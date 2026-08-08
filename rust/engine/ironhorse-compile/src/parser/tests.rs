@@ -640,6 +640,20 @@ fn statement_level_early_errors() {
 }
 
 #[test]
+fn strict_delete_identifier_is_an_early_error() {
+    for src in [
+        r#""use strict"; delete name;"#,
+        r#""use strict"; delete ((name));"#,
+    ] {
+        let err = prog_err(src);
+        assert_eq!(err.kind, ParseErrorKind::Syntax, "src {src:?}");
+        assert!(err.message.contains("invalid delete"), "{src:?}: {}", err.message);
+    }
+    prog_ok("delete name;");
+    prog_ok(r#""use strict"; delete object.name;"#);
+}
+
+#[test]
 fn program_never_panics_on_garbage() {
     // The whole-program entry upholds the fuzz invariant too.
     for src in ["}", "for(", "class", "function(", "if", "case 1:", "{{{{", "export", "import"] {

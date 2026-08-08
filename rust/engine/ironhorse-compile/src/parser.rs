@@ -433,6 +433,13 @@ impl Parser {
         let t = self.top_token();
         match t {
             Some(Token::Access) => {
+                // Static Semantics: it is an early Syntax Error to delete an
+                // IdentifierReference from strict-mode code. Parenthesized
+                // identifiers have already been unwrapped above, so the same
+                // check covers `delete ((name))` recursively.
+                if token == Token::Delete && self.flags & flags::STRICT != 0 {
+                    return Err(self.error("invalid delete (strict mode)"));
+                }
                 if let Some(sym) = self.top_access_symbol() {
                     self.check_strict_symbol(&sym)?;
                 }

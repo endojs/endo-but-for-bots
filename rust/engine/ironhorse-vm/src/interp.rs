@@ -415,6 +415,39 @@ pub const XS_DONT_PATCH_FLAG: u8 = 16;
 /// the two never name the same slot (the instance's head slot is never a
 /// property), so the overlap is harmless, exactly as `XS_DONT_PATCH_FLAG`'s is.
 pub const XS_DONT_MARSHALL_FLAG: u8 = 64;
+
+/// The callable pair carried by an ordinary accessor property. XS stores the
+/// getter and setter in adjacent property slots. Ironhorse keeps the public
+/// property slot in the ordinary property chain (so attributes and key order
+/// stay centralized there) and keeps the pair in this side table.
+#[derive(Clone, Copy, Debug, Default)]
+struct AccessorData {
+    get: Option<Slot>,
+    set: Option<Slot>,
+}
+
+/// A complete or partial ECMAScript property descriptor. Presence is encoded
+/// by `Option`; this is important because an absent field and a present field
+/// whose value is `undefined` have different effects during redefinition.
+#[derive(Clone, Copy, Debug, Default)]
+struct OrdinaryDescriptor {
+    value: Option<Slot>,
+    writable: Option<bool>,
+    get: Option<Slot>,
+    set: Option<Slot>,
+    enumerable: Option<bool>,
+    configurable: Option<bool>,
+}
+
+impl OrdinaryDescriptor {
+    fn is_accessor(self) -> bool {
+        self.get.is_some() || self.set.is_some()
+    }
+
+    fn is_data(self) -> bool {
+        self.value.is_some() || self.writable.is_some()
+    }
+}
 /// `harden`/`petrify` per-hardened-object base: `fx_hardenFreezeAndTraverse`
 /// builds the two `fxNewInstance` ownKeys holders (the freeze pass and the
 /// traverse pass) over the `mxBehaviorPreventExtensions` frame. Modeled as two
@@ -1489,6 +1522,9 @@ pub enum MathId {
 /// user code — the `call`/`apply`/`bind` re-entrant methods are separate.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NativeMethod {
+    /// The internal `%CopyObject%` helper used by object spread and object
+    /// rest. It copies the source's own enumerable properties to `this`.
+    CopyObject,
     ObjectToString,
     ObjectHasOwnProperty,
     ObjectValueOf,
@@ -1496,6 +1532,9 @@ pub enum NativeMethod {
     /// `Object.keys(o)` — the own enumerable string-keyed property names, in
     /// property-creation order, as a fresh `Array` of interned key strings.
     ObjectKeys,
+    /// `Object.create(proto[, properties])` for ordinary prototypes and the
+    /// same descriptor machinery as `Object.defineProperties`.
+    ObjectCreate,
     /// `Object.getOwnPropertyDescriptor(o, k)` — the fully-populated data
     /// descriptor object (`{value, writable, enumerable, configurable}`) for
     /// `o`'s own property `k`, or `undefined` when absent.
@@ -1514,10 +1553,15 @@ pub enum NativeMethod {
     /// descriptor, a redefine of an existing key, or an exotic receiver
     /// self-names.
     ObjectDefineProperty,
+    /// `Object.defineProperties(o, descriptors)`; descriptors are snapshotted
+    /// before any definition and then applied through the ordinary MOP seam.
+    ObjectDefineProperties,
     /// `Object.getOwnPropertyDescriptors(o)` — a fresh object mapping each own
     /// property key to its descriptor object (the plural of
     /// `getOwnPropertyDescriptor`).
     ObjectGetOwnPropertyDescriptors,
+    /// `Object.getOwnPropertySymbols(o)` in symbol creation order.
+    ObjectGetOwnPropertySymbols,
     /// `Object.values(o)` — a fresh `Array` of `o`'s own enumerable
     /// string-keyed property values, in creation order.
     ObjectValues,
@@ -1558,6 +1602,8 @@ pub enum NativeMethod {
     /// when the target is non-extensible and `proto` differs from the current
     /// prototype. Ordinary receivers only (an exotic side-table object skips).
     ReflectSetPrototypeOf,
+    ReflectIsExtensible,
+    ReflectPreventExtensions,
     /// `Reflect.getOwnPropertyDescriptor(target, key)`
     /// (`fx_Reflect_getOwnPropertyDescriptor`): identical result to
     /// `Object.getOwnPropertyDescriptor` (the data-descriptor object or
@@ -2140,17 +2186,61 @@ pub struct TypedArrayType {
 /// The concrete TypedArray constructors ironhorse binds, in `gxTypeDispatches`
 /// order. `Native::TypedArray(i)` indexes this table.
 pub const TYPED_ARRAY_TYPES: &[TypedArrayType] = &[
-    TypedArrayType { name: "BigInt64Array", size: 8, shift: 3 },
-    TypedArrayType { name: "BigUint64Array", size: 8, shift: 3 },
-    TypedArrayType { name: "Float32Array", size: 4, shift: 2 },
-    TypedArrayType { name: "Float64Array", size: 8, shift: 3 },
-    TypedArrayType { name: "Int8Array", size: 1, shift: 0 },
-    TypedArrayType { name: "Int16Array", size: 2, shift: 1 },
-    TypedArrayType { name: "Int32Array", size: 4, shift: 2 },
-    TypedArrayType { name: "Uint8Array", size: 1, shift: 0 },
-    TypedArrayType { name: "Uint16Array", size: 2, shift: 1 },
-    TypedArrayType { name: "Uint32Array", size: 4, shift: 2 },
-    TypedArrayType { name: "Uint8ClampedArray", size: 1, shift: 0 },
+    TypedArrayType {
+        name: "BigInt64Array",
+        size: 8,
+        shift: 3,
+    },
+    TypedArrayType {
+        name: "BigUint64Array",
+        size: 8,
+        shift: 3,
+    },
+    TypedArrayType {
+        name: "Float32Array",
+        size: 4,
+        shift: 2,
+    },
+    TypedArrayType {
+        name: "Float64Array",
+        size: 8,
+        shift: 3,
+    },
+    TypedArrayType {
+        name: "Int8Array",
+        size: 1,
+        shift: 0,
+    },
+    TypedArrayType {
+        name: "Int16Array",
+        size: 2,
+        shift: 1,
+    },
+    TypedArrayType {
+        name: "Int32Array",
+        size: 4,
+        shift: 2,
+    },
+    TypedArrayType {
+        name: "Uint8Array",
+        size: 1,
+        shift: 0,
+    },
+    TypedArrayType {
+        name: "Uint16Array",
+        size: 2,
+        shift: 1,
+    },
+    TypedArrayType {
+        name: "Uint32Array",
+        size: 4,
+        shift: 2,
+    },
+    TypedArrayType {
+        name: "Uint8ClampedArray",
+        size: 1,
+        shift: 0,
+    },
 ];
 
 /// A TypedArray instance's internal state (XS's `XS_TYPED_ARRAY_KIND`
@@ -2722,6 +2812,11 @@ pub struct Interp {
     /// for the exception/`this` semantics that observe it; the covered
     /// subset does not yet branch on it.
     strict: bool,
+    /// Depth of the most recent callback frame that reached its own `END`.
+    /// This distinguishes a normal re-entrant callback return from a throw
+    /// that unwound into, and completed, its caller while the nested
+    /// dispatcher was still active.
+    callback_return_depth: Option<usize>,
     meter: Meter,
     /// Cost-calibration histogram recorder (design
     /// `designs/ironhorse-meter-opcode-cost-instrumentation.md`, stage
@@ -2844,7 +2939,11 @@ pub struct Interp {
     /// installed as an own property of its prototype only when the program
     /// references its name (so it relinks to the program-local symbol id and
     /// stays invisible to programs that never mention it).
-    proto_methods: Vec<(crate::value::SlotIndex, &'static str, crate::value::SlotIndex)>,
+    proto_methods: Vec<(
+        crate::value::SlotIndex,
+        &'static str,
+        crate::value::SlotIndex,
+    )>,
     /// Native prototype **data** properties to bind at link time: `(prototype,
     /// property name, string value)`. Used for the inherited Error prototype
     /// `name`/`message` (so `err.name` resolves up the chain and
@@ -3004,6 +3103,10 @@ pub struct Interp {
     /// string-key enumerations) skip it — matching the spec's string/symbol key
     /// partition (and the boot-key soundness gate).
     symbol_key_ids: std::collections::HashMap<crate::value::SlotIndex, u16>,
+    /// Getter/setter pairs for ordinary accessor properties. The key is the
+    /// owner and property id; the owner's normal property chain remains the
+    /// source of truth for presence, attributes, and creation order.
+    accessors: std::collections::HashMap<(crate::value::SlotIndex, u16), AccessorData>,
     /// Native prototype/namespace **numeric** data properties to bind at link
     /// time: `(owner instance, property name, value)`. Used for `Math.PI` &co.
     /// (the `Math` constants) and `Number.MAX_VALUE` &co.; bound only when the
@@ -3336,6 +3439,7 @@ impl Interp {
             global_props: std::collections::HashMap::new(),
             result: Slot::undefined(),
             strict: false,
+            callback_return_depth: None,
             meter: Meter::new(),
             cost: crate::cost::CostRecorder::default(),
             meter_host: None,
@@ -3392,6 +3496,7 @@ impl Interp {
             symbol_registry: std::collections::HashMap::new(),
             symbol_registry_keys: std::collections::HashMap::new(),
             symbol_key_ids: std::collections::HashMap::new(),
+            accessors: std::collections::HashMap::new(),
             proto_value_data: Vec::new(),
             iterators: std::collections::HashMap::new(),
             value_id: None,
@@ -3483,7 +3588,9 @@ impl Interp {
         // The prototype roots: %Object.prototype% (null proto) and
         // %Function.prototype% (chains to it). Every native constructor is a
         // callable whose own prototype is %Function.prototype%.
-        let object_proto = self.slots.alloc(Slot::instance(crate::value::SlotIndex::NULL));
+        let object_proto = self
+            .slots
+            .alloc(Slot::instance(crate::value::SlotIndex::NULL));
         self.object_proto = object_proto;
         let func_proto = self.slots.alloc(Slot::instance(object_proto));
         self.function_proto = func_proto;
@@ -3521,10 +3628,9 @@ impl Interp {
                 | Native::TypeError
                 | Native::URIError
                 | Native::AggregateError => self.slots.alloc(Slot::instance(error_proto)),
-                Native::Boolean
-                | Native::Symbol
-                | Native::Number
-                | Native::String => self.slots.alloc(Slot::instance(object_proto)),
+                Native::Boolean | Native::Symbol | Native::Number | Native::String => {
+                    self.slots.alloc(Slot::instance(object_proto))
+                }
                 // `%Array.prototype%` is itself an (empty) exotic array in XS;
                 // ironhorse models it as an ordinary boot object chaining to
                 // %Object.prototype% (its own array-ness is unobservable to the
@@ -3653,7 +3759,8 @@ impl Interp {
             let from = self.alloc_method(NativeMethod::ArrayFrom);
             self.proto_methods.push((array_ctor, "from", from));
             let from_async = self.alloc_method(NativeMethod::ArrayFromAsync);
-            self.proto_methods.push((array_ctor, "fromAsync", from_async));
+            self.proto_methods
+                .push((array_ctor, "fromAsync", from_async));
         }
         // `%Symbol.prototype%`: the box target for a primitive symbol's method
         // access (`Symbol("x").toString()`), carrying `toString`/`valueOf`;
@@ -3679,12 +3786,7 @@ impl Interp {
         // apart from the weak key check); `add`/`has`/`delete` on Set and
         // WeakSet share `SetAdd`/`SetHas`/`SetDelete`. Bound at link time only
         // when the program references the name (like every native method).
-        for (name, cache) in [
-            ("Map", 0usize),
-            ("Set", 1),
-            ("WeakMap", 2),
-            ("WeakSet", 3),
-        ] {
+        for (name, cache) in [("Map", 0usize), ("Set", 1), ("WeakMap", 2), ("WeakSet", 3)] {
             let proto = self
                 .intrinsics
                 .get(name)
@@ -3793,8 +3895,10 @@ impl Interp {
         for &(gname, sname, kind) in dv_methods {
             let getter = self.alloc_method(NativeMethod::DataViewGet(kind));
             let setter = self.alloc_method(NativeMethod::DataViewSet(kind));
-            self.proto_methods.push((self.dataview_proto, gname, getter));
-            self.proto_methods.push((self.dataview_proto, sname, setter));
+            self.proto_methods
+                .push((self.dataview_proto, gname, getter));
+            self.proto_methods
+                .push((self.dataview_proto, sname, setter));
         }
         // `%Promise.prototype%`: `then`/`catch`/`finally`, bound at link time
         // only when the program references the name. The per-instance
@@ -3883,7 +3987,10 @@ impl Interp {
             ("valueOf", NativeMethod::ObjectValueOf),
             ("hasOwnProperty", NativeMethod::ObjectHasOwnProperty),
             ("isPrototypeOf", NativeMethod::ObjectIsPrototypeOf),
-            ("propertyIsEnumerable", NativeMethod::ObjectPropertyIsEnumerable),
+            (
+                "propertyIsEnumerable",
+                NativeMethod::ObjectPropertyIsEnumerable,
+            ),
         ];
         for (name, m) in obj_methods {
             let mf = self.alloc_method(m);
@@ -3893,6 +4000,8 @@ impl Interp {
         // instance (not the prototype), bound at link time only when the
         // program references the name.
         if let Some(&object_ctor) = self.intrinsics.get("Object") {
+            let create = self.alloc_method(NativeMethod::ObjectCreate);
+            self.proto_methods.push((object_ctor, "create", create));
             let keys = self.alloc_method(NativeMethod::ObjectKeys);
             self.proto_methods.push((object_ctor, "keys", keys));
             let gopd = self.alloc_method(NativeMethod::ObjectGetOwnPropertyDescriptor);
@@ -3904,9 +4013,15 @@ impl Interp {
             let defprop = self.alloc_method(NativeMethod::ObjectDefineProperty);
             self.proto_methods
                 .push((object_ctor, "defineProperty", defprop));
+            let defprops = self.alloc_method(NativeMethod::ObjectDefineProperties);
+            self.proto_methods
+                .push((object_ctor, "defineProperties", defprops));
             let gopds = self.alloc_method(NativeMethod::ObjectGetOwnPropertyDescriptors);
             self.proto_methods
                 .push((object_ctor, "getOwnPropertyDescriptors", gopds));
+            let gops = self.alloc_method(NativeMethod::ObjectGetOwnPropertySymbols);
+            self.proto_methods
+                .push((object_ctor, "getOwnPropertySymbols", gops));
             let values = self.alloc_method(NativeMethod::ObjectValues);
             self.proto_methods.push((object_ctor, "values", values));
             let entries = self.alloc_method(NativeMethod::ObjectEntries);
@@ -3927,7 +4042,8 @@ impl Interp {
             self.proto_methods.push((object_ctor, "isFrozen", isfrozen));
         }
         let fp_tostring = self.alloc_method(NativeMethod::FunctionToString);
-        self.proto_methods.push((func_proto, "toString", fp_tostring));
+        self.proto_methods
+            .push((func_proto, "toString", fp_tostring));
         let fp_call = self.alloc_method(NativeMethod::FunctionCall);
         self.proto_methods.push((func_proto, "call", fp_call));
         let fp_apply = self.alloc_method(NativeMethod::FunctionApply);
@@ -3965,8 +4081,10 @@ impl Interp {
         // on `%Error.prototype%`, inherited by subtypes). Placing `name` on
         // the prototype — not the instance — is what makes `err.name` resolve
         // up the chain while `err.hasOwnProperty('name')` is `false`, as XS.
-        self.proto_data.push((error_proto, "name", "Error".to_string()));
-        self.proto_data.push((error_proto, "message", String::new()));
+        self.proto_data
+            .push((error_proto, "name", "Error".to_string()));
+        self.proto_data
+            .push((error_proto, "message", String::new()));
         for (_, native) in Native::intrinsics() {
             if matches!(
                 native,
@@ -4052,6 +4170,8 @@ impl Interp {
         for (name, m) in [
             ("getPrototypeOf", NativeMethod::ReflectGetPrototypeOf),
             ("setPrototypeOf", NativeMethod::ReflectSetPrototypeOf),
+            ("isExtensible", NativeMethod::ReflectIsExtensible),
+            ("preventExtensions", NativeMethod::ReflectPreventExtensions),
             (
                 "getOwnPropertyDescriptor",
                 NativeMethod::ReflectGetOwnPropertyDescriptor,
@@ -4354,12 +4474,7 @@ impl Interp {
             .iter()
             .position(|n| n == "length")
             .map(|k| (k + 1) as u16);
-        let id_of = |want: &str| {
-            names
-                .iter()
-                .position(|n| n == want)
-                .map(|k| (k + 1) as u16)
-        };
+        let id_of = |want: &str| names.iter().position(|n| n == want).map(|k| (k + 1) as u16);
         self.name_id = id_of("name");
         self.value_id = id_of("value");
         self.done_id = id_of("done");
@@ -4456,7 +4571,17 @@ impl Interp {
         // inherited intrinsic method, present before the guest runs).
         let methods = std::mem::take(&mut self.proto_methods);
         for &(proto, mname, mfunc) in &methods {
-            if let Some(&mid) = self.symbol_ids.get(mname) {
+            // Constructor `prototype` is a mandatory own property even when
+            // the program reaches it reflectively through a string key rather
+            // than a static `.prototype` access (and therefore has no SYMB
+            // atom for the name). It is an XS boot default key, so assigning
+            // its program-local id here is unmetered.
+            let mid = if mname == "prototype" {
+                Some(self.intern_key(mname))
+            } else {
+                self.symbol_ids.get(mname).copied()
+            };
+            if let Some(mid) = mid {
                 let flag = if mname == "prototype" {
                     XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG
                 } else {
@@ -4664,7 +4789,11 @@ impl Interp {
     /// global object's property list, and record it in [`Self::global_props`].
     /// Does **not** meter — callers add the allocation metering at the
     /// faithful opcode site. Returns the property slot index.
-    fn create_global_property(&mut self, id: u16, value: (Kind, Payload)) -> crate::value::SlotIndex {
+    fn create_global_property(
+        &mut self,
+        id: u16,
+        value: (Kind, Payload),
+    ) -> crate::value::SlotIndex {
         let mut prop = Slot::property(id, value.1);
         prop.kind = value.0;
         // Insert at the head of the global object's property list.
@@ -4745,8 +4874,7 @@ impl Interp {
     /// across a re-declared name (its property is created once).
     fn hoist_vars_to_global(&mut self) {
         // Declaration order = the `locals` index the name maps to.
-        let mut names: Vec<(usize, u16)> =
-            self.id_map.iter().map(|(&id, &i)| (i, id)).collect();
+        let mut names: Vec<(usize, u16)> = self.id_map.iter().map(|(&id, &i)| (i, id)).collect();
         names.sort_unstable();
         for (_, id) in names {
             if !self.global_props.contains_key(&id) {
@@ -4869,11 +4997,7 @@ impl Interp {
                     // as the `/source/flags` literal (the empty pattern renders
                     // its `(?:)` source).
                     let (source, _alloc) = self.regexp_source_bytes(r);
-                    format!(
-                        "/{}/{}",
-                        String::from_utf8_lossy(&source),
-                        d.flags
-                    )
+                    format!("/{}/{}", String::from_utf8_lossy(&source), d.flags)
                 } else if let Some(info) = self.error_data.get(&r) {
                     match &info.message {
                         Some(m) if !m.is_empty() => format!("{}: {}", info.name, m),
@@ -4946,6 +5070,22 @@ impl Interp {
         // meter already matches the oracle's run-only count).
         if halt == Halt::Return && self.result.kind == Kind::Symbol {
             halt = Halt::Throw("TypeError: cannot coerce symbol to string".to_string());
+        }
+        // The oracle shim stringifies the completion.  A bare ordinary object
+        // with a null prototype has neither `toString` nor `valueOf`, so
+        // `ToPrimitive` fails instead of producing the generic reference stub.
+        // Model that post-run harness conversion just as we do Symbol above.
+        if halt == Halt::Return {
+            if let Payload::Reference(object) = self.result.value {
+                if self.result.kind == Kind::Reference
+                    && self.instance_prototype(object).is_null()
+                    && !self.arrays.contains_key(&object)
+                    && self.native_of(object).is_none()
+                {
+                    halt =
+                        Halt::Throw("TypeError: cannot convert object to primitive value".into());
+                }
+            }
         }
         let completed = halt == Halt::Return;
         let result = if completed {
@@ -5024,7 +5164,9 @@ impl Interp {
             let byte = code[pc];
             let op = match Opcode::from_u8(byte) {
                 Some(o) => o,
-                None => return Halt::Decode(format!("invalid opcode byte {:#04x} at {}", byte, pc)),
+                None => {
+                    return Halt::Decode(format!("invalid opcode byte {:#04x} at {}", byte, pc))
+                }
             };
             // Every dispatched opcode meters one code unit (mxBreak /
             // the switch-path `meterIndex += XS_CODE_METERING`).
@@ -5139,10 +5281,16 @@ impl Interp {
                     let name = id!(1);
                     let env = if self.id_map.contains_key(&name) {
                         // Frame scope: NULL sentinel reference.
-                        Slot::of(Kind::EnvReference, Payload::Reference(crate::value::SlotIndex::NULL))
+                        Slot::of(
+                            Kind::EnvReference,
+                            Payload::Reference(crate::value::SlotIndex::NULL),
+                        )
                     } else {
                         // Global object: a distinct non-null sentinel.
-                        Slot::of(Kind::EnvReference, Payload::Reference(crate::value::SlotIndex(0)))
+                        Slot::of(
+                            Kind::EnvReference,
+                            Payload::Reference(crate::value::SlotIndex(0)),
+                        )
                     };
                     self.push(env);
                     pc += ilen;
@@ -5225,9 +5373,7 @@ impl Interp {
                     let v = self.resolve_get(name);
                     match v {
                         Some(s) => self.push(s),
-                        None => {
-                            return Halt::Throw(format!("get {}: undefined variable", name))
-                        }
+                        None => return Halt::Throw(format!("get {}: undefined variable", name)),
                     }
                     pc += ilen;
                 }
@@ -5243,9 +5389,7 @@ impl Interp {
                     // creating the property (a sloppy global) if absent —
                     // metered as one property creation exactly where
                     // `mxBehaviorSetProperty` allocates it.
-                    if !self.id_map.contains_key(&name)
-                        && !self.global_props.contains_key(&name)
-                    {
+                    if !self.id_map.contains_key(&name) && !self.global_props.contains_key(&name) {
                         self.materialize_global_property(name);
                         // Creating a sloppy global through `SET_VARIABLE`
                         // dispatches XS's setter machinery
@@ -5326,7 +5470,7 @@ impl Interp {
                 XS_CODE_GET_PROPERTY_AT => {
                     let key = self.pop();
                     let obj = self.pop();
-                    let v = self.property_at_get(obj, key);
+                    let v = self.property_at_get(code, obj, key);
                     match v {
                         Ok(s) => self.push(s),
                         Err(h) => return h,
@@ -5339,7 +5483,7 @@ impl Interp {
                     let value = self.pop();
                     let key = self.pop();
                     let obj = self.pop();
-                    if let Err(h) = self.property_at_set(obj, key, value, false) {
+                    if let Err(h) = self.property_at_set(code, obj, key, value, false) {
                         return h;
                     }
                     self.push(value);
@@ -5360,7 +5504,7 @@ impl Interp {
                     let value = self.pop();
                     let key = self.pop();
                     let obj = self.pop();
-                    if let Err(h) = self.property_at_set(obj, key, value, true) {
+                    if let Err(h) = self.property_at_set(code, obj, key, value, true) {
                         return h;
                     }
                     pc += 3;
@@ -5471,6 +5615,40 @@ impl Interp {
                     let value = self.pop();
                     let obj = self.pop();
                     if let Payload::Reference(inst) = obj.value {
+                        let property_flag = code[pc + 4];
+                        if property_flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+                            let existing =
+                                self.accessors.get(&(inst, id)).copied().unwrap_or_default();
+                            let accessor = AccessorData {
+                                get: if property_flag & XS_GETTER_FLAG != 0 {
+                                    Some(value)
+                                } else {
+                                    existing.get
+                                },
+                                set: if property_flag & XS_SETTER_FLAG != 0 {
+                                    Some(value)
+                                } else {
+                                    existing.set
+                                },
+                            };
+                            self.accessors.insert((inst, id), accessor);
+                            if let Some(property) = self.find_property(inst, id) {
+                                self.slots.get_mut(property).flag |=
+                                    XS_GETTER_FLAG | XS_SETTER_FLAG;
+                            } else {
+                                let descriptor = OrdinaryDescriptor {
+                                    get: Some(accessor.get.unwrap_or_else(Slot::undefined)),
+                                    set: Some(accessor.set.unwrap_or_else(Slot::undefined)),
+                                    enumerable: Some(true),
+                                    configurable: Some(true),
+                                    ..OrdinaryDescriptor::default()
+                                };
+                                self.ordinary_define_own_property(inst, id, descriptor);
+                            }
+                            self.meter.tick_builtin();
+                            pc += 5;
+                            continue;
+                        }
                         // `fxRunDefine` creating a data property: one
                         // built-in step plus the property-slot allocation.
                         self.instance_put(inst, id, value);
@@ -5525,9 +5703,16 @@ impl Interp {
                             // `ToLength`-ish integer semantics (the covered
                             // grammar assigns a non-negative integer).
                             let n = to_number(&value);
-                            let clamped = if n.is_nan() || n < 0.0 { 0.0 } else { n.floor() };
+                            let clamped = if n.is_nan() || n < 0.0 {
+                                0.0
+                            } else {
+                                n.floor()
+                            };
                             self.regexps.get_mut(&inst).unwrap().last_index = clamped;
-                        } else if self.ordinary_write_rejected(inst, id) {
+                        } else if !match self.ordinary_set(code, inst, id, value, obj) {
+                            Ok(accepted) => accepted,
+                            Err(halt) => return halt,
+                        } {
                             // A frozen / non-writable property, or a new key on a
                             // non-extensible object: XS's `mxBehaviorSetProperty`
                             // stores nothing. A **sloppy** callee silently
@@ -5549,8 +5734,6 @@ impl Interp {
                                     Err(halt) => return halt,
                                 }
                             }
-                        } else {
-                            self.instance_put(inst, id, value);
                         }
                     }
                     self.push(value);
@@ -5702,7 +5885,10 @@ impl Interp {
                         {
                             self.instance_get(self.symbol_proto, id)
                         }
-                        Payload::Reference(inst) => self.instance_get(inst, id),
+                        Payload::Reference(inst) => match self.ordinary_get(code, inst, id, obj) {
+                            Ok(value) => value,
+                            Err(halt) => return halt,
+                        },
                         // A primitive string boxes to `%String.prototype%`
                         // (XS's `fxCoerceToString`/string behavior): `.length`
                         // is the UTF-16 code-unit count; any other name
@@ -5763,8 +5949,67 @@ impl Interp {
                                 *s = Slot::boolean(deleted);
                             }
                         }
-                        _ => return Halt::Unsupported(op.name()),
+                        _ if obj.kind == Kind::Null || obj.kind == Kind::Undefined => {
+                            let error = self.build_error("TypeError", 0, 0);
+                            match self.raise_js(error) {
+                                Ok(target) => {
+                                    pc = target;
+                                    continue;
+                                }
+                                Err(halt) => return halt,
+                            }
+                        }
+                        // ToObject succeeds for every other primitive. Such a
+                        // temporary wrapper has no configurable own property
+                        // with this identifier, so deletion succeeds.
+                        _ => {
+                            if let Some(s) = self.stack.last_mut() {
+                                *s = Slot::boolean(true);
+                            }
+                        }
                     }
+                    pc += ilen;
+                }
+                XS_CODE_DELETE_PROPERTY_AT => {
+                    let key = self.pop();
+                    let obj = self.pop();
+                    let (id, index) = match key.value {
+                        Payload::At(id, index) => (id, index),
+                        _ => return Halt::Unsupported(op.name()),
+                    };
+                    let id = if id == crate::value::XS_NO_ID {
+                        self.intern_key(&index.to_string())
+                    } else {
+                        id
+                    };
+                    let deleted = match obj.value {
+                        Payload::Reference(inst) => {
+                            self.meter.tick_builtin();
+                            self.delete_own_property(inst, id)
+                        }
+                        _ if obj.kind == Kind::Null || obj.kind == Kind::Undefined => {
+                            let error = self.build_error("TypeError", 0, 0);
+                            match self.raise_js(error) {
+                                Ok(target) => {
+                                    pc = target;
+                                    continue;
+                                }
+                                Err(halt) => return halt,
+                            }
+                        }
+                        _ => true,
+                    };
+                    self.push(Slot::boolean(deleted));
+                    pc += size as usize;
+                }
+
+                // `%CopyObject%`, the internal callable emitted for object
+                // spread/rest. The following CALL opcode supplies the target
+                // and source as arguments zero and one, then (for rest) the
+                // excluded property keys as the remaining arguments.
+                XS_CODE_COPY_OBJECT => {
+                    let function = self.alloc_method(NativeMethod::CopyObject);
+                    self.push(Slot::of(Kind::Reference, Payload::Reference(function)));
                     pc += ilen;
                 }
 
@@ -5816,9 +6061,7 @@ impl Interp {
                 XS_CODE_CODE_1 | XS_CODE_CODE_2 | XS_CODE_CODE_4 => {
                     let n = match op {
                         XS_CODE_CODE_1 => code[pc + 1] as usize,
-                        XS_CODE_CODE_2 => {
-                            u16::from_le_bytes([code[pc + 1], code[pc + 2]]) as usize
-                        }
+                        XS_CODE_CODE_2 => u16::from_le_bytes([code[pc + 1], code[pc + 2]]) as usize,
                         _ => u32::from_le_bytes([
                             code[pc + 1],
                             code[pc + 2],
@@ -5837,9 +6080,10 @@ impl Interp {
                     // and accrue it here, where XS incurs it at
                     // definition rather than per call.
                     let locals = count_new_locals(code, body_start, n);
-                    self.meter
-                        .tick_raw(FUNCTION_LOCAL_METERING * locals as u64);
-                    if let Payload::Reference(f) = self.stack.last().map(|s| s.value).unwrap_or(Payload::None) {
+                    self.meter.tick_raw(FUNCTION_LOCAL_METERING * locals as u64);
+                    if let Payload::Reference(f) =
+                        self.stack.last().map(|s| s.value).unwrap_or(Payload::None)
+                    {
                         // `fxNewFunctionLength(the, variable, *(code+1))`: XS
                         // sets the function's `.length` from the second byte of
                         // the body chunk — `begin`'s declared-parameter-count
@@ -5867,7 +6111,11 @@ impl Interp {
                     let env = self.new_environment();
                     // The function is the current top; record its captured
                     // environment before pushing the env reference.
-                    if let Some(&Slot { value: Payload::Reference(f), .. }) = self.stack.last() {
+                    if let Some(&Slot {
+                        value: Payload::Reference(f),
+                        ..
+                    }) = self.stack.last()
+                    {
                         self.functions.entry(f).or_default().closures = env;
                     }
                     self.push(Slot::of(Kind::Reference, Payload::Reference(env)));
@@ -5911,9 +6159,7 @@ impl Interp {
                     let argc = match op {
                         XS_CODE_RUN => self.pop_run_count(),
                         XS_CODE_RUN_1 => code[pc + 1] as usize,
-                        XS_CODE_RUN_2 => {
-                            u16::from_le_bytes([code[pc + 1], code[pc + 2]]) as usize
-                        }
+                        XS_CODE_RUN_2 => u16::from_le_bytes([code[pc + 1], code[pc + 2]]) as usize,
                         _ => u32::from_le_bytes([
                             code[pc + 1],
                             code[pc + 2],
@@ -5939,14 +6185,15 @@ impl Interp {
                         .and_then(|b| self.stack.get(b))
                         .map(|s| s.kind == Kind::Uninitialized)
                         .unwrap_or(false);
-                    let func_ref = base_opt.and_then(|base| {
-                        match self.stack.get(base + 1).map(|s| s.value) {
+                    let func_ref =
+                        base_opt.and_then(|base| match self.stack.get(base + 1).map(|s| s.value) {
                             Some(Payload::Reference(f)) => Some((f, base)),
                             _ => None,
-                        }
-                    });
-                    let callee = func_ref.and_then(|(f, base)| self.native_of(f).map(|n| (n, base)));
-                    let method = func_ref.and_then(|(f, base)| self.method_of(f).map(|m| (m, base)));
+                        });
+                    let callee =
+                        func_ref.and_then(|(f, base)| self.native_of(f).map(|n| (n, base)));
+                    let method =
+                        func_ref.and_then(|(f, base)| self.method_of(f).map(|m| (m, base)));
                     let bound = func_ref.and_then(|(f, base)| {
                         if self.bound_functions.contains_key(&f) {
                             Some((f, base))
@@ -6195,7 +6442,9 @@ impl Interp {
                 XS_CODE_REFRESH_CLOSURE_1 | XS_CODE_REFRESH_CLOSURE_2 => {
                     let k = self.closure_index(op, code, pc);
                     let old = self.closure_cell(k);
-                    let src = old.map(|c| *self.slots.get(c)).unwrap_or_else(Slot::uninitialized);
+                    let src = old
+                        .map(|c| *self.slots.get(c))
+                        .unwrap_or_else(Slot::uninitialized);
                     let mut fresh = Slot::of(src.kind, src.value);
                     fresh.flag = src.flag;
                     let cell = self.slots.alloc(fresh);
@@ -6304,9 +6553,10 @@ impl Interp {
                 XS_CODE_STRING_1 | XS_CODE_STRING_2 | XS_CODE_STRING_4 => {
                     let (n, data) = match op {
                         XS_CODE_STRING_1 => (code[pc + 1] as usize, pc + 2),
-                        XS_CODE_STRING_2 => {
-                            (u16::from_le_bytes([code[pc + 1], code[pc + 2]]) as usize, pc + 3)
-                        }
+                        XS_CODE_STRING_2 => (
+                            u16::from_le_bytes([code[pc + 1], code[pc + 2]]) as usize,
+                            pc + 3,
+                        ),
                         _ => (
                             u32::from_le_bytes([
                                 code[pc + 1],
@@ -6678,8 +6928,11 @@ impl Interp {
                                 top.value = Payload::Integer(if inc { v + 1 } else { v - 1 });
                             } else {
                                 top.kind = Kind::Number;
-                                top.value =
-                                    Payload::Number(if inc { v as f64 + 1.0 } else { v as f64 - 1.0 });
+                                top.value = Payload::Number(if inc {
+                                    v as f64 + 1.0
+                                } else {
+                                    v as f64 - 1.0
+                                });
                             }
                         }
                         (Kind::Number, Payload::Number(n)) => {
@@ -7033,9 +7286,7 @@ impl Interp {
                 // top is undefined/null, normalize it to undefined and branch
                 // (short-circuit the optional chain); otherwise fall through
                 // (continue the chain), keeping the value.
-                XS_CODE_BRANCH_CHAIN_1
-                | XS_CODE_BRANCH_CHAIN_2
-                | XS_CODE_BRANCH_CHAIN_4 => {
+                XS_CODE_BRANCH_CHAIN_1 | XS_CODE_BRANCH_CHAIN_2 | XS_CODE_BRANCH_CHAIN_4 => {
                     let off = match op {
                         XS_CODE_BRANCH_CHAIN_1 => s1!(1),
                         XS_CODE_BRANCH_CHAIN_2 => {
@@ -7084,10 +7335,7 @@ impl Interp {
                 // the covered grammar — but the guard is explicit so the
                 // abort-point semantics are exact (stage-2a review finding
                 // 1).
-                XS_CODE_END
-                | XS_CODE_END_ARROW
-                | XS_CODE_END_BASE
-                | XS_CODE_END_DERIVED => {
+                XS_CODE_END | XS_CODE_END_ARROW | XS_CODE_END_BASE | XS_CODE_END_DERIVED => {
                     if self.call_stack.len() == return_depth {
                         // The frame this dispatch was entered to run has
                         // returned: hand control back to the caller (the C/host
@@ -7107,6 +7355,7 @@ impl Interp {
                             // activation is restored.
                             let _ = self.leave_call();
                             self.push(ret);
+                            self.callback_return_depth = Some(return_depth);
                         }
                         return Halt::Return;
                     }
@@ -7237,7 +7486,9 @@ impl Interp {
                     // Run to the first await/completion. An un-modeled surface in
                     // the body (a named skip) propagates out as the async call's
                     // own skip.
-                    if let Err(h) = self.step_async(code, inst, ResumeStatus::NoStatus, Slot::undefined(), true) {
+                    if let Err(h) =
+                        self.step_async(code, inst, ResumeStatus::NoStatus, Slot::undefined(), true)
+                    {
                         return h;
                     }
                     let promise = self.async_instances[&inst].result_promise;
@@ -7582,7 +7833,9 @@ impl Interp {
         // helpers).
         let result_promise = self.new_promise_instance();
         let (resolve_fn, reject_fn) = self.make_resolving_functions(result_promise);
-        let inst = self.slots.alloc(Slot::instance(crate::value::SlotIndex::NULL));
+        let inst = self
+            .slots
+            .alloc(Slot::instance(crate::value::SlotIndex::NULL));
         // Snapshot the current (freshly-entered) frame. Like `START_GENERATOR`,
         // the value stack holds nothing above the frame base at `START_ASYNC`
         // (`begin` set up `locals`, not temporaries), so `stack_slice` is empty;
@@ -7624,7 +7877,9 @@ impl Interp {
         // `env.next.next`. The two-slot cost is folded into
         // [`FUNCTION_DEFINE_METERING`] (calibrated on a function whose
         // `function_environment` runs), so it is not metered again here.
-        let env = self.slots.alloc(Slot::instance(crate::value::SlotIndex::NULL));
+        let env = self
+            .slots
+            .alloc(Slot::instance(crate::value::SlotIndex::NULL));
         let behavior = self
             .slots
             .alloc(Slot::of(Kind::Uninitialized, Payload::None));
@@ -7681,8 +7936,7 @@ impl Interp {
         // fixed budget, abort to the host exactly as XS does — this is
         // what makes unbounded recursion overflow on ironhorse too, rather than
         // completing where XS aborts.
-        let caller_footprint =
-            FRAME_OVERHEAD_SLOTS + self.args.len() + self.locals.len();
+        let caller_footprint = FRAME_OVERHEAD_SLOTS + self.args.len() + self.locals.len();
         // Opening the callee frame allocates its quartet and argument slots
         // on top of everything currently live (the caller's frame stays
         // suspended on the stack). If that crosses the fixed budget, abort
@@ -7782,13 +8036,14 @@ impl Interp {
         // After `enter_call` the callee frame's `CallerState` is on the call
         // stack; run until its `END` pops the stack back to this depth.
         let return_depth = self.call_stack.len();
+        self.callback_return_depth = None;
         match self.dispatch_at(code, body_start, return_depth) {
             // A callback throw may unwind across this native re-entry into a
             // catch/finally established by the caller. In that case the nested
             // dispatcher has already resumed the caller and run it onward;
             // its eventual Return must propagate instead of being mistaken
             // for the callback's own result (whose frame was abandoned).
-            Halt::Return if self.call_stack.len() < return_depth => {
+            Halt::Return if self.callback_return_depth != Some(return_depth) => {
                 Err(Halt::Return)
             }
             Halt::Return => Ok(self.pop()),
@@ -8004,7 +8259,13 @@ impl Interp {
     ) -> Result<(), Halt> {
         // A resume of an already-settled instance (a promise firing twice) is a
         // no-op — the two-level guard XS's resolving functions enforce.
-        if self.async_instances.get(&inst).map(|a| a.done).unwrap_or(true) && !is_start {
+        if self
+            .async_instances
+            .get(&inst)
+            .map(|a| a.done)
+            .unwrap_or(true)
+            && !is_start
+        {
             return Ok(());
         }
         let saved = self
@@ -8050,7 +8311,11 @@ impl Interp {
         if !is_start {
             self.push(sent);
         }
-        self.resume_status = if is_start { ResumeStatus::NoStatus } else { status };
+        self.resume_status = if is_start {
+            ResumeStatus::NoStatus
+        } else {
+            status
+        };
         let return_depth = self.call_stack.len();
         self.async_run_stack.push(AsyncRunFrame {
             inst,
@@ -8215,7 +8480,10 @@ impl Interp {
         // Argument i is at `base + 4 + i` (arg0 is the deepest); missing
         // arguments read `undefined`.
         let arg = |i: usize| -> Slot {
-            self.stack.get(base + 4 + i).copied().unwrap_or_else(Slot::undefined)
+            self.stack
+                .get(base + 4 + i)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
         };
         let result: Slot = match native {
             // `Boolean(value)` (`fx_Boolean`): ToBoolean(argument0), or
@@ -8449,7 +8717,11 @@ impl Interp {
                 let inst = self.slots.alloc(Slot::instance(proto));
                 self.collections.insert(
                     inst,
-                    CollectionData { kind, entries: Vec::new(), table_length: MAP_MIN_TABLE_LENGTH },
+                    CollectionData {
+                        kind,
+                        entries: Vec::new(),
+                        table_length: MAP_MIN_TABLE_LENGTH,
+                    },
                 );
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
@@ -8472,7 +8744,11 @@ impl Interp {
                 let inst = self.slots.alloc(Slot::instance(proto));
                 self.collections.insert(
                     inst,
-                    CollectionData { kind, entries: Vec::new(), table_length: 0 },
+                    CollectionData {
+                        kind,
+                        entries: Vec::new(),
+                        table_length: 0,
+                    },
                 );
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
@@ -8551,7 +8827,11 @@ impl Interp {
                         // of the element size.
                         let offset: u32 = match self.arg_to_byte_length(base, 1, 0) {
                             Some(o) => o,
-                            None => return Err(Halt::Unsupported("native-call:TypedArray:coerce-offset")),
+                            None => {
+                                return Err(Halt::Unsupported(
+                                    "native-call:TypedArray:coerce-offset",
+                                ))
+                            }
                         };
                         if offset & ((1 << shift) - 1) != 0 {
                             return Err(Halt::Unsupported("native-call:TypedArray:bad-offset"));
@@ -8562,15 +8842,27 @@ impl Interp {
                         if argc >= 3 && arg(2).kind != Kind::Undefined {
                             let len = match self.arg_to_byte_length(base, 2, 0) {
                                 Some(l) => l,
-                                None => return Err(Halt::Unsupported("native-call:TypedArray:coerce-length")),
+                                None => {
+                                    return Err(Halt::Unsupported(
+                                        "native-call:TypedArray:coerce-length",
+                                    ))
+                                }
                             };
                             let delta = match len.checked_shl(shift) {
                                 Some(d) => d,
-                                None => return Err(Halt::Unsupported("native-call:TypedArray:bad-length")),
+                                None => {
+                                    return Err(Halt::Unsupported(
+                                        "native-call:TypedArray:bad-length",
+                                    ))
+                                }
                             };
                             let end = match offset.checked_add(delta) {
                                 Some(e) => e,
-                                None => return Err(Halt::Unsupported("native-call:TypedArray:bad-length")),
+                                None => {
+                                    return Err(Halt::Unsupported(
+                                        "native-call:TypedArray:bad-length",
+                                    ))
+                                }
                             };
                             if buf_len < end {
                                 return Err(Halt::Unsupported("native-call:TypedArray:bad-length"));
@@ -8578,7 +8870,9 @@ impl Interp {
                             byte_size = delta;
                         } else {
                             if offset > buf_len || (buf_len & ((1 << shift) - 1)) != 0 {
-                                return Err(Halt::Unsupported("native-call:TypedArray:bad-byteLength"));
+                                return Err(Halt::Unsupported(
+                                    "native-call:TypedArray:bad-byteLength",
+                                ));
                             }
                             byte_size = buf_len - offset;
                         }
@@ -8586,7 +8880,12 @@ impl Interp {
                         let inst = self.slots.alloc(Slot::instance(proto));
                         self.typed_arrays.insert(
                             inst,
-                            TypedArrayData { kind: idx, buffer: r, offset, length: byte_size >> shift },
+                            TypedArrayData {
+                                kind: idx,
+                                buffer: r,
+                                offset,
+                                length: byte_size >> shift,
+                            },
                         );
                         Slot::of(Kind::Reference, Payload::Reference(inst))
                     }
@@ -8630,7 +8929,12 @@ impl Interp {
                         self.meter.tick_raw(TYPED_ARRAY_LENGTH_CTOR_FRAME_METERING);
                         let buffer = self.alloc_array_buffer(byte_length);
                         let inst = self.slots.alloc(Slot::instance(proto));
-                        let ta = TypedArrayData { kind: idx, buffer, offset: 0, length };
+                        let ta = TypedArrayData {
+                            kind: idx,
+                            buffer,
+                            offset: 0,
+                            length,
+                        };
                         self.typed_arrays.insert(inst, ta);
                         for (i, v) in elements.into_iter().enumerate() {
                             self.typed_array_element_set(ta, i as u32, v)?;
@@ -8652,7 +8956,11 @@ impl Interp {
                             Kind::Undefined => 0,
                             Kind::Integer => match a.value {
                                 Payload::Integer(i) if i >= 0 => i as u32,
-                                _ => return Err(Halt::Unsupported("native-call:TypedArray:bad-length")),
+                                _ => {
+                                    return Err(Halt::Unsupported(
+                                        "native-call:TypedArray:bad-length",
+                                    ))
+                                }
                             },
                             Kind::Number => match a.value {
                                 Payload::Number(n) => {
@@ -8660,16 +8968,26 @@ impl Interp {
                                     if t.is_nan() {
                                         0
                                     } else if t < 0.0 || t > (0x7FFF_FFFFu32 >> shift) as f64 {
-                                        return Err(Halt::Unsupported("native-call:TypedArray:bad-length"));
+                                        return Err(Halt::Unsupported(
+                                            "native-call:TypedArray:bad-length",
+                                        ));
                                     } else {
                                         t as u32
                                     }
                                 }
-                                _ => return Err(Halt::Unsupported("native-call:TypedArray:bad-length")),
+                                _ => {
+                                    return Err(Halt::Unsupported(
+                                        "native-call:TypedArray:bad-length",
+                                    ))
+                                }
                             },
                             // A boolean/string length needs the general ToNumber
                             // coercion metering — honest skip.
-                            _ => return Err(Halt::Unsupported("native-call:TypedArray:coerce-length")),
+                            _ => {
+                                return Err(Halt::Unsupported(
+                                    "native-call:TypedArray:coerce-length",
+                                ))
+                            }
                         };
                         if length > (0x7FFF_FFFFu32 >> shift) {
                             return Err(Halt::Unsupported("native-call:TypedArray:bad-length"));
@@ -8680,7 +8998,12 @@ impl Interp {
                         let inst = self.slots.alloc(Slot::instance(proto));
                         self.typed_arrays.insert(
                             inst,
-                            TypedArrayData { kind: idx, buffer, offset: 0, length },
+                            TypedArrayData {
+                                kind: idx,
+                                buffer,
+                                offset: 0,
+                                length,
+                            },
                         );
                         Slot::of(Kind::Reference, Payload::Reference(inst))
                     }
@@ -8712,7 +9035,9 @@ impl Interp {
                 if argc >= 3 && arg(2).kind != Kind::Undefined {
                     let s = match self.arg_to_byte_length(base, 2, 0) {
                         Some(s) => s,
-                        None => return Err(Halt::Unsupported("native-call:DataView:coerce-length")),
+                        None => {
+                            return Err(Halt::Unsupported("native-call:DataView:coerce-length"))
+                        }
                     };
                     let end = match offset.checked_add(s) {
                         Some(e) => e,
@@ -8727,7 +9052,14 @@ impl Interp {
                 }
                 self.meter.tick_raw(DATA_VIEW_CTOR_FRAME_METERING);
                 let inst = self.slots.alloc(Slot::instance(self.dataview_proto));
-                self.data_views.insert(inst, DataViewData { buffer: buf, offset, size });
+                self.data_views.insert(
+                    inst,
+                    DataViewData {
+                        buffer: buf,
+                        offset,
+                        size,
+                    },
+                );
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
             // `new Promise(executor)` (`fx_Promise`): a fresh pending promise
@@ -8763,9 +9095,7 @@ impl Interp {
                 // an executor throw self-names rather than mis-settle.
                 match self.run_callback(code, executor, Slot::undefined(), &[resolve, reject]) {
                     Ok(_) => {}
-                    Err(Halt::Throw(_)) => {
-                        return Err(Halt::Unsupported("promise:executor-throw"))
-                    }
+                    Err(Halt::Throw(_)) => return Err(Halt::Unsupported("promise:executor-throw")),
                     Err(h) => return Err(h),
                 }
                 Slot::of(Kind::Reference, Payload::Reference(promise))
@@ -8869,8 +9199,14 @@ impl Interp {
                 ..FuncInfo::default()
             },
         );
-        self.promise_functions
-            .insert(resolve, PromiseFnData { promise, reject: false, guard });
+        self.promise_functions.insert(
+            resolve,
+            PromiseFnData {
+                promise,
+                reject: false,
+                guard,
+            },
+        );
         let reject = self.slots.alloc(Slot::instance(fp));
         self.functions.insert(
             reject,
@@ -8879,8 +9215,14 @@ impl Interp {
                 ..FuncInfo::default()
             },
         );
-        self.promise_functions
-            .insert(reject, PromiseFnData { promise, reject: true, guard });
+        self.promise_functions.insert(
+            reject,
+            PromiseFnData {
+                promise,
+                reject: true,
+                guard,
+            },
+        );
         (
             Slot::of(Kind::Reference, Payload::Reference(resolve)),
             Slot::of(Kind::Reference, Payload::Reference(reject)),
@@ -8919,14 +9261,30 @@ impl Interp {
             XS_REGEXP_V, XS_REGEXP_Y,
         };
         let mut s = String::new();
-        if flags & XS_REGEXP_D != 0 { s.push('d'); }
-        if flags & XS_REGEXP_G != 0 { s.push('g'); }
-        if flags & XS_REGEXP_I != 0 { s.push('i'); }
-        if flags & XS_REGEXP_M != 0 { s.push('m'); }
-        if flags & XS_REGEXP_S != 0 { s.push('s'); }
-        if flags & XS_REGEXP_U != 0 { s.push('u'); }
-        if flags & XS_REGEXP_V != 0 { s.push('v'); }
-        if flags & XS_REGEXP_Y != 0 { s.push('y'); }
+        if flags & XS_REGEXP_D != 0 {
+            s.push('d');
+        }
+        if flags & XS_REGEXP_G != 0 {
+            s.push('g');
+        }
+        if flags & XS_REGEXP_I != 0 {
+            s.push('i');
+        }
+        if flags & XS_REGEXP_M != 0 {
+            s.push('m');
+        }
+        if flags & XS_REGEXP_S != 0 {
+            s.push('s');
+        }
+        if flags & XS_REGEXP_U != 0 {
+            s.push('u');
+        }
+        if flags & XS_REGEXP_V != 0 {
+            s.push('v');
+        }
+        if flags & XS_REGEXP_Y != 0 {
+            s.push('y');
+        }
         s
     }
 
@@ -9059,11 +9417,7 @@ impl Interp {
     /// `RegExp.prototype.exec(string)` (`fx_RegExp_prototype_exec`): the match
     /// drive plus the result-array construction (`[whole, ...captures]` with
     /// the `index`/`input`/`groups` own properties), or `null` on no match.
-    fn regexp_exec(
-        &mut self,
-        inst: crate::value::SlotIndex,
-        arg0: Slot,
-    ) -> Result<Slot, Halt> {
+    fn regexp_exec(&mut self, inst: crate::value::SlotIndex, arg0: Slot) -> Result<Slot, Halt> {
         Ok(self.regexp_exec_inner(inst, arg0)?.0)
     }
 
@@ -9099,8 +9453,7 @@ impl Interp {
         // `fxCacheArray`), beyond the explicit per-capture slot/chunk allocs.
         let capture_count = captures.len() as u64;
         self.meter.tick_raw(
-            REGEXP_EXEC_MATCH_METERING
-                + REGEXP_EXEC_PER_CAPTURE * capture_count.saturating_sub(1),
+            REGEXP_EXEC_MATCH_METERING + REGEXP_EXEC_PER_CAPTURE * capture_count.saturating_sub(1),
         );
         let match_start = captures[0].0;
         // The result array: one element per capture (whole match at 0).
@@ -9153,11 +9506,7 @@ impl Interp {
     /// `mxGetID(_exec)` + `mxRunCount(1)` re-entrant call framing. ironhorse
     /// mirrors that: run the exec machinery, discard the array, return the
     /// boolean.
-    fn regexp_test(
-        &mut self,
-        inst: crate::value::SlotIndex,
-        arg0: Slot,
-    ) -> Result<Slot, Halt> {
+    fn regexp_test(&mut self, inst: crate::value::SlotIndex, arg0: Slot) -> Result<Slot, Halt> {
         self.meter.tick_raw(REGEXP_TEST_FRAME_METERING);
         let result = self.regexp_exec(inst, arg0)?;
         Ok(Slot::boolean(result.kind != Kind::Null))
@@ -9197,11 +9546,7 @@ impl Interp {
     /// The global path (collect every whole match into a fresh array, advancing
     /// on an empty match) is a later increment — self-named. A non-RegExp
     /// argument (the `withoutRegexp` coerce-to-RegExp path) self-names.
-    fn string_match(
-        &mut self,
-        inst: crate::value::SlotIndex,
-        subject: Slot,
-    ) -> Result<Slot, Halt> {
+    fn string_match(&mut self, inst: crate::value::SlotIndex, subject: Slot) -> Result<Slot, Halt> {
         let global = self.regexps[&inst].program.flags() & ironhorse_regexp::XS_REGEXP_G != 0;
         if global {
             return Err(Halt::Unsupported("String.match:global"));
@@ -9322,7 +9667,10 @@ impl Interp {
     /// meter + code/data chunks + ctor frame). Returns the splitter instance,
     /// or a named skip if the (already-compiled) pattern somehow fails to
     /// recompile.
-    fn build_split_splitter(&mut self, inst: crate::value::SlotIndex) -> Result<crate::value::SlotIndex, Halt> {
+    fn build_split_splitter(
+        &mut self,
+        inst: crate::value::SlotIndex,
+    ) -> Result<crate::value::SlotIndex, Halt> {
         let (source, mut flags) = {
             let d = &self.regexps[&inst];
             (d.source.clone(), d.flags.clone())
@@ -9332,7 +9680,9 @@ impl Interp {
         }
         let program = match ironhorse_regexp::compile(&source, &flags) {
             Ok(p) => p,
-            Err(ironhorse_regexp::CompileError::Unsupported(name)) => return Err(Halt::Unsupported(name)),
+            Err(ironhorse_regexp::CompileError::Unsupported(name)) => {
+                return Err(Halt::Unsupported(name))
+            }
             Err(_) => return Err(Halt::Unsupported("String.split:splitter-recompile")),
         };
         for _ in 0..4 {
@@ -9352,7 +9702,12 @@ impl Interp {
         let sp = self.slots.alloc(Slot::instance(proto));
         self.regexps.insert(
             sp,
-            RegExpData { program, source, flags: canonical, last_index: 0.0 },
+            RegExpData {
+                program,
+                source,
+                flags: canonical,
+                last_index: 0.0,
+            },
         );
         Ok(sp)
     }
@@ -9383,7 +9738,11 @@ impl Interp {
             0xFFFF_FFFF
         } else {
             let n = to_number(&limit_slot);
-            if n.is_nan() || n < 0.0 { 0 } else { (n as u64) & 0xFFFF_FFFF }
+            if n.is_nan() || n < 0.0 {
+                0
+            } else {
+                (n as u64) & 0xFFFF_FFFF
+            }
         };
         self.meter.tick_raw(STRING_SPLIT_FRAME_METERING);
         // `mxGetID(_flags)` in the worker (the eight-property cascade) + the
@@ -9587,18 +9946,10 @@ impl Interp {
             } else if c == 13 {
                 out.push(b'\\');
                 out.push(b'r');
-            } else if c == 0xE2
-                && i + 2 < src.len()
-                && src[i + 1] == 0x80
-                && src[i + 2] == 0xA8
-            {
+            } else if c == 0xE2 && i + 2 < src.len() && src[i + 1] == 0x80 && src[i + 2] == 0xA8 {
                 out.extend_from_slice(b"\\u2028");
                 i += 2;
-            } else if c == 0xE2
-                && i + 2 < src.len()
-                && src[i + 1] == 0x80
-                && src[i + 2] == 0xA9
-            {
+            } else if c == 0xE2 && i + 2 < src.len() && src[i + 1] == 0x80 && src[i + 2] == 0xA9 {
                 out.extend_from_slice(b"\\u2029");
                 i += 2;
             } else {
@@ -9634,9 +9985,21 @@ impl Interp {
     /// the reaction is queued as a job immediately (run at the drain);
     /// otherwise it is appended to the promise's reaction list. Returns the
     /// derived promise reference slot.
-    fn promise_then(&mut self, promise: crate::value::SlotIndex, base: usize) -> Result<Slot, Halt> {
-        let arg0 = self.stack.get(base + 4).copied().unwrap_or_else(Slot::undefined);
-        let arg1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+    fn promise_then(
+        &mut self,
+        promise: crate::value::SlotIndex,
+        base: usize,
+    ) -> Result<Slot, Halt> {
+        let arg0 = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let arg1 = self
+            .stack
+            .get(base + 5)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
         self.promise_then_with(promise, arg0, arg1)
     }
 
@@ -9685,7 +10048,11 @@ impl Interp {
                 // Append to the promise's reaction list (XS's +1 THENS-list
                 // reference slot linking the reaction).
                 self.meter.tick_slot_alloc();
-                self.promises.get_mut(&promise).unwrap().reactions.push(reaction);
+                self.promises
+                    .get_mut(&promise)
+                    .unwrap()
+                    .reactions
+                    .push(reaction);
             }
             PromiseState::Fulfilled | PromiseState::Rejected => {
                 // Already settled: queue the reaction as a job immediately.
@@ -9735,7 +10102,11 @@ impl Interp {
         _argc: usize,
     ) -> Result<(), Halt> {
         let data = self.promise_functions[&f];
-        let value = self.stack.get(base + 4).copied().unwrap_or_else(Slot::undefined);
+        let value = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
         // XS's `fxResolvePromise`/`fxRejectPromise` first consult the pair's
         // shared `[[AlreadyResolved]]` boolean: if already tripped, return right
         // after the check (a near-zero residual). Otherwise trip it and settle.
@@ -10062,7 +10433,11 @@ impl Interp {
     /// whose `kind` the drain dispatches on. A pending promise appends it (+1
     /// THENS-list slot); an already-settled promise queues the job now. Marks
     /// the promise handled for the unhandled-rejection latch.
-    fn register_native_reaction(&mut self, promise: crate::value::SlotIndex, reaction: PromiseReaction) {
+    fn register_native_reaction(
+        &mut self,
+        promise: crate::value::SlotIndex,
+        reaction: PromiseReaction,
+    ) {
         for _ in 0..5 {
             self.meter.tick_slot_alloc();
         }
@@ -10072,7 +10447,11 @@ impl Interp {
         match state {
             PromiseState::Pending => {
                 self.meter.tick_slot_alloc();
-                self.promises.get_mut(&promise).unwrap().reactions.push(reaction);
+                self.promises
+                    .get_mut(&promise)
+                    .unwrap()
+                    .reactions
+                    .push(reaction);
             }
             PromiseState::Fulfilled | PromiseState::Rejected => {
                 let value = self.promises[&promise].result;
@@ -10247,7 +10626,11 @@ impl Interp {
                 let (derived, results) =
                     (self.combinators[ci].derived, self.combinators[ci].results);
                 self.combinators[ci].done = true;
-                self.settle_promise(derived, Slot::of(Kind::Reference, Payload::Reference(results)), false)
+                self.settle_promise(
+                    derived,
+                    Slot::of(Kind::Reference, Payload::Reference(results)),
+                    false,
+                )
             }
             CombinatorKind::Race => Ok(()),
             CombinatorKind::Any => {
@@ -10337,7 +10720,9 @@ impl Interp {
                         let errs: Vec<Slot> = {
                             let data = &self.arrays[&results];
                             (0..data.length)
-                                .map(|i| data.items.get(&i).copied().unwrap_or_else(Slot::undefined))
+                                .map(|i| {
+                                    data.items.get(&i).copied().unwrap_or_else(Slot::undefined)
+                                })
                                 .collect()
                         };
                         let agg = self.new_aggregate_error(errs);
@@ -10447,13 +10832,21 @@ impl Interp {
         // Chain the error instance to its type's `%<Type>.prototype%` (so
         // `err instanceof TypeError` / `instanceof Error` hold) rather than
         // the plain `%Object.prototype%` `new_object` defaulted it to.
-        if let Some(proto) = self.intrinsics.get(name).and_then(|&c| self.prototype_of(c)) {
+        if let Some(proto) = self
+            .intrinsics
+            .get(name)
+            .and_then(|&c| self.prototype_of(c))
+        {
             self.slots.get_mut(inst).value = Payload::Reference(proto);
         }
         // The message argument: absent or `undefined` ⇒ no own message (XS
         // inherits `Error.prototype.message == ""`).
         let message: Option<String> = if argc >= 1 {
-            let a = self.stack.get(base + 4).copied().unwrap_or_else(Slot::undefined);
+            let a = self
+                .stack
+                .get(base + 4)
+                .copied()
+                .unwrap_or_else(Slot::undefined);
             if a.kind == Kind::Undefined {
                 None
             } else {
@@ -10520,17 +10913,27 @@ impl Interp {
     fn build_aggregate_error(&mut self, base: usize, argc: usize) -> Result<Slot, Halt> {
         // The errors argument (arg 0) must be a dense Array; anything else
         // (a non-array iterable, or a sparse array) self-names.
-        let errors_slot = self.stack.get(base + 4).copied().unwrap_or_else(Slot::undefined);
+        let errors_slot = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
         let err_elems: Vec<Slot> = match errors_slot.value {
             Payload::Reference(arr) if self.arrays.contains_key(&arr) => {
                 let data = &self.arrays[&arr];
                 let len = data.length;
                 if (0..len).any(|i| !data.items.contains_key(&i)) {
-                    return Err(Halt::Unsupported("native-call:AggregateError:sparse-errors"));
+                    return Err(Halt::Unsupported(
+                        "native-call:AggregateError:sparse-errors",
+                    ));
                 }
                 (0..len).map(|i| data.items[&i]).collect()
             }
-            _ => return Err(Halt::Unsupported("native-call:AggregateError:iterable-errors")),
+            _ => {
+                return Err(Halt::Unsupported(
+                    "native-call:AggregateError:iterable-errors",
+                ))
+            }
         };
         // The base error (identical to `build_error` but the message is arg 1,
         // XS's `fx_Error_aux(..., 1)`).
@@ -10545,7 +10948,11 @@ impl Interp {
             self.slots.get_mut(inst).value = Payload::Reference(proto);
         }
         let message: Option<String> = if argc >= 2 {
-            let a = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+            let a = self
+                .stack
+                .get(base + 5)
+                .copied()
+                .unwrap_or_else(Slot::undefined);
             if a.kind == Kind::Undefined {
                 None
             } else {
@@ -10635,11 +11042,20 @@ impl Interp {
             Payload::Reference(r) if self.functions.contains_key(&r) => r,
             _ => return Err(Halt::Unsupported("bind:non-user-function-receiver")),
         };
-        let this_arg = self.stack.get(base + 4).copied().unwrap_or_else(Slot::undefined);
+        let this_arg = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
         // Bound leading arguments: args 1..argc (arg 0 is `thisArg`).
         let bound_args: Vec<Slot> = if argc >= 2 {
             (1..argc)
-                .map(|i| self.stack.get(base + 4 + i).copied().unwrap_or_else(Slot::undefined))
+                .map(|i| {
+                    self.stack
+                        .get(base + 4 + i)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined)
+                })
                 .collect()
         } else {
             Vec::new()
@@ -10649,7 +11065,11 @@ impl Interp {
         // = "bound " + target.name (XS reads the target's own `length`/`name`).
         let target_arity = self.functions.get(&target).map(|fi| fi.arity).unwrap_or(0);
         let bound_len = target_arity.saturating_sub(nbound);
-        let target_name = self.functions.get(&target).map(|fi| fi.name.clone()).unwrap_or_default();
+        let target_name = self
+            .functions
+            .get(&target)
+            .map(|fi| fi.name.clone())
+            .unwrap_or_default();
         let bound_name = format!("bound {}", target_name);
         // The bound-function creation cluster (instance + CODE/HOME + the three
         // internal property slots + the length/name properties). When there
@@ -10695,7 +11115,11 @@ impl Interp {
         self.meter.tick_builtin();
         let inst = self.new_object();
         self.meter.tick_raw(WRAPPER_CONSTRUCT_EXTRA);
-        if let Some(proto) = self.intrinsics.get(native.display_name()).and_then(|&c| self.prototype_of(c)) {
+        if let Some(proto) = self
+            .intrinsics
+            .get(native.display_name())
+            .and_then(|&c| self.prototype_of(c))
+        {
             self.slots.get_mut(inst).value = Payload::Reference(proto);
         }
         self.wrapper_data.insert(inst, prim);
@@ -10789,9 +11213,8 @@ impl Interp {
         for arg in forwarded {
             self.push(arg);
         }
-        self.meter.tick_raw(
-            CALL_TRAMPOLINE_METERING + forwarded_len as u64 * CALL_TRAMPOLINE_PER_ARG,
-        );
+        self.meter
+            .tick_raw(CALL_TRAMPOLINE_METERING + forwarded_len as u64 * CALL_TRAMPOLINE_PER_ARG);
         if let Some(native) = native {
             self.call_native(native, base, forwarded_len, false, code)?;
         } else if let Some(method) = method {
@@ -10814,7 +11237,11 @@ impl Interp {
         argc: usize,
         ret_pc: usize,
     ) -> Result<usize, Halt> {
-        let f = self.stack.get(base).copied().unwrap_or_else(Slot::undefined);
+        let f = self
+            .stack
+            .get(base)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
         let fref = match f.value {
             Payload::Reference(r)
                 if self
@@ -10864,7 +11291,8 @@ impl Interp {
         self.stack.push(this_arg); // THIS
         self.stack.push(f); // FUNCTION (the receiver)
         self.stack.push(Slot::undefined()); // RESULT
-        self.stack.push(Slot::of(Kind::Uninitialized, Payload::None)); // FRAME
+        self.stack
+            .push(Slot::of(Kind::Uninitialized, Payload::None)); // FRAME
         for a in real_args {
             self.stack.push(a);
         }
@@ -10884,7 +11312,11 @@ impl Interp {
         _argc: usize,
         ret_pc: usize,
     ) -> Result<usize, Halt> {
-        let f = self.stack.get(base).copied().unwrap_or_else(Slot::undefined);
+        let f = self
+            .stack
+            .get(base)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
         match f.value {
             Payload::Reference(r)
                 if self
@@ -10923,9 +11355,7 @@ impl Interp {
         let arg_array = self.stack.get(base + 5).copied();
         let (real_args, array_read_meter) = match arg_array.map(|s| (s.kind, s.value)) {
             None | Some((Kind::Undefined, _)) | Some((Kind::Null, _)) => (Vec::new(), 0),
-            Some((Kind::Reference, Payload::Reference(arr)))
-                if self.arrays.contains_key(&arr) =>
-            {
+            Some((Kind::Reference, Payload::Reference(arr))) if self.arrays.contains_key(&arr) => {
                 let data = &self.arrays[&arr];
                 let len = data.length;
                 // Dense only: every index in `[0, length)` must be a present
@@ -10936,8 +11366,8 @@ impl Interp {
                 let args: Vec<Slot> = (0..len).map(|i| data.items[&i]).collect();
                 // The array path's fixed setup plus the per-element read +
                 // forwarding (`mxGetID(_length)` + `mxGetIndex(i)` + copy).
-                let meter = APPLY_ARRAY_BASE_METERING
-                    + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
+                let meter =
+                    APPLY_ARRAY_BASE_METERING + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
                 (args, meter)
             }
             _ => return Err(Halt::Unsupported("apply:arguments-array")),
@@ -10947,7 +11377,8 @@ impl Interp {
         self.stack.push(this_arg); // THIS
         self.stack.push(f); // FUNCTION (the receiver)
         self.stack.push(Slot::undefined()); // RESULT
-        self.stack.push(Slot::of(Kind::Uninitialized, Payload::None)); // FRAME
+        self.stack
+            .push(Slot::of(Kind::Uninitialized, Payload::None)); // FRAME
         for a in real_args {
             self.stack.push(a);
         }
@@ -10994,7 +11425,8 @@ impl Interp {
         self.stack.push(data.this_arg); // THIS (the bound `this`)
         self.stack.push(target); // FUNCTION (the target)
         self.stack.push(Slot::undefined()); // RESULT
-        self.stack.push(Slot::of(Kind::Uninitialized, Payload::None)); // FRAME
+        self.stack
+            .push(Slot::of(Kind::Uninitialized, Payload::None)); // FRAME
         for a in data.args {
             self.stack.push(a); // bound args first
         }
@@ -11015,7 +11447,11 @@ impl Interp {
     fn error_to_string(&mut self, code: &[u8], this: Slot) -> Result<String, Halt> {
         let inst = match this.value {
             Payload::Reference(inst) => inst,
-            _ => return Err(Halt::Throw("TypeError: Error receiver is not an object".into())),
+            _ => {
+                return Err(Halt::Throw(
+                    "TypeError: Error receiver is not an object".into(),
+                ))
+            }
         };
         let name_value = self
             .symbol_ids
@@ -11053,7 +11489,9 @@ impl Interp {
             value
         };
         if primitive.kind == Kind::Symbol {
-            return Err(Halt::Throw("TypeError: cannot coerce symbol to string".into()));
+            return Err(Halt::Throw(
+                "TypeError: cannot coerce symbol to string".into(),
+            ));
         }
         Ok(String::from_utf8_lossy(&self.to_string_bytes_metered(primitive)).into_owned())
     }
@@ -11073,17 +11511,87 @@ impl Interp {
         code: &[u8],
     ) -> Result<(), Halt> {
         let _ = code; // used by the callback-taking methods (run_callback)
-        // Cost-calibration builtin histogram: one invocation per dispatched
-        // native prototype method. This is the central native-method
-        // dispatch seam (every `tick_builtin*` inside this function belongs
-        // to `m`). Compiles away when the feature is off. Step-granular (k)
-        // attribution folds in at stage C2, where the timing normalization
-        // that consumes it lands.
+                      // Cost-calibration builtin histogram: one invocation per dispatched
+                      // native prototype method. This is the central native-method
+                      // dispatch seam (every `tick_builtin*` inside this function belongs
+                      // to `m`). Compiles away when the feature is off. Step-granular (k)
+                      // attribution folds in at stage C2, where the timing normalization
+                      // that consumes it lands.
         self.cost.on_builtin(m);
-        let this = self.stack.get(base).copied().unwrap_or_else(Slot::undefined);
-        let arg0 = self.stack.get(base + 4).copied().unwrap_or_else(Slot::undefined);
+        let this = self
+            .stack
+            .get(base)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let arg0 = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
         let _ = argc;
         let result: Slot = match m {
+            NativeMethod::CopyObject => {
+                // XS's internal helper is called as
+                // `%CopyObject%(target, source, ...excludedKeys)`; unlike
+                // `Object.assign`, `this` is deliberately `undefined`.
+                let target = match arg0.value {
+                    Payload::Reference(target) if arg0.kind == Kind::Reference => target,
+                    _ => return Err(Halt::Throw("TypeError: copy target".into())),
+                };
+                let source_value = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                if source_value.kind == Kind::Null || source_value.kind == Kind::Undefined {
+                    arg0
+                } else {
+                    let source = match source_value.value {
+                        Payload::Reference(source) if source_value.kind == Kind::Reference => {
+                            source
+                        }
+                        _ => return Err(Halt::Unsupported("copy_object:primitive-source")),
+                    };
+                    if !self.is_ordinary_object(source) {
+                        return Err(Halt::Unsupported("copy_object:exotic-source"));
+                    }
+                    let mut excluded = Vec::new();
+                    for index in 2..argc {
+                        let key = self.stack[base + 4 + index];
+                        excluded.push(self.to_property_id(code, key)?);
+                    }
+                    let keys: Vec<u16> = self
+                        .own_property_slots(source)
+                        .into_iter()
+                        .map(|property| self.slots.get(property).id)
+                        .collect();
+                    for id in keys {
+                        if excluded.contains(&id) {
+                            continue;
+                        }
+                        let descriptor = match self.ordinary_get_own_descriptor(source, id) {
+                            Some(descriptor) if descriptor.enumerable == Some(true) => descriptor,
+                            _ => continue,
+                        };
+                        let value = if descriptor.is_accessor() {
+                            self.ordinary_get(code, source, id, source_value)?
+                        } else {
+                            descriptor.value.unwrap_or_else(Slot::undefined)
+                        };
+                        let copied = OrdinaryDescriptor {
+                            value: Some(value),
+                            writable: Some(true),
+                            enumerable: Some(true),
+                            configurable: Some(true),
+                            ..OrdinaryDescriptor::default()
+                        };
+                        if !self.ordinary_define_own_property(target, id, copied) {
+                            return Err(Halt::Throw("TypeError: copy property".into()));
+                        }
+                    }
+                    arg0
+                }
+            }
             // `Function.prototype.call` is handled by the `run` trampoline
             // (`enter_call_dot_call`) and never reaches here.
             NativeMethod::FunctionCall => return Err(Halt::Unsupported("call:unexpected")),
@@ -11229,9 +11737,7 @@ impl Interp {
                 // and a well-known inherited name (`"toString"`) is correctly
                 // `false` because it is not an own property.
                 let (o, key) = match (this.value, arg0.value) {
-                    (Payload::Reference(o), Payload::String(off)) => {
-                        (o, self.str_text(off))
-                    }
+                    (Payload::Reference(o), Payload::String(off)) => (o, self.str_text(off)),
                     _ => return Err(Halt::Unsupported("hasOwnProperty:non-string-key")),
                 };
                 // An index-valued string key routes to the exotic index
@@ -11296,7 +11802,9 @@ impl Interp {
                 let mut data = ArrayData::default();
                 data.length = n;
                 for (i, &id) in ids.iter().enumerate() {
-                    let name = self.symbol_names[(id - 1) as usize].clone();
+                    let name = self
+                        .string_key_name(id)
+                        .ok_or(Halt::Unsupported("Object.keys:unknown-key"))?;
                     let off = self.alloc_str_text(name.as_bytes());
                     data.items
                         .insert(i as u32, Slot::of(Kind::String, Payload::String(off)));
@@ -11309,7 +11817,11 @@ impl Interp {
             // Ordinary objects with ordinary data properties only; an exotic
             // receiver or an accessor / non-standard-flagged property skips.
             NativeMethod::ObjectGetOwnPropertyDescriptor => {
-                let arg1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+                let arg1 = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 let inst = match arg0.value {
                     Payload::Reference(o) => o,
                     _ => return Err(Halt::Unsupported("getOwnPropertyDescriptor:non-object")),
@@ -11327,23 +11839,7 @@ impl Interp {
                 // interns as a name (an index-valued string is the exotic-index
                 // corner — honest skip). Own-only, so no boot-default gate: an
                 // own miss is soundly `undefined`.
-                let id = match arg1.kind {
-                    Kind::Symbol => match arg1.value {
-                        Payload::Reference(desc) => self.intern_symbol_key(desc),
-                        _ => return Err(Halt::Unsupported("getOwnPropertyDescriptor:bad-symbol-key")),
-                    },
-                    Kind::String => {
-                        let key = match arg1.value {
-                            Payload::String(off) => self.str_text(off),
-                            _ => return Err(Halt::Unsupported("getOwnPropertyDescriptor:non-string-key")),
-                        };
-                        if string_to_index(&key).is_some() {
-                            return Err(Halt::Unsupported("getOwnPropertyDescriptor:index-key"));
-                        }
-                        self.intern_key(&key)
-                    }
-                    _ => return Err(Halt::Unsupported("getOwnPropertyDescriptor:non-string-key")),
-                };
+                let id = self.to_property_id(code, arg1)?;
                 match self.find_property(inst, id) {
                     Some(p) => {
                         let prop = *self.slots.get(p);
@@ -11355,31 +11851,31 @@ impl Interp {
                         // (all true), an `Object.defineProperty`-defined one may
                         // clear any of them.
                         if prop.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
-                            return Err(Halt::Unsupported(
-                                "getOwnPropertyDescriptor:accessor-property",
-                            ));
+                            self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
+                            self.descriptor_object(
+                                self.ordinary_get_own_descriptor(inst, id).unwrap(),
+                            )
+                        } else {
+                            let writable = prop.flag & XS_DONT_SET_FLAG == 0;
+                            let enumerable = prop.flag & XS_DONT_ENUM_FLAG == 0;
+                            let configurable = prop.flag & XS_DONT_DELETE_FLAG == 0;
+                            self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
+                            let value = Slot::of(prop.kind, prop.value);
+                            let desc = self.slots.alloc(Slot::instance(self.object_proto));
+                            self.define_descriptor_field(desc, "value", value);
+                            self.define_descriptor_field(desc, "writable", Slot::boolean(writable));
+                            self.define_descriptor_field(
+                                desc,
+                                "enumerable",
+                                Slot::boolean(enumerable),
+                            );
+                            self.define_descriptor_field(
+                                desc,
+                                "configurable",
+                                Slot::boolean(configurable),
+                            );
+                            Slot::of(Kind::Reference, Payload::Reference(desc))
                         }
-                        let writable = prop.flag & XS_DONT_SET_FLAG == 0;
-                        let enumerable = prop.flag & XS_DONT_ENUM_FLAG == 0;
-                        let configurable = prop.flag & XS_DONT_DELETE_FLAG == 0;
-                        // The whole `fxFromPropertyDescriptor` build, folded
-                        // into one measured residual; the descriptor object is
-                        // constructed with its per-allocation metering
-                        // suppressed (accounted by the constant).
-                        self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
-                        let value = Slot::of(prop.kind, prop.value);
-                        let desc = self.slots.alloc(Slot::instance(self.object_proto));
-                        // Insert value → writable → enumerable → configurable;
-                        // the chain (prepended) then reverses to XS's key order.
-                        self.define_descriptor_field(desc, "value", value);
-                        self.define_descriptor_field(desc, "writable", Slot::boolean(writable));
-                        self.define_descriptor_field(desc, "enumerable", Slot::boolean(enumerable));
-                        self.define_descriptor_field(
-                            desc,
-                            "configurable",
-                            Slot::boolean(configurable),
-                        );
-                        Slot::of(Kind::Reference, Payload::Reference(desc))
                     }
                     None => {
                         self.meter.tick_raw(GOPD_ABSENT_RESIDUAL_METERING);
@@ -11395,12 +11891,9 @@ impl Interp {
                 if !self.is_ordinary_object(inst) {
                     return Err(Halt::Unsupported("getOwnPropertyNames:exotic-object"));
                 }
-                let ids: Vec<u16> = self
-                    .own_property_slots(inst)
-                    .into_iter()
-                    .map(|p| self.slots.get(p).id)
-                    .filter(|&id| !self.is_symbol_key_id(id))
-                    .collect();
+                let ids = self
+                    .own_all_string_ids(inst)
+                    .ok_or(Halt::Unsupported("getOwnPropertyNames:unknown-key"))?;
                 let n = ids.len() as u32;
                 self.meter.tick_raw(OBJECT_KEYS_FRAME_METERING);
                 self.meter.tick_raw(self.array_chunk_size_metering(n));
@@ -11428,6 +11921,81 @@ impl Interp {
                 self.arrays.insert(result, data);
                 Slot::of(Kind::Reference, Payload::Reference(result))
             }
+            NativeMethod::ObjectCreate => {
+                let prototype = match arg0.value {
+                    Payload::Reference(prototype) if arg0.kind == Kind::Reference => prototype,
+                    _ if arg0.kind == Kind::Null => crate::value::SlotIndex::NULL,
+                    _ => return Err(Halt::Throw("TypeError: Object.create prototype".into())),
+                };
+                let object = self.new_object();
+                self.slots.get_mut(object).value = Payload::Reference(prototype);
+                let properties = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                if properties.kind != Kind::Undefined {
+                    let descriptors = match properties.value {
+                        Payload::Reference(descriptors) if properties.kind == Kind::Reference => {
+                            descriptors
+                        }
+                        _ => return Err(Halt::Throw("TypeError: Object.create properties".into())),
+                    };
+                    if !self.define_properties_from_object(code, object, descriptors)? {
+                        return Err(Halt::Throw("TypeError: cannot define properties".into()));
+                    }
+                }
+                Slot::of(Kind::Reference, Payload::Reference(object))
+            }
+            NativeMethod::ObjectDefineProperties => {
+                let target = match arg0.value {
+                    Payload::Reference(target) if arg0.kind == Kind::Reference => target,
+                    _ => return Err(Halt::Throw("TypeError: defineProperties target".into())),
+                };
+                let properties = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let descriptors = match properties.value {
+                    Payload::Reference(descriptors) if properties.kind == Kind::Reference => {
+                        descriptors
+                    }
+                    _ => {
+                        return Err(Halt::Throw(
+                            "TypeError: defineProperties descriptors".into(),
+                        ))
+                    }
+                };
+                if !self.define_properties_from_object(code, target, descriptors)? {
+                    return Err(Halt::Throw("TypeError: cannot define properties".into()));
+                }
+                arg0
+            }
+            NativeMethod::ObjectGetOwnPropertySymbols => {
+                let object = match arg0.value {
+                    Payload::Reference(object) if arg0.kind == Kind::Reference => object,
+                    _ => {
+                        return Err(Halt::Throw(
+                            "TypeError: getOwnPropertySymbols target".into(),
+                        ))
+                    }
+                };
+                let ids: Vec<u16> = self
+                    .own_property_slots(object)
+                    .into_iter()
+                    .map(|property| self.slots.get(property).id)
+                    .filter(|id| self.is_symbol_key_id(*id))
+                    .collect();
+                let result = self.new_array_unmetered();
+                let mut items = std::collections::BTreeMap::new();
+                for (index, id) in ids.into_iter().enumerate() {
+                    items.insert(index as u32, self.property_key_slot(id)?);
+                }
+                let length = items.len() as u32;
+                self.arrays.insert(result, ArrayData { length, items });
+                Slot::of(Kind::Reference, Payload::Reference(result))
+            }
             // `Object.defineProperty(o, k, descriptor)`: define a **new** own
             // data property on an ordinary object from a full four-field data
             // descriptor. Covers the verifyProperty shape — `{value, writable,
@@ -11437,119 +12005,173 @@ impl Interp {
             // existing key, a partial or accessor descriptor, an index/exotic
             // key, or an exotic receiver self-names.
             NativeMethod::ObjectDefineProperty => {
-                let arg1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
-                let arg2 = self.stack.get(base + 6).copied().unwrap_or_else(Slot::undefined);
-                let inst = match arg0.value {
-                    Payload::Reference(o) => o,
-                    _ => return Err(Halt::Unsupported("defineProperty:non-object")),
-                };
-                if self.arrays.contains_key(&inst)
-                    || self.collections.contains_key(&inst)
-                    || self.typed_arrays.contains_key(&inst)
-                    || self.array_buffers.contains_key(&inst)
-                    || self.data_views.contains_key(&inst)
-                    || self.wrapper_data.contains_key(&inst)
-                {
-                    return Err(Halt::Unsupported("defineProperty:exotic-object"));
-                }
-                let descref = match arg2.value {
-                    Payload::Reference(d) => d,
-                    _ => return Err(Halt::Unsupported("defineProperty:non-object-descriptor")),
-                };
-                // A symbol key resolves to its interned key id (`mxID(symbol)`);
-                // a string key interns as a name, rejecting an index-valued
-                // string (the exotic-index corner) and a boot default-key name
-                // the program never symbol-referenced (the intern-table gate —
-                // it cannot be keyed soundly).
-                let key_id = match arg1.kind {
-                    Kind::Symbol => match arg1.value {
-                        Payload::Reference(desc) => self.intern_symbol_key(desc),
-                        _ => return Err(Halt::Unsupported("defineProperty:bad-symbol-key")),
-                    },
-                    Kind::String => {
-                        let key = match arg1.value {
-                            Payload::String(off) => self.str_text(off),
-                            _ => return Err(Halt::Unsupported("defineProperty:non-string-key")),
-                        };
-                        if string_to_index(&key).is_some() {
-                            return Err(Halt::Unsupported("defineProperty:index-key"));
-                        }
-                        if !self.symbol_ids.contains_key(&key)
-                            && self.default_keys.contains(key.as_str())
+                if self.is_ordinary_object(match arg0.value {
+                    Payload::Reference(object) if arg0.kind == Kind::Reference => object,
+                    _ => return Err(Halt::Throw("TypeError: defineProperty target".into())),
+                }) {
+                    let key = self
+                        .stack
+                        .get(base + 5)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined);
+                    let descriptor_value = self
+                        .stack
+                        .get(base + 6)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined);
+                    let object = match arg0.value {
+                        Payload::Reference(object) => object,
+                        _ => unreachable!(),
+                    };
+                    let descriptor_object = match descriptor_value.value {
+                        Payload::Reference(descriptor)
+                            if descriptor_value.kind == Kind::Reference =>
                         {
-                            return Err(Halt::Unsupported("defineProperty:ambiguous-default-key"));
+                            descriptor
                         }
-                        self.intern_key(&key)
+                        _ => {
+                            return Err(Halt::Throw(
+                                "TypeError: descriptor is not an object".into(),
+                            ))
+                        }
+                    };
+                    let id = self.to_property_id(code, key)?;
+                    let descriptor = self.descriptor_from_object(code, descriptor_object)?;
+                    self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
+                    if !self.ordinary_define_own_property(object, id, descriptor) {
+                        return Err(Halt::Throw("TypeError: cannot define property".into()));
                     }
-                    _ => return Err(Halt::Unsupported("defineProperty:non-string-key")),
-                };
-                // Read the descriptor's four data fields (their keys are the
-                // descriptor literal's program symbols). Any get/set present,
-                // or any of the four absent, is outside the covered shape.
-                let field = |slf: &Self, name: &str| -> Option<Slot> {
-                    slf.symbol_ids
-                        .get(name)
-                        .and_then(|&fid| slf.find_property(descref, fid))
-                        .map(|p| {
-                            let s = slf.slots.get(p);
-                            Slot::of(s.kind, s.value)
-                        })
-                };
-                if field(self, "get").is_some() || field(self, "set").is_some() {
-                    return Err(Halt::Unsupported("defineProperty:accessor-descriptor"));
-                }
-                let (value, writable, enumerable, configurable) = match (
-                    field(self, "value"),
-                    field(self, "writable"),
-                    field(self, "enumerable"),
-                    field(self, "configurable"),
-                ) {
-                    (Some(v), Some(w), Some(e), Some(c)) => (v, w, e, c),
-                    _ => return Err(Halt::Unsupported("defineProperty:partial-descriptor")),
-                };
-                // The three attribute flags coerce the field values to boolean
-                // (XS's `fxToBoolean`); a non-boolean attribute is outside the
-                // covered shape (its coercion metering is unmodeled here).
-                let as_bool = |s: Slot| -> Option<bool> {
-                    match s.kind {
-                        Kind::Boolean => Some(matches!(s.value, Payload::Boolean(true))),
-                        _ => None,
+                    arg0
+                } else {
+                    let arg1 = self
+                        .stack
+                        .get(base + 5)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined);
+                    let arg2 = self
+                        .stack
+                        .get(base + 6)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined);
+                    let inst = match arg0.value {
+                        Payload::Reference(o) => o,
+                        _ => return Err(Halt::Unsupported("defineProperty:non-object")),
+                    };
+                    if self.arrays.contains_key(&inst)
+                        || self.collections.contains_key(&inst)
+                        || self.typed_arrays.contains_key(&inst)
+                        || self.array_buffers.contains_key(&inst)
+                        || self.data_views.contains_key(&inst)
+                        || self.wrapper_data.contains_key(&inst)
+                    {
+                        return Err(Halt::Unsupported("defineProperty:exotic-object"));
                     }
-                };
-                let (w, e, c) = match (as_bool(writable), as_bool(enumerable), as_bool(configurable))
-                {
-                    (Some(w), Some(e), Some(c)) => (w, e, c),
-                    _ => return Err(Halt::Unsupported("defineProperty:non-boolean-attribute")),
-                };
-                let id = key_id;
-                // Only a genuinely-new own property is covered; a redefine runs
-                // the configurable-compatibility checks (different metering).
-                if self.find_property(inst, id).is_some() {
-                    return Err(Halt::Unsupported("defineProperty:redefine"));
+                    let descref = match arg2.value {
+                        Payload::Reference(d) => d,
+                        _ => return Err(Halt::Unsupported("defineProperty:non-object-descriptor")),
+                    };
+                    // A symbol key resolves to its interned key id (`mxID(symbol)`);
+                    // a string key interns as a name, rejecting an index-valued
+                    // string (the exotic-index corner) and a boot default-key name
+                    // the program never symbol-referenced (the intern-table gate —
+                    // it cannot be keyed soundly).
+                    let key_id = match arg1.kind {
+                        Kind::Symbol => match arg1.value {
+                            Payload::Reference(desc) => self.intern_symbol_key(desc),
+                            _ => return Err(Halt::Unsupported("defineProperty:bad-symbol-key")),
+                        },
+                        Kind::String => {
+                            let key = match arg1.value {
+                                Payload::String(off) => self.str_text(off),
+                                _ => {
+                                    return Err(Halt::Unsupported("defineProperty:non-string-key"))
+                                }
+                            };
+                            if string_to_index(&key).is_some() {
+                                return Err(Halt::Unsupported("defineProperty:index-key"));
+                            }
+                            if !self.symbol_ids.contains_key(&key)
+                                && self.default_keys.contains(key.as_str())
+                            {
+                                return Err(Halt::Unsupported(
+                                    "defineProperty:ambiguous-default-key",
+                                ));
+                            }
+                            self.intern_key(&key)
+                        }
+                        _ => return Err(Halt::Unsupported("defineProperty:non-string-key")),
+                    };
+                    // Read the descriptor's four data fields (their keys are the
+                    // descriptor literal's program symbols). Any get/set present,
+                    // or any of the four absent, is outside the covered shape.
+                    let field = |slf: &Self, name: &str| -> Option<Slot> {
+                        slf.symbol_ids
+                            .get(name)
+                            .and_then(|&fid| slf.find_property(descref, fid))
+                            .map(|p| {
+                                let s = slf.slots.get(p);
+                                Slot::of(s.kind, s.value)
+                            })
+                    };
+                    if field(self, "get").is_some() || field(self, "set").is_some() {
+                        return Err(Halt::Unsupported("defineProperty:accessor-descriptor"));
+                    }
+                    let (value, writable, enumerable, configurable) = match (
+                        field(self, "value"),
+                        field(self, "writable"),
+                        field(self, "enumerable"),
+                        field(self, "configurable"),
+                    ) {
+                        (Some(v), Some(w), Some(e), Some(c)) => (v, w, e, c),
+                        _ => return Err(Halt::Unsupported("defineProperty:partial-descriptor")),
+                    };
+                    // The three attribute flags coerce the field values to boolean
+                    // (XS's `fxToBoolean`); a non-boolean attribute is outside the
+                    // covered shape (its coercion metering is unmodeled here).
+                    let as_bool = |s: Slot| -> Option<bool> {
+                        match s.kind {
+                            Kind::Boolean => Some(matches!(s.value, Payload::Boolean(true))),
+                            _ => None,
+                        }
+                    };
+                    let (w, e, c) = match (
+                        as_bool(writable),
+                        as_bool(enumerable),
+                        as_bool(configurable),
+                    ) {
+                        (Some(w), Some(e), Some(c)) => (w, e, c),
+                        _ => return Err(Halt::Unsupported("defineProperty:non-boolean-attribute")),
+                    };
+                    let id = key_id;
+                    // Only a genuinely-new own property is covered; a redefine runs
+                    // the configurable-compatibility checks (different metering).
+                    if self.find_property(inst, id).is_some() {
+                        return Err(Halt::Unsupported("defineProperty:redefine"));
+                    }
+                    let mut flag = 0u8;
+                    if !w {
+                        flag |= XS_DONT_SET_FLAG;
+                    }
+                    if !e {
+                        flag |= XS_DONT_ENUM_FLAG;
+                    }
+                    if !c {
+                        flag |= XS_DONT_DELETE_FLAG;
+                    }
+                    // The whole `fxDescriptorToSlot` field read +
+                    // `fxOrdinaryDefineOwnProperty` create, folded into one measured
+                    // residual (the property slot built with per-allocation metering
+                    // suppressed); a novel key's intern slot is metered above.
+                    self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
+                    let mut prop = value;
+                    prop.id = id;
+                    prop.flag = flag;
+                    let head = self.slots.get(inst).next;
+                    prop.next = head;
+                    let idx = self.slots.alloc(prop);
+                    self.slots.get_mut(inst).next = idx;
+                    arg0
                 }
-                let mut flag = 0u8;
-                if !w {
-                    flag |= XS_DONT_SET_FLAG;
-                }
-                if !e {
-                    flag |= XS_DONT_ENUM_FLAG;
-                }
-                if !c {
-                    flag |= XS_DONT_DELETE_FLAG;
-                }
-                // The whole `fxDescriptorToSlot` field read +
-                // `fxOrdinaryDefineOwnProperty` create, folded into one measured
-                // residual (the property slot built with per-allocation metering
-                // suppressed); a novel key's intern slot is metered above.
-                self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
-                let mut prop = value;
-                prop.id = id;
-                prop.flag = flag;
-                let head = self.slots.get(inst).next;
-                prop.next = head;
-                let idx = self.slots.alloc(prop);
-                self.slots.get_mut(inst).next = idx;
-                arg0
             }
             // `Object.propertyIsEnumerable(k)` (a prototype method): whether
             // `k` is an own enumerable property of the receiver. Own-only, no
@@ -11572,7 +12194,9 @@ impl Interp {
                     return Err(Halt::Unsupported("propertyIsEnumerable:index-key"));
                 }
                 if !self.symbol_ids.contains_key(&key) && self.default_keys.contains(key.as_str()) {
-                    return Err(Halt::Unsupported("propertyIsEnumerable:ambiguous-default-key"));
+                    return Err(Halt::Unsupported(
+                        "propertyIsEnumerable:ambiguous-default-key",
+                    ));
                 }
                 let id = self.intern_key(&key);
                 let r = match self.find_property(inst, id) {
@@ -11617,14 +12241,11 @@ impl Interp {
                 // Read each value now (the property chain is stable across the
                 // result build). An accessor own property would need a getter
                 // invocation; `own_enumerable_ids` already skips such objects.
-                let values: Vec<Slot> = ids
-                    .iter()
-                    .map(|&id| {
-                        let p = self.find_property(inst, id).unwrap();
-                        let s = self.slots.get(p);
-                        Slot::of(s.kind, s.value)
-                    })
-                    .collect();
+                let receiver = Slot::of(Kind::Reference, Payload::Reference(inst));
+                let mut values = Vec::with_capacity(ids.len());
+                for &id in &ids {
+                    values.push(self.ordinary_get(code, inst, id, receiver)?);
+                }
                 let n = ids.len() as u32;
                 self.meter.tick_raw(if entries {
                     OBJECT_ENTRIES_FRAME_METERING
@@ -11643,7 +12264,9 @@ impl Interp {
                         for _ in 0..2 {
                             self.meter.tick_slot_alloc();
                         }
-                        let name = self.symbol_names[(id - 1) as usize].clone();
+                        let name = self
+                            .string_key_name(id)
+                            .ok_or(Halt::Unsupported("Object.entries:unknown-key"))?;
                         let off = self.alloc_str_text(name.as_bytes());
                         let pair = self.slots.alloc(Slot::instance(self.array_proto));
                         let mut pd = ArrayData::default();
@@ -11652,8 +12275,10 @@ impl Interp {
                             .insert(0, Slot::of(Kind::String, Payload::String(off)));
                         pd.items.insert(1, *val);
                         self.arrays.insert(pair, pd);
-                        data.items
-                            .insert(i as u32, Slot::of(Kind::Reference, Payload::Reference(pair)));
+                        data.items.insert(
+                            i as u32,
+                            Slot::of(Kind::Reference, Payload::Reference(pair)),
+                        );
                     } else {
                         self.meter.tick_raw(OBJECT_VALUES_PER_KEY_METERING);
                         self.meter.tick_slot_alloc();
@@ -11675,39 +12300,19 @@ impl Interp {
                     return Err(Halt::Unsupported("getOwnPropertyDescriptors:exotic-object"));
                 }
                 let slots = self.own_property_slots(inst);
-                // Snapshot each own property (id, flag, value). Any accessor is
-                // outside the covered data-descriptor shape.
-                let mut props: Vec<(u16, u8, Kind, Payload)> = Vec::new();
+                let mut props: Vec<(u16, OrdinaryDescriptor)> = Vec::new();
                 for &p in &slots {
                     let s = *self.slots.get(p);
-                    if s.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
-                        return Err(Halt::Unsupported(
-                            "getOwnPropertyDescriptors:accessor-property",
-                        ));
-                    }
-                    let name_idx = match (s.id as usize).checked_sub(1) {
-                        Some(i) if i < self.symbol_names.len() => i,
-                        _ => {
-                            return Err(Halt::Unsupported(
-                                "getOwnPropertyDescriptors:unclassified-property",
-                            ))
-                        }
-                    };
-                    let _ = name_idx;
-                    props.push((s.id, s.flag, s.kind, s.value));
+                    props.push((s.id, self.ordinary_get_own_descriptor(inst, s.id).unwrap()));
                 }
                 self.meter.tick_raw(GOPDS_FRAME_METERING);
                 let result = self.slots.alloc(Slot::instance(self.object_proto));
-                for (id, flag, kind, value) in props {
-                    let writable = flag & XS_DONT_SET_FLAG == 0;
-                    let enumerable = flag & XS_DONT_ENUM_FLAG == 0;
-                    let configurable = flag & XS_DONT_DELETE_FLAG == 0;
+                for (id, descriptor) in props {
                     self.meter.tick_raw(GOPDS_PER_KEY_METERING);
-                    let desc = self.slots.alloc(Slot::instance(self.object_proto));
-                    self.define_descriptor_field(desc, "value", Slot::of(kind, value));
-                    self.define_descriptor_field(desc, "writable", Slot::boolean(writable));
-                    self.define_descriptor_field(desc, "enumerable", Slot::boolean(enumerable));
-                    self.define_descriptor_field(desc, "configurable", Slot::boolean(configurable));
+                    let desc = match self.descriptor_object(descriptor).value {
+                        Payload::Reference(desc) => desc,
+                        _ => unreachable!(),
+                    };
                     let head = self.slots.get(result).next;
                     let mut prop = Slot::of(Kind::Reference, Payload::Reference(desc));
                     prop.id = id;
@@ -11743,25 +12348,13 @@ impl Interp {
                         }));
                     }
                     let slots = self.own_property_slots(inst);
-                    // A getter/setter own property: freeze/seal do stamp
-                    // DONT_DELETE (and freeze leaves the accessor callable), a
-                    // shape not modeled — honest-skip rather than mis-stamp.
-                    for &p in &slots {
-                        if self.slots.get(p).flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
-                            return Err(Halt::Unsupported(if freeze {
-                                "freeze:accessor-property"
-                            } else {
-                                "seal:accessor-property"
-                            }));
-                        }
-                    }
                     self.meter.tick_raw(INTEGRITY_APPLY_KEYS_BASE_METERING);
                     self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG;
                     for &p in &slots {
                         self.meter.tick_raw(INTEGRITY_APPLY_PER_KEY_METERING);
                         let s = self.slots.get_mut(p);
                         s.flag |= XS_DONT_DELETE_FLAG;
-                        if freeze {
+                        if freeze && s.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) == 0 {
                             s.flag |= XS_DONT_SET_FLAG;
                         }
                     }
@@ -11809,20 +12402,13 @@ impl Interp {
                             for &p in &slots {
                                 self.meter.tick_raw(INTEGRITY_QUERY_PER_KEY_METERING);
                                 let f = self.slots.get(p).flag;
-                                if f & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
-                                    // An accessor's writability is n/a; only the
-                                    // DONT_DELETE bit matters — but the modeled
-                                    // shape carries no accessors, so skip.
-                                    return Err(Halt::Unsupported(if frozen {
-                                        "isFrozen:accessor-property"
-                                    } else {
-                                        "isSealed:accessor-property"
-                                    }));
-                                }
                                 if f & XS_DONT_DELETE_FLAG == 0 {
                                     ok = false;
                                 }
-                                if frozen && f & XS_DONT_SET_FLAG == 0 {
+                                if frozen
+                                    && f & (XS_GETTER_FLAG | XS_SETTER_FLAG) == 0
+                                    && f & XS_DONT_SET_FLAG == 0
+                                {
                                     ok = false;
                                 }
                             }
@@ -11848,7 +12434,12 @@ impl Interp {
                     None => return Err(Halt::Unsupported("push:non-dense-array")),
                 };
                 let args: Vec<Slot> = (0..argc)
-                    .map(|i| self.stack.get(base + 4 + i).copied().unwrap_or_else(Slot::undefined))
+                    .map(|i| {
+                        self.stack
+                            .get(base + 4 + i)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined)
+                    })
                     .collect();
                 let c = args.len() as u32;
                 let length = self.arrays[&inst].length;
@@ -12114,7 +12705,8 @@ impl Interp {
                 for op in operands {
                     // Every reference operand runs the `Symbol.isConcatSpreadable`
                     // check.
-                    let is_array = matches!(op.value, Payload::Reference(r) if self.arrays.contains_key(&r));
+                    let is_array =
+                        matches!(op.value, Payload::Reference(r) if self.arrays.contains_key(&r));
                     if let Payload::Reference(_) = op.value {
                         self.meter.tick_raw(ARRAY_CONCAT_CHECK_METERING);
                     }
@@ -12133,7 +12725,11 @@ impl Interp {
                             return Err(Halt::Unsupported("concat:sparse-arg"));
                         }
                         for i in 0..len {
-                            let s = self.arrays[&r].items.get(&i).copied().unwrap_or_else(Slot::undefined);
+                            let s = self.arrays[&r]
+                                .items
+                                .get(&i)
+                                .copied()
+                                .unwrap_or_else(Slot::undefined);
                             self.meter.tick_slot_alloc();
                             self.meter.tick_builtin_some(2);
                             self.meter.tick_raw(ARRAY_CONCAT_SPREAD_EXTRA_METERING);
@@ -12326,9 +12922,14 @@ impl Interp {
                     // RangeError — its abort-value/metering is a later increment.
                     return Err(Halt::Unsupported("with:range"));
                 }
-                let value = self.stack.get(base + 4 + 1).copied().unwrap_or_else(Slot::undefined);
+                let value = self
+                    .stack
+                    .get(base + 4 + 1)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 self.meter.tick_raw(ARRAY_WITH_FRAME_METERING);
-                self.meter.tick_raw((length as u64) * ARRAY_WITH_PER_ELEM_METERING);
+                self.meter
+                    .tick_raw((length as u64) * ARRAY_WITH_PER_ELEM_METERING);
                 let result = self.new_array_unmetered();
                 if length > 0 {
                     self.meter.tick_raw(self.array_chunk_size_metering(length));
@@ -12391,7 +12992,11 @@ impl Interp {
                     None => return Err(Halt::Unsupported("map:non-dense-array")),
                 };
                 let callback = arg0;
-                let this_arg = self.stack.get(base + 4 + 1).copied().unwrap_or_else(Slot::undefined);
+                let this_arg = self
+                    .stack
+                    .get(base + 4 + 1)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_MAP_FRAME_METERING);
                 let result = self.new_array_unmetered();
@@ -12424,7 +13029,11 @@ impl Interp {
                     None => return Err(Halt::Unsupported("some/every:non-dense-array")),
                 };
                 let callback = arg0;
-                let this_arg = self.stack.get(base + 4 + 1).copied().unwrap_or_else(Slot::undefined);
+                let this_arg = self
+                    .stack
+                    .get(base + 4 + 1)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_SOMEEVERY_FRAME_METERING);
                 let mut answer = is_every;
@@ -12459,7 +13068,11 @@ impl Interp {
                     None => return Err(Halt::Unsupported("find:non-dense-array")),
                 };
                 let callback = arg0;
-                let this_arg = self.stack.get(base + 4 + 1).copied().unwrap_or_else(Slot::undefined);
+                let this_arg = self
+                    .stack
+                    .get(base + 4 + 1)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_FIND_FRAME_METERING);
                 if !want_index {
@@ -12470,8 +13083,7 @@ impl Interp {
                 }
                 let mut found: Option<(u32, Slot)> = None;
                 for i in 0..length {
-                    let item = self
-                        .arrays[&inst]
+                    let item = self.arrays[&inst]
                         .items
                         .get(&i)
                         .copied()
@@ -12512,7 +13124,11 @@ impl Interp {
                     None => return Err(Halt::Unsupported("filter:non-dense-array")),
                 };
                 let callback = arg0;
-                let this_arg = self.stack.get(base + 4 + 1).copied().unwrap_or_else(Slot::undefined);
+                let this_arg = self
+                    .stack
+                    .get(base + 4 + 1)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_FILTER_FRAME_METERING);
                 let mut kept: Vec<Slot> = Vec::new();
@@ -12562,13 +13178,21 @@ impl Interp {
                 self.meter.tick_raw(ARRAY_REDUCE_FRAME_METERING);
                 // The present indices in fold order.
                 let order: Vec<u32> = if right {
-                    (0..length).rev().filter(|i| self.arrays[&inst].items.contains_key(i)).collect()
+                    (0..length)
+                        .rev()
+                        .filter(|i| self.arrays[&inst].items.contains_key(i))
+                        .collect()
                 } else {
-                    (0..length).filter(|i| self.arrays[&inst].items.contains_key(i)).collect()
+                    (0..length)
+                        .filter(|i| self.arrays[&inst].items.contains_key(i))
+                        .collect()
                 };
                 let mut it = order.into_iter();
                 let mut acc = if argc >= 2 {
-                    self.stack.get(base + 4 + 1).copied().unwrap_or_else(Slot::undefined)
+                    self.stack
+                        .get(base + 4 + 1)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined)
                 } else {
                     match it.next() {
                         Some(i) => {
@@ -12577,7 +13201,9 @@ impl Interp {
                             self.meter.tick_raw(ARRAY_REDUCE_INIT_SCAN_METERING);
                             match self.arrays[&inst].items.get(&i) {
                                 Some(s) => *s,
-                                None => return Err(Halt::Unsupported("reduce:concurrent-mutation")),
+                                None => {
+                                    return Err(Halt::Unsupported("reduce:concurrent-mutation"))
+                                }
                             }
                         }
                         None => return Err(Halt::Unsupported("reduce:empty-no-initial")),
@@ -12607,7 +13233,11 @@ impl Interp {
                     None => return Err(Halt::Unsupported("findLast:non-dense-array")),
                 };
                 let callback = arg0;
-                let this_arg = self.stack.get(base + 4 + 1).copied().unwrap_or_else(Slot::undefined);
+                let this_arg = self
+                    .stack
+                    .get(base + 4 + 1)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_FIND_FRAME_METERING);
                 // The `findLast`/`findLastIndex` backward-scan setup, a fixed
@@ -12618,8 +13248,7 @@ impl Interp {
                 }
                 let mut found: Option<(u32, Slot)> = None;
                 for i in (0..length).rev() {
-                    let item = self
-                        .arrays[&inst]
+                    let item = self.arrays[&inst]
                         .items
                         .get(&i)
                         .copied()
@@ -12661,7 +13290,8 @@ impl Interp {
                 };
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_TOREVERSED_FRAME_METERING);
-                self.meter.tick_raw((length as u64) * ARRAY_WITH_PER_ELEM_METERING);
+                self.meter
+                    .tick_raw((length as u64) * ARRAY_WITH_PER_ELEM_METERING);
                 let result = self.new_array_unmetered();
                 if length > 0 {
                     self.meter.tick_raw(self.array_chunk_size_metering(length));
@@ -12703,7 +13333,13 @@ impl Interp {
                 } else {
                     let ins = (argc - 2) as u32;
                     // deleteCount clamped to [0, length - start].
-                    let dc = match numeric_of(&self.stack.get(base + 4 + 1).copied().unwrap_or_else(Slot::undefined)) {
+                    let dc = match numeric_of(
+                        &self
+                            .stack
+                            .get(base + 4 + 1)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined),
+                    ) {
                         Some(n) if n.is_nan() || n < 0.0 => 0,
                         Some(n) if n > (length - start) as f64 => length - start,
                         Some(n) => n.trunc() as u32,
@@ -12715,14 +13351,16 @@ impl Interp {
                 // The removed-elements result array.
                 let result = self.new_array_unmetered();
                 if deletions > 0 {
-                    self.meter.tick_raw(self.array_chunk_size_metering(deletions));
+                    self.meter
+                        .tick_raw(self.array_chunk_size_metering(deletions));
                 }
                 self.meter.tick_builtin_some((deletions as u64) * 10);
                 self.meter.tick_builtin_some(4);
                 let tail_len = length - (start + deletions);
                 if insertions < deletions {
                     self.meter.tick_builtin_some((tail_len as u64) * 10);
-                    self.meter.tick_builtin_some(((deletions - insertions) as u64) * 4);
+                    self.meter
+                        .tick_builtin_some(((deletions - insertions) as u64) * 4);
                     let new_len = length - (deletions - insertions);
                     if new_len > 0 {
                         self.meter.tick_raw(self.array_chunk_size_metering(new_len));
@@ -12738,11 +13376,22 @@ impl Interp {
                 self.meter.tick_builtin_some(4);
                 // Perform the splice on a dense element vector.
                 let cur: Vec<Slot> = (0..length)
-                    .map(|i| self.arrays[&inst].items.get(&i).copied().unwrap_or_else(Slot::undefined))
+                    .map(|i| {
+                        self.arrays[&inst]
+                            .items
+                            .get(&i)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined)
+                    })
                     .collect();
                 let removed: Vec<Slot> = cur[start as usize..(start + deletions) as usize].to_vec();
                 let inserted: Vec<Slot> = (0..insertions)
-                    .map(|k| self.stack.get(base + 4 + 2 + k as usize).copied().unwrap_or_else(Slot::undefined))
+                    .map(|k| {
+                        self.stack
+                            .get(base + 4 + 2 + k as usize)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined)
+                    })
                     .collect();
                 let mut rebuilt: Vec<Slot> = Vec::new();
                 rebuilt.extend_from_slice(&cur[..start as usize]);
@@ -12783,7 +13432,13 @@ impl Interp {
                     (0, length - start)
                 } else {
                     let ins = (argc - 2) as u32;
-                    let dc = match numeric_of(&self.stack.get(base + 4 + 1).copied().unwrap_or_else(Slot::undefined)) {
+                    let dc = match numeric_of(
+                        &self
+                            .stack
+                            .get(base + 4 + 1)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined),
+                    ) {
                         Some(n) if n.is_nan() || n < 0.0 => 0,
                         Some(n) if n > (length - start) as f64 => length - start,
                         Some(n) => n.trunc() as u32,
@@ -12795,7 +13450,8 @@ impl Interp {
                 let rest = length - (start + skip);
                 self.meter.tick_raw(ARRAY_TOSPLICED_FRAME_METERING);
                 if result_len > 0 {
-                    self.meter.tick_raw(self.array_chunk_size_metering(result_len));
+                    self.meter
+                        .tick_raw(self.array_chunk_size_metering(result_len));
                 }
                 self.meter.tick_builtin_some((start as u64) * 10);
                 for _ in 0..insertions {
@@ -12805,10 +13461,21 @@ impl Interp {
                 self.meter.tick_builtin_some(4);
                 // Build the result densely; the receiver stays untouched.
                 let cur: Vec<Slot> = (0..length)
-                    .map(|i| self.arrays[&inst].items.get(&i).copied().unwrap_or_else(Slot::undefined))
+                    .map(|i| {
+                        self.arrays[&inst]
+                            .items
+                            .get(&i)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined)
+                    })
                     .collect();
                 let inserted: Vec<Slot> = (0..insertions)
-                    .map(|k| self.stack.get(base + 4 + 2 + k as usize).copied().unwrap_or_else(Slot::undefined))
+                    .map(|k| {
+                        self.stack
+                            .get(base + 4 + 2 + k as usize)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined)
+                    })
                     .collect();
                 let mut rebuilt: Vec<Slot> = Vec::new();
                 rebuilt.extend_from_slice(&cur[..start as usize]);
@@ -12871,7 +13538,11 @@ impl Interp {
                     None => return Err(Halt::Unsupported("flatMap:non-dense-array")),
                 };
                 let callback = arg0;
-                let this_arg = self.stack.get(base + 4 + 1).copied().unwrap_or_else(Slot::undefined);
+                let this_arg = self
+                    .stack
+                    .get(base + 4 + 1)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_FLAT_FRAME_METERING);
                 let mut out: Vec<Slot> = Vec::new();
@@ -12893,13 +13564,15 @@ impl Interp {
                             for k in 0..sub_len {
                                 if let Some(e) = self.arrays[&sub].items.get(&k).copied() {
                                     self.meter.tick_raw(ARRAY_FLAT_PER_LEAF_METERING);
-                                    self.meter.tick_raw(self.array_item_grow_metering(out.len() as u64));
+                                    self.meter
+                                        .tick_raw(self.array_item_grow_metering(out.len() as u64));
                                     out.push(e);
                                 }
                             }
                         } else {
                             self.meter.tick_raw(ARRAY_FLAT_PER_LEAF_METERING);
-                            self.meter.tick_raw(self.array_item_grow_metering(out.len() as u64));
+                            self.meter
+                                .tick_raw(self.array_item_grow_metering(out.len() as u64));
                             out.push(r);
                         }
                     }
@@ -13013,15 +13686,21 @@ impl Interp {
             // completion divergence or a wrong value). See each variant's doc.
             NativeMethod::ArraySort => {
                 let _ = (base, argc);
-                return Err(Halt::Unsupported("Array.prototype.sort:data-dependent-comparison-metering"));
+                return Err(Halt::Unsupported(
+                    "Array.prototype.sort:data-dependent-comparison-metering",
+                ));
             }
             NativeMethod::ArrayToSorted => {
                 let _ = (base, argc);
-                return Err(Halt::Unsupported("Array.prototype.toSorted:data-dependent-comparison-metering"));
+                return Err(Halt::Unsupported(
+                    "Array.prototype.toSorted:data-dependent-comparison-metering",
+                ));
             }
             NativeMethod::ArrayToLocaleString => {
                 let _ = (base, argc);
-                return Err(Halt::Unsupported("Array.prototype.toLocaleString:locale-stringification"));
+                return Err(Halt::Unsupported(
+                    "Array.prototype.toLocaleString:locale-stringification",
+                ));
             }
             NativeMethod::ArrayFrom => {
                 let _ = (base, argc);
@@ -13077,6 +13756,8 @@ impl Interp {
             NativeMethod::Math(id) => self.call_math(id, base, argc)?,
             NativeMethod::ReflectGetPrototypeOf
             | NativeMethod::ReflectSetPrototypeOf
+            | NativeMethod::ReflectIsExtensible
+            | NativeMethod::ReflectPreventExtensions
             | NativeMethod::ReflectGetOwnPropertyDescriptor
             | NativeMethod::ReflectDefineProperty
             | NativeMethod::ReflectOwnKeys
@@ -13085,7 +13766,7 @@ impl Interp {
             | NativeMethod::ReflectSet
             | NativeMethod::ReflectDeleteProperty
             | NativeMethod::ReflectApply
-            | NativeMethod::ReflectConstruct => self.call_reflect(m, base, argc)?,
+            | NativeMethod::ReflectConstruct => self.call_reflect(m, base, argc, code)?,
             NativeMethod::StringCharCodeAt
             | NativeMethod::StringCodePointAt
             | NativeMethod::StringCharAt
@@ -13125,9 +13806,7 @@ impl Interp {
             | NativeMethod::SetDelete => self.call_collection(m, this, base, argc)?,
             // `Map`/`Set` `forEach` — re-entrant (drives a user callback per
             // live entry); needs the code buffer for the nested dispatch.
-            NativeMethod::CollForEach => {
-                self.call_collection_foreach(this, base, argc, code)?
-            }
+            NativeMethod::CollForEach => self.call_collection_foreach(this, base, argc, code)?,
             // `entries`/`keys`/`values` → a Map/Set Iterator over the receiver.
             NativeMethod::CollEntries | NativeMethod::CollKeys | NativeMethod::CollValues => {
                 let inst = match self.collection_ref(this) {
@@ -13244,7 +13923,11 @@ impl Interp {
                     Some(o) => o,
                     None => return Err(Halt::Unsupported("data-view-set:coerce-offset")),
                 };
-                let value = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+                let value = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 if dv.size < delta || (dv.size - delta) < offset {
                     return Err(Halt::Unsupported("data-view-set:out-of-range"));
                 }
@@ -13422,7 +14105,11 @@ impl Interp {
                 if self.string_receiver_units(this).is_none() {
                     return Err(Halt::Unsupported("String.replace:non-string-receiver"));
                 }
-                let repl = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+                let repl = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 match arg0.value {
                     Payload::Reference(r) if self.regexps.contains_key(&r) => {
                         self.string_replace(r, this, repl)?
@@ -13438,7 +14125,11 @@ impl Interp {
                 if self.string_receiver_units(this).is_none() {
                     return Err(Halt::Unsupported("String.split:non-string-receiver"));
                 }
-                let limit = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+                let limit = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 match arg0.value {
                     Payload::Reference(r) if self.regexps.contains_key(&r) => {
                         self.string_split(r, this, limit)?
@@ -13458,11 +14149,34 @@ impl Interp {
     /// (`apply`/`construct`, which re-enter, self-name this child). The result
     /// is oracle-certified; the metering is the advisory native-frame residual
     /// (accuracy-over-parity: the `Reflect` corpus is result-gated).
-    fn call_reflect(&mut self, m: NativeMethod, base: usize, argc: usize) -> Result<Slot, Halt> {
+    fn call_reflect(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
         let _ = argc;
-        let arg0 = self.stack.get(base + 4).copied().unwrap_or_else(Slot::undefined);
-        let arg1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
-        let arg2 = self.stack.get(base + 6).copied().unwrap_or_else(Slot::undefined);
+        let arg0 = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let arg1 = self
+            .stack
+            .get(base + 5)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let arg2 = self
+            .stack
+            .get(base + 6)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let arg3 = self
+            .stack
+            .get(base + 7)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
         match m {
             // `Reflect.getPrototypeOf(target)`: the target's `[[Prototype]]` —
             // a reference to the prototype instance, or `null`. Sound for any
@@ -13519,6 +14233,25 @@ impl Interp {
                 }
                 Ok(Slot::boolean(true))
             }
+            NativeMethod::ReflectIsExtensible => {
+                let object = match arg0.value {
+                    Payload::Reference(object) if arg0.kind == Kind::Reference => object,
+                    _ => return Err(Halt::Throw("TypeError: Reflect.isExtensible target".into())),
+                };
+                Ok(Slot::boolean(self.instance_extensible(object)))
+            }
+            NativeMethod::ReflectPreventExtensions => {
+                let object = match arg0.value {
+                    Payload::Reference(object) if arg0.kind == Kind::Reference => object,
+                    _ => {
+                        return Err(Halt::Throw(
+                            "TypeError: Reflect.preventExtensions target".into(),
+                        ))
+                    }
+                };
+                self.slots.get_mut(object).flag |= XS_DONT_PATCH_FLAG;
+                Ok(Slot::boolean(true))
+            }
             // `Reflect.getOwnPropertyDescriptor(target, key)`: identical result
             // to `Object.getOwnPropertyDescriptor` — the data-descriptor object
             // or `undefined`. A non-object target self-names (no coercion).
@@ -13536,32 +14269,11 @@ impl Interp {
                         "Reflect.getOwnPropertyDescriptor:exotic-object",
                     ));
                 }
-                let id = self
-                    .property_key_id(arg1, false)
-                    .ok_or(Halt::Unsupported("Reflect.getOwnPropertyDescriptor:non-string-key"))?;
-                match self.find_property(inst, id) {
-                    Some(p) => {
-                        let prop = *self.slots.get(p);
-                        if prop.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
-                            return Err(Halt::Unsupported(
-                                "Reflect.getOwnPropertyDescriptor:accessor-property",
-                            ));
-                        }
-                        let writable = prop.flag & XS_DONT_SET_FLAG == 0;
-                        let enumerable = prop.flag & XS_DONT_ENUM_FLAG == 0;
-                        let configurable = prop.flag & XS_DONT_DELETE_FLAG == 0;
+                let id = self.to_property_id(code, arg1)?;
+                match self.ordinary_get_own_descriptor(inst, id) {
+                    Some(descriptor) => {
                         self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
-                        let value = Slot::of(prop.kind, prop.value);
-                        let desc = self.slots.alloc(Slot::instance(self.object_proto));
-                        self.define_descriptor_field(desc, "value", value);
-                        self.define_descriptor_field(desc, "writable", Slot::boolean(writable));
-                        self.define_descriptor_field(desc, "enumerable", Slot::boolean(enumerable));
-                        self.define_descriptor_field(
-                            desc,
-                            "configurable",
-                            Slot::boolean(configurable),
-                        );
-                        Ok(Slot::of(Kind::Reference, Payload::Reference(desc)))
+                        Ok(self.descriptor_object(descriptor))
                     }
                     None => {
                         self.meter.tick_raw(GOPD_ABSENT_RESIDUAL_METERING);
@@ -13574,82 +14286,115 @@ impl Interp {
             // returning a boolean and never throwing on rejection. Covered
             // shape: a four-field data descriptor on a genuinely-new key.
             NativeMethod::ReflectDefineProperty => {
-                let inst = match arg0.value {
-                    Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(Halt::Unsupported("Reflect.defineProperty:non-object")),
-                };
-                if !self.is_ordinary_object(inst) {
-                    return Err(Halt::Unsupported("Reflect.defineProperty:exotic-object"));
-                }
-                let descref = match arg2.value {
-                    Payload::Reference(d) if arg2.kind == Kind::Reference => d,
-                    _ => {
+                if let Payload::Reference(object) = arg0.value {
+                    if arg0.kind != Kind::Reference {
+                        return Err(Halt::Throw(
+                            "TypeError: Reflect.defineProperty target".into(),
+                        ));
+                    }
+                    let descriptor_object = match arg2.value {
+                        Payload::Reference(descriptor) if arg2.kind == Kind::Reference => {
+                            descriptor
+                        }
+                        _ => {
+                            return Err(Halt::Throw(
+                                "TypeError: descriptor is not an object".into(),
+                            ))
+                        }
+                    };
+                    let id = self.to_property_id(code, arg1)?;
+                    let descriptor = self.descriptor_from_object(code, descriptor_object)?;
+                    self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
+                    Ok(Slot::boolean(
+                        self.ordinary_define_own_property(object, id, descriptor),
+                    ))
+                } else {
+                    let inst = match arg0.value {
+                        Payload::Reference(o) if arg0.kind == Kind::Reference => o,
+                        _ => return Err(Halt::Unsupported("Reflect.defineProperty:non-object")),
+                    };
+                    if !self.is_ordinary_object(inst) {
+                        return Err(Halt::Unsupported("Reflect.defineProperty:exotic-object"));
+                    }
+                    let descref = match arg2.value {
+                        Payload::Reference(d) if arg2.kind == Kind::Reference => d,
+                        _ => {
+                            return Err(Halt::Unsupported(
+                                "Reflect.defineProperty:non-object-descriptor",
+                            ))
+                        }
+                    };
+                    let id = self
+                        .property_key_id(arg1, true)
+                        .ok_or(Halt::Unsupported("Reflect.defineProperty:non-string-key"))?;
+                    let field = |slf: &Self, name: &str| -> Option<Slot> {
+                        slf.symbol_ids
+                            .get(name)
+                            .and_then(|&fid| slf.find_property(descref, fid))
+                            .map(|p| {
+                                let s = slf.slots.get(p);
+                                Slot::of(s.kind, s.value)
+                            })
+                    };
+                    if field(self, "get").is_some() || field(self, "set").is_some() {
                         return Err(Halt::Unsupported(
-                            "Reflect.defineProperty:non-object-descriptor",
-                        ))
+                            "Reflect.defineProperty:accessor-descriptor",
+                        ));
                     }
-                };
-                let id = self
-                    .property_key_id(arg1, true)
-                    .ok_or(Halt::Unsupported("Reflect.defineProperty:non-string-key"))?;
-                let field = |slf: &Self, name: &str| -> Option<Slot> {
-                    slf.symbol_ids
-                        .get(name)
-                        .and_then(|&fid| slf.find_property(descref, fid))
-                        .map(|p| {
-                            let s = slf.slots.get(p);
-                            Slot::of(s.kind, s.value)
-                        })
-                };
-                if field(self, "get").is_some() || field(self, "set").is_some() {
-                    return Err(Halt::Unsupported("Reflect.defineProperty:accessor-descriptor"));
-                }
-                let (value, writable, enumerable, configurable) = match (
-                    field(self, "value"),
-                    field(self, "writable"),
-                    field(self, "enumerable"),
-                    field(self, "configurable"),
-                ) {
-                    (Some(v), Some(w), Some(e), Some(c)) => (v, w, e, c),
-                    _ => return Err(Halt::Unsupported("Reflect.defineProperty:partial-descriptor")),
-                };
-                let as_bool = |s: Slot| -> Option<bool> {
-                    match s.kind {
-                        Kind::Boolean => Some(matches!(s.value, Payload::Boolean(true))),
-                        _ => None,
+                    let (value, writable, enumerable, configurable) = match (
+                        field(self, "value"),
+                        field(self, "writable"),
+                        field(self, "enumerable"),
+                        field(self, "configurable"),
+                    ) {
+                        (Some(v), Some(w), Some(e), Some(c)) => (v, w, e, c),
+                        _ => {
+                            return Err(Halt::Unsupported(
+                                "Reflect.defineProperty:partial-descriptor",
+                            ))
+                        }
+                    };
+                    let as_bool = |s: Slot| -> Option<bool> {
+                        match s.kind {
+                            Kind::Boolean => Some(matches!(s.value, Payload::Boolean(true))),
+                            _ => None,
+                        }
+                    };
+                    let (w, e, c) = match (
+                        as_bool(writable),
+                        as_bool(enumerable),
+                        as_bool(configurable),
+                    ) {
+                        (Some(w), Some(e), Some(c)) => (w, e, c),
+                        _ => {
+                            return Err(Halt::Unsupported(
+                                "Reflect.defineProperty:non-boolean-attribute",
+                            ))
+                        }
+                    };
+                    if self.find_property(inst, id).is_some() {
+                        return Err(Halt::Unsupported("Reflect.defineProperty:redefine"));
                     }
-                };
-                let (w, e, c) = match (as_bool(writable), as_bool(enumerable), as_bool(configurable))
-                {
-                    (Some(w), Some(e), Some(c)) => (w, e, c),
-                    _ => {
-                        return Err(Halt::Unsupported(
-                            "Reflect.defineProperty:non-boolean-attribute",
-                        ))
+                    let mut flag = 0u8;
+                    if !w {
+                        flag |= XS_DONT_SET_FLAG;
                     }
-                };
-                if self.find_property(inst, id).is_some() {
-                    return Err(Halt::Unsupported("Reflect.defineProperty:redefine"));
+                    if !e {
+                        flag |= XS_DONT_ENUM_FLAG;
+                    }
+                    if !c {
+                        flag |= XS_DONT_DELETE_FLAG;
+                    }
+                    self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
+                    let mut prop = value;
+                    prop.id = id;
+                    prop.flag = flag;
+                    let head = self.slots.get(inst).next;
+                    prop.next = head;
+                    let idx = self.slots.alloc(prop);
+                    self.slots.get_mut(inst).next = idx;
+                    Ok(Slot::boolean(true))
                 }
-                let mut flag = 0u8;
-                if !w {
-                    flag |= XS_DONT_SET_FLAG;
-                }
-                if !e {
-                    flag |= XS_DONT_ENUM_FLAG;
-                }
-                if !c {
-                    flag |= XS_DONT_DELETE_FLAG;
-                }
-                self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
-                let mut prop = value;
-                prop.id = id;
-                prop.flag = flag;
-                let head = self.slots.get(inst).next;
-                prop.next = head;
-                let idx = self.slots.alloc(prop);
-                self.slots.get_mut(inst).next = idx;
-                Ok(Slot::boolean(true))
             }
             // `Reflect.ownKeys(target)`: a fresh `Array` of ALL own string keys
             // (enumerable or not), in creation order. Ordinary receivers with
@@ -13663,10 +14408,21 @@ impl Interp {
                 if !self.is_ordinary_object(inst) {
                     return Err(Halt::Unsupported("Reflect.ownKeys:exotic-object"));
                 }
-                let ids = match self.own_all_string_ids(inst) {
-                    Some(v) => v,
-                    None => return Err(Halt::Unsupported("Reflect.ownKeys:unclassified-property")),
-                };
+                let mut ids: Vec<u16> = self
+                    .own_property_slots(inst)
+                    .into_iter()
+                    .map(|property| self.slots.get(property).id)
+                    .collect();
+                ids.sort_by_key(|id| {
+                    if self.is_symbol_key_id(*id) {
+                        (2u8, 0)
+                    } else {
+                        self.string_key_name(*id)
+                            .and_then(|name| string_to_index(&name))
+                            .map(|index| (0u8, index))
+                            .unwrap_or((1u8, 0))
+                    }
+                });
                 let n = ids.len() as u32;
                 self.meter.tick_raw(OBJECT_KEYS_FRAME_METERING);
                 self.meter.tick_raw(self.array_chunk_size_metering(n));
@@ -13677,10 +14433,7 @@ impl Interp {
                 let mut data = ArrayData::default();
                 data.length = n;
                 for (i, &id) in ids.iter().enumerate() {
-                    let name = self.symbol_names[(id - 1) as usize].clone();
-                    let off = self.alloc_str_text(name.as_bytes());
-                    data.items
-                        .insert(i as u32, Slot::of(Kind::String, Payload::String(off)));
+                    data.items.insert(i as u32, self.property_key_slot(id)?);
                 }
                 self.arrays.insert(result, data);
                 Ok(Slot::of(Kind::Reference, Payload::Reference(result)))
@@ -13695,7 +14448,7 @@ impl Interp {
                 if !self.is_ordinary_object(inst) {
                     return Err(Halt::Unsupported("Reflect.has:exotic-object"));
                 }
-                let id = self.property_key_id(arg1, true).ok_or(Halt::Unsupported("Reflect.has:non-string-key"))?;
+                let id = self.to_property_id(code, arg1)?;
                 let (present, recursions) = self.instance_has(inst, id);
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
                 self.meter.tick_code_n(recursions);
@@ -13712,9 +14465,10 @@ impl Interp {
                 if !self.is_ordinary_object(inst) {
                     return Err(Halt::Unsupported("Reflect.get:exotic-object"));
                 }
-                let id = self.property_key_id(arg1, true).ok_or(Halt::Unsupported("Reflect.get:non-string-key"))?;
+                let id = self.to_property_id(code, arg1)?;
+                let receiver = if argc >= 3 { arg2 } else { arg0 };
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
-                Ok(self.instance_get(inst, id))
+                self.ordinary_get(code, inst, id, receiver)
             }
             // `Reflect.set(target, key, value[, receiver])`: an ordinary
             // `[[Set]]` returning whether it was accepted. `false` for a
@@ -13728,20 +14482,12 @@ impl Interp {
                 if !self.is_ordinary_object(inst) {
                     return Err(Halt::Unsupported("Reflect.set:exotic-object"));
                 }
-                let id = self.property_key_id(arg1, true).ok_or(Halt::Unsupported("Reflect.set:non-string-key"))?;
-                // An accessor own property routes through a setter (re-entrant,
-                // not modeled) — self-name rather than clobber it as data.
-                if let Some(p) = self.find_property(inst, id) {
-                    if self.slots.get(p).flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
-                        return Err(Halt::Unsupported("Reflect.set:accessor-property"));
-                    }
-                }
+                let id = self.to_property_id(code, arg1)?;
+                let receiver = if argc >= 4 { arg3 } else { arg0 };
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
-                if self.ordinary_write_rejected(inst, id) {
-                    return Ok(Slot::boolean(false));
-                }
-                self.instance_put(inst, id, arg2);
-                Ok(Slot::boolean(true))
+                Ok(Slot::boolean(
+                    self.ordinary_set(code, inst, id, arg2, receiver)?,
+                ))
             }
             // `Reflect.deleteProperty(target, key)`: the ordinary own-property
             // delete as a boolean (`false` for a non-configurable own property,
@@ -13754,8 +14500,7 @@ impl Interp {
                 if !self.is_ordinary_object(inst) {
                     return Err(Halt::Unsupported("Reflect.deleteProperty:exotic-object"));
                 }
-                let id =
-                    self.property_key_id(arg1, true).ok_or(Halt::Unsupported("Reflect.deleteProperty:non-string-key"))?;
+                let id = self.to_property_id(code, arg1)?;
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
                 Ok(Slot::boolean(self.delete_own_property(inst, id)))
             }
@@ -13790,7 +14535,11 @@ impl Interp {
         argc: usize,
     ) -> Result<Slot, Halt> {
         let _ = argc;
-        let arg0 = self.stack.get(base + 4).copied().unwrap_or_else(Slot::undefined);
+        let arg0 = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
         let inst = match self.collection_ref(this) {
             Some(i) => i,
             None => return Err(Halt::Unsupported("collection-method:non-collection-this")),
@@ -13804,7 +14553,11 @@ impl Interp {
         let weak = matches!(kind, CollKind::WeakMap | CollKind::WeakSet);
         match m {
             NativeMethod::MapSet if is_map_family => {
-                let val = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+                let val = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 let key = self.normalize_coll_key(arg0);
                 if weak && key.kind != Kind::Reference {
                     return Err(Halt::Unsupported("WeakMap.set:non-object-key"));
@@ -13818,7 +14571,11 @@ impl Interp {
                         // (Map: key + value + entry; WeakMap: keyEntry +
                         // listEntry + closure).
                         self.charge_new_entry_slots(3);
-                        self.collections.get_mut(&inst).unwrap().entries.push((key, val));
+                        self.collections
+                            .get_mut(&inst)
+                            .unwrap()
+                            .entries
+                            .push((key, val));
                         self.collection_table_resize(inst);
                     }
                 }
@@ -13834,7 +14591,11 @@ impl Interp {
                     // `fxSetWeakEntry` → three (keyEntry + listEntry + closure).
                     let n = if weak { 3 } else { 2 };
                     self.charge_new_entry_slots(n);
-                    self.collections.get_mut(&inst).unwrap().entries.push((key, Slot::undefined()));
+                    self.collections
+                        .get_mut(&inst)
+                        .unwrap()
+                        .entries
+                        .push((key, Slot::undefined()));
                     self.collection_table_resize(inst);
                 }
                 Ok(this)
@@ -14052,9 +14813,18 @@ impl Interp {
     /// still coercing the remaining arguments — a no-op for ironhorse's numeric
     /// operands). `max` seeds `-Infinity`, `min` seeds `+Infinity`.
     fn math_extremum(&mut self, argc: usize, base: usize, is_max: bool) -> Result<Slot, Halt> {
-        let a = |i: usize| self.stack.get(base + 4 + i).copied().unwrap_or_else(Slot::undefined);
+        let a = |i: usize| {
+            self.stack
+                .get(base + 4 + i)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        };
         if argc == 0 {
-            return Ok(Slot::number(if is_max { f64::NEG_INFINITY } else { f64::INFINITY }));
+            return Ok(Slot::number(if is_max {
+                f64::NEG_INFINITY
+            } else {
+                f64::INFINITY
+            }));
         }
         // Integer fast path while every argument seen so far is an integer.
         let first = a(0);
@@ -14066,7 +14836,11 @@ impl Interp {
         } else {
             None
         };
-        let mut acc: f64 = if is_max { f64::NEG_INFINITY } else { f64::INFINITY };
+        let mut acc: f64 = if is_max {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        };
         let start = if int_acc.is_some() { 1 } else { 0 };
         for i in start..argc {
             let s = a(i);
@@ -14119,7 +14893,12 @@ impl Interp {
         argc: usize,
     ) -> Result<Slot, Halt> {
         let arg0 = if argc > 0 {
-            Some(self.stack.get(base + 4).copied().unwrap_or_else(Slot::undefined))
+            Some(
+                self.stack
+                    .get(base + 4)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined),
+            )
         } else {
             None
         };
@@ -14241,7 +15020,11 @@ impl Interp {
                         _ => return Err(Halt::Unsupported("isNaN/isFinite:uncoercible")),
                     },
                 };
-                Slot::boolean(if m == GlobalIsNaN { n.is_nan() } else { n.is_finite() })
+                Slot::boolean(if m == GlobalIsNaN {
+                    n.is_nan()
+                } else {
+                    n.is_finite()
+                })
             }
             _ => return Err(Halt::Unsupported("number:unmodeled")),
         };
@@ -14253,7 +15036,10 @@ impl Interp {
     /// meters. `parse` allocates the parsed strings' chunks.
     fn call_json(&mut self, m: NativeMethod, base: usize, argc: usize) -> Result<Slot, Halt> {
         let arg0 = if argc > 0 {
-            self.stack.get(base + 4).copied().unwrap_or_else(Slot::undefined)
+            self.stack
+                .get(base + 4)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
         } else {
             Slot::undefined()
         };
@@ -14262,8 +15048,16 @@ impl Interp {
                 // A replacer/space argument (2nd/3rd) changes the output and
                 // the traversal; ironhorse models the no-replacer / no-space subset
                 // and self-names the rest.
-                let arg1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
-                let arg2 = self.stack.get(base + 6).copied().unwrap_or_else(Slot::undefined);
+                let arg1 = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let arg2 = self
+                    .stack
+                    .get(base + 6)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 if (argc > 1 && arg1.kind != Kind::Undefined && arg1.kind != Kind::Null)
                     || (argc > 2 && arg2.kind != Kind::Undefined && arg2.kind != Kind::Null)
                 {
@@ -14301,7 +15095,11 @@ impl Interp {
                 // A reviver argument (2nd) re-walks the result under a callback;
                 // out of scope — self-name.
                 if argc > 1 {
-                    let arg1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+                    let arg1 = self
+                        .stack
+                        .get(base + 5)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined);
                     if arg1.kind == Kind::Reference {
                         return Err(Halt::Unsupported("JSON.parse:reviver"));
                     }
@@ -14310,7 +15108,11 @@ impl Interp {
                 // only an already-string text (the coercion + its metering is a
                 // corner) — self-name otherwise.
                 let off = match arg0 {
-                    Slot { kind: Kind::String, value: Payload::String(o), .. } => o,
+                    Slot {
+                        kind: Kind::String,
+                        value: Payload::String(o),
+                        ..
+                    } => o,
                     _ => return Err(Halt::Unsupported("JSON.parse:non-string")),
                 };
                 let input = self.str_text(off).into_bytes();
@@ -14351,13 +15153,11 @@ impl Interp {
             Kind::Undefined => Ok(None),
             Kind::Boolean => {
                 *cost += JSON_STRINGIFY_SCALAR_METERING;
-                Ok(Some(
-                    if matches!(value.value, Payload::Boolean(true)) {
-                        b"true".to_vec()
-                    } else {
-                        b"false".to_vec()
-                    },
-                ))
+                Ok(Some(if matches!(value.value, Payload::Boolean(true)) {
+                    b"true".to_vec()
+                } else {
+                    b"false".to_vec()
+                }))
             }
             Kind::Integer => match value.value {
                 Payload::Integer(i) => {
@@ -14733,7 +15533,10 @@ impl Interp {
                 // through its CESU-8 decoder; ironhorse copies UTF-8 input verbatim
                 // for the BMP but self-names anything above the BMP.
                 let rest = &input[i..];
-                match std::str::from_utf8(rest).ok().and_then(|s| s.chars().next()) {
+                match std::str::from_utf8(rest)
+                    .ok()
+                    .and_then(|s| s.chars().next())
+                {
                     Some(ch) if (ch as u32) <= 0xFFFF => {
                         let l = ch.len_utf8();
                         out.extend_from_slice(&input[i..i + l]);
@@ -14917,10 +15720,10 @@ impl Interp {
             None => return Err(Halt::Unsupported("string-method:non-string-receiver")),
         };
         let ulen = content.len() as i64; // UTF-16 code-unit length
-        // Clamp a (possibly negative / out-of-range) code-unit position to a
-        // valid slice index into `content` (units). Replaces the CESU-8
-        // byte-offset lookup — with UTF-16 storage the unit index *is* the
-        // slice index.
+                                         // Clamp a (possibly negative / out-of-range) code-unit position to a
+                                         // valid slice index into `content` (units). Replaces the CESU-8
+                                         // byte-offset lookup — with UTF-16 storage the unit index *is* the
+                                         // slice index.
         let clamp = |unit: i64| -> usize {
             if unit <= 0 {
                 0
@@ -14932,7 +15735,12 @@ impl Interp {
         };
         let argn = |i: usize| -> Option<Slot> {
             if i < argc {
-                Some(self.stack.get(base + 4 + i).copied().unwrap_or_else(Slot::undefined))
+                Some(
+                    self.stack
+                        .get(base + 4 + i)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined),
+                )
             } else {
                 None
             }
@@ -15178,7 +15986,11 @@ impl Interp {
                     .iter()
                     .map(|&u| {
                         let b = u as u8;
-                        (if up { b.to_ascii_uppercase() } else { b.to_ascii_lowercase() }) as u16
+                        (if up {
+                            b.to_ascii_uppercase()
+                        } else {
+                            b.to_ascii_lowercase()
+                        }) as u16
                     })
                     .collect();
                 self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
@@ -15402,8 +16214,16 @@ impl Interp {
             CollKind::Set => true,
             _ => return Err(Halt::Unsupported("collection-forEach:weak")),
         };
-        let callback = self.stack.get(base + 4).copied().unwrap_or_else(Slot::undefined);
-        let this_arg = self.stack.get(base + 4 + 1).copied().unwrap_or_else(Slot::undefined);
+        let callback = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let this_arg = self
+            .stack
+            .get(base + 4 + 1)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
         self.meter.tick_raw(if is_set {
             SET_FOREACH_FRAME_METERING
         } else {
@@ -15413,7 +16233,10 @@ impl Interp {
         // the covered grammar does not mutate mid-iteration).
         let mut i = 0u32;
         loop {
-            let entry = self.collections.get(&inst).and_then(|c| c.entries.get(i as usize).copied());
+            let entry = self
+                .collections
+                .get(&inst)
+                .and_then(|c| c.entries.get(i as usize).copied());
             let (k, v) = match entry {
                 Some(kv) => kv,
                 None => break,
@@ -15439,41 +16262,40 @@ impl Interp {
     fn string_iterator_next(&mut self, iter: crate::value::SlotIndex) -> Result<Slot, Halt> {
         let st = self.iterators[&iter].clone();
         let result = st.result;
-        let (new_value, new_done, next_index): (Slot, bool, u32) = if st.done
-            || (st.index as usize) >= st.str_bytes.len()
-        {
-            (Slot::undefined(), true, st.index)
-        } else {
-            // `index` is a BYTE offset into the UTF-16BE payload; each yielded
-            // code point consumes one code unit (2 bytes) or, for a valid
-            // surrogate pair, two (4 bytes) — `for...of` iterates by code point.
-            let i = st.index as usize;
-            if i + 2 > st.str_bytes.len() {
-                return Err(Halt::Unsupported("string-iterator:truncated-sequence"));
-            }
-            let hi = u16::from_be_bytes([st.str_bytes[i], st.str_bytes[i + 1]]);
-            let consumed = if (0xD800..=0xDBFF).contains(&hi) && i + 4 <= st.str_bytes.len() {
-                let lo = u16::from_be_bytes([st.str_bytes[i + 2], st.str_bytes[i + 3]]);
-                if (0xDC00..=0xDFFF).contains(&lo) {
-                    4 // a valid surrogate pair → one astral code point
-                } else {
-                    2 // a lone high surrogate → yielded as its own code unit
-                }
+        let (new_value, new_done, next_index): (Slot, bool, u32) =
+            if st.done || (st.index as usize) >= st.str_bytes.len() {
+                (Slot::undefined(), true, st.index)
             } else {
-                2
+                // `index` is a BYTE offset into the UTF-16BE payload; each yielded
+                // code point consumes one code unit (2 bytes) or, for a valid
+                // surrogate pair, two (4 bytes) — `for...of` iterates by code point.
+                let i = st.index as usize;
+                if i + 2 > st.str_bytes.len() {
+                    return Err(Halt::Unsupported("string-iterator:truncated-sequence"));
+                }
+                let hi = u16::from_be_bytes([st.str_bytes[i], st.str_bytes[i + 1]]);
+                let consumed = if (0xD800..=0xDBFF).contains(&hi) && i + 4 <= st.str_bytes.len() {
+                    let lo = u16::from_be_bytes([st.str_bytes[i + 2], st.str_bytes[i + 3]]);
+                    if (0xDC00..=0xDFFF).contains(&lo) {
+                        4 // a valid surrogate pair → one astral code point
+                    } else {
+                        2 // a lone high surrogate → yielded as its own code unit
+                    }
+                } else {
+                    2
+                };
+                // The yielded string is exactly the consumed BE bytes (already the
+                // stored form). Metered by yielded code-unit length (`+1`), the
+                // re-based O(n) weight; ASCII yields meter identically to before.
+                self.meter.tick_raw(STRING_ITERATOR_NEXT_METERING);
+                self.meter.tick_chunk_new((consumed / 2 + 1) as u64);
+                let off = self.chunks.alloc(&st.str_bytes[i..i + consumed]);
+                (
+                    Slot::of(Kind::String, Payload::String(off)),
+                    false,
+                    st.index + consumed as u32,
+                )
             };
-            // The yielded string is exactly the consumed BE bytes (already the
-            // stored form). Metered by yielded code-unit length (`+1`), the
-            // re-based O(n) weight; ASCII yields meter identically to before.
-            self.meter.tick_raw(STRING_ITERATOR_NEXT_METERING);
-            self.meter.tick_chunk_new((consumed / 2 + 1) as u64);
-            let off = self.chunks.alloc(&st.str_bytes[i..i + consumed]);
-            (
-                Slot::of(Kind::String, Payload::String(off)),
-                false,
-                st.index + consumed as u32,
-            )
-        };
         if let Some(s) = self.iterators.get_mut(&iter) {
             s.index = next_index;
             s.done = new_done;
@@ -15728,9 +16550,7 @@ impl Interp {
     /// two strings as unequal because it cannot see the chunk arena).
     fn strict_equal(&self, a: &Slot, b: &Slot) -> bool {
         match (a.value, b.value) {
-            (Payload::String(x), Payload::String(y)) => {
-                self.str_content(x) == self.str_content(y)
-            }
+            (Payload::String(x), Payload::String(y)) => self.str_content(x) == self.str_content(y),
             // `bigint === bigint`: equal iff same sign and magnitude. A BigInt
             // is never `===` a non-BigInt (distinct type), which
             // `strict_equals` already gives.
@@ -15810,8 +16630,8 @@ impl Interp {
         let size = TYPED_ARRAY_TYPES[ta.kind as usize].size as usize;
         let buf = self.array_buffers[&ta.buffer];
         let base = ta.offset as usize + index as usize * size;
-        let le = encode_element_le(ta.kind, n)
-            .ok_or(Halt::Unsupported("typed-array-set:bigint"))?;
+        let le =
+            encode_element_le(ta.kind, n).ok_or(Halt::Unsupported("typed-array-set:bigint"))?;
         let out = self.chunks.slice_mut(buf.data, base + size);
         out[base..base + size].copy_from_slice(&le);
         Ok(())
@@ -15843,7 +16663,11 @@ impl Interp {
     /// Whether call argument `argi` (at `stack[base + 4 + argi]`) is truthy
     /// (XS's `fxToBoolean`) — the DataView `littleEndian` flag.
     fn arg_is_truthy(&self, base: usize, argi: usize) -> bool {
-        let a = self.stack.get(base + 4 + argi).copied().unwrap_or_else(Slot::undefined);
+        let a = self
+            .stack
+            .get(base + 4 + argi)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
         self.truthy(&a)
     }
 
@@ -15902,7 +16726,11 @@ impl Interp {
     /// kind needing general ToNumber coercion — an honest skip for the
     /// caller. The `default` is only returned for an absent/undefined arg.
     fn arg_to_byte_length(&self, base: usize, argi: usize, default: u32) -> Option<u32> {
-        let a = self.stack.get(base + 4 + argi).copied().unwrap_or_else(Slot::undefined);
+        let a = self
+            .stack
+            .get(base + 4 + argi)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
         match a.kind {
             Kind::Undefined => Some(default),
             Kind::Integer => match a.value {
@@ -15937,7 +16765,13 @@ impl Interp {
         self.meter.tick_chunk_new(byte_length as u64);
         let data = self.chunks.alloc(&vec![0u8; byte_length as usize]);
         let inst = self.slots.alloc(Slot::instance(self.arraybuffer_proto));
-        self.array_buffers.insert(inst, ArrayBufferData { data, length: byte_length });
+        self.array_buffers.insert(
+            inst,
+            ArrayBufferData {
+                data,
+                length: byte_length,
+            },
+        );
         inst
     }
 
@@ -15954,7 +16788,9 @@ impl Interp {
     /// The index of `key` among `inst`'s entries by SameValueZero, or `None`.
     fn collection_find(&self, inst: crate::value::SlotIndex, key: &Slot) -> Option<usize> {
         let data = self.collections.get(&inst)?;
-        data.entries.iter().position(|(k, _)| self.same_value_zero(k, key))
+        data.entries
+            .iter()
+            .position(|(k, _)| self.same_value_zero(k, key))
     }
 
     /// Charge the metering of an inserting `fxSetEntry`/`fxSetWeakEntry` new
@@ -16221,7 +17057,10 @@ impl Interp {
     /// defining frame share one cell.
     fn store_closure(&mut self, k: usize) {
         let env = match self.stack.last() {
-            Some(&Slot { value: Payload::Reference(e), .. }) => e,
+            Some(&Slot {
+                value: Payload::Reference(e),
+                ..
+            }) => e,
             _ => return,
         };
         let i = match self.local_index(k) {
@@ -16285,17 +17124,16 @@ impl Interp {
         // (fxGetPrototypeFromConstructor), defaulting to %Object.prototype% —
         // so `(new F()) instanceof F` holds. Reading the prototype is a
         // property get (unmetered), already folded into the measured cost.
-        let proto = self.prototype_of(self.cur_func).unwrap_or(self.object_proto);
+        let proto = self
+            .prototype_of(self.cur_func)
+            .unwrap_or(self.object_proto);
         let inst = self.slots.alloc(Slot::instance(proto));
         self.this_val = Slot::of(Kind::Reference, Payload::Reference(inst));
     }
 
     fn bind_this_sloppy(&mut self) {
         if matches!(self.this_val.kind, Kind::Undefined | Kind::Null) {
-            self.this_val = Slot::of(
-                Kind::Reference,
-                Payload::Reference(self.global_obj),
-            );
+            self.this_val = Slot::of(Kind::Reference, Payload::Reference(self.global_obj));
         }
     }
 
@@ -16322,13 +17160,24 @@ impl Interp {
     /// array elements while `depth > 0` and appending leaves to `out`. Meters
     /// the per-visit read, the per-array-element length read, and each
     /// appended leaf's `mxDefineIndex` chunk growth as it goes.
-    fn flat_into(&mut self, src: crate::value::SlotIndex, len: u32, depth: u32, out: &mut Vec<Slot>) {
+    fn flat_into(
+        &mut self,
+        src: crate::value::SlotIndex,
+        len: u32,
+        depth: u32,
+        out: &mut Vec<Slot>,
+    ) {
         for index in 0..len {
-            let item = match self.arrays.get(&src).and_then(|a| a.items.get(&index).copied()) {
+            let item = match self
+                .arrays
+                .get(&src)
+                .and_then(|a| a.items.get(&index).copied())
+            {
                 Some(it) => it,
                 None => continue, // a hole is skipped (fxHasIndex false)
             };
-            let is_array = matches!(item.value, Payload::Reference(r) if self.arrays.contains_key(&r));
+            let is_array =
+                matches!(item.value, Payload::Reference(r) if self.arrays.contains_key(&r));
             if depth > 0 && is_array {
                 let sub = match item.value {
                     Payload::Reference(r) => r,
@@ -16417,6 +17266,12 @@ impl Interp {
         !self.symbol_key_ids.is_empty() && self.symbol_key_ids.values().any(|&v| v == id)
     }
 
+    fn string_key_name(&self, id: u16) -> Option<String> {
+        self.symbol_ids
+            .iter()
+            .find_map(|(name, property_id)| (*property_id == id).then(|| name.clone()))
+    }
+
     /// Resolve a property key `Slot` (string or symbol) to its interned id for
     /// the property-op surface, or `None` when the key is out of the covered
     /// grammar. A **symbol** key routes through [`Self::intern_symbol_key`]
@@ -16440,9 +17295,6 @@ impl Interp {
                     Payload::String(off) => self.str_text(off),
                     _ => return None,
                 };
-                if string_to_index(&s).is_some() {
-                    return None;
-                }
                 if gate_default
                     && !self.symbol_ids.contains_key(&s)
                     && self.default_keys.contains(s.as_str())
@@ -16478,7 +17330,10 @@ impl Interp {
                     _ => return None,
                 };
                 if i >= 0 {
-                    Some(Slot::of(Kind::At, Payload::At(crate::value::XS_NO_ID, i as u32)))
+                    Some(Slot::of(
+                        Kind::At,
+                        Payload::At(crate::value::XS_NO_ID, i as u32),
+                    ))
                 } else {
                     // A negative integer names a string key ("-1"): XS's
                     // `mxToString` + `fxNewName` interns it (no index branch).
@@ -16493,7 +17348,10 @@ impl Interp {
                     _ => return None,
                 };
                 if n >= 0.0 && n.fract() == 0.0 && n < 4294967295.0 {
-                    Some(Slot::of(Kind::At, Payload::At(crate::value::XS_NO_ID, n as u32)))
+                    Some(Slot::of(
+                        Kind::At,
+                        Payload::At(crate::value::XS_NO_ID, n as u32),
+                    ))
                 } else {
                     let name = number_to_ecma_string(n);
                     let id = self.intern_key(&name);
@@ -16521,7 +17379,8 @@ impl Interp {
                     // `fxStringToIndex` success two extra code units.
                     self.meter.tick_code_n(2);
                     Some(Slot::of(Kind::At, Payload::At(crate::value::XS_NO_ID, idx)))
-                } else if !self.symbol_ids.contains_key(&s) && self.default_keys.contains(s.as_str())
+                } else if !self.symbol_ids.contains_key(&s)
+                    && self.default_keys.contains(s.as_str())
                 {
                     // A boot default-key name that the *program* never named as
                     // a symbol (so `link_intrinsics` never linked its inherited
@@ -16549,7 +17408,7 @@ impl Interp {
     /// reads the item (or `undefined` for a hole / past the end); a named key
     /// reads the (own-or-inherited) property. Meters no built-in step, like
     /// `GET_PROPERTY`.
-    fn property_at_get(&mut self, obj: Slot, key: Slot) -> Result<Slot, Halt> {
+    fn property_at_get(&mut self, code: &[u8], obj: Slot, key: Slot) -> Result<Slot, Halt> {
         let (id, index) = match key.value {
             Payload::At(id, index) => (id, index),
             _ => return Err(Halt::Unsupported("get_property_at")),
@@ -16593,18 +17452,14 @@ impl Interp {
                     }
                 }
             } else {
-                // A non-array object indexed numerically stores its items in a
-                // separate index chunk (XS's `fxSetIndexProperty` on an
-                // ordinary object) whose allocation metering ironhorse does not yet
-                // model — honest skip rather than a wrong/meter-divergent value.
-                let _ = index;
-                Err(Halt::Unsupported("get_property_at"))
+                let id = self.intern_key(&index.to_string());
+                self.ordinary_get(code, inst, id, obj)
             }
         } else if Some(id) == self.length_id && self.arrays.contains_key(&inst) {
             self.meter.tick_raw(ARRAY_LENGTH_GET_METERING);
             Ok(Slot::integer(self.arrays[&inst].length as i32))
         } else {
-            Ok(self.instance_get(inst, id))
+            self.ordinary_get(code, inst, id, obj)
         }
     }
 
@@ -16615,6 +17470,7 @@ impl Interp {
     /// key routes to the ordinary property store or the array length.
     fn property_at_set(
         &mut self,
+        code: &[u8],
         obj: Slot,
         key: Slot,
         value: Slot,
@@ -16647,20 +17503,38 @@ impl Interp {
                     Ok(())
                 }
             } else {
-                // Numeric index on a non-array object uses the ordinary-object
-                // index chunk (see [`Self::property_at_get`]); its metering is
-                // not yet modeled, so this is an honest skip rather than a
-                // wrong/meter-divergent store.
-                let _ = (index, value, define);
-                Err(Halt::Unsupported("set_property_at"))
+                let id = self.intern_key(&index.to_string());
+                if define {
+                    let descriptor = OrdinaryDescriptor {
+                        value: Some(value),
+                        writable: Some(true),
+                        enumerable: Some(true),
+                        configurable: Some(true),
+                        ..OrdinaryDescriptor::default()
+                    };
+                    self.ordinary_define_own_property(inst, id, descriptor);
+                    self.meter.tick_builtin();
+                } else {
+                    let _ = self.ordinary_set(code, inst, id, value, obj)?;
+                }
+                Ok(())
             }
         } else if Some(id) == self.length_id && self.arrays.contains_key(&inst) {
             self.array_set_length(inst, value);
             Ok(())
         } else {
-            self.instance_put(inst, id, value);
             if define {
+                let descriptor = OrdinaryDescriptor {
+                    value: Some(value),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(true),
+                    ..OrdinaryDescriptor::default()
+                };
+                self.ordinary_define_own_property(inst, id, descriptor);
                 self.meter.tick_builtin();
+            } else {
+                let _ = self.ordinary_set(code, inst, id, value, obj)?;
             }
             Ok(())
         }
@@ -16733,11 +17607,7 @@ impl Interp {
         let new_len = self.to_length_u32(value);
         if let Some(a) = self.arrays.get_mut(&inst) {
             if new_len < a.length {
-                let drop: Vec<u32> = a
-                    .items
-                    .range(new_len..)
-                    .map(|(&k, _)| k)
-                    .collect();
+                let drop: Vec<u32> = a.items.range(new_len..).map(|(&k, _)| k).collect();
                 for k in drop {
                     a.items.remove(&k);
                 }
@@ -16785,7 +17655,11 @@ impl Interp {
     /// (XS's property slots hold the value directly, keyed by `id`), so
     /// the match is by `id` alone — a property slot's `kind` is the
     /// value's kind, not a separate marker.
-    fn find_property(&self, inst: crate::value::SlotIndex, id: u16) -> Option<crate::value::SlotIndex> {
+    fn find_property(
+        &self,
+        inst: crate::value::SlotIndex,
+        id: u16,
+    ) -> Option<crate::value::SlotIndex> {
         let mut cur = self.slots.get(inst).next;
         while !cur.is_null() {
             let s = self.slots.get(cur);
@@ -16809,12 +17683,6 @@ impl Interp {
         let mut cur = self.slots.get(inst).next;
         while !cur.is_null() {
             let s = self.slots.get(cur);
-            // An accessor own property is outside the covered shape — its
-            // enumerability is knowable but its presence signals a model
-            // (getter/setter) ironhorse does not carry, so honest-skip.
-            if s.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
-                return None;
-            }
             // A symbol-keyed property is excluded from `Object.keys` (the
             // string-key enumeration) — skip it, keeping the string keys.
             if self.is_symbol_key_id(s.id) {
@@ -16826,20 +17694,20 @@ impl Interp {
             // an enumerable one — flag 0 or carrying only `writable`/
             // `configurable`-false bits — is included in creation order.
             if s.flag & XS_DONT_ENUM_FLAG == 0 {
-                // Every enumerable key of a covered object is a program symbol;
-                // an id outside the program-symbol range (a runtime-interned
-                // novel key or an internal id) can't be rendered to its name.
-                let name_idx = (s.id as usize).checked_sub(1)?;
-                if name_idx >= self.symbol_names.len() {
+                if self.string_key_name(s.id).is_none() {
                     return None;
                 }
                 ids.push(s.id);
             }
             cur = s.next;
         }
-        // The own-property chain is newest-first (`instance_put` prepends);
-        // `Object.keys` yields keys in creation order, so reverse.
         ids.reverse();
+        ids.sort_by_key(|id| {
+            self.string_key_name(*id)
+                .and_then(|name| string_to_index(&name))
+                .map(|index| (0u8, index))
+                .unwrap_or((1u8, 0))
+        });
         Some(ids)
     }
 
@@ -16857,9 +17725,6 @@ impl Interp {
         let mut cur = self.slots.get(inst).next;
         while !cur.is_null() {
             let s = self.slots.get(cur);
-            if s.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
-                return None;
-            }
             // `Reflect.ownKeys` returns the string keys THEN the symbol keys;
             // ironhorse renders only the string portion, so an object carrying a
             // symbol-keyed property is an honest skip (the symbol elements
@@ -16867,8 +17732,7 @@ impl Interp {
             if self.is_symbol_key_id(s.id) {
                 return None;
             }
-            let name_idx = (s.id as usize).checked_sub(1)?;
-            if name_idx >= self.symbol_names.len() {
+            if self.string_key_name(s.id).is_none() {
                 return None;
             }
             ids.push(s.id);
@@ -16876,6 +17740,12 @@ impl Interp {
         }
         // Newest-first chain → creation order.
         ids.reverse();
+        ids.sort_by_key(|id| {
+            self.string_key_name(*id)
+                .and_then(|name| string_to_index(&name))
+                .map(|index| (0u8, index))
+                .unwrap_or((1u8, 0))
+        });
         Some(ids)
     }
 
@@ -16960,7 +17830,11 @@ impl Interp {
     /// enqueue; marking at enqueue is behaviorally identical (the mark is only a
     /// visited set — the freeze still happens in `harden_freeze_and_traverse`)
     /// and makes the Vec-backed walk terminate without duplicate entries.
-    fn harden_enqueue(&mut self, inst: crate::value::SlotIndex, list: &mut Vec<crate::value::SlotIndex>) {
+    fn harden_enqueue(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        list: &mut Vec<crate::value::SlotIndex>,
+    ) {
         if inst.is_null() {
             return;
         }
@@ -17062,12 +17936,7 @@ impl Interp {
     /// residual (`GOPD_PRESENT_RESIDUAL_METERING`). The field name resolves
     /// through the global intern table so `descriptor.value` (etc.) reads back
     /// under the same id the program's `.value` access uses.
-    fn define_descriptor_field(
-        &mut self,
-        inst: crate::value::SlotIndex,
-        name: &str,
-        value: Slot,
-    ) {
+    fn define_descriptor_field(&mut self, inst: crate::value::SlotIndex, name: &str, value: Slot) {
         let id = self.intern_key(name);
         let head = self.slots.get(inst).next;
         let mut prop = value;
@@ -17078,26 +17947,474 @@ impl Interp {
         self.slots.get_mut(inst).next = idx;
     }
 
-    /// Define/set an own property `id = value` on instance `inst`,
-    /// creating the property slot (metered `fxNewSlot`) when absent.
-    /// Returns `true` if a new property was created. The property slot
-    /// holds the value directly (its `kind`/`value` are the value's),
-    /// with `id` the key and `next` the following property.
-    /// Whether an ordinary `[[Set]]` of `id` on `inst` must be *rejected* by
-    /// the integrity flags (XS's `mxBehaviorSetProperty` returning without
-    /// storing): an own data property marked non-writable (`XS_DONT_SET_FLAG`
-    /// — the state `Object.freeze`/`defineProperty(writable:false)` stamps), or
-    /// a genuinely-new key on a non-extensible instance (`XS_DONT_PATCH_FLAG`
-    /// — `preventExtensions`/`seal`/`freeze`). A writable own property, or a
-    /// new key on an extensible instance, accepts the write. Own-property only:
-    /// an inherited non-writable data property or a prototype setter is a later
-    /// increment (the covered grammar's prototypes carry only intrinsic
-    /// methods, none writable-false data).
-    fn ordinary_write_rejected(&self, inst: crate::value::SlotIndex, id: u16) -> bool {
-        match self.find_property(inst, id) {
-            Some(p) => self.slots.get(p).flag & XS_DONT_SET_FLAG != 0,
-            None => !self.instance_extensible(inst),
+    /// The ordinary-object behavior seam. Proxy and exotic-object support can
+    /// dispatch around these methods; all ordinary property operations route
+    /// through them so descriptor compatibility cannot drift between syntax,
+    /// `Object.*`, and `Reflect.*`.
+    fn ordinary_get_own_descriptor(
+        &self,
+        inst: crate::value::SlotIndex,
+        id: u16,
+    ) -> Option<OrdinaryDescriptor> {
+        let property = self.find_property(inst, id)?;
+        let slot = *self.slots.get(property);
+        let enumerable = Some(slot.flag & XS_DONT_ENUM_FLAG == 0);
+        let configurable = Some(slot.flag & XS_DONT_DELETE_FLAG == 0);
+        if slot.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+            let accessor = self.accessors.get(&(inst, id)).copied().unwrap_or_default();
+            Some(OrdinaryDescriptor {
+                get: Some(accessor.get.unwrap_or_else(Slot::undefined)),
+                set: Some(accessor.set.unwrap_or_else(Slot::undefined)),
+                enumerable,
+                configurable,
+                ..OrdinaryDescriptor::default()
+            })
+        } else {
+            Some(OrdinaryDescriptor {
+                value: Some(Slot::of(slot.kind, slot.value)),
+                writable: Some(slot.flag & XS_DONT_SET_FLAG == 0),
+                enumerable,
+                configurable,
+                ..OrdinaryDescriptor::default()
+            })
         }
+    }
+
+    fn same_value(&self, left: Slot, right: Slot) -> bool {
+        match (left.value, right.value) {
+            (Payload::Number(a), Payload::Number(b)) => {
+                (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits()
+            }
+            _ => self.strict_equal(&left, &right),
+        }
+    }
+
+    /// Validate and apply a partial property descriptor (ECMA-262
+    /// ValidateAndApplyPropertyDescriptor) to an ordinary object.
+    fn ordinary_define_own_property(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        id: u16,
+        descriptor: OrdinaryDescriptor,
+    ) -> bool {
+        if descriptor.is_accessor() && descriptor.is_data() {
+            return false;
+        }
+        let current = self.ordinary_get_own_descriptor(inst, id);
+        if current.is_none() {
+            if !self.instance_extensible(inst) {
+                return false;
+            }
+            let enumerable = descriptor.enumerable.unwrap_or(false);
+            let configurable = descriptor.configurable.unwrap_or(false);
+            let mut flag = 0u8;
+            if !enumerable {
+                flag |= XS_DONT_ENUM_FLAG;
+            }
+            if !configurable {
+                flag |= XS_DONT_DELETE_FLAG;
+            }
+            let mut property = if descriptor.is_accessor() {
+                flag |= XS_GETTER_FLAG | XS_SETTER_FLAG;
+                self.accessors.insert(
+                    (inst, id),
+                    AccessorData {
+                        get: descriptor.get.filter(|slot| slot.kind != Kind::Undefined),
+                        set: descriptor.set.filter(|slot| slot.kind != Kind::Undefined),
+                    },
+                );
+                Slot::undefined()
+            } else {
+                if !descriptor.writable.unwrap_or(false) {
+                    flag |= XS_DONT_SET_FLAG;
+                }
+                descriptor.value.unwrap_or_else(Slot::undefined)
+            };
+            property.id = id;
+            property.flag = flag;
+            property.next = self.slots.get(inst).next;
+            let index = self.slots.alloc(property);
+            self.slots.get_mut(inst).next = index;
+            if inst == self.global_obj {
+                // The global object's property chain is also the backing set
+                // for identifier resolution. Keep its fast index in lockstep
+                // when an ordinary [[DefineOwnProperty]] creates a global via
+                // `globalThis.x = value` or its computed equivalent.
+                self.global_props.insert(id, index);
+            }
+            self.tick_property_create();
+            return true;
+        }
+
+        let current = current.unwrap();
+        let current_configurable = current.configurable.unwrap_or(false);
+        if !current_configurable {
+            if descriptor.configurable == Some(true)
+                || descriptor
+                    .enumerable
+                    .is_some_and(|value| Some(value) != current.enumerable)
+            {
+                return false;
+            }
+        }
+        let current_accessor = current.is_accessor();
+        if (descriptor.is_accessor() || descriptor.is_data())
+            && descriptor.is_accessor() != current_accessor
+        {
+            if !current_configurable {
+                return false;
+            }
+        } else if !current_configurable {
+            if !current_accessor && current.writable == Some(false) {
+                if descriptor.writable == Some(true)
+                    || descriptor
+                        .value
+                        .is_some_and(|value| !self.same_value(value, current.value.unwrap()))
+                {
+                    return false;
+                }
+            }
+            if current_accessor {
+                if descriptor
+                    .get
+                    .is_some_and(|value| !self.same_value(value, current.get.unwrap()))
+                    || descriptor
+                        .set
+                        .is_some_and(|value| !self.same_value(value, current.set.unwrap()))
+                {
+                    return false;
+                }
+            }
+        }
+
+        let property = self.find_property(inst, id).unwrap();
+        let old_flag = self.slots.get(property).flag;
+        let target_accessor = if descriptor.is_accessor() || descriptor.is_data() {
+            descriptor.is_accessor()
+        } else {
+            current_accessor
+        };
+        let enumerable = descriptor
+            .enumerable
+            .or(current.enumerable)
+            .unwrap_or(false);
+        let configurable = descriptor
+            .configurable
+            .or(current.configurable)
+            .unwrap_or(false);
+        let mut flag = old_flag
+            & !(XS_DONT_ENUM_FLAG
+                | XS_DONT_DELETE_FLAG
+                | XS_DONT_SET_FLAG
+                | XS_GETTER_FLAG
+                | XS_SETTER_FLAG);
+        if !enumerable {
+            flag |= XS_DONT_ENUM_FLAG;
+        }
+        if !configurable {
+            flag |= XS_DONT_DELETE_FLAG;
+        }
+        if target_accessor {
+            flag |= XS_GETTER_FLAG | XS_SETTER_FLAG;
+            let old = self.accessors.get(&(inst, id)).copied().unwrap_or_default();
+            let get = descriptor
+                .get
+                .map(|slot| (slot.kind != Kind::Undefined).then_some(slot))
+                .unwrap_or(old.get);
+            let set = descriptor
+                .set
+                .map(|slot| (slot.kind != Kind::Undefined).then_some(slot))
+                .unwrap_or(old.set);
+            self.accessors.insert((inst, id), AccessorData { get, set });
+            let slot = self.slots.get_mut(property);
+            slot.kind = Kind::Undefined;
+            slot.value = Payload::None;
+            slot.flag = flag;
+        } else {
+            self.accessors.remove(&(inst, id));
+            if !descriptor.writable.or(current.writable).unwrap_or(false) {
+                flag |= XS_DONT_SET_FLAG;
+            }
+            let value = descriptor
+                .value
+                .or(current.value)
+                .unwrap_or_else(Slot::undefined);
+            let slot = self.slots.get_mut(property);
+            slot.kind = value.kind;
+            slot.value = value.value;
+            slot.flag = flag;
+        }
+        true
+    }
+
+    fn ordinary_get(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        receiver: Slot,
+    ) -> Result<Slot, Halt> {
+        let mut owner = inst;
+        while !owner.is_null() {
+            if let Some(descriptor) = self.ordinary_get_own_descriptor(owner, id) {
+                if descriptor.is_accessor() {
+                    let getter = descriptor.get.unwrap_or_else(Slot::undefined);
+                    if getter.kind == Kind::Undefined {
+                        return Ok(Slot::undefined());
+                    }
+                    return self.run_callback(code, getter, receiver, &[]);
+                }
+                return Ok(descriptor.value.unwrap_or_else(Slot::undefined));
+            }
+            owner = self.instance_prototype(owner);
+        }
+        Ok(Slot::undefined())
+    }
+
+    fn ordinary_set(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<bool, Halt> {
+        let own = self.ordinary_get_own_descriptor(inst, id);
+        if let Some(descriptor) = own {
+            if descriptor.is_accessor() {
+                let setter = descriptor.set.unwrap_or_else(Slot::undefined);
+                if setter.kind == Kind::Undefined {
+                    return Ok(false);
+                }
+                self.run_callback(code, setter, receiver, &[value])?;
+                return Ok(true);
+            }
+            if descriptor.writable == Some(false) {
+                return Ok(false);
+            }
+        } else {
+            let prototype = self.instance_prototype(inst);
+            if !prototype.is_null() {
+                let inherited = self.ordinary_get_own_descriptor(prototype, id);
+                if let Some(descriptor) = inherited {
+                    if descriptor.is_accessor() {
+                        let setter = descriptor.set.unwrap_or_else(Slot::undefined);
+                        if setter.kind == Kind::Undefined {
+                            return Ok(false);
+                        }
+                        self.run_callback(code, setter, receiver, &[value])?;
+                        return Ok(true);
+                    }
+                    if descriptor.writable == Some(false) {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        let receiver_inst = match receiver.value {
+            Payload::Reference(receiver_inst) if receiver.kind == Kind::Reference => receiver_inst,
+            _ => return Ok(false),
+        };
+        if let Some(existing) = self.ordinary_get_own_descriptor(receiver_inst, id) {
+            if existing.is_accessor() || existing.writable == Some(false) {
+                return Ok(false);
+            }
+            // OrdinarySetWithOwnDescriptor updates only [[Value]]. Preserve
+            // the receiver property's existing attributes (notably a sealed
+            // property's configurable:false bit).
+            return Ok(self.ordinary_define_own_property(
+                receiver_inst,
+                id,
+                OrdinaryDescriptor {
+                    value: Some(value),
+                    ..OrdinaryDescriptor::default()
+                },
+            ));
+        }
+        let descriptor = OrdinaryDescriptor {
+            value: Some(value),
+            writable: Some(true),
+            enumerable: Some(true),
+            configurable: Some(true),
+            ..OrdinaryDescriptor::default()
+        };
+        Ok(self.ordinary_define_own_property(receiver_inst, id, descriptor))
+    }
+
+    fn descriptor_from_object(
+        &mut self,
+        code: &[u8],
+        descriptor: crate::value::SlotIndex,
+    ) -> Result<OrdinaryDescriptor, Halt> {
+        let mut out = OrdinaryDescriptor::default();
+        for name in [
+            "enumerable",
+            "configurable",
+            "value",
+            "writable",
+            "get",
+            "set",
+        ] {
+            let id = match self.symbol_ids.get(name).copied() {
+                Some(id) => id,
+                None => continue,
+            };
+            if !self.instance_has(descriptor, id).0 {
+                continue;
+            }
+            let receiver = Slot::of(Kind::Reference, Payload::Reference(descriptor));
+            let value = self.ordinary_get(code, descriptor, id, receiver)?;
+            match name {
+                "enumerable" => out.enumerable = Some(to_boolean(&value)),
+                "configurable" => out.configurable = Some(to_boolean(&value)),
+                "value" => out.value = Some(value),
+                "writable" => out.writable = Some(to_boolean(&value)),
+                "get" => {
+                    if value.kind != Kind::Undefined
+                        && !matches!(value.value, Payload::Reference(function) if self.functions.contains_key(&function))
+                    {
+                        return Err(Halt::Throw("TypeError: getter is not callable".into()));
+                    }
+                    out.get = Some(value);
+                }
+                "set" => {
+                    if value.kind != Kind::Undefined
+                        && !matches!(value.value, Payload::Reference(function) if self.functions.contains_key(&function))
+                    {
+                        return Err(Halt::Throw("TypeError: setter is not callable".into()));
+                    }
+                    out.set = Some(value);
+                }
+                _ => unreachable!(),
+            }
+        }
+        if out.is_accessor() && out.is_data() {
+            return Err(Halt::Throw("TypeError: invalid property descriptor".into()));
+        }
+        Ok(out)
+    }
+
+    fn to_property_id(&mut self, code: &[u8], key: Slot) -> Result<u16, Halt> {
+        if key.kind == Kind::Symbol {
+            return match key.value {
+                Payload::Reference(descriptor) => Ok(self.intern_symbol_key(descriptor)),
+                _ => Err(Halt::Throw("TypeError: invalid symbol".into())),
+            };
+        }
+        let primitive = self.to_primitive(code, key, true)?;
+        if primitive.kind == Kind::Symbol {
+            return match primitive.value {
+                Payload::Reference(descriptor) => Ok(self.intern_symbol_key(descriptor)),
+                _ => Err(Halt::Throw("TypeError: invalid symbol".into())),
+            };
+        }
+        let string = self.to_string_slot_metered(primitive);
+        let name = match string.value {
+            Payload::String(offset) => self.str_text(offset),
+            _ => return Err(Halt::Throw("TypeError: invalid property key".into())),
+        };
+        Ok(self.intern_key(&name))
+    }
+
+    fn property_key_slot(&mut self, id: u16) -> Result<Slot, Halt> {
+        if let Some((&descriptor, _)) = self
+            .symbol_key_ids
+            .iter()
+            .find(|(_, property_id)| **property_id == id)
+        {
+            return Ok(Slot::of(Kind::Symbol, Payload::Reference(descriptor)));
+        }
+        let name = self
+            .symbol_ids
+            .iter()
+            .find_map(|(name, property_id)| (*property_id == id).then(|| name.clone()))
+            .ok_or(Halt::Unsupported("ordinary-ownKeys:unknown-key"))?;
+        let offset = self.alloc_str_text(name.as_bytes());
+        Ok(Slot::of(Kind::String, Payload::String(offset)))
+    }
+
+    fn define_properties_from_object(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        descriptors: crate::value::SlotIndex,
+    ) -> Result<bool, Halt> {
+        let mut ids: Vec<u16> = self
+            .own_property_slots(descriptors)
+            .into_iter()
+            .filter_map(|property| {
+                let slot = self.slots.get(property);
+                (slot.flag & XS_DONT_ENUM_FLAG == 0).then_some(slot.id)
+            })
+            .collect();
+        ids.sort_by_key(|id| {
+            if self.is_symbol_key_id(*id) {
+                (2u8, 0)
+            } else {
+                self.string_key_name(*id)
+                    .and_then(|name| string_to_index(&name))
+                    .map(|index| (0u8, index))
+                    .unwrap_or((1u8, 0))
+            }
+        });
+        let receiver = Slot::of(Kind::Reference, Payload::Reference(descriptors));
+        let mut pending = Vec::with_capacity(ids.len());
+        for id in ids {
+            let value = self.ordinary_get(code, descriptors, id, receiver)?;
+            let descriptor_object = match value.value {
+                Payload::Reference(object) if value.kind == Kind::Reference => object,
+                _ => {
+                    return Err(Halt::Throw(
+                        "TypeError: property descriptor is not an object".into(),
+                    ))
+                }
+            };
+            pending.push((id, self.descriptor_from_object(code, descriptor_object)?));
+        }
+        for (id, descriptor) in pending {
+            if !self.ordinary_define_own_property(target, id, descriptor) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn descriptor_object(&mut self, descriptor: OrdinaryDescriptor) -> Slot {
+        let object = self.slots.alloc(Slot::instance(self.object_proto));
+        if descriptor.is_accessor() {
+            self.define_descriptor_field(
+                object,
+                "get",
+                descriptor.get.unwrap_or_else(Slot::undefined),
+            );
+            self.define_descriptor_field(
+                object,
+                "set",
+                descriptor.set.unwrap_or_else(Slot::undefined),
+            );
+        } else {
+            self.define_descriptor_field(
+                object,
+                "value",
+                descriptor.value.unwrap_or_else(Slot::undefined),
+            );
+            self.define_descriptor_field(
+                object,
+                "writable",
+                Slot::boolean(descriptor.writable.unwrap_or(false)),
+            );
+        }
+        self.define_descriptor_field(
+            object,
+            "enumerable",
+            Slot::boolean(descriptor.enumerable.unwrap_or(false)),
+        );
+        self.define_descriptor_field(
+            object,
+            "configurable",
+            Slot::boolean(descriptor.configurable.unwrap_or(false)),
+        );
+        Slot::of(Kind::Reference, Payload::Reference(object))
     }
 
     fn instance_put(&mut self, inst: crate::value::SlotIndex, id: u16, value: Slot) -> bool {
@@ -17166,6 +18483,7 @@ impl Interp {
                 if inst == self.global_obj {
                     self.global_props.remove(&id);
                 }
+                self.accessors.remove(&(inst, id));
                 return true;
             }
             prev = cur;
@@ -17590,7 +18908,11 @@ impl Interp {
                 Ok(Slot::of(Kind::String, Payload::String(off)))
             }
             Some(NativeMethod::FunctionToString) => {
-                let name = self.functions.get(&f).map(|fi| fi.name.as_str()).unwrap_or("");
+                let name = self
+                    .functions
+                    .get(&f)
+                    .map(|fi| fi.name.as_str())
+                    .unwrap_or("");
                 let text = format!("function [\"{name}\"] (){{[native code]}}");
                 self.meter.tick_raw(METHOD_FUNCTION_TOSTRING_METERING);
                 self.meter.tick_chunk_new(text.len() as u64);
@@ -17831,13 +19153,19 @@ impl Interp {
                 self.meter.tick_chunk_new((r.len() + 1) as u64);
                 r
             }
-            Payload::Boolean(bv) => if bv { b"true".to_vec() } else { b"false".to_vec() },
+            Payload::Boolean(bv) => {
+                if bv {
+                    b"true".to_vec()
+                } else {
+                    b"false".to_vec()
+                }
+            }
             Payload::None => match s.kind {
                 Kind::Null => b"null".to_vec(),
                 _ => b"undefined".to_vec(),
             },
             Payload::Reference(_) => Vec::new(), // unreachable: op_add rejects references
-            Payload::At(..) => Vec::new(),        // unreachable: not a primitive value
+            Payload::At(..) => Vec::new(),       // unreachable: not a primitive value
             // `String(aBigInt)` — the decimal magnitude with a leading `-`.
             // `fxBigIntToString` renders into a fresh chunk; metered as a
             // number's ToString is (one built-in step + the result chunk).
@@ -17858,7 +19186,12 @@ impl Interp {
         let mut mag = Vec::with_capacity(bytes.len() / 4);
         let mut i = 1;
         while i + 4 <= bytes.len() {
-            mag.push(u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]));
+            mag.push(u32::from_le_bytes([
+                bytes[i],
+                bytes[i + 1],
+                bytes[i + 2],
+                bytes[i + 3],
+            ]));
             i += 4;
         }
         if mag.is_empty() {
@@ -17973,7 +19306,8 @@ impl Interp {
         };
         self.meter.tick_chunk_new(alloc_limbs * 4);
         let size = mag.len() as u64; // trimmed to XS's post-op `rr->size`
-        self.meter.tick_raw((size - 1) * crate::meter::BIGINT_METERING);
+        self.meter
+            .tick_raw((size - 1) * crate::meter::BIGINT_METERING);
         self.meter.tick_raw(BIGINT_ARITH_FRAME_METERING);
         Ok(self.store_bigint(neg, mag))
     }
@@ -17987,9 +19321,7 @@ impl Interp {
             return Ok(None);
         }
         match (a.value, b.value) {
-            (Payload::BigInt(x), Payload::BigInt(y)) => {
-                Ok(Some(self.bigint_arith(op, x, y)?))
-            }
+            (Payload::BigInt(x), Payload::BigInt(y)) => Ok(Some(self.bigint_arith(op, x, y)?)),
             _ => Err(()),
         }
     }
@@ -18529,7 +19861,10 @@ fn parse_decimal_body(body: &[u8]) -> f64 {
     {
         return f64::NAN;
     }
-    match std::str::from_utf8(body).ok().and_then(|s| s.parse::<f64>().ok()) {
+    match std::str::from_utf8(body)
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+    {
         Some(v) => v,
         None => f64::NAN,
     }
@@ -18797,12 +20132,7 @@ fn loose_equals(a: &Slot, b: &Slot) -> bool {
         (Kind::Undefined | Kind::Null, Kind::Undefined | Kind::Null) => true,
         _ => {
             // Numeric coercion for number/int/boolean.
-            let numeric = |s: &Slot| {
-                matches!(
-                    s.kind,
-                    Kind::Integer | Kind::Number | Kind::Boolean
-                )
-            };
+            let numeric = |s: &Slot| matches!(s.kind, Kind::Integer | Kind::Number | Kind::Boolean);
             if numeric(a) && numeric(b) {
                 let x = to_number(a);
                 let y = to_number(b);
@@ -18854,12 +20184,23 @@ mod tests {
         );
         let out = interp.run(&code);
 
-        assert_eq!(out.halt, Halt::MeterAbort, "armed meter must abort the loop");
+        assert_eq!(
+            out.halt,
+            Halt::MeterAbort,
+            "armed meter must abort the loop"
+        );
         assert!(!out.completed);
         // Consulted at 2, 4, 6; refuses at 6 (6 >= 5). Six dispatched
         // backward branches; computrons = meterIndex >> 16 = 6.
-        assert_eq!(*seen.borrow(), vec![2, 4, 6], "host consulted on XS's cadence");
-        assert_eq!(out.dispatched, 6, "aborts on the branch that crosses the refusal");
+        assert_eq!(
+            *seen.borrow(),
+            vec![2, 4, 6],
+            "host consulted on XS's cadence"
+        );
+        assert_eq!(
+            out.dispatched, 6,
+            "aborts on the branch that crosses the refusal"
+        );
         assert_eq!(out.computrons, 6);
     }
 
@@ -18953,7 +20294,10 @@ mod tests {
         let out = Interp::new().run(&code);
         assert_eq!(out.halt, Halt::Return);
         assert!(out.completed);
-        assert_eq!(out.result, "2", "the shared closure cell mutates across the two f() calls");
+        assert_eq!(
+            out.result, "2",
+            "the shared closure cell mutates across the two f() calls"
+        );
         assert_eq!(out.computrons, 87, "bit-exact computrons vs XS");
     }
 
@@ -19038,7 +20382,10 @@ mod tests {
         let out = Interp::new().run(&code);
         assert_eq!(out.halt, Halt::Return);
         assert!(out.completed);
-        assert_eq!(out.result, "7", "the catch binds and returns the thrown value");
+        assert_eq!(
+            out.result, "7",
+            "the catch binds and returns the thrown value"
+        );
         assert_eq!(out.computrons, 38, "bit-exact computrons vs XS");
     }
 
@@ -19053,7 +20400,11 @@ mod tests {
         // the 3-dispatch invocation baseline, the escaping `throw` dropped).
         let code: [u8; 7] = [0x0b, 0x00, 0x4b, 0x72, 0x07, 0xd7, 0xa9];
         let out = Interp::new().run(&code);
-        assert_eq!(out.halt, Halt::Throw("7".into()), "no handler ⇒ escape to host");
+        assert_eq!(
+            out.halt,
+            Halt::Throw("7".into()),
+            "no handler ⇒ escape to host"
+        );
         assert!(!out.completed);
         assert_eq!(out.computrons, 6, "bit-exact host-escape computrons vs XS");
     }
@@ -19236,7 +20587,11 @@ mod tests {
         let id_a = interp.intern_key("a");
         interp.instance_put(outer, id_a, Slot::number(1.0));
         let id_b = interp.intern_key("b");
-        interp.instance_put(outer, id_b, Slot::of(Kind::Reference, Payload::Reference(inner)));
+        interp.instance_put(
+            outer,
+            id_b,
+            Slot::of(Kind::Reference, Payload::Reference(inner)),
+        );
         (interp, outer, inner, id_a, id_b, id_c)
     }
 
@@ -19284,7 +20639,10 @@ mod tests {
         assert!(matches!(r.value, Payload::Reference(x) if x == outer));
         let of = interp.slots.get(outer).flag;
         assert!(of & XS_DONT_PATCH_FLAG != 0, "target non-extensible");
-        assert!(of & XS_DONT_MARSHALL_FLAG == 0, "petrify leaves DONT_MARSHALL clear");
+        assert!(
+            of & XS_DONT_MARSHALL_FLAG == 0,
+            "petrify leaves DONT_MARSHALL clear"
+        );
         let pa = interp.find_property(outer, id_a).expect("a present");
         assert!(interp.slots.get(pa).flag & XS_DONT_SET_FLAG != 0);
         // The nested object is NOT frozen (non-transitive).
@@ -19369,7 +20727,10 @@ mod tests {
             0x0b, 0x00, 0x4b, 0x4d, 0x01, 0x00, 0x67, 0x01, 0x00, 0xbb, 0xa9,
         ];
         let out = Interp::new().run(&code);
-        assert!(matches!(out.halt, Halt::Throw(_)), "unbound global must miss");
+        assert!(
+            matches!(out.halt, Halt::Throw(_)),
+            "unbound global must miss"
+        );
     }
 
     #[test]
@@ -19435,7 +20796,6 @@ mod tests {
         assert_eq!(rec.opcode_count(Opcode::XS_CODE_END), 1);
     }
 
-
     /// Miri-clean exercise of the generator suspend/resume + allocation paths
     /// (design § generators): runs the XS-compiled bytecode of
     /// `function* g(){ yield 1; yield 2; } var a=g(); a.next().value +
@@ -19449,10 +20809,28 @@ mod tests {
     /// this is a defensive backstop). Bytecode + symbols captured from the pin.
     #[test]
     fn generator_suspend_resume_is_miri_clean() {
-        const BYTECODE: &[u8] = &[0x0b,0x00,0x9e,0x02,0x86,0x01,0x00,0xe0,0xe6,0x01,0x92,0x86,0x02,0x00,0x8e,0xe6,0x02,0x92,0x4b,0x4d,0x02,0x00,0x59,0x02,0x00,0x2e,0x30,0x0b,0x00,0xc3,0x90,0x42,0x72,0x01,0x89,0x03,0x00,0x72,0x00,0x42,0x52,0x89,0x04,0x00,0x72,0x00,0xeb,0x25,0x02,0xbb,0x44,0x92,0x90,0x42,0x72,0x02,0x89,0x03,0x00,0x72,0x00,0x42,0x52,0x89,0x04,0x00,0x72,0x00,0xeb,0x25,0x02,0xbb,0x44,0x92,0x44,0x58,0x92,0xbf,0x02,0x00,0x92,0x4d,0x01,0x00,0xe0,0x4d,0x02,0x00,0x66,0x02,0x00,0x28,0xab,0x00,0xbf,0x01,0x00,0x92,0x4d,0x01,0x00,0x67,0x01,0x00,0x42,0x60,0x05,0x00,0x28,0xab,0x00,0x60,0x03,0x00,0x4d,0x01,0x00,0x67,0x01,0x00,0x42,0x60,0x05,0x00,0x28,0xab,0x00,0x60,0x03,0x00,0x01,0xbb,0xa9];
-        const SYMBOLS: &[u8] = &[0x06,0x00,0x61,0x00,0x67,0x00,0x76,0x61,0x6c,0x75,0x65,0x00,0x64,0x6f,0x6e,0x65,0x00,0x6e,0x65,0x78,0x74,0x00];
+        const BYTECODE: &[u8] = &[
+            0x0b, 0x00, 0x9e, 0x02, 0x86, 0x01, 0x00, 0xe0, 0xe6, 0x01, 0x92, 0x86, 0x02, 0x00,
+            0x8e, 0xe6, 0x02, 0x92, 0x4b, 0x4d, 0x02, 0x00, 0x59, 0x02, 0x00, 0x2e, 0x30, 0x0b,
+            0x00, 0xc3, 0x90, 0x42, 0x72, 0x01, 0x89, 0x03, 0x00, 0x72, 0x00, 0x42, 0x52, 0x89,
+            0x04, 0x00, 0x72, 0x00, 0xeb, 0x25, 0x02, 0xbb, 0x44, 0x92, 0x90, 0x42, 0x72, 0x02,
+            0x89, 0x03, 0x00, 0x72, 0x00, 0x42, 0x52, 0x89, 0x04, 0x00, 0x72, 0x00, 0xeb, 0x25,
+            0x02, 0xbb, 0x44, 0x92, 0x44, 0x58, 0x92, 0xbf, 0x02, 0x00, 0x92, 0x4d, 0x01, 0x00,
+            0xe0, 0x4d, 0x02, 0x00, 0x66, 0x02, 0x00, 0x28, 0xab, 0x00, 0xbf, 0x01, 0x00, 0x92,
+            0x4d, 0x01, 0x00, 0x67, 0x01, 0x00, 0x42, 0x60, 0x05, 0x00, 0x28, 0xab, 0x00, 0x60,
+            0x03, 0x00, 0x4d, 0x01, 0x00, 0x67, 0x01, 0x00, 0x42, 0x60, 0x05, 0x00, 0x28, 0xab,
+            0x00, 0x60, 0x03, 0x00, 0x01, 0xbb, 0xa9,
+        ];
+        const SYMBOLS: &[u8] = &[
+            0x06, 0x00, 0x61, 0x00, 0x67, 0x00, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x00, 0x64, 0x6f,
+            0x6e, 0x65, 0x00, 0x6e, 0x65, 0x78, 0x74, 0x00,
+        ];
         let out = crate::run_program_with_symbols(BYTECODE, SYMBOLS);
-        assert!(out.completed, "generator program should complete: {:?}", out.halt);
+        assert!(
+            out.completed,
+            "generator program should complete: {:?}",
+            out.halt
+        );
         assert_eq!(out.result, "3", "1 + 2 from two yields");
     }
 
@@ -19469,10 +20847,29 @@ mod tests {
     /// backstop). Bytecode + symbols captured from the pin `48ee02d8cfe0`.
     #[test]
     fn promise_thenable_adoption_is_miri_clean() {
-        const BYTECODE: &[u8] = &[0x0b,0x00,0x9e,0x01,0x86,0x03,0x00,0xe0,0xe6,0x01,0x92,0x4b,0x9e,0x01,0x4d,0x03,0x00,0x72,0x00,0xbf,0x03,0x00,0x92,0x4d,0x04,0x00,0x67,0x04,0x00,0x42,0x60,0x01,0x00,0x28,0x8b,0x90,0xb5,0x01,0x5c,0x01,0x38,0x00,0x00,0x2e,0x16,0x0b,0x01,0x9e,0x01,0x86,0x06,0x00,0x02,0x00,0xe6,0x01,0x92,0xe0,0x5c,0x01,0x28,0x72,0x07,0xab,0x01,0x92,0x44,0x58,0x92,0x42,0xe0,0x89,0x05,0x00,0x72,0x04,0x89,0x07,0x00,0x72,0x01,0xe2,0x01,0xab,0x01,0x42,0x60,0x07,0x00,0x28,0x38,0x00,0x00,0x2e,0x16,0x0b,0x01,0x9e,0x01,0x86,0x02,0x00,0x02,0x00,0xe6,0x01,0x92,0x4d,0x03,0x00,0x5c,0x01,0xbf,0x03,0x00,0x92,0x44,0x58,0x92,0x42,0xe0,0x89,0x05,0x00,0x72,0x04,0xab,0x01,0xbb,0x4d,0x03,0x00,0x67,0x03,0x00,0xbb,0xa9];
-        const SYMBOLS: &[u8] = &[0x08,0x00,0x72,0x65,0x73,0x6f,0x6c,0x76,0x65,0x00,0x76,0x00,0x78,0x00,0x50,0x72,0x6f,0x6d,0x69,0x73,0x65,0x00,0x63,0x61,0x6c,0x6c,0x65,0x72,0x00,0x72,0x65,0x73,0x00,0x74,0x68,0x65,0x6e,0x00];
+        const BYTECODE: &[u8] = &[
+            0x0b, 0x00, 0x9e, 0x01, 0x86, 0x03, 0x00, 0xe0, 0xe6, 0x01, 0x92, 0x4b, 0x9e, 0x01,
+            0x4d, 0x03, 0x00, 0x72, 0x00, 0xbf, 0x03, 0x00, 0x92, 0x4d, 0x04, 0x00, 0x67, 0x04,
+            0x00, 0x42, 0x60, 0x01, 0x00, 0x28, 0x8b, 0x90, 0xb5, 0x01, 0x5c, 0x01, 0x38, 0x00,
+            0x00, 0x2e, 0x16, 0x0b, 0x01, 0x9e, 0x01, 0x86, 0x06, 0x00, 0x02, 0x00, 0xe6, 0x01,
+            0x92, 0xe0, 0x5c, 0x01, 0x28, 0x72, 0x07, 0xab, 0x01, 0x92, 0x44, 0x58, 0x92, 0x42,
+            0xe0, 0x89, 0x05, 0x00, 0x72, 0x04, 0x89, 0x07, 0x00, 0x72, 0x01, 0xe2, 0x01, 0xab,
+            0x01, 0x42, 0x60, 0x07, 0x00, 0x28, 0x38, 0x00, 0x00, 0x2e, 0x16, 0x0b, 0x01, 0x9e,
+            0x01, 0x86, 0x02, 0x00, 0x02, 0x00, 0xe6, 0x01, 0x92, 0x4d, 0x03, 0x00, 0x5c, 0x01,
+            0xbf, 0x03, 0x00, 0x92, 0x44, 0x58, 0x92, 0x42, 0xe0, 0x89, 0x05, 0x00, 0x72, 0x04,
+            0xab, 0x01, 0xbb, 0x4d, 0x03, 0x00, 0x67, 0x03, 0x00, 0xbb, 0xa9,
+        ];
+        const SYMBOLS: &[u8] = &[
+            0x08, 0x00, 0x72, 0x65, 0x73, 0x6f, 0x6c, 0x76, 0x65, 0x00, 0x76, 0x00, 0x78, 0x00,
+            0x50, 0x72, 0x6f, 0x6d, 0x69, 0x73, 0x65, 0x00, 0x63, 0x61, 0x6c, 0x6c, 0x65, 0x72,
+            0x00, 0x72, 0x65, 0x73, 0x00, 0x74, 0x68, 0x65, 0x6e, 0x00,
+        ];
         let out = crate::run_program_with_symbols(BYTECODE, SYMBOLS);
-        assert!(out.completed, "thenable-adoption program should complete: {:?}", out.halt);
+        assert!(
+            out.completed,
+            "thenable-adoption program should complete: {:?}",
+            out.halt
+        );
         // The completion is the pre-drain `x` (the reaction runs at the drain,
         // after the script returns); the thenable settles to 7 at the drain.
         assert_eq!(out.result, "0", "pre-drain x");
@@ -19493,10 +20890,24 @@ mod tests {
     /// pin `48ee02d8cfe0`.
     #[test]
     fn async_await_suspend_resume_is_miri_clean() {
-        const BYTECODE: &[u8] = &[0x0b,0x00,0x9e,0x02,0x86,0x01,0x00,0x8e,0xe6,0x01,0x92,0x86,0x02,0x00,0xe0,0xe6,0x02,0x92,0x4b,0x4d,0x01,0x00,0x07,0x01,0x00,0x2e,0x12,0x0b,0x00,0xc1,0x4d,0x02,0x00,0x72,0x07,0x0a,0x25,0x02,0xbb,0x44,0xbf,0x02,0x00,0x92,0x44,0x58,0x92,0x42,0xe0,0x89,0x03,0x00,0x72,0x04,0xbf,0x01,0x00,0x92,0x4d,0x02,0x00,0x72,0x00,0xbf,0x02,0x00,0x92,0xe0,0x4d,0x01,0x00,0x66,0x01,0x00,0x28,0xab,0x00,0xbb,0x4d,0x02,0x00,0x67,0x02,0x00,0xbb,0xa9];
-        const SYMBOLS: &[u8] = &[0x04,0x00,0x66,0x00,0x78,0x00,0x63,0x61,0x6c,0x6c,0x65,0x72,0x00];
+        const BYTECODE: &[u8] = &[
+            0x0b, 0x00, 0x9e, 0x02, 0x86, 0x01, 0x00, 0x8e, 0xe6, 0x01, 0x92, 0x86, 0x02, 0x00,
+            0xe0, 0xe6, 0x02, 0x92, 0x4b, 0x4d, 0x01, 0x00, 0x07, 0x01, 0x00, 0x2e, 0x12, 0x0b,
+            0x00, 0xc1, 0x4d, 0x02, 0x00, 0x72, 0x07, 0x0a, 0x25, 0x02, 0xbb, 0x44, 0xbf, 0x02,
+            0x00, 0x92, 0x44, 0x58, 0x92, 0x42, 0xe0, 0x89, 0x03, 0x00, 0x72, 0x04, 0xbf, 0x01,
+            0x00, 0x92, 0x4d, 0x02, 0x00, 0x72, 0x00, 0xbf, 0x02, 0x00, 0x92, 0xe0, 0x4d, 0x01,
+            0x00, 0x66, 0x01, 0x00, 0x28, 0xab, 0x00, 0xbb, 0x4d, 0x02, 0x00, 0x67, 0x02, 0x00,
+            0xbb, 0xa9,
+        ];
+        const SYMBOLS: &[u8] = &[
+            0x04, 0x00, 0x66, 0x00, 0x78, 0x00, 0x63, 0x61, 0x6c, 0x6c, 0x65, 0x72, 0x00,
+        ];
         let out = crate::run_program_with_symbols(BYTECODE, SYMBOLS);
-        assert!(out.completed, "async program should complete: {:?}", out.halt);
+        assert!(
+            out.completed,
+            "async program should complete: {:?}",
+            out.halt
+        );
         // The completion is the pre-drain `x` (the resume runs at the drain,
         // after the script returns); the awaited 7 settles into `x` at the drain.
         assert_eq!(out.result, "0", "pre-drain x");
@@ -19509,11 +20920,11 @@ mod tests {
         // sequence of 16-bit code units, so nothing is normalized away.
         for units in [
             vec![],
-            vec![0x0000u16],                         // U+0000 (no NUL-terminator hazard)
-            "hello".encode_utf16().collect(),        // ASCII
-            "héllo — Ω".encode_utf16().collect(),    // BMP non-ASCII
-            "𝒜𝒷".encode_utf16().collect(),           // astral (surrogate pairs)
-            vec![0xD834, 0x0041, 0xDD1E],            // a LONE high surrogate mid-string
+            vec![0x0000u16],                      // U+0000 (no NUL-terminator hazard)
+            "hello".encode_utf16().collect(),     // ASCII
+            "héllo — Ω".encode_utf16().collect(), // BMP non-ASCII
+            "𝒜𝒷".encode_utf16().collect(),        // astral (surrogate pairs)
+            vec![0xD834, 0x0041, 0xDD1E],         // a LONE high surrogate mid-string
         ] {
             let bytes = units_to_be16(&units);
             assert_eq!(bytes.len(), units.len() * 2, "2 bytes per code unit");
@@ -19543,8 +20954,16 @@ mod tests {
                 Payload::String(o) => o,
                 _ => panic!("new_string_units must yield a String slot"),
             };
-            assert_eq!(interp.str_units(off), units, "stored units read back exactly");
-            assert_eq!(interp.str_len(off), units.len(), "length is the code-unit count");
+            assert_eq!(
+                interp.str_units(off),
+                units,
+                "stored units read back exactly"
+            );
+            assert_eq!(
+                interp.str_len(off),
+                units.len(),
+                "length is the code-unit count"
+            );
         }
     }
 
@@ -19592,17 +21011,25 @@ mod tests {
         // codePointAt is the standard recombination over the same units.
         let cp_lead = units[100]; // the 𝒜 lead surrogate
         let cp_trail = units[101]; // the 𝒜 trail surrogate
-        assert!((0xD800..=0xDBFF).contains(&cp_lead), "index 100 is a lead surrogate");
-        assert!((0xDC00..=0xDFFF).contains(&cp_trail), "index 101 is a trail surrogate");
+        assert!(
+            (0xD800..=0xDBFF).contains(&cp_lead),
+            "index 100 is a lead surrogate"
+        );
+        assert!(
+            (0xDC00..=0xDFFF).contains(&cp_trail),
+            "index 101 is a trail surrogate"
+        );
         assert_eq!(stored[100], cp_lead, "charCodeAt(100) == the lead unit");
         assert_eq!(stored[101], cp_trail, "charCodeAt(101) == the trail unit");
         // The unit just past the supplementary char is 'b' (index 102), read
         // with no offset drift from the two-unit pair before it.
         assert_eq!(stored[102], b'b' as u16, "the unit just past 𝒜 is 'b'");
         // codePointAt(100) recombines the pair to U+1D49C.
-        let combined =
-            0x10000 + (((cp_lead as u32 - 0xD800) << 10) | (cp_trail as u32 - 0xDC00));
-        assert_eq!(combined, 0x1D49C, "codePointAt at the lead is the astral code point");
+        let combined = 0x10000 + (((cp_lead as u32 - 0xD800) << 10) | (cp_trail as u32 - 0xDC00));
+        assert_eq!(
+            combined, 0x1D49C,
+            "codePointAt at the lead is the astral code point"
+        );
     }
 
     #[test]
@@ -19616,15 +21043,27 @@ mod tests {
         assert_eq!(units.len(), 4, "'a' + 2-unit pair + 'b'");
 
         let lead = str_off(&interp.new_string_units(&units[1..2]));
-        assert_eq!(interp.str_units(lead), vec![units[1]], "a split lead surrogate survives");
+        assert_eq!(
+            interp.str_units(lead),
+            vec![units[1]],
+            "a split lead surrogate survives"
+        );
         assert_eq!(interp.str_len(lead), 1);
 
         let trail = str_off(&interp.new_string_units(&units[2..3]));
-        assert_eq!(interp.str_units(trail), vec![units[2]], "a split trail surrogate survives");
+        assert_eq!(
+            interp.str_units(trail),
+            vec![units[2]],
+            "a split trail surrogate survives"
+        );
         assert_eq!(interp.str_len(trail), 1);
 
         let whole = str_off(&interp.new_string_units(&units[1..3]));
-        assert_eq!(interp.str_units(whole), units[1..3].to_vec(), "the whole pair slices intact");
+        assert_eq!(
+            interp.str_units(whole),
+            units[1..3].to_vec(),
+            "the whole pair slices intact"
+        );
     }
 
     #[test]
@@ -19635,8 +21074,15 @@ mod tests {
         // no NUL hazard, no normalization. str_content is exactly the payload.
         let lone = vec![b'A' as u16, 0xD800, b'B' as u16];
         let off = str_off(&interp.new_string_units(&lone));
-        assert_eq!(interp.str_units(off), lone, "the lone surrogate reads back unchanged");
-        assert_eq!(interp.str_content(off), &[0x00, 0x41, 0xD8, 0x00, 0x00, 0x42]);
+        assert_eq!(
+            interp.str_units(off),
+            lone,
+            "the lone surrogate reads back unchanged"
+        );
+        assert_eq!(
+            interp.str_content(off),
+            &[0x00, 0x41, 0xD8, 0x00, 0x00, 0x42]
+        );
 
         // Comparison: byte-lexicographic order over the UTF-16BE payload is the
         // code-unit (ECMAScript relational) order — even for lone surrogates,
@@ -19645,9 +21091,18 @@ mod tests {
         let d801 = str_off(&interp.new_string_units(&[0xD801]));
         let bmp_e000 = str_off(&interp.new_string_units(&[0xE000]));
         let bmp_007a = str_off(&interp.new_string_units(&[0x007A]));
-        assert!(interp.str_content(d800) < interp.str_content(d801), "0xD800 < 0xD801");
-        assert!(interp.str_content(d801) < interp.str_content(bmp_e000), "0xD801 < 0xE000");
-        assert!(interp.str_content(bmp_007a) < interp.str_content(d800), "'z' (0x7A) < 0xD800");
+        assert!(
+            interp.str_content(d800) < interp.str_content(d801),
+            "0xD800 < 0xD801"
+        );
+        assert!(
+            interp.str_content(d801) < interp.str_content(bmp_e000),
+            "0xD801 < 0xE000"
+        );
+        assert!(
+            interp.str_content(bmp_007a) < interp.str_content(d800),
+            "'z' (0x7A) < 0xD800"
+        );
 
         // Concat: joining two lone surrogates that form a pair reunites them
         // into a supplementary code point in the middle (WTF-16 concat); joining
@@ -19693,8 +21148,16 @@ mod tests {
             // "Deserialize" into a fresh machine's arena.
             let mut dst = Interp::new();
             let dst_off = dst.chunks.alloc(&payload);
-            assert_eq!(dst.str_units(dst_off), units, "atom decodes back to the same units");
-            assert_eq!(dst.str_len(dst_off), units.len(), "O(1) length survives the round-trip");
+            assert_eq!(
+                dst.str_units(dst_off),
+                units,
+                "atom decodes back to the same units"
+            );
+            assert_eq!(
+                dst.str_len(dst_off),
+                units.len(),
+                "O(1) length survives the round-trip"
+            );
             // And the bytes themselves are identical (bit-exact snapshot).
             assert_eq!(dst.str_content(dst_off), payload.as_slice());
         }
