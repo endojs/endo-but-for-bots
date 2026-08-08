@@ -37,26 +37,28 @@
 #                      Default 10; 0 = off.
 #   --no-fetch         do not clone; require --test262-dir.
 #
-# NOTE: a whole-tree run is a MULTI-HOUR sweep. Publishing its output is a
-# separate, deliberate act (a gh-pages commit); ordinary CI must not run it.
+# NOTE: the recorded whole-tree run took 16m30s at --jobs 16 on
+# endolin-garden2-5bcdff64. Runner capacity, cold builds, cloning, and the hang
+# tail vary, so publishing remains a separate deliberate act and ordinary CI
+# must not run it.
 # END HELP
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-crate_dir=$(cd "$here/.." && pwd)
-repo_root=$(cd "$crate_dir" && git rev-parse --show-toplevel)
-engine_dir="$repo_root/rust/engine"
+crate_directory=$(cd "$here/.." && pwd)
+repo_root=$(cd "$crate_directory" && git rev-parse --show-toplevel)
+engine_directory="$repo_root/rust/engine"
 
 # shellcheck source=/dev/null
-source "$crate_dir/TEST262_REVISION"
+source "$crate_directory/TEST262_REVISION"
 # Re-affirm the sourced pins (validates the revision file and makes the
 # assignment visible to static analysis).
 TEST262_REPO="${TEST262_REPO:?TEST262_REVISION must define TEST262_REPO}"
 TEST262_SHA="${TEST262_SHA:?TEST262_REVISION must define TEST262_SHA}"
 
-test262_dir=""
+test262_directory=""
 subtree=""
-out="$engine_dir/target/test262-report"
+out="$engine_directory/target/test262-report"
 jobs=""
 oracle="on"
 allow_fetch="yes"
@@ -67,7 +69,7 @@ case_timeout="10"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --test262-dir) test262_dir="$2"; shift 2 ;;
+    --test262-dir) test262_directory="$2"; shift 2 ;;
     --subtree) subtree="$2"; shift 2 ;;
     --out) out="$2"; shift 2 ;;
     --jobs) jobs="$2"; shift 2 ;;
@@ -89,34 +91,34 @@ results="$out/results"
 mkdir -p "$results"
 
 echo "full-run: building the runner + report binaries (release)..." >&2
-cargo build --release --manifest-path "$engine_dir/Cargo.toml" \
+cargo build --release --manifest-path "$engine_directory/Cargo.toml" \
   -p ironhorse-262 --bin ironhorse-xst --bin ironhorse-262-report >&2
-xst="$engine_dir/target/release/ironhorse-xst"
-report_binary="$engine_dir/target/release/ironhorse-262-report"
+xst="$engine_directory/target/release/ironhorse-xst"
+report_binary="$engine_directory/target/release/ironhorse-262-report"
 
 # --- Resolve / vendor the authoritative test262 corpus at the pinned SHA. -----
-if [ -z "$test262_dir" ]; then
+if [ -z "$test262_directory" ]; then
   if [ "$allow_fetch" = "no" ]; then
     echo "full-run: --no-fetch given but no --test262-dir" >&2; exit 2
   fi
-  test262_dir="$out/test262-src"
-  if [ ! -f "$test262_dir/harness/sta.js" ]; then
-    echo "full-run: vendoring $TEST262_REPO @ $TEST262_SHA into $test262_dir" >&2
-    mkdir -p "$test262_dir"
-    git -C "$test262_dir" init -q 2>/dev/null || true
-    git -C "$test262_dir" remote add origin "$TEST262_REPO" 2>/dev/null || \
-      git -C "$test262_dir" remote set-url origin "$TEST262_REPO"
-    git -C "$test262_dir" fetch --depth 1 -q origin "$TEST262_SHA"
-    git -C "$test262_dir" checkout -q "$TEST262_SHA"
+  test262_directory="$out/test262-src"
+  if [ ! -f "$test262_directory/harness/sta.js" ]; then
+    echo "full-run: vendoring $TEST262_REPO @ $TEST262_SHA into $test262_directory" >&2
+    mkdir -p "$test262_directory"
+    git -C "$test262_directory" init -q 2>/dev/null || true
+    git -C "$test262_directory" remote add origin "$TEST262_REPO" 2>/dev/null || \
+      git -C "$test262_directory" remote set-url origin "$TEST262_REPO"
+    git -C "$test262_directory" fetch --depth 1 -q origin "$TEST262_SHA"
+    git -C "$test262_directory" checkout -q "$TEST262_SHA"
   fi
 fi
-if [ ! -f "$test262_dir/harness/sta.js" ]; then
-  echo "full-run: no test262 harness under $test262_dir" >&2; exit 2
+if [ ! -f "$test262_directory/harness/sta.js" ]; then
+  echo "full-run: no test262 harness under $test262_directory" >&2; exit 2
 fi
-test_root="$test262_dir/test"
+test_root="$test262_directory/test"
 
 # --- Provenance (recorded once; the report re-emits it verbatim). ------------
-test262_sha=$(git -C "$test262_dir" rev-parse HEAD 2>/dev/null || echo "$TEST262_SHA")
+test262_sha=$(git -C "$test262_directory" rev-parse HEAD 2>/dev/null || echo "$TEST262_SHA")
 endo_sha=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo unknown)
 moddable_sha=$(git -C "$repo_root" rev-parse HEAD:c/moddable 2>/dev/null || echo unknown)
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -129,7 +131,7 @@ json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 provenance="$out/provenance.json"
 
 # --- Discover + plan (resume). -----------------------------------------------
-discover_args=(--test262-dir "$test262_dir")
+discover_args=(--test262-dir "$test262_directory")
 [ -n "$subtree" ] && discover_args+=(--subtree "$subtree")
 
 mapfile -t all_batches < <("$report_binary" discover "${discover_args[@]}")
@@ -147,20 +149,20 @@ fi
 # --- Run the pending batches, one oracle process each, --jobs in parallel. ----
 # Each batch writes to a .part file first and is atomically renamed on success,
 # so a killed process never leaves a partial file that resume mistakes for done.
-run_one() {
+run_one_batch() {
   batch="$1"
   batch_file_stem=$(printf '%s' "$batch" | sed 's|/|__|g')
   final="$results/$batch_file_stem.json"
   part="$results/$batch_file_stem.part"
   "$xst" --flat $oracle_flag --case-timeout "$case_timeout" --json "$part" \
-    --test262-dir "$test262_dir" "$test_root/$batch" >/dev/null 2>&1 || true
+    --test262-dir "$test262_directory" "$test_root/$batch" >/dev/null 2>&1 || true
   if [ -s "$part" ]; then mv -f "$part" "$final"; else rm -f "$part"; fi
 }
-export -f run_one
-export xst results test262_dir test_root oracle_flag case_timeout
+export -f run_one_batch
+export xst results test262_directory test_root oracle_flag case_timeout
 
 if [ "${#pending[@]}" -gt 0 ]; then
-  printf '%s\n' "${pending[@]}" | xargs -P "$jobs" -I{} bash -c 'run_one "$@"' _ {}
+  printf '%s\n' "${pending[@]}" | xargs -P "$jobs" -I{} bash -c 'run_one_batch "$@"' _ {}
 fi
 
 # --- Completeness gate: reconcile discovered vs produced. ---------------------
@@ -168,7 +170,7 @@ fi
 # truncated one; `plan` (re-run here) counts both as still-pending — a file that
 # parses to zero cases is treated as incomplete. If ANY batch is still pending
 # after the sweep, fail rather than aggregate an authoritative-looking report
-# that silently omits whole directories. This is why `run_one` can swallow a
+# that silently omits whole directories. This is why `run_one_batch` can swallow a
 # single batch's failure (the parallel run finishes) without hiding it: the
 # reconciliation below is the real completeness check.
 mapfile -t still_pending < <("$report_binary" plan --results "$results" "${discover_args[@]}")

@@ -72,8 +72,10 @@ Outputs land in `rust/engine/target/test262-report/` by default:
 ## CI
 
 `.github/workflows/ironhorse-full-test262.yml` is an **explicitly invokable**
-(`workflow_dispatch`) path — never on the PR/push matrix, because a whole-tree
-run is a multi-hour sweep. It defaults to a bounded subtree (`built-ins/Proxy`)
+(`workflow_dispatch`) path, never on the PR/push matrix because a whole-tree
+run is intentionally operator-scheduled. The recorded run took 16m30s at
+`--jobs 16` on `endolin-garden2-5bcdff64`; runner capacity, cold builds,
+cloning, and the hang tail vary. It defaults to a bounded subtree (`built-ins/Proxy`)
 so a manual run is quick; pass `full` to sweep the whole tree. It uploads
 `report.json`/`report.html`/`provenance.json` as a build artifact; publishing to
 gh-pages is a separate, deliberate step.

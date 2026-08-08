@@ -1,8 +1,9 @@
 # The full-test262 Ironhorse conformance sweep (maintainer request,
 # kriscendobot/garden#51). This is an EXPLICITLY INVOKABLE workflow only — it runs
 # the complete authoritative TC39 test262 corpus against the Ironhorse engine,
-# which is a MULTI-HOUR sweep, so it must never ride the ordinary PR/push
-# matrix (CI stays in ci.yml). Dispatch it from the Actions tab; a bounded
+# whose recorded run took 16m30s at jobs=16 on endolin-garden2-5bcdff64.
+# Runner capacity, cold builds, cloning, and the hang tail vary, so it must
+# never ride the ordinary PR/push matrix (CI stays in ci.yml). Dispatch it from the Actions tab; a bounded
 # subtree (e.g. built-ins/Proxy) is the default so a manual run is quick, and
 # `full` runs the whole tree.
 name: Ironhorse full test262 sweep

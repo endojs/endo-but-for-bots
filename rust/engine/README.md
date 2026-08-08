@@ -422,9 +422,8 @@ carries a method only for program-referenced names, so it cannot tell an absent
 own read from an inherited built-in it never linked, and refuses rather than
 answer a wrong `undefined`/`false`. A fourth static, **`Object.defineProperty`**,
 lands the attribute-aware property model: `defineProperty(o, k, desc)` defines a
-new own data property on an ordinary object from the canonical four-field data
-descriptor (`{value, writable, enumerable, configurable}`, no `get`/`set` — the
-verifyProperty shape), storing the three booleans as XS's property flag byte
+ordinary own property from a partial data or accessor descriptor, including
+reconfiguration of an existing key, storing the attributes as XS's property flag byte
 (`XS_DONT_SET_FLAG`/`XS_DONT_ENUM_FLAG`/`XS_DONT_DELETE_FLAG`) so the attributes
 **ripple through** the other statics: `Object.keys` now filters non-enumerable
 properties (and still renders every enumerable one in creation order), and
@@ -439,12 +438,11 @@ tests, the computed-access `at`/`at_2` unlock, and the `in`-false answers now
 covered). The honest **named skips** are:
 `Object.keys`/`getOwnPropertyDescriptor` over an exotic receiver
 (array/typed-array/collection/wrapper/error — whose own-key set includes
-indices/length or internal names) or over an accessor property, an index-string
+indices/length or internal names), an index-string
 key, a computed read / `in` of a boot default-key name the program never
 referenced (the incomplete `%Object.prototype%` member set), a
-`defineProperty` with a partial or accessor descriptor / a redefine of an
-existing key / a non-object descriptor / a non-boolean attribute / an
-enumerable **novel** key `Object.keys` cannot render to a string.
+`defineProperty` on an exotic receiver, or an enumerable **novel** key
+`Object.keys` cannot render to a string.
 
 The stage-4 **object-integrity** child (1/8, harden's direct prerequisite)
 lands the property-attribute **integrity model** and the **descriptor-reflection
@@ -475,21 +473,16 @@ pairs, `66048` base + a per-key value-read residual — `3<<14` for `values`,
 `1<<16`). `built-ins/Object` whole-tree dual-run grows to **`covered=176
 divergent=0`** (from 63), with the per-section bars all `divergent=0`:
 `built-ins/Object/{freeze covered=12, seal 12, preventExtensions 12, isFrozen
-24, isSealed 19, isExtensible 25}`. The honest **named skips** are: the
-**strict-mode** integrity-violation *throw* — a rejected set/delete under a
-strict callee must throw a *catchable* native `TypeError`, which needs the
-native-error construction Ironhorse does not yet model (a wrong uncatchable
-host-abort would diverge from a `try`/`catch`), so it self-names
-`strict-set:integrity-violation` / `strict-delete:non-configurable` rather than
-answer wrongly; and an **exotic receiver** or an **accessor own property**
-across all these surfaces (the same class the object-statics child skips). The
-headline stage-4 surfaces this child does **not** reach — **accessor
-properties** (getter/setter slots, `get x()`/`set x()` object-literal opcodes,
-accessor-descriptor `defineProperty`) and the **full ValidateAndApplyProperty­
-Descriptor** reconfiguration path (`defineProperty` redefine / partial
-descriptors) — remain the reported **scope fold**, carried forward to a
-follow-up child as the honest named skips the object-statics child already
-lists.
+24, isSealed 19, isExtensible 25}`. Exotic receivers remain honest named
+skips across these surfaces.
+
+The stage-4 **ordinary-object MOP and descriptors** child completes the shared
+ordinary property seam. Data and accessor descriptors now use the full
+ValidateAndApplyPropertyDescriptor compatibility checks; `Object.create`,
+`Object.defineProperties`, symbol-key reflection, object spread, inherited
+getters/setters, and strict failed writes/deletes route through the same seam.
+Accessor getter/setter functions participate in harden's transitive walk, and
+rejected strict operations raise catchable realm-local `TypeError` objects.
 
 The stage-4 **classes** child (2/8) lands **`new.target`** (the `XS_CODE_TARGET`
 opcode, which already decoded but had no semantics), bit-exact (result AND
