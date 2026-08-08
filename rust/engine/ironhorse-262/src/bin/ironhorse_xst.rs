@@ -36,11 +36,11 @@
 //!
 //! Memory note (inherited from `test262-language`): the XS oracle
 //! accumulates process memory across the tens of thousands of machine
-//! create/destroy cycles a whole-tree run makes, so walk one subtree per
-//! process to bound the working set; each subprocess frees everything on
-//! exit.
+//! create/destroy cycles a whole-tree run makes, so the full sweep caps the
+//! number of cases per process; each subprocess frees everything on exit.
 
-use ironhorse_262::test262::{collect_js, locate_test262};
+use ironhorse_262::report::RunReport;
+use ironhorse_262::test262::{collect_js, collect_js_batch, collect_js_direct, locate_test262};
 use ironhorse_262::xst::{run_files, Config, SesMode};
 use std::path::PathBuf;
 
@@ -48,6 +48,11 @@ fn main() {
     let mut cfg = Config::default();
     let mut test262_dir: Option<PathBuf> = None;
     let mut report_path: Option<PathBuf> = None;
+    let mut json_path: Option<PathBuf> = None;
+    let mut direct_only = false;
+    let mut batch_index: Option<usize> = None;
+    let mut batch_size: Option<usize> = None;
+    let mut run_id: String = String::new();
     let mut subtrees: Vec<String> = Vec::new();
 
     let mut args = std::env::args().skip(1);
@@ -107,6 +112,32 @@ fn main() {
                     args.next().unwrap_or_else(|| fail("-o needs a path")),
                 ));
             }
+            "--json" => {
+                json_path = Some(PathBuf::from(
+                    args.next().unwrap_or_else(|| fail("--json needs a path")),
+                ));
+            }
+            "--direct-only" => direct_only = true,
+            "--run-id" => {
+                run_id = args
+                    .next()
+                    .unwrap_or_else(|| fail("--run-id needs a value"));
+            }
+            "--batch-index" => {
+                batch_index = Some(
+                    args.next()
+                        .and_then(|value| value.parse().ok())
+                        .unwrap_or_else(|| fail("--batch-index needs a non-negative integer")),
+                );
+            }
+            "--batch-size" => {
+                batch_size = Some(
+                    args.next()
+                        .and_then(|value| value.parse().ok())
+                        .filter(|size| *size > 0)
+                        .unwrap_or_else(|| fail("--batch-size needs a positive integer")),
+                );
+            }
             "-h" | "--help" => {
                 print!("{}", HELP);
                 return;
@@ -146,17 +177,38 @@ fn main() {
         // tree) is run directly, exactly as `xst` takes case paths. Otherwise
         // it resolves as a subtree under the located test262 root.
         let direct = PathBuf::from(sub);
-        let found = if direct.is_file() {
-            vec![direct]
-        } else if direct.is_dir() {
-            collect_js(&direct)
+        let target = if direct.exists() {
+            direct
+        } else if sub.starts_with("language") || sub.starts_with("built-ins") {
+            root.join(sub)
         } else {
-            let base = if sub.starts_with("language") || sub.starts_with("built-ins") {
-                root.join(sub)
+            root.join("language").join(sub)
+        };
+        let found = if batch_index.is_some() {
+            Vec::new()
+        } else if target.is_file() {
+            vec![target.clone()]
+        } else if target.is_dir() {
+            if direct_only {
+                collect_js_direct(&target)
             } else {
-                root.join("language").join(sub)
-            };
-            collect_js(&base)
+                collect_js(&target)
+            }
+        } else {
+            Vec::new()
+        };
+        let found = match (batch_index, batch_size) {
+            (Some(index), Some(size)) => {
+                if subtrees.len() != 1 {
+                    fail("batching accepts exactly one positional directory");
+                }
+                if !target.is_dir() {
+                    fail("batching requires one positional directory");
+                }
+                collect_js_batch(&target, index, size).unwrap_or_else(|error| fail(&error))
+            }
+            (None, None) => found,
+            _ => fail("--batch-index and --batch-size must be used together"),
         };
         if found.is_empty() {
             eprintln!("warning: no test files under {}", sub);
@@ -223,6 +275,25 @@ fn main() {
         }
     }
 
+    // `--json`: the per-case batch file the whole-tree sweep aggregates. Written
+    // BEFORE the bar-check exit below so a batch that contains a failure still
+    // records its cases (the orchestrator gates on the aggregate, not per-batch
+    // exit status), and so an interrupted sweep can resume from what completed.
+    if let Some(path) = &json_path {
+        match std::fs::write(path, RunReport::batch_json_with_id(&run_id, &rep.cases)) {
+            Ok(()) => eprintln!(
+                "wrote {} case records to {}",
+                rep.cases.len(),
+                path.display()
+            ),
+            Err(e) => fail(&format!(
+                "could not write json to {}: {}",
+                path.display(),
+                e
+            )),
+        }
+    }
+
     if rep.met_bar() {
         println!(
             "BAR MET: {} covered, 0 failed (of {} total; {} skipped by named reason)",
@@ -264,6 +335,14 @@ OPTIONS:
                              not yet landed, so each is a named whole-case skip
     --test262-dir DIR        use DIR as the test262 root (has harness/, test/)
     -o, --report FILE        write the xst-shaped YAML report to FILE
+    --json FILE              write the per-case JSON batch file (for the
+                             whole-tree sweep's aggregator) to FILE
+    --run-id ID              stamp the --json batch with this run identity so
+                             the aggregator can bind the report to one run
+    --direct-only            for a directory positional, run only its DIRECT
+                             .js cases (non-recursive)
+    --batch-index N          zero-based chunk of the directory's sorted DIRECT cases (implies --direct-only)
+    --batch-size N           positive maximum files in that chunk
     -h, --help               print this help
 
 THIRD-HOST (ses-xs-parity axis, alongside `xst -l` and node+SES prelude):
