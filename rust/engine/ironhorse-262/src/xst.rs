@@ -532,8 +532,21 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
 /// real over-acceptance — the oracle rejecting a source ironhorse wrongly ran —
 /// is never masked (it either yields empty oracle bytecode or a non-empty
 /// thrown value).
+///
+/// The parse conjunct reads the **oracle's own** parse signal
+/// ([`DualRun::oracle_parsed`], set from `oracle.bytecode`), NOT `run.bytecode`
+/// — the latter is ironhorse's bytecode on the default runner, which under
+/// `Agreement::IronhorseOnlyComplete` is necessarily non-empty and so would
+/// make the conjunct vacuous.
+///
+/// Known residual: `oracle_error.is_empty()` also holds for a genuine
+/// `throw undefined` / `throw ''` (the XS shim stringifies those to `""`). A
+/// tighter form gates on the oracle's abort *exit status*, which the shim does
+/// not yet surface across the FFI; a follow-up should thread
+/// `XS_JAVASCRIPT_STACK_OVERFLOW_EXIT` out of `xs_shim.c` rather than infer a
+/// host abort from an empty string.
 fn oracle_host_aborted(run: &DualRun) -> bool {
-    !run.bytecode.is_empty() && run.oracle_error.is_empty()
+    run.oracle_parsed && run.oracle_error.is_empty()
 }
 
 fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
@@ -587,12 +600,14 @@ fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
 /// * **compiler rejection** — ironhorse-compile raised its own SyntaxError for a
 ///   construct it implements; when the oracle agrees the source is an early
 ///   error, that is `Covered`.
-/// * **over-acceptance** — ironhorse-compile emitted bytecode AND ironhorse ran
-///   it to completion; a `Fail` the oracle differential catches (the bar-forbidden
-///   defect this instrument exists to surface).
-/// * **runtime throw** — ironhorse-compile accepted, then ironhorse aborted at
-///   run rather than at compile: it rejected at the wrong phase, an honest
-///   coverage gap (`negative-<phase>:runtime-reject`), not covered.
+/// * **over-acceptance** — ironhorse-compile *accepted* (emitted bytecode for) a
+///   source the oracle rejected at parse; a `Fail` the oracle differential
+///   catches (the bar-forbidden defect this instrument exists to surface). The
+///   verdict is decided at the **parse phase**, not by whether the assembled
+///   program ran to completion: test262 prepends `$DONOTEVALUATE()`
+///   (`harness/sta.js`) which throws at RUN, so neither engine "completes" the
+///   assembled program even when it wrongly parsed — completion is the wrong
+///   discriminator (it made this arm unreachable for ~99.5% of the corpus).
 /// * **oracle surprise** — the XS oracle did NOT reject a source test262 marks as
 ///   an early error; the differential authority disagrees, so we do not claim
 ///   coverage (`negative-oracle-unexpected`).
@@ -604,8 +619,12 @@ fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
 ///   forbidden one.
 fn evaluate_negative_early(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
     // A parse/resolution negative expects the oracle (XS) to reject the source
-    // at compile — i.e. XS did not complete.
-    let oracle_rejected = !oracle_completed(run.agreement);
+    // at the PARSE phase — i.e. XS emitted no bytecode. This reads the oracle's
+    // own parse signal, NOT `!oracle_completed`: the assembled program's leading
+    // `$DONOTEVALUATE()` throws at run, so XS never "completes" even when it
+    // wrongly parsed (accepted) the source, which made the old `!completed`
+    // signal score an ironhorse over-rejection as covered.
+    let oracle_parse_rejected = !run.oracle_parsed;
 
     match &run.ironhorse_compile {
         // ironhorse-compile reached a deferred/unimplemented path — it either
@@ -621,35 +640,32 @@ fn evaluate_negative_early(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdi
 
         // ironhorse's own front end raised the early error.
         IronhorseCompile::Rejected(_) => {
-            if !cfg.oracle || oracle_rejected {
+            if !cfg.oracle || oracle_parse_rejected {
                 Verdict::Covered
             } else {
-                // ironhorse rejected but the oracle accepted — the differential
-                // authority disagrees the source is an early error.
+                // ironhorse rejected but the oracle parsed (accepted) the source
+                // — the differential authority disagrees it is an early error.
                 Verdict::RunSkip("negative-oracle-unexpected".into())
             }
         }
 
-        // ironhorse-compile accepted the source.
+        // ironhorse-compile ACCEPTED the source (emitted bytecode) — its parser
+        // did not reject a source test262 marks as a parse-phase early error.
+        // Decide at the parse phase: whether the assembled program then ran to
+        // completion is irrelevant, because `$DONOTEVALUATE()` throws at run.
         IronhorseCompile::Accepted => {
-            if ironhorse_completed(run.agreement) {
-                // Emitted bytecode AND ran to completion: a genuine
-                // over-acceptance of a source the spec forbids.
-                if cfg.oracle && oracle_rejected {
-                    Verdict::Fail(format!(
-                        "negative over-acceptance: ironhorse compiled and ran a source expected to be a {}-phase early error",
-                        neg.phase
-                    ))
-                } else {
-                    // Oracle gate off, or the oracle also accepted (no
-                    // differential authority to fail on).
-                    Verdict::RunSkip("oracle-gate-off:negative-over-acceptance".into())
-                }
+            if cfg.oracle && oracle_parse_rejected {
+                // ironhorse parsed a source XS rejected at parse: the
+                // bar-forbidden parser over-acceptance the differential exists to
+                // surface.
+                Verdict::Fail(format!(
+                    "negative over-acceptance: ironhorse-compile accepted a source expected to be a {}-phase early error",
+                    neg.phase
+                ))
             } else {
-                // Accepted at compile but aborted at run: rejected at the wrong
-                // phase (a runtime throw where an early error was due). An honest
-                // coverage gap, not a covered early-error reproduction.
-                Verdict::RunSkip(format!("negative-{}:runtime-reject", neg.phase))
+                // Oracle gate off, or the oracle also parsed the source (no
+                // parse-phase differential authority to fail on).
+                Verdict::RunSkip("oracle-gate-off:negative-over-acceptance".into())
             }
         }
 
@@ -1356,8 +1372,11 @@ mod tests {
         // ironhorse-compile raised its own SyntaxError AND the oracle rejected
         // the source: a real early-error reproduction — the covered outcome that
         // replaces the old blanket `pending-compiler` skip.
+        // ironhorse rejected AND the oracle rejected at parse (emitted no
+        // bytecode): both agree it is an early error. `oracle_parsed = false`.
         let run = synthetic_early(
             Agreement::BothAbort,
+            false,
             IronhorseCompile::Rejected("line 1: unexpected token".into()),
         );
         let cfg = Config::default();
@@ -1373,10 +1392,14 @@ mod tests {
 
     #[test]
     fn early_error_over_acceptance_is_a_failure() {
-        // ironhorse-compile emitted bytecode AND ran it to completion for a
-        // source the spec forbids: the bar-forbidden over-acceptance the oracle
-        // differential exists to catch — never silently relabeled.
-        let run = synthetic_early(Agreement::IronhorseOnlyComplete, IronhorseCompile::Accepted);
+        // ironhorse-compile ACCEPTED a source the oracle rejected at parse
+        // (`oracle_parsed = false`): the bar-forbidden parser over-acceptance the
+        // differential exists to catch. The realistic corpus shape is
+        // `BothAbort` — the assembled program's leading `$DONOTEVALUATE()` throws
+        // at run, so neither engine "completes" even though ironhorse wrongly
+        // PARSED it. The verdict is decided at the parse phase, so this Fail is
+        // reachable (the old `IronhorseOnlyComplete` premise never was).
+        let run = synthetic_early(Agreement::BothAbort, false, IronhorseCompile::Accepted);
         let cfg = Config::default();
         match evaluate_negative_early(&cfg, &run, &early_negative("parse")) {
             Verdict::Fail(m) => assert!(m.contains("over-acceptance"), "got {m}"),
@@ -1385,12 +1408,13 @@ mod tests {
     }
 
     /// Build a positive-test `DualRun` where ironhorse completed and the oracle
-    /// did not (`IronhorseOnlyComplete`), with a chosen oracle bytecode length
-    /// and thrown-value string — the two axes `oracle_host_aborted` reads.
-    fn synthetic_ih_only_complete(oracle_bytecode: Vec<u8>, oracle_error: &str) -> DualRun {
+    /// did not (`IronhorseOnlyComplete`), with a chosen oracle-parse signal
+    /// (`oracle_parsed`: did XS emit bytecode?) and thrown-value string — the two
+    /// axes `oracle_host_aborted` reads.
+    fn synthetic_ih_only_complete(oracle_parsed: bool, oracle_error: &str) -> DualRun {
         let mut run = synthetic_abort(Halt::Return, "");
         run.agreement = Agreement::IronhorseOnlyComplete;
-        run.bytecode = oracle_bytecode;
+        run.oracle_parsed = oracle_parsed;
         run.oracle_error = oracle_error.to_string();
         run
     }
@@ -1405,7 +1429,7 @@ mod tests {
         // non-result the differential cannot cover — NOT an ironhorse
         // over-acceptance — and it scores `infrastructure`, never
         // `ironhorse-failure`.
-        let run = synthetic_ih_only_complete(vec![0xde, 0xad, 0xbe, 0xef], "");
+        let run = synthetic_ih_only_complete(true, "");
         assert!(oracle_host_aborted(&run));
         let cfg = Config::default();
         assert_eq!(
@@ -1425,13 +1449,13 @@ mod tests {
     fn genuine_over_acceptance_still_fails() {
         // The host-abort refinement must NOT mask a real over-acceptance. Two
         // distinct non-host shapes stay `Fail`:
-        //  * the oracle REJECTED at parse — empty bytecode (a real early error
-        //    ironhorse wrongly ran to completion);
-        let parse_reject = synthetic_ih_only_complete(Vec::new(), "");
+        //  * the oracle REJECTED at parse — emitted no bytecode (a real early
+        //    error ironhorse wrongly ran to completion);
+        let parse_reject = synthetic_ih_only_complete(false, "");
         assert!(!oracle_host_aborted(&parse_reject));
         //  * the oracle threw a real runtime value — a non-empty thrown string
         //    (ironhorse missed a runtime throw the oracle raised).
-        let runtime_throw = synthetic_ih_only_complete(vec![1, 2, 3], "TypeError: nope");
+        let runtime_throw = synthetic_ih_only_complete(true, "TypeError: nope");
         assert!(!oracle_host_aborted(&runtime_throw));
         let cfg = Config::default();
         for run in [parse_reject, runtime_throw] {
@@ -1456,15 +1480,19 @@ mod tests {
     }
 
     #[test]
-    fn early_error_runtime_reject_is_a_named_gap_not_covered() {
-        // ironhorse-compile accepted, then ironhorse aborted at RUN: it rejected
-        // at the wrong phase (a runtime throw where an early error was due). An
-        // honest coverage gap, never counted as a covered early error.
-        let run = synthetic_early(Agreement::BothAbort, IronhorseCompile::Accepted);
+    fn early_error_oracle_also_parsed_is_not_a_failure() {
+        // ironhorse-compile accepted AND the oracle also parsed the source
+        // (`oracle_parsed = true`): both front ends accepted a source test262
+        // marks as a parse negative, so there is no parse-phase differential
+        // authority to fail on — a skip, never a Fail and never covered. (Under
+        // the old `!oracle_completed` signal this synthetic `BothAbort` shape —
+        // both aborting on the `$DONOTEVALUATE()` throw — was miscounted as an
+        // oracle rejection and Failed.)
+        let run = synthetic_early(Agreement::BothAbort, true, IronhorseCompile::Accepted);
         let cfg = Config::default();
         assert_eq!(
             evaluate_negative_early(&cfg, &run, &early_negative("parse")),
-            Verdict::RunSkip("negative-parse:runtime-reject".into())
+            Verdict::RunSkip("oracle-gate-off:negative-over-acceptance".into())
         );
     }
 
@@ -1477,6 +1505,7 @@ mod tests {
         // a forbidden one, even when the oracle also rejects.
         let run = synthetic_early(
             Agreement::BothAbort,
+            false,
             IronhorseCompile::Unsupported("line 1: unsupported: arrow function".into()),
         );
         let cfg = Config::default();
@@ -1493,10 +1522,12 @@ mod tests {
 
     #[test]
     fn early_error_oracle_surprise_is_not_covered() {
-        // ironhorse rejected but the oracle ACCEPTED the source: the differential
-        // authority disagrees it is an early error, so we do not claim coverage.
+        // ironhorse rejected but the oracle ACCEPTED (parsed) the source
+        // (`oracle_parsed = true`, and it completed): the differential authority
+        // disagrees it is an early error, so we do not claim coverage.
         let run = synthetic_early(
             Agreement::OracleOnlyComplete,
+            true,
             IronhorseCompile::Rejected("line 1: unexpected token".into()),
         );
         let cfg = Config::default();
@@ -1513,6 +1544,7 @@ mod tests {
         // never a covered early error and never silently a pass.
         let run = synthetic_early(
             Agreement::BothAbort,
+            false,
             IronhorseCompile::Panicked("static block with lexical declarations deferred".into()),
         );
         let cfg = Config::default();
@@ -1530,9 +1562,11 @@ mod tests {
     #[test]
     fn early_error_no_oracle_trusts_ironhorse_rejection() {
         // With the oracle gate off, ironhorse's own rejection stands as covered
-        // even though the oracle is not consulted as authority.
+        // even though the oracle is not consulted as authority (the oracle-parse
+        // signal is irrelevant here).
         let run = synthetic_early(
             Agreement::OracleOnlyComplete,
+            true,
             IronhorseCompile::Rejected("line 1: unexpected token".into()),
         );
         let cfg = Config {
@@ -1708,17 +1742,24 @@ mod tests {
             ironhorse_halt,
             ironhorse_compile: IronhorseCompile::NotAttempted,
             bytecode: Vec::new(),
+            oracle_parsed: false,
         }
     }
 
     /// A `DualRun` shaped for the early-error (parse/resolution) negative
     /// verdict: the caller supplies the four-valued `agreement` (whether each
-    /// engine completed) and ironhorse's own front-end reaction
-    /// (`ironhorse_compile`) — the two axes `evaluate_negative`'s early-error
-    /// arm reads.
-    fn synthetic_early(agreement: Agreement, compile: IronhorseCompile) -> DualRun {
+    /// engine completed), whether the XS **oracle** parsed the source
+    /// (`oracle_parsed`, its own parse signal), and ironhorse's own front-end
+    /// reaction (`ironhorse_compile`) — the axes `evaluate_negative`'s
+    /// early-error arm reads.
+    fn synthetic_early(
+        agreement: Agreement,
+        oracle_parsed: bool,
+        compile: IronhorseCompile,
+    ) -> DualRun {
         let mut run = synthetic_abort(Halt::Decode("empty".into()), "");
         run.agreement = agreement;
+        run.oracle_parsed = oracle_parsed;
         run.ironhorse_compile = compile;
         run
     }

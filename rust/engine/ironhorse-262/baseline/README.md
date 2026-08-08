@@ -18,8 +18,11 @@ effort measures its regression invariant against it.
 > the three non-terminators are recorded with the shipped harness's spelling
 > (`ironhorse-hang: no verdict within {N}s (non-terminating dispatch)`), not the
 > hand-authored `engine-hang:…` string in `baseline.json`; and parse/resolution
-> negatives that were blanket run-skips can now land as `covered` /
-> `compiler-unimplemented:*` / `negative-*:runtime-reject`. The
+> negatives that were blanket run-skips can now land as `covered`,
+> `compiler-unimplemented:*`, an over-acceptance `Fail`, or an
+> `oracle-gate-off:negative-over-acceptance` skip (the early-error verdict is
+> decided at the parse phase, comparing ironhorse-compile's acceptance against
+> the oracle's own parse signal). The
 > report-refresh that closes this effort re-measures at the merged head and
 > republishes; until then, treat these totals as the *pre-bound* starting line.
 

@@ -167,9 +167,8 @@ pub fn classify(outcome: Outcome, reason: &str) -> Category {
             } else {
                 // unsupported-opcode:*, parse-or-decode, non-primitive-completion,
                 // builtin-coercion-computron-gap, abort-value-differs,
-                // ironhorse-aborted*, negative-<phase>:runtime-reject,
-                // negative-<phase>:oracle-compiler-path, negative-type-unmatched:*,
-                // async:* — all Ironhorse coverage gaps.
+                // ironhorse-aborted*, negative-<phase>:oracle-compiler-path,
+                // negative-type-unmatched:*, async:* — all Ironhorse coverage gaps.
                 Category::Unsupported
             }
         }

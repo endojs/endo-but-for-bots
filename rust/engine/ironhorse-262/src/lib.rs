@@ -126,8 +126,21 @@ pub struct DualRun {
     /// negative verdict reads this to separate a real compiler rejection from
     /// an over-acceptance or a harness panic.
     pub ironhorse_compile: IronhorseCompile,
-    /// The exact bytecode XS emitted (for disassembly on divergence).
+    /// The bytecode ironhorse **ran** — the *selected* compiler's output
+    /// (`ironhorse-compile`'s on the default [`Compiler::Ironhorse`] path, the
+    /// oracle's on the reference path), kept for disassembly on a divergence.
+    /// NOT the oracle's bytes on the default runner; a verdict predicate that
+    /// needs the oracle's own parse signal reads [`Self::oracle_parsed`], never
+    /// this field.
     pub bytecode: Vec<u8>,
+    /// Whether the XS **oracle** emitted bytecode — it parsed AND coded the
+    /// source. A parse-phase rejection yields empty oracle bytecode, so this is
+    /// the oracle's own parse signal, retained independently of
+    /// [`Self::bytecode`] (which under the default runner holds *ironhorse's*
+    /// bytes). The early-error negative verdict and the host-abort exclusion both
+    /// read this to tell an oracle *parse rejection* (early error) apart from an
+    /// oracle *runtime abort* on a source XS parsed.
+    pub oracle_parsed: bool,
 }
 
 impl DualRun {
@@ -314,6 +327,10 @@ fn build_dual_run(
         (true, false) => Agreement::OracleOnlyComplete,
     };
 
+    // The oracle's own parse signal: XS emitted bytecode iff it parsed AND
+    // coded the source. Captured before `oracle` is consumed below.
+    let oracle_parsed = !oracle.bytecode.is_empty();
+
     let result_agrees =
         oracle.completed && ironhorse.completed && oracle.result == ironhorse.result;
     let computrons_agree =
@@ -351,6 +368,7 @@ fn build_dual_run(
         ironhorse_halt: ironhorse.halt,
         ironhorse_compile,
         bytecode,
+        oracle_parsed,
     }
 }
 
@@ -764,6 +782,7 @@ mod tests {
             ironhorse_halt,
             ironhorse_compile: IronhorseCompile::NotAttempted,
             bytecode: Vec::new(),
+            oracle_parsed: false,
         }
     }
 
