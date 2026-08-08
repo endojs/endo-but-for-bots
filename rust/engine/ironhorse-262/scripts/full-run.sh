@@ -8,7 +8,7 @@
 # Design of the run (why it is shaped this way):
 #   * BOUNDED / OOM-SAFE. The XS oracle retains process RSS across the tens of
 #     thousands of machine create/destroy cycles a whole-tree run makes, so the
-#     tree is partitioned into per-directory batches and EACH batch is its own
+#     tree is partitioned into case-count-capped batches and EACH batch is its own
 #     `ironhorse-xst` process — every batch frees the oracle's RSS on exit. Peak
 #     memory is bounded by --jobs (that many concurrent oracle processes), not
 #     by the tree size.
@@ -27,7 +27,7 @@
 #   --subtree PREFIX   restrict the sweep to a subtree, e.g. built-ins/Proxy.
 #                      Default: the whole test/ tree.
 #   --out DIR          output directory. Default:
-#                      rust/engine/ironhorse-262/target/test262-report
+#                      rust/engine/target/test262-report
 #   --jobs N           batch parallelism. Default: min(nproc/2, 8). This bounds
 #                      peak memory (concurrent oracle processes).
 #   --oracle on|off    gate on the XS oracle (default on).
@@ -64,14 +64,23 @@ while [ $# -gt 0 ]; do
     --jobs) jobs="$2"; shift 2 ;;
     --oracle) oracle="$2"; shift 2 ;;
     --no-fetch) allow_fetch="no"; shift ;;
-    -h|--help) sed -n '2,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,/^set -euo pipefail$/{ /^set -euo pipefail$/d; p; }' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "full-run.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
 if [ -z "$jobs" ]; then
-  n=$( (nproc 2>/dev/null || echo 4) )
-  jobs=$(( n / 2 )); [ "$jobs" -lt 1 ] && jobs=1; [ "$jobs" -gt 8 ] && jobs=8
+  processor_count=$(nproc 2>/dev/null || sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
+  jobs=$(( processor_count / 2 )); [ "$jobs" -lt 1 ] && jobs=1; [ "$jobs" -gt 8 ] && jobs=8
+fi
+case "$jobs" in
+  ''|*[!0-9]*) echo "full-run: --jobs needs a positive integer" >&2; exit 2 ;;
+esac
+if [ "$jobs" -eq 0 ]; then
+  echo "full-run: --jobs needs a positive integer" >&2; exit 2
+fi
+if [ "$oracle" != "on" ] && [ "$oracle" != "off" ]; then
+  echo "full-run: --oracle must be on or off" >&2; exit 2
 fi
 
 mkdir -p "$out"
@@ -82,7 +91,7 @@ echo "full-run: building the runner + report binaries (release)…" >&2
 cargo build --release --manifest-path "$engine_dir/Cargo.toml" \
   -p ironhorse-262 --bin ironhorse-xst --bin ironhorse-262-report >&2
 xst="$engine_dir/target/release/ironhorse-xst"
-report_bin="$engine_dir/target/release/ironhorse-262-report"
+report_binary="$engine_dir/target/release/ironhorse-262-report"
 
 # --- Resolve / vendor the authoritative test262 corpus at the pinned SHA. -----
 if [ -z "$test262_dir" ]; then
@@ -110,9 +119,9 @@ test262_sha=$(git -C "$test262_dir" rev-parse HEAD 2>/dev/null || echo "$TEST262
 endo_sha=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo unknown)
 moddable_sha=$(git -C "$repo_root" rev-parse HEAD:c/moddable 2>/dev/null || echo unknown)
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-host=$(hostname 2>/dev/null || echo unknown)
+host="redacted"
 oracle_flag=""; [ "$oracle" = "off" ] && oracle_flag="--no-oracle"
-config="oracle=$oracle flat-per-directory-batches jobs=$jobs subtree=${subtree:-<all>}"
+config="oracle=$oracle max-cases-per-batch=100 jobs=$jobs subtree=${subtree:-<all>}"
 command_line="full-run.sh --subtree ${subtree:-<all>} --jobs $jobs --oracle $oracle"
 
 json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
@@ -122,27 +131,63 @@ provenance="$out/provenance.json"
 discover_args=(--test262-dir "$test262_dir")
 [ -n "$subtree" ] && discover_args+=(--subtree "$subtree")
 
-mapfile -t all_batches < <("$report_bin" discover "${discover_args[@]}")
-mapfile -t pending < <("$report_bin" plan --results "$results" "${discover_args[@]}")
+discovery_file="$out/discovery.txt"
+pending_file="$out/pending.txt"
+if ! "$report_binary" discover "${discover_args[@]}" > "$discovery_file"; then
+  echo "full-run: batch discovery failed" >&2; exit 2
+fi
+if ! "$report_binary" plan --results "$results" "${discover_args[@]}" > "$pending_file"; then
+  echo "full-run: resume planning failed" >&2; exit 2
+fi
+all_batches=()
+while IFS= read -r batch; do
+  [ -n "$batch" ] && all_batches[${#all_batches[@]}]="$batch"
+done < "$discovery_file"
+pending=()
+while IFS= read -r batch; do
+  [ -n "$batch" ] && pending[${#pending[@]}]="$batch"
+done < "$pending_file"
 echo "full-run: ${#all_batches[@]} batches total, ${#pending[@]} pending (resume-aware), jobs=$jobs" >&2
 
 # --- Run the pending batches, one oracle process each, --jobs in parallel. ----
 # Each batch writes to a .part file first and is atomically renamed on success,
 # so a killed process never leaves a partial file that resume mistakes for done.
 run_one() {
-  b="$1"
-  san=$(printf '%s' "$b" | sed 's|/|__|g')
-  final="$results/$san.json"
-  part="$results/$san.part"
-  "$xst" --flat $oracle_flag --json "$part" --test262-dir "$test262_dir" \
-    "$test_root/$b" >/dev/null 2>&1 || true
-  if [ -s "$part" ]; then mv -f "$part" "$final"; else rm -f "$part"; fi
+  batch="$1"
+  directory=${batch%@@*}
+  batch_index=${batch##*@@}
+  sanitized=$(printf '%s' "$batch" | sed 's|/|__|g')
+  final="$results/$sanitized.json"
+  part="$results/$sanitized.part"
+  rm -f "$part"
+  "$xst" --flat --batch-size 100 --batch-index "$((10#$batch_index))" \
+    $oracle_flag --json "$part" --test262-dir "$test262_dir" \
+    "$test_root/$directory" >/dev/null 2>&1 || true
+  if "$report_binary" validate --batch "$part" >/dev/null 2>&1; then
+    mv -f "$part" "$final"
+  else
+    rm -f "$part"
+  fi
 }
 export -f run_one
-export xst results test262_dir test_root oracle_flag
+export xst report_binary results test262_dir test_root oracle_flag
 
 if [ "${#pending[@]}" -gt 0 ]; then
   printf '%s\n' "${pending[@]}" | xargs -P "$jobs" -I{} bash -c 'run_one "$@"' _ {}
+fi
+
+# Completeness gate: a run is publishable only when every discovered batch has
+# a valid result. This also catches killed/truncated workers and stale files.
+if ! "$report_binary" plan --results "$results" "${discover_args[@]}" > "$pending_file"; then
+  echo "full-run: post-sweep completeness check failed" >&2; exit 2
+fi
+remaining=0
+while IFS= read -r batch; do
+  [ -n "$batch" ] && remaining=$((remaining + 1))
+done < "$pending_file"
+if [ "$remaining" -ne 0 ]; then
+  echo "full-run: incomplete sweep: $remaining batch(es) remain pending; re-run to resume" >&2
+  exit 1
 fi
 
 finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -163,7 +208,7 @@ cat > "$provenance" <<EOF
 EOF
 
 # --- Aggregate → stable JSON + static HTML. ----------------------------------
-"$report_bin" aggregate --results "$results" --provenance "$provenance" \
+"$report_binary" aggregate --results "$results" --provenance "$provenance" \
   --json "$out/report.json" --html "$out/report.html"
 
 echo "full-run: done." >&2

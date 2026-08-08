@@ -300,7 +300,10 @@ fn looks_like_overflow(err: &str) -> bool {
 }
 
 fn ironhorse_completed(a: Agreement) -> bool {
-    matches!(a, Agreement::BothComplete | Agreement::IronhorseOnlyComplete)
+    matches!(
+        a,
+        Agreement::BothComplete | Agreement::IronhorseOnlyComplete
+    )
 }
 
 fn oracle_completed(a: Agreement) -> bool {
@@ -633,15 +636,16 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
     // The determinism gate (unconditional half of the doctrine) overrides a
     // covered/skip verdict with a failure if ironhorse's computrons are not
     // reproducible across runs of this same build.
-    let verdict =
-        if cfg.repeat > 1 && determinism_violation(&source, cfg.repeat, eval.ironhorse_computrons) {
-            Verdict::Fail(format!(
-                "nondeterministic computrons across {} runs",
-                cfg.repeat
-            ))
-        } else {
-            eval.outcome
-        };
+    let verdict = if cfg.repeat > 1
+        && determinism_violation(&source, cfg.repeat, eval.ironhorse_computrons)
+    {
+        Verdict::Fail(format!(
+            "nondeterministic computrons across {} runs",
+            cfg.repeat
+        ))
+    } else {
+        eval.outcome
+    };
 
     CaseResult {
         verdict,
@@ -689,8 +693,8 @@ fn run_async_case(
     };
 
     let base = verdict_for(cfg, &async_run.run, fm, meter_exact_gate);
-    let computron_gap =
-        matches!(base, Verdict::Covered) && async_run.run.oracle_computrons != async_run.run.ironhorse_computrons;
+    let computron_gap = matches!(base, Verdict::Covered)
+        && async_run.run.oracle_computrons != async_run.run.ironhorse_computrons;
 
     // A `Covered` differential means ironhorse reproduced the oracle's full
     // execution (script + microtask drain) — only then is the async completion
@@ -770,8 +774,8 @@ pub struct XstReport {
     pub ses_mode: SesMode,
     /// Every case's full record — the per-case wire the whole-tree sweep emits
     /// as JSON (`ironhorse-xst --json`) for [`crate::report`] to aggregate.
-    /// Populated by [`XstReport::record_case`]; empty when a caller uses the
-    /// aggregate-only [`XstReport::record`].
+    /// Populated by [`XstReport::record_case`] and by [`XstReport::record`];
+    /// legacy aggregate callers record an empty feature list.
     pub cases: Vec<CaseRecord>,
 }
 
@@ -782,8 +786,8 @@ impl XstReport {
         self.total > 0 && self.failures.is_empty()
     }
 
-    /// Fold one case's result in, attributed to `path` (aggregate counters
-    /// only, no per-case record — used by the existing aggregate callers/tests).
+    /// Fold one case's result in, attributed to `path`, retaining a per-case
+    /// record with an empty feature list for legacy aggregate callers/tests.
     pub fn record(&mut self, path: &str, r: CaseResult) {
         self.record_case(path, Vec::new(), r);
     }
@@ -1231,17 +1235,26 @@ mod tests {
 
         // A synchronous success signals `AsyncTestComplete`.
         let s = done("$DONE();");
-        assert_eq!(s.ironhorse_signal.as_deref(), Some("Test262:AsyncTestComplete"));
+        assert_eq!(
+            s.ironhorse_signal.as_deref(),
+            Some("Test262:AsyncTestComplete")
+        );
         assert!(!s.ironhorse_unhandled_rejection);
 
         // An awaited primitive then `$DONE()` — the resume runs at the drain.
         let a = done("(async function(){ await 1; $DONE(); })();");
         assert_eq!(a.run.agreement, Agreement::BothComplete);
-        assert_eq!(a.ironhorse_signal.as_deref(), Some("Test262:AsyncTestComplete"));
+        assert_eq!(
+            a.ironhorse_signal.as_deref(),
+            Some("Test262:AsyncTestComplete")
+        );
 
         // A resolved-promise reaction feeding `$DONE` — drained the same way.
         let p = done("Promise.resolve(1).then(function(){ $DONE(); }, $DONE);");
-        assert_eq!(p.ironhorse_signal.as_deref(), Some("Test262:AsyncTestComplete"));
+        assert_eq!(
+            p.ironhorse_signal.as_deref(),
+            Some("Test262:AsyncTestComplete")
+        );
 
         // Never signals: the did-not-run latch reads `None`.
         assert_eq!(done("1 + 1;").ironhorse_signal, None);

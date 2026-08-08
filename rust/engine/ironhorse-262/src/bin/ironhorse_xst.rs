@@ -36,9 +36,8 @@
 //!
 //! Memory note (inherited from `test262-language`): the XS oracle
 //! accumulates process memory across the tens of thousands of machine
-//! create/destroy cycles a whole-tree run makes, so walk one subtree per
-//! process to bound the working set; each subprocess frees everything on
-//! exit.
+//! create/destroy cycles a whole-tree run makes, so the full sweep caps the
+//! number of cases per process; each subprocess frees everything on exit.
 
 use ironhorse_262::report::RunReport;
 use ironhorse_262::test262::{collect_js, collect_js_flat, locate_test262};
@@ -51,6 +50,8 @@ fn main() {
     let mut report_path: Option<PathBuf> = None;
     let mut json_path: Option<PathBuf> = None;
     let mut flat = false;
+    let mut batch_index: Option<usize> = None;
+    let mut batch_size: Option<usize> = None;
     let mut subtrees: Vec<String> = Vec::new();
 
     let mut args = std::env::args().skip(1);
@@ -116,6 +117,21 @@ fn main() {
                 ));
             }
             "--flat" => flat = true,
+            "--batch-index" => {
+                batch_index = Some(
+                    args.next()
+                        .and_then(|value| value.parse().ok())
+                        .unwrap_or_else(|| fail("--batch-index needs a non-negative integer")),
+                );
+            }
+            "--batch-size" => {
+                batch_size = Some(
+                    args.next()
+                        .and_then(|value| value.parse().ok())
+                        .filter(|size| *size > 0)
+                        .unwrap_or_else(|| fail("--batch-size needs a positive integer")),
+                );
+            }
             "-h" | "--help" => {
                 print!("{}", HELP);
                 return;
@@ -178,6 +194,11 @@ fn main() {
         if found.is_empty() {
             eprintln!("warning: no test files under {}", sub);
         }
+        let found = match (batch_index, batch_size) {
+            (Some(index), Some(size)) => found.into_iter().skip(index * size).take(size).collect(),
+            (None, None) => found,
+            _ => fail("--batch-index and --batch-size must be used together"),
+        };
         files.extend(found);
     }
     files.sort();
@@ -245,9 +266,17 @@ fn main() {
     // records its cases (the orchestrator gates on the aggregate, not per-batch
     // exit status), and so an interrupted sweep can resume from what completed.
     if let Some(path) = &json_path {
-        match std::fs::write(path, RunReport::to_batch_json(&rep.cases)) {
-            Ok(()) => eprintln!("wrote {} case records to {}", rep.cases.len(), path.display()),
-            Err(e) => fail(&format!("could not write json to {}: {}", path.display(), e)),
+        match std::fs::write(path, RunReport::batch_json(&rep.cases)) {
+            Ok(()) => eprintln!(
+                "wrote {} case records to {}",
+                rep.cases.len(),
+                path.display()
+            ),
+            Err(e) => fail(&format!(
+                "could not write json to {}: {}",
+                path.display(),
+                e
+            )),
         }
     }
 
@@ -295,8 +324,9 @@ OPTIONS:
     --json FILE              write the per-case JSON batch file (for the
                              whole-tree sweep's aggregator) to FILE
     --flat                   for a directory positional, run only its DIRECT
-                             .js cases (non-recursive) — the per-directory
-                             batch unit the resumable full sweep drives
+                             .js cases (non-recursive)
+    --batch-index N          zero-based chunk of the sorted positional files
+    --batch-size N           positive maximum files in that chunk
     -h, --help               print this help
 
 THIRD-HOST (ses-xs-parity axis, alongside `xst -l` and node+SES prelude):

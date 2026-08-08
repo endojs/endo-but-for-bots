@@ -23,13 +23,13 @@
 //!   stable report, sorted by path;
 //! - **discovery** ([`discover_batches`]) and **resume planning**
 //!   ([`pending_batches`]) so the orchestrator can partition `test/**` into
-//!   per-directory batches and skip the ones already on disk after an
+//!   case-count-capped batches and skip the ones already on disk after an
 //!   interruption.
 //!
 //! JSON is emitted by hand (like the sibling YAML in [`crate::xst`], keeping the
 //! crate free of a serde dependency) and read back through `yaml-rust2` (JSON is
 //! a subset of YAML, so the frontmatter parser's dependency doubles as the
-//! reader) — see [`read_report`] / [`read_provenance`].
+//! reader) — see [`read_batch`] / [`read_provenance`].
 
 use crate::xst::{CaseResult, Verdict};
 use std::collections::BTreeMap;
@@ -151,14 +151,26 @@ pub fn classify(outcome: Outcome, reason: &str) -> Category {
                 "oracle-shim-unsafe",
                 "oracle-gate-off",
             ];
-            if INFRA.iter().any(|p| reason.starts_with(p)) {
+            if INFRA.iter().any(|prefix| reason.starts_with(prefix)) {
                 Category::Infrastructure
-            } else {
+            } else if reason.starts_with("unsupported-opcode:")
+                || reason == "parse-or-decode"
+                || reason.starts_with("non-primitive-completion")
+                || reason.starts_with("builtin-coercion-computron-gap")
+                || reason.starts_with("abort-value-differs")
+                || reason.starts_with("ironhorse-aborted")
+                || reason.starts_with("negative-")
+                || reason.starts_with("async:")
+            {
                 // unsupported-opcode:*, parse-or-decode, non-primitive-completion,
                 // builtin-coercion-computron-gap, abort-value-differs,
                 // ironhorse-aborted*, negative-*:pending-compiler,
                 // negative-type-unmatched:*, async:* — all Ironhorse coverage gaps.
                 Category::Unsupported
+            } else {
+                // Unknown run skips must not be charged to Ironhorse. New
+                // reason families stay honest until explicitly classified.
+                Category::Infrastructure
             }
         }
     }
@@ -301,11 +313,11 @@ impl RunReport {
 
     /// The top-line count in each provenance category.
     pub fn totals_by_category(&self) -> CategoryCounts {
-        let mut cc = CategoryCounts::default();
+        let mut counts = CategoryCounts::default();
         for c in &self.cases {
-            cc.add(c.category());
+            counts.add(c.category());
         }
-        cc
+        counts
     }
 
     /// Category counts grouped by the first `depth` path components (e.g.
@@ -357,8 +369,10 @@ impl RunReport {
                 e.1.push(c.path.clone());
             }
         }
-        let mut v: Vec<(String, usize, Vec<String>)> =
-            counts.into_iter().map(|(k, (n, ex))| (k, n, ex)).collect();
+        let mut v: Vec<(String, usize, Vec<String>)> = counts
+            .into_iter()
+            .map(|(key, (count, examples))| (key, count, examples))
+            .collect();
         v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         v
     }
@@ -369,7 +383,7 @@ impl RunReport {
     pub fn to_json(&self) -> String {
         let mut cases = self.cases.clone();
         cases.sort_by(|a, b| a.path.cmp(&b.path));
-        let cc = self.totals_by_category();
+        let counts = self.totals_by_category();
         let by_outcome = self.totals_by_outcome();
 
         let mut s = String::new();
@@ -414,7 +428,7 @@ impl RunReport {
             s.push_str(&format!(
                 "      {}: {}{}\n",
                 json_str(cat.as_str()),
-                cc.get(*cat),
+                counts.get(*cat),
                 comma
             ));
         }
@@ -425,7 +439,7 @@ impl RunReport {
         s.push_str("  \"cases\": [\n");
         for (i, c) in cases.iter().enumerate() {
             let comma = if i + 1 < cases.len() { "," } else { "" };
-            let feats = c
+            let features = c
                 .features
                 .iter()
                 .map(|f| json_str(f))
@@ -437,7 +451,7 @@ impl RunReport {
                 json_str(c.outcome.as_str()),
                 json_str(c.category().as_str()),
                 json_str(&c.reason),
-                feats,
+                features,
                 c.strict_skipped,
                 c.computron_gap,
                 comma,
@@ -450,14 +464,14 @@ impl RunReport {
 
     /// A batch file's JSON — just the case array, no provenance (the aggregate
     /// owns provenance). This is what `ironhorse-xst --json` writes per subtree.
-    pub fn to_batch_json(cases: &[CaseRecord]) -> String {
+    pub fn batch_json(cases: &[CaseRecord]) -> String {
         let mut cases = cases.to_vec();
         cases.sort_by(|a, b| a.path.cmp(&b.path));
         let mut s = String::new();
-        s.push_str("{ \"cases\": [\n");
+        s.push_str("{ \"schema\": \"ironhorse-test262-batch/1\", \"cases\": [\n");
         for (i, c) in cases.iter().enumerate() {
             let comma = if i + 1 < cases.len() { "," } else { "" };
-            let feats = c
+            let features = c
                 .features
                 .iter()
                 .map(|f| json_str(f))
@@ -468,7 +482,7 @@ impl RunReport {
                 json_str(&c.path),
                 json_str(c.outcome.as_str()),
                 json_str(&c.reason),
-                feats,
+                features,
                 c.strict_skipped,
                 c.computron_gap,
                 comma,
@@ -549,11 +563,28 @@ fn case_from_yaml(node: &Yaml) -> Option<CaseRecord> {
 /// or unreadable file yields an empty vector (the orchestrator's resume treats
 /// it as still-pending), never a panic.
 pub fn read_batch(path: &Path) -> Vec<CaseRecord> {
+    read_batch_checked(path).unwrap_or_default()
+}
+
+/// Read and validate a batch file. Validation requires the batch schema, a
+/// `cases` array, and a valid record for every entry; an empty array is valid.
+pub fn read_batch_checked(path: &Path) -> Result<Vec<CaseRecord>, String> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
-        Err(_) => return Vec::new(),
+        Err(error) => return Err(error.to_string()),
     };
-    read_cases_from_str(&text)
+    let docs = YamlLoader::load_from_str(&text).map_err(|error| error.to_string())?;
+    let doc = docs.first().ok_or_else(|| "empty document".to_string())?;
+    if doc["schema"].as_str() != Some("ironhorse-test262-batch/1") {
+        return Err("missing or unsupported batch schema".to_string());
+    }
+    let nodes = doc["cases"]
+        .as_vec()
+        .ok_or_else(|| "missing cases array".to_string())?;
+    nodes
+        .iter()
+        .map(|node| case_from_yaml(node).ok_or_else(|| "invalid case record".to_string()))
+        .collect()
 }
 
 /// Parse the `cases` array out of a batch or aggregate JSON string.
@@ -616,6 +647,9 @@ pub fn batch_filename(subtree: &str) -> String {
     format!("{}.json", subtree.replace('/', "__"))
 }
 
+/// Maximum cases retained by one oracle process during a full sweep.
+pub const BATCH_CASE_LIMIT: usize = 100;
+
 // ---------------------------------------------------------------------------
 // Aggregation
 // ---------------------------------------------------------------------------
@@ -657,12 +691,9 @@ pub fn aggregate(results_dir: &Path, provenance: Provenance) -> RunReport {
 // Discovery + resume planning
 // ---------------------------------------------------------------------------
 
-/// Discover the per-directory batches under a test262 `test/` root: every
-/// directory that **directly** contains at least one non-fixture `.js` case,
-/// as a path relative to the root. `staging/` and its descendants are excluded
-/// (the runner excludes them too). Per-directory granularity is the batching
-/// that bounds the XS oracle's process-RSS retention — each batch is one
-/// process that frees everything on exit — and gives fine-grained resume.
+/// Discover bounded batches under a test262 `test/` root. Direct cases in each
+/// directory are split into chunks of at most [`BATCH_CASE_LIMIT`], named
+/// `directory@@NNNN`. `staging/` and its descendants are excluded.
 ///
 /// The result is sorted, so the plan is reproducible.
 pub fn discover_batches(test_root: &Path) -> Vec<String> {
@@ -678,7 +709,7 @@ fn discover_into(root: &Path, dir: &Path, out: &mut Vec<String>) {
         Ok(e) => e,
         Err(_) => return,
     };
-    let mut has_direct_case = false;
+    let mut direct_case_count = 0usize;
     let mut subdirs = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
@@ -690,15 +721,18 @@ fn discover_into(root: &Path, dir: &Path, out: &mut Vec<String>) {
         } else if path.extension().map(|e| e == "js").unwrap_or(false) {
             let name = path.file_name().unwrap_or_default().to_string_lossy();
             if !name.ends_with("_FIXTURE.js") {
-                has_direct_case = true;
+                direct_case_count += 1;
             }
         }
     }
-    if has_direct_case {
+    if direct_case_count > 0 {
         if let Ok(rel) = dir.strip_prefix(root) {
-            let r = rel.to_string_lossy().into_owned();
-            if !r.is_empty() {
-                out.push(r);
+            let relative = rel.to_string_lossy().into_owned();
+            if !relative.is_empty() {
+                let chunks = direct_case_count.div_ceil(BATCH_CASE_LIMIT);
+                for index in 0..chunks {
+                    out.push(format!("{}@@{:04}", relative, index));
+                }
             }
         }
     }
@@ -709,17 +743,14 @@ fn discover_into(root: &Path, dir: &Path, out: &mut Vec<String>) {
 }
 
 /// The batches from `all` that have **not** yet been run — those whose result
-/// file is absent (or empty) in `results_dir`. This is the resume plan: after
-/// an interruption, the completed per-directory batch files remain on disk and
+/// file is absent or invalid in `results_dir`. This is the resume plan: after
+/// an interruption, the completed bounded batch files remain on disk and
 /// are skipped, so a re-run continues where it stopped.
 pub fn pending_batches(results_dir: &Path, all: &[String]) -> Vec<String> {
     all.iter()
         .filter(|b| {
             let f = results_dir.join(batch_filename(b));
-            match std::fs::metadata(&f) {
-                Ok(m) => m.len() == 0,
-                Err(_) => true,
-            }
+            read_batch_checked(&f).is_err()
         })
         .cloned()
         .collect()
@@ -730,7 +761,7 @@ pub fn pending_batches(results_dir: &Path, all: &[String]) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 /// HTML-escape text for a self-contained static report (no template engine).
-fn h(s: &str) -> String {
+fn escape_html(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -745,11 +776,11 @@ fn h(s: &str) -> String {
     out
 }
 
-fn pct(n: usize, total: usize) -> String {
+fn percentage(count: usize, total: usize) -> String {
     if total == 0 {
         "0.0%".to_string()
     } else {
-        format!("{:.1}%", (n as f64) * 100.0 / (total as f64))
+        format!("{:.1}%", (count as f64) * 100.0 / (total as f64))
     }
 }
 
@@ -759,9 +790,9 @@ fn pct(n: usize, total: usize) -> String {
 /// category, by subtree, and by feature, the named Ironhorse failures, and the
 /// most-frequent unsupported reasons with sample case identifiers.
 pub fn to_html(report: &RunReport) -> String {
-    let p = &report.provenance;
+    let provenance = &report.provenance;
     let total = report.total();
-    let cc = report.totals_by_category();
+    let counts = report.totals_by_category();
     let mut s = String::new();
 
     s.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n");
@@ -773,30 +804,46 @@ pub fn to_html(report: &RunReport) -> String {
     s.push_str("</style>\n</head>\n<body>\n<main>\n");
 
     s.push_str("<h1>Ironhorse test262 conformance report</h1>\n");
+    let whole_corpus = provenance.config.contains("subtree=<all>");
+    let oracle_locked = provenance.config.contains("oracle=on");
+    let scope = if whole_corpus {
+        "The complete authoritative TC39 test262 corpus"
+    } else {
+        "The selected TC39 test262 subtree"
+    };
+    let oracle_description = if oracle_locked {
+        ", oracle-locked to XS"
+    } else {
+        ", run without the XS oracle gate"
+    };
     s.push_str(&format!(
-        "<p class=\"lede\">The complete authoritative TC39 test262 corpus run against the Ironhorse engine, oracle-locked to XS. {} cases.</p>\n",
-        total
+        "<p class=\"lede\">{} run against the Ironhorse engine{}. {} cases.</p>\n",
+        scope, oracle_description, total
     ));
 
     // Provenance.
     s.push_str("<section aria-labelledby=\"prov\">\n<h2 id=\"prov\">Run provenance</h2>\n<dl class=\"prov\">\n");
-    let prov = [
-        ("Runner", p.runner.as_str()),
-        ("test262 revision", p.test262_ref.as_str()),
-        ("test262 SHA", p.test262_sha.as_str()),
-        ("endo / Ironhorse SHA", p.endo_sha.as_str()),
-        ("XS oracle", p.oracle.as_str()),
-        ("Command", p.command.as_str()),
-        ("Config", p.config.as_str()),
-        ("Started", p.started_at.as_str()),
-        ("Finished", p.finished_at.as_str()),
-        ("Host", p.host.as_str()),
+    let provenance_fields = [
+        ("Runner", provenance.runner.as_str()),
+        ("test262 revision", provenance.test262_ref.as_str()),
+        ("test262 SHA", provenance.test262_sha.as_str()),
+        ("endo / Ironhorse SHA", provenance.endo_sha.as_str()),
+        ("XS oracle", provenance.oracle.as_str()),
+        ("Command", provenance.command.as_str()),
+        ("Config", provenance.config.as_str()),
+        ("Started", provenance.started_at.as_str()),
+        ("Finished", provenance.finished_at.as_str()),
+        ("Host", provenance.host.as_str()),
     ];
-    for (k, v) in prov {
+    for (key, value) in provenance_fields {
         s.push_str(&format!(
             "<div><dt>{}</dt><dd>{}</dd></div>\n",
-            h(k),
-            if v.is_empty() { "&mdash;".into() } else { h(v) }
+            escape_html(key),
+            if value.is_empty() {
+                "&mdash;".into()
+            } else {
+                escape_html(value)
+            }
         ));
     }
     s.push_str("</dl>\n</section>\n");
@@ -805,22 +852,30 @@ pub fn to_html(report: &RunReport) -> String {
     s.push_str("<section aria-labelledby=\"totals\">\n<h2 id=\"totals\">Totals by category</h2>\n");
     s.push_str("<ul class=\"cards\">\n");
     let cards = [
-        ("Covered", cc.covered, "covered"),
-        ("Ironhorse failures", cc.ironhorse_failure, "fail"),
-        ("Unsupported", cc.unsupported, "unsupported"),
-        ("Skipped", cc.skipped, "skipped"),
-        ("Infrastructure", cc.infrastructure, "infra"),
+        ("Covered", counts.covered, "covered"),
+        ("Ironhorse failures", counts.ironhorse_failure, "fail"),
+        ("Unsupported", counts.unsupported, "unsupported"),
+        ("Skipped", counts.skipped, "skipped"),
+        ("Infrastructure", counts.infrastructure, "infra"),
     ];
     for (label, n, cls) in cards {
         s.push_str(&format!(
             "<li class=\"card {}\"><span class=\"num\">{}</span><span class=\"lbl\">{}</span><span class=\"pct\">{}</span></li>\n",
-            cls, n, h(label), pct(n, total)
+            cls,
+            n,
+            escape_html(label),
+            percentage(n, total)
         ));
     }
     s.push_str("</ul>\n");
+    let covered_definition = if oracle_locked {
+        "ran end-to-end and agreed bit-exactly with the XS oracle"
+    } else {
+        "ran end-to-end with the oracle gate disabled"
+    };
     s.push_str(&format!(
-        "<p class=\"note\">“Covered” = ran end-to-end and agreed bit-exactly with the XS oracle. “Ironhorse failures” are bar-forbidden divergences/over-acceptances. “Unsupported” are genuine language gaps (the actionable backlog). “Infrastructure” are oracle/harness non-results, <strong>not</strong> Ironhorse gaps. Totals sum to {} cases.</p>\n",
-        total
+        "<p class=\"note\">“Covered” = {}. “Ironhorse failures” are bar-forbidden divergences/over-acceptances. “Unsupported” are genuine language gaps (the actionable backlog). “Infrastructure” are oracle/harness non-results, <strong>not</strong> Ironhorse gaps. Totals sum to {} cases.</p>\n",
+        covered_definition, total
     ));
     s.push_str("</section>\n");
 
@@ -830,9 +885,9 @@ pub fn to_html(report: &RunReport) -> String {
     for (k, n) in report.totals_by_outcome() {
         s.push_str(&format!(
             "<tr><th scope=\"row\">{}</th><td class=\"n\">{}</td><td class=\"n\">{}</td></tr>\n",
-            h(k),
+            escape_html(k),
             n,
-            pct(n, total)
+            percentage(n, total)
         ));
     }
     s.push_str("</tbody>\n</table>\n</section>\n");
@@ -848,21 +903,21 @@ pub fn to_html(report: &RunReport) -> String {
     s.push_str(
         "<section aria-labelledby=\"byfeature\">\n<h2 id=\"byfeature\">Breakdown by feature</h2>\n",
     );
-    let feats = report.by_feature();
-    let mut feat_rows: Vec<(String, CategoryCounts)> = feats.into_iter().collect();
-    feat_rows.sort_by(|a, b| {
+    let features = report.by_feature();
+    let mut feature_rows: Vec<(String, CategoryCounts)> = features.into_iter().collect();
+    feature_rows.sort_by(|a, b| {
         let ga = a.1.unsupported + a.1.ironhorse_failure;
         let gb = b.1.unsupported + b.1.ironhorse_failure;
         gb.cmp(&ga).then(a.0.cmp(&b.0))
     });
-    let shown = feat_rows.len().min(60);
+    let shown = feature_rows.len().min(60);
     s.push_str(&format!(
         "<p class=\"note\">{} features total; showing the {} with the most gaps.</p>\n",
-        feat_rows.len(),
+        feature_rows.len(),
         shown
     ));
-    let feat_map: BTreeMap<String, CategoryCounts> = feat_rows.into_iter().take(60).collect();
-    s.push_str(&category_table(&feat_map));
+    let feature_map: BTreeMap<String, CategoryCounts> = feature_rows.into_iter().take(60).collect();
+    s.push_str(&category_table(&feature_map));
     s.push_str("</section>\n");
 
     // Ironhorse failures (named).
@@ -877,8 +932,8 @@ pub fn to_html(report: &RunReport) -> String {
         for c in &failures {
             s.push_str(&format!(
                 "<tr><td class=\"path\">{}</td><td>{}</td></tr>\n",
-                h(&c.path),
-                h(&c.reason)
+                escape_html(&c.path),
+                escape_html(&c.reason)
             ));
         }
         s.push_str("</tbody>\n</table>\n");
@@ -913,16 +968,16 @@ fn category_table(map: &BTreeMap<String, CategoryCounts>) -> String {
     // Sort rows by total descending for readability, ties by key.
     let mut rows: Vec<(&String, &CategoryCounts)> = map.iter().collect();
     rows.sort_by(|a, b| b.1.total().cmp(&a.1.total()).then(a.0.cmp(b.0)));
-    for (k, cc) in rows {
+    for (key, counts) in rows {
         s.push_str(&format!(
             "<tr><th scope=\"row\" class=\"path\">{}</th><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td></tr>\n",
-            h(k),
-            cc.total(),
-            cc.covered,
-            cc.ironhorse_failure,
-            cc.unsupported,
-            cc.skipped,
-            cc.infrastructure,
+            escape_html(key),
+            counts.total(),
+            counts.covered,
+            counts.ironhorse_failure,
+            counts.unsupported,
+            counts.skipped,
+            counts.infrastructure,
         ));
     }
     s.push_str("</tbody>\n</table>\n");
@@ -937,16 +992,16 @@ fn reason_table(reasons: &[(String, usize, Vec<String>)]) -> String {
     }
     s.push_str("<table>\n<thead><tr><th scope=\"col\">Reason</th><th scope=\"col\">Count</th><th scope=\"col\">Example cases</th></tr></thead>\n<tbody>\n");
     for (reason, n, examples) in reasons {
-        let ex = examples
+        let formatted_examples = examples
             .iter()
-            .map(|e| format!("<code>{}</code>", h(e)))
+            .map(|example| format!("<code>{}</code>", escape_html(example)))
             .collect::<Vec<_>>()
             .join("<br>");
         s.push_str(&format!(
             "<tr><th scope=\"row\" class=\"reason\">{}</th><td class=\"n\">{}</td><td>{}</td></tr>\n",
-            h(reason),
+            escape_html(reason),
             n,
-            ex
+            formatted_examples
         ));
     }
     s.push_str("</tbody>\n</table>\n");
@@ -1063,6 +1118,8 @@ mod tests {
 
     #[test]
     fn json_round_trips_through_the_yaml_reader() {
+        let hostile =
+            "quote=\" slash=\\ controls=\n\r\t unicode=\u{85}\u{2028}\u{2029} astral=\u{1f680}";
         let report = RunReport {
             provenance: Provenance {
                 test262_sha: "abc123".into(),
@@ -1073,8 +1130,8 @@ mod tests {
                 rec(
                     "built-ins/Proxy/apply/a.js",
                     Outcome::RunSkip,
-                    "unsupported-opcode:XS_CODE_x",
-                    &["Proxy"],
+                    hostile,
+                    &["Proxy", hostile],
                 ),
                 rec(
                     "language/expressions/addition/b.js",
@@ -1091,10 +1148,51 @@ mod tests {
         assert_eq!(back.len(), 2);
         assert_eq!(back[0].path, "built-ins/Proxy/apply/a.js");
         assert_eq!(back[0].outcome, Outcome::RunSkip);
-        assert_eq!(back[0].features, vec!["Proxy".to_string()]);
+        assert_eq!(back[0].reason, hostile);
+        assert_eq!(
+            back[0].features,
+            vec!["Proxy".to_string(), hostile.to_string()]
+        );
         assert_eq!(back[1].outcome, Outcome::Covered);
         // Stable: emitting twice is byte-identical.
         assert_eq!(json, report.to_json());
+    }
+
+    #[test]
+    fn provenance_reads_the_shell_wire_shape() {
+        let dir = std::env::temp_dir().join(format!("ih262-provenance-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("provenance.json");
+        std::fs::write(
+            &path,
+            r#"{
+  "runner": "ironhorse-xst",
+  "test262_sha": "abc123",
+  "test262_ref": "tc39/test262@abc123",
+  "endo_sha": "def456",
+  "oracle": "moddable submodule @ 789abc",
+  "command": "full-run.sh --subtree <all> --jobs 4 --oracle on",
+  "config": "oracle=on max-cases-per-batch=100 jobs=4 subtree=<all>",
+  "started_at": "2026-08-08T00:00:00Z",
+  "finished_at": "2026-08-08T01:00:00Z",
+  "host": "redacted"
+}
+"#,
+        )
+        .unwrap();
+        let provenance = read_provenance(&path);
+        assert_eq!(provenance.runner, "ironhorse-xst");
+        assert_eq!(provenance.test262_sha, "abc123");
+        assert_eq!(provenance.test262_ref, "tc39/test262@abc123");
+        assert_eq!(provenance.endo_sha, "def456");
+        assert_eq!(provenance.oracle, "moddable submodule @ 789abc");
+        assert!(provenance.command.contains("--jobs 4"));
+        assert!(provenance.config.contains("max-cases-per-batch=100"));
+        assert_eq!(provenance.started_at, "2026-08-08T00:00:00Z");
+        assert_eq!(provenance.finished_at, "2026-08-08T01:00:00Z");
+        assert_eq!(provenance.host, "redacted");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1103,7 +1201,7 @@ mod tests {
             rec("z/c.js", Outcome::Fail, "over-acceptance", &[]),
             rec("a/b.js", Outcome::Covered, "", &["Symbol"]),
         ];
-        let batch = RunReport::to_batch_json(&cases);
+        let batch = RunReport::batch_json(&cases);
         let back = read_cases_from_str(&batch);
         // Sorted by path on emit.
         assert_eq!(back[0].path, "a/b.js");
@@ -1161,6 +1259,7 @@ mod tests {
                 test262_ref: "tc39/test262@be13516".into(),
                 endo_sha: "deadbeef".into(),
                 oracle: "moddable 8.3.1".into(),
+                config: "oracle=on max-cases-per-batch=100 jobs=4 subtree=<all>".into(),
                 runner: "ironhorse-xst".into(),
                 ..Default::default()
             },
@@ -1190,6 +1289,8 @@ mod tests {
         assert!(html.contains("be13516fb6"));
         assert!(html.contains("tc39/test262@be13516"));
         assert!(html.contains("deadbeef"));
+        assert!(html.contains("The complete authoritative TC39 test262 corpus"));
+        assert!(html.contains("oracle-locked to XS"));
         // Totals and a named failure with its case id.
         assert!(html.contains("Totals by category"));
         assert!(html.contains("built-ins/Array/z.js"));
@@ -1202,6 +1303,18 @@ mod tests {
         assert!(html.trim_end().ends_with("</html>"));
         assert_eq!(html.matches("<!DOCTYPE html>").count(), 1);
         assert_eq!(html.matches("</html>").count(), 1);
+
+        let scoped = RunReport {
+            provenance: Provenance {
+                config: "oracle=off max-cases-per-batch=100 jobs=1 subtree=built-ins/Proxy".into(),
+                ..Default::default()
+            },
+            cases: Vec::new(),
+        };
+        let scoped_html = to_html(&scoped);
+        assert!(scoped_html.contains("The selected TC39 test262 subtree"));
+        assert!(scoped_html.contains("without the XS oracle gate"));
+        assert!(!scoped_html.contains("The complete authoritative TC39 test262 corpus"));
     }
 
     #[test]
@@ -1211,13 +1324,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ih262-agg-{}-{}", std::process::id(), "t"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let b1 = RunReport::to_batch_json(&[rec(
+        let b1 = RunReport::batch_json(&[rec(
             "built-ins__Proxy/a.js",
             Outcome::RunSkip,
             "unsupported-opcode:X",
             &["Proxy"],
         )]);
-        let b2 = RunReport::to_batch_json(&[rec("language/b.js", Outcome::Covered, "", &[])]);
+        let b2 = RunReport::batch_json(&[rec("language/b.js", Outcome::Covered, "", &[])]);
         std::fs::write(dir.join("built-ins__Proxy.json"), b1).unwrap();
         std::fs::write(dir.join("language.json"), b2).unwrap();
         let report = aggregate(&dir, Provenance::default());
@@ -1243,9 +1356,8 @@ mod tests {
 
     #[test]
     fn pending_batches_is_the_resume_plan() {
-        // The interrupted-run resume contract: a completed (non-empty) batch
-        // file is skipped; an absent file OR a zero-length partial (a crashed
-        // process before the atomic rename) is still pending.
+        // The interrupted-run resume contract: only a valid parsed batch is
+        // skipped. Empty, absent, and non-empty truncated files stay pending.
         let dir = std::env::temp_dir().join(format!("ih262-plan-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1253,25 +1365,35 @@ mod tests {
             "built-ins/Proxy".to_string(),
             "built-ins/Array".to_string(),
             "language/x".to_string(),
+            "language/y".to_string(),
         ];
         // Proxy done; Array a zero-length partial; language/x absent.
         std::fs::write(
             dir.join(batch_filename("built-ins/Proxy")),
-            "{ \"cases\": [] }",
+            RunReport::batch_json(&[]),
         )
         .unwrap();
         std::fs::write(dir.join(batch_filename("built-ins/Array")), "").unwrap();
+        std::fs::write(
+            dir.join(batch_filename("language/y")),
+            "{ \"schema\": \"ironhorse-test262-batch/1\", \"cases\": [",
+        )
+        .unwrap();
         let pending = pending_batches(&dir, &all);
         assert_eq!(
             pending,
-            vec!["built-ins/Array".to_string(), "language/x".to_string()]
+            vec![
+                "built-ins/Array".to_string(),
+                "language/x".to_string(),
+                "language/y".to_string()
+            ]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn discovery_partitions_the_whole_tree() {
-        // Discovery-completeness: the per-directory batches cover the ENTIRE
+        // Discovery-completeness: the bounded batches cover the ENTIRE
         // official `test/**` tree with no overlap and no curated-subtree filter
         // — the union of every batch's direct files equals the whole recursive
         // walk. This is the guard against silently hiding an unsupported
@@ -1291,7 +1413,8 @@ mod tests {
         assert!(
             batches
                 .iter()
-                .any(|b| b == "built-ins/Proxy" || b.starts_with("built-ins/Proxy/")),
+                .any(|batch| batch.starts_with("built-ins/Proxy@@")
+                    || batch.starts_with("built-ins/Proxy/")),
             "built-ins/Proxy must be discovered"
         );
         // `staging/` is excluded, exactly as the runner excludes it.
@@ -1301,22 +1424,31 @@ mod tests {
                 .all(|b| b != "staging" && !b.starts_with("staging/")),
             "staging/ must be excluded"
         );
-        // Completeness + partition: every case appears in exactly one batch,
+        // Completeness + partition: every case appears in exactly one capped batch,
         // and the union is the whole tree.
         let mut from_batches: BTreeSet<PathBuf> = BTreeSet::new();
-        for b in &batches {
-            for f in collect_js_flat(&root.join(b)) {
+        for batch in &batches {
+            let (directory, index_text) = batch.rsplit_once("@@").unwrap();
+            let index: usize = index_text.parse().unwrap();
+            let files = collect_js_flat(&root.join(directory));
+            let chunk: Vec<PathBuf> = files
+                .into_iter()
+                .skip(index * BATCH_CASE_LIMIT)
+                .take(BATCH_CASE_LIMIT)
+                .collect();
+            assert!(chunk.len() <= BATCH_CASE_LIMIT);
+            for file in chunk {
                 assert!(
-                    from_batches.insert(f.clone()),
+                    from_batches.insert(file.clone()),
                     "case in two batches: {:?}",
-                    f
+                    file
                 );
             }
         }
         let whole: BTreeSet<PathBuf> = collect_js(&root).into_iter().collect();
         assert_eq!(
             from_batches, whole,
-            "per-directory batches must partition the entire test/** tree"
+            "bounded batches must partition the entire test/** tree"
         );
     }
 

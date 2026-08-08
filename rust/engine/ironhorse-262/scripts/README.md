@@ -25,13 +25,13 @@ Outputs land in `rust/engine/target/test262-report/` by default:
   reasons with sample case identifiers.
 - `provenance.json` — the run provenance (test262 SHA, endo/Ironhorse SHA,
   oracle build, command, config, timestamps, host).
-- `results/` — one per-directory batch JSON, the resume state.
+- `results/` — one case-count-capped batch JSON, the resume state.
 
 ## Why it is shaped this way
 
 - **Bounded / OOM-safe.** The XS oracle retains process RSS across the tens of
   thousands of machine create/destroy cycles a whole-tree run makes. The tree is
-  partitioned into **per-directory batches** and each batch is its **own
+  partitioned into batches of at most **100 cases** and each batch is its **own
   `ironhorse-xst` process**, so the oracle's RSS is freed on every batch exit.
   Peak memory is bounded by `--jobs` (that many concurrent oracle processes),
   not by the tree size.
@@ -53,7 +53,7 @@ Outputs land in `rust/engine/target/test262-report/` by default:
 | Piece | What it does |
 | --- | --- |
 | `ironhorse-xst --flat --json FILE <dir>` | runs one directory's direct cases through the full oracle differential, writing the per-case JSON batch |
-| `ironhorse-262-report discover` | lists every per-directory batch under the tree |
+| `ironhorse-262-report discover` | lists every case-count-capped batch under the tree |
 | `ironhorse-262-report plan` | lists the batches not yet completed (resume plan) |
 | `ironhorse-262-report aggregate` | merges per-batch JSON into `report.json` + `report.html` |
 | `scripts/full-run.sh` | the orchestrator that ties them together |

@@ -79,7 +79,11 @@ pub fn assemble(harness_dir: &Path, src: &str, fm: &Frontmatter) -> Result<Strin
     if fm.flags.iter().any(|f| f == "module") {
         return Err("structural:module".into());
     }
-    if fm.flags.iter().any(|f| f == "async" || f == "CanBlockIsFalse") {
+    if fm
+        .flags
+        .iter()
+        .any(|f| f == "async" || f == "CanBlockIsFalse")
+    {
         return Err("structural:async-or-can-block".into());
     }
     if fm.flags.iter().any(|f| f == "raw") {
@@ -257,11 +261,11 @@ pub fn collect_js(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Collect only the `.js` case files **directly** in `dir` (non-recursive),
-/// excluding `_FIXTURE.js` helpers. This is the per-directory batch unit the
-/// whole-tree sweep runs one process at a time (design § the OOM-bounded run):
-/// paired with [`crate::report::discover_batches`], which lists every directory
-/// holding direct cases, it partitions `test/**` with no overlap, so no case is
-/// run twice and each batch process frees the XS oracle's retained RSS on exit.
+/// excluding `_FIXTURE.js` helpers. The whole-tree sweep chunks this sorted
+/// list at a fixed case-count cap (design § the OOM-bounded run). Paired with
+/// [`crate::report::discover_batches`], it partitions `test/**` with no overlap,
+/// so no case is run twice and each batch process frees the XS oracle's retained
+/// RSS on exit.
 /// Deterministic (sorted) order.
 pub fn collect_js_flat(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -397,7 +401,10 @@ mod tests {
         for s in sections {
             files.extend(collect_js(&root.join(s)));
         }
-        assert!(!files.is_empty(), "the UTF-16 String sections must have tests");
+        assert!(
+            !files.is_empty(),
+            "the UTF-16 String sections must have tests"
+        );
         let rep = run_files(&harness, &root, &files);
         eprintln!(
             "test262 String.prototype (UTF-16 sections): total={} covered={} divergent={}",
@@ -463,7 +470,10 @@ mod tests {
         for s in sections {
             files.extend(collect_js(&root.join(s)));
         }
-        assert!(!files.is_empty(), "covered-grammar language sections must have tests");
+        assert!(
+            !files.is_empty(),
+            "covered-grammar language sections must have tests"
+        );
         let rep = run_files(&harness, &root, &files);
 
         eprintln!(

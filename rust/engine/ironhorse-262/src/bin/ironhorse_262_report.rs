@@ -7,8 +7,8 @@
 //!
 //! Subcommands:
 //!   discover   --test262-dir DIR [--subtree PREFIX]
-//!       Print, one per line, every per-directory batch under the test262
-//!       `test/` tree (each a directory holding direct `.js` cases). This is
+//!       Print, one per line, every case-count-capped batch under the test262
+//!       `test/` tree. This is
 //!       the discovery audit: it covers the entire official `test/**` tree with
 //!       no curated-subtree filter, so no unsupported feature is hidden.
 //!
@@ -17,13 +17,17 @@
 //!       After an interruption the completed per-batch JSON files remain, so a
 //!       re-run continues where it stopped.
 //!
+//!   validate   --batch FILE
+//!       Exit successfully only when FILE is a complete, parseable batch.
+//!
 //!   aggregate  --results DIR [--provenance FILE] --json OUT [--html OUT]
 //!       Merge every per-batch JSON in the results dir (deterministically,
 //!       sorted by path) with the provenance into the stable machine-readable
 //!       `report.json` and the self-contained static HTML report.
 
 use ironhorse_262::report::{
-    aggregate, discover_batches, pending_batches, read_provenance, to_html, Provenance,
+    aggregate, discover_batches, pending_batches, read_batch_checked, read_provenance, to_html,
+    Provenance,
 };
 use ironhorse_262::test262::locate_test262;
 use std::path::PathBuf;
@@ -31,15 +35,16 @@ use std::process::exit;
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let cmd = args.next().unwrap_or_else(|| {
+    let command = args.next().unwrap_or_else(|| {
         eprintln!("{}", HELP);
         exit(2);
     });
     let rest: Vec<String> = args.collect();
-    match cmd.as_str() {
-        "discover" => cmd_discover(&rest),
-        "plan" => cmd_plan(&rest),
-        "aggregate" => cmd_aggregate(&rest),
+    match command.as_str() {
+        "discover" => command_discover(&rest),
+        "plan" => command_plan(&rest),
+        "validate" => command_validate(&rest),
+        "aggregate" => command_aggregate(&rest),
         "-h" | "--help" | "help" => println!("{}", HELP),
         other => {
             eprintln!("ironhorse-262-report: unknown subcommand: {}", other);
@@ -51,7 +56,7 @@ fn main() {
 
 /// Minimal `--flag value` / `--flag` option scan. Returns the value after
 /// `name`, or `None`.
-fn opt(args: &[String], name: &str) -> Option<String> {
+fn option_value(args: &[String], name: &str) -> Option<String> {
     args.iter()
         .position(|a| a == name)
         .and_then(|i| args.get(i + 1).cloned())
@@ -60,7 +65,7 @@ fn opt(args: &[String], name: &str) -> Option<String> {
 /// Resolve the test262 `test/` root: `--test262-dir DIR` (with `test/`), else
 /// the checked-in subset via [`locate_test262`].
 fn resolve_test_root(args: &[String]) -> PathBuf {
-    match opt(args, "--test262-dir") {
+    match option_value(args, "--test262-dir") {
         Some(dir) => {
             let root = PathBuf::from(&dir).join("test");
             if !root.is_dir() {
@@ -79,14 +84,19 @@ fn resolve_test_root(args: &[String]) -> PathBuf {
 fn discover_scoped(args: &[String]) -> Vec<String> {
     let root = resolve_test_root(args);
     let mut batches = discover_batches(&root);
-    if let Some(prefix) = opt(args, "--subtree") {
+    if let Some(prefix) = option_value(args, "--subtree") {
         let prefix = prefix.trim_end_matches('/');
-        batches.retain(|b| b == prefix || b.starts_with(&format!("{}/", prefix)));
+        batches.retain(|batch| {
+            let directory = batch
+                .rsplit_once("@@")
+                .map_or(batch.as_str(), |pair| pair.0);
+            directory == prefix || directory.starts_with(&format!("{}/", prefix))
+        });
     }
     batches
 }
 
-fn cmd_discover(args: &[String]) {
+fn command_discover(args: &[String]) {
     let batches = discover_scoped(args);
     for b in &batches {
         println!("{}", b);
@@ -94,9 +104,10 @@ fn cmd_discover(args: &[String]) {
     eprintln!("ironhorse-262-report: discovered {} batches", batches.len());
 }
 
-fn cmd_plan(args: &[String]) {
-    let results =
-        PathBuf::from(opt(args, "--results").unwrap_or_else(|| fail("plan needs --results DIR")));
+fn command_plan(args: &[String]) {
+    let results = PathBuf::from(
+        option_value(args, "--results").unwrap_or_else(|| fail("plan needs --results DIR")),
+    );
     let batches = discover_scoped(args);
     let pending = pending_batches(&results, &batches);
     for b in &pending {
@@ -109,14 +120,24 @@ fn cmd_plan(args: &[String]) {
     );
 }
 
-fn cmd_aggregate(args: &[String]) {
-    let results = PathBuf::from(
-        opt(args, "--results").unwrap_or_else(|| fail("aggregate needs --results DIR")),
+fn command_validate(args: &[String]) {
+    let batch = PathBuf::from(
+        option_value(args, "--batch").unwrap_or_else(|| fail("validate needs --batch FILE")),
     );
-    let json_out =
-        PathBuf::from(opt(args, "--json").unwrap_or_else(|| fail("aggregate needs --json OUT")));
-    let provenance: Provenance = match opt(args, "--provenance") {
-        Some(p) => read_provenance(&PathBuf::from(p)),
+    if let Err(error) = read_batch_checked(&batch) {
+        fail(&format!("invalid batch {}: {}", batch.display(), error));
+    }
+}
+
+fn command_aggregate(args: &[String]) {
+    let results = PathBuf::from(
+        option_value(args, "--results").unwrap_or_else(|| fail("aggregate needs --results DIR")),
+    );
+    let json_out = PathBuf::from(
+        option_value(args, "--json").unwrap_or_else(|| fail("aggregate needs --json OUT")),
+    );
+    let provenance: Provenance = match option_value(args, "--provenance") {
+        Some(path) => read_provenance(&PathBuf::from(path)),
         None => Provenance::default(),
     };
     let report = aggregate(&results, provenance);
@@ -129,7 +150,7 @@ fn cmd_aggregate(args: &[String]) {
         json_out.display(),
         report.total()
     );
-    if let Some(html_out) = opt(args, "--html") {
+    if let Some(html_out) = option_value(args, "--html") {
         let html_out = PathBuf::from(html_out);
         if let Err(e) = std::fs::write(&html_out, to_html(&report)) {
             fail(&format!("could not write {}: {}", html_out.display(), e));
@@ -138,10 +159,14 @@ fn cmd_aggregate(args: &[String]) {
     }
 
     // A concise console summary so a CI log carries the headline numbers.
-    let cc = report.totals_by_category();
+    let counts = report.totals_by_category();
     eprintln!(
         "  covered={} ironhorse-failures={} unsupported={} skipped={} infrastructure={}",
-        cc.covered, cc.ironhorse_failure, cc.unsupported, cc.skipped, cc.infrastructure
+        counts.covered,
+        counts.ironhorse_failure,
+        counts.unsupported,
+        counts.skipped,
+        counts.infrastructure
     );
 }
 
@@ -158,10 +183,13 @@ USAGE:
 
 SUBCOMMANDS:
     discover   --test262-dir DIR [--subtree PREFIX]
-        Print every per-directory batch under the test262 test/ tree.
+        Print every case-count-capped batch under the test262 test/ tree.
 
     plan       --results DIR --test262-dir DIR [--subtree PREFIX]
         Print the batches not yet completed in the results dir (resume plan).
+
+    validate   --batch FILE
+        Validate a complete batch file for atomic promotion/resume.
 
     aggregate  --results DIR [--provenance FILE] --json OUT [--html OUT]
         Merge per-batch JSON into the stable report.json (+ optional HTML).
