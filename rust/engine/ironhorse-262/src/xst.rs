@@ -474,12 +474,30 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
             _ => Verdict::RunSkip("ironhorse-aborted-limit".into()),
         },
         // ironhorse completed a source the oracle rejected — the over-acceptance
-        // the differential exists to catch (gating under `--oracle`).
+        // the differential exists to catch (gating under `--oracle`) — UNLESS
+        // the oracle did not *reject* the source at all but *failed to run* it:
+        // a fatal host abort (a value-stack overflow / OOM inside XS's fixed
+        // 4096-slot geometry, `fxAbort(XS_JAVASCRIPT_STACK_OVERFLOW_EXIT)`),
+        // which longjmps with NO JavaScript exception object. Its signature is
+        // exact and distinct from a language rejection: the oracle *emitted
+        // bytecode* (it parsed and coded the source cleanly — not a parse-phase
+        // reject, which yields empty bytecode) yet its abort carries an *empty*
+        // thrown value (a real runtime throw stringifies to a non-empty error).
+        // A program XS cannot execute for want of stack is a host / oracle
+        // limitation on a valid source, never an ironhorse over-acceptance — the
+        // symmetric twin of `OracleOnlyComplete`'s `ironhorse-aborted` skip
+        // (ironhorse's own limit the oracle cannot share). This is the "host-only
+        // exclusion" the acceptance bar carves out, named so the report groups
+        // it as an oracle non-result rather than an ironhorse defect.
         Agreement::IronhorseOnlyComplete => {
             if cfg.oracle {
-                Verdict::Fail(
-                    "over-acceptance: ironhorse completed a source the oracle rejected".into(),
-                )
+                if oracle_host_aborted(run) {
+                    Verdict::RunSkip("oracle-host-stack-limit".into())
+                } else {
+                    Verdict::Fail(
+                        "over-acceptance: ironhorse completed a source the oracle rejected".into(),
+                    )
+                }
             } else {
                 Verdict::RunSkip("oracle-gate-off:ironhorse-only-complete".into())
             }
@@ -487,6 +505,20 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
         // ironhorse aborted where the oracle completed — an ironhorse limitation.
         Agreement::OracleOnlyComplete => Verdict::RunSkip("ironhorse-aborted".into()),
     }
+}
+
+/// Did the oracle fail to complete because of a **fatal host abort** (a value-
+/// stack overflow / OOM inside XS's fixed 4096-slot geometry) rather than a
+/// language rejection? The signature is exact: XS emitted bytecode (it parsed
+/// AND coded the source — a parse-phase *rejection* yields empty bytecode) yet
+/// its abort carries an **empty** thrown value (`fxAbort` longjmps with no
+/// `mxException`; a genuine runtime throw stringifies to a non-empty error).
+/// True only for the "the oracle could not run this valid program" shape, so a
+/// real over-acceptance — the oracle rejecting a source ironhorse wrongly ran —
+/// is never masked (it either yields empty oracle bytecode or a non-empty
+/// thrown value).
+fn oracle_host_aborted(run: &DualRun) -> bool {
+    !run.bytecode.is_empty() && run.oracle_error.is_empty()
 }
 
 fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
@@ -1027,14 +1059,30 @@ fn run_case_bounded(
         }
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
             // Leak the worker (stuck in an uncancellable native dispatch cycle);
-            // it dies with the batch process. Record the hang as the bar-forbidden
-            // non-termination it is.
+            // it dies with the batch process. But `run_case` timed out inside
+            // `dual_run`, which runs the ORACLE and ironhorse on one thread — so
+            // this bound alone cannot say *which* engine failed to terminate.
+            // Attribute it: re-run ironhorse ALONE under the same bound. If
+            // ironhorse terminates on its own, the non-termination was the
+            // oracle's (e.g. XS's own infinite loop on
+            // `for (const i=0; i<1; i++){}`) — a host / infrastructure non-result
+            // the differential cannot cover, not the bar-forbidden ironhorse
+            // dispatch loop. Only when ironhorse *also* fails to terminate is it
+            // the `ironhorse-hang` failure the bar forbids.
             drop(handle);
-            CaseResult {
-                verdict: Verdict::Fail(format!(
+            let verdict = if ironhorse_terminates_alone(harness_dir, src, timeout) {
+                Verdict::RunSkip(format!(
+                    "oracle-nontermination: oracle failed to terminate within {}s (ironhorse terminates alone)",
+                    timeout.as_secs()
+                ))
+            } else {
+                Verdict::Fail(format!(
                     "ironhorse-hang: no verdict within {}s (non-terminating dispatch)",
                     timeout.as_secs()
-                )),
+                ))
+            };
+            CaseResult {
+                verdict,
                 strict_skipped: false,
                 computron_gap: false,
             }
@@ -1050,6 +1098,33 @@ fn run_case_bounded(
             }
         }
     }
+}
+
+/// Attribute a per-case wall-clock hang: does ironhorse terminate on this
+/// source *alone* (no oracle) within `timeout`? Assembles the source exactly as
+/// the sloppy run does (the observed non-terminating cases are sloppy) and runs
+/// [`crate::ironhorse_only_run`] on its own wall-clock-bounded thread. `true`
+/// means ironhorse terminates independently, so the timeout was the oracle's
+/// non-termination, not ironhorse's. A missing-harness assembly error is itself
+/// a prompt terminal (ironhorse never even ran a dispatch loop → `true`); a
+/// thread-spawn failure forfeits attribution conservatively toward the
+/// bar-forbidden `ironhorse-hang` (`false`).
+fn ironhorse_terminates_alone(harness_dir: &Path, src: &str, timeout: std::time::Duration) -> bool {
+    let fm = frontmatter::parse(src);
+    let source = match assemble(harness_dir, src, &fm) {
+        Ok(s) => s,
+        Err(_) => return true,
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawn = std::thread::Builder::new()
+        .name("ironhorse-xst-attribute".into())
+        .spawn(move || {
+            let _ = tx.send(crate::ironhorse_only_run(&source));
+        });
+    if spawn.is_err() {
+        return false;
+    }
+    matches!(rx.recv_timeout(timeout), Ok(_))
 }
 
 pub fn run_files(cfg: &Config, harness_dir: &Path, root: &Path, files: &[PathBuf]) -> XstReport {
@@ -1266,6 +1341,77 @@ mod tests {
             Verdict::Fail(m) => assert!(m.contains("over-acceptance"), "got {m}"),
             other => panic!("expected Fail, got {other:?}"),
         }
+    }
+
+    /// Build a positive-test `DualRun` where ironhorse completed and the oracle
+    /// did not (`IronhorseOnlyComplete`), with a chosen oracle bytecode length
+    /// and thrown-value string — the two axes `oracle_host_aborted` reads.
+    fn synthetic_ih_only_complete(oracle_bytecode: Vec<u8>, oracle_error: &str) -> DualRun {
+        let mut run = synthetic_abort(Halt::Return, "");
+        run.agreement = Agreement::IronhorseOnlyComplete;
+        run.bytecode = oracle_bytecode;
+        run.oracle_error = oracle_error.to_string();
+        run
+    }
+
+    #[test]
+    fn oracle_host_stack_overflow_is_a_host_exclusion_not_over_acceptance() {
+        // XS emitted bytecode (it parsed AND coded the source cleanly) then
+        // aborted at RUN with an empty thrown value — the `fxAbort` value-stack
+        // overflow signature (the 16 `start-unicode-*` cases: >3912 top-level
+        // decls overflow XS's fixed 4096-slot geometry on a valid program). The
+        // oracle could not RUN a valid source, so it is a host / oracle
+        // non-result the differential cannot cover — NOT an ironhorse
+        // over-acceptance — and it scores `infrastructure`, never
+        // `ironhorse-failure`.
+        let run = synthetic_ih_only_complete(vec![0xde, 0xad, 0xbe, 0xef], "");
+        assert!(oracle_host_aborted(&run));
+        let cfg = Config::default();
+        assert_eq!(
+            evaluate_positive(&cfg, &run, false),
+            Verdict::RunSkip("oracle-host-stack-limit".into())
+        );
+        assert_eq!(
+            crate::report::classify(
+                crate::report::Outcome::RunSkip,
+                "oracle-host-stack-limit"
+            ),
+            crate::report::Category::Infrastructure
+        );
+    }
+
+    #[test]
+    fn genuine_over_acceptance_still_fails() {
+        // The host-abort refinement must NOT mask a real over-acceptance. Two
+        // distinct non-host shapes stay `Fail`:
+        //  * the oracle REJECTED at parse — empty bytecode (a real early error
+        //    ironhorse wrongly ran to completion);
+        let parse_reject = synthetic_ih_only_complete(Vec::new(), "");
+        assert!(!oracle_host_aborted(&parse_reject));
+        //  * the oracle threw a real runtime value — a non-empty thrown string
+        //    (ironhorse missed a runtime throw the oracle raised).
+        let runtime_throw = synthetic_ih_only_complete(vec![1, 2, 3], "TypeError: nope");
+        assert!(!oracle_host_aborted(&runtime_throw));
+        let cfg = Config::default();
+        for run in [parse_reject, runtime_throw] {
+            match evaluate_positive(&cfg, &run, false) {
+                Verdict::Fail(m) => assert!(m.contains("over-acceptance"), "got {m}"),
+                other => panic!("expected Fail, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn oracle_nontermination_maps_to_infrastructure() {
+        // A hang attributed to the ORACLE (ironhorse terminates alone) is a host
+        // non-result, never the bar-forbidden `ironhorse-hang` failure.
+        assert_eq!(
+            crate::report::classify(
+                crate::report::Outcome::RunSkip,
+                "oracle-nontermination: oracle failed to terminate within 10s (ironhorse terminates alone)"
+            ),
+            crate::report::Category::Infrastructure
+        );
     }
 
     #[test]

@@ -150,6 +150,14 @@ pub fn classify(outcome: Outcome, reason: &str) -> Category {
                 "negative-oracle-unexpected",
                 "oracle-shim-unsafe",
                 "oracle-gate-off",
+                // The oracle could not RUN a valid source (a fatal host abort:
+                // XS's fixed-geometry value-stack overflow on a wide frame), or
+                // failed to TERMINATE where ironhorse does — an oracle / host
+                // non-result on a program the differential cannot cover, never
+                // an ironhorse gap. (Toggle knob: move these two prefixes out of
+                // INFRA to score them `unsupported` instead.)
+                "oracle-host-stack-limit",
+                "oracle-nontermination",
                 // A crash INSIDE ironhorse-compile while assembling a case is a
                 // harness defect, not a language gap.
                 "harness-assembly",

@@ -383,6 +383,36 @@ pub fn dual_run_async(source: &str, signal_name: &str) -> Option<AsyncDualRun> {
     })
 }
 
+/// Run `source` on ironhorse ALONE — its own front end
+/// ([`ironhorse_compile`]) then [`ironhorse_vm`], with **no oracle**.
+///
+/// The per-case wall-clock bound ([`crate::xst`] § the dispatch bound) runs
+/// [`dual_run`] — the oracle AND ironhorse — on one thread, so a timeout there
+/// does not say *which* engine failed to terminate. Re-running ironhorse alone
+/// under the same bound attributes it: if ironhorse terminates on its own, the
+/// non-termination was the **oracle's** (a host / infrastructure non-result the
+/// differential cannot cover), not an ironhorse dispatch loop. A compiler
+/// reject or coder panic yields no bytecode — itself a prompt terminal outcome
+/// — so this returns quickly for every case except a genuine ironhorse VM
+/// dispatch cycle, which never returns (the caller's wall-clock join bounds
+/// that). Metering-neutral: it shares no engine state with any other run.
+pub fn ironhorse_only_run(source: &str) -> Halt {
+    let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ironhorse_compile::compile_atoms(source)
+    }));
+    let (bytecode, symbols) = match compiled {
+        Ok(Ok((b, s))) => (b, s),
+        // A structured reject or a coder panic: ironhorse produced no bytecode,
+        // a terminal (non-hanging) outcome — ironhorse did not fail to
+        // terminate, so the hang, if any, was not on the ironhorse side.
+        _ => return Halt::Decode("ironhorse-only: compile produced no bytecode".into()),
+    };
+    let names = ironhorse_vm::parse_symbols(&symbols);
+    let mut interp = ironhorse_vm::Interp::new();
+    interp.link_intrinsics(&names);
+    interp.run(&bytecode).halt
+}
+
 /// Parse a corpus file: one program per non-empty, non-`//` line. Keeping
 /// entries to a single line keeps the completion value (the last expression)
 /// unambiguous. The per-stage `stage*_corpus()` accessors this once fed
@@ -612,6 +642,26 @@ impl Summary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ironhorse_only_run_terminates_on_the_const_for_hang_source() {
+        // The three `*-invalid-assignment-next-expression-for.js` cases hang the
+        // ORACLE (XS itself loops forever on `for (const i=0; i<1; i++){}`), not
+        // ironhorse. `ironhorse_only_run` is the attribution probe: ironhorse
+        // must reach a terminal `Halt` on its own — if this test hangs, the
+        // premise (ironhorse terminates alone) is false. No oracle involved.
+        let halt = ironhorse_only_run("for (const i = 0; i < 1; i++) {}");
+        assert!(
+            !matches!(halt, Halt::StepLimit(_)),
+            "ironhorse should terminate naturally, not by a step ceiling: {halt:?}"
+        );
+        // A compiler reject/panic is also terminal (empty bytecode → decode).
+        let rejected = ironhorse_only_run("for (const {");
+        assert!(matches!(
+            rejected,
+            Halt::Decode(_) | Halt::Return | Halt::Throw(_)
+        ));
+    }
 
     #[test]
     fn compiler_seam_endor_matches_oracle_on_byte_identical_programs() {
