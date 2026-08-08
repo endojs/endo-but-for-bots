@@ -1,5 +1,10 @@
-import { start, makeEndoClient } from '@endo/daemon';
+// @ts-check
+
+import { makeEndoClient, start } from '@endo/daemon';
+
 import { isTerminalError } from './doe-normaal.js';
+
+/** @typedef {NonNullable<Parameters<typeof makeEndoClient>[4]>} CapTPOptions */
 
 /**
  * Custom onReject handler that suppresses "normal termination" errors.
@@ -14,7 +19,10 @@ const onReject = err => {
   }
 };
 
-/** @type {{ onReject?: (err: any) => void }} */
+// Deliberately keep the established one-argument callback: CapTP's structured
+// second argument is backward compatible, and the CLI applies the same policy
+// to promise, disconnect, and protocol rejections.
+/** @type {CapTPOptions} */
 const capTpOptions = harden({ onReject });
 
 /**
