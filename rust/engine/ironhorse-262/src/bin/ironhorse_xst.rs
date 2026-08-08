@@ -184,7 +184,9 @@ fn main() {
         } else {
             root.join("language").join(sub)
         };
-        let found = if target.is_file() {
+        let found = if batch_index.is_some() {
+            Vec::new()
+        } else if target.is_file() {
             vec![target.clone()]
         } else if target.is_dir() {
             if direct_only {
@@ -339,7 +341,7 @@ OPTIONS:
                              the aggregator can bind the report to one run
     --direct-only            for a directory positional, run only its DIRECT
                              .js cases (non-recursive)
-    --batch-index N          zero-based chunk of the sorted positional files
+    --batch-index N          zero-based chunk of the directory's sorted DIRECT cases (implies --direct-only)
     --batch-size N           positive maximum files in that chunk
     -h, --help               print this help
 

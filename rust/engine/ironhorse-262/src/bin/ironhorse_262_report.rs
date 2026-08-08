@@ -7,9 +7,8 @@
 //! Run with `--help` for the single authoritative subcommand reference.
 
 use ironhorse_262::report::{
-    aggregate, aggregate_plan, batch_case_count, batch_case_limit, discover_batches,
-    pending_batches_checked, read_batch_full, read_provenance, to_html, CaseRecord, Outcome,
-    Provenance, RunReport,
+    aggregate_plan, batch_case_count, batch_case_limit, discover_batches, pending_batches_checked,
+    read_batch_full, read_provenance, to_html, CaseRecord, Outcome, Provenance, RunReport,
 };
 use ironhorse_262::test262::{collect_js_batch, locate_test262};
 use std::path::PathBuf;
@@ -212,44 +211,41 @@ fn command_aggregate(args: &[String]) {
             .unwrap_or_else(|error| fail(&format!("invalid provenance {}: {}", path, error))),
         None => fail("aggregate needs --provenance FILE"),
     };
-    // With `--plan FILE`, aggregate EXACTLY the batches the discovery plan names,
-    // bound to the provenance run identity, never a directory glob. Without it,
-    // fall back to the legacy glob aggregation.
-    let report = match option_value(args, "--plan") {
-        Some(plan_path) => {
-            let text = std::fs::read_to_string(&plan_path)
-                .unwrap_or_else(|e| fail(&format!("could not read plan {}: {}", plan_path, e)));
-            let plan: Vec<String> = text
-                .lines()
-                .map(|l| l.trim())
-                .filter(|l| !l.is_empty())
-                .map(|l| l.to_string())
-                .collect();
-            let (report, warnings) = aggregate_plan(&results, &plan, provenance);
-            for w in &warnings {
-                eprintln!("ironhorse-262-report: WARNING {}", w);
-            }
-            if !warnings.is_empty() {
-                fail(&format!(
+    // Aggregate only the exact discovery plan, bound to the provenance identity.
+    let plan_path =
+        option_value(args, "--plan").unwrap_or_else(|| fail("aggregate needs --plan FILE"));
+    let report = {
+        let text = std::fs::read_to_string(&plan_path)
+            .unwrap_or_else(|e| fail(&format!("could not read plan {}: {}", plan_path, e)));
+        let plan: Vec<String> = text
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .map(|l| l.to_string())
+            .collect();
+        let (report, warnings) = aggregate_plan(&results, &plan, provenance);
+        for w in &warnings {
+            eprintln!("ironhorse-262-report: WARNING {}", w);
+        }
+        if !warnings.is_empty() {
+            fail(&format!(
                     "{} batch(es) rejected during aggregation; refusing to publish a report that misrepresents the run",
                     warnings.len()
                 ));
-            }
-            if let Some(expected_total) = option_value(args, "--expected-total") {
-                let expected_total = expected_total
-                    .parse::<usize>()
-                    .unwrap_or_else(|_| fail("--expected-total needs a non-negative integer"));
-                if report.total() != expected_total {
-                    fail(&format!(
-                        "aggregate contains {} cases, expected {} from discovery",
-                        report.total(),
-                        expected_total
-                    ));
-                }
-            }
-            report
         }
-        None => aggregate(&results, provenance),
+        if let Some(expected_total) = option_value(args, "--expected-total") {
+            let expected_total = expected_total
+                .parse::<usize>()
+                .unwrap_or_else(|_| fail("--expected-total needs a non-negative integer"));
+            if report.total() != expected_total {
+                fail(&format!(
+                    "aggregate contains {} cases, expected {} from discovery",
+                    report.total(),
+                    expected_total
+                ));
+            }
+        }
+        report
     };
 
     if let Err(e) = std::fs::write(&json_out, report.to_json()) {
@@ -303,7 +299,7 @@ SUBCOMMANDS:
         Validate a complete batch file for atomic promotion/resume. With
         --run-id, also reject a batch stamped with a different identity.
 
-    aggregate  --results DIR --provenance FILE [--plan FILE] --json OUT [--html OUT] [--expected-total N]
+    aggregate  --results DIR --provenance FILE --plan FILE --json OUT [--html OUT] [--expected-total N]
         Merge per-batch JSON into the stable report.json (+ optional HTML).
         With --plan, aggregate EXACTLY the batches the plan names, bound to the
         provenance run identity — never a directory glob — and fail on any

@@ -169,7 +169,13 @@ elif [ "$corpus_dirty" != "no" ] || [ "$test262_sha" = "unknown" ]; then
   echo "full-run: --test262-dir must be a clean git top-level so resume has a unique corpus identity" >&2
   exit 2
 fi
-test262_ref="tc39/test262@${test262_sha:0:12}"
+if [ "$test262_sha" = "$TEST262_SHA" ]; then
+  test262_ref="tc39/test262@${test262_sha:0:12}"
+else
+  # A clean, caller-supplied checkout is reproducible, but it is not evidence
+  # that the corpus came from tc39 or is the configured corpus revision.
+  test262_ref="unverified-corpus@${test262_sha:0:12}"
+fi
 
 # Record provenance once; the report re-emits it verbatim.
 if ! git -C "$repo_root" diff --quiet HEAD -- rust/engine c/moddable; then
@@ -240,7 +246,9 @@ echo "full-run: ${#all_batches[@]} batches total, ${#pending[@]} pending (resume
 # Per-batch stdout/stderr + exit status are captured to a log, so a failed/hung batch is
 # diagnosable after the fact instead of vanishing.
 logs="$output/logs"
-run_key=$("$report_binary" batch-filename "$run_id")
+# `run_id` is deliberately descriptive and can exceed NAME_MAX for a deep
+# subtree.  Resume-state directory names need only be stable, not readable.
+run_key=$(printf '%s' "$run_id" | sha256sum | awk '{print $1}')
 attempts="$output/attempts/$run_key"
 quarantines="$output/quarantines/$run_key"
 mkdir -p "$logs" "$attempts" "$quarantines"
@@ -263,7 +271,8 @@ run_one_batch() {
   log="$logs/$basename.log"
   attempt_file="$attempts/$basename"
   attempt=0
-  [ -f "$attempt_file" ] && read -r attempt < "$attempt_file"
+  [ -f "$attempt_file" ] && read -r attempt < "$attempt_file" || true
+  case "$attempt" in ''|*[!0-9]*) attempt=0 ;; esac
   expected_count=$("$report_binary" batch-count --test262-dir "$test262_dir" --batch "$batch")
   status=0
   # Retry the batch in-process up to the cap so ONE invocation can reach the
@@ -287,10 +296,10 @@ run_one_batch() {
       # the handler a no-op until a real timer PID exists.
       timer=""
       trap '[ -n "$timer" ] && kill "$timer" 2>/dev/null; exit 0' TERM INT
-      sleep 180 & timer=$!
+      sleep "${IRONHORSE_262_BATCH_TIMEOUT:-180}" & timer=$!
       wait "$timer" || exit 0
       kill -TERM "$worker" 2>/dev/null || exit 0
-      sleep 30 & timer=$!
+      sleep "${IRONHORSE_262_KILL_GRACE:-30}" & timer=$!
       wait "$timer" || exit 0
       kill -KILL "$worker" 2>/dev/null || true
     ) &

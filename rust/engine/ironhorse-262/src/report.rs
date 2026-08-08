@@ -193,15 +193,11 @@ pub fn classify(outcome: Outcome, reason: &str) -> Category {
                 || reason.starts_with("ironhorse-aborted")
                 || reason.starts_with("negative-")
                 || reason.starts_with("async:")
-                || reason == "shared-test262-failure"
             {
                 // unsupported-opcode:*, parse-or-decode, non-primitive-completion,
                 // builtin-coercion-computron-gap, abort-value-differs,
                 // ironhorse-aborted*, negative-*:pending-compiler,
                 // negative-type-unmatched:*, async:* — all Ironhorse coverage gaps.
-                // shared-test262-failure is deliberately here too: the harness ran
-                // ironhorse far enough to throw its own assertion error, so a
-                // shared Test262Error is an Ironhorse gap, not infrastructure.
                 Category::Unsupported
             } else {
                 // Unknown run skips must not be charged to Ironhorse. New
@@ -912,7 +908,16 @@ fn discover_into(root: &Path, directory: &Path, out: &mut Vec<String>) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            if path.file_name().map(|n| n == "staging").unwrap_or(false) {
+            if path
+                .file_name()
+                .map(|n| {
+                    matches!(
+                        n.to_str(),
+                        Some("staging" | "intl402" | "annexB" | "harness")
+                    )
+                })
+                .unwrap_or(false)
+            {
                 continue;
             }
             subdirectories.push(path);
@@ -1048,10 +1053,10 @@ pub fn to_html(report: &RunReport) -> String {
     // where it makes its headline claim, never only in a provenance row far
     // below (an engine whose reason for existing is Hardened JavaScript must
     // say so). A hardened run states its mode in the SES-mode provenance row.
-    let ses_description = if provenance.ses_mode.is_empty() || provenance.ses_mode == "none" {
-        " Hardened JavaScript (SES) is not exercised: no lockdown() or Compartment cases are run."
-    } else {
+    let ses_description = if matches!(provenance.ses_mode.as_str(), "l" | "lc" | "c") {
         ""
+    } else {
+        " Hardened JavaScript (SES) is not exercised: no lockdown() or Compartment cases are run."
     };
     s.push_str(&format!(
         "<p class=\"lede\">{} run against the Ironhorse engine{}, excluding staging and module cases; strict-mode executions are not implemented.{} {} cases, {} required strict-mode executions skipped.</p>\n",
@@ -1111,7 +1116,7 @@ pub fn to_html(report: &RunReport) -> String {
     }
     s.push_str("</ul>\n");
     let covered_definition = if oracle_locked {
-        "ran end-to-end and agreed bit-exactly with the XS oracle"
+        "ran end-to-end, agreed bit-exactly with the XS oracle, and did not share a Test262 harness assertion failure"
     } else {
         "ran end-to-end with the oracle gate disabled"
     };
@@ -1334,11 +1339,11 @@ mod tests {
             classify(Outcome::RunSkip, "parse-or-decode"),
             Category::Unsupported
         );
-        // A shared Test262Error is an Ironhorse gap (deliberately classified,
-        // not left to the unknown-reason infrastructure fallback).
+        // A shared Test262Error shows the oracle failed the harness assertion
+        // too, so it is not charged to Ironhorse's actionable backlog.
         assert_eq!(
             classify(Outcome::RunSkip, "shared-test262-failure"),
-            Category::Unsupported
+            Category::Infrastructure
         );
         // Oracle/harness non-results are infrastructure, not Ironhorse gaps.
         assert_eq!(
@@ -2109,12 +2114,14 @@ mod tests {
                     || batch.starts_with("built-ins/Proxy/")),
             "built-ins/Proxy must be discovered"
         );
-        // `staging/` is excluded, exactly as the runner excludes it.
+        // Non-ECMA-262 and harness trees are excluded from this denominator.
         assert!(
             batches
                 .iter()
-                .all(|b| b != "staging" && !b.starts_with("staging/")),
-            "staging/ must be excluded"
+                .all(|b| !["staging", "intl402", "annexB", "harness"]
+                    .iter()
+                    .any(|excluded| b == *excluded || b.starts_with(&format!("{excluded}/")))),
+            "excluded trees must not be discovered"
         );
         // Completeness + partition: every case appears in exactly one capped batch,
         // and the union is the whole tree.
@@ -2137,7 +2144,18 @@ mod tests {
                 );
             }
         }
-        let whole: BTreeSet<PathBuf> = collect_js(&root).into_iter().collect();
+        let whole: BTreeSet<PathBuf> = collect_js(&root)
+            .into_iter()
+            .filter(|path| {
+                let relative = path.strip_prefix(&root).unwrap();
+                !relative.components().any(|component| {
+                    matches!(
+                        component.as_os_str().to_str(),
+                        Some("staging" | "intl402" | "annexB" | "harness")
+                    )
+                })
+            })
+            .collect();
         assert_eq!(
             from_batches, whole,
             "bounded batches must partition the entire test/** tree"
