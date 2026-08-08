@@ -395,14 +395,11 @@ fn assemble(harness_dir: &Path, src: &str, fm: &Frontmatter) -> Result<String, S
 }
 
 /// Assemble the strict variant of a normal test262 script.  The directive is
-/// inserted immediately before the test body, after the harness files, which
-/// is how the official runner keeps the harness itself out of the test's
-/// strict directive prologue.
+/// inserted at the beginning of the executed Script. The harness is part of
+/// that Script in this runner, so putting it before only the body would be
+/// inert rather than a Directive Prologue.
 fn assemble_strict(harness_dir: &Path, src: &str, fm: &Frontmatter) -> Result<String, String> {
-    if fm.flags.iter().any(|f| f == "raw") {
-        return Ok(src.to_string());
-    }
-    assemble(harness_dir, &format!("\"use strict\";\n{src}"), fm)
+    Ok(format!("\"use strict\";\n{}", assemble(harness_dir, src, fm)?))
 }
 
 struct Eval {
@@ -678,9 +675,11 @@ fn evaluate_negative_early(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdi
                     neg.phase
                 ))
             } else {
-                // Oracle gate off, or the oracle also parsed the source (no
-                // parse-phase differential authority to fail on).
-                Verdict::RunSkip("oracle-gate-off:negative-over-acceptance".into())
+                if cfg.oracle {
+                    Verdict::RunSkip("negative-oracle-unexpected".into())
+                } else {
+                    Verdict::RunSkip("oracle-gate-off:negative-over-acceptance".into())
+                }
             }
         }
 
@@ -1221,11 +1220,11 @@ fn run_case_bounded(
             }
         }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            // The worker panicked before sending — a harness defect, not a
-            // language verdict, and never a reason to abort the batch.
+            // A worker panic can originate in the VM under test; keep it in
+            // the bar-forbidden category rather than laundering it as infra.
             let _ = handle.join();
             CaseResult {
-                verdict: Verdict::RunSkip("harness-assembly:worker-crash".into()),
+                verdict: Verdict::Fail("ironhorse-worker-panic".into()),
                 strict_skipped: false,
                 computron_gap: false,
             }

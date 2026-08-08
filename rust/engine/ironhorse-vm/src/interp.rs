@@ -2531,7 +2531,8 @@ impl Native {
         match self {
             Native::AggregateError => 2,
             Native::RegExp => 2,
-            Native::TypedArray(_) | Native::DataView => 3,
+            Native::TypedArray(_) => 3,
+            Native::DataView => 1,
             Native::Symbol | Native::Map | Native::Set | Native::WeakMap | Native::WeakSet => 0,
             Native::Object
             | Native::Function
@@ -7781,9 +7782,7 @@ impl Interp {
             // dispatcher has already resumed the caller and run it onward;
             // its eventual Return must propagate instead of being mistaken
             // for the callback's own result (whose frame was abandoned).
-            Halt::Return
-                if self.call_stack.len() < return_depth && self.stack.is_empty() =>
-            {
+            Halt::Return if self.call_stack.len() < return_depth => {
                 Err(Halt::Return)
             }
             Halt::Return => Ok(self.pop()),
@@ -15547,7 +15546,7 @@ impl Interp {
             let mut p = self.slots.get(cur).next;
             while !p.is_null() {
                 let s = self.slots.get(p);
-                if s.id != crate::value::XS_NO_ID {
+                if s.id != crate::value::XS_NO_ID && s.flag & XS_DONT_ENUM_FLAG == 0 {
                     names.push((s.id, 0));
                 }
                 p = s.next;

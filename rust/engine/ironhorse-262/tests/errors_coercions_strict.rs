@@ -52,6 +52,12 @@ fn object_to_primitive_drives_string_and_numeric_operations() {
         "var o = { toString() { return 'key'; } }; ({ key: 9 })[o]",
         "Number({ valueOf() { return '12'; } })",
         "String({ toString() { return 'ok'; } })",
+        "var o = { valueOf() { return 1 }, toString() { return 'two' } }; String(o) + (o + 0)",
+        "'10' < 9",
+        "({ valueOf() { return 5 } }) < 6",
+        "'3' & 1",
+        "({ valueOf() { return 6 } }) | 1",
+        "({ valueOf() { return 7 } }) * 2",
         "try { ({ valueOf() { throw 7; } }) + 1 } catch (e) { e }",
     ] {
         assert_result_agrees(source);
@@ -76,8 +82,8 @@ fn only_strict_test262_cases_execute_instead_of_preskipping() {
         std::process::id()
     ));
     std::fs::create_dir_all(&harness).expect("create temporary harness");
-    std::fs::write(harness.join("sta.js"), "").expect("write sta.js");
-    std::fs::write(harness.join("assert.js"), "").expect("write assert.js");
+    std::fs::write(harness.join("sta.js"), "function Test262Error() {}\n").expect("write sta.js");
+    std::fs::write(harness.join("assert.js"), "var assert = {};\n").expect("write assert.js");
     let source = r#"/*---
 flags: [onlyStrict]
 ---*/

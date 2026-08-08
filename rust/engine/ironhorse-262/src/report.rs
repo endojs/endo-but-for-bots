@@ -130,6 +130,7 @@ impl Category {
 /// reason strings are the exact ones [`crate::xst`] emits; a prefix match keeps
 /// this robust as new sub-reasons are added under a known family.
 pub fn classify(outcome: Outcome, reason: &str) -> Category {
+    let reason = reason.strip_prefix("strict:").unwrap_or(reason);
     match outcome {
         Outcome::Covered => Category::Covered,
         // Every `Verdict::Fail` is a bar-forbidden Ironhorse defect.
