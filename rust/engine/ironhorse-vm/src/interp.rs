@@ -5395,9 +5395,72 @@ impl Interp {
                     let v = self.resolve_get(name);
                     match v {
                         Some(s) => self.push(s),
-                        None => return Halt::Throw(format!("get {}: undefined variable", name)),
+                        // An unresolvable reference — reading a name bound in no
+                        // reachable environment — is a **catchable** ReferenceError
+                        // (ECMA-262 `GetValue` 6.2.5.5 → `ResolveBinding`), not an
+                        // uncatchable host abort. Raise it through the jump-buffer
+                        // chain so a `try`/`catch` observes a realm-correct
+                        // `ReferenceError`; an uncaught throw still escapes to the
+                        // host as `Halt::Throw` (former behavior).
+                        None => {
+                            let error = self.build_error("ReferenceError", 0, 0);
+                            match self.raise_js(error) {
+                                Ok(target) => {
+                                    pc = target;
+                                    if self.check_meter() == MeterCheck::Abort {
+                                        return Halt::MeterAbort;
+                                    }
+                                    continue;
+                                }
+                                Err(halt) => return halt,
+                            }
+                        }
                     }
                     pc += ilen;
+                }
+                // `to_instance` (`XS_CODE_TO_INSTANCE`): ToObject on the
+                // top-of-stack value (ECMA-262 7.1.18), XS's `mxToInstance`.
+                // Emitted by the base-class constructor bind (before `CLASS`),
+                // object-destructuring of a value RHS, and `with`. An object is
+                // returned unchanged (the hot path — a class constructor is
+                // already a reference); `null`/`undefined` raise a catchable
+                // TypeError; every other primitive boxes to its wrapper object
+                // so subsequent property reads resolve against the wrapper.
+                XS_CODE_TO_INSTANCE => {
+                    let top = *self.stack.last().unwrap_or(&Slot::undefined());
+                    match top.kind {
+                        // Already an object — ToObject is identity, no allocation.
+                        Kind::Reference | Kind::Instance => {}
+                        // null / undefined → catchable TypeError.
+                        Kind::Null | Kind::Undefined => {
+                            let error = self.build_error("TypeError", 0, 0);
+                            match self.raise_js(error) {
+                                Ok(target) => {
+                                    pc = target;
+                                    if self.check_meter() == MeterCheck::Abort {
+                                        return Halt::MeterAbort;
+                                    }
+                                    continue;
+                                }
+                                Err(halt) => return halt,
+                            }
+                        }
+                        // Every other primitive's ToObject boxes to its
+                        // `%<Type>.prototype%` wrapper. The wrapper's *exotic*
+                        // own properties (a String wrapper's `length` and
+                        // indexed characters, in particular) are not yet
+                        // materialized on the boxed instance, so a subsequent
+                        // own-property read would silently diverge from the
+                        // oracle. Name the gap honestly as an `Unsupported`
+                        // skip rather than hand back a mis-answering wrapper —
+                        // the boxed-primitive ToObject surface (string/number
+                        // destructuring, `with(primitive)`) is a later child's
+                        // work. The hot in-scope paths (a base-class
+                        // constructor and object destructuring of an object
+                        // RHS) take the identity arm above and never reach here.
+                        _ => return Halt::Unsupported("to_instance:primitive-box"),
+                    }
+                    pc += size as usize;
                 }
                 XS_CODE_SET_VARIABLE => {
                     let name = id!(1);
@@ -7924,7 +7987,18 @@ impl Interp {
         let args: Vec<Slot> = self.stack[base + 4..base + 4 + argc].to_vec();
         let func = match func_slot.value {
             Payload::Reference(f) if self.functions.contains_key(&f) => f,
-            _ => return Err(Halt::Throw("call: not a function".into())),
+            // The callee is not callable (a non-function reference, or a
+            // primitive). ECMA-262 `Call` (7.3.14) requires a **catchable**
+            // TypeError here, not an uncatchable host abort — a program that
+            // wraps the call in `try`/`catch` (or `assert.throws`) must observe
+            // a realm-correct `TypeError` object. Raise it through the same
+            // jump-buffer chain as the `throw` opcode: `raise_js` returns the
+            // catch-handler pc when one is established, or escapes to the host
+            // as `Halt::Throw` when the throw is uncaught (former behavior).
+            _ => {
+                let error = self.build_error("TypeError", 0, 0);
+                return self.raise_js(error);
+            }
         };
         // The single choke point every user-function dispatch funnels through.
         // A `None` body means the callee has no runnable bytecode — a bound

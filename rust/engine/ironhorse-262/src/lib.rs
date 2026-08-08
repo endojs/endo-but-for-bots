@@ -770,6 +770,78 @@ mod tests {
         );
     }
 
+    /// js-04 helper: a source whose sloppy dual-run must agree with the XS
+    /// oracle (BothComplete + observable agreement — a "covered" verdict).
+    fn assert_covers_oracle(src: &str) {
+        let r = dual_run(src).expect("oracle machine runs");
+        assert_eq!(
+            r.agreement,
+            Agreement::BothComplete,
+            "js-04: expected both engines to complete for {src:?} \
+             (ironhorse_halt={:?}, ironhorse_result={:?})",
+            r.ironhorse_halt,
+            r.ironhorse_result,
+        );
+        assert!(
+            r.result_agrees,
+            "js-04: expected observable agreement for {src:?} \
+             (oracle={:?} ironhorse={:?})",
+            r.oracle_result, r.ironhorse_result,
+        );
+    }
+
+    #[test]
+    fn calling_a_non_callable_throws_a_catchable_type_error() {
+        // ECMA-262 `Call` (7.3.14): invoking a non-callable is a *catchable*
+        // TypeError, not an uncatchable host abort. Before js-04 the callee
+        // gate raised `Halt::Throw("call: not a function")`, which `try`/`catch`
+        // could not observe; now it raises a realm-correct `TypeError`.
+        assert_covers_oracle(
+            "var x = {}; var caught = false; \
+             try { x(); } catch (e) { caught = e instanceof TypeError; } caught",
+        );
+        // The same gate fronts `new` on a non-constructable ordinary object.
+        assert_covers_oracle(
+            "var x = {}; var caught = false; \
+             try { new x(); } catch (e) { caught = e instanceof TypeError; } caught",
+        );
+    }
+
+    #[test]
+    fn reading_an_unresolvable_reference_throws_a_catchable_reference_error() {
+        // `GetValue` on an unresolvable Reference is a catchable ReferenceError
+        // (6.2.5.5 → ResolveBinding). Before js-04 the `get_variable` miss
+        // raised an uncatchable `Halt::Throw("get …: undefined variable")`.
+        assert_covers_oracle(
+            "var ok = false; \
+             try { thisGlobalIsNotDefinedXYZ; } catch (e) { ok = e instanceof ReferenceError; } ok",
+        );
+    }
+
+    #[test]
+    fn to_instance_toobject_identity_null_typeerror_and_primitive_box() {
+        // `XS_CODE_TO_INSTANCE` (ToObject, 7.1.18), emitted by object
+        // destructuring (and the base-class constructor bind / `with`).
+        // Object RHS → identity: the own property is read straight through.
+        assert_covers_oracle("var { a } = { a: 5 }; a");
+        // null / undefined RHS → catchable TypeError.
+        assert_covers_oracle(
+            "var ok = false; \
+             try { var { b } = null; } catch (e) { ok = e instanceof TypeError; } ok",
+        );
+        assert_covers_oracle(
+            "var ok = false; \
+             try { var { c } = undefined; } catch (e) { ok = e instanceof TypeError; } ok",
+        );
+        // A base-class constructor bind (`TO_INSTANCE` on an already-object
+        // constructor) also takes the identity arm — exercised end-to-end by
+        // the boot-bundle ledger test, which now advances past `to_instance`.
+        //
+        // The boxed-primitive ToObject arm (string/number destructuring) is a
+        // named `to_instance:primitive-box` skip, not covered here: the boxed
+        // wrapper's exotic own properties are a later child's surface.
+    }
+
     // A `DualRun` with the given agreement and ironhorse halt. For a
     // `Halt::Throw`, the oracle is modeled as throwing the same value with
     // the same computrons (the agreeing case), so `is_bit_exact` turns on
@@ -1126,10 +1198,13 @@ mod tests {
         // gap any more — each advances past its first `globalThis` read to the
         // next real post-stage-4 engine gap. Those gaps stay honest, self-named
         // `Halt::Unsupported` aborts (never divergences, per assertion (1)):
-        // `polyfills.js` and the boot prefix reach the `to_instance` surface,
-        // `host_aliases.js` the computed-`at` property surface. They are the
-        // NEXT ledgered gaps (stage-7's following children); when one lands,
-        // this assertion advances again.
+        // `host_aliases.js` reaches the computed-`at` property surface. The
+        // `to_instance` (ToObject) surface `polyfills.js` and the boot prefix
+        // used to stop at LANDED (js-04 functions/constructors/base-classes),
+        // so both now advance past it to the next real engine gap — the `class`
+        // opcode (base-class definition), the following ledgered gap. They stay
+        // honest, self-named `Halt::Unsupported` aborts (never divergences, per
+        // assertion (1)); when `class` lands, this assertion advances again.
         assert_eq!(
             gaps.get("boot:no-globalThis-global-object-binding")
                 .copied(),
@@ -1137,16 +1212,22 @@ mod tests {
             "the `globalThis` global-object binding landed (stage-7 child 1); no committed \
              bundle should still stop at that gap, but got {gaps:?}"
         );
+        assert_eq!(
+            gaps.get("boot:unsupported:to_instance").copied(),
+            None,
+            "the `to_instance` (ToObject) surface landed (js-04); no committed bundle should \
+             still stop at that gap, but got {gaps:?}"
+        );
         let expected_gaps: std::collections::BTreeMap<String, usize> = [
             ("boot:unsupported:at".to_string(), 1usize),
-            ("boot:unsupported:to_instance".to_string(), 2usize),
+            ("boot:unsupported:class".to_string(), 2usize),
         ]
         .into_iter()
         .collect();
         assert_eq!(
             gaps, expected_gaps,
-            "expected the committed boot bundles to stop at the advanced stage-7 gaps \
-             (2× to_instance, 1× at); got {gaps:?} (if a gap closed, advance the ledger)"
+            "expected the committed boot bundles to stop at the advanced gaps \
+             (2× class, 1× at); got {gaps:?} (if a gap closed, advance the ledger)"
         );
     }
 
