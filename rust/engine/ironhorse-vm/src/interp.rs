@@ -397,6 +397,7 @@ pub const PROPERTY_IS_ENUMERABLE_METERING: u64 = 1 << 16;
 pub const XS_DONT_DELETE_FLAG: u8 = 2; // configurable: false
 pub const XS_DONT_ENUM_FLAG: u8 = 4; // enumerable: false
 pub const XS_DONT_SET_FLAG: u8 = 8; // writable: false
+pub const XS_METHOD_FLAG: u8 = 16;
 pub const XS_GETTER_FLAG: u8 = 32;
 pub const XS_SETTER_FLAG: u8 = 64;
 /// XS instance-slot flag bit (`xsAll.h`): a non-extensible instance carries
@@ -1470,6 +1471,12 @@ struct FuncInfo {
     /// `START_GENERATOR`. Recorded for clarity/diagnostics; the body opcode
     /// drives the actual generator-object creation.
     is_generator: bool,
+    /// The class/method home object used by `super` property references.
+    /// `NULL` for ordinary functions.
+    home: crate::value::SlotIndex,
+    /// `Some(false)` for a base-class constructor, `Some(true)` for a derived
+    /// constructor, and `None` for an ordinary function.
+    class_derived: Option<bool>,
 }
 
 /// The `Math` static functions ironhorse models (`xsMath.c`). Each is a
@@ -2107,6 +2114,8 @@ impl Default for FuncInfo {
             arity: 0,
             name_chunk: crate::value::ChunkOffset::NULL,
             is_generator: false,
+            home: crate::value::SlotIndex::NULL,
+            class_derived: None,
         }
     }
 }
@@ -2916,6 +2925,12 @@ pub struct Interp {
     /// construct return semantics at `end` (a non-object completion yields
     /// `this`). `false` for a plain call and the program frame.
     cur_target: bool,
+    /// The actual `new.target`. It differs from `cur_func` while a derived
+    /// constructor is executing its heritage through `super()`.
+    target_func: crate::value::SlotIndex,
+    /// One-shot target override installed by `super()` for the following
+    /// construct-frame `run`.
+    pending_new_target: Option<crate::value::SlotIndex>,
     /// The pending thrown value (XS's `mxException`). `THROW` sets it and
     /// unwinds to the innermost jump; `EXCEPTION` moves it to the stack
     /// (binding the catch parameter) and clears it back to `undefined`;
@@ -2955,6 +2970,14 @@ pub struct Interp {
     /// object — so `(new F()) instanceof F` and `err instanceof TypeError`
     /// are prototype-chain identity checks (`fxOrdinaryHasInstance`).
     ctor_prototype: std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>,
+    /// Private elements are keyed by the receiver and the closure cell that
+    /// represents the lexically-scoped private name. The cell identity is the
+    /// brand; it cannot collide across class evaluations even when the source
+    /// spelling is the same.
+    private_values:
+        std::collections::HashMap<(crate::value::SlotIndex, crate::value::SlotIndex), Slot>,
+    private_accessors:
+        std::collections::HashMap<(crate::value::SlotIndex, crate::value::SlotIndex), AccessorData>,
     /// Native prototype methods to bind at link time: `(prototype instance,
     /// method name, method function)`. Populated once at boot; a method is
     /// installed as an own property of its prototype only when the program
@@ -3281,6 +3304,7 @@ struct CallerState {
     this_val: Slot,
     cur_func: crate::value::SlotIndex,
     cur_target: bool,
+    target_func: crate::value::SlotIndex,
     /// The caller's code cursor to resume at (just past its `run`).
     ret_pc: usize,
 }
@@ -3339,6 +3363,7 @@ struct SavedFrame {
     this_val: Slot,
     cur_func: crate::value::SlotIndex,
     cur_target: bool,
+    target_func: crate::value::SlotIndex,
     strict: bool,
     result: Slot,
     stack_slice: Vec<Slot>,
@@ -3476,12 +3501,16 @@ impl Interp {
             this_val: Slot::undefined(),
             cur_func: crate::value::SlotIndex::NULL,
             cur_target: false,
+            target_func: crate::value::SlotIndex::NULL,
+            pending_new_target: None,
             exception: Slot::undefined(),
             frame_slots: 0,
             intrinsics: std::collections::HashMap::new(),
             object_proto: crate::value::SlotIndex::NULL,
             function_proto: crate::value::SlotIndex::NULL,
             ctor_prototype: std::collections::HashMap::new(),
+            private_values: std::collections::HashMap::new(),
+            private_accessors: std::collections::HashMap::new(),
             proto_methods: Vec::new(),
             proto_data: Vec::new(),
             well_known_symbols: Vec::new(),
@@ -4028,8 +4057,7 @@ impl Interp {
             let gopd = self.alloc_method(NativeMethod::ObjectGetOwnPropertyDescriptor);
             self.proto_methods
                 .push((object_ctor, "getOwnPropertyDescriptor", gopd));
-            let get_own_property_names =
-                self.alloc_method(NativeMethod::ObjectGetOwnPropertyNames);
+            let get_own_property_names = self.alloc_method(NativeMethod::ObjectGetOwnPropertyNames);
             self.proto_methods
                 .push((object_ctor, "getOwnPropertyNames", get_own_property_names));
             let defprop = self.alloc_method(NativeMethod::ObjectDefineProperty);
@@ -4463,6 +4491,9 @@ impl Interp {
     /// An instance slot's prototype (its payload reference), or `NULL`.
     #[inline]
     fn instance_prototype(&self, inst: crate::value::SlotIndex) -> crate::value::SlotIndex {
+        if inst.is_null() || inst.0 >= self.slots.capacity() {
+            return crate::value::SlotIndex::NULL;
+        }
         match self.slots.get(inst).value {
             Payload::Reference(p) => p,
             _ => crate::value::SlotIndex::NULL,
@@ -5261,13 +5292,63 @@ impl Interp {
                         // global in strict mode too (only an ES module's is
                         // `undefined`, and modules are structurally skipped).
                         self.bind_program_this();
-                    } else if self.cur_target && op == XS_CODE_BEGIN_STRICT {
-                        // A strict `function` constructor invoked with `new`:
-                        // `fxRunConstructor` allocates `this` (the class
-                        // `*_BASE`/`*_DERIVED` forms need the class machinery,
-                        // out of the covered grammar — left to self-name).
-                        self.run_constructor();
+                    } else {
+                        match op {
+                            XS_CODE_BEGIN_STRICT_BASE => {
+                                // A class constructor is never callable without
+                                // `new`.  Base construction allocates `this`
+                                // before the constructor body begins.
+                                if !self.cur_target {
+                                    let error = self.build_error("TypeError", 0, 0);
+                                    pc = dispatch_result!(
+                                        self.raise_js(error),
+                                        pc,
+                                        self,
+                                        return_depth
+                                    );
+                                    continue;
+                                }
+                                self.run_constructor();
+                            }
+                            XS_CODE_BEGIN_STRICT_DERIVED => {
+                                // A derived constructor starts with an
+                                // uninitialized `this`; `super()` supplies it.
+                                if !self.cur_target {
+                                    let error = self.build_error("TypeError", 0, 0);
+                                    pc = dispatch_result!(
+                                        self.raise_js(error),
+                                        pc,
+                                        self,
+                                        return_depth
+                                    );
+                                    continue;
+                                }
+                                self.this_val = Slot::uninitialized();
+                            }
+                            XS_CODE_BEGIN_STRICT if self.cur_target => {
+                                self.run_constructor();
+                            }
+                            // Field initializers run as strict methods with an
+                            // already-supplied receiver.
+                            _ => {}
+                        }
                     }
+                    pc += size as usize;
+                }
+                // Materialize the active frame's arguments as an iterable
+                // indexed object. The default derived constructor uses this
+                // form to forward all arguments through `super(...args)`.
+                XS_CODE_ARGUMENTS | XS_CODE_ARGUMENTS_SLOPPY | XS_CODE_ARGUMENTS_STRICT => {
+                    let offset = code[pc + 1] as usize;
+                    let values: Vec<Slot> = self.args.iter().copied().skip(offset).collect();
+                    let array = self.new_array();
+                    if let Some(data) = self.arrays.get_mut(&array) {
+                        data.length = values.len() as u32;
+                        for (index, value) in values.into_iter().enumerate() {
+                            data.items.insert(index as u32, value);
+                        }
+                    }
+                    self.push(Slot::of(Kind::Reference, Payload::Reference(array)));
                     pc += size as usize;
                 }
                 // The environment opcodes establish/refer to the frame's
@@ -5589,8 +5670,78 @@ impl Interp {
                     let value = self.pop();
                     let key = self.pop();
                     let obj = self.pop();
-                    if let Err(h) = self.property_at_set(code, obj, key, value, true) {
-                        return h;
+                    let property_flag = code[pc + 2];
+                    let handled_class_member = match (obj.value, key.value) {
+                        (Payload::Reference(inst), Payload::At(raw_id, index))
+                            if property_flag
+                                & (XS_METHOD_FLAG | XS_GETTER_FLAG | XS_SETTER_FLAG)
+                                != 0 =>
+                        {
+                            let id = if raw_id == crate::value::XS_NO_ID {
+                                self.intern_key(&index.to_string())
+                            } else {
+                                raw_id
+                            };
+                            if property_flag & XS_METHOD_FLAG != 0 {
+                                if let Payload::Reference(f) = value.value {
+                                    if let Some(info) = self.functions.get_mut(&f) {
+                                        info.home = inst;
+                                    }
+                                }
+                            }
+                            if property_flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+                                let current =
+                                    self.accessors.get(&(inst, id)).copied().unwrap_or_default();
+                                let accessor = AccessorData {
+                                    get: if property_flag & XS_GETTER_FLAG != 0 {
+                                        Some(value)
+                                    } else {
+                                        current.get
+                                    },
+                                    set: if property_flag & XS_SETTER_FLAG != 0 {
+                                        Some(value)
+                                    } else {
+                                        current.set
+                                    },
+                                };
+                                self.accessors.insert((inst, id), accessor);
+                                self.ordinary_define_own_property(
+                                    inst,
+                                    id,
+                                    OrdinaryDescriptor {
+                                        get: Some(accessor.get.unwrap_or_else(Slot::undefined)),
+                                        set: Some(accessor.set.unwrap_or_else(Slot::undefined)),
+                                        enumerable: Some(property_flag & XS_DONT_ENUM_FLAG == 0),
+                                        configurable: Some(
+                                            property_flag & XS_DONT_DELETE_FLAG == 0,
+                                        ),
+                                        ..OrdinaryDescriptor::default()
+                                    },
+                                );
+                            } else {
+                                self.ordinary_define_own_property(
+                                    inst,
+                                    id,
+                                    OrdinaryDescriptor {
+                                        value: Some(value),
+                                        writable: Some(property_flag & XS_DONT_SET_FLAG == 0),
+                                        enumerable: Some(property_flag & XS_DONT_ENUM_FLAG == 0),
+                                        configurable: Some(
+                                            property_flag & XS_DONT_DELETE_FLAG == 0,
+                                        ),
+                                        ..OrdinaryDescriptor::default()
+                                    },
+                                );
+                            }
+                            self.meter.tick_builtin();
+                            true
+                        }
+                        _ => false,
+                    };
+                    if !handled_class_member {
+                        if let Err(h) = self.property_at_set(code, obj, key, value, true) {
+                            return h;
+                        }
                     }
                     pc += 3;
                 }
@@ -5607,6 +5758,26 @@ impl Interp {
                     let iterable = self.pop();
                     match iterable.value {
                         Payload::Reference(i) if self.arrays.contains_key(&i) => {
+                            // The dense fast path represents the realm's
+                            // intrinsic array iterator. If guest code replaced
+                            // `Array.prototype[Symbol.iterator]`, invoking that
+                            // arbitrary iterator requires the general protocol;
+                            // self-name instead of silently bypassing it.
+                            let iterator_overridden = self
+                                .well_known_symbols
+                                .iter()
+                                .find(|(name, _)| *name == "iterator")
+                                .and_then(|(_, value)| match value.value {
+                                    Payload::Reference(desc) => {
+                                        self.symbol_key_ids.get(&desc).copied()
+                                    }
+                                    _ => None,
+                                })
+                                .and_then(|id| self.find_property(self.array_proto, id))
+                                .is_some();
+                            if iterator_overridden {
+                                return Halt::Unsupported("for_of:array-iterator-override");
+                            }
                             self.meter.tick_raw(FOR_OF_GET_ITERATOR_METERING);
                             let it = self.make_array_iterator(i, 0);
                             self.push(it);
@@ -5702,6 +5873,13 @@ impl Interp {
                     if let Payload::Reference(inst) = obj.value {
                         let property_flag = code[pc + 4];
                         if property_flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+                            if property_flag & XS_METHOD_FLAG != 0 {
+                                if let Payload::Reference(f) = value.value {
+                                    if let Some(info) = self.functions.get_mut(&f) {
+                                        info.home = inst;
+                                    }
+                                }
+                            }
                             let existing =
                                 self.accessors.get(&(inst, id)).copied().unwrap_or_default();
                             let accessor = AccessorData {
@@ -5724,8 +5902,8 @@ impl Interp {
                                 let descriptor = OrdinaryDescriptor {
                                     get: Some(accessor.get.unwrap_or_else(Slot::undefined)),
                                     set: Some(accessor.set.unwrap_or_else(Slot::undefined)),
-                                    enumerable: Some(true),
-                                    configurable: Some(true),
+                                    enumerable: Some(property_flag & XS_DONT_ENUM_FLAG == 0),
+                                    configurable: Some(property_flag & XS_DONT_DELETE_FLAG == 0),
                                     ..OrdinaryDescriptor::default()
                                 };
                                 self.ordinary_define_own_property(inst, id, descriptor);
@@ -5752,6 +5930,17 @@ impl Interp {
                             );
                         } else {
                             self.instance_put(inst, id, value);
+                        }
+                        if let Some(property) = self.find_property(inst, id) {
+                            self.slots.get_mut(property).flag = property_flag
+                                & (XS_DONT_DELETE_FLAG | XS_DONT_ENUM_FLAG | XS_DONT_SET_FLAG);
+                        }
+                        if property_flag & XS_METHOD_FLAG != 0 {
+                            if let Payload::Reference(f) = value.value {
+                                if let Some(info) = self.functions.get_mut(&f) {
+                                    info.home = inst;
+                                }
+                            }
                         }
                         self.meter.tick_builtin();
                         // An object-literal generator method (`{ *m(){} }`)
@@ -5782,6 +5971,170 @@ impl Interp {
                         }
                     }
                     pc += 5;
+                }
+                // Private elements use the captured private-name closure cell
+                // itself as their unforgeable brand key. This mirrors XS's
+                // `slot->value.closure->value.reference` lookup while keeping
+                // the ordinary public-property MOP untouched.
+                XS_CODE_NEW_PRIVATE_1 | XS_CODE_NEW_PRIVATE_2 => {
+                    if pc + ilen + 2 > len {
+                        return Halt::Decode(format!("new_private at {pc} needs flag operand"));
+                    }
+                    let index = self.closure_index(op, code, pc);
+                    let brand = match self.closure_cell(index) {
+                        Some(cell) => cell,
+                        None => return Halt::Unsupported("private:missing-brand"),
+                    };
+                    let value = self.pop();
+                    let receiver = self.pop();
+                    let object = match receiver.value {
+                        Payload::Reference(object) if receiver.kind == Kind::Reference => object,
+                        _ => {
+                            let error = self.build_error("TypeError", 0, 0);
+                            pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                            continue;
+                        }
+                    };
+                    let flag = code[pc + ilen + 1];
+                    let key = (object, brand);
+                    if flag & XS_METHOD_FLAG != 0 {
+                        let home = self
+                            .functions
+                            .get(&self.cur_func)
+                            .map(|info| info.home)
+                            .unwrap_or(crate::value::SlotIndex::NULL);
+                        if let Payload::Reference(f) = value.value {
+                            if let Some(info) = self.functions.get_mut(&f) {
+                                info.home = home;
+                            }
+                        }
+                    }
+                    if flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+                        let current = self
+                            .private_accessors
+                            .get(&key)
+                            .copied()
+                            .unwrap_or_default();
+                        self.private_accessors.insert(
+                            key,
+                            AccessorData {
+                                get: if flag & XS_GETTER_FLAG != 0 {
+                                    Some(value)
+                                } else {
+                                    current.get
+                                },
+                                set: if flag & XS_SETTER_FLAG != 0 {
+                                    Some(value)
+                                } else {
+                                    current.set
+                                },
+                            },
+                        );
+                    } else {
+                        self.private_values.insert(key, value);
+                    }
+                    pc += ilen + 2;
+                }
+                XS_CODE_GET_PRIVATE_1 | XS_CODE_GET_PRIVATE_2 => {
+                    let index = self.closure_index(op, code, pc);
+                    let brand = match self.closure_cell(index) {
+                        Some(cell) => cell,
+                        None => return Halt::Unsupported("private:missing-brand"),
+                    };
+                    let receiver = self.pop();
+                    let object = match receiver.value {
+                        Payload::Reference(object) if receiver.kind == Kind::Reference => object,
+                        _ => {
+                            let error = self.build_error("TypeError", 0, 0);
+                            pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                            continue;
+                        }
+                    };
+                    let key = (object, brand);
+                    let value = if let Some(value) = self.private_values.get(&key).copied() {
+                        value
+                    } else if let Some(accessor) = self.private_accessors.get(&key).copied() {
+                        match accessor.get {
+                            Some(getter) => dispatch_result!(
+                                self.run_callback(code, getter, receiver, &[]),
+                                pc,
+                                self,
+                                return_depth
+                            ),
+                            None => Slot::undefined(),
+                        }
+                    } else {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    };
+                    self.push(value);
+                    pc += ilen;
+                }
+                XS_CODE_SET_PRIVATE_1 | XS_CODE_SET_PRIVATE_2 => {
+                    let index = self.closure_index(op, code, pc);
+                    let brand = match self.closure_cell(index) {
+                        Some(cell) => cell,
+                        None => return Halt::Unsupported("private:missing-brand"),
+                    };
+                    let value = self.pop();
+                    let receiver = self.pop();
+                    let object = match receiver.value {
+                        Payload::Reference(object) if receiver.kind == Kind::Reference => object,
+                        _ => {
+                            let error = self.build_error("TypeError", 0, 0);
+                            pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                            continue;
+                        }
+                    };
+                    let key = (object, brand);
+                    if self.private_values.contains_key(&key) {
+                        self.private_values.insert(key, value);
+                    } else if let Some(accessor) = self.private_accessors.get(&key).copied() {
+                        match accessor.set {
+                            Some(setter) => {
+                                let _ = dispatch_result!(
+                                    self.run_callback(code, setter, receiver, &[value]),
+                                    pc,
+                                    self,
+                                    return_depth
+                                );
+                            }
+                            None => {
+                                let error = self.build_error("TypeError", 0, 0);
+                                pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                                continue;
+                            }
+                        }
+                    } else {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
+                    self.push(value);
+                    pc += ilen;
+                }
+                XS_CODE_HAS_PRIVATE_1 | XS_CODE_HAS_PRIVATE_2 => {
+                    let index = self.closure_index(op, code, pc);
+                    let brand = match self.closure_cell(index) {
+                        Some(cell) => cell,
+                        None => return Halt::Unsupported("private:missing-brand"),
+                    };
+                    let receiver = self.pop();
+                    let present = match receiver.value {
+                        Payload::Reference(object) if receiver.kind == Kind::Reference => {
+                            let key = (object, brand);
+                            self.private_values.contains_key(&key)
+                                || self.private_accessors.contains_key(&key)
+                        }
+                        _ => {
+                            let error = self.build_error("TypeError", 0, 0);
+                            pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                            continue;
+                        }
+                    };
+                    self.push(Slot::boolean(present));
+                    pc += ilen;
                 }
                 // `o.k = v`. Stack: [.., objectRef, value] → [.., value].
                 // Unlike `SET_VARIABLE`, the handler runs no `fxRunHas`
@@ -6092,8 +6445,7 @@ impl Interp {
                             {
                                 self.arrays.get_mut(&inst).unwrap().items.remove(&index);
                                 true
-                            } else if self.arrays.contains_key(&inst)
-                                && Some(id) == self.length_id
+                            } else if self.arrays.contains_key(&inst) && Some(id) == self.length_id
                             {
                                 false
                             } else {
@@ -6249,6 +6601,124 @@ impl Interp {
                     pc += size as usize;
                 }
 
+                // `extend` validates the heritage constructor and leaves both
+                // the heritage and the newly-created prototype on the stack.
+                // `class` later consumes `[heritage, prototype, constructor]`.
+                XS_CODE_EXTEND => {
+                    let heritage = self.stack.last().copied().unwrap_or_else(Slot::undefined);
+                    let parent_proto = match heritage.value {
+                        Payload::None if heritage.kind == Kind::Null => {
+                            crate::value::SlotIndex::NULL
+                        }
+                        Payload::Reference(parent)
+                            if heritage.kind == Kind::Reference
+                                && self.functions.contains_key(&parent) =>
+                        {
+                            self.prototype_of(parent)
+                                .unwrap_or(crate::value::SlotIndex::NULL)
+                        }
+                        _ => {
+                            let error = self.build_error("TypeError", 0, 0);
+                            pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                            continue;
+                        }
+                    };
+                    let proto = self.slots.alloc(Slot::instance(parent_proto));
+                    self.push(Slot::of(Kind::Reference, Payload::Reference(proto)));
+                    pc += size as usize;
+                }
+                // Finalize a class constructor and its prototype. The
+                // ordinary object MOP remains the behavior seam: only the
+                // class-created links and standard descriptors are installed
+                // here; subsequent reads/writes use ordinary_get/set.
+                XS_CODE_CLASS => {
+                    let constructor = self.pop();
+                    let prototype = self.pop();
+                    let heritage = self.pop();
+                    let (ctor, proto) = match (constructor.value, prototype.value) {
+                        (Payload::Reference(ctor), Payload::Reference(proto))
+                            if constructor.kind == Kind::Reference
+                                && prototype.kind == Kind::Reference
+                                && self.functions.contains_key(&ctor) =>
+                        {
+                            (ctor, proto)
+                        }
+                        _ => return Halt::Unsupported("class:invalid-stack"),
+                    };
+                    let derived = self
+                        .functions
+                        .get(&ctor)
+                        .and_then(|info| info.body_start)
+                        .and_then(|start| code.get(start))
+                        .and_then(|byte| Opcode::from_u8(*byte))
+                        == Some(XS_CODE_BEGIN_STRICT_DERIVED);
+                    if let Some(info) = self.functions.get_mut(&ctor) {
+                        info.home = proto;
+                        info.class_derived = Some(derived);
+                    }
+                    self.ctor_prototype.insert(ctor, proto);
+                    // A derived class constructor inherits static properties
+                    // from its heritage constructor. A base class continues
+                    // to inherit from %Function.prototype%.
+                    if derived && heritage.kind == Kind::Reference {
+                        if let Payload::Reference(parent) = heritage.value {
+                            self.slots.get_mut(ctor).value = Payload::Reference(parent);
+                        }
+                    }
+                    let prototype_id = self.intern_key("prototype");
+                    let constructor_id = self.intern_key("constructor");
+                    self.set_own_unmetered_with_flag(
+                        ctor,
+                        prototype_id,
+                        Slot::of(Kind::Reference, Payload::Reference(proto)),
+                        XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG,
+                    );
+                    self.set_own_unmetered_with_flag(
+                        proto,
+                        constructor_id,
+                        Slot::of(Kind::Reference, Payload::Reference(ctor)),
+                        XS_DONT_ENUM_FLAG,
+                    );
+                    pc += size as usize;
+                }
+                // Attach the current function/method's [[HomeObject]]. The
+                // home object is on top and is consumed; the function remains
+                // for capture/call by the following opcode.
+                XS_CODE_SET_HOME => {
+                    let home = self.pop();
+                    let function = self.stack.last().copied().unwrap_or_else(Slot::undefined);
+                    if let (Payload::Reference(f), Payload::Reference(h)) =
+                        (function.value, home.value)
+                    {
+                        if let Some(info) = self.functions.get_mut(&f) {
+                            info.home = h;
+                        }
+                    }
+                    pc += size as usize;
+                }
+                // Give an anonymous/class function its inferred binding name
+                // (`fxRenameFunction`). The callable stays on the stack.
+                XS_CODE_NAME => {
+                    let id = id!(1);
+                    if let Some(&Slot {
+                        value: Payload::Reference(f),
+                        ..
+                    }) = self.stack.last()
+                    {
+                        let name = (id as usize)
+                            .checked_sub(1)
+                            .and_then(|i| self.symbol_names.get(i).cloned())
+                            .unwrap_or_default();
+                        let name_chunk = self.alloc_str_text(name.as_bytes());
+                        if let Some(info) = self.functions.get_mut(&f) {
+                            info.name = name;
+                            info.name_chunk = name_chunk;
+                        }
+                        self.meter.tick_builtin_some(2);
+                    }
+                    pc += ilen;
+                }
+
                 // ---- user functions: call --------------------------
                 // `call` (`XS_CODE_CALL`): reserve the RESULT (undefined)
                 // and FRAME (marker) slots above the already-pushed
@@ -6276,17 +6746,38 @@ impl Interp {
                     self.push(Slot::of(Kind::Uninitialized, Payload::None)); // FRAME
                     pc += size as usize;
                 }
+                // `super()` constructs the current constructor's heritage.
+                // The following `run_*` consumes this standard construct
+                // frame, and `set_this` installs the returned object in the
+                // derived frame.
+                XS_CODE_SUPER => {
+                    let parent = self.instance_prototype(self.cur_func);
+                    if parent.is_null() || !self.functions.contains_key(&parent) {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
+                    self.pending_new_target = Some(self.target_func);
+                    self.push(Slot::uninitialized());
+                    self.push(Slot::of(Kind::Reference, Payload::Reference(parent)));
+                    self.push(Slot::undefined());
+                    self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                    pc += size as usize;
+                }
                 // `run`/`run_N` (`XS_CODE_RUN*`): invoke the function with N
                 // arguments. Stack below the N args is
                 // `[THIS, FUNCTION, RESULT, FRAME]` (XS's frame geometry:
                 // args below the frame, `result`/`function`/`this` at fixed
                 // offsets). Enter the callee's body frame; the call-entry
                 // `mxFirstCode` meter check fires here.
-                XS_CODE_RUN | XS_CODE_RUN_1 | XS_CODE_RUN_2 | XS_CODE_RUN_4 => {
+                XS_CODE_RUN | XS_CODE_RUN_1 | XS_CODE_RUN_2 | XS_CODE_RUN_4 | XS_CODE_RUN_TAIL
+                | XS_CODE_RUN_TAIL_1 | XS_CODE_RUN_TAIL_2 | XS_CODE_RUN_TAIL_4 => {
                     let argc = match op {
-                        XS_CODE_RUN => self.pop_run_count(),
-                        XS_CODE_RUN_1 => code[pc + 1] as usize,
-                        XS_CODE_RUN_2 => u16::from_le_bytes([code[pc + 1], code[pc + 2]]) as usize,
+                        XS_CODE_RUN | XS_CODE_RUN_TAIL => self.pop_run_count(),
+                        XS_CODE_RUN_1 | XS_CODE_RUN_TAIL_1 => code[pc + 1] as usize,
+                        XS_CODE_RUN_2 | XS_CODE_RUN_TAIL_2 => {
+                            u16::from_le_bytes([code[pc + 1], code[pc + 2]]) as usize
+                        }
                         _ => u32::from_le_bytes([
                             code[pc + 1],
                             code[pc + 2],
@@ -6779,19 +7270,39 @@ impl Interp {
                     pc += size as usize;
                 }
                 XS_CODE_SUBTRACT => {
-                    dispatch_result!(self.binary_arith(code, ArithOp::Sub), pc, self, return_depth);
+                    dispatch_result!(
+                        self.binary_arith(code, ArithOp::Sub),
+                        pc,
+                        self,
+                        return_depth
+                    );
                     pc += size as usize;
                 }
                 XS_CODE_MULTIPLY => {
-                    dispatch_result!(self.binary_arith(code, ArithOp::Mul), pc, self, return_depth);
+                    dispatch_result!(
+                        self.binary_arith(code, ArithOp::Mul),
+                        pc,
+                        self,
+                        return_depth
+                    );
                     pc += size as usize;
                 }
                 XS_CODE_DIVIDE => {
-                    dispatch_result!(self.binary_arith(code, ArithOp::Div), pc, self, return_depth);
+                    dispatch_result!(
+                        self.binary_arith(code, ArithOp::Div),
+                        pc,
+                        self,
+                        return_depth
+                    );
                     pc += size as usize;
                 }
                 XS_CODE_MODULO => {
-                    dispatch_result!(self.binary_arith(code, ArithOp::Mod), pc, self, return_depth);
+                    dispatch_result!(
+                        self.binary_arith(code, ArithOp::Mod),
+                        pc,
+                        self,
+                        return_depth
+                    );
                     pc += size as usize;
                 }
 
@@ -6835,7 +7346,12 @@ impl Interp {
                     pc += size as usize;
                 }
                 XS_CODE_LESS_EQUAL => {
-                    dispatch_result!(self.relational(code, RelOp::LessEqual), pc, self, return_depth);
+                    dispatch_result!(
+                        self.relational(code, RelOp::LessEqual),
+                        pc,
+                        self,
+                        return_depth
+                    );
                     pc += size as usize;
                 }
                 XS_CODE_MORE => {
@@ -6843,7 +7359,12 @@ impl Interp {
                     pc += size as usize;
                 }
                 XS_CODE_MORE_EQUAL => {
-                    dispatch_result!(self.relational(code, RelOp::MoreEqual), pc, self, return_depth);
+                    dispatch_result!(
+                        self.relational(code, RelOp::MoreEqual),
+                        pc,
+                        self,
+                        return_depth
+                    );
                     pc += size as usize;
                 }
                 XS_CODE_STRICT_EQUAL => {
@@ -6925,6 +7446,172 @@ impl Interp {
                     self.push(Slot::of(Kind::Reference, Payload::Reference(g)));
                     pc += size as usize;
                 }
+                // Derived-constructor `this` access is guarded by its
+                // uninitialized binding until `super()` completes.
+                XS_CODE_GET_THIS => {
+                    if self.this_val.kind == Kind::Uninitialized {
+                        let error = self.build_error("ReferenceError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
+                    self.push(self.this_val);
+                    pc += size as usize;
+                }
+                // Prepare a computed super reference. XS carries the actual
+                // receiver and the home prototype together in an ephemeral
+                // `XS_SUPER_KIND` stack slot; ironhorse uses an EnvReference
+                // slot with `value = receiver` and `next = base prototype` for
+                // the same transient geometry.
+                XS_CODE_SUPER_AT | XS_CODE_SUPER_AT_2 => {
+                    let receiver_depth = if op == XS_CODE_SUPER_AT_2 { 3 } else { 2 };
+                    let receiver_pos = match self.stack.len().checked_sub(receiver_depth) {
+                        Some(pos) => pos,
+                        None => return Halt::Unsupported("super_at:stack"),
+                    };
+                    let key_pos = receiver_pos + 1;
+                    let receiver = self.stack[receiver_pos];
+                    let receiver_ref = match receiver.value {
+                        Payload::Reference(object) if receiver.kind == Kind::Reference => object,
+                        _ => return Halt::Unsupported("super_at:primitive-receiver"),
+                    };
+                    let home = self
+                        .functions
+                        .get(&self.cur_func)
+                        .map(|info| info.home)
+                        .unwrap_or(crate::value::SlotIndex::NULL);
+                    if home.is_null() {
+                        return Halt::Unsupported("super_at:no-home");
+                    }
+                    let base = self.instance_prototype(home);
+                    let key = match self.resolve_at_key(self.stack[key_pos]) {
+                        Some(key) => key,
+                        None => return Halt::Unsupported("super_at:key"),
+                    };
+                    let mut super_ref =
+                        Slot::of(Kind::EnvReference, Payload::Reference(receiver_ref));
+                    super_ref.next = base;
+                    self.stack[receiver_pos] = super_ref;
+                    self.stack[key_pos] = key;
+                    pc += size as usize;
+                }
+                XS_CODE_SET_THIS => {
+                    if self.this_val.kind != Kind::Uninitialized {
+                        let error = self.build_error("ReferenceError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
+                    self.this_val = self.stack.last().copied().unwrap_or_else(Slot::undefined);
+                    pc += size as usize;
+                }
+                // A fixed-name `super.k` starts lookup at
+                // [[HomeObject]].[[Prototype]] while retaining the actual
+                // receiver for getter/setter `this`.
+                XS_CODE_GET_SUPER => {
+                    let id = id!(1);
+                    let receiver = self.pop();
+                    let home = self
+                        .functions
+                        .get(&self.cur_func)
+                        .map(|info| info.home)
+                        .unwrap_or(crate::value::SlotIndex::NULL);
+                    if home.is_null() {
+                        return Halt::Unsupported("get_super:no-home");
+                    }
+                    let base = self.instance_prototype(home);
+                    let value = dispatch_result!(
+                        self.ordinary_get(code, base, id, receiver),
+                        pc,
+                        self,
+                        return_depth
+                    );
+                    self.push(value);
+                    pc += ilen;
+                }
+                XS_CODE_GET_SUPER_AT => {
+                    let key = self.pop();
+                    let super_ref = self.pop();
+                    let receiver_ref = match super_ref.value {
+                        Payload::Reference(receiver) if super_ref.kind == Kind::EnvReference => {
+                            receiver
+                        }
+                        _ => return Halt::Unsupported("get_super_at:reference"),
+                    };
+                    let id = match key.value {
+                        Payload::At(id, index) if id == crate::value::XS_NO_ID => {
+                            self.intern_key(&index.to_string())
+                        }
+                        Payload::At(id, _) => id,
+                        _ => return Halt::Unsupported("get_super_at:key"),
+                    };
+                    let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
+                    let value = dispatch_result!(
+                        self.ordinary_get(code, super_ref.next, id, receiver),
+                        pc,
+                        self,
+                        return_depth
+                    );
+                    self.push(value);
+                    pc += size as usize;
+                }
+                XS_CODE_SET_SUPER => {
+                    let id = id!(1);
+                    let value = self.pop();
+                    let receiver = self.pop();
+                    let home = self
+                        .functions
+                        .get(&self.cur_func)
+                        .map(|info| info.home)
+                        .unwrap_or(crate::value::SlotIndex::NULL);
+                    if home.is_null() {
+                        return Halt::Unsupported("set_super:no-home");
+                    }
+                    let base = self.instance_prototype(home);
+                    let accepted = dispatch_result!(
+                        self.ordinary_set(code, base, id, value, receiver),
+                        pc,
+                        self,
+                        return_depth
+                    );
+                    if !accepted {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
+                    self.push(value);
+                    pc += ilen;
+                }
+                XS_CODE_SET_SUPER_AT => {
+                    let value = self.pop();
+                    let key = self.pop();
+                    let super_ref = self.pop();
+                    let receiver_ref = match super_ref.value {
+                        Payload::Reference(receiver) if super_ref.kind == Kind::EnvReference => {
+                            receiver
+                        }
+                        _ => return Halt::Unsupported("set_super_at:reference"),
+                    };
+                    let id = match key.value {
+                        Payload::At(id, index) if id == crate::value::XS_NO_ID => {
+                            self.intern_key(&index.to_string())
+                        }
+                        Payload::At(id, _) => id,
+                        _ => return Halt::Unsupported("set_super_at:key"),
+                    };
+                    let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
+                    let accepted = dispatch_result!(
+                        self.ordinary_set(code, super_ref.next, id, value, receiver),
+                        pc,
+                        self,
+                        return_depth
+                    );
+                    if !accepted {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
+                    self.push(value);
+                    pc += size as usize;
+                }
                 // `this` (XS_CODE_THIS, xsRun.c:1334): push the frame's
                 // `this` (`*mxFrameThis`). Bound to the realm global for a
                 // top-level script frame (set at program entry) and for a
@@ -6945,8 +7632,8 @@ impl Interp {
                 // XS's handler only allocs a stack slot and advances, so the
                 // generic `tick_code` above is the whole cost.
                 XS_CODE_TARGET => {
-                    if self.cur_target && !self.cur_func.is_null() {
-                        let f = self.cur_func;
+                    if self.cur_target && !self.target_func.is_null() {
+                        let f = self.target_func;
                         self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
                     } else {
                         self.push(Slot::undefined());
@@ -7450,11 +8137,7 @@ impl Interp {
                         // native method driving a callback via `run_callback`).
                         // Construct/`this` return still applies; leave the
                         // result on the value stack for the caller to read.
-                        let ret = if self.cur_target && self.result.kind != Kind::Reference {
-                            self.this_val
-                        } else {
-                            self.result
-                        };
+                        let ret = dispatch_result!(self.end_completion(op), pc, self, return_depth);
                         if return_depth != 0 {
                             // A callback frame: pop the activation and push its
                             // result, exactly as a normal `END` does, so
@@ -7469,11 +8152,7 @@ impl Interp {
                     // Construct return (XS's `END` with `mxFrameHasTarget`):
                     // a constructor's completion is its `this` instance unless
                     // the body explicitly returned an object.
-                    let ret = if self.cur_target && self.result.kind != Kind::Reference {
-                        self.this_val
-                    } else {
-                        self.result
-                    };
+                    let ret = dispatch_result!(self.end_completion(op), pc, self, return_depth);
                     let resume = self.leave_call();
                     self.push(ret);
                     pc = resume;
@@ -7560,6 +8239,7 @@ impl Interp {
                         this_val: self.this_val,
                         cur_func: self.cur_func,
                         cur_target: self.cur_target,
+                        target_func: self.target_func,
                         strict: self.strict,
                         result: self.result,
                         stack_slice,
@@ -7645,6 +8325,7 @@ impl Interp {
                         this_val: self.this_val,
                         cur_func: self.cur_func,
                         cur_target: self.cur_target,
+                        target_func: self.target_func,
                         strict: self.strict,
                         result: self.result,
                         stack_slice,
@@ -7887,6 +8568,7 @@ impl Interp {
             this_val: self.this_val,
             cur_func: self.cur_func,
             cur_target: self.cur_target,
+            target_func: self.target_func,
             strict: self.strict,
             result: self.result,
             stack_slice: Vec::new(),
@@ -7960,6 +8642,7 @@ impl Interp {
             this_val: self.this_val,
             cur_func: self.cur_func,
             cur_target: self.cur_target,
+            target_func: self.target_func,
             strict: self.strict,
             result: self.result,
             stack_slice: Vec::new(),
@@ -8082,6 +8765,7 @@ impl Interp {
             this_val: self.this_val,
             cur_func: self.cur_func,
             cur_target: self.cur_target,
+            target_func: self.target_func,
             ret_pc,
         });
         self.result = Slot::undefined();
@@ -8090,6 +8774,11 @@ impl Interp {
         self.this_val = this_val;
         self.cur_func = func;
         self.cur_target = has_target;
+        self.target_func = if has_target {
+            self.pending_new_target.take().unwrap_or(func)
+        } else {
+            crate::value::SlotIndex::NULL
+        };
         Ok(body_start)
     }
 
@@ -8167,9 +8856,7 @@ impl Interp {
             // dispatcher has already resumed the caller and run it onward;
             // its eventual Return must propagate instead of being mistaken
             // for the callback's own result (whose frame was abandoned).
-            Halt::Return if self.callback_return_depth != Some(return_depth) => {
-                Err(Halt::Return)
-            }
+            Halt::Return if self.callback_return_depth != Some(return_depth) => Err(Halt::Return),
             Halt::Return => Ok(self.pop()),
             other => Err(other),
         }
@@ -8277,6 +8964,7 @@ impl Interp {
             this_val: self.this_val,
             cur_func: self.cur_func,
             cur_target: self.cur_target,
+            target_func: self.target_func,
             ret_pc: 0,
         });
         let stack_base = self.stack.len();
@@ -8287,6 +8975,7 @@ impl Interp {
         self.this_val = saved.this_val;
         self.cur_func = saved.cur_func;
         self.cur_target = saved.cur_target;
+        self.target_func = saved.target_func;
         self.strict = saved.strict;
         self.result = saved.result;
         self.stack.extend(saved.stack_slice);
@@ -8416,6 +9105,7 @@ impl Interp {
             this_val: self.this_val,
             cur_func: self.cur_func,
             cur_target: self.cur_target,
+            target_func: self.target_func,
             ret_pc: 0,
         });
         let stack_base = self.stack.len();
@@ -8426,6 +9116,7 @@ impl Interp {
         self.this_val = saved.this_val;
         self.cur_func = saved.cur_func;
         self.cur_target = saved.cur_target;
+        self.target_func = saved.target_func;
         self.strict = saved.strict;
         self.result = saved.result;
         self.stack.extend(saved.stack_slice);
@@ -14376,9 +15067,7 @@ impl Interp {
                     }
                 };
                 if !self.is_ordinary_object(object) {
-                    return Err(Halt::Unsupported(
-                        "Reflect.preventExtensions:exotic-object",
-                    ));
+                    return Err(Halt::Unsupported("Reflect.preventExtensions:exotic-object"));
                 }
                 self.slots.get_mut(object).flag |= XS_DONT_PATCH_FLAG;
                 Ok(Slot::boolean(true))
@@ -17010,6 +17699,37 @@ impl Interp {
         }
     }
 
+    /// Apply the constructor-specific completion rules associated with the
+    /// body's terminating opcode. In particular a derived constructor may
+    /// return an object directly, but otherwise must have initialized `this`
+    /// with `super()` and may not return a different primitive.
+    fn end_completion(&mut self, op: Opcode) -> Result<Slot, Halt> {
+        if !self.cur_target {
+            return Ok(self.result);
+        }
+        match op {
+            Opcode::XS_CODE_END_DERIVED => {
+                if self.result.kind == Kind::Reference {
+                    Ok(self.result)
+                } else if self.result.kind == Kind::Undefined {
+                    if self.this_val.kind == Kind::Uninitialized {
+                        let error = self.build_error("ReferenceError", 0, 0);
+                        self.raise_js(error)
+                            .and_then(|target| Err(Halt::Resume(target)))
+                    } else {
+                        Ok(self.this_val)
+                    }
+                } else {
+                    let error = self.build_error("TypeError", 0, 0);
+                    self.raise_js(error)
+                        .and_then(|target| Err(Halt::Resume(target)))
+                }
+            }
+            _ if self.result.kind != Kind::Reference => Ok(self.this_val),
+            _ => Ok(self.result),
+        }
+    }
+
     /// Leave a user-function call (`XS_CODE_END`): restore the caller's
     /// saved activation and return the pc to resume the caller at. The
     /// callee's result has already been captured by the caller of this
@@ -17033,6 +17753,7 @@ impl Interp {
         self.this_val = caller.this_val;
         self.cur_func = caller.cur_func;
         self.cur_target = caller.cur_target;
+        self.target_func = caller.target_func;
         caller.ret_pc
     }
 
@@ -17267,7 +17988,7 @@ impl Interp {
         // so `(new F()) instanceof F` holds. Reading the prototype is a
         // property get (unmetered), already folded into the measured cost.
         let proto = self
-            .prototype_of(self.cur_func)
+            .prototype_of(self.target_func)
             .unwrap_or(self.object_proto);
         let inst = self.slots.alloc(Slot::instance(proto));
         self.this_val = Slot::of(Kind::Reference, Payload::Reference(inst));
@@ -18130,9 +18851,7 @@ impl Interp {
     /// ECMAScript SameValue, including NaN equality and distinct signed zeros.
     fn same_value(&self, left: Slot, right: Slot) -> bool {
         match (numeric_of(&left), numeric_of(&right)) {
-            (Some(a), Some(b)) => {
-                (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits()
-            }
+            (Some(a), Some(b)) => (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits(),
             _ => self.strict_equal(&left, &right),
         }
     }
@@ -19694,6 +20413,8 @@ fn count_new_locals(code: &[u8], start: usize, len: usize) -> usize {
             // carry past their id (the dispatch loop advances 5, not the
             // `instruction_len` id-opcode 3).
             Opcode::XS_CODE_NEW_PROPERTY | Opcode::XS_CODE_NEW_PROPERTY_AT => 5,
+            Opcode::XS_CODE_NEW_PRIVATE_1 => 4,
+            Opcode::XS_CODE_NEW_PRIVATE_2 => 5,
             _ => crate::opcode::instruction_len(code, pc).unwrap_or(1),
         };
         if step == 0 {

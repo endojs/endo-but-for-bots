@@ -44,7 +44,6 @@ pub const DEFAULT_ENDOR_SKIP_FEATURES: &[&str] = &[
     // xst `gxFeatures` analogues — surfaces ironhorse does not implement.
     "Temporal",
     "ShadowRealm",
-    "decorators",
     "Atomics",
     "SharedArrayBuffer",
     "tail-call-optimization",

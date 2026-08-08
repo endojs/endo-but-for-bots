@@ -1201,10 +1201,8 @@ mod tests {
         // `host_aliases.js` reaches the computed-`at` property surface. The
         // `to_instance` (ToObject) surface `polyfills.js` and the boot prefix
         // used to stop at LANDED (js-04 functions/constructors/base-classes),
-        // so both now advance past it to the next real engine gap — the `class`
-        // opcode (base-class definition), the following ledgered gap. They stay
-        // honest, self-named `Halt::Unsupported` aborts (never divergences, per
-        // assertion (1)); when `class` lands, this assertion advances again.
+        // then at the `class` opcode. Class definition now lands too, so the
+        // remaining two probes reach the same computed-`at` surface.
         assert_eq!(
             gaps.get("boot:no-globalThis-global-object-binding")
                 .copied(),
@@ -1218,16 +1216,14 @@ mod tests {
             "the `to_instance` (ToObject) surface landed (js-04); no committed bundle should \
              still stop at that gap, but got {gaps:?}"
         );
-        let expected_gaps: std::collections::BTreeMap<String, usize> = [
-            ("boot:unsupported:at".to_string(), 1usize),
-            ("boot:unsupported:class".to_string(), 2usize),
-        ]
-        .into_iter()
-        .collect();
+        let expected_gaps: std::collections::BTreeMap<String, usize> =
+            [("boot:unsupported:at".to_string(), 2usize)]
+                .into_iter()
+                .collect();
         assert_eq!(
             gaps, expected_gaps,
-            "expected the committed boot bundles to stop at the advanced gaps \
-             (2× class, 1× at); got {gaps:?} (if a gap closed, advance the ledger)"
+            "expected the committed boot bundles to stop at the advanced gap \
+             (2× at); got {gaps:?} (if a gap closed, advance the ledger)"
         );
     }
 
