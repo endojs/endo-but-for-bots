@@ -5,6 +5,11 @@ The oracle-locked transliteration of XS to Rust described in
 An independent Cargo workspace (excluded from the repo-root workspace)
 so it builds in-repo from the first commit (resolved question 9).
 
+The bounded full-test262 automation is documented in
+[`ironhorse-262/scripts/README.md`](ironhorse-262/scripts/README.md). It uses
+the package-local oracle build; this is distinct from the repository package
+test runner's xsnap acquisition path described below.
+
 ## Crates
 
 | Crate | `unsafe` | Purpose |

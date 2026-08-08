@@ -30,7 +30,7 @@
 //! crate free of a serde dependency) and read back through `yaml-rust2` (JSON is
 //! a subset of YAML, so the frontmatter parser's dependency doubles as the
 //! reader) — see [`read_batch`] / [`read_provenance`].
-
+//!
 use crate::xst::{CaseResult, Verdict};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -140,30 +140,40 @@ pub fn classify(outcome: Outcome, reason: &str) -> Category {
                 Category::Infrastructure
             } else if reason.starts_with("ses-mode:")
                 || reason == "onlyStrict:strict-mode-unimplemented"
+                || matches!(
+                    reason,
+                    "feature:lockdown" | "feature:Compartment" | "feature:ses-xs-parity"
+                )
             {
                 // An SES lockdown/compartment mode ironhorse cannot yet run, and
                 // a strict-only case whose sole mode is the not-yet-implemented
                 // strict mode, are genuine ENGINE gaps — the actionable backlog
-                // — not declared/structural skips (round-2 must-fix #5). They
+                // — not declared/structural skips. They
                 // flip to covered the day the guest surface / strict compiler
                 // lands, exactly like an `unsupported-opcode:*` run-skip.
                 Category::Unsupported
-            } else {
+            } else if reason.starts_with("feature:") || reason.starts_with("structural:") {
                 // Everything else pre-skipped is a declared/structural skip (a
                 // `feature:` on the skip list, a `module`/`async`/`can-block`
                 // shape).
                 Category::Skipped
+            } else {
+                Category::Infrastructure
             }
         }
         Outcome::RunSkip => {
             // Harness/oracle/infrastructure non-results — not an Ironhorse gap.
-            const INFRA: &[&str] = &[
+            const INFRASTRUCTURE_REASONS: &[&str] = &[
                 "oracle-machine-error",
                 "negative-oracle-unexpected",
                 "oracle-shim-unsafe",
                 "oracle-gate-off",
+                "quarantine:",
             ];
-            if INFRA.iter().any(|prefix| reason.starts_with(prefix)) {
+            if INFRASTRUCTURE_REASONS
+                .iter()
+                .any(|prefix| reason.starts_with(prefix))
+            {
                 Category::Infrastructure
             } else if reason.starts_with("unsupported-opcode:")
                 || reason == "parse-or-decode"
@@ -205,8 +215,8 @@ pub struct CaseRecord {
 
 impl CaseRecord {
     /// Build a record from a runner [`CaseResult`] and the case's path/features.
-    pub fn from_result(path: &str, features: Vec<String>, r: &CaseResult) -> CaseRecord {
-        let (outcome, reason) = match &r.verdict {
+    pub fn from_result(path: &str, features: Vec<String>, result: &CaseResult) -> CaseRecord {
+        let (outcome, reason) = match &result.verdict {
             Verdict::Covered => (Outcome::Covered, String::new()),
             Verdict::PreSkip(s) => (Outcome::PreSkip, s.clone()),
             Verdict::RunSkip(s) => (Outcome::RunSkip, s.clone()),
@@ -217,8 +227,8 @@ impl CaseRecord {
             outcome,
             reason,
             features,
-            strict_skipped: r.strict_skipped,
-            computron_gap: r.computron_gap,
+            strict_skipped: result.strict_skipped,
+            computron_gap: result.computron_gap,
         }
     }
 
@@ -251,8 +261,7 @@ pub struct Provenance {
     pub host: String,
     /// The runner name (`ironhorse-xst`).
     pub runner: String,
-    // --- Typed, load-bearing provenance the HTML renders from directly ------
-    // (round-2 must-fix #4: authority claims must not be substring matches on
+    // Typed provenance the HTML renders from directly. Authority claims must not be substring matches on
     // operator-controlled prose). These carry the report's scope and mode as
     // structured values so a crafted `config` string can never publish a false
     // whole-corpus / oracle-locked claim.
@@ -268,16 +277,20 @@ pub struct Provenance {
     /// The run identity every batch is stamped with — the fingerprint of the
     /// result-affecting inputs (corpus SHA, engine SHA, oracle mode, SES mode,
     /// batch cap, scope). Aggregation binds the report to this and rejects any
-    /// batch stamped with a different identity (round-2 must-fix #1).
+    /// batch stamped with a different identity.
     pub run_id: String,
 }
 
 impl Provenance {
     /// True when the typed scope field marks a whole-corpus sweep. Reading the
-    /// structured field — never a substring of the human `config` — is the
-    /// round-2 must-fix #4 fix.
+    /// structured field, never a substring of the human `config`.
     pub fn is_whole_corpus(&self) -> bool {
         self.scope == "whole-corpus"
+            && self.test262_sha.len() == 40
+            && self
+                .test262_sha
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
     }
 
     /// True when the XS oracle gated the run.
@@ -400,7 +413,7 @@ impl RunReport {
         v
     }
 
-    /// Skip/unsupported reasons → (count, up to `sample` example case paths),
+    /// Skip/unsupported reasons mapped to (count, up to `sample` example case paths),
     /// most-frequent first. Turns the honest split into actionable gap jobs.
     pub fn reasons(&self, want: Category, sample: usize) -> Vec<(String, usize, Vec<String>)> {
         let mut counts: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
@@ -465,16 +478,16 @@ impl RunReport {
         s.push_str("  \"summary\": {\n");
         s.push_str(&format!("    \"total\": {},\n", self.total()));
         s.push_str("    \"by_outcome\": {\n");
-        let bo: Vec<_> = by_outcome.iter().collect();
-        for (i, (k, n)) in bo.iter().enumerate() {
-            let comma = if i + 1 < bo.len() { "," } else { "" };
+        let outcome_rows: Vec<_> = by_outcome.iter().collect();
+        for (i, (k, n)) in outcome_rows.iter().enumerate() {
+            let comma = if i + 1 < outcome_rows.len() { "," } else { "" };
             s.push_str(&format!("      {}: {}{}\n", json_str(k), n, comma));
         }
         s.push_str("    },\n");
         s.push_str("    \"by_category\": {\n");
-        let cats = Category::all();
-        for (i, cat) in cats.iter().enumerate() {
-            let comma = if i + 1 < cats.len() { "," } else { "" };
+        let categories = Category::all();
+        for (i, cat) in categories.iter().enumerate() {
+            let comma = if i + 1 < categories.len() { "," } else { "" };
             s.push_str(&format!(
                 "      {}: {}{}\n",
                 json_str(cat.as_str()),
@@ -523,8 +536,8 @@ impl RunReport {
     /// A batch file's JSON stamped with the run identity `run_id`. A whole-tree
     /// sweep stamps every batch with the fingerprint of its result-affecting
     /// inputs so aggregation can bind the report to exactly one run and reject a
-    /// batch left over from a different corpus/engine/oracle/scope (round-2
-    /// must-fix #1). An empty `run_id` is omitted (the legacy shape).
+    /// batch left over from a different corpus/engine/oracle/scope. An empty
+    /// `run_id` is omitted (the legacy shape).
     pub fn batch_json_with_id(run_id: &str, cases: &[CaseRecord]) -> String {
         let mut cases = cases.to_vec();
         cases.sort_by(|a, b| a.path.cmp(&b.path));
@@ -573,7 +586,7 @@ fn path_prefix(path: &str, depth: usize) -> String {
 }
 
 /// JSON-quote a string, escaping the control set JSON requires.
-fn json_str(s: &str) -> String {
+pub fn json_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for c in s.chars() {
@@ -591,10 +604,8 @@ fn json_str(s: &str) -> String {
     out
 }
 
-// ---------------------------------------------------------------------------
 // Reading back (aggregation): JSON is a subset of YAML, so yaml-rust2 (already
 // a dependency for frontmatter) reads our own emitted batch/provenance files.
-// ---------------------------------------------------------------------------
 
 fn yaml_str(node: &Yaml) -> String {
     node.as_str().unwrap_or_default().to_string()
@@ -632,7 +643,7 @@ pub fn read_batch(path: &Path) -> Vec<CaseRecord> {
 }
 
 /// Read and validate a batch file. Validation requires the batch schema, a
-/// `cases` array, and a valid record for every entry; an empty array is valid.
+/// non-empty `cases` array, and a valid record for every entry.
 pub fn read_batch_checked(path: &Path) -> Result<Vec<CaseRecord>, String> {
     read_batch_full(path).map(|(_run_id, cases)| cases)
 }
@@ -660,6 +671,9 @@ pub fn read_batch_full(path: &Path) -> Result<(String, Vec<CaseRecord>), String>
         .iter()
         .map(|node| case_from_yaml(node).ok_or_else(|| "invalid case record".to_string()))
         .collect::<Result<Vec<_>, _>>()?;
+    if cases.is_empty() {
+        return Err("empty cases array".to_string());
+    }
     Ok((run_id, cases))
 }
 
@@ -679,54 +693,20 @@ pub fn read_cases_from_str(text: &str) -> Vec<CaseRecord> {
         .unwrap_or_default()
 }
 
-/// Read a provenance JSON file (the flat object the orchestrator writes). A
-/// missing/unreadable file yields a default provenance so aggregation still
-/// produces a report (with empty provenance fields), never a panic.
-pub fn read_provenance(path: &Path) -> Provenance {
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(_) => return Provenance::default(),
-    };
-    let docs = match YamlLoader::load_from_str(&text) {
-        Ok(d) => d,
-        Err(_) => return Provenance::default(),
-    };
-    let doc = match docs.first() {
-        Some(d) => d,
-        None => return Provenance::default(),
-    };
+/// Read the flat provenance JSON object the orchestrator writes.
+pub fn read_provenance(path: &Path) -> Result<Provenance, String> {
+    let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let docs = YamlLoader::load_from_str(&text).map_err(|error| error.to_string())?;
+    let doc = docs.first().ok_or_else(|| "empty document".to_string())?;
     let config = yaml_str(&doc["config"]);
-    Provenance {
+    Ok(Provenance {
         test262_sha: yaml_str(&doc["test262_sha"]),
         test262_ref: yaml_str(&doc["test262_ref"]),
         endo_sha: yaml_str(&doc["endo_sha"]),
         oracle: yaml_str(&doc["oracle"]),
         command: yaml_str(&doc["command"]),
-        // Prefer the typed fields; fall back to deriving from the human `config`
-        // only for a legacy provenance file that predates them, so an old report
-        // still renders. A current sweep always writes the typed fields.
-        scope: {
-            let s = yaml_str(&doc["scope"]);
-            if !s.is_empty() {
-                s
-            } else if config.contains("subtree=<all>") {
-                "whole-corpus".to_string()
-            } else {
-                String::new()
-            }
-        },
-        oracle_mode: {
-            let m = yaml_str(&doc["oracle_mode"]);
-            if !m.is_empty() {
-                m
-            } else if config.contains("oracle=on") {
-                "on".to_string()
-            } else if config.contains("oracle=off") {
-                "off".to_string()
-            } else {
-                String::new()
-            }
-        },
+        scope: yaml_str(&doc["scope"]),
+        oracle_mode: yaml_str(&doc["oracle_mode"]),
         ses_mode: yaml_str(&doc["ses_mode"]),
         completion: yaml_str(&doc["completion"]),
         run_id: yaml_str(&doc["run_id"]),
@@ -742,22 +722,27 @@ pub fn read_provenance(path: &Path) -> Provenance {
                 r
             }
         },
-    }
+    })
 }
 
-/// The batch-file basename for a subtree path: `/` → `__`, plus a `.json`
-/// suffix. The inverse of what the orchestrator names each per-batch file, and
-/// the key resume plans on.
-pub fn batch_filename(subtree: &str) -> String {
-    format!("{}.json", subtree.replace('/', "__"))
+/// Encode a batch name injectively as a portable result-file basename.
+pub fn batch_filename(batch: &str) -> String {
+    let mut encoded = String::new();
+    for byte in batch.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    format!("{encoded}.json")
 }
 
 /// Maximum cases retained by one oracle process during a full sweep. This is
 /// the SINGLE SOURCE OF TRUTH for the partition cap: discovery
 /// ([`discover_batches`]) chunks on it, and the orchestrator reads it back
 /// through [`batch_case_limit`] rather than repeating the literal, so the shell
-/// `--batch-size` can never drift from the Rust chunk boundary (round-2
-/// must-fix #2).
+/// `--batch-size` can never drift from the Rust chunk boundary.
 pub const BATCH_CASE_LIMIT: usize = 100;
 
 /// The partition cap as a value the orchestrator can print and pass to
@@ -766,11 +751,21 @@ pub fn batch_case_limit() -> usize {
     BATCH_CASE_LIMIT
 }
 
-// ---------------------------------------------------------------------------
-// Aggregation
-// ---------------------------------------------------------------------------
+/// Count the cases represented by one discovered batch name.
+pub fn batch_case_count(test_root: &Path, batch: &str) -> Result<usize, String> {
+    let (directory, index_text) = batch
+        .rsplit_once("@@")
+        .ok_or_else(|| format!("invalid batch name {batch:?}"))?;
+    let index = index_text
+        .parse::<usize>()
+        .map_err(|error| format!("invalid batch index {index_text:?}: {error}"))?;
+    crate::test262::collect_js_batch(&test_root.join(directory), index, BATCH_CASE_LIMIT)
+        .map(|files| files.len())
+}
 
-/// Merge every batch file in `results_dir` (any `*.json` except a reserved
+// Aggregation
+
+/// Merge every batch file in `results_directory` (any `*.json` except a reserved
 /// aggregate name) with the provenance, into one deterministic [`RunReport`].
 /// Duplicate paths (a batch re-run after an interruption) collapse to the
 /// last-read record; the final case list is sorted by path.
@@ -778,8 +773,8 @@ pub fn batch_case_limit() -> usize {
 /// This is the directory-glob aggregation, retained for the legacy/unbound
 /// path. A whole-tree sweep binds the report to an exact plan + run identity
 /// with [`aggregate_plan`], which does not trust a directory glob.
-pub fn aggregate(results_dir: &Path, provenance: Provenance) -> RunReport {
-    let mut batch_files: Vec<PathBuf> = std::fs::read_dir(results_dir)
+pub fn aggregate(results_directory: &Path, provenance: Provenance) -> RunReport {
+    let mut batch_files: Vec<PathBuf> = std::fs::read_dir(results_directory)
         .map(|rd| {
             rd.flatten()
                 .map(|e| e.path())
@@ -808,9 +803,8 @@ pub fn aggregate(results_dir: &Path, provenance: Provenance) -> RunReport {
 }
 
 /// Aggregate exactly the batches named in `plan` (the discovery list, batch
-/// names `directory@@NNNN`) from `results_dir`, binding the report to the run
-/// identity in `provenance.run_id`. This is the trustworthy aggregation
-/// (round-2 must-fix #1): it never globs the directory, so a case from a
+/// names `directory@@NNNN`) from `results_directory`, binding the report to the run
+/// identity in `provenance.run_id`. It never globs the directory, so a case from a
 /// different corpus/engine/oracle/scope, or a stale batch file deleted from the
 /// plan, cannot leak into the report; and a batch stamped with a different
 /// `run_id` is rejected rather than merged under this run's provenance.
@@ -820,12 +814,15 @@ pub fn aggregate(results_dir: &Path, provenance: Provenance) -> RunReport {
 /// completeness gate — decides whether that is fatal). Duplicate paths across
 /// batches collapse to the last-read record; the case list is sorted by path.
 pub fn aggregate_plan(
-    results_dir: &Path,
+    results_directory: &Path,
     plan: &[String],
     provenance: Provenance,
 ) -> (RunReport, Vec<String>) {
     let expected = provenance.run_id.clone();
     let mut warnings = Vec::new();
+    if expected.is_empty() {
+        warnings.push("provenance carries no run_id; identity binding is unavailable".to_string());
+    }
     // Read in sorted batch-name order so duplicate-path resolution (last wins)
     // and the merged case list are deterministic regardless of plan order.
     let mut names: Vec<&String> = plan.iter().collect();
@@ -834,11 +831,11 @@ pub fn aggregate_plan(
 
     let mut by_path: BTreeMap<String, CaseRecord> = BTreeMap::new();
     for batch in names {
-        // A batch name is `directory@@NNNN`; the file is that name with `/`→`__`.
-        let file = results_dir.join(batch_filename(batch));
+        // A batch name is `directory@@NNNN`; its result filename is encoded.
+        let file = results_directory.join(batch_filename(batch));
         match read_batch_full(&file) {
             Ok((run_id, cases)) => {
-                if !expected.is_empty() && run_id != expected {
+                if expected.is_empty() || run_id != expected {
                     warnings.push(format!(
                         "batch {} has run_id {:?}, expected {:?} — rejected",
                         batch, run_id, expected
@@ -861,9 +858,7 @@ pub fn aggregate_plan(
     )
 }
 
-// ---------------------------------------------------------------------------
 // Discovery + resume planning
-// ---------------------------------------------------------------------------
 
 /// Discover bounded batches under a test262 `test/` root. Direct cases in each
 /// directory are split into chunks of at most [`BATCH_CASE_LIMIT`], named
@@ -878,24 +873,24 @@ pub fn discover_batches(test_root: &Path) -> Vec<String> {
     out
 }
 
-fn discover_into(root: &Path, dir: &Path, out: &mut Vec<String>) {
-    let entries = match std::fs::read_dir(dir) {
+fn discover_into(root: &Path, directory: &Path, out: &mut Vec<String>) {
+    let entries = match std::fs::read_dir(directory) {
         Ok(e) => e,
         Err(_) => return,
     };
     let mut direct_case_count = 0usize;
-    let mut subdirs = Vec::new();
+    let mut subdirectories = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
             if path.file_name().map(|n| n == "staging").unwrap_or(false) {
                 continue;
             }
-            subdirs.push(path);
+            subdirectories.push(path);
         } else if path.is_file() && path.extension().map(|e| e == "js").unwrap_or(false) {
-            // `is_file()` mirrors `collect_js_flat`'s predicate exactly, so
+            // `is_file()` mirrors `collect_js_direct`'s predicate exactly, so
             // discovery's per-directory count and the runner's per-directory
-            // slice agree on what a "case" is (round-2 must-fix #2, second half).
+            // slice agree on what a "case" is.
             let name = path.file_name().unwrap_or_default().to_string_lossy();
             if !name.ends_with("_FIXTURE.js") {
                 direct_case_count += 1;
@@ -903,7 +898,7 @@ fn discover_into(root: &Path, dir: &Path, out: &mut Vec<String>) {
         }
     }
     if direct_case_count > 0 {
-        if let Ok(rel) = dir.strip_prefix(root) {
+        if let Ok(rel) = directory.strip_prefix(root) {
             let relative = rel.to_string_lossy().into_owned();
             if !relative.is_empty() {
                 let chunks = direct_case_count.div_ceil(BATCH_CASE_LIMIT);
@@ -913,18 +908,18 @@ fn discover_into(root: &Path, dir: &Path, out: &mut Vec<String>) {
             }
         }
     }
-    subdirs.sort();
-    for sub in subdirs {
+    subdirectories.sort();
+    for sub in subdirectories {
         discover_into(root, &sub, out);
     }
 }
 
 /// The batches from `all` that have **not** yet been run — those whose result
-/// file is absent or invalid in `results_dir`. This is the resume plan: after
+/// file is absent or invalid in `results_directory`. This is the resume plan: after
 /// an interruption, the completed bounded batch files remain on disk and
 /// are skipped, so a re-run continues where it stopped.
-pub fn pending_batches(results_dir: &Path, all: &[String]) -> Vec<String> {
-    pending_batches_checked(results_dir, all, None)
+pub fn pending_batches(results_directory: &Path, all: &[String]) -> Vec<String> {
+    pending_batches_checked(results_directory, all, None)
 }
 
 /// The resume plan, additionally binding each completed batch to `expected_run_id`
@@ -932,22 +927,19 @@ pub fn pending_batches(results_dir: &Path, all: &[String]) -> Vec<String> {
 /// with `expected_run_id = Some(id)`, a batch stamped with a DIFFERENT identity
 /// is also pending — so a results dir reused after a test262-pin/engine/oracle/
 /// scope change re-runs the affected work rather than silently retaining the old
-/// result (round-2 must-fix #1). A batch carrying no `run_id` (the legacy shape)
-/// is treated as matching, so an unbound sweep is unchanged.
+/// result. With an expected identity, an unstamped batch is pending.
 pub fn pending_batches_checked(
-    results_dir: &Path,
+    results_directory: &Path,
     all: &[String],
     expected_run_id: Option<&str>,
 ) -> Vec<String> {
     all.iter()
         .filter(|b| {
-            let f = results_dir.join(batch_filename(b));
+            let f = results_directory.join(batch_filename(b));
             match read_batch_full(&f) {
                 Err(_) => true,
                 Ok((run_id, _)) => match expected_run_id {
-                    Some(expected) if !expected.is_empty() && !run_id.is_empty() => {
-                        run_id != expected
-                    }
+                    Some(expected) if !expected.is_empty() => run_id != expected,
                     _ => false,
                 },
             }
@@ -956,9 +948,7 @@ pub fn pending_batches_checked(
         .collect()
 }
 
-// ---------------------------------------------------------------------------
 // HTML report
-// ---------------------------------------------------------------------------
 
 /// HTML-escape text for a self-contained static report (no template engine).
 fn escape_html(s: &str) -> String {
@@ -993,6 +983,11 @@ pub fn to_html(report: &RunReport) -> String {
     let provenance = &report.provenance;
     let total = report.total();
     let counts = report.totals_by_category();
+    let strict_skipped = report
+        .cases
+        .iter()
+        .filter(|case| case.strict_skipped)
+        .count();
     let mut s = String::new();
 
     s.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n");
@@ -1005,7 +1000,7 @@ pub fn to_html(report: &RunReport) -> String {
 
     s.push_str("<h1>Ironhorse test262 conformance report</h1>\n");
     // Authority claims are derived from the typed provenance fields, never a
-    // substring of the operator-controlled `config` prose (round-2 must-fix #4).
+    // substring of the operator-controlled `config` prose.
     let whole_corpus = provenance.is_whole_corpus();
     let oracle_locked = provenance.is_oracle_locked();
     let scope = if whole_corpus {
@@ -1019,8 +1014,8 @@ pub fn to_html(report: &RunReport) -> String {
         ", run without the XS oracle gate"
     };
     s.push_str(&format!(
-        "<p class=\"lede\">{} run against the Ironhorse engine{}. {} cases.</p>\n",
-        scope, oracle_description, total
+        "<p class=\"lede\">{} run against the Ironhorse engine{}, excluding staging and module cases; strict-mode executions are not implemented. {} cases, {} required strict-mode executions skipped.</p>\n",
+        scope, oracle_description, total, strict_skipped
     ));
 
     // Provenance.
@@ -1081,7 +1076,7 @@ pub fn to_html(report: &RunReport) -> String {
         "ran end-to-end with the oracle gate disabled"
     };
     s.push_str(&format!(
-        "<p class=\"note\">“Covered” = {}. “Ironhorse failures” are bar-forbidden divergences/over-acceptances. “Unsupported” are genuine language gaps (the actionable backlog). “Infrastructure” are oracle/harness non-results, <strong>not</strong> Ironhorse gaps. Totals sum to {} cases.</p>\n",
+        "<p class=\"note\">&ldquo;Covered&rdquo; = {}. &ldquo;Ironhorse failures&rdquo; are bar-forbidden divergences/over-acceptances. &ldquo;Unsupported&rdquo; are genuine language gaps (the actionable backlog). &ldquo;Infrastructure&rdquo; are oracle/harness non-results, <strong>not</strong> Ironhorse gaps. Totals sum to {} cases.</p>\n",
         covered_definition, total
     ));
     s.push_str("</section>\n");
@@ -1113,9 +1108,9 @@ pub fn to_html(report: &RunReport) -> String {
     let features = report.by_feature();
     let mut feature_rows: Vec<(String, CategoryCounts)> = features.into_iter().collect();
     feature_rows.sort_by(|a, b| {
-        let ga = a.1.unsupported + a.1.ironhorse_failure;
-        let gb = b.1.unsupported + b.1.ironhorse_failure;
-        gb.cmp(&ga).then(a.0.cmp(&b.0))
+        let a_gaps = a.1.unsupported + a.1.ironhorse_failure;
+        let b_gaps = b.1.unsupported + b.1.ironhorse_failure;
+        b_gaps.cmp(&a_gaps).then(a.0.cmp(&b.0))
     });
     let shown = feature_rows.len().min(60);
     s.push_str(&format!(
@@ -1388,7 +1383,7 @@ mod tests {
 "#,
         )
         .unwrap();
-        let provenance = read_provenance(&path);
+        let provenance = read_provenance(&path).unwrap();
         assert_eq!(provenance.runner, "ironhorse-xst");
         assert_eq!(provenance.test262_sha, "abc123");
         assert_eq!(provenance.test262_ref, "tc39/test262@abc123");
@@ -1462,7 +1457,7 @@ mod tests {
     fn html_carries_provenance_totals_and_named_gaps() {
         let report = RunReport {
             provenance: Provenance {
-                test262_sha: "be13516fb6".into(),
+                test262_sha: "be13516fb6be13516fb6be13516fb6be13516fb6".into(),
                 test262_ref: "tc39/test262@be13516".into(),
                 endo_sha: "deadbeef".into(),
                 oracle: "moddable 8.3.1".into(),
@@ -1553,7 +1548,7 @@ mod tests {
     fn batch_filename_and_prefix() {
         assert_eq!(
             batch_filename("built-ins/Proxy/apply"),
-            "built-ins__Proxy__apply.json"
+            "built-ins%2FProxy%2Fapply.json"
         );
         assert_eq!(
             path_prefix("built-ins/Proxy/apply/a.js", 2),
@@ -1561,6 +1556,7 @@ mod tests {
         );
         assert_eq!(path_prefix("language/expr/x.js", 2), "language/expr");
         assert_eq!(path_prefix("a.js", 2), "a.js");
+        assert_ne!(batch_filename("a/b@@0000"), batch_filename("a__b@@0000"));
     }
 
     #[test]
@@ -1579,7 +1575,7 @@ mod tests {
         // Proxy done; Array a zero-length partial; language/x absent.
         std::fs::write(
             dir.join(batch_filename("built-ins/Proxy")),
-            RunReport::batch_json(&[]),
+            RunReport::batch_json(&[rec("built-ins/Proxy/a.js", Outcome::Covered, "", &[])]),
         )
         .unwrap();
         std::fs::write(dir.join(batch_filename("built-ins/Array")), "").unwrap();
@@ -1601,11 +1597,30 @@ mod tests {
     }
 
     #[test]
+    fn empty_batch_and_malformed_provenance_fail_closed() {
+        let directory =
+            std::env::temp_dir().join(format!("ih262-failclosed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        let batch = directory.join("batch.json");
+        std::fs::write(
+            &batch,
+            r#"{"schema":"ironhorse-test262-batch/1","run_id":"run-A","cases":[]}"#,
+        )
+        .unwrap();
+        assert!(read_batch_full(&batch).is_err());
+        let provenance = directory.join("provenance.json");
+        std::fs::write(&provenance, "{not-json").unwrap();
+        assert!(read_provenance(&provenance).is_err());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
     fn classify_unknown_run_skip_is_infrastructure_not_ironhorse() {
         // An unrecognized RunSkip reason must NOT be charged to Ironhorse: the
         // category split exists to separate an engine gap from an oracle/harness
         // non-result, so a new/unknown family stays Infrastructure until it is
-        // explicitly classified (round-1 should-fix `assessor`, pinned here).
+        // explicitly classified.
         assert_eq!(
             classify(Outcome::RunSkip, "some-brand-new-reason-family:x"),
             Category::Infrastructure
@@ -1620,7 +1635,7 @@ mod tests {
 
     #[test]
     fn classify_ses_and_strict_preskips_are_engine_gaps() {
-        // Round-2 must-fix #5: an SES-mode / strict-only pre-skip is a genuine
+        // An SES-mode / strict-only pre-skip is a genuine
         // engine gap (the actionable backlog), not a declared/structural skip.
         assert_eq!(
             classify(Outcome::PreSkip, "ses-mode:lockdown-unimplemented"),
@@ -1643,20 +1658,24 @@ mod tests {
             classify(Outcome::PreSkip, "structural:module"),
             Category::Skipped
         );
+        assert_eq!(
+            classify(Outcome::PreSkip, "feature:lockdown"),
+            Category::Unsupported
+        );
+        assert_eq!(classify(Outcome::PreSkip, ""), Category::Infrastructure);
     }
 
     #[test]
     fn batch_cap_is_single_sourced() {
         // The orchestrator reads the partition cap through this accessor rather
         // than repeating the literal, so `--batch-size` and discovery cannot
-        // drift (round-2 must-fix #2).
+        // drift.
         assert_eq!(batch_case_limit(), BATCH_CASE_LIMIT);
     }
 
     #[test]
     fn discovery_chunks_exactly_at_the_cap_boundary() {
-        // The actual partition boundary, not a test-local restatement (round-2
-        // must-fix #2/#7): a directory holding cap+1 direct cases discovers
+        // The actual partition boundary, not a test-local restatement: a directory holding cap+1 direct cases discovers
         // exactly two chunks; cap cases discover one. This catches a discovery
         // cap that drifts from `BATCH_CASE_LIMIT`.
         let dir = std::env::temp_dir().join(format!("ih262-cap-{}", std::process::id()));
@@ -1686,18 +1705,41 @@ mod tests {
     }
 
     #[test]
+    fn batch_case_count_uses_the_runner_selection_boundary() {
+        let directory =
+            std::env::temp_dir().join(format!("ih262-batch-count-{}", std::process::id()));
+        let cases = directory.join("built-ins").join("Boundary");
+        std::fs::create_dir_all(&cases).unwrap();
+        for index in 0..(BATCH_CASE_LIMIT + 1) {
+            std::fs::write(cases.join(format!("case-{index:05}.js")), "1;").unwrap();
+        }
+        assert_eq!(
+            batch_case_count(&directory, "built-ins/Boundary@@0000").unwrap(),
+            BATCH_CASE_LIMIT
+        );
+        assert_eq!(
+            batch_case_count(&directory, "built-ins/Boundary@@0001").unwrap(),
+            1
+        );
+        assert!(batch_case_count(&directory, "built-ins/Boundary@@9999").is_err());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
     fn pending_is_run_identity_aware() {
         // A results dir reused after a result-affecting input changed must
-        // re-run the affected batch, not retain the stale result (round-2
-        // must-fix #1). A batch stamped with a DIFFERENT run_id is pending; the
-        // same run_id is skipped; a legacy (unstamped) batch is skipped.
+        // re-run the affected batch, not retain the stale result. A batch stamped with a DIFFERENT run_id is pending; the
+        // same run_id is skipped; a legacy (unstamped) batch is pending.
         let dir = std::env::temp_dir().join(format!("ih262-idpend-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let all = vec!["built-ins/Proxy".to_string(), "language/x".to_string()];
         std::fs::write(
             dir.join(batch_filename("built-ins/Proxy")),
-            RunReport::batch_json_with_id("run-A", &[rec("built-ins/Proxy/a.js", Outcome::Covered, "", &[])]),
+            RunReport::batch_json_with_id(
+                "run-A",
+                &[rec("built-ins/Proxy/a.js", Outcome::Covered, "", &[])],
+            ),
         )
         .unwrap();
         std::fs::write(
@@ -1705,14 +1747,12 @@ mod tests {
             RunReport::batch_json(&[rec("language/x/b.js", Outcome::Covered, "", &[])]),
         )
         .unwrap();
-        // Same identity as the stamped batch: only the legacy one is not-mismatched
-        // (both are treated as present).
+        // Same identity as the stamped batch: the legacy batch remains pending.
         let same = pending_batches_checked(&dir, &all, Some("run-A"));
-        assert!(same.is_empty(), "matching + legacy batches are complete: {:?}", same);
-        // A different identity: the stamped batch is now pending; the legacy
-        // (unstamped) batch is still treated as matching.
+        assert_eq!(same, vec!["language/x".to_string()]);
+        // A different identity makes both the stamped and legacy batches pending.
         let changed = pending_batches_checked(&dir, &all, Some("run-B"));
-        assert_eq!(changed, vec!["built-ins/Proxy".to_string()]);
+        assert_eq!(changed, all);
         // No expected identity: identity is ignored (the unbound path).
         assert!(pending_batches_checked(&dir, &all, None).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
@@ -1720,7 +1760,7 @@ mod tests {
 
     #[test]
     fn aggregate_plan_binds_identity_and_ignores_foreign_files() {
-        // The trustworthy aggregation (round-2 must-fix #1): aggregate exactly
+        // The trustworthy aggregation: aggregate exactly
         // the plan, collapse a duplicate path (last-read wins) counted once,
         // reject a batch stamped with a different identity, and never read a
         // stale file the plan does not name.
@@ -1733,19 +1773,30 @@ mod tests {
             dir.join(batch_filename("a@@0000")),
             RunReport::batch_json_with_id(
                 "run-A",
-                &[rec("built-ins/Dup/x.js", Outcome::RunSkip, "unsupported-opcode:X", &["Proxy"])],
+                &[rec(
+                    "built-ins/Dup/x.js",
+                    Outcome::RunSkip,
+                    "unsupported-opcode:X",
+                    &["Proxy"],
+                )],
             ),
         )
         .unwrap();
         std::fs::write(
             dir.join(batch_filename("b@@0000")),
-            RunReport::batch_json_with_id("run-A", &[rec("built-ins/Dup/x.js", Outcome::Covered, "", &[])]),
+            RunReport::batch_json_with_id(
+                "run-A",
+                &[rec("built-ins/Dup/x.js", Outcome::Covered, "", &[])],
+            ),
         )
         .unwrap();
         // A STALE/FOREIGN file not named by the plan: must be ignored entirely.
         std::fs::write(
             dir.join(batch_filename("foreign@@0000")),
-            RunReport::batch_json_with_id("run-A", &[rec("language/foreign.js", Outcome::Fail, "x", &[])]),
+            RunReport::batch_json_with_id(
+                "run-A",
+                &[rec("language/foreign.js", Outcome::Fail, "x", &[])],
+            ),
         )
         .unwrap();
         let provenance = Provenance {
@@ -1765,24 +1816,36 @@ mod tests {
         // A batch stamped with a mismatched identity is rejected (warned), not merged.
         std::fs::write(
             dir.join(batch_filename("c@@0000")),
-            RunReport::batch_json_with_id("run-OTHER", &[rec("language/c.js", Outcome::Covered, "", &[])]),
+            RunReport::batch_json_with_id(
+                "run-OTHER",
+                &[rec("language/c.js", Outcome::Covered, "", &[])],
+            ),
         )
         .unwrap();
         let provenance = Provenance {
             run_id: "run-A".into(),
             ..Default::default()
         };
-        let plan = vec!["a@@0000".to_string(), "c@@0000".to_string(), "missing@@0000".to_string()];
+        let plan = vec![
+            "a@@0000".to_string(),
+            "c@@0000".to_string(),
+            "missing@@0000".to_string(),
+        ];
         let (report, warnings) = aggregate_plan(&dir, &plan, provenance);
         assert_eq!(report.total(), 1, "only the matching batch merged");
-        assert_eq!(warnings.len(), 2, "one identity-mismatch + one missing: {:?}", warnings);
+        assert_eq!(
+            warnings.len(),
+            2,
+            "one identity-mismatch + one missing: {:?}",
+            warnings
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn read_provenance_reads_the_typed_fields() {
         // The whole wire between full-run.sh's heredoc and the report, pinned on
-        // the exact keys the shell writes (round-2 must-fix #4): the typed scope/
+        // the exact keys the shell writes: the typed scope/
         // oracle/ses/completion/run_id fields read back as authored, and the HTML
         // authority claims derive from them.
         let dir = std::env::temp_dir().join(format!("ih262-typedprov-{}", std::process::id()));
@@ -1793,8 +1856,8 @@ mod tests {
             &path,
             r#"{
   "runner": "ironhorse-xst",
-  "test262_sha": "unknown",
-  "test262_ref": "unverified",
+  "test262_sha": "0123456789abcdef0123456789abcdef01234567",
+  "test262_ref": "tc39/test262@0123456789ab",
   "endo_sha": "def456",
   "oracle": "moddable submodule @ 789abc",
   "command": "full-run.sh --subtree <all> --jobs 4 --oracle on",
@@ -1811,7 +1874,7 @@ mod tests {
 "#,
         )
         .unwrap();
-        let p = read_provenance(&path);
+        let p = read_provenance(&path).unwrap();
         assert_eq!(p.scope, "whole-corpus");
         assert_eq!(p.oracle_mode, "on");
         assert_eq!(p.ses_mode, "none");
@@ -1853,7 +1916,7 @@ mod tests {
         // — the union of every batch's direct files equals the whole recursive
         // walk. This is the guard against silently hiding an unsupported
         // feature behind a filtered subtree.
-        use crate::test262::{collect_js, collect_js_flat, locate_test262};
+        use crate::test262::{collect_js, collect_js_direct, locate_test262};
         use std::collections::BTreeSet;
         let (root, _harness) = match locate_test262() {
             Some(p) => p,
@@ -1885,7 +1948,7 @@ mod tests {
         for batch in &batches {
             let (directory, index_text) = batch.rsplit_once("@@").unwrap();
             let index: usize = index_text.parse().unwrap();
-            let files = collect_js_flat(&root.join(directory));
+            let files = collect_js_direct(&root.join(directory));
             let chunk: Vec<PathBuf> = files
                 .into_iter()
                 .skip(index * BATCH_CASE_LIMIT)

@@ -79,11 +79,7 @@ pub fn assemble(harness_dir: &Path, src: &str, fm: &Frontmatter) -> Result<Strin
     if fm.flags.iter().any(|f| f == "module") {
         return Err("structural:module".into());
     }
-    if fm
-        .flags
-        .iter()
-        .any(|f| f == "async" || f == "CanBlockIsFalse")
-    {
+    if fm.flags.iter().any(|f| f == "async" || f == "CanBlockIsFalse") {
         return Err("structural:async-or-can-block".into());
     }
     if fm.flags.iter().any(|f| f == "raw") {
@@ -253,23 +249,24 @@ pub fn run_files(harness_dir: &Path, root: &Path, files: &[PathBuf]) -> Report {
 /// Collect `.js` test files under `dir` (recursively), excluding
 /// `_FIXTURE.js` helpers and the `staging/` area. Deterministic order
 /// (sorted) so a run is reproducible.
-pub fn collect_js(dir: &Path) -> Vec<PathBuf> {
+pub fn collect_js(directory: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    collect_js_into(dir, &mut out);
+    collect_js_into(directory, &mut out);
     out.sort();
     out
 }
 
-/// Collect only the `.js` case files **directly** in `dir` (non-recursive),
+/// Collect only the `.js` case files **directly** in `directory` (non-recursive),
 /// excluding `_FIXTURE.js` helpers. The whole-tree sweep chunks this sorted
-/// list at a fixed case-count cap (design § the OOM-bounded run). Paired with
+/// list at a fixed case-count cap (see `scripts/README.md`, "Why it is shaped
+/// this way"). Paired with
 /// [`crate::report::discover_batches`], it partitions `test/**` with no overlap,
 /// so no case is run twice and each batch process frees the XS oracle's retained
 /// RSS on exit.
 /// Deterministic (sorted) order.
-pub fn collect_js_flat(dir: &Path) -> Vec<PathBuf> {
+pub fn collect_js_direct(directory: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let entries = match std::fs::read_dir(dir) {
+    let entries = match std::fs::read_dir(directory) {
         Ok(e) => e,
         Err(_) => return out,
     };
@@ -286,8 +283,33 @@ pub fn collect_js_flat(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-fn collect_js_into(dir: &Path, out: &mut Vec<PathBuf>) {
-    let entries = match std::fs::read_dir(dir) {
+/// Select one case-count-capped batch from a directory's sorted direct cases.
+pub fn collect_js_batch(
+    directory: &Path,
+    index: usize,
+    size: usize,
+) -> Result<Vec<PathBuf>, String> {
+    if size == 0 {
+        return Err("batch size must be positive".to_string());
+    }
+    let start = index
+        .checked_mul(size)
+        .ok_or_else(|| "batch index overflows usize".to_string())?;
+    let files: Vec<PathBuf> = collect_js_direct(directory)
+        .into_iter()
+        .skip(start)
+        .take(size)
+        .collect();
+    if files.is_empty() {
+        return Err(format!(
+            "batch index {index} is outside the directory's case set"
+        ));
+    }
+    Ok(files)
+}
+
+fn collect_js_into(directory: &Path, out: &mut Vec<PathBuf>) {
+    let entries = match std::fs::read_dir(directory) {
         Ok(e) => e,
         Err(_) => return,
     };
@@ -401,10 +423,7 @@ mod tests {
         for s in sections {
             files.extend(collect_js(&root.join(s)));
         }
-        assert!(
-            !files.is_empty(),
-            "the UTF-16 String sections must have tests"
-        );
+        assert!(!files.is_empty(), "the UTF-16 String sections must have tests");
         let rep = run_files(&harness, &root, &files);
         eprintln!(
             "test262 String.prototype (UTF-16 sections): total={} covered={} divergent={}",
@@ -470,10 +489,7 @@ mod tests {
         for s in sections {
             files.extend(collect_js(&root.join(s)));
         }
-        assert!(
-            !files.is_empty(),
-            "covered-grammar language sections must have tests"
-        );
+        assert!(!files.is_empty(), "covered-grammar language sections must have tests");
         let rep = run_files(&harness, &root, &files);
 
         eprintln!(

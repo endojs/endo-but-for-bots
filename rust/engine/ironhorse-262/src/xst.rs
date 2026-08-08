@@ -300,10 +300,7 @@ fn looks_like_overflow(err: &str) -> bool {
 }
 
 fn ironhorse_completed(a: Agreement) -> bool {
-    matches!(
-        a,
-        Agreement::BothComplete | Agreement::IronhorseOnlyComplete
-    )
+    matches!(a, Agreement::BothComplete | Agreement::IronhorseOnlyComplete)
 }
 
 fn oracle_completed(a: Agreement) -> bool {
@@ -442,7 +439,9 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
         }
         Agreement::BothAbort => match &run.ironhorse_halt {
             Halt::Throw(_) => {
-                if run.error_agrees {
+                if constructor_name(&run.oracle_error) == "Test262Error" {
+                    Verdict::RunSkip("shared-test262-failure".into())
+                } else if run.error_agrees {
                     if meter_exact_gate && run.oracle_computrons != run.ironhorse_computrons {
                         meter_violation(run)
                     } else {
@@ -636,16 +635,15 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
     // The determinism gate (unconditional half of the doctrine) overrides a
     // covered/skip verdict with a failure if ironhorse's computrons are not
     // reproducible across runs of this same build.
-    let verdict = if cfg.repeat > 1
-        && determinism_violation(&source, cfg.repeat, eval.ironhorse_computrons)
-    {
-        Verdict::Fail(format!(
-            "nondeterministic computrons across {} runs",
-            cfg.repeat
-        ))
-    } else {
-        eval.outcome
-    };
+    let verdict =
+        if cfg.repeat > 1 && determinism_violation(&source, cfg.repeat, eval.ironhorse_computrons) {
+            Verdict::Fail(format!(
+                "nondeterministic computrons across {} runs",
+                cfg.repeat
+            ))
+        } else {
+            eval.outcome
+        };
 
     CaseResult {
         verdict,
@@ -693,8 +691,8 @@ fn run_async_case(
     };
 
     let base = verdict_for(cfg, &async_run.run, fm, meter_exact_gate);
-    let computron_gap = matches!(base, Verdict::Covered)
-        && async_run.run.oracle_computrons != async_run.run.ironhorse_computrons;
+    let computron_gap =
+        matches!(base, Verdict::Covered) && async_run.run.oracle_computrons != async_run.run.ironhorse_computrons;
 
     // A `Covered` differential means ironhorse reproduced the oracle's full
     // execution (script + microtask drain) — only then is the async completion
@@ -788,22 +786,23 @@ impl XstReport {
 
     /// Fold one case's result in, attributed to `path`, retaining a per-case
     /// record with an empty feature list for legacy aggregate callers/tests.
-    pub fn record(&mut self, path: &str, r: CaseResult) {
-        self.record_case(path, Vec::new(), r);
+    pub fn record(&mut self, path: &str, result: CaseResult) {
+        self.record_case(path, Vec::new(), result);
     }
 
     /// Fold one case's result in and retain its full [`CaseRecord`] (with the
     /// declared `features:`) for the per-case JSON a whole-tree sweep emits.
-    pub fn record_case(&mut self, path: &str, features: Vec<String>, r: CaseResult) {
-        self.cases.push(CaseRecord::from_result(path, features, &r));
+    pub fn record_case(&mut self, path: &str, features: Vec<String>, result: CaseResult) {
+        self.cases
+            .push(CaseRecord::from_result(path, features, &result));
         self.total += 1;
-        if r.strict_skipped {
+        if result.strict_skipped {
             self.strict_skipped += 1;
         }
-        if r.computron_gap {
+        if result.computron_gap {
             self.computron_advisories += 1;
         }
-        match r.verdict {
+        match result.verdict {
             Verdict::Covered => {
                 self.covered += 1;
                 self.sloppy_run += 1;
@@ -1181,6 +1180,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn positive_shared_test262_error_is_not_covered() {
+        let mut run = synthetic_abort(
+            Halt::Throw("Test262Error: assertion failed".into()),
+            "Test262Error: assertion failed",
+        );
+        run.oracle_error = "Test262Error: assertion failed".into();
+        run.error_agrees = true;
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("shared-test262-failure".into())
+        );
+    }
+
     /// An `AsyncDualRun` wrapping a trivially-agreeing dual-run with a chosen
     /// completion signal and rejection latch — for the pure `refine_async`
     /// trichotomy without an oracle machine.
@@ -1235,26 +1248,17 @@ mod tests {
 
         // A synchronous success signals `AsyncTestComplete`.
         let s = done("$DONE();");
-        assert_eq!(
-            s.ironhorse_signal.as_deref(),
-            Some("Test262:AsyncTestComplete")
-        );
+        assert_eq!(s.ironhorse_signal.as_deref(), Some("Test262:AsyncTestComplete"));
         assert!(!s.ironhorse_unhandled_rejection);
 
         // An awaited primitive then `$DONE()` — the resume runs at the drain.
         let a = done("(async function(){ await 1; $DONE(); })();");
         assert_eq!(a.run.agreement, Agreement::BothComplete);
-        assert_eq!(
-            a.ironhorse_signal.as_deref(),
-            Some("Test262:AsyncTestComplete")
-        );
+        assert_eq!(a.ironhorse_signal.as_deref(), Some("Test262:AsyncTestComplete"));
 
         // A resolved-promise reaction feeding `$DONE` — drained the same way.
         let p = done("Promise.resolve(1).then(function(){ $DONE(); }, $DONE);");
-        assert_eq!(
-            p.ironhorse_signal.as_deref(),
-            Some("Test262:AsyncTestComplete")
-        );
+        assert_eq!(p.ironhorse_signal.as_deref(), Some("Test262:AsyncTestComplete"));
 
         // Never signals: the did-not-run latch reads `None`.
         assert_eq!(done("1 + 1;").ironhorse_signal, None);
