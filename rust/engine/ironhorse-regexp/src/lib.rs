@@ -209,6 +209,8 @@ mod tests {
         ] {
             assert!(!accepts(pattern, ""), "invalid inline modifiers: {pattern}");
         }
+        assert!(!accepts("(?i:(?<>a))", ""), "invalid nested group name");
+        assert!(!accepts("(?i:a", ""), "unterminated modifier group");
     }
 
     #[test]
