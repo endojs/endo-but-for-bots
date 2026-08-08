@@ -1,0 +1,105 @@
+# The full-test262 Ironhorse conformance sweep (maintainer request,
+# kriskowal/garden#51). This is an EXPLICITLY INVOKABLE workflow only — it runs
+# the complete authoritative TC39 test262 corpus against the Ironhorse engine,
+# which is a MULTI-HOUR sweep, so it must never ride the ordinary PR/push
+# matrix (CI stays in ci.yml). Dispatch it from the Actions tab; a bounded
+# subtree (e.g. built-ins/Proxy) is the default so a manual run is quick, and
+# `full` runs the whole tree.
+name: Ironhorse full test262 sweep
+
+on:
+  workflow_dispatch:
+    inputs:
+      subtree:
+        description: 'Subtree to sweep (e.g. built-ins/Proxy), or "full" for the whole tree'
+        required: false
+        default: 'built-ins/Proxy'
+      jobs:
+        description: 'Batch parallelism (bounds peak memory: concurrent oracle processes)'
+        required: false
+        default: '4'
+      oracle:
+        description: 'Gate on the XS oracle (on/off)'
+        required: false
+        default: 'on'
+
+# Minimal permissions: read the checkout, nothing else. The report is uploaded
+# as a build artifact; publishing it to gh-pages is a separate, deliberate step.
+permissions:
+  contents: read
+
+# Defense in depth against npm lifecycle scripts (repo convention, see
+# designs/ci-no-npm-lifecycle.md). This workflow does not run yarn, but the
+# posture is kept uniform across workflows.
+env:
+  YARN_ENABLE_SCRIPTS: 'false'
+  npm_config_ignore_scripts: 'true'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.inputs.subtree }}
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: sweep
+    runs-on: ubuntu-latest
+    # A whole-tree run is long; a bounded subtree finishes quickly. Cap so a
+    # runaway can't burn a full day of runner time.
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          # The XS oracle links the moddable C submodule.
+          submodules: true
+
+      - name: Cache Cargo + target
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/engine/target
+          key: ${{ runner.os }}-ih262-${{ hashFiles('rust/engine/Cargo.lock', 'rust/engine/ironhorse-262/**', 'c/moddable/**') }}
+          restore-keys: |
+            ${{ runner.os }}-ih262-
+
+      - name: Run the sweep
+        env:
+          SUBTREE: ${{ github.event.inputs.subtree }}
+          JOBS: ${{ github.event.inputs.jobs }}
+          ORACLE: ${{ github.event.inputs.oracle }}
+        run: |
+          set -euo pipefail
+          args=(--out "$GITHUB_WORKSPACE/test262-report" --jobs "${JOBS:-4}" --oracle "${ORACLE:-on}")
+          if [ -n "${SUBTREE:-}" ] && [ "${SUBTREE}" != "full" ]; then
+            args+=(--subtree "${SUBTREE}")
+          fi
+          bash rust/engine/ironhorse-262/scripts/full-run.sh "${args[@]}"
+
+      - name: Summarize
+        if: always()
+        run: |
+          set -euo pipefail
+          report="$GITHUB_WORKSPACE/test262-report/report.json"
+          if [ -f "$report" ]; then
+            echo '## Ironhorse test262 sweep' >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            sed -n '/"summary"/,/^  },$/p' "$report" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'No report.json produced.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ironhorse-test262-report
+          path: |
+            test262-report/report.json
+            test262-report/report.html
+            test262-report/provenance.json
+          if-no-files-found: warn

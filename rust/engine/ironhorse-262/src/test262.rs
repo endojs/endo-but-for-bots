@@ -256,6 +256,32 @@ pub fn collect_js(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// Collect only the `.js` case files **directly** in `dir` (non-recursive),
+/// excluding `_FIXTURE.js` helpers. This is the per-directory batch unit the
+/// whole-tree sweep runs one process at a time (design § the OOM-bounded run):
+/// paired with [`crate::report::discover_batches`], which lists every directory
+/// holding direct cases, it partitions `test/**` with no overlap, so no case is
+/// run twice and each batch process frees the XS oracle's retained RSS on exit.
+/// Deterministic (sorted) order.
+pub fn collect_js_flat(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return out,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() && path.extension().map(|e| e == "js").unwrap_or(false) {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            if !name.ends_with("_FIXTURE.js") {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 fn collect_js_into(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,

@@ -40,7 +40,8 @@
 //! process to bound the working set; each subprocess frees everything on
 //! exit.
 
-use ironhorse_262::test262::{collect_js, locate_test262};
+use ironhorse_262::report::RunReport;
+use ironhorse_262::test262::{collect_js, collect_js_flat, locate_test262};
 use ironhorse_262::xst::{run_files, Config, SesMode};
 use std::path::PathBuf;
 
@@ -48,6 +49,8 @@ fn main() {
     let mut cfg = Config::default();
     let mut test262_dir: Option<PathBuf> = None;
     let mut report_path: Option<PathBuf> = None;
+    let mut json_path: Option<PathBuf> = None;
+    let mut flat = false;
     let mut subtrees: Vec<String> = Vec::new();
 
     let mut args = std::env::args().skip(1);
@@ -107,6 +110,12 @@ fn main() {
                     args.next().unwrap_or_else(|| fail("-o needs a path")),
                 ));
             }
+            "--json" => {
+                json_path = Some(PathBuf::from(
+                    args.next().unwrap_or_else(|| fail("--json needs a path")),
+                ));
+            }
+            "--flat" => flat = true,
             "-h" | "--help" => {
                 print!("{}", HELP);
                 return;
@@ -149,14 +158,22 @@ fn main() {
         let found = if direct.is_file() {
             vec![direct]
         } else if direct.is_dir() {
-            collect_js(&direct)
+            if flat {
+                collect_js_flat(&direct)
+            } else {
+                collect_js(&direct)
+            }
         } else {
             let base = if sub.starts_with("language") || sub.starts_with("built-ins") {
                 root.join(sub)
             } else {
                 root.join("language").join(sub)
             };
-            collect_js(&base)
+            if flat {
+                collect_js_flat(&base)
+            } else {
+                collect_js(&base)
+            }
         };
         if found.is_empty() {
             eprintln!("warning: no test files under {}", sub);
@@ -223,6 +240,17 @@ fn main() {
         }
     }
 
+    // `--json`: the per-case batch file the whole-tree sweep aggregates. Written
+    // BEFORE the bar-check exit below so a batch that contains a failure still
+    // records its cases (the orchestrator gates on the aggregate, not per-batch
+    // exit status), and so an interrupted sweep can resume from what completed.
+    if let Some(path) = &json_path {
+        match std::fs::write(path, RunReport::to_batch_json(&rep.cases)) {
+            Ok(()) => eprintln!("wrote {} case records to {}", rep.cases.len(), path.display()),
+            Err(e) => fail(&format!("could not write json to {}: {}", path.display(), e)),
+        }
+    }
+
     if rep.met_bar() {
         println!(
             "BAR MET: {} covered, 0 failed (of {} total; {} skipped by named reason)",
@@ -264,6 +292,11 @@ OPTIONS:
                              not yet landed, so each is a named whole-case skip
     --test262-dir DIR        use DIR as the test262 root (has harness/, test/)
     -o, --report FILE        write the xst-shaped YAML report to FILE
+    --json FILE              write the per-case JSON batch file (for the
+                             whole-tree sweep's aggregator) to FILE
+    --flat                   for a directory positional, run only its DIRECT
+                             .js cases (non-recursive) — the per-directory
+                             batch unit the resumable full sweep drives
     -h, --help               print this help
 
 THIRD-HOST (ses-xs-parity axis, alongside `xst -l` and node+SES prelude):

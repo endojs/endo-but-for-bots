@@ -32,6 +32,7 @@ use ironhorse_vm::{run_program_with_symbols, Halt, RunOutcome};
 
 pub mod compile_diff;
 pub mod frontmatter;
+pub mod report;
 pub mod test262;
 pub mod xst;
 

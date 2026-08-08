@@ -23,6 +23,7 @@
 //! parse-phase negatives activate.
 
 use crate::frontmatter::{self, Frontmatter, Negative};
+use crate::report::CaseRecord;
 use crate::{dual_run, dual_run_async, Agreement, AsyncDualRun, DualRun};
 use ironhorse_vm::Halt;
 use std::collections::{BTreeMap, HashSet};
@@ -767,6 +768,11 @@ pub struct XstReport {
     /// surfaced in the report's `mode:` section so a reader sees which
     /// Hardened-JavaScript axis produced it. [`SesMode::None`] for a plain run.
     pub ses_mode: SesMode,
+    /// Every case's full record — the per-case wire the whole-tree sweep emits
+    /// as JSON (`ironhorse-xst --json`) for [`crate::report`] to aggregate.
+    /// Populated by [`XstReport::record_case`]; empty when a caller uses the
+    /// aggregate-only [`XstReport::record`].
+    pub cases: Vec<CaseRecord>,
 }
 
 impl XstReport {
@@ -776,8 +782,16 @@ impl XstReport {
         self.total > 0 && self.failures.is_empty()
     }
 
-    /// Fold one case's result in, attributed to `path`.
+    /// Fold one case's result in, attributed to `path` (aggregate counters
+    /// only, no per-case record — used by the existing aggregate callers/tests).
     pub fn record(&mut self, path: &str, r: CaseResult) {
+        self.record_case(path, Vec::new(), r);
+    }
+
+    /// Fold one case's result in and retain its full [`CaseRecord`] (with the
+    /// declared `features:`) for the per-case JSON a whole-tree sweep emits.
+    pub fn record_case(&mut self, path: &str, features: Vec<String>, r: CaseResult) {
+        self.cases.push(CaseRecord::from_result(path, features, &r));
         self.total += 1;
         if r.strict_skipped {
             self.strict_skipped += 1;
@@ -892,11 +906,14 @@ pub fn run_files(cfg: &Config, harness_dir: &Path, root: &Path, files: &[PathBuf
                 continue;
             }
         };
+        // Parse the frontmatter once, up front: its `features:` list drives
+        // both the optional `--feature-filter` and the per-case record's
+        // feature breakdown.
+        let fm = frontmatter::parse(&src);
         // `--feature-filter` (the `test262-harness --features-include`
         // semantics): a case that does not carry a required feature is out of
         // scope for this run — not recorded, so it never enters `total`.
         if !cfg.feature_filter.is_empty() {
-            let fm = frontmatter::parse(&src);
             let carries = cfg
                 .feature_filter
                 .iter()
@@ -906,7 +923,7 @@ pub fn run_files(cfg: &Config, harness_dir: &Path, root: &Path, files: &[PathBuf
             }
         }
         let r = run_case(cfg, harness_dir, &src);
-        rep.record(&rel, r);
+        rep.record_case(&rel, fm.features.clone(), r);
     }
     rep
 }
