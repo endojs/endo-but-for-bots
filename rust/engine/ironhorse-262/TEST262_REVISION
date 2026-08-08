@@ -1,5 +1,5 @@
 # The exact authoritative upstream TC39 test262 revision the full Ironhorse
-# conformance sweep pins to (maintainer request, kriskowal/garden#51: "a *full*
+# conformance sweep pins to (maintainer request, https://github.com/kriscendobot/garden/issues/51: "a *full*
 # test262 suite" against "the current, authoritative test262 tests").
 #
 # `scripts/full-run.sh` sources this file and, unless given an existing

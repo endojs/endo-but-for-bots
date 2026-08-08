@@ -4,7 +4,7 @@ The one-command, bounded, resumable sweep that runs the **complete authoritative
 TC39 test262 corpus** against the Ironhorse engine (oracle-locked to XS) and
 emits a stable machine-readable `report.json` plus a self-contained static
   `report.html` (drop-in for kriscendobot gh-pages). Maintainer request:
-[kriskowal/garden#51](https://github.com/kriscendobot/garden/issues/51#issuecomment-5224315524).
+[garden issue 51](https://github.com/kriscendobot/garden/issues/51#issuecomment-5224315524).
 
 ## One command
 

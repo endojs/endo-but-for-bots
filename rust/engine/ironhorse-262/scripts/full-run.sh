@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # full-run.sh — the one-command, bounded, resumable, parallel full-test262
 # sweep of the Ironhorse engine, oracle-locked to XS (maintainer request,
-# kriskowal/garden#51). It runs the complete authoritative TC39 test262 corpus
+# https://github.com/kriscendobot/garden/issues/51). It runs the complete authoritative TC39 test262 corpus
 # against Ironhorse and emits both a stable machine-readable `report.json` and a
 # self-contained static `report.html` (drop-in for kriscendobot gh-pages).
 #

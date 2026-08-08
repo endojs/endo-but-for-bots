@@ -1,5 +1,5 @@
 //! `ironhorse-262-report`: the whole-tree sweep's orchestration + reporting CLI
-//! (maintainer request, kriskowal/garden#51). It is the deterministic,
+//! (maintainer request, https://github.com/kriscendobot/garden/issues/51). It is the deterministic,
 //! oracle-free half of the full run — every subcommand is pure filesystem work,
 //! unit-tested in [`ironhorse_262::report`] — leaving the heavy per-case oracle
 //! execution to `ironhorse-xst`, which the orchestrator (`scripts/full-run.sh`)

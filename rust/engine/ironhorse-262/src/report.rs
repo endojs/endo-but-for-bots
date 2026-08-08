@@ -1,7 +1,7 @@
 //! Full-run reporting for `ironhorse-xst`: per-case records, run provenance,
 //! stable machine-readable JSON, deterministic cross-batch aggregation, and a
 //! self-contained static HTML report (maintainer request,
-//! [kriskowal/garden#51]: "a *full* test262 suite with Ironhorse and produce
+//! [garden issue 51]: "a *full* test262 suite with Ironhorse and produce
 //! an HTML report to be included in kriscendobot gh-pages").
 //!
 //! The runner core ([`crate::xst`]) already classifies each case into the
@@ -31,6 +31,8 @@
 //! a subset of YAML, so the frontmatter parser's dependency doubles as the
 //! reader) — see [`read_batch`] / [`read_provenance`].
 //!
+//! [garden issue 51]: https://github.com/kriscendobot/garden/issues/51
+
 use crate::xst::{CaseResult, Verdict};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -1972,7 +1974,7 @@ mod tests {
 
     #[test]
     fn proxy_is_observed_unimplemented_via_oracle_slice() {
-        // The maintainer's explicit Proxy check (kriskowal/garden#51: "Proxy is
+        // The maintainer's explicit Proxy check (https://github.com/kriscendobot/garden/issues/51: "Proxy is
         // evidently not implemented. Please check."), as a committed,
         // reproducible, real-oracle-backed slice: run a bounded set of OFFICIAL
         // Proxy cases through the full runner and REPORT the observed result
