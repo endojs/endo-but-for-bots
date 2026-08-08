@@ -64,7 +64,7 @@ test('try disconnecting captp', async t => {
   await Promise.all(ps);
 });
 
-test('try aborting captp with reason', async t => {
+test('one-argument onReject observes an abort reason once', async t => {
   const objs = [];
   const rejected = [];
   const { getBootstrap, abort } = makeCapTP(
