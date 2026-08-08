@@ -1,7 +1,7 @@
 // @ts-check
 
 /** @import { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from '@earendil-works/pi-coding-agent' */
-/** @import { EndoProvisionPersistence, EndoProvisionResult, EndoProvisionSpec } from '../src/code-mode-provisioning-types.js' */
+/** @import { EndoConnectionFailureContext, EndoConnectionFailureObserver, EndoProvisionPersistence, EndoProvisionResult, EndoProvisionSpec } from '../src/code-mode-provisioning-types.js' */
 
 import { initTheme } from '@earendil-works/pi-coding-agent';
 import test from '@endo/ses-ava/prepare-endo.js';
@@ -19,6 +19,7 @@ import {
 } from '../code-mode-provisioning.js';
 import { makeEndoCodeModePiExtension } from '../endo-code-mode-pi-extension.js';
 import { makeEndoProvisionGlobals } from '../src/code-mode-provision-globals.js';
+import { makeCodeModeCapTpOptions } from '../src/code-mode-provisioning.js';
 import { samePlainData } from '../src/endo-code-mode-pi-extension.js';
 import {
   renderEvaluateCall,
@@ -63,7 +64,7 @@ const runLauncher = (args, cwd) =>
  * @property {string} [flag]
  * @property {string[]} [activeToolNames]
  * @property {'tui' | 'rpc' | 'json' | 'print'} [mode]
- * @property {(persistence: EndoProvisionPersistence) => Promise<EndoProvisionResult>} [reconstructProvision]
+ * @property {(persistence: EndoProvisionPersistence, options: { onConnectionFailure: EndoConnectionFailureObserver }) => Promise<EndoProvisionResult>} [reconstructProvision]
  * @property {() => Promise<void>} [startDaemon]
  * @property {import('../src/endo-code-mode-pi-extension.js').EndoCodeModePiExtensionOptions['rehydrateCredential']} [rehydrateCredential]
  * @property {import('../src/endo-code-mode-pi-extension.js').EndoCodeModePiExtensionOptions['validatePersistence']} [validatePersistence]
@@ -113,6 +114,8 @@ const makeHarness = options => {
   /** @type {EndoProvisionPersistence[]} */
   const reconstructions = [];
   let cleanupCount = 0;
+  /** @type {EndoConnectionFailureObserver | undefined} */
+  let onConnectionFailure;
 
   const defaultReconstruct = async persistence => {
     reconstructions.push(persistence);
@@ -125,8 +128,12 @@ const makeHarness = options => {
       },
     });
   };
-  const reconstructProvision =
+  const selectedReconstruct =
     options.reconstructProvision ?? defaultReconstruct;
+  const reconstructProvision = async (persistence, connectionOptions) => {
+    onConnectionFailure = connectionOptions.onConnectionFailure;
+    return selectedReconstruct(persistence, connectionOptions);
+  };
 
   const extensionApi = /** @type {ExtensionAPI} */ (
     /** @type {unknown} */ ({
@@ -215,6 +222,16 @@ const makeHarness = options => {
     get currentActiveTools() {
       return currentActiveTools;
     },
+    /** @param {'disconnect' | 'protocol'} [kind] */
+    failConnection(kind = 'disconnect') {
+      if (onConnectionFailure === undefined) {
+        throw Error('connection failure observer is not installed');
+      }
+      onConnectionFailure(
+        Error('raw host detail must not be presented'),
+        harden({ kind }),
+      );
+    },
     get cleanupCount() {
       return cleanupCount;
     },
@@ -302,6 +319,31 @@ test('samePlainData still distinguishes a changed leaf value', t => {
       ? `counter-example: ${JSON.stringify(result.counterexample)}`
       : undefined,
   );
+});
+
+test('code-mode CapTP policy leaves promise rejection presentation to its caller', t => {
+  /** @type {Array<{ error: unknown, context: EndoConnectionFailureContext }>} */
+  const connectionFailures = [];
+  const options = makeCodeModeCapTpOptions((error, context) => {
+    connectionFailures.push({ error, context });
+  });
+  const applicationError = Error('tool owns this error');
+
+  options.onReject(applicationError, {
+    kind: 'promise',
+  });
+  t.deepEqual(connectionFailures, []);
+
+  const disconnectError = Error('connection lost');
+  options.onReject(disconnectError, {
+    kind: 'disconnect',
+  });
+  t.deepEqual(connectionFailures, [
+    {
+      error: disconnectError,
+      context: { kind: 'disconnect' },
+    },
+  ]);
 });
 
 test('load registers only daemon-independent flag and command', async t => {
@@ -797,6 +839,7 @@ test('failed daemon autostart is deterministic and actionable', async t => {
   t.deepEqual(harness.terminations, [1]);
   t.is(harness.diagnostics[0].code, 'ENDO_DAEMON_UNAVAILABLE');
   t.regex(harness.diagnostics[0].action, /endo start/);
+  t.is(harness.diagnostics.length, 1);
 });
 
 test('failed preserved startup leaves standard Pi tools active', async t => {
@@ -830,6 +873,73 @@ test('failed preserved startup leaves standard Pi tools active', async t => {
     'standard harness prompt\n\nEndo code mode is unavailable. Standard Pi tools remain active; resolve the extension startup error before continuing.',
   );
 });
+
+test('startup connection failure keeps its structured diagnostic', async t => {
+  const cwd = await makeWorkspace(t);
+  const harness = makeHarness({
+    cwd,
+    mode: 'json',
+    reconstructProvision: async (persistence, { onConnectionFailure }) => {
+      onConnectionFailure(
+        Error('raw host detail must not be presented'),
+        harden({ kind: 'disconnect' }),
+      );
+      throw Error('connection closed');
+    },
+  });
+
+  await harness.emit('session_start', {
+    type: 'session_start',
+    reason: 'startup',
+  });
+
+  t.is(harness.diagnostics[0].code, 'ENDO_DAEMON_CONNECTION_FAILED');
+  t.regex(harness.diagnostics[0].message, /closed unexpectedly/);
+  t.false(JSON.stringify(harness.diagnostics).includes('raw host detail'));
+});
+
+test('unexpected disconnect fails code mode once and disables evaluate', async t => {
+  const cwd = await makeWorkspace(t);
+  const harness = makeHarness({ cwd });
+
+  await harness.emit('session_start', {
+    type: 'session_start',
+    reason: 'startup',
+  });
+  harness.failConnection('disconnect');
+  harness.failConnection('disconnect');
+
+  t.deepEqual(harness.activeTools.at(-1), []);
+  t.is(harness.cleanupCount, 1);
+  t.is(harness.notifications.length, 1);
+  t.like(harness.notifications[0], { type: 'error' });
+  t.regex(harness.notifications[0].message, /closed unexpectedly/);
+  t.false(harness.notifications[0].message.includes('raw host detail'));
+});
+
+for (const mode of NONINTERACTIVE_MODES) {
+  test(`${mode} mode emits one structured connection diagnostic`, async t => {
+    const cwd = await makeWorkspace(t);
+    const harness = makeHarness({ cwd, mode });
+
+    await harness.emit('session_start', {
+      type: 'session_start',
+      reason: 'startup',
+    });
+    harness.failConnection('protocol');
+    harness.failConnection('protocol');
+
+    t.deepEqual(harness.notifications, []);
+    t.deepEqual(harness.terminations, [1]);
+    t.deepEqual(harness.activeTools.at(-1), []);
+    t.is(harness.diagnostics.length, 1);
+    t.like(harness.diagnostics[0], {
+      type: 'endo_code_mode_error',
+      code: 'ENDO_DAEMON_PROTOCOL_FAILED',
+    });
+    t.false(JSON.stringify(harness.diagnostics).includes('raw host detail'));
+  });
+}
 
 test('a daemon that returns different persistence than requested is rejected and cleaned up', async t => {
   const cwd = await makeWorkspace(t);
@@ -997,6 +1107,43 @@ test('shutdown disposes only the live connection and leaves persistence reusable
     reason: 'resume',
   });
   t.deepEqual(resumed.reconstructions, [retained]);
+});
+
+test('intentional shutdown ignores the connection close observation', async t => {
+  const cwd = await makeWorkspace(t);
+  /** @type {EndoConnectionFailureObserver | undefined} */
+  let observer;
+  const harness = makeHarness({
+    cwd,
+    reconstructProvision: async (persistence, options) => {
+      observer = options.onConnectionFailure;
+      return harden({
+        powers: FAKE_POWERS,
+        globals: harden([]),
+        persistence,
+        cleanup: async () => {
+          observer?.(
+            Error('intentional close'),
+            harden({ kind: 'disconnect' }),
+          );
+        },
+      });
+    },
+  });
+
+  await harness.emit('session_start', {
+    type: 'session_start',
+    reason: 'startup',
+  });
+  await harness.emit('session_shutdown', {
+    type: 'session_shutdown',
+    reason: 'quit',
+  });
+
+  t.deepEqual(harness.notifications, []);
+  t.deepEqual(harness.diagnostics, []);
+  t.deepEqual(harness.terminations, []);
+  t.deepEqual(harness.activeTools.at(-1), []);
 });
 
 test('/endo-code-mode reports state without exposing policy data', async t => {

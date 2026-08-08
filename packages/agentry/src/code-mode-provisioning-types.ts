@@ -62,16 +62,34 @@ export type NormalizeEndoProvisionOptions = {
   cwd: string;
 };
 
-export type ProvisionEndoCodeModeOptions = NormalizeEndoProvisionOptions & {
-  spec?: EndoProvisionSpec;
-  /** Optional daemon socket override, independent of the workspace path. */
-  sockPath?: string;
+/** Narrow host-owned observation of a failed daemon connection. */
+export type EndoConnectionFailureContext = {
+  kind: 'disconnect' | 'protocol';
 };
 
-export type ReconstructEndoCodeModeOptions = {
-  persistence: EndoProvisionPersistence;
+export type EndoConnectionFailureObserver = (
+  error: unknown,
+  context: EndoConnectionFailureContext,
+) => void;
+
+export type EndoCodeModeConnectionOptions = {
   /** Optional daemon socket override, independent of the workspace path. */
   sockPath?: string;
+  /**
+   * Observe connection failures that are not owned by an operation promise.
+   * Application rejections remain exclusively deliverable through their
+   * original promises.
+   */
+  onConnectionFailure?: EndoConnectionFailureObserver;
+};
+
+export type ProvisionEndoCodeModeOptions = NormalizeEndoProvisionOptions &
+  EndoCodeModeConnectionOptions & {
+    spec?: EndoProvisionSpec;
+  };
+
+export type ReconstructEndoCodeModeOptions = EndoCodeModeConnectionOptions & {
+  persistence: EndoProvisionPersistence;
 };
 
 export type EndoProvisionResult = {

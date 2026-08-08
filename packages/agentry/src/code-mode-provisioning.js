@@ -2,7 +2,7 @@
 /// <reference types="ses"/>
 
 /** @import { EndoHost } from '@endo/daemon' */
-/** @import { EndoProvisionPersistence, EndoProvisionResult, ProvisionEndoCodeModeOptions, ReconstructEndoCodeModeOptions } from './code-mode-provisioning-types.js' */
+/** @import { EndoConnectionFailureObserver, EndoProvisionPersistence, EndoProvisionResult, ProvisionEndoCodeModeOptions, ReconstructEndoCodeModeOptions } from './code-mode-provisioning-types.js' */
 
 import { makeCancelKit } from '@endo/cancel';
 import { makeEndoClient } from '@endo/daemon';
@@ -43,11 +43,41 @@ const selectSockPath = sockPath => {
 };
 
 /**
+ * Build the scoped CapTP presentation policy used by code-mode hosts.
+ * Promise-delivered application failures remain owned by their awaiting
+ * caller; only connection failures cross this host-owned observer boundary.
+ *
+ * Exported for focused policy tests, but intentionally omitted from the
+ * package's public provisioning thunk.
+ *
+ * @param {EndoConnectionFailureObserver} onConnectionFailure
+ */
+export const makeCodeModeCapTpOptions = onConnectionFailure =>
+  harden({
+    /**
+     * @param {unknown} error
+     * @param {{ kind: 'promise' | 'disconnect' | 'protocol' }} context
+     */
+    onReject: (error, context) => {
+      if (context.kind === 'promise') {
+        return;
+      }
+      onConnectionFailure(error, harden({ kind: context.kind }));
+    },
+  });
+harden(makeCodeModeCapTpOptions);
+
+/**
  * @param {EndoProvisionPersistence} persistence
  * @param {string | undefined} sockPath
+ * @param {EndoConnectionFailureObserver | undefined} onConnectionFailure
  * @returns {Promise<EndoProvisionResult>}
  */
-const connectAndRealize = async (persistence, sockPath) => {
+const connectAndRealize = async (
+  persistence,
+  sockPath,
+  onConnectionFailure,
+) => {
   await null;
   const { cancelled, cancel } = makeCancelKit();
   /** @type {Promise<void> | undefined} */
@@ -65,10 +95,16 @@ const connectAndRealize = async (persistence, sockPath) => {
   try {
     const harness = persistence.guestHandlePath[1];
     const sessionKey = persistence.guestHandlePath[2];
+    const capTpOptions =
+      onConnectionFailure === undefined
+        ? undefined
+        : makeCodeModeCapTpOptions(onConnectionFailure);
     const client = await makeEndoClient(
       `code-mode-${harness}-${sessionKey.slice('session-'.length, 'session-'.length + 12)}`,
       selectSockPath(sockPath),
       cancelled,
+      undefined,
+      capTpOptions,
     );
     closed = client.closed;
     closed.catch(() => {});
@@ -103,7 +139,11 @@ export const provisionEndoCodeMode = async options => {
     sessionId: options?.sessionId,
     cwd: options?.cwd,
   });
-  return connectAndRealize(persistence, options?.sockPath);
+  return connectAndRealize(
+    persistence,
+    options?.sockPath,
+    options?.onConnectionFailure,
+  );
 };
 harden(provisionEndoCodeMode);
 
@@ -119,6 +159,10 @@ export const reconstructEndoCodeMode = async options => {
   const persistence = await validateEndoProvisionPersistence(
     options?.persistence,
   );
-  return connectAndRealize(persistence, options?.sockPath);
+  return connectAndRealize(
+    persistence,
+    options?.sockPath,
+    options?.onConnectionFailure,
+  );
 };
 harden(reconstructEndoCodeMode);
