@@ -17,19 +17,25 @@
 //! - a **category** ([`Category`]) that separates a genuine Ironhorse execution
 //!   defect / language gap from a harness/oracle/infrastructure non-result — the
 //!   distinction the maintainer asked the report to make explicit;
-//! - **deterministic aggregation** ([`aggregate`]) that merges the per-batch
-//!   JSON a bounded, resumable sweep writes (one batch per process, so the
-//!   known XS-oracle process-RSS retention cannot OOM a whole-tree run) into one
-//!   stable report, sorted by path;
+//! - **deterministic aggregation** — [`aggregate_plan`], which merges *exactly*
+//!   the discovered plan bound to the run identity (the hardened path the
+//!   orchestrator uses; [`aggregate`] is the legacy directory-glob variant kept
+//!   for the unbound case) — of the per-batch JSON a bounded, resumable sweep
+//!   writes (one batch per process, so the known XS-oracle process-RSS
+//!   retention cannot OOM a whole-tree run) into one stable report, sorted by
+//!   path;
 //! - **discovery** ([`discover_batches`]) and **resume planning**
-//!   ([`pending_batches`]) so the orchestrator can partition `test/**` into
-//!   case-count-capped batches and skip the ones already on disk after an
-//!   interruption.
+//!   ([`pending_batches_checked`], the identity-binding variant the orchestrator
+//!   uses; [`pending_batches`] is the unbound legacy shorthand) so the
+//!   orchestrator can partition `test/**` into case-count-capped batches and
+//!   skip the ones already on disk after an interruption.
 //!
 //! JSON is emitted by hand (like the sibling YAML in [`crate::xst`], keeping the
 //! crate free of a serde dependency) and read back through `yaml-rust2` (JSON is
 //! a subset of YAML, so the frontmatter parser's dependency doubles as the
-//! reader) — see [`read_batch`] / [`read_provenance`].
+//! reader). A batch is read back through [`read_batch_full`] (the identity-aware
+//! reader the orchestrator binds against; [`read_batch`] is its
+//! `unwrap_or_default` shorthand), and provenance through [`read_provenance`].
 //!
 //! [garden issue 51]: https://github.com/kriscendobot/garden/issues/51
 
@@ -95,7 +101,9 @@ pub enum Category {
     /// — a genuine language-implementation gap (the actionable backlog).
     Unsupported,
     /// Declared or structural skip the run never attempted (a `feature:` on the
-    /// skip list, a `module`/`onlyStrict`/SES-mode shape).
+    /// skip list, a `module`/`async`/`can-block` shape). Note that `onlyStrict`
+    /// and the SES lockdown/compartment modes are *engine gaps* classed as
+    /// [`Category::Unsupported`], not skips — see [`classify`].
     Skipped,
     /// The oracle, the harness, or the infrastructure could not produce a
     /// comparison — explicitly **not** an Ironhorse gap (an oracle machine
@@ -185,11 +193,15 @@ pub fn classify(outcome: Outcome, reason: &str) -> Category {
                 || reason.starts_with("ironhorse-aborted")
                 || reason.starts_with("negative-")
                 || reason.starts_with("async:")
+                || reason == "shared-test262-failure"
             {
                 // unsupported-opcode:*, parse-or-decode, non-primitive-completion,
                 // builtin-coercion-computron-gap, abort-value-differs,
                 // ironhorse-aborted*, negative-*:pending-compiler,
                 // negative-type-unmatched:*, async:* — all Ironhorse coverage gaps.
+                // shared-test262-failure is deliberately here too: the harness ran
+                // ironhorse far enough to throw its own assertion error, so a
+                // shared Test262Error is an Ironhorse gap, not infrastructure.
                 Category::Unsupported
             } else {
                 // Unknown run skips must not be charged to Ironhorse. New
@@ -285,9 +297,15 @@ pub struct Provenance {
 
 impl Provenance {
     /// True when the typed scope field marks a whole-corpus sweep. Reading the
-    /// structured field, never a substring of the human `config`.
+    /// structured fields, never a substring of the human `config`. Every
+    /// conjunct is load-bearing: the scope flag, a verified 40-hex corpus SHA
+    /// (an unverified `unknown`/`unverified` corpus can never publish the
+    /// whole-corpus claim), and `completion == "complete"` (a run with a
+    /// quarantined/missing batch is not the complete corpus, so it renders the
+    /// subtree wording instead of the strongest claim).
     pub fn is_whole_corpus(&self) -> bool {
         self.scope == "whole-corpus"
+            && self.completion == "complete"
             && self.test262_sha.len() == 40
             && self
                 .test262_sha
@@ -528,7 +546,8 @@ impl RunReport {
     }
 
     /// A batch file's JSON — just the case array, no provenance (the aggregate
-    /// owns provenance). This is what `ironhorse-xst --json` writes per subtree.
+    /// owns provenance). This is what `ironhorse-xst --json` writes per batch (a
+    /// case-count-capped chunk of one directory's direct cases).
     /// Equivalent to [`RunReport::batch_json_with_id`] with an empty identity;
     /// retained for the legacy aggregate callers/tests that do not bind a run.
     pub fn batch_json(cases: &[CaseRecord]) -> String {
@@ -851,13 +870,21 @@ pub fn aggregate_plan(
             Err(error) => warnings.push(format!("batch {} unreadable: {}", batch, error)),
         }
     }
-    (
-        RunReport {
-            provenance,
-            cases: by_path.into_values().collect(),
-        },
-        warnings,
-    )
+    let cases: Vec<CaseRecord> = by_path.into_values().collect();
+    // Derive `completion` from the aggregated cases themselves — never a side
+    // file (the `quarantines/` marker dir) the documented resume path can drop.
+    // A run is complete only when every plan batch was read cleanly (no
+    // warnings) AND no case was quarantined; a quarantined case carries a
+    // `quarantine:` reason in the batch JSON, so this is computed from the
+    // artifact it describes.
+    let mut provenance = provenance;
+    let quarantined = cases.iter().any(|c| c.reason.starts_with("quarantine:"));
+    provenance.completion = if warnings.is_empty() && !quarantined {
+        "complete".to_string()
+    } else {
+        "incomplete".to_string()
+    };
+    (RunReport { provenance, cases }, warnings)
 }
 
 // Discovery + resume planning
@@ -1015,9 +1042,20 @@ pub fn to_html(report: &RunReport) -> String {
     } else {
         ", run without the XS oracle gate"
     };
+    // The Hardened-JavaScript (SES) axis, disclosed in the lede at the same
+    // altitude as the strict-mode gap. Derived from the typed `ses_mode`
+    // provenance field so a non-hardened run always names the missing axis
+    // where it makes its headline claim, never only in a provenance row far
+    // below (an engine whose reason for existing is Hardened JavaScript must
+    // say so). A hardened run states its mode in the SES-mode provenance row.
+    let ses_description = if provenance.ses_mode.is_empty() || provenance.ses_mode == "none" {
+        " Hardened JavaScript (SES) is not exercised: no lockdown() or Compartment cases are run."
+    } else {
+        ""
+    };
     s.push_str(&format!(
-        "<p class=\"lede\">{} run against the Ironhorse engine{}, excluding staging and module cases; strict-mode executions are not implemented. {} cases, {} required strict-mode executions skipped.</p>\n",
-        scope, oracle_description, total, strict_skipped
+        "<p class=\"lede\">{} run against the Ironhorse engine{}, excluding staging and module cases; strict-mode executions are not implemented.{} {} cases, {} required strict-mode executions skipped.</p>\n",
+        scope, oracle_description, ses_description, total, strict_skipped
     ));
 
     // Provenance.
@@ -1296,6 +1334,12 @@ mod tests {
             classify(Outcome::RunSkip, "parse-or-decode"),
             Category::Unsupported
         );
+        // A shared Test262Error is an Ironhorse gap (deliberately classified,
+        // not left to the unknown-reason infrastructure fallback).
+        assert_eq!(
+            classify(Outcome::RunSkip, "shared-test262-failure"),
+            Category::Unsupported
+        );
         // Oracle/harness non-results are infrastructure, not Ironhorse gaps.
         assert_eq!(
             classify(Outcome::RunSkip, "oracle-machine-error"),
@@ -1466,6 +1510,7 @@ mod tests {
                 config: "oracle=on max-cases-per-batch=100 jobs=4 subtree=<all>".into(),
                 scope: "whole-corpus".into(),
                 oracle_mode: "on".into(),
+                completion: "complete".into(),
                 runner: "ironhorse-xst".into(),
                 ..Default::default()
             },
@@ -1909,6 +1954,133 @@ mod tests {
         assert!(crafted_html.contains("without the XS oracle gate"));
         assert!(!crafted_html.contains("The complete authoritative TC39 test262 corpus"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn is_whole_corpus_requires_every_conjunct() {
+        // Each conjunct of the whole-corpus authority gate is load-bearing:
+        // deleting any one must let a report that is not the complete verified
+        // corpus publish the strongest claim. This pins all three.
+        let complete = Provenance {
+            scope: "whole-corpus".into(),
+            completion: "complete".into(),
+            test262_sha: "be13516fb6be13516fb6be13516fb6be13516fb6".into(),
+            ..Default::default()
+        };
+        assert!(complete.is_whole_corpus());
+
+        // scope narrowed → not whole-corpus.
+        let narrowed = Provenance {
+            scope: "subtree=built-ins/Proxy".into(),
+            ..complete.clone()
+        };
+        assert!(!narrowed.is_whole_corpus());
+
+        // Corpus SHA unverified (`unknown`) → not whole-corpus, and the HTML
+        // renders the subtree wording rather than the complete-corpus claim.
+        let unverified = Provenance {
+            test262_sha: "unknown".into(),
+            ..complete.clone()
+        };
+        assert!(!unverified.is_whole_corpus());
+        let html = to_html(&RunReport {
+            provenance: unverified,
+            cases: Vec::new(),
+        });
+        assert!(html.contains("The selected TC39 test262 subtree"));
+        assert!(!html.contains("The complete authoritative TC39 test262 corpus"));
+
+        // A quarantined/missing batch → completion != complete → not
+        // whole-corpus.
+        let incomplete = Provenance {
+            completion: "incomplete".into(),
+            ..complete.clone()
+        };
+        assert!(!incomplete.is_whole_corpus());
+    }
+
+    #[test]
+    fn aggregate_plan_rejects_all_batches_when_run_id_is_empty() {
+        // Fail-closed: with no expected identity, every batch is rejected (a
+        // warning each) rather than silently merged under this run's provenance
+        // — the exact leak the identity binding exists to close.
+        let dir = std::env::temp_dir().join(format!("ih262-emptyid-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(batch_filename("a@@0000")),
+            RunReport::batch_json_with_id(
+                "run-A",
+                &[rec("built-ins/A/x.js", Outcome::Covered, "", &[])],
+            ),
+        )
+        .unwrap();
+        let provenance = Provenance {
+            run_id: String::new(),
+            ..Default::default()
+        };
+        let plan = vec!["a@@0000".to_string()];
+        let (report, warnings) = aggregate_plan(&dir, &plan, provenance);
+        assert_eq!(report.total(), 0, "no batch merged under an empty identity");
+        assert!(!warnings.is_empty(), "empty identity must warn");
+        assert_eq!(report.provenance.completion, "incomplete");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn aggregate_plan_derives_completion_from_quarantined_cases() {
+        // completion is a property of the aggregated artifact, not of a side
+        // `quarantines/` dir the documented restore path can drop: a case with
+        // a `quarantine:` reason makes the run incomplete even though the plan
+        // batch was read cleanly.
+        let dir = std::env::temp_dir().join(format!("ih262-qcompletion-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(batch_filename("q@@0000")),
+            RunReport::batch_json_with_id(
+                "run-A",
+                &[rec(
+                    "built-ins/Q/x.js",
+                    Outcome::RunSkip,
+                    "quarantine:worker-failed-after-3-attempts:status-124",
+                    &[],
+                )],
+            ),
+        )
+        .unwrap();
+        let provenance = Provenance {
+            run_id: "run-A".into(),
+            completion: "complete".into(), // stale side-file claim; must be overridden
+            ..Default::default()
+        };
+        let plan = vec!["q@@0000".to_string()];
+        let (report, warnings) = aggregate_plan(&dir, &plan, provenance);
+        assert!(warnings.is_empty(), "batch read cleanly: {:?}", warnings);
+        assert_eq!(
+            report.provenance.completion, "incomplete",
+            "a quarantined case makes the run incomplete regardless of the passed provenance"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lede_discloses_the_ses_axis_when_not_hardened() {
+        // An engine whose reason for existing is Hardened JavaScript must name
+        // the missing SES axis in the lede when it did not run it.
+        let report = RunReport {
+            provenance: Provenance {
+                scope: "whole-corpus".into(),
+                completion: "complete".into(),
+                test262_sha: "be13516fb6be13516fb6be13516fb6be13516fb6".into(),
+                oracle_mode: "on".into(),
+                ses_mode: "none".into(),
+                ..Default::default()
+            },
+            cases: Vec::new(),
+        };
+        let html = to_html(&report);
+        assert!(html.contains("Hardened JavaScript (SES) is not exercised"));
     }
 
     #[test]

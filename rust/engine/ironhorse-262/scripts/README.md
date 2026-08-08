@@ -6,6 +6,13 @@ emits a stable machine-readable `report.json` plus a self-contained static
   `report.html` (drop-in for kriscendobot gh-pages). Maintainer request:
 [garden issue 51](https://github.com/kriscendobot/garden/issues/51#issuecomment-5224315524).
 
+**Axes this sweep does not exercise.** Every run this automation produces is a
+non-hardened run: `ses_mode` is `none`, so no `lockdown()` / `Compartment` cases
+run and the SES (Hardened JavaScript) axis is **not** measured — the report's
+lede discloses this beside the strict-mode gap. Strict-mode executions are
+likewise not implemented. Both are named where the report makes its headline
+claim, not only in a provenance row.
+
 ## One command
 
 ```sh
@@ -25,7 +32,13 @@ Outputs land in `rust/engine/target/test262-report/` by default:
   reasons with sample case identifiers.
 - `provenance.json` — the run provenance (test262 SHA, endo/Ironhorse SHA,
   oracle build, command, config, timestamps, host).
-- `results/` — one case-count-capped batch JSON, the resume state.
+- `results/` — one JSON file per case-count-capped batch, the resume state.
+
+`report.{json,html}` are the publishable artifact; everything else the run
+writes under the output dir — `results/`, `logs/` (per-batch stdout/stderr +
+exit status), `attempts/`, `quarantines/`, the vendored `test262-src/`,
+`discovery.txt`, and `pending.txt` — is scratch/resume state under the
+gitignored `rust/engine/target/`.
 
 ## Why it is shaped this way
 
@@ -44,7 +57,10 @@ Outputs land in `rust/engine/target/test262-report/` by default:
   an output directory after **any** of those inputs changes re-runs the affected
   batches rather than silently retaining a stale/foreign result, and aggregation
   reads **exactly the discovered plan** (never a directory glob), so a leftover
-  batch from a different run can never leak into the report.
+  batch from a different run can never leak into the report. This last property
+  is a guarantee of `full-run.sh`, which always passes `--plan` and `--run-id`;
+  the bare `ironhorse-262-report aggregate`/`plan` CLI without those flags falls
+  back to the legacy directory-glob path and does not bind the run identity.
 - **Single-sourced partition cap.** The at-most-N-cases-per-batch cap lives in
   one place (the Rust `BATCH_CASE_LIMIT`); the orchestrator reads it back with
   `ironhorse-262-report batch-size` and passes it as `--batch-size`, so discovery
@@ -101,5 +117,9 @@ GitHub Actions cache keys are immutable and cannot accumulate partial state
 across dispatches. The whole-tree sweep is bounded (a zero-batch discovery is a
 hard error, never a published "0 cases" report).
 Each worker has a 180-second wall-clock bound.
-After three failed attempts, the batch is quarantined as infrastructure and the
-report marks completion as `incomplete` instead of blocking publication forever.
+A failing batch is retried in-process up to three attempts (the count also
+accumulates across resumes), so the quarantine path is reachable from a single
+sweep invocation — the CI dispatch runs the script once. After the cap the batch
+is quarantined as infrastructure and the report marks completion as `incomplete`
+instead of blocking publication forever; completion is derived from the
+aggregated case records (a `quarantine:` reason), not a side marker file.

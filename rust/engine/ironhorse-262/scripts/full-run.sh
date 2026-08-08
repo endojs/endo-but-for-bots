@@ -176,7 +176,10 @@ if ! git -C "$repo_root" diff --quiet HEAD -- rust/engine c/moddable; then
   echo "full-run: the engine or oracle tree is dirty; commit it before running a resumable sweep" >&2
   exit 2
 fi
-endo_sha=$(git -C "$repo_root" rev-parse HEAD:rust)
+# The endo/Ironhorse *commit* under test — a resolvable HEAD commit, not the
+# `HEAD:rust` subtree tree object (which no reader can resolve as a commit). The
+# dirty-check above guarantees the rust engine tree matches this commit.
+endo_sha=$(git -C "$repo_root" rev-parse HEAD)
 moddable_sha=$(git -C "$repo_root/c/moddable" rev-parse HEAD)
 moddable_pin=$(git -C "$repo_root" rev-parse HEAD:c/moddable)
 if [ "$moddable_sha" != "$moddable_pin" ] || [ -n "$(git -C "$repo_root/c/moddable" status --porcelain)" ]; then
@@ -195,7 +198,10 @@ command_line="full-run.sh --subtree ${subtree:-<all>} --jobs $jobs --oracle $ora
 # result-affecting inputs. Reusing a results dir after ANY of these changes
 # re-runs the affected batches rather than retaining stale/foreign results
 # across runs.
-run_id="test262=$test262_sha;endo=$endo_sha;oracle=$oracle;ses=$ses_mode;cap=$batch_size;scope=${subtree:-<all>}"
+# The XS oracle's source pin (moddable_sha) is part of the identity: it is the
+# gate that decides every case's verdict, so bumping c/moddable must re-run the
+# affected batches rather than retain results scored against the old oracle.
+run_id="test262=$test262_sha;endo=$endo_sha;oracle=$oracle;moddable=$moddable_sha;ses=$ses_mode;cap=$batch_size;scope=${subtree:-<all>}"
 
 provenance="$output/provenance.json"
 
@@ -238,6 +244,14 @@ run_key=$("$report_binary" batch-filename "$run_id")
 attempts="$output/attempts/$run_key"
 quarantines="$output/quarantines/$run_key"
 mkdir -p "$logs" "$attempts" "$quarantines"
+# The per-batch attempt cap. Quarantine (below) fires once a batch has failed
+# this many times. The cap counts attempts ACROSS invocations (persisted in
+# `$attempts/<batch>`) AND is retried in-process within one invocation, so the
+# quarantine path is reachable from a single sweep run — the CI dispatch runs
+# this script once (see scripts/README.md § quarantine).
+MAX_BATCH_ATTEMPTS=3
+export MAX_BATCH_ATTEMPTS
+
 run_one_batch() {
   batch="$1"
   directory=${batch%@@*}
@@ -250,46 +264,63 @@ run_one_batch() {
   attempt_file="$attempts/$basename"
   attempt=0
   [ -f "$attempt_file" ] && read -r attempt < "$attempt_file"
-  attempt=$((attempt + 1))
-  printf '%s\n' "$attempt" > "$attempt_file"
   expected_count=$("$report_binary" batch-count --test262-dir "$test262_dir" --batch "$batch")
-  rm -f "$part"
   status=0
-  "$xst_binary" --direct-only --batch-size "$batch_size" --batch-index "$((10#$batch_index))" \
-    $oracle_flag --run-id "$run_id" --json "$part" --test262-dir "$test262_dir" \
-    "$test_root/$directory" >"$log" 2>&1 &
-  worker=$!
-  (
-    timer=0
-    trap 'kill "$timer" 2>/dev/null || true; exit 0' TERM INT
-    sleep 180 & timer=$!
-    wait "$timer" || exit 0
-    kill -TERM "$worker" 2>/dev/null || exit 0
-    sleep 30 & timer=$!
-    wait "$timer" || exit 0
-    kill -KILL "$worker" 2>/dev/null || true
-  ) &
-  watchdog=$!
-  wait "$worker" || status=$?
-  kill "$watchdog" 2>/dev/null || true
-  wait "$watchdog" 2>/dev/null || true
-  echo "exit-status: $status" >> "$log"
-  # The resume marker is validated by the SAME parser that consumes it and bound
-  # to the run identity: only a complete, correctly-stamped batch is promoted.
+  # Retry the batch in-process up to the cap so ONE invocation can reach the
+  # quarantine path rather than leaving a permanently-pending batch that fails
+  # the completeness gate. `attempt` accumulates across invocations, so a batch
+  # already at the cap on entry skips straight to quarantine.
+  while [ "$attempt" -lt "$MAX_BATCH_ATTEMPTS" ]; do
+    attempt=$((attempt + 1))
+    printf '%s\n' "$attempt" > "$attempt_file"
+    rm -f "$part"
+    status=0
+    "$xst_binary" --direct-only --batch-size "$batch_size" --batch-index "$((10#$batch_index))" \
+      $oracle_flag --run-id "$run_id" --json "$part" --test262-dir "$test262_dir" \
+      "$test_root/$directory" >"$log" 2>&1 &
+    worker=$!
+    (
+      # timer starts EMPTY, never 0: a TERM that lands after the trap is installed
+      # but before the first `sleep &` must not run `kill "$timer"` with an unset
+      # target — `kill 0` (or `kill ""` → the group) would TERM the whole sweep's
+      # process group (full-run.sh, xargs, every sibling worker). The guard makes
+      # the handler a no-op until a real timer PID exists.
+      timer=""
+      trap '[ -n "$timer" ] && kill "$timer" 2>/dev/null; exit 0' TERM INT
+      sleep 180 & timer=$!
+      wait "$timer" || exit 0
+      kill -TERM "$worker" 2>/dev/null || exit 0
+      sleep 30 & timer=$!
+      wait "$timer" || exit 0
+      kill -KILL "$worker" 2>/dev/null || true
+    ) &
+    watchdog=$!
+    wait "$worker" || status=$?
+    kill "$watchdog" 2>/dev/null || true
+    wait "$watchdog" 2>/dev/null || true
+    echo "exit-status: $status (attempt $attempt/$MAX_BATCH_ATTEMPTS)" >> "$log"
+    # The resume marker is validated by the SAME parser that consumes it and
+    # bound to the run identity: only a complete, correctly-stamped batch is
+    # promoted.
+    if "$report_binary" validate --batch "$part" --run-id "$run_id" \
+        --expected-count "$expected_count" >>"$log" 2>&1; then
+      mv -f "$part" "$final"
+      return 0
+    fi
+    rm -f "$part"
+  done
+  # Attempts exhausted: quarantine so one bad batch never blocks publication
+  # forever. Promote ONLY if the quarantine record itself validates (the guard
+  # is load-bearing, not decorative).
+  reason="quarantine:worker-failed-after-${attempt}-attempts:status-${status}"
+  "$report_binary" quarantine --test262-dir "$test262_dir" --batch "$batch" \
+    --run-id "$run_id" --reason "$reason" --json "$part" >>"$log" 2>&1
   if "$report_binary" validate --batch "$part" --run-id "$run_id" \
       --expected-count "$expected_count" >>"$log" 2>&1; then
     mv -f "$part" "$final"
+    printf '%s\n' "$reason" > "$quarantines/$basename"
   else
     rm -f "$part"
-    if [ "$attempt" -ge 3 ]; then
-      reason="quarantine:worker-failed-after-${attempt}-attempts:status-${status}"
-      "$report_binary" quarantine --test262-dir "$test262_dir" --batch "$batch" \
-        --run-id "$run_id" --reason "$reason" --json "$part" >>"$log" 2>&1
-      "$report_binary" validate --batch "$part" --run-id "$run_id" \
-        --expected-count "$expected_count" >>"$log" 2>&1
-      mv -f "$part" "$final"
-      printf '%s\n' "$reason" > "$quarantines/$basename"
-    fi
   fi
 }
 export -f run_one_batch

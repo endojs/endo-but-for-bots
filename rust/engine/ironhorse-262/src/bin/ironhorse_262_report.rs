@@ -170,7 +170,7 @@ fn command_validate(args: &[String]) {
     );
     match read_batch_full(&batch) {
         Err(error) => fail(&format!("invalid batch {}: {}", batch.display(), error)),
-        Ok((run_id, _cases)) => {
+        Ok((run_id, cases)) => {
             // With `--run-id`, a batch stamped with a different identity is not
             // a valid completion of this run.
             if let Some(expected) = option_value(args, "--run-id") {
@@ -187,11 +187,11 @@ fn command_validate(args: &[String]) {
                 let expected_count = expected_count
                     .parse::<usize>()
                     .unwrap_or_else(|_| fail("--expected-count needs a non-negative integer"));
-                if _cases.len() != expected_count {
+                if cases.len() != expected_count {
                     fail(&format!(
                         "batch {} has {} cases, expected {}",
                         batch.display(),
-                        _cases.len(),
+                        cases.len(),
                         expected_count
                     ));
                 }
@@ -303,11 +303,12 @@ SUBCOMMANDS:
         Validate a complete batch file for atomic promotion/resume. With
         --run-id, also reject a batch stamped with a different identity.
 
-    aggregate  --results DIR [--provenance FILE] [--plan FILE] --json OUT [--html OUT]
+    aggregate  --results DIR --provenance FILE [--plan FILE] --json OUT [--html OUT] [--expected-total N]
         Merge per-batch JSON into the stable report.json (+ optional HTML).
         With --plan, aggregate EXACTLY the batches the plan names, bound to the
         provenance run identity — never a directory glob — and fail on any
-        missing/mismatched batch.
+        missing/mismatched batch. With --expected-total, fail unless the merged
+        case count equals N (the discovery total).
 
     batch-size
         Print the single-source partition cap (cases per batch) the runner's

@@ -439,18 +439,30 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
         }
         Agreement::BothAbort => match &run.ironhorse_halt {
             Halt::Throw(_) => {
-                if constructor_name(&run.oracle_error) == "Test262Error" {
-                    Verdict::RunSkip("shared-test262-failure".into())
-                } else if run.error_agrees {
+                if run.error_agrees {
+                    // A meter-exact gate outranks every abort disposition: an
+                    // armed case that burns a different computron budget is a
+                    // violation even when both engines threw the same value, so
+                    // it is checked before the Test262Error shape below.
                     if meter_exact_gate && run.oracle_computrons != run.ironhorse_computrons {
                         meter_violation(run)
+                    } else if constructor_name(&run.oracle_error) == "Test262Error" {
+                        // Both engines threw the harness's own assertion error:
+                        // the test's assertions failed identically in XS and in
+                        // ironhorse. That is a *shared* conformance gap ironhorse
+                        // must still close (the harness ran ironhorse far enough
+                        // to assert and it lost), never a covered pass.
+                        Verdict::RunSkip("shared-test262-failure".into())
                     } else {
                         Verdict::Covered
                     }
                 } else {
                     // Both aborted but ironhorse threw a different value — the
                     // oracle's real Error object ironhorse does not construct, a
-                    // built-in gap, not a covered-grammar divergence.
+                    // built-in gap, not a covered-grammar divergence. An oracle
+                    // `Test262Error` paired with a divergent ironhorse throw
+                    // lands here, not in `shared-test262-failure`: nothing is
+                    // actually shared, so the divergence stays visible.
                     Verdict::RunSkip("abort-value-differs".into())
                 }
             }
@@ -1192,6 +1204,43 @@ mod tests {
             evaluate_positive(&Config::default(), &run, false),
             Verdict::RunSkip("shared-test262-failure".into())
         );
+    }
+
+    #[test]
+    fn oracle_test262_error_with_divergent_ironhorse_throw_is_not_shared() {
+        // Oracle throws the harness assertion error; ironhorse throws a
+        // different value (a real divergence). Nothing is shared, so this must
+        // stay `abort-value-differs` (→ the Ironhorse backlog), never be
+        // laundered into `shared-test262-failure`.
+        let mut run = synthetic_abort(
+            Halt::Throw("TypeError: not a function".into()),
+            "TypeError: not a function",
+        );
+        run.oracle_error = "Test262Error: assertion failed".into();
+        run.error_agrees = false;
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("abort-value-differs".into())
+        );
+    }
+
+    #[test]
+    fn shared_test262_error_still_yields_to_an_armed_meter_gate() {
+        // With a meter-exact gate armed, a differing computron budget is a
+        // violation even when both engines threw the same Test262Error — the
+        // gate outranks the shared-abort shape.
+        let mut run = synthetic_abort(
+            Halt::Throw("Test262Error: assertion failed".into()),
+            "Test262Error: assertion failed",
+        );
+        run.oracle_error = "Test262Error: assertion failed".into();
+        run.error_agrees = true;
+        run.oracle_computrons = 100;
+        run.ironhorse_computrons = 101;
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, true),
+            Verdict::Fail(_)
+        ));
     }
 
     /// An `AsyncDualRun` wrapping a trivially-agreeing dual-run with a chosen
