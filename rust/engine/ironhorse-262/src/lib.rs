@@ -257,17 +257,17 @@ fn compile_for(
                 Err(payload) => (
                     Vec::new(),
                     Vec::new(),
-                    IronhorseCompile::Panicked(panic_message(&payload)),
+                    IronhorseCompile::Panicked(panic_message(payload.as_ref())),
                 ),
             }
         }
     }
 }
 
-/// Best-effort render of a caught panic payload (the `Box<dyn Any>` from
-/// [`std::panic::catch_unwind`]) as a short one-line message, for a
+/// Best-effort render of a caught panic payload (the `dyn Any` behind the `Box`
+/// from [`std::panic::catch_unwind`]) as a short one-line message, for a
 /// compiler-gap label. Falls back to a generic string for a non-string payload.
-fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     let msg = if let Some(s) = payload.downcast_ref::<&str>() {
         (*s).to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {
@@ -275,8 +275,11 @@ fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     } else {
         "panic".to_string()
     };
-    // One line, bounded — this becomes part of a report reason string.
-    msg.lines().next().unwrap_or("panic").trim().to_string()
+    // One line AND length-bounded — this becomes part of a report reason string
+    // published into report.json/HTML, so a panic payload embedding a minified
+    // source cannot land unbounded in the artifact.
+    let line = msg.lines().next().unwrap_or("panic").trim();
+    line.chars().take(200).collect()
 }
 
 /// Run one program on both engines and compare, using the default

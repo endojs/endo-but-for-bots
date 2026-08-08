@@ -1158,8 +1158,11 @@ fn run_case_bounded(
 /// means ironhorse terminates independently, so the timeout was the oracle's
 /// non-termination, not ironhorse's. A missing-harness assembly error is itself
 /// a prompt terminal (ironhorse never even ran a dispatch loop → `true`); a
-/// thread-spawn failure forfeits attribution conservatively toward the
-/// bar-forbidden `ironhorse-hang` (`false`).
+/// worker panic (`Disconnected`, the sender dropped before sending) is *also* a
+/// prompt terminal — ironhorse stopped, it did not hang — so it counts as
+/// terminated (`true`), never a `false` that would mislabel an oracle hang as
+/// the bar-forbidden `ironhorse-hang`. A thread-spawn failure forfeits
+/// attribution conservatively toward `ironhorse-hang` (`false`).
 fn ironhorse_terminates_alone(harness_dir: &Path, src: &str, timeout: std::time::Duration) -> bool {
     let fm = frontmatter::parse(src);
     let source = match assemble(harness_dir, src, &fm) {
@@ -1176,7 +1179,14 @@ fn ironhorse_terminates_alone(harness_dir: &Path, src: &str, timeout: std::time:
     if spawn.is_err() {
         return false;
     }
-    matches!(rx.recv_timeout(timeout), Ok(_))
+    match rx.recv_timeout(timeout) {
+        // ironhorse produced a halt within the bound: it terminated.
+        Ok(_) => true,
+        // The worker panicked before sending — a prompt terminal, not a hang.
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => true,
+        // The bound elapsed with no halt: ironhorse genuinely did not terminate.
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => false,
+    }
 }
 
 /// Run a set of test262 files (absolute paths) against the harness in
