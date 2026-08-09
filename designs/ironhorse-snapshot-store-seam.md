@@ -131,6 +131,22 @@ still left on the lazy paths, and tightened the decoders:
 - The pass re-raised the placeholder-allocation trade (twice); the
   disposition stands as recorded above.
 
+**The acceptance suite is backend-parameterized (2026-08-08).** The
+six-way metamorphic determinism runner, the lazy working-set bound,
+and the checkpoint acceptance locks moved into
+`ironhorse-snapshot::store_suite` (a `store-suite` cargo feature —
+test support, never in production builds), generic over the
+`HeapStore` under test. Every backend now runs the SAME instrument:
+the reference backends instantiate it in the engine workspace
+(`MemoryStore`, and newly `FileStore`, which previously had no
+metamorphic coverage), and the SQLite crate instantiates it in
+`tests/store_suite.rs` against both `:memory:` and on-disk (WAL
+engaged) stores — in addition to its own real-JS close/reopen
+lifecycle scenarios. Byte-level corruption sweeps and commit-stats
+proportionality locks deliberately stay per-backend: they poke a
+backend's physical representation, so their failure taxonomy is not
+shared.
+
 Phase 1-2 detail (2026-08-06):
 
 - `rust/engine/ironhorse-snapshot/src/store.rs` — the paged logical

@@ -11,10 +11,9 @@ use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, resume_from_store, resume_from_store_lazy,
     MachineSnapshot, StoreSession,
 };
-use ironhorse_snapshot::sha256::hex_sha256;
 use ironhorse_snapshot::store::{
-    export_to_container, image_to_batch, root_hash, slot_page_count, store_to_image,
-    CheckpointBatch, HeapStore, MemoryStore, StoreError,
+    image_to_batch, slot_page_count, store_to_image, CheckpointBatch, HeapStore, MemoryStore,
+    StoreError,
 };
 use ironhorse_snapshot::store_file::FileStore;
 use ironhorse_snapshot::Signature;
@@ -47,52 +46,20 @@ fn begin(m: Interp, store: &mut dyn HeapStore) -> StoreSession {
     begin_store_session(m, &sig(), store).map_err(|(_, e)| panic!("begin: {e:?}")).unwrap()
 }
 
-/// The central invariant: after every checkpoint — full or incremental
-/// — the store equals the bound machine's snapshot image, its export
-/// byte-equals the machine's own blob, and its root hash is the blob's
-/// CAS key.
-fn store_tracks_live_machine(store: &mut dyn HeapStore) {
-    let mut m = Interp::new();
-    assert!(m.run(&PROG_A).completed);
-    let mut session = begin(m, store);
-    assert_eq!(session.epoch(), 1);
-    assert_eq!(
-        store_to_image(store).unwrap(),
-        session.machine().snapshot_image(&sig())
-    );
-    assert_eq!(
-        export_to_container(store).unwrap(),
-        session.machine().write_snapshot(&sig()),
-        "store export byte-equals the machine's own blob"
-    );
-
-    assert!(session.machine_mut().run(&PROG_B).completed);
-    let epoch = checkpoint_to_store(&mut session, &sig(), store).expect("incremental");
-    assert_eq!(epoch, 2);
-    assert_eq!(
-        store_to_image(store).unwrap(),
-        session.machine().snapshot_image(&sig())
-    );
-    assert_eq!(
-        export_to_container(store).unwrap(),
-        session.machine().write_snapshot(&sig())
-    );
-    assert_eq!(
-        root_hash(store).unwrap(),
-        hex_sha256(&session.machine().write_snapshot(&sig()))
-    );
-}
-
+/// The central invariant and the row-6 bar now live in the shared
+/// backend-parameterized suite (`ironhorse_snapshot::store_suite`), so
+/// the SQLite backend runs the identical locks; these tests
+/// instantiate it for the two reference backends.
 #[test]
 fn store_tracks_live_machine_memory() {
     let mut store = MemoryStore::new();
-    store_tracks_live_machine(&mut store);
+    ironhorse_snapshot::store_suite::checkpoint_acceptance(&mut store);
 }
 
 #[test]
 fn store_tracks_live_machine_file() {
     let (mut store, dir) = file_store("tracks");
-    store_tracks_live_machine(&mut store);
+    ironhorse_snapshot::store_suite::checkpoint_acceptance(&mut store);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -129,36 +96,16 @@ fn incremental_checkpoint_writes_only_dirty_rows() {
     assert_eq!(stats.chunk_extents_written, 0, "no false dirt");
 }
 
-/// The row-6 bar through the store, both backends.
-fn resume_equals_uninterrupted(store: &mut dyn HeapStore) {
-    let mut uninterrupted = Interp::new();
-    assert!(uninterrupted.run(&PROG_A).completed);
-    let ub = uninterrupted.run(&PROG_B);
-    assert!(ub.completed);
-
-    let mut m1 = Interp::new();
-    assert!(m1.run(&PROG_A).completed);
-    let s1 = begin(m1, store);
-    let epoch = s1.epoch();
-    drop(s1); // the suspended worker's machine is gone
-
-    let mut s2 = resume_from_store(store, &sig()).expect("resumes");
-    assert_eq!(s2.epoch(), epoch);
-    let b2 = s2.machine_mut().run(&PROG_B);
-    assert_eq!(b2.result, ub.result);
-    assert_eq!(b2.computrons, ub.computrons, "meter continued");
-}
-
 #[test]
 fn resume_equals_uninterrupted_memory() {
     let mut store = MemoryStore::new();
-    resume_equals_uninterrupted(&mut store);
+    ironhorse_snapshot::store_suite::resume_equals_uninterrupted(&mut store);
 }
 
 #[test]
 fn resume_equals_uninterrupted_file() {
     let (mut store, dir) = file_store("resume");
-    resume_equals_uninterrupted(&mut store);
+    ironhorse_snapshot::store_suite::resume_equals_uninterrupted(&mut store);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
