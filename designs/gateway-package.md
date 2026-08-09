@@ -1018,7 +1018,7 @@ direct-to-this-gateway sessions.
 The path name encodes the codec/transport pair:
 
 - `ocapn`: protocol family.
-- `cbor`: payload codec ([`cbors`](cbors.md), peer of
+- `cbor`: payload codec ([`cbor-frame`](cbor-frame.md), peer of
   `@endo/syrups`).
 - `np`: Noise Protocol network identifier (per
   [`ocapn-noise-network`](ocapn-noise-network.md) § Network
@@ -1038,7 +1038,7 @@ encrypted payload thereafter).
 Inside the encrypted payload, the OCapN payload is a single CBOR
 record encoding one OCapN message.
 This is analogous to
-[`ocapn-tcp-syrups-framing`](ocapn-tcp-syrups-framing.md)'s
+[`ocapn-tcp-syrup-framing`](ocapn-tcp-syrup-framing.md)'s
 netstring-around-syrup framing on TCP: the outer layer (WS frame
 or netstring) provides message boundaries, the inner layer
 (Noise) provides encryption, and the innermost layer (CBOR or
@@ -1316,7 +1316,7 @@ startup; a misconfiguration (e.g., `relay.enabled` with
 | [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md) | The handshake-pattern review feeds the relay's session-establishment shape; the gateway uses whichever pattern (XX, IK, XK) that review settles on. |
 | [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | Justifies "no TLS, Noise in-band": OCapN's transport is separated from its semantics, so the network layer (Noise) owns confidentiality and the gateway's HTTP/WS transport owns only framing. |
 | [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md) | The Ed25519 public keys that identify OCapN nodes are the keys the gateway's relay table is indexed by, and the formula-identifier bearer tokens (feature 3) are the same 256-bit hex strings. |
-| [ocapn-tcp-syrups-framing](ocapn-tcp-syrups-framing.md) | Sibling framing pattern (netstring-around-syrup on TCP); the `/ocapn-cbor-np` design (feature 8) is the WS-around-CBOR analog. |
+| [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | Sibling framing pattern (netstring-around-syrup on TCP); the `/ocapn-cbor-np` design (feature 8) is the WS-around-CBOR analog. |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | The `op:start-session` extraction; the relay (feature 6) inherits the post-extraction OCapN-Noise session shape. |
 | [daemon-docker-selfhost](daemon-docker-selfhost.md) | The docker-self-host story needs to be revised on top of this design; PR [#134](https://github.com/endojs/endo-but-for-bots/pull/134) is paused pending. Feature 10's container shape (one image, gateway as PID 1, sidecar user-daemon containers sharing a tmpfs volume for the UDS bootstrap) is the target. |
 | [daemon-cas-management](daemon-cas-management.md) | Reused for the gateway's content-addressed read-through cache of weblet assets, served directly from the HTTP path. Per-tenant isolation in the gateway-side cache is Open Question 5. |

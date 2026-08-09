@@ -78,7 +78,7 @@ for Concise Binary Object Representation and is permitted under the
 namer's rule on canonical acronyms. `@endo/cbor` names the codec
 primitives for one CBOR item; the framing sibling landed as
 `@endo/cbor-frame` — proposed as `@endo/cbors` in
-[cbors.md](cbors.md), implemented under the explicit `-frame` suffix in
+[cbor-frame.md](cbor-frame.md), implemented under the explicit `-frame` suffix in
 [PR #288](https://github.com/endojs/endo-but-for-bots/pull/288) — and
 names a *stream* of length-prefixed byte strings on the wire. The two
 packages are complements, not competitors: `@endo/cbor-frame` frames
@@ -283,7 +283,7 @@ Phased so each step is independently landable and verifiable:
    `@endo/cbor-frame` framing design, which may import `writeHead` /
    `readHead` for its byte-string heads. Its recorded decision to
    duplicate head-parsing scaffolding for independent auditability
-   ([cbors.md](cbors.md) section Dependencies) predates a shared
+   ([cbor-frame.md](cbor-frame.md) section Dependencies) predates a shared
    primitive package existing; whether to supersede that decision is
    left to the maintainer at implementation time.
 
@@ -297,8 +297,8 @@ slots package can adopt `@endo/cbor` before merge and shed its
 | Package | Role |
 |---|---|
 | `@endo/cbor` (this design) | Encodes and decodes single CBOR items; the primitive layer |
-| [`@endo/cbor-frame`](cbors.md) (impl PR #288; proposed as `@endo/cbors`) | Frames a stream of length-prefixed CBOR byte strings; payload bytes are opaque |
-| [`@endo/syrup-frame`](ocapn-tcp-syrups-framing.md) (landed on `llm`; proposed as `@endo/syrups`) | The Syrup-grammar framing sibling |
+| [`@endo/cbor-frame`](cbor-frame.md) (impl PR #288; proposed as `@endo/cbors`) | Frames a stream of length-prefixed CBOR byte strings; payload bytes are opaque |
+| [`@endo/syrup-frame`](ocapn-tcp-syrup-framing.md) (landed on `llm`; proposed as `@endo/syrups`) | The Syrup-grammar framing sibling |
 | `@endo/netstring` | The netstring-grammar framing sibling |
 | `packages/ocapn` | OCapN protocol codec; becomes a consumer |
 | `packages/slots` (PR #124) | Slot-machine wire protocol; becomes a consumer |
@@ -338,7 +338,7 @@ slots package can adopt `@endo/cbor` before merge and shed its
    only shape that keeps both consumers honest.
 2. **Not an extension of `@endo/cbor-frame`.** That design scopes itself
    to framing only and explicitly excludes codec duties
-   ([cbors.md](cbors.md) section Scope); grafting a codec onto it
+   ([cbor-frame.md](cbor-frame.md) section Scope); grafting a codec onto it
    would break its recorded contract. Considered and rejected:
    one combined CBOR package. Reason: framing and item codecs have
    different consumers and different audit surfaces.
