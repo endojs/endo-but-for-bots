@@ -6,7 +6,7 @@
 | **Updated** | 2026-05-19 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
-| **Source** | Amends [ocapn-noise-network](ocapn-noise-network.md) and [ocapn-tcp-syrups-framing](ocapn-tcp-syrups-framing.md). |
+| **Source** | Amends [ocapn-noise-network](ocapn-noise-network.md) and [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md). |
 
 ## What is the Problem Being Solved?
 
@@ -479,7 +479,7 @@ internal implementation of the returned session, which now
 transparently survives transport-instance changes.
 
 For TCP-syrups (per
-[ocapn-tcp-syrups-framing](ocapn-tcp-syrups-framing.md)) the framer
+[ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md)) the framer
 operates per-transport-instance: each new TCP connection mounts a
 fresh `makeSyrupsReader` / `makeSyrupsWriter` pair. The session-level
 queue of outbound operations bridges across the framer instances.
@@ -577,7 +577,7 @@ sequenceDiagram
 | [ocapn-noise-network](ocapn-noise-network.md) | Direct: this amendment extends that network with reconnection semantics. |
 | [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md) | Direct: the Resume-vs-Rekey choice (Open question C1) belongs in the cryptographic review's deliverable. |
 | [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | Indirect: this design lives entirely inside the network layer that document establishes. |
-| [ocapn-tcp-syrups-framing](ocapn-tcp-syrups-framing.md) | Indirect: each TCP transport instance mounts a fresh framer; the session-level operation queue bridges across instances. |
+| [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | Indirect: each TCP transport instance mounts a fresh framer; the session-level operation queue bridges across instances. |
 
 ## Security Considerations
 

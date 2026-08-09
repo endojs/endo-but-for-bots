@@ -298,7 +298,7 @@ slots package can adopt `@endo/cbor` before merge and shed its
 |---|---|
 | `@endo/cbor` (this design) | Encodes and decodes single CBOR items; the primitive layer |
 | [`@endo/cbor-frame`](cbor-frame.md) (impl PR #288; proposed as `@endo/cbors`) | Frames a stream of length-prefixed CBOR byte strings; payload bytes are opaque |
-| [`@endo/syrup-frame`](ocapn-tcp-syrups-framing.md) (landed on `llm`; proposed as `@endo/syrups`) | The Syrup-grammar framing sibling |
+| [`@endo/syrup-frame`](ocapn-tcp-syrup-framing.md) (landed on `llm`; proposed as `@endo/syrups`) | The Syrup-grammar framing sibling |
 | `@endo/netstring` | The netstring-grammar framing sibling |
 | `packages/ocapn` | OCapN protocol codec; becomes a consumer |
 | `packages/slots` (PR #124) | Slot-machine wire protocol; becomes a consumer |
