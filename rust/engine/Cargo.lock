@@ -89,6 +89,7 @@ name = "ironhorse-snapshot"
 version = "0.0.1"
 dependencies = [
  "ironhorse-compile",
+ "ironhorse-snapshot",
  "ironhorse-vm",
 ]
 

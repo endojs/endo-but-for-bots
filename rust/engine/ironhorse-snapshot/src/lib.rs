@@ -58,6 +58,11 @@ pub mod sidetable;
 pub mod slot_codec;
 pub mod store;
 pub mod store_file;
+// Backend-parameterized acceptance suites (metamorphic determinism,
+// checkpoint locks) for OTHER crates' backends to instantiate; test
+// support only, hence feature-gated.
+#[cfg(feature = "store-suite")]
+pub mod store_suite;
 
 pub use atom::{Atom, AtomError, AtomReader, AtomWriter};
 pub use format::{
