@@ -309,12 +309,15 @@ pub fn seal_commit(
 ) -> String {
     let mut h = crate::sha256::Sha256::new();
     h.update(prev_seal.as_bytes());
-    // Core fields, not the encoded manifest (whose seal field is what
-    // is being computed).
-    h.update(&manifest_core.epoch.to_be_bytes());
-    h.update(&manifest_core.slot_count.to_be_bytes());
-    h.update(&manifest_core.slot_live.to_be_bytes());
-    h.update(&manifest_core.chunk_len.to_be_bytes());
+    // The COMPLETE manifest with only the seal field cleared (that is
+    // what is being computed): version, store schema, host callback
+    // signature, and creation parameters are store identity — two
+    // stores with identical rows but different signatures must not
+    // share a seal, or the pairing guard would pass a session against
+    // another host's store (the PR-review finding).
+    let mut sealed = manifest_core.clone();
+    sealed.seal = String::new();
+    h.update(&sealed.encode());
     h.update(small);
     for (i, bytes) in slot_pages {
         h.update(b"P");
@@ -327,6 +330,20 @@ pub fn seal_commit(
         h.update(bytes);
     }
     crate::sha256::hex(&h.finalize())
+}
+
+/// Recompute a batch's seal after direct surgery on its contents —
+/// test/tooling support. Legitimate producers ([`image_to_batch`],
+/// the machine checkpoint) seal correctly by construction; a mutated
+/// batch without a reseal fails [`check_succession`]'s recomputation.
+pub fn reseal_batch(batch: &mut CheckpointBatch) {
+    batch.manifest.seal = seal_commit(
+        &batch.prev_seal,
+        &batch.manifest,
+        &batch.small,
+        &batch.slot_pages,
+        &batch.chunk_extents,
+    );
 }
 
 /// The whole-on-every-commit remainder of the machine state: the value
@@ -473,11 +490,36 @@ pub fn check_succession(
             found: batch.prev_seal.clone(),
         });
     }
+    // The batch's own seal must actually hash this batch:
+    // `CheckpointBatch` is a public type, so without recomputation a
+    // forged constant seal could stitch divergent stores into one
+    // apparent lineage and defeat the equal-epoch fork guard (the
+    // PR-review finding). Every backend calls this before persisting.
+    let recomputed = seal_commit(
+        &batch.prev_seal,
+        &batch.manifest,
+        &batch.small,
+        &batch.slot_pages,
+        &batch.chunk_extents,
+    );
+    if batch.manifest.seal != recomputed {
+        return Err(StoreError::BaselineMismatch {
+            expected: recomputed,
+            found: batch.manifest.seal.clone(),
+        });
+    }
     Ok(())
 }
 
 pub fn check_epoch(stored: Option<u64>, batch_epoch: u64) -> Result<(), StoreError> {
-    let expected = stored.map_or(1, |e| e + 1);
+    // A decoded manifest may legally carry u64::MAX; an exhausted
+    // epoch is corrupt input, not a wrap to epoch 0.
+    let expected = match stored {
+        None => 1,
+        Some(e) => e.checked_add(1).ok_or(StoreError::Snapshot(
+            crate::format::SnapshotError::Corrupt("store epoch exhausted"),
+        ))?,
+    };
     if batch_epoch != expected {
         return Err(StoreError::EpochMismatch {
             expected,
@@ -1173,8 +1215,10 @@ mod tests {
     fn validate_fails_closed_on_accounting_mismatch() {
         let image = ran_image();
         let mut batch = image_to_batch(&image, 1, "");
-        // Corrupt the live count so live + free != count.
+        // Corrupt the live count so live + free != count — resealed,
+        // so the accounting gate (not the seal check) is what trips.
         batch.manifest.slot_live += 1;
+        reseal_batch(&mut batch);
         let mut store = MemoryStore::new();
         store.commit(&batch).unwrap();
         match validate_store(&store, &sig()) {

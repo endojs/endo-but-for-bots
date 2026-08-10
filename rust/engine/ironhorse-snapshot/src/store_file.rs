@@ -479,7 +479,7 @@ mod tests {
         changed.slots[0] = ironhorse_vm::Slot::integer(424242);
         let prev = store.manifest().unwrap().seal;
         let full = image_to_batch(&changed, 2, &prev);
-        let one_page = CheckpointBatch {
+        let mut one_page = CheckpointBatch {
             prev_seal: prev.clone(),
             manifest: full.manifest.clone(),
             small: full.small.clone(),
@@ -491,6 +491,10 @@ mod tests {
                 .collect(),
             chunk_extents: Vec::new(),
         };
+        // The dirty-only batch seals over exactly its own rows (the
+        // legitimate producer's shape); the full batch's seal covered
+        // every page and must not be reused.
+        crate::store::reseal_batch(&mut one_page);
         store.commit(&one_page).unwrap();
 
         // The merged store now equals the changed image exactly.
@@ -591,6 +595,7 @@ mod tests {
         let prev = store.manifest().unwrap().seal;
         let mut batch = image_to_batch(&grown, 2, &prev);
         batch.chunk_extents.pop(); // drop the newest extent's row
+        crate::store::reseal_batch(&mut batch);
         match store.commit(&batch) {
             Err(StoreError::MissingRow("chunk extent", _)) => {}
             other => panic!("expected missing grown row, got {other:?}"),
