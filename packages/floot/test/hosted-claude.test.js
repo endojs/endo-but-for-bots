@@ -153,3 +153,41 @@ test('speech restart replays accumulated text and carries future deltas', async 
     { type: 'end' },
   ]);
 });
+
+test('identifyClient reports the client cap identity used for attach keying', async t => {
+  /** @type {Map<string, unknown>} */
+  const names = new Map();
+  const ids = new Map([
+    ['claude-client-session-a', 'id-per-session'],
+    ['claude-client', 'id-shared'],
+  ]);
+  const powers = harden({
+    async has(name) {
+      return names.has(name);
+    },
+    async lookup(name) {
+      return names.get(name);
+    },
+    async remove(name) {
+      names.delete(name);
+    },
+    async identify(name) {
+      return ids.get(name);
+    },
+  });
+  const resolver = makeClaudeClientResolver(powers);
+  await null;
+
+  // Nothing bound yet: no identity, so container mounts stay unarmed.
+  t.is(await resolver.identifyClient('session-a'), undefined);
+  // Only the shared client exists: its identity serves the session.
+  names.set('claude-client', harden({}));
+  t.is(await resolver.identifyClient('session-a'), 'id-shared');
+  // A per-session client takes precedence over the shared fallback.
+  names.set('claude-client-session-a', harden({}));
+  t.is(await resolver.identifyClient('session-a'), 'id-per-session');
+  // A bound name that cannot be identified yields undefined rather than a
+  // bogus key.
+  ids.delete('claude-client-session-a');
+  t.is(await resolver.identifyClient('session-a'), undefined);
+});
