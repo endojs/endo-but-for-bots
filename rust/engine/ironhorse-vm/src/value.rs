@@ -619,12 +619,20 @@ impl SlotArena {
     /// free returns to the free list. Returns the number of slots
     /// reclaimed. Mirrors `fxSweep` reclaiming unmarked slots.
     pub fn sweep(&mut self) -> u32 {
+        self.sweep_each(&mut |_| {})
+    }
+
+    /// Sweep, reporting each reclaimed index so the machine can drop
+    /// side-table entries keyed by it (the GC side-table liveness
+    /// contract) — same deterministic index order as [`Self::sweep`].
+    pub fn sweep_each(&mut self, swept: &mut dyn FnMut(SlotIndex)) -> u32 {
         let mut reclaimed = 0u32;
         for i in 0..self.slots.len() as u32 {
             if !self.marks[i as usize] && !self.is_free(i) {
                 self.free.push(i);
                 self.live -= 1;
                 reclaimed += 1;
+                swept(SlotIndex(i));
             }
         }
         reclaimed
