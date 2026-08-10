@@ -1,6 +1,8 @@
 # On-Device Android Admin Agent for the Endo Daemon
 
-Status: Proposed.
+Status: Partially implemented — the in-repo JavaScript halves
+(`@endo/exo-android-admin`, `@endo/host-android-admin`) exist and are tested
+on desktop; the Android application shell is not yet built.
 Owner: daemon / device-management.
 
 ## Motivation
@@ -248,16 +250,28 @@ Ranked by how much they gate the work:
 The in-repo, reusable pieces are independent of the Android shell and can
 land and be tested on a desktop daemon first:
 
-1. `exo-android-admin` — portable exo, `Client`/`Control` split, policy
+1. ✅ `exo-android-admin` — portable exo, `Client`/`Control` split, policy
    allowlist, `revoke()`, interface guards, against the `exo-shell` layout,
    with the protocol catalog, `PROTOCOL.md`, and `protocol/fixtures.json`
    that both halves are tested against.
-2. `host-android-admin` — unconfined backend with the injected `transport`
+   Adds `attenuate()`, which intersects against the live parent bounds on
+   every call, so narrowing or revoking a parent also narrows or kills every
+   facet derived from it.
+2. ✅ `host-android-admin` — unconfined backend with the injected `transport`
    seam, a channel transport for the nodejs-mobile bridge, and a mock
    `DevicePolicyManager` bridge so the admin surface is testable without a
    device.
-3. `setup-android.js` — boot-time formula: install iroh, mint the admin
-   exo, invite/adopt HQ.
+   The formula returns an `AndroidAdminKit` rather than a bare client,
+   because a formula has one result and returning only the client would
+   leave the control facet unreachable.
+3. ✅ `setup-android.js` — boot-time formula: install iroh, mint the admin
+   exo, name both facets.
+   Vending is deliberately left to an explicit operator act rather than
+   automated on boot.
+
+Remaining, in dependency order: the L2 cross-daemon vend test
+(§ Testing strategy), the Android application shell, and the Kotlin half of
+the protocol tested against the same fixtures.
 
 The Android application shell — Kotlin DPC + `DeviceAdminReceiver` +
 foreground service + nodejs-mobile embed + supervisor + JNI channel +
