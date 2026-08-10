@@ -2,6 +2,7 @@
 import '@endo/init';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
+import { Far } from '@endo/far';
 
 import { makeClaudeSessionProvisioner } from '../src/claude-session-provisioner.js';
 
@@ -244,4 +245,268 @@ test('rejects session ids that could escape its namespace', async t => {
   await t.throwsAsync(() => E(provisioner).provision('../escape'), {
     message: /Invalid Floot session id/,
   });
+});
+
+// ---------------------------------------------------------------------------
+// Container mount bridges (designs/runtime-container-fs-mount.md)
+// ---------------------------------------------------------------------------
+
+/**
+ * Harness for the bridge methods: a Map-backed host agent with
+ * `lookupById` / `provideMount`, an injectable fake 9P mounter, and caps of
+ * each shape the bridge must recognise.
+ */
+const makeBridgeHarness = () => {
+  /** @type {Map<string, unknown>} */
+  const names = new Map();
+  /** @type {Map<string, unknown>} */
+  const byId = new Map();
+  const provideMountCalls = [];
+  const hostAgent = harden({
+    async has(...path) {
+      return names.has(keyFor(path));
+    },
+    async lookup(...path) {
+      return names.get(keyFor(path));
+    },
+    async remove(...path) {
+      names.delete(keyFor(path));
+    },
+    async lookupById(id) {
+      if (!byId.has(id)) throw Error(`unknown id ${id}`);
+      return byId.get(id);
+    },
+    async provideMount(path, name, opts) {
+      const cap = harden({ kind: 'attach-mount', path, name });
+      provideMountCalls.push({ path, name, opts });
+      names.set(name, cap);
+      return cap;
+    },
+  });
+  const mountCalls = [];
+  const unmounts = [];
+  const fsMounter = harden({
+    async mount(fs, mountPoint, opts) {
+      // A real 9P handle is an exo; the guard on the bridge result demands a
+      // declared remotable, so the fake must be Far too.
+      const handle = Far('FakeFs9pMountHandle', {
+        async unmount() {
+          unmounts.push(mountPoint);
+        },
+      });
+      mountCalls.push({ fs, mountPoint, opts, handle });
+      return handle;
+    },
+  });
+  const provisioner = makeClaudeSessionProvisioner(
+    hostAgent,
+    {
+      flootDir: 'floot',
+      clientBase: 'claude-client',
+      credentialsName: 'claude-creds',
+      workspaceBaseDir: '/workspaces',
+      rootfs: 'oci:test',
+      attachMountBaseDir: '/attach-mounts',
+    },
+    {
+      async makeFilesystem() {
+        return undefined;
+      },
+      async provisionSession() {
+        throw Error('unused in bridge tests');
+      },
+      getFsMounter: async () => fsMounter,
+    },
+  );
+  return {
+    names,
+    byId,
+    provideMountCalls,
+    mountCalls,
+    unmounts,
+    provisioner,
+  };
+};
+
+test('bridges a Mount-shaped cap over 9P at a host-picked layout', async t => {
+  const h = makeBridgeHarness();
+  // A daemon Mount surface: readText + entry (among others).
+  h.byId.set(
+    'cap-1',
+    harden({
+      __getMethodNames__: () => [
+        'entry',
+        'has',
+        'list',
+        'lookup',
+        'readText',
+        'writeText',
+      ],
+    }),
+  );
+
+  const bridge = await E(h.provisioner).provideContainerMountBridge(
+    harden({ key: 'abc123', capId: 'cap-1', mode: 'rw' }),
+  );
+  t.is(h.mountCalls.length, 1);
+  t.is(h.mountCalls[0].mountPoint, '/attach-mounts/claude-attach-abc123');
+  t.true(h.mountCalls[0].opts.lazyUnmount);
+  t.false(h.mountCalls[0].opts.readOnly);
+  // The Mount cap is wrapped as a Filesystem before serving (not passed raw).
+  t.not(h.mountCalls[0].fs, h.byId.get('cap-1'));
+  t.deepEqual(h.provideMountCalls, [
+    {
+      path: '/attach-mounts/claude-attach-abc123',
+      name: 'claude-attach-abc123',
+      opts: { readOnly: false },
+    },
+  ]);
+  t.is(bridge.mountCap, h.names.get('claude-attach-abc123'));
+  t.truthy(bridge.handle);
+
+  // Idempotent per key: a replay reuses the live bridge.
+  const again = await E(h.provisioner).provideContainerMountBridge(
+    harden({ key: 'abc123', capId: 'cap-1', mode: 'rw' }),
+  );
+  t.is(h.mountCalls.length, 1);
+  t.is(again.mountCap, bridge.mountCap);
+
+  await E(h.provisioner).releaseContainerMountBridge('abc123');
+  t.deepEqual(h.unmounts, ['/attach-mounts/claude-attach-abc123']);
+  t.false(h.names.has('claude-attach-abc123'));
+
+  // Releasing again is a no-op, not an error.
+  await E(h.provisioner).releaseContainerMountBridge('abc123');
+  t.is(h.unmounts.length, 1);
+});
+
+test('an EndoGit cap attaches its worktree', async t => {
+  const h = makeBridgeHarness();
+  let worktreeCalls = 0;
+  const worktree = harden({
+    __getMethodNames__: () => ['entry', 'readText', 'writeText'],
+  });
+  h.byId.set(
+    'git-1',
+    harden({
+      __getMethodNames__: () => ['worktree', 'status', 'diff', 'add', 'commit'],
+      async worktree() {
+        worktreeCalls += 1;
+        return worktree;
+      },
+    }),
+  );
+
+  await E(h.provisioner).provideContainerMountBridge(
+    harden({ key: 'gitkey', capId: 'git-1', mode: 'rw' }),
+  );
+  t.is(worktreeCalls, 1);
+  t.is(h.mountCalls.length, 1);
+});
+
+test('a Filesystem cap is served as-is, and ro mode pins every layer', async t => {
+  const h = makeBridgeHarness();
+  const filesystem = harden({
+    __getMethodNames__: () => ['root', 'named', 'statfs', 'brands', 'help'],
+  });
+  h.byId.set('fs-1', filesystem);
+
+  await E(h.provisioner).provideContainerMountBridge(
+    harden({ key: 'fskey', capId: 'fs-1', mode: 'ro' }),
+  );
+  t.is(h.mountCalls[0].fs, filesystem);
+  t.true(h.mountCalls[0].opts.readOnly);
+  t.true(h.provideMountCalls[0].opts.readOnly);
+});
+
+test('rejects caps that are not filesystem-like and malformed requests', async t => {
+  const h = makeBridgeHarness();
+  h.byId.set('opaque-1', harden({ __getMethodNames__: () => ['help'] }));
+
+  await t.throwsAsync(
+    () =>
+      E(h.provisioner).provideContainerMountBridge(
+        harden({ key: 'k1', capId: 'opaque-1' }),
+      ),
+    { message: /not filesystem-like/ },
+  );
+  // A failed resolution leaves no bridge behind.
+  t.is(h.mountCalls.length, 0);
+
+  await t.throwsAsync(
+    () =>
+      E(h.provisioner).provideContainerMountBridge(
+        harden({ key: '../escape', capId: 'opaque-1' }),
+      ),
+    { message: /Invalid container mount bridge key/ },
+  );
+  await t.throwsAsync(
+    () =>
+      E(h.provisioner).provideContainerMountBridge(
+        harden({ key: 'k1', capId: 'opaque-1', mode: 'rwx' }),
+      ),
+    { message: /mode must be/ },
+  );
+  await t.throwsAsync(
+    () => E(h.provisioner).provideContainerMountBridge(harden({ key: 'k1' })),
+    { message: /capId must be/ },
+  );
+});
+
+test('a provideMount failure unmounts the fresh 9P bridge', async t => {
+  const h = makeBridgeHarness();
+  h.byId.set(
+    'cap-2',
+    harden({ __getMethodNames__: () => ['entry', 'readText'] }),
+  );
+  const failingHost = harden({
+    async has() {
+      return false;
+    },
+    async lookupById(id) {
+      return h.byId.get(id);
+    },
+    async provideMount() {
+      throw Error('mount registration failed');
+    },
+  });
+  const unmounts = [];
+  const fsMounter = harden({
+    async mount(_fs, mountPoint) {
+      return Far('FakeFs9pMountHandle', {
+        async unmount() {
+          unmounts.push(mountPoint);
+        },
+      });
+    },
+  });
+  const provisioner = makeClaudeSessionProvisioner(
+    failingHost,
+    {
+      flootDir: 'floot',
+      clientBase: 'claude-client',
+      credentialsName: 'claude-creds',
+      workspaceBaseDir: '/workspaces',
+      rootfs: 'oci:test',
+      attachMountBaseDir: '/attach-mounts',
+    },
+    {
+      async makeFilesystem() {
+        return undefined;
+      },
+      async provisionSession() {
+        throw Error('unused');
+      },
+      getFsMounter: async () => fsMounter,
+    },
+  );
+
+  await t.throwsAsync(
+    () =>
+      E(provisioner).provideContainerMountBridge(
+        harden({ key: 'k2', capId: 'cap-2' }),
+      ),
+    { message: /mount registration failed/ },
+  );
+  t.deepEqual(unmounts, ['/attach-mounts/claude-attach-k2']);
 });

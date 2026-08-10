@@ -310,11 +310,14 @@ export const make = (powers, context, contextWrapper = {}) => {
 
   /**
    * Lazily mount the workspace and mint the slice. Run once on first
-   * use and memoized by `makeClaudeClient`.
+   * use and memoized by `makeClaudeClient` — and re-run by it when the
+   * runtime-attached extra bind set changes (the client disposes the old
+   * slice first; see designs/runtime-container-fs-mount.md).
    *
+   * @param {readonly import('./claude-client.js').ExtraMountSpec[]} [extraMounts]
    * @returns {Promise<{ slice: any, mountHandle: { unmount: () => Promise<void> } }>}
    */
-  const provision = async () => {
+  const provision = async (extraMounts = harden([])) => {
     // Pull the caps from the per-session powers by reference (no name
     // lookup). The factory bundled exactly these four when it built the
     // powers cap.
@@ -430,6 +433,17 @@ export const make = (powers, context, contextWrapper = {}) => {
         ...(mcpCap
           ? [{ cap: mcpCap, innerPath: mcpInnerDir, mode: 'ro' }]
           : []),
+        // Runtime-attached extras (designs/runtime-container-fs-mount.md):
+        // caps the session guest holds, already bridged over 9P by the host
+        // attach registrar and registered as daemon Mount caps. Read-write
+        // by default — the primary use case is modifying the cap's tree
+        // with in-slice Linux tools (git especially). Only the bind fields
+        // flow to the slice; the registrar's 9P handle stays host-side.
+        ...extraMounts.map(extra => ({
+          cap: extra.cap,
+          innerPath: extra.innerPath,
+          mode: extra.mode === 'ro' ? 'ro' : 'rw',
+        })),
       ];
       const slice = await E(sandboxFactory).make(
         harden({
