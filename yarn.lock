@@ -1906,7 +1906,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/exo-android-admin@workspace:packages/exo-android-admin":
+"@endo/exo-android-admin@workspace:^, @endo/exo-android-admin@workspace:packages/exo-android-admin":
   version: 0.0.0-use.local
   resolution: "@endo/exo-android-admin@workspace:packages/exo-android-admin"
   dependencies:
@@ -2337,6 +2337,23 @@ __metadata:
     babel-eslint: "npm:^10.1.0"
     eslint: "catalog:dev"
     prettier: "npm:^3.5.3"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/host-android-admin@workspace:packages/host-android-admin":
+  version: 0.0.0-use.local
+  resolution: "@endo/host-android-admin@workspace:packages/host-android-admin"
+  dependencies:
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/exo-android-admin": "workspace:^"
+    "@endo/far": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
     typescript: "catalog:dev"
   languageName: unknown
   linkType: soft
