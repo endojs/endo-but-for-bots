@@ -34,7 +34,7 @@ import { outlinerComponent } from './outliner-component.js';
 import { inboxComponent } from './inbox-component.js';
 import { inventoryComponent } from './inventory-component.js';
 import { channelListComponent } from './channel-list.js';
-import { createSpacesGutter } from './spaces-gutter.js';
+import { createSpacesGutter, readBootDefaultSpace } from './spaces-gutter.js';
 import { inventoryGraphComponent } from './inventory-graph-component.js';
 import { whylipComponent } from './whylip-component.js';
 import { peersComponent } from './peers-component.js';
@@ -1688,12 +1688,26 @@ const bodyComponent = (
  * @param {unknown} powers - The powers object from HubCap
  */
 export const make = async powers => {
+  // Open the default space directly, rather than mounting Home and correcting
+  // once the daemon has answered. The preference and everything needed to act
+  // on it are on this device, so the first thing built is the thing the user
+  // asked for; the gutter re-checks the cache against the loaded spaces and
+  // falls back to Home if it named a space that is gone.
+  const boot = readBootDefaultSpace();
+
   /** @type {string[]} */
-  let currentProfilePath = [];
+  let currentProfilePath = boot ? boot.profilePath : [];
   /** @type {ConversationState | null} */
   let activeConversation = null;
   /** @type {ActiveSpaceInfo} */
-  let activeSpaceInfo = { mode: 'inbox' };
+  let activeSpaceInfo = boot
+    ? /** @type {ActiveSpaceInfo} */ (boot.spaceInfo)
+    : { mode: 'inbox' };
+  if (boot && boot.scheme && boot.scheme !== 'auto') {
+    // Ahead of the first paint, so the default space does not flash the
+    // previous scheme before the gutter applies its own.
+    document.documentElement.setAttribute('data-scheme', boot.scheme);
+  }
   /** @type {(() => void) | null} */
   let activeCleanup = null;
 
