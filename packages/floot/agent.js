@@ -35,6 +35,7 @@ import { discoverTools, executeTool } from '@endo/fae/src/tools.js';
 import { createStreamingProvider } from './providers/index.js';
 import { runClaudeTurn } from './src/claude-turn.js';
 import { makeReplyChannel } from './src/stream.js';
+import { makeSessionTurn } from './src/session-turn.js';
 import { makeFlootLocalTools } from './src/tool-registry.js';
 import { makeMcpBridge } from './src/mcp-bridge.js';
 import { startMcpSocketServer } from './src/mcp-socket-server.js';
@@ -352,8 +353,8 @@ const FlootFactoryInterface = M.interface('FlootFactory', {
 // runtime-tested here.
 const FlootSessionInterface = M.interface('FlootSession', {
   getInfo: M.callWhen().returns(M.record()),
-  converse: M.call(M.any()).returns(M.remotable()),
-  converseWithSpeech: M.call(M.any(), M.any())
+  startTurn: M.call(M.any()).returns(M.remotable()),
+  startTurnWithSpeech: M.call(M.any(), M.any())
     .optional(M.record())
     .returns(M.any()),
   getHistory: M.callWhen().returns(M.any()),
@@ -1983,82 +1984,43 @@ export const make = (hostPowers, _context, { env } = {}) => {
         },
         /**
          * @param {string | object} input
-         * @returns {object} replyReader
+         * @returns {object} FlootTurn
          */
-        converse(input) {
-          // Abort the in-flight turn when the consumer stops pulling the reply
-          // (UI Stop / barge-in): makeReplyChannel fires onClose on
-          // reader.return/throw, aborting the signal threaded into the provider
-          // stream so the model stops generating instead of running on unseen.
-          const controller = new AbortController();
-          const { writer, reader } = makeReplyChannel(() => controller.abort());
-          (async () => {
-            try {
+        startTurn(input) {
+          return makeSessionTurn({
+            run: async (writer, signal) => {
               const agent = await getAgent(id);
-              await agent.converse(input, writer, undefined, controller.signal);
-            } catch (error) {
-              if (controller.signal.aborted) return;
-              writer.abort(
-                error instanceof Error ? error.message : String(error),
-              );
-            }
-          })();
-          return reader;
+              await agent.converse(input, writer, undefined, signal);
+            },
+          });
         },
         /**
-         * Start a turn with a daemon-side TTS branch. The browser passes the
-         * selected TTS capability and receives independent reply/audio readers;
-         * reply text never has to cross into the browser and back for speech.
-         *
          * @param {string | object} input
          * @param {any} ttsServer
          * @param {Record<string, unknown>} [ttsOptions]
-         * @returns {{
-         *   replyReader: object,
-         *   audioReader: Promise<object>,
-         *   speechController: object,
-         * }}
          */
-        converseWithSpeech(input, ttsServer, ttsOptions = {}) {
-          const controller = new AbortController();
-          const { writer: replyWriter, reader: replyReader } = makeReplyChannel(
-            () => controller.abort(),
-          );
+        startTurnWithSpeech(input, ttsServer, ttsOptions = {}) {
+          const channel = makeReplyChannel();
           const speech = makeSpeechWriter(
-            replyWriter,
+            channel.writer,
             ttsServer,
             harden({ ...ttsOptions }),
           );
-          controller.signal.addEventListener(
-            'abort',
-            () => speech.abort('reply stopped'),
-            { once: true },
-          );
-          const { audioReader } = speech;
-          audioReader.catch(error => {
-            speech.abort(
-              error instanceof Error ? error.message : String(error),
-            );
-          });
-          (async () => {
-            try {
+          const turn = makeSessionTurn({
+            channel,
+            run: async (_writer, signal) => {
+              signal.addEventListener(
+                'abort',
+                () => speech.abort('reply stopped'),
+                { once: true },
+              );
               const agent = await getAgent(id);
-              await agent.converse(
-                input,
-                speech.writer,
-                undefined,
-                controller.signal,
-              );
-            } catch (error) {
-              if (controller.signal.aborted) return;
-              speech.writer.abort(
-                error instanceof Error ? error.message : String(error),
-              );
-            }
-          })();
+              await agent.converse(input, speech.writer, undefined, signal);
+            },
+          });
           return harden({
-            replyReader,
-            audioReader,
+            turn,
+            audioReader: speech.audioReader,
             speechController: speech.speechController,
           });
         },
@@ -2071,7 +2033,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           return agent.getUsage();
         },
         help() {
-          return 'Floot session: converse(input) returns a streaming reply reader; converseWithSpeech(input, tts, options?) returns independent reply/audio streams plus a speech controller that can restart synthesis with new options; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getInfo() returns { id, title, createdAt }.';
+          return 'Floot session: startTurn(input) returns a FlootTurn (getStatus, watch, cancel, whenFinished); startTurnWithSpeech(input, tts, options?) adds daemon-side speech; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getInfo() returns { id, title, createdAt }.';
         },
       });
       facets.set(id, facet);
@@ -2325,7 +2287,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: owns all chat sessions. createSession(title?, presetId?, model?, runtime?) -> session facet; listSessions() -> [{id,title,createdAt,presetId,runtime,model}]; listPresets() -> [{id,title,description}]; listModels() -> [{id,title,description,default}]; listRuntimes() -> [{id,title,description,default}]; getSession(id) -> facet; renameSession(id,title); deleteSession(id); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. A session facet exposes converse(input) (streaming reply reader), getHistory(), and getInfo().';
+        return 'Floot factory: owns all chat sessions. createSession(title?, presetId?, model?, runtime?) -> session facet; listSessions() -> [{id,title,createdAt,presetId,runtime,model}]; listPresets() -> [{id,title,description}]; listModels() -> [{id,title,description,default}]; listRuntimes() -> [{id,title,description,default}]; getSession(id) -> facet; renameSession(id,title); deleteSession(id); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. A session facet exposes startTurn(input) -> FlootTurn, getHistory(), and getInfo().';
       }
       const docs = {
         createSession:

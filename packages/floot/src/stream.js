@@ -38,7 +38,7 @@ import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
  * @returns {{ writer: object, reader: object }}
  */
 export const makeReplyChannel = (onClose = null) => {
-  const { push, reader } = makeBufferedReader({ onClose });
+  const { push, reader, close } = makeBufferedReader({ onClose });
 
   const writer = harden({
     /** @param {string} phase */
@@ -76,6 +76,6 @@ export const makeReplyChannel = (onClose = null) => {
     abort: reason => push({ type: 'abort', reason: `${reason}` }),
   });
 
-  return { writer, reader };
+  return harden({ writer, reader, close });
 };
 harden(makeReplyChannel);

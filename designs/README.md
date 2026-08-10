@@ -286,6 +286,7 @@ LLM-agent stack).*
 | [chat-spaces-gutter](chat-spaces-gutter.md) | 2026-02-21 | 2026-02-26 | **Complete** |
 | [chat-spaces-inbox](chat-spaces-inbox.md) | 2026-02-21 | 2026-02-24 | **Complete** |
 | [chat-test-coverage](chat-test-coverage.md) | 2026-03-02 | 2026-03-02 | **Complete** |
+| [floot-daemon-owned-turns](floot-daemon-owned-turns.md) | 2026-08-10 | 2026-08-10 | **Complete** |
 | [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md) | 2026-02-24 | 2026-03-02 | **Complete** |
 | [daemon-agent-network-identity](daemon-agent-network-identity.md) | 2026-03-02 | 2026-03-02 | Not Started |
 | [daemon-agent-tools](daemon-agent-tools.md) | 2026-03-02 | 2026-07-13 | In Progress |
@@ -413,6 +414,7 @@ LLM-agent stack).*
 | [agentry-git-verb-gaps](agentry-git-verb-gaps.md) | 2026-07-08 | 2026-07-08 | Proposed |
 | [agentry-git-eval-scenarios](agentry-git-eval-scenarios.md) | 2026-07-08 | 2026-07-17 | Not Started |
 | [unhandled-rejection-display](unhandled-rejection-display.md) | 2026-05-10 | 2026-05-18 | **Complete** |
+| [ui-view-not-driver](ui-view-not-driver.md) | 2026-08-10 | 2026-08-10 | Proposed |
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [pass-style-promise](pass-style-promise.md) | 2026-05-10 | 2026-05-10 | Proposed |

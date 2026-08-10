@@ -15,13 +15,8 @@ import { h, renderConfined, unmount } from './setup-preact-container.js';
 // them.
 
 // ── Background turns ─────────────────────────────────────────────────────────
-// A Floot turn keeps running on the daemon even after you leave its space: the
-// reply reader is consumed by a background loop kept HERE, outside any component
-// instance, so unmounting a Floot space never returns the reader (which would
-// abort the agent) — the turn finishes and persists in the background. Keeping
-// the loop module-level also lets a remounted component reattach to a still-
-// streaming reply and show a "thinking" indicator. The entry is removed once the
-// turn ends, so a finished reply simply falls back to getHistory().
+// Turn work runs on the daemon (`startTurn`). The UI pulls a disposable
+// `watch()` stream and calls `cancel()` to stop — never by dropping CapTP.
 /**
  * @typedef {{ role: 'assistant' | 'tool', text?: string, id?: string,
  *   name?: string, args?: string, result?: string | null }} TurnMessage
@@ -47,15 +42,13 @@ const inFlightTurns = new Map();
  *
  * @param {string} key registry key (factory path + session id)
  * @param {string} sessionId
- * @param {any} reader the reply reader returned by session.converse()
+ * @param {any} turnRef FlootTurn from session.startTurn()
  * @returns {FlootTurn}
  */
-const startFlootTurn = (key, sessionId, reader) => {
-  // Stream the reply over the exo-stream protocol rather than one CapTP round
-  // trip per event. `buffer` primes the synchronize chain; the responder is a
-  // buffered channel, so it acknowledges eagerly regardless — the pre-resolved
-  // nodes only save the first round trip.
-  const replies = iterateReader(reader, { buffer: 8 });
+const startFlootTurn = (key, sessionId, turnRef) => {
+  const repliesPromise = E(turnRef)
+    .watch()
+    .then(viewReader => iterateReader(viewReader, { buffer: 8 }));
   /** @type {Set<(ev: { type: string }) => void>} */
   const listeners = new Set();
   /** @type {TurnMessage[]} */
@@ -100,15 +93,16 @@ const startFlootTurn = (key, sessionId, reader) => {
     stop() {
       if (stopped) return;
       stopped = true;
-      // Closing the stream fires the producer's onClose, which aborts the
-      // in-flight agent turn (stops token generation and tool rounds).
-      replies.return().catch(() => {});
+      E(turnRef)
+        .cancel()
+        .catch(() => {});
     },
   };
   inFlightTurns.set(key, turn);
 
   (async () => {
     try {
+      const replies = await repliesPromise;
       for await (const raw of replies) {
         const value = /** @type {any} */ (raw);
         if (stopped) break;
@@ -929,22 +923,20 @@ export const flootComponent = (
     // one reader for display and one audio-only reader for autoplay; reply text
     // never makes a browser round trip to reach TTS.
     const speakLive = ttsEnabled && Boolean(ttsServer);
-    let reader;
+    let turnRef;
     if (speakLive) {
       prepareTts();
-      const streams = await E(facetFor(session)).converseWithSpeech(
+      const streams = await E(facetFor(session)).startTurnWithSpeech(
         text,
         ttsServer,
         currentTtsOptions(),
       );
-      reader = streams.replyReader;
+      turnRef = streams.turn;
       playAudioStream(streams.audioReader, streams.speechController);
     } else {
-      reader = E(facetFor(session)).converse(text);
+      turnRef = await E(facetFor(session)).startTurn(text);
     }
-    // Start the turn in the background — it owns the reply reader and keeps
-    // running if this space is left — then render it through the shared view.
-    const turn = startFlootTurn(turnKey(session.id), session.id, reader);
+    const turn = startFlootTurn(turnKey(session.id), session.id, turnRef);
     await attachTurnView(turn, session);
   };
 

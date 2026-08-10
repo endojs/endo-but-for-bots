@@ -24,11 +24,8 @@ if (!globalThis.MutationObserver && testWindow.MutationObserver) {
 }
 
 /**
- * Mock Floot factory with one session. Each converse() hands the component a
- * buffered reply reader and parks its writer in `turns`, so the test drives
- * turn progress event by event. `history` is the daemon-side canonical
- * transcript getHistory() serves — the test appends to it before ending a
- * turn, as the real agent persists before `end`.
+ * Mock Floot factory with one session. Each startTurn() returns a FlootTurn
+ * whose watch() stream the test drives event by event.
  */
 const makeMockFactory = () => {
   const turns = [];
@@ -45,10 +42,24 @@ const makeMockFactory = () => {
           model: '',
         };
       },
-      converse(input) {
+      startTurn(input) {
         const { push, reader } = makeBufferedReader();
         turns.push({ input, push });
-        return reader;
+        return Far('FlootTurn', {
+          watch: () => reader,
+          async getStatus() {
+            return {
+              phase: 'thinking',
+              streamingText: '',
+              messages: [],
+              done: false,
+              error: null,
+              usage: null,
+            };
+          },
+          async cancel() {},
+          async whenFinished() {},
+        });
       },
       async getHistory() {
         return harden([...history]);
