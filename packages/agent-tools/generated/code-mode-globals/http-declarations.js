@@ -50,8 +50,8 @@ type HttpResponse = {
     help: () => string;
 };
 type HttpPassableBytesReader<TReadReturn = undefined> = {
-    streamBase64(synPromise: HttpERef<HttpStreamNode<unknown, TReadReturn>>): Promise<HttpStreamNode<string, TReadReturn>>;
-    readReturnPattern(): unknown | undefined;
+    streamBase64: (synPromise: HttpERef<HttpStreamNode<unknown, TReadReturn>>) => Promise<HttpStreamNode<string, TReadReturn>>;
+    readReturnPattern: () => unknown | undefined;
 };
 type HttpStreamNode<Y = undefined, R = undefined> = HttpStreamYieldNode<Y, R> | HttpStreamReturnNode<R>;
 type HttpStreamReturnNode<R = undefined> = {
