@@ -559,3 +559,258 @@ test('initialPrompt is fired and drained at construction', async t => {
   // prompt.
   t.true(fake.spawned[1].argv.includes('--continue'));
 });
+
+// ---------------------------------------------------------------------------
+// Runtime extra mounts: recreate concurrency (designs/runtime-container-fs-mount.md)
+// ---------------------------------------------------------------------------
+
+test('terminate() racing a mount recreate never re-provisions', async t => {
+  t.timeout(10_000);
+  let provisionCount = 0;
+  let releaseDispose;
+  const disposeGate = new Promise(r => {
+    releaseDispose = r;
+  });
+  let disposeStarted;
+  const disposeStartedP = new Promise(r => {
+    disposeStarted = r;
+  });
+  const makeSlice = () => ({
+    async spawn() {
+      const proc = {
+        async stdout() {
+          return harden({ kind: 'fake-stdout' });
+        },
+        async kill() {},
+        async wait() {
+          return harden({ code: 0, signal: null });
+        },
+      };
+      procOut.set(proc, []);
+      return proc;
+    },
+    async dispose() {
+      disposeStarted();
+      await disposeGate;
+    },
+  });
+  const client = makeClaudeClient({
+    sessionId: 'race-term',
+    createdAt: 'now',
+    workspaceMountPoint: '/tmp/x',
+    workspacePath: '/workspace',
+    backend: 'podman',
+    makeStdoutIterable,
+    provision: async () => {
+      provisionCount += 1;
+      return { slice: makeSlice() };
+    },
+  });
+  await drain(await client.send('one'));
+  t.is(provisionCount, 1);
+
+  // Start a recreate; while its teardown is disposing the old slice,
+  // terminate the client. The recreate must NOT re-provision afterwards —
+  // that container (and its credential grant) would have no owner left to
+  // release it.
+  const applied = client.setExtraMounts(
+    harden([{ cap: harden({}), innerPath: '/mnt/x', mode: 'rw' }]),
+  );
+  await disposeStartedP;
+  const terminated = client.terminate();
+  releaseDispose();
+  await applied;
+  await terminated;
+  t.is(provisionCount, 1);
+  await t.throwsAsync(() => client.send('after'), {
+    message: /is terminated/,
+  });
+});
+
+test('a send racing a mount recreate waits for the teardown gate', async t => {
+  t.timeout(10_000);
+  const log = [];
+  let provisionCount = 0;
+  let releaseUnmount;
+  const unmountGate = new Promise(r => {
+    releaseUnmount = r;
+  });
+  let unmountStarted;
+  const unmountStartedP = new Promise(r => {
+    unmountStarted = r;
+  });
+  const makeLoggedSlice = n => ({
+    async spawn() {
+      log.push(`spawn@${n}`);
+      const proc = {
+        async stdout() {
+          return harden({ kind: 'fake-stdout' });
+        },
+        async kill() {},
+        async wait() {
+          return harden({ code: 0, signal: null });
+        },
+      };
+      procOut.set(proc, []);
+      return proc;
+    },
+    async dispose() {
+      log.push(`dispose@${n}`);
+    },
+  });
+  const client = makeClaudeClient({
+    sessionId: 'race-gate',
+    createdAt: 'now',
+    workspaceMountPoint: '/tmp/x',
+    workspacePath: '/workspace',
+    backend: 'podman',
+    makeStdoutIterable,
+    provision: async extras => {
+      provisionCount += 1;
+      const n = provisionCount;
+      log.push(`provision@${n}:${extras.map(e => e.innerPath).join(',')}`);
+      return {
+        slice: makeLoggedSlice(n),
+        mountHandle: {
+          async unmount() {
+            log.push(`unmount-start@${n}`);
+            if (n === 1) {
+              unmountStarted();
+              await unmountGate;
+            }
+            log.push(`unmount-end@${n}`);
+          },
+        },
+      };
+    },
+  });
+  await drain(await client.send('one'));
+
+  const applied = client.setExtraMounts(
+    harden([{ cap: harden({}), innerPath: '/mnt/r', mode: 'rw' }]),
+  );
+  await unmountStartedP; // the old workspace unmount is in progress
+  const sendP = client.send('two'); // races the recreate
+  await new Promise(r => setTimeout(r, 20));
+  // The gate holds: no provision may overlap the teardown, or the fresh 9P
+  // mounts could be unmounted by the old slice's teardown.
+  t.is(provisionCount, 1);
+  releaseUnmount();
+  await applied;
+  const events = await drain(await sendP);
+  t.is(events[events.length - 1].type, 'end');
+  t.is(provisionCount, 2);
+  t.true(log.indexOf('unmount-end@1') < log.indexOf('provision@2:/mnt/r'));
+  // The racing turn spawned in the NEW slice.
+  t.true(log.includes('spawn@2'));
+});
+
+test('a turn killed by a mount recreate aborts with the recreate-labelled reason', async t => {
+  t.timeout(10_000);
+  let unblockStdout;
+  const blocked = new Promise(r => {
+    unblockStdout = r;
+  });
+  let releaseProvision;
+  const provisionGate = new Promise(r => {
+    releaseProvision = r;
+  });
+  let provisionCount = 0;
+  const client = makeClaudeClient({
+    sessionId: 'label',
+    createdAt: 'now',
+    workspaceMountPoint: '/tmp/x',
+    workspacePath: '/workspace',
+    backend: 'podman',
+    makeStdoutIterable: () =>
+      harden({
+        async *[Symbol.asyncIterator]() {
+          yield enc.encode('{"type":"system"}\n');
+          await blocked; // in flight until the recreate disposes the slice
+        },
+      }),
+    provision: async () => {
+      provisionCount += 1;
+      if (provisionCount === 2) {
+        // Hold the re-mint open so the killed turn's abort is pushed while
+        // the recreate is still in progress.
+        await provisionGate;
+      }
+      return {
+        slice: {
+          async spawn() {
+            return {
+              async stdout() {
+                return harden({ kind: 'fake-stdout' });
+              },
+              async kill() {
+                unblockStdout();
+              },
+              async wait() {
+                return harden({ code: null, signal: 'SIGKILL' });
+              },
+            };
+          },
+          async dispose() {
+            unblockStdout(); // disposing the slice kills the process
+          },
+        },
+      };
+    },
+  });
+  const it = iterateReader(await client.send('work'));
+  t.is((await it.next()).value.type, 'system'); // the turn is in flight
+  const applied = client.setExtraMounts(
+    harden([{ cap: harden({}), innerPath: '/mnt/z', mode: 'rw' }]),
+  );
+  const rest = [];
+  for await (const ev of it) {
+    rest.push(ev);
+  }
+  const last = rest[rest.length - 1];
+  t.is(last.type, 'abort');
+  t.regex(last.reason, /container mount set changed; sandbox slice recreated/);
+  t.regex(last.reason, /killed by SIGKILL/);
+  releaseProvision();
+  await applied;
+  t.is(provisionCount, 2);
+});
+
+test('setExtraMounts refuses eager and terminated clients without recording', async t => {
+  // Eager client (no provision thunk): there is no way to recreate the
+  // slice, and the refused set must not leak into status()/terminate().
+  const fake = makeFakeSlice([[]]);
+  const mount = makeFakeMount();
+  const eager = makeClaudeClient(baseArgs(fake, mount));
+  await t.throwsAsync(
+    () =>
+      eager.setExtraMounts(
+        harden([{ cap: harden({}), innerPath: '/mnt/x', mode: 'rw' }]),
+      ),
+    { message: /require a lazily-provisioned client/ },
+  );
+  t.deepEqual((await eager.status()).extraMounts, []);
+
+  // Terminated client: refused before any provisioning.
+  let provisions = 0;
+  const lazy = makeClaudeClient({
+    sessionId: 'dead',
+    createdAt: 'now',
+    workspaceMountPoint: '/tmp/x',
+    backend: 'podman',
+    makeStdoutIterable,
+    provision: async () => {
+      provisions += 1;
+      return { slice: makeFakeSlice([]).slice };
+    },
+  });
+  await lazy.terminate();
+  await t.throwsAsync(
+    () =>
+      lazy.setExtraMounts(
+        harden([{ cap: harden({}), innerPath: '/mnt/x', mode: 'rw' }]),
+      ),
+    { message: /is terminated/ },
+  );
+  t.is(provisions, 0);
+});
