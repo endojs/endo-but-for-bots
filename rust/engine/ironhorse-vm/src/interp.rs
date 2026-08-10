@@ -19388,3 +19388,363 @@ fn string_to_index(s: &str) -> Option<u32> {
         None
     }
 }
+
+// --- full garbage collection over machine roots and side tables (the
+// GC side-table liveness contract; adversarial-review latent finding).
+impl Interp {
+    /// Collect garbage across the WHOLE machine: arenas plus every
+    /// side table. Roots are the machine registers (stack, frames,
+    /// globals, boot/proto anchors, the strong symbol registry); a
+    /// keyed side-table entry is an EDGE from its object, so dead
+    /// objects drop their entries instead of leaking through them;
+    /// side-table-held chunk offsets (function name chunks,
+    /// ArrayBuffer backing stores, string `Slot`s stored outside the
+    /// arena) participate in compaction liveness and are rewritten
+    /// like arena-resident strings. Deterministic: trace order is
+    /// worklist order from a fixed root sequence, sweep is index
+    /// order.
+    pub fn collect_garbage(&mut self) -> crate::gc::GcStats {
+        use crate::value::{ChunkOffset, SlotIndex};
+
+        // --- roots: registers, frames, globals, boot anchors ---
+        let mut roots: Vec<SlotIndex> = Vec::new();
+        fn slot_roots(s: &Slot, roots: &mut Vec<SlotIndex>) {
+            s.each_ref_slot(|e| roots.push(e));
+        }
+        for s in &self.stack {
+            slot_roots(s, &mut roots);
+        }
+        for s in &self.locals {
+            slot_roots(s, &mut roots);
+        }
+        for s in &self.args {
+            slot_roots(s, &mut roots);
+        }
+        slot_roots(&self.this_val, &mut roots);
+        slot_roots(&self.exception, &mut roots);
+        for f in &self.call_stack {
+            for s in &f.locals {
+                slot_roots(s, &mut roots);
+            }
+            for s in &f.args {
+                slot_roots(s, &mut roots);
+            }
+            slot_roots(&f.this_val, &mut roots);
+            slot_roots(&f.result, &mut roots);
+            roots.push(f.cur_func);
+        }
+        for (_, s) in &self.well_known_symbols {
+            slot_roots(s, &mut roots);
+        }
+        for (idx, _, s) in &self.proto_value_data {
+            roots.push(*idx);
+            slot_roots(s, &mut roots);
+        }
+        roots.push(self.cur_func);
+        roots.push(self.global_obj);
+        roots.extend(self.global_props.values().copied());
+        roots.extend(self.intrinsics.values().copied());
+        roots.extend([
+            self.object_proto,
+            self.function_proto,
+            self.array_proto,
+            self.map_proto,
+            self.set_proto,
+            self.weakmap_proto,
+            self.weakset_proto,
+            self.arraybuffer_proto,
+            self.dataview_proto,
+            self.array_iterator_proto,
+            self.string_proto,
+            self.number_proto,
+            self.symbol_proto,
+            self.promise_proto,
+            self.generator_proto,
+            self.async_function_proto,
+            self.regexp_proto,
+            self.math_object,
+        ]);
+        for (holder, _, method) in &self.proto_methods {
+            roots.push(*holder);
+            roots.push(*method);
+        }
+        for (holder, _, _) in &self.proto_data {
+            roots.push(*holder);
+        }
+        // Symbol.for registry entries are strong per spec.
+        roots.extend(self.symbol_registry.values().copied());
+        for f in &self.gen_run_stack {
+            roots.push(f.gen);
+        }
+        for f in &self.async_run_stack {
+            roots.push(f.inst);
+        }
+
+        struct Hooks<'a> {
+            functions: &'a mut std::collections::HashMap<SlotIndex, FuncInfo>,
+            bound_functions: &'a mut std::collections::HashMap<SlotIndex, BoundData>,
+            ctor_prototype: &'a mut std::collections::HashMap<SlotIndex, SlotIndex>,
+            wrapper_data: &'a mut std::collections::HashMap<SlotIndex, Slot>,
+            arrays: &'a mut std::collections::HashMap<SlotIndex, ArrayData>,
+            collections: &'a mut std::collections::HashMap<SlotIndex, CollectionData>,
+            array_buffers: &'a mut std::collections::HashMap<SlotIndex, ArrayBufferData>,
+            typed_arrays: &'a mut std::collections::HashMap<SlotIndex, TypedArrayData>,
+            data_views: &'a mut std::collections::HashMap<SlotIndex, DataViewData>,
+            iterators: &'a mut std::collections::HashMap<SlotIndex, IterState>,
+            promises: &'a mut std::collections::HashMap<SlotIndex, PromiseData>,
+            generators: &'a mut std::collections::HashMap<SlotIndex, GeneratorData>,
+            async_instances: &'a mut std::collections::HashMap<SlotIndex, AsyncData>,
+            promise_functions: &'a mut std::collections::HashMap<SlotIndex, PromiseFnData>,
+            stack: &'a mut Vec<Slot>,
+            locals: &'a mut Vec<Slot>,
+            args: &'a mut Vec<Slot>,
+            this_val: &'a mut Slot,
+            exception: &'a mut Slot,
+            call_stack: &'a mut Vec<CallerState>,
+            well_known_symbols: &'a mut Vec<(&'static str, Slot)>,
+            proto_value_data: &'a mut Vec<(SlotIndex, &'static str, Slot)>,
+            swept: Vec<SlotIndex>,
+        }
+
+        fn saved_frame_slots(f: &SavedFrame, visit: &mut dyn FnMut(SlotIndex)) {
+            for s in &f.locals {
+                s.each_ref_slot(&mut *visit);
+            }
+            for s in &f.args {
+                s.each_ref_slot(&mut *visit);
+            }
+            for s in &f.stack_slice {
+                s.each_ref_slot(&mut *visit);
+            }
+            f.this_val.each_ref_slot(&mut *visit);
+            f.result.each_ref_slot(&mut *visit);
+            visit(f.cur_func);
+        }
+
+        // Rewrite a chunk offset carried INSIDE a stored Slot.
+        fn slot_chunk(s: &mut Slot, visit: &mut dyn FnMut(&mut ChunkOffset)) {
+            if let Some(off) = s.chunk_ref() {
+                let mut o = off;
+                visit(&mut o);
+                if o != off {
+                    s.set_chunk_ref(o);
+                }
+            }
+        }
+
+        fn saved_frame_chunks(f: &mut SavedFrame, visit: &mut dyn FnMut(&mut ChunkOffset)) {
+            for s in &mut f.locals {
+                slot_chunk(s, visit);
+            }
+            for s in &mut f.args {
+                slot_chunk(s, visit);
+            }
+            for s in &mut f.stack_slice {
+                slot_chunk(s, visit);
+            }
+            slot_chunk(&mut f.this_val, visit);
+            slot_chunk(&mut f.result, visit);
+        }
+
+        impl crate::gc::GcHooks for Hooks<'_> {
+            fn extra_edges(&self, idx: SlotIndex, visit: &mut dyn FnMut(SlotIndex)) {
+                if let Some(f) = self.functions.get(&idx) {
+                    visit(f.closures);
+                }
+                if let Some(b) = self.bound_functions.get(&idx) {
+                    visit(b.target);
+                    b.this_arg.each_ref_slot(&mut *visit);
+                    for s in &b.args {
+                        s.each_ref_slot(&mut *visit);
+                    }
+                }
+                if let Some(p) = self.ctor_prototype.get(&idx) {
+                    visit(*p);
+                }
+                if let Some(s) = self.wrapper_data.get(&idx) {
+                    s.each_ref_slot(&mut *visit);
+                }
+                if let Some(a) = self.arrays.get(&idx) {
+                    for s in a.items.values() {
+                        s.each_ref_slot(&mut *visit);
+                    }
+                }
+                if let Some(c) = self.collections.get(&idx) {
+                    for (k, v) in &c.entries {
+                        k.each_ref_slot(&mut *visit);
+                        v.each_ref_slot(&mut *visit);
+                    }
+                }
+                if let Some(t) = self.typed_arrays.get(&idx) {
+                    visit(t.buffer);
+                }
+                if let Some(d) = self.data_views.get(&idx) {
+                    visit(d.buffer);
+                }
+                if let Some(i) = self.iterators.get(&idx) {
+                    visit(i.iterable);
+                    visit(i.result);
+                }
+                if let Some(p) = self.promises.get(&idx) {
+                    p.result.each_ref_slot(&mut *visit);
+                    for r in &p.reactions {
+                        r.on_fulfilled.each_ref_slot(&mut *visit);
+                        r.on_rejected.each_ref_slot(&mut *visit);
+                        r.resolve.each_ref_slot(&mut *visit);
+                        r.reject.each_ref_slot(&mut *visit);
+                    }
+                }
+                if let Some(g) = self.generators.get(&idx) {
+                    if let Some(f) = &g.frame {
+                        saved_frame_slots(f, visit);
+                    }
+                }
+                if let Some(a) = self.async_instances.get(&idx) {
+                    visit(a.result_promise);
+                    a.resolve_fn.each_ref_slot(&mut *visit);
+                    a.reject_fn.each_ref_slot(&mut *visit);
+                    if let Some(f) = &a.frame {
+                        saved_frame_slots(f, visit);
+                    }
+                }
+                if let Some(p) = self.promise_functions.get(&idx) {
+                    visit(p.promise);
+                }
+            }
+
+            fn swept(&mut self, idx: SlotIndex) {
+                self.swept.push(idx);
+            }
+
+            fn external_chunk_refs(&mut self, visit: &mut dyn FnMut(&mut ChunkOffset)) {
+                for f in self.functions.values_mut() {
+                    visit(&mut f.name_chunk);
+                }
+                for b in self.array_buffers.values_mut() {
+                    visit(&mut b.data);
+                }
+                for b in self.bound_functions.values_mut() {
+                    slot_chunk(&mut b.this_arg, visit);
+                    for s in &mut b.args {
+                        slot_chunk(s, visit);
+                    }
+                }
+                for s in self.wrapper_data.values_mut() {
+                    slot_chunk(s, visit);
+                }
+                for a in self.arrays.values_mut() {
+                    for s in a.items.values_mut() {
+                        slot_chunk(s, visit);
+                    }
+                }
+                for c in self.collections.values_mut() {
+                    for (k, v) in &mut c.entries {
+                        slot_chunk(k, visit);
+                        slot_chunk(v, visit);
+                    }
+                }
+                for p in self.promises.values_mut() {
+                    slot_chunk(&mut p.result, visit);
+                    for r in &mut p.reactions {
+                        slot_chunk(&mut r.on_fulfilled, visit);
+                        slot_chunk(&mut r.on_rejected, visit);
+                        slot_chunk(&mut r.resolve, visit);
+                        slot_chunk(&mut r.reject, visit);
+                    }
+                }
+                for g in self.generators.values_mut() {
+                    if let Some(f) = &mut g.frame {
+                        saved_frame_chunks(f, visit);
+                    }
+                }
+                for a in self.async_instances.values_mut() {
+                    slot_chunk(&mut a.resolve_fn, visit);
+                    slot_chunk(&mut a.reject_fn, visit);
+                    if let Some(f) = &mut a.frame {
+                        saved_frame_chunks(f, visit);
+                    }
+                }
+                for s in self.stack.iter_mut() {
+                    slot_chunk(s, visit);
+                }
+                for s in self.locals.iter_mut() {
+                    slot_chunk(s, visit);
+                }
+                for s in self.args.iter_mut() {
+                    slot_chunk(s, visit);
+                }
+                slot_chunk(self.this_val, visit);
+                slot_chunk(self.exception, visit);
+                for f in self.call_stack.iter_mut() {
+                    for s in &mut f.locals {
+                        slot_chunk(s, visit);
+                    }
+                    for s in &mut f.args {
+                        slot_chunk(s, visit);
+                    }
+                    slot_chunk(&mut f.this_val, visit);
+                    slot_chunk(&mut f.result, visit);
+                }
+                for (_, s) in self.well_known_symbols.iter_mut() {
+                    slot_chunk(s, visit);
+                }
+                for (_, _, s) in self.proto_value_data.iter_mut() {
+                    slot_chunk(s, visit);
+                }
+            }
+        }
+
+        let mut hooks = Hooks {
+            functions: &mut self.functions,
+            bound_functions: &mut self.bound_functions,
+            ctor_prototype: &mut self.ctor_prototype,
+            wrapper_data: &mut self.wrapper_data,
+            arrays: &mut self.arrays,
+            collections: &mut self.collections,
+            array_buffers: &mut self.array_buffers,
+            typed_arrays: &mut self.typed_arrays,
+            data_views: &mut self.data_views,
+            iterators: &mut self.iterators,
+            promises: &mut self.promises,
+            generators: &mut self.generators,
+            async_instances: &mut self.async_instances,
+            promise_functions: &mut self.promise_functions,
+            stack: &mut self.stack,
+            locals: &mut self.locals,
+            args: &mut self.args,
+            this_val: &mut self.this_val,
+            exception: &mut self.exception,
+            call_stack: &mut self.call_stack,
+            well_known_symbols: &mut self.well_known_symbols,
+            proto_value_data: &mut self.proto_value_data,
+            swept: Vec::new(),
+        };
+        let stats = crate::gc::collect_full(&mut self.slots, &mut self.chunks, &roots, &mut hooks);
+        let swept = std::mem::take(&mut hooks.swept);
+        drop(hooks);
+
+        // Drop every side-table entry keyed by a reclaimed slot — the
+        // sweep half of the side-table liveness contract.
+        let dead: std::collections::HashSet<SlotIndex> = swept.into_iter().collect();
+        self.functions.retain(|k, _| !dead.contains(k));
+        self.bound_functions.retain(|k, _| !dead.contains(k));
+        self.ctor_prototype.retain(|k, _| !dead.contains(k));
+        self.wrapper_data.retain(|k, _| !dead.contains(k));
+        self.error_data.retain(|k, _| !dead.contains(k));
+        self.arrays.retain(|k, _| !dead.contains(k));
+        self.collections.retain(|k, _| !dead.contains(k));
+        self.array_buffers.retain(|k, _| !dead.contains(k));
+        self.typed_arrays.retain(|k, _| !dead.contains(k));
+        self.data_views.retain(|k, _| !dead.contains(k));
+        self.iterators.retain(|k, _| !dead.contains(k));
+        self.promises.retain(|k, _| !dead.contains(k));
+        self.generators.retain(|k, _| !dead.contains(k));
+        self.async_instances.retain(|k, _| !dead.contains(k));
+        self.promise_functions.retain(|k, _| !dead.contains(k));
+        self.regexps.retain(|k, _| !dead.contains(k));
+        self.symbol_key_ids.retain(|k, _| !dead.contains(k));
+        self.symbol_registry_keys.retain(|k, _| !dead.contains(k));
+
+        stats
+    }
+}

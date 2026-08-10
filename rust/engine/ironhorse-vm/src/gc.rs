@@ -55,59 +55,115 @@ impl Heap {
     /// then slide-compact the chunk arena and rewrite the surviving
     /// string slots' offsets.
     pub fn collect(&mut self, roots: &[SlotIndex]) -> GcStats {
-        let chunk_bytes_before = self.chunks.byte_size();
+        struct NoHooks;
+        impl GcHooks for NoHooks {
+            fn extra_edges(&self, _: SlotIndex, _: &mut dyn FnMut(SlotIndex)) {}
+            fn swept(&mut self, _: SlotIndex) {}
+            fn external_chunk_refs(&mut self, _: &mut dyn FnMut(&mut ChunkOffset)) {}
+        }
+        collect_full(&mut self.slots, &mut self.chunks, roots, &mut NoHooks)
+    }
+}
 
-        // --- mark (worklist trace, cycle-safe via the mark bit) ---
-        self.slots.clear_marks();
-        let mut worklist: Vec<SlotIndex> = Vec::new();
-        for &r in roots {
-            if self.slots.mark(r) {
-                worklist.push(r);
+/// The machine-state hooks [`collect_full`] traces through — one
+/// object rather than separate closures so the machine's side tables
+/// can be read during mark and rewritten during compaction under one
+/// set of borrows.
+pub trait GcHooks {
+    /// Report `idx`'s side-table-held outgoing slot references.
+    fn extra_edges(&self, idx: SlotIndex, visit: &mut dyn FnMut(SlotIndex));
+    /// `idx` was reclaimed; the machine drops entries keyed by it.
+    fn swept(&mut self, idx: SlotIndex);
+    /// Enumerate every chunk offset held outside the slot arena.
+    /// Called twice: before compaction (liveness) and after (rewrite).
+    fn external_chunk_refs(&mut self, visit: &mut dyn FnMut(&mut ChunkOffset));
+}
+
+/// The full collection the machine wires (the side-table liveness fix
+/// from the adversarial review): mark/sweep/compact over the two
+/// arenas, extended with the machine state the arenas cannot see.
+///
+/// - `extra_edges(idx, visit)` is called once per newly marked slot;
+///   the machine reports the slot's **side-table-held** outgoing slot
+///   references (a closure's capture record, an iterator's target, a
+///   generator frame's saved slots …) so keyed side-table state keeps
+///   its object graph alive — as an edge from the keyed object, never
+///   a root, so a dead object's table entry cannot leak it.
+/// - `swept(idx)` is called for every reclaimed slot so the machine
+///   drops the side-table entries keyed by it.
+/// - `external_chunk_refs(visit)` enumerates every chunk offset the
+///   machine holds **outside** the slot arena (a function's name
+///   chunk, an ArrayBuffer's backing store, a string `Slot` stored in
+///   a side table or on the value stack). It is called twice: before
+///   compaction so those chunks count as live, and after so they are
+///   rewritten to their new offsets — exactly the treatment
+///   arena-resident string slots get.
+pub fn collect_full(
+    slots: &mut SlotArena,
+    chunks: &mut ChunkArena,
+    roots: &[SlotIndex],
+    hooks: &mut dyn GcHooks,
+) -> GcStats {
+    let chunk_bytes_before = chunks.byte_size();
+
+    // --- mark (worklist trace, cycle-safe via the mark bit) ---
+    slots.clear_marks();
+    let mut worklist: Vec<SlotIndex> = Vec::new();
+    for &r in roots {
+        if slots.mark(r) {
+            worklist.push(r);
+        }
+    }
+    while let Some(idx) = worklist.pop() {
+        // Collect edges first (immutable borrow), then mark (mutable).
+        let mut edges: Vec<SlotIndex> = Vec::new();
+        slots.get(idx).each_ref_slot(|e| edges.push(e));
+        hooks.extra_edges(idx, &mut |e| edges.push(e));
+        for e in edges {
+            if slots.mark(e) {
+                worklist.push(e);
             }
         }
-        while let Some(idx) = worklist.pop() {
-            // Collect edges first (immutable borrow), then mark (mutable).
-            let mut edges: Vec<SlotIndex> = Vec::new();
-            self.slots.get(idx).each_ref_slot(|e| edges.push(e));
-            for e in edges {
-                if self.slots.mark(e) {
-                    worklist.push(e);
+    }
+
+    // --- sweep ---
+    let slots_reclaimed = slots.sweep_each(&mut |idx| hooks.swept(idx));
+
+    // --- compact chunks: gather the offsets the surviving string
+    // slots AND the machine's external holders reference, slide them
+    // down, and rewrite every holder. ---
+    let mut live_offsets: Vec<ChunkOffset> = Vec::new();
+    for i in 0..slots.capacity() {
+        let idx = SlotIndex(i);
+        if slots.is_marked(idx) {
+            if let Some(off) = slots.get(idx).chunk_ref() {
+                live_offsets.push(off);
+            }
+        }
+    }
+    hooks.external_chunk_refs(&mut |off: &mut ChunkOffset| live_offsets.push(*off));
+    let remap = chunks.compact(&live_offsets);
+    for i in 0..slots.capacity() {
+        let idx = SlotIndex(i);
+        if slots.is_marked(idx) {
+            if let Some(off) = slots.get(idx).chunk_ref() {
+                if let Some(&new_off) = remap.get(&off) {
+                    slots.get_mut(idx).set_chunk_ref(new_off);
                 }
             }
         }
-
-        // --- sweep ---
-        let slots_reclaimed = self.slots.sweep();
-
-        // --- compact chunks: gather the offsets the surviving string
-        // slots hold, slide them down, and rewrite each survivor. ---
-        let mut live_offsets: Vec<ChunkOffset> = Vec::new();
-        for i in 0..self.slots.capacity() {
-            let idx = SlotIndex(i);
-            if self.slots.is_marked(idx) {
-                if let Some(off) = self.slots.get(idx).chunk_ref() {
-                    live_offsets.push(off);
-                }
-            }
+    }
+    hooks.external_chunk_refs(&mut |off: &mut ChunkOffset| {
+        if let Some(&new_off) = remap.get(off) {
+            *off = new_off;
         }
-        let remap = self.chunks.compact(&live_offsets);
-        for i in 0..self.slots.capacity() {
-            let idx = SlotIndex(i);
-            if self.slots.is_marked(idx) {
-                if let Some(off) = self.slots.get(idx).chunk_ref() {
-                    if let Some(&new_off) = remap.get(&off) {
-                        self.slots.get_mut(idx).set_chunk_ref(new_off);
-                    }
-                }
-            }
-        }
+    });
 
-        GcStats {
-            slots_reclaimed,
-            slots_live: self.slots.live_count(),
-            chunk_bytes_before,
-            chunk_bytes_after: self.chunks.byte_size(),
-        }
+    GcStats {
+        slots_reclaimed,
+        slots_live: slots.live_count(),
+        chunk_bytes_before,
+        chunk_bytes_after: chunks.byte_size(),
     }
 }
 
