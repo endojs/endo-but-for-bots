@@ -63,6 +63,18 @@ const EvaluateMethodGuard = M.call(
   .optional(NameOrPathShape)
   .returns(M.promise());
 
+// No-wait evaluate: result name is required by application code (clear
+// TypeError message). Guard accepts undefined so the application check runs
+// before any persistence, rather than only a shape-guard message.
+const StartEvaluateMethodGuard = M.call(
+  M.or(NameOrPathShape, M.undefined()),
+  M.string(),
+  M.arrayOf(M.string()),
+  NamesOrPathsShape,
+)
+  .optional(M.or(NameOrPathShape, M.undefined()))
+  .returns(M.promise());
+
 // #region Interfaces
 
 export const WorkerInterface = M.interface('EndoWorker', {});
@@ -257,6 +269,7 @@ export const GuestInterface = M.interface('EndoGuest', {
   deliver: M.call(M.record()).returns(),
   // Evaluate code directly in a worker
   evaluate: EvaluateMethodGuard,
+  startEvaluate: StartEvaluateMethodGuard,
 });
 
 export const HostInterface = M.interface('EndoHost', {
@@ -421,12 +434,27 @@ export const HostInterface = M.interface('EndoHost', {
   provideWorker: M.call(NameOrPathShape).returns(M.promise()),
   // Evaluate code directly in a worker
   evaluate: EvaluateMethodGuard,
+  startEvaluate: StartEvaluateMethodGuard,
   // Make an unconfined caplet
   makeUnconfined: M.call(M.or(NameOrPathShape, M.undefined()), M.string())
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
+  startMakeUnconfined: M.call(
+    M.or(NameOrPathShape, M.undefined()),
+    M.string(),
+    NameOrPathShape,
+  )
+    .optional(MakeCapletOptionsShape)
+    .returns(M.promise()),
   // Make a caplet from a source-only ZIP archive
   makeArchive: M.call(M.or(NameOrPathShape, M.undefined()), NameOrPathShape)
+    .optional(MakeCapletOptionsShape)
+    .returns(M.promise()),
+  startMakeArchive: M.call(
+    M.or(NameOrPathShape, M.undefined()),
+    NameOrPathShape,
+    NameOrPathShape,
+  )
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
   // Make a caplet from a ReadableTree or Mount laid out as a
@@ -435,12 +463,26 @@ export const HostInterface = M.interface('EndoHost', {
   makeFromTree: M.call(M.or(NameOrPathShape, M.undefined()), NameOrPathShape)
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
+  startMakeFromTree: M.call(
+    M.or(NameOrPathShape, M.undefined()),
+    NameOrPathShape,
+    NameOrPathShape,
+  )
+    .optional(MakeCapletOptionsShape)
+    .returns(M.promise()),
   // Materialise a readable tree into a new scratch mount.
   stageTree: M.call(NameOrPathShape, NameOrPathShape).returns(M.promise()),
   // Stage a readable tree and run its entry module as an unconfined
   // Node caplet.
   makeUnconfinedFromTree: M.call(
     M.or(NameOrPathShape, M.undefined()),
+    NameOrPathShape,
+  )
+    .optional(MakeCapletOptionsShape)
+    .returns(M.promise()),
+  startMakeUnconfinedFromTree: M.call(
+    M.or(NameOrPathShape, M.undefined()),
+    NameOrPathShape,
     NameOrPathShape,
   )
     .optional(MakeCapletOptionsShape)

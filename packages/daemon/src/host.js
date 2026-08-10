@@ -40,7 +40,12 @@ import {
 import { toHex, fromHex } from './hex.js';
 import { makePetSitter } from './pet-sitter.js';
 
-import { makeDeferredTasks } from './deferred-tasks.js';
+import {
+  makeDeferredTasks,
+  makeStoreIdentifierTask,
+  makePinTransientTask,
+  makeLocalOrDirectoryStoreTask,
+} from './deferred-tasks.js';
 import { makeFormulaRecord } from './formula-record.js';
 
 import {
@@ -537,8 +542,12 @@ export const makeHostMaker = ({
 
       /** @type {DeferredTasks<ReadableBlobDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
-      tasks.push(identifiers =>
-        E(directory).storeIdentifier(namePath, identifiers.readableBlobId),
+      tasks.push(
+        makeStoreIdentifierTask(
+          (p, id) => E(directory).storeIdentifier(p, id),
+          namePath,
+          ids => ids.readableBlobId,
+        ),
       );
 
       const { value } = await formulateReadableBlob(readerRef, tasks);
@@ -555,8 +564,12 @@ export const makeHostMaker = ({
 
       /** @type {DeferredTasks<ReadableTreeDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
-      tasks.push(identifiers =>
-        E(directory).storeIdentifier(namePath, identifiers.readableTreeId),
+      tasks.push(
+        makeStoreIdentifierTask(
+          (p, id) => E(directory).storeIdentifier(p, id),
+          namePath,
+          ids => ids.readableTreeId,
+        ),
       );
 
       const { value } = await checkinTree(remoteTree, tasks);
@@ -579,8 +592,12 @@ export const makeHostMaker = ({
 
       /** @type {DeferredTasks<MountDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
-      tasks.push(identifiers =>
-        E(directory).storeIdentifier(namePath, identifiers.mountId),
+      tasks.push(
+        makeStoreIdentifierTask(
+          (p, id) => E(directory).storeIdentifier(p, id),
+          namePath,
+          ids => ids.mountId,
+        ),
       );
 
       const { value } = await formulateMount(
@@ -649,8 +666,12 @@ export const makeHostMaker = ({
 
       /** @type {DeferredTasks<ScratchMountDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
-      tasks.push(identifiers =>
-        E(directory).storeIdentifier(namePath, identifiers.scratchMountId),
+      tasks.push(
+        makeStoreIdentifierTask(
+          (p, id) => E(directory).storeIdentifier(p, id),
+          namePath,
+          ids => ids.scratchMountId,
+        ),
       );
 
       const { value } = await formulateScratchMount(
@@ -861,8 +882,12 @@ export const makeHostMaker = ({
 
       /** @type {DeferredTasks<GitDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
-      tasks.push(identifiers =>
-        E(directory).storeIdentifier(namePath, identifiers.gitId),
+      tasks.push(
+        makeStoreIdentifierTask(
+          (p, id) => E(directory).storeIdentifier(p, id),
+          namePath,
+          ids => ids.gitId,
+        ),
       );
 
       const { allowHistoryRewrite = false, readOnly = false } = options;
@@ -915,8 +940,12 @@ export const makeHostMaker = ({
 
       /** @type {DeferredTasks<ShellDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
-      tasks.push(identifiers =>
-        E(directory).storeIdentifier(namePath, identifiers.shellId),
+      tasks.push(
+        makeStoreIdentifierTask(
+          (p, id) => E(directory).storeIdentifier(p, id),
+          namePath,
+          ids => ids.shellId,
+        ),
       );
 
       const { value } = await formulateShell(mountId, normalizedPolicy, tasks);
@@ -934,8 +963,12 @@ export const makeHostMaker = ({
 
       /** @type {DeferredTasks<HttpClientDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
-      tasks.push(identifiers =>
-        E(directory).storeIdentifier(namePath, identifiers.httpClientId),
+      tasks.push(
+        makeStoreIdentifierTask(
+          (p, id) => E(directory).storeIdentifier(p, id),
+          namePath,
+          ids => ids.httpClientId,
+        ),
       );
 
       const { value } = await formulateHttpClient(normalizedPolicy, tasks);
@@ -975,8 +1008,12 @@ export const makeHostMaker = ({
 
       /** @type {DeferredTasks<GitCredentialDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
-      tasks.push(identifiers =>
-        E(directory).storeIdentifier(namePath, identifiers.gitCredentialId),
+      tasks.push(
+        makeStoreIdentifierTask(
+          (p, id) => E(directory).storeIdentifier(p, id),
+          namePath,
+          ids => ids.gitCredentialId,
+        ),
       );
 
       const { value } = await formulateGitCredential(
@@ -1011,8 +1048,12 @@ export const makeHostMaker = ({
 
       /** @type {DeferredTasks<GitCredentialDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
-      tasks.push(identifiers =>
-        E(directory).storeIdentifier(namePath, identifiers.gitCredentialId),
+      tasks.push(
+        makeStoreIdentifierTask(
+          (p, id) => E(directory).storeIdentifier(p, id),
+          namePath,
+          ids => ids.gitCredentialId,
+        ),
       );
 
       const { value } = await formulateGitCredential(
@@ -1107,8 +1148,12 @@ export const makeHostMaker = ({
 
       /** @type {DeferredTasks<GitRemoteDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
-      tasks.push(identifiers =>
-        E(directory).storeIdentifier(namePath, identifiers.gitRemoteId),
+      tasks.push(
+        makeStoreIdentifierTask(
+          (p, id) => E(directory).storeIdentifier(p, id),
+          namePath,
+          ids => ids.gitRemoteId,
+        ),
       );
 
       const { value } = await formulateGitRemote(
@@ -1247,8 +1292,12 @@ export const makeHostMaker = ({
       /** @type {DeferredTasks<MarshalDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
 
-      tasks.push(identifiers =>
-        E(directory).storeIdentifier(namePath, identifiers.marshalId),
+      tasks.push(
+        makeStoreIdentifierTask(
+          (p, id) => E(directory).storeIdentifier(p, id),
+          namePath,
+          ids => ids.marshalId,
+        ),
       );
 
       const { id } = await formulateMarshalValue(value, tasks, pinTransient);
@@ -1268,8 +1317,12 @@ export const makeHostMaker = ({
 
       /** @type {DeferredTasks<WorkerDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
-      tasks.push(identifiers =>
-        E(directory).storeIdentifier(namePath, identifiers.workerId),
+      tasks.push(
+        makeStoreIdentifierTask(
+          (p, id) => E(directory).storeIdentifier(p, id),
+          namePath,
+          ids => ids.workerId,
+        ),
       );
       const workerLabel = namePath[namePath.length - 1];
       const { value } = await formulateWorker(tasks, undefined, workerLabel);
@@ -1296,10 +1349,14 @@ export const makeHostMaker = ({
       );
       if (workerId === undefined) {
         const { namePath, petName } = assertPetNamePath(workerNamePath);
-        deferTask(identifiers =>
-          namePath.length === 1
-            ? petStore.storeIdentifier(petName, identifiers.workerId)
-            : E(directory).storeIdentifier(namePath, identifiers.workerId),
+        deferTask(
+          makeLocalOrDirectoryStoreTask(
+            petStore,
+            (p, id) => E(directory).storeIdentifier(p, id),
+            namePath,
+            petName,
+            ids => ids.workerId,
+          ),
         );
         return { workerId: undefined, workerLabel: petName };
       }
@@ -1310,14 +1367,14 @@ export const makeHostMaker = ({
     };
 
     /**
-     * Evaluate code directly in a worker.
+     * Shared evaluate path returning daemon-core `{ id, value }`.
      * @param {NameOrPath | undefined} workerName
      * @param {string} source
      * @param {Array<string>} codeNames
      * @param {(string | string[])[]} petNamePaths
      * @param {NameOrPath | undefined} resultName
      */
-    const evaluate = async (
+    const evaluateInternal = async (
       workerName,
       source,
       codeNames,
@@ -1361,12 +1418,16 @@ export const makeHostMaker = ({
 
       if (resultName !== undefined) {
         const { namePath: resultNamePath } = petNamePathFrom(resultName);
-        tasks.push(identifiers =>
-          E(directory).storeIdentifier(resultNamePath, identifiers.evalId),
+        tasks.push(
+          makeStoreIdentifierTask(
+            (p, id) => E(directory).storeIdentifier(p, id),
+            resultNamePath,
+            ids => ids.evalId,
+          ),
         );
       }
 
-      const { id, value } = await formulateEval(
+      return formulateEval(
         hostId,
         source,
         codeNames,
@@ -1375,6 +1436,30 @@ export const makeHostMaker = ({
         workerId,
         resultName === undefined ? pinTransient : undefined,
         workerLabel,
+      );
+    };
+
+    /**
+     * Evaluate code directly in a worker (waits for construction).
+     * @param {NameOrPath | undefined} workerName
+     * @param {string} source
+     * @param {Array<string>} codeNames
+     * @param {(string | string[])[]} petNamePaths
+     * @param {NameOrPath | undefined} resultName
+     */
+    const evaluate = async (
+      workerName,
+      source,
+      codeNames,
+      petNamePaths,
+      resultName,
+    ) => {
+      const { id, value } = await evaluateInternal(
+        workerName,
+        source,
+        codeNames,
+        petNamePaths,
+        resultName,
       );
       if (resultName === undefined) {
         // Ephemeral eval: the formula was pinned inside formulateEval
@@ -1388,6 +1473,44 @@ export const makeHostMaker = ({
         }
       }
       return value;
+    };
+
+    /**
+     * No-wait evaluate: returns a data-only FormulationReceipt after
+     * formula persistence and result-name commit; construction may still
+     * be pending. Requires a result name for durable retention.
+     *
+     * @param {NameOrPath | undefined} workerName
+     * @param {string} source
+     * @param {Array<string>} codeNames
+     * @param {(string | string[])[]} petNamePaths
+     * @param {NameOrPath} resultName
+     */
+    const startEvaluate = async (
+      workerName,
+      source,
+      codeNames,
+      petNamePaths,
+      resultName,
+    ) => {
+      if (resultName === undefined) {
+        throw new TypeError(
+          'startEvaluate requires a result name for durable retention',
+        );
+      }
+      // Validate path syntax before any persistence.
+      petNamePathFrom(resultName);
+      const { id } = await evaluateInternal(
+        workerName,
+        source,
+        codeNames,
+        petNamePaths,
+        resultName,
+      );
+      return harden({
+        id,
+        locator: formatLocator(id, 'eval'),
+      });
     };
 
     /**
@@ -1423,23 +1546,25 @@ export const makeHostMaker = ({
       );
       if (powersId === undefined) {
         const { petName: powersPetName } = assertPetNamePath(powersNamePath);
-        tasks.push(identifiers =>
-          powersNamePath.length === 1
-            ? petStore.storeIdentifier(powersPetName, identifiers.powersId)
-            : E(directory).storeIdentifier(
-                powersNamePath,
-                identifiers.powersId,
-              ),
+        tasks.push(
+          makeLocalOrDirectoryStoreTask(
+            petStore,
+            (p, id) => E(directory).storeIdentifier(p, id),
+            powersNamePath,
+            powersPetName,
+            ids => ids.powersId,
+          ),
         );
       }
 
       if (resultName !== undefined) {
-        tasks.push(identifiers =>
-          E(directory).storeIdentifier(
-            namePathFrom(resultName),
-            identifiers.capletId,
-          ),
-        );
+        tasks.push(
+        makeStoreIdentifierTask(
+          (p, id) => E(directory).storeIdentifier(p, id),
+          namePathFrom(resultName),
+          ids => ids.capletId,
+        ),
+      );
       }
 
       return {
@@ -1452,8 +1577,13 @@ export const makeHostMaker = ({
       };
     };
 
-    /** @type {EndoHost['makeUnconfined']} */
-    const makeUnconfined = async (workerName, specifier, options) => {
+    /**
+     * Shared makeUnconfined path returning `{ id, value }`.
+     * @param {NameOrPath | undefined} workerName
+     * @param {string} specifier
+     * @param {MakeCapletOptions} [options]
+     */
+    const makeUnconfinedInternal = async (workerName, specifier, options) => {
       // makeUnconfined is unconditionally Node-shaped (loads a plugin
       // by filesystem path through Node's module loader).  When no
       // worker is named *and* the caller has not requested trusted
@@ -1482,8 +1612,7 @@ export const makeHostMaker = ({
           ? `${options.resultName}`
           : `unconfined:${specifier}`);
 
-      // Behold, recursion:
-      const { value } = await formulateUnconfined(
+      return formulateUnconfined(
         hostId,
         handleId,
         specifier,
@@ -1494,11 +1623,48 @@ export const makeHostMaker = ({
         workerTrustedShims,
         workerLabel,
       );
+    };
+
+    /** @type {EndoHost['makeUnconfined']} */
+    const makeUnconfined = async (workerName, specifier, options) => {
+      const { value } = await makeUnconfinedInternal(
+        workerName,
+        specifier,
+        options,
+      );
       return value;
     };
 
-    /** @type {EndoHost['makeArchive']} */
-    const makeArchive = async (workerName, archiveName, options) => {
+    /**
+     * @param {NameOrPath | undefined} workerName
+     * @param {string} specifier
+     * @param {NameOrPath} resultName
+     * @param {Omit<MakeCapletOptions, 'resultName'>} [options]
+     */
+    const startMakeUnconfined = async (
+      workerName,
+      specifier,
+      resultName,
+      options = {},
+    ) => {
+      petNamePathFrom(resultName);
+      const { id } = await makeUnconfinedInternal(workerName, specifier, {
+        ...options,
+        resultName,
+      });
+      return harden({
+        id,
+        locator: formatLocator(id, 'make-unconfined'),
+      });
+    };
+
+    /**
+     * Shared makeArchive path returning `{ id, value }`.
+     * @param {NameOrPath | undefined} workerName
+     * @param {NameOrPath} archiveName
+     * @param {MakeCapletOptions} [options]
+     */
+    const makeArchiveInternal = async (workerName, archiveName, options) => {
       // A single segment resolves against the agent's own pet store; a
       // path resolves the source archive through the directory.
       const archiveNamePath = namePathFrom(archiveName);
@@ -1527,7 +1693,7 @@ export const makeHostMaker = ({
           ? `${options.resultName}`
           : `archive:${archiveName}`);
 
-      const { value } = await formulateArchive(
+      return formulateArchive(
         hostId,
         handleId,
         /** @type {FormulaIdentifier} */ (archiveId),
@@ -1538,7 +1704,39 @@ export const makeHostMaker = ({
         workerTrustedShims,
         workerLabel,
       );
+    };
+
+    /** @type {EndoHost['makeArchive']} */
+    const makeArchive = async (workerName, archiveName, options) => {
+      const { value } = await makeArchiveInternal(
+        workerName,
+        archiveName,
+        options,
+      );
       return value;
+    };
+
+    /**
+     * @param {NameOrPath | undefined} workerName
+     * @param {NameOrPath} archiveName
+     * @param {NameOrPath} resultName
+     * @param {Omit<MakeCapletOptions, 'resultName'>} [options]
+     */
+    const startMakeArchive = async (
+      workerName,
+      archiveName,
+      resultName,
+      options = {},
+    ) => {
+      petNamePathFrom(resultName);
+      const { id } = await makeArchiveInternal(workerName, archiveName, {
+        ...options,
+        resultName,
+      });
+      return harden({
+        id,
+        locator: formatLocator(id, 'make-archive'),
+      });
     };
 
     /**
@@ -1675,8 +1873,16 @@ export const makeHostMaker = ({
       return scratchMount;
     };
 
-    /** @type {EndoHost['makeUnconfinedFromTree']} */
-    const makeUnconfinedFromTree = async (workerName, treeName, options) => {
+    /**
+     * @param {NameOrPath | undefined} workerName
+     * @param {NameOrPath} treeName
+     * @param {MakeCapletOptions & { entry?: string }} [options]
+     */
+    const makeUnconfinedFromTreeInternal = async (
+      workerName,
+      treeName,
+      options,
+    ) => {
       const entry = options?.entry ?? 'index.js';
       const resultLabel =
         options?.resultName !== undefined
@@ -1704,15 +1910,53 @@ export const makeHostMaker = ({
         .map(segment => encodeURIComponent(segment))
         .join('/');
       const fileUrl = `file://${encodedPath}`;
-      return makeUnconfined(
+      return makeUnconfinedInternal(
         workerName,
         fileUrl,
         /** @type {MakeCapletOptions} */ (options ?? {}),
       );
     };
 
-    /** @type {EndoHost['makeFromTree']} */
-    const makeFromTree = async (workerName, treeName, options) => {
+    /** @type {EndoHost['makeUnconfinedFromTree']} */
+    const makeUnconfinedFromTree = async (workerName, treeName, options) => {
+      const { value } = await makeUnconfinedFromTreeInternal(
+        workerName,
+        treeName,
+        options,
+      );
+      return value;
+    };
+
+    /**
+     * @param {NameOrPath | undefined} workerName
+     * @param {NameOrPath} treeName
+     * @param {NameOrPath} resultName
+     * @param {Omit<MakeCapletOptions, 'resultName'> & { entry?: string }} [options]
+     */
+    const startMakeUnconfinedFromTree = async (
+      workerName,
+      treeName,
+      resultName,
+      options = {},
+    ) => {
+      petNamePathFrom(resultName);
+      const { id } = await makeUnconfinedFromTreeInternal(workerName, treeName, {
+        ...options,
+        resultName,
+      });
+      return harden({
+        id,
+        locator: formatLocator(id, 'make-unconfined'),
+      });
+    };
+
+    /**
+     * Shared makeFromTree path returning `{ id, value }`.
+     * @param {NameOrPath | undefined} workerName
+     * @param {NameOrPath} treeName
+     * @param {MakeCapletOptions} [options]
+     */
+    const makeFromTreeInternal = async (workerName, treeName, options) => {
       const namePath = namePathFrom(treeName);
       const treeId = await E(directory).identify(...namePath);
       if (treeId === undefined) {
@@ -1736,7 +1980,7 @@ export const makeHostMaker = ({
           ? `${options.resultName}`
           : `tree:${Array.isArray(treeName) ? treeName.join('/') : treeName}`);
 
-      const { value } = await formulateFromTree(
+      return formulateFromTree(
         hostId,
         handleId,
         /** @type {FormulaIdentifier} */ (treeId),
@@ -1747,7 +1991,39 @@ export const makeHostMaker = ({
         workerTrustedShims,
         workerLabel,
       );
+    };
+
+    /** @type {EndoHost['makeFromTree']} */
+    const makeFromTree = async (workerName, treeName, options) => {
+      const { value } = await makeFromTreeInternal(
+        workerName,
+        treeName,
+        options,
+      );
       return value;
+    };
+
+    /**
+     * @param {NameOrPath | undefined} workerName
+     * @param {NameOrPath} treeName
+     * @param {NameOrPath} resultName
+     * @param {Omit<MakeCapletOptions, 'resultName'>} [options]
+     */
+    const startMakeFromTree = async (
+      workerName,
+      treeName,
+      resultName,
+      options = {},
+    ) => {
+      petNamePathFrom(resultName);
+      const { id } = await makeFromTreeInternal(workerName, treeName, {
+        ...options,
+        resultName,
+      });
+      return harden({
+        id,
+        locator: formatLocator(id, 'make-from-tree'),
+      });
     };
 
     /**
@@ -1812,19 +2088,27 @@ export const makeHostMaker = ({
       if (handleName !== undefined) {
         const { namePath: handlePath, petName: handlePetName } =
           petNamePathFrom(handleName);
-        tasks.push(identifiers =>
-          handlePath.length === 1
-            ? petStore.storeIdentifier(handlePetName, identifiers.handleId)
-            : E(directory).storeIdentifier(handlePath, identifiers.handleId),
+        tasks.push(
+          makeLocalOrDirectoryStoreTask(
+            petStore,
+            (p, id) => E(directory).storeIdentifier(p, id),
+            handlePath,
+            handlePetName,
+            ids => ids.handleId,
+          ),
         );
       }
       if (agentName !== undefined) {
         const { namePath: agentPath, petName: agentPetName } =
           petNamePathFrom(agentName);
-        tasks.push(identifiers =>
-          agentPath.length === 1
-            ? petStore.storeIdentifier(agentPetName, identifiers.agentId)
-            : E(directory).storeIdentifier(agentPath, identifiers.agentId),
+        tasks.push(
+          makeLocalOrDirectoryStoreTask(
+            petStore,
+            (p, id) => E(directory).storeIdentifier(p, id),
+            agentPath,
+            agentPetName,
+            ids => ids.agentId,
+          ),
         );
       }
       return tasks;
@@ -1952,10 +2236,14 @@ export const makeHostMaker = ({
       const { namePath, petName: timerPetName } = petNamePathFrom(petName);
       /** @type {DeferredTasks<{ timerId: import('./types.js').FormulaIdentifier }>} */
       const tasks = makeDeferredTasks();
-      tasks.push(identifiers =>
-        namePath.length === 1
-          ? petStore.storeIdentifier(timerPetName, identifiers.timerId)
-          : E(directory).storeIdentifier(namePath, identifiers.timerId),
+      tasks.push(
+        makeLocalOrDirectoryStoreTask(
+          petStore,
+          (p, id) => E(directory).storeIdentifier(p, id),
+          namePath,
+          timerPetName,
+          ids => ids.timerId,
+        ),
       );
       const { value } = await formulateTimer(
         Number(intervalMs),
@@ -1974,10 +2262,14 @@ export const makeHostMaker = ({
       const { namePath, petName: channelPetName } = petNamePathFrom(petName);
       /** @type {DeferredTasks<ChannelDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
-      tasks.push(identifiers =>
-        namePath.length === 1
-          ? petStore.storeIdentifier(channelPetName, identifiers.channelId)
-          : E(directory).storeIdentifier(namePath, identifiers.channelId),
+      tasks.push(
+        makeLocalOrDirectoryStoreTask(
+          petStore,
+          (p, id) => E(directory).storeIdentifier(p, id),
+          namePath,
+          channelPetName,
+          ids => ids.channelId,
+        ),
       );
       const { value } = await formulateChannel(
         hostId,
@@ -2005,10 +2297,14 @@ export const makeHostMaker = ({
       // inside a directory; the parent directory must already exist.
       /** @type {DeferredTasks<InvitationDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
-      tasks.push(identifiers =>
-        namePath.length === 1
-          ? petStore.storeIdentifier(guestPetName, identifiers.invitationId)
-          : E(directory).storeIdentifier(namePath, identifiers.invitationId),
+      tasks.push(
+        makeLocalOrDirectoryStoreTask(
+          petStore,
+          (p, id) => E(directory).storeIdentifier(p, id),
+          namePath,
+          guestPetName,
+          ids => ids.invitationId,
+        ),
       );
       const { value } = await formulateInvitation(
         hostId,
@@ -2088,7 +2384,7 @@ export const makeHostMaker = ({
       // collection, then store the durable name after the lock releases.
       /** @type {import('./types.js').DeferredTasks<import('./types.js').AgentDeferredTaskParams>} */
       const guestTasks = makeDeferredTasks();
-      guestTasks.push(async identifiers => pinTransient(identifiers.handleId));
+      guestTasks.push(makePinTransientTask(pinTransient, ids => ids.handleId));
       const { id: localGuestId } = await formulateGuest(
         hostId,
         handleId,
@@ -2369,9 +2665,13 @@ export const makeHostMaker = ({
 
       if (resultName !== undefined) {
         const { namePath: resultNamePath } = petNamePathFrom(resultName);
-        tasks.push(identifiers =>
-          E(directory).storeIdentifier(resultNamePath, identifiers.evalId),
-        );
+        tasks.push(
+        makeStoreIdentifierTask(
+          (p, id) => E(directory).storeIdentifier(p, id),
+          resultNamePath,
+          ids => ids.evalId,
+        ),
+      );
       }
 
       const { id: evalId } = await formulateEval(
@@ -2575,11 +2875,16 @@ export const makeHostMaker = ({
       provideHost,
       provideWorker,
       evaluate,
+      startEvaluate,
       makeUnconfined,
+      startMakeUnconfined,
       makeArchive,
+      startMakeArchive,
       makeFromTree,
+      startMakeFromTree,
       stageTree,
       makeUnconfinedFromTree,
+      startMakeUnconfinedFromTree,
       cancel,
       gateway,
       greeter,
