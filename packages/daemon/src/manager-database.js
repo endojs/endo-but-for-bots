@@ -41,6 +41,11 @@ import { q } from '@endo/errors';
  * @property {(storeNumber: string) => {localClock: number, remoteAckedClock: number}} getSyncedMeta
  * @property {(storeNumber: string, localClock: number, remoteAckedClock: number) => void} setSyncedMeta
  * @property {(storeNumber: string) => void} deleteSyncedMeta
+ * @property {(commitId: string, formulaId: string, resultNamePath: string, selectedFormulaId: string, state: 'pending' | 'committed') => void} writePendingNameCommit
+ * @property {(commitId: string) => {commitId: string, formulaId: string, resultNamePath: string, selectedFormulaId: string, state: string} | undefined} getPendingNameCommit
+ * @property {(commitId: string, state: 'pending' | 'committed') => void} updatePendingNameCommitState
+ * @property {(commitId: string) => void} deletePendingNameCommit
+ * @property {() => Array<{commitId: string, formulaId: string, resultNamePath: string, selectedFormulaId: string, state: string}>} listPendingNameCommits
  */
 
 // Node's ObjectWrap cleanup hook can be removed during GC without a current
@@ -49,7 +54,7 @@ import { q } from '@endo/errors';
 // Retain wrappers until process teardown, when an Environment is available.
 const retainedForProcessLifetime = new Set();
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS schema_version (
@@ -69,6 +74,17 @@ const SCHEMA_SQL = `
   );
 
   CREATE INDEX IF NOT EXISTS idx_formula_node ON formula(node);
+
+  CREATE TABLE IF NOT EXISTS pending_name_commit (
+    commit_id TEXT PRIMARY KEY,
+    formula_id TEXT NOT NULL,
+    result_name_path TEXT NOT NULL,
+    selected_formula_id TEXT NOT NULL,
+    state TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_pending_name_commit_formula
+    ON pending_name_commit(formula_id);
 
   CREATE TABLE IF NOT EXISTS agent_key (
     public_key TEXT PRIMARY KEY,
@@ -256,6 +272,44 @@ export const makeDaemonDatabase = (config, options) => {
   );
   const stmtDeleteSyncedMeta = prepare(
     'DELETE FROM synced_store_meta WHERE store_number = ?',
+  );
+
+  // Ensure provisional name-commit table exists on upgraded databases
+  // (schema created with SCHEMA_VERSION < 3).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pending_name_commit (
+      commit_id TEXT PRIMARY KEY,
+      formula_id TEXT NOT NULL,
+      result_name_path TEXT NOT NULL,
+      selected_formula_id TEXT NOT NULL,
+      state TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_pending_name_commit_formula
+      ON pending_name_commit(formula_id);
+  `);
+
+  const stmtWritePendingNameCommit = db.prepare(
+    `INSERT OR REPLACE INTO pending_name_commit
+      (commit_id, formula_id, result_name_path, selected_formula_id, state)
+     VALUES (?, ?, ?, ?, ?)`,
+  );
+  const stmtGetPendingNameCommit = db.prepare(
+    `SELECT commit_id AS commitId, formula_id AS formulaId,
+            result_name_path AS resultNamePath,
+            selected_formula_id AS selectedFormulaId, state
+     FROM pending_name_commit WHERE commit_id = ?`,
+  );
+  const stmtUpdatePendingNameCommitState = db.prepare(
+    'UPDATE pending_name_commit SET state = ? WHERE commit_id = ?',
+  );
+  const stmtDeletePendingNameCommit = db.prepare(
+    'DELETE FROM pending_name_commit WHERE commit_id = ?',
+  );
+  const stmtListPendingNameCommits = db.prepare(
+    `SELECT commit_id AS commitId, formula_id AS formulaId,
+            result_name_path AS resultNamePath,
+            selected_formula_id AS selectedFormulaId, state
+     FROM pending_name_commit`,
   );
 
   // -- Formula operations --
@@ -565,6 +619,57 @@ export const makeDaemonDatabase = (config, options) => {
     stmtDeleteSyncedMeta.run(storeNumber);
   };
 
+  // -- Pending name-commit operations --
+
+  /**
+   * @param {string} commitId
+   * @param {string} formulaId
+   * @param {string} resultNamePath
+   * @param {string} selectedFormulaId
+   * @param {'pending' | 'committed'} state
+   */
+  const writePendingNameCommit = (
+    commitId,
+    formulaId,
+    resultNamePath,
+    selectedFormulaId,
+    state,
+  ) => {
+    stmtWritePendingNameCommit.run(
+      commitId,
+      formulaId,
+      resultNamePath,
+      selectedFormulaId,
+      state,
+    );
+  };
+
+  /** @param {string} commitId */
+  const getPendingNameCommit = commitId => {
+    return /** @type {{commitId: string, formulaId: string, resultNamePath: string, selectedFormulaId: string, state: string} | undefined} */ (
+      stmtGetPendingNameCommit.get(commitId)
+    );
+  };
+
+  /**
+   * @param {string} commitId
+   * @param {'pending' | 'committed'} state
+   */
+  const updatePendingNameCommitState = (commitId, state) => {
+    stmtUpdatePendingNameCommitState.run(state, commitId);
+  };
+
+  /** @param {string} commitId */
+  const deletePendingNameCommit = commitId => {
+    stmtDeletePendingNameCommit.run(commitId);
+  };
+
+  const listPendingNameCommits = () => {
+    return /** @type {Array<{commitId: string, formulaId: string, resultNamePath: string, selectedFormulaId: string, state: string}>} */ (
+      stmtListPendingNameCommits.all()
+    );
+  };
+
   const close = () => {
     db.close();
   };
@@ -604,6 +709,11 @@ export const makeDaemonDatabase = (config, options) => {
     getSyncedMeta,
     setSyncedMeta,
     deleteSyncedMeta,
+    writePendingNameCommit,
+    getPendingNameCommit,
+    updatePendingNameCommitState,
+    deletePendingNameCommit,
+    listPendingNameCommits,
   });
 };
 harden(makeDaemonDatabase);

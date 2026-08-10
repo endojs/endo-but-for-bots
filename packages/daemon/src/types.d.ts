@@ -1066,7 +1066,10 @@ export type GcHooks = {
   onPetStoreWrite: (storeId: FormulaIdentifier, id: FormulaIdentifier) => void;
   onPetStoreRemove: (storeId: FormulaIdentifier, id: FormulaIdentifier) => void;
   isLocalId: (id: string) => boolean;
-  withFormulaGraphLock: (asyncFn?: () => Promise<any>) => Promise<any>;
+  withFormulaGraphLock: (
+    asyncFn?: (lockContext?: FormulaGraphLockContext) => Promise<any>,
+    lockContext?: FormulaGraphLockContext,
+  ) => Promise<any>;
 };
 
 export interface StoreController {
@@ -1523,6 +1526,14 @@ export interface EndoGuest extends EndoAgent {
     petNamesOrPaths: Array<string | string[]>,
     resultNameOrPath?: string | string[],
   ): Promise<unknown>;
+  /** No-wait evaluate; requires a result name for durable retention. */
+  startEvaluate(
+    workerPetName: string | string[] | undefined,
+    source: string,
+    codeNames: Array<string>,
+    petNamesOrPaths: Array<string | string[]>,
+    resultNameOrPath: string | string[],
+  ): Promise<FormulationReceipt>;
   define(
     source: string,
     slots: Record<string, { label: string; pattern?: unknown }>,
@@ -1752,21 +1763,46 @@ export interface EndoHost extends EndoAgent {
     petNamesOrPaths: Array<string | string[]>,
     resultName?: string | string[],
   ): Promise<unknown>;
+  startEvaluate(
+    workerPetName: string | string[] | undefined,
+    source: string,
+    codeNames: Array<string>,
+    petNamesOrPaths: Array<string | string[]>,
+    resultName: string | string[],
+  ): Promise<FormulationReceipt>;
   makeUnconfined(
     workerName: string | string[] | undefined,
     specifier: string,
     options?: MakeCapletOptions,
   ): Promise<unknown>;
+  startMakeUnconfined(
+    workerName: string | string[] | undefined,
+    specifier: string,
+    resultName: string | string[],
+    options?: Omit<MakeCapletOptions, 'resultName'>,
+  ): Promise<FormulationReceipt>;
   makeArchive(
     workerPetName: string | string[] | undefined,
     archiveName: string | string[],
     options?: MakeCapletOptions,
   ): Promise<unknown>;
+  startMakeArchive(
+    workerPetName: string | string[] | undefined,
+    archiveName: string | string[],
+    resultName: string | string[],
+    options?: Omit<MakeCapletOptions, 'resultName'>,
+  ): Promise<FormulationReceipt>;
   makeFromTree(
     workerPetName: string | string[] | undefined,
     treeName: string | string[],
     options?: MakeCapletOptions,
   ): Promise<unknown>;
+  startMakeFromTree(
+    workerPetName: string | string[] | undefined,
+    treeName: string | string[],
+    resultName: string | string[],
+    options?: Omit<MakeCapletOptions, 'resultName'>,
+  ): Promise<FormulationReceipt>;
   /**
    * Materialise a ReadableTree or Mount into a new scratch mount
    * under `scratchPetName` and return that scratch mount.  The
@@ -1788,6 +1824,12 @@ export interface EndoHost extends EndoAgent {
     treeName: string | string[],
     options?: MakeCapletOptions & { entry?: string },
   ): Promise<unknown>;
+  startMakeUnconfinedFromTree(
+    workerPetName: string | string[] | undefined,
+    treeName: string | string[],
+    resultName: string | string[],
+    options?: Omit<MakeCapletOptions, 'resultName'> & { entry?: string },
+  ): Promise<FormulationReceipt>;
   cancel(petNameOrPath: string | string[], reason?: Error): Promise<void>;
   greeter(): Promise<EndoGreeter>;
   gateway(): Promise<EndoGateway>;
@@ -2321,6 +2363,39 @@ export type DaemonicPersistencePowers = {
   listRetention: (guestPublicKey: string) => Array<{ formulaNumber: string }>;
   replaceRetention: (guestPublicKey: string, formulaNumbers: string[]) => void;
   deleteAllRetention: (guestPublicKey: string) => void;
+  writePendingNameCommit: (
+    commitId: string,
+    formulaId: string,
+    resultNamePath: string,
+    selectedFormulaId: string,
+    state: 'pending' | 'committed',
+  ) => Promise<void>;
+  getPendingNameCommit: (
+    commitId: string,
+  ) => Promise<
+    | {
+        commitId: string;
+        formulaId: string;
+        resultNamePath: string;
+        selectedFormulaId: string;
+        state: string;
+      }
+    | undefined
+  >;
+  updatePendingNameCommitState: (
+    commitId: string,
+    state: 'pending' | 'committed',
+  ) => Promise<void>;
+  deletePendingNameCommit: (commitId: string) => Promise<void>;
+  listPendingNameCommits: () => Promise<
+    Array<{
+      commitId: string;
+      formulaId: string;
+      resultNamePath: string;
+      selectedFormulaId: string;
+      state: string;
+    }>
+  >;
 };
 
 export interface DaemonWorkerFacet {}
@@ -2422,16 +2497,51 @@ export type FormulateResult<T> = Promise<{
   value: T;
 }>;
 
-export type DeferredTask<T extends Record<string, string | string[]>> = (
-  ids: Readonly<T>,
-) => Promise<void>;
+/**
+ * Data-only receipt for no-wait formulation: formula id plus endo:// locator.
+ * Contains no promise leaf so CapTP cannot collapse creation into construction.
+ */
+export type FormulationReceipt = {
+  id: FormulaIdentifier;
+  locator: string;
+};
+
+/** Opaque token proving ownership of the current formula-graph lock section. */
+export type FormulaGraphLockContext = object;
 
 /**
- * A collection of deferred tasks (i.e. async functions) that can be executed in
- * parallel.
+ * Outcome of a name-commit phase for formula-plus-name durability.
+ * - committed: name operation acknowledged success
+ * - rejected-before-write: proven that no name write occurred
+ * - ambiguous: failure without proof that no write occurred (e.g. lost remote ack)
+ */
+export type CommitOutcome =
+  | 'committed'
+  | 'rejected-before-write'
+  | 'ambiguous';
+
+/**
+ * Two-phase deferred task: preflight (path syntax only) then commit under
+ * the context-aware graph lock after formula persistence.
+ */
+export type DeferredTask<T extends Record<string, string | string[]>> = {
+  preflight: () => Promise<void>;
+  commit: (
+    identifiers: Readonly<T>,
+    lockContext: FormulaGraphLockContext,
+  ) => Promise<CommitOutcome>;
+};
+
+/**
+ * A collection of two-phase deferred tasks run in parallel per phase.
+ * There is no one-phase `execute` entry point.
  */
 export type DeferredTasks<T extends Record<string, string | string[]>> = {
-  execute(identifiers?: Readonly<T>): Promise<void>;
+  preflight(): Promise<void>;
+  commit(
+    identifiers: Readonly<T>,
+    lockContext: FormulaGraphLockContext,
+  ): Promise<CommitOutcome>;
   push(value: DeferredTask<T>): void;
 };
 
@@ -2576,7 +2686,10 @@ export interface DaemonCore {
   }>;
 
   pinTransient: (id: FormulaIdentifier) => void;
-  unpinTransient: (id: FormulaIdentifier) => void;
+  unpinTransient: (
+    id: FormulaIdentifier,
+    lockContext?: FormulaGraphLockContext,
+  ) => Promise<void>;
 
   formulateMessage: (
     messageFormula: MessageFormula,

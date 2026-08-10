@@ -324,24 +324,12 @@ LLM-agent stack).*
 | [daemon-message-streaming](daemon-message-streaming.md) | 2026-03-26 | 2026-07-22 | **Complete** (PR #125: `editMessage`, `messageHistory`, `done`; supersedes the retired `streamReply` sketch) |
 | [daemon-mount](daemon-mount.md) | 2026-03-20 | 2026-05-27 | In Progress |
 | [daemon-mount-capabilities](daemon-mount-capabilities.md) | 2026-05-18 | 2026-05-27 | **Complete** |
-<<<<<<< HEAD
+| [daemon-no-wait](daemon-no-wait.md) | 2026-07-17 | 2026-08-07 | Proposed |
 | [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-06-02 | Not Started |
 | [registry-capability](registry-capability.md) | 2026-06-02 | 2026-08-29 | Deprecated |
 | [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) | 2026-08-29 | 2026-08-29 | Not Started |
 | [mvs-resolver](mvs-resolver.md) | 2026-06-02 | 2026-06-02 | Not Started |
 | [snapshot-mapper](snapshot-mapper.md) | 2026-06-02 | 2026-06-02 | Not Started |
-||||||| parent of e03492552a (docs(designs): add daemon-no-wait creation-vs-construction design)
-| [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-06-02 | Proposed |
-| [registry-capability](registry-capability.md) | 2026-06-02 | 2026-06-02 | Proposed |
-| [mvs-resolver](mvs-resolver.md) | 2026-06-02 | 2026-06-02 | Proposed |
-| [snapshot-mapper](snapshot-mapper.md) | 2026-06-02 | 2026-06-02 | Proposed |
-=======
-| [daemon-no-wait](daemon-no-wait.md) | 2026-07-17 | 2026-08-07 | Proposed |
-| [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-06-02 | Proposed |
-| [registry-capability](registry-capability.md) | 2026-06-02 | 2026-06-02 | Proposed |
-| [mvs-resolver](mvs-resolver.md) | 2026-06-02 | 2026-06-02 | Proposed |
-| [snapshot-mapper](snapshot-mapper.md) | 2026-06-02 | 2026-06-02 | Proposed |
->>>>>>> e03492552a (docs(designs): add daemon-no-wait creation-vs-construction design)
 | [filesystem-watchers](filesystem-watchers.md) | 2026-05-07 | 2026-05-07 | Not Started |
 | [platform-fs](platform-fs.md) | 2026-03-18 | 2026-05-19 | **Complete** |
 | [fs-interface-reconciliation](fs-interface-reconciliation.md) | 2026-06-18 | 2026-06-19 | In Progress |
@@ -568,12 +556,8 @@ flowchart TD
         fagent[familiar-bundled-agents<br/><i>COMPLETE</i>]
         dtools[daemon-agent-tools<br/><i>IN PROGRESS</i>]
         deval[daemon-guest-eval-simplification<br/><i>IMPLEMENTED</i>]
-<<<<<<< HEAD
         afollow[agent-follow-stream-tool<br/><i>PROPOSED</i>]
-||||||| parent of e03492552a (docs(designs): add daemon-no-wait creation-vs-construction design)
-=======
         deval --> dnowait
->>>>>>> e03492552a (docs(designs): add daemon-no-wait creation-vs-construction design)
         eat[endo-agent-tools]
         eagentry[agentry-agent-builder]
         agvg[agentry-git-verb-gaps]
@@ -1598,14 +1582,8 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | endoclaw-webhooks | S-M | 3 days | 7 | Gateway webhook routes -> inbox messages |
 | endoclaw-voice | S | 1-2 days | 7 | Web Speech API in Chat UI |
 | ~~chat-reply-chain-visualization~~ | — | — | 9 | Deprecated (superseded by chat-focus-message) |
-<<<<<<< HEAD
 | chat-pending-commands | S-M | 3 days | 9 | Pending region, unlocked command bar (UI only); PR #133 merged to `llm` 2026-07-13 |
-||||||| parent of e03492552a (docs(designs): add daemon-no-wait creation-vs-construction design)
-| chat-pending-commands | S-M | 3 days | 9 | Pending region, unlocked command bar (UI only); PR #133 forwarded under bot |
-=======
-| chat-pending-commands | S-M | 3 days | 9 | Pending region, unlocked command bar (UI only); PR #133 forwarded under bot |
 | daemon-no-wait | L | 2–3 weeks | 9 | Revised 2026-08-07 for panel readiness: `startEvaluate` vertical, structured preflight/commit tasks, a context-aware graph lock, and durable provisional name-commit records; exact persistence-name-construction split; CLI `eval --no-wait` with result-name output; caplet `startMake*` family + `make --no-wait` temp-archive rework; raw promise-resolution identity compatibility; and conformance pinning. No-wait request remains deferred. Net ~380–560 production LOC, ~800–1,200 total churn. |
->>>>>>> e03492552a (docs(designs): add daemon-no-wait creation-vs-construction design)
 | chat-slot-slash-commands | M | 4-5 days | 9 | Slot-level verb registry, transient-pin extension of `formulateEval`, shared slot-input component (1.2x bump) |
 | daemon-commands-as-messages | M-L | 1.5 weeks | 9 | New message type, self-delivery, result replies, Chat rendering |
 | inventory-cancel-and-liveness | M | 4-5 days | 9 | Cancel button, indicator states, coalesced watcher exo + daemon hooks |
