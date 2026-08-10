@@ -24,6 +24,7 @@ export const makeCommand = async ({
   agentNames,
   powersName,
   env,
+  noWait = false,
 }) => {
   await null;
   if (filePath !== undefined && importPath !== undefined) {
@@ -44,6 +45,12 @@ export const makeCommand = async ({
   }
 
   const resultPath = parseOptionalPetNamePath(resultName);
+  if (noWait && resultPath === undefined) {
+    console.error('endo make --no-wait requires a result name (-n/--name)');
+    process.exitCode = 1;
+    return;
+  }
+
   // A slash-delimited powers name references powers nested in a
   // directory; the parent directory must already exist (as with
   // `mkdir`, `store`, and `mv`).
@@ -88,32 +95,63 @@ export const makeCommand = async ({
     // `mkdir`, `store`, and `mv`).
     const workerPath = parseOptionalPetNamePath(workerName);
 
-    let resultP;
-    if (importPath !== undefined) {
-      // makeUnconfined is unconditionally Node-scoped; default to
-      // the host's @node worker when no other worker is named.
-      const unconfinedWorkerName = workerPath ?? '@node';
-      resultP = E(agent).makeUnconfined(
-        unconfinedWorkerName,
-        url.pathToFileURL(path.resolve(importPath)).href,
-        { powersName: powersPath, resultName: resultPath, env },
-      );
-    } else {
-      resultP = E(agent).makeArchive(workerPath, archivePath, {
-        powersName: powersPath,
-        resultName: resultPath,
-        env,
-      });
-    }
-    let result;
+    const nameStr = Array.isArray(resultPath)
+      ? resultPath.join('/')
+      : resultPath;
+
     try {
-      result = await resultP;
+      if (noWait) {
+        let receipt;
+        if (importPath !== undefined) {
+          const unconfinedWorkerName = workerPath ?? '@node';
+          receipt = await E(agent).startMakeUnconfined(
+            unconfinedWorkerName,
+            url.pathToFileURL(path.resolve(importPath)).href,
+            resultPath,
+            { powersName: powersPath, env },
+          );
+        } else {
+          receipt = await E(agent).startMakeArchive(
+            workerPath,
+            archivePath,
+            resultPath,
+            {
+              powersName: powersPath,
+              env,
+            },
+          );
+        }
+        console.log(nameStr);
+        console.log(`locator: ${receipt.locator}`);
+        return receipt;
+      }
+
+      let resultP;
+      if (importPath !== undefined) {
+        // makeUnconfined is unconditionally Node-scoped; default to
+        // the host's @node worker when no other worker is named.
+        const unconfinedWorkerName = workerPath ?? '@node';
+        resultP = E(agent).makeUnconfined(
+          unconfinedWorkerName,
+          url.pathToFileURL(path.resolve(importPath)).href,
+          { powersName: powersPath, resultName: resultPath, env },
+        );
+      } else {
+        resultP = E(agent).makeArchive(workerPath, archivePath, {
+          powersName: powersPath,
+          resultName: resultPath,
+          env,
+        });
+      }
+      const result = await resultP;
       console.log(result);
+      return result;
     } finally {
+      // Temp archive is retained by the make-archive formula's formulaDeps
+      // edge, not the tmp pet name alone; remove the name after receipt/value.
       if (temporaryArchiveName) {
         await E(agent).remove(temporaryArchiveName);
       }
     }
-    return result;
   });
 };
