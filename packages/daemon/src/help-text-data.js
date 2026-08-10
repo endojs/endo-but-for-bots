@@ -224,6 +224,7 @@ export const helpTextEntries = harden([
     {
       '': 'EndoMount - Live mutable access to a filesystem directory.\n\nAll paths are confined to the mount root. Symlinks that escape\nthe root are invisible. Use readOnly() for an attenuated view.\n\nWell-known credential and configuration names (such as .ssh, .aws,\n.env, and .gnupg) are restricted: naming one in a path throws\n"Access denied", and list() and followNameChanges() omit them.\nMatching is case-insensitive. Ordinary dotfiles like .gitignore stay\naccessible. The set can be replaced when the mount is created.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
+      kind: 'kind() -> "directory"\nReturn the structural kind of this lookup result.\nUse this before choosing directory-only or file-only methods.',
       has: 'has(...pathSegments | entry) -> Promise<boolean>\nCheck if a path exists within the mount.\nEither pass path segments (has("dir", "file.txt")) or a single EndoMountEntry.',
       list: 'list(...pathSegments) -> Promise<string[]>\nList directory entries at the given path.\nEach argument is one path segment: list("subdir").\nCall with no arguments to list the root.\nEntries with symlinks escaping the mount root are excluded.',
       glob: 'glob(pattern) -> Promise<string[]>\nRecursively enumerate paths matching a glob pattern, relative to this mount face.\npattern: string — Slash-separated segments. The only metacharacters are `*` and `**`.\n`*` matches zero or more characters within one segment (never `/`, and it does match\nleading-dot names); `**` as a whole segment matches zero or more directory levels,\nand a trailing `**` additionally matches file descendants, not only directories.\nEvery other character, including `?`, `[`, `]`, `{`, `}`, and `+`, is a literal.\nDenied names (such as .ssh, .aws, .env) never appear, even when named literally.\nEntries whose symlinks escape the mount root are excluded. Results include\ndirectories as well as files, are sorted by UTF-16 code unit, and are capped at\n10,000 with silent truncation.\nExample: glob("**/*.js") → all JavaScript files at any depth.\nExample: glob("src/*") → the immediate children of src.',
@@ -231,7 +232,7 @@ export const helpTextEntries = harden([
       glorp:
         'glorp(glob, grep, options?) -> Promise<Array<{ file, line, text }>>\nFused glob+grep: enumerate the files matching the glob pattern, then search them for the grep pattern.\nglob: string — A glob pattern (same dialect as glob()); the files it matches are the search set.\ngrep: string — An ECMAScript RegExp source (same as grep()); the pattern each matched file is searched for.\nBoth patterns are required, so the whole operation is one call whose two patterns a native filesystem\nlayer can push down and fuse into a single enumerate-and-scan pass. It returns the same\n{ file, line, text } records as grep and honors the same confinement and deny-pattern filtering.\noptions.maxResults: number — Cap on the number of match records (default 1000).\nglorp(g, p) is the fused equivalent of grep(p, glob(g)); prefer it when you have both patterns up front.\nExample: glorp("src/**/*.js", "TODO") → every TODO line under src.',
       lookup:
-        'lookup(path) -> Promise<EndoMount | EndoMountFile>\nResolve a path within the mount.\npath: string | string[] — Name or path segments.\nReturns EndoMount for directories, EndoMountFile for files.',
+        'lookup(path) -> Promise<EndoMount | EndoMountFile>\nResolve a path within the mount.\npath: string | string[] | EndoMountEntry — A string is one segment; an array\nis a sequence of segments. For a slash-joined nested path, use\nlookup(entry("dir/file.txt")) or pass lookup(["dir", "file.txt"]).\nReturns EndoMount for directories, EndoMountFile for files.',
       readText:
         'readText(path) -> Promise<string>\nRead a file as UTF-8 text.\npath: string | string[] — Name or path segments.\nThrows if the file does not exist.',
       maybeReadText:
@@ -260,8 +261,10 @@ export const helpTextEntries = harden([
   [
     'EndoMountFile',
     {
-      '': 'EndoMountFile - A file within a mounted directory.\n\nA live, host-backed file. Read it with text() / json() / streamBase64(),\ninspect and range-read it with getInfo() / fetch(), write it with\nwriteText() / append() / writeBytes(), or snapshot() it into the content\nstore. stat() returns the bigint-nanosecond metadata record.',
+      '': 'EndoMountFile - A file within a mounted directory.\n\nA live, host-backed file. Read it with text() / json() / streamBase64(),\ninspect and range-read it with getInfo() / fetch(), write it with\nwriteText() / append() / writeBytes(), or snapshot() it into the content\nstore. kind() returns "file" and stat() returns the bigint-nanosecond metadata\nrecord.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
+      kind: 'kind() -> "file"\nReturn the structural kind of this lookup result.',
+      list: 'list() -> never\nNot available on a file.\nUse text() to read its contents.',
       getInfo:
         'getInfo() -> Promise<{ algorithm, hash, size }>\nThe content-addressed identity of the file\'s current bytes in one\nround-trip: algorithm ("sha256"), hash (base64), and size (bigint).\nRecomputed each call, since the live file may change.',
       fetch:

@@ -29,11 +29,14 @@ export const checkoutTree = async (tree, writer, options = {}) => {
       /** @type {any} */
       const child = await E(/** @type {SnapshotTree} */ (node)).lookup(name);
       const childPath = [...pathSegments, name];
-      // Use __getMethodNames__ to detect the node type without calling
-      // a method that may not exist (which causes CapTP error logging).
+      // Use the explicit kind discriminator when a mount provides it.
+      // Otherwise fall back to method introspection for older ReadableTree /
+      // ReadableBlob capabilities.
       // eslint-disable-next-line no-underscore-dangle
       const methods = await E(child).__getMethodNames__();
-      const isTree = methods.includes('list');
+      const isTree = methods.includes('kind')
+        ? (await E(child).kind()) === 'directory'
+        : methods.includes('list');
       if (isTree) {
         await walk(child, childPath);
       } else {

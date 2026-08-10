@@ -52,12 +52,14 @@ export const checkinTree = async (remoteTree, store, options = {}) => {
       const child = await E(/** @type {SnapshotTree} */ (remoteNode)).lookup(
         name,
       );
-      // Use __getMethodNames__ (available on Exos and conforming Far objects)
-      // to detect the node type without calling a method that may not exist,
-      // which would cause CapTP to log a noisy error.
+      // Use the explicit kind discriminator when a mount provides it.
+      // Otherwise fall back to method introspection for older ReadableTree /
+      // ReadableBlob capabilities.
       // eslint-disable-next-line no-underscore-dangle
       const methods = await E(child).__getMethodNames__();
-      const childIsTree = methods.includes('list');
+      const childIsTree = methods.includes('kind')
+        ? (await E(child).kind()) === 'directory'
+        : methods.includes('list');
       const result = await checkinNode(child, childIsTree, depth + 1);
       treeEntries.push([name, result.type, result.sha256]);
     }

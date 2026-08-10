@@ -21,6 +21,7 @@ import type {
 type RuntimeMount = TypeFromInterfaceGuard<typeof MountInterface>;
 
 declare const mount: EndoMount;
+declare const file: EndoMountFile;
 declare const source: DirectoryWriteSource;
 const issuer: PathEntryIssuer = mount;
 const entry = issuer.entry(['src']);
@@ -34,6 +35,9 @@ expectTypeOf(entry).toEqualTypeOf<ReturnType<PathEntryIssuer['entry']>>();
 // what callers across the daemon can rely on.
 expectTypeOf(mount.has('src', 'index.js')).resolves.toEqualTypeOf<boolean>();
 expectTypeOf(mount.has(entry)).resolves.toEqualTypeOf<boolean>();
+expectTypeOf(mount.kind()).toEqualTypeOf<'directory'>();
+expectTypeOf(file.kind()).toEqualTypeOf<'file'>();
+expectTypeOf(file.list()).toEqualTypeOf<Promise<never>>();
 expectTypeOf(mount.lookup(entry)).resolves.toEqualTypeOf<
   EndoMount | EndoMountFile
 >();

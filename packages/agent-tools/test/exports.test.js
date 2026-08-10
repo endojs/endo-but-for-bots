@@ -191,9 +191,10 @@ test('agent-tools scoped exports resolve the relocated surfaces', async t => {
   );
 
   t.is(typeof globalsFs.makeWorkspaceGlobal, 'function');
+  t.is(typeof globalsFs.makeFilesystemGlobal, 'function');
   t.deepEqual(
     Object.keys(globalsFs).sort(),
-    ['fsDeclarations', 'makeWorkspaceGlobal'],
+    ['fsDeclarations', 'makeFilesystemGlobal', 'makeWorkspaceGlobal'],
     '@endo/agent-tools/code-mode-globals/fs.js export surface',
   );
 

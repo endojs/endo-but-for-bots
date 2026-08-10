@@ -1312,6 +1312,12 @@ export interface EndoGitTree {
  * additive; `readOnly()` narrows to a structural `ReadableBlob` view.
  */
 export interface EndoMountFile {
+  kind(): 'file';
+  /**
+   * Diagnostic-only directory-method stub.
+   * Calling it rejects with guidance to use `text()` instead.
+   */
+  list(): Promise<never>;
   text(): Promise<string>;
   streamBase64(
     synPromise: ERef<StreamNode<Passable, Passable>>,
@@ -1338,6 +1344,7 @@ export interface EndoMountFile {
  * view.
  */
 export interface EndoMount extends PathEntryIssuer {
+  kind(): 'directory';
   has(...pathSegments: string[]): Promise<boolean>;
   has(entry: EndoMountEntry): Promise<boolean>;
   list(...pathSegments: string[]): Promise<string[]>;

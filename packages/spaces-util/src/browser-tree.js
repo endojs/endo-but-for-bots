@@ -206,13 +206,16 @@ export const checkoutToDirectory = async (tree, rootHandle, options = {}) => {
     const names = await E(treeNode).list();
     for (const name of names) {
       const child = await E(treeNode).lookup(name);
-      // Use __getMethodNames__ to detect the node type without calling
-      // a method that may not exist (which causes CapTP error logging).
+      // Use kind() for daemon mounts and method introspection for older
+      // ReadableTree / ReadableBlob capabilities.
       // eslint-disable-next-line no-underscore-dangle
       const methods = await E(
         /** @type {{ __getMethodNames__: () => Promise<string[]> }} */ (child),
       ).__getMethodNames__();
-      const isTree = methods.includes('list');
+      const childRef = /** @type {any} */ (child);
+      const isTree = methods.includes('kind')
+        ? (await E(childRef).kind()) === 'directory'
+        : methods.includes('list');
       if (isTree) {
         const childDir = await parentHandle.getDirectoryHandle(name, {
           create: true,
