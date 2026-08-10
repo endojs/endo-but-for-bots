@@ -1,8 +1,12 @@
 # On-Device Android Admin Agent for the Endo Daemon
 
-Status: Partially implemented — the in-repo JavaScript halves
-(`@endo/exo-android-admin`, `@endo/host-android-admin`) exist and are tested
-on desktop; the Android application shell is not yet built.
+Status: Partially implemented.
+Testing levels L1–L5 are green: both JavaScript halves
+(`@endo/exo-android-admin`, `@endo/host-android-admin`), the cross-daemon vend
+test, and the pure-JVM Kotlin protocol module (`android/protocol`) all pass
+without a device.
+Remaining: the Node embedding inside the Android app, compiling `android/app`,
+and the emulator levels (L6–L7).
 Owner: daemon / device-management.
 
 ## Motivation
@@ -322,7 +326,7 @@ Samsung-specific quirks a device farm cannot reproduce.
 
 The layers, cheapest and most deterministic first:
 
-### L1 — Exo policy and guard units (desktop AVA, no device)
+### L1 — Exo policy and guard units (desktop AVA, no device) ✅
 
 Test `exo-android-admin` against a **recording mock transport** that
 captures `(action, args)` without touching Android. Assertions:
@@ -337,7 +341,7 @@ captures `(action, args)` without touching Android. Assertions:
 
 These are pure, fast, and need no daemon fork.
 
-### L2 — Cross-daemon vend integration (desktop AVA, two local daemons)
+### L2 — Cross-daemon vend integration (desktop AVA, two local daemons) ✅
 
 Prove the actual "vend admin control to HQ" mechanism without a phone.
 Following the daemon's existing gateway/multiplayer tests
@@ -351,7 +355,7 @@ and facet asymmetry hold across CapTP, and that `Control.revoke()` on the
 device side severs the HQ reference. This is the highest-value test: it
 exercises the whole capability path end to end minus the OS.
 
-### L3 — Contract fixtures shared by both halves
+### L3 — Contract fixtures shared by both halves ✅
 
 Define the admin protocol as a fixed set of `(action, args) => result`
 golden fixtures. The JS side (L1/L2) asserts it *produces* exactly these
@@ -360,21 +364,32 @@ right `DevicePolicyManager` method. Because both halves are tested against
 the same fixtures, the device is never needed to prove the two agree — a
 wire-format drift fails in CI, not on the phone.
 
-### L4 — JVM bridge contract (Robolectric, no device/emulator)
+### L4 — JVM bridge contract (plain JVM, no device/emulator) ✅
 
-Test the Kotlin channel handler on the JVM with Robolectric (or DPM test
-doubles): replay the L3 fixtures through the nodejs-mobile channel decoder
-and assert each dispatches to the expected `DevicePolicyManager` call with
-correctly unmarshalled arguments. Catches marshalling and channel wire-
-format bugs without booting Android.
+Implemented as `android/protocol` — and Robolectric turned out to be
+unnecessary. Splitting the Kotlin so the catalog, envelope codec, and
+dispatcher carry *no* Android dependency means they compile and run on a
+plain JDK: `gradle :protocol:test` replays the L3 fixtures through the real
+decoder and asserts each dispatches to the expected operation with correctly
+unmarshalled arguments, with no SDK, no emulator, and no Robolectric.
 
-### L5 — iroh-on-device transport check (arm64 CI, not the phone)
+`settings.gradle.kts` includes the Android `:app` module only when an SDK is
+detected, so these tests run in ordinary CI. The suite additionally enforces
+that the two language catalogs agree in both directions and that every
+fixture's argument keys are catalog-declared, so adding an action to one
+language without the other fails the build. Verified by mutation: renaming a
+single wire key in the dispatcher fails the fixture test.
 
-Validate whichever iroh path is chosen (§ iroh on device) on an
-`aarch64-linux` CI runner, not on the A37: assert the binding loads and two
-peers complete a CapTP round-trip over iroh loopback, reusing the daemon's
-existing iroh discovery tests. The device should never be where we discover
-the binding fails to load.
+### L5 — iroh-on-device transport check (arm64 CI, not the phone) — partly resolved
+
+The larger half of this is already answered off the shelf: a prebuilt
+`aarch64-linux-android` binding is published and the loader resolves it
+(§ iroh on device), so "does a binding exist for the target" no longer needs
+testing. What remains is to assert on an `aarch64-linux` CI runner that the
+binding *loads* under the embedded runtime and that two peers complete a
+CapTP round-trip over iroh loopback, reusing the daemon's existing iroh
+discovery tests. The device should still never be where we discover a load
+failure.
 
 ### L6 — Emulator instrumented tests (CI, disposable AVD)
 
