@@ -193,7 +193,7 @@ const setupGutter = async (opts = {}) => {
     $container,
     $modalContainer,
     powers,
-    currentProfilePath: [],
+    currentProfilePath: opts.currentProfilePath || [],
     onNavigate: path => navigated.push([...path]),
   });
 
@@ -513,5 +513,90 @@ test.serial(
       $editModalContainer.isConnected,
       'edit container stayed attached to the document',
     );
+  },
+);
+
+// ── Default space opens first, without a round trip ──
+//
+// The preference names a space, but opening one needs its profile path and
+// mode, which live on the daemon. Waiting for them meant Home was mounted and
+// torn down before the default space appeared. The gutter caches the whole
+// descriptor beside the preference so the entry point can mount it directly.
+
+test.serial(
+  'refresh caches the default space so the next load can open it',
+  async t => {
+    window.localStorage.clear();
+    const storedValues = new Map();
+    storedValues.set(
+      'spaces/1',
+      harden({
+        id: '1',
+        name: 'Work',
+        icon: '🧙',
+        profilePath: ['work-agent'],
+        mode: 'channel',
+        channelPetName: 'general',
+        scheme: 'dark',
+      }),
+    );
+    // The preference as a previous session left it: a bare space id.
+    window.localStorage.setItem('chat-default-space', '1');
+    await setupGutter({ storedValues });
+
+    const { readBootDefaultSpace } = await import('../../spaces-gutter.js');
+    const boot = readBootDefaultSpace();
+    t.is(boot.id, '1');
+    t.deepEqual(boot.profilePath, ['work-agent']);
+    t.is(
+      boot.spaceInfo.mode,
+      'channel',
+      'enough to mount it, not just name it',
+    );
+    t.is(boot.spaceInfo.channelPetName, 'general');
+    t.is(boot.scheme, 'dark');
+  },
+);
+
+test.serial(
+  'a default that no longer resolves leaves nothing cached',
+  async t => {
+    window.localStorage.clear();
+    // A preference naming a space that is not in the store: caching it would
+    // send the next load somewhere the user cannot actually go.
+    window.localStorage.setItem('chat-default-space', '9');
+    await setupGutter();
+
+    const { readBootDefaultSpace } = await import('../../spaces-gutter.js');
+    t.is(readBootDefaultSpace(), undefined);
+  },
+);
+
+test.serial(
+  'a cached default naming a since-removed space falls back to Home',
+  async t => {
+    window.localStorage.clear();
+    // A cache left by a previous session for a space that no longer exists.
+    window.localStorage.setItem(
+      'chat-default-space-boot',
+      JSON.stringify({
+        id: '7',
+        profilePath: ['spaces', '7'],
+        spaceInfo: { mode: 'channel' },
+      }),
+    );
+    window.localStorage.setItem('chat-default-space', '7');
+
+    // The entry point would have mounted ['spaces','7']; the gutter is created
+    // with that path and must notice the space is not there.
+    const { navigated } = await setupGutter({
+      currentProfilePath: ['spaces', '7'],
+    });
+
+    await waitFor(() => navigated.length > 0);
+    t.deepEqual(navigated[0], [], 'navigated back to Home');
+
+    const { readBootDefaultSpace } = await import('../../spaces-gutter.js');
+    t.is(readBootDefaultSpace(), undefined, 'and dropped the stale cache');
   },
 );

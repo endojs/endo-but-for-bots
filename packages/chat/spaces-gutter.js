@@ -103,6 +103,64 @@ const pathsEqual = (a, b) => {
 };
 harden(pathsEqual);
 
+// Per-device default space (this browser). Overrides the system-wide default
+// (stored on the home config). '' means "no per-device preference".
+const DEVICE_DEFAULT_KEY = 'chat-default-space';
+
+// Everything needed to OPEN the default space, cached beside the preference.
+//
+// The preference names a space; opening one needs its profile path and mode,
+// which live on the daemon. Waiting for them meant the app mounted Home first
+// and tore it down a round trip later — the default space was the second thing
+// you saw, after paying to build something you did not ask for. Remembering
+// where the space was last time makes it the first thing built instead.
+//
+// Strictly a cache: absent, stale, or unparseable, it is ignored and the
+// original post-refresh path applies. `refresh()` rewrites it from the loaded
+// configuration, so a space that moved or changed mode is corrected on the load
+// after the change, and one that was removed is corrected during that load.
+const BOOT_DEFAULT_KEY = 'chat-default-space-boot';
+
+const loadDeviceDefaultSpaceId = () => {
+  try {
+    return window.localStorage.getItem(DEVICE_DEFAULT_KEY) || '';
+  } catch {
+    return '';
+  }
+};
+
+/**
+ * The cached descriptor of the space to open on load, if one was cached.
+ *
+ * Synchronous by design: the caller uses it to choose what to mount before the
+ * first paint, so anything asynchronous here would defeat the purpose.
+ *
+ * @returns {{ id: string, profilePath: string[], spaceInfo: object, scheme?: ColorScheme } | undefined}
+ */
+export const readBootDefaultSpace = () => {
+  try {
+    const raw = window.localStorage.getItem(BOOT_DEFAULT_KEY);
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw);
+    // A cache written by another version is not worth interpreting.
+    if (
+      !parsed ||
+      typeof parsed.id !== 'string' ||
+      !Array.isArray(parsed.profilePath) ||
+      !parsed.profilePath.every(segment => typeof segment === 'string') ||
+      parsed.profilePath.length === 0 ||
+      typeof parsed.spaceInfo !== 'object' ||
+      parsed.spaceInfo === null
+    ) {
+      return undefined;
+    }
+    return parsed;
+  } catch {
+    return undefined;
+  }
+};
+harden(readBootDefaultSpace);
+
 // ── Confined Preact view ──────────────────────────────────────────────────
 //
 // The gutter's chrome (the space icons, the add-space button, and the
@@ -426,18 +484,19 @@ export const createSpacesGutter = ({
   // API-triggered refresh() (e.g. reconnect) never yanks the user elsewhere.
   let appliedInitialDefault = false;
 
-  // Per-device default space (this browser). Overrides the system-wide default
-  // (stored on the home config). '' means "no per-device preference".
-  const DEVICE_DEFAULT_KEY = 'chat-default-space';
-  const loadDeviceDefaultSpaceId = () => {
-    try {
-      return window.localStorage.getItem(DEVICE_DEFAULT_KEY) || '';
-    } catch {
-      return '';
-    }
-  };
   let deviceDefaultSpaceId = loadDeviceDefaultSpaceId();
   const systemDefaultSpaceId = () => homeSpaceConfig.defaultSpaceId || '';
+
+  // Whether the app opened straight into the boot-cached default space, in
+  // which case the one-shot default navigation below is already satisfied and
+  // only needs checking against the spaces that actually loaded. Recognized by
+  // the path rather than by a flag threaded down from the entry point, so the
+  // cache's two readers cannot disagree about what was opened.
+  const booted = readBootDefaultSpace();
+  const bootedDefaultSpaceId =
+    booted !== undefined && pathsEqual(booted.profilePath, currentProfilePath)
+      ? booted.id
+      : '';
 
   /**
    * Get spaces as sorted array.
@@ -676,6 +735,26 @@ export const createSpacesGutter = ({
   };
 
   /**
+   * The navigation descriptor for a space — what `onNavigate` needs to mount
+   * it. Shared by `selectSpace` and the boot cache so a space opened from the
+   * cache is mounted exactly as clicking it would have mounted it.
+   *
+   * @param {SpaceConfig} space
+   */
+  const spaceInfoFor = space => ({
+    mode: space.mode,
+    channelPetName: space.lastChannelPetName || space.channelPetName,
+    proposedName: space.proposedName,
+    whylipSystemPrompt: space.whylipSystemPrompt,
+    viewMode: space.viewMode,
+    channelOrder: space.channelOrder,
+    bookmarks: space.bookmarks,
+    audioPath: space.audioPath,
+    ttsPath: space.ttsPath,
+    workflowPath: space.workflowPath,
+  });
+
+  /**
    * Select and activate a space.
    *
    * @param {string} id
@@ -696,18 +775,38 @@ export const createSpacesGutter = ({
     activeSpaceId = id;
     applyScheme(space.scheme);
     pushState();
-    onNavigate(space.profilePath, {
-      mode: space.mode,
-      channelPetName: space.lastChannelPetName || space.channelPetName,
-      proposedName: space.proposedName,
-      whylipSystemPrompt: space.whylipSystemPrompt,
-      viewMode: space.viewMode,
-      channelOrder: space.channelOrder,
-      bookmarks: space.bookmarks,
-      audioPath: space.audioPath,
-      ttsPath: space.ttsPath,
-      workflowPath: space.workflowPath,
-    });
+    onNavigate(space.profilePath, spaceInfoFor(space));
+  };
+
+  /**
+   * Write (or clear) the boot cache for whichever space would be opened on the
+   * next load. Called wherever the answer can change: after `refresh()` has the
+   * configurations, and when either default preference is set.
+   */
+  const updateBootDefaultSpace = () => {
+    const target = deviceDefaultSpaceId || systemDefaultSpaceId();
+    const space =
+      target && target !== 'home' ? spacesMap.get(target) : undefined;
+    try {
+      if (space === undefined) {
+        // No default, or one that no longer resolves: the next load opens Home,
+        // and a stale entry would send it somewhere the user did not choose.
+        window.localStorage.removeItem(BOOT_DEFAULT_KEY);
+      } else {
+        window.localStorage.setItem(
+          BOOT_DEFAULT_KEY,
+          JSON.stringify({
+            id: space.id,
+            profilePath: space.profilePath,
+            spaceInfo: spaceInfoFor(space),
+            scheme: space.scheme,
+          }),
+        );
+      }
+    } catch {
+      // localStorage unavailable (private mode); the app just pays the round
+      // trip on the next load, as it did before the cache existed.
+    }
   };
 
   /**
@@ -729,6 +828,7 @@ export const createSpacesGutter = ({
       // localStorage unavailable (private mode); the in-memory value still
       // drives this session's view.
     }
+    updateBootDefaultSpace();
     pushState();
   };
 
@@ -741,9 +841,9 @@ export const createSpacesGutter = ({
    * @param {boolean} on
    */
   const setSystemDefaultSpace = (id, on) => {
-    updateSpace('home', { defaultSpaceId: on ? id : '' }).catch(
-      window.reportError,
-    );
+    updateSpace('home', { defaultSpaceId: on ? id : '' })
+      .then(updateBootDefaultSpace)
+      .catch(window.reportError);
   };
 
   /**
@@ -755,6 +855,15 @@ export const createSpacesGutter = ({
   const applyInitialDefaultSpace = () => {
     if (appliedInitialDefault) return;
     appliedInitialDefault = true;
+    // The app already opened this space from the boot cache, so there is
+    // nothing to redirect — unless the cache was stale, in which case we are
+    // showing a space that no longer exists and Home is where we belong.
+    if (bootedDefaultSpaceId) {
+      if (!spacesMap.has(bootedDefaultSpaceId)) {
+        selectSpace('home');
+      }
+      return;
+    }
     // Only redirect a plain Home open; a deep-linked path stays put.
     if (currentProfilePath.length !== 0) return;
     const target = deviceDefaultSpaceId || systemDefaultSpaceId();
@@ -1230,6 +1339,10 @@ export const createSpacesGutter = ({
 
     // Set active space based on current profile path
     syncActiveSpaceToPath();
+    // Now that the configurations are known, record where the next load should
+    // start. This is also what corrects a cache for a space that has since
+    // moved, changed mode, or been removed.
+    updateBootDefaultSpace();
     pushState();
   };
 
