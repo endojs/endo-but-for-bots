@@ -40,6 +40,7 @@ import { makeFlootLocalTools } from './src/tool-registry.js';
 import { makeMcpBridge } from './src/mcp-bridge.js';
 import { startMcpSocketServer } from './src/mcp-socket-server.js';
 import { makePublishTool } from './src/publish-tool.js';
+import { makeContainerMountRegistrar } from './src/container-mounts.js';
 
 // Cap the tool-call loop so a misbehaving model can't spin forever before it
 // produces a spoken reply. This is a *safety* ceiling, not a work budget: real
@@ -327,7 +328,24 @@ export const makeClaudeClientResolver = (powers, env = {}) => {
     }
   };
 
-  return harden({ get, remove });
+  // The formula id of the ClaudeClient serving a session, or undefined when
+  // none is bound yet. Container-mount attach records are keyed by this CAP
+  // identity — not the Floot session id — so a shared client is ref-counted
+  // safely (designs/runtime-container-fs-mount.md).
+  const identifyClient = async id => {
+    const perSession = `${base}-${id}`;
+    for (const name of [perSession, base]) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await E(powers).has(name)) {
+        // eslint-disable-next-line no-await-in-loop
+        const clientId = await E(powers).identify(name);
+        return clientId === undefined ? undefined : `${clientId}`;
+      }
+    }
+    return undefined;
+  };
+
+  return harden({ get, remove, identifyClient });
 };
 harden(makeClaudeClientResolver);
 
@@ -1584,6 +1602,34 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const claudeClientResolver = makeClaudeClientResolver(powers, env);
   const getClaudeClient = claudeClientResolver.get;
 
+  // Runtime container-mount attach registrar
+  // (designs/runtime-container-fs-mount.md): validates guest-chosen /mnt/
+  // paths, proves cap possession against the session guest's petstore,
+  // persists ref-counted attach records in this factory's petstore, and
+  // drives ClaudeClient slice recreates. The privileged 9P bridging runs in
+  // the hosted Claude session provisioner (root-host powers + fs-mounter);
+  // older provisioner caplets without the bridge methods — and deployments
+  // with no provisioner at all — simply leave attach unavailable.
+  const containerMountRegistrar = makeContainerMountRegistrar({
+    powers,
+    getBridgeProvider: async () => {
+      const provisionerName =
+        env?.FLOOT_CLAUDE_PROVISIONER || 'claude-session-provisioner';
+      if (!(await E(powers).has(provisionerName))) return undefined;
+      const provider = await E(powers).lookup(provisionerName);
+      try {
+        // eslint-disable-next-line no-underscore-dangle
+        const methods = await E(provider).__getMethodNames__();
+        if (methods.includes('provideContainerMountBridge')) {
+          return provider;
+        }
+      } catch {
+        // An older provisioner without introspection cannot bridge either.
+      }
+      return undefined;
+    },
+  });
+
   // Hand a session only the authority its turns need. A session runs prompts;
   // it has no business interrupting or terminating the sandbox session out
   // from under the factory that provisioned it, so the client is attenuated to
@@ -1900,6 +1946,17 @@ export const make = (hostPowers, _context, { env } = {}) => {
         const model = modelOf(entry);
         let agentConfig;
         if (runtime === CLAUDE_CLI_RUNTIME_ID) {
+          // Runtime container-mount attach tools
+          // (designs/runtime-container-fs-mount.md): let the session bind
+          // caps it holds into the sandbox under /mnt/. Built BEFORE the MCP
+          // server so the CLI's tool loop discovers them; armed with the
+          // client below, after it resolves (the tools error clearly until
+          // then).
+          const mountKit = containerMountRegistrar.makeSessionKit({
+            sessionId: id,
+            sessionGuest,
+          });
+          extraTools = { ...extraTools, ...mountKit.tools };
           // The tool bridge is best-effort: if the socket server fails to
           // start, the CLI session still runs (just without Endo tools) rather
           // than failing to open at all.
@@ -1926,15 +1983,29 @@ export const make = (hostPowers, _context, { env } = {}) => {
             ...(workspaceDir ? { workspaceDir } : {}),
             ...(model ? { model } : {}),
           };
+          const claudeClient = await getClaudeClient(
+            id,
+            Object.keys(provisionOptions).length ? provisionOptions : undefined,
+          );
+          // Arm the attach tools with the resolved client and REPLAY any
+          // persisted attaches, so a daemon restart rebuilds the same
+          // container view before the first turn. Best-effort: a session
+          // without a resolvable client identity (or bridge provider) still
+          // opens; the tools report the situation when called.
+          try {
+            const clientKey = await claudeClientResolver.identifyClient(id);
+            if (clientKey !== undefined) {
+              await mountKit.arm({ clientKey, client: claudeClient });
+            }
+          } catch (err) {
+            console.warn(
+              `[floot-factory] container mounts unavailable for session ${id}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
           agentConfig = {
-            claudeClient: makeSendOnlyClient(
-              await getClaudeClient(
-                id,
-                Object.keys(provisionOptions).length
-                  ? provisionOptions
-                  : undefined,
-              ),
-            ),
+            claudeClient: makeSendOnlyClient(claudeClient),
             // Per-turn --model: the client's env default was frozen at
             // provision time, so a later model change would otherwise be
             // silently ignored for this session.
@@ -2211,6 +2282,19 @@ export const make = (hostPowers, _context, { env } = {}) => {
       } catch (error) {
         console.warn(
           `[floot-factory] could not remove Claude client for ${id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+      // Drop this session's container-mount attach references; last-reference
+      // attaches release their 9P bridges and host mount names. Runs after
+      // the client removal so the container no longer binds the mountpoints
+      // being released.
+      try {
+        await containerMountRegistrar.releaseSession(id);
+      } catch (error) {
+        console.warn(
+          `[floot-factory] could not release container mounts for ${id}: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
