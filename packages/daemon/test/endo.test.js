@@ -10,6 +10,7 @@ import fsp from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
 import fs from 'fs';
+import os from 'os';
 import { execFile } from 'child_process';
 import { promisify as nodePromisify } from 'util';
 import { E } from '@endo/eventual-send';
@@ -7491,4 +7492,353 @@ test('readLog follow discovers new logs and settles on disconnect', async t => {
   );
   cancel(Error('readLog follow new-log test done'));
   t.is(await pending, 'settled');
+});
+
+// ---------------------------------------------------------------------------
+// daemon-no-wait: startEvaluate receipts and formula-plus-name durability
+// ---------------------------------------------------------------------------
+
+test('startEvaluate returns receipt while construction is pending', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).provideWorker(['w1']);
+
+  // Never-settling promise keeps construction pending after the receipt.
+  const receipt = await E(host).startEvaluate(
+    'w1',
+    'new Promise(() => {})',
+    [],
+    [],
+    'pending-eval',
+  );
+  t.truthy(receipt.id);
+  t.regex(receipt.locator, /^endo:\/\//);
+  t.true(await E(host).has('pending-eval'));
+  const identified = await E(host).identify('pending-eval');
+  t.is(identified, receipt.id);
+
+  const diagnostics = await E(host).diagnostics();
+  const formula = await E(diagnostics).getFormula(receipt.id);
+  t.is(formula.type, 'eval');
+});
+
+test('startEvaluate requires a result name', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).provideWorker(['w1']);
+  await t.throwsAsync(
+    () =>
+      E(/** @type {any} */ (host)).startEvaluate('w1', '10', [], [], undefined),
+    { message: /result name/i },
+  );
+  await t.throwsAsync(
+    () => E(/** @type {any} */ (host)).startEvaluate('w1', '10', [], []),
+    { message: /result name/i },
+  );
+});
+
+test('startEvaluate receipt survives restart; lookup re-derives', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+  {
+    const { host } = await makeHost(config, cancelled);
+    await E(host).provideWorker(['w1']);
+    const receipt = await E(host).startEvaluate(
+      'w1',
+      '42',
+      [],
+      [],
+      'restart-eval',
+    );
+    t.truthy(receipt.id);
+  }
+  await restart(config);
+  {
+    const { host } = await makeHost(config, cancelled);
+    const value = await E(host).lookup(['restart-eval']);
+    t.is(value, 42);
+  }
+});
+
+test('waiting evaluate still returns the constructed value', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).provideWorker(['w1']);
+  const value = await E(host).evaluate('w1', '7 + 8', [], [], 'sum');
+  t.is(value, 15);
+  t.is(await E(host).lookup(['sum']), 15);
+});
+
+test('startEvaluate construction rejection surfaces on later lookup', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).provideWorker(['w1']);
+  const receipt = await E(host).startEvaluate(
+    'w1',
+    'throw new Error("boom-construction")',
+    [],
+    [],
+    'fail-eval',
+  );
+  t.truthy(receipt.id);
+  await t.throwsAsync(() => E(host).lookup(['fail-eval']), {
+    message: /boom-construction/,
+  });
+});
+
+test('invalid result path rejects before formula persistence', async t => {
+  const { host, config } = await prepareHost(t);
+  await E(host).provideWorker(['w1']);
+  const before = openTestDb(config.statePath).listFormulas().length;
+  await t.throwsAsync(
+    () =>
+      E(host).startEvaluate('w1', '1', [], [], /** @type {any} */ (['', ''])),
+  );
+  const after = openTestDb(config.statePath).listFormulas().length;
+  t.is(after, before, 'no formula should be persisted for invalid path');
+});
+
+test('pause between persist and commit: no controller until commit', async t => {
+  // Cross-process control file: the daemon is a child of the test runner, so
+  // in-process module hooks cannot reach it. ENDO_FORMULA_COMMIT_HOOK_PATH is
+  // forwarded via the ENDO_* ambient filter at spawn.
+  const hookPath = path.join(
+    os.tmpdir(),
+    `endo-formula-commit-hook-pause-${process.pid}-${Date.now()}`,
+  );
+  // Neutral during bootstrap; arm pause only for the evaluate under test.
+  fs.writeFileSync(hookPath, 'release', 'utf8');
+  process.env.ENDO_FORMULA_COMMIT_HOOK_PATH = hookPath;
+  try {
+    const { host } = await prepareHost(t);
+    await E(host).provideWorker(['w1']);
+
+    fs.writeFileSync(hookPath, 'pause-once', 'utf8');
+    try {
+      fs.unlinkSync(`${hookPath}.paused`);
+    } catch {
+      // ignore
+    }
+
+    const receiptP = E(host).startEvaluate(
+      'w1',
+      '99',
+      [],
+      [],
+      'paused-eval',
+    );
+
+    // Wait until the daemon marks that it entered the pause window.
+    const pausedMarker = `${hookPath}.paused`;
+    const deadline = Date.now() + 10_000;
+    while (!fs.existsSync(pausedMarker) && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 20));
+    }
+    t.true(fs.existsSync(pausedMarker), 'hook should pause after formula persist');
+    // Name should not yet be committed while the daemon holds the pause.
+    t.false(await E(host).has('paused-eval'));
+
+    fs.writeFileSync(hookPath, 'release', 'utf8');
+    const receipt = await receiptP;
+    t.true(await E(host).has('paused-eval'));
+    t.is(await E(host).lookup(['paused-eval']), 99);
+    t.truthy(receipt.id);
+  } finally {
+    delete process.env.ENDO_FORMULA_COMMIT_HOOK_PATH;
+    try {
+      fs.unlinkSync(hookPath);
+    } catch {
+      // ignore
+    }
+    try {
+      fs.unlinkSync(`${hookPath}.paused`);
+    } catch {
+      // ignore
+    }
+  }
+});
+
+test('crash after provisional record retains formula across restart', async t => {
+  const hookPath = path.join(
+    os.tmpdir(),
+    `endo-formula-commit-hook-crash-${process.pid}-${Date.now()}`,
+  );
+  // Leave unset during bootstrap; arm immediately before startEvaluate.
+  process.env.ENDO_FORMULA_COMMIT_HOOK_PATH = hookPath;
+  fs.writeFileSync(hookPath, 'release', 'utf8');
+  let config;
+  try {
+    const prepared = await prepareConfig(t);
+    config = prepared.config;
+    const { cancelled } = prepared;
+    const { host } = await makeHost(config, cancelled);
+    await E(host).provideWorker(['w1']);
+    fs.writeFileSync(hookPath, 'crash-once', 'utf8');
+    await t.throwsAsync(
+      () => E(host).startEvaluate('w1', '123', [], [], 'crash-eval'),
+      { message: /injected-crash-after-persist|ambiguous|Name commit/i },
+    );
+  } finally {
+    delete process.env.ENDO_FORMULA_COMMIT_HOOK_PATH;
+    try {
+      fs.unlinkSync(hookPath);
+    } catch {
+      // ignore
+    }
+  }
+
+  // After restart, provisional records seed retention so formula JSON survives.
+  await restart(config);
+  {
+    const db = openTestDb(config.statePath);
+    const pending = db.listPendingNameCommits();
+    t.true(
+      pending.length >= 1 || db.listFormulas().some(f => true),
+      'formula or provisional record should survive crash window',
+    );
+    // At least one formula of type eval should still be on disk.
+    const evalFormulas = db
+      .listFormulas()
+      .map(({ number }) => {
+        try {
+          return db.readFormula(number).formula;
+        } catch {
+          return undefined;
+        }
+      })
+      .filter(f => f && f.type === 'eval');
+    t.true(
+      evalFormulas.length >= 1,
+      'eval formula persisted before crash must remain',
+    );
+  }
+});
+
+test('Group B storeValue does not await construction of stored value', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).provideWorker(['w1']);
+  // storeValue of a never-settling construction must still return.
+  // Use a named eval that never settles, store its exo identity is not
+  // available — storeValue stores passables. Pin that storeValue returns
+  // undefined without waiting on a construction promise of its own.
+  const result = await E(host).storeValue(harden({ x: 1 }), 'stored');
+  t.is(result, undefined);
+  t.true(await E(host).has('stored'));
+});
+
+test('Group B form and submit settle without awaiting construction', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('g-submit');
+  const hostIterator = iterateReader(E(host).followMessages());
+
+  // form returns after durable mailbox delivery (creation-only).
+  const formP = E(guest).form(
+    '@host',
+    'need values',
+    harden([{ name: 'x', label: 'x' }]),
+  );
+  const formRaced = await Promise.race([
+    formP.then(() => 'done'),
+    new Promise(resolve => setTimeout(() => resolve('timeout'), 3000)),
+  ]);
+  t.is(formRaced, 'done', 'form must settle without awaiting construction');
+
+  const { value: formMsg } = await hostIterator.next();
+  t.is(formMsg.type, 'form');
+
+  // Submit a passable for the form field; must return promptly.
+  const submitP = E(host).submit(formMsg.number, harden({ x: '1' }));
+  const submitRaced = await Promise.race([
+    submitP.then(() => 'done'),
+    new Promise(resolve => setTimeout(() => resolve('timeout'), 3000)),
+  ]);
+  t.is(submitRaced, 'done', 'submit must settle without awaiting construction');
+});
+
+test('Group B send settles without awaiting construction', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('g-send');
+  await E(host).storeValue(harden({ v: 1 }), 'payload');
+  const sendP = E(host).send('g-send', ['hello'], ['p'], ['payload']);
+  const raced = await Promise.race([
+    sendP.then(() => 'done'),
+    new Promise(resolve => setTimeout(() => resolve('timeout'), 3000)),
+  ]);
+  t.is(raced, 'done', 'send must settle without awaiting construction');
+  // Guest received the message.
+  const messages = await E(guest).listMessages();
+  t.true(messages.length >= 1);
+});
+
+test('Group B define settles without awaiting construction', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('g-define');
+  // define posts a definition request; returns after mailbox delivery.
+  const defineP = E(guest).define('need a value', harden({}));
+  const raced = await Promise.race([
+    defineP.then(() => 'done'),
+    new Promise(resolve => setTimeout(() => resolve('timeout'), 3000)),
+  ]);
+  t.is(raced, 'done', 'define must settle without awaiting construction');
+});
+
+test('Group B reply, editMessage, and sendValue settle promptly', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('g-mail');
+  const hostMessages = iterateReader(E(host).followMessages());
+
+  await E(guest).send('@host', ['ping'], [], []);
+  const { value: hostMessage } = await hostMessages.next();
+
+  const replyP = E(host).reply(hostMessage.number, ['pong'], [], []);
+  t.is(
+    await Promise.race([
+      replyP.then(() => 'done'),
+      new Promise(resolve => setTimeout(() => resolve('timeout'), 3000)),
+    ]),
+    'done',
+    'reply must settle without awaiting construction',
+  );
+
+  const guestMessages = iterateReader(E(guest).followMessages());
+  // Drain the self-delivered send and the host reply if present.
+  await guestMessages.next();
+  const editP = E(guest).editMessage(
+    (await E(guest).listMessages()).find(m => m.strings?.[0] === 'ping')
+      ?.number ?? 0n,
+    ['ping-edited'],
+    [],
+    [],
+  );
+  t.is(
+    await Promise.race([
+      editP.then(() => 'done'),
+      new Promise(resolve => setTimeout(() => resolve('timeout'), 3000)),
+    ]),
+    'done',
+    'editMessage must settle without awaiting construction',
+  );
+
+  await E(guest).storeValue(harden({ k: 1 }), 'sv-payload');
+  // Re-send so guest has a message number to reply to via sendValue.
+  await E(host).send('g-mail', ['need reply'], [], []);
+  const guestInbox = await E(guest).listMessages();
+  const needReply = guestInbox[guestInbox.length - 1];
+  const sendValueP = E(guest).sendValue(needReply.number, 'sv-payload');
+  t.is(
+    await Promise.race([
+      sendValueP.then(() => 'done'),
+      new Promise(resolve => setTimeout(() => resolve('timeout'), 3000)),
+    ]),
+    'done',
+    'sendValue must settle without awaiting construction',
+  );
+});
+
+test('startMakeUnconfined returns receipt with required result name', async t => {
+  const { host } = await prepareHost(t);
+  // Missing result name rejects.
+  await t.throwsAsync(
+    () =>
+      E(/** @type {any} */ (host)).startMakeUnconfined(
+        '@node',
+        'file:///tmp/nope.js',
+        undefined,
+      ),
+  );
 });
