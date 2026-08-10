@@ -3,6 +3,7 @@
 
 import '@endo/init';
 import test from 'ava';
+import { Far } from '@endo/far';
 import { mkdtemp, mkdir, writeFile, rm, utimes } from 'node:fs/promises';
 import os from 'node:os';
 import nodePath from 'node:path';
@@ -563,4 +564,125 @@ test('terminate() before any use creates nothing', async t => {
   t.is(host.mountCalls.length, 0);
   t.is(host.sliceFactoryCalls.length, 0);
   t.false(host.isUnmounted());
+});
+
+// ---------------------------------------------------------------------------
+// Runtime-attached extra container binds (designs/runtime-container-fs-mount.md)
+// ---------------------------------------------------------------------------
+
+test('setExtraMounts before first use binds the extras at provision time', async t => {
+  const host = makeMockHost();
+  const client = make(host.powers, undefined, { env: baseEnv() });
+  const extraCap = harden({ kind: 'attach-mount-cap' });
+
+  await client.setExtraMounts(
+    harden([{ cap: extraCap, innerPath: '/mnt/project', mode: 'rw' }]),
+  );
+  // Nothing was provisioned yet, so recording the set is not a recreate.
+  t.is(host.sliceFactoryCalls.length, 0);
+
+  await drain(await client.send('hello'));
+  t.is(host.sliceFactoryCalls.length, 1);
+  const { mounts } = host.sliceFactoryCalls[0];
+  t.is(mounts[0].innerPath, '/workspace');
+  const extra = mounts.find(m => m.innerPath === '/mnt/project');
+  t.truthy(extra);
+  t.is(extra.cap, extraCap);
+  t.is(extra.mode, 'rw');
+
+  const status = await client.status();
+  t.deepEqual(status.extraMounts, [{ innerPath: '/mnt/project', mode: 'rw' }]);
+});
+
+test('setExtraMounts on a live slice disposes and immediately recreates it', async t => {
+  const host = makeMockHost();
+  const client = make(host.powers, undefined, { env: baseEnv() });
+
+  await drain(await client.send('hello'));
+  t.is(host.sliceFactoryCalls.length, 1);
+  t.false(host.isDisposed());
+
+  const extraCap = harden({ kind: 'attach-mount-cap' });
+  await client.setExtraMounts(
+    harden([{ cap: extraCap, innerPath: '/mnt/data', mode: 'ro' }]),
+  );
+
+  // The old slice is gone, the workspace 9P mount was released and
+  // re-mounted, and the new slice binds the extra.
+  t.true(host.isDisposed());
+  t.true(host.isUnmounted());
+  t.is(host.mountCalls.length, 2);
+  t.is(host.sliceFactoryCalls.length, 2);
+  const { mounts } = host.sliceFactoryCalls[1];
+  t.is(mounts[0].innerPath, '/workspace');
+  const extra = mounts.find(m => m.innerPath === '/mnt/data');
+  t.truthy(extra);
+  t.is(extra.cap, extraCap);
+  t.is(extra.mode, 'ro');
+
+  // A follow-up turn spawns in the recreated slice rather than failing.
+  await drain(await client.send('again'));
+  t.is(host.spawnCalls.length, 2);
+});
+
+test('an emptied extra set also recreates, dropping the binds', async t => {
+  const host = makeMockHost();
+  const client = make(host.powers, undefined, { env: baseEnv() });
+  await client.setExtraMounts(
+    harden([{ cap: harden({}), innerPath: '/mnt/x', mode: 'rw' }]),
+  );
+  await drain(await client.send('hello'));
+  t.is(host.sliceFactoryCalls[0].mounts.length, 2);
+
+  await client.setExtraMounts(harden([]));
+  t.is(host.sliceFactoryCalls.length, 2);
+  t.is(host.sliceFactoryCalls[1].mounts.length, 1);
+  t.is(host.sliceFactoryCalls[1].mounts[0].innerPath, '/workspace');
+});
+
+test('terminate() unmounts runtime-attached extra handles', async t => {
+  const host = makeMockHost();
+  const client = make(host.powers, undefined, { env: baseEnv() });
+  let extraUnmounts = 0;
+  const handle = Far('FakeFs9pMountHandle', {
+    async unmount() {
+      extraUnmounts += 1;
+    },
+  });
+  await client.setExtraMounts(
+    harden([{ cap: harden({}), innerPath: '/mnt/x', mode: 'rw', handle }]),
+  );
+
+  // Terminate before any provision still releases the handed-in bridge.
+  await client.terminate();
+  t.is(extraUnmounts, 1);
+  t.is(host.sliceFactoryCalls.length, 0);
+});
+
+test('a recreate does not unmount the extras it keeps', async t => {
+  const host = makeMockHost();
+  const client = make(host.powers, undefined, { env: baseEnv() });
+  let extraUnmounts = 0;
+  const handle = Far('FakeFs9pMountHandle', {
+    async unmount() {
+      extraUnmounts += 1;
+    },
+  });
+  const extra = harden({
+    cap: harden({}),
+    innerPath: '/mnt/kept',
+    mode: 'rw',
+    handle,
+  });
+  await client.setExtraMounts(harden([extra]));
+  await drain(await client.send('hello'));
+
+  // Replacing the set with the same bind recreates the slice but must not
+  // release the registrar-owned 9P bridge behind it.
+  await client.setExtraMounts(harden([extra]));
+  t.is(host.sliceFactoryCalls.length, 2);
+  t.is(extraUnmounts, 0);
+
+  await client.terminate();
+  t.is(extraUnmounts, 1);
 });

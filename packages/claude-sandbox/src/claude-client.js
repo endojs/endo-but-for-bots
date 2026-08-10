@@ -53,6 +53,7 @@ const ClaudeClientInterface = M.interface('ClaudeClient', {
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.promise()),
   interrupt: M.call().returns(M.promise()),
+  setExtraMounts: M.call(M.arrayOf(M.record())).returns(M.promise()),
   terminate: M.call().returns(M.promise()),
   status: M.call().returns(M.promise()),
   help: M.call().optional(M.string()).returns(M.string()),
@@ -157,6 +158,23 @@ const defaultStderrIterable = proc =>
   });
 
 /**
+ * A runtime-attached extra container bind
+ * (designs/runtime-container-fs-mount.md). The host-side attach registrar
+ * bridges a cap the session guest holds over 9P, registers the mountpoint as
+ * a daemon `Mount` cap, and hands the result here; the slice binds it at
+ * `innerPath` (under `/mnt/`) on the next provision.
+ *
+ * @typedef {object} ExtraMountSpec
+ * @property {object} cap - Daemon `Mount` cap for the bridged host mountpoint.
+ * @property {string} innerPath - Slice-internal path, under `/mnt/`.
+ * @property {'ro' | 'rw'} mode
+ * @property {{ unmount: () => Promise<void> }} [handle] - Host-side 9P mount
+ *   handle backing the cap. The attach registrar owns it across slice
+ *   recreates; `terminate()` still unmounts it, because terminate destroys
+ *   the whole CLI environment rather than one bind.
+ */
+
+/**
  * @typedef {object} ClaudeClientArgs
  * @property {string} sessionId
  * @property {string} createdAt - ISO timestamp.
@@ -167,13 +185,15 @@ const defaultStderrIterable = proc =>
  * @property {{ unmount: () => Promise<void> }} [mountHandle] - Host-side
  *   9P mount handle for the workspace. Unmounted on `terminate()`.
  *   Omitted when the workspace was bound by some other means (tests).
- * @property {() => Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, configMountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void>, removeMount?: () => Promise<void> }>} [provision]
+ * @property {(extraMounts?: readonly ExtraMountSpec[]) => Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, configMountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void>, removeMount?: () => Promise<void> }>} [provision]
  *   - Lazy workspace provisioner. When present, `slice` / `mountHandle`
  *   are ignored and the slice + mount are created on first use (the
  *   first `send()` or `initialPrompt`), memoized thereafter. This is
  *   what lets the client be a pure-`env` formula: it constructs
  *   instantly and re-mounts / re-mints its container on demand, so
- *   daemon boot is never blocked on a container start. May also return a
+ *   daemon boot is never blocked on a container start. Receives the
+ *   current runtime-attached extra binds so a recreate expands the
+ *   slice's mount list. May also return a
  *   `revoke` thunk, called on `terminate()` to release the credential
  *   grant it issued.
  * @property {string} workspaceMountPoint - Host path the workspace 9P
@@ -346,12 +366,30 @@ export const makeClaudeClient = ({
   /** @type {Promise<void>} */
   let turnChain = Promise.resolve();
 
+  // Runtime-attached extra container binds
+  // (designs/runtime-container-fs-mount.md). Replacing the set while a slice
+  // is live disposes and immediately re-mints it with the expanded mount
+  // list; when nothing is provisioned yet, the set simply binds on the next
+  // (lazy) provision.
+  /** @type {readonly ExtraMountSpec[]} */
+  let extraMounts = harden([]);
+  // True while a recreate is tearing down the live slice, so the killed
+  // in-flight turn's abort reason names the recreate instead of a bare
+  // signal.
+  let recreating = false;
+  // A recreate's teardown must finish before a racing turn re-provisions:
+  // both the old teardown and the new provision touch the same host
+  // mountpoints (workspace/config 9P), so an overlap could unmount the fresh
+  // mount. `ensureProvisioned` chains behind this gate.
+  /** @type {Promise<void>} */
+  let pendingTeardown = Promise.resolve();
+
   // Workspace provisioning. Direct `slice` / `mountHandle` are treated
   // as already provisioned (eager); a `provision` thunk is run once on
   // first use (lazy) and memoized. `provisioned` stays `undefined`
   // until a lazy provision starts, so `terminate()` before any use is
   // a no-op rather than spinning up a container just to tear it down.
-  /** @type {Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void>, removeMount?: () => Promise<void> }> | undefined} */
+  /** @type {Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, configMountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void>, removeMount?: () => Promise<void> }> | undefined} */
   let provisioned = provision
     ? undefined
     : Promise.resolve(
@@ -364,8 +402,8 @@ export const makeClaudeClient = ({
       );
   const ensureProvisioned = () => {
     if (provisioned === undefined) {
-      const pending = Promise.resolve(
-        /** @type {NonNullable<typeof provision>} */ (provision)(),
+      const pending = pendingTeardown.then(() =>
+        /** @type {NonNullable<typeof provision>} */ (provision)(extraMounts),
       );
       provisioned = pending;
       // A transient provisioning failure (image pull, 9P mount EPERM,
@@ -387,6 +425,19 @@ export const makeClaudeClient = ({
       throw makeError(X`ClaudeClient(${q(sessionId)}) is terminated.`);
     }
   };
+
+  /**
+   * While a recreate is disposing the live slice, the in-flight `claude`
+   * process dies by signal; name the actual cause in that turn's abort
+   * reason (attach/detach is disruptive by design — see
+   * designs/runtime-container-fs-mount.md).
+   *
+   * @param {string} base
+   */
+  const abortReasonInContext = base =>
+    recreating
+      ? `container mount set changed; sandbox slice recreated — ${base}`
+      : base;
 
   /**
    * Spawn one `claude -p` process inside the slice and return its
@@ -592,17 +643,20 @@ export const makeClaudeClient = ({
               ? `killed by ${status.signal}`
               : `exited with code ${status.code}`;
           const stderrText = await readStderrBrief(proc);
+          const base = abortReasonInContext(`claude ${how}`);
           push({
             type: 'abort',
             reason: stderrText
-              ? `claude ${how}\n--- stderr ---\n${stderrText}`
-              : `claude ${how}`,
+              ? `${base}\n--- stderr ---\n${stderrText}`
+              : base,
           });
         } else {
           push({ type: 'end' });
         }
       } catch (error) {
-        const base = error instanceof Error ? error.message : String(error);
+        const base = abortReasonInContext(
+          error instanceof Error ? error.message : String(error),
+        );
         // Kill first so the captured stderr stream EOFs, then fold any
         // diagnostic claude wrote to stderr into the abort reason — without
         // it, a claude-side failure surfaces only as an opaque stream/parse
@@ -657,6 +711,96 @@ export const makeClaudeClient = ({
     })().catch(() => {});
   }
 
+  // Serialize attach-set changes so two overlapping `setExtraMounts` calls
+  // never interleave their teardown/re-provision sequences.
+  /** @type {Promise<void>} */
+  let extraMountsChain = Promise.resolve();
+  /**
+   * @param {readonly ExtraMountSpec[]} extras
+   */
+  const applyExtraMounts = extras => {
+    const run = extraMountsChain.then(async () => {
+      await null;
+      guardLive();
+      extraMounts = harden([...extras]);
+      if (provisioned === undefined) {
+        // Nothing live: the new set binds on the next (lazy) provision.
+        return;
+      }
+      if (!provision) {
+        throw makeError(
+          X`ClaudeClient(${q(sessionId)}): extra mounts require a lazily-provisioned client (no provision thunk to recreate the slice with)`,
+        );
+      }
+      const prior = provisioned;
+      provisioned = undefined;
+      /** @type {() => void} */
+      let releaseTeardown = () => {};
+      pendingTeardown = new Promise(resolve => {
+        releaseTeardown = resolve;
+      });
+      recreating = true;
+      try {
+        try {
+          /** @type {Awaited<typeof prior> | undefined} */
+          let resolved;
+          try {
+            resolved = await prior;
+          } catch {
+            // The prior provision failed and already cleaned up after
+            // itself; the next provision binds the new set.
+            return;
+          }
+          // Dispose the slice first: it kills the in-flight `claude` (that
+          // turn aborts with a recreate-labelled reason) and releases the
+          // container's binds so the 9P mounts below can unmount.
+          try {
+            await E(resolved.slice).dispose();
+          } catch {
+            // best-effort
+          }
+          // Unmount the workspace/config 9P mounts so the re-provision can
+          // remount the same host mountpoints. The extras' own 9P bridges
+          // are NOT touched: the attach registrar owns them across
+          // recreates (they die only on detach or terminate).
+          for (const handle of [
+            resolved.mountHandle,
+            resolved.configMountHandle,
+          ]) {
+            if (handle) {
+              try {
+                await E(handle).unmount();
+              } catch {
+                // best-effort
+              }
+            }
+          }
+          // Release the credential grant; the re-provision issues a fresh
+          // one.
+          if (resolved.revoke) {
+            try {
+              await resolved.revoke();
+            } catch {
+              // best-effort
+            }
+          }
+        } finally {
+          // Must release before re-provisioning: ensureProvisioned chains
+          // behind this gate.
+          releaseTeardown();
+        }
+        // Immediate recreate (design decision: apply on attach, not on the
+        // next turn) so a provisioning failure surfaces to the attach
+        // caller rather than poisoning the next send.
+        await ensureProvisioned();
+      } finally {
+        recreating = false;
+      }
+    });
+    extraMountsChain = run.catch(() => {});
+    return run;
+  };
+
   return makeExo('ClaudeClient', ClaudeClientInterface, {
     /**
      * Start a turn and return its reply reader immediately. The turn
@@ -695,6 +839,29 @@ export const makeClaudeClient = ({
     },
 
     /**
+     * Replace the runtime-attached extra container binds
+     * (designs/runtime-container-fs-mount.md). When a slice is live it is
+     * disposed and IMMEDIATELY re-minted with the expanded mount list —
+     * attach is disruptive by design, so an in-flight turn is killed with
+     * an abort reason naming the recreate. When nothing is provisioned
+     * yet, the set simply binds on the next (lazy) provision.
+     *
+     * Called by the host-side attach registrar, which owns each extra's 9P
+     * bridge across recreates. Not reachable from a session: floot hands
+     * sessions a send-only attenuation of this client.
+     *
+     * @param {ReadonlyArray<Record<string, any>>} extras - wire-shaped
+     *   records (the interface guard admits any copyRecord); treated as
+     *   {@link ExtraMountSpec}s.
+     */
+    async setExtraMounts(extras) {
+      guardLive();
+      return applyExtraMounts(
+        /** @type {readonly ExtraMountSpec[]} */ (extras),
+      );
+    },
+
+    /**
      * Tear down the session: abort the in-flight turn, dispose the slice
      * (which kills every process and releases the container), unmount the
      * host-side 9P workspace mount, and revoke the credential grant.
@@ -723,6 +890,20 @@ export const makeClaudeClient = ({
           await E(proc).kill();
         } catch {
           // best-effort
+        }
+      }
+      // Runtime-attached extras destroyed too: terminate destroys the
+      // whole shared CLI environment, not one session's view of it, so
+      // every 9P bridge handed in with the attach set is released (a mere
+      // recreate never touches these). Done before the provisioned check —
+      // an attach can precede the first provision.
+      for (const extra of extraMounts) {
+        if (extra.handle) {
+          try {
+            await E(extra.handle).unmount();
+          } catch {
+            // best-effort; the bridge caplet also unmounts on teardown
+          }
         }
       }
       // Only tear down what was actually provisioned. If the workspace
@@ -790,6 +971,10 @@ export const makeClaudeClient = ({
         rootfs: rootfsLabel,
         conversationStarted,
         terminated,
+        extraMounts: extraMounts.map(({ innerPath, mode }) => ({
+          innerPath,
+          mode,
+        })),
       });
     },
 
@@ -806,10 +991,13 @@ export const makeClaudeClient = ({
           '                        makeRefIterator). Turns queue.',
           '  interrupt()         → close the current reader (kills the',
           '                        in-flight prompt; slice survives)',
+          '  setExtraMounts(a)   → replace the runtime-attached container',
+          '                        binds; recreates a live slice immediately',
+          '                        (the in-flight turn aborts)',
           '  terminate()         → dispose the slice + unmount + revoke creds',
           '  status()            → { sessionId, createdAt, workspaceMountPoint,',
           '                          backend, rootfs, conversationStarted,',
-          '                          terminated }',
+          '                          terminated, extraMounts }',
         ].join('\n');
       }
       return `No documentation for method "${q(methodName)}".`;
