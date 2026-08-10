@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
-| **Updated** | 2026-08-07 |
+| **Updated** | 2026-08-08 |
 | **Author** | Aaron Kumavis (prompted) |
 | **Status** | In Progress |
 | **Builds on** | designs/ironhorse-engine.md (§ Snapshots, requirement 1c) |
@@ -260,8 +260,11 @@ Remaining, mapped to the phases: cargo-fuzz promotion of the hardening
 arms (the `ironhorse-fuzz` crate links the XS oracle, absent in the
 build environment); the supervisor cadence policy and `endor` binary
 wiring (with the worker-envelope work); the attached-mode and
-wake-latency benchmarks; the incremental root-hash tree (future
-work).
+wake-latency benchmarks; and the phase 5-9 roadmap (added 2026-08-08,
+see Phased Implementation) toward the standing goal that no operation
+ever reifies the whole heap — incremental Merkle root hash,
+summary-driven generational mark, identity-keyed chunk rows, eviction,
+sparse attach + paged free list.
 
 ## What Is the Problem Being Solved?
 
@@ -772,9 +775,75 @@ changes an engine observable.
    checkpoint cadence policy; side-table rows landing paired with
    their atoms as the ledger's `Pending` rows graduate; incremental
    root hash if export-to-hash becomes hot.
-   *Future work (out of scope until a consumer demands it):* clean-page
-   eviction for heaps larger than RAM; structural sharing of pages
-   across forked workers; store compaction/vacuum policy.
+
+Phases 5-9 (added 2026-08-08) chase one goal: **no operation on a
+store-backed machine ever reifies, rewrites, or hashes the whole
+heap** — the residual O(heap) touchpoints being GC mark, GC chunk
+compaction (and the near-full checkpoint after it), export-for-
+identity, the dense lazy attach with grow-only residency, and the
+free list riding whole in small state.
+
+5. **Incremental root hash (Merkle row tree).** Per-row hashes as
+   tree leaves, maintained at commit in O(dirty · log n), the root
+   sealed into the manifest chain; faults verify the row against its
+   leaf, discharging named integrity limitation 1 (unchecksummed row
+   content). The Merkle root is the *store-native* identity for
+   verification and store-equality; the blob CAS key remains
+   SHA-256 of the canonical export, now computed only at actual
+   interchange — never for verification.
+   *Bar:* commit overhead measured O(dirty); a flipped row byte fails
+   closed at fault with a named error; two stores compare equal by
+   root without a row read. Land the wake-latency benchmark with this
+   phase so 6-9 each have a number to move.
+6. **Persisted page-edge summaries; generational mark.** Checkpoints
+   also write per-page outgoing-reference summaries (computed from
+   the dirty pages already being encoded), sealed with the commit; a
+   release-fixed partial collector marks only pages dirtied since the
+   last collect plus pages their summaries reach, resolving the rest
+   through indexed store queries — including the periodic full
+   reachability pass, which traces over summaries, not faulted
+   content. Collector behavior stays a pure function of store
+   content, never residency; the change is per-release, per the
+   metering doctrine. *Prerequisite:* the chunk-roots ledger rows
+   (array buffers, static strings) first-class in the GC roots
+   contract — the adversarial review's latent finding.
+   *Bar:* a generational metamorphic arm agrees exactly with the
+   other six; collection store-I/O measured sub-O(live heap) on the
+   wide-heap fixture under small mutation sets; collection *timing*
+   byte-identical to the ungenerational release... within that
+   release's own six ways.
+7. **Identity-keyed chunk rows; incremental compaction.** Re-key
+   chunk storage by stable chunk identity (a store-schema bump), with
+   the slot→chunk reference encoding and the compaction algorithm
+   moving together, so compaction becomes per-chunk row moves —
+   indexed updates — never a whole-space slide-and-rewrite, and the
+   post-GC checkpoint dirties only chunks that actually moved.
+   *Bar:* post-compaction checkpoint I/O proportional to moved
+   chunks; the container byte-identity locks still hold (export
+   canonicalizes back to offset order).
+8. **Eviction (fault-out) — the amendment Design Decision 3
+   requires.** Clean pages and extents may drop (the store holds
+   them); dirty rows checkpoint first or stay; nothing evicts under a
+   live chunk guard. Any eviction schedule must be observably
+   irrelevant — the adversarial-prefetch metamorphic arm generalizes
+   to an adversarial-evict arm.
+   *Bar:* six-way agreement extended with randomized evict schedules;
+   a long-running working-set fixture holds bounded residency with
+   results, computrons, and blobs identical.
+9. **Sparse attach; paged free list.** Placeholder pages allocate on
+   first fault instead of the dense O(slot_count) zero-fill (the
+   phase-3 recorded trade's named follow-up — re-runs the hot-path
+   benchmark gate, since it touches the by-value `get`), and the free
+   list moves out of small state into dirty-tracked paged rows (its
+   LIFO order is load-bearing and is preserved row-internally) —
+   closing the last two O(heap) terms.
+   *Bar:* attach time O(working set) on a huge-heap fixture;
+   small-state bytes O(1) in heap size; slots microbench within the
+   recorded envelope.
+
+*Future work beyond phase 9 (out of scope until a consumer demands
+it):* structural sharing of pages across forked workers; store
+compaction/vacuum policy.
 
 ## Design Decisions
 
@@ -822,14 +891,18 @@ changes an engine observable.
 3. Checkpoint cadence policy: supervisor-driven only, or an automatic
    every-N-cranks knob on the worker?
    (A policy question for the daemon, not an engine semantic.)
-4. Side-table row granularity as `Pending` atoms land: per-instance
-   rows from the start, or per-table blobs first with keyed rows on
-   demand?
+4. ~~Side-table row granularity as `Pending` atoms land~~ **Decided
+   2026-08-08** (phase 5-9 roadmap): per-instance keyed rows from the
+   start, with dirty tracking and lazy fault, the same discipline as
+   slot pages — a per-table blob would reintroduce a whole-heap
+   object per graduated ledger row, against the roadmap's goal.
 5. Whether `store::file` (the pure-Rust reference store) should grow
    into the default backend for non-daemon embedders, leaving SQLite
    as the daemon's choice — revisit when a second embedder exists.
-6. **Lighter GC against the store.** Today a collection is the
-   amortized full reifier (Design Decision 4): mark faults every live
+6. **Lighter GC against the store.** *Promoted 2026-08-08: the
+   second and third directions below are now phases 6 and 7 of the
+   roadmap; the first is standing supervisor policy.* Today a
+   collection is the amortized full reifier (Design Decision 4): mark faults every live
    slot page, and chunk compaction reifies the whole extent space
    before downgrading it to plain bytes; only sweep and the free list
    are content-free. Three directions could shrink a collection's
