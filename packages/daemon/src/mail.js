@@ -341,6 +341,10 @@ export const makeMailboxMaker = ({
           ...envelopeRecord,
           source: envelope.source,
           slots: envelope.slots,
+          // Retain the promise/resolver pair so guest define + host endow
+          // cannot collect them between post and resolution.
+          promiseId: /** @type {FormulaIdentifier} */ (envelope.promiseId),
+          resolverId: /** @type {FormulaIdentifier} */ (envelope.resolverId),
         });
       }
 

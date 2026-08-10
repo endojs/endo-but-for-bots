@@ -51,7 +51,11 @@ import {
   makeStoreIdentifierTask,
   makePinTransientTask,
 } from './deferred-tasks.js';
-import { runAfterPersistBeforeCommitHook } from './formula-commit-test-hooks.js';
+import {
+  runAfterPersistBeforeCommitHook,
+  setPinTransientForTests,
+  setUnpinTransientForTests,
+} from './formula-commit-test-hooks.js';
 import { assertMailboxStoreName, makeMailboxMaker } from './mail.js';
 import { makeGuestMaker } from './guest.js';
 import { makeChannelMaker } from './channel.js';
@@ -1205,19 +1209,36 @@ const makeDaemonCore = async (
 
   /**
    * Unpin a transient formula under the context-aware graph lock.
-   * Nested under the owned token (explicit or ALS), mutates immediately
-   * and defers cleanup until the outer lock section ends. Otherwise
-   * enqueues so concurrent unpin cannot collect mid-commit.
+   * Nested under the owned token, mutates immediately and defers cleanup
+   * until the outer lock section ends. Without a token, always exclusive
+   * enqueue (never the auto-reentry path) so concurrent unpin cannot
+   * collect mid-commit.
    *
    * @param {FormulaIdentifier} id
    * @param {import('./types.js').FormulaGraphLockContext} [lockContext]
    * @returns {Promise<void>}
    */
   const unpinTransient = async (id, lockContext = undefined) => {
-    await withFormulaGraphLock(async lockContext => {
+    if (
+      lockContext !== undefined &&
+      lockContext === ownedFormulaGraphLockContext
+    ) {
       formulaGraph.unpinTransient(id);
-    }, lockContext);
+      return;
+    }
+    // Exclusive: no auto-reentry when a commit holds the lock.
+    await formulaGraphJobs.enqueue(async () => {
+      formulaGraph.unpinTransient(id);
+    });
+    // Drain only when no outer owner is mid-section.
+    if (ownedFormulaGraphLockContext === null) {
+      // eslint-disable-next-line no-use-before-define
+      await drainCollectionCleanup();
+    }
   };
+  // Test seams for concurrent-unpin-during-commit cases.
+  setUnpinTransientForTests(unpinTransient);
+  setPinTransientForTests(pinTransient);
 
   /** @type {WeakMap<object, FormulaIdentifier>} */
   const agentIdForHandle = new WeakMap();
@@ -4536,14 +4557,15 @@ const makeDaemonCore = async (
         'pending',
       );
 
-      // Test seam: pause/crash between durable writes and name commit.
-      await runAfterPersistBeforeCommitHook();
-
       /** @type {import('./types.js').CommitOutcome} */
       let outcome = 'committed';
       /** @type {Error | undefined} */
       let commitError;
       try {
+        // Test seam: pause/crash/reject between durable writes and name commit.
+        // Failures here are treated as commit outcomes so rejected-before-write
+        // can sweep and ambiguous/crash can retain the provisional record.
+        await runAfterPersistBeforeCommitHook();
         // 2. Name commit while holding the lock token.
         outcome = await commitAfterPersistence(lockContext);
       } catch (error) {
@@ -4555,20 +4577,20 @@ const makeDaemonCore = async (
         }
       }
 
-      // 3. Register formula and graph edges even on rejection so retention
-      // or an explicit sweep can recover safely.
-      registerFormulaInGraph(
-        id,
-        formulaNumber,
-        formula,
-        nodeNumber,
-        lockContext,
-      );
-      if (options.pin) {
-        options.pin(id);
-      }
-
       if (outcome === 'committed') {
+        // 3. Register formula and graph edges only after a successful name
+        // commit (or for ambiguous retention below). Proven rejected-before-
+        // write must not publish a controller or durable graph edges.
+        registerFormulaInGraph(
+          id,
+          formulaNumber,
+          formula,
+          nodeNumber,
+          lockContext,
+        );
+        if (options.pin) {
+          options.pin(id);
+        }
         // Local committed: drop provisional record when the name path is
         // empty (no-op bag) or when a local path was written. Remote-capable
         // multi-segment paths may keep the record as a durable edge; for
@@ -4591,30 +4613,31 @@ const makeDaemonCore = async (
 
       if (outcome === 'rejected-before-write') {
         await persistencePowers.deletePendingNameCommit(commitId);
-        // Explicit post-lock sweep runs after we leave this section.
-        // Schedule via microtask after lock release by using a follow-up.
-        // We rethrow after the lock section; the caller-facing reject happens
-        // below. Sweep is invoked just before rethrow outside nested work:
-        // drain happens after withFormulaGraphLock returns, so schedule sweep
-        // in a nested enqueue after this callback ends by re-entering.
+        // Proven no name write: never publish the formula into the live
+        // graph; delete the orphan formula JSON and run an explicit sweep
+        // so any related unreachable residue is collected.
+        await persistencePowers.deleteFormula(formulaNumber);
+        formulaGraph.sweepUnreachable();
         const error =
           commitError ||
           Error('Name commit rejected before write');
         // @ts-expect-error tag for tests
         error.commitOutcome = 'rejected-before-write';
-        // Run sweep after this lock section by chaining.
-        // Enqueue sweep after this lock section releases.
-        Promise.resolve()
-          .then(() =>
-            withFormulaGraphLock(async lockContext => {
-              formulaGraph.sweepUnreachable();
-            }),
-          )
-          .catch(() => {});
         throw error;
       }
 
-      // ambiguous: keep provisional record as retention root; no construction.
+      // ambiguous: keep provisional record as retention root; register so
+      // recovery and in-memory graph agree, but do not construct.
+      registerFormulaInGraph(
+        id,
+        formulaNumber,
+        formula,
+        nodeNumber,
+        lockContext,
+      );
+      if (options.pin) {
+        options.pin(id);
+      }
       const error =
         commitError ||
         Error('Name commit failed with ambiguous outcome');
@@ -5765,7 +5788,7 @@ const makeDaemonCore = async (
       await deferredTasks.commit(__commitIdentifiers_14, /** @type {any} */ (undefined));
       const result = await formulateNumberedHost(identifiers);
       for (const id of identifiers.pinned) {
-        unpinTransient(id);
+        await unpinTransient(id, lockContext);
       }
       return result;
     });
@@ -5921,7 +5944,7 @@ const makeDaemonCore = async (
       await deferredTasks.commit(__commitIdentifiers_15, /** @type {any} */ (undefined));
       const result = await formulateNumberedGuest(identifiers);
       for (const id of identifiers.pinned) {
-        unpinTransient(id);
+        await unpinTransient(id, lockContext);
       }
       return result;
     });

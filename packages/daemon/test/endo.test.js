@@ -7842,3 +7842,427 @@ test('startMakeUnconfined returns receipt with required result name', async t =>
       ),
   );
 });
+
+test('guest startEvaluate returns receipt; missing name rejects', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('g-eval');
+
+  await t.throwsAsync(
+    () =>
+      E(/** @type {any} */ (guest)).startEvaluate(
+        undefined,
+        '1',
+        [],
+        [],
+        undefined,
+      ),
+    { message: /result name/i },
+  );
+
+  const receipt = await E(guest).startEvaluate(
+    undefined,
+    'new Promise(() => {})',
+    [],
+    [],
+    'guest-pending',
+  );
+  t.truthy(receipt.id);
+  t.regex(receipt.locator, /^endo:\/\//);
+  t.true(await E(guest).has('guest-pending'));
+  // Host namespace does not see the guest name.
+  t.false(await E(host).has('guest-pending'));
+});
+
+test('concurrent startEvaluate same name overwrites under lock', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).provideWorker(['w1']);
+  const [r1, r2] = await Promise.all([
+    E(host).startEvaluate('w1', '1', [], [], 'shared-name'),
+    E(host).startEvaluate('w1', '2', [], [], 'shared-name'),
+  ]);
+  t.truthy(r1.id);
+  t.truthy(r2.id);
+  t.true(await E(host).has('shared-name'));
+  const value = await E(host).lookup(['shared-name']);
+  // Last writer wins; either value is acceptable as long as lookup settles.
+  t.true(value === 1 || value === 2);
+  const identified = await E(host).identify('shared-name');
+  t.true(identified === r1.id || identified === r2.id);
+});
+
+test('rejected-before-write sweeps unreferenced formula JSON', async t => {
+  const hookPath = path.join(
+    os.tmpdir(),
+    `endo-formula-commit-hook-rbw-${process.pid}-${Date.now()}`,
+  );
+  fs.writeFileSync(hookPath, 'release', 'utf8');
+  process.env.ENDO_FORMULA_COMMIT_HOOK_PATH = hookPath;
+  try {
+    const { host, config } = await prepareHost(t);
+    await E(host).provideWorker(['w1']);
+    const before = openTestDb(config.statePath).listFormulas().length;
+    fs.writeFileSync(hookPath, 'reject-before-write-once', 'utf8');
+    await t.throwsAsync(
+      () => E(host).startEvaluate('w1', '55', [], [], 'rbw-eval'),
+      { message: /injected-rejected-before-write|rejected before write/i },
+    );
+    // Give post-lock sweep a turn.
+    await new Promise(r => setTimeout(r, 100));
+    t.false(await E(host).has('rbw-eval'));
+    const after = openTestDb(config.statePath).listFormulas().length;
+    // Proven no-write: no net formula growth for the aborted eval (bootstrap
+    // formulas remain; the aborted formula must not stick around).
+    const pending = openTestDb(config.statePath).listPendingNameCommits();
+    t.is(pending.length, 0, 'provisional record deleted on rejected-before-write');
+    // Formula count should not have grown permanently for the aborted write.
+    t.true(
+      after <= before + 2,
+      `expected sweep of unreferenced formula (before=${before}, after=${after})`,
+    );
+    // Stronger: no eval formula body with source 55 remains.
+    const evalSources = openTestDb(config.statePath)
+      .listFormulas()
+      .map(({ number }) => {
+        try {
+          return openTestDb(config.statePath).readFormula(number).formula;
+        } catch {
+          return undefined;
+        }
+      })
+      .filter(f => f && f.type === 'eval' && f.source === '55');
+    t.is(evalSources.length, 0, 'unreferenced eval formula JSON must be swept');
+  } finally {
+    delete process.env.ENDO_FORMULA_COMMIT_HOOK_PATH;
+    try {
+      fs.unlinkSync(hookPath);
+    } catch {
+      // ignore
+    }
+  }
+});
+
+test('ambiguous commit retains formula across restart', async t => {
+  const hookPath = path.join(
+    os.tmpdir(),
+    `endo-formula-commit-hook-amb-${process.pid}-${Date.now()}`,
+  );
+  fs.writeFileSync(hookPath, 'release', 'utf8');
+  process.env.ENDO_FORMULA_COMMIT_HOOK_PATH = hookPath;
+  let config;
+  try {
+    const prepared = await prepareConfig(t);
+    config = prepared.config;
+    const { cancelled } = prepared;
+    const { host } = await makeHost(config, cancelled);
+    await E(host).provideWorker(['w1']);
+    fs.writeFileSync(hookPath, 'ambiguous-once', 'utf8');
+    await t.throwsAsync(
+      () => E(host).startEvaluate('w1', '77', [], [], 'amb-eval'),
+      { message: /injected-ambiguous|ambiguous|Name commit/i },
+    );
+  } finally {
+    delete process.env.ENDO_FORMULA_COMMIT_HOOK_PATH;
+    try {
+      fs.unlinkSync(hookPath);
+    } catch {
+      // ignore
+    }
+  }
+
+  await restart(config);
+  {
+    const db = openTestDb(config.statePath);
+    const pending = db.listPendingNameCommits();
+    t.true(
+      pending.length >= 1,
+      'ambiguous outcome must retain provisional name-commit record',
+    );
+    const evalFormulas = db
+      .listFormulas()
+      .map(({ number }) => {
+        try {
+          return db.readFormula(number).formula;
+        } catch {
+          return undefined;
+        }
+      })
+      .filter(f => f && f.type === 'eval' && f.source === '77');
+    t.true(
+      evalFormulas.length >= 1,
+      'ambiguous outcome must retain formula JSON rather than delete it',
+    );
+  }
+});
+
+test('concurrent unpin during pause-before-commit is serialized', async t => {
+  const hookPath = path.join(
+    os.tmpdir(),
+    `endo-formula-commit-hook-unpin-${process.pid}-${Date.now()}`,
+  );
+  fs.writeFileSync(hookPath, 'release', 'utf8');
+  process.env.ENDO_FORMULA_COMMIT_HOOK_PATH = hookPath;
+  try {
+    const { host, config } = await prepareHost(t);
+    await E(host).provideWorker(['w1']);
+
+    // Create a named formula, pin it transiently, then drop the name so
+    // only the transient pin retains it.
+    const setup = await E(host).startEvaluate('w1', '1', [], [], 'sentinel');
+    const sentinelId = setup.id;
+    fs.writeFileSync(`${hookPath}.pin`, sentinelId, 'utf8');
+    const pinDeadline = Date.now() + 5000;
+    while (!fs.existsSync(`${hookPath}.pin-done`) && Date.now() < pinDeadline) {
+      await new Promise(r => setTimeout(r, 20));
+    }
+    t.true(fs.existsSync(`${hookPath}.pin-done`), 'daemon should pin sentinel');
+    await E(host).remove('sentinel');
+    t.true(
+      formulaExistsInDb(config.statePath, sentinelId),
+      'transient pin alone retains the sentinel',
+    );
+
+    // Pause the next formulateWithCommit and request concurrent unpin.
+    fs.writeFileSync(hookPath, 'pause-once', 'utf8');
+    try {
+      fs.unlinkSync(`${hookPath}.paused`);
+    } catch {
+      // ignore
+    }
+    const receiptP = E(host).startEvaluate(
+      'w1',
+      '2',
+      [],
+      [],
+      'during-pause',
+    );
+    const pausedMarker = `${hookPath}.paused`;
+    const pauseDeadline = Date.now() + 10_000;
+    while (!fs.existsSync(pausedMarker) && Date.now() < pauseDeadline) {
+      await new Promise(r => setTimeout(r, 20));
+    }
+    t.true(fs.existsSync(pausedMarker), 'commit should pause after persist');
+
+    fs.writeFileSync(`${hookPath}.unpin`, sentinelId, 'utf8');
+    const unpinStartedDeadline = Date.now() + 5000;
+    while (
+      !fs.existsSync(`${hookPath}.unpin-started`) &&
+      Date.now() < unpinStartedDeadline
+    ) {
+      await new Promise(r => setTimeout(r, 20));
+    }
+    t.true(
+      fs.existsSync(`${hookPath}.unpin-started`),
+      'concurrent unpin should be requested during pause',
+    );
+    // While still paused, onCollect must not have finished: formula remains.
+    await new Promise(r => setTimeout(r, 50));
+    t.true(
+      formulaExistsInDb(config.statePath, sentinelId),
+      'onCollect must not complete while commit holds the lock',
+    );
+    t.false(fs.existsSync(`${hookPath}.unpin-done`));
+
+    fs.writeFileSync(hookPath, 'release', 'utf8');
+    await receiptP;
+
+    const doneDeadline = Date.now() + 5000;
+    while (
+      !fs.existsSync(`${hookPath}.unpin-done`) &&
+      Date.now() < doneDeadline
+    ) {
+      await new Promise(r => setTimeout(r, 20));
+    }
+    t.true(fs.existsSync(`${hookPath}.unpin-done`), 'unpin finishes after lock');
+    // Give collection cleanup a moment.
+    await new Promise(r => setTimeout(r, 100));
+    t.false(
+      formulaExistsInDb(config.statePath, sentinelId),
+      'post-lock sweep collects unreferenced sentinel after exclusive unpin',
+    );
+  } finally {
+    delete process.env.ENDO_FORMULA_COMMIT_HOOK_PATH;
+    for (const suffix of [
+      '',
+      '.paused',
+      '.pin',
+      '.pin-done',
+      '.unpin',
+      '.unpin-started',
+      '.unpin-done',
+      '.unpin-error',
+    ]) {
+      try {
+        fs.unlinkSync(`${hookPath}${suffix}`);
+      } catch {
+        // ignore
+      }
+    }
+  }
+});
+
+test('local-guest pin task pins handle before unlock (provideGuest)', async t => {
+  // provideGuest formulates a guest with deferred tasks; the handle must
+  // remain reachable after formulation (named guest pet name and agent edges).
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('pinned-guest');
+  t.truthy(guest);
+  t.true(await E(host).has('pinned-guest'));
+  // Guest is durable under its pet name; a second provideGuest is idempotent.
+  const guest2 = await E(host).provideGuest('pinned-guest');
+  t.truthy(guest2);
+  // Both handles remain usable for mail without mid-formulation collection.
+  await E(host).storeValue(harden({ ok: true }), 'for-guest');
+  await E(host).send('pinned-guest', ['hi'], ['v'], ['for-guest']);
+  const msgs = await E(guest).listMessages();
+  t.true(msgs.length >= 1);
+});
+
+test('Group B endow settles without awaiting construction', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).provideWorker(['w1']);
+  const guest = await E(host).provideGuest('g-endow');
+  const hostMessages = iterateReader(E(host).followMessages());
+
+  // Guest proposes code; host endows. endow destructures { id } from
+  // formulateEval and delivers by id without awaiting construction.
+  await E(guest).define('1 + 1', harden({}));
+  const { value: defMsg } = await hostMessages.next();
+  t.is(defMsg.type, 'definition');
+
+  // Use listMessages number as the authoritative inbox index.
+  const inbox = await E(host).listMessages();
+  const def = inbox.find(m => m.type === 'definition');
+  t.truthy(def);
+
+  const endowP = E(host).endow(def.number, harden({}), 'w1');
+  const raced = await Promise.race([
+    endowP.then(() => 'done').catch(err => `err:${err && err.message}`),
+    new Promise(resolve => setTimeout(() => resolve('timeout'), 5000)),
+  ]);
+  t.is(
+    raced,
+    'done',
+    `endow must settle without awaiting construction (got ${raced})`,
+  );
+});
+
+test('Group B deliver settles without awaiting construction', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('g-deliver');
+  // deliver is the internal mailbox write path used by send/form. Drive it
+  // via send (already creation-only) and also call deliver on the guest if
+  // exposed; pin that send (which uses deliver) settles promptly.
+  await E(host).storeValue(harden({ d: 1 }), 'd-payload');
+  const deliverViaSendP = E(host).send(
+    'g-deliver',
+    ['payload'],
+    ['p'],
+    ['d-payload'],
+  );
+  t.is(
+    await Promise.race([
+      deliverViaSendP.then(() => 'done'),
+      new Promise(resolve => setTimeout(() => resolve('timeout'), 3000)),
+    ]),
+    'done',
+    'deliver via send must settle without awaiting construction',
+  );
+  const messages = await E(guest).listMessages();
+  t.true(messages.length >= 1);
+});
+
+test('raw provide(promiseId) and waiting request second-deref are unchanged', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).storeValue(10, 'ten');
+  const guest = await E(host).provideGuest('g-req');
+  const hostMessages = iterateReader(E(host).followMessages());
+
+  // Waiting request: second dereference is the construction/resolution path.
+  const requestP = E(guest).request('@host', 'need ten', 'got-ten');
+  const { value: reqMsg } = await hostMessages.next();
+  t.is(reqMsg.type, 'request');
+
+  // promiseId on the request message is a locator/id for the pending promise
+  // formula; storing and looking it up is the raw provide(promiseId) surface.
+  const promiseLocator = await reqMsg.promiseId;
+  t.truthy(promiseLocator);
+  await E(host).storeLocator(['pending-promise'], promiseLocator);
+
+  // Resolve the request; waiting requestP should settle to the value.
+  await E(host).resolve(reqMsg.number, 'ten');
+  const got = await requestP;
+  t.is(got, 10);
+  t.is(await E(guest).lookup(['got-ten']), 10);
+
+  // The stored promise formula identity resolves to the provided value's id.
+  const resolved = await E(host).lookup(['pending-promise']);
+  const tenId = await E(host).identify('ten');
+  t.is(resolved, tenId);
+});
+
+testNeedsNodeWorker(
+  'startMakeUnconfined returns receipt while construction can settle later',
+  async t => {
+    const { host } = await prepareHost(t);
+    await E(host).provideWorker(['worker']);
+    const envEchoPath = path.join(dirname, 'test', 'env-echo.js');
+    const envEchoLocation = url.pathToFileURL(envEchoPath).href;
+
+    const receipt = await E(host).startMakeUnconfined(
+      'worker',
+      envEchoLocation,
+      'started-unconfined',
+      { powersName: '@none', env: { K: 'v' } },
+    );
+    t.truthy(receipt.id);
+    t.regex(receipt.locator, /^endo:\/\//);
+    t.true(await E(host).has('started-unconfined'));
+    const value = await E(host).lookup(['started-unconfined']);
+    t.is(await E(value).getEnvVar('K'), 'v');
+  },
+);
+
+test('startMakeArchive returns receipt; formulaDeps retain blob without tmp name', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).provideWorker(['worker']);
+  const archivePath = path.join(
+    dirname,
+    'test',
+    'fixtures',
+    'archive-env-echo',
+  );
+
+  const receipt = await doMakeArchive(host, archivePath, archiveName =>
+    E(host).startMakeArchive('worker', archiveName, 'started-archive', {
+      powersName: '@none',
+      env: { FROM: 'archive' },
+    }),
+  );
+  t.truthy(receipt.id);
+  t.regex(receipt.locator, /^endo:\/\//);
+  t.true(await E(host).has('started-archive'));
+  // Temp archive pet names (tmp-archive-*) are not required for retention;
+  // doMakeArchive removes the temp name after the callback, matching CLI.
+  const value = await E(host).lookup(['started-archive']);
+  t.is(await E(value).getEnvVar('FROM'), 'archive');
+});
+
+test('startMakeFromTree and startMakeUnconfinedFromTree require result name', async t => {
+  const { host } = await prepareHost(t);
+  await t.throwsAsync(
+    () =>
+      E(/** @type {any} */ (host)).startMakeFromTree(
+        undefined,
+        'missing-tree',
+        undefined,
+      ),
+  );
+  await t.throwsAsync(
+    () =>
+      E(/** @type {any} */ (host)).startMakeUnconfinedFromTree(
+        undefined,
+        'missing-tree',
+        undefined,
+      ),
+  );
+});
