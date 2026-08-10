@@ -47,6 +47,8 @@ ${toolGuidance}
 
 The evaluate tool evaluates JavaScript source in an Endo Compartment. The compartment includes hardened SES globals plus the powers listed below. These powers are already in lexical scope; do not look them up by pet name. The TypeScript declarations below are your primary reference: use them to pick a method and its arguments before your first call rather than probing at runtime. They may be a subset of a capability's live surface, so if you need a method that is not declared, discover it with E(capability).__getMethodNames__().
 
+The \`workspace\` binding is the workspace root itself; do not call \`workspace.root()\`. For path arguments, an array is a sequence of segments and a string is one segment. The \`workspace.entry()\` exception accepts a slash-joined string when you intentionally need an entry for a nested path.
+
 Use E(capability).method(...) for remotable capabilities. Top-level await is not available, so use an async IIFE when you need multiple awaits or a final awaited result:
 
 \`\`\`js
@@ -294,7 +296,7 @@ harden(makeCodeModeAgent);
 
 /**
  * The git-loop preset: a thin alias over {@link makeCodeModeAgent} that wires a
- * repository `workspace` Filesystem and a `git` capability as the lexical
+ * repository `workspace` mount and a `git` capability as the lexical
  * powers and supplies the repository-oriented preamble. Returns the live
  * `Agent`.
  *
@@ -314,7 +316,7 @@ export const makeCodeModeGitLoopAgent = options => {
     globals: options.globals,
     systemPrompt: options.systemPrompt,
     preamble:
-      'You are an Endo-hosted Pi coding agent. Use the evaluate tool to inspect and edit the repository through the workspace Filesystem and Git capabilities.',
+      'You are an Endo-hosted Pi coding agent. Use the evaluate tool to inspect and edit the repository through the workspace mount and Git capabilities.',
     evaluate: options.evaluate,
     storeValue: options.storeValue,
     onContainedEventualSendRejection: options.onContainedEventualSendRejection,

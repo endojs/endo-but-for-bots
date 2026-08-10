@@ -59,10 +59,9 @@ harden(drainBytes);
  * each leaf blob into the supplied `ZipWriter` under its
  * slash-joined path.
  *
- * Uses `__getMethodNames__()` to discriminate sub-tree from leaf
- * blob, mirroring `@endo/platform`'s `checkoutTree` so the same
- * remotables work on both the read and write side without
- * duck-typing failed CapTP calls.
+ * Uses the mount `kind()` discriminator when available, with
+ * `__getMethodNames__()` as a fallback for older ReadableTree and
+ * ReadableBlob capabilities.
  *
  * @param {unknown} node
  * @param {string[]} pathSegments
@@ -72,7 +71,9 @@ harden(drainBytes);
 const walkTree = async (node, pathSegments, writer, entryOptions) => {
   // eslint-disable-next-line no-underscore-dangle
   const methods = await E(/** @type {any} */ (node)).__getMethodNames__();
-  const isTree = methods.includes('list');
+  const isTree = methods.includes('kind')
+    ? (await E(/** @type {any} */ (node)).kind()) === 'directory'
+    : methods.includes('list');
   if (isTree) {
     const names = await E(/** @type {any} */ (node)).list();
     for (const name of names) {

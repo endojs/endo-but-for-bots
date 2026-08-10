@@ -660,6 +660,8 @@ const PathArgShape = M.or(M.string(), PathSegmentsShape, MountEntryShape);
 // `makeFile` accepts only the public string payload.
 export const MountInterface = M.interface('EndoMount', {
   ...pathEntryIssuerMethodGuards,
+  // A lookup result can be classified without probing its whole surface.
+  kind: M.call().returns(M.eq('directory')),
   // ReadableTree-compatible surface.  `has` accepts either variadic
   // path segments or a single entry value; the impl validates the
   // shape because rest-with-M.or pattern guards do not narrow
@@ -751,6 +753,11 @@ export const MountInterface = M.interface('EndoMount', {
 // `readOnly` narrows to a structural ReadableBlob view that carries the same
 // rich surface.
 export const MountFileInterface = M.interface('EndoMountFile', {
+  // A lookup result can be classified without probing its whole surface.
+  kind: M.call().returns(M.eq('file')),
+  // Diagnostic-only stub: this keeps the common `file.list()` mistake useful
+  // without granting a file any directory authority.
+  list: M.call().returns(M.promise()),
   // Whole-value read surface (help / streamBase64 / text / json) shared with
   // every other readable blob, plus the rich `rangeReadMethodGuards`
   // (getInfo / fetch) over the live file, plus the mount-file write surface.

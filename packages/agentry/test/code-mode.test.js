@@ -13,7 +13,6 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
 } from '@earendil-works/pi-ai/compat';
-import { makeNodeFilesystem } from '@endo/platform/fs/extended';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 import { makeGit } from '@endo/exo-git';
@@ -118,12 +117,11 @@ const provisionGitWorktree = async t => {
  */
 const makeRealGit = async (t, allowHistoryRewrite = false) => {
   const repoRoot = await provisionGitWorktree(t);
-  const workspace = makeNodeFilesystem({ rootPath: repoRoot });
   const filePowers = makeFilePowers({ fs, path });
   const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
   const backend = makeNativeGitBackend({ repoRoot });
   const git = makeGit({ mount, backend, lineageOf }, { allowHistoryRewrite });
-  return harden({ repoRoot, workspace, git });
+  return harden({ repoRoot, workspace: mount, git });
 };
 
 /**
@@ -237,9 +235,15 @@ test('a typed global injects its generated declaration into the prompt', t => {
   t.true(
     systemPrompt.includes('commit: (message: string) => Promise<GitCommit>;'),
   );
-  // workspace: guard-derived, reaching the Directory surface transitively.
-  t.true(systemPrompt.includes('declare const workspace: Filesystem;'));
-  t.true(systemPrompt.includes('type Directory = {'));
+  // workspace: the raw daemon mount bound by code-mode provisioning.
+  t.true(systemPrompt.includes('declare const workspace: DaemonMount;'));
+  t.true(systemPrompt.includes('type MountEndoMountFile = {'));
+  t.true(systemPrompt.includes("kind: () => 'directory';"));
+  t.true(systemPrompt.includes("kind: () => 'file';"));
+  t.true(
+    systemPrompt.includes('workspace` binding is the workspace root itself'),
+  );
+  t.true(systemPrompt.includes('workspace.entry()'));
   // The runtime introspection fallback is still advertised.
   t.true(systemPrompt.includes('__getMethodNames__'));
 });
@@ -284,7 +288,7 @@ test('makeCodeModeAgent injects typed git + workspace declarations from powers',
     powers: { workspace, git },
   });
   t.true(systemPrompt.includes('declare const git: WritableEndoGit;'));
-  t.true(systemPrompt.includes('declare const workspace: Filesystem;'));
+  t.true(systemPrompt.includes('declare const workspace: DaemonMount;'));
   t.true(systemPrompt.includes('type WritableEndoGit = {'));
 });
 
@@ -398,13 +402,11 @@ test('git-loop preset edits the workspace, commits, and reads HEAD~1 over a real
   const executions = [];
   const source = `\
 (async () => {
-  const root = await E(workspace).root();
-  const cursor = await E(root).list();
-  const listed = await E(cursor).toArray();
-  const note = await E(root).lookup('note.txt');
-  const beforeStat = await E(note).getStat();
+  const listed = await E(workspace).list();
+  const note = await E(workspace).lookup('note.txt');
+  const beforeStat = await E(note).stat();
 
-  await writeFileText(note, 'after\\n');
+  await E(note).writeText('after\\n');
 
   const status = await E(git).status();
   const row = status.entries.find(candidate => candidate.path === 'note.txt');
@@ -421,10 +423,10 @@ test('git-loop preset edits the workspace, commits, and reads HEAD~1 over a real
   const previousRoot = await E(previousFs).root();
   const previousNote = await E(previousRoot).lookup('note.txt');
   const previousText = await readFileText(previousNote);
-  const currentText = await readFileText(note);
+  const currentText = await E(note).text();
 
   return {
-    listed: listed.map(entry => entry.name).sort(),
+    listed: [...listed].sort(),
     beforeSize: String(beforeStat.size),
     status: { path: row.path, index: row.index, worktree: row.worktree },
     stagedDiffHasEdit: stagedDiff.includes('+after'),

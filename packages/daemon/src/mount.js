@@ -893,7 +893,17 @@ const makeMountExo = ctx => {
 
   const lookup = async pathArg => {
     await null;
-    const segments = segmentsFromPathArg(pathArg);
+    let segments;
+    try {
+      segments = segmentsFromPathArg(pathArg);
+    } catch (error) {
+      if (typeof pathArg === 'string' && pathArg.includes('/')) {
+        throw new Error(
+          `${/** @type {Error} */ (error).message}; use an array of path segments or entry() for a slash-joined path`,
+        );
+      }
+      throw error;
+    }
     return openExisting(resolveFromRoot(segments), segments);
   };
 
@@ -1321,6 +1331,10 @@ const makeMountExo = ctx => {
 
   const exo = makeExo('EndoMount', MountInterface, {
     help,
+    kind() {
+      assertLive();
+      return 'directory';
+    },
     has,
     list,
     glob,
@@ -1428,9 +1442,8 @@ const makeReadableTreeView = readOnlyMount => {
       // read-only because the parent mount is; we wrap it in the
       // structural view so descendants surface the platform shape
       // too.
-      // eslint-disable-next-line no-underscore-dangle
-      const methods = await E(result).__getMethodNames__();
-      if (methods.includes('list')) {
+      const kind = await E(result).kind();
+      if (kind === 'directory') {
         return makeReadableTreeView(result);
       }
       return makeReadableBlobView(result);
@@ -1546,6 +1559,17 @@ const makeMountFileExo = (
 
   return makeExo('EndoMountFile', MountFileInterface, {
     help,
+
+    kind() {
+      assertLive();
+      return 'file';
+    },
+
+    // Keep the common cross-type mistake useful without adding directory
+    // authority to a file capability.
+    list() {
+      throw new Error('list() is not available on a file; use text()');
+    },
 
     async text() {
       await null;

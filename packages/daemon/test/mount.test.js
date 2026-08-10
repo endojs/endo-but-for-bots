@@ -613,6 +613,31 @@ test('lookup of a present file returns an EndoMountFile with text/json', async t
   t.deepEqual(await E(file).json(), { a: 1 });
 });
 
+test('lookup results expose a kind discriminator and targeted cross-type errors', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  fs.mkdirSync(path.join(rootPath, 'dir'));
+  fs.writeFileSync(path.join(rootPath, 'dir', 'value.txt'), 'value');
+
+  const directory = await E(mount).lookup(['dir']);
+  const file = await E(mount).lookup(['dir', 'value.txt']);
+  t.is(await E(directory).kind(), 'directory');
+  t.is(await E(file).kind(), 'file');
+  await t.throwsAsync(() => E(file).list(), {
+    message: 'list() is not available on a file; use text()',
+  });
+});
+
+test('lookup explains the array and entry forms for slash-joined strings', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  fs.mkdirSync(path.join(rootPath, 'dir'));
+
+  await t.throwsAsync(() => E(mount).lookup('dir/value.txt'), {
+    message: /array of path segments or entry\(\)/,
+  });
+});
+
 test('EndoMountFile.append extends the file content', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
