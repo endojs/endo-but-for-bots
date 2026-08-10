@@ -2345,6 +2345,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/host-android-admin@workspace:packages/host-android-admin"
   dependencies:
+    "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
@@ -2352,6 +2353,7 @@ __metadata:
     "@endo/far": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/patterns": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
     typescript: "catalog:dev"
