@@ -799,7 +799,11 @@ const makeMountExo = ctx => {
   };
 
   // Enumerate the mount-face-relative paths matching a glob `pattern`, sorted
-  // by UTF-16 code unit and capped at `GLOB_MAX_RESULTS`. The walk, the
+  // by UTF-16 code unit and capped at `GLOB_MAX_RESULTS`. `**` reports a
+  // directory symlink but does not recurse through it, so the walk covers the
+  // tree rather than the link graph — the cap cannot rescue an unbounded walk,
+  // because the sort needs the whole result set before the first batch. A
+  // segment naming a path still follows a link. The walk, the
   // two-metacharacter dialect, the ReDoS-safe matcher, symlink-cycle
   // termination, deny filtering, and confinement all live in the platform
   // engine (`@endo/platform/fs/search`); this method is the eager

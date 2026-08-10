@@ -273,3 +273,81 @@ test('compileGlobSegment is linear and bounded on a ReDoS-style pattern', t => {
   t.true(compileGlobSegment('q?')('q?'));
   t.false(compileGlobSegment('q?')('qX'));
 });
+
+// `**` walks the tree, not the link graph. In a workspace checkout every
+// `node_modules/@endo/*` entry links back into the repository, so recursing
+// through links enumerates the transitive dependency closure of every package
+// by every distinct route to it: `packages/chat/**/*.js` reached 22 directories
+// as a tree and over nine million paths as a graph, and since glob must collect
+// the whole set before it can sort and yield, it simply never returned.
+test('** reports a directory symlink but does not recurse through it', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'search-link-'));
+  t.teardown(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'pkg', 'src'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'pkg', 'src', 'a.js'), 'a');
+  fs.mkdirSync(path.join(dir, 'target'));
+  fs.writeFileSync(path.join(dir, 'target', 'b.js'), 'b');
+  // The shape that bites: a link inside the tree pointing back up into it.
+  fs.symlinkSync(path.join(dir, 'target'), path.join(dir, 'pkg', 'link'));
+
+  const search = makeSearch(makeNodeSearchPowers());
+
+  t.deepEqual(
+    await collect(search.globPaths(dir, 'pkg/**/*.js')),
+    ['pkg/src/a.js'],
+    'the walk does not descend through the link',
+  );
+
+  t.true(
+    (await collect(search.globPaths(dir, 'pkg/**'))).includes('pkg/link'),
+    'the link is still reported as an entry, so nothing vanishes',
+  );
+
+  // rg's rule: traversal does not cross a link, but a path you name does.
+  t.deepEqual(await collect(search.globPaths(dir, 'pkg/link/*.js')), [
+    'pkg/link/b.js',
+  ]);
+  // A single `*` consumes exactly one segment, so it is bounded by the
+  // pattern's own depth and follows links as a named segment does.
+  t.deepEqual(await collect(search.globPaths(dir, 'pkg/*/b.js')), [
+    'pkg/link/b.js',
+  ]);
+
+  // `followSymlinks` opts the sweep back in, as `rg -L` does.
+  t.deepEqual(
+    await collect(
+      search.globPaths(dir, 'pkg/**/*.js', { followSymlinks: true }),
+    ),
+    ['pkg/link/b.js', 'pkg/src/a.js'],
+  );
+});
+
+// grep's implicit walk is the broadest one there is, so it inherits the rule.
+test('grep with paths omitted does not recurse through a directory symlink', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'search-link-grep-'));
+  t.teardown(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'src', 'a.js'), 'needle here');
+  fs.mkdirSync(path.join(dir, 'target'));
+  fs.writeFileSync(path.join(dir, 'target', 'b.js'), 'needle there');
+  fs.symlinkSync(path.join(dir, 'target'), path.join(dir, 'src', 'link'));
+
+  const search = makeSearch(makeNodeSearchPowers());
+  t.deepEqual(
+    (await collect(search.grepFiles(dir, 'needle'))).map(m => m.file).sort(),
+    ['src/a.js', 'target/b.js'],
+    'both reached as tree entries; neither reached twice through the link',
+  );
+  t.deepEqual(
+    (
+      await collect(
+        search.grepFiles(dir, 'needle', undefined, {
+          followSymlinks: true,
+        }),
+      )
+    )
+      .map(m => m.file)
+      .sort(),
+    ['src/a.js', 'src/link/b.js', 'target/b.js'],
+  );
+});
