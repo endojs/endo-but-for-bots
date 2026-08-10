@@ -654,6 +654,46 @@ jobs:
       - name: Build xsnap crate
         run: cargo check --manifest-path rust/endo/xsnap/Cargo.toml
 
+  # The pure-Rust ironhorse crates: the engine's zero-C members
+  # (ironhorse-vm, ironhorse-snapshot — including the store seam's
+  # metamorphic determinism and checkpoint acceptance suites) plus the
+  # daemon-side SQLite heap-store backend in the root workspace. The
+  # oracle-linked engine crates (xs-oracle, ironhorse-compile,
+  # ironhorse-regexp, ironhorse-262, ironhorse-fuzz) are excluded: their
+  # dev-dependencies compile the Moddable XS C sources, which need the
+  # c/moddable submodule and its toolchain; they remain local/manual
+  # until a job provisions that.
+  test-ironhorse:
+    name: test-ironhorse
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Cache Cargo + targets
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            rust/engine/target
+          key: ${{ runner.os }}-ironhorse-${{ hashFiles('Cargo.lock', 'rust/engine/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-
+
+      - name: Test ironhorse engine crates (rust/engine workspace)
+        working-directory: rust/engine
+        run: cargo test -p ironhorse-vm -p ironhorse-snapshot
+
+      - name: Test SQLite heap-store backend (root workspace)
+        run: cargo test -p ironhorse-store-sqlite
+
   test-ocapn-python:
     name: test-ocapn-python
 
