@@ -176,23 +176,43 @@ export const makeContainerMountRegistrar = ({
 }) => {
   /** @type {readonly AttachRecord[] | undefined} */
   let records;
-  const loadRecords = async () => {
-    if (records !== undefined) return records;
-    await null;
-    /** @type {unknown[]} */
-    let stored = [];
-    if (await E(powers).has(registryName)) {
-      const value = await E(powers).lookup(registryName);
-      stored = Array.isArray(value) ? [...value] : [];
+  // Memoize the first load so overlapping callers share one petstore read —
+  // a second read resolving after a mutation landed would otherwise assign
+  // over the mutated set and resurrect dropped records.
+  /** @type {Promise<readonly AttachRecord[]> | undefined} */
+  let recordsLoad;
+  const loadRecords = () => {
+    if (records !== undefined) return Promise.resolve(records);
+    if (!recordsLoad) {
+      const pending = (async () => {
+        await null;
+        /** @type {unknown[]} */
+        let stored = [];
+        if (await E(powers).has(registryName)) {
+          const value = await E(powers).lookup(registryName);
+          stored = Array.isArray(value) ? [...value] : [];
+        }
+        const valid = stored.filter(isValidRecord);
+        if (valid.length !== stored.length) {
+          console.warn(
+            `[floot] dropped ${stored.length - valid.length} malformed container-mount record(s) from "${registryName}"`,
+          );
+        }
+        if (records === undefined) {
+          records = harden(valid);
+        }
+        return records;
+      })();
+      recordsLoad = pending;
+      // A failed read must not brick the registrar for the boot: retry on
+      // the next call.
+      pending.catch(() => {
+        if (recordsLoad === pending) {
+          recordsLoad = undefined;
+        }
+      });
     }
-    const valid = stored.filter(isValidRecord);
-    if (valid.length !== stored.length) {
-      console.warn(
-        `[floot] dropped ${stored.length - valid.length} malformed container-mount record(s) from "${registryName}"`,
-      );
-    }
-    records = harden(valid);
-    return records;
+    return recordsLoad;
   };
   // Serialize writes: storeValue can't overwrite, so each save removes then
   // stores, and concurrent saves would interleave (same pattern as the
@@ -230,26 +250,49 @@ export const makeContainerMountRegistrar = ({
   /** @type {Map<string, string>} */
   const lastPushedByClient = new Map();
 
+  // Serialize every mutating operation (attach, detach, releaseSession, and
+  // the arm-time replay). Attach validates against the record set and then
+  // awaits a slow bridge mint before appending — an unserialized sibling
+  // call could slip a conflicting record into that window (two binds at one
+  // innerPath would fail every later provision), and overlapping pushes
+  // could apply an older bind set after a newer one. Reads (`list`) stay
+  // lock-free.
+  /** @type {Promise<unknown>} */
+  let registrarChain = Promise.resolve();
+  /**
+   * @template T
+   * @param {() => Promise<T>} fn
+   * @returns {Promise<T>}
+   */
+  const withRegistrarLock = fn => {
+    const run = registrarChain.then(fn, fn);
+    registrarChain = run.catch(() => {});
+    return run;
+  };
+
   /**
    * @param {AttachRecord} record
+   * @returns {Promise<{ mountCap: any, handle: any }>}
    */
   const ensureBridge = async record => {
     await null;
-    let bridge = bridges.get(record.key);
-    if (!bridge) {
-      const provider = await getBridgeProvider();
-      if (!provider) {
-        throw new Error(
-          'Container mounts need the hosted Claude session provisioner ' +
-            '(@endo/claude-sandbox setup-hosted.js), which is not available ' +
-            'in this deployment.',
-        );
-      }
-      bridge = await E(provider).provideContainerMountBridge(
-        harden({ key: record.key, capId: record.capId, mode: record.mode }),
-      );
-      bridges.set(record.key, bridge);
+    const existing = bridges.get(record.key);
+    if (existing) {
+      return existing;
     }
+    const provider = await getBridgeProvider();
+    if (!provider) {
+      throw new Error(
+        'Container mounts need the hosted Claude session provisioner ' +
+          '(@endo/claude-sandbox setup-hosted.js), which is not available ' +
+          'in this deployment.',
+      );
+    }
+    /** @type {{ mountCap: any, handle: any }} */
+    const bridge = await E(provider).provideContainerMountBridge(
+      harden({ key: record.key, capId: record.capId, mode: record.mode }),
+    );
+    bridges.set(record.key, bridge);
     return bridge;
   };
 
@@ -268,6 +311,12 @@ export const makeContainerMountRegistrar = ({
    * set is unchanged since the last push, so idempotent re-attaches and
    * ref-count-only changes never restart the container.
    *
+   * A record whose bridge cannot be built this boot (its cap's formula was
+   * removed, say) is skipped with a warning rather than wedging every other
+   * bind for the client. The recorded signature covers only what was
+   * actually pushed, so the next push retries the skipped records instead
+   * of being deduped away.
+   *
    * @param {string} clientKey
    */
   const pushExtras = async clientKey => {
@@ -277,12 +326,26 @@ export const makeContainerMountRegistrar = ({
     const clientRecords = (records || []).filter(
       record => record.clientKey === clientKey,
     );
-    const signature = extrasSignature(clientRecords);
-    if (lastPushedByClient.get(clientKey) === signature) return;
+    if (lastPushedByClient.get(clientKey) === extrasSignature(clientRecords)) {
+      return;
+    }
+    /** @type {AttachRecord[]} */
+    const pushedRecords = [];
     const extras = [];
     for (const record of clientRecords) {
-      // eslint-disable-next-line no-await-in-loop
-      const bridge = await ensureBridge(record);
+      let bridge;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        bridge = await ensureBridge(record);
+      } catch (error) {
+        console.warn(
+          `[floot] could not bridge container mount ${record.innerPath}; leaving it unbound for now:`,
+          error instanceof Error ? error.message : String(error),
+        );
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      pushedRecords.push(record);
       extras.push(
         harden({
           cap: bridge.mountCap,
@@ -292,11 +355,17 @@ export const makeContainerMountRegistrar = ({
         }),
       );
     }
+    const signature = extrasSignature(pushedRecords);
+    if (lastPushedByClient.get(clientKey) === signature) return;
     await E(client).setExtraMounts(harden(extras));
     lastPushedByClient.set(clientKey, signature);
   };
 
   /**
+   * The session-facing description of an attach. Deliberately omits the
+   * record's `capId`: formula ids are bearer-capable, and a shared client's
+   * list would otherwise disclose ids for caps this session never held.
+   *
    * @param {AttachRecord} record
    * @param {string} sessionId
    */
@@ -305,10 +374,31 @@ export const makeContainerMountRegistrar = ({
       innerPath: record.innerPath,
       mode: record.mode,
       petName: record.petName,
-      capId: record.capId,
       sessions: record.sessionIds.length,
       heldByThisSession: record.sessionIds.includes(sessionId),
     });
+
+  /**
+   * Translate a live-apply failure after a persisted record mutation into
+   * an honest message: the record IS recorded and will replay on the next
+   * sandbox start; only the immediate live update failed.
+   *
+   * @param {string} clientKey
+   * @param {string} innerPath
+   */
+  const applyOrExplain = async (clientKey, innerPath) => {
+    await null;
+    try {
+      await pushExtras(clientKey);
+    } catch (error) {
+      throw new Error(
+        `The bind at "${innerPath}" was recorded and will apply when the sandbox next starts, but updating the live sandbox failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { cause: error },
+      );
+    }
+  };
 
   /**
    * @param {object} options
@@ -320,7 +410,7 @@ export const makeContainerMountRegistrar = ({
    * @param {string} options.innerPath
    * @param {string} [options.mode]
    */
-  const attach = async ({
+  const attachLocked = async ({
     sessionId,
     sessionGuest,
     clientKey,
@@ -380,7 +470,7 @@ export const makeContainerMountRegistrar = ({
         await saveRecords();
       }
       await ensureBridge(existing);
-      await pushExtras(clientKey);
+      await applyOrExplain(clientKey, innerPath);
       return describeRecord(
         /** @type {AttachRecord} */ (
           (records || []).find(record => record.key === existing.key)
@@ -413,9 +503,12 @@ export const makeContainerMountRegistrar = ({
     await ensureBridge(record);
     records = harden([...(records || []), record]);
     await saveRecords();
-    await pushExtras(clientKey);
+    await applyOrExplain(clientKey, innerPath);
     return describeRecord(record, sessionId);
   };
+
+  /** @type {typeof attachLocked} */
+  const attach = options => withRegistrarLock(() => attachLocked(options));
 
   /**
    * @param {object} options
@@ -423,7 +516,11 @@ export const makeContainerMountRegistrar = ({
    * @param {string} options.clientKey
    * @param {string} options.innerPath
    */
-  const detach = async ({ sessionId, clientKey, innerPath: rawInnerPath }) => {
+  const detachLocked = async ({
+    sessionId,
+    clientKey,
+    innerPath: rawInnerPath,
+  }) => {
     const innerPath = normalizeInnerPath(rawInnerPath);
     await loadRecords();
     const record = (records || []).find(
@@ -452,7 +549,18 @@ export const makeContainerMountRegistrar = ({
     await saveRecords();
     // Order matters: recreate the slice WITHOUT the bind first, then release
     // the bridge — unmounting 9P under a live container bind would be busy.
-    await pushExtras(clientKey);
+    // The release must run even when the recreate push fails (the record is
+    // gone, so nothing would ever release the bridge later; the 9P mounts
+    // are lazy-unmount, so a still-bound mountpoint detaches once the
+    // container lets go).
+    try {
+      await pushExtras(clientKey);
+    } catch (error) {
+      console.warn(
+        `[floot] could not update the sandbox after detaching ${innerPath}:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
     bridges.delete(record.key);
     const provider = await Promise.resolve(getBridgeProvider()).catch(
       () => undefined,
@@ -469,6 +577,9 @@ export const makeContainerMountRegistrar = ({
     }
     return harden({ innerPath, released: true, sessions: 0 });
   };
+
+  /** @type {typeof detachLocked} */
+  const detach = options => withRegistrarLock(() => detachLocked(options));
 
   /**
    * @param {object} options
@@ -493,7 +604,7 @@ export const makeContainerMountRegistrar = ({
    *
    * @param {string} sessionId
    */
-  const releaseSession = async sessionId => {
+  const releaseSessionLocked = async sessionId => {
     const sessionClientKey = armedSessions.get(sessionId);
     armedSessions.delete(sessionId);
     if (
@@ -554,6 +665,10 @@ export const makeContainerMountRegistrar = ({
     }
   };
 
+  /** @type {typeof releaseSessionLocked} */
+  const releaseSession = sessionId =>
+    withRegistrarLock(() => releaseSessionLocked(sessionId));
+
   /**
    * Per-session kit: the three session tools plus the `arm` hook getAgent
    * calls once the session's ClaudeClient has resolved. The tools are built
@@ -590,10 +705,14 @@ export const makeContainerMountRegistrar = ({
       armed = { clientKey, client };
       armedSessions.set(sessionId, clientKey);
       clients.set(clientKey, client);
-      await loadRecords();
-      if ((records || []).some(record => record.clientKey === clientKey)) {
-        await pushExtras(clientKey);
-      }
+      // The replay itself takes the registrar lock: a tool-driven attach
+      // arriving while the replay is mid-push must serialize behind it.
+      await withRegistrarLock(async () => {
+        await loadRecords();
+        if ((records || []).some(record => record.clientKey === clientKey)) {
+          await pushExtras(clientKey);
+        }
+      });
     };
 
     /**

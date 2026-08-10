@@ -77,9 +77,18 @@ const makeHarness = () => {
   const releaseCalls = [];
   /** @type {string[]} */
   const handleUnmounts = [];
+  // Tests may inject bridge failures per capId (replay resilience) and
+  // observe the moment a release happens (push-before-release ordering).
+  /** @type {Set<string>} */
+  const failCapIds = new Set();
+  /** @type {(() => void) | undefined} */
+  let releaseObserver;
   const provider = harden({
     /** @param {{ key: string, capId: string, mode: string }} options */
     async provideContainerMountBridge({ key, capId, mode }) {
+      if (failCapIds.has(capId)) {
+        throw Error(`no bridge for ${capId}`);
+      }
       bridgeCalls.push({ key, capId, mode });
       return harden({
         mountCap: harden({ kind: 'bridged-mount', key }),
@@ -92,6 +101,7 @@ const makeHarness = () => {
     },
     /** @param {string} key */
     async releaseContainerMountBridge(key) {
+      if (releaseObserver) releaseObserver();
       releaseCalls.push(key);
     },
   });
@@ -125,6 +135,10 @@ const makeHarness = () => {
     bridgeCalls,
     releaseCalls,
     handleUnmounts,
+    failCapIds,
+    setReleaseObserver: (/** @type {() => void} */ fn) => {
+      releaseObserver = fn;
+    },
     makeClient,
     makeGuest,
     makeRegistrar,
@@ -152,16 +166,21 @@ test('attach proves possession, bridges, persists, and pushes the bind', async t
     innerPath: '/mnt/project',
     mode: 'rw',
     petName: 'workspace',
-    capId: 'cap-1',
     sessions: 1,
     heldByThisSession: true,
   });
+  // Formula ids are bearer-capable, so the session-facing description must
+  // NOT carry the capId (the persisted record below still does).
+  t.false('capId' in info);
   t.is(h.bridgeCalls.length, 1);
   t.like(h.bridgeCalls[0], { capId: 'cap-1', mode: 'rw' });
   t.is(sets.length, 1);
   t.is(sets[0].length, 1);
   t.like(sets[0][0], { innerPath: '/mnt/project', mode: 'rw' });
-  t.truthy(sets[0][0].cap);
+  // The pushed bind must carry the BRIDGE's mount cap and handle, not some
+  // other object.
+  t.is(sets[0][0].cap.kind, 'bridged-mount');
+  t.is(sets[0][0].cap.key, h.bridgeCalls[0].key);
   t.truthy(sets[0][0].handle);
 
   // Persisted for replay.
@@ -298,10 +317,16 @@ test('two sessions of one client ref-count; the last detach releases', async t =
     message: /does not hold the bind/,
   });
 
+  let setsAtRelease = -1;
+  h.setReleaseObserver(() => {
+    setsAtRelease = sets.length;
+  });
   const last = await kitB.detach({ innerPath: '/mnt/shared' });
   t.true(last.released);
-  // The slice is recreated WITHOUT the bind before the bridge is released.
+  // The slice is recreated WITHOUT the bind BEFORE the bridge is released —
+  // unmounting 9P under a live container bind would be busy.
   t.is(sets.length, 2);
+  t.is(setsAtRelease, 2);
   t.deepEqual(sets[1], []);
   t.is(h.releaseCalls.length, 1);
   t.is(h.releaseCalls[0], h.bridgeCalls[0].key);
@@ -423,4 +448,139 @@ test('the session tools drive attach, list, and detach end to end', async t => {
     await kit.tools.listContainerMounts.execute(),
     'No runtime container binds are attached.',
   );
+});
+
+test('releaseSession pushes the shrunken set to an armed survivor of a shared client', async t => {
+  const h = makeHarness();
+  const registrar = h.makeRegistrar();
+  const { sets, client } = h.makeClient();
+  const kitA = registrar.makeSessionKit({
+    sessionId: 'a',
+    sessionGuest: h.makeGuest(new Map([['data', 'cap-d']])),
+  });
+  const kitB = registrar.makeSessionKit({
+    sessionId: 'b',
+    sessionGuest: h.makeGuest(new Map()),
+  });
+  await kitA.arm({ clientKey: 'ck', client });
+  await kitB.arm({ clientKey: 'ck', client });
+  await kitA.attach({ petName: 'data', innerPath: '/mnt/d' });
+  t.is(sets.length, 1);
+
+  // Session b stays armed on the shared client, so dropping a's
+  // last-reference attach must recreate the surviving client's container
+  // without the bind, then release the bridge.
+  await registrar.releaseSession('a');
+  t.is(sets.length, 2);
+  t.deepEqual(sets[1], []);
+  t.is(h.releaseCalls.length, 1);
+});
+
+test('malformed persisted records are dropped on load and never replayed', async t => {
+  const h = makeHarness();
+  h.names.set(
+    'floot-container-mounts',
+    harden([
+      {
+        key: 'k1',
+        clientKey: 'ck',
+        capId: 'c1',
+        innerPath: '/mnt/good',
+        mode: 'rw',
+        petName: 'ws',
+        sessionIds: ['s1'],
+      },
+      {
+        key: 'k2',
+        clientKey: 'ck',
+        capId: 'c2',
+        innerPath: '/workspace', // escapes /mnt/
+        mode: 'rw',
+        petName: 'x',
+        sessionIds: ['s1'],
+      },
+      {
+        key: 'k3',
+        clientKey: 'ck',
+        capId: 'c3',
+        innerPath: '/mnt/y',
+        mode: 'rwx', // bad mode
+        petName: 'y',
+        sessionIds: ['s1'],
+      },
+      'not-a-record',
+    ]),
+  );
+  const registrar = h.makeRegistrar();
+  const { sets, client } = h.makeClient();
+  const kit = registrar.makeSessionKit({
+    sessionId: 's1',
+    sessionGuest: h.makeGuest(new Map()),
+  });
+  await kit.arm({ clientKey: 'ck', client });
+  t.is(sets.length, 1);
+  t.deepEqual(
+    sets[0].map(extra => extra.innerPath),
+    ['/mnt/good'],
+  );
+  t.deepEqual(
+    (await kit.list()).map(record => record.innerPath),
+    ['/mnt/good'],
+  );
+});
+
+test('one unbridgeable record does not wedge the rest, and heals on a later push', async t => {
+  const h = makeHarness();
+  // Two persisted records; the second one's cap cannot be bridged this boot.
+  h.names.set(
+    'floot-container-mounts',
+    harden([
+      {
+        key: 'kgood',
+        clientKey: 'ck',
+        capId: 'cap-ok',
+        innerPath: '/mnt/ok',
+        mode: 'rw',
+        petName: 'ok',
+        sessionIds: ['s1'],
+      },
+      {
+        key: 'kbad',
+        clientKey: 'ck',
+        capId: 'cap-bad',
+        innerPath: '/mnt/bad',
+        mode: 'rw',
+        petName: 'bad',
+        sessionIds: ['s1'],
+      },
+    ]),
+  );
+  h.failCapIds.add('cap-bad');
+  const registrar = h.makeRegistrar();
+  const { sets, client } = h.makeClient();
+  const guest = h.makeGuest(new Map([['third', 'cap-3']]));
+  const kit = registrar.makeSessionKit({
+    sessionId: 's1',
+    sessionGuest: guest,
+  });
+
+  // Replay: the bad record is skipped with a warning; the good one still
+  // reaches the container.
+  await kit.arm({ clientKey: 'ck', client });
+  t.is(sets.length, 1);
+  t.deepEqual(
+    sets[0].map(extra => extra.innerPath),
+    ['/mnt/ok'],
+  );
+
+  // Once the cap becomes bridgeable again, the next push retries it (the
+  // recorded signature covered only what was actually pushed).
+  h.failCapIds.delete('cap-bad');
+  await kit.attach({ petName: 'third', innerPath: '/mnt/third' });
+  t.is(sets.length, 2);
+  t.deepEqual(sets[1].map(extra => extra.innerPath).sort(), [
+    '/mnt/bad',
+    '/mnt/ok',
+    '/mnt/third',
+  ]);
 });
