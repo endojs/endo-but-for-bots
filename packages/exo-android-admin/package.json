@@ -1,0 +1,81 @@
+{
+  "name": "@endo/exo-android-admin",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Remotable exo glue, interface guards, and wire protocol for an AndroidAdmin capability — a policy-bounded DevicePolicyManager surface split into a vendable client facet and a host-retained control facet. Portable across SES realms; pair it with @endo/host-android-admin for the privileged device-side bridge.",
+  "keywords": [
+    "endo",
+    "exo",
+    "android",
+    "device-admin",
+    "capability"
+  ],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/exo-android-admin"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./types-index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types-index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./src/android-admin.js": {
+      "types": "./src/android-admin.d.ts",
+      "default": "./src/android-admin.js"
+    },
+    "./src/interfaces.js": {
+      "types": "./src/interfaces.d.ts",
+      "default": "./src/interfaces.js"
+    },
+    "./src/protocol.js": {
+      "types": "./src/protocol.d.ts",
+      "default": "./src/protocol.js"
+    },
+    "./src/policy.js": {
+      "types": "./src/policy.d.ts",
+      "default": "./src/policy.js"
+    },
+    "./protocol/fixtures.json": "./protocol/fixtures.json",
+    "./types-index.js": {
+      "types": "./types-index.d.ts",
+      "default": "./types-index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "test": "ava",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix",
+    "lint:eslint": "eslint '**/*.js'",
+    "lint:types": "tsc"
+  },
+  "dependencies": {
+    "@endo/errors": "workspace:^",
+    "@endo/exo": "workspace:^",
+    "@endo/harden": "workspace:^",
+    "@endo/patterns": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/far": "workspace:^",
+    "@endo/init": "workspace:^",
+    "ava": "catalog:dev",
+    "eslint": "catalog:dev",
+    "typescript": "catalog:dev"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.js"
+    ],
+    "timeout": "60s"
+  }
+}

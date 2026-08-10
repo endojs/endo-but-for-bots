@@ -1,0 +1,227 @@
+{
+  "comment": "Cross-language golden fixtures for the AndroidAdmin bridge protocol. The JavaScript half asserts it PRODUCES each `request` and CONSUMES each `result`; the Kotlin/Robolectric half asserts the mirror image. See PROTOCOL.md. `value: null` stands for `undefined`, which JSON cannot represent.",
+  "version": 1,
+  "cases": [
+    {
+      "name": "getDeviceState",
+      "action": "getDeviceState",
+      "positional": [],
+      "request": { "v": 1, "action": "getDeviceState", "args": {} },
+      "result": {
+        "ok": true,
+        "value": {
+          "deviceOwner": true,
+          "model": "SM-A375F",
+          "apiLevel": 34,
+          "securityPatch": "2026-07-01"
+        }
+      },
+      "value": {
+        "deviceOwner": true,
+        "model": "SM-A375F",
+        "apiLevel": 34,
+        "securityPatch": "2026-07-01"
+      }
+    },
+    {
+      "name": "listUserRestrictions",
+      "action": "listUserRestrictions",
+      "positional": [],
+      "request": { "v": 1, "action": "listUserRestrictions", "args": {} },
+      "result": { "ok": true, "value": ["no_install_apps", "no_factory_reset"] },
+      "value": ["no_install_apps", "no_factory_reset"]
+    },
+    {
+      "name": "isApplicationHidden",
+      "action": "isApplicationHidden",
+      "positional": ["com.example.app"],
+      "request": {
+        "v": 1,
+        "action": "isApplicationHidden",
+        "args": { "packageName": "com.example.app" }
+      },
+      "result": { "ok": true, "value": false },
+      "value": false
+    },
+    {
+      "name": "lockNow",
+      "action": "lockNow",
+      "positional": [],
+      "request": { "v": 1, "action": "lockNow", "args": {} },
+      "result": { "ok": true },
+      "value": null
+    },
+    {
+      "name": "setCameraDisabled/true",
+      "action": "setCameraDisabled",
+      "positional": [true],
+      "request": {
+        "v": 1,
+        "action": "setCameraDisabled",
+        "args": { "disabled": true }
+      },
+      "result": { "ok": true },
+      "value": null
+    },
+    {
+      "name": "setScreenCaptureDisabled/false",
+      "action": "setScreenCaptureDisabled",
+      "positional": [false],
+      "request": {
+        "v": 1,
+        "action": "setScreenCaptureDisabled",
+        "args": { "disabled": false }
+      },
+      "result": { "ok": true },
+      "value": null
+    },
+    {
+      "name": "setMaximumTimeToLock",
+      "action": "setMaximumTimeToLock",
+      "positional": [60000],
+      "request": {
+        "v": 1,
+        "action": "setMaximumTimeToLock",
+        "args": { "timeMs": 60000 }
+      },
+      "result": { "ok": true },
+      "value": null
+    },
+    {
+      "name": "setRequiredPasswordComplexity",
+      "action": "setRequiredPasswordComplexity",
+      "positional": ["high"],
+      "request": {
+        "v": 1,
+        "action": "setRequiredPasswordComplexity",
+        "args": { "complexity": "high" }
+      },
+      "result": { "ok": true },
+      "value": null
+    },
+    {
+      "name": "addUserRestriction",
+      "action": "addUserRestriction",
+      "positional": ["no_install_apps"],
+      "request": {
+        "v": 1,
+        "action": "addUserRestriction",
+        "args": { "key": "no_install_apps" }
+      },
+      "result": { "ok": true },
+      "value": null
+    },
+    {
+      "name": "clearUserRestriction",
+      "action": "clearUserRestriction",
+      "positional": ["no_install_apps"],
+      "request": {
+        "v": 1,
+        "action": "clearUserRestriction",
+        "args": { "key": "no_install_apps" }
+      },
+      "result": { "ok": true },
+      "value": null
+    },
+    {
+      "name": "setApplicationHidden",
+      "action": "setApplicationHidden",
+      "positional": ["com.example.app", true],
+      "request": {
+        "v": 1,
+        "action": "setApplicationHidden",
+        "args": { "packageName": "com.example.app", "hidden": true }
+      },
+      "result": { "ok": true },
+      "value": null
+    },
+    {
+      "name": "setUninstallBlocked",
+      "action": "setUninstallBlocked",
+      "positional": ["com.example.app", true],
+      "request": {
+        "v": 1,
+        "action": "setUninstallBlocked",
+        "args": { "packageName": "com.example.app", "blocked": true }
+      },
+      "result": { "ok": true },
+      "value": null
+    },
+    {
+      "name": "reboot",
+      "action": "reboot",
+      "positional": [],
+      "request": { "v": 1, "action": "reboot", "args": {} },
+      "result": { "ok": true },
+      "value": null
+    },
+    {
+      "name": "wipeData/with-reason",
+      "action": "wipeData",
+      "positional": ["decommissioned by HQ"],
+      "request": {
+        "v": 1,
+        "action": "wipeData",
+        "args": { "reason": "decommissioned by HQ" }
+      },
+      "result": { "ok": true },
+      "value": null
+    },
+    {
+      "name": "wipeData/omitted-optional-argument",
+      "comment": "An omitted optional argument is ABSENT from args, never present as null.",
+      "action": "wipeData",
+      "positional": [],
+      "request": { "v": 1, "action": "wipeData", "args": {} },
+      "result": { "ok": true },
+      "value": null
+    }
+  ],
+  "failureCases": [
+    {
+      "name": "security-exception",
+      "comment": "A JVM throwable crosses as data and is rethrown on the JavaScript side.",
+      "action": "lockNow",
+      "positional": [],
+      "request": { "v": 1, "action": "lockNow", "args": {} },
+      "result": {
+        "ok": false,
+        "error": {
+          "name": "SecurityException",
+          "message": "Calling package is not the device owner"
+        }
+      },
+      "messageIncludes": "SecurityException"
+    },
+    {
+      "name": "unsupported-version",
+      "comment": "The Android side must reject a version it does not implement rather than guessing argument shapes.",
+      "action": "lockNow",
+      "positional": [],
+      "request": { "v": 1, "action": "lockNow", "args": {} },
+      "result": {
+        "ok": false,
+        "error": {
+          "name": "UnsupportedVersion",
+          "message": "protocol version 1 is not implemented by this build"
+        }
+      },
+      "messageIncludes": "UnsupportedVersion"
+    },
+    {
+      "name": "unknown-action",
+      "comment": "An unknown action must fail, never succeed as a silent no-op.",
+      "action": "lockNow",
+      "positional": [],
+      "request": { "v": 1, "action": "lockNow", "args": {} },
+      "result": {
+        "ok": false,
+        "error": {
+          "name": "UnknownAction",
+          "message": "action is not in this build's catalog"
+        }
+      },
+      "messageIncludes": "UnknownAction"
+    }
+  ]
+}

@@ -87,6 +87,9 @@
       "path": "packages/exo/tsconfig.composite.json"
     },
     {
+      "path": "packages/exo-android-admin/tsconfig.composite.json"
+    },
+    {
       "path": "packages/exo-git/tsconfig.composite.json"
     },
     {

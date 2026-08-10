@@ -117,6 +117,38 @@ Only the `Client` facet is ever sent to HQ. The `Control` facet stays on
 the device, so policy can be re-scoped or the capability revoked without
 HQ's cooperation.
 
+### The bridge protocol is an explicit versioned contract
+
+The `transport` seam is a language boundary, so it is specified rather than
+left implicit. If the JavaScript and Kotlin halves each invent their own
+marshalling, the only place their disagreement surfaces is the physical
+device — exactly the outcome the testing strategy exists to avoid.
+
+The contract is therefore:
+
+- **A versioned request envelope.** Every call is a hardened, JSON-able
+  record `{ v, action, args }`, where `v` is the protocol version, `action`
+  is a name from a closed catalog, and `args` is a record whose shape the
+  catalog fixes per action.
+- **An explicit result envelope.** Kotlin answers with
+  `{ ok: true, value }` or `{ ok: false, error: { name, message } }`.
+  Errors are *data*, not exceptions: a JVM exception cannot cross the
+  channel as a JS throw, so the backend rethrows locally from the envelope.
+- **A closed action catalog.** Actions and their argument shapes live in
+  one portable module (`exo-android-admin/src/protocol.js`), which the exo's
+  interface guards, the policy allowlist, and the fixtures all derive from.
+  Adding an action means adding one catalog entry, not touching four files.
+- **Golden fixtures as the cross-language oracle.** A checked-in
+  `protocol/fixtures.json` enumerates representative request/response pairs.
+  The JS side asserts it *produces* those requests and *consumes* those
+  responses; the Kotlin/Robolectric side asserts the mirror image. Wire drift
+  fails in CI on both sides independently, so agreement never has to be
+  demonstrated on the phone.
+- **`PROTOCOL.md`** documents the envelope, the version-negotiation rule
+  (the app rejects a request whose `v` it does not implement), and the
+  catalog, so the Kotlin implementation has a written spec rather than
+  JavaScript to reverse-engineer.
+
 ### Provisioning and vending flow
 
 Installed once at boot, a `setup-android.js` formula (an unconfined caplet,
@@ -217,9 +249,13 @@ The in-repo, reusable pieces are independent of the Android shell and can
 land and be tested on a desktop daemon first:
 
 1. `exo-android-admin` — portable exo, `Client`/`Control` split, policy
-   allowlist, `revoke()`, interface guards, against the `exo-shell` layout.
+   allowlist, `revoke()`, interface guards, against the `exo-shell` layout,
+   with the protocol catalog, `PROTOCOL.md`, and `protocol/fixtures.json`
+   that both halves are tested against.
 2. `host-android-admin` — unconfined backend with the injected `transport`
-   seam, mockable so the admin surface is testable without a device.
+   seam, a channel transport for the nodejs-mobile bridge, and a mock
+   `DevicePolicyManager` bridge so the admin surface is testable without a
+   device.
 3. `setup-android.js` — boot-time formula: install iroh, mint the admin
    exo, invite/adopt HQ.
 
