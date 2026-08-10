@@ -17,8 +17,9 @@ Implemented on the floot/claude-sandbox pair, same-day with the design:
   persistence in the factory petstore (`floot-container-mounts`), replay on
   arm, and the three session tools.
 - `packages/floot/agent.js` — wires a per-session kit into the CLI-runtime
-  branch of `getAgent` (tools are discoverable through the MCP bridge and
-  the API tool loop alike), arms it with the resolved client after
+  branch of `getAgent` (the tools reach the CLI's own tool loop through the
+  per-session MCP bridge; API-runtime sessions have no sandbox and do not
+  get them), arms it with the resolved client after
   provisioning, adds `identifyClient` to the client resolver (cap identity
   for record keying), and releases the session's references on
   `deleteSession`.
@@ -64,6 +65,14 @@ Deviations from the sketch:
 - Attach requires the hosted provisioner (it holds the `fs-mounter` and
   root-host authority); deployments without it get a clear
   attach-unavailable error rather than a degraded bridge.
+- The shared-client ref counting (Goal 5) is implemented and tested at the
+  registrar (records keyed by client cap identity, session-id reference
+  sets, last-reference teardown), but floot's client resolver still grants
+  the shared base client to ONE session exclusively (`sharedClaimedBy`) and
+  the hosted provisioner mints per-session clients, so no production wiring
+  currently lets two live sessions share a `clientKey`. The machinery is
+  the forward-looking safety story for when sharing is wired, not a
+  behavior reachable today.
 
 ## Summary
 
@@ -276,7 +285,8 @@ that owns the slice.
 2. **Guest API + validator** — `/mnt/` normalization, cap possession, git
    worktree resolution, `capId` extraction. ✅ (session tools + registrar in
    `packages/floot/src/container-mounts.js`)
-3. **Registry + ref counting** — shared client safe detach. ✅
+3. **Registry + ref counting** — shared client safe detach. ✅ (registrar
+   behavior; see Status — production wiring does not yet share a client)
 4. **Client recreate path** — immediate dispose/`make` on attach/detach. ✅
    (`ClaudeClient.setExtraMounts`)
 5. **Persistence replay** — attach records in the factory petstore, replayed
