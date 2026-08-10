@@ -135,9 +135,38 @@ export const makeClaudeSessionProvisioner = (
   // `provideContainerMountBridge`, which re-mounts 9P at the same
   // deterministic mountpoint and re-registers the same host mount pet name
   // (overwriting orphans the prior formula for GC — the same story as the
-  // per-session workspace mount replay).
-  /** @type {Map<string, { mountCap: any, handle: any }>} */
+  // per-session workspace mount replay). The cap identity and mode are
+  // remembered so a cached bridge is never served for a request it does not
+  // match (a stale entry left by a swallowed release, say).
+  /** @type {Map<string, { mountCap: any, handle: any, capId: string, mode: string }>} */
   const bridges = new Map();
+
+  // Serialize bridge operations per key: without this, two concurrent
+  // provides for one key would both miss the cache and stack two 9P mounts
+  // on one mountpoint (leaking the loser), and a release racing a provide
+  // could remove the pet name the provide just registered — cancelling the
+  // fresh Mount formula while the cache still points at it.
+  /** @type {Map<string, Promise<unknown>>} */
+  const bridgeChains = new Map();
+  /**
+   * @template T
+   * @param {string} key
+   * @param {() => Promise<T>} fn
+   * @returns {Promise<T>}
+   */
+  const withBridgeKeyLock = (key, fn) => {
+    const prior = bridgeChains.get(key) || Promise.resolve();
+    const run = prior.then(fn, fn);
+    const tail = run.catch(() => {});
+    bridgeChains.set(key, tail);
+    // Drop the chain entry once idle so the map stays bounded by live work.
+    tail.then(() => {
+      if (bridgeChains.get(key) === tail) {
+        bridgeChains.delete(key);
+      }
+    });
+    return run;
+  };
 
   const attachMountName = (/** @type {string} */ key) => `claude-attach-${key}`;
 
@@ -186,7 +215,7 @@ export const makeClaudeSessionProvisioner = (
   /**
    * @param {{ key: string, capId: string, mode?: string }} options
    */
-  const provideBridge = async ({ key, capId, mode = 'rw' }) => {
+  const provideBridge = ({ key, capId, mode = 'rw' }) => {
     assertBridgeKey(key);
     if (mode !== 'ro' && mode !== 'rw') {
       throw makeError(X`attach: mode must be "ro" or "rw", got ${q(mode)}`);
@@ -194,55 +223,73 @@ export const makeClaudeSessionProvisioner = (
     if (typeof capId !== 'string' || capId === '') {
       throw makeError(X`attach: capId must be a non-empty string`);
     }
-    const existing = bridges.get(key);
-    if (existing) {
-      return harden({ mountCap: existing.mountCap, handle: existing.handle });
-    }
-    const readOnly = mode === 'ro';
-    const cap = await E(hostAgent).lookupById(capId);
-    const fs = await resolveServeableFilesystem(cap);
-    const mountPoint = path.join(attachMountBaseDir, attachMountName(key));
-    const fsMounter = await getFsMounter();
-    // Belt and braces: a read-only attach is enforced at the kernel mount
-    // (`ro`), at the daemon Mount cap (`readOnly`), and at the slice bind
-    // (the registrar passes the mode through to the bind list too).
-    const handle = await E(fsMounter).mount(
-      fs,
-      mountPoint,
-      harden({ lazyUnmount: true, readOnly }),
-    );
-    try {
-      const mountCap = await E(hostAgent).provideMount(
+    return withBridgeKeyLock(key, async () => {
+      await null;
+      const existing = bridges.get(key);
+      if (existing) {
+        if (existing.capId === capId && existing.mode === mode) {
+          return harden({
+            mountCap: existing.mountCap,
+            handle: existing.handle,
+          });
+        }
+        // A cached bridge that does not match the request (a swallowed
+        // release left it behind, or the attach's mode changed) must not be
+        // served: its kernel mount and Mount cap enforce the WRONG mode.
+        // Tear it down and mint afresh.
+        bridges.delete(key);
+        await E(existing.handle)
+          .unmount()
+          .catch(() => {});
+      }
+      const readOnly = mode === 'ro';
+      const cap = await E(hostAgent).lookupById(capId);
+      const fs = await resolveServeableFilesystem(cap);
+      const mountPoint = path.join(attachMountBaseDir, attachMountName(key));
+      const fsMounter = await getFsMounter();
+      // Belt and braces: a read-only attach is enforced at the kernel mount
+      // (`ro`), at the daemon Mount cap (`readOnly`), and at the slice bind
+      // (the registrar passes the mode through to the bind list too).
+      const handle = await E(fsMounter).mount(
+        fs,
         mountPoint,
-        attachMountName(key),
-        harden({ readOnly }),
+        harden({ lazyUnmount: true, readOnly }),
       );
-      bridges.set(key, harden({ mountCap, handle }));
-      return harden({ mountCap, handle });
-    } catch (error) {
-      await E(handle)
-        .unmount()
-        .catch(() => {});
-      throw error;
-    }
+      try {
+        const mountCap = await E(hostAgent).provideMount(
+          mountPoint,
+          attachMountName(key),
+          harden({ readOnly }),
+        );
+        bridges.set(key, harden({ mountCap, handle, capId, mode }));
+        return harden({ mountCap, handle });
+      } catch (error) {
+        await E(handle)
+          .unmount()
+          .catch(() => {});
+        throw error;
+      }
+    });
   };
 
   /**
    * @param {string} key
    */
-  const releaseBridge = async key => {
-    await null;
+  const releaseBridge = key => {
     assertBridgeKey(key);
-    const bridge = bridges.get(key);
-    bridges.delete(key);
-    if (bridge) {
-      await E(bridge.handle)
-        .unmount()
-        .catch(() => {});
-    }
-    if (await E(hostAgent).has(attachMountName(key))) {
-      await E(hostAgent).remove(attachMountName(key));
-    }
+    return withBridgeKeyLock(key, async () => {
+      await null;
+      const bridge = bridges.get(key);
+      bridges.delete(key);
+      if (bridge) {
+        await E(bridge.handle)
+          .unmount()
+          .catch(() => {});
+      }
+      if (await E(hostAgent).has(attachMountName(key))) {
+        await E(hostAgent).remove(attachMountName(key));
+      }
+    });
   };
 
   const namesFor = sessionId => {

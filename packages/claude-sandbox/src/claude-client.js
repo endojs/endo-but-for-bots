@@ -402,6 +402,13 @@ export const makeClaudeClient = ({
       );
   const ensureProvisioned = () => {
     if (provisioned === undefined) {
+      // A terminated client must never re-provision: `terminate()` tears down
+      // only what `provisioned` names at the moment it runs, so a provision
+      // started after it (a queued turn racing terminate, or a recreate whose
+      // teardown terminate raced past) would leak a container, its 9P
+      // mounts, and a fresh credential grant with no owner left to release
+      // them.
+      guardLive();
       const pending = pendingTeardown.then(() =>
         /** @type {NonNullable<typeof provision>} */ (provision)(extraMounts),
       );
@@ -580,9 +587,13 @@ export const makeClaudeClient = ({
       try {
         proc = await spawnClaude(prompt, opts);
       } catch (error) {
+        // A recreate disposes the slice a queued spawn may be about to use;
+        // label that failure the same way an in-flight kill is labelled.
         push({
           type: 'abort',
-          reason: error instanceof Error ? error.message : String(error),
+          reason: abortReasonInContext(
+            error instanceof Error ? error.message : String(error),
+          ),
         });
         return;
       }
@@ -722,15 +733,19 @@ export const makeClaudeClient = ({
     const run = extraMountsChain.then(async () => {
       await null;
       guardLive();
-      extraMounts = harden([...extras]);
-      if (provisioned === undefined) {
-        // Nothing live: the new set binds on the next (lazy) provision.
-        return;
-      }
+      // Refuse BEFORE recording anything: an eagerly-provisioned client (no
+      // provision thunk) has no way to recreate its slice, and a rejected
+      // call must not leave the refused set visible in `status()` or
+      // unmountable by `terminate()`.
       if (!provision) {
         throw makeError(
           X`ClaudeClient(${q(sessionId)}): extra mounts require a lazily-provisioned client (no provision thunk to recreate the slice with)`,
         );
+      }
+      extraMounts = harden([...extras]);
+      if (provisioned === undefined) {
+        // Nothing live: the new set binds on the next (lazy) provision.
+        return;
       }
       const prior = provisioned;
       provisioned = undefined;
@@ -788,6 +803,15 @@ export const makeClaudeClient = ({
           // Must release before re-provisioning: ensureProvisioned chains
           // behind this gate.
           releaseTeardown();
+        }
+        // A terminate() that landed during the teardown above saw
+        // `provisioned === undefined` and returned with nothing more to
+        // release — re-provisioning now would mint a container, 9P mounts,
+        // and a credential grant that nothing will ever tear down. The
+        // teardown this recreate just performed doubles as the terminate's
+        // missing cleanup, so simply stop here.
+        if (terminated) {
+          return;
         }
         // Immediate recreate (design decision: apply on attach, not on the
         // next turn) so a provisioning failure surfaces to the attach

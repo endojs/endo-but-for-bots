@@ -402,6 +402,9 @@ test('an EndoGit cap attaches its worktree', async t => {
   );
   t.is(worktreeCalls, 1);
   t.is(h.mountCalls.length, 1);
+  // The served filesystem must derive from the WORKTREE, not the git cap
+  // itself (serving the repo object would break in-container git).
+  t.not(h.mountCalls[0].fs, h.byId.get('git-1'));
 });
 
 test('a Filesystem cap is served as-is, and ro mode pins every layer', async t => {
@@ -509,4 +512,37 @@ test('a provideMount failure unmounts the fresh 9P bridge', async t => {
     { message: /mount registration failed/ },
   );
   t.deepEqual(unmounts, ['/attach-mounts/claude-attach-k2']);
+});
+
+test('a cached bridge that does not match the requested capId/mode is re-minted', async t => {
+  const h = makeBridgeHarness();
+  h.byId.set(
+    'cap-m',
+    harden({ __getMethodNames__: () => ['entry', 'readText', 'writeText'] }),
+  );
+
+  const first = await E(h.provisioner).provideContainerMountBridge(
+    harden({ key: 'modekey', capId: 'cap-m', mode: 'rw' }),
+  );
+  t.is(h.mountCalls.length, 1);
+  t.false(h.mountCalls[0].opts.readOnly);
+
+  // Same key, different mode (a detach whose release was swallowed followed
+  // by a re-attach): serving the cached rw bridge would leave the kernel
+  // mount and daemon Mount cap enforcing the WRONG mode. It must be torn
+  // down and re-minted read-only.
+  const second = await E(h.provisioner).provideContainerMountBridge(
+    harden({ key: 'modekey', capId: 'cap-m', mode: 'ro' }),
+  );
+  t.is(h.unmounts.length, 1); // the stale rw bridge was unmounted
+  t.is(h.mountCalls.length, 2);
+  t.true(h.mountCalls[1].opts.readOnly);
+  t.true(h.provideMountCalls[1].opts.readOnly);
+  t.not(second.handle, first.handle);
+
+  // Now cached under the new mode: a matching replay reuses it.
+  await E(h.provisioner).provideContainerMountBridge(
+    harden({ key: 'modekey', capId: 'cap-m', mode: 'ro' }),
+  );
+  t.is(h.mountCalls.length, 2);
 });
