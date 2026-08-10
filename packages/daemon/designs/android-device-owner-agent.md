@@ -228,6 +228,108 @@ foreground service + nodejs-mobile embed + supervisor + JNI channel +
 `DevicePolicyManager` invocations — is a separate deliverable that consumes
 the `transport` seam exposed by `host-android-admin`.
 
+## Testing strategy
+
+The design's central seam — the `transport` function
+`(action, args) => result` between `host-android-admin` and Kotlin — is
+also the *test* seam. Everything above it is portable JavaScript that runs
+under desktop Node; everything below it is OS integration. The goal is to
+push as much coverage as possible above the seam and onto a *disposable
+emulator*, reserving the physical A37 for a final acceptance pass and
+Samsung-specific quirks a device farm cannot reproduce.
+
+The layers, cheapest and most deterministic first:
+
+### L1 — Exo policy and guard units (desktop AVA, no device)
+
+Test `exo-android-admin` against a **recording mock transport** that
+captures `(action, args)` without touching Android. Assertions:
+
+- The `M.interface()` guard rejects malformed calls at the boundary.
+- The policy allowlist admits only permitted actions and target packages,
+  and a per-call parameter can only *narrow*, never widen (mirror the
+  `exo-shell` timeout-narrowing tests).
+- The `Client` facet exposes no control methods; `Control.setPolicy()` and
+  `Control.revoke()` behave, and post-revoke calls on the vended `Client`
+  fail closed.
+
+These are pure, fast, and need no daemon fork.
+
+### L2 — Cross-daemon vend integration (desktop AVA, two local daemons)
+
+Prove the actual "vend admin control to HQ" mechanism without a phone.
+Following the daemon's existing gateway/multiplayer tests
+(`test.serial`, `ENDO_ADDR=127.0.0.1:0`, `t.teardown` for every forked
+daemon and temp dir): stand up two daemons in temp state trees, install a
+**fake `android-admin`** backed by an in-JS fake `DevicePolicyManager`,
+connect them (loopback TCP is enough here — cheaper than iroh), vend the
+`Client` facet, and have the HQ side invoke methods. Assert that calls
+arrive at the fake DPM with the exact marshalled args, that object identity
+and facet asymmetry hold across CapTP, and that `Control.revoke()` on the
+device side severs the HQ reference. This is the highest-value test: it
+exercises the whole capability path end to end minus the OS.
+
+### L3 — Contract fixtures shared by both halves
+
+Define the admin protocol as a fixed set of `(action, args) => result`
+golden fixtures. The JS side (L1/L2) asserts it *produces* exactly these
+payloads; the Kotlin bridge (L4) asserts it *consumes* them and calls the
+right `DevicePolicyManager` method. Because both halves are tested against
+the same fixtures, the device is never needed to prove the two agree — a
+wire-format drift fails in CI, not on the phone.
+
+### L4 — JVM bridge contract (Robolectric, no device/emulator)
+
+Test the Kotlin channel handler on the JVM with Robolectric (or DPM test
+doubles): replay the L3 fixtures through the nodejs-mobile channel decoder
+and assert each dispatches to the expected `DevicePolicyManager` call with
+correctly unmarshalled arguments. Catches marshalling and channel wire-
+format bugs without booting Android.
+
+### L5 — iroh-on-device transport check (arm64 CI, not the phone)
+
+Validate whichever iroh path is chosen (§ iroh on device) on an
+`aarch64-linux` CI runner, not on the A37: assert the binding loads and two
+peers complete a CapTP round-trip over iroh loopback, reusing the daemon's
+existing iroh discovery tests. The device should never be where we discover
+the binding fails to load.
+
+### L6 — Emulator instrumented tests (CI, disposable AVD)
+
+Only the parts that genuinely cannot be faked run here, on a
+factory-fresh emulator — which, unlike a daily-driver phone, can be
+provisioned as device owner and wiped freely:
+
+- **Provisioning:** `adb shell dpm set-device-owner …` on a freshly booted
+  AVD (no accounts), then assert the app reports device-owner status.
+- **Embedding:** the app boots, starts the embedded daemon, and the daemon
+  answers `ping` over its socket.
+- **Real DPM effect:** drive a whitelisted action (e.g. password-quality
+  policy) and assert it via `adb shell dumpsys device_policy`.
+- **Survival:** simulate Doze (`adb shell dumpsys deviceidle force-idle`)
+  and a background kill (`am kill`), then assert the foreground service and
+  boot receiver bring the daemon back.
+
+Because the embedded daemon is *the same bundle* that L1–L2 cover under
+desktop Node, the emulator only has to validate the embedding and the OS
+integration — not the daemon logic again.
+
+### L7 — Emulator end-to-end smoke (CI)
+
+One gate that ties it together with no physical device: emulator (agent) +
+a local HQ daemon on the CI host, a real vend over the chosen transport,
+HQ issues a whitelisted DPM command, and the effect is observed via
+`adb shell dumpsys device_policy`. This is the "does the whole thing work
+remotely" check.
+
+### What still needs the A37
+
+After L1–L7 are green, the residual manual pass on the physical device
+covers only what an emulator cannot: Samsung One UI's real battery/Doze
+behavior and background-kill aggressiveness, Knox interactions, and any
+A37-specific `DevicePolicyManager` deviations. That is a short acceptance
+checklist, not a test-development effort.
+
 ## References
 
 - [iroh-network-design.md](./iroh-network-design.md) — the iroh transport,
