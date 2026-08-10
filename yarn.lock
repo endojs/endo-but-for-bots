@@ -1706,6 +1706,7 @@ __metadata:
     "@endo/far": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/patterns": "workspace:^"
+    "@endo/platform": "workspace:^"
     "@endo/sandbox": "workspace:^"
     "@endo/stream": "workspace:^"
     ava: "catalog:dev"
