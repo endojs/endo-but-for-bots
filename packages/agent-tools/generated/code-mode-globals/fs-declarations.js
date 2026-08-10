@@ -176,17 +176,17 @@ type OpenFileOptions = {
     append?: boolean;
 };
 type PassableBytesReader<TReadReturn = undefined> = {
-    streamBase64(synPromise: ERef<StreamNode<unknown, TReadReturn>>): Promise<StreamNode<string, TReadReturn>>;
-    readReturnPattern(): unknown | undefined;
+    streamBase64: (synPromise: ERef<StreamNode<unknown, TReadReturn>>) => Promise<StreamNode<string, TReadReturn>>;
+    readReturnPattern: () => unknown | undefined;
 };
 type PassableBytesWriter<TWriteReturn = undefined> = {
-    streamBase64(synPromise: ERef<StreamNode<string, TWriteReturn>>): Promise<StreamNode<undefined, TWriteReturn>>;
-    writeReturnPattern(): unknown | undefined;
+    streamBase64: (synPromise: ERef<StreamNode<string, TWriteReturn>>) => Promise<StreamNode<undefined, TWriteReturn>>;
+    writeReturnPattern: () => unknown | undefined;
 };
 type PassableReader<TRead = unknown, TReadReturn = unknown> = {
-    stream(synPromise: ERef<StreamNode<undefined, TReadReturn>>): Promise<StreamNode<TRead, TReadReturn>>;
-    readPattern(): unknown | undefined;
-    readReturnPattern(): unknown | undefined;
+    stream: (synPromise: ERef<StreamNode<undefined, TReadReturn>>) => Promise<StreamNode<TRead, TReadReturn>>;
+    readPattern: () => unknown | undefined;
+    readReturnPattern: () => unknown | undefined;
 };
 type Qid<K = NodeKind> = {
     type: K;

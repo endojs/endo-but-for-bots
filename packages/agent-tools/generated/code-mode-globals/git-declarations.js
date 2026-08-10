@@ -312,17 +312,17 @@ type GitOpenFileOptions = {
     append?: boolean;
 };
 type GitPassableBytesReader<TReadReturn = undefined> = {
-    streamBase64(synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>): Promise<GitStreamNode<string, TReadReturn>>;
-    readReturnPattern(): unknown | undefined;
+    streamBase64: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
+    readReturnPattern: () => unknown | undefined;
 };
 type GitPassableBytesWriter<TWriteReturn = undefined> = {
-    streamBase64(synPromise: GitERef<GitStreamNode<string, TWriteReturn>>): Promise<GitStreamNode<undefined, TWriteReturn>>;
-    writeReturnPattern(): unknown | undefined;
+    streamBase64: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
+    writeReturnPattern: () => unknown | undefined;
 };
 type GitPassableReader<TRead = unknown, TReadReturn = unknown> = {
-    stream(synPromise: GitERef<GitStreamNode<undefined, TReadReturn>>): Promise<GitStreamNode<TRead, TReadReturn>>;
-    readPattern(): unknown | undefined;
-    readReturnPattern(): unknown | undefined;
+    stream: (synPromise: GitERef<GitStreamNode<undefined, TReadReturn>>) => Promise<GitStreamNode<TRead, TReadReturn>>;
+    readPattern: () => unknown | undefined;
+    readReturnPattern: () => unknown | undefined;
 };
 type GitPathEntry = GitLitePathEntry;
 type GitPathEntryIssuer = GitLitePathEntryIssuer;
@@ -656,17 +656,17 @@ type GitOpenFileOptions = {
     append?: boolean;
 };
 type GitPassableBytesReader<TReadReturn = undefined> = {
-    streamBase64(synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>): Promise<GitStreamNode<string, TReadReturn>>;
-    readReturnPattern(): unknown | undefined;
+    streamBase64: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
+    readReturnPattern: () => unknown | undefined;
 };
 type GitPassableBytesWriter<TWriteReturn = undefined> = {
-    streamBase64(synPromise: GitERef<GitStreamNode<string, TWriteReturn>>): Promise<GitStreamNode<undefined, TWriteReturn>>;
-    writeReturnPattern(): unknown | undefined;
+    streamBase64: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
+    writeReturnPattern: () => unknown | undefined;
 };
 type GitPassableReader<TRead = unknown, TReadReturn = unknown> = {
-    stream(synPromise: GitERef<GitStreamNode<undefined, TReadReturn>>): Promise<GitStreamNode<TRead, TReadReturn>>;
-    readPattern(): unknown | undefined;
-    readReturnPattern(): unknown | undefined;
+    stream: (synPromise: GitERef<GitStreamNode<undefined, TReadReturn>>) => Promise<GitStreamNode<TRead, TReadReturn>>;
+    readPattern: () => unknown | undefined;
+    readReturnPattern: () => unknown | undefined;
 };
 type GitPathEntry = GitLitePathEntry;
 type GitQid<K = GitNodeKind> = {
