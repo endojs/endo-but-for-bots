@@ -184,22 +184,51 @@ configuration) is sufficient, which keeps the embedding small.
 
 ### iroh on device
 
-The iroh transport needs a working `@number0/iroh` NAPI binding for the
-device ABI. Two paths, tried in order:
+**Resolved: a prebuilt already exists — no cross-compilation needed.**
 
-- **Path A — cross-compile `@number0/iroh` for `aarch64-linux-android`.**
-  nodejs-mobile is standard-ABI Node and napi-rs supports the Android
-  target, so a from-source build should load and let us reuse `iroh.js`
-  verbatim. Least new code.
-- **Path B — run iroh natively in Kotlin via `iroh-ffi`.** iroh ships
-  officially supported Android/Kotlin bindings. We run the endpoint in
-  Kotlin, bridge each QUIC bidirectional stream over the nodejs-mobile
-  channel, and add a small transport module that feeds the existing
-  `adaptIrohStream` → `makeNetstringCapTP` path. More code, but it keeps
-  Rust out of the Node ABI and uses the most Android-native iroh path.
+The original plan assumed we would have to cross-compile `@number0/iroh` for
+`aarch64-linux-android`, and treated that as the design's largest open risk.
+Checking the published package settles it:
 
-Path A is preferred for reuse; Path B is the fallback and may become
-primary if the NAPI build proves brittle on the target.
+- `@number0/iroh`'s `napi.targets` list includes `aarch64-linux-android`, and
+  it declares `@number0/iroh-android-arm64` as an `optionalDependency`
+  (`armv7-linux-androideabi` / `@number0/iroh-android-arm-eabi` are published
+  too, for 32-bit devices).
+- `@number0/iroh-android-arm64` is published at both `1.0.0` and `1.1.0`,
+  inside the daemon's existing `^1.0.0` range.
+- Its payload, `iroh.android-arm64.node`, is a real *ELF 64-bit LSB shared
+  object, ARM aarch64*, linked against bionic (`libc.so`, `libdl.so`,
+  `libm.so`) — an Android NDK build, not a repackaged Linux one.
+- `@number0/iroh`'s loader already branches on
+  `process.platform === 'android'` and requires the arm64 binding, so
+  resolution needs no patching.
+
+So Path A collapses to "install the dependency", and
+`packages/daemon/src/networks/iroh.js` should run **verbatim** on device.
+
+Two practical consequences, neither of them blocking:
+
+- **The prebuilt is gated by `os: ['android']` / `cpu: ['arm64']`.** A build
+  running on a developer's laptop will *not* fetch it by default. The app's
+  bundling step must ask for it explicitly — under Yarn 4, via
+  `supportedArchitectures` in `.yarnrc.yml`; under npm, via
+  `--os=android --cpu=arm64`. Forgetting this yields a daemon that starts and
+  then reports no iroh transport, which reads like a code bug rather than a
+  packaging one.
+- **`@number0/iroh` declares `engines.node >= 20.3.0`.** This, not the
+  binding, is now the real constraint: the embedded runtime must be a
+  nodejs-mobile build on Node 20.3 or newer. Confirm the chosen
+  nodejs-mobile build's Node version before committing to the embedding —
+  it is the one remaining item on this path that a published artifact does
+  not already answer.
+
+**Path B — run iroh natively in Kotlin via `iroh-ffi`** — remains the
+fallback: iroh ships officially supported Android/Kotlin bindings, and we
+would bridge each QUIC bidirectional stream over the nodejs-mobile channel
+into the existing `adaptIrohStream` → `makeNetstringCapTP` path. It is now
+only worth reaching for if the nodejs-mobile Node version cannot satisfy
+`engines.node`, or if loading a 19 MB NAPI module inside the app process
+proves problematic in practice.
 
 ## Security and trust
 
@@ -240,10 +269,13 @@ Ranked by how much they gate the work:
    runtime; the effort is wiring the spawn-envelope supervisor to it and
    choosing a worker topology. A single/in-process worker keeps this
    contained.
-3. **The iroh native binding.** Path A depends on a successful
-   `aarch64-linux-android` build of `@number0/iroh`; Path B trades that for
-   a Kotlin bridge and a new transport adapter. Validate one of these
-   early — the rest of the design assumes an iroh path exists on device.
+3. ~~**The iroh native binding.**~~ **Retired.** A prebuilt
+   `@number0/iroh-android-arm64` is published in the daemon's existing
+   version range and is a genuine bionic-linked aarch64 build, and the
+   package's loader already resolves it on `process.platform === 'android'`
+   (see § iroh on device). What remains is not a risk but two build-time
+   chores: opt into the Android architecture when bundling, and confirm the
+   nodejs-mobile build satisfies `engines.node >= 20.3.0`.
 
 ## Build order
 
