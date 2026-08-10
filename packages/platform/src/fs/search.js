@@ -37,7 +37,11 @@
  * path. The engine applies denial *during* the walk (a denied directory is
  * never descended into) and never follows a path out of the confinement root
  * (symlinks are resolved and a resolved path outside the root is excluded;
- * confinement by construction). Declarative inputs are what let the identical
+ * confinement by construction). `**` reports a symbolic link to a directory
+ * but does not recurse through it, so an unbounded pattern walks the tree
+ * rather than the link graph; a segment naming a path still follows one, and
+ * `followSymlinks` opts the sweep back in (`rg`'s rule, and `rg -L`).
+ * Declarative inputs are what let the identical
  * contract cross a native seam as plain data — a per-entry callback would pin
  * the walk to JavaScript forever.
  */
@@ -243,6 +247,7 @@ export const makeSearch = powers => {
       confinementRoot = root,
       batchSize,
       includeDirectories = true,
+      followSymlinks = false,
     } = options;
     await null;
     const batchLimit = clampBatchSize(batchSize);
@@ -295,13 +300,34 @@ export const makeSearch = powers => {
     };
 
     /**
+     * Whether `name` in `dirReal` is a link to somewhere else, decided by
+     * comparing the child's physical path against where it would be if it were
+     * an ordinary entry. `maybeRealPath` is already paid for confinement, so
+     * this costs nothing and keeps the `SearchPowers` read contract — the seam
+     * a native walk substitutes across — as narrow as it was.
+     *
+     * An unresolvable parent answers "no", leaving such an entry to the cycle
+     * guard rather than silently making the walk narrower than it can justify.
+     *
+     * @param {string | undefined} dirReal
+     * @param {string} name
+     * @param {string | undefined} childReal
+     * @returns {boolean}
+     */
+    const isLink = (dirReal, name, childReal) =>
+      dirReal !== undefined &&
+      childReal !== undefined &&
+      childReal !== powers.joinPath(dirReal, name);
+
+    /**
      * @param {string[]} remaining
      * @param {string} dir
      * @param {string[]} prefix
      * @param {Set<string>} ancestorsReal
+     * @param {string | undefined} dirReal Physical path of `dir`, for `isLink`.
      * @returns {Promise<void>}
      */
-    const walk = async (remaining, dir, prefix, ancestorsReal) => {
+    const walk = async (remaining, dir, prefix, ancestorsReal, dirReal) => {
       await null;
       const visitKey = `${remaining.length}\0${dir}`;
       if (visited.has(visitKey)) {
@@ -329,7 +355,7 @@ export const makeSearch = powers => {
         // matches `docs/*.md`). One or more consumed: descend into each confined
         // child directory with `**` still in play. A trailing `**` additionally
         // matches file descendants directly.
-        await walk(rest, dir, prefix, ancestorsReal);
+        await walk(rest, dir, prefix, ancestorsReal, dirReal);
         for (const name of names) {
           if (isDeniedName(denySet, name)) {
             continue;
@@ -340,17 +366,37 @@ export const makeSearch = powers => {
             continue;
           }
           if (await powers.isDirectory(childPath)) {
-            if (real !== undefined && !ancestorsReal.has(real)) {
+            // `**` does not descend through a link. Recursion of unbounded
+            // depth crossing links makes the answer a walk of the link graph
+            // rather than of the tree, and in a workspace checkout — where
+            // every `node_modules/@endo/*` entry links back into the
+            // repository — that graph enumerates the transitive dependency
+            // closure of every package by every distinct route to it. Measured
+            // on this repo, `packages/chat/**/*.js` reaches 22 directories as a
+            // tree and over nine million paths as a graph, which no cap can
+            // rescue: the sort below needs the whole set before it can yield.
+            //
+            // The link is still reported when the pattern ends here, exactly as
+            // the cycle case below is, so nothing disappears from a listing —
+            // only the descent through it stops. A caller that means to search
+            // through a link spells it out in a segment (`node_modules/@endo/*/
+            // src/**`), which is bounded by the pattern's own depth and so
+            // still followed; `followSymlinks` restores the sweep wholesale.
+            // This is `rg`'s rule: traversal does not cross links, an argument
+            // does, and `-L` opts back in.
+            const linked = !followSymlinks && isLink(dirReal, name, real);
+            if (!linked && real !== undefined && !ancestorsReal.has(real)) {
               const descentAncestors = new Set([...ancestorsReal, real]);
               await walk(
                 remaining,
                 childPath,
                 [...prefix, name],
                 descentAncestors,
+                real,
               );
             } else if (rest.length === 0) {
-              // A cyclic (or unresolvable) directory under a trailing `**` is
-              // still a valid entry: recorded once, never re-entered.
+              // A linked, cyclic, or unresolvable directory under a trailing
+              // `**` is still a valid entry: recorded once, never re-entered.
               await addResult([...prefix, name], childPath);
             }
           } else if (rest.length === 0) {
@@ -375,21 +421,22 @@ export const makeSearch = powers => {
         }
         // A non-final segment must descend, so it matches directories only.
         if (await powers.isDirectory(childPath)) {
-          // A literal descent consumes a segment, so it cannot recurse without
-          // bound; still extend the ancestor set so a later `**` sees this
-          // directory's physical identity and detects a cycle.
+          // A named descent consumes a segment, so it cannot recurse without
+          // bound — which is why it follows links where `**` does not. Still
+          // extend the ancestor set so a later `**` sees this directory's
+          // physical identity and detects a cycle.
           const nextAncestors =
             real === undefined
               ? ancestorsReal
               : new Set([...ancestorsReal, real]);
-          await walk(rest, childPath, [...prefix, name], nextAncestors);
+          await walk(rest, childPath, [...prefix, name], nextAncestors, real);
         }
       }
     };
 
     const rootReal = await powers.maybeRealPath(root);
     const initialAncestors = new Set(rootReal === undefined ? [] : [rootReal]);
-    await walk(patternSegments, root, [], initialAncestors);
+    await walk(patternSegments, root, [], initialAncestors, rootReal);
 
     // Sort by UTF-16 code unit (Array.prototype.sort's default string order) as
     // the final step so the flattened sequence is deterministic across
@@ -416,6 +463,7 @@ export const makeSearch = powers => {
     if (paths === undefined) {
       return globPaths(root, '**', {
         deniedSegments: options.deniedSegments,
+        followSymlinks: options.followSymlinks,
         confinementRoot: options.confinementRoot,
         batchSize: options.batchSize,
         includeDirectories: false,
