@@ -132,6 +132,9 @@
       "path": "packages/hex/tsconfig.composite.json"
     },
     {
+      "path": "packages/host-android-admin/tsconfig.composite.json"
+    },
+    {
       "path": "packages/host-spawner/tsconfig.composite.json"
     },
     {

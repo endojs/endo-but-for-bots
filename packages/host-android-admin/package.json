@@ -1,0 +1,62 @@
+{
+  "name": "@endo/host-android-admin",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Unconfined Endo formula that mints an AndroidAdmin capability over the privileged side of a device-owner application's bridge. Supplies the nodejs-mobile channel transport, an in-memory mock DevicePolicyManager for desktop testing, and the device-side bring-up formula. Pair with @endo/exo-android-admin for the portable, guest-facing exo.",
+  "keywords": [
+    "endo",
+    "android",
+    "device-admin",
+    "device-owner",
+    "nodejs-mobile"
+  ],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/host-android-admin"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./src/channel-transport.js": "./src/channel-transport.js",
+    "./src/mock-bridge.js": "./src/mock-bridge.js",
+    "./src/nodejs-mobile-channel.js": "./src/nodejs-mobile-channel.js",
+    "./src/setup-android.js": "./src/setup-android.js",
+    "./src/types.js": "./src/types.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "test": "ava",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix",
+    "lint:eslint": "eslint '**/*.js'",
+    "lint:types": "tsc"
+  },
+  "dependencies": {
+    "@endo/errors": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/exo": "workspace:^",
+    "@endo/exo-android-admin": "workspace:^",
+    "@endo/patterns": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/far": "workspace:^",
+    "@endo/init": "workspace:^",
+    "ava": "catalog:dev",
+    "eslint": "catalog:dev",
+    "typescript": "catalog:dev"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.js"
+    ],
+    "timeout": "60s"
+  }
+}
