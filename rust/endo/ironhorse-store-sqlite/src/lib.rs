@@ -236,7 +236,12 @@ impl HeapStore for SqliteHeapStore {
         // so open-time validation (and lazy resume) reads no row
         // contents.
         let m = self.manifest()?;
-        let mut pages = vec![None; slot_page_count(m.slot_count) as usize];
+        // Built from the rows actually present (ORDER BY page), never
+        // pre-sized from the manifest's untrusted geometry — a forged
+        // slot_count must fail validation, not force an allocation
+        // (the malformed-count discipline). Contiguity is enforced
+        // here; the count-vs-geometry comparison is validate_store's.
+        let mut pages: Vec<usize> = Vec::new();
         let mut stmt = self
             .conn
             .prepare("SELECT page, length(bytes) FROM slot_pages ORDER BY page")
@@ -246,17 +251,13 @@ impl HeapStore for SqliteHeapStore {
             .map_err(sql_err)?;
         for row in rows {
             let (page, len) = row.map_err(sql_err)?;
-            if let Some(slot) = pages.get_mut(page as usize) {
-                *slot = Some(len as usize);
+            if page as usize != pages.len() {
+                return Err(StoreError::MissingRow("slot page", pages.len() as u32));
             }
+            pages.push(len as usize);
         }
-        let pages: Vec<usize> = pages
-            .into_iter()
-            .enumerate()
-            .map(|(i, l)| l.ok_or(StoreError::MissingRow("slot page", i as u32)))
-            .collect::<Result<_, _>>()?;
 
-        let mut exts = vec![None; chunk_extent_count(m.chunk_len) as usize];
+        let mut exts: Vec<usize> = Vec::new();
         let mut stmt = self
             .conn
             .prepare("SELECT ext, length(bytes) FROM chunk_exts ORDER BY ext")
@@ -266,15 +267,11 @@ impl HeapStore for SqliteHeapStore {
             .map_err(sql_err)?;
         for row in rows {
             let (ext, len) = row.map_err(sql_err)?;
-            if let Some(slot) = exts.get_mut(ext as usize) {
-                *slot = Some(len as usize);
+            if ext as usize != exts.len() {
+                return Err(StoreError::MissingRow("chunk extent", exts.len() as u32));
             }
+            exts.push(len as usize);
         }
-        let exts: Vec<usize> = exts
-            .into_iter()
-            .enumerate()
-            .map(|(i, l)| l.ok_or(StoreError::MissingRow("chunk extent", i as u32)))
-            .collect::<Result<_, _>>()?;
         Ok((pages, exts))
     }
 

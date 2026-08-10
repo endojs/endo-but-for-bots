@@ -12,8 +12,8 @@ use ironhorse_snapshot::machine::{
     MachineSnapshot, StoreSession,
 };
 use ironhorse_snapshot::store::{
-    image_to_batch, slot_page_count, store_to_image, CheckpointBatch, HeapStore, MemoryStore,
-    StoreError,
+    image_to_batch, seal_commit, slot_page_count, store_to_image, CheckpointBatch, HeapStore,
+    MemoryStore, StoreError,
 };
 use ironhorse_snapshot::store_file::FileStore;
 use ironhorse_snapshot::Signature;
@@ -431,4 +431,40 @@ fn lazy_fault_refuses_row_read_across_a_foreign_commit() {
         msg.contains("store advanced under this machine"),
         "expected the named torn-read panic, got: {msg}"
     );
+}
+
+
+/// The two seal findings from the third review pass, locked: a seal
+/// binds the COMPLETE manifest identity (same rows under a different
+/// host signature seal differently), and a batch whose seal does not
+/// hash its own contents is refused before any backend persists it.
+#[test]
+fn seal_binds_full_manifest_identity_and_forgeries_are_refused() {
+    let mut m = Interp::new();
+    assert!(m.run(&PROG_A).completed);
+    let image = m.snapshot_image(&sig());
+    let batch = image_to_batch(&image, 1, "");
+
+    let mut foreign = batch.manifest.clone();
+    foreign.signature = Signature::new("some-other-host-v9");
+    let foreign_seal = seal_commit(
+        "",
+        &foreign,
+        &batch.small,
+        &batch.slot_pages,
+        &batch.chunk_extents,
+    );
+    assert_ne!(
+        batch.manifest.seal, foreign_seal,
+        "identical rows under a different signature must not share a seal"
+    );
+
+    let mut forged = image_to_batch(&image, 1, "");
+    forged.manifest.seal = batch.manifest.seal.clone();
+    forged.slot_pages[0].1[0] ^= 0xff; // content no longer matches the seal
+    let mut store = MemoryStore::new();
+    match store.commit(&forged) {
+        Err(StoreError::BaselineMismatch { .. }) => {}
+        other => panic!("expected forged-seal refusal, got {other:?}"),
+    }
 }

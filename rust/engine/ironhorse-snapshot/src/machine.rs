@@ -422,7 +422,9 @@ pub fn checkpoint_to_store(
             found: stored.seal,
         });
     }
-    let epoch = session.epoch + 1;
+    let epoch = session.epoch.checked_add(1).ok_or(StoreError::Snapshot(
+        crate::format::SnapshotError::Corrupt("store epoch exhausted"),
+    ))?;
     let interp = &mut session.interp;
     let mut manifest = manifest_of(interp, signature, epoch);
 

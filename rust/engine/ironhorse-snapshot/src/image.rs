@@ -85,7 +85,10 @@ impl MeterImage {
         let interval = u64::from_be_bytes(p[8..16].try_into().unwrap());
         let count = u64::from_be_bytes(p[16..24].try_into().unwrap());
         let vlen = u32::from_be_bytes([p[24], p[25], p[26], p[27]]) as usize;
-        if 28 + vlen > p.len() {
+        // Exact consumption: this decoder also reads the small state's
+        // length-delimited meter section, where tolerated trailing
+        // bytes would defeat the store decoders' fail-closed rule.
+        if 28 + vlen != p.len() {
             return Err(SnapshotError::Corrupt("METR version string"));
         }
         let cost_table_version = std::str::from_utf8(&p[28..28 + vlen])
