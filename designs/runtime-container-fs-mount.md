@@ -5,7 +5,65 @@
 | **Created** | 2026-08-10 |
 | **Updated** | 2026-08-10 |
 | **Author** | kumavis (prompted) |
-| **Status** | Proposed |
+| **Status** | **Complete** |
+
+## Status
+
+Implemented on the floot/claude-sandbox pair, same-day with the design:
+
+- `packages/floot/src/container-mounts.js` — the host attach registrar:
+  `normalizeInnerPath` (the `/mnt/` validator), ref-counted attach records
+  keyed by cap identity (daemon formula id) with the session-id sets,
+  persistence in the factory petstore (`floot-container-mounts`), replay on
+  arm, and the three session tools.
+- `packages/floot/agent.js` — wires a per-session kit into the CLI-runtime
+  branch of `getAgent` (tools are discoverable through the MCP bridge and
+  the API tool loop alike), arms it with the resolved client after
+  provisioning, adds `identifyClient` to the client resolver (cap identity
+  for record keying), and releases the session's references on
+  `deleteSession`.
+- `packages/claude-sandbox/src/claude-session-provisioner.js` —
+  `provideContainerMountBridge` / `releaseContainerMountBridge`: resolves
+  the cap by formula id (`lookupById`), projects it as a `Filesystem`
+  (`EndoGit` → `worktree()`; `Mount` → `mountAsFilesystem`; `Filesystem`
+  as-is), 9P-mounts it at a host-picked mountpoint, and registers the
+  daemon `Mount` cap the slice binds. Idempotent per deterministic key, so
+  post-restart replay re-lands on the same host layout.
+- `packages/claude-sandbox/src/claude-client.js` /
+  `claude-client-module.js` — `ClaudeClient.setExtraMounts(extras)`
+  records the runtime bind set; a live slice is disposed and immediately
+  re-minted with `mounts = workspace + config + mcp + extras` (the
+  in-flight turn aborts with a recreate-labelled reason), while an
+  unprovisioned client binds the set on its next lazy provision.
+  `terminate()` additionally unmounts every extra's 9P handle; a mere
+  recreate never touches them (the registrar owns them across recreates).
+- Tests: `packages/floot/test/container-mounts.test.js`,
+  plus bridge and recreate coverage appended to
+  `packages/claude-sandbox/test/claude-session-provisioner.test.js` and
+  `test/claude-client-module.test.js` — idempotent attach, two sessions on
+  one client with last-detach teardown, restart replay, terminate clears
+  all.
+
+Deviations from the sketch:
+
+- The session-guest API landed as the session **tools**
+  (`attachContainerMount` / `detachContainerMount` / `listContainerMounts`)
+  rather than methods on a daemon guest facet — tools are floot's existing
+  session-guest surface, reachable from both runtimes.
+- The `cap` (direct passable) attach variant is deferred: tools speak JSON,
+  so v1 resolves by pet name only; possession is proven by resolving the
+  name through the session guest's own petstore (`identify`).
+- Bridges are per attach record (`clientKey`, `capId`, `innerPath`), not
+  per `capId`; attaching one cap at two inner paths mints two bridges.
+  The per-cap reuse remains an optimization for later.
+- Every attach bridges over 9P — the daemon-mount fast path via
+  `provideHostPath` was deliberately not taken, because a raw host-path
+  bind would bypass the cap's own attenuations (read-only views, denied
+  segments); serving through the cap is what makes "the cap is the policy"
+  true.
+- Attach requires the hosted provisioner (it holds the `fs-mounter` and
+  root-host authority); deployments without it get a clear
+  attach-unavailable error rather than a degraded bridge.
 
 ## Summary
 
@@ -214,14 +272,19 @@ that owns the slice.
 
 ## Implementation phases
 
-1. **Design** — this document (**Proposed**).
+1. **Design** — this document. ✅
 2. **Guest API + validator** — `/mnt/` normalization, cap possession, git
-   worktree resolution, `capId` extraction.
-3. **Registry + ref counting** — shared client safe detach.
-4. **Client recreate path** — immediate dispose/`make` on attach/detach.
-5. **Persistence replay** — formula fields + restart test.
-6. **Tests** — two guests, one client, same cap; git commit visible on host cap;
-   last detach unmounts; terminate clears all.
+   worktree resolution, `capId` extraction. ✅ (session tools + registrar in
+   `packages/floot/src/container-mounts.js`)
+3. **Registry + ref counting** — shared client safe detach. ✅
+4. **Client recreate path** — immediate dispose/`make` on attach/detach. ✅
+   (`ClaudeClient.setExtraMounts`)
+5. **Persistence replay** — attach records in the factory petstore, replayed
+   on arm before the first post-restart turn. ✅
+6. **Tests** — two guests, one client, same cap; last detach unmounts;
+   terminate clears all; restart replay. ✅ (an end-to-end in-container
+   `git commit` against a live daemon remains a live-daemon follow-up,
+   alongside the existing `test:live` suite)
 
 ## Related
 
