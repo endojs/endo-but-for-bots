@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The device-admin policies this receiver declares.
+
+  Kept to exactly what the protocol's action catalog can reach: declaring
+  policies the agent never exercises would widen the authority an operator
+  grants at provisioning time for no benefit.
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <!-- lockNow, setMaximumTimeToLock -->
+        <force-lock />
+        <!-- wipeData -->
+        <wipe-data />
+        <!-- setRequiredPasswordComplexity -->
+        <limit-password />
+        <!-- setCameraDisabled -->
+        <disable-camera />
+        <!-- setScreenCaptureDisabled and other keyguard-adjacent features -->
+        <disable-keyguard-features />
+        <!-- Required to observe password state changes alongside the above -->
+        <watch-login />
+    </uses-policies>
+</device-admin>
