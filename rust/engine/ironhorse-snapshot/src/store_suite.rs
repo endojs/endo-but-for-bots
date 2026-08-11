@@ -113,13 +113,19 @@ enum Resume {
     Eager,
     Lazy,
     LazyAdversarialPrefetch,
-    /// Prefetch everything, then evict every clean page and extent,
-    /// mid-lifecycle — any evict schedule must be observably
-    /// irrelevant (store seam phase 8, the Decision-3 amendment).
+    /// Prefetch everything, then evict every clean page and extent —
+    /// both right after the resume (attach-time rows) and right after
+    /// each checkpoint (rows the session itself just committed and
+    /// cleaned). Any evict schedule must be observably irrelevant
+    /// (store seam phase 8, the Decision-3 amendment), including the
+    /// commit-then-evict-then-refault ordering the phase-8 review
+    /// found unexercised (stale attach-time leaves). The arm asserts
+    /// eviction genuinely happened, so a future guard change cannot
+    /// silently degrade it into a prefetch duplicate.
     LazyAdversarialEvict,
 }
 
-/// Variants 3-5: store-backed sleep/wake between every crank, with the
+/// Variants 3-6: store-backed sleep/wake between every crank, with the
 /// chosen resume mode, against a fresh backend from the caller.
 fn run_store<S: HeapStore + 'static>(
     store: S,
@@ -140,6 +146,7 @@ fn run_store<S: HeapStore + 'static>(
         .map_err(|(_, e)| e)
         .expect("begin session");
 
+    let mut evictions = 0u32;
     for (bytecode, _) in compiled.iter().skip(1) {
         drop(session);
         session = match mode {
@@ -159,11 +166,18 @@ fn run_store<S: HeapStore + 'static>(
                 session.machine().chunks.touch_extent(ext);
             }
             for page in 0..slot_page_count(manifest.slot_count) {
-                session.machine().slots.evict_page(page);
+                evictions += session.machine().slots.evict_page(page) as u32;
             }
             for ext in 0..chunk_extent_count(manifest.chunk_len) {
-                session.machine().chunks.evict_extent(ext);
+                evictions += session.machine().chunks.evict_extent(ext) as u32;
             }
+            // A freshly resumed session is wholly clean, so the evict
+            // sweep must have emptied residency — the arm's premise.
+            assert_eq!(
+                session.machine().slots.resident_page_count(),
+                0,
+                "post-resume evict sweep empties slot residency"
+            );
         }
         if let Resume::LazyAdversarialPrefetch = mode {
             // Touch every page and extent in reverse order — a fault
@@ -181,11 +195,34 @@ fn run_store<S: HeapStore + 'static>(
         results.push(o.result);
         computrons.push(o.computrons);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
+        if let Resume::LazyAdversarialEvict = mode {
+            // Evict AFTER the session's own checkpoint too: the rows
+            // this commit rewrote are clean again — evictable — and
+            // their re-faults must verify against the leaves the
+            // commit refreshed (frozen attach-time leaves would
+            // misdiagnose exactly this healthy re-fault as a corrupt
+            // store — the phase-8 review finding). The final
+            // `write_snapshot` below re-faults everything evicted
+            // here.
+            let manifest = store.borrow().manifest().unwrap();
+            for page in 0..slot_page_count(manifest.slot_count) {
+                evictions += session.machine().slots.evict_page(page) as u32;
+            }
+            for ext in 0..chunk_extent_count(manifest.chunk_len) {
+                evictions += session.machine().chunks.evict_extent(ext) as u32;
+            }
+        }
+    }
+    if let Resume::LazyAdversarialEvict = mode {
+        assert!(
+            evictions > 0,
+            "the adversarial-evict arm must actually evict"
+        );
     }
     (results, computrons, session.machine().write_snapshot(&sig()))
 }
 
-/// Variant 6: one surviving machine, checkpoint after every crank, one
+/// Variant 7: one surviving machine, checkpoint after every crank, one
 /// lazy resume at the end. The resumed machine's blob must equal the
 /// survivor's.
 fn run_checkpoint_every_crank<S: HeapStore + 'static>(
@@ -243,12 +280,13 @@ fn metamorphic<S: HeapStore + 'static>(
     assert_agrees("checkpoint-every-crank", scenario, &baseline, &r, &c, &b);
 }
 
-/// The full six-way metamorphic determinism suite against a backend:
-/// five real-JS scenarios, each executed uninterrupted / blob /
-/// store-eager / store-lazy / adversarial-prefetch /
-/// checkpoint-every-crank, agreeing on per-crank results, final
-/// computrons, and final canonical blob bytes. `fresh` must return an
-/// EMPTY store; it is called once per store-backed variant.
+/// The full seven-way metamorphic determinism suite against a
+/// backend: five real-JS scenarios, each executed uninterrupted /
+/// blob / store-eager / store-lazy / adversarial-prefetch /
+/// adversarial-evict / checkpoint-every-crank, agreeing on per-crank
+/// results, per-crank computrons, and final canonical blob bytes.
+/// `fresh` must return an EMPTY store; it is called once per
+/// store-backed variant.
 ///
 /// Fixtures follow the anchored equal-symbol-set discipline (every
 /// crank of a scenario uses the same program-symbol set).

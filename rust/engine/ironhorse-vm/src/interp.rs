@@ -19384,23 +19384,19 @@ fn string_to_index(s: &str) -> Option<u32> {
 // --- full garbage collection over machine roots and side tables (the
 // GC side-table liveness contract; adversarial-review latent finding).
 impl Interp {
-    /// Collect garbage across the WHOLE machine: arenas plus every
-    /// side table. Roots are the machine registers (stack, frames,
-    /// globals, boot/proto anchors, the strong symbol registry); a
-    /// keyed side-table entry is an EDGE from its object, so dead
-    /// objects drop their entries instead of leaking through them;
-    /// side-table-held chunk offsets (function name chunks,
-    /// ArrayBuffer backing stores, string `Slot`s stored outside the
-    /// arena) participate in compaction liveness and are rewritten
-    /// like arena-resident strings. Deterministic: trace order is
-    /// worklist order from a fixed root sequence, sweep is index
-    /// order.
     /// The machine's complete GC root set (registers, value stack,
-    /// frames, globals, boot/proto anchors, run stacks, the strong
-    /// symbol registry) — the root assembly [`Self::collect_garbage`]
-    /// marks from, exposed so store-side collectors (the phase-6
+    /// frames, globals, boot/proto anchors, run stacks, the completion
+    /// register, the pending microtask queue, in-flight combinator
+    /// state reachable from queued jobs, and the strong symbol
+    /// registry) — the root assembly [`Self::collect_garbage`] marks
+    /// from, exposed so store-side collectors (the phase-6
     /// summary-driven partial collect) can ask "which pages hold
-    /// roots" without re-enumerating machine internals.
+    /// roots" without re-enumerating machine internals. Sorted and
+    /// deduplicated, so the sequence really is fixed: two of the
+    /// sources below are `HashMap`s whose iteration order varies per
+    /// process, and the determinism claim on
+    /// [`Self::collect_garbage`] must hold by construction, not by
+    /// the mark set happening to be order-independent.
     pub fn gc_roots(&self) -> Vec<crate::value::SlotIndex> {
         use crate::value::SlotIndex;
         let mut roots: Vec<SlotIndex> = Vec::new();
@@ -19418,6 +19414,11 @@ impl Interp {
         }
         slot_roots(&self.this_val, &mut roots);
         slot_roots(&self.exception, &mut roots);
+        // The completion register: `run` writes the program's
+        // completion value here and it survives past the crank (the
+        // host reads it at the boundary where collections run), so it
+        // is a root exactly like `this_val`/`exception`.
+        slot_roots(&self.result, &mut roots);
         for f in &self.call_stack {
             for s in &f.locals {
                 slot_roots(s, &mut roots);
@@ -19475,10 +19476,67 @@ impl Interp {
         for f in &self.async_run_stack {
             roots.push(f.inst);
         }
+        // The pending microtask queue: a crank that halts on a throw,
+        // meter exhaustion, or an unsupported opcode leaves jobs
+        // queued across the host boundary where collections run, and
+        // those jobs' captured handler/value slots have no other
+        // reference. A queued reaction's KIND payload is a real edge
+        // too: `AsyncAwait` carries the suspended async instance,
+        // `Combine` will index [`Self::combinators`] at the drain.
+        for j in &self.promise_jobs {
+            match j {
+                PromiseJob::Reaction {
+                    reaction,
+                    value,
+                    rejected: _,
+                } => {
+                    slot_roots(&reaction.on_fulfilled, &mut roots);
+                    slot_roots(&reaction.on_rejected, &mut roots);
+                    slot_roots(&reaction.resolve, &mut roots);
+                    slot_roots(&reaction.reject, &mut roots);
+                    slot_roots(value, &mut roots);
+                    match reaction.kind {
+                        ReactionKind::AsyncAwait(inst) => roots.push(inst),
+                        ReactionKind::Combine(ci, _) => {
+                            if let Some(c) = self.combinators.get(ci as usize) {
+                                roots.push(c.derived);
+                                roots.push(c.results);
+                            }
+                        }
+                        ReactionKind::User | ReactionKind::FinallyReturn => {}
+                    }
+                }
+                PromiseJob::Thenable {
+                    then,
+                    thenable,
+                    resolve,
+                    reject,
+                } => {
+                    slot_roots(then, &mut roots);
+                    slot_roots(thenable, &mut roots);
+                    slot_roots(resolve, &mut roots);
+                    slot_roots(reject, &mut roots);
+                }
+            }
+        }
 
+        // Fix the sequence (see the doc comment): sort + dedup makes
+        // the trace order independent of `HashMap` iteration order.
+        roots.sort_unstable_by_key(|r| r.0);
+        roots.dedup();
         roots
     }
 
+    /// Collect garbage across the WHOLE machine: arenas plus every
+    /// side table. Roots are [`Self::gc_roots`]; a keyed side-table
+    /// entry is an EDGE from its object, so dead objects drop their
+    /// entries instead of leaking through them; side-table-held chunk
+    /// offsets (function name chunks, ArrayBuffer backing stores,
+    /// string `Slot`s stored outside the arena, the interned `typeof`
+    /// strings) participate in compaction liveness and are rewritten
+    /// like arena-resident strings. Deterministic: trace order is
+    /// worklist order from a fixed (sorted) root sequence, sweep is
+    /// index order.
     pub fn collect_garbage(&mut self) -> crate::gc::GcStats {
         use crate::value::{ChunkOffset, SlotIndex};
 
@@ -19503,9 +19561,13 @@ impl Interp {
             args: &'a mut Vec<Slot>,
             this_val: &'a mut Slot,
             exception: &'a mut Slot,
+            result: &'a mut Slot,
             call_stack: &'a mut Vec<CallerState>,
             well_known_symbols: &'a mut Vec<(&'static str, Slot)>,
             proto_value_data: &'a mut Vec<(SlotIndex, &'static str, Slot)>,
+            promise_jobs: &'a mut std::collections::VecDeque<PromiseJob>,
+            combinators: &'a [CombinatorState],
+            static_str: &'a mut StaticStrings,
             swept: Vec<SlotIndex>,
         }
 
@@ -19595,6 +19657,23 @@ impl Interp {
                         r.on_rejected.each_ref_slot(&mut *visit);
                         r.resolve.each_ref_slot(&mut *visit);
                         r.reject.each_ref_slot(&mut *visit);
+                        // A native reaction's real payload rides its
+                        // KIND, not the four handler slots (which it
+                        // leaves unused): an `AsyncAwait` reaction's
+                        // only reference to the suspended async
+                        // instance is here, and a `Combine` reaction
+                        // will index the combinator's derived promise
+                        // and accumulator Array at the drain.
+                        match r.kind {
+                            ReactionKind::AsyncAwait(inst) => visit(inst),
+                            ReactionKind::Combine(ci, _) => {
+                                if let Some(c) = self.combinators.get(ci as usize) {
+                                    visit(c.derived);
+                                    visit(c.results);
+                                }
+                            }
+                            ReactionKind::User | ReactionKind::FinallyReturn => {}
+                        }
                     }
                 }
                 if let Some(g) = self.generators.get(&idx) {
@@ -19616,6 +19695,31 @@ impl Interp {
             }
 
             fn swept(&mut self, idx: SlotIndex) {
+                // Prune the slot-bearing side tables NOW, during the
+                // sweep — before the compaction scan calls
+                // `external_chunk_refs` — so a dead entry's chunks (a
+                // function's name chunk, an ArrayBuffer's backing
+                // store, side-table string `Slot`s) are reclaimed in
+                // THIS collection rather than one collection late,
+                // and `chunk_bytes_after` reports the true live set.
+                self.functions.remove(&idx);
+                self.bound_functions.remove(&idx);
+                self.ctor_prototype.remove(&idx);
+                self.wrapper_data.remove(&idx);
+                self.arrays.remove(&idx);
+                self.collections.remove(&idx);
+                self.array_buffers.remove(&idx);
+                self.typed_arrays.remove(&idx);
+                self.data_views.remove(&idx);
+                self.iterators.remove(&idx);
+                self.promises.remove(&idx);
+                self.generators.remove(&idx);
+                self.async_instances.remove(&idx);
+                self.promise_functions.remove(&idx);
+                // The tables holding no slots or chunks (error data,
+                // regexps, symbol id maps) are pruned after the
+                // collection from this list — late pruning cannot
+                // leak chunk liveness there.
                 self.swept.push(idx);
             }
 
@@ -19678,6 +19782,53 @@ impl Interp {
                 }
                 slot_chunk(self.this_val, visit);
                 slot_chunk(self.exception, visit);
+                // The completion register (a String completion's
+                // offset must survive compaction exactly like a
+                // register-held string).
+                slot_chunk(self.result, visit);
+                // The interned `typeof` strings: eight chunk offsets
+                // held directly by the machine, allocated once at
+                // construction and referenced by every later `typeof`
+                // — never resident in any slot unless a result
+                // happens to be live, so they MUST be enumerated here
+                // or compaction drops and dangles them.
+                visit(&mut self.static_str.undefined);
+                visit(&mut self.static_str.object);
+                visit(&mut self.static_str.boolean);
+                visit(&mut self.static_str.number);
+                visit(&mut self.static_str.string);
+                visit(&mut self.static_str.function);
+                visit(&mut self.static_str.symbol);
+                visit(&mut self.static_str.bigint);
+                // Queued microtask jobs' captured slots (rooted for
+                // marking in `gc_roots`; their string payloads need
+                // the same compaction treatment).
+                for j in self.promise_jobs.iter_mut() {
+                    match j {
+                        PromiseJob::Reaction {
+                            reaction,
+                            value,
+                            rejected: _,
+                        } => {
+                            slot_chunk(&mut reaction.on_fulfilled, visit);
+                            slot_chunk(&mut reaction.on_rejected, visit);
+                            slot_chunk(&mut reaction.resolve, visit);
+                            slot_chunk(&mut reaction.reject, visit);
+                            slot_chunk(value, visit);
+                        }
+                        PromiseJob::Thenable {
+                            then,
+                            thenable,
+                            resolve,
+                            reject,
+                        } => {
+                            slot_chunk(then, visit);
+                            slot_chunk(thenable, visit);
+                            slot_chunk(resolve, visit);
+                            slot_chunk(reject, visit);
+                        }
+                    }
+                }
                 for f in self.call_stack.iter_mut() {
                     for s in &mut f.locals {
                         slot_chunk(s, visit);
@@ -19717,33 +19868,25 @@ impl Interp {
             args: &mut self.args,
             this_val: &mut self.this_val,
             exception: &mut self.exception,
+            result: &mut self.result,
             call_stack: &mut self.call_stack,
             well_known_symbols: &mut self.well_known_symbols,
             proto_value_data: &mut self.proto_value_data,
+            promise_jobs: &mut self.promise_jobs,
+            combinators: &self.combinators,
+            static_str: &mut self.static_str,
             swept: Vec::new(),
         };
         let stats = crate::gc::collect_full(&mut self.slots, &mut self.chunks, &roots, &mut hooks);
         let swept = std::mem::take(&mut hooks.swept);
         drop(hooks);
 
-        // Drop every side-table entry keyed by a reclaimed slot — the
-        // sweep half of the side-table liveness contract.
+        // The slot-bearing side tables were pruned per-slot in the
+        // `swept` hook (so the same collection's compaction sees only
+        // live entries). What remains is the tables holding no slots
+        // or chunks, safe to prune after the fact.
         let dead: std::collections::HashSet<SlotIndex> = swept.into_iter().collect();
-        self.functions.retain(|k, _| !dead.contains(k));
-        self.bound_functions.retain(|k, _| !dead.contains(k));
-        self.ctor_prototype.retain(|k, _| !dead.contains(k));
-        self.wrapper_data.retain(|k, _| !dead.contains(k));
         self.error_data.retain(|k, _| !dead.contains(k));
-        self.arrays.retain(|k, _| !dead.contains(k));
-        self.collections.retain(|k, _| !dead.contains(k));
-        self.array_buffers.retain(|k, _| !dead.contains(k));
-        self.typed_arrays.retain(|k, _| !dead.contains(k));
-        self.data_views.retain(|k, _| !dead.contains(k));
-        self.iterators.retain(|k, _| !dead.contains(k));
-        self.promises.retain(|k, _| !dead.contains(k));
-        self.generators.retain(|k, _| !dead.contains(k));
-        self.async_instances.retain(|k, _| !dead.contains(k));
-        self.promise_functions.retain(|k, _| !dead.contains(k));
         self.regexps.retain(|k, _| !dead.contains(k));
         self.symbol_key_ids.retain(|k, _| !dead.contains(k));
         self.symbol_registry_keys.retain(|k, _| !dead.contains(k));
@@ -19759,12 +19902,14 @@ impl Interp {
     /// order) and drop the side-table entries keyed by them — the
     /// page-granular reclamation the summary-driven partial collector
     /// performs. The caller (the store layer) has proven the pages
-    /// unreachable from the machine's [`Self::gc_roots`] via the
-    /// persisted page-edge summaries; chunk space held by freed
-    /// string slots is reclaimed by the next full
-    /// [`Self::collect_garbage`] (partial collection never compacts).
-    /// Returns the number of slots freed. Freeing never dirties: the
-    /// free list rides small state, exactly like a sweep.
+    /// unreachable from the machine's [`Self::gc_roots`] **plus**
+    /// [`Self::side_table_ref_slots`] via the persisted page-edge
+    /// summaries; chunk space held by freed string slots is reclaimed
+    /// by the next full [`Self::collect_garbage`] (partial collection
+    /// never compacts). Returns the number of slots freed. Freeing
+    /// never dirties: no record byte changes — the reclamation
+    /// travels as free-list state (free-segment rows plus the
+    /// manifest's `free_len`), exactly like a sweep.
     pub fn free_pages(&mut self, pages: &[u32]) -> u32 {
         use crate::value::{SlotIndex, SLOTS_PER_PAGE};
         let mut freed: Vec<SlotIndex> = Vec::new();
@@ -19772,8 +19917,11 @@ impl Interp {
         sorted.sort_unstable();
         sorted.dedup();
         for &page in &sorted {
-            let start = page * SLOTS_PER_PAGE;
-            let end = (start + SLOTS_PER_PAGE).min(self.slots.capacity());
+            // u64 page math: `page * SLOTS_PER_PAGE` would wrap u32 at
+            // the maximal page index, turning an out-of-range page
+            // into a bogus in-range sweep.
+            let start = (page as u64 * SLOTS_PER_PAGE as u64).min(self.slots.capacity() as u64) as u32;
+            let end = ((start as u64 + SLOTS_PER_PAGE as u64).min(self.slots.capacity() as u64)) as u32;
             for i in start..end {
                 let idx = SlotIndex(i);
                 if !self.slots.is_free_index(idx) {
@@ -19802,5 +19950,117 @@ impl Interp {
         self.symbol_key_ids.retain(|k, _| !dead.contains(k));
         self.symbol_registry_keys.retain(|k, _| !dead.contains(k));
         freed.len() as u32
+    }
+
+    /// Every slot index held in a side-table VALUE — the same edge
+    /// set [`Self::collect_garbage`]'s `extra_edges` hook reports,
+    /// but enumerated over every entry regardless of its key's
+    /// liveness. The summary-driven partial collector must root these
+    /// pages: the persisted page-edge summaries carry only ARENA
+    /// edges (`Slot.next` + `Payload::Reference`), so a reference
+    /// held in a Rust-side table — an Array's element map, a Map/Set
+    /// entry, a captured closure record, a bound function's target, a
+    /// suspended generator/async frame, a pending reaction — is
+    /// invisible to the stored graph, and a page reachable only
+    /// through one would otherwise be freed while live (the review's
+    /// unsoundness finding). Treating every side-table value as a
+    /// page root is strictly conservative: an entry whose key is dead
+    /// keeps its values' pages one partial collection longer; the
+    /// full [`Self::collect_garbage`] reclaims exactly.
+    pub fn side_table_ref_slots(&self) -> Vec<crate::value::SlotIndex> {
+        use crate::value::SlotIndex;
+        let mut out: Vec<SlotIndex> = Vec::new();
+        fn slot_refs(s: &Slot, out: &mut Vec<SlotIndex>) {
+            s.each_ref_slot(|e| out.push(e));
+        }
+        fn frame_refs(f: &SavedFrame, out: &mut Vec<SlotIndex>) {
+            for s in &f.locals {
+                slot_refs(s, out);
+            }
+            for s in &f.args {
+                slot_refs(s, out);
+            }
+            for s in &f.stack_slice {
+                slot_refs(s, out);
+            }
+            slot_refs(&f.this_val, out);
+            slot_refs(&f.result, out);
+            out.push(f.cur_func);
+        }
+        for f in self.functions.values() {
+            out.push(f.closures);
+        }
+        for b in self.bound_functions.values() {
+            out.push(b.target);
+            slot_refs(&b.this_arg, &mut out);
+            for s in &b.args {
+                slot_refs(s, &mut out);
+            }
+        }
+        for p in self.ctor_prototype.values() {
+            out.push(*p);
+        }
+        for s in self.wrapper_data.values() {
+            slot_refs(s, &mut out);
+        }
+        for a in self.arrays.values() {
+            for s in a.items.values() {
+                slot_refs(s, &mut out);
+            }
+        }
+        for c in self.collections.values() {
+            for (k, v) in &c.entries {
+                slot_refs(k, &mut out);
+                slot_refs(v, &mut out);
+            }
+        }
+        for t in self.typed_arrays.values() {
+            out.push(t.buffer);
+        }
+        for d in self.data_views.values() {
+            out.push(d.buffer);
+        }
+        for i in self.iterators.values() {
+            out.push(i.iterable);
+            out.push(i.result);
+        }
+        for p in self.promises.values() {
+            slot_refs(&p.result, &mut out);
+            for r in &p.reactions {
+                slot_refs(&r.on_fulfilled, &mut out);
+                slot_refs(&r.on_rejected, &mut out);
+                slot_refs(&r.resolve, &mut out);
+                slot_refs(&r.reject, &mut out);
+                match r.kind {
+                    ReactionKind::AsyncAwait(inst) => out.push(inst),
+                    ReactionKind::Combine(ci, _) => {
+                        if let Some(c) = self.combinators.get(ci as usize) {
+                            out.push(c.derived);
+                            out.push(c.results);
+                        }
+                    }
+                    ReactionKind::User | ReactionKind::FinallyReturn => {}
+                }
+            }
+        }
+        for g in self.generators.values() {
+            if let Some(f) = &g.frame {
+                frame_refs(f, &mut out);
+            }
+        }
+        for a in self.async_instances.values() {
+            out.push(a.result_promise);
+            slot_refs(&a.resolve_fn, &mut out);
+            slot_refs(&a.reject_fn, &mut out);
+            if let Some(f) = &a.frame {
+                frame_refs(f, &mut out);
+            }
+        }
+        for p in self.promise_functions.values() {
+            out.push(p.promise);
+        }
+        out.sort_unstable_by_key(|r| r.0);
+        out.dedup();
+        out
     }
 }

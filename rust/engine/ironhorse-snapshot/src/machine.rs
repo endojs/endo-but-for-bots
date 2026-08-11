@@ -268,6 +268,16 @@ pub fn resume_from_cas(
 struct LazyPin {
     epoch: std::cell::Cell<u64>,
     seal: std::cell::RefCell<String>,
+    /// The verified row-leaf hashes every fault checks its row
+    /// against. Seeded from `validate_store` at attach and REFRESHED
+    /// by the session's own successful checkpoints (alongside the
+    /// epoch/seal advance): a checkpoint rewrites dirty rows in the
+    /// store, and phase 8's eviction means a rewritten-then-clean row
+    /// CAN fault again — against the committed bytes, which only the
+    /// refreshed leaves match. Frozen attach-time leaves would
+    /// misdiagnose that healthy re-fault as a corrupt store (the
+    /// review's eviction finding).
+    leaves: std::cell::RefCell<StoreLeaves>,
     /// Address of the pinned store's data (the `S` inside the
     /// `Rc<RefCell<S>>` the page source reads through). The session
     /// advances the pin after a commit only when the committed store
@@ -469,8 +479,12 @@ pub fn checkpoint_to_store(
     // Free-list segments (phase 9): diff against the stored segment
     // leaves so only CHANGED segments travel — LIFO churn touches the
     // tail segment, making per-commit free bytes O(1) in heap size.
+    // A backend error propagates like the row-leaf read below —
+    // swallowing it into "no prior leaves" would still seal a correct
+    // root (every segment would travel), but a store that cannot
+    // answer metadata queries has no business absorbing a commit.
     let free_all = crate::store::encode_all_free_segs(interp.slots.free_list());
-    let prior_frees = store.free_leaf_hashes().unwrap_or_default();
+    let prior_frees = store.free_leaf_hashes()?;
     let free_segs: Vec<(u32, Vec<u8>)> = free_all
         .into_iter()
         .filter(|(i, bytes)| {
@@ -537,6 +551,22 @@ pub fn checkpoint_to_store(
         if committed.cast::<()>() == pin.store_addr {
             pin.epoch.set(epoch);
             *pin.seal.borrow_mut() = seal;
+            // The pinned store's rows just changed; the leaves every
+            // future fault verifies against must follow (phase 8: a
+            // committed-then-clean row is evictable, so it CAN fault
+            // again — and must verify against the bytes this commit
+            // wrote, not the attach-time ones).
+            *pin.leaves.borrow_mut() = StoreLeaves {
+                pages: leaf_pages,
+                exts: leaf_exts,
+                frees: leaf_frees,
+            };
+            // And the arenas' lazy backing advances to the committed
+            // geometry: rows appended past the attach-time range are
+            // now store-backed (evictable, re-faultable), and the
+            // tail row's expected fault length is the committed one.
+            session.interp.slots.advance_backing();
+            session.interp.chunks.advance_backing();
         }
     }
     Ok(epoch)
@@ -586,18 +616,15 @@ pub fn resume_from_store(
 /// message — the deterministic crashed-crank path.
 struct StorePageSource<S: HeapStore> {
     store: std::rc::Rc<std::cell::RefCell<S>>,
-    /// The row-leaf hashes verified against the sealed root at open
-    /// (phase 5). Every fault checks its row against these, so a
-    /// length-preserving flip at rest dies as a named crashed crank,
-    /// never a different machine. Attach-time leaves stay valid for
-    /// every faultable row: the session's own commits touch only
-    /// dirty rows, and dirty ⇒ resident means those never fault.
-    leaves: StoreLeaves,
-    /// The (epoch, seal) the machine's session currently stands at.
-    /// Every fault re-verifies it, so a store advanced by anyone else
-    /// turns torn reads into a deterministic named crashed crank
-    /// instead of a chimera heap (the review's two-lazy-machines
-    /// finding); the session advances the pin on its own commits.
+    /// The (epoch, seal, row leaves) the machine's session currently
+    /// stands at. Every fault re-verifies the pin, so a store
+    /// advanced by anyone else turns torn reads into a deterministic
+    /// named crashed crank instead of a chimera heap (the review's
+    /// two-lazy-machines finding), and checks its row against the
+    /// pinned leaves, so a length-preserving flip at rest dies as a
+    /// named crashed crank, never a different machine. The session
+    /// advances all three on its own commits — see
+    /// [`LazyPin::leaves`] for why the leaves must advance too.
     pin: std::rc::Rc<LazyPin>,
 }
 
@@ -627,7 +654,7 @@ impl<S: HeapStore> ironhorse_vm::PageSource for StorePageSource<S> {
             .borrow()
             .read_slot_page(page)
             .unwrap_or_else(|e| panic!("lazy heap fault: slot page {page}: {e:?}"));
-        if self.leaves.pages.get(page as usize).copied()
+        if self.pin.leaves.borrow().pages.get(page as usize).copied()
             != Some(leaf_hash(LEAF_PAGE, page, &bytes))
         {
             panic!("lazy heap fault: slot page {page} fails its leaf hash (corrupt store)");
@@ -649,7 +676,8 @@ impl<S: HeapStore> ironhorse_vm::PageSource for StorePageSource<S> {
             .borrow()
             .read_chunk_extent(ext)
             .unwrap_or_else(|e| panic!("lazy heap fault: chunk extent {ext}: {e:?}"));
-        if self.leaves.exts.get(ext as usize).copied() != Some(leaf_hash(LEAF_EXT, ext, &bytes))
+        if self.pin.leaves.borrow().exts.get(ext as usize).copied()
+            != Some(leaf_hash(LEAF_EXT, ext, &bytes))
         {
             panic!("lazy heap fault: chunk extent {ext} fails its leaf hash (corrupt store)");
         }
@@ -696,6 +724,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     let pin = std::rc::Rc::new(LazyPin {
         epoch: std::cell::Cell::new(manifest.epoch),
         seal: std::cell::RefCell::new(manifest.seal.clone()),
+        leaves: std::cell::RefCell::new(leaves),
         // `RefCell::as_ptr` addresses the `S` itself — the same address
         // a later `&mut *store.borrow_mut()` coerced to
         // `&mut dyn HeapStore` carries into [`checkpoint_to_store`].
@@ -703,7 +732,6 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     });
     let source = std::rc::Rc::new(StorePageSource {
         store: store.clone(),
-        leaves,
         pin: pin.clone(),
     });
     let slots = ironhorse_vm::SlotArena::lazy_from_parts(
@@ -894,24 +922,39 @@ mod tests {
 }
 
 /// **Summary-driven partial collection** (store seam phase 6): free
-/// every page unreachable from the machine's GC roots, deciding
-/// reachability ENTIRELY from the store's persisted page-edge
-/// summaries — zero row-content reads, no full-heap reification.
+/// every page unreachable from the machine's GC roots and side-table
+/// references, deciding arena reachability ENTIRELY from the store's
+/// persisted page-edge summaries — zero row-content reads, no
+/// full-heap reification.
 ///
-/// Page-conservative by design: garbage co-resident with live data in
-/// a reachable page survives (the release-fixed full
-/// [`ironhorse_vm::Interp::collect_garbage`] reclaims it, and only it
-/// compacts chunk space). Deterministic: a pure function of store
-/// content and machine roots.
+/// The root set is [`ironhorse_vm::Interp::gc_roots`] **plus**
+/// [`ironhorse_vm::Interp::side_table_ref_slots`]: the stored
+/// summaries carry only arena edges, so every side-table-held
+/// reference (an Array's elements, a Map entry, a captured closure
+/// record, a suspended frame) roots its page directly — the
+/// page-granular equivalent of the full collector's `extra_edges`
+/// hook. Without it, an object reachable only through a side table
+/// would be freed while live (the review's unsoundness finding).
+///
+/// Page-conservative by design, twice over: garbage co-resident with
+/// live data in a reachable page survives, and a side-table entry
+/// whose key is dead still roots its values' pages until the full
+/// [`ironhorse_vm::Interp::collect_garbage`] reclaims exactly (only
+/// it compacts chunk space). Deterministic: a pure function of store
+/// content and machine state — which also means the *schedule* of
+/// partial collections is part of a replica's decision sequence,
+/// exactly like the full collector's (it rewrites the free list, so
+/// a replica that collects and one that does not diverge in
+/// subsequent allocation order).
 ///
 /// Contract: call at a checkpoint boundary while the session has no
 /// dirty rows — the summaries describe the committed state, and dirt
 /// would make them stale. A dirty machine panics with a named message
 /// (a caller bug, like the fault contract).
 ///
-/// Returns the number of slots freed. Freeing never dirties (the free
-/// list rides small state), so the next checkpoint carries the
-/// reclamation in small state alone.
+/// Returns the number of slots freed. Freeing never dirties (no
+/// record byte changes), so the next checkpoint carries the
+/// reclamation as free-list state alone.
 pub fn partial_collect(
     session: &mut StoreSession,
     store: &dyn HeapStore,
@@ -928,14 +971,30 @@ pub fn partial_collect(
             found: manifest.seal,
         });
     }
+    let total = slot_page_count(manifest.slot_count);
+    // Refuse a summary vector that disagrees with the geometry BEFORE
+    // deciding anything from it: `reachable_pages` treats an absent
+    // entry as "no outgoing edges", so a truncated store would read
+    // as maximal garbage and free live pages.
+    let found = store.page_edges()?.len() as u32;
+    if found != total {
+        return Err(StoreError::SummaryCount {
+            expected: total,
+            found,
+        });
+    }
     let mut root_pages: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
     for r in interp.gc_roots() {
         if !r.is_null() {
             root_pages.insert(r.0 / crate::store::SLOTS_PER_PAGE);
         }
     }
+    for r in interp.side_table_ref_slots() {
+        if !r.is_null() {
+            root_pages.insert(r.0 / crate::store::SLOTS_PER_PAGE);
+        }
+    }
     let reached = crate::store::reachable_pages(store, root_pages)?;
-    let total = slot_page_count(manifest.slot_count);
     let dead: Vec<u32> = (0..total).filter(|p| !reached.contains(p)).collect();
     Ok(session.machine_mut().free_pages(&dead))
 }
