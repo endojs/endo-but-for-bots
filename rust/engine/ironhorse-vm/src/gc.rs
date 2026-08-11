@@ -168,6 +168,53 @@ pub fn collect_full(
 }
 
 #[cfg(test)]
+mod incremental_compaction_tests {
+    use super::*;
+    use crate::value::{Kind, Payload, Slot, CHUNK_EXTENT_BYTES};
+
+    /// Store seam phase 7 bar: post-compaction checkpoint I/O is
+    /// proportional to what MOVED. An already-compact space (every
+    /// chunk live, no gaps) compacts to identical bytes and leaves
+    /// every extent clean; tail garbage dirties only the shrunk tail.
+    #[test]
+    fn compaction_dirties_only_moved_extents() {
+        let mut h = Heap::new();
+        let per = CHUNK_EXTENT_BYTES as usize;
+        // Fill ~2.5 extents with live chunks.
+        let mut roots = Vec::new();
+        while h.chunks.byte_size() < per * 5 / 2 {
+            let off = h.chunks.alloc(&vec![7u8; 1000]);
+            roots.push(h.slots.alloc(Slot::of(Kind::String, Payload::String(off))));
+        }
+        h.slots.clear_dirty();
+        h.chunks.clear_dirty();
+
+        // Everything live: compaction moves nothing, so nothing is
+        // newly dirty.
+        let stats = h.collect(&roots.clone());
+        assert_eq!(stats.chunk_bytes_before, stats.chunk_bytes_after);
+        assert!(
+            h.chunks.dirty_extents().is_empty(),
+            "no-movement compaction stays clean, got {:?}",
+            h.chunks.dirty_extents()
+        );
+
+        // Tail garbage: drop the last root; only the tail region
+        // changes, and the leading extents stay clean.
+        h.slots.clear_dirty();
+        h.chunks.clear_dirty();
+        let dropped = roots.pop().unwrap();
+        h.slots.free(dropped);
+        h.collect(&roots);
+        let dirty = h.chunks.dirty_extents();
+        assert!(
+            !dirty.contains(&0),
+            "leading extent unchanged by tail-only compaction: {dirty:?}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::value::{Kind, Payload, Slot};
