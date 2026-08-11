@@ -66,7 +66,7 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// [`crate::format::IRONHORSE_FORMAT_VERSION`] (which governs the record
 /// encodings both containers share). Bumped on any change to the page
 /// geometry, the manifest layout, or the small-state layout.
-pub const STORE_SCHEMA_VERSION: u32 = 3;
+pub const STORE_SCHEMA_VERSION: u32 = 4;
 
 /// A store that cannot be used, or an operation on it that failed.
 /// Gate failures reuse the [`SnapshotError`] taxonomy so a foreign or
@@ -140,6 +140,10 @@ pub struct StoreManifest {
     pub slot_live: u32,
     /// Chunk-arena byte length. May shrink across a GC compaction.
     pub chunk_len: u64,
+    /// Total free-list entries (store seam phase 9): the free list
+    /// lives in dirty-diffed segment rows, and this is their geometry
+    /// the same way `slot_count` is the pages'.
+    pub free_len: u32,
     /// The checkpoint generation. 0 never appears in a committed
     /// manifest; the first commit is epoch 1.
     pub epoch: u64,
@@ -208,6 +212,7 @@ impl StoreManifest {
         v.extend_from_slice(&self.slot_count.to_be_bytes());
         v.extend_from_slice(&self.slot_live.to_be_bytes());
         v.extend_from_slice(&self.chunk_len.to_be_bytes());
+        v.extend_from_slice(&self.free_len.to_be_bytes());
         v.extend_from_slice(&self.epoch.to_be_bytes());
         let rb = self.root.as_bytes();
         v.extend_from_slice(&(rb.len() as u32).to_be_bytes());
@@ -275,6 +280,7 @@ impl StoreManifest {
         let slot_count = u32::from_be_bytes(take4(&mut i)?);
         let slot_live = u32::from_be_bytes(take4(&mut i)?);
         let chunk_len = u64::from_be_bytes(take8(&mut i)?);
+        let free_len = u32::from_be_bytes(take4(&mut i)?);
         let epoch = u64::from_be_bytes(take8(&mut i)?);
         let root_len = u32::from_be_bytes(take4(&mut i)?) as usize;
         if i + root_len > p.len() {
@@ -312,6 +318,7 @@ impl StoreManifest {
             slot_count,
             slot_live,
             chunk_len,
+            free_len,
             epoch,
             root,
             seal,
@@ -330,6 +337,7 @@ pub fn seal_commit(
     small: &[u8],
     slot_pages: &[(u32, Vec<u8>)],
     chunk_extents: &[(u32, Vec<u8>)],
+    free_segs: &[(u32, Vec<u8>)],
     page_edges: &[(u32, Vec<u32>)],
 ) -> String {
     let mut h = crate::sha256::Sha256::new();
@@ -351,6 +359,11 @@ pub fn seal_commit(
     }
     for (i, bytes) in chunk_extents {
         h.update(b"X");
+        h.update(&i.to_be_bytes());
+        h.update(bytes);
+    }
+    for (i, bytes) in free_segs {
+        h.update(b"F");
         h.update(&i.to_be_bytes());
         h.update(bytes);
     }
@@ -423,15 +436,56 @@ pub fn reseal_batch(batch: &mut CheckpointBatch) {
         &batch.small,
         &batch.slot_pages,
         &batch.chunk_extents,
+        &batch.free_segs,
         &batch.page_edges,
     );
 }
 
 /// Row-leaf domain tags for the [`leaf_hash`] tree: slot page, chunk
-/// extent, small state.
+/// extent, free-list segment, small state.
 pub const LEAF_PAGE: u8 = b'P';
 pub const LEAF_EXT: u8 = b'X';
+pub const LEAF_FREE: u8 = b'F';
 pub const LEAF_SMALL: u8 = b'S';
+
+/// Free-list entries per stored segment (store seam phase 9): the
+/// free list leaves small state and becomes dirty-diffed segment rows,
+/// so LIFO churn rewrites only the tail segment and per-commit
+/// small-state bytes are O(1) in heap size.
+pub const FREE_SEG_ENTRIES: u32 = 4096;
+
+/// Segments a `free_len`-entry free list occupies.
+pub fn free_seg_count(free_len: u32) -> u32 {
+    free_len.div_ceil(FREE_SEG_ENTRIES)
+}
+
+/// Entry count of segment `seg` under `free_len`.
+pub fn free_seg_len(free_len: u32, seg: u32) -> usize {
+    let start = (seg as u64) * (FREE_SEG_ENTRIES as u64);
+    let end = ((seg as u64) + 1) * (FREE_SEG_ENTRIES as u64);
+    ((free_len as u64).min(end).saturating_sub(start)) as usize
+}
+
+/// Encode one free-list segment (big-endian u32 entries).
+pub fn encode_free_seg(entries: &[u32]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(entries.len() * 4);
+    for e in entries {
+        v.extend_from_slice(&e.to_be_bytes());
+    }
+    v
+}
+
+/// Split a full free list into `(segment index, encoded bytes)` rows.
+pub fn encode_all_free_segs(free: &[u32]) -> Vec<(u32, Vec<u8>)> {
+    let n = free_seg_count(free.len() as u32);
+    (0..n)
+        .map(|seg| {
+            let start = (seg * FREE_SEG_ENTRIES) as usize;
+            let end = free.len().min(start + FREE_SEG_ENTRIES as usize);
+            (seg, encode_free_seg(&free[start..end]))
+        })
+        .collect()
+}
 
 /// One leaf of the row-hash tree: SHA-256 over the domain tag, the
 /// big-endian row index, and the row's exact stored bytes.
@@ -448,13 +502,21 @@ pub fn leaf_hash(kind: u8, index: u32, bytes: &[u8]) -> [u8; 32] {
 /// leaves are 32 bytes each, so recombining is metadata-scale even for
 /// large heaps; an interior tree is the named upgrade if leaf counts
 /// ever make this measurable.
-pub fn combine_root(small_leaf: &[u8; 32], pages: &[[u8; 32]], exts: &[[u8; 32]]) -> String {
+pub fn combine_root(
+    small_leaf: &[u8; 32],
+    pages: &[[u8; 32]],
+    exts: &[[u8; 32]],
+    frees: &[[u8; 32]],
+) -> String {
     let mut h = crate::sha256::Sha256::new();
     h.update(small_leaf);
     for l in pages {
         h.update(l);
     }
     for l in exts {
+        h.update(l);
+    }
+    for l in frees {
         h.update(l);
     }
     crate::sha256::hex(&h.finalize())
@@ -470,12 +532,15 @@ pub fn combine_root(small_leaf: &[u8; 32], pages: &[[u8; 32]], exts: &[[u8; 32]]
 pub fn apply_batch_leaves(
     pages: &mut Vec<[u8; 32]>,
     exts: &mut Vec<[u8; 32]>,
+    frees: &mut Vec<[u8; 32]>,
     batch: &CheckpointBatch,
 ) -> Result<String, StoreError> {
     let n_pages = slot_page_count(batch.manifest.slot_count) as usize;
     let n_exts = chunk_extent_count(batch.manifest.chunk_len) as usize;
+    let n_frees = free_seg_count(batch.manifest.free_len) as usize;
     pages.resize(n_pages, [0u8; 32]);
     exts.resize(n_exts, [0u8; 32]);
+    frees.resize(n_frees, [0u8; 32]);
     for (i, bytes) in &batch.slot_pages {
         let slot = pages
             .get_mut(*i as usize)
@@ -488,8 +553,14 @@ pub fn apply_batch_leaves(
             .ok_or(StoreError::MissingRow("chunk extent", *i))?;
         *slot = leaf_hash(LEAF_EXT, *i, bytes);
     }
+    for (i, bytes) in &batch.free_segs {
+        let slot = frees
+            .get_mut(*i as usize)
+            .ok_or(StoreError::MissingRow("free segment", *i))?;
+        *slot = leaf_hash(LEAF_FREE, *i, bytes);
+    }
     let small_leaf = leaf_hash(LEAF_SMALL, 0, &batch.small);
-    let root = combine_root(&small_leaf, pages, exts);
+    let root = combine_root(&small_leaf, pages, exts, frees);
     if root != batch.manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: root,
@@ -515,10 +586,15 @@ pub struct SmallState {
 impl SmallState {
     /// Serialize: six sections, each `u32` length-prefixed, in the
     /// fixed order stack, free list, keys, names, symbols, meter.
+    /// Since store schema v4 the free-list section is always EMPTY in
+    /// stored small state — the list lives in dirty-diffed segment
+    /// rows (phase 9) — but the section slot stays so the layout is
+    /// stable; the atom container path still carries the list via the
+    /// image, not this encoding.
     pub fn encode(&self) -> Vec<u8> {
         let sections: [Vec<u8>; 6] = [
             encode_stack(&self.stack),
-            encode_u32s(&self.slot_free),
+            encode_u32s(&[]),
             encode_strings(&self.keys),
             encode_strings(&self.names),
             encode_u32s(&self.symbols),
@@ -593,6 +669,10 @@ pub struct CheckpointBatch {
     pub slot_pages: Vec<(u32, Vec<u8>)>,
     /// `(extent index, raw bytes)` for each dirty chunk extent.
     pub chunk_extents: Vec<(u32, Vec<u8>)>,
+    /// `(segment index, encoded entries)` for each dirty free-list
+    /// segment (store seam phase 9). Dirty-diffed at checkpoint via
+    /// the leaf tree, so LIFO churn carries only the tail segment.
+    pub free_segs: Vec<(u32, Vec<u8>)>,
     /// `(page index, sorted outgoing page targets)` for each dirty
     /// slot page — the **persisted page-edge summaries** (phase 6):
     /// which pages this page's records reference. Derived purely from
@@ -635,6 +715,10 @@ pub trait HeapStore {
     /// validation recombines them against the manifest root, and the
     /// fault path verifies each row read against its leaf.
     fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError>;
+    /// The raw bytes of free-list segment `seg` (phase 9).
+    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError>;
+    /// The stored free-segment leaf hashes, index-ordered (phase 9).
+    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError>;
     /// The stored page-edge summaries, index-ordered (phase 6): one
     /// sorted target list per slot page. Metadata-scale; maintained by
     /// `commit` from the batch's `page_edges`.
@@ -672,6 +756,7 @@ pub fn check_succession(
         &batch.small,
         &batch.slot_pages,
         &batch.chunk_extents,
+        &batch.free_segs,
         &batch.page_edges,
     );
     if batch.manifest.seal != recomputed {
@@ -760,6 +845,7 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         slot_count: image.slots.len() as u32,
         slot_live: image.slot_live,
         chunk_len: image.chunks.len() as u64,
+        free_len: image.slot_free.len() as u32,
         epoch,
         root: String::new(),
         seal: String::new(),
@@ -775,6 +861,7 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
     let small_bytes = small.encode();
     let slot_pages = encode_all_slot_pages(&image.slots);
     let chunk_extents = encode_all_chunk_extents(&image.chunks);
+    let free_segs = encode_all_free_segs(&image.slot_free);
     let page_edges: Vec<(u32, Vec<u32>)> = (0..slot_page_count(manifest.slot_count))
         .map(|page| {
             let start = (page * SLOTS_PER_PAGE) as usize;
@@ -792,13 +879,18 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         .iter()
         .map(|(i, b)| leaf_hash(LEAF_EXT, *i, b))
         .collect();
-    manifest.root = combine_root(&leaf_hash(LEAF_SMALL, 0, &small_bytes), &pages, &exts);
+    let frees: Vec<[u8; 32]> = free_segs
+        .iter()
+        .map(|(i, b)| leaf_hash(LEAF_FREE, *i, b))
+        .collect();
+    manifest.root = combine_root(&leaf_hash(LEAF_SMALL, 0, &small_bytes), &pages, &exts, &frees);
     manifest.seal = seal_commit(
         prev_seal,
         &manifest,
         &small_bytes,
         &slot_pages,
         &chunk_extents,
+        &free_segs,
         &page_edges,
     );
     CheckpointBatch {
@@ -807,6 +899,7 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         small: small_bytes,
         slot_pages,
         chunk_extents,
+        free_segs,
         page_edges,
     }
 }
@@ -817,7 +910,7 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
 pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError> {
     let manifest = store.manifest()?;
     let small_bytes = store.read_small_state()?;
-    let small = SmallState::decode(&small_bytes)?;
+    let mut small = SmallState::decode(&small_bytes)?;
     if manifest.cost_gate_mismatch(&small) {
         return Err(StoreError::Snapshot(SnapshotError::CostTableMismatch {
             expected: COST_TABLE_VERSION.to_string(),
@@ -880,13 +973,38 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         chunks.extend_from_slice(&bytes);
     }
 
+    let free_leaves = store.free_leaf_hashes()?;
+    let mut slot_free: Vec<u32> = Vec::with_capacity((manifest.free_len as usize).min(1 << 16));
+    for seg in 0..free_seg_count(manifest.free_len) {
+        let bytes = store.read_free_seg(seg)?;
+        let expected = free_seg_len(manifest.free_len, seg) * 4;
+        if bytes.len() != expected {
+            return Err(StoreError::RowLength {
+                kind: "free segment",
+                index: seg,
+                expected,
+                found: bytes.len(),
+            });
+        }
+        if free_leaves.get(seg as usize).copied() != Some(leaf_hash(LEAF_FREE, seg, &bytes)) {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store free segment fails its leaf hash",
+            )));
+        }
+        slot_free.extend(
+            bytes
+                .chunks_exact(4)
+                .map(|c| u32::from_be_bytes(c.try_into().unwrap())),
+        );
+    }
+
     Ok(MachineImage {
         version: manifest.version,
         signature: manifest.signature,
         creation: manifest.creation,
         chunks,
         slots,
-        slot_free: small.slot_free,
+        slot_free,
         slot_live: manifest.slot_live,
         stack: small.stack,
         keys: small.keys,
@@ -919,6 +1037,7 @@ impl StoreManifest {
 pub struct StoreLeaves {
     pub pages: Vec<[u8; 32]>,
     pub exts: Vec<[u8; 32]>,
+    pub frees: Vec<[u8; 32]>,
 }
 
 pub fn validate_store(
@@ -949,7 +1068,7 @@ pub fn validate_store(
     }
 
     let small_bytes = store.read_small_state()?;
-    let small = SmallState::decode(&small_bytes)?;
+    let mut small = SmallState::decode(&small_bytes)?;
     if manifest.cost_gate_mismatch(&small) {
         return Err(StoreError::Snapshot(SnapshotError::CostTableMismatch {
             expected: COST_TABLE_VERSION.to_string(),
@@ -957,30 +1076,13 @@ pub fn validate_store(
         }));
     }
 
-    // Accounting: every record is live or on the free list, and every
-    // free index addresses a record.
-    let free_len = small.slot_free.len() as u64;
-    if free_len + manifest.slot_live as u64 != manifest.slot_count as u64 {
+    // Accounting: every record is live or on the free list. The count
+    // side uses the manifest's free_len (the list itself is segment
+    // rows, reassembled below, where the per-entry checks run).
+    if manifest.free_len as u64 + manifest.slot_live as u64 != manifest.slot_count as u64 {
         return Err(StoreError::Snapshot(SnapshotError::Corrupt(
             "store live/free/count accounting mismatch",
         )));
-    }
-    if small.slot_free.iter().any(|&f| f >= manifest.slot_count) {
-        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-            "store free-list index out of range",
-        )));
-    }
-    // Distinctness: a duplicated free index passes the sum check but
-    // aliases one record to two allocations after resume (the
-    // adversarial-review aliasing finding). With distinctness, the sum
-    // check makes the live/free partition exact.
-    {
-        let mut seen = std::collections::HashSet::with_capacity(small.slot_free.len());
-        if !small.slot_free.iter().all(|f| seen.insert(*f)) {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store free-list contains duplicate indices",
-            )));
-        }
     }
 
     // Row inventory: every promised row exists at its exact length —
@@ -1023,14 +1125,21 @@ pub fn validate_store(
     // CONTENT is then verified against these leaves at the point of
     // read (eager reify or lazy fault), so a length-preserving flip at
     // rest can never resume a different machine.
-    let (leaf_pages, leaf_exts) = store.leaf_hashes()?;
-    if leaf_pages.len() != n_pages as usize || leaf_exts.len() != n_exts as usize {
+    let (leaf_pages, leaf_exts, leaf_frees) = {
+        let (p, e) = store.leaf_hashes()?;
+        (p, e, store.free_leaf_hashes()?)
+    };
+    let n_frees = free_seg_count(manifest.free_len);
+    if leaf_pages.len() != n_pages as usize
+        || leaf_exts.len() != n_exts as usize
+        || leaf_frees.len() != n_frees as usize
+    {
         return Err(StoreError::Snapshot(SnapshotError::Corrupt(
             "store leaf-hash inventory disagrees with geometry",
         )));
     }
     let small_leaf = leaf_hash(LEAF_SMALL, 0, &small_bytes);
-    let root = combine_root(&small_leaf, &leaf_pages, &leaf_exts);
+    let root = combine_root(&small_leaf, &leaf_pages, &leaf_exts, &leaf_frees);
     if root != manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: root,
@@ -1038,12 +1147,58 @@ pub fn validate_store(
         });
     }
 
+    // Reassemble the free list from its segment rows (phase 9), each
+    // verified against its leaf; the accounting checks above already
+    // ran against this list.
+    let mut free: Vec<u32> = Vec::with_capacity((manifest.free_len as usize).min(1 << 16));
+    for seg in 0..n_frees {
+        let bytes = store.read_free_seg(seg)?;
+        let expected = free_seg_len(manifest.free_len, seg) * 4;
+        if bytes.len() != expected {
+            return Err(StoreError::RowLength {
+                kind: "free segment",
+                index: seg,
+                expected,
+                found: bytes.len(),
+            });
+        }
+        if leaf_frees.get(seg as usize).copied() != Some(leaf_hash(LEAF_FREE, seg, &bytes)) {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store free segment fails its leaf hash",
+            )));
+        }
+        free.extend(
+            bytes
+                .chunks_exact(4)
+                .map(|c| u32::from_be_bytes(c.try_into().unwrap())),
+        );
+    }
+    if free.iter().any(|&f| f >= manifest.slot_count) {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "store free-list index out of range",
+        )));
+    }
+    // Distinctness: a duplicated free index passes the sum check but
+    // aliases one record to two allocations after resume (the
+    // adversarial-review aliasing finding). With distinctness, the sum
+    // check makes the live/free partition exact.
+    {
+        let mut seen = std::collections::HashSet::with_capacity(free.len());
+        if !free.iter().all(|f| seen.insert(*f)) {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store free-list contains duplicate indices",
+            )));
+        }
+    }
+    small.slot_free = free;
+
     Ok((
         manifest,
         small,
         StoreLeaves {
             pages: leaf_pages,
             exts: leaf_exts,
+            frees: leaf_frees,
         },
     ))
 }
@@ -1105,6 +1260,8 @@ pub struct MemoryStore {
     chunk_extents: std::collections::HashMap<u32, Vec<u8>>,
     leaf_pages: Vec<[u8; 32]>,
     leaf_exts: Vec<[u8; 32]>,
+    leaf_frees: Vec<[u8; 32]>,
+    free_segs: std::collections::HashMap<u32, Vec<u8>>,
     edges: Vec<Vec<u32>>,
     last_commit: CommitStats,
 }
@@ -1183,6 +1340,20 @@ impl HeapStore for MemoryStore {
         Ok(self.edges.clone())
     }
 
+    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+        self.free_segs
+            .get(&seg)
+            .cloned()
+            .ok_or(StoreError::MissingRow("free segment", seg))
+    }
+
+    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
+        if self.manifest.is_none() {
+            return Err(StoreError::Empty);
+        }
+        Ok(self.leaf_frees.clone())
+    }
+
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
         check_succession(self.manifest.as_ref(), batch)?;
         // A grown geometry's new rows must be in the batch. Prior rows
@@ -1207,12 +1378,21 @@ impl HeapStore for MemoryStore {
                 return Err(StoreError::MissingRow("chunk extent", ext));
             }
         }
+        let prior_frees = self.manifest.as_ref().map_or(0, |m| free_seg_count(m.free_len));
+        let batch_frees: std::collections::HashSet<u32> =
+            batch.free_segs.iter().map(|(f, _)| *f).collect();
+        for seg in prior_frees..free_seg_count(batch.manifest.free_len) {
+            if !batch_frees.contains(&seg) {
+                return Err(StoreError::MissingRow("free segment", seg));
+            }
+        }
         // Leaf maintenance + root verification BEFORE persisting: a
         // batch whose sealed root does not match its own rows fails
         // closed here (phase 5).
         let mut leaf_pages = self.leaf_pages.clone();
         let mut leaf_exts = self.leaf_exts.clone();
-        apply_batch_leaves(&mut leaf_pages, &mut leaf_exts, batch)?;
+        let mut leaf_frees = self.leaf_frees.clone();
+        apply_batch_leaves(&mut leaf_pages, &mut leaf_exts, &mut leaf_frees, batch)?;
         for (page, bytes) in &batch.slot_pages {
             self.slot_pages.insert(*page, bytes.clone());
         }
@@ -1221,6 +1401,12 @@ impl HeapStore for MemoryStore {
         }
         self.leaf_pages = leaf_pages;
         self.leaf_exts = leaf_exts;
+        self.leaf_frees = leaf_frees;
+        for (seg, bytes) in &batch.free_segs {
+            self.free_segs.insert(*seg, bytes.clone());
+        }
+        let n_frees = free_seg_count(batch.manifest.free_len);
+        self.free_segs.retain(|&s, _| s < n_frees);
         self.edges.resize(pages as usize, Vec::new());
         for (page, targets) in &batch.page_edges {
             if let Some(slot) = self.edges.get_mut(*page as usize) {
@@ -1298,6 +1484,7 @@ mod tests {
             slot_count: 300,
             slot_live: 200,
             chunk_len: 70_000,
+            free_len: 5,
             epoch: 3,
             root: "r00t".to_string(),
             seal: "abc123".to_string(),
@@ -1346,7 +1533,11 @@ mod tests {
             symbols: vec![11, 22],
             meter: MeterImage::current(),
         };
-        assert_eq!(SmallState::decode(&s.encode()).unwrap(), s);
+        // Since schema v4 the free list does NOT ride in small state
+        // (it lives in segment rows); the round-trip drops it.
+        let mut expected = s.clone();
+        expected.slot_free = Vec::new();
+        assert_eq!(SmallState::decode(&s.encode()).unwrap(), expected);
     }
 
     #[test]

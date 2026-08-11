@@ -147,3 +147,52 @@ fn partial_collect_is_conservative_and_exact() {
         "post-partial-collect store round-trip is byte-exact"
     );
 }
+
+/// Phase 9 bar: small state is O(1) in heap size — a machine with a
+/// large free list (post-GC) stores a SMALL small-state row, with the
+/// list riding in leafed segment rows instead.
+#[test]
+fn small_state_stays_small_with_a_large_free_list() {
+    use ironhorse_snapshot::store::{free_seg_count, HeapStore};
+
+    let cranks = [
+        "var last = { v: 0 }; var t = 0; var i = 0; \
+         for (i = 0; i < 3000; i = i + 1) { last = { v: i }; } \
+         last = 0; t = 7;",
+    ];
+    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let mut m = Interp::new();
+    m.link_intrinsics(&compiled[0].1);
+    assert!(m.run(&compiled[0].0).completed);
+    // Full GC sweeps the dropped chain onto the free list.
+    let stats = m.collect_garbage();
+    assert!(stats.slots_reclaimed > 3000, "chain swept: {stats:?}");
+
+    let mut store = MemoryStore::new();
+    let session = begin_store_session(m, &sig(), &mut store)
+        .map_err(|(_, e)| e)
+        .expect("begin");
+    let manifest = store.manifest().unwrap();
+    assert!(manifest.free_len > 3000, "free list is genuinely large");
+    let small_len = store.read_small_state().unwrap().len();
+    assert!(
+        small_len < 512,
+        "small state is O(1) in heap size, got {small_len} bytes for \
+         {} free entries",
+        manifest.free_len
+    );
+    // The list itself rides in segment rows, leafed and verifiable.
+    let segs = free_seg_count(manifest.free_len);
+    let total: usize = (0..segs)
+        .map(|s| store.read_free_seg(s).unwrap().len())
+        .sum();
+    assert_eq!(total, manifest.free_len as usize * 4);
+    drop(session);
+
+    // And the round-trip carries it exactly.
+    let resumed = resume_from_store(&store, &sig()).expect("resume");
+    assert_eq!(
+        resumed.machine().slots.free_list().len() as u32,
+        manifest.free_len
+    );
+}

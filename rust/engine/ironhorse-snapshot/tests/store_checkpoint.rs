@@ -366,6 +366,12 @@ impl HeapStore for InterleavingStore {
     fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
         self.inner.borrow().page_edges()
     }
+    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+        self.inner.borrow().read_free_seg(seg)
+    }
+    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
+        self.inner.borrow().free_leaf_hashes()
+    }
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
         self.inner.borrow_mut().commit(batch)
     }
@@ -459,6 +465,7 @@ fn seal_binds_full_manifest_identity_and_forgeries_are_refused() {
         &batch.small,
         &batch.slot_pages,
         &batch.chunk_extents,
+        &batch.free_segs,
         &batch.page_edges,
     );
     assert_ne!(
@@ -584,6 +591,12 @@ fn reachability_query_reads_no_row_content() {
         }
         fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
             self.inner.page_edges()
+        }
+        fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+            self.inner.read_free_seg(seg)
+        }
+        fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
+            self.inner.free_leaf_hashes()
         }
         fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
             self.inner.commit(batch)

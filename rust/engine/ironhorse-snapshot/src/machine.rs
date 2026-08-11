@@ -344,6 +344,7 @@ fn manifest_of(interp: &Interp, signature: &Signature, epoch: u64) -> StoreManif
         slot_count: interp.slots.capacity(),
         slot_live: interp.slots.live_count(),
         chunk_len: interp.chunks.byte_size() as u64,
+        free_len: interp.slots.free_list().len() as u32,
         epoch,
         root: String::new(),
         seal: String::new(),
@@ -465,25 +466,50 @@ pub fn checkpoint_to_store(
         .collect();
 
     let small = small_state_of(interp).encode();
+    // Free-list segments (phase 9): diff against the stored segment
+    // leaves so only CHANGED segments travel — LIFO churn touches the
+    // tail segment, making per-commit free bytes O(1) in heap size.
+    let free_all = crate::store::encode_all_free_segs(interp.slots.free_list());
+    let prior_frees = store.free_leaf_hashes().unwrap_or_default();
+    let free_segs: Vec<(u32, Vec<u8>)> = free_all
+        .into_iter()
+        .filter(|(i, bytes)| {
+            prior_frees.get(*i as usize).copied() != Some(leaf_hash(crate::store::LEAF_FREE, *i, bytes))
+        })
+        .collect();
     // Row-hash tree maintenance (phase 5): prior leaves + this
     // commit's dirty leaves → the new sealed root. Metadata-scale
     // (32 bytes per row) and O(dirty) hashing of content.
     let (mut leaf_pages, mut leaf_exts) = store.leaf_hashes()?;
+    let mut leaf_frees = prior_frees;
     leaf_pages.resize(slot_page_count(manifest.slot_count) as usize, [0u8; 32]);
     leaf_exts.resize(chunk_extent_count(manifest.chunk_len) as usize, [0u8; 32]);
+    leaf_frees.resize(
+        crate::store::free_seg_count(manifest.free_len) as usize,
+        [0u8; 32],
+    );
     for (i, bytes) in &slot_pages {
         leaf_pages[*i as usize] = leaf_hash(LEAF_PAGE, *i, bytes);
     }
     for (i, bytes) in &chunk_extents {
         leaf_exts[*i as usize] = leaf_hash(LEAF_EXT, *i, bytes);
     }
-    manifest.root = combine_root(&leaf_hash(LEAF_SMALL, 0, &small), &leaf_pages, &leaf_exts);
+    for (i, bytes) in &free_segs {
+        leaf_frees[*i as usize] = leaf_hash(crate::store::LEAF_FREE, *i, bytes);
+    }
+    manifest.root = combine_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &leaf_pages,
+        &leaf_exts,
+        &leaf_frees,
+    );
     manifest.seal = seal_commit(
         &session.seal,
         &manifest,
         &small,
         &slot_pages,
         &chunk_extents,
+        &free_segs,
         &page_edges,
     );
     let seal = manifest.seal.clone();
@@ -493,6 +519,7 @@ pub fn checkpoint_to_store(
         small,
         slot_pages,
         chunk_extents,
+        free_segs,
         page_edges,
     };
     store.commit(&batch)?;
