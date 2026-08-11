@@ -926,6 +926,19 @@ impl ChunkArena {
     /// guard's live `Ref` — the adversarial-review critical finding
     /// (a lazily resumed machine crashing on `a === b` across
     /// extents while every other run mode succeeds).
+    /// Compare two chunk payloads — the ONLY sanctioned way to read
+    /// two chunks at once. Pre-faults BOTH before taking the two
+    /// guards: on a lazy heap, constructing the second guard over a
+    /// non-resident extent would `borrow_mut` under the first guard's
+    /// live `Ref` and panic (the adversarial review's critical
+    /// finding). New two-chunk comparisons go through here, never
+    /// through two bare [`Self::payload`] calls.
+    pub fn compare_payloads(&self, a: ChunkOffset, b: ChunkOffset) -> std::cmp::Ordering {
+        self.ensure_payload_resident(a);
+        self.ensure_payload_resident(b);
+        self.payload(a).cmp(&self.payload(b))
+    }
+
     pub fn ensure_payload_resident(&self, off: ChunkOffset) {
         if matches!(self.bytes, ChunkBytes::Plain(_)) || off.is_null() {
             return;
@@ -1101,7 +1114,12 @@ impl ChunkArena {
         self.ensure_all_resident();
         let old_bytes = std::mem::take(self.bytes_mut());
         let len_at = |off: ChunkOffset| -> usize {
-            let h = off.0 as usize - CHUNK_HEADER;
+            // Checked like `len_of`: an offset below the header width
+            // is a corrupt heap, and dies as the same named panic in
+            // release builds instead of an underflow wrap.
+            let h = (off.0 as usize)
+                .checked_sub(CHUNK_HEADER)
+                .expect("chunk offset below header (corrupt heap)");
             u32::from_le_bytes([
                 old_bytes[h],
                 old_bytes[h + 1],

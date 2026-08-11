@@ -51,3 +51,54 @@ fn file_store_agrees_six_ways() {
 fn file_store_lazy_resume_faults_only_the_working_set() {
     with_file_stores("working-set", |fresh| lazy_working_set_bound(&mut *fresh));
 }
+
+/// Frozen golden vector (collaborator-review follow-up): every other
+/// comparison in the suite is self-referential within one process, so
+/// a latent host-endianness or map-iteration dependency would cancel
+/// out in-process yet break the cross-host resume claim. These
+/// constants pin the canonical blob bytes and the seal chain; an
+/// intentional format or cost-table change updates them consciously,
+/// with a commit message saying why.
+#[test]
+fn golden_vector_pins_canonical_bytes_and_seal() {
+    use ironhorse_snapshot::machine::{
+        begin_store_session, checkpoint_to_store, MachineSnapshot,
+    };
+    use ironhorse_snapshot::sha256::hex_sha256;
+    use ironhorse_snapshot::store::HeapStore;
+    use ironhorse_snapshot::Signature;
+    use ironhorse_vm::{parse_symbols, Interp};
+
+    let sig = Signature::new("ironhorse-worker-v1");
+    let cranks = ["var x = 5;", "x = x + 1;", "x + 10"];
+    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks
+        .iter()
+        .map(|s| {
+            let (b, sy) = ironhorse_compile::compile_atoms(s).expect("compiles");
+            (b, parse_symbols(&sy))
+        })
+        .collect();
+
+    let mut store = MemoryStore::new();
+    let mut m = Interp::new();
+    m.link_intrinsics(&compiled[0].1);
+    assert!(m.run(&compiled[0].0).completed);
+    let mut session = begin_store_session(m, &sig, &mut store)
+        .map_err(|(_, e)| e)
+        .expect("begin");
+    for (bytecode, _) in compiled.iter().skip(1) {
+        assert!(session.machine_mut().run(bytecode).completed);
+        checkpoint_to_store(&mut session, &sig, &mut store).expect("checkpoint");
+    }
+
+    assert_eq!(
+        hex_sha256(&session.machine().write_snapshot(&sig)),
+        "c36f161dea7e80c5144bc5b3134c5a38105b2e94e8150aa7a496bc1e927d3e2f",
+        "canonical final blob hash"
+    );
+    assert_eq!(
+        store.manifest().unwrap().seal,
+        "cdbaaaf00de955b5188888efd191d76be7648d5d61f65a4c64931e9380bba5d1",
+        "epoch-3 seal chain"
+    );
+}

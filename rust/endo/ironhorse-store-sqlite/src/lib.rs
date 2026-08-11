@@ -116,6 +116,21 @@ impl SqliteHeapStore {
         // silent fallback the review flagged must fail closed instead.
         conn.busy_timeout(std::time::Duration::from_millis(5000))
             .map_err(sql_err)?;
+        // Enforce the documented single-writer-per-path model instead
+        // of assuming it (the collaborator review's finding): under
+        // EXCLUSIVE locking the first connection to touch the file
+        // holds it, so a stray second opener fails closed with
+        // SQLITE_BUSY at its first query (our application_id gate)
+        // rather than silently racing. In-memory databases report
+        // "exclusive" trivially (nothing shares them).
+        let lock_mode: String = conn
+            .query_row("PRAGMA locking_mode=EXCLUSIVE", [], |r| r.get(0))
+            .map_err(sql_err)?;
+        if lock_mode.to_ascii_lowercase() != "exclusive" {
+            return Err(StoreError::Io(format!(
+                "sqlite: locking_mode=EXCLUSIVE refused (got {lock_mode})"
+            )));
+        }
         let mode: String = conn
             .query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))
             .map_err(sql_err)?;
@@ -125,6 +140,12 @@ impl SqliteHeapStore {
             )));
         }
         conn.execute_batch("PRAGMA wal_autocheckpoint = 1000")
+            .map_err(sql_err)?;
+        // Pin durability explicitly rather than riding the build-time
+        // default: FULL syncs the WAL on every commit, which is the
+        // acked-checkpoint-survives-power-loss contract the machine
+        // layer's fsync discipline assumes.
+        conn.execute_batch("PRAGMA synchronous = FULL")
             .map_err(sql_err)?;
         conn.execute_batch(
             "PRAGMA foreign_keys=ON;
@@ -163,6 +184,13 @@ impl SqliteHeapStore {
     /// sidecars, leaving a self-contained single file safe to copy or
     /// hand off. Consume-on-close mirrors the daemon's "no database
     /// request after close" invariant.
+    ///
+    /// The single-file invariant holds only once this returns `Ok`: a
+    /// dropped (not closed) store runs `Connection`'s `Drop`, which
+    /// swallows any checkpoint error, and may leave live `-wal`/`-shm`
+    /// sidecars beside the file. Committed epochs are still durable
+    /// either way (WAL + `synchronous=FULL`); only the
+    /// one-self-contained-file property needs the explicit close.
     pub fn close(self) -> Result<(), StoreError> {
         self.conn
             .close()
@@ -276,7 +304,14 @@ impl HeapStore for SqliteHeapStore {
     }
 
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
-        let tx = self.conn.transaction().map_err(sql_err)?;
+        // IMMEDIATE: take the writer lock up front so a concurrent
+        // commit serializes under busy_timeout instead of surfacing
+        // SQLITE_BUSY_SNAPSHOT on the mid-transaction read-to-write
+        // upgrade (the collaborator review's finding).
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(sql_err)?;
         {
             let stored = Self::stored_manifest(&tx)?;
             check_succession(stored.as_ref(), batch)?;

@@ -463,3 +463,82 @@ fn dirty_fraction_sweep_commits_exactly_the_touched_pages() {
     assert_eq!(chunks.dirty_extents(), vec![0]);
     let _ = SLOT_RECORD_BYTES; // geometry sanity anchor
 }
+
+/// The random sweep above is dominated by blob-content bytes, which
+/// under-samples the decode paths an attacker actually targets
+/// (collaborator-review follow-up). This arm concentrates every
+/// mutation on the header/manifest/directory span — the first bytes
+/// of the file, where the magic, the length-prefixed manifest and
+/// small-state blocks, the row counts, and the directories live — and
+/// requires the same taxonomy: a structured error or a clean decode,
+/// never a panic, never an allocation blow-up.
+#[test]
+fn corrupted_store_headers_never_panic() {
+    let mut rng = Lcg(0xBEEF);
+    let mut m = Machine::new();
+    for _ in 0..800 {
+        m.step(&mut rng);
+    }
+    let dir = std::env::temp_dir().join("ironhorse-hardening-corrupt-header");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("heap.ihstore");
+    let mut store = FileStore::open(&path).unwrap();
+    store.commit(&image_to_batch(&m.image(&[]), 1, "")).unwrap();
+    drop(store);
+    let pristine = std::fs::read(&path).unwrap();
+
+    // The security-critical spans, computed from the actual layout:
+    // magic + manifest block (with its length prefix), and the
+    // counts + directories. The small-state BLOCK CONTENT is excluded
+    // — like row blobs it is length-guarded but content-unchecksummed
+    // (the named integrity limitation), so flips there legitimately
+    // decode; its length prefix stays in scope.
+    let be32 = |b: &[u8], at: usize| u32::from_be_bytes(b[at..at + 4].try_into().unwrap()) as usize;
+    let mlen = be32(&pristine, 8);
+    let manifest_end = 12 + mlen;
+    let small_len = be32(&pristine, manifest_end);
+    let small_end = manifest_end + 4 + small_len;
+    let n_pages = be32(&pristine, small_end);
+    let n_exts = be32(&pristine, small_end + 4);
+    let dir_end = small_end + 8 + 12 * (n_pages + n_exts);
+    let head_span = manifest_end + 4; // magic..=manifest block + small length prefix
+    let tail_span = dir_end - small_end; // counts + directories
+
+    let mut outcomes = [0usize; 3];
+    for i in 0..400u64 {
+        let mut bytes = pristine.clone();
+        let r = rng.below((head_span + tail_span) as u64) as usize;
+        let pos = if r < head_span { r } else { small_end + (r - head_span) };
+        if i % 4 == 3 {
+            // Overwrite with a hostile length-shaped value.
+            let hostile = [0xFFu8, 0xFF, 0xFF, 0xFF];
+            let end = (pos + 4).min(bytes.len());
+            bytes[pos..end].copy_from_slice(&hostile[..end - pos]);
+        } else {
+            let flip = 1u8 << rng.below(8);
+            bytes[pos] ^= flip;
+        }
+        std::fs::write(&path, &bytes).unwrap();
+        match FileStore::open(&path) {
+            Err(_) => outcomes[0] += 1,
+            Ok(s) => match validate_store(&s, &sig()) {
+                Err(_) => outcomes[1] += 1,
+                Ok(_) => match store_to_image(&s) {
+                    Err(_) => outcomes[1] += 1,
+                    Ok(_) => outcomes[2] += 1,
+                },
+            },
+        }
+    }
+    // Sanity: the arm actually exercises refusal paths. The clean
+    // remainder is real and bounded: flips inside the stored seal
+    // string or the epoch decode as a structurally valid store at
+    // open (the seal chain is enforced at commit/pairing time; the
+    // open-time whole-store recheck is the phase-5 stepping stone).
+    assert!(
+        outcomes[0] + outcomes[1] > 250,
+        "structural corruption should overwhelmingly refuse: {outcomes:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -15355,13 +15355,9 @@ impl Interp {
     fn strict_equal(&self, a: &Slot, b: &Slot) -> bool {
         match (a.value, b.value) {
             (Payload::String(x), Payload::String(y)) => {
-                // Pre-fault BOTH payloads before taking the two guards:
-                // constructing the second guard over a non-resident
-                // extent would borrow_mut under the first guard's live
-                // Ref on a lazy heap (the review's critical finding).
-                self.chunks.ensure_payload_resident(x);
-                self.chunks.ensure_payload_resident(y);
-                self.str_content(x) == self.str_content(y)
+                // Two-chunk read: only through the arena's guarded
+                // comparison (lazy-heap borrow discipline).
+                self.chunks.compare_payloads(x, y) == std::cmp::Ordering::Equal
             }
             // `bigint === bigint`: equal iff same sign and magnitude. A BigInt
             // is never `===` a non-BigInt (distinct type), which
@@ -17030,16 +17026,14 @@ impl Interp {
         if a.kind == Kind::String && b.kind == Kind::String {
             if let (Payload::String(x), Payload::String(y)) = (a.value, b.value) {
                 let r = {
-                    // Pre-fault before the two live guards (see
-                    // strict_equal): lazy-heap borrow discipline.
-                    self.chunks.ensure_payload_resident(x);
-                    self.chunks.ensure_payload_resident(y);
-                    let (ca, cb) = (self.str_content(x), self.str_content(y));
+                    // Two-chunk read: only through the arena's guarded
+                    // comparison (lazy-heap borrow discipline).
+                    let ord = self.chunks.compare_payloads(x, y);
                     match op {
-                        RelOp::Less => ca < cb,
-                        RelOp::LessEqual => ca <= cb,
-                        RelOp::More => ca > cb,
-                        RelOp::MoreEqual => ca >= cb,
+                        RelOp::Less => ord.is_lt(),
+                        RelOp::LessEqual => ord.is_le(),
+                        RelOp::More => ord.is_gt(),
+                        RelOp::MoreEqual => ord.is_ge(),
                     }
                 };
                 self.push(Slot::boolean(r));
@@ -17099,11 +17093,9 @@ impl Interp {
         let eq = match (a.kind, b.kind) {
             (Kind::String, Kind::String) => match (a.value, b.value) {
                 (Payload::String(x), Payload::String(y)) => {
-                    // Pre-fault before the two live guards (see
-                    // strict_equal): lazy-heap borrow discipline.
-                    self.chunks.ensure_payload_resident(x);
-                    self.chunks.ensure_payload_resident(y);
-                    self.str_content(x) == self.str_content(y)
+                    // Two-chunk read: only through the arena's guarded
+                    // comparison (lazy-heap borrow discipline).
+                    self.chunks.compare_payloads(x, y) == std::cmp::Ordering::Equal
                 }
                 _ => false,
             },

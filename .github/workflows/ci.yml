@@ -662,10 +662,12 @@ jobs:
   # metamorphic determinism and checkpoint acceptance suites) plus the
   # daemon-side SQLite heap-store backend in the root workspace. The
   # oracle-linked engine crates (xs-oracle, ironhorse-compile,
-  # ironhorse-regexp, ironhorse-262, ironhorse-fuzz) are excluded: their
-  # dev-dependencies compile the Moddable XS C sources, which need the
-  # c/moddable submodule and its toolchain; they remain local/manual
-  # until a job provisions that.
+  # ironhorse-regexp, ironhorse-262, ironhorse-fuzz) are excluded from
+  # TESTING: their dev-dependencies compile the Moddable XS C sources,
+  # which need the c/moddable submodule and its toolchain, so their own
+  # test targets remain local/manual until a job provisions that.
+  # (ironhorse-compile still builds here as a library dependency of the
+  # tested crates — dev-dependencies of dependencies do not build.)
   #
   # On pull requests the expensive steps self-skip unless the PR
   # touches these crates or their inputs (the engine workspace, the
