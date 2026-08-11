@@ -108,6 +108,12 @@ pub enum StoreError {
     /// already holds an epoch. Adopting existing content is the resume
     /// path's job; silently overwriting it would discard a heap.
     NotEmpty { epoch: u64 },
+    /// A stored page-edge summary vector whose length disagrees with
+    /// the manifest geometry. Refused before any reachability decision
+    /// is made from the summaries: the partial collector FREES pages
+    /// based on them, so a short vector (a truncated table) must fail
+    /// closed rather than read as "no outgoing edges".
+    SummaryCount { expected: u32, found: u32 },
 }
 
 impl From<SnapshotError> for StoreError {

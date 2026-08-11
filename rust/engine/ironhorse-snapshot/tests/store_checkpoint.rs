@@ -621,3 +621,58 @@ fn reachability_query_reads_no_row_content() {
         "reachability must be answered from summaries alone"
     );
 }
+
+/// Phase 8 review regression: a row the session ITSELF committed is
+/// clean again — evictable — and its re-fault must verify against the
+/// leaves that commit refreshed, at the committed geometry. Frozen
+/// attach-time leaves would misdiagnose the healthy re-fault as
+/// "corrupt store"; frozen attach-time geometry would fail the tail
+/// row's length assert once the heap grew. Sequence: lazy resume →
+/// mutate + grow → checkpoint → evict everything → re-fault
+/// everything (write_snapshot) and demand byte equality.
+#[test]
+fn evict_after_own_checkpoint_refaults_cleanly() {
+    use ironhorse_snapshot::store::chunk_extent_count;
+    use ironhorse_vm::{Slot, SLOTS_PER_PAGE};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let mut m = Interp::new();
+    assert!(m.run(&PROG_A).completed);
+    let store = Rc::new(RefCell::new(MemoryStore::new()));
+    let session = begin(m, &mut *store.borrow_mut());
+    drop(session);
+
+    let mut session = resume_from_store_lazy(store.clone(), &sig()).expect("lazy resume");
+    assert!(session.machine_mut().run(&PROG_B).completed);
+    // Grow well past the attach-time tail page so the committed tail
+    // row is longer than the attach-time one — the geometry half of
+    // the finding.
+    for _ in 0..(2 * SLOTS_PER_PAGE + 17) {
+        session.machine_mut().slots.alloc(Slot::integer(7));
+    }
+    checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
+
+    // Reference bytes, faulting everything in (all rows resident).
+    let expect = session.machine().write_snapshot(&sig());
+
+    // Evict every clean row — including the rows the checkpoint just
+    // rewrote and the pages appended past the attach range.
+    let manifest = store.borrow().manifest().unwrap();
+    let mut evictions = 0u32;
+    for page in 0..slot_page_count(manifest.slot_count) {
+        evictions += session.machine().slots.evict_page(page) as u32;
+    }
+    for ext in 0..chunk_extent_count(manifest.chunk_len) {
+        evictions += session.machine().chunks.evict_extent(ext) as u32;
+    }
+    assert!(evictions > 0, "nothing was evicted — the regression is untested");
+
+    // Every re-fault must verify against the REFRESHED leaves at the
+    // COMMITTED geometry and reinstall identical content.
+    assert_eq!(
+        session.machine().write_snapshot(&sig()),
+        expect,
+        "post-commit eviction re-faults reinstall the committed bytes"
+    );
+}

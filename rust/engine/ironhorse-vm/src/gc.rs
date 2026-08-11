@@ -148,7 +148,15 @@ pub fn collect_full(
         if slots.is_marked(idx) {
             if let Some(off) = slots.get(idx).chunk_ref() {
                 if let Some(&new_off) = remap.get(&off) {
-                    slots.get_mut(idx).set_chunk_ref(new_off);
+                    // Identity remaps (compaction moved nothing here)
+                    // must not go through `get_mut`, whose conservative
+                    // dirty-marking would re-dirty every string-holding
+                    // slot page on every collection — the phase-7
+                    // "write only what moved" bound applies to slot
+                    // pages exactly as it does to chunk extents.
+                    if new_off != off {
+                        slots.get_mut(idx).set_chunk_ref(new_off);
+                    }
                 }
             }
         }
@@ -190,7 +198,10 @@ mod incremental_compaction_tests {
         h.chunks.clear_dirty();
 
         // Everything live: compaction moves nothing, so nothing is
-        // newly dirty.
+        // newly dirty — neither chunk extents NOR slot pages. The slot
+        // half locks the identity-remap guard: without it, the offset
+        // rewrite loop `get_mut`s every string-holding slot and
+        // re-dirties every slot page on every collection.
         let stats = h.collect(&roots.clone());
         assert_eq!(stats.chunk_bytes_before, stats.chunk_bytes_after);
         assert!(
@@ -198,9 +209,16 @@ mod incremental_compaction_tests {
             "no-movement compaction stays clean, got {:?}",
             h.chunks.dirty_extents()
         );
+        assert!(
+            h.slots.dirty_pages().is_empty(),
+            "no-movement compaction rewrites no slot offsets, got pages {:?}",
+            h.slots.dirty_pages()
+        );
 
         // Tail garbage: drop the last root; only the tail region
-        // changes, and the leading extents stay clean.
+        // changes, and the leading extents stay clean. Nothing before
+        // the dropped tail moves, so no slot offset is rewritten and
+        // the slot pages stay clean too.
         h.slots.clear_dirty();
         h.chunks.clear_dirty();
         let dropped = roots.pop().unwrap();
@@ -210,6 +228,11 @@ mod incremental_compaction_tests {
         assert!(
             !dirty.contains(&0),
             "leading extent unchanged by tail-only compaction: {dirty:?}"
+        );
+        assert!(
+            h.slots.dirty_pages().is_empty(),
+            "tail-only compaction moves nothing, so no slot offset rewrite: {:?}",
+            h.slots.dirty_pages()
         );
     }
 }
