@@ -191,6 +191,20 @@ Page-isolated garbage is the reclaim case; shrinking the summaries
 to live-only edges after a full collection's sweep, and the
 compaction that de-chains pages, belong to phase 7's re-keying.
 
+**Phase 7 landed as the incremental-compaction cut (2026-08-11).**
+Compaction now dirties only extents whose bytes actually changed
+(diffed against the pre-compaction space, OR'd with uncommitted
+pre-compaction dirt, tail-shrink counted), so the post-GC checkpoint
+writes what MOVED, not the whole geometry — the phase-7 bar, locked
+by `compaction_dirties_only_moved_extents` (an already-compact space
+recommits nothing; tail garbage leaves leading extents clean). The
+full re-key of chunk rows by stable identity — which would also
+de-chain the page summaries phase 6 needs for dropped sequential
+runs — is deferred with this honest note: it changes the slot→chunk
+reference encoding, the store schema, and the compaction algorithm
+together, and the incremental-dirt cut already removes the
+whole-space recommit cost that motivated it.
+
 Preceding it, the collaborator-review follow-up wave landed:
 `compare_payloads` as the only sanctioned two-chunk read, SQLite
 EXCLUSIVE locking (second opener fails closed, locked by test) +

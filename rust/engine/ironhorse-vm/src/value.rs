@@ -1157,13 +1157,37 @@ impl ChunkArena {
             debug_assert_eq!(new_off as usize, header + CHUNK_HEADER);
             remap.insert(old, ChunkOffset(new_off));
         }
-        // The whole byte space was rewritten (and possibly shrunk):
-        // every surviving extent is dirty, and the bitmap tracks the
-        // new, smaller geometry so a checkpoint never names an extent
-        // past the compacted end.
+        // Incremental compaction dirt (store seam phase 7): an extent
+        // is dirty only if its BYTES actually changed — a compaction
+        // that moves little (garbage clustered at the tail) re-commits
+        // little. The geometry may have shrunk, so the bitmap tracks
+        // the new extent count; an extent wholly identical to its old
+        // bytes at the same positions stays clean, because the store
+        // already holds exactly those bytes.
         let exts = fresh.len().div_ceil(CHUNK_EXTENT_BYTES as usize);
+        let per = CHUNK_EXTENT_BYTES as usize;
+        let mut dirty = Vec::with_capacity(exts);
+        for e in 0..exts {
+            let start = e * per;
+            let end = fresh.len().min(start + per);
+            let changed = match old_bytes.get(start..end) {
+                Some(old) => old != &fresh[start..end],
+                // The old space was shorter here: new content, dirty.
+                None => true,
+            };
+            // Uncommitted PRE-compaction dirt must survive: the diff
+            // above compares against pre-compaction MEMORY, but the
+            // store holds the last COMMITTED bytes, which may differ
+            // even where compaction moved nothing.
+            let was_dirty = self.dirty.get(e).copied().unwrap_or(true);
+            // A shrunk FINAL extent also counts as changed when the
+            // old space extended past the new end (its stored row had
+            // the old, longer length).
+            let tail_shrunk = e == exts - 1 && old_bytes.len() > fresh.len();
+            dirty.push(changed || was_dirty || tail_shrunk);
+        }
         self.bytes = ChunkBytes::Plain(fresh);
-        self.dirty = vec![true; exts];
+        self.dirty = dirty;
         remap
     }
 
