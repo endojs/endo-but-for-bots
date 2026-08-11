@@ -164,9 +164,13 @@ only dirty rows and dirty ⇒ resident means those never fault). The
 root is the store-native identity — two stores compare equal by
 manifest field, no row read; the CAS blob key remains SHA-256 of the
 canonical export, computed only at interchange (the golden vector
-proved the container unchanged across the schema bump). Still open
-from the phase-5 bar: the wake-latency benchmark, and an interior
-tree if leaf counts ever make the linear recombine measurable.
+proved the container unchanged across the schema bump). The wake-latency
+instrument (`wake_latency_bench.rs`, `#[ignore]`d like the dispatch
+bench) closed the phase-5 bar: on a 120k-slot fixture, eager wake
+median 15.3 ms vs lazy wake 0.41 ms (ratio 0.027) for a one-global
+crank — wake cost is measurably the working set, not the heap.
+Still open: an interior tree if leaf counts ever make the linear
+recombine measurable.
 Preceding it, the collaborator-review follow-up wave landed:
 `compare_payloads` as the only sanctioned two-chunk read, SQLite
 EXCLUSIVE locking (second opener fails closed, locked by test) +
