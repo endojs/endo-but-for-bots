@@ -43,7 +43,10 @@ fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
 
 struct Baseline {
     results: Vec<String>,
-    final_computrons: u64,
+    /// Cumulative computrons AFTER EVERY CRANK, not just the last: a
+    /// mid-run meter divergence that reconverges by the final crank
+    /// must still fail (the collaborator review's finding).
+    computrons: Vec<u64>,
     final_blob: Vec<u8>,
 }
 
@@ -51,16 +54,16 @@ fn run_baseline(compiled: &[(Vec<u8>, Vec<String>)]) -> Baseline {
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let mut results = Vec::new();
-    let mut final_computrons = 0;
+    let mut computrons = Vec::new();
     for (bytecode, _) in compiled {
         let o = m.run(bytecode);
         assert!(o.completed, "baseline crank completes (halt: {:?})", o.halt);
         results.push(o.result);
-        final_computrons = o.computrons;
+        computrons.push(o.computrons);
     }
     Baseline {
         results,
-        final_computrons,
+        computrons,
         final_blob: m.write_snapshot(&sig()),
     }
 }
@@ -70,7 +73,7 @@ fn assert_agrees(
     scenario: &str,
     baseline: &Baseline,
     results: &[String],
-    final_computrons: u64,
+    computrons: &[u64],
     final_blob: &[u8],
 ) {
     assert_eq!(
@@ -78,8 +81,8 @@ fn assert_agrees(
         "[{scenario}/{variant}] per-crank results agree"
     );
     assert_eq!(
-        final_computrons, baseline.final_computrons,
-        "[{scenario}/{variant}] final computrons agree"
+        computrons, &baseline.computrons[..],
+        "[{scenario}/{variant}] per-crank computron vector agrees"
     );
     assert_eq!(
         final_blob, &baseline.final_blob[..],
@@ -88,11 +91,11 @@ fn assert_agrees(
 }
 
 /// Variant 2: blob suspend/resume between every crank.
-fn run_blob(compiled: &[(Vec<u8>, Vec<String>)]) -> (Vec<String>, u64, Vec<u8>) {
+fn run_blob(compiled: &[(Vec<u8>, Vec<String>)]) -> (Vec<String>, Vec<u64>, Vec<u8>) {
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let mut results = Vec::new();
-    let mut computrons = 0;
+    let mut computrons = Vec::new();
     for (i, (bytecode, _)) in compiled.iter().enumerate() {
         if i > 0 {
             let bytes = m.write_snapshot(&sig());
@@ -100,7 +103,7 @@ fn run_blob(compiled: &[(Vec<u8>, Vec<String>)]) -> (Vec<String>, u64, Vec<u8>) 
         }
         let o = m.run(bytecode);
         results.push(o.result);
-        computrons = o.computrons;
+        computrons.push(o.computrons);
     }
     (results, computrons, m.write_snapshot(&sig()))
 }
@@ -118,16 +121,17 @@ fn run_store<S: HeapStore + 'static>(
     store: S,
     compiled: &[(Vec<u8>, Vec<String>)],
     mode: Resume,
-) -> (Vec<String>, u64, Vec<u8>) {
+) -> (Vec<String>, Vec<u64>, Vec<u8>) {
     let store = Rc::new(RefCell::new(store));
     let mut results = Vec::new();
+    let mut computrons = Vec::new();
 
     // Crank 1 on a fresh machine, then bind.
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let o = m.run(&compiled[0].0);
     results.push(o.result);
-    let mut computrons = o.computrons;
+    computrons.push(o.computrons);
     let mut session = begin_store_session(m, &sig(), &mut *store.borrow_mut())
         .map_err(|(_, e)| e)
         .expect("begin session");
@@ -154,7 +158,7 @@ fn run_store<S: HeapStore + 'static>(
         }
         let o = session.machine_mut().run(bytecode);
         results.push(o.result);
-        computrons = o.computrons;
+        computrons.push(o.computrons);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
     }
     (results, computrons, session.machine().write_snapshot(&sig()))
@@ -166,15 +170,16 @@ fn run_store<S: HeapStore + 'static>(
 fn run_checkpoint_every_crank<S: HeapStore + 'static>(
     store: S,
     compiled: &[(Vec<u8>, Vec<String>)],
-) -> (Vec<String>, u64, Vec<u8>) {
+) -> (Vec<String>, Vec<u64>, Vec<u8>) {
     let store = Rc::new(RefCell::new(store));
     let mut results = Vec::new();
+    let mut computrons = Vec::new();
 
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let o = m.run(&compiled[0].0);
     results.push(o.result);
-    let mut computrons = o.computrons;
+    computrons.push(o.computrons);
     let mut session: StoreSession = begin_store_session(m, &sig(), &mut *store.borrow_mut())
         .map_err(|(_, e)| e)
         .expect("begin session");
@@ -182,7 +187,7 @@ fn run_checkpoint_every_crank<S: HeapStore + 'static>(
     for (bytecode, _) in compiled.iter().skip(1) {
         let o = session.machine_mut().run(bytecode);
         results.push(o.result);
-        computrons = o.computrons;
+        computrons.push(o.computrons);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
     }
     drop(session);
@@ -199,19 +204,19 @@ fn metamorphic<S: HeapStore + 'static>(
     let baseline = run_baseline(&compiled);
 
     let (r, c, b) = run_blob(&compiled);
-    assert_agrees("blob", scenario, &baseline, &r, c, &b);
+    assert_agrees("blob", scenario, &baseline, &r, &c, &b);
 
     let (r, c, b) = run_store(fresh(), &compiled, Resume::Eager);
-    assert_agrees("store-eager", scenario, &baseline, &r, c, &b);
+    assert_agrees("store-eager", scenario, &baseline, &r, &c, &b);
 
     let (r, c, b) = run_store(fresh(), &compiled, Resume::Lazy);
-    assert_agrees("store-lazy", scenario, &baseline, &r, c, &b);
+    assert_agrees("store-lazy", scenario, &baseline, &r, &c, &b);
 
     let (r, c, b) = run_store(fresh(), &compiled, Resume::LazyAdversarialPrefetch);
-    assert_agrees("store-lazy-prefetch", scenario, &baseline, &r, c, &b);
+    assert_agrees("store-lazy-prefetch", scenario, &baseline, &r, &c, &b);
 
     let (r, c, b) = run_checkpoint_every_crank(fresh(), &compiled);
-    assert_agrees("checkpoint-every-crank", scenario, &baseline, &r, c, &b);
+    assert_agrees("checkpoint-every-crank", scenario, &baseline, &r, &c, &b);
 }
 
 /// The full six-way metamorphic determinism suite against a backend:
