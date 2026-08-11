@@ -467,6 +467,30 @@ impl SlotArena {
     /// Pre-touch one page (the adversarial-prefetch hook the
     /// metamorphic determinism suite drives; harmless no-op when
     /// detached or already resident).
+    /// **Evict** a clean, source-backed, resident page (store seam
+    /// phase 8): flip its residency off so the next touch re-faults
+    /// from the store. Refused (returns false) for dirty pages (their
+    /// content exists nowhere else yet), pages past the snapshot range
+    /// (locally allocated, no backing), and non-resident pages.
+    /// Content-identical by construction: a re-fault installs exactly
+    /// the committed bytes, so any evict schedule is observably
+    /// irrelevant — the adversarial-evict metamorphic arm locks it.
+    /// The dense record array keeps its RAM until sparse backing
+    /// (phase 9); eviction is the correctness machinery.
+    pub fn evict_page(&self, page: u32) -> bool {
+        let Some(backing) = &self.lazy else {
+            return false;
+        };
+        let Some(bit) = backing.resident.get(page as usize) else {
+            return false;
+        };
+        if !bit.get() || self.dirty.get(page as usize).copied().unwrap_or(false) {
+            return false;
+        }
+        bit.set(false);
+        true
+    }
+
     pub fn touch_page(&self, page: u32) {
         self.ensure_page_resident(page);
     }
@@ -918,6 +942,29 @@ impl ChunkArena {
 
     /// Pre-touch one extent (the adversarial-prefetch hook; no-op when
     /// detached or already resident).
+    /// **Evict** a clean, source-backed, resident extent (store seam
+    /// phase 8) — same contract as [`SlotArena::evict_page`], plus:
+    /// refused while any chunk guard is live (the bytes must not
+    /// vanish under a reader).
+    pub fn evict_extent(&self, ext: u32) -> bool {
+        let ChunkBytes::Lazy { cell, resident, .. } = &self.bytes else {
+            return false;
+        };
+        let Some(bit) = resident.get(ext as usize) else {
+            return false;
+        };
+        if !bit.get() || self.dirty.get(ext as usize).copied().unwrap_or(false) {
+            return false;
+        }
+        // A live ChunkSlice guard borrows the cell; never evict under
+        // a reader.
+        if cell.try_borrow_mut().is_err() {
+            return false;
+        }
+        bit.set(false);
+        true
+    }
+
     pub fn touch_extent(&self, ext: u32) {
         let per = CHUNK_EXTENT_BYTES as usize;
         self.ensure_range_resident(ext as usize * per, (ext as usize + 1) * per);
