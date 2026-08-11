@@ -110,7 +110,9 @@ export const main = async agent => {
       if (await E(agent).has(dir, 'stt')) {
         await E(agent).remove(dir, 'stt');
       }
-      console.log(`Standing up STT caplet as "${dir}/stt" (loads moonshine)...`);
+      console.log(
+        `Standing up STT caplet as "${dir}/stt" (loads moonshine)...`,
+      );
       await E(agent).makeUnconfined(undefined, audioCapletSpecifier, {
         resultName: sttPath,
         env: harden({

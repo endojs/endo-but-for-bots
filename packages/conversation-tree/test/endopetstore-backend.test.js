@@ -50,9 +50,7 @@ const buildChain = async (tree, depth) => {
   let leaf = root.id;
   for (let i = 0; i < depth; i += 1) {
     // eslint-disable-next-line no-await-in-loop
-    const node = await tree.addNode(leaf, [
-      { role: 'user', content: `m${i}` },
-    ]);
+    const node = await tree.addNode(leaf, [{ role: 'user', content: `m${i}` }]);
     leaf = node.id;
   }
   return leaf;
@@ -113,7 +111,10 @@ test('a node added after load is visible via putNode index update', async t => {
   const child = await tree.addNode(root.id, [{ role: 'user', content: 'c' }]);
 
   const kids = await tree.getChildren(root.id);
-  t.deepEqual(kids.map(k => k.id), [child.id]);
+  t.deepEqual(
+    kids.map(k => k.id),
+    [child.id],
+  );
   const path = await tree.getPath(child.id);
   t.is(path.length, 2);
 });
