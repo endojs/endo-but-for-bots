@@ -1,5 +1,5 @@
 //! Instantiates the **backend-parameterized store acceptance suite**
-//! (`ironhorse_snapshot::store_suite` — the six-way metamorphic
+//! (`ironhorse_snapshot::store_suite` — the seven-way metamorphic
 //! determinism runner and the lazy working-set bound) against the two
 //! in-crate reference backends. The daemon-side SQLite backend
 //! instantiates the same suite in its own crate
@@ -11,7 +11,7 @@ use ironhorse_snapshot::store_file::FileStore;
 use ironhorse_snapshot::store_suite::{lazy_working_set_bound, metamorphic_suite};
 
 #[test]
-fn memory_store_agrees_six_ways() {
+fn memory_store_agrees_seven_ways() {
     metamorphic_suite(MemoryStore::new);
 }
 
@@ -43,8 +43,8 @@ fn with_file_stores(name: &str, run: impl FnOnce(&mut dyn FnMut() -> FileStore))
 }
 
 #[test]
-fn file_store_agrees_six_ways() {
-    with_file_stores("six-ways", |fresh| metamorphic_suite(fresh));
+fn file_store_agrees_seven_ways() {
+    with_file_stores("seven-ways", |fresh| metamorphic_suite(fresh));
 }
 
 #[test]
