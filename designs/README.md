@@ -348,7 +348,7 @@ LLM-agent stack).*
 | [daemon-debug-worker-restart](daemon-debug-worker-restart.md) | 2026-04-17 | 2026-04-17 | Not Started |
 | [daemon-cas-management](daemon-cas-management.md) | 2026-04-17 | 2026-04-17 | In Progress |
 | [endor-git-bindings](endor-git-bindings.md) | 2026-07-15 | — | Proposed |
-| [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md) | 2026-08-06 | 2026-08-08 | In Progress |
+| [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md) | 2026-08-06 | 2026-08-11 | In Progress |
 | [ironhorse-debugger-recovery-and-uncaught](ironhorse-debugger-recovery-and-uncaught.md) | 2026-08-12 | 2026-08-14 | Proposed |
 | [endor-run-expanded](endor-run-expanded.md) | 2026-04-17 | 2026-04-17 | In Progress |
 | [endor-npm-registry-proxy](endor-npm-registry-proxy.md) | 2026-04-17 | 2026-04-17 | In Progress |

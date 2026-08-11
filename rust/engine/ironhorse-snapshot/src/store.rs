@@ -66,7 +66,7 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// [`crate::format::IRONHORSE_FORMAT_VERSION`] (which governs the record
 /// encodings both containers share). Bumped on any change to the page
 /// geometry, the manifest layout, or the small-state layout.
-pub const STORE_SCHEMA_VERSION: u32 = 2;
+pub const STORE_SCHEMA_VERSION: u32 = 3;
 
 /// A store that cannot be used, or an operation on it that failed.
 /// Gate failures reuse the [`SnapshotError`] taxonomy so a foreign or
@@ -143,11 +143,21 @@ pub struct StoreManifest {
     /// The checkpoint generation. 0 never appears in a committed
     /// manifest; the first commit is epoch 1.
     pub epoch: u64,
+    /// The **row-hash tree root** (store seam design, phase 5): SHA-256
+    /// (hex) over the small-state leaf and every row leaf
+    /// ([`combine_root`]). Unlike the seal — which chains commit
+    /// *deltas* — the root attests the store's complete CURRENT
+    /// content, so a length-preserving byte flip at rest fails closed
+    /// (at open for a leaf flip, at first read for a row flip)
+    /// instead of resuming a different machine. Store-native identity;
+    /// the CAS blob key remains SHA-256 of the canonical export.
+    pub root: String,
     /// The commit-seal chain: SHA-256 (hex) over the previous seal and
     /// this commit's content ([`seal_commit`]). Together with
     /// [`check_succession`] it binds every commit to the exact store
     /// state it was computed against — an epoch number alone cannot
     /// distinguish forks, copies, or unrelated stores at equal height.
+    /// The seal hashes the whole manifest, so it also signs `root`.
     pub seal: String,
 }
 
@@ -199,6 +209,9 @@ impl StoreManifest {
         v.extend_from_slice(&self.slot_live.to_be_bytes());
         v.extend_from_slice(&self.chunk_len.to_be_bytes());
         v.extend_from_slice(&self.epoch.to_be_bytes());
+        let rb = self.root.as_bytes();
+        v.extend_from_slice(&(rb.len() as u32).to_be_bytes());
+        v.extend_from_slice(rb);
         let sb = self.seal.as_bytes();
         v.extend_from_slice(&(sb.len() as u32).to_be_bytes());
         v.extend_from_slice(sb);
@@ -263,6 +276,16 @@ impl StoreManifest {
         let slot_live = u32::from_be_bytes(take4(&mut i)?);
         let chunk_len = u64::from_be_bytes(take8(&mut i)?);
         let epoch = u64::from_be_bytes(take8(&mut i)?);
+        let root_len = u32::from_be_bytes(take4(&mut i)?) as usize;
+        if i + root_len > p.len() {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store manifest root truncated",
+            )));
+        }
+        let root = std::str::from_utf8(&p[i..i + root_len])
+            .map_err(|_| SnapshotError::Corrupt("store manifest root not utf8"))?
+            .to_string();
+        i += root_len;
         let seal_len = u32::from_be_bytes(take4(&mut i)?) as usize;
         if i + seal_len > p.len() {
             return Err(StoreError::Snapshot(SnapshotError::Corrupt(
@@ -290,6 +313,7 @@ impl StoreManifest {
             slot_live,
             chunk_len,
             epoch,
+            root,
             seal,
         })
     }
@@ -344,6 +368,78 @@ pub fn reseal_batch(batch: &mut CheckpointBatch) {
         &batch.slot_pages,
         &batch.chunk_extents,
     );
+}
+
+/// Row-leaf domain tags for the [`leaf_hash`] tree: slot page, chunk
+/// extent, small state.
+pub const LEAF_PAGE: u8 = b'P';
+pub const LEAF_EXT: u8 = b'X';
+pub const LEAF_SMALL: u8 = b'S';
+
+/// One leaf of the row-hash tree: SHA-256 over the domain tag, the
+/// big-endian row index, and the row's exact stored bytes.
+pub fn leaf_hash(kind: u8, index: u32, bytes: &[u8]) -> [u8; 32] {
+    let mut h = crate::sha256::Sha256::new();
+    h.update(&[kind]);
+    h.update(&index.to_be_bytes());
+    h.update(bytes);
+    h.finalize()
+}
+
+/// The row-hash tree root: SHA-256 (hex) over the small-state leaf and
+/// every page and extent leaf, in index order. Linear combine — the
+/// leaves are 32 bytes each, so recombining is metadata-scale even for
+/// large heaps; an interior tree is the named upgrade if leaf counts
+/// ever make this measurable.
+pub fn combine_root(small_leaf: &[u8; 32], pages: &[[u8; 32]], exts: &[[u8; 32]]) -> String {
+    let mut h = crate::sha256::Sha256::new();
+    h.update(small_leaf);
+    for l in pages {
+        h.update(l);
+    }
+    for l in exts {
+        h.update(l);
+    }
+    crate::sha256::hex(&h.finalize())
+}
+
+/// Apply a batch's dirty rows to a stored leaf set and return the new
+/// root — the shared per-commit maintenance every backend runs (and
+/// verifies against `batch.manifest.root` before persisting, so a
+/// mis-rooted batch fails closed). `pages`/`exts` are the PRIOR leaf
+/// vectors; the geometry is resized to the batch's manifest (grown
+/// rows must be in the batch — already enforced by the grown-region
+/// presence checks).
+pub fn apply_batch_leaves(
+    pages: &mut Vec<[u8; 32]>,
+    exts: &mut Vec<[u8; 32]>,
+    batch: &CheckpointBatch,
+) -> Result<String, StoreError> {
+    let n_pages = slot_page_count(batch.manifest.slot_count) as usize;
+    let n_exts = chunk_extent_count(batch.manifest.chunk_len) as usize;
+    pages.resize(n_pages, [0u8; 32]);
+    exts.resize(n_exts, [0u8; 32]);
+    for (i, bytes) in &batch.slot_pages {
+        let slot = pages
+            .get_mut(*i as usize)
+            .ok_or(StoreError::MissingRow("slot page", *i))?;
+        *slot = leaf_hash(LEAF_PAGE, *i, bytes);
+    }
+    for (i, bytes) in &batch.chunk_extents {
+        let slot = exts
+            .get_mut(*i as usize)
+            .ok_or(StoreError::MissingRow("chunk extent", *i))?;
+        *slot = leaf_hash(LEAF_EXT, *i, bytes);
+    }
+    let small_leaf = leaf_hash(LEAF_SMALL, 0, &batch.small);
+    let root = combine_root(&small_leaf, pages, exts);
+    if root != batch.manifest.root {
+        return Err(StoreError::BaselineMismatch {
+            expected: root,
+            found: batch.manifest.root.clone(),
+        });
+    }
+    Ok(root)
 }
 
 /// The whole-on-every-commit remainder of the machine state: the value
@@ -468,6 +564,12 @@ pub trait HeapStore {
     /// O(heap) content I/O (the PR-review finding); backends serve it
     /// from metadata (directory entries, `length(bytes)` aggregates).
     fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError>;
+    /// The stored row-leaf hashes, index-ordered (pages, extents) —
+    /// 32 bytes per row, so metadata-scale like [`Self::inventory`].
+    /// Maintained by `commit` via [`apply_batch_leaves`]; the open-time
+    /// validation recombines them against the manifest root, and the
+    /// fault path verifies each row read against its leaf.
+    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError>;
     /// Apply one checkpoint atomically. Must enforce the epoch
     /// discipline via [`check_epoch`] and drop rows beyond the new
     /// geometry.
@@ -589,6 +691,7 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         slot_live: image.slot_live,
         chunk_len: image.chunks.len() as u64,
         epoch,
+        root: String::new(),
         seal: String::new(),
     };
     let small = SmallState {
@@ -602,6 +705,17 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
     let small_bytes = small.encode();
     let slot_pages = encode_all_slot_pages(&image.slots);
     let chunk_extents = encode_all_chunk_extents(&image.chunks);
+    // Root first (a full batch carries every row), then the seal —
+    // which hashes the whole manifest and therefore signs the root.
+    let pages: Vec<[u8; 32]> = slot_pages
+        .iter()
+        .map(|(i, b)| leaf_hash(LEAF_PAGE, *i, b))
+        .collect();
+    let exts: Vec<[u8; 32]> = chunk_extents
+        .iter()
+        .map(|(i, b)| leaf_hash(LEAF_EXT, *i, b))
+        .collect();
+    manifest.root = combine_root(&leaf_hash(LEAF_SMALL, 0, &small_bytes), &pages, &exts);
     manifest.seal = seal_commit(prev_seal, &manifest, &small_bytes, &slot_pages, &chunk_extents);
     CheckpointBatch {
         prev_seal: prev_seal.to_string(),
@@ -617,13 +731,20 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
 /// of [`image_to_batch`] + [`HeapStore::commit`].
 pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError> {
     let manifest = store.manifest()?;
-    let small = SmallState::decode(&store.read_small_state()?)?;
+    let small_bytes = store.read_small_state()?;
+    let small = SmallState::decode(&small_bytes)?;
     if manifest.cost_gate_mismatch(&small) {
         return Err(StoreError::Snapshot(SnapshotError::CostTableMismatch {
             expected: COST_TABLE_VERSION.to_string(),
             found: small.meter.cost_table_version.clone(),
         }));
     }
+
+    // Row-content integrity (phase 5): every row read below is checked
+    // against its stored leaf hash, so eager reification — and the
+    // export/root_hash paths riding on it — cannot absorb a
+    // length-preserving flip.
+    let (leaf_pages, leaf_exts) = store.leaf_hashes()?;
 
     let pages = slot_page_count(manifest.slot_count);
     // Clamp the pre-reservation: the manifest count is untrusted until
@@ -640,6 +761,11 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
                 expected,
                 found: bytes.len(),
             });
+        }
+        if leaf_pages.get(page as usize).copied() != Some(leaf_hash(LEAF_PAGE, page, &bytes)) {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store slot page fails its leaf hash",
+            )));
         }
         slots.extend(
             decode_slots(&bytes)
@@ -660,6 +786,11 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
                 expected,
                 found: bytes.len(),
             });
+        }
+        if leaf_exts.get(ext as usize).copied() != Some(leaf_hash(LEAF_EXT, ext, &bytes)) {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store chunk extent fails its leaf hash",
+            )));
         }
         chunks.extend_from_slice(&bytes);
     }
@@ -696,10 +827,19 @@ impl StoreManifest {
 /// errors (design decision 7): after `validate_store` succeeds, every
 /// row a lazy fault can ask for has been proven present and
 /// well-sized.
+/// The verified row-leaf hashes [`validate_store`] hands back so the
+/// resume paths can verify every later row read against them without
+/// re-trusting the store.
+#[derive(Clone, Debug)]
+pub struct StoreLeaves {
+    pub pages: Vec<[u8; 32]>,
+    pub exts: Vec<[u8; 32]>,
+}
+
 pub fn validate_store(
     store: &dyn HeapStore,
     expected_sig: &Signature,
-) -> Result<(StoreManifest, SmallState), StoreError> {
+) -> Result<(StoreManifest, SmallState, StoreLeaves), StoreError> {
     let manifest = store.manifest()?;
     if manifest.version != Version::current() {
         return Err(StoreError::Snapshot(SnapshotError::Corrupt(
@@ -723,7 +863,8 @@ pub fn validate_store(
         )));
     }
 
-    let small = SmallState::decode(&store.read_small_state()?)?;
+    let small_bytes = store.read_small_state()?;
+    let small = SmallState::decode(&small_bytes)?;
     if manifest.cost_gate_mismatch(&small) {
         return Err(StoreError::Snapshot(SnapshotError::CostTableMismatch {
             expected: COST_TABLE_VERSION.to_string(),
@@ -792,7 +933,34 @@ pub fn validate_store(
         }
     }
 
-    Ok((manifest, small))
+    // Row-hash tree (phase 5): the stored leaves must recombine to the
+    // manifest's sealed root — metadata-scale (32 bytes per row). Row
+    // CONTENT is then verified against these leaves at the point of
+    // read (eager reify or lazy fault), so a length-preserving flip at
+    // rest can never resume a different machine.
+    let (leaf_pages, leaf_exts) = store.leaf_hashes()?;
+    if leaf_pages.len() != n_pages as usize || leaf_exts.len() != n_exts as usize {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "store leaf-hash inventory disagrees with geometry",
+        )));
+    }
+    let small_leaf = leaf_hash(LEAF_SMALL, 0, &small_bytes);
+    let root = combine_root(&small_leaf, &leaf_pages, &leaf_exts);
+    if root != manifest.root {
+        return Err(StoreError::BaselineMismatch {
+            expected: root,
+            found: manifest.root.clone(),
+        });
+    }
+
+    Ok((
+        manifest,
+        small,
+        StoreLeaves {
+            pages: leaf_pages,
+            exts: leaf_exts,
+        },
+    ))
 }
 
 // --- container ↔ store (the identity locks) ---
@@ -850,6 +1018,8 @@ pub struct MemoryStore {
     small: Vec<u8>,
     slot_pages: std::collections::HashMap<u32, Vec<u8>>,
     chunk_extents: std::collections::HashMap<u32, Vec<u8>>,
+    leaf_pages: Vec<[u8; 32]>,
+    leaf_exts: Vec<[u8; 32]>,
     last_commit: CommitStats,
 }
 
@@ -913,6 +1083,13 @@ impl HeapStore for MemoryStore {
         Ok((pages, exts))
     }
 
+    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
+        if self.manifest.is_none() {
+            return Err(StoreError::Empty);
+        }
+        Ok((self.leaf_pages.clone(), self.leaf_exts.clone()))
+    }
+
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
         check_succession(self.manifest.as_ref(), batch)?;
         // A grown geometry's new rows must be in the batch. Prior rows
@@ -937,12 +1114,20 @@ impl HeapStore for MemoryStore {
                 return Err(StoreError::MissingRow("chunk extent", ext));
             }
         }
+        // Leaf maintenance + root verification BEFORE persisting: a
+        // batch whose sealed root does not match its own rows fails
+        // closed here (phase 5).
+        let mut leaf_pages = self.leaf_pages.clone();
+        let mut leaf_exts = self.leaf_exts.clone();
+        apply_batch_leaves(&mut leaf_pages, &mut leaf_exts, batch)?;
         for (page, bytes) in &batch.slot_pages {
             self.slot_pages.insert(*page, bytes.clone());
         }
         for (ext, bytes) in &batch.chunk_extents {
             self.chunk_extents.insert(*ext, bytes.clone());
         }
+        self.leaf_pages = leaf_pages;
+        self.leaf_exts = leaf_exts;
         // Drop rows beyond the new geometry (chunk shrink across a GC
         // compaction; slot pages are monotone but the sweep is uniform).
         self.slot_pages.retain(|&p, _| p < pages);
@@ -1014,6 +1199,7 @@ mod tests {
             slot_live: 200,
             chunk_len: 70_000,
             epoch: 3,
+            root: "r00t".to_string(),
             seal: "abc123".to_string(),
         };
         let bytes = m.encode();
@@ -1143,7 +1329,7 @@ mod tests {
         let image = ran_image();
         let mut store = MemoryStore::new();
         store.commit(&image_to_batch(&image, 1, "")).unwrap();
-        let (manifest, small) = validate_store(&store, &sig()).expect("validates");
+        let (manifest, small, _leaves) = validate_store(&store, &sig()).expect("validates");
         assert_eq!(manifest.epoch, 1);
         assert_eq!(manifest.slot_count as usize, image.slots.len());
         assert_eq!(small.slot_free, image.slot_free);

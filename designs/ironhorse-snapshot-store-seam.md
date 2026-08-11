@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
-| **Updated** | 2026-08-08 |
+| **Updated** | 2026-08-11 |
 | **Author** | Aaron Kumavis (prompted) |
 | **Status** | In Progress |
 | **Builds on** | designs/ironhorse-engine.md (§ Snapshots, requirement 1c) |
@@ -147,6 +147,34 @@ proportionality locks deliberately stay per-backend: they poke a
 backend's physical representation, so their failure taxonomy is not
 shared.
 
+**Phase 5 landed (2026-08-11, store schema v3): the row-hash tree.**
+Every row (slot page, chunk extent, small state) has a SHA-256 leaf;
+the manifest carries the combined root, which the seal signs (the
+seal hashes the full manifest). Backends persist leaves beside rows
+(a `leaf_hashes` table in SQLite; a leaf section in the `IHSTORE2`
+file layout; vectors in the memory store), maintain them
+transactionally via the shared `apply_batch_leaves` — which also
+REFUSES any batch whose sealed root does not match its own rows —
+and serve them through `HeapStore::leaf_hashes()` (32 bytes per row,
+metadata-scale like `inventory()`). `validate_store` recombines
+leaves against the root at open; `store_to_image` verifies each row
+as it reads; lazy faults verify against the attach-time leaves
+(valid for every faultable row, since a session's own commits touch
+only dirty rows and dirty ⇒ resident means those never fault). The
+root is the store-native identity — two stores compare equal by
+manifest field, no row read; the CAS blob key remains SHA-256 of the
+canonical export, computed only at interchange (the golden vector
+proved the container unchanged across the schema bump). Still open
+from the phase-5 bar: the wake-latency benchmark, and an interior
+tree if leaf counts ever make the linear recombine measurable.
+Preceding it, the collaborator-review follow-up wave landed:
+`compare_payloads` as the only sanctioned two-chunk read, SQLite
+EXCLUSIVE locking (second opener fails closed, locked by test) +
+IMMEDIATE transactions + pinned `synchronous=FULL`, full per-crank
+computron vectors and a frozen golden vector in the metamorphic
+suite, a structural-span corruption arm, and the checked
+`compact` header subtraction.
+
 Phase 1-2 detail (2026-08-06):
 
 - `rust/engine/ironhorse-snapshot/src/store.rs` — the paged logical
@@ -240,13 +268,16 @@ wake-latency benchmark remain open.
 these bound Requirement 6 and Design Decision 7 to *structural*
 validation):**
 
-1. **Row content is not checksummed.** `validate_store` proves gates,
-   accounting, and row existence/length — a bit flip *inside* a
-   length-valid row passes and resumes a different machine. The blob
-   path has the same property (its integrity comes from the external
-   CAS address). Candidate fix: per-row hashes in the manifest chain
-   (lazy-compatible, priced per commit); whole-store verification via
-   `root_hash` exists but is O(heap).
+1. ~~Row content is not checksummed.~~ **Discharged 2026-08-11 by
+   phase 5** (store schema v3): every row has a stored leaf hash, the
+   manifest carries the sealed row-tree root, validation recombines
+   leaves against the root at open (metadata-scale), and every row
+   read — eager reify or lazy fault — verifies content against its
+   leaf. A length-preserving flip at rest now fails closed (open-time
+   error for a leaf flip; read-time structured error or named panic
+   for a row flip), locked by
+   `length_preserving_flip_at_rest_fails_closed`. The blob path keeps
+   its external-CAS-address integrity model.
 2. **Record semantics are not validated at open.** A structurally
    valid store whose record *contents* are corrupt (a chunk offset
    below the header width, an out-of-range slot index) passes

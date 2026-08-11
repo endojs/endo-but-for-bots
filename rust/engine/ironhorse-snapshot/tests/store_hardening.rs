@@ -158,7 +158,12 @@ impl Machine {
 /// Build the incremental batch for the machine's current state from
 /// public pieces only — the same construction the machine surface
 /// performs, exercised here under arbitrary schedules.
-fn incremental_batch(m: &Machine, epoch: u64, prev_seal: &str) -> CheckpointBatch {
+fn incremental_batch(
+    m: &Machine,
+    store: &dyn HeapStore,
+    epoch: u64,
+    prev_seal: &str,
+) -> CheckpointBatch {
     let slots = &m.heap.slots;
     let chunks = &m.heap.chunks;
     let manifest = StoreManifest {
@@ -176,6 +181,7 @@ fn incremental_batch(m: &Machine, epoch: u64, prev_seal: &str) -> CheckpointBatc
         slot_live: slots.live_count(),
         chunk_len: chunks.byte_size() as u64,
         epoch,
+        root: String::new(),
         seal: String::new(),
     };
     let small = SmallState {
@@ -206,6 +212,22 @@ fn incremental_batch(m: &Machine, epoch: u64, prev_seal: &str) -> CheckpointBatc
         .collect();
     let small_bytes = small.encode();
     let mut manifest = manifest;
+    // Root maintenance exactly as checkpoint_to_store performs it:
+    // prior stored leaves + this batch's dirty leaves.
+    let (mut lp, mut le) = store.leaf_hashes().unwrap_or_default();
+    lp.resize(ironhorse_snapshot::store::slot_page_count(manifest.slot_count) as usize, [0u8; 32]);
+    le.resize(chunk_extent_count(manifest.chunk_len) as usize, [0u8; 32]);
+    for (i, bytes) in &slot_pages {
+        lp[*i as usize] = ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_PAGE, *i, bytes);
+    }
+    for (i, bytes) in &chunk_extents {
+        le[*i as usize] = ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_EXT, *i, bytes);
+    }
+    manifest.root = ironhorse_snapshot::store::combine_root(
+        &ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_SMALL, 0, &small_bytes),
+        &lp,
+        &le,
+    );
     manifest.seal = seal_commit(prev_seal, &manifest, &small_bytes, &slot_pages, &chunk_extents);
     CheckpointBatch {
         prev_seal: prev_seal.to_string(),
@@ -252,7 +274,7 @@ fn randomized_schedules_keep_store_equal_to_live_arenas() {
             }
             epoch += 1;
             let prev = mem_store.manifest().unwrap().seal;
-            let batch = incremental_batch(&m, epoch, &prev);
+            let batch = incremental_batch(&m, &mem_store, epoch, &prev);
             m.heap.slots.clear_dirty();
             m.heap.chunks.clear_dirty();
             mem_store.commit(&batch).unwrap();
@@ -446,7 +468,7 @@ fn dirty_fraction_sweep_commits_exactly_the_touched_pages() {
             live: Vec::new(),
         };
         let prev = store.manifest().unwrap().seal;
-        let batch = incremental_batch(&m, epoch, &prev);
+        let batch = incremental_batch(&m, &store, epoch, &prev);
         slots = m.heap.slots;
         slots.clear_dirty();
         store.commit(&batch).unwrap();
