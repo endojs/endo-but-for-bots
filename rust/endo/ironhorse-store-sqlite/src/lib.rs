@@ -8,10 +8,13 @@
 //! extents inside one SQLite transaction under WAL, where the in-crate
 //! reference [`ironhorse_snapshot::store_file::FileStore`] rewrites its
 //! whole file per commit. The semantics are pinned by the shared
-//! contract, not re-invented here: epoch discipline via
-//! [`ironhorse_snapshot::store::check_epoch`], rows beyond the new
-//! geometry dropped on commit, raw row bytes in the crate's canonical
-//! encodings, and the same fail-closed gate taxonomy.
+//! contract, not re-invented here: succession discipline via
+//! [`ironhorse_snapshot::store::check_succession`] (the seal chain
+//! plus the recomputed batch seal — strictly stronger than a bare
+//! epoch check), the shared [`ironhorse_snapshot::store::apply_batch`]
+//! verification, rows beyond the new geometry dropped on commit, raw
+//! row bytes in the crate's canonical encodings, and the same
+//! fail-closed gate taxonomy.
 //!
 //! Operational discipline follows the daemon's SQLite designs
 //! (`designs/daemon-endo-rust-sqlite.md`,
@@ -32,7 +35,7 @@
 use std::path::Path;
 
 use ironhorse_snapshot::store::{
-    apply_batch_leaves, check_succession, chunk_extent_count, free_seg_count, leaf_hash,
+    apply_batch, check_succession, chunk_extent_count, free_seg_count, leaf_hash,
     slot_page_count, CheckpointBatch, HeapStore, StoreError, StoreManifest, LEAF_EXT, LEAF_FREE,
     LEAF_PAGE,
 };
@@ -64,14 +67,14 @@ impl SqliteHeapStore {
     /// schema. A file that is not a SQLite database fails closed here.
     pub fn open(path: impl AsRef<Path>) -> Result<SqliteHeapStore, StoreError> {
         let conn = Connection::open(path).map_err(sql_err)?;
-        Self::init(conn)
+        Self::init(conn, false)
     }
 
     /// An in-memory store for tests and ephemeral use. Same schema and
     /// semantics; nothing durable.
     pub fn open_in_memory() -> Result<SqliteHeapStore, StoreError> {
         let conn = Connection::open_in_memory().map_err(sql_err)?;
-        Self::init(conn)
+        Self::init(conn, true)
     }
 
     /// The `PRAGMA application_id` stamp: `IRON` as a big-endian u32 —
@@ -81,7 +84,7 @@ impl SqliteHeapStore {
     /// review's foreign-database finding).
     const APPLICATION_ID: i32 = i32::from_be_bytes(*b"IRON");
 
-    fn init(conn: Connection) -> Result<SqliteHeapStore, StoreError> {
+    fn init(conn: Connection, in_memory: bool) -> Result<SqliteHeapStore, StoreError> {
         // Foreign-database gate before anything else touches the file.
         let app_id: i32 = conn
             .query_row("PRAGMA application_id", [], |r| r.get(0))
@@ -135,7 +138,11 @@ impl SqliteHeapStore {
         let mode: String = conn
             .query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))
             .map_err(sql_err)?;
-        if mode != "wal" && mode != "memory" {
+        // "memory" is acceptable ONLY for a genuinely in-memory
+        // connection — keyed on how WE opened it, not on the reported
+        // string, so an on-disk database claiming a memory journal
+        // (no crash durability at all) fails closed (review nit).
+        if mode != "wal" && !(in_memory && mode == "memory") {
             return Err(StoreError::Io(format!(
                 "sqlite: journal_mode=WAL refused (got {mode})"
             )));
@@ -145,9 +152,20 @@ impl SqliteHeapStore {
         // Pin durability explicitly rather than riding the build-time
         // default: FULL syncs the WAL on every commit, which is the
         // acked-checkpoint-survives-power-loss contract the machine
-        // layer's fsync discipline assumes.
+        // layer's fsync discipline assumes. Verified by read-back like
+        // the two pragmas above — `synchronous` is exactly the one
+        // whose silent absence breaks the stated contract (the review
+        // found it fired blind while its siblings were checked).
         conn.execute_batch("PRAGMA synchronous = FULL")
             .map_err(sql_err)?;
+        let sync: i64 = conn
+            .query_row("PRAGMA synchronous", [], |r| r.get(0))
+            .map_err(sql_err)?;
+        if sync != 2 {
+            return Err(StoreError::Io(format!(
+                "sqlite: synchronous=FULL refused (got {sync})"
+            )));
+        }
         conn.execute_batch(
             "PRAGMA foreign_keys=ON;
              CREATE TABLE IF NOT EXISTS meta (
@@ -258,6 +276,13 @@ impl HeapStore for SqliteHeapStore {
     }
 
     fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
+        // Empty-store gate for point-read parity: all three backends
+        // report `Empty` for a store with no committed epoch, and
+        // `MissingRow` only for a committed store lacking the row
+        // (the review's parity table).
+        if Self::stored_manifest(&self.conn)?.is_none() {
+            return Err(StoreError::Empty);
+        }
         self.conn
             .query_row(
                 "SELECT bytes FROM slot_pages WHERE page = ?1",
@@ -270,6 +295,9 @@ impl HeapStore for SqliteHeapStore {
     }
 
     fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError> {
+        if Self::stored_manifest(&self.conn)?.is_none() {
+            return Err(StoreError::Empty);
+        }
         self.conn
             .query_row(
                 "SELECT bytes FROM chunk_exts WHERE ext = ?1",
@@ -285,7 +313,7 @@ impl HeapStore for SqliteHeapStore {
         // Metadata-only: `length(bytes)` never materializes the BLOBs,
         // so open-time validation (and lazy resume) reads no row
         // contents.
-        let m = self.manifest()?;
+        let _ = self.manifest()?;
         // Built from the rows actually present (ORDER BY page), never
         // pre-sized from the manifest's untrusted geometry — a forged
         // slot_count must fail validation, not force an allocation
@@ -356,9 +384,9 @@ impl HeapStore for SqliteHeapStore {
     }
 
     fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
-        if Self::stored_manifest(&self.conn)?.is_none() {
+        let Some(m) = Self::stored_manifest(&self.conn)? else {
             return Err(StoreError::Empty);
-        }
+        };
         let mut stmt = self
             .conn
             .prepare("SELECT page, targets FROM page_edges ORDER BY page")
@@ -381,10 +409,23 @@ impl HeapStore for SqliteHeapStore {
                     .collect(),
             );
         }
+        // Contiguity above rules out interior gaps; this rules out a
+        // truncated TAIL — the case the review showed reads as "no
+        // outgoing edges" and turns the partial collector maximal.
+        let expected = slot_page_count(m.slot_count);
+        if out.len() != expected as usize {
+            return Err(StoreError::SummaryCount {
+                expected,
+                found: out.len() as u32,
+            });
+        }
         Ok(out)
     }
 
     fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+        if Self::stored_manifest(&self.conn)?.is_none() {
+            return Err(StoreError::Empty);
+        }
         self.conn
             .query_row(
                 "SELECT bytes FROM free_segs WHERE seg = ?1",
@@ -433,29 +474,8 @@ impl HeapStore for SqliteHeapStore {
         {
             let stored = Self::stored_manifest(&tx)?;
             check_succession(stored.as_ref(), batch)?;
-
-            // A grown geometry's new rows must be in the batch. Prior
-            // rows exist by induction, so only the grown region is
-            // checked — O(grown + dirty) set lookups, zero per-row SQL
-            // (the PR-review finding).
             let pages = slot_page_count(batch.manifest.slot_count);
             let exts = chunk_extent_count(batch.manifest.chunk_len);
-            let prior_pages = stored.as_ref().map_or(0, |m| slot_page_count(m.slot_count));
-            let prior_exts = stored.as_ref().map_or(0, |m| chunk_extent_count(m.chunk_len));
-            let batch_pages: std::collections::HashSet<u32> =
-                batch.slot_pages.iter().map(|(p, _)| *p).collect();
-            let batch_exts: std::collections::HashSet<u32> =
-                batch.chunk_extents.iter().map(|(e, _)| *e).collect();
-            for page in prior_pages..pages {
-                if !batch_pages.contains(&page) {
-                    return Err(StoreError::MissingRow("slot page", page));
-                }
-            }
-            for ext in prior_exts..exts {
-                if !batch_exts.contains(&ext) {
-                    return Err(StoreError::MissingRow("chunk extent", ext));
-                }
-            }
 
             let mut upsert_page = tx
                 .prepare(
@@ -488,53 +508,77 @@ impl HeapStore for SqliteHeapStore {
             tx.execute("DELETE FROM chunk_exts WHERE ext >= ?1", params![exts as i64])
                 .map_err(sql_err)?;
 
-            // Row-leaf maintenance (phase 5): verify the batch's root
-            // against prior leaves + dirty leaves, then persist the
-            // dirty leaves and drop those beyond the new geometry —
-            // all inside this transaction. The prior leaves come from
-            // the same snapshot the succession check read.
+            // The shared per-commit verification (grown-region
+            // presence for all three row dimensions, row lengths,
+            // summary coupling, root recombination) against the prior
+            // leaves and summaries — all read inside this transaction,
+            // the same snapshot the succession check read. The prior
+            // leaves are read PER KIND with contiguity enforced, like
+            // the trait readers: the review found an unfiltered
+            // `ORDER BY kind, idx` here silently folding kind-2 free
+            // leaves into the extent vector (masked only by resize
+            // bounds), and no gap detection.
             {
-                let mut prior_pages: Vec<[u8; 32]> = Vec::new();
-                let mut prior_exts: Vec<[u8; 32]> = Vec::new();
-                let mut stmt = tx
-                    .prepare("SELECT kind, idx, hash FROM leaf_hashes ORDER BY kind, idx")
-                    .map_err(sql_err)?;
-                let rows = stmt
-                    .query_map([], |r| {
-                        Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, Vec<u8>>(2)?))
-                    })
-                    .map_err(sql_err)?;
-                for row in rows {
-                    let (kind, _idx, hash) = row.map_err(sql_err)?;
-                    let arr: [u8; 32] = hash
-                        .try_into()
-                        .map_err(|_| StoreError::Io("sqlite: malformed leaf hash".to_string()))?;
-                    if kind == 0 {
-                        prior_pages.push(arr);
-                    } else {
-                        prior_exts.push(arr);
-                    }
-                }
-                drop(stmt);
-                let mut prior_frees: Vec<[u8; 32]> = Vec::new();
-                {
+                let mut read_kind = |kind: i64, what: &'static str| -> Result<Vec<[u8; 32]>, StoreError> {
                     let mut stmt = tx
-                        .prepare("SELECT idx, hash FROM leaf_hashes WHERE kind = 2 ORDER BY idx")
+                        .prepare("SELECT idx, hash FROM leaf_hashes WHERE kind = ?1 ORDER BY idx")
                         .map_err(sql_err)?;
                     let rows = stmt
-                        .query_map([], |r| {
+                        .query_map(params![kind], |r| {
                             Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
                         })
                         .map_err(sql_err)?;
+                    let mut out: Vec<[u8; 32]> = Vec::new();
                     for row in rows {
-                        let (_idx, hash) = row.map_err(sql_err)?;
+                        let (idx, hash) = row.map_err(sql_err)?;
+                        if idx as usize != out.len() {
+                            return Err(StoreError::MissingRow(what, out.len() as u32));
+                        }
                         let arr: [u8; 32] = hash.try_into().map_err(|_| {
                             StoreError::Io("sqlite: malformed leaf hash".to_string())
                         })?;
-                        prior_frees.push(arr);
+                        out.push(arr);
+                    }
+                    Ok(out)
+                };
+                let mut prior_pages = read_kind(0, "slot page leaf")?;
+                let mut prior_exts = read_kind(1, "chunk extent leaf")?;
+                let mut prior_frees = read_kind(2, "free segment leaf")?;
+                let mut prior_edges: Vec<Vec<u32>> = Vec::new();
+                {
+                    let mut stmt = tx
+                        .prepare("SELECT page, targets FROM page_edges ORDER BY page")
+                        .map_err(sql_err)?;
+                    let rows = stmt
+                        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+                        .map_err(sql_err)?;
+                    for row in rows {
+                        let (page, blob) = row.map_err(sql_err)?;
+                        if page as usize != prior_edges.len() {
+                            return Err(StoreError::MissingRow(
+                                "page edges",
+                                prior_edges.len() as u32,
+                            ));
+                        }
+                        if blob.len() % 4 != 0 {
+                            return Err(StoreError::Io(
+                                "sqlite: malformed page edges".to_string(),
+                            ));
+                        }
+                        prior_edges.push(
+                            blob.chunks_exact(4)
+                                .map(|c| u32::from_be_bytes(c.try_into().unwrap()))
+                                .collect(),
+                        );
                     }
                 }
-                apply_batch_leaves(&mut prior_pages, &mut prior_exts, &mut prior_frees, batch)?;
+                apply_batch(
+                    &mut prior_pages,
+                    &mut prior_exts,
+                    &mut prior_frees,
+                    &mut prior_edges,
+                    batch,
+                )?;
                 let mut upsert_leaf = tx
                     .prepare(
                         "INSERT INTO leaf_hashes (kind, idx, hash) VALUES (?1, ?2, ?3)

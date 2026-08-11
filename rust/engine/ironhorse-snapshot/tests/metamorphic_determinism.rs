@@ -96,15 +96,17 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         "c36f161dea7e80c5144bc5b3134c5a38105b2e94e8150aa7a496bc1e927d3e2f",
         "canonical final blob hash"
     );
-    // Seal re-pinned 2026-08-11 as the schema evolved: v3 (row-hash
-    // tree root), phase 6 (page-edge summaries in the seal), phase 6
-    // NULL-edge fix, and v4 (segmented free list; free_len in the
-    // manifest, free rows in the seal).
-    // The blob hash above was unchanged by both — exactly the
+    // Seal re-pinned 2026-08-11 as the schema evolved, once per
+    // format commit: v3 (row-hash tree root), v3+phase 6 (page-edge
+    // summaries in the seal, including the NULL-edge exclusion), v4
+    // (segmented free list: free_len in the manifest, free rows in
+    // the seal), and v5 (summaries folded into the root; counts
+    // header and length-prefixed edge entries in root and seal).
+    // The blob hash above was unchanged by ALL of them — exactly the
     // container/store independence this vector exists to prove.
     assert_eq!(
         store.manifest().unwrap().seal,
-        "cee98814d49acb860ff33fb526b5032f99821e42b3e58e6a62c744f214bfe628",
+        "0a2751b718025257a83a58ce6447efa975fcc4e4d9c12ec2677602150488b051",
         "epoch-3 seal chain"
     );
 }
