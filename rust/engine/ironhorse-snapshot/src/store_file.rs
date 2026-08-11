@@ -24,6 +24,7 @@
 //! [4]  slot-page count   [4] chunk-extent count
 //! [page directory: count × (u64 offset, u32 length)]
 //! [extent directory: count × (u64 offset, u32 length)]
+//! [page leaf hashes: count × 32]  [extent leaf hashes: count × 32]
 //! [blobs, in directory order]
 //! ```
 //!
@@ -45,7 +46,7 @@ use crate::store::{
 
 /// The file-format discriminator. Version-suffixed: a layout change is
 /// a new magic, and a reader fails closed on a magic it does not know.
-pub const FILE_MAGIC: [u8; 8] = *b"IHSTORE1";
+pub const FILE_MAGIC: [u8; 8] = *b"IHSTORE2";
 
 /// Temp files are uniquely named per process and per commit
 /// (`.tmp-{pid}-{n}`), so two writers can never interleave bytes in a
@@ -70,6 +71,8 @@ struct Loaded {
     small: Vec<u8>,
     pages: Vec<DirEntry>,
     extents: Vec<DirEntry>,
+    leaf_pages: Vec<[u8; 32]>,
+    leaf_exts: Vec<[u8; 32]>,
 }
 
 /// The single-file reference store. See the module docs.
@@ -174,6 +177,24 @@ impl FileStore {
         let pages = read_dir(n_pages)?;
         let extents = read_dir(n_exts)?;
 
+        // The row-leaf hashes (phase 5), 32 bytes per row; the same
+        // reservation clamp discipline as the directories.
+        if (n_pages + n_exts) * 32 > file_len {
+            return Err(corrupt("file store leaf hashes truncated"));
+        }
+        let mut read_leaves = |n: u64| -> Result<Vec<[u8; 32]>, StoreError> {
+            let mut out = Vec::with_capacity(n as usize);
+            for _ in 0..n {
+                let mut b = [0u8; 32];
+                file.read_exact(&mut b)
+                    .map_err(|_| corrupt("file store leaf hashes truncated"))?;
+                out.push(b);
+            }
+            Ok(out)
+        };
+        let leaf_pages = read_leaves(n_pages)?;
+        let leaf_exts = read_leaves(n_exts)?;
+
         // The directories must cover exactly the manifest's geometry —
         // the same promise the row inventory of `validate_store`
         // re-checks with lengths.
@@ -191,6 +212,8 @@ impl FileStore {
             small,
             pages,
             extents,
+            leaf_pages,
+            leaf_exts,
         })
     }
 
@@ -245,6 +268,13 @@ impl HeapStore for FileStore {
         ))
     }
 
+    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
+        self.state
+            .as_ref()
+            .map(|(l, _)| (l.leaf_pages.clone(), l.leaf_exts.clone()))
+            .ok_or(StoreError::Empty)
+    }
+
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
         // Reload the durable file: the cached view can be stale if
         // another handle on this path committed (the review's silent
@@ -261,6 +291,7 @@ impl HeapStore for FileStore {
             None
         };
         check_succession(durable.as_ref().map(|(l, _)| &l.manifest), batch)?;
+
 
         let n_pages = slot_page_count(batch.manifest.slot_count);
         let n_exts = chunk_extent_count(batch.manifest.chunk_len);
@@ -321,6 +352,20 @@ impl HeapStore for FileStore {
             }
         }
 
+        // Leaf maintenance + root verification (phase 5) against the
+        // DURABLE prior leaves — after source resolution, so a missing
+        // grown row reports its precise MissingRow error rather than a
+        // root mismatch.
+        let mut leaf_pages = durable
+            .as_ref()
+            .map(|(l, _)| l.leaf_pages.clone())
+            .unwrap_or_default();
+        let mut leaf_exts = durable
+            .as_ref()
+            .map(|(l, _)| l.leaf_exts.clone())
+            .unwrap_or_default();
+        crate::store::apply_batch_leaves(&mut leaf_pages, &mut leaf_exts, batch)?;
+
         // Lay the file out: header, manifest, small, counts, dirs,
         // blobs. Directory offsets are computable before writing.
         let manifest_bytes = batch.manifest.encode();
@@ -331,7 +376,8 @@ impl HeapStore for FileStore {
             + batch.small.len() as u64
             + 4
             + 4
-            + 12 * (n_pages as u64 + n_exts as u64);
+            + 12 * (n_pages as u64 + n_exts as u64)
+            + 32 * (n_pages as u64 + n_exts as u64);
         let mut offsets: Vec<u64> = Vec::with_capacity(lengths.len());
         let mut cursor = header_len;
         for len in &lengths {
@@ -361,6 +407,12 @@ impl HeapStore for FileStore {
         for (offset, length) in offsets.iter().zip(&lengths) {
             tmp.write_all(&offset.to_be_bytes()).map_err(io_err)?;
             tmp.write_all(&length.to_be_bytes()).map_err(io_err)?;
+        }
+        for l in &leaf_pages {
+            tmp.write_all(l).map_err(io_err)?;
+        }
+        for l in &leaf_exts {
+            tmp.write_all(l).map_err(io_err)?;
         }
         for source in &sources {
             match source {

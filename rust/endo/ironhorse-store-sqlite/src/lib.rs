@@ -32,8 +32,8 @@
 use std::path::Path;
 
 use ironhorse_snapshot::store::{
-    check_succession, chunk_extent_count, slot_page_count, CheckpointBatch, HeapStore,
-    StoreError, StoreManifest,
+    apply_batch_leaves, check_succession, chunk_extent_count, leaf_hash, slot_page_count,
+    CheckpointBatch, HeapStore, StoreError, StoreManifest, LEAF_EXT, LEAF_PAGE,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -164,6 +164,15 @@ impl SqliteHeapStore {
              CREATE TABLE IF NOT EXISTS small_state (
                name  TEXT PRIMARY KEY,
                bytes BLOB NOT NULL
+             );
+             -- Row-leaf hashes (store seam phase 5): kind 0 = slot
+             -- page, 1 = chunk extent; 32-byte SHA-256 per row,
+             -- maintained transactionally with the rows themselves.
+             CREATE TABLE IF NOT EXISTS leaf_hashes (
+               kind  INTEGER NOT NULL,
+               idx   INTEGER NOT NULL,
+               hash  BLOB NOT NULL,
+               PRIMARY KEY (kind, idx)
              );
              -- One row set per side-table ledger row, populated as the
              -- Pending atoms land paired with their store rows (design
@@ -303,6 +312,36 @@ impl HeapStore for SqliteHeapStore {
         Ok((pages, exts))
     }
 
+    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
+        if Self::stored_manifest(&self.conn)?.is_none() {
+            return Err(StoreError::Empty);
+        }
+        let mut read = |kind: i64, what: &'static str| -> Result<Vec<[u8; 32]>, StoreError> {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT idx, hash FROM leaf_hashes WHERE kind = ?1 ORDER BY idx")
+                .map_err(sql_err)?;
+            let rows = stmt
+                .query_map(params![kind], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+                })
+                .map_err(sql_err)?;
+            let mut out: Vec<[u8; 32]> = Vec::new();
+            for row in rows {
+                let (idx, hash) = row.map_err(sql_err)?;
+                if idx as usize != out.len() {
+                    return Err(StoreError::MissingRow(what, out.len() as u32));
+                }
+                let arr: [u8; 32] = hash
+                    .try_into()
+                    .map_err(|_| StoreError::Io("sqlite: malformed leaf hash".to_string()))?;
+                out.push(arr);
+            }
+            Ok(out)
+        };
+        Ok((read(0, "slot page leaf")?, read(1, "chunk extent leaf")?))
+    }
+
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
         // IMMEDIATE: take the writer lock up front so a concurrent
         // commit serializes under busy_timeout instead of surfacing
@@ -369,6 +408,64 @@ impl HeapStore for SqliteHeapStore {
                 .map_err(sql_err)?;
             tx.execute("DELETE FROM chunk_exts WHERE ext >= ?1", params![exts as i64])
                 .map_err(sql_err)?;
+
+            // Row-leaf maintenance (phase 5): verify the batch's root
+            // against prior leaves + dirty leaves, then persist the
+            // dirty leaves and drop those beyond the new geometry —
+            // all inside this transaction. The prior leaves come from
+            // the same snapshot the succession check read.
+            {
+                let mut prior_pages: Vec<[u8; 32]> = Vec::new();
+                let mut prior_exts: Vec<[u8; 32]> = Vec::new();
+                let mut stmt = tx
+                    .prepare("SELECT kind, idx, hash FROM leaf_hashes ORDER BY kind, idx")
+                    .map_err(sql_err)?;
+                let rows = stmt
+                    .query_map([], |r| {
+                        Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, Vec<u8>>(2)?))
+                    })
+                    .map_err(sql_err)?;
+                for row in rows {
+                    let (kind, _idx, hash) = row.map_err(sql_err)?;
+                    let arr: [u8; 32] = hash
+                        .try_into()
+                        .map_err(|_| StoreError::Io("sqlite: malformed leaf hash".to_string()))?;
+                    if kind == 0 {
+                        prior_pages.push(arr);
+                    } else {
+                        prior_exts.push(arr);
+                    }
+                }
+                drop(stmt);
+                apply_batch_leaves(&mut prior_pages, &mut prior_exts, batch)?;
+                let mut upsert_leaf = tx
+                    .prepare(
+                        "INSERT INTO leaf_hashes (kind, idx, hash) VALUES (?1, ?2, ?3)
+                         ON CONFLICT(kind, idx) DO UPDATE SET hash = excluded.hash",
+                    )
+                    .map_err(sql_err)?;
+                for (page, bytes) in &batch.slot_pages {
+                    upsert_leaf
+                        .execute(params![0i64, *page as i64, leaf_hash(LEAF_PAGE, *page, bytes).as_slice()])
+                        .map_err(sql_err)?;
+                }
+                for (ext, bytes) in &batch.chunk_extents {
+                    upsert_leaf
+                        .execute(params![1i64, *ext as i64, leaf_hash(LEAF_EXT, *ext, bytes).as_slice()])
+                        .map_err(sql_err)?;
+                }
+                drop(upsert_leaf);
+                tx.execute(
+                    "DELETE FROM leaf_hashes WHERE kind = 0 AND idx >= ?1",
+                    params![pages as i64],
+                )
+                .map_err(sql_err)?;
+                tx.execute(
+                    "DELETE FROM leaf_hashes WHERE kind = 1 AND idx >= ?1",
+                    params![exts as i64],
+                )
+                .map_err(sql_err)?;
+            }
 
             tx.execute(
                 "INSERT INTO small_state (name, bytes) VALUES (?1, ?2)

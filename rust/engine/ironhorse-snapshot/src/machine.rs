@@ -63,8 +63,9 @@ use crate::format::{Signature, SnapshotError};
 use crate::image::{read_machine, write_machine, MachineImage, MeterImage};
 use crate::sha256::{hex, Sha256};
 use crate::store::{
-    chunk_extent_count, image_to_batch, seal_commit, store_to_image, validate_store,
-    CheckpointBatch, HeapStore, SmallState, StoreError, StoreManifest, STORE_SCHEMA_VERSION,
+    chunk_extent_count, combine_root, image_to_batch, leaf_hash, seal_commit, slot_page_count,
+    store_to_image, validate_store, CheckpointBatch, HeapStore, SmallState, StoreError,
+    StoreLeaves, StoreManifest, LEAF_EXT, LEAF_PAGE, LEAF_SMALL, STORE_SCHEMA_VERSION,
 };
 use ironhorse_vm::Interp;
 
@@ -343,6 +344,7 @@ fn manifest_of(interp: &Interp, signature: &Signature, epoch: u64) -> StoreManif
         slot_live: interp.slots.live_count(),
         chunk_len: interp.chunks.byte_size() as u64,
         epoch,
+        root: String::new(),
         seal: String::new(),
     }
 }
@@ -458,6 +460,19 @@ pub fn checkpoint_to_store(
         .collect();
 
     let small = small_state_of(interp).encode();
+    // Row-hash tree maintenance (phase 5): prior leaves + this
+    // commit's dirty leaves → the new sealed root. Metadata-scale
+    // (32 bytes per row) and O(dirty) hashing of content.
+    let (mut leaf_pages, mut leaf_exts) = store.leaf_hashes()?;
+    leaf_pages.resize(slot_page_count(manifest.slot_count) as usize, [0u8; 32]);
+    leaf_exts.resize(chunk_extent_count(manifest.chunk_len) as usize, [0u8; 32]);
+    for (i, bytes) in &slot_pages {
+        leaf_pages[*i as usize] = leaf_hash(LEAF_PAGE, *i, bytes);
+    }
+    for (i, bytes) in &chunk_extents {
+        leaf_exts[*i as usize] = leaf_hash(LEAF_EXT, *i, bytes);
+    }
+    manifest.root = combine_root(&leaf_hash(LEAF_SMALL, 0, &small), &leaf_pages, &leaf_exts);
     manifest.seal = seal_commit(&session.seal, &manifest, &small, &slot_pages, &chunk_extents);
     let seal = manifest.seal.clone();
     let batch = CheckpointBatch {
@@ -497,7 +512,7 @@ pub fn resume_from_store(
     store: &dyn HeapStore,
     expected_sig: &Signature,
 ) -> Result<StoreSession, StoreError> {
-    let (manifest, _small) = validate_store(store, expected_sig)?;
+    let (manifest, _small, _leaves) = validate_store(store, expected_sig)?;
     let image = store_to_image(store)?;
     // Re-check the manifest after the row reads: the reads above are
     // not one atomic snapshot on every backend, so a concurrent commit
@@ -531,6 +546,13 @@ pub fn resume_from_store(
 /// message — the deterministic crashed-crank path.
 struct StorePageSource<S: HeapStore> {
     store: std::rc::Rc<std::cell::RefCell<S>>,
+    /// The row-leaf hashes verified against the sealed root at open
+    /// (phase 5). Every fault checks its row against these, so a
+    /// length-preserving flip at rest dies as a named crashed crank,
+    /// never a different machine. Attach-time leaves stay valid for
+    /// every faultable row: the session's own commits touch only
+    /// dirty rows, and dirty ⇒ resident means those never fault.
+    leaves: StoreLeaves,
     /// The (epoch, seal) the machine's session currently stands at.
     /// Every fault re-verifies it, so a store advanced by anyone else
     /// turns torn reads into a deterministic named crashed crank
@@ -565,6 +587,11 @@ impl<S: HeapStore> ironhorse_vm::PageSource for StorePageSource<S> {
             .borrow()
             .read_slot_page(page)
             .unwrap_or_else(|e| panic!("lazy heap fault: slot page {page}: {e:?}"));
+        if self.leaves.pages.get(page as usize).copied()
+            != Some(leaf_hash(LEAF_PAGE, page, &bytes))
+        {
+            panic!("lazy heap fault: slot page {page} fails its leaf hash (corrupt store)");
+        }
         // The pin check and the row read are separate store operations,
         // so on a shared backend a foreign commit can land between them
         // and the read return a NEW-epoch row the pre-check could not
@@ -582,6 +609,10 @@ impl<S: HeapStore> ironhorse_vm::PageSource for StorePageSource<S> {
             .borrow()
             .read_chunk_extent(ext)
             .unwrap_or_else(|e| panic!("lazy heap fault: chunk extent {ext}: {e:?}"));
+        if self.leaves.exts.get(ext as usize).copied() != Some(leaf_hash(LEAF_EXT, ext, &bytes))
+        {
+            panic!("lazy heap fault: chunk extent {ext} fails its leaf hash (corrupt store)");
+        }
         // Same post-read verification as `slot_page` — see there.
         self.check_pin("chunk extent post-read");
         bytes
@@ -605,7 +636,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     store: std::rc::Rc<std::cell::RefCell<S>>,
     expected_sig: &Signature,
 ) -> Result<StoreSession, StoreError> {
-    let (manifest, small) = validate_store(&*store.borrow(), expected_sig)?;
+    let (manifest, small, leaves) = validate_store(&*store.borrow(), expected_sig)?;
     // Re-check the manifest after validation's separate reads, exactly
     // as eager resume does after its row reads: the manifest / small /
     // inventory reads are not one atomic snapshot on every backend, so
@@ -632,6 +663,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     });
     let source = std::rc::Rc::new(StorePageSource {
         store: store.clone(),
+        leaves,
         pin: pin.clone(),
     });
     let slots = ironhorse_vm::SlotArena::lazy_from_parts(

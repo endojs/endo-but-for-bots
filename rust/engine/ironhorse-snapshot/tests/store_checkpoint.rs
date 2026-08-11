@@ -360,6 +360,9 @@ impl HeapStore for InterleavingStore {
         }
         served
     }
+    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
+        self.inner.borrow().leaf_hashes()
+    }
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
         self.inner.borrow_mut().commit(batch)
     }
@@ -467,4 +470,78 @@ fn seal_binds_full_manifest_identity_and_forgeries_are_refused() {
         Err(StoreError::BaselineMismatch { .. }) => {}
         other => panic!("expected forged-seal refusal, got {other:?}"),
     }
+}
+
+/// Phase 5 acceptance: the row-hash tree discharges named integrity
+/// limitation 1 — a length-preserving byte flip at rest can no longer
+/// resume a different machine. A flipped ROW byte fails closed at the
+/// point of read (eager resume error; lazy fault dies as the named
+/// panic), and a flipped LEAF byte fails closed at open (the leaves no
+/// longer recombine to the sealed root).
+#[test]
+fn length_preserving_flip_at_rest_fails_closed() {
+    let (mut store, dir) = file_store("integrity");
+    let path = dir.join("heap.ihstore");
+    let mut m = Interp::new();
+    assert!(m.run(&PROG_A).completed);
+    drop(begin(m, &mut store));
+    drop(store);
+    let pristine = std::fs::read(&path).unwrap();
+
+    // 1. Flip the file's LAST byte — blob content (blobs are the tail
+    //    of the layout), so the store still loads structurally.
+    let mut flipped = pristine.clone();
+    *flipped.last_mut().unwrap() ^= 0xff;
+    std::fs::write(&path, &flipped).unwrap();
+    let store = FileStore::open(&path).expect("structural load still succeeds");
+    match resume_from_store(&store, &sig()) {
+        Err(_) => {}
+        Ok(_) => panic!("eager resume must refuse a flipped row byte"),
+    }
+
+    // The same flip under LAZY resume dies at the fault that reads the
+    // row, as the named leaf-hash panic — never a different machine.
+    let shared = std::rc::Rc::new(std::cell::RefCell::new(FileStore::open(&path).unwrap()));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let session = resume_from_store_lazy(shared.clone(), &sig())?;
+        let manifest = shared.borrow().manifest().unwrap();
+        for ext in 0..ironhorse_snapshot::store::chunk_extent_count(manifest.chunk_len) {
+            session.machine().chunks.touch_extent(ext);
+        }
+        for page in 0..slot_page_count(manifest.slot_count) {
+            session.machine().slots.touch_page(page);
+        }
+        Ok::<(), StoreError>(())
+    }));
+    match outcome {
+        Err(payload) => {
+            let msg = payload.downcast_ref::<String>().map(String::as_str).unwrap_or("");
+            assert!(
+                msg.contains("fails its leaf hash"),
+                "expected the named leaf-hash panic, got: {msg}"
+            );
+        }
+        Ok(Err(_)) => {} // refused before attach: equally fail-closed
+        Ok(Ok(())) => panic!("lazy resume must not serve a flipped row byte"),
+    }
+
+    // 2. Flip a byte inside the LEAF-HASH region: refused at open
+    //    (leaves no longer recombine to the sealed root).
+    let be32 = |b: &[u8], at: usize| u32::from_be_bytes(b[at..at + 4].try_into().unwrap()) as usize;
+    let mlen = be32(&pristine, 8);
+    let slen = be32(&pristine, 12 + mlen);
+    let counts_at = 12 + mlen + 4 + slen;
+    let n_pages = be32(&pristine, counts_at);
+    let n_exts = be32(&pristine, counts_at + 4);
+    let leaves_at = counts_at + 8 + 12 * (n_pages + n_exts);
+    let mut leaf_flipped = pristine.clone();
+    leaf_flipped[leaves_at] ^= 0xff;
+    std::fs::write(&path, &leaf_flipped).unwrap();
+    let store = FileStore::open(&path).expect("structural load still succeeds");
+    match resume_from_store(&store, &sig()) {
+        Err(_) => {}
+        Ok(_) => panic!("a flipped leaf hash must fail closed at open"),
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
