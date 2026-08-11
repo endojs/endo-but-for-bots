@@ -40,7 +40,9 @@ test('reroutes a release-pinned URL through the current symlink', async t => {
 });
 
 test('returns the URL unchanged when it has no releases/<id>/ segment', t => {
-  const url = pathToFileURL('/home/dev/endo/packages/sandbox/src/agent.js').href;
+  const url = pathToFileURL(
+    '/home/dev/endo/packages/sandbox/src/agent.js',
+  ).href;
   t.is(toCurrentSpecifier(url), url);
 });
 

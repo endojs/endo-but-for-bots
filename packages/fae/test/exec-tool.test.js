@@ -27,9 +27,12 @@ test('exec runs a plain multiline snippet', async t => {
 
 test('exec strips a markdown code fence before evaluating', async t => {
   const tool = makeExecTool(powers);
-  const fenced = ['```js', 'const xs = [1, 2, 3];', 'return xs.length;', '```'].join(
-    '\n',
-  );
+  const fenced = [
+    '```js',
+    'const xs = [1, 2, 3];',
+    'return xs.length;',
+    '```',
+  ].join('\n');
   const result = await tool.execute({ code: fenced });
   t.is(result, '3');
 });
