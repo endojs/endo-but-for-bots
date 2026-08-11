@@ -611,6 +611,12 @@ impl SlotArena {
     /// Whether `index` currently sits on the free list (a swept or
     /// never-live record). Linear in the free-list length; used only by
     /// the sweep bookkeeping and tests, not on any hot path.
+    /// Whether `idx` is on the free list — the liveness query the
+    /// store-side partial collector uses for page-granular freeing.
+    pub fn is_free_index(&self, idx: SlotIndex) -> bool {
+        self.is_free(idx.0)
+    }
+
     fn is_free(&self, i: u32) -> bool {
         self.free.contains(&i)
     }

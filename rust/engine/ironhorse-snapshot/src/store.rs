@@ -330,6 +330,7 @@ pub fn seal_commit(
     small: &[u8],
     slot_pages: &[(u32, Vec<u8>)],
     chunk_extents: &[(u32, Vec<u8>)],
+    page_edges: &[(u32, Vec<u32>)],
 ) -> String {
     let mut h = crate::sha256::Sha256::new();
     h.update(prev_seal.as_bytes());
@@ -353,7 +354,62 @@ pub fn seal_commit(
         h.update(&i.to_be_bytes());
         h.update(bytes);
     }
+    for (i, targets) in page_edges {
+        h.update(b"E");
+        h.update(&i.to_be_bytes());
+        for t in targets {
+            h.update(&t.to_be_bytes());
+        }
+    }
     crate::sha256::hex(&h.finalize())
+}
+
+/// A page's outgoing edge summary: the sorted, deduplicated set of
+/// pages its records reference (self-edges excluded — a page trivially
+/// reaches itself). A pure function of the page's records, so stored
+/// summaries are recomputable from content — the phase-6 determinism
+/// lock.
+pub fn derive_page_edges(page: u32, records: &[Slot]) -> Vec<u32> {
+    let mut targets = std::collections::BTreeSet::new();
+    for r in records {
+        r.each_ref_slot(|t| {
+            // NULL is a link terminator, not a page; recording it
+            // would fabricate an edge to page u32::MAX / SLOTS_PER_PAGE.
+            if t.is_null() {
+                return;
+            }
+            let tp = t.0 / SLOTS_PER_PAGE;
+            if tp != page {
+                targets.insert(tp);
+            }
+        });
+    }
+    targets.into_iter().collect()
+}
+
+/// Reachability over the STORED page-edge summaries alone: BFS from
+/// `roots` (page indices) through [`HeapStore::page_edges`], never
+/// reading row content — GC-shaped questions as indexed queries.
+pub fn reachable_pages(
+    store: &dyn HeapStore,
+    roots: impl IntoIterator<Item = u32>,
+) -> Result<std::collections::BTreeSet<u32>, StoreError> {
+    let edges = store.page_edges()?;
+    let mut seen = std::collections::BTreeSet::new();
+    let mut work: Vec<u32> = roots.into_iter().collect();
+    while let Some(p) = work.pop() {
+        if !seen.insert(p) {
+            continue;
+        }
+        if let Some(ts) = edges.get(p as usize) {
+            for &t in ts {
+                if !seen.contains(&t) {
+                    work.push(t);
+                }
+            }
+        }
+    }
+    Ok(seen)
 }
 
 /// Recompute a batch's seal after direct surgery on its contents —
@@ -367,6 +423,7 @@ pub fn reseal_batch(batch: &mut CheckpointBatch) {
         &batch.small,
         &batch.slot_pages,
         &batch.chunk_extents,
+        &batch.page_edges,
     );
 }
 
@@ -536,6 +593,14 @@ pub struct CheckpointBatch {
     pub slot_pages: Vec<(u32, Vec<u8>)>,
     /// `(extent index, raw bytes)` for each dirty chunk extent.
     pub chunk_extents: Vec<(u32, Vec<u8>)>,
+    /// `(page index, sorted outgoing page targets)` for each dirty
+    /// slot page — the **persisted page-edge summaries** (phase 6):
+    /// which pages this page's records reference. Derived purely from
+    /// the page's records ([`derive_page_edges`]), sealed with the
+    /// commit, and the substrate for reachability-as-indexed-queries
+    /// ([`reachable_pages`]) — a collector consulting them never
+    /// faults row content.
+    pub page_edges: Vec<(u32, Vec<u32>)>,
 }
 
 /// The keyed snapshot store: point reads by page/extent index and one
@@ -570,6 +635,10 @@ pub trait HeapStore {
     /// validation recombines them against the manifest root, and the
     /// fault path verifies each row read against its leaf.
     fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError>;
+    /// The stored page-edge summaries, index-ordered (phase 6): one
+    /// sorted target list per slot page. Metadata-scale; maintained by
+    /// `commit` from the batch's `page_edges`.
+    fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError>;
     /// Apply one checkpoint atomically. Must enforce the epoch
     /// discipline via [`check_epoch`] and drop rows beyond the new
     /// geometry.
@@ -603,6 +672,7 @@ pub fn check_succession(
         &batch.small,
         &batch.slot_pages,
         &batch.chunk_extents,
+        &batch.page_edges,
     );
     if batch.manifest.seal != recomputed {
         return Err(StoreError::BaselineMismatch {
@@ -705,6 +775,13 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
     let small_bytes = small.encode();
     let slot_pages = encode_all_slot_pages(&image.slots);
     let chunk_extents = encode_all_chunk_extents(&image.chunks);
+    let page_edges: Vec<(u32, Vec<u32>)> = (0..slot_page_count(manifest.slot_count))
+        .map(|page| {
+            let start = (page * SLOTS_PER_PAGE) as usize;
+            let end = image.slots.len().min(start + SLOTS_PER_PAGE as usize);
+            (page, derive_page_edges(page, &image.slots[start..end]))
+        })
+        .collect();
     // Root first (a full batch carries every row), then the seal —
     // which hashes the whole manifest and therefore signs the root.
     let pages: Vec<[u8; 32]> = slot_pages
@@ -716,13 +793,21 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         .map(|(i, b)| leaf_hash(LEAF_EXT, *i, b))
         .collect();
     manifest.root = combine_root(&leaf_hash(LEAF_SMALL, 0, &small_bytes), &pages, &exts);
-    manifest.seal = seal_commit(prev_seal, &manifest, &small_bytes, &slot_pages, &chunk_extents);
+    manifest.seal = seal_commit(
+        prev_seal,
+        &manifest,
+        &small_bytes,
+        &slot_pages,
+        &chunk_extents,
+        &page_edges,
+    );
     CheckpointBatch {
         prev_seal: prev_seal.to_string(),
         manifest,
         small: small_bytes,
         slot_pages,
         chunk_extents,
+        page_edges,
     }
 }
 
@@ -1020,6 +1105,7 @@ pub struct MemoryStore {
     chunk_extents: std::collections::HashMap<u32, Vec<u8>>,
     leaf_pages: Vec<[u8; 32]>,
     leaf_exts: Vec<[u8; 32]>,
+    edges: Vec<Vec<u32>>,
     last_commit: CommitStats,
 }
 
@@ -1090,6 +1176,13 @@ impl HeapStore for MemoryStore {
         Ok((self.leaf_pages.clone(), self.leaf_exts.clone()))
     }
 
+    fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
+        if self.manifest.is_none() {
+            return Err(StoreError::Empty);
+        }
+        Ok(self.edges.clone())
+    }
+
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
         check_succession(self.manifest.as_ref(), batch)?;
         // A grown geometry's new rows must be in the batch. Prior rows
@@ -1128,6 +1221,13 @@ impl HeapStore for MemoryStore {
         }
         self.leaf_pages = leaf_pages;
         self.leaf_exts = leaf_exts;
+        self.edges.resize(pages as usize, Vec::new());
+        for (page, targets) in &batch.page_edges {
+            if let Some(slot) = self.edges.get_mut(*page as usize) {
+                *slot = targets.clone();
+            }
+        }
+        self.edges.truncate(pages as usize);
         // Drop rows beyond the new geometry (chunk shrink across a GC
         // compaction; slot pages are monotone but the sweep is uniform).
         self.slot_pages.retain(|&p, _| p < pages);

@@ -63,9 +63,10 @@ use crate::format::{Signature, SnapshotError};
 use crate::image::{read_machine, write_machine, MachineImage, MeterImage};
 use crate::sha256::{hex, Sha256};
 use crate::store::{
-    chunk_extent_count, combine_root, image_to_batch, leaf_hash, seal_commit, slot_page_count,
-    store_to_image, validate_store, CheckpointBatch, HeapStore, SmallState, StoreError,
-    StoreLeaves, StoreManifest, LEAF_EXT, LEAF_PAGE, LEAF_SMALL, STORE_SCHEMA_VERSION,
+    chunk_extent_count, combine_root, derive_page_edges, image_to_batch, leaf_hash, seal_commit,
+    slot_page_count, store_to_image, validate_store, CheckpointBatch, HeapStore, SmallState,
+    StoreError, StoreLeaves, StoreManifest, LEAF_EXT, LEAF_PAGE, LEAF_SMALL,
+    STORE_SCHEMA_VERSION,
 };
 use ironhorse_vm::Interp;
 
@@ -434,12 +435,16 @@ pub fn checkpoint_to_store(
     // `extent_bytes` copy one page/extent out of the arena (dirty rows
     // are resident by construction, lazy or not), and the encoding is
     // the same canonical record codec the full path uses.
+    let mut page_edges: Vec<(u32, Vec<u32>)> = Vec::new();
     let slot_pages: Vec<(u32, Vec<u8>)> = interp
         .slots
         .dirty_pages()
         .into_iter()
         .map(|page| {
             let records = interp.slots.page_records(page);
+            // The page-edge summary (phase 6) falls out of the records
+            // already in hand — a pure function of page content.
+            page_edges.push((page, derive_page_edges(page, &records)));
             let mut bytes = Vec::with_capacity(records.len() * crate::slot_codec::SLOT_RECORD_BYTES);
             for slot in &records {
                 crate::slot_codec::encode_slot(slot, &mut bytes);
@@ -473,7 +478,14 @@ pub fn checkpoint_to_store(
         leaf_exts[*i as usize] = leaf_hash(LEAF_EXT, *i, bytes);
     }
     manifest.root = combine_root(&leaf_hash(LEAF_SMALL, 0, &small), &leaf_pages, &leaf_exts);
-    manifest.seal = seal_commit(&session.seal, &manifest, &small, &slot_pages, &chunk_extents);
+    manifest.seal = seal_commit(
+        &session.seal,
+        &manifest,
+        &small,
+        &slot_pages,
+        &chunk_extents,
+        &page_edges,
+    );
     let seal = manifest.seal.clone();
     let batch = CheckpointBatch {
         prev_seal: session.seal.clone(),
@@ -481,6 +493,7 @@ pub fn checkpoint_to_store(
         small,
         slot_pages,
         chunk_extents,
+        page_edges,
     };
     store.commit(&batch)?;
     session.interp.slots.clear_dirty();
@@ -851,4 +864,51 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// **Summary-driven partial collection** (store seam phase 6): free
+/// every page unreachable from the machine's GC roots, deciding
+/// reachability ENTIRELY from the store's persisted page-edge
+/// summaries — zero row-content reads, no full-heap reification.
+///
+/// Page-conservative by design: garbage co-resident with live data in
+/// a reachable page survives (the release-fixed full
+/// [`ironhorse_vm::Interp::collect_garbage`] reclaims it, and only it
+/// compacts chunk space). Deterministic: a pure function of store
+/// content and machine roots.
+///
+/// Contract: call at a checkpoint boundary while the session has no
+/// dirty rows — the summaries describe the committed state, and dirt
+/// would make them stale. A dirty machine panics with a named message
+/// (a caller bug, like the fault contract).
+///
+/// Returns the number of slots freed. Freeing never dirties (the free
+/// list rides small state), so the next checkpoint carries the
+/// reclamation in small state alone.
+pub fn partial_collect(
+    session: &mut StoreSession,
+    store: &dyn HeapStore,
+) -> Result<u32, StoreError> {
+    let interp = session.machine();
+    assert!(
+        interp.slots.dirty_pages().is_empty() && interp.chunks.dirty_extents().is_empty(),
+        "partial collect requires a clean checkpoint boundary (dirty rows present)"
+    );
+    let manifest = store.manifest()?;
+    if manifest.epoch != session.epoch || manifest.seal != session.seal {
+        return Err(StoreError::BaselineMismatch {
+            expected: session.seal.clone(),
+            found: manifest.seal,
+        });
+    }
+    let mut root_pages: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    for r in interp.gc_roots() {
+        if !r.is_null() {
+            root_pages.insert(r.0 / crate::store::SLOTS_PER_PAGE);
+        }
+    }
+    let reached = crate::store::reachable_pages(store, root_pages)?;
+    let total = slot_page_count(manifest.slot_count);
+    let dead: Vec<u32> = (0..total).filter(|p| !reached.contains(p)).collect();
+    Ok(session.machine_mut().free_pages(&dead))
 }

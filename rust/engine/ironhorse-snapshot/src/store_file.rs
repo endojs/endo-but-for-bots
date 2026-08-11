@@ -25,6 +25,7 @@
 //! [page directory: count × (u64 offset, u32 length)]
 //! [extent directory: count × (u64 offset, u32 length)]
 //! [page leaf hashes: count × 32]  [extent leaf hashes: count × 32]
+//! [page edges: count × (u32 len, len × u32 targets)]
 //! [blobs, in directory order]
 //! ```
 //!
@@ -46,7 +47,7 @@ use crate::store::{
 
 /// The file-format discriminator. Version-suffixed: a layout change is
 /// a new magic, and a reader fails closed on a magic it does not know.
-pub const FILE_MAGIC: [u8; 8] = *b"IHSTORE2";
+pub const FILE_MAGIC: [u8; 8] = *b"IHSTORE3";
 
 /// Temp files are uniquely named per process and per commit
 /// (`.tmp-{pid}-{n}`), so two writers can never interleave bytes in a
@@ -73,6 +74,7 @@ struct Loaded {
     extents: Vec<DirEntry>,
     leaf_pages: Vec<[u8; 32]>,
     leaf_exts: Vec<[u8; 32]>,
+    edges: Vec<Vec<u32>>,
 }
 
 /// The single-file reference store. See the module docs.
@@ -195,6 +197,21 @@ impl FileStore {
         let leaf_pages = read_leaves(n_pages)?;
         let leaf_exts = read_leaves(n_exts)?;
 
+        // Page-edge summaries (phase 6): u32 length + targets per
+        // page, with the same clamp discipline.
+        let mut edges: Vec<Vec<u32>> = Vec::with_capacity(n_pages as usize);
+        for _ in 0..n_pages {
+            let len = read_u32(file)? as u64;
+            if len * 4 > file_len {
+                return Err(corrupt("file store page edges truncated"));
+            }
+            let mut ts = Vec::with_capacity(len as usize);
+            for _ in 0..len {
+                ts.push(read_u32(file)?);
+            }
+            edges.push(ts);
+        }
+
         // The directories must cover exactly the manifest's geometry —
         // the same promise the row inventory of `validate_store`
         // re-checks with lengths.
@@ -214,6 +231,7 @@ impl FileStore {
             extents,
             leaf_pages,
             leaf_exts,
+            edges,
         })
     }
 
@@ -272,6 +290,13 @@ impl HeapStore for FileStore {
         self.state
             .as_ref()
             .map(|(l, _)| (l.leaf_pages.clone(), l.leaf_exts.clone()))
+            .ok_or(StoreError::Empty)
+    }
+
+    fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
+        self.state
+            .as_ref()
+            .map(|(l, _)| l.edges.clone())
             .ok_or(StoreError::Empty)
     }
 
@@ -365,6 +390,18 @@ impl HeapStore for FileStore {
             .map(|(l, _)| l.leaf_exts.clone())
             .unwrap_or_default();
         crate::store::apply_batch_leaves(&mut leaf_pages, &mut leaf_exts, batch)?;
+        let mut edges = durable
+            .as_ref()
+            .map(|(l, _)| l.edges.clone())
+            .unwrap_or_default();
+        edges.resize(n_pages as usize, Vec::new());
+        for (page, targets) in &batch.page_edges {
+            if let Some(slot) = edges.get_mut(*page as usize) {
+                *slot = targets.clone();
+            }
+        }
+        edges.truncate(n_pages as usize);
+        let edges_bytes: u64 = edges.iter().map(|ts| 4 + 4 * ts.len() as u64).sum();
 
         // Lay the file out: header, manifest, small, counts, dirs,
         // blobs. Directory offsets are computable before writing.
@@ -377,7 +414,8 @@ impl HeapStore for FileStore {
             + 4
             + 4
             + 12 * (n_pages as u64 + n_exts as u64)
-            + 32 * (n_pages as u64 + n_exts as u64);
+            + 32 * (n_pages as u64 + n_exts as u64)
+            + edges_bytes;
         let mut offsets: Vec<u64> = Vec::with_capacity(lengths.len());
         let mut cursor = header_len;
         for len in &lengths {
@@ -413,6 +451,12 @@ impl HeapStore for FileStore {
         }
         for l in &leaf_exts {
             tmp.write_all(l).map_err(io_err)?;
+        }
+        for ts in &edges {
+            tmp.write_all(&(ts.len() as u32).to_be_bytes()).map_err(io_err)?;
+            for t in ts {
+                tmp.write_all(&t.to_be_bytes()).map_err(io_err)?;
+            }
         }
         for source in &sources {
             match source {
@@ -542,6 +586,12 @@ mod tests {
                 .cloned()
                 .collect(),
             chunk_extents: Vec::new(),
+            page_edges: full
+                .page_edges
+                .iter()
+                .filter(|(p, _)| *p == 0)
+                .cloned()
+                .collect(),
         };
         // The dirty-only batch seals over exactly its own rows (the
         // legitimate producer's shape); the full batch's seal covered
