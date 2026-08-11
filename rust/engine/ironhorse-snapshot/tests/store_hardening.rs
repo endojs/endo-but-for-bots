@@ -192,13 +192,19 @@ fn incremental_batch(
         symbols: Vec::new(),
         meter: MeterImage::current(),
     };
+    let mut page_edges: Vec<(u32, Vec<u32>)> = Vec::new();
     let slot_pages: Vec<(u32, Vec<u8>)> = slots
         .dirty_pages()
         .into_iter()
         .map(|page| {
+            let records = slots.page_records(page);
+            page_edges.push((
+                page,
+                ironhorse_snapshot::store::derive_page_edges(page, &records),
+            ));
             let mut bytes = Vec::new();
-            for s in slots.page_records(page) {
-                ironhorse_snapshot::encode_slot(&s, &mut bytes);
+            for s in &records {
+                ironhorse_snapshot::encode_slot(s, &mut bytes);
             }
             (page, bytes)
         })
@@ -228,13 +234,21 @@ fn incremental_batch(
         &lp,
         &le,
     );
-    manifest.seal = seal_commit(prev_seal, &manifest, &small_bytes, &slot_pages, &chunk_extents);
+    manifest.seal = seal_commit(
+        prev_seal,
+        &manifest,
+        &small_bytes,
+        &slot_pages,
+        &chunk_extents,
+        &page_edges,
+    );
     CheckpointBatch {
         prev_seal: prev_seal.to_string(),
         manifest,
         small: small_bytes,
         slot_pages,
         chunk_extents,
+        page_edges,
     }
 }
 

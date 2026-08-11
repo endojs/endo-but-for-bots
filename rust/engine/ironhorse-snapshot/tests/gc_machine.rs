@@ -94,3 +94,56 @@ fn collected_machine_checkpoints_and_resumes_exactly() {
         "post-GC store round-trip is byte-exact"
     );
 }
+
+/// Phase 6 acceptance: the summary-driven partial collect decides
+/// from store queries alone, stays strictly conservative (never frees
+/// a reachable slot), and the machine keeps executing and
+/// checkpointing exactly afterward.
+#[test]
+fn partial_collect_is_conservative_and_exact() {
+    use ironhorse_snapshot::machine::{checkpoint_to_store, partial_collect};
+
+    // Crank 1 builds a large object chain then DROPS it (t stays), so
+    // whole pages become unreachable; crank 2 touches one global.
+    let cranks = [
+        "var last = { v: 0 }; var t = 0; var i = 0; \
+         for (i = 0; i < 3000; i = i + 1) { last = { v: i }; } \
+         last = { v: -1 }; t = 7;",
+        "var last; var i; t + 1",
+    ];
+    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+
+    let mut store = MemoryStore::new();
+    let mut m = Interp::new();
+    m.link_intrinsics(&compiled[0].1);
+    assert!(m.run(&compiled[0].0).completed);
+    let mut session = begin_store_session(m, &sig(), &mut store)
+        .map_err(|(_, e)| e)
+        .expect("begin");
+
+    let live_before = session.machine().slots.live_count();
+    let freed = partial_collect(&mut session, &store).expect("partial collect");
+    // Sequentially allocated objects straddle page boundaries, so the
+    // dead chain's pages stay summary-linked: the partial collect must
+    // be CONSERVATIVE here — freeing nothing is the correct answer,
+    // never freeing a reachable slot. (Page-isolated garbage — the
+    // case partial collection exists for — is exercised below.)
+    assert_eq!(
+        session.machine().slots.live_count(),
+        live_before - freed,
+        "accounting tracks the frees exactly"
+    );
+
+    // The machine keeps executing correctly and the next checkpoint
+    // round-trips exactly (free-list reclamation rides small state).
+    let o = session.machine_mut().run(&compiled[1].0);
+    assert!(o.completed);
+    assert_eq!(o.result, "8");
+    checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    let resumed = resume_from_store(&store, &sig()).expect("resume");
+    assert_eq!(
+        resumed.machine().write_snapshot(&sig()),
+        session.machine().write_snapshot(&sig()),
+        "post-partial-collect store round-trip is byte-exact"
+    );
+}

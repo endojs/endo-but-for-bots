@@ -363,6 +363,9 @@ impl HeapStore for InterleavingStore {
     fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
         self.inner.borrow().leaf_hashes()
     }
+    fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
+        self.inner.borrow().page_edges()
+    }
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
         self.inner.borrow_mut().commit(batch)
     }
@@ -456,6 +459,7 @@ fn seal_binds_full_manifest_identity_and_forgeries_are_refused() {
         &batch.small,
         &batch.slot_pages,
         &batch.chunk_extents,
+        &batch.page_edges,
     );
     assert_ne!(
         batch.manifest.seal, foreign_seal,
@@ -544,4 +548,63 @@ fn length_preserving_flip_at_rest_fails_closed() {
     }
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Phase 6: reachability over the persisted summaries is answered
+/// entirely from indexed metadata — ZERO row-content reads. This is
+/// the substrate for GC-shaped questions as store queries.
+#[test]
+fn reachability_query_reads_no_row_content() {
+    use std::cell::Cell;
+
+    struct CountingStore {
+        inner: MemoryStore,
+        content_reads: Cell<u32>,
+    }
+    impl HeapStore for CountingStore {
+        fn manifest(&self) -> Result<ironhorse_snapshot::store::StoreManifest, StoreError> {
+            self.inner.manifest()
+        }
+        fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
+            self.inner.read_small_state()
+        }
+        fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
+            self.content_reads.set(self.content_reads.get() + 1);
+            self.inner.read_slot_page(page)
+        }
+        fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError> {
+            self.content_reads.set(self.content_reads.get() + 1);
+            self.inner.read_chunk_extent(ext)
+        }
+        fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
+            self.inner.inventory()
+        }
+        fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
+            self.inner.leaf_hashes()
+        }
+        fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
+            self.inner.page_edges()
+        }
+        fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
+            self.inner.commit(batch)
+        }
+    }
+
+    let mut store = CountingStore {
+        inner: MemoryStore::new(),
+        content_reads: Cell::new(0),
+    };
+    let mut m = Interp::new();
+    assert!(m.run(&PROG_A).completed);
+    drop(begin(m, &mut store));
+
+    store.content_reads.set(0);
+    let reached =
+        ironhorse_snapshot::store::reachable_pages(&store, [0u32]).expect("query succeeds");
+    assert!(!reached.is_empty(), "page 0 reaches itself at least");
+    assert_eq!(
+        store.content_reads.get(),
+        0,
+        "reachability must be answered from summaries alone"
+    );
 }

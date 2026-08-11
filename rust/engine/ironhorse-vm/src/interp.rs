@@ -19395,10 +19395,14 @@ impl Interp {
     /// like arena-resident strings. Deterministic: trace order is
     /// worklist order from a fixed root sequence, sweep is index
     /// order.
-    pub fn collect_garbage(&mut self) -> crate::gc::GcStats {
-        use crate::value::{ChunkOffset, SlotIndex};
-
-        // --- roots: registers, frames, globals, boot anchors ---
+    /// The machine's complete GC root set (registers, value stack,
+    /// frames, globals, boot/proto anchors, run stacks, the strong
+    /// symbol registry) — the root assembly [`Self::collect_garbage`]
+    /// marks from, exposed so store-side collectors (the phase-6
+    /// summary-driven partial collect) can ask "which pages hold
+    /// roots" without re-enumerating machine internals.
+    pub fn gc_roots(&self) -> Vec<crate::value::SlotIndex> {
+        use crate::value::SlotIndex;
         let mut roots: Vec<SlotIndex> = Vec::new();
         fn slot_roots(s: &Slot, roots: &mut Vec<SlotIndex>) {
             s.each_ref_slot(|e| roots.push(e));
@@ -19472,6 +19476,13 @@ impl Interp {
             roots.push(f.inst);
         }
 
+        roots
+    }
+
+    pub fn collect_garbage(&mut self) -> crate::gc::GcStats {
+        use crate::value::{ChunkOffset, SlotIndex};
+
+        let roots = self.gc_roots();
         struct Hooks<'a> {
             functions: &'a mut std::collections::HashMap<SlotIndex, FuncInfo>,
             bound_functions: &'a mut std::collections::HashMap<SlotIndex, BoundData>,
@@ -19738,5 +19749,58 @@ impl Interp {
         self.symbol_registry_keys.retain(|k, _| !dead.contains(k));
 
         stats
+    }
+}
+
+// --- page-granular freeing for the store-side partial collector
+// (store seam phase 6).
+impl Interp {
+    /// Free every live slot in the given pages (deterministic index
+    /// order) and drop the side-table entries keyed by them — the
+    /// page-granular reclamation the summary-driven partial collector
+    /// performs. The caller (the store layer) has proven the pages
+    /// unreachable from the machine's [`Self::gc_roots`] via the
+    /// persisted page-edge summaries; chunk space held by freed
+    /// string slots is reclaimed by the next full
+    /// [`Self::collect_garbage`] (partial collection never compacts).
+    /// Returns the number of slots freed. Freeing never dirties: the
+    /// free list rides small state, exactly like a sweep.
+    pub fn free_pages(&mut self, pages: &[u32]) -> u32 {
+        use crate::value::{SlotIndex, SLOTS_PER_PAGE};
+        let mut freed: Vec<SlotIndex> = Vec::new();
+        let mut sorted: Vec<u32> = pages.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        for &page in &sorted {
+            let start = page * SLOTS_PER_PAGE;
+            let end = (start + SLOTS_PER_PAGE).min(self.slots.capacity());
+            for i in start..end {
+                let idx = SlotIndex(i);
+                if !self.slots.is_free_index(idx) {
+                    self.slots.free(idx);
+                    freed.push(idx);
+                }
+            }
+        }
+        let dead: std::collections::HashSet<SlotIndex> = freed.iter().copied().collect();
+        self.functions.retain(|k, _| !dead.contains(k));
+        self.bound_functions.retain(|k, _| !dead.contains(k));
+        self.ctor_prototype.retain(|k, _| !dead.contains(k));
+        self.wrapper_data.retain(|k, _| !dead.contains(k));
+        self.error_data.retain(|k, _| !dead.contains(k));
+        self.arrays.retain(|k, _| !dead.contains(k));
+        self.collections.retain(|k, _| !dead.contains(k));
+        self.array_buffers.retain(|k, _| !dead.contains(k));
+        self.typed_arrays.retain(|k, _| !dead.contains(k));
+        self.data_views.retain(|k, _| !dead.contains(k));
+        self.iterators.retain(|k, _| !dead.contains(k));
+        self.promises.retain(|k, _| !dead.contains(k));
+        self.generators.retain(|k, _| !dead.contains(k));
+        self.async_instances.retain(|k, _| !dead.contains(k));
+        self.promise_functions.retain(|k, _| !dead.contains(k));
+        self.regexps.retain(|k, _| !dead.contains(k));
+        self.symbol_key_ids.retain(|k, _| !dead.contains(k));
+        self.symbol_registry_keys.retain(|k, _| !dead.contains(k));
+        freed.len() as u32
     }
 }

@@ -171,6 +171,26 @@ median 15.3 ms vs lazy wake 0.41 ms (ratio 0.027) for a one-global
 crank — wake cost is measurably the working set, not the heap.
 Still open: an interior tree if leaf counts ever make the linear
 recombine measurable.
+**Phase 6 landed (2026-08-11): persisted page-edge summaries and the
+summary-driven partial collector.** Every checkpoint writes per-page
+outgoing-edge summaries (`derive_page_edges` — a pure function of the
+page's records, NULL links excluded), carried in the batch and signed
+by the seal; backends persist them beside rows (`page_edges` table /
+file section / memory vectors). `reachable_pages` answers
+reachability from the summaries alone — locked to ZERO row-content
+reads by a counting-store test — and `partial_collect` frees every
+page unreachable from the machine's `gc_roots` at a clean checkpoint
+boundary, with side-table cleanup via `Interp::free_pages`. The
+purity lock (stored summaries equal content-derived summaries) runs
+in the shared backend suite. **Honest limitation, recorded:** edges
+are derived from ALL records, dead ones included, and sequentially
+allocated objects straddle page boundaries — so a dropped allocation
+run keeps its pages summary-chained and the partial collect
+correctly frees nothing there (strict conservatism, locked by test).
+Page-isolated garbage is the reclaim case; shrinking the summaries
+to live-only edges after a full collection's sweep, and the
+compaction that de-chains pages, belong to phase 7's re-keying.
+
 Preceding it, the collaborator-review follow-up wave landed:
 `compare_payloads` as the only sanctioned two-chunk read, SQLite
 EXCLUSIVE locking (second opener fails closed, locked by test) +

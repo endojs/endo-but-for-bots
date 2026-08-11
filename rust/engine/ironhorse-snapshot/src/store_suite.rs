@@ -25,8 +25,8 @@ use crate::machine::{
     resume_from_store_lazy, MachineSnapshot, StoreSession,
 };
 use crate::store::{
-    chunk_extent_count, export_to_container, root_hash, slot_page_count, store_to_image,
-    HeapStore,
+    chunk_extent_count, derive_page_edges, export_to_container, root_hash, slot_page_count,
+    store_to_image, HeapStore, SLOTS_PER_PAGE,
 };
 use crate::sha256::hex_sha256;
 use crate::Signature;
@@ -346,6 +346,26 @@ pub fn checkpoint_acceptance(store: &mut dyn HeapStore) {
         root_hash(store).unwrap(),
         hex_sha256(&session.machine().write_snapshot(&sig()))
     );
+    assert_edges_match_content(store);
+}
+
+/// The phase-6 purity lock: the STORED page-edge summaries must equal
+/// the summaries recomputed from the store's own content — a pure
+/// function of the rows, never of the schedule that produced them.
+fn assert_edges_match_content(store: &dyn HeapStore) {
+    let image = store_to_image(store).unwrap();
+    let stored = store.page_edges().unwrap();
+    let n_pages = slot_page_count(image.slots.len() as u32) as usize;
+    assert_eq!(stored.len(), n_pages, "one summary per page");
+    for (page, stored_targets) in stored.iter().enumerate() {
+        let start = page * SLOTS_PER_PAGE as usize;
+        let end = image.slots.len().min(start + SLOTS_PER_PAGE as usize);
+        let expected = derive_page_edges(page as u32, &image.slots[start..end]);
+        assert_eq!(
+            stored_targets, &expected,
+            "page {page} summary equals content-derived summary"
+        );
+    }
 }
 
 /// The row-6 bar through an EMPTY backend: a machine that slept in the

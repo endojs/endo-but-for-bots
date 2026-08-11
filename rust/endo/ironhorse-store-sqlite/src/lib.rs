@@ -174,6 +174,12 @@ impl SqliteHeapStore {
                hash  BLOB NOT NULL,
                PRIMARY KEY (kind, idx)
              );
+             -- Page-edge summaries (store seam phase 6): the sorted
+             -- outgoing page targets per slot page, as big-endian u32s.
+             CREATE TABLE IF NOT EXISTS page_edges (
+               page    INTEGER PRIMARY KEY,
+               targets BLOB NOT NULL
+             );
              -- One row set per side-table ledger row, populated as the
              -- Pending atoms land paired with their store rows (design
              -- § Side tables: the ledger governs the schema).
@@ -342,6 +348,35 @@ impl HeapStore for SqliteHeapStore {
         Ok((read(0, "slot page leaf")?, read(1, "chunk extent leaf")?))
     }
 
+    fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
+        if Self::stored_manifest(&self.conn)?.is_none() {
+            return Err(StoreError::Empty);
+        }
+        let mut stmt = self
+            .conn
+            .prepare("SELECT page, targets FROM page_edges ORDER BY page")
+            .map_err(sql_err)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+            .map_err(sql_err)?;
+        let mut out: Vec<Vec<u32>> = Vec::new();
+        for row in rows {
+            let (page, blob) = row.map_err(sql_err)?;
+            if page as usize != out.len() {
+                return Err(StoreError::MissingRow("page edges", out.len() as u32));
+            }
+            if blob.len() % 4 != 0 {
+                return Err(StoreError::Io("sqlite: malformed page edges".to_string()));
+            }
+            out.push(
+                blob.chunks_exact(4)
+                    .map(|c| u32::from_be_bytes(c.try_into().unwrap()))
+                    .collect(),
+            );
+        }
+        Ok(out)
+    }
+
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
         // IMMEDIATE: take the writer lock up front so a concurrent
         // commit serializes under busy_timeout instead of surfacing
@@ -465,6 +500,31 @@ impl HeapStore for SqliteHeapStore {
                     params![exts as i64],
                 )
                 .map_err(sql_err)?;
+            }
+
+            // Page-edge summaries (phase 6): upsert the dirty pages'
+            // summaries, drop those beyond the new geometry. Grown
+            // pages are necessarily dirty, so every page in range has
+            // a row by induction.
+            {
+                let mut upsert = tx
+                    .prepare(
+                        "INSERT INTO page_edges (page, targets) VALUES (?1, ?2)
+                         ON CONFLICT(page) DO UPDATE SET targets = excluded.targets",
+                    )
+                    .map_err(sql_err)?;
+                for (page, targets) in &batch.page_edges {
+                    let mut blob = Vec::with_capacity(targets.len() * 4);
+                    for t in targets {
+                        blob.extend_from_slice(&t.to_be_bytes());
+                    }
+                    upsert
+                        .execute(params![*page as i64, blob])
+                        .map_err(sql_err)?;
+                }
+                drop(upsert);
+                tx.execute("DELETE FROM page_edges WHERE page >= ?1", params![pages as i64])
+                    .map_err(sql_err)?;
             }
 
             tx.execute(
