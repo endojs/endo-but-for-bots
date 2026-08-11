@@ -180,6 +180,7 @@ fn incremental_batch(
         slot_count: slots.capacity(),
         slot_live: slots.live_count(),
         chunk_len: chunks.byte_size() as u64,
+        free_len: slots.free_list().len() as u32,
         epoch,
         root: String::new(),
         seal: String::new(),
@@ -217,22 +218,46 @@ fn incremental_batch(
         .map(|e| (e, chunks.extent_bytes(e)))
         .collect();
     let small_bytes = small.encode();
+    // Free segments: diff against stored leaves, exactly as the
+    // machine surface does.
+    let prior_frees = store.free_leaf_hashes().unwrap_or_default();
+    let free_segs: Vec<(u32, Vec<u8>)> =
+        ironhorse_snapshot::store::encode_all_free_segs(slots.free_list())
+            .into_iter()
+            .filter(|(i, bytes)| {
+                prior_frees.get(*i as usize).copied()
+                    != Some(ironhorse_snapshot::store::leaf_hash(
+                        ironhorse_snapshot::store::LEAF_FREE,
+                        *i,
+                        bytes,
+                    ))
+            })
+            .collect();
     let mut manifest = manifest;
     // Root maintenance exactly as checkpoint_to_store performs it:
     // prior stored leaves + this batch's dirty leaves.
     let (mut lp, mut le) = store.leaf_hashes().unwrap_or_default();
+    let mut lf = prior_frees.clone();
     lp.resize(ironhorse_snapshot::store::slot_page_count(manifest.slot_count) as usize, [0u8; 32]);
     le.resize(chunk_extent_count(manifest.chunk_len) as usize, [0u8; 32]);
+    lf.resize(
+        ironhorse_snapshot::store::free_seg_count(manifest.free_len) as usize,
+        [0u8; 32],
+    );
     for (i, bytes) in &slot_pages {
         lp[*i as usize] = ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_PAGE, *i, bytes);
     }
     for (i, bytes) in &chunk_extents {
         le[*i as usize] = ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_EXT, *i, bytes);
     }
+    for (i, bytes) in &free_segs {
+        lf[*i as usize] = ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_FREE, *i, bytes);
+    }
     manifest.root = ironhorse_snapshot::store::combine_root(
         &ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_SMALL, 0, &small_bytes),
         &lp,
         &le,
+        &lf,
     );
     manifest.seal = seal_commit(
         prev_seal,
@@ -240,6 +265,7 @@ fn incremental_batch(
         &small_bytes,
         &slot_pages,
         &chunk_extents,
+        &free_segs,
         &page_edges,
     );
     CheckpointBatch {
@@ -248,6 +274,7 @@ fn incremental_batch(
         small: small_bytes,
         slot_pages,
         chunk_extents,
+        free_segs,
         page_edges,
     }
 }

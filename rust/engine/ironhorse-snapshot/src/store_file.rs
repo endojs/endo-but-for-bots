@@ -26,6 +26,8 @@
 //! [extent directory: count × (u64 offset, u32 length)]
 //! [page leaf hashes: count × 32]  [extent leaf hashes: count × 32]
 //! [page edges: count × (u32 len, len × u32 targets)]
+//! [free segments: u32 count, then count × (u32 len, len bytes)]
+//! [free leaf hashes: count × 32]
 //! [blobs, in directory order]
 //! ```
 //!
@@ -47,7 +49,7 @@ use crate::store::{
 
 /// The file-format discriminator. Version-suffixed: a layout change is
 /// a new magic, and a reader fails closed on a magic it does not know.
-pub const FILE_MAGIC: [u8; 8] = *b"IHSTORE3";
+pub const FILE_MAGIC: [u8; 8] = *b"IHSTORE4";
 
 /// Temp files are uniquely named per process and per commit
 /// (`.tmp-{pid}-{n}`), so two writers can never interleave bytes in a
@@ -75,6 +77,8 @@ struct Loaded {
     leaf_pages: Vec<[u8; 32]>,
     leaf_exts: Vec<[u8; 32]>,
     edges: Vec<Vec<u32>>,
+    free_segs: Vec<Vec<u8>>,
+    leaf_frees: Vec<[u8; 32]>,
 }
 
 /// The single-file reference store. See the module docs.
@@ -212,6 +216,33 @@ impl FileStore {
             edges.push(ts);
         }
 
+        // Free-list segments + their leaves (phase 9), clamp-checked.
+        let n_frees = read_u32(file)? as u64;
+        if n_frees * 4 > file_len {
+            return Err(corrupt("file store free segments truncated"));
+        }
+        let mut free_segs: Vec<Vec<u8>> = Vec::with_capacity(n_frees as usize);
+        for _ in 0..n_frees {
+            let len = read_u32(file)? as u64;
+            if len > file_len {
+                return Err(corrupt("file store free segments truncated"));
+            }
+            let mut b = vec![0u8; len as usize];
+            file.read_exact(&mut b)
+                .map_err(|_| corrupt("file store free segments truncated"))?;
+            free_segs.push(b);
+        }
+        if n_frees * 32 > file_len {
+            return Err(corrupt("file store free leaf hashes truncated"));
+        }
+        let mut leaf_frees: Vec<[u8; 32]> = Vec::with_capacity(n_frees as usize);
+        for _ in 0..n_frees {
+            let mut b = [0u8; 32];
+            file.read_exact(&mut b)
+                .map_err(|_| corrupt("file store free leaf hashes truncated"))?;
+            leaf_frees.push(b);
+        }
+
         // The directories must cover exactly the manifest's geometry —
         // the same promise the row inventory of `validate_store`
         // re-checks with lengths.
@@ -232,6 +263,8 @@ impl FileStore {
             leaf_pages,
             leaf_exts,
             edges,
+            free_segs,
+            leaf_frees,
         })
     }
 
@@ -297,6 +330,24 @@ impl HeapStore for FileStore {
         self.state
             .as_ref()
             .map(|(l, _)| l.edges.clone())
+            .ok_or(StoreError::Empty)
+    }
+
+    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+        self.state
+            .as_ref()
+            .ok_or(StoreError::Empty)?
+            .0
+            .free_segs
+            .get(seg as usize)
+            .cloned()
+            .ok_or(StoreError::MissingRow("free segment", seg))
+    }
+
+    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
+        self.state
+            .as_ref()
+            .map(|(l, _)| l.leaf_frees.clone())
             .ok_or(StoreError::Empty)
     }
 
@@ -389,7 +440,25 @@ impl HeapStore for FileStore {
             .as_ref()
             .map(|(l, _)| l.leaf_exts.clone())
             .unwrap_or_default();
-        crate::store::apply_batch_leaves(&mut leaf_pages, &mut leaf_exts, batch)?;
+        let mut leaf_frees = durable
+            .as_ref()
+            .map(|(l, _)| l.leaf_frees.clone())
+            .unwrap_or_default();
+        crate::store::apply_batch_leaves(&mut leaf_pages, &mut leaf_exts, &mut leaf_frees, batch)?;
+        let n_free_segs = crate::store::free_seg_count(batch.manifest.free_len) as usize;
+        let mut free_segs = durable
+            .as_ref()
+            .map(|(l, _)| l.free_segs.clone())
+            .unwrap_or_default();
+        free_segs.resize(n_free_segs, Vec::new());
+        for (seg, bytes) in &batch.free_segs {
+            if let Some(slot) = free_segs.get_mut(*seg as usize) {
+                *slot = bytes.clone();
+            }
+        }
+        free_segs.truncate(n_free_segs);
+        let free_bytes: u64 = 4 + free_segs.iter().map(|b| 4 + b.len() as u64).sum::<u64>()
+            + 32 * n_free_segs as u64;
         let mut edges = durable
             .as_ref()
             .map(|(l, _)| l.edges.clone())
@@ -415,7 +484,8 @@ impl HeapStore for FileStore {
             + 4
             + 12 * (n_pages as u64 + n_exts as u64)
             + 32 * (n_pages as u64 + n_exts as u64)
-            + edges_bytes;
+            + edges_bytes
+            + free_bytes;
         let mut offsets: Vec<u64> = Vec::with_capacity(lengths.len());
         let mut cursor = header_len;
         for len in &lengths {
@@ -457,6 +527,15 @@ impl HeapStore for FileStore {
             for t in ts {
                 tmp.write_all(&t.to_be_bytes()).map_err(io_err)?;
             }
+        }
+        tmp.write_all(&(free_segs.len() as u32).to_be_bytes())
+            .map_err(io_err)?;
+        for b in &free_segs {
+            tmp.write_all(&(b.len() as u32).to_be_bytes()).map_err(io_err)?;
+            tmp.write_all(b).map_err(io_err)?;
+        }
+        for l in &leaf_frees {
+            tmp.write_all(l).map_err(io_err)?;
         }
         for source in &sources {
             match source {
@@ -586,6 +665,7 @@ mod tests {
                 .cloned()
                 .collect(),
             chunk_extents: Vec::new(),
+            free_segs: full.free_segs.clone(),
             page_edges: full
                 .page_edges
                 .iter()

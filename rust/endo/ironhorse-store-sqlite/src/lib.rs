@@ -32,8 +32,9 @@
 use std::path::Path;
 
 use ironhorse_snapshot::store::{
-    apply_batch_leaves, check_succession, chunk_extent_count, leaf_hash, slot_page_count,
-    CheckpointBatch, HeapStore, StoreError, StoreManifest, LEAF_EXT, LEAF_PAGE,
+    apply_batch_leaves, check_succession, chunk_extent_count, free_seg_count, leaf_hash,
+    slot_page_count, CheckpointBatch, HeapStore, StoreError, StoreManifest, LEAF_EXT, LEAF_FREE,
+    LEAF_PAGE,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -179,6 +180,12 @@ impl SqliteHeapStore {
              CREATE TABLE IF NOT EXISTS page_edges (
                page    INTEGER PRIMARY KEY,
                targets BLOB NOT NULL
+             );
+             -- Free-list segments (store seam phase 9): big-endian u32
+             -- entries; kind-2 rows in leaf_hashes checksum them.
+             CREATE TABLE IF NOT EXISTS free_segs (
+               seg   INTEGER PRIMARY KEY,
+               bytes BLOB NOT NULL
              );
              -- One row set per side-table ledger row, populated as the
              -- Pending atoms land paired with their store rows (design
@@ -377,6 +384,43 @@ impl HeapStore for SqliteHeapStore {
         Ok(out)
     }
 
+    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT bytes FROM free_segs WHERE seg = ?1",
+                params![seg as i64],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql_err)?
+            .ok_or(StoreError::MissingRow("free segment", seg))
+    }
+
+    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
+        if Self::stored_manifest(&self.conn)?.is_none() {
+            return Err(StoreError::Empty);
+        }
+        let mut stmt = self
+            .conn
+            .prepare("SELECT idx, hash FROM leaf_hashes WHERE kind = 2 ORDER BY idx")
+            .map_err(sql_err)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+            .map_err(sql_err)?;
+        let mut out: Vec<[u8; 32]> = Vec::new();
+        for row in rows {
+            let (idx, hash) = row.map_err(sql_err)?;
+            if idx as usize != out.len() {
+                return Err(StoreError::MissingRow("free segment leaf", out.len() as u32));
+            }
+            let arr: [u8; 32] = hash
+                .try_into()
+                .map_err(|_| StoreError::Io("sqlite: malformed leaf hash".to_string()))?;
+            out.push(arr);
+        }
+        Ok(out)
+    }
+
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
         // IMMEDIATE: take the writer lock up front so a concurrent
         // commit serializes under busy_timeout instead of surfacing
@@ -472,7 +516,25 @@ impl HeapStore for SqliteHeapStore {
                     }
                 }
                 drop(stmt);
-                apply_batch_leaves(&mut prior_pages, &mut prior_exts, batch)?;
+                let mut prior_frees: Vec<[u8; 32]> = Vec::new();
+                {
+                    let mut stmt = tx
+                        .prepare("SELECT idx, hash FROM leaf_hashes WHERE kind = 2 ORDER BY idx")
+                        .map_err(sql_err)?;
+                    let rows = stmt
+                        .query_map([], |r| {
+                            Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+                        })
+                        .map_err(sql_err)?;
+                    for row in rows {
+                        let (_idx, hash) = row.map_err(sql_err)?;
+                        let arr: [u8; 32] = hash.try_into().map_err(|_| {
+                            StoreError::Io("sqlite: malformed leaf hash".to_string())
+                        })?;
+                        prior_frees.push(arr);
+                    }
+                }
+                apply_batch_leaves(&mut prior_pages, &mut prior_exts, &mut prior_frees, batch)?;
                 let mut upsert_leaf = tx
                     .prepare(
                         "INSERT INTO leaf_hashes (kind, idx, hash) VALUES (?1, ?2, ?3)
@@ -489,6 +551,11 @@ impl HeapStore for SqliteHeapStore {
                         .execute(params![1i64, *ext as i64, leaf_hash(LEAF_EXT, *ext, bytes).as_slice()])
                         .map_err(sql_err)?;
                 }
+                for (seg, bytes) in &batch.free_segs {
+                    upsert_leaf
+                        .execute(params![2i64, *seg as i64, leaf_hash(LEAF_FREE, *seg, bytes).as_slice()])
+                        .map_err(sql_err)?;
+                }
                 drop(upsert_leaf);
                 tx.execute(
                     "DELETE FROM leaf_hashes WHERE kind = 0 AND idx >= ?1",
@@ -500,6 +567,26 @@ impl HeapStore for SqliteHeapStore {
                     params![exts as i64],
                 )
                 .map_err(sql_err)?;
+                let n_frees = free_seg_count(batch.manifest.free_len);
+                tx.execute(
+                    "DELETE FROM leaf_hashes WHERE kind = 2 AND idx >= ?1",
+                    params![n_frees as i64],
+                )
+                .map_err(sql_err)?;
+                let mut upsert_seg = tx
+                    .prepare(
+                        "INSERT INTO free_segs (seg, bytes) VALUES (?1, ?2)
+                         ON CONFLICT(seg) DO UPDATE SET bytes = excluded.bytes",
+                    )
+                    .map_err(sql_err)?;
+                for (seg, bytes) in &batch.free_segs {
+                    upsert_seg
+                        .execute(params![*seg as i64, bytes])
+                        .map_err(sql_err)?;
+                }
+                drop(upsert_seg);
+                tx.execute("DELETE FROM free_segs WHERE seg >= ?1", params![n_frees as i64])
+                    .map_err(sql_err)?;
             }
 
             // Page-edge summaries (phase 6): upsert the dirty pages'

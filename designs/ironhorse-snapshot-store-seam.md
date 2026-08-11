@@ -191,6 +191,23 @@ Page-isolated garbage is the reclaim case; shrinking the summaries
 to live-only edges after a full collection's sweep, and the
 compaction that de-chains pages, belong to phase 7's re-keying.
 
+**Phase 9 landed (2026-08-11, store schema v4): the paged free
+list.** The free list no longer rides small state: it lives in
+leafed, dirty-diffed segment rows (`FREE_SEG_ENTRIES` = 4096 entries
+per segment; kind-2 leaf rows; `free_len` in the manifest; segments
+in the seal), so per-commit small-state bytes are O(1) in heap size
+and LIFO churn rewrites only the tail segment — locked by
+`small_state_stays_small_with_a_large_free_list` (a 3000-entry free
+list stores a sub-512-byte small state, and the round-trip carries
+the list exactly). Validation reassembles the list from
+leaf-verified segments and runs the range/distinctness gates on the
+result. The sparse-attach half of phase 9 is **measured and
+deferred**: the wake-latency instrument put the whole dense attach —
+zero-fill included — at 0.41 ms for a 120k-slot heap, so the dense
+trade the benchmark gate priced remains the right one until heaps
+grow orders of magnitude; the disposition and the re-run-the-gate
+condition stay recorded at the phase-3 trade note.
+
 **Phase 8 landed (2026-08-11): eviction.** See amended Design
 Decision 3 — clean-row fault-out with guard/dirty refusal, locked by
 the new adversarial-evict arm in the shared suite (all backends).
@@ -332,12 +349,15 @@ validation):**
 Remaining, mapped to the phases: cargo-fuzz promotion of the hardening
 arms (the `ironhorse-fuzz` crate links the XS oracle, absent in the
 build environment); the supervisor cadence policy and `endor` binary
-wiring (with the worker-envelope work); the attached-mode and
-wake-latency benchmarks; and the phase 5-9 roadmap (added 2026-08-08,
-see Phased Implementation) toward the standing goal that no operation
-ever reifies the whole heap — incremental Merkle root hash,
-summary-driven generational mark, identity-keyed chunk rows, eviction,
-sparse attach + paged free list.
+wiring (with the worker-envelope work); the attached-mode benchmark.
+The phase 5-9 roadmap is LANDED (2026-08-11, see the phase blocks
+above): row-hash tree + wake-latency instrument (5), page-edge
+summaries + partial collect (6), incremental compaction dirt (7),
+eviction + adversarial-evict arm (8), paged free list with sparse
+attach measured-and-deferred (9). The residual O(heap) operations
+are, by design: full GC (the amortized reifier, now with
+incremental-compaction dirt), eager reification, and canonical
+export at interchange.
 
 ## What Is the Problem Being Solved?
 
