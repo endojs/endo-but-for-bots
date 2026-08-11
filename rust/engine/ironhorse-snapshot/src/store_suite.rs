@@ -1,5 +1,5 @@
 //! The **backend-parameterized store acceptance suite** (store seam
-//! design, decision 8): the six-way metamorphic determinism runner,
+//! design, decision 8): the metamorphic determinism runner (seven execution ways),
 //! the lazy working-set bound, and the checkpoint acceptance locks,
 //! generic over the [`HeapStore`] under test so every backend —
 //! in-crate reference or external (the daemon-side SQLite store) —
@@ -113,6 +113,10 @@ enum Resume {
     Eager,
     Lazy,
     LazyAdversarialPrefetch,
+    /// Prefetch everything, then evict every clean page and extent,
+    /// mid-lifecycle — any evict schedule must be observably
+    /// irrelevant (store seam phase 8, the Decision-3 amendment).
+    LazyAdversarialEvict,
 }
 
 /// Variants 3-5: store-backed sleep/wake between every crank, with the
@@ -140,10 +144,27 @@ fn run_store<S: HeapStore + 'static>(
         drop(session);
         session = match mode {
             Resume::Eager => resume_from_store(&*store.borrow(), &sig()).expect("resumes"),
-            Resume::Lazy | Resume::LazyAdversarialPrefetch => {
+            Resume::Lazy | Resume::LazyAdversarialPrefetch | Resume::LazyAdversarialEvict => {
                 resume_from_store_lazy(store.clone(), &sig()).expect("resumes lazily")
             }
         };
+        if let Resume::LazyAdversarialEvict = mode {
+            // Warm everything, then throw it all away again: the
+            // re-faults must reinstall identical content.
+            let manifest = store.borrow().manifest().unwrap();
+            for page in 0..slot_page_count(manifest.slot_count) {
+                session.machine().slots.touch_page(page);
+            }
+            for ext in 0..chunk_extent_count(manifest.chunk_len) {
+                session.machine().chunks.touch_extent(ext);
+            }
+            for page in 0..slot_page_count(manifest.slot_count) {
+                session.machine().slots.evict_page(page);
+            }
+            for ext in 0..chunk_extent_count(manifest.chunk_len) {
+                session.machine().chunks.evict_extent(ext);
+            }
+        }
         if let Resume::LazyAdversarialPrefetch = mode {
             // Touch every page and extent in reverse order — a fault
             // schedule no organic run produces. Residency order must
@@ -214,6 +235,9 @@ fn metamorphic<S: HeapStore + 'static>(
 
     let (r, c, b) = run_store(fresh(), &compiled, Resume::LazyAdversarialPrefetch);
     assert_agrees("store-lazy-prefetch", scenario, &baseline, &r, &c, &b);
+
+    let (r, c, b) = run_store(fresh(), &compiled, Resume::LazyAdversarialEvict);
+    assert_agrees("store-lazy-evict", scenario, &baseline, &r, &c, &b);
 
     let (r, c, b) = run_checkpoint_every_crank(fresh(), &compiled);
     assert_agrees("checkpoint-every-crank", scenario, &baseline, &r, &c, &b);

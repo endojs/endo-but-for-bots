@@ -191,6 +191,10 @@ Page-isolated garbage is the reclaim case; shrinking the summaries
 to live-only edges after a full collection's sweep, and the
 compaction that de-chains pages, belong to phase 7's re-keying.
 
+**Phase 8 landed (2026-08-11): eviction.** See amended Design
+Decision 3 — clean-row fault-out with guard/dirty refusal, locked by
+the new adversarial-evict arm in the shared suite (all backends).
+
 **Phase 7 landed as the incremental-compaction cut (2026-08-11).**
 Compaction now dirties only extents whose bytes actually changed
 (diffed against the pre-compaction space, OR'd with uncommitted
@@ -926,10 +930,17 @@ compaction/vacuum policy.
    backend.
    Ironhorse defines the seam; Endor binds it — matching the
    engine/binding naming doctrine.
-3. **Lazy reification is grow-only residency.** Fault-in, never
-   fault-out, until an eviction design earns its own amendment with
-   its prerequisites named; no observable may depend on residency
-   either way.
+3. **Lazy reification is grow-only residency.** ~~Fault-in, never
+   fault-out~~ **Amended 2026-08-11 (phase 8):** fault-out landed.
+   `evict_page`/`evict_extent` drop residency for CLEAN, source-backed
+   rows only (dirty rows are refused — their content exists nowhere
+   else; a live chunk guard refuses too), so the next touch re-faults
+   committed bytes. Any evict schedule is observably irrelevant — the
+   adversarial-evict metamorphic arm (warm everything, evict
+   everything, mid-lifecycle) agrees with the other six ways on every
+   backend. The dense arrays keep their RAM until phase 9's sparse
+   backing; eviction is the correctness machinery that makes bounded
+   residency possible.
 4. **GC is the amortized reifier and its scheduling is untouched.**
    Collection stays a pure function of release-fixed thresholds; the
    first collect after a lazy resume pays full reification, and a
