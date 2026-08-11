@@ -439,18 +439,51 @@ pub fn checkpoint_to_store(
     let epoch = session.epoch.checked_add(1).ok_or(StoreError::Snapshot(
         crate::format::SnapshotError::Corrupt("store epoch exhausted"),
     ))?;
+    // The stored metadata this commit builds on must itself cohere:
+    // leaves + summaries + small state recombine to the stored root
+    // (metadata-scale). A leaf edited at rest leaves the manifest
+    // untouched — so the pairing guard above still passes — and
+    // without this check the edit would be laundered into THIS
+    // commit's validly sealed root, surfacing only as a fault panic
+    // at the corrupted row's first read (the review's laundering
+    // finding).
+    let (mut leaf_pages, mut leaf_exts) = store.leaf_hashes()?;
+    let prior_frees = store.free_leaf_hashes()?;
+    let mut edges_all = store.page_edges()?;
+    {
+        let stored_small = store.read_small_state()?;
+        let recombined = combine_root(
+            &leaf_hash(LEAF_SMALL, 0, &stored_small),
+            &leaf_pages,
+            &leaf_exts,
+            &prior_frees,
+            &edges_all,
+        );
+        if recombined != stored.root {
+            return Err(StoreError::BaselineMismatch {
+                expected: recombined,
+                found: stored.root.clone(),
+            });
+        }
+    }
     let interp = &mut session.interp;
     let mut manifest = manifest_of(interp, signature, epoch);
 
     // Dirty rows only — never the whole heap. `page_records`/
     // `extent_bytes` copy one page/extent out of the arena (dirty rows
     // are resident by construction, lazy or not), and the encoding is
-    // the same canonical record codec the full path uses.
+    // the same canonical record codec the full path uses. The range
+    // filter mirrors the chunk side's — the slot bitmap cannot exceed
+    // the geometry today (slot space never shrinks), so it is the
+    // same belt-and-braces, an unindexable panic traded for a row the
+    // root check below would refuse.
+    let page_count = slot_page_count(manifest.slot_count);
     let mut page_edges: Vec<(u32, Vec<u32>)> = Vec::new();
     let slot_pages: Vec<(u32, Vec<u8>)> = interp
         .slots
         .dirty_pages()
         .into_iter()
+        .filter(|&p| p < page_count)
         .map(|page| {
             let records = interp.slots.page_records(page);
             // The page-edge summary (phase 6) falls out of the records
@@ -479,24 +512,19 @@ pub fn checkpoint_to_store(
     // Free-list segments (phase 9): diff against the stored segment
     // leaves so only CHANGED segments travel — LIFO churn touches the
     // tail segment, making per-commit free bytes O(1) in heap size.
-    // A backend error propagates like the row-leaf read below —
-    // swallowing it into "no prior leaves" would still seal a correct
-    // root (every segment would travel), but a store that cannot
-    // answer metadata queries has no business absorbing a commit.
     let free_all = crate::store::encode_all_free_segs(interp.slots.free_list());
-    let prior_frees = store.free_leaf_hashes()?;
     let free_segs: Vec<(u32, Vec<u8>)> = free_all
         .into_iter()
         .filter(|(i, bytes)| {
             prior_frees.get(*i as usize).copied() != Some(leaf_hash(crate::store::LEAF_FREE, *i, bytes))
         })
         .collect();
-    // Row-hash tree maintenance (phase 5): prior leaves + this
-    // commit's dirty leaves → the new sealed root. Metadata-scale
-    // (32 bytes per row) and O(dirty) hashing of content.
-    let (mut leaf_pages, mut leaf_exts) = store.leaf_hashes()?;
+    // Row-hash tree + summary maintenance (phases 5-6, v5): prior
+    // state + this commit's dirty leaves/summaries → the new sealed
+    // root. Metadata-scale (32 bytes per row) and O(dirty) hashing of
+    // content.
     let mut leaf_frees = prior_frees;
-    leaf_pages.resize(slot_page_count(manifest.slot_count) as usize, [0u8; 32]);
+    leaf_pages.resize(page_count as usize, [0u8; 32]);
     leaf_exts.resize(chunk_extent_count(manifest.chunk_len) as usize, [0u8; 32]);
     leaf_frees.resize(
         crate::store::free_seg_count(manifest.free_len) as usize,
@@ -511,11 +539,16 @@ pub fn checkpoint_to_store(
     for (i, bytes) in &free_segs {
         leaf_frees[*i as usize] = leaf_hash(crate::store::LEAF_FREE, *i, bytes);
     }
+    edges_all.resize(page_count as usize, Vec::new());
+    for (i, targets) in &page_edges {
+        edges_all[*i as usize] = targets.clone();
+    }
     manifest.root = combine_root(
         &leaf_hash(LEAF_SMALL, 0, &small),
         &leaf_pages,
         &leaf_exts,
         &leaf_frees,
+        &edges_all,
     );
     manifest.seal = seal_commit(
         &session.seal,

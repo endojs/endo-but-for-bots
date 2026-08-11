@@ -355,3 +355,52 @@ fn small_state_stays_small_with_a_large_free_list() {
 
 
 
+
+/// Phase 9 proportionality lock (review follow-up): LIFO free-list
+/// churn rewrites ONLY the tail segment. Allocation pops from the
+/// list's tail, so a crank that reuses a handful of freed slots
+/// leaves segment 0's 4096 entries byte-identical — the checkpoint's
+/// segment diff must ship exactly one row, observed through
+/// `CommitStats::free_segs_written` (the axis the review found
+/// asserted in prose and measured by nothing).
+#[test]
+fn lifo_churn_rewrites_only_the_tail_free_segment() {
+    use ironhorse_snapshot::machine::checkpoint_to_store;
+    use ironhorse_snapshot::store::{free_seg_count, HeapStore};
+
+    // Crank 2 mirrors crank 1's symbol order (last, v, t, i).
+    let cranks = [
+        "var last = { v: 0 }; var t = 0; var i = 0; \
+         for (i = 0; i < 3000; i = i + 1) { last = { v: i }; } \
+         last = 0; t = 7;",
+        "var last; var v; var t; var i; last = { v: 1 }; t + 1",
+    ];
+    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+
+    let mut m = Interp::new();
+    m.link_intrinsics(&compiled[0].1);
+    assert!(m.run(&compiled[0].0).completed);
+    // Sweep the dropped chain onto the free list — thousands of
+    // entries, spanning multiple segments.
+    m.collect_garbage();
+
+    let mut store = MemoryStore::new();
+    let mut session = begin_store_session(m, &sig(), &mut store)
+        .map_err(|(_, e)| e)
+        .expect("begin");
+    let segs_before = free_seg_count(store.manifest().unwrap().free_len);
+    assert!(segs_before >= 2, "multi-segment premise, got {segs_before}");
+
+    // A small crank: pops a few entries off the free-list TAIL.
+    let o = session.machine_mut().run(&compiled[1].0);
+    assert!(o.completed, "halt: {:?}", o.halt);
+    checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+
+    let segs_after = free_seg_count(store.manifest().unwrap().free_len);
+    assert_eq!(segs_before, segs_after, "fixture premise: no boundary crossing");
+    assert_eq!(
+        store.last_commit_stats().free_segs_written,
+        1,
+        "LIFO churn ships exactly the tail segment"
+    );
+}
