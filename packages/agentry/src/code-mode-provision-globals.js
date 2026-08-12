@@ -21,8 +21,11 @@ export const makeEndoProvisionGlobals = persistence => {
   /** @type {CodeModeGlobal[]} */
   const globals = [];
   for (const name of Object.keys(policy.mounts).sort()) {
-    if (policy.mounts[name].guestBinding) {
-      globals.push(makeWorkspaceGlobal({ name }));
+    const mount = policy.mounts[name];
+    if (mount.guestBinding) {
+      globals.push(
+        makeWorkspaceGlobal({ name, readOnly: mount.mode === 'readOnly' }),
+      );
     }
   }
   const gits = policy.gits ?? {};
