@@ -1599,8 +1599,7 @@ const makeDaemonCore = async (
    * @returns {import('@endo/exo-stream').PassableReader<import('./retention-accumulator.js').RetentionDelta, undefined>}
    */
   const makeRetentionSetFollower = peerNodeNumber => {
-    const snapshot =
-      persistencePowers.listFormulaNumbersByNode(peerNodeNumber);
+    const snapshot = persistencePowers.listFormulaNumbersByNode(peerNodeNumber);
     const accumulator = makeRetentionAccumulator({ snapshot });
 
     // Feed formula change events into the accumulator, filtered
