@@ -33,6 +33,7 @@ declare var hostSha256Init: (...args: any[]) => any;
 declare var hostSha256Update: (...args: any[]) => any;
 declare var hostSha256UpdateBytes: (...args: any[]) => any;
 declare var hostSha256Finish: (...args: any[]) => any;
+declare var hostSha256Bytes: (bytes: Uint8Array) => ArrayBuffer;
 declare var hostRandomHex256: (...args: any[]) => any;
 declare var hostEd25519Keygen: (...args: any[]) => any;
 declare var hostEd25519Sign: (...args: any[]) => any;

@@ -27,6 +27,7 @@ import {
 } from './manager-node-powers.js';
 import { makeDaemonDatabase } from './manager-database-node.js';
 import { makeRegistryNodePowers } from './registry-node-powers.js';
+import { makeNodeHostToolPowers } from './host-tool-powers-node.js';
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { CapTpConnectionRegistrar, Config, CryptoPowers, DaemonWorkerFacet, DaemonicPowers, FilePowers, WorkerDaemonFacet } from './types.js' */
@@ -352,6 +353,7 @@ export const makeDaemonicGoPowers = async ({
       ...registryPowers,
       registryUrl: config.registryUrl,
     }),
+    hostTools: makeNodeHostToolPowers(),
   });
 };
 

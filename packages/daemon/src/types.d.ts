@@ -2376,6 +2376,20 @@ export type DaemonicControlPowers = {
   detachDebugger?: (workerHandle: number) => void;
 };
 
+/**
+ * The capabilities the daemon core implements by spawning a host
+ * process. Injected rather than imported, so that `manager.js` and
+ * `host.js` carry no static import of `@endo/git` or
+ * `@endo/host-spawner` and therefore none of their `node:` builtins,
+ * which the SES/XS bundler cannot resolve. See
+ * `designs/platform-neutral-hash.md`.
+ */
+export type HostToolPowers = {
+  gitClone: typeof import('@endo/git').gitClone;
+  makeNativeGitBackend: typeof import('@endo/git').makeNativeGitBackend;
+  makeHostSpawner: typeof import('@endo/host-spawner').makeHostSpawner;
+};
+
 export type DaemonicPowers = {
   crypto: CryptoPowers;
   petStore: PetStorePowers;
@@ -2393,6 +2407,11 @@ export type DaemonicPowers = {
       registryUrl: string;
     }) => any;
   };
+  /**
+   * Absent on a supervisor that cannot spawn host processes (the XS
+   * one). `git` and `shell` formulas then refuse with a diagnosis.
+   */
+  hostTools?: Partial<HostToolPowers>;
 };
 
 export type FormulateResult<T> = Promise<{

@@ -214,14 +214,18 @@ Implemented and verified:
 Not yet runnable as a full daemon-to-daemon CapTP handshake in this tree, for
 reasons **out of scope for the iroh work**:
 
-1. **The XS daemon bundle pulls in Node-only packages.**
-   `bundle-bus-daemon-rust-xs.mjs` currently fails because `@endo/git`
-   (`makeNativeGitBackend`, imported eagerly in `daemon.js`) and a transitive
-   path under `@endo/platform/fs/lite` import `node:` builtins the bundler's
-   `EXCLUDED_PACKAGES` list does not cover.
-   This is pre-existing — it fails on the unmodified manager too.
-   The fix is to make the git backend injectable (as `better-sqlite3` already
-   is) and extend the exclude list; roughly a half-day of bundler hygiene.
+1. **The XS daemon bundle pulls in Node-only packages.** *Resolved.*
+   `bundle-bus-daemon-rust-xs.mjs` used to fail on sixteen `node:` imports the
+   bundler's `EXCLUDED_PACKAGES` list did not cover: `@endo/git`
+   (`makeNativeGitBackend`, imported by `manager.js`) and `@endo/host-spawner`
+   (imported by `manager.js`; `gitClone` by `host.js`), a transitive path
+   under `@endo/platform/fs/extended` reached through `@endo/exo-git`, and
+   `blob-ref.js`'s `node:crypto`.
+   The git backend and the host spawner are now injectable as
+   `DaemonicPowers.hostTools` (as `better-sqlite3` already was) and excluded;
+   `@endo/exo-git` imports the two `fs/extended` modules it uses directly
+   instead of the index; and `blob-ref.js` hashes through `@endo/sha256`.
+   See `designs/platform-neutral-hash.md`.
 2. **The XS realm is not locked down.**
    `ses_boot.js` installs the `HandledPromise` shim but calls no
    `lockdown()`, no separate lockdown bundle is evaluated, and the
@@ -239,8 +243,8 @@ reasons **out of scope for the iroh work**:
    Same-host direct-address dialing (`ENDO_IROH_LOCAL=1`) works and is what
    the integration tests use.
 
-Item 1 blocks a live `endor` boot regardless of the iroh work; once it is
-resolved, `ENDO_MANAGER_XS=1 ENDO_IROH=1 endor daemon` (add
+Item 1 blocked a live `endor` boot regardless of the iroh work and is now
+resolved, so `ENDO_MANAGER_XS=1 ENDO_IROH=1 endor daemon` (add
 `ENDO_IROH_LOCAL=1` for same-host) completes the path. Item 2 does not block
 the boot; it bounds what the boot is worth as a confinement claim.
 
