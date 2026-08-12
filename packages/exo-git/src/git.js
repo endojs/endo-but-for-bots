@@ -4,10 +4,13 @@
 import { q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { defineExoClassKit } from '@endo/exo';
-import {
-  readOnly as readOnlyFs,
-  wrapBackend,
-} from '@endo/platform/fs/extended';
+// Deep specifiers rather than the `@endo/platform/fs/extended` index: the
+// index also re-exports `makeNodeFilesystem` / `makeNodeFsBackend`, which
+// statically import `node:fs/promises` and `node:path`.  `@endo/exo-git` is
+// on the XS daemon bundle's compartment graph, where those do not resolve,
+// and it needs neither (`designs/platform-neutral-hash.md`).
+import { readOnly as readOnlyFs } from '@endo/platform/fs/extended/readonly.js';
+import { wrapBackend } from '@endo/platform/fs/extended/wrap-backend.js';
 
 import { makeGitFsBackend } from './git-filesystem.js';
 import {
