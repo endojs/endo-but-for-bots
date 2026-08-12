@@ -10641,7 +10641,7 @@ impl Interp {
         let array = self.new_array_unmetered();
         let mut segments: Vec<Slot> = Vec::new();
         let size = subject_bytes.len();
-        let mut push_segment = |this: &mut Self, from: usize, to: usize, segs: &mut Vec<Slot>| {
+        let push_segment = |this: &mut Self, from: usize, to: usize, segs: &mut Vec<Slot>| {
             // `split_aux`: a `fxNewSlot` + the substring `fxNewChunk`.
             this.meter.tick_slot_alloc();
             let piece = &subject_bytes[from..to];
