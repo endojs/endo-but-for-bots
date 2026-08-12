@@ -299,7 +299,7 @@ harden(assertValidTreeEntryName);
  * @param {Set<string>} [deniedSegments]
  * @returns {string}
  */
-const resolveSegments = (
+export const resolveSegments = (
   currentDir,
   confinementRoot,
   segments,

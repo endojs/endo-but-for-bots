@@ -96,7 +96,12 @@ import {
   makeHelp,
   readableTreeHelp,
 } from './help-text.js';
-import { getMountBacking, lineageOf, makeRevocableMount } from './mount.js';
+import {
+  getMountBacking,
+  lineageOf,
+  makeRevocableMount,
+  resolveSegments,
+} from './mount.js';
 
 // Sorted:
 import {
@@ -814,7 +819,9 @@ const makeDaemonCore = async (
       case 'readable-tree':
         return [];
       case 'mount':
-        return [];
+        // Sub-mounts record their parent mount for dependency tracking
+        // so the parent stays reachable while the child references it.
+        return formula.parent ? [['parent', formula.parent]] : [];
       case 'scratch-mount':
         return [];
       case 'git':
@@ -3150,7 +3157,15 @@ const makeDaemonCore = async (
     'readable-tree': ({ content }) => makeReadableTree(content),
     registry: ({ registryUrl }) =>
       makeRegistry(registryUrl ?? registryDefaultUrl),
-    mount: async ({ path: mountPath, readOnly, deniedSegments }, context) => {
+    mount: async (
+      { path: mountPath, readOnly, deniedSegments, parent },
+      context,
+    ) => {
+      // A sub-mount dies together with its parent mount: cancelling the
+      // parent (or its collection) tears down the child rooted beneath it.
+      if (parent !== undefined) {
+        context.thisDiesIfThatDies(parent);
+      }
       // Verify the mount path exists.
       const pathExists = await filePowers.exists(mountPath);
       if (!pathExists) {
@@ -4561,6 +4576,89 @@ const makeDaemonCore = async (
           type: 'scratch-mount',
           readOnly,
           ...(deniedSegments !== undefined ? { deniedSegments } : {}),
+        });
+
+        return formulate(formulaNumber, formula);
+      })
+    );
+  };
+
+  /** @type {DaemonCore['formulateSubMount']} */
+  const formulateSubMount = async (
+    parentMountId,
+    subpath,
+    readOnly,
+    deferredTasks,
+  ) => {
+    return /** @type {FormulateResult<EndoMount>} */ (
+      withFormulaGraphLock(async () => {
+        await null;
+        // Derive the child root from the parent mount's host path.  The
+        // parent path comes from `getMountHostPath`, which rejects any id
+        // that is not a top-level `mount` / `scratch-mount` formula, so a
+        // sub-mount can only be rooted beneath a daemon-minted mount.
+        const parentPath = getMountHostPath(parentMountId);
+        // Attenuation is monotonic: a sub-mount may only narrow the
+        // authority it is derived from, never widen it.  If the parent
+        // mount is read-only, the child is read-only regardless of the
+        // requested flag, so read-only access cannot be escaped by
+        // re-mounting a subtree (design daemon-mount.md § Read-only
+        // attenuation: a read-only mount "cannot be upgraded to
+        // read-write through any API path").  `getMountHostPath` has
+        // already proven the parent is a `mount` / `scratch-mount`
+        // formula, both of which carry `readOnly`.
+        const parentFormula = formulaForId.get(parentMountId);
+        const parentReadOnly =
+          parentFormula !== undefined &&
+          (parentFormula.type === 'mount' ||
+            parentFormula.type === 'scratch-mount') &&
+          parentFormula.readOnly;
+        const effectiveReadOnly = readOnly || parentReadOnly;
+        // `resolveSegments` clamps `..` at the parent root, so the child
+        // root can never traverse above the parent — a sub-mount at
+        // `/project/src` given `['..', '.env']` stays within `/project`,
+        // and the child's own confinement root then bounds it further.
+        const fullPath = resolveSegments(
+          parentPath,
+          parentPath,
+          subpath,
+          filePowers,
+        );
+        // Defense in depth against a symlinked subpath: if the derived
+        // root already exists, its realpath must resolve within the
+        // parent's realpath.  The lexical `..` clamp above already
+        // prevents parent-directory-traversal escapes; this closes the
+        // symlink escape.
+        if (await filePowers.exists(fullPath)) {
+          const realParent = await filePowers.realPath(parentPath);
+          const realFull = await filePowers.realPath(fullPath);
+          if (
+            realFull !== realParent &&
+            !realFull.startsWith(`${realParent}/`)
+          ) {
+            throw makeError(
+              X`Sub-mount subpath ${q(subpath)} escapes parent mount root`,
+            );
+          }
+        }
+
+        const formulaNumber = /** @type {FormulaNumber} */ (
+          await randomHex256()
+        );
+
+        await deferredTasks.execute({
+          mountId: formatId({
+            number: formulaNumber,
+            node: localNodeNumber,
+          }),
+        });
+
+        /** @type {import('./types.js').MountFormula} */
+        const formula = harden({
+          type: 'mount',
+          path: fullPath,
+          readOnly: effectiveReadOnly,
+          parent: parentMountId,
         });
 
         return formulate(formulaNumber, formula);
@@ -7100,6 +7198,7 @@ const makeDaemonCore = async (
     checkinTree,
     formulateMount,
     formulateScratchMount,
+    formulateSubMount,
     formulateGit,
     formulateShell,
     formulateHttpClient,
