@@ -13,11 +13,11 @@ import { makeEndoProvisionGlobals } from '../src/code-mode-provision-globals.js'
 const makePersistence = policy =>
   harden(
     /** @type {any} */ ({
-      version: 1,
+      version: 2,
       guestHandlePath: ['code-mode', 'test', 'session-test', 'guest-handle'],
       workspacePath: '/workspace',
       policy: {
-        workspace: { deniedSegments: [] },
+        mounts: {},
         ...policy,
       },
     }),
@@ -27,24 +27,89 @@ test('globals match filesystem and Git authority modes', t => {
   const cases = [
     [makePersistence({}), []],
     [
-      makePersistence({ fs: 'readOnly' }),
+      makePersistence({
+        mounts: {
+          workspace: {
+            root: '/workspace',
+            mode: 'readOnly',
+            deniedSegments: [],
+            guestBinding: true,
+          },
+        },
+      }),
       [makeWorkspaceGlobal({ name: 'workspace' })],
     ],
     [
-      makePersistence({ fs: 'readWrite' }),
+      makePersistence({
+        mounts: {
+          workspace: {
+            root: '/workspace',
+            mode: 'readWrite',
+            deniedSegments: [],
+            guestBinding: true,
+          },
+        },
+      }),
       [makeWorkspaceGlobal({ name: 'workspace' })],
     ],
     [
-      makePersistence({ git: 'readOnly' }),
+      makePersistence({
+        gits: {
+          git: {
+            mount: 'workspace',
+            path: [],
+            root: '/workspace',
+            mode: 'readOnly',
+          },
+        },
+      }),
       [makeGitGlobal({ name: 'git', readOnly: true })],
     ],
-    [makePersistence({ git: 'readWrite' }), [makeGitGlobal({ name: 'git' })]],
     [
-      makePersistence({ git: 'historyRewrite' }),
+      makePersistence({
+        gits: {
+          git: {
+            mount: 'workspace',
+            path: [],
+            root: '/workspace',
+            mode: 'readWrite',
+          },
+        },
+      }),
+      [makeGitGlobal({ name: 'git' })],
+    ],
+    [
+      makePersistence({
+        gits: {
+          git: {
+            mount: 'workspace',
+            path: [],
+            root: '/workspace',
+            mode: 'historyRewrite',
+          },
+        },
+      }),
       [makeGitGlobal({ name: 'git', historyRewrite: true })],
     ],
     [
-      makePersistence({ fs: 'readWrite', git: 'historyRewrite' }),
+      makePersistence({
+        mounts: {
+          workspace: {
+            root: '/workspace',
+            mode: 'readWrite',
+            deniedSegments: [],
+            guestBinding: true,
+          },
+        },
+        gits: {
+          git: {
+            mount: 'workspace',
+            path: [],
+            root: '/workspace',
+            mode: 'historyRewrite',
+          },
+        },
+      }),
       [
         makeWorkspaceGlobal({ name: 'workspace' }),
         makeGitGlobal({ name: 'git', historyRewrite: true }),
@@ -63,7 +128,14 @@ test('globals match filesystem and Git authority modes', t => {
 test('remote globals are sorted and hardened', t => {
   const globals = makeEndoProvisionGlobals(
     makePersistence({
-      git: 'readWrite',
+      gits: {
+        git: {
+          mount: 'workspace',
+          path: [],
+          root: '/workspace',
+          mode: 'readWrite',
+        },
+      },
       gitRemotes: {
         zebra: {},
         alpha: {},
@@ -80,13 +152,28 @@ test('remote globals are sorted and hardened', t => {
   t.true(globals.every(Object.isFrozen));
 });
 
-test('nested Git globals each appear in the system prompt', t => {
+test('named Git globals each appear in the system prompt', t => {
   const globals = makeEndoProvisionGlobals(
     makePersistence({
       gits: {
-        zeta: { path: ['zeta'], mode: 'historyRewrite' },
-        ebfb: { path: ['ebfb'], mode: 'readWrite' },
-        inspect: { path: ['inspect'], mode: 'readOnly' },
+        zeta: {
+          mount: 'workspace',
+          path: ['zeta'],
+          root: '/workspace/zeta',
+          mode: 'historyRewrite',
+        },
+        ebfb: {
+          mount: 'workspace',
+          path: ['ebfb'],
+          root: '/workspace/ebfb',
+          mode: 'readWrite',
+        },
+        inspect: {
+          mount: 'workspace',
+          path: ['inspect'],
+          root: '/workspace/inspect',
+          mode: 'readOnly',
+        },
       },
     }),
   );
@@ -99,4 +186,41 @@ test('nested Git globals each appear in the system prompt', t => {
   t.true(prompt.includes('declare const ebfb: WritableEndoGit;'));
   t.true(prompt.includes('declare const inspect: ReadOnlyEndoGit;'));
   t.true(prompt.includes('declare const zeta: EndoGitHistory;'));
+});
+
+test('named mount and Git globals expose only named capabilities', t => {
+  const globals = makeEndoProvisionGlobals(
+    makePersistence({
+      mounts: {
+        destination: {
+          root: '/sibling',
+          mode: 'readWrite',
+          deniedSegments: [],
+          guestBinding: true,
+        },
+        source: {
+          root: '/workspace',
+          mode: 'readOnly',
+          deniedSegments: [],
+          guestBinding: true,
+        },
+      },
+      gits: {
+        inspect: {
+          mount: 'source',
+          path: [],
+          root: '/workspace',
+          mode: 'readOnly',
+        },
+      },
+    }),
+  );
+
+  t.deepEqual(
+    globals.map(({ name }) => name),
+    ['destination', 'source', 'inspect'],
+  );
+  const prompt = makeCodeModeSystemPrompt(globals);
+  t.false(prompt.includes('/workspace'));
+  t.false(prompt.includes('/sibling'));
 });

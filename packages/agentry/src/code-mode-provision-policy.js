@@ -1,7 +1,7 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { EndoProvisionPersistence, EndoProvisionPolicy, EndoProvisionSpec, NormalizeEndoProvisionOptions, NormalizedGitRemoteSpec, NormalizedNestedGitSpec } from './code-mode-provisioning-types.js' */
+/** @import { EndoProvisionPersistence, EndoProvisionPolicy, EndoProvisionSpec, GitGrant, MountGrant, NormalizeEndoProvisionOptions, NormalizedGitGrant, NormalizedGitRemoteSpec, NormalizedMountGrant } from './code-mode-provisioning-types.js' */
 
 import { defaultDeniedSegments } from '@endo/daemon/src/mount.js';
 import { isPetName } from '@endo/daemon/pet-name.js';
@@ -16,12 +16,21 @@ const ROOT_FIELDS = harden([
   'workspace',
   'fs',
   'git',
+  'mounts',
   'gits',
   'gitRemotes',
   'piTools',
 ]);
 const WORKSPACE_FIELDS = harden(['path', 'deniedSegments']);
-const NESTED_GIT_FIELDS = harden(['path', 'mode']);
+const MOUNT_FIELDS = harden(['path', 'mode', 'deniedSegments']);
+const GIT_FIELDS = harden(['mount', 'path', 'mode']);
+const NORMALIZED_MOUNT_FIELDS = harden([
+  'root',
+  'mode',
+  'deniedSegments',
+  'guestBinding',
+]);
+const NORMALIZED_GIT_FIELDS = harden(['mount', 'path', 'root', 'mode']);
 const REMOTE_FIELDS = harden([
   'url',
   'allowedDirections',
@@ -38,7 +47,13 @@ const REMOTE_FIELDS = harden([
 const FS_MODES = harden(['readOnly', 'readWrite']);
 const GIT_MODES = harden(['readOnly', 'readWrite', 'historyRewrite']);
 const PI_TOOLS_MODES = harden(['preserve']);
-const PRODUCT_RESERVED_BINDINGS = harden(['E', 'git', 'gits', 'workspace']);
+const PRODUCT_RESERVED_BINDINGS = harden([
+  'E',
+  'git',
+  'gits',
+  'mounts',
+  'workspace',
+]);
 const LANGUAGE_RESERVED_BINDINGS = harden([
   'arguments',
   'await',
@@ -242,7 +257,8 @@ const normalizeCredentialPetNamePath = (value, label) => {
 };
 
 /**
- * Remote names become lexical bindings inside a strict module compartment.
+ * Remote names and named mounts become lexical bindings inside a strict
+ * module compartment.
  *
  * @param {string} name
  * @returns {boolean}
@@ -261,6 +277,19 @@ const assertBindingName = (name, label) => {
     throw makeError(
       X`${q(label)} must be a non-reserved JavaScript binding and pet name`,
     );
+  }
+};
+
+/**
+ * A Git grant may select the generated compatibility mount named workspace.
+ * Every other mount reference must name an actual named mount.
+ *
+ * @param {string} name
+ * @param {string} label
+ */
+const assertMountReferenceName = (name, label) => {
+  if (name !== 'workspace') {
+    assertBindingName(name, label);
   }
 };
 
@@ -312,106 +341,47 @@ const normalizeRemote = (value, name) => {
 };
 
 /**
- * @param {string} workspacePath
+ * @param {string} root
  * @param {string} candidate
  * @returns {boolean}
  */
-const isWithinWorkspace = (workspacePath, candidate) => {
-  const fromWorkspace = relative(workspacePath, candidate);
+const isWithinRoot = (root, candidate) => {
+  const fromRoot = relative(root, candidate);
   return (
-    fromWorkspace === '' ||
-    (!isAbsolute(fromWorkspace) &&
-      fromWorkspace !== '..' &&
-      !fromWorkspace.startsWith(`..${sep}`))
+    fromRoot === '' ||
+    (!isAbsolute(fromRoot) &&
+      fromRoot !== '..' &&
+      !fromRoot.startsWith(`..${sep}`))
   );
 };
 
 /**
  * @param {unknown} value
- * @param {string} name
- * @param {string} workspacePath
- * @param {string[]} deniedSegments
- * @param {unknown} fs
- * @returns {Promise<NormalizedNestedGitSpec>}
- */
-const normalizeNestedGit = async (
-  value,
-  name,
-  workspacePath,
-  deniedSegments,
-  fs,
-) => {
-  const label = `gits.${name}`;
-  assertBindingName(name, `Git grant name ${name}`);
-  const grant = requirePlainRecord(value, `EndoProvisionSpec.${label}`);
-  assertKnownFields(grant, NESTED_GIT_FIELDS, `EndoProvisionSpec.${label}`);
-  const mode = grant.mode;
-  if (mode === undefined || !GIT_MODES.includes(/** @type {any} */ (mode))) {
-    throw makeError(
-      X`EndoProvisionSpec.${label}.mode must be readOnly, readWrite, or historyRewrite`,
-    );
-  }
-  if (
-    fs === 'readOnly' &&
-    (mode === 'readWrite' || mode === 'historyRewrite')
-  ) {
-    throw makeError(
-      X`EndoProvisionSpec: writable Git grant ${q(name)} requires a writable filesystem grant; fs: 'readOnly' cannot be combined with gits.${q(name)}.mode: ${q(mode)}`,
-    );
-  }
-  const path = requireStringArray(
-    grant.path,
-    `EndoProvisionSpec.${label}.path`,
-  ).map((segment, index) => {
-    if (
-      segment === '.' ||
-      segment === '..' ||
-      segment.includes('/') ||
-      segment.includes('\\')
-    ) {
-      throw makeError(
-        X`${q(`EndoProvisionSpec.${label}.path[${index}]`)} must be one path segment inside the workspace`,
-      );
-    }
-    if (deniedSegments.includes(segment.toLowerCase())) {
-      throw makeError(
-        X`${q(`EndoProvisionSpec.${label}.path[${index}]`)} names a denied workspace segment`,
-      );
-    }
-    return segment;
-  });
-  const requestedPath = resolve(workspacePath, ...path);
-  const nestedPath = await canonicalDirectory(
-    requestedPath,
-    `EndoProvisionSpec.${label}.path`,
-  );
-  if (!isWithinWorkspace(workspacePath, nestedPath)) {
-    throw makeError(
-      X`EndoProvisionSpec.${label}.path must stay inside the workspace`,
-    );
-  }
-  return harden({
-    path: nestedPath,
-    mode: /** @type {'readOnly' | 'readWrite' | 'historyRewrite'} */ (mode),
-  });
-};
-
-/**
- * Convert a canonical nested Git path from persistence back to the
- * workspace-relative segments accepted by the inert provisioning spec.
- *
- * @param {string} workspacePath
- * @param {string} nestedPath
  * @param {string} label
  * @returns {string[]}
  */
-const nestedPathSegments = (workspacePath, nestedPath, label) => {
-  const fromWorkspace = relative(workspacePath, nestedPath);
-  if (!isWithinWorkspace(workspacePath, nestedPath)) {
-    throw makeError(X`${q(label)} must stay inside the workspace`);
-  }
-  return fromWorkspace === '' ? [] : fromWorkspace.split(sep);
-};
+const normalizeDeniedSegments = (value, label) =>
+  harden(
+    [
+      ...new Set(
+        requireStringArray(value ?? defaultDeniedSegments, label).map(
+          (segment, index) => {
+            if (
+              segment === '.' ||
+              segment === '..' ||
+              segment.includes('/') ||
+              segment.includes('\\')
+            ) {
+              throw makeError(
+                X`${q(`${label}[${index}]`)} must be one path segment`,
+              );
+            }
+            return segment.toLowerCase();
+          },
+        ),
+      ),
+    ].sort(),
+  );
 
 /**
  * @param {string} candidate
@@ -439,11 +409,124 @@ const canonicalDirectory = async (candidate, label) => {
 };
 
 /**
+ * @param {unknown} value
+ * @param {string} name
+ * @param {string} cwd
+ * @returns {Promise<NormalizedMountGrant>}
+ */
+const normalizeMount = async (value, name, cwd) => {
+  assertBindingName(name, `Mount grant name ${name}`);
+  const grant = requirePlainRecord(value, `EndoProvisionSpec.mounts.${name}`);
+  const label = `EndoProvisionSpec.mounts.${name}`;
+  assertKnownFields(grant, MOUNT_FIELDS, label);
+  if (!FS_MODES.includes(/** @type {any} */ (grant.mode))) {
+    throw makeError(X`${q(`${label}.mode`)} must be readOnly or readWrite`);
+  }
+  const selector = requireString(grant.path, `${label}.path`);
+  const root = await canonicalDirectory(
+    resolve(cwd, selector),
+    `${label}.path`,
+  );
+  return harden({
+    root,
+    mode: /** @type {'readOnly' | 'readWrite'} */ (grant.mode),
+    deniedSegments: normalizeDeniedSegments(
+      grant.deniedSegments,
+      `${label}.deniedSegments`,
+    ),
+    guestBinding: true,
+  });
+};
+
+/**
+ * @param {unknown} value
+ * @param {string} name
+ * @param {Record<string, NormalizedMountGrant>} mounts
+ * @param {string | undefined} pinnedRoot
+ * @returns {Promise<NormalizedGitGrant>}
+ */
+const normalizeGitGrant = async (value, name, mounts, pinnedRoot) => {
+  const label = `EndoProvisionSpec.gits.${name}`;
+  const grant = requirePlainRecord(value, label);
+  assertKnownFields(grant, GIT_FIELDS, label);
+  const mountName =
+    grant.mount === undefined
+      ? 'workspace'
+      : requireString(grant.mount, `${label}.mount`);
+  assertMountReferenceName(mountName, `${label}.mount`);
+  const selectedMount = mounts[mountName];
+  if (selectedMount === undefined) {
+    throw makeError(
+      X`${q(`${label}.mount`)} names an ungranted mount ${q(mountName)}`,
+    );
+  }
+  const mode = grant.mode;
+  if (mode === undefined || !GIT_MODES.includes(/** @type {any} */ (mode))) {
+    throw makeError(
+      X`${q(`${label}.mode`)} must be readOnly, readWrite, or historyRewrite`,
+    );
+  }
+  const writable = mode === 'readWrite' || mode === 'historyRewrite';
+  if (selectedMount.mode === 'readOnly' && writable) {
+    throw makeError(
+      X`Git grant ${q(name)} cannot be ${q(mode)} on read-only mount ${q(mountName)}`,
+    );
+  }
+  if (writable && !selectedMount.guestBinding) {
+    throw makeError(
+      X`writable Git grant ${q(name)} requires its selected mount ${q(mountName)} to be guest-bound (grant an fs or mount binding the guest can see)`,
+    );
+  }
+  const path = requireStringArray(grant.path, `${label}.path`).map(
+    (segment, index) => {
+      if (
+        segment === '.' ||
+        segment === '..' ||
+        segment.includes('/') ||
+        segment.includes('\\') ||
+        isAbsolute(segment)
+      ) {
+        throw makeError(
+          X`${q(`${label}.path[${index}]`)} must be one relative path segment inside the selected mount`,
+        );
+      }
+      if (selectedMount.deniedSegments.includes(segment.toLowerCase())) {
+        throw makeError(
+          X`${q(`${label}.path[${index}]`)} names a denied segment of mount ${q(mountName)}`,
+        );
+      }
+      return segment;
+    },
+  );
+  const requestedRoot = resolve(selectedMount.root, ...path);
+  // Persistence pins the canonical worktree root. Revalidation must check
+  // that pinned root itself still exists and remains confined, without
+  // following a selector that may have been replaced by a symlink after the
+  // first normalization.
+  const root = await canonicalDirectory(
+    pinnedRoot ?? requestedRoot,
+    `${label}.path`,
+  );
+  if (!isWithinRoot(selectedMount.root, root)) {
+    throw makeError(
+      X`${q(`${label}.path`)} must stay inside selected mount ${q(mountName)}`,
+    );
+  }
+  return harden({
+    mount: mountName,
+    path: harden([...path]),
+    root,
+    mode: /** @type {'readOnly' | 'readWrite' | 'historyRewrite'} */ (mode),
+  });
+};
+
+/**
  * @param {EndoProvisionSpec | undefined} spec
  * @param {string} cwd
+ * @param {Record<string, string> | undefined} pinnedGitRoots
  * @returns {Promise<{ workspacePath: string, policy: EndoProvisionPolicy }>}
  */
-const normalizePolicy = async (spec, cwd) => {
+const normalizePolicy = async (spec, cwd, pinnedGitRoots = undefined) => {
   const root = requirePlainRecord(spec ?? {}, 'EndoProvisionSpec');
   assertNoSecretFields(root, 'EndoProvisionSpec');
   assertKnownFields(root, ROOT_FIELDS, 'EndoProvisionSpec');
@@ -468,14 +551,9 @@ const normalizePolicy = async (spec, cwd) => {
   ) {
     throw makeError(X`EndoProvisionSpec.piTools must be preserve`);
   }
-  if (fs === 'readOnly' && (git === 'readWrite' || git === 'historyRewrite')) {
-    throw makeError(
-      X`EndoProvisionSpec: writable Git requires a writable filesystem grant; fs: 'readOnly' cannot be combined with git: 'readWrite' or 'historyRewrite'`,
-    );
-  }
 
   const canonicalCwd = await canonicalDirectory(resolve(cwd), 'cwd');
-  const requestedPath =
+  const requestedWorkspacePath =
     workspace.path === undefined
       ? canonicalCwd
       : resolve(
@@ -483,63 +561,134 @@ const normalizePolicy = async (spec, cwd) => {
           requireString(workspace.path, 'EndoProvisionSpec.workspace.path'),
         );
   const workspacePath = await canonicalDirectory(
-    requestedPath,
+    requestedWorkspacePath,
     'EndoProvisionSpec.workspace.path',
   );
-  const deniedSegments = harden(
-    [
-      ...new Set(
-        requireStringArray(
-          workspace.deniedSegments ?? defaultDeniedSegments,
-          'EndoProvisionSpec.workspace.deniedSegments',
-        ).map((segment, index) => {
-          if (
-            segment === '.' ||
-            segment === '..' ||
-            segment.includes('/') ||
-            segment.includes('\\')
-          ) {
-            throw makeError(
-              X`${q(`EndoProvisionSpec.workspace.deniedSegments[${index}]`)} must be one path segment`,
-            );
-          }
-          return segment.toLowerCase();
-        }),
-      ),
-    ].sort(),
+  const workspaceDeniedSegments = normalizeDeniedSegments(
+    workspace.deniedSegments,
+    'EndoProvisionSpec.workspace.deniedSegments',
   );
+
+  const mountsRecord =
+    root.mounts === undefined
+      ? undefined
+      : requirePlainRecord(root.mounts, 'EndoProvisionSpec.mounts');
+  /** @type {Record<string, NormalizedMountGrant>} */
+  const mounts = {};
+  for (const name of Object.keys(mountsRecord ?? {}).sort()) {
+    // eslint-disable-next-line no-await-in-loop
+    mounts[name] = await normalizeMount(
+      /** @type {Record<string, unknown>} */ (mountsRecord)[name],
+      name,
+      canonicalCwd,
+    );
+  }
 
   const gitsRecord =
     root.gits === undefined
       ? undefined
       : requirePlainRecord(root.gits, 'EndoProvisionSpec.gits');
-  /** @type {Array<[string, NormalizedNestedGitSpec]>} */
-  const normalizedGits = [];
-  for (const name of Object.keys(gitsRecord ?? {}).sort()) {
-    // eslint-disable-next-line no-await-in-loop
-    const grant = await normalizeNestedGit(
-      /** @type {Record<string, unknown>} */ (gitsRecord)[name],
-      name,
-      workspacePath,
-      deniedSegments,
-      fs,
+  const needsWorkspaceMount =
+    fs !== undefined ||
+    git !== undefined ||
+    Object.keys(gitsRecord ?? {}).some(name => {
+      const grant = requirePlainRecord(
+        /** @type {Record<string, unknown>} */ (gitsRecord)[name],
+        `EndoProvisionSpec.gits.${name}`,
+      );
+      return grant.mount === undefined || grant.mount === 'workspace';
+    });
+
+  const workspaceGitModes = [
+    ...(git === undefined ? [] : [git]),
+    ...Object.keys(gitsRecord ?? {}).flatMap(name => {
+      const grant = /** @type {Record<string, unknown>} */ (gitsRecord)[name];
+      const grantRecord = isPlainRecord(grant) ? grant : undefined;
+      const mount =
+        grantRecord !== undefined && grantRecord.mount !== undefined
+          ? grantRecord.mount
+          : 'workspace';
+      return mount === 'workspace' && typeof grantRecord?.mode === 'string'
+        ? [grantRecord.mode]
+        : [];
+    }),
+  ];
+  if (
+    fs !== 'readWrite' &&
+    workspaceGitModes.some(
+      mode => mode === 'readWrite' || mode === 'historyRewrite',
+    )
+  ) {
+    throw makeError(
+      X`writable Git requires a writable filesystem grant; declare fs: 'readWrite' or an explicit guest-bound writable mount; the compatibility workspace cannot use fs: 'readOnly' or omitted fs for a writable Git grant`,
     );
-    normalizedGits.push([name, grant]);
   }
-  const gits = /** @type {Record<string, NormalizedNestedGitSpec>} */ (
-    Object.fromEntries(normalizedGits)
+  if (needsWorkspaceMount && mounts.workspace === undefined) {
+    const workspaceMode =
+      fs === 'readWrite' ||
+      workspaceGitModes.some(
+        mode => mode === 'readWrite' || mode === 'historyRewrite',
+      )
+        ? 'readWrite'
+        : 'readOnly';
+    mounts.workspace = harden({
+      root: workspacePath,
+      mode: /** @type {'readOnly' | 'readWrite'} */ (workspaceMode),
+      deniedSegments: workspaceDeniedSegments,
+      guestBinding: fs !== undefined,
+    });
+  }
+
+  /** @type {Array<[string, NormalizedGitGrant]>} */
+  const normalizedGits = [];
+  if (git !== undefined) {
+    normalizedGits.push([
+      'git',
+      await normalizeGitGrant(
+        { mount: 'workspace', path: [], mode: git },
+        'git',
+        mounts,
+        pinnedGitRoots?.git,
+      ),
+    ]);
+  }
+  for (const name of Object.keys(gitsRecord ?? {}).sort()) {
+    assertBindingName(name, `Git grant name ${name}`);
+    if (name === 'git') {
+      throw makeError(
+        X`Git grant name ${q(name)} is reserved for the compatibility root git input`,
+      );
+    }
+    normalizedGits.push([
+      name,
+      // eslint-disable-next-line no-await-in-loop
+      await normalizeGitGrant(
+        /** @type {Record<string, unknown>} */ (gitsRecord)[name],
+        name,
+        mounts,
+        pinnedGitRoots?.[name],
+      ),
+    ]);
+  }
+  const gits = /** @type {Record<string, NormalizedGitGrant>} */ (
+    Object.fromEntries(
+      normalizedGits.sort(([left], [right]) => left.localeCompare(right)),
+    )
   );
 
   const gitRemotesRecord =
     root.gitRemotes === undefined
       ? undefined
       : requirePlainRecord(root.gitRemotes, 'EndoProvisionSpec.gitRemotes');
+  if (gitRemotesRecord !== undefined && git === undefined) {
+    throw makeError(X`Git remotes require the compatibility root git grant`);
+  }
   if (
     gitRemotesRecord !== undefined &&
     git !== 'readWrite' &&
     git !== 'historyRewrite'
   ) {
-    throw makeError(X`Git remotes require writable Git authority`);
+    throw makeError(X`Git remotes require writable root Git authority`);
   }
   const gitRemotes = /** @type {Record<string, NormalizedGitRemoteSpec>} */ (
     Object.fromEntries(
@@ -554,28 +703,40 @@ const normalizePolicy = async (spec, cwd) => {
         ]),
     )
   );
+
+  const allNames = new Map();
+  for (const name of Object.keys(mounts)) {
+    allNames.set(name, 'mount');
+  }
   for (const name of Object.keys(gits)) {
-    if (Object.hasOwn(gitRemotes, name)) {
+    if (allNames.has(name)) {
       throw makeError(
-        X`Git grant binding ${q(name)} is declared both in gits and gitRemotes`,
+        X`Binding name ${q(name)} is declared for both a mount and a Git grant`,
       );
     }
+    allNames.set(name, 'git');
+  }
+  for (const name of Object.keys(gitRemotes)) {
+    if (allNames.has(name)) {
+      throw makeError(
+        X`Binding name ${q(name)} is declared for a mount, Git grant, or remote more than once`,
+      );
+    }
+    allNames.set(name, 'remote');
   }
 
   /** @type {EndoProvisionPolicy} */
   const policy = harden({
-    workspace: harden({ deniedSegments }),
     ...(piTools === undefined
       ? {}
       : { piTools: /** @type {'preserve'} */ (piTools) }),
-    ...(fs === undefined
-      ? {}
-      : { fs: /** @type {'readOnly' | 'readWrite'} */ (fs) }),
-    ...(git === undefined
-      ? {}
-      : {
-          git: /** @type {'readOnly' | 'readWrite' | 'historyRewrite'} */ (git),
-        }),
+    mounts: harden(
+      Object.fromEntries(
+        Object.entries(mounts).sort(([left], [right]) =>
+          left.localeCompare(right),
+        ),
+      ),
+    ),
     ...(Object.keys(gits).length === 0 ? {} : { gits: harden(gits) }),
     ...(Object.keys(gitRemotes).length === 0
       ? {}
@@ -586,8 +747,8 @@ const normalizePolicy = async (spec, cwd) => {
 
 /**
  * Normalize plain provisioning intent into the versioned persistence record.
- * The workspace path is made absolute and canonical even for a no-grant spec;
- * the policy itself continues to omit every unrequested capability.
+ * Canonical host roots are retained only in this trusted record; guest-facing
+ * globals are generated from the capability graph without exposing them.
  *
  * @param {EndoProvisionSpec | undefined} spec
  * @param {NormalizeEndoProvisionOptions} options
@@ -606,7 +767,7 @@ export const normalizeEndoProvisionSpec = async (spec, options) => {
   const sessionKey = `session-${createHash('sha256').update(sessionId).digest('hex')}`;
   const { workspacePath, policy } = await normalizePolicy(spec, cwd);
   return harden({
-    version: 1,
+    version: /** @type {2} */ (2),
     guestHandlePath: harden(['code-mode', harness, sessionKey, 'guest-handle']),
     workspacePath,
     policy,
@@ -616,6 +777,8 @@ harden(normalizeEndoProvisionSpec);
 
 /**
  * Validate and re-normalize caller-held persistence before reconstruction.
+ * This re-resolves every canonical root and every mount-relative Git selector,
+ * so moved or symlink-swapped roots fail closed before host realization.
  *
  * @param {unknown} value
  * @returns {Promise<EndoProvisionPersistence>}
@@ -627,8 +790,8 @@ export const validateEndoProvisionPersistence = async value => {
     harden(['version', 'guestHandlePath', 'workspacePath', 'policy']),
     'Endo provision persistence',
   );
-  if (record.version !== 1) {
-    throw makeError(X`Endo provision persistence version must be 1`);
+  if (record.version !== 2) {
+    throw makeError(X`Endo provision persistence version must be 2`);
   }
   const guestHandlePath = requireStringArray(
     record.guestHandlePath,
@@ -658,9 +821,14 @@ export const validateEndoProvisionPersistence = async value => {
     record.policy,
     'Endo provision persistence.policy',
   );
-  const workspacePolicy = requirePlainRecord(
-    policyRecord.workspace,
-    'Endo provision persistence.policy.workspace',
+  assertKnownFields(
+    policyRecord,
+    harden(['mounts', 'gits', 'gitRemotes', 'piTools']),
+    'Endo provision persistence.policy',
+  );
+  const persistedMounts = requirePlainRecord(
+    policyRecord.mounts,
+    'Endo provision persistence.policy.mounts',
   );
   const persistedGits =
     policyRecord.gits === undefined
@@ -669,39 +837,115 @@ export const validateEndoProvisionPersistence = async value => {
           policyRecord.gits,
           'Endo provision persistence.policy.gits',
         );
-  const reconstructedGits =
-    persistedGits === undefined
-      ? undefined
-      : Object.fromEntries(
-          Object.entries(persistedGits).map(([name, grantValue]) => {
-            const label = `Endo provision persistence.policy.gits.${name}`;
-            const grant = requirePlainRecord(grantValue, label);
-            assertKnownFields(grant, NESTED_GIT_FIELDS, label);
-            const canonicalPath = requireString(grant.path, `${label}.path`);
-            return [
-              name,
-              {
-                path: nestedPathSegments(
-                  workspacePath,
-                  canonicalPath,
-                  `${label}.path`,
-                ),
-                mode: grant.mode,
-              },
-            ];
-          }),
+
+  /** @type {Record<string, MountGrant>} */
+  const mounts = {};
+  /** @type {{ path: string, deniedSegments: string[] } | undefined} */
+  let workspaceMount;
+  /** @type {'readOnly' | 'readWrite' | undefined} */
+  let fs;
+  /** @type {'readOnly' | 'readWrite' | 'historyRewrite' | undefined} */
+  let rootGitMode;
+  /** @type {Record<string, string>} */
+  const pinnedGitRoots = {};
+  for (const name of Object.keys(persistedMounts).sort()) {
+    const label = `Endo provision persistence.policy.mounts.${name}`;
+    const mount = requirePlainRecord(
+      /** @type {Record<string, unknown>} */ (persistedMounts)[name],
+      label,
+    );
+    assertKnownFields(mount, NORMALIZED_MOUNT_FIELDS, label);
+    const root = requireString(mount.root, `${label}.root`);
+    if (!isAbsolute(root)) {
+      throw makeError(X`${q(`${label}.root`)} must be absolute`);
+    }
+    if (!FS_MODES.includes(/** @type {any} */ (mount.mode))) {
+      throw makeError(X`${q(`${label}.mode`)} must be readOnly or readWrite`);
+    }
+    if (typeof mount.guestBinding !== 'boolean') {
+      throw makeError(X`${q(`${label}.guestBinding`)} must be a boolean`);
+    }
+    const deniedSegments = requireStringArray(
+      mount.deniedSegments,
+      `${label}.deniedSegments`,
+    );
+    if (name === 'workspace') {
+      workspaceMount = { path: root, deniedSegments };
+      if (mount.guestBinding) {
+        fs = /** @type {'readOnly' | 'readWrite'} */ (mount.mode);
+      }
+    } else {
+      if (!mount.guestBinding) {
+        throw makeError(
+          X`${q(label)} must be guest-bound when named explicitly`,
         );
+      }
+      mounts[name] = {
+        path: root,
+        mode: /** @type {'readOnly' | 'readWrite'} */ (mount.mode),
+        deniedSegments,
+      };
+    }
+  }
+
+  /** @type {Record<string, GitGrant>} */
+  const gits = {};
+  for (const name of Object.keys(persistedGits ?? {}).sort()) {
+    const label = `Endo provision persistence.policy.gits.${name}`;
+    const grant = requirePlainRecord(
+      /** @type {Record<string, unknown>} */ (persistedGits)[name],
+      label,
+    );
+    assertKnownFields(grant, NORMALIZED_GIT_FIELDS, label);
+    const mount = requireString(grant.mount, `${label}.mount`);
+    const path = requireStringArray(grant.path, `${label}.path`);
+    const grantRoot = requireString(grant.root, `${label}.root`);
+    if (!isAbsolute(grantRoot)) {
+      throw makeError(X`${q(`${label}.root`)} must be absolute`);
+    }
+    if (!GIT_MODES.includes(/** @type {any} */ (grant.mode))) {
+      throw makeError(
+        X`${q(`${label}.mode`)} must be readOnly, readWrite, or historyRewrite`,
+      );
+    }
+    if (name === 'git') {
+      if (mount !== 'workspace' || path.length !== 0) {
+        throw makeError(
+          X`Persisted compatibility root git must select workspace at its root`,
+        );
+      }
+      rootGitMode = /** @type {'readOnly' | 'readWrite' | 'historyRewrite'} */ (
+        grant.mode
+      );
+      pinnedGitRoots.git = grantRoot;
+    } else {
+      pinnedGitRoots[name] = grantRoot;
+      gits[name] = {
+        mount,
+        path,
+        mode: /** @type {'readOnly' | 'readWrite' | 'historyRewrite'} */ (
+          grant.mode
+        ),
+      };
+    }
+  }
+
   const reconstructedSpec = harden({
-    workspace: harden({
-      path: workspacePath,
-      deniedSegments: workspacePolicy.deniedSegments,
-    }),
-    ...(policyRecord.fs === undefined ? {} : { fs: policyRecord.fs }),
-    ...(policyRecord.git === undefined ? {} : { git: policyRecord.git }),
-    ...(reconstructedGits === undefined ? {} : { gits: reconstructedGits }),
     ...(policyRecord.piTools === undefined
       ? {}
       : { piTools: policyRecord.piTools }),
+    ...(workspaceMount === undefined
+      ? {}
+      : {
+          workspace: harden({
+            path: workspaceMount.path,
+            deniedSegments: harden([...workspaceMount.deniedSegments]),
+          }),
+        }),
+    ...(fs === undefined ? {} : { fs }),
+    ...(rootGitMode === undefined ? {} : { git: rootGitMode }),
+    ...(Object.keys(mounts).length === 0 ? {} : { mounts }),
+    ...(Object.keys(gits).length === 0 ? {} : { gits }),
     ...(policyRecord.gitRemotes === undefined
       ? {}
       : { gitRemotes: policyRecord.gitRemotes }),
@@ -709,10 +953,11 @@ export const validateEndoProvisionPersistence = async value => {
   const normalized = await normalizePolicy(
     /** @type {EndoProvisionSpec} */ (reconstructedSpec),
     workspacePath,
+    pinnedGitRoots,
   );
   /** @type {EndoProvisionPersistence} */
   const persistence = harden({
-    version: /** @type {1} */ (1),
+    version: /** @type {2} */ (2),
     guestHandlePath: harden([...guestHandlePath]),
     workspacePath: normalized.workspacePath,
     policy: normalized.policy,

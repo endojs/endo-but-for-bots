@@ -20,21 +20,14 @@ export const makeEndoProvisionGlobals = persistence => {
   const { policy } = persistence;
   /** @type {CodeModeGlobal[]} */
   const globals = [];
-  if (policy.fs !== undefined) {
-    globals.push(makeWorkspaceGlobal({ name: 'workspace' }));
+  for (const name of Object.keys(policy.mounts).sort()) {
+    if (policy.mounts[name].guestBinding) {
+      globals.push(makeWorkspaceGlobal({ name }));
+    }
   }
-  if (policy.git !== undefined) {
-    globals.push(
-      makeGitGlobal({
-        name: 'git',
-        readOnly: policy.git === 'readOnly',
-        historyRewrite: policy.git === 'historyRewrite',
-      }),
-    );
-  }
-  const nestedGits = policy.gits ?? {};
-  for (const name of Object.keys(nestedGits).sort()) {
-    const grant = nestedGits[name];
+  const gits = policy.gits ?? {};
+  for (const name of Object.keys(gits).sort()) {
+    const grant = gits[name];
     globals.push(
       makeGitGlobal({
         name,

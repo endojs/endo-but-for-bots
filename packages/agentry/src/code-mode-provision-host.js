@@ -190,36 +190,71 @@ const realizeProvisionResources = async (host, persistence, credentials) => {
 
   /** @type {Array<[string, string[]]>} */
   const guestBindings = [];
-  if (persistence.policy.fs !== undefined) {
-    const workspaceAlias = harden([...controllerPath, 'workspace']);
-    await provideOrLookup(host, workspaceAlias, () =>
-      E(host).provideMount(persistence.workspacePath, workspaceAlias, {
-        readOnly: persistence.policy.fs === 'readOnly',
-        deniedSegments: persistence.policy.workspace.deniedSegments,
-      }),
-    );
-    guestBindings.push(['workspace', workspaceAlias]);
-  }
-
-  if (persistence.policy.git !== undefined) {
-    const gitMountAlias = harden([...controllerPath, 'git-workspace']);
-    const gitAlias = harden([...controllerPath, 'git']);
-    const gitMount = /** @type {EndoMount} */ (
-      await provideOrLookup(host, gitMountAlias, () =>
-        E(host).provideMount(persistence.workspacePath, gitMountAlias, {
-          readOnly: persistence.policy.git === 'readOnly',
-          deniedSegments: persistence.policy.workspace.deniedSegments,
+  const mountsPath = harden([...controllerPath, 'mounts']);
+  await ensureNameDirectory(host, mountsPath);
+  /** @type {Map<string, EndoMount>} */
+  const mounts = new Map();
+  for (const [name, grant] of Object.entries(persistence.policy.mounts)) {
+    const mountPath = harden([...mountsPath, name]);
+    const mountAlias = harden([...mountPath, 'mount']);
+    // eslint-disable-next-line no-await-in-loop
+    await ensureNameDirectory(host, mountPath);
+    const mount = /** @type {EndoMount} */ (
+      // eslint-disable-next-line no-await-in-loop
+      await provideOrLookup(host, mountAlias, () =>
+        E(host).provideMount(grant.root, mountAlias, {
+          readOnly: grant.mode === 'readOnly',
+          deniedSegments: grant.deniedSegments,
         }),
       )
     );
+    mounts.set(name, mount);
+    if (grant.guestBinding) {
+      guestBindings.push([name, mountAlias]);
+    }
+  }
+
+  const gitsPath = harden([...controllerPath, 'gits']);
+  /** @type {Map<string, unknown>} */
+  const gits = new Map();
+  await ensureNameDirectory(host, gitsPath);
+  for (const [name, grant] of Object.entries(persistence.policy.gits ?? {})) {
+    const grantPath = harden([...gitsPath, name]);
+    const gitMountAlias = harden([...grantPath, 'mount']);
+    const gitAlias = harden([...grantPath, 'git']);
+    // eslint-disable-next-line no-await-in-loop
+    await ensureNameDirectory(host, grantPath);
+    const selectedMount = mounts.get(grant.mount);
+    if (selectedMount === undefined) {
+      throw makeError(
+        X`Git grant ${q(name)} selects a mount that was not realized`,
+      );
+    }
+    const gitMount = /** @type {EndoMount} */ (
+      // A Git grant gets a fresh exact-root mount. The selected named mount is
+      // the authority ceiling; this derived mount prevents a Git capability
+      // from silently covering unrelated paths in that mount.
+      // eslint-disable-next-line no-await-in-loop
+      await provideOrLookup(host, gitMountAlias, () =>
+        E(host).provideMount(grant.root, gitMountAlias, {
+          readOnly: grant.mode === 'readOnly',
+          deniedSegments: persistence.policy.mounts[grant.mount].deniedSegments,
+        }),
+      )
+    );
+    // eslint-disable-next-line no-await-in-loop
     const git = await provideOrLookup(host, gitAlias, () =>
       E(host).provideGit(gitMount, gitAlias, {
-        allowHistoryRewrite: persistence.policy.git === 'historyRewrite',
-        readOnly: persistence.policy.git === 'readOnly',
+        allowHistoryRewrite: grant.mode === 'historyRewrite',
+        readOnly: grant.mode === 'readOnly',
       }),
     );
-    guestBindings.push(['git', gitAlias]);
+    gits.set(name, git);
+    guestBindings.push([name, gitAlias]);
+  }
 
+  const rootGit = gits.get('git');
+  if (rootGit !== undefined) {
     for (const [name, remote] of Object.entries(
       persistence.policy.gitRemotes ?? {},
     )) {
@@ -244,51 +279,21 @@ const realizeProvisionResources = async (host, persistence, credentials) => {
       if (remote.credential === undefined) {
         // eslint-disable-next-line no-await-in-loop
         await provideOrLookup(host, remoteAlias, () =>
-          E(host).provideGitRemote(git, remoteAlias, remoteOptions),
+          E(host).provideGitRemote(rootGit, remoteAlias, remoteOptions),
         );
       } else {
         // eslint-disable-next-line no-await-in-loop
         await reprovisionCredentialedRemote(
           host,
-          git,
+          rootGit,
           remoteAlias,
           remoteOptions,
         );
       }
       guestBindings.push([name, remoteAlias]);
     }
-  }
-
-  const nestedGits = persistence.policy.gits ?? {};
-  if (Object.keys(nestedGits).length > 0) {
-    // The internal container is reserved by policy so it cannot collide with
-    // a user-facing Git remote or nested Git binding.
-    const gitsPath = harden([...controllerPath, 'gits']);
-    await ensureNameDirectory(host, gitsPath);
-    for (const [name, grant] of Object.entries(nestedGits)) {
-      const grantPath = harden([...gitsPath, name]);
-      // eslint-disable-next-line no-await-in-loop
-      await ensureNameDirectory(host, grantPath);
-      const gitMountAlias = harden([...grantPath, 'workspace']);
-      const gitAlias = harden([...grantPath, 'git']);
-      const gitMount = /** @type {EndoMount} */ (
-        // eslint-disable-next-line no-await-in-loop
-        await provideOrLookup(host, gitMountAlias, () =>
-          E(host).provideMount(grant.path, gitMountAlias, {
-            readOnly: grant.mode === 'readOnly',
-            deniedSegments: persistence.policy.workspace.deniedSegments,
-          }),
-        )
-      );
-      // eslint-disable-next-line no-await-in-loop
-      await provideOrLookup(host, gitAlias, () =>
-        E(host).provideGit(gitMount, gitAlias, {
-          allowHistoryRewrite: grant.mode === 'historyRewrite',
-          readOnly: grant.mode === 'readOnly',
-        }),
-      );
-      guestBindings.push([name, gitAlias]);
-    }
+  } else if (Object.keys(persistence.policy.gitRemotes ?? {}).length > 0) {
+    throw makeError(X`Git remotes have no retained root Git grant`);
   }
 
   const hasHandle = await hasNamePath(host, persistence.guestHandlePath);
@@ -331,19 +336,26 @@ const realizeProvisionResources = async (host, persistence, credentials) => {
  * @returns {Promise<EndoGuest>}
  */
 export const realizeEndoProvisionOnHost = async (host, persistence) => {
+  // Revalidate the caller-held record immediately before minting capabilities.
+  // This catches a moved or symlink-swapped canonical root during first
+  // realization, not only during a later daemon restart.
+  const normalizedPersistence =
+    await validateEndoProvisionPersistence(persistence);
   const controllerPath = persistence.guestHandlePath.slice(0, -1);
   const persistencePath = harden([...controllerPath, 'persistence']);
   const hasPersistence = await hasNamePath(host, persistencePath);
   if (hasPersistence) {
     const stored = await E(host).lookup(persistencePath);
     const normalizedStored = await validateEndoProvisionPersistence(stored);
-    if (!equalEndoProvisionPersistence(normalizedStored, persistence)) {
+    if (
+      !equalEndoProvisionPersistence(normalizedStored, normalizedPersistence)
+    ) {
       throw makeError(
         X`Reconstruction cannot widen or change a retained code-mode provision policy`,
       );
     }
   }
-  const credentials = await resolveGitCredentials(host, persistence);
-  return realizeProvisionResources(host, persistence, credentials);
+  const credentials = await resolveGitCredentials(host, normalizedPersistence);
+  return realizeProvisionResources(host, normalizedPersistence, credentials);
 };
 harden(realizeEndoProvisionOnHost);

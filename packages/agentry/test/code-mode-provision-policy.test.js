@@ -43,14 +43,14 @@ test('normalization preserves omission and resolves a canonical cwd', async t =>
   );
 
   t.deepEqual(first, second);
-  t.is(first.version, 1);
+  t.is(first.version, 2);
   t.is(first.workspacePath, await realpath(child));
   t.deepEqual(first.guestHandlePath.slice(0, 2), ['code-mode', 'test']);
   t.deepEqual(first.guestHandlePath.slice(2), [
     'session-e18c78136e8ee72d10e2af231794072c72fa11fcf2367f56e50eb0d97d37b870',
     'guest-handle',
   ]);
-  t.deepEqual(Object.keys(first.policy), ['workspace']);
+  t.deepEqual(Object.keys(first.policy), ['mounts']);
   t.is(relative.workspacePath, await realpath(child));
   t.notDeepEqual(relative.guestHandlePath, first.guestHandlePath);
 });
@@ -64,7 +64,7 @@ test('normalization retains explicit Pi tool preservation in policy data', async
 
   t.deepEqual(persistence.policy, {
     piTools: 'preserve',
-    workspace: { deniedSegments: persistence.policy.workspace.deniedSegments },
+    mounts: {},
   });
 });
 
@@ -165,7 +165,7 @@ test('Git remote dictionaries retain an own __proto__ binding', async t => {
   t.true(Object.hasOwn(persistence.policy.gitRemotes ?? {}, '__proto__'));
 });
 
-test('nested Git grants normalize workspace-relative paths and modes', async t => {
+test('Git grants normalize mount-relative paths and modes', async t => {
   const { root, child } = await makeWorkspace(t);
   const persistence = await normalizeEndoProvisionSpec(
     {
@@ -175,18 +175,63 @@ test('nested Git grants normalize workspace-relative paths and modes', async t =
         ebfb: { path: [], mode: 'readOnly' },
       },
     },
-    { harness: 'test', sessionId: 'nested-gits', cwd: root },
+    { harness: 'test', sessionId: 'named-gits', cwd: root },
   );
 
+  t.deepEqual(persistence.policy.mounts?.workspace, {
+    root: await realpath(root),
+    mode: 'readWrite',
+    deniedSegments: persistence.policy.mounts?.workspace.deniedSegments,
+    guestBinding: true,
+  });
   t.deepEqual(persistence.policy.gits, {
-    ebfb: { path: await realpath(root), mode: 'readOnly' },
-    zeta: { path: await realpath(child), mode: 'historyRewrite' },
+    ebfb: {
+      mount: 'workspace',
+      path: [],
+      root: await realpath(root),
+      mode: 'readOnly',
+    },
+    zeta: {
+      mount: 'workspace',
+      path: ['child'],
+      root: await realpath(child),
+      mode: 'historyRewrite',
+    },
   });
   t.true(Object.isFrozen(persistence.policy.gits));
   t.true(Object.isFrozen(persistence.policy.gits?.ebfb));
 });
 
-test('nested Git grants pin canonical paths across validation', async t => {
+test('read-only Git can omit the filesystem grant', async t => {
+  const { root } = await makeWorkspace(t);
+  const readOnly = await normalizeEndoProvisionSpec(
+    { git: 'readOnly' },
+    { harness: 'test', sessionId: 'read-only-git-without-fs', cwd: root },
+  );
+
+  t.deepEqual(readOnly.policy.mounts?.workspace, {
+    root: await realpath(root),
+    mode: 'readOnly',
+    deniedSegments: readOnly.policy.mounts?.workspace.deniedSegments,
+    guestBinding: false,
+  });
+  t.deepEqual(readOnly.policy.gits?.git, {
+    mount: 'workspace',
+    path: [],
+    root: await realpath(root),
+    mode: 'readOnly',
+  });
+
+  const writable = await normalizeEndoProvisionSpec(
+    { fs: 'readWrite', git: 'readWrite' },
+    { harness: 'test', sessionId: 'writable-git-with-fs', cwd: root },
+  );
+  t.is(writable.policy.mounts?.workspace.mode, 'readWrite');
+  t.is(writable.policy.mounts?.workspace.guestBinding, true);
+  t.is(writable.policy.gits?.git.mode, 'readWrite');
+});
+
+test('Git grants pin canonical roots across validation', async t => {
   const { root, child } = await makeWorkspace(t);
   const link = join(root, 'child-link');
   await symlink(child, link, 'dir');
@@ -196,10 +241,11 @@ test('nested Git grants pin canonical paths across validation', async t => {
       fs: 'readWrite',
       gits: { linked: { path: ['child-link'], mode: 'readOnly' } },
     },
-    { harness: 'test', sessionId: 'canonical-nested-git', cwd: root },
+    { harness: 'test', sessionId: 'canonical-git', cwd: root },
   );
 
-  t.is(persistence.policy.gits?.linked.path, await realpath(child));
+  t.is(persistence.policy.gits?.linked.root, await realpath(child));
+  t.deepEqual(persistence.policy.gits?.linked.path, ['child-link']);
   t.deepEqual(
     await validateEndoProvisionPersistence(
       JSON.parse(JSON.stringify(persistence)),
@@ -208,12 +254,12 @@ test('nested Git grants pin canonical paths across validation', async t => {
   );
 });
 
-test('nested Git grants reject binding collisions, escapes, denial, and capping', async t => {
+test('Git grants reject binding collisions, escapes, denial, and capping', async t => {
   const { root } = await makeWorkspace(t);
   const normalizeGits = (gits, extra = {}) =>
     normalizeEndoProvisionSpec(
       /** @type {any} */ ({ fs: 'readWrite', gits, ...extra }),
-      { harness: 'test', sessionId: 'invalid-nested-git', cwd: root },
+      { harness: 'test', sessionId: 'invalid-git', cwd: root },
     );
 
   for (const name of ['E', 'git', 'gits', 'workspace', 'class']) {
@@ -231,13 +277,13 @@ test('nested Git grants reject binding collisions, escapes, denial, and capping'
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(
       () => normalizeGits({ escape: { path, mode: 'readOnly' } }),
-      { message: /one path segment inside the workspace/ },
+      { message: /one relative path segment inside the selected mount/ },
     );
   }
 
   await t.throwsAsync(
     () => normalizeGits({ hidden: { path: ['.ssh'], mode: 'readOnly' } }),
-    { message: /denied workspace segment/ },
+    { message: /denied segment of mount/ },
   );
   await t.throwsAsync(
     () =>
@@ -245,7 +291,7 @@ test('nested Git grants reject binding collisions, escapes, denial, and capping'
         { privateRepo: { path: ['private'], mode: 'readOnly' } },
         { workspace: { deniedSegments: ['PRIVATE'] } },
       ),
-    { message: /denied workspace segment/ },
+    { message: /denied segment of mount/ },
   );
 
   for (const mode of /** @type {const} */ (['readWrite', 'historyRewrite'])) {
@@ -257,9 +303,9 @@ test('nested Git grants reject binding collisions, escapes, denial, and capping'
             fs: 'readOnly',
             gits: { nested: { path: ['child'], mode } },
           },
-          { harness: 'test', sessionId: 'capped-nested-git', cwd: root },
+          { harness: 'test', sessionId: 'capped-git', cwd: root },
         ),
-      { message: /writable Git grant.*writable filesystem grant/ },
+      { message: /writable Git requires a writable filesystem grant/ },
     );
   }
 
@@ -279,7 +325,30 @@ test('nested Git grants reject binding collisions, escapes, denial, and capping'
         },
         { harness: 'test', sessionId: 'colliding-git-name', cwd: root },
       ),
-    { message: /declared both in gits and gitRemotes/ },
+    { message: /declared for a mount, Git grant, or remote more than once/ },
+  );
+
+  await t.throwsAsync(
+    () =>
+      normalizeEndoProvisionSpec(
+        {
+          mounts: { source: { path: root, mode: 'readOnly' } },
+          gits: { source: { mount: 'source', path: [], mode: 'readOnly' } },
+        },
+        { harness: 'test', sessionId: 'mount-git-collision', cwd: root },
+      ),
+    { message: /declared for both a mount and a Git grant/ },
+  );
+
+  await t.throwsAsync(
+    () =>
+      normalizeEndoProvisionSpec(
+        {
+          mounts: { workspace: { path: root, mode: 'readOnly' } },
+        },
+        { harness: 'test', sessionId: 'reserved-mount', cwd: root },
+      ),
+    { message: /non-reserved JavaScript binding/ },
   );
 
   const outside = await mkdtemp(join(tmpdir(), 'endo-provision-outside-'));
@@ -288,7 +357,69 @@ test('nested Git grants reject binding collisions, escapes, denial, and capping'
   await t.throwsAsync(
     () =>
       normalizeGits({ escape: { path: ['escape-link'], mode: 'readOnly' } }),
-    { message: /must stay inside the workspace/ },
+    { message: /must stay inside selected mount/ },
+  );
+});
+
+test('named mounts coexist and cap each selected Git grant independently', async t => {
+  const { root } = await makeWorkspace(t);
+  const readOnlyRoot = await mkdtemp(join(tmpdir(), 'endo-provision-ro-'));
+  const writableRoot = await mkdtemp(join(tmpdir(), 'endo-provision-rw-'));
+  t.teardown(() => rm(readOnlyRoot, { recursive: true, force: true }));
+  t.teardown(() => rm(writableRoot, { recursive: true, force: true }));
+
+  const readOnly = await normalizeEndoProvisionSpec(
+    {
+      mounts: {
+        source: { path: readOnlyRoot, mode: 'readOnly' },
+        destination: { path: writableRoot, mode: 'readWrite' },
+      },
+      gits: {
+        inspect: { mount: 'source', path: [], mode: 'readOnly' },
+      },
+    },
+    { harness: 'test', sessionId: 'named-mounts', cwd: root },
+  );
+  t.deepEqual(Object.keys(readOnly.policy.mounts), ['destination', 'source']);
+  t.deepEqual(readOnly.policy.gits?.inspect, {
+    mount: 'source',
+    path: [],
+    root: await realpath(readOnlyRoot),
+    mode: 'readOnly',
+  });
+
+  const writable = await normalizeEndoProvisionSpec(
+    {
+      mounts: {
+        source: { path: readOnlyRoot, mode: 'readOnly' },
+        destination: { path: writableRoot, mode: 'readWrite' },
+      },
+      gits: {
+        rewrite: { mount: 'destination', path: [], mode: 'historyRewrite' },
+        write: { mount: 'destination', path: [], mode: 'readWrite' },
+      },
+    },
+    { harness: 'test', sessionId: 'named-mounts-writable', cwd: root },
+  );
+  t.is(writable.policy.gits?.rewrite.mount, 'destination');
+  t.is(writable.policy.gits?.write.mount, 'destination');
+
+  await t.throwsAsync(
+    () =>
+      normalizeEndoProvisionSpec(
+        {
+          fs: 'readWrite',
+          mounts: {
+            source: { path: readOnlyRoot, mode: 'readOnly' },
+            destination: { path: writableRoot, mode: 'readWrite' },
+          },
+          gits: {
+            wrong: { mount: 'source', path: [], mode: 'readWrite' },
+          },
+        },
+        { harness: 'test', sessionId: 'named-mount-cap', cwd: root },
+      ),
+    { message: /cannot be.*on read-only mount/ },
   );
 });
 
@@ -315,8 +446,20 @@ test('EndoProvisionSpec rejects malformed roots and incompatible modes', async t
       /writable Git requires a writable filesystem grant/,
     ],
     [
+      { git: 'readWrite' },
+      /writable Git requires a writable filesystem grant.*omitted fs/,
+    ],
+    [
+      { git: 'historyRewrite' },
+      /writable Git requires a writable filesystem grant.*omitted fs/,
+    ],
+    [
+      { gits: { nested: { path: [], mode: 'readWrite' } } },
+      /writable Git requires a writable filesystem grant.*omitted fs/,
+    ],
+    [
       { git: 'readOnly', gitRemotes: { origin: { url: 'file:///tmp/x' } } },
-      /remotes require writable Git/,
+      /remotes require writable root Git/,
     ],
   ];
 
