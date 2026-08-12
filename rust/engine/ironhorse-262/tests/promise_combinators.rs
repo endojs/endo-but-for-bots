@@ -297,3 +297,11 @@ fn non_iterable_combinator_input_rejects_with_type_error() {
         "TypeError",
     );
 }
+
+#[test]
+fn iterator_method_returning_a_primitive_rejects_capability() {
+    assert_drains_to(
+        "var g,o={}; o[Symbol.iterator]=function(){return 1;}; Promise.any(o).then(undefined,function(e){g=e.name;}); undefined",
+        "TypeError",
+    );
+}

@@ -11510,6 +11510,7 @@ impl Interp {
     /// ([`Self::run_combine_reaction`]).
     fn promise_combinator(
         &mut self,
+        code: &[u8],
         kind: CombinatorKind,
         iterable: Slot,
         constructor: Slot,
@@ -11556,9 +11557,25 @@ impl Interp {
                 self.settle_promise(derived, error, true)?;
                 return Ok(Slot::of(Kind::Reference, Payload::Reference(derived)));
             }
-            return Err(Halt::Unsupported(
-                "promise-combinator:custom-array-iterator",
-            ));
+            if !self.is_user_function_value(method) {
+                return Err(Halt::Unsupported(
+                    "promise-combinator:native-custom-iterator",
+                ));
+            }
+            match self.run_callback_catching_throw(code, method, iterable, &[])? {
+                Ok(iterator) if iterator.kind == Kind::Reference => {
+                    return Err(Halt::Unsupported("promise-combinator:custom-iterator-next"));
+                }
+                Ok(_) => {
+                    let error = self.build_error("TypeError", 0, 0);
+                    self.settle_promise(derived, error, true)?;
+                    return Ok(Slot::of(Kind::Reference, Payload::Reference(derived)));
+                }
+                Err(thrown) => {
+                    self.settle_promise(derived, thrown, true)?;
+                    return Ok(Slot::of(Kind::Reference, Payload::Reference(derived)));
+                }
+            }
         }
         let elems: Vec<Slot> = match iterable.value {
             Payload::Reference(arr) if self.arrays.contains_key(&arr) => {
@@ -11593,7 +11610,27 @@ impl Interp {
                     .map(|id| self.instance_get(instance, id))
                     .unwrap_or_else(Slot::undefined);
                 if self.is_callable_value(method) {
-                    return Err(Halt::Unsupported("promise-combinator:custom-iterable"));
+                    if !self.is_user_function_value(method) {
+                        return Err(Halt::Unsupported(
+                            "promise-combinator:native-custom-iterator",
+                        ));
+                    }
+                    match self.run_callback_catching_throw(code, method, iterable, &[])? {
+                        Ok(iterator) if iterator.kind == Kind::Reference => {
+                            return Err(Halt::Unsupported(
+                                "promise-combinator:custom-iterator-next",
+                            ));
+                        }
+                        Ok(_) => {
+                            let error = self.build_error("TypeError", 0, 0);
+                            self.settle_promise(derived, error, true)?;
+                            return Ok(Slot::of(Kind::Reference, Payload::Reference(derived)));
+                        }
+                        Err(thrown) => {
+                            self.settle_promise(derived, thrown, true)?;
+                            return Ok(Slot::of(Kind::Reference, Payload::Reference(derived)));
+                        }
+                    }
                 }
                 let error = self.build_error("TypeError", 0, 0);
                 self.settle_promise(derived, error, true)?;
@@ -15060,14 +15097,18 @@ impl Interp {
             // promise, and register a native COMBINE reaction on it; the shared
             // `remainingElementsCount`/results state settles the derived at the
             // drain. No synchronous user re-entry.
-            NativeMethod::PromiseAll => self.promise_combinator(CombinatorKind::All, arg0, this)?,
+            NativeMethod::PromiseAll => {
+                self.promise_combinator(code, CombinatorKind::All, arg0, this)?
+            }
             NativeMethod::PromiseAllSettled => {
-                self.promise_combinator(CombinatorKind::AllSettled, arg0, this)?
+                self.promise_combinator(code, CombinatorKind::AllSettled, arg0, this)?
             }
             NativeMethod::PromiseRace => {
-                self.promise_combinator(CombinatorKind::Race, arg0, this)?
+                self.promise_combinator(code, CombinatorKind::Race, arg0, this)?
             }
-            NativeMethod::PromiseAny => self.promise_combinator(CombinatorKind::Any, arg0, this)?,
+            NativeMethod::PromiseAny => {
+                self.promise_combinator(code, CombinatorKind::Any, arg0, this)?
+            }
             // The resolve/reject functions settle in the `RUN` dispatch
             // (`call_promise_function`) and never reach here.
             NativeMethod::PromiseResolveFunction | NativeMethod::PromiseRejectFunction => {
