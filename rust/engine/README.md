@@ -566,15 +566,16 @@ agree with **zero divergence**, every skip named:
 gen)` now driven, still `divergent=0`. The curated `stage4-generators.js` corpus
 is locked as `stage4_generators_corpus_is_bit_exact_against_oracle`, and the
 suspend/resume + allocation paths are exercised Miri-clean
-(`generator_suspend_resume_is_miri_clean`). The headline **scope fold** —
-carried forward as honest named skips (`Halt::Unsupported`, never a wrong value or
-a silent divergence): **`yield*` delegation** (`YIELD_STAR`), **`.throw(e)` and
-`.return(v)` into a *suspended* body** (throw-into-suspended and `finally`
-unwinding through the catch/finally jump chain — `generator:throw-into-suspended`/
-`generator:return-into-suspended`), a **`yield` inside a live `try`**
-(`generator:yield-in-try` — the jump-chain snapshot/rebase), a **`new`-constructed
-generator** (`generator:new-target`), and **async generators / `await`** (child 4,
-which resumes on this same `SavedFrame` machinery).
+(`generator_suspend_resume_is_miri_clean`). Synchronous generator control is now
+**complete**, each landed bit-exact against the oracle rather than named a skip:
+**`yield*` delegation** (`YIELD_STAR`, sharing the `YIELD` suspension machinery and
+carrying the delegate's iterator-result object as-is), **`.throw(e)` and `.return(v)`
+into a *suspended* body** (throw-into-suspended and `finally` unwinding through the
+catch/finally jump chain), and a **`yield` inside a live `try`** (the jump-chain
+snapshot/rebase). The remaining **scope fold** — carried forward as honest named
+skips (`Halt::Unsupported`, never a wrong value or a silent divergence): a
+**`new`-constructed generator** (`generator:new-target`) and **async generators /
+`await`** (child 4, which resumes on this same `SavedFrame` machinery).
 
 The stage-3b **promises** child (7/9) lands `Promise`, the promise **job
 queue**, and the **pump-loop latch** — the host-driven microtask drain the

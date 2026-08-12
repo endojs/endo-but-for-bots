@@ -72,8 +72,8 @@ Async/await reuses child 3's generator suspend/resume machinery verbatim — the
    reading the instance from a new `async_run_stack`, returning a new
    `Halt::Await(value)`. For v1 gate `await`-in-`try` (`self.jumps.len() >
    jumps_base`) as a named skip `await:await-in-try`; try/catch across await needs
-   the jump-chain snapshot/rebase (the same increment generators defer for
-   `generator:yield-in-try`) — do it second. Per-suspend metering is the same
+   the jump-chain snapshot/rebase (the same one synchronous generators now perform
+   for `yield`-in-`try`) — do it second. Per-suspend metering is the same
    formula as `GENERATOR_YIELD_METERING` (identical C code); verify via oracle.
 
 4. **`XS_CODE_BRANCH_STATUS_*`** (xsRun.c:1573, the resume epilogue right after
