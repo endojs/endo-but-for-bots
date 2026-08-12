@@ -285,3 +285,15 @@ fn combinators_accept_string_iterables_by_code_point() {
         "2:a😀",
     );
 }
+
+#[test]
+fn non_iterable_combinator_input_rejects_with_type_error() {
+    assert_drains_to(
+        "var g; Promise.all(1).then(undefined,function(e){g=e.name;}); undefined",
+        "TypeError",
+    );
+    assert_drains_to(
+        "var g,a=[]; a[Symbol.iterator]=null; Promise.race(a).then(undefined,function(e){g=e.name;}); undefined",
+        "TypeError",
+    );
+}

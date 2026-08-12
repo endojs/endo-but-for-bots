@@ -11532,6 +11532,34 @@ impl Interp {
                 ));
             }
         }
+        self.meter.tick_raw(PROMISE_COMBINATOR_FRAME_METERING);
+        let (derived, _resolve, _reject) = self.new_promise_capability();
+
+        // Iterator acquisition failures reject the capability; they do not
+        // synchronously throw from Promise.{all,allSettled,race,any}.  Handle
+        // the common non-iterable inputs here, including an Array whose own
+        // @@iterator shadows the intrinsic with a non-callable value.
+        let iterator_id = self.well_known_symbol_property_id("iterator");
+        let array_has_own_iterator = match (iterable.value, iterator_id) {
+            (Payload::Reference(arr), Some(id)) if self.arrays.contains_key(&arr) => {
+                self.find_property(arr, id).is_some()
+            }
+            _ => false,
+        };
+        if array_has_own_iterator {
+            let Payload::Reference(arr) = iterable.value else {
+                unreachable!()
+            };
+            let method = self.instance_get(arr, iterator_id.unwrap());
+            if !self.is_callable_value(method) {
+                let error = self.build_error("TypeError", 0, 0);
+                self.settle_promise(derived, error, true)?;
+                return Ok(Slot::of(Kind::Reference, Payload::Reference(derived)));
+            }
+            return Err(Halt::Unsupported(
+                "promise-combinator:custom-array-iterator",
+            ));
+        }
         let elems: Vec<Slot> = match iterable.value {
             Payload::Reference(arr) if self.arrays.contains_key(&arr) => {
                 let data = &self.arrays[&arr];
@@ -11560,10 +11588,23 @@ impl Interp {
                 }
                 out
             }
-            _ => return Err(Halt::Unsupported("promise-combinator:non-array-iterable")),
+            Payload::Reference(instance) => {
+                let method = iterator_id
+                    .map(|id| self.instance_get(instance, id))
+                    .unwrap_or_else(Slot::undefined);
+                if self.is_callable_value(method) {
+                    return Err(Halt::Unsupported("promise-combinator:custom-iterable"));
+                }
+                let error = self.build_error("TypeError", 0, 0);
+                self.settle_promise(derived, error, true)?;
+                return Ok(Slot::of(Kind::Reference, Payload::Reference(derived)));
+            }
+            _ => {
+                let error = self.build_error("TypeError", 0, 0);
+                self.settle_promise(derived, error, true)?;
+                return Ok(Slot::of(Kind::Reference, Payload::Reference(derived)));
+            }
         };
-        self.meter.tick_raw(PROMISE_COMBINATOR_FRAME_METERING);
-        let (derived, _resolve, _reject) = self.new_promise_capability();
         let total = elems.len() as u32;
         // The accumulator Array: values (all), `{status,...}` records
         // (allSettled), or errors (any). `race` ignores it. Preset dense length
