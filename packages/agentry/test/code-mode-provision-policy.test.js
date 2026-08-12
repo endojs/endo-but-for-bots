@@ -262,7 +262,17 @@ test('Git grants reject binding collisions, escapes, denial, and capping', async
       { harness: 'test', sessionId: 'invalid-git', cwd: root },
     );
 
-  for (const name of ['E', 'git', 'gits', 'workspace', 'class']) {
+  for (const name of [
+    'E',
+    'git',
+    'gits',
+    'workspace',
+    'class',
+    'persistence',
+    'remotes',
+    'guest-agent',
+    'guest-handle',
+  ]) {
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(
       () =>
@@ -361,6 +371,49 @@ test('Git grants reject binding collisions, escapes, denial, and capping', async
   );
 });
 
+test('host infrastructure names are reserved for mounts and remotes', async t => {
+  const { root } = await makeWorkspace(t);
+  const localRemoteUrl = pathToFileURL(root).href;
+
+  // A mount named after a controller-path infrastructure sibling is rejected,
+  // so it can never shadow the persistence record or guest handle.
+  for (const name of [
+    'persistence',
+    'remotes',
+    'guest-agent',
+    'guest-handle',
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        normalizeEndoProvisionSpec(
+          { mounts: { [name]: { path: root, mode: 'readOnly' } } },
+          { harness: 'test', sessionId: `reserved-mount-${name}`, cwd: root },
+        ),
+      { message: /non-reserved JavaScript binding/ },
+    );
+  }
+
+  // A Git remote named `persistence` fails closed at normalization rather than
+  // resolving to the stored persistence record at realization time.
+  await t.throwsAsync(
+    () =>
+      normalizeEndoProvisionSpec(
+        {
+          fs: 'readWrite',
+          git: 'readWrite',
+          gitRemotes: {
+            persistence: {
+              url: localRemoteUrl,
+              allowLocalFileTransport: true,
+            },
+          },
+        },
+        { harness: 'test', sessionId: 'reserved-remote', cwd: root },
+      ),
+    { message: /non-reserved JavaScript binding/ },
+  );
+});
 test('named mounts coexist and cap each selected Git grant independently', async t => {
   const { root } = await makeWorkspace(t);
   const readOnlyRoot = await mkdtemp(join(tmpdir(), 'endo-provision-ro-'));
