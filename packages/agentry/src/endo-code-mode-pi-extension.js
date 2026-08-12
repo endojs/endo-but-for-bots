@@ -10,7 +10,6 @@ import { makeDaemonEvaluate } from '@endo/agent-tools/code-mode/daemon.js';
 import { makeEvaluateTool } from '@endo/agent-tools/code-mode/evaluate-tool.js';
 import { start } from '@endo/daemon';
 
-import { relative, sep } from 'node:path';
 import { exit, stderr } from 'node:process';
 
 import { makeCodeModeSystemPrompt } from './code-mode.js';
@@ -122,31 +121,48 @@ const persistenceToSpec = persistence =>
       : { piTools: persistence.policy.piTools }),
     workspace: harden({
       path: persistence.workspacePath,
-      deniedSegments: harden([...persistence.policy.workspace.deniedSegments]),
+      ...(persistence.policy.mounts.workspace === undefined
+        ? {}
+        : {
+            deniedSegments: harden([
+              ...persistence.policy.mounts.workspace.deniedSegments,
+            ]),
+          }),
     }),
-    ...(persistence.policy.fs === undefined
+    ...(persistence.policy.mounts.workspace?.guestBinding
+      ? { fs: persistence.policy.mounts.workspace.mode }
+      : {}),
+    ...(persistence.policy.gits?.git === undefined
       ? {}
-      : { fs: persistence.policy.fs }),
-    ...(persistence.policy.git === undefined
-      ? {}
-      : { git: persistence.policy.git }),
+      : { git: persistence.policy.gits.git.mode }),
+    ...(Object.keys(persistence.policy.mounts).some(
+      name => name !== 'workspace',
+    )
+      ? {
+          mounts: Object.fromEntries(
+            Object.entries(persistence.policy.mounts)
+              .filter(([name]) => name !== 'workspace')
+              .map(([name, grant]) => [
+                name,
+                {
+                  path: grant.root,
+                  mode: grant.mode,
+                  deniedSegments: grant.deniedSegments,
+                },
+              ]),
+          ),
+        }
+      : {}),
     ...(persistence.policy.gits === undefined
       ? {}
       : {
           gits: Object.fromEntries(
-            Object.entries(persistence.policy.gits).map(([name, grant]) => {
-              const fromWorkspace = relative(
-                persistence.workspacePath,
-                grant.path,
-              );
-              return [
+            Object.entries(persistence.policy.gits)
+              .filter(([name]) => name !== 'git')
+              .map(([name, grant]) => [
                 name,
-                {
-                  path: fromWorkspace === '' ? [] : fromWorkspace.split(sep),
-                  mode: grant.mode,
-                },
-              ];
-            }),
+                { mount: grant.mount, path: grant.path, mode: grant.mode },
+              ]),
           ),
         }),
     ...(persistence.policy.gitRemotes === undefined
@@ -524,7 +540,7 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
             } catch {
               throw new EndoPiLifecycleError(
                 'ENDO_PROVISION_SESSION_INVALID',
-                'This session has missing or invalid Endo code-mode authority; a previously granted workspace or nested Git directory is unavailable.',
+                'This session has missing or invalid Endo code-mode authority; a previously granted workspace or Git directory is unavailable.',
                 'Start a new session; no previous grant is silently dropped or changed during recovery.',
               );
             }

@@ -36,8 +36,9 @@ test('persistence validation accepts only normalized records', async t => {
   t.true(Object.isFrozen(persistence));
   t.true(Object.isFrozen(persistence.guestHandlePath));
   t.true(Object.isFrozen(persistence.policy));
-  t.true(Object.isFrozen(persistence.policy.workspace));
-  t.true(Object.isFrozen(persistence.policy.workspace.deniedSegments));
+  t.true(Object.isFrozen(persistence.policy.mounts));
+  t.true(Object.isFrozen(persistence.policy.mounts.workspace));
+  t.true(Object.isFrozen(persistence.policy.mounts.workspace.deniedSegments));
 
   await t.throwsAsync(
     () =>
@@ -53,14 +54,19 @@ test('persistence validation accepts only normalized records', async t => {
         ...persistence,
         policy: {
           ...persistence.policy,
-          workspace: { deniedSegments: ['private', '.git'] },
+          mounts: {
+            workspace: {
+              ...persistence.policy.mounts.workspace,
+              deniedSegments: ['PRIVATE', 'private'],
+            },
+          },
         },
       }),
     { message: /not in normalized form/ },
   );
 });
 
-test('nested Git grants reconstruct from persistence without the original spec', async t => {
+test('Git grants reconstruct from persistence without the original spec', async t => {
   const root = await makeWorkspace(t);
   await mkdir(join(root, 'nested-repo'));
   const persistence = await normalizeEndoProvisionSpec(
@@ -68,21 +74,21 @@ test('nested Git grants reconstruct from persistence without the original spec',
       fs: 'readWrite',
       gits: { ebfb: { path: ['nested-repo'], mode: 'readWrite' } },
     },
-    { harness: 'test', sessionId: 'nested-restart', cwd: root },
+    { harness: 'test', sessionId: 'git-restart', cwd: root },
   );
 
   const persistedRecord = JSON.parse(JSON.stringify(persistence));
   const reconstructed = await validateEndoProvisionPersistence(persistedRecord);
   t.deepEqual(reconstructed, persistence);
-  t.deepEqual(reconstructed.policy.gits, {
-    ebfb: {
-      path: await realpath(join(root, 'nested-repo')),
-      mode: 'readWrite',
-    },
+  t.deepEqual(reconstructed.policy.gits?.ebfb, {
+    mount: 'workspace',
+    path: ['nested-repo'],
+    root: await realpath(join(root, 'nested-repo')),
+    mode: 'readWrite',
   });
 });
 
-test('missing nested Git directories reject the whole persisted authority', async t => {
+test('missing Git directories reject the whole persisted authority', async t => {
   const root = await makeWorkspace(t);
   const nestedPath = join(root, 'nested-repo');
   await mkdir(nestedPath);
@@ -91,7 +97,7 @@ test('missing nested Git directories reject the whole persisted authority', asyn
       fs: 'readWrite',
       gits: { ebfb: { path: ['nested-repo'], mode: 'readOnly' } },
     },
-    { harness: 'test', sessionId: 'missing-nested-repo', cwd: root },
+    { harness: 'test', sessionId: 'missing-git-repo', cwd: root },
   );
   await rm(nestedPath, { recursive: true, force: true });
 
@@ -108,10 +114,7 @@ test('persistence equality ignores record key order but preserves array order', 
   );
   const reordered = {
     policy: {
-      fs: persistence.policy.fs,
-      workspace: {
-        deniedSegments: persistence.policy.workspace.deniedSegments,
-      },
+      mounts: persistence.policy.mounts,
     },
     workspacePath: persistence.workspacePath,
     guestHandlePath: persistence.guestHandlePath,
@@ -121,10 +124,13 @@ test('persistence equality ignores record key order but preserves array order', 
     ...reordered,
     policy: {
       ...reordered.policy,
-      workspace: {
-        deniedSegments: [
-          ...persistence.policy.workspace.deniedSegments,
-        ].reverse(),
+      mounts: {
+        workspace: {
+          ...persistence.policy.mounts.workspace,
+          deniedSegments: [
+            ...persistence.policy.mounts.workspace.deniedSegments,
+          ].reverse(),
+        },
       },
     },
   };

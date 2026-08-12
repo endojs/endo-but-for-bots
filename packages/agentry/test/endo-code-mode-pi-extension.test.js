@@ -436,7 +436,7 @@ test('startup with an omitted grant uses cwd and activates only evaluate', async
   t.is(harness.reconstructions.length, 1);
   const [persistence] = harness.reconstructions;
   t.is(persistence.workspacePath, canonicalCwd);
-  t.deepEqual(Object.keys(persistence.policy), ['workspace']);
+  t.deepEqual(Object.keys(persistence.policy), ['mounts']);
   t.deepEqual(harness.activeTools, [[], ['evaluate']]);
   t.is(harness.tools.length, 1);
   const [evaluateTool] =
@@ -525,8 +525,8 @@ test('explicit filesystem and Git grants default their workspace to cwd', async 
 
   const [persistence] = harness.reconstructions;
   t.is(persistence.workspacePath, await realpath(cwd));
-  t.is(persistence.policy.fs, 'readWrite');
-  t.is(persistence.policy.git, 'readOnly');
+  t.is(persistence.policy.mounts.workspace.mode, 'readWrite');
+  t.is(persistence.policy.gits?.git?.mode, 'readOnly');
   t.deepEqual(
     makeEndoProvisionGlobals(persistence).map(({ name }) => name),
     ['workspace', 'git'],
@@ -663,7 +663,7 @@ test('resume with unparseable stored persistence is rejected as invalid', async 
     entries: [
       persistenceEntry(
         /** @type {EndoProvisionPersistence} */ (
-          /** @type {unknown} */ ({ ...stored, version: 2 })
+          /** @type {unknown} */ ({ ...stored, version: 1 })
         ),
       ),
     ],
@@ -683,7 +683,7 @@ test('resume with unparseable stored persistence is rejected as invalid', async 
   );
 });
 
-test('resume with a missing nested Git directory fails closed for the session', async t => {
+test('resume with a missing Git directory fails closed for the session', async t => {
   const cwd = await makeWorkspace(t);
   const nestedPath = join(cwd, 'nested-repo');
   await mkdir(nestedPath);
@@ -710,10 +710,7 @@ test('resume with a missing nested Git directory fails closed for the session', 
   t.deepEqual(harness.reconstructions, []);
   t.deepEqual(harness.appended, []);
   t.is(harness.diagnostics[0].code, 'ENDO_PROVISION_SESSION_INVALID');
-  t.regex(
-    harness.diagnostics[0].message,
-    /nested Git directory is unavailable/,
-  );
+  t.regex(harness.diagnostics[0].message, /Git directory is unavailable/);
   t.regex(
     harness.diagnostics[0].action,
     /no previous grant is silently dropped or changed/,
@@ -765,7 +762,12 @@ test('resume whose re-derived authority differs from the persisted policy is rej
     ...stored,
     policy: {
       ...stored.policy,
-      workspace: { deniedSegments: ['NODE_MODULES', 'node_modules'] },
+      mounts: {
+        workspace: {
+          ...stored.policy.mounts.workspace,
+          deniedSegments: ['NODE_MODULES', 'node_modules'],
+        },
+      },
     },
   };
   const harness = makeHarness({
@@ -1015,6 +1017,7 @@ test('trusted interactive hook can rehydrate a credential without handling its v
   const cwd = await makeWorkspace(t);
   const credentialPersistence = await normalizeEndoProvisionSpec(
     {
+      fs: 'readWrite',
       git: 'readWrite',
       gitRemotes: {
         origin: {
