@@ -17,7 +17,7 @@ name: CI (docs-only)
 
 on:
   push:
-    branches: [master]
+    branches: [master, llm]
   pull_request:
     paths:
       - '**/*.md'
