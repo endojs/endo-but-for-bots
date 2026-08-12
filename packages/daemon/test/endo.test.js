@@ -6345,6 +6345,106 @@ test('provideHostPath is an EndoHost-only capability not reachable through an En
   );
 });
 
+test('host-only capabilities are not reachable through an EndoGuest', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('authority-guest', {
+    agentName: 'authority-guest-agent',
+  });
+
+  const hostOnlyMethodNames = harden([
+    'accept',
+    'addPeerInfo',
+    'adoptFromLocator',
+    'cancel',
+    'diagnostics',
+    'endow',
+    'followPeerChanges',
+    'followRetentionPaths',
+    'gateway',
+    'getGitCredentialController',
+    'getGitRemoteController',
+    'getHttpClientControl',
+    'getPeerInfo',
+    'greeter',
+    'invite',
+    'listKnownPeers',
+    'listRetentionPaths',
+    'locateWithHints',
+    'makeArchive',
+    'makeChannel',
+    'makeFromTree',
+    'makeTimer',
+    'makeUnconfined',
+    'makeUnconfinedFromTree',
+    'provideBasicCredential',
+    'provideBearerCredential',
+    'provideGit',
+    'provideGitClone',
+    'provideGitRemote',
+    'provideGuest',
+    'provideHost',
+    'provideHostPath',
+    'provideHttpClient',
+    'provideMount',
+    'provideScratchMount',
+    'provideShell',
+    'provideWorker',
+    'sign',
+    'stageTree',
+    'storeTree',
+  ]);
+
+  // These operations either execute Node.js code outside a compartment,
+  // prepare inputs for that execution path, or mint another privileged host.
+  // A caller must not be able to recover them by overstepping the EndoGuest
+  // type at the CapTP boundary.
+  const hostOnlyCalls = harden({
+    makeUnconfinedFromTree: () =>
+      E(/** @type {any} */ (guest)).makeUnconfinedFromTree(undefined, 'tree'),
+    makeUnconfined: () =>
+      E(/** @type {any} */ (guest)).makeUnconfined(undefined, 'caplet.js'),
+    makeArchive: () =>
+      E(/** @type {any} */ (guest)).makeArchive(undefined, 'archive'),
+    makeFromTree: () =>
+      E(/** @type {any} */ (guest)).makeFromTree(undefined, 'tree'),
+    stageTree: () => E(/** @type {any} */ (guest)).stageTree('tree', 'scratch'),
+    endow: () => E(/** @type {any} */ (guest)).endow(0n, {}),
+    provideHost: () => E(/** @type {any} */ (guest)).provideHost(),
+  });
+
+  // eslint-disable-next-line no-underscore-dangle
+  const guestMethods = await E(guest).__getMethodNames__();
+  // eslint-disable-next-line no-underscore-dangle
+  const hostMethods = await E(host).__getMethodNames__();
+  t.deepEqual(
+    hostMethods.filter(name => !guestMethods.includes(name)),
+    hostOnlyMethodNames,
+    'the complete EndoHost-only surface remains absent from EndoGuest',
+  );
+  await Promise.all(
+    Object.entries(hostOnlyCalls).map(([methodName, call]) => {
+      t.false(
+        guestMethods.includes(methodName),
+        `EndoGuest must not expose host-only ${methodName}`,
+      );
+      return t.throwsAsync(call, { message: new RegExp(methodName) });
+    }),
+  );
+
+  // The guest's reserved @host name is its parent's mail handle, not a
+  // delegated EndoHost facet. Looking it up must not recover the unconfined
+  // execution surface either.
+  const parentHandle = await E(guest).lookup(['@host']);
+  await t.throwsAsync(
+    () =>
+      E(/** @type {any} */ (parentHandle)).makeUnconfinedFromTree(
+        undefined,
+        'tree',
+      ),
+    { message: /makeUnconfinedFromTree/u },
+  );
+});
+
 test('provideHostPath rejects a spoof that passes the MountCap shape gate', async t => {
   // Pins the layering documented in the agent host's `assertIsMountCap`:
   //
