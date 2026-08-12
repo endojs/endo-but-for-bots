@@ -3448,6 +3448,9 @@ struct AsyncRunFrame {
     inst: crate::value::SlotIndex,
     stack_base: usize,
     jumps_base: usize,
+    /// Call depth of the installed async frame. Saved handlers rebase across
+    /// each await just as generator handlers do across yield.
+    call_depth_base: usize,
 }
 
 /// The resume mode threaded into the `BRANCH_STATUS` epilogue after an `AWAIT`
@@ -7113,7 +7116,9 @@ impl Interp {
                 XS_CODE_REFRESH_CLOSURE_1 | XS_CODE_REFRESH_CLOSURE_2 => {
                     let k = self.closure_index(op, code, pc);
                     let old = self.closure_cell(k);
-                    let src = old.map(|c| self.slots.get(c)).unwrap_or_else(Slot::uninitialized);
+                    let src = old
+                        .map(|c| self.slots.get(c))
+                        .unwrap_or_else(Slot::uninitialized);
                     let mut fresh = Slot::of(src.kind, src.value);
                     fresh.flag = src.flag;
                     let cell = self.slots.alloc(fresh);
@@ -8365,16 +8370,27 @@ impl Interp {
                 // (the same increment generators defer for `yield-in-try`) — an
                 // honest named skip for now.
                 XS_CODE_AWAIT => {
-                    let (inst, stack_base, jumps_base) = match self.async_run_stack.last() {
-                        Some(a) => (a.inst, a.stack_base, a.jumps_base),
-                        None => return Halt::Unsupported("await:no-async-instance"),
-                    };
-                    if self.jumps.len() > jumps_base {
-                        return Halt::Unsupported("await:await-in-try");
-                    }
+                    let (inst, stack_base, jumps_base, call_depth_base) =
+                        match self.async_run_stack.last() {
+                            Some(a) => (a.inst, a.stack_base, a.jumps_base, a.call_depth_base),
+                            None => return Halt::Unsupported("await:no-async-instance"),
+                        };
                     let resume_pc = pc + size as usize;
                     let awaited = self.pop();
                     let stack_slice = self.stack.split_off(stack_base);
+                    let jumps = self
+                        .jumps
+                        .split_off(jumps_base)
+                        .into_iter()
+                        .map(|jump| SavedJump {
+                            target_pc: jump.target_pc,
+                            stack_offset: jump.stack_len.saturating_sub(stack_base),
+                            locals_len: jump.locals_len,
+                            id_map: jump.id_map,
+                            call_depth_offset: jump.call_depth.saturating_sub(call_depth_base),
+                            flag: jump.flag,
+                        })
+                        .collect();
                     self.meter.tick_raw(GENERATOR_YIELD_METERING);
                     let frame = SavedFrame {
                         locals: std::mem::take(&mut self.locals),
@@ -8387,7 +8403,7 @@ impl Interp {
                         strict: self.strict,
                         result: self.result,
                         stack_slice,
-                        jumps: Vec::new(),
+                        jumps,
                         resume_pc,
                     };
                     if let Some(a) = self.async_instances.get_mut(&inst) {
@@ -8923,6 +8939,37 @@ impl Interp {
         }
     }
 
+    /// Run a callback behind a native `mxTry` boundary. Promise executors,
+    /// reactions, and thenable jobs catch a guest throw in native code: the
+    /// callback activation is abandoned, the thrown value is retained, and
+    /// the surrounding promise is rejected instead of the machine halting.
+    fn run_callback_catching_throw(
+        &mut self,
+        code: &[u8],
+        func: Slot,
+        this: Slot,
+        args: &[Slot],
+    ) -> Result<Result<Slot, Slot>, Halt> {
+        let stack_base = self.stack.len();
+        let call_depth = self.call_stack.len();
+        let jump_depth = self.jumps.len();
+        match self.run_callback(code, func, this, args) {
+            Ok(value) => Ok(Ok(value)),
+            Err(Halt::Throw(_)) => {
+                while self.call_stack.len() > call_depth {
+                    let _ = self.leave_call();
+                }
+                self.stack.truncate(stack_base);
+                self.jumps.truncate(jump_depth);
+                let thrown = self.exception;
+                self.exception = Slot::undefined();
+                self.unmeter_host_escape();
+                Ok(Err(thrown))
+            }
+            Err(halt) => Err(halt),
+        }
+    }
+
     /// Build a generator `{value, done}` result object (`fxNewGeneratorResult`):
     /// a fresh `%Object.prototype%`-chained object with `value`/`done` own data
     /// properties, metering the calibrated [`GENERATOR_RESULT_METERING`]. The
@@ -9202,10 +9249,20 @@ impl Interp {
             status
         };
         let return_depth = self.call_stack.len();
+        self.jumps
+            .extend(saved.jumps.into_iter().map(|jump| CatchJump {
+                target_pc: jump.target_pc,
+                stack_len: stack_base + jump.stack_offset,
+                locals_len: jump.locals_len,
+                id_map: jump.id_map,
+                call_depth: return_depth + jump.call_depth_offset,
+                flag: jump.flag,
+            }));
         self.async_run_stack.push(AsyncRunFrame {
             inst,
             stack_base,
             jumps_base,
+            call_depth_base: return_depth,
         });
         let outcome = self.dispatch_at(code, saved.resume_pc, return_depth);
         self.async_run_stack.pop();
@@ -9978,10 +10035,14 @@ impl Interp {
                 // re-entrant. A throw rejects the promise via `fxRejectException`
                 // — its thrown-value capture + metering is a later increment, so
                 // an executor throw self-names rather than mis-settle.
-                match self.run_callback(code, executor, Slot::undefined(), &[resolve, reject]) {
+                match self.run_callback_catching_throw(
+                    code,
+                    executor,
+                    Slot::undefined(),
+                    &[resolve, reject],
+                )? {
                     Ok(_) => {}
-                    Err(Halt::Throw(_)) => return Err(Halt::Unsupported("promise:executor-throw")),
-                    Err(h) => return Err(h),
+                    Err(thrown) => self.settle_via_function(reject, thrown)?,
                 }
                 Slot::of(Kind::Reference, Payload::Reference(promise))
             }
@@ -10897,12 +10958,12 @@ impl Interp {
         arg0: Slot,
         arg1: Slot,
     ) -> Result<Slot, Halt> {
-        let on_fulfilled = if arg0.kind == Kind::Reference {
+        let on_fulfilled = if self.is_callable_value(arg0) {
             arg0
         } else {
             Slot::undefined()
         };
-        let on_rejected = if arg1.kind == Kind::Reference {
+        let on_rejected = if self.is_callable_value(arg1) {
             arg1
         } else {
             Slot::undefined()
@@ -11028,9 +11089,25 @@ impl Interp {
         if !reject && value.kind == Kind::Reference {
             if let Payload::Reference(obj) = value.value {
                 if obj == promise {
-                    // `resolve(promise)` — a "promise resolves itself" TypeError
-                    // in XS; the catchable native-error path is not modeled.
-                    return Err(Halt::Unsupported("promise:resolve-self"));
+                    // `resolve(promise)` rejects that promise with a TypeError.
+                    let error = self.build_error("TypeError", 0, 0);
+                    return self.settle_promise(promise, error, true);
+                }
+                if self.promises.contains_key(&obj) {
+                    // Promise adoption is a native `then` registration whose
+                    // pass-through reaction forwards the source settlement to
+                    // the target promise. It must remain asynchronous even
+                    // when the source is already settled.
+                    let (resolve, reject) = self.make_resolving_functions(promise);
+                    let reaction = PromiseReaction {
+                        on_fulfilled: Slot::undefined(),
+                        on_rejected: Slot::undefined(),
+                        resolve,
+                        reject,
+                        kind: ReactionKind::User,
+                    };
+                    self.register_native_reaction(obj, reaction);
+                    return Ok(());
                 }
                 let then = match self.then_id {
                     Some(tid) => self.instance_get(obj, tid),
@@ -11041,12 +11118,7 @@ impl Interp {
                 self.meter.tick_raw(PROMISE_RESOLVE_THEN_PROBE_METERING);
                 if self.is_callable_value(then) {
                     // Adoption drives `then.call(thenable, res, rej)` at the
-                    // drain through `run_callback`, which runs user (bytecode)
-                    // functions. A NATIVE `.then` (e.g. adopting a native
-                    // promise, whose `then` is `%Promise.prototype%.then`)
-                    // would need the res/rej resolving functions registered AS
-                    // native reaction handlers — a separate increment — so it
-                    // self-names rather than queue a job that dies at the drain.
+                    // drain through `run_callback`, which runs guest bytecode.
                     if !self.is_user_function_value(then) {
                         return Err(Halt::Unsupported("promise:adopt-native-thenable"));
                     }
@@ -11266,20 +11338,9 @@ impl Interp {
             // (XS's `fxOnResolvedPromise` `mxCatch`: `*argument = mxException;
             // function = rejectFunction`). The thrown value is still in
             // `self.exception` after the callback unwinds to the host boundary.
-            match self.run_callback(code, handler, Slot::undefined(), &[value]) {
+            match self.run_callback_catching_throw(code, handler, Slot::undefined(), &[value])? {
                 Ok(r) => (r, false),
-                Err(Halt::Throw(_)) => {
-                    // A reaction handler that throws is caught by XS's native
-                    // `mxTry` and rejects the derived promise — but cleanly
-                    // unwinding the re-entrant callback frame after an internal
-                    // throw (restoring the driver's stack/call-stack/jumps depth
-                    // XS's `fxJump` longjmp bypasses) is a separate increment;
-                    // self-name rather than continue the drain over a corrupted
-                    // activation. Carried forward with `generator:throw-into-
-                    // suspended` as the throw-unwind family.
-                    return Err(Halt::Unsupported("promise:handler-throw"));
-                }
-                Err(h) => return Err(h),
+                Err(thrown) => (thrown, true),
             }
         };
         // Settle the derived promise (XS calls the captured resolve/reject
@@ -11301,14 +11362,9 @@ impl Interp {
         reject: Slot,
     ) -> Result<(), Halt> {
         self.meter.tick_raw(PROMISE_THENABLE_JOB_FRAME_METERING);
-        let _ = reject;
-        match self.run_callback(code, then, thenable, &[resolve, reject]) {
+        match self.run_callback_catching_throw(code, then, thenable, &[resolve, reject])? {
             Ok(_) => Ok(()),
-            // A `then` body that throws is caught by `fxOnThenable`'s `mxTry` →
-            // `fxRejectException`; the same clean re-entrant-throw unwind the
-            // reaction-handler path defers, so it self-names too.
-            Err(Halt::Throw(_)) => Err(Halt::Unsupported("promise:thenable-then-throw")),
-            Err(h) => Err(h),
+            Err(thrown) => self.settle_via_function(reject, thrown),
         }
     }
 
@@ -11420,7 +11476,7 @@ impl Interp {
             if !self.is_user_function_value(on_finally) {
                 return Err(Halt::Unsupported("finally:native-onfinally"));
             }
-            match self.run_callback(code, on_finally, Slot::undefined(), &[]) {
+            match self.run_callback_catching_throw(code, on_finally, Slot::undefined(), &[])? {
                 Ok(r) => {
                     // A thenable return would sequence the derived's settlement
                     // behind it (XS's `thenFinally`/`catchFinally`); not modeled.
@@ -11437,8 +11493,7 @@ impl Interp {
                     }
                     self.settle_promise(derived, value, rejected)
                 }
-                Err(Halt::Throw(_)) => Err(Halt::Unsupported("promise:handler-throw")),
-                Err(h) => Err(h),
+                Err(thrown) => self.settle_promise(derived, thrown, true),
             }
         } else {
             self.settle_promise(derived, value, rejected)
@@ -22025,8 +22080,15 @@ mod tests {
         // no NUL hazard, no normalization. str_content is exactly the payload.
         let lone = vec![b'A' as u16, 0xD800, b'B' as u16];
         let off = str_off(&interp.new_string_units(&lone));
-        assert_eq!(interp.str_units(off), lone, "the lone surrogate reads back unchanged");
-        assert_eq!(&*interp.str_content(off), &[0x00, 0x41, 0xD8, 0x00, 0x00, 0x42]);
+        assert_eq!(
+            interp.str_units(off),
+            lone,
+            "the lone surrogate reads back unchanged"
+        );
+        assert_eq!(
+            &*interp.str_content(off),
+            &[0x00, 0x41, 0xD8, 0x00, 0x00, 0x42]
+        );
 
         // Comparison: byte-lexicographic order over the UTF-16BE payload is the
         // code-unit (ECMAScript relational) order — even for lone surrogates,

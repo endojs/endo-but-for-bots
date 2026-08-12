@@ -55,9 +55,16 @@ fn assert_drains_to(source: &str, expected: &str) {
 /// The ironhorse meter must be deterministic across repeated runs of the same
 /// program (identical computrons) — the deterministic-per-release meter gate.
 fn assert_deterministic(source: &str) {
-    let a = dual_run(source).expect("oracle machine").ironhorse_computrons;
-    let b = dual_run(source).expect("oracle machine").ironhorse_computrons;
-    assert_eq!(a, b, "`{source}` ironhorse computrons must be deterministic across runs");
+    let a = dual_run(source)
+        .expect("oracle machine")
+        .ironhorse_computrons;
+    let b = dual_run(source)
+        .expect("oracle machine")
+        .ironhorse_computrons;
+    assert_eq!(
+        a, b,
+        "`{source}` ironhorse computrons must be deterministic across runs"
+    );
 }
 
 // -------------------------------------------------------------------------
@@ -211,5 +218,49 @@ fn any_of_empty_rejects_with_an_empty_aggregate_error() {
     assert_drains_to(
         "var g; Promise.any([]).then(function(v){g='v';}, function(e){g=e.name+e.errors.length;}); undefined",
         "AggregateError0",
+    );
+}
+
+// -------------------------------------------------------------------------
+// §6  Rejection propagation and async resume boundaries.
+// -------------------------------------------------------------------------
+
+#[test]
+fn thrown_reaction_rejects_the_derived_promise() {
+    assert_drains_to(
+        "var g; Promise.resolve(1).then(function(){throw 7;}).then(undefined,function(e){g='e'+e;}); undefined",
+        "e7",
+    );
+}
+
+#[test]
+fn throwing_thenable_rejects_the_adopting_promise() {
+    assert_drains_to(
+        "var g; Promise.resolve({then:function(){throw 8;}}).then(undefined,function(e){g='e'+e;}); undefined",
+        "e8",
+    );
+}
+
+#[test]
+fn native_promise_resolution_is_adopted_asynchronously() {
+    assert_drains_to(
+        "var g; Promise.resolve(Promise.resolve(9)).then(function(v){g='v'+v;}); undefined",
+        "v9",
+    );
+}
+
+#[test]
+fn await_preserves_try_catch_across_suspension() {
+    assert_drains_to(
+        "var g; (async function(){try{await Promise.reject(10);}catch(e){g='e'+e;}})(); undefined",
+        "e10",
+    );
+}
+
+#[test]
+fn resolving_a_promise_with_itself_rejects_with_type_error() {
+    assert_drains_to(
+        "var g,r,p=new Promise(function(resolve){r=resolve;}); r(p); p.then(undefined,function(e){g=e.name;}); undefined",
+        "TypeError",
     );
 }
