@@ -8,7 +8,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import fc from 'fast-check';
 
 import { execFile } from 'node:child_process';
-import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execPath } from 'node:process';
@@ -677,7 +677,47 @@ test('resume with unparseable stored persistence is rejected as invalid', async 
   t.deepEqual(harness.reconstructions, []);
   t.deepEqual(harness.appended, []);
   t.is(harness.diagnostics[0].code, 'ENDO_PROVISION_SESSION_INVALID');
-  t.regex(harness.diagnostics[0].message, /invalid Endo code-mode persistence/);
+  t.regex(
+    harness.diagnostics[0].message,
+    /missing or invalid Endo code-mode authority/,
+  );
+});
+
+test('resume with a missing nested Git directory fails closed for the session', async t => {
+  const cwd = await makeWorkspace(t);
+  const nestedPath = join(cwd, 'nested-repo');
+  await mkdir(nestedPath);
+  const stored = await normalizeEndoProvisionSpec(
+    {
+      fs: 'readWrite',
+      gits: { nested: { path: ['nested-repo'], mode: 'readOnly' } },
+    },
+    { harness: 'pi', sessionId: 'missing-nested-repo', cwd },
+  );
+  await rm(nestedPath, { recursive: true, force: true });
+  const harness = makeHarness({
+    cwd,
+    mode: 'json',
+    sessionId: 'missing-nested-repo',
+    entries: [persistenceEntry(stored)],
+  });
+
+  await harness.emit('session_start', {
+    type: 'session_start',
+    reason: 'resume',
+  });
+
+  t.deepEqual(harness.reconstructions, []);
+  t.deepEqual(harness.appended, []);
+  t.is(harness.diagnostics[0].code, 'ENDO_PROVISION_SESSION_INVALID');
+  t.regex(
+    harness.diagnostics[0].message,
+    /nested Git directory is unavailable/,
+  );
+  t.regex(
+    harness.diagnostics[0].action,
+    /no previous grant is silently dropped or changed/,
+  );
 });
 
 test('resume whose stored authority cannot be re-derived is rejected as invalid', async t => {

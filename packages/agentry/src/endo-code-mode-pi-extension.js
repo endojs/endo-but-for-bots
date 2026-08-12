@@ -10,6 +10,7 @@ import { makeDaemonEvaluate } from '@endo/agent-tools/code-mode/daemon.js';
 import { makeEvaluateTool } from '@endo/agent-tools/code-mode/evaluate-tool.js';
 import { start } from '@endo/daemon';
 
+import { relative, sep } from 'node:path';
 import { exit, stderr } from 'node:process';
 
 import { makeCodeModeSystemPrompt } from './code-mode.js';
@@ -129,6 +130,25 @@ const persistenceToSpec = persistence =>
     ...(persistence.policy.git === undefined
       ? {}
       : { git: persistence.policy.git }),
+    ...(persistence.policy.gits === undefined
+      ? {}
+      : {
+          gits: Object.fromEntries(
+            Object.entries(persistence.policy.gits).map(([name, grant]) => {
+              const fromWorkspace = relative(
+                persistence.workspacePath,
+                grant.path,
+              );
+              return [
+                name,
+                {
+                  path: fromWorkspace === '' ? [] : fromWorkspace.split(sep),
+                  mode: grant.mode,
+                },
+              ];
+            }),
+          ),
+        }),
     ...(persistence.policy.gitRemotes === undefined
       ? {}
       : { gitRemotes: persistence.policy.gitRemotes }),
@@ -504,8 +524,8 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
             } catch {
               throw new EndoPiLifecycleError(
                 'ENDO_PROVISION_SESSION_INVALID',
-                'This session has invalid Endo code-mode persistence.',
-                'Start a new session; do not copy or edit extension-owned session entries.',
+                'This session has missing or invalid Endo code-mode authority; a previously granted workspace or nested Git directory is unavailable.',
+                'Start a new session; no previous grant is silently dropped or changed during recovery.',
               );
             }
 

@@ -259,6 +259,38 @@ const realizeProvisionResources = async (host, persistence, credentials) => {
     }
   }
 
+  const nestedGits = persistence.policy.gits ?? {};
+  if (Object.keys(nestedGits).length > 0) {
+    // The internal container is reserved by policy so it cannot collide with
+    // a user-facing Git remote or nested Git binding.
+    const gitsPath = harden([...controllerPath, 'gits']);
+    await ensureNameDirectory(host, gitsPath);
+    for (const [name, grant] of Object.entries(nestedGits)) {
+      const grantPath = harden([...gitsPath, name]);
+      // eslint-disable-next-line no-await-in-loop
+      await ensureNameDirectory(host, grantPath);
+      const gitMountAlias = harden([...grantPath, 'workspace']);
+      const gitAlias = harden([...grantPath, 'git']);
+      const gitMount = /** @type {EndoMount} */ (
+        // eslint-disable-next-line no-await-in-loop
+        await provideOrLookup(host, gitMountAlias, () =>
+          E(host).provideMount(grant.path, gitMountAlias, {
+            readOnly: grant.mode === 'readOnly',
+            deniedSegments: persistence.policy.workspace.deniedSegments,
+          }),
+        )
+      );
+      // eslint-disable-next-line no-await-in-loop
+      await provideOrLookup(host, gitAlias, () =>
+        E(host).provideGit(gitMount, gitAlias, {
+          allowHistoryRewrite: grant.mode === 'historyRewrite',
+          readOnly: grant.mode === 'readOnly',
+        }),
+      );
+      guestBindings.push([name, gitAlias]);
+    }
+  }
+
   const hasHandle = await hasNamePath(host, persistence.guestHandlePath);
   const hasAgent = await hasNamePath(host, guestAgentPath);
   if (hasHandle !== hasAgent) {

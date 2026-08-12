@@ -8,6 +8,7 @@ import '@endo/init/debug.js';
 import test from 'ava';
 
 import { execFile } from 'node:child_process';
+import { mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -15,9 +16,11 @@ import { E } from '@endo/eventual-send';
 
 /* eslint-disable import/no-relative-packages */
 import {
+  normalizeEndoProvisionSpec,
   provisionEndoCodeMode,
   reconstructEndoCodeMode,
 } from '../../agentry/code-mode-provisioning.js';
+import { realizeEndoProvisionOnHost } from '../../agentry/src/code-mode-provision-host.js';
 /* eslint-enable import/no-relative-packages */
 
 import { makeProvisioningFixture } from './_code-mode-provisioning-fixture.js';
@@ -172,6 +175,76 @@ test.serial(
     t.is(
       (await E(recoveredOrigin).inspect()).defaultPullRef,
       'refs/heads/main',
+    );
+  },
+);
+
+test.serial(
+  'code-mode provisioning realizes a named nested Git grant at its canonical path',
+  async t => {
+    t.timeout(120_000);
+    const fixture = await makeProvisioningFixture(t);
+    const nestedPath = join(fixture.workspace, 'nested-repo');
+    const nestedLink = join(fixture.workspace, 'nested-link');
+    const outsidePath = join(fixture.root, 'outside-repo');
+    await mkdir(nestedPath);
+    await mkdir(outsidePath);
+    await writeFile(join(nestedPath, 'inside.txt'), 'inside\n');
+    await writeFile(join(outsidePath, 'outside.txt'), 'outside\n');
+    await execFileAsync('git', ['init', '-q', '-b', 'main'], {
+      cwd: nestedPath,
+    });
+    await execFileAsync('git', ['init', '-q', '-b', 'main'], {
+      cwd: outsidePath,
+    });
+    await symlink(nestedPath, nestedLink, 'dir');
+
+    const persistence = await normalizeEndoProvisionSpec(
+      {
+        fs: 'readWrite',
+        gits: {
+          nested: { path: ['nested-link'], mode: 'readOnly' },
+        },
+      },
+      {
+        harness: 'test',
+        sessionId: 'canonical-nested-host-realize',
+        cwd: fixture.workspace,
+      },
+    );
+    t.is(persistence.policy.gits?.nested.path, await realpath(nestedPath));
+
+    await rm(nestedLink, { force: true });
+    await symlink(outsidePath, nestedLink, 'dir');
+
+    const host = await fixture.connectHost('nested-git-host');
+    const guest = await realizeEndoProvisionOnHost(host, persistence);
+    const nestedGit = /** @type {ReadOnlyEndoGit} */ (
+      await E(guest).lookup('nested')
+    );
+    const rows = await E(nestedGit).status();
+    t.deepEqual(
+      rows.map(({ path }) => path),
+      ['inside.txt'],
+    );
+
+    const controllerPath = persistence.guestHandlePath.slice(0, -1);
+    t.true(await E(host).has(...controllerPath, 'gits', 'nested', 'git'));
+
+    await fixture.restartDaemon();
+    const recovered = fixture.trackSession(
+      await reconstructEndoCodeMode({
+        persistence,
+        sockPath: fixture.sockPath,
+      }),
+    );
+    const recoveredGit = /** @type {ReadOnlyEndoGit} */ (
+      await E(recovered.powers).lookup('nested')
+    );
+    const recoveredRows = await E(recoveredGit).status();
+    t.deepEqual(
+      recoveredRows.map(({ path }) => path),
+      ['inside.txt'],
     );
   },
 );
