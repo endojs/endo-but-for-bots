@@ -11093,11 +11093,16 @@ impl Interp {
                     let error = self.build_error("TypeError", 0, 0);
                     return self.settle_promise(promise, error, true);
                 }
-                if self.promises.contains_key(&obj) {
+                let has_own_then = self
+                    .then_id
+                    .is_some_and(|tid| self.find_property(obj, tid).is_some());
+                if self.promises.contains_key(&obj) && !has_own_then {
                     // Promise adoption is a native `then` registration whose
                     // pass-through reaction forwards the source settlement to
-                    // the target promise. It must remain asynchronous even
-                    // when the source is already settled.
+                    // the target promise. An own `.then` override still goes
+                    // through ordinary thenable assimilation below. Adoption
+                    // must remain asynchronous even when the source is already
+                    // settled.
                     let (resolve, reject) = self.make_resolving_functions(promise);
                     let reaction = PromiseReaction {
                         on_fulfilled: Slot::undefined(),

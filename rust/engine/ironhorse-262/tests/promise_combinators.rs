@@ -250,6 +250,14 @@ fn native_promise_resolution_is_adopted_asynchronously() {
 }
 
 #[test]
+fn native_promise_with_own_then_uses_thenable_assimilation() {
+    assert_drains_to(
+        "var g,p=Promise.resolve(1); p.then=function(resolve){resolve(9);}; new Promise(function(resolve){resolve(p);}).then(function(v){g=v;}); undefined",
+        "9",
+    );
+}
+
+#[test]
 fn await_preserves_try_catch_across_suspension() {
     assert_drains_to(
         "var g; (async function(){try{await Promise.reject(10);}catch(e){g='e'+e;}})(); undefined",
