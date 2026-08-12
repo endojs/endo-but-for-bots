@@ -1,6 +1,6 @@
 //! `ironhorse-xst`: the xst-analogue test262 runner for the Rust engine
 //! (design [`designs/ironhorse-test262-convergence.md`] § Part 2,
-//! "Harness → `ironhorse-xst`"). It plays for ironhorse exactly the role
+//! "Harness -> `ironhorse-xst`"). It plays for ironhorse exactly the role
 //! `xs/tools/xst.c` + `xst262.c` (@ `48ee02d8cfe0`) play for XS, plus the
 //! one thing `xst` never had: a differential oracle.
 //!
@@ -479,15 +479,29 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
         Agreement::BothAbort => match &run.ironhorse_halt {
             Halt::Throw(_) => {
                 if run.error_agrees {
+                    // A meter-exact gate outranks every abort disposition: an
+                    // armed case that burns a different computron budget is a
+                    // violation even when both engines threw the same value, so
+                    // it is checked before the Test262Error shape below.
                     if meter_exact_gate && run.oracle_computrons != run.ironhorse_computrons {
                         meter_violation(run)
+                    } else if constructor_name(&run.oracle_error) == "Test262Error" {
+                        // Both engines threw the harness's own assertion error:
+                        // the test's assertions failed identically in XS and in
+                        // ironhorse. That is a *shared* conformance gap ironhorse
+                        // must still close (the harness ran ironhorse far enough
+                        // to assert and it lost), never a covered pass.
+                        Verdict::RunSkip("shared-test262-failure".into())
                     } else {
                         Verdict::Covered
                     }
                 } else {
                     // Both aborted but ironhorse threw a different value — the
                     // oracle's real Error object ironhorse does not construct, a
-                    // built-in gap, not a covered-grammar divergence.
+                    // built-in gap, not a covered-grammar divergence. An oracle
+                    // `Test262Error` paired with a divergent ironhorse throw
+                    // lands here, not in `shared-test262-failure`: nothing is
+                    // actually shared, so the divergence stays visible.
                     Verdict::RunSkip("abort-value-differs".into())
                 }
             }
@@ -1008,9 +1022,9 @@ pub struct XstReport {
     pub strict_skipped: usize,
     /// `fail:` — real failures: `(path, detail)`. Must be empty to meet the bar.
     pub failures: Vec<(String, String)>,
-    /// `skip:` — pre-run feature/flag/structural skips → count.
+    /// `skip:` — pre-run feature/flag/structural skips -> count.
     pub pre_skips: BTreeMap<String, usize>,
-    /// `skip-detail:` — post-run honest named skips → count.
+    /// `skip-detail:` — post-run honest named skips -> count.
     pub run_skips: BTreeMap<String, usize>,
     /// `advisory:` — covered cases whose computrons drifted from the oracle.
     pub computron_advisories: usize,
@@ -1020,9 +1034,8 @@ pub struct XstReport {
     pub ses_mode: SesMode,
     /// Every case's full record — the per-case wire the whole-tree sweep emits
     /// as JSON (`ironhorse-xst --json`) for [`crate::report`] to aggregate.
-    /// Populated by **both** recorders: [`XstReport::record_case`] carries the
-    /// declared `features:`, while [`XstReport::record`] pushes the same record
-    /// with an empty `features` vector.
+    /// Populated by [`XstReport::record_case`] and by [`XstReport::record`];
+    /// legacy aggregate callers record an empty feature list.
     pub cases: Vec<CaseRecord>,
 }
 
@@ -1033,39 +1046,25 @@ impl XstReport {
         self.total > 0 && self.failures.is_empty()
     }
 
-    /// Fold one case's result in, attributed to `path`, with no declared
-    /// features (used by the aggregate callers/tests that do not carry a
-    /// `features:` list). Delegates to [`Self::record_case`], so it pushes a
-    /// [`CaseRecord`] with an empty `features` vector like any other case.
-    pub fn record(&mut self, path: &str, r: CaseResult) {
-        self.record_case(path, Vec::new(), r);
+    /// Fold one case's result in, attributed to `path`, retaining a per-case
+    /// record with an empty feature list for legacy aggregate callers/tests.
+    pub fn record(&mut self, path: &str, result: CaseResult) {
+        self.record_case(path, Vec::new(), result);
     }
 
     /// Fold one case's result in and retain its full [`CaseRecord`] (with the
     /// declared `features:`) for the per-case JSON a whole-tree sweep emits.
-    pub fn record_case(&mut self, path: &str, features: Vec<String>, r: CaseResult) {
-        self.record_case_timed(path, features, r, 0);
-    }
-
-    /// Fold one timed case result into the report.
-    pub fn record_case_timed(
-        &mut self,
-        path: &str,
-        features: Vec<String>,
-        r: CaseResult,
-        elapsed_milliseconds: u64,
-    ) {
-        let mut case = CaseRecord::from_result(path, features, &r);
-        case.elapsed_milliseconds = elapsed_milliseconds;
-        self.cases.push(case);
+    pub fn record_case(&mut self, path: &str, features: Vec<String>, result: CaseResult) {
+        self.cases
+            .push(CaseRecord::from_result(path, features, &result));
         self.total += 1;
-        if r.strict_skipped {
+        if result.strict_skipped {
             self.strict_skipped += 1;
         }
-        if r.computron_gap {
+        if result.computron_gap {
             self.computron_advisories += 1;
         }
-        match r.verdict {
+        match result.verdict {
             Verdict::Covered => {
                 self.covered += 1;
                 self.sloppy_run += 1;
@@ -1346,7 +1345,6 @@ pub fn run_files(cfg: &Config, harness_dir: &Path, root: &Path, files: &[PathBuf
                 continue;
             }
         }
-        let started = std::time::Instant::now();
         let r = if cfg.per_case_timeout_seconds == 0 {
             run_case(cfg, harness_dir, &src)
         } else {
@@ -1357,12 +1355,7 @@ pub fn run_files(cfg: &Config, harness_dir: &Path, root: &Path, files: &[PathBuf
                 std::time::Duration::from_secs(cfg.per_case_timeout_seconds),
             )
         };
-        rep.record_case_timed(
-            &rel,
-            fm.features.clone(),
-            r,
-            started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-        );
+        rep.record_case(&rel, fm.features.clone(), r);
     }
     rep
 }
@@ -1609,7 +1602,7 @@ mod tests {
             Verdict::RunSkip("oracle-host-stack-limit".into())
         );
         assert_eq!(
-            crate::report::classify(crate::report::Outcome::RunSkip, "oracle-host-stack-limit"),
+            crate::report::classify(crate::report::Verdict::RunSkip, "oracle-host-stack-limit"),
             crate::report::Category::Infrastructure
         );
     }
@@ -1641,7 +1634,7 @@ mod tests {
         // non-result, never the bar-forbidden `ironhorse-hang` failure.
         assert_eq!(
             crate::report::classify(
-                crate::report::Outcome::RunSkip,
+                crate::report::Verdict::RunSkip,
                 "oracle-nontermination: oracle failed to terminate within 10s (ironhorse terminates alone)"
             ),
             crate::report::Category::Infrastructure
@@ -1682,7 +1675,7 @@ mod tests {
         assert_eq!(v, Verdict::RunSkip("compiler-unimplemented:parse".into()));
         assert_eq!(
             crate::report::classify(
-                crate::report::Outcome::RunSkip,
+                crate::report::Verdict::RunSkip,
                 "compiler-unimplemented:parse"
             ),
             crate::report::Category::Unsupported
@@ -1721,7 +1714,7 @@ mod tests {
         assert_eq!(v, Verdict::RunSkip("compiler-unimplemented:parse".into()));
         assert_eq!(
             crate::report::classify(
-                crate::report::Outcome::RunSkip,
+                crate::report::Verdict::RunSkip,
                 "compiler-unimplemented:parse"
             ),
             crate::report::Category::Unsupported
@@ -1786,7 +1779,7 @@ mod tests {
         // The hang verdict maps to the bar-forbidden ironhorse-failure category.
         assert_eq!(
             crate::report::classify(
-                crate::report::Outcome::Fail,
+                crate::report::Verdict::Fail,
                 "ironhorse-hang: no verdict within 2s (non-terminating dispatch)"
             ),
             crate::report::Category::IronhorseFailure
@@ -1964,6 +1957,57 @@ mod tests {
         run.oracle_parsed = oracle_parsed;
         run.ironhorse_compile = compile;
         run
+    }
+
+    #[test]
+    fn positive_shared_test262_error_is_not_covered() {
+        let mut run = synthetic_abort(
+            Halt::Throw("Test262Error: assertion failed".into()),
+            "Test262Error: assertion failed",
+        );
+        run.oracle_error = "Test262Error: assertion failed".into();
+        run.error_agrees = true;
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("shared-test262-failure".into())
+        );
+    }
+
+    #[test]
+    fn oracle_test262_error_with_divergent_ironhorse_throw_is_not_shared() {
+        // Oracle throws the harness assertion error; ironhorse throws a
+        // different value (a real divergence). Nothing is shared, so this must
+        // stay `abort-value-differs` (-> the Ironhorse backlog), never be
+        // laundered into `shared-test262-failure`.
+        let mut run = synthetic_abort(
+            Halt::Throw("TypeError: not a function".into()),
+            "TypeError: not a function",
+        );
+        run.oracle_error = "Test262Error: assertion failed".into();
+        run.error_agrees = false;
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("abort-value-differs".into())
+        );
+    }
+
+    #[test]
+    fn shared_test262_error_still_yields_to_an_armed_meter_gate() {
+        // With a meter-exact gate armed, a differing computron budget is a
+        // violation even when both engines threw the same Test262Error — the
+        // gate outranks the shared-abort shape.
+        let mut run = synthetic_abort(
+            Halt::Throw("Test262Error: assertion failed".into()),
+            "Test262Error: assertion failed",
+        );
+        run.oracle_error = "Test262Error: assertion failed".into();
+        run.error_agrees = true;
+        run.oracle_computrons = 100;
+        run.ironhorse_computrons = 101;
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, true),
+            Verdict::Fail(_)
+        ));
     }
 
     /// An `AsyncDualRun` wrapping a trivially-agreeing dual-run with a chosen

@@ -50,7 +50,7 @@ export const gitDeclarations = harden({
   stashPop: (index?: number) => Promise<void>;
   stashPush: (options?: GitStashPushOptions) => Promise<string>;
   stashShow: (index?: number) => Promise<string>;
-  status: () => Promise<GitStatusEntry[]>;
+  status: (options?: GitStatusOptions) => Promise<GitStatusEntry[]>;
   switch: (ref: GitRef | string) => Promise<void>;
   switchBranch: (name: string) => Promise<void>;
   tree: (ref: GitRef | string) => Promise<GitReadableTree>;
@@ -219,6 +219,9 @@ type GitStatusEntry = {
     renamedFrom?: string;
 };
 type GitStatusNode = GitDirectory | GitFile | GitReadableTree | GitReadableBlob;
+type GitStatusOptions = {
+    untracked?: 'all' | 'normal' | 'no';
+};
 type GitWorktreeStatus = 'clean' | 'modified' | 'deleted' | 'untracked' | 'ignored' | 'conflicted';
 type GitLiteDirectory = {
     has: (...path: string[]) => Promise<boolean>;
@@ -337,7 +340,7 @@ type GitQid<K = GitNodeKind> = {
 };
 type GitReadOnlyEndoGit = {
     worktree: () => Promise<GitReadOnlyGitWorktree>;
-    status: () => Promise<GitStatusEntry[]>;
+    status: (options?: GitStatusOptions) => Promise<GitStatusEntry[]>;
     diff: (options?: GitDiffOptions) => Promise<string>;
     log: (options?: GitLogOptions) => Promise<GitCommit[]>;
     show: (ref: GitRef | string) => Promise<string>;
@@ -451,7 +454,7 @@ type GitRef = {
   show: (ref: GitRef | string) => Promise<string>;
   stashList: () => Promise<string[]>;
   stashShow: (index?: number) => Promise<string>;
-  status: () => Promise<GitStatusEntry[]>;
+  status: (options?: GitStatusOptions) => Promise<GitStatusEntry[]>;
   tree: (ref: GitRef | string) => Promise<GitReadableTree>;
   worktree: () => Promise<GitReadOnlyGitWorktree>;
 };
@@ -597,6 +600,9 @@ type GitStatusEntry = {
     renamedFrom?: string;
 };
 type GitStatusNode = GitDirectory | GitFile | GitReadableTree | GitReadableBlob;
+type GitStatusOptions = {
+    untracked?: 'all' | 'normal' | 'no';
+};
 type GitWorktreeStatus = 'clean' | 'modified' | 'deleted' | 'untracked' | 'ignored' | 'conflicted';
 type GitLiteDirectory = {
     has: (...path: string[]) => Promise<boolean>;

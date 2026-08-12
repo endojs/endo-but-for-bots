@@ -80,6 +80,79 @@ const provisionRepoRoot = async t => {
   return backend;
 };
 
+const provisionRepo = async t => {
+  const repoRoot = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'native-git-status-'),
+  );
+  t.teardown(() => fs.promises.rm(repoRoot, { recursive: true, force: true }));
+  await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+  return { backend: makeNativeGitBackend({ repoRoot }), repoRoot };
+};
+
+test('NativeGitBackend.status reads large output and preserves status columns', async t => {
+  t.timeout(60_000);
+  const { backend, repoRoot } = await provisionRepo(t);
+
+  await fs.promises.writeFile(path.join(repoRoot, 'deleted.txt'), 'tracked');
+  await execFileAsync('git', ['add', 'deleted.txt'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'tracked'],
+    { cwd: repoRoot },
+  );
+  await fs.promises.rm(path.join(repoRoot, 'deleted.txt'));
+
+  const untrackedDir = path.join(repoRoot, 'untracked');
+  await fs.promises.mkdir(untrackedDir);
+  const fileCount = 30_000;
+  const fileSuffix = 'x'.repeat(48);
+  for (let start = 0; start < fileCount; start += 500) {
+    const writes = [];
+    for (let i = start; i < Math.min(start + 500, fileCount); i += 1) {
+      writes.push(
+        fs.promises.writeFile(
+          path.join(untrackedDir, `file-${i}-${fileSuffix}.txt`),
+          '',
+        ),
+      );
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.all(writes);
+  }
+
+  const entries = await backend.status();
+  t.is(entries.length, fileCount + 1);
+  // The porcelain record for this path begins with a leading space (` D`),
+  // so this asserts the streaming read did not trim its status columns.
+  t.like(
+    entries.find(entry => entry.path === 'deleted.txt'),
+    {
+      path: 'deleted.txt',
+      index: 'clean',
+      worktree: 'deleted',
+    },
+  );
+});
+
+test('NativeGitBackend.status filters untracked files according to options', async t => {
+  const { backend, repoRoot } = await provisionRepo(t);
+  await fs.promises.mkdir(path.join(repoRoot, 'tree', 'deeper'), {
+    recursive: true,
+  });
+  await fs.promises.writeFile(path.join(repoRoot, 'tree', 'deeper', 'a'), '');
+  await fs.promises.writeFile(path.join(repoRoot, 'one'), '');
+
+  const pathsFor = async options =>
+    (await backend.status(options)).map(entry => entry.path).sort();
+  t.deepEqual(await pathsFor(), ['one', 'tree/deeper/a']);
+  t.deepEqual(await pathsFor({ untracked: 'normal' }), ['one', 'tree/']);
+  t.deepEqual(await pathsFor({ untracked: 'no' }), []);
+  await t.throwsAsync(
+    backend.status(/** @type {any} */ ({ untracked: 'invalid' })),
+    { message: /status\.untracked/ },
+  );
+});
+
 const LEASE_URL = 'https://github.com/example/repo.git';
 const LEASE_OID = '0123456789abcdef0123456789abcdef01234567';
 

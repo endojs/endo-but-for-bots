@@ -4,7 +4,7 @@
 |---|---|
 | **Created** | 2026-07-05 |
 | **Author** | endolinbot (prompted) |
-| **Status** | Roadmap (completion-phase milestone of [ironhorse-engine](ironhorse-engine.md); the build is parked behind the remaining port stages) |
+| **Status** | In progress: the bounded, resumable whole-tree reporting instrument has landed; language-surface convergence remains a completion-phase milestone of [ironhorse-engine](ironhorse-engine.md) |
 
 Toward the completion of the XS→Rust port (PR #600), the maintainer
 directive is that "the corpus should eventually be converted into

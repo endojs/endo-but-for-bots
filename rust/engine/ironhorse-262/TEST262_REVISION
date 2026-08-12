@@ -1,6 +1,5 @@
 # The exact authoritative upstream TC39 test262 revision the full Ironhorse
-# conformance sweep pins to (maintainer request, kriscendobot/garden#51: "a *full*
-# test262 suite" against "the current, authoritative test262 tests").
+# conformance sweep pins to. See designs/ironhorse-test262-convergence.md.
 #
 # `scripts/full-run.sh` sources this file and, unless given an existing
 # `--test262-dir`, clones tc39/test262 at exactly this SHA so a published report

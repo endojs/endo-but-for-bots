@@ -81,6 +81,11 @@ export type GitStatusEntry = {
   renamedFrom?: string;
 };
 
+export type GitStatusOptions = {
+  /** Include all untracked files, collapse them to directories, or omit them. */
+  untracked?: 'all' | 'normal' | 'no';
+};
+
 export type GitDiffOptions = {
   cached?: boolean;
   base?: GitRef | string;
@@ -305,7 +310,7 @@ export type GitRemoteKit = {
 /** The read-only capability surface returned by `readOnly()`. */
 export type ReadOnlyEndoGit = {
   worktree: () => Promise<ReadOnlyGitWorktree>;
-  status: () => Promise<GitStatusEntry[]>;
+  status: (options?: GitStatusOptions) => Promise<GitStatusEntry[]>;
   diff: (options?: GitDiffOptions) => Promise<string>;
   log: (options?: GitLogOptions) => Promise<GitCommit[]>;
   show: (ref: GitRef | string) => Promise<string>;

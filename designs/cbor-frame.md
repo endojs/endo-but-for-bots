@@ -28,7 +28,7 @@ each names a different on-the-wire grammar for length-prefixed byte
 strings.
 Note: PR 29's package is queued to be renamed from `@endo/syrup-frame`
 to `@endo/syrups` for naming consistency with `@endo/cbors`
-(see [`syrups.md`](./syrups.md)).
+(see [`syrup-frame.md`](./syrup-frame.md)).
 References below use the in-flight name `@endo/syrup-frame`; the
 rename is the steward's next dispatch.
 

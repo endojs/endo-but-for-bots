@@ -654,6 +654,76 @@ jobs:
       - name: Build xsnap crate
         run: cargo check --manifest-path rust/endo/xsnap/Cargo.toml
 
+  # The pure-Rust ironhorse crates: the engine's zero-C members
+  # (ironhorse-vm, ironhorse-snapshot — including the store seam's
+  # metamorphic determinism and checkpoint acceptance suites) plus the
+  # daemon-side SQLite heap-store backend in the root workspace. The
+  # oracle-linked engine crates (xs-oracle, ironhorse-compile,
+  # ironhorse-regexp, ironhorse-262, ironhorse-fuzz) are excluded: their
+  # dev-dependencies compile the Moddable XS C sources, which need the
+  # c/moddable submodule and its toolchain; they remain local/manual
+  # until a job provisions that.
+  #
+  # On pull requests the expensive steps self-skip unless the PR
+  # touches these crates or their inputs (the engine workspace, the
+  # SQLite crate, the root cargo manifests, or this workflow), so the
+  # check name stays present — and green — on unrelated PRs instead of
+  # needing a docs-only-style mirror workflow. Pushes to master always
+  # run the full job.
+  test-ironhorse:
+    name: test-ironhorse
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          # Depth 2 so the pull_request merge commit's parents exist
+          # for the change probe below.
+          fetch-depth: 2
+
+      - name: Detect ironhorse-relevant changes
+        id: changes
+        if: github.event_name == 'pull_request'
+        run: |
+          # The pull_request checkout is a merge commit whose first
+          # parent is the base branch head, so this diff is exactly the
+          # PR's change set. Fail open (run the tests) if that shape
+          # ever doesn't hold.
+          if ! git rev-parse -q --verify HEAD^2 >/dev/null; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only HEAD^1 HEAD \
+            | grep -qE '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^\.github/workflows/ci\.yml$'; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache Cargo + targets
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            rust/engine/target
+          key: ${{ runner.os }}-ironhorse-${{ hashFiles('Cargo.lock', 'rust/engine/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-
+
+      - name: Test ironhorse engine crates (rust/engine workspace)
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        working-directory: rust/engine
+        run: cargo test -p ironhorse-vm -p ironhorse-snapshot
+
+      - name: Test SQLite heap-store backend (root workspace)
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        run: cargo test -p ironhorse-store-sqlite
+
   test-ocapn-python:
     name: test-ocapn-python
 

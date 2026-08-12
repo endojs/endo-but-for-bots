@@ -55,6 +55,7 @@ const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
  * } from '@endo/exo-git'
  * @import {
  *   GitTreeEntry,
+ *   NativeGitStatusOptions,
  *   RawStatusEntry,
  *   RemoteRefspec,
  *   RepositoryIdentity,
@@ -2085,16 +2086,23 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
      * the bound mount — the backend has no mount cap to mint with.
      *
      * @returns {Promise<RawStatusEntry[]>}
+     * @param {NativeGitStatusOptions} [options]
      */
-    status: async () => {
-      // Use the raw runner: porcelain=v1 records start with a column-
+    status: async (options = {}) => {
+      const untracked = options.untracked ?? 'all';
+      if (untracked !== 'all' && untracked !== 'normal' && untracked !== 'no') {
+        throw new Error(
+          "status.untracked must be one of 'all', 'normal', or 'no'",
+        );
+      }
+      // Use the streaming reader: porcelain=v1 records start with a column-
       // sensitive XY code (e.g. ' D' for a worktree-only deletion);
-      // runGit's trim() would strip a leading space and shift the path.
-      const out = await runGitRaw([
+      // trimming would strip a leading space and shift the path.
+      const out = await readGitText([
         'status',
         '--porcelain=v1',
         '-z',
-        '--untracked-files=all',
+        `--untracked-files=${untracked}`,
       ]);
       if (out === '') {
         return harden([]);

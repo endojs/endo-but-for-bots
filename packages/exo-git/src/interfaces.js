@@ -25,6 +25,12 @@ const GitWorktreeStatusShape = M.or(
   'untracked',
 );
 
+const GitStatusOptionsShape = M.splitRecord(
+  {},
+  { untracked: M.or('all', 'normal', 'no') },
+  harden({}),
+);
+
 const GitStatusEntryShape = M.splitRecord(
   {
     entry: M.remotable(),
@@ -265,7 +271,9 @@ export const GIT_METHOD_GUARDS = harden({
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.string()),
   stashShow: M.callWhen().optional(M.number()).returns(M.string()),
-  status: M.callWhen().returns(M.arrayOf(GitStatusEntryShape)),
+  status: M.callWhen()
+    .optional(GitStatusOptionsShape)
+    .returns(M.arrayOf(GitStatusEntryShape)),
   switch: M.callWhen(RefArgShape).returns(M.undefined()),
   switchBranch: M.callWhen(M.string()).returns(M.undefined()),
   tree: M.callWhen(RefArgShape).returns(M.remotable()),

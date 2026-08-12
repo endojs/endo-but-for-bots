@@ -61,7 +61,7 @@ The initial registered schemes are:
 
 `tcp+cbor` is deliberately distinct from the current TCP netstring adapter:
 the scheme is a wire commitment, not a nickname. The TCP implementation uses
-the byte-string framing primitive described by [cbors.md](cbors.md) (now named
+the byte-string framing primitive described by [cbor-frame.md](cbor-frame.md) (now named
 `@endo/cbor-frame`), with a bounded inbound frame size. A peer only selects a
 transport for which it has both a registered dial adapter and a complete hint
 set. It tries matching schemes in the caller-configured preference order; a
@@ -153,7 +153,7 @@ without a transport becoming part of the identity.
 ## Migration Plan
 
 1. Land or expose the bounded `@endo/cbor-frame` reader/writer from
-   [cbors.md](cbors.md), and implement `makeTcpCborTransport`. Keep the
+   [cbor-frame.md](cbor-frame.md), and implement `makeTcpCborTransport`. Keep the
    netstring TCP adapter available under its current scheme; it is not wire
    compatible with `tcp+cbor`.
 2. Split the current `OcapnNoiseTransport.listen(handler)` into
@@ -211,7 +211,7 @@ peer must not be treated as interchangeable.
 
 | Design | Relationship |
 |---|---|
-| [cbors.md](cbors.md) | Supplies the TCP CBOR byte-string framing primitive. |
+| [cbor-frame.md](cbor-frame.md) | Supplies the TCP CBOR byte-string framing primitive. |
 | [ocapn-noise-network.md](ocapn-noise-network.md) | Supplies the Noise IK session, key routing, and transport plugin substrate amended here. |
 | [ocapn-noise-session-reconnect.md](ocapn-noise-session-reconnect.md) | Must preserve session ownership and close behavior across every carrier. |
 | [ocapn-noise-key-only-session-boundary.md](ocapn-noise-key-only-session-boundary.md) | A relay forwards the framed ciphertext stream to these terminating listeners. |

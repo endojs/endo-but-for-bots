@@ -563,7 +563,7 @@ parity between the lanes.
   through `EndoRegistry` must be public on the configured
   registry.
   A credentials lane that composes with the
-  [endo-gateway](endo-gateway.md) multi-tenant story is a
+  [gateway-package](gateway-package.md) multi-tenant story is a
   separate design that will land when the public-only constraint
   becomes binding.
 

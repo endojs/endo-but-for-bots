@@ -9,7 +9,7 @@
 
 ## What is the Problem Being Solved?
 
-The Endo Gateway, as proposed in [endo-gateway](endo-gateway.md), is the
+The Endo Gateway, as proposed in [gateway-package](gateway-package.md), is the
 per-host system service that owns the host's external HTTP and WebSocket
 surface and relays into per-user Daemons by Ed25519 public key.
 Today the Gateway terminates exactly one application protocol on that
@@ -29,7 +29,7 @@ caller by bearer token, resolves the token to a specific Endo agent's
 formula identifier, and exposes the tools that agent's Lal-style harness
 already provides as MCP tools.
 
-The TLS-proxy assumption from [endo-gateway](endo-gateway.md) carries
+The TLS-proxy assumption from [gateway-package](gateway-package.md) carries
 over to this new surface unchanged: the Gateway speaks plaintext HTTP and
 the operator runs a TLS terminator (Caddy, nginx, Traefik) in front of
 it.
@@ -46,7 +46,7 @@ creating agents and retrieving their MCP configuration block.
 Three pieces of prior art frame the design.
 
 **Endo Gateway.**
-[endo-gateway](endo-gateway.md) (Proposed) lifts host-scope HTTP and
+[gateway-package](gateway-package.md) (Proposed) lifts host-scope HTTP and
 WebSocket out of the per-user Daemon into a system service.
 The Gateway terminates two protocols today on its plaintext bind port:
 per-weblet HTTP / WebSocket on virtual hosts derived from a weblet's
@@ -141,7 +141,7 @@ The Gateway's job on the MCP path is narrow:
    and refuse with 401 if absent (advancing the failed-auth rate
    limiter from [gateway-bearer-token-auth](gateway-bearer-token-auth.md)).
 3. Resolve the formula id to the User Daemon that owns it via the
-   registration table from [endo-gateway](endo-gateway.md), then call
+   registration table from [gateway-package](gateway-package.md), then call
    `E(userDaemon).fetchAgent(formulaId)` to obtain the agent's
    `EndoGuest` powers.
 4. Hand the JSON-RPC request to the MCP adapter bound to those powers,
@@ -423,7 +423,7 @@ A new module that:
 `gateway-mcp.js` lives in `packages/daemon` because that is where the
 Gateway and the per-user Daemon already live (the Gateway and Daemon
 are two modes of the same binary, per
-[endo-gateway](endo-gateway.md)).
+[gateway-package](gateway-package.md)).
 
 ## Chat-side UI: create-agent and MCP-config retrieval
 
@@ -483,7 +483,7 @@ same call Chat already uses elsewhere.
 
 A "Copy" button copies the JSON block.
 A "Rotate" button is deferred: rotation is the cross-cutting open
-question in [endo-gateway](endo-gateway.md) §Open Questions §1 (the
+question in [gateway-package](gateway-package.md) §Open Questions §1 (the
 Pass-Invariant-Eq problem), and this design does not introduce a new
 rotation mechanism.
 A warning is shown next to the block:
@@ -514,7 +514,7 @@ focused unit tests for `executeTool`.
 
 ### Phase 2: bearer-token table + agent publishing
 
-Extend `Registration` (from [endo-gateway](endo-gateway.md) §Registration
+Extend `Registration` (from [gateway-package](gateway-package.md) §Registration
 Protocol) with `publishAgent({ formulaId, agentExo })` /
 `unpublishAgent(formulaId)`.
 The Gateway persists the published agents in its sqlite store next to
@@ -548,7 +548,7 @@ existing ones.
 
 | Design | Relationship |
 |--------|--------------|
-| [endo-gateway](endo-gateway.md) | The Gateway this design adds an endpoint to. The MCP termination is a third application protocol on the same bind port; the TLS-proxy assumption from `endo-gateway` carries over. |
+| [gateway-package](gateway-package.md) | The Gateway this design adds an endpoint to. The MCP termination is a third application protocol on the same bind port; the TLS-proxy assumption from `endo-gateway` carries over. |
 | [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | The bearer is the 256-bit hex formula identifier from this design, applied to the new `/mcp` surface. Per-IP rate limiter is reused. |
 | [daemon-agent-tools](daemon-agent-tools.md) | Capability-scoped tools (`Dir` / `Shell` / `Git`) compose into `makeAgentTools` via the `extra` option as they land. Out of scope for the initial MCP catalog. |
 | [lal-fae-form-provisioning](lal-fae-form-provisioning.md) | The Chat "+ Add agent" affordance routes to the existing manager configuration form. |

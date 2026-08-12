@@ -3,8 +3,15 @@
 The one-command, bounded, resumable sweep that runs the **complete authoritative
 TC39 test262 corpus** against the Ironhorse engine (oracle-locked to XS) and
 emits a stable machine-readable `report.json` plus a self-contained static
-`report.html` (drop-in for kriscendobot gh-pages). Maintainer request:
-[kriscendobot/garden#51](https://github.com/kriscendobot/garden/issues/51#issuecomment-5224315524).
+  `report.html` (drop-in for kriscendobot gh-pages). Maintainer request:
+[garden issue 51](https://github.com/kriscendobot/garden/issues/51#issuecomment-5224315524).
+
+**Axes this sweep does not exercise.** Every run this automation produces is a
+non-hardened run: `ses_mode` is `none`, so no `lockdown()` / `Compartment` cases
+run and the SES (Hardened JavaScript) axis is **not** measured — the report's
+lede discloses this beside the strict-mode gap. Strict-mode executions are
+likewise not implemented. Both are named where the report makes its headline
+claim, not only in a provenance row.
 
 ## One command
 
@@ -25,33 +32,48 @@ Outputs land in `rust/engine/target/test262-report/` by default:
   reasons with sample case identifiers.
 - `provenance.json` — the run provenance (test262 SHA, endo/Ironhorse SHA,
   oracle build, command, config, timestamps, host).
-- `results/` — one per-directory batch JSON, the resume state.
+- `results/` — one JSON file per case-count-capped batch, the resume state.
+
+`report.{json,html}` are the publishable artifact; everything else the run
+writes under the output dir — `results/`, `logs/` (per-batch stdout/stderr +
+exit status), `attempts/`, `quarantines/`, the vendored `test262-src/`,
+`discovery.txt`, and `pending.txt` — is scratch/resume state under the
+gitignored `rust/engine/target/`.
 
 ## Why it is shaped this way
 
-- **Bounded / OOM-safe.** The XS oracle retains process RSS across the tens of
+- **Bounded worker lifetime.** The XS oracle retains process RSS across the tens of
   thousands of machine create/destroy cycles a whole-tree run makes. The tree is
-  partitioned into **per-directory batches** and each batch is its **own
+  partitioned into batches of at most **100 cases** and each batch is its **own
   `ironhorse-xst` process**, so the oracle's RSS is freed on every batch exit.
-  Peak memory is bounded by `--jobs` (that many concurrent oracle processes),
-  not by the tree size.
-- **Resumable.** Each batch writes one JSON file atomically (`.part` -> rename).
-  An interrupted run leaves the completed files on disk; re-running the same
-  command runs only what is missing.
-- **Per-case wall-clock bound.** Both the XS oracle and the ironhorse VM can
-  *non-terminate* on a pathological source (e.g. `for (const i = 0; i < 1; i++)
-  {}`). Each case is dispatched under a hard bound (`--case-timeout`, default
-  10s). A timeout is attributed with an Ironhorse-only rerun: an Ironhorse
-  non-terminator is an `ironhorse-hang` **failure**, while an oracle-only
-  non-terminator is an **infrastructure** skip. Either outcome is recorded in
-  bounded time instead of wedging its whole per-directory batch process — the
-  batch's other cases still run and its JSON is still written, so resume never
-  loses a directory to one bad case.
-  `--case-timeout 0` disables the bound.
-- **Deterministic.** Discovery, batching, and aggregation are sorted, so the
-  same corpus + engine produces byte-identical `report.json`.
-- **Honest coverage.** Discovery walks the **entire** official `test/**` tree
-  (no curated-subtree filter, `staging/` excluded exactly as the runner does);
+  Each batch gets a wall-clock watchdog, so an unmetered oracle call cannot
+  hold a worker forever. `--jobs` bounds the number of concurrent oracle
+  processes; the script does not claim a per-process memory ceiling.
+- **Resumable, and bound to a run identity.** Each batch writes one JSON file
+  atomically (`.part` then rename) and is **stamped with a run identity** - the
+  fingerprint of the result-affecting inputs (test262 SHA, engine SHA, oracle
+  mode, SES mode, batch cap, scope). An interrupted run leaves the completed
+  files on disk; re-running the same command runs only what is missing. Reusing
+  an output directory after **any** of those inputs changes re-runs the affected
+  batches rather than silently retaining a stale/foreign result, and aggregation
+  reads **exactly the discovered plan** (never a directory glob), so a leftover
+  batch from a different run can never leak into the report. This last property
+  is a guarantee of `full-run.sh`, which always passes `--plan` and `--run-id`;
+  the library's legacy `aggregate` and `pending_batches` entry points remain
+  unbound, while the `aggregate` CLI always requires an exact `--plan`.
+- **Single-sourced partition cap.** The at-most-N-cases-per-batch cap lives in
+  one place (the Rust `BATCH_CASE_LIMIT`); the orchestrator reads it back with
+  `ironhorse-262-report batch-size` and passes it as `--batch-size`, so discovery
+  and execution cannot drift.
+- **Verified corpus identity.** A corpus must be a clean git top-level.
+  The sweep refuses an unverified or dirty corpus rather than collapsing
+  distinct inputs into one resume identity.
+- **Deterministic results.** Discovery, batching, and aggregation are sorted,
+  so case ordering and totals are stable for the same corpus + engine;
+  provenance timestamps intentionally differ between runs.
+- **Honest coverage.** Discovery walks the authoritative `test/**` case trees,
+  including `annexB/` and `intl402/`. It excludes non-authoritative `staging/`,
+  harness support files, and module cases, all named in the report lede;
   an unsupported language feature surfaces as a named `unsupported` gap, never
   hidden. The report distinguishes a genuine **Ironhorse failure** (a
   bar-forbidden divergence) and an **unsupported** language gap from an
@@ -62,9 +84,11 @@ Outputs land in `rust/engine/target/test262-report/` by default:
 
 | Piece | What it does |
 | --- | --- |
-| `ironhorse-xst --flat --json FILE <dir>` | runs one directory's direct cases through the full oracle differential, writing the per-case JSON batch |
-| `ironhorse-262-report discover` | lists every per-directory batch under the tree |
+| `ironhorse-xst --direct-only --batch-size N --batch-index I --json FILE <directory>` | runs one bounded directory batch through the full oracle differential, writing per-case JSON |
+| `ironhorse-262-report discover` | lists every case-count-capped batch under the tree |
 | `ironhorse-262-report plan` | lists the batches not yet completed (resume plan) |
+| `ironhorse-262-report validate` | verifies schema, run identity, and expected case count |
+| `ironhorse-262-report batch-size` | prints the single-source partition cap |
 | `ironhorse-262-report aggregate` | merges per-batch JSON into `report.json` + `report.html` |
 | `scripts/full-run.sh` | the orchestrator that ties them together |
 | `TEST262_REVISION` | the pinned authoritative tc39/test262 SHA the sweep vendors |
@@ -72,22 +96,32 @@ Outputs land in `rust/engine/target/test262-report/` by default:
 ## CI
 
 `.github/workflows/ironhorse-full-test262.yml` is an **explicitly invokable**
-(`workflow_dispatch`) path, never on the PR/push matrix because a whole-tree
-run is intentionally operator-scheduled. The recorded run took 16m30s at
-`--jobs 16` on `endolin-garden2-5bcdff64`; runner capacity, cold builds,
-cloning, and the hang tail vary. It defaults to a bounded subtree (`built-ins/Proxy`)
-so a manual run is quick; pass `full` to sweep the whole tree. It uploads
+(`workflow_dispatch`) path — never on the PR/push matrix.
+An indicative run at `14f26d0a6` on a 32-vCPU host with `--jobs 16` and the XS
+oracle enabled took 16m30s. It predates the watchdog/quarantine changes; runner
+speed and lower parallelism increase that wall clock.
+It defaults to a bounded subtree (`built-ins/Proxy`) so a manual run is quick;
+pass `full` to sweep the whole tree.
+It uploads
 `report.json`/`report.html`/`provenance.json` as a build artifact; publishing to
 gh-pages is a separate, deliberate step.
 
-## Complementary coverage
-
-The bespoke bit-exact **metering** micro-cases under `ironhorse-262/cases`
-(`ironhorse-meter-exact` / `ironhorse-meter-determinism`) are **not** test262
-conformance cases and are kept separate on purpose — upstream test262 has no cost
-model. This sweep measures conformance against the authoritative corpus; the
-metering cases measure byte-exact compile/meter identity. They are complementary,
-not duplicate. The parameterized expectation/ratchet groundwork in
-[PR #946](https://github.com/endojs/endo-but-for-bots/pull/946) is likewise
-complementary: it is the per-(case, mode) regression *gate*; this sweep is the
-whole-tree *snapshot* instrument.
+**Whole-tree resume is a manual restore.**
+The workflow also uploads the
+**validated resume state** (`results/`), retry/quarantine state, and the
+**per-batch diagnostics** (`logs/`) as a second artifact
+(`ironhorse-test262-resume-state`), even on
+failure. To continue a timed-out run, download that artifact, unpack it under a
+local `--output`, and re-run `full-run.sh` with the same inputs — each batch is
+bound to its run identity, so only work matching this corpus/engine/oracle/scope
+is reused. Cross-dispatch automatic resume is deliberately **not** attempted:
+GitHub Actions cache keys are immutable and cannot accumulate partial state
+across dispatches. The whole-tree sweep is bounded (a zero-batch discovery is a
+hard error, never a published "0 cases" report).
+Each worker has a 180-second wall-clock bound.
+A failing batch is retried in-process up to three attempts (the count also
+accumulates across resumes), so the quarantine path is reachable from a single
+sweep invocation — the CI dispatch runs the script once. After the cap the batch
+is quarantined as infrastructure and the report marks completion as `incomplete`
+instead of blocking publication forever; completion is derived from the
+aggregated case records (a `quarantine:` reason), not a side marker file.

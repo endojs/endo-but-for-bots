@@ -6,12 +6,12 @@
 | **Updated** | 2026-05-06 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Deprecated |
-| **Superseded by** | [`ocapn-tcp-syrups-framing.md`](./ocapn-tcp-syrups-framing.md) (PR 29) |
+| **Superseded by** | [`ocapn-tcp-syrup-framing.md`](./ocapn-tcp-syrup-framing.md) (PR 29) |
 
 ## Status
 
 This design is consolidated with PR 29's `@endo/syrup-frame`
-([`ocapn-tcp-syrups-framing.md`](./ocapn-tcp-syrups-framing.md)).
+([`ocapn-tcp-syrup-framing.md`](./ocapn-tcp-syrup-framing.md)).
 The two packages are the same in shape: each adapts a stream of
 `Uint8Array` chunks into a stream of `Uint8Array`-delimited messages,
 using length-prefixed Syrup byte-string framing on the wire
@@ -38,7 +38,7 @@ design doc title, and PR title and body.
 
 ## Effect on the sibling `@endo/cbors` design
 
-[`cbors.md`](./cbors.md) (the sibling design in this PR) is unaffected.
+[`cbor-frame.md`](./cbor-frame.md) (the sibling design in this PR) is unaffected.
 It already carries `Uint8Array` at its boundaries and is the precise
 peer of `@endo/syrups`.
 

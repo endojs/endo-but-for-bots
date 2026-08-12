@@ -4979,13 +4979,13 @@ impl Interp {
     /// UTF-16 code-unit order, which is exactly the ECMAScript string
     /// ordering — the relational/equality opcodes therefore compare these
     /// bytes directly with no decode.
-    fn str_content(&self, off: crate::value::ChunkOffset) -> &[u8] {
+    fn str_content(&self, off: crate::value::ChunkOffset) -> crate::value::ChunkSlice<'_> {
         self.chunks.payload(off)
     }
 
     /// The string value's code units (`str_content` decoded from UTF-16BE).
     fn str_units(&self, off: crate::value::ChunkOffset) -> Vec<u16> {
-        be16_to_units(self.str_content(off))
+        be16_to_units(&self.str_content(off))
     }
 
     /// The string value's code-unit length (`length`, O(1) — half the stored
@@ -7063,7 +7063,7 @@ impl Interp {
                     let k = self.closure_index(op, code, pc);
                     match self.closure_cell(k) {
                         Some(cell) => {
-                            let s = *self.slots.get(cell);
+                            let s = self.slots.get(cell);
                             if s.kind == Kind::Uninitialized {
                                 return Halt::Throw("get closure: not initialized yet".into());
                             }
@@ -7113,9 +7113,7 @@ impl Interp {
                 XS_CODE_REFRESH_CLOSURE_1 | XS_CODE_REFRESH_CLOSURE_2 => {
                     let k = self.closure_index(op, code, pc);
                     let old = self.closure_cell(k);
-                    let src = old
-                        .map(|c| *self.slots.get(c))
-                        .unwrap_or_else(Slot::uninitialized);
+                    let src = old.map(|c| self.slots.get(c)).unwrap_or_else(Slot::uninitialized);
                     let mut fresh = Slot::of(src.kind, src.value);
                     fresh.flag = src.flag;
                     let cell = self.slots.alloc(fresh);
@@ -12723,7 +12721,7 @@ impl Interp {
                 let id = self.to_property_id(code, arg1)?;
                 match self.find_property(inst, id) {
                     Some(p) => {
-                        let prop = *self.slots.get(p);
+                        let prop = self.slots.get(p);
                         // An accessor own property needs the accessor-descriptor
                         // shape (`{get, set, enumerable, configurable}`), which
                         // is not modeled — honest skip. A data property carries
@@ -13188,7 +13186,7 @@ impl Interp {
                 let slots = self.own_property_slots(inst);
                 let mut props: Vec<(u16, OrdinaryDescriptor)> = Vec::new();
                 for &p in &slots {
-                    let s = *self.slots.get(p);
+                    let s = self.slots.get(p);
                     props.push((s.id, self.ordinary_get_own_descriptor(inst, s.id).unwrap()));
                 }
                 self.meter.tick_raw(GOPDS_FRAME_METERING);
@@ -17442,7 +17440,15 @@ impl Interp {
     /// two strings as unequal because it cannot see the chunk arena).
     fn strict_equal(&self, a: &Slot, b: &Slot) -> bool {
         match (a.value, b.value) {
-            (Payload::String(x), Payload::String(y)) => self.str_content(x) == self.str_content(y),
+            (Payload::String(x), Payload::String(y)) => {
+                // Pre-fault BOTH payloads before taking the two guards:
+                // constructing the second guard over a non-resident
+                // extent would borrow_mut under the first guard's live
+                // Ref on a lazy heap (the review's critical finding).
+                self.chunks.ensure_payload_resident(x);
+                self.chunks.ensure_payload_resident(y);
+                self.str_content(x) == self.str_content(y)
+            }
             // `bigint === bigint`: equal iff same sign and magnitude. A BigInt
             // is never `===` a non-BigInt (distinct type), which
             // `strict_equals` already gives.
@@ -17973,7 +17979,7 @@ impl Interp {
             if cur.is_null() {
                 break;
             }
-            let s = *self.slots.get(cur);
+            let s = self.slots.get(cur);
             let mut copy = Slot::of(s.kind, s.value);
             copy.id = s.id;
             copy.flag = s.flag;
@@ -18830,7 +18836,7 @@ impl Interp {
         let proto = self.instance_prototype(inst);
         self.harden_enqueue(proto, list);
         for &p in &slots {
-            let s = *self.slots.get(p);
+            let s = self.slots.get(p);
             if s.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
                 let accessor = self
                     .accessors
@@ -18912,7 +18918,7 @@ impl Interp {
         id: u16,
     ) -> Option<OrdinaryDescriptor> {
         let property = self.find_property(inst, id)?;
-        let slot = *self.slots.get(property);
+        let slot = self.slots.get(property);
         let enumerable = Some(slot.flag & XS_DONT_ENUM_FLAG == 0);
         let configurable = Some(slot.flag & XS_DONT_DELETE_FLAG == 0);
         if slot.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
@@ -19417,7 +19423,7 @@ impl Interp {
         let mut prev = inst;
         let mut cur = self.slots.get(inst).next;
         while !cur.is_null() {
-            let s = *self.slots.get(cur);
+            let s = self.slots.get(cur);
             if s.id == id {
                 // A non-configurable own property (`XS_DONT_DELETE_FLAG` — the
                 // state `seal`/`freeze`/`defineProperty(configurable:false)`
@@ -19709,6 +19715,10 @@ impl Interp {
         if a.kind == Kind::String && b.kind == Kind::String {
             if let (Payload::String(x), Payload::String(y)) = (a.value, b.value) {
                 let r = {
+                    // Pre-fault before the two live guards (see
+                    // strict_equal): lazy-heap borrow discipline.
+                    self.chunks.ensure_payload_resident(x);
+                    self.chunks.ensure_payload_resident(y);
                     let (ca, cb) = (self.str_content(x), self.str_content(y));
                     match op {
                         RelOp::Less => ca < cb,
@@ -19773,6 +19783,10 @@ impl Interp {
         let eq = match (a.kind, b.kind) {
             (Kind::String, Kind::String) => match (a.value, b.value) {
                 (Payload::String(x), Payload::String(y)) => {
+                    // Pre-fault before the two live guards (see
+                    // strict_equal): lazy-heap borrow discipline.
+                    self.chunks.ensure_payload_resident(x);
+                    self.chunks.ensure_payload_resident(y);
                     self.str_content(x) == self.str_content(y)
                 }
                 _ => false,
@@ -22011,15 +22025,8 @@ mod tests {
         // no NUL hazard, no normalization. str_content is exactly the payload.
         let lone = vec![b'A' as u16, 0xD800, b'B' as u16];
         let off = str_off(&interp.new_string_units(&lone));
-        assert_eq!(
-            interp.str_units(off),
-            lone,
-            "the lone surrogate reads back unchanged"
-        );
-        assert_eq!(
-            interp.str_content(off),
-            &[0x00, 0x41, 0xD8, 0x00, 0x00, 0x42]
-        );
+        assert_eq!(interp.str_units(off), lone, "the lone surrogate reads back unchanged");
+        assert_eq!(&*interp.str_content(off), &[0x00, 0x41, 0xD8, 0x00, 0x00, 0x42]);
 
         // Comparison: byte-lexicographic order over the UTF-16BE payload is the
         // code-unit (ECMAScript relational) order — even for lone surrogates,
@@ -22096,7 +22103,7 @@ mod tests {
                 "O(1) length survives the round-trip"
             );
             // And the bytes themselves are identical (bit-exact snapshot).
-            assert_eq!(dst.str_content(dst_off), payload.as_slice());
+            assert_eq!(&*dst.str_content(dst_off), payload.as_slice());
         }
     }
 }

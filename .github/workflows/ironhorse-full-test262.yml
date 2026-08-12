@@ -1,9 +1,9 @@
-# The full-test262 Ironhorse conformance sweep (maintainer request,
-# kriscendobot/garden#51). This is an EXPLICITLY INVOKABLE workflow only — it runs
-# the complete authoritative TC39 test262 corpus against the Ironhorse engine,
-# whose recorded run took 16m30s at jobs=16 on endolin-garden2-5bcdff64.
-# Runner capacity, cold builds, cloning, and the hang tail vary, so it must
-# never ride the ordinary PR/push matrix (CI stays in ci.yml). Dispatch it from the Actions tab; a bounded
+# The full-test262 Ironhorse conformance sweep described in
+# designs/ironhorse-test262-convergence.md. This is an explicitly invokable workflow.
+# An indicative run at 14f26d0a6 on a 32-vCPU host with jobs=16 and the XS oracle
+# enabled took 16m30s; later watchdog/quarantine changes and slower runners can
+# change that wall clock. It remains dispatch-only so ordinary
+# PR/push CI does not absorb that cost. Dispatch it from the Actions tab; a bounded
 # subtree (e.g. built-ins/Proxy) is the default so a manual run is quick, and
 # `full` runs the whole tree.
 name: Ironhorse full test262 sweep
@@ -15,14 +15,20 @@ on:
         description: 'Subtree to sweep (e.g. built-ins/Proxy), or "full" for the whole tree'
         required: false
         default: 'built-ins/Proxy'
+        type: string
       jobs:
         description: 'Batch parallelism (bounds peak memory: concurrent oracle processes)'
         required: false
         default: '4'
+        type: string
       oracle:
         description: 'Gate on the XS oracle (on/off)'
         required: false
         default: 'on'
+        type: choice
+        options:
+          - 'on'
+          - 'off'
 
 # Minimal permissions: read the checkout, nothing else. The report is uploaded
 # as a build artifact; publishing it to gh-pages is a separate, deliberate step.
@@ -44,7 +50,7 @@ jobs:
   sweep:
     name: sweep
     runs-on: ubuntu-latest
-    # A whole-tree run is long; a bounded subtree finishes quickly. Cap so a
+    # A whole-tree run is substantial; a bounded subtree finishes quickly. Cap so a
     # runaway can't burn a full day of runner time.
     timeout-minutes: 350
 
@@ -56,16 +62,15 @@ jobs:
           # The XS oracle links the moddable C submodule.
           submodules: true
 
-      - name: Cache Cargo + target
+      - name: Cache Cargo downloads
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            rust/engine/target
-          key: ${{ runner.os }}-ih262-${{ hashFiles('rust/engine/Cargo.lock', 'rust/engine/ironhorse-262/**', 'c/moddable/**') }}
+          key: ${{ runner.os }}-ih262-cargo-${{ hashFiles('rust/engine/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-ih262-
+            ${{ runner.os }}-ih262-cargo-
 
       - name: Run the sweep
         env:
@@ -74,11 +79,12 @@ jobs:
           ORACLE: ${{ github.event.inputs.oracle }}
         run: |
           set -euo pipefail
-          args=(--out "$GITHUB_WORKSPACE/test262-report" --jobs "${JOBS:-4}" --oracle "${ORACLE:-on}")
-          if [ -n "${SUBTREE:-}" ] && [ "${SUBTREE}" != "full" ]; then
-            args+=(--subtree "${SUBTREE}")
+          arguments=(--output "$GITHUB_WORKSPACE/test262-report" --jobs "${JOBS:-4}" --oracle "${ORACLE:-on}")
+          SUBTREE="${SUBTREE:-built-ins/Proxy}"
+          if [ "${SUBTREE}" != "full" ]; then
+            arguments+=(--subtree "${SUBTREE}")
           fi
-          bash rust/engine/ironhorse-262/scripts/full-run.sh "${args[@]}"
+          bash rust/engine/ironhorse-262/scripts/full-run.sh "${arguments[@]}"
 
       - name: Summarize
         if: always()
@@ -103,4 +109,28 @@ jobs:
             test262-report/report.json
             test262-report/report.html
             test262-report/provenance.json
+          if-no-files-found: warn
+
+      # Preserve the validated resume state (the completed per-batch results) and
+      # the per-batch diagnostics even when the sweep did NOT finish, so a whole-
+      # tree run interrupted by the job limit is not lost: download this
+      # artifact, restore it under a local `--output`, and re-run `full-run.sh` to
+      # resume from exactly what completed (a batch is bound to its run identity,
+      # so only work matching this corpus/engine/oracle/scope is reused). Cross-
+      # dispatch resume is deliberately a manual restore — GitHub Actions cache is
+      # keyed immutably and cannot accumulate partial state across dispatches — so
+      # the whole-tree sweep's canonical home is a long-lived local/self-hosted run
+      # (see rust/engine/ironhorse-262/scripts/README.md, "CI").
+      - name: Upload resume state + diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ironhorse-test262-resume-state
+          path: |
+            test262-report/results/**
+            test262-report/logs/**
+            test262-report/attempts/**
+            test262-report/quarantines/**
+            test262-report/discovery.txt
+            test262-report/pending.txt
           if-no-files-found: warn
