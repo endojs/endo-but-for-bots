@@ -54,6 +54,19 @@ const PRODUCT_RESERVED_BINDINGS = harden([
   'mounts',
   'workspace',
 ]);
+// Names the host reserves for infrastructure siblings under the controller
+// path: the persistence record, the guest handle and agent, and the
+// namespace container for provisioned Git remotes. Remotes are namespaced
+// under their own `remotes` container so a remote name can no longer collide
+// with a trusted sibling, but a guest-binding name matching one of these is
+// still rejected here so any residual collision fails closed rather than
+// substituting a trusted record for the requested capability.
+const HOST_RESERVED_BINDINGS = harden([
+  'persistence',
+  'guest-agent',
+  'guest-handle',
+  'remotes',
+]);
 const LANGUAGE_RESERVED_BINDINGS = harden([
   'arguments',
   'await',
@@ -266,7 +279,8 @@ const normalizeCredentialPetNamePath = (value, label) => {
 const isLexicalBindingName = name =>
   IDENTIFIER_RE.test(name) &&
   !LANGUAGE_RESERVED_BINDINGS.includes(name) &&
-  !PRODUCT_RESERVED_BINDINGS.includes(name);
+  !PRODUCT_RESERVED_BINDINGS.includes(name) &&
+  !HOST_RESERVED_BINDINGS.includes(name);
 
 /**
  * @param {string} name

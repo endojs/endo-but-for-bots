@@ -255,10 +255,17 @@ const realizeProvisionResources = async (host, persistence, credentials) => {
 
   const rootGit = gits.get('git');
   if (rootGit !== undefined) {
+    // Git remotes live under their own namespace container so a remote name
+    // can never resolve to a trusted infrastructure sibling of controllerPath
+    // (the persistence record, guest handle, or guest agent). A flat sibling
+    // alias would otherwise let a remote named `persistence` substitute the
+    // stored persistence record for a minted GitRemote.
+    const remotesPath = harden([...controllerPath, 'remotes']);
+    await ensureNameDirectory(host, remotesPath);
     for (const [name, remote] of Object.entries(
       persistence.policy.gitRemotes ?? {},
     )) {
-      const remoteAlias = harden([...controllerPath, name]);
+      const remoteAlias = harden([...remotesPath, name]);
       const remoteOptions = {
         name,
         url: remote.url,

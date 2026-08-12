@@ -128,10 +128,15 @@ test.serial(
     const controllerPath = localRemote.persistence.guestHandlePath.slice(0, -1);
     const controllerWorkspaceId = await E(host).identify(
       ...controllerPath,
-      'git-workspace',
+      'mounts',
+      'workspace',
+      'mount',
     );
     const guestGitId = await E(localRemote.powers).identify('git');
-    t.is(await E(host).identify(...controllerPath, 'git'), guestGitId);
+    t.is(
+      await E(host).identify(...controllerPath, 'gits', 'git', 'git'),
+      guestGitId,
+    );
     t.truthy(controllerWorkspaceId);
 
     const answer = await E(localRemote.powers).evaluate(
@@ -165,7 +170,12 @@ test.serial(
     );
     t.is(await E(recovered.powers).identify('git'), guestGitId);
     t.is(
-      await E(restartedHost).identify(...controllerPath, 'git-workspace'),
+      await E(restartedHost).identify(
+        ...controllerPath,
+        'mounts',
+        'workspace',
+        'mount',
+      ),
       controllerWorkspaceId,
     );
     t.is(await E(recovered.powers).lookup('answer'), 42);
@@ -180,7 +190,107 @@ test.serial(
 );
 
 test.serial(
-  'code-mode provisioning realizes a named nested Git grant at its canonical path',
+  'a Git remote cannot substitute or expose the host persistence record',
+  async t => {
+    t.timeout(120_000);
+    const fixture = await makeProvisioningFixture(t);
+    const bareRemote = join(fixture.root, 'persistence-probe.git');
+    await execFileAsync('git', ['init', '-q', '-b', 'main'], {
+      cwd: fixture.workspace,
+    });
+    await execFileAsync('git', ['add', 'README.md'], {
+      cwd: fixture.workspace,
+    });
+    await execFileAsync(
+      'git',
+      [
+        '-c',
+        'user.name=Provision Test',
+        '-c',
+        'user.email=provision@example.test',
+        'commit',
+        '-q',
+        '-m',
+        'initial',
+      ],
+      { cwd: fixture.workspace },
+    );
+    await execFileAsync('git', ['init', '--bare', '-q', bareRemote]);
+
+    const host = await fixture.connectHost('persistence-probe-host');
+
+    // A remote whose name collides with the host persistence sibling fails
+    // closed at normalization; it never reaches realization where it could have
+    // resolved to the stored record.
+    await t.throwsAsync(
+      () =>
+        provisionEndoCodeMode({
+          harness: 'test',
+          sessionId: 'collide-persistence',
+          cwd: fixture.workspace,
+          sockPath: fixture.sockPath,
+          spec: {
+            fs: 'readWrite',
+            git: 'readWrite',
+            gitRemotes: {
+              persistence: {
+                url: new URL(`file://${bareRemote}`).href,
+                allowLocalFileTransport: true,
+              },
+            },
+          },
+        }),
+      { message: /non-reserved JavaScript binding/ },
+    );
+
+    // A legitimately named remote binds an actual GitRemote, not the trusted
+    // persistence record, and the record stays out of the guest's reach.
+    const session = fixture.trackSession(
+      await provisionEndoCodeMode({
+        harness: 'test',
+        sessionId: 'persistence-probe',
+        cwd: fixture.workspace,
+        sockPath: fixture.sockPath,
+        spec: {
+          fs: 'readWrite',
+          git: 'readWrite',
+          gitRemotes: {
+            origin: {
+              url: new URL(`file://${bareRemote}`).href,
+              allowLocalFileTransport: true,
+            },
+          },
+        },
+      }),
+    );
+
+    const origin = /** @type {GitRemote} */ (
+      await E(session.powers).lookup('origin')
+    );
+    const originPolicy = await E(origin).inspect();
+    t.is(originPolicy.url, new URL(`file://${bareRemote}`).href);
+    // A GitRemote has no persistence-record fields.
+    t.is(/** @type {any} */ (originPolicy).workspacePath, undefined);
+    t.is(/** @type {any} */ (originPolicy).policy, undefined);
+
+    // The guest holds no binding for the persistence record or any controller
+    // infrastructure name, so no absolute host path or reconstruction record
+    // is reachable through the guest.
+    t.is(await E(session.powers).identify('persistence'), undefined);
+    t.is(await E(session.powers).identify('remotes'), undefined);
+    await t.throwsAsync(() => E(session.powers).lookup('persistence'));
+
+    const controllerPath = session.persistence.guestHandlePath.slice(0, -1);
+    // The remote is namespaced under its own container, a sibling of — never
+    // the same path as — the persistence record.
+    t.true(await E(host).has(...controllerPath, 'remotes', 'origin'));
+    t.true(await E(host).has(...controllerPath, 'persistence'));
+    t.false(await E(host).has(...controllerPath, 'origin'));
+  },
+);
+
+test.serial(
+  'code-mode provisioning realizes a named Git grant through its selected mount',
   async t => {
     t.timeout(120_000);
     const fixture = await makeProvisioningFixture(t);
@@ -201,9 +311,15 @@ test.serial(
 
     const persistence = await normalizeEndoProvisionSpec(
       {
-        fs: 'readWrite',
+        mounts: {
+          source: { path: fixture.workspace, mode: 'readWrite' },
+        },
         gits: {
-          nested: { path: ['nested-link'], mode: 'readOnly' },
+          nested: {
+            mount: 'source',
+            path: ['nested-link'],
+            mode: 'readOnly',
+          },
         },
       },
       {
@@ -212,7 +328,8 @@ test.serial(
         cwd: fixture.workspace,
       },
     );
-    t.is(persistence.policy.gits?.nested.path, await realpath(nestedPath));
+    t.is(persistence.policy.gits?.nested.root, await realpath(nestedPath));
+    t.is(persistence.policy.gits?.nested.mount, 'source');
 
     await rm(nestedLink, { force: true });
     await symlink(outsidePath, nestedLink, 'dir');
