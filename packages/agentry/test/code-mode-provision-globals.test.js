@@ -6,6 +6,7 @@ import { makeWorkspaceGlobal } from '@endo/agent-tools/code-mode-globals/fs.js';
 import { makeGitGlobal } from '@endo/agent-tools/code-mode-globals/git.js';
 import { makeGitRemoteGlobal } from '@endo/agent-tools/code-mode-globals/git-remote.js';
 
+import { makeCodeModeSystemPrompt } from '../src/code-mode.js';
 import { makeEndoProvisionGlobals } from '../src/code-mode-provision-globals.js';
 
 /** @param {Record<string, unknown>} policy */
@@ -77,4 +78,25 @@ test('remote globals are sorted and hardened', t => {
   ]);
   t.true(Object.isFrozen(globals));
   t.true(globals.every(Object.isFrozen));
+});
+
+test('nested Git globals each appear in the system prompt', t => {
+  const globals = makeEndoProvisionGlobals(
+    makePersistence({
+      gits: {
+        zeta: { path: ['zeta'], mode: 'historyRewrite' },
+        ebfb: { path: ['ebfb'], mode: 'readWrite' },
+        inspect: { path: ['inspect'], mode: 'readOnly' },
+      },
+    }),
+  );
+
+  t.deepEqual(
+    globals.map(({ name }) => name),
+    ['ebfb', 'inspect', 'zeta'],
+  );
+  const prompt = makeCodeModeSystemPrompt(globals);
+  t.true(prompt.includes('declare const ebfb: WritableEndoGit;'));
+  t.true(prompt.includes('declare const inspect: ReadOnlyEndoGit;'));
+  t.true(prompt.includes('declare const zeta: EndoGitHistory;'));
 });

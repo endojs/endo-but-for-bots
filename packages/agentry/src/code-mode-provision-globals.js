@@ -32,6 +32,17 @@ export const makeEndoProvisionGlobals = persistence => {
       }),
     );
   }
+  const nestedGits = policy.gits ?? {};
+  for (const name of Object.keys(nestedGits).sort()) {
+    const grant = nestedGits[name];
+    globals.push(
+      makeGitGlobal({
+        name,
+        readOnly: grant.mode === 'readOnly',
+        historyRewrite: grant.mode === 'historyRewrite',
+      }),
+    );
+  }
   for (const name of Object.keys(policy.gitRemotes ?? {}).sort()) {
     globals.push(makeGitRemoteGlobal({ name }));
   }
