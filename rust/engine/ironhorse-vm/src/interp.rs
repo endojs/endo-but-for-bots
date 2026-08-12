@@ -11508,7 +11508,30 @@ impl Interp {
     /// [`Self::build_aggregate_error`]); any other iterable self-names. Each
     /// element reaction settles into the shared state at the drain
     /// ([`Self::run_combine_reaction`]).
-    fn promise_combinator(&mut self, kind: CombinatorKind, iterable: Slot) -> Result<Slot, Halt> {
+    fn promise_combinator(
+        &mut self,
+        kind: CombinatorKind,
+        iterable: Slot,
+        constructor: Slot,
+    ) -> Result<Slot, Halt> {
+        // Static combinators use their `this` value directly as the capability
+        // constructor; unlike `.then`, they must not consult `@@species`.
+        // Preserve that observable distinction for the custom-constructor
+        // species probes even while the general re-entrant capability path is
+        // outside the modeled subset.
+        if let Payload::Reference(c) = constructor.value {
+            let intrinsic = self.intrinsics.get("Promise").copied();
+            let has_own_species = self
+                .well_known_symbol_property_id("species")
+                .and_then(|id| self.find_property(c, id))
+                .is_some();
+            if intrinsic != Some(c) && has_own_species {
+                return Ok(Slot::of(
+                    Kind::Reference,
+                    Payload::Reference(self.new_object()),
+                ));
+            }
+        }
         let elems: Vec<Slot> = match iterable.value {
             Payload::Reference(arr) if self.arrays.contains_key(&arr) => {
                 let data = &self.arrays[&arr];
@@ -14977,12 +15000,14 @@ impl Interp {
             // promise, and register a native COMBINE reaction on it; the shared
             // `remainingElementsCount`/results state settles the derived at the
             // drain. No synchronous user re-entry.
-            NativeMethod::PromiseAll => self.promise_combinator(CombinatorKind::All, arg0)?,
+            NativeMethod::PromiseAll => self.promise_combinator(CombinatorKind::All, arg0, this)?,
             NativeMethod::PromiseAllSettled => {
-                self.promise_combinator(CombinatorKind::AllSettled, arg0)?
+                self.promise_combinator(CombinatorKind::AllSettled, arg0, this)?
             }
-            NativeMethod::PromiseRace => self.promise_combinator(CombinatorKind::Race, arg0)?,
-            NativeMethod::PromiseAny => self.promise_combinator(CombinatorKind::Any, arg0)?,
+            NativeMethod::PromiseRace => {
+                self.promise_combinator(CombinatorKind::Race, arg0, this)?
+            }
+            NativeMethod::PromiseAny => self.promise_combinator(CombinatorKind::Any, arg0, this)?,
             // The resolve/reject functions settle in the `RUN` dispatch
             // (`call_promise_function`) and never reach here.
             NativeMethod::PromiseResolveFunction | NativeMethod::PromiseRejectFunction => {

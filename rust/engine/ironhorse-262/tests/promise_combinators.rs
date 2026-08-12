@@ -264,3 +264,16 @@ fn resolving_a_promise_with_itself_rejects_with_type_error() {
         "TypeError",
     );
 }
+
+#[test]
+fn static_combinator_does_not_consult_constructor_species() {
+    let run = dual_run(
+        "function C(executor){executor(function(){},function(){});} Object.defineProperty(C,Symbol.species,{get:function(){throw 1;}}); Promise.all.call(C,[])",
+    )
+    .expect("the XS oracle machine must start");
+    assert_eq!(run.agreement, Agreement::BothComplete);
+    assert!(
+        run.result_agrees,
+        "custom static capability result must agree"
+    );
+}
