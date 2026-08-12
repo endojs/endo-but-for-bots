@@ -277,3 +277,11 @@ fn static_combinator_does_not_consult_constructor_species() {
         "custom static capability result must agree"
     );
 }
+
+#[test]
+fn combinators_accept_string_iterables_by_code_point() {
+    assert_drains_to(
+        r#"var g; Promise.all('a\uD83D\uDE00').then(function(v){g=v.length+':'+v[0]+v[1];}); undefined"#,
+        "2:a😀",
+    );
+}

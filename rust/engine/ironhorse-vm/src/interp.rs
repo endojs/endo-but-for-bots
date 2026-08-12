@@ -11536,10 +11536,29 @@ impl Interp {
             Payload::Reference(arr) if self.arrays.contains_key(&arr) => {
                 let data = &self.arrays[&arr];
                 let len = data.length;
-                if (0..len).any(|i| !data.items.contains_key(&i)) {
-                    return Err(Halt::Unsupported("promise-combinator:sparse-iterable"));
+                (0..len)
+                    .map(|i| data.items.get(&i).copied().unwrap_or_else(Slot::undefined))
+                    .collect()
+            }
+            Payload::String(off) if iterable.kind == Kind::String => {
+                // The built-in String iterator yields Unicode code points (a
+                // surrogate pair together, a lone surrogate by itself).
+                let units = self.str_units(off);
+                let mut out = Vec::new();
+                let mut i = 0;
+                while i < units.len() {
+                    let width = if (0xD800..=0xDBFF).contains(&units[i])
+                        && i + 1 < units.len()
+                        && (0xDC00..=0xDFFF).contains(&units[i + 1])
+                    {
+                        2
+                    } else {
+                        1
+                    };
+                    out.push(self.new_string_units(&units[i..i + width]));
+                    i += width;
                 }
-                (0..len).map(|i| data.items[&i]).collect()
+                out
             }
             _ => return Err(Halt::Unsupported("promise-combinator:non-array-iterable")),
         };
