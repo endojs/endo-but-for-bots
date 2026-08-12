@@ -41,12 +41,15 @@
   },
   "dependencies": {
     "@endo/base64": "workspace:^",
+    "@endo/bytes": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/exo-git": "workspace:^",
     "@endo/exo-stream": "workspace:^",
     "@endo/harden": "workspace:^",
+    "@endo/hex": "workspace:^",
     "@endo/platform": "workspace:^",
+    "@endo/sha256": "workspace:^",
     "@endo/stream": "workspace:^"
   },
   "devDependencies": {
