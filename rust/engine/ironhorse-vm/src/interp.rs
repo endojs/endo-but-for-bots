@@ -3318,6 +3318,7 @@ struct CallerState {
 /// crosses called functions pops their activations back to the frame that
 /// established the catch). `flag` mirrors XS's `jump->flag = 1` (a JS
 /// jump); every ironhorse jump is JS, and the host boundary is the empty chain.
+#[derive(Clone)]
 struct CatchJump {
     target_pc: usize,
     stack_len: usize,
@@ -3353,9 +3354,8 @@ enum GeneratorState {
 /// scope (`locals`/`id_map`), the call identity (`args`/`this_val`/
 /// `cur_func`/`cur_target`/`strict`/`result`), the generator's own value-stack
 /// temporaries (`stack_slice`, the slots above the frame base at the suspend
-/// point), and the resume cursor (`resume_pc`). A generator suspended inside a
-/// `try` (a live `CatchJump` above the frame base) is an honest named skip for
-/// now — `stack_slice` alone reproduces the un-nested case bit-exactly.
+/// point), its live exception handlers (`jumps`), and the resume cursor
+/// (`resume_pc`).
 struct SavedFrame {
     locals: Vec<Slot>,
     id_map: std::collections::HashMap<u16, usize>,
@@ -3367,7 +3367,21 @@ struct SavedFrame {
     strict: bool,
     result: Slot,
     stack_slice: Vec<Slot>,
+    /// Exception handlers established by this activation. Their stack and
+    /// call-depth cuts are stored relative to the activation so a resume can
+    /// rebase them above whichever caller is driving the generator.
+    jumps: Vec<SavedJump>,
     resume_pc: usize,
+}
+
+#[derive(Clone)]
+struct SavedJump {
+    target_pc: usize,
+    stack_offset: usize,
+    locals_len: usize,
+    id_map: std::collections::HashMap<u16, usize>,
+    call_depth_offset: usize,
+    flag: u8,
 }
 
 /// Which `%GeneratorPrototype%` entry drove a resume (XS's `txFlag status`
@@ -3398,9 +3412,12 @@ struct GenRunFrame {
     /// `self.stack.len()` at the moment the generator frame was installed;
     /// `self.stack[stack_base..]` is the generator's own temporaries.
     stack_base: usize,
-    /// `self.jumps.len()` at install; a `YIELD` with `self.jumps.len() >
-    /// jumps_base` is suspended inside a `try` (the named skip above).
+    /// `self.jumps.len()` at install; handlers above this boundary belong to
+    /// the generator activation and are snapshotted on suspension.
     jumps_base: usize,
+    /// Call depth of the installed generator frame. Saved handlers rebase
+    /// their frame cuts relative to this depth across suspension.
+    call_depth_base: usize,
 }
 
 /// Per-instance async-function state in the `async_instances` side table
@@ -3441,6 +3458,10 @@ enum ResumeStatus {
     /// by `offset`, leaving the resolved value on the stack as the `await`
     /// expression's result. Also the state outside any resume.
     NoStatus,
+    /// A generator `.return(value)` resume. `BRANCH_STATUS` falls through to
+    /// the compiler-emitted `set_result`/return-target path, which performs
+    /// the same `finally` unwinding as an ordinary `return` statement.
+    Return,
     /// A rejected await resume (XS's `XS_THROW_STATUS`): `BRANCH_STATUS` sets
     /// the exception from the top of stack and unwinds to the innermost handler.
     Throw,
@@ -5451,6 +5472,19 @@ impl Interp {
                     }
                     pc += size as usize;
                 }
+                // `reset_local #k` (xsRun.c:RESET_LOCAL): restore a lexical
+                // loop-head binding to the uninitialized state before the
+                // next iteration initializes it. Unlike RESET_CLOSURE this
+                // reuses the existing scope slot and performs no allocation.
+                XS_CODE_RESET_LOCAL_1 | XS_CODE_RESET_LOCAL_2 => {
+                    let k = self.local_operand(op, code, pc);
+                    if let Some(i) = self.local_index(k) {
+                        let id = self.locals[i].id;
+                        self.locals[i] = Slot::uninitialized();
+                        self.locals[i].id = id;
+                    }
+                    pc += size as usize;
+                }
                 XS_CODE_UNWIND_1 | XS_CODE_UNWIND_2 => {
                     let n = self.local_operand(op, code, pc);
                     // Discard the n most-recently-declared scope slots
@@ -5747,37 +5781,49 @@ impl Interp {
                 }
                 // `for_of` (`XS_CODE_FOR_OF` → `fxRunForOf` → `fxGetIterator`):
                 // replace the top-of-stack iterable with its iterator,
-                // `iterable[Symbol.iterator]()`. For an array that is the
-                // `values` iterator; the surrounding loop then reads `.next`
-                // and drives the {value,done} protocol through already-modeled
-                // opcodes. A non-array iterable (string/user iterator) self-
-                // names an honest skip (its iterator wiring is a later
-                // increment). Metering is the `fxGetIterator` cost measured
-                // against the pin.
+                // `iterable[Symbol.iterator]()`. Guest-defined methods take
+                // precedence; arrays, strings, collections, and generators
+                // retain allocation-faithful intrinsic fast paths. The
+                // surrounding loop drives the returned `{value, done}`
+                // protocol through ordinary property/call opcodes.
                 XS_CODE_FOR_OF => {
                     let iterable = self.pop();
+                    // A guest-defined `@@iterator` takes precedence over the
+                    // intrinsic dense fast paths below. Accessor lookup and a
+                    // user iterator method both re-enter the interpreter; the
+                    // returned object is then driven by the compiler-emitted
+                    // `next`/`done`/`value` loop.
+                    let custom_iterator = match iterable.value {
+                        Payload::Reference(instance) => {
+                            let symbol_id = self
+                                .well_known_symbol_property_id("iterator")
+                                .unwrap_or(crate::value::XS_NO_ID);
+                            if symbol_id == crate::value::XS_NO_ID {
+                                None
+                            } else {
+                                match self.ordinary_get(code, instance, symbol_id, iterable) {
+                                    Ok(method) if method.kind != Kind::Undefined => Some(method),
+                                    Ok(_) => None,
+                                    Err(halt) => return halt,
+                                }
+                            }
+                        }
+                        _ => None,
+                    };
+                    if let Some(method) = custom_iterator {
+                        self.meter.tick_raw(FOR_OF_GET_ITERATOR_METERING);
+                        let iterator = match self.call_primitive_method(code, method, iterable, &[])
+                        {
+                            Ok(iterator) if iterator.kind == Kind::Reference => iterator,
+                            Ok(_) => return self.catchable_type_error(),
+                            Err(halt) => return halt,
+                        };
+                        self.push(iterator);
+                        pc += size as usize;
+                        continue;
+                    }
                     match iterable.value {
                         Payload::Reference(i) if self.arrays.contains_key(&i) => {
-                            // The dense fast path represents the realm's
-                            // intrinsic array iterator. If guest code replaced
-                            // `Array.prototype[Symbol.iterator]`, invoking that
-                            // arbitrary iterator requires the general protocol;
-                            // self-name instead of silently bypassing it.
-                            let iterator_overridden = self
-                                .well_known_symbols
-                                .iter()
-                                .find(|(name, _)| *name == "iterator")
-                                .and_then(|(_, value)| match value.value {
-                                    Payload::Reference(desc) => {
-                                        self.symbol_key_ids.get(&desc).copied()
-                                    }
-                                    _ => None,
-                                })
-                                .and_then(|id| self.find_property(self.array_proto, id))
-                                .is_some();
-                            if iterator_overridden {
-                                return Halt::Unsupported("for_of:array-iterator-override");
-                            }
                             self.meter.tick_raw(FOR_OF_GET_ITERATOR_METERING);
                             let it = self.make_array_iterator(i, 0);
                             self.push(it);
@@ -5821,7 +5867,7 @@ impl Interp {
                             self.meter.tick_raw(FOR_OF_GET_ITERATOR_METERING);
                             self.push(iterable);
                         }
-                        _ => return Halt::Unsupported(op.name()),
+                        _ => return self.catchable_type_error(),
                     }
                     pc += size as usize;
                 }
@@ -7930,14 +7976,11 @@ impl Interp {
                 // return/throw handling and continue the body, leaving the sent/
                 // resolved value on the stack as the yield/await expression's
                 // result); `return` takes `index` (fall into the return handling
-                // — never reached: only a generator `.return` sets it, a named
-                // skip); `throw` sets `mxException = *mxStack` (the top = the
+                // path); `throw` sets `mxException = *mxStack` (the top = the
                 // rejection value the resume pushed) and `fxJump`s to the
-                // innermost handler. A **generator** resume only ever threads
-                // `NoStatus` (return/throw into a suspended body are named skips
-                // in `resume_generator`), so its behavior is unchanged; an
-                // **async** `await` resume threads `Throw` on a rejected awaited
-                // promise. XS meters this as one dispatch, mirrored at the loop top.
+                // innermost handler. Generator resumes thread all three modes;
+                // async `await` resumes use `NoStatus` and `Throw`. XS meters
+                // this as one dispatch, mirrored at the loop top.
                 XS_CODE_BRANCH_STATUS_1 | XS_CODE_BRANCH_STATUS_2 | XS_CODE_BRANCH_STATUS_4 => {
                     let off = match op {
                         XS_CODE_BRANCH_STATUS_1 => s1!(1),
@@ -7978,6 +8021,14 @@ impl Interp {
                                     return Halt::Throw(self.render(&v));
                                 }
                             }
+                        }
+                        ResumeStatus::Return => {
+                            // Fall through to the compiler-emitted generator
+                            // return path immediately after `BRANCH_STATUS`.
+                            // That path stores the sent value as the function
+                            // result and branches through any aliased finally
+                            // targets before reaching `END`.
+                            pc += size as usize;
                         }
                         ResumeStatus::NoStatus => {
                             if off < 0 && self.check_meter() == MeterCheck::Abort {
@@ -8211,22 +8262,30 @@ impl Interp {
                 // temporaries + resume cursor) back into the `generators` table
                 // and unwind to the `resume_generator` driver via
                 // [`Halt::Yield`], carrying the yielded value (the `.next`
-                // result). Only reachable inside a generator resume; `AWAIT` /
-                // `YIELD_STAR` share this label in XS but stay honest skips
-                // (async is child 4; delegation is below the fold).
-                XS_CODE_YIELD => {
-                    let (gen, stack_base, jumps_base) = match self.gen_run_stack.last() {
-                        Some(g) => (g.gen, g.stack_base, g.jumps_base),
-                        None => return Halt::Unsupported("yield:no-generator"),
-                    };
-                    // A `yield` inside a live `try` needs the jump chain
-                    // snapshotted and rebased — an honest named skip for now.
-                    if self.jumps.len() > jumps_base {
-                        return Halt::Unsupported("generator:yield-in-try");
-                    }
+                // result). `YIELD_STAR` uses the same suspension machinery,
+                // carrying the delegate's iterator-result object as-is.
+                XS_CODE_YIELD | XS_CODE_YIELD_STAR => {
+                    let (gen, stack_base, jumps_base, call_depth_base) =
+                        match self.gen_run_stack.last() {
+                            Some(g) => (g.gen, g.stack_base, g.jumps_base, g.call_depth_base),
+                            None => return Halt::Unsupported("yield:no-generator"),
+                        };
                     let resume_pc = pc + size as usize;
                     let yielded = self.pop();
                     let stack_slice = self.stack.split_off(stack_base);
+                    let jumps = self
+                        .jumps
+                        .split_off(jumps_base)
+                        .into_iter()
+                        .map(|jump| SavedJump {
+                            target_pc: jump.target_pc,
+                            stack_offset: jump.stack_len.saturating_sub(stack_base),
+                            locals_len: jump.locals_len,
+                            id_map: jump.id_map,
+                            call_depth_offset: jump.call_depth.saturating_sub(call_depth_base),
+                            flag: jump.flag,
+                        })
+                        .collect();
                     // XS's `YIELD` copies the activation into the instance's
                     // `XS_STACK_KIND` chunk (`fxNewChunk`/`fxRenewChunk`) — a
                     // calibrated raw residual over the same bytecode both
@@ -8243,6 +8302,7 @@ impl Interp {
                         strict: self.strict,
                         result: self.result,
                         stack_slice,
+                        jumps,
                         resume_pc,
                     };
                     if let Some(g) = self.generators.get_mut(&gen) {
@@ -8329,6 +8389,7 @@ impl Interp {
                         strict: self.strict,
                         result: self.result,
                         stack_slice,
+                        jumps: Vec::new(),
                         resume_pc,
                     };
                     if let Some(a) = self.async_instances.get_mut(&inst) {
@@ -8572,6 +8633,7 @@ impl Interp {
             strict: self.strict,
             result: self.result,
             stack_slice: Vec::new(),
+            jumps: Vec::new(),
             resume_pc,
         };
         self.generators.insert(
@@ -8646,6 +8708,7 @@ impl Interp {
             strict: self.strict,
             result: self.result,
             stack_slice: Vec::new(),
+            jumps: Vec::new(),
             resume_pc,
         };
         self.async_instances.insert(
@@ -8883,13 +8946,14 @@ impl Interp {
     /// The `{value, done}` a `next`/`return`/`throw` on an already-completed
     /// generator produces (`fx_Generator_prototype_aux`, the `state == END`
     /// branch): `next` → `{undefined, true}`; `return(v)` → `{v, true}`;
-    /// `throw(e)` re-throws `e` (the native-`TypeError`/rethrow path ironhorse does
-    /// not model yet — an honest named skip).
+    /// `throw(e)` re-throws `e`.
     fn generator_done_result(&mut self, status: GenStatus, sent: Slot) -> Result<Slot, Halt> {
         match status {
             GenStatus::Next => Ok(self.new_generator_result(Slot::undefined(), true)),
             GenStatus::Return => Ok(self.new_generator_result(sent, true)),
-            GenStatus::Throw => Err(Halt::Unsupported("generator:throw-on-completed")),
+            GenStatus::Throw => self
+                .raise_js(sent)
+                .and_then(|target| Err(Halt::Resume(target))),
         }
     }
 
@@ -8900,8 +8964,8 @@ impl Interp {
     /// activation is suspended onto `call_stack` (exactly as [`Self::enter_call`]
     /// does) so the generator's `END`/`leave_call` restores it; a `yield`
     /// unwinds here via [`Halt::Yield`] with the driver still suspended, which
-    /// this restores. `.return`/`.throw` into a live suspended body (finally
-    /// unwinding / throw-into-suspended) are honest named skips.
+    /// this restores. `.return`/`.throw` resume through the compiler's
+    /// `BRANCH_STATUS` epilogue, including live catch/finally handlers.
     fn resume_generator(
         &mut self,
         code: &[u8],
@@ -8933,14 +8997,6 @@ impl Interp {
                 }
             }
             GeneratorState::SuspendedYield => {}
-        }
-        // `return`/`throw` into a live suspended body needs finally-unwinding /
-        // throw-into-suspended (the catch/finally jump chain) — below the fold.
-        if status == GenStatus::Return {
-            return Err(Halt::Unsupported("generator:return-into-suspended"));
-        }
-        if status == GenStatus::Throw {
-            return Err(Halt::Unsupported("generator:throw-into-suspended"));
         }
         let was_start = state == GeneratorState::SuspendedStart;
         let saved = self
@@ -8985,17 +9041,33 @@ impl Interp {
         if !was_start {
             self.push(sent);
         }
+        self.resume_status = match status {
+            GenStatus::Next => ResumeStatus::NoStatus,
+            GenStatus::Return => ResumeStatus::Return,
+            GenStatus::Throw => ResumeStatus::Throw,
+        };
         if let Some(g) = self.generators.get_mut(&gen) {
             g.state = GeneratorState::Executing;
         }
         let return_depth = self.call_stack.len();
+        self.jumps
+            .extend(saved.jumps.into_iter().map(|jump| CatchJump {
+                target_pc: jump.target_pc,
+                stack_len: stack_base + jump.stack_offset,
+                locals_len: jump.locals_len,
+                id_map: jump.id_map,
+                call_depth: return_depth + jump.call_depth_offset,
+                flag: jump.flag,
+            }));
         self.gen_run_stack.push(GenRunFrame {
             gen,
             stack_base,
             jumps_base,
+            call_depth_base: return_depth,
         });
         let outcome = self.dispatch_at(code, saved.resume_pc, return_depth);
         self.gen_run_stack.pop();
+        self.resume_status = ResumeStatus::NoStatus;
         match outcome {
             Halt::Yield(v) => {
                 // The `YIELD` arm snapshotted the generator and truncated the
@@ -18118,6 +18190,21 @@ impl Interp {
         self.next_intern_id = self.next_intern_id.saturating_add(1);
         self.symbol_key_ids.insert(desc, id);
         id
+    }
+
+    /// Resolve a realm well-known symbol to the property id used by ordinary
+    /// object lookup. The descriptor identity, rather than its description,
+    /// is the key, so a guest-created `Symbol("iterator")` remains distinct
+    /// from `Symbol.iterator`.
+    fn well_known_symbol_property_id(&mut self, name: &str) -> Option<u16> {
+        let descriptor = self
+            .well_known_symbols
+            .iter()
+            .find_map(|(symbol_name, value)| (*symbol_name == name).then_some(value.value))?;
+        match descriptor {
+            Payload::Reference(descriptor) => Some(self.intern_symbol_key(descriptor)),
+            _ => None,
+        }
     }
 
     /// Whether property id `id` was minted for a **symbol** key (present as a

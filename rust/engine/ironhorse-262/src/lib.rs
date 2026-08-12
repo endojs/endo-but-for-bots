@@ -842,6 +842,50 @@ mod tests {
         // wrapper's exotic own properties are a later child's surface.
     }
 
+    #[test]
+    fn synchronous_iteration_uses_guest_protocol_and_closes_abruptly() {
+        assert_covers_oracle(
+            "var log = ''; var iterable = { \
+               [Symbol.iterator]: function () { return this; }, \
+               next: function () { log += 'n'; return { value: 1, done: false }; }, \
+               return: function () { log += 'r'; return {}; } \
+             }; var value; for (value of iterable) { log += value; break; } log",
+        );
+        // A lexical/destructuring head is reset to TDZ and initialized again
+        // for every iteration (`RESET_LOCAL`), rather than retaining the
+        // preceding iteration's value.
+        assert_covers_oracle(
+            "var values = []; for (let [value] of [[1], [2]]) { values.push(value); } \
+             values.join(':')",
+        );
+    }
+
+    #[test]
+    fn generator_return_and_throw_resume_through_finally() {
+        assert_covers_oracle(
+            "var log = ''; function* g() { try { yield 1; } finally { log += 'f'; } } \
+             var iterator = g(); iterator.next(); var result = iterator.return(9); \
+             log + ':' + result.value + ':' + result.done",
+        );
+        assert_covers_oracle(
+            "var log = ''; function* g() { try { yield 1; } catch (error) { log += error; } \
+             finally { log += 'f'; } } var iterator = g(); iterator.next(); \
+             var result = iterator.throw('x'); log + ':' + result.done",
+        );
+    }
+
+    #[test]
+    fn generator_yield_preserves_live_exception_handlers() {
+        assert_covers_oracle(
+            "function* g() { try { yield 1; throw 2; } catch (error) { yield error + 1; } } \
+             var iterator = g(); iterator.next(); iterator.next().value",
+        );
+        assert_covers_oracle(
+            "function* g() { return yield* [1, 2]; } var iterator = g(); \
+             iterator.next().value + ':' + iterator.next().value + ':' + iterator.next(7).value",
+        );
+    }
+
     // A `DualRun` with the given agreement and ironhorse halt. For a
     // `Halt::Throw`, the oracle is modeled as throwing the same value with
     // the same computrons (the agreeing case), so `is_bit_exact` turns on
