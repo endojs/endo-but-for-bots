@@ -39,10 +39,12 @@ test('provisions and removes one isolated client per Floot session', async t => 
         filesystemCalls.push({ name, directory });
         names.set(name, harden({}));
       },
-      async provisionSession(_host, spec, options) {
+      // The real signature declares `options` optional; mirror its defaults
+      // (the provisioner always passes it).
+      async provisionSession(_host, spec, options = {}) {
         provisionCalls.push({ spec, options });
         names.set(keyFor(options.resultName), harden({ client: spec.name }));
-        for (const name of options.removeNames) {
+        for (const name of options.removeNames ?? []) {
           names.delete(keyFor(Array.isArray(name) ? name : [name]));
         }
         return harden({
@@ -131,10 +133,12 @@ test('forwards the MCP tool-bridge mount options to the session provisioner', as
       async makeFilesystem(name) {
         names.set(name, harden({}));
       },
-      async provisionSession(_host, spec, options) {
+      // Optional `options` mirrors the real signature; the provisioner
+      // ignores the result, so a bare client stub suffices.
+      async provisionSession(_host, spec, options = {}) {
         provisionCalls.push({ spec, options });
         names.set(keyFor(options.resultName), harden({ client: spec.name }));
-        return harden({ client: spec.name });
+        return /** @type {any} */ (harden({ client: spec.name }));
       },
     },
   );
@@ -179,9 +183,11 @@ test('a workspaceDir override roots the filesystem at a shared worktree', async 
         filesystemCalls.push({ name, directory });
         names.set(name, harden({}));
       },
-      async provisionSession(_host, spec, options) {
+      // Optional `options` mirrors the real signature; the provisioner
+      // ignores the result, so a bare client stub suffices.
+      async provisionSession(_host, spec, options = {}) {
         names.set(keyFor(options.resultName), harden({ client: spec.name }));
-        return harden({ client: spec.name });
+        return /** @type {any} */ (harden({ client: spec.name }));
       },
       async removeDirectory(directory, options) {
         removedDirectories.push({ directory, options });

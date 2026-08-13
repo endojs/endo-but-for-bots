@@ -9,7 +9,7 @@ import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 
 import { makeReplyChannel } from './stream.js';
 
-/** @import { PassableReader } from '@endo/exo-stream' */
+/** @import { BufferedReaderKit, PassableReader } from '@endo/exo-stream' */
 
 /**
  * @typedef {{
@@ -114,7 +114,13 @@ const drainReplyReader = async (reader, status, tee = () => {}) => {
  * @returns {object} FlootTurn exo
  */
 export const makeSessionTurn = ({ run, channel }) => {
-  const { writer, reader, close } = channel ?? makeReplyChannel();
+  // makeReplyChannel returns `close` too; its `@returns` only declares the
+  // writer/reader pair, so name the full shape here.
+  const { writer, reader, close } =
+    channel ??
+    /** @type {{ writer: object, reader: object, close: () => void }} */ (
+      makeReplyChannel()
+    );
 
   const controller = new AbortController();
 
@@ -128,7 +134,7 @@ export const makeSessionTurn = ({ run, channel }) => {
     usage: null,
   };
 
-  /** @type {import('@endo/exo-stream/buffered-channel.js').BufferedReaderKit | null} */
+  /** @type {BufferedReaderKit} */
   let viewKit = makeBufferedReader();
   /** @type {(event: object) => void} */
   let teeToView = event => {
@@ -137,7 +143,7 @@ export const makeSessionTurn = ({ run, channel }) => {
 
   /** @type {Promise<void>} */
   let finished = Promise.resolve(undefined);
-  /** @type {() => void} */
+  /** @type {(value?: undefined) => void} */
   let finishResolve = () => {};
   finished = new Promise(resolve => {
     finishResolve = resolve;

@@ -196,6 +196,7 @@ export const MessageList = ({ state, controller, debug = false }) => {
   // the rendered transcript, plus the live raw stream. A pure re-projection of
   // the same snapshot, so it updates as the turn streams.
   if (debug) {
+    /** @type {VNode<any>[]} */
     const rawRows = messages.map((msg, i) => RawBlock(`raw-${i}`, msg));
     if (streamingText) {
       rawRows.push(

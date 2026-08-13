@@ -18,6 +18,7 @@
 
 import { E } from '@endo/eventual-send';
 
+/** @type {import('@endo/fae/src/tool-makers.js').ToolSchema} */
 const publishSchema = harden({
   type: 'function',
   function: {
