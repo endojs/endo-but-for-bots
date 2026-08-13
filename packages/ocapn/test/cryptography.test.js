@@ -2,8 +2,10 @@
 
 import test from '@endo/ses-ava/test.js';
 
+import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { bytesFromText } from '@endo/bytes/from-string.js';
+import harden from '@endo/harden';
 import { makeCryptography, makeSessionId } from '../src/cryptography.js';
 import { syrupCodec } from '../src/syrup/index.js';
 import {
@@ -15,11 +17,20 @@ import {
 
 const {
   makeOcapnKeyPair,
+  makeOcapnKeyPairFromPrivateKey,
+  signLocation,
   signHandoffGive,
   signHandoffReceive,
   assertHandoffGiveSignatureValid,
   assertHandoffReceiveSignatureValid,
 } = makeCryptography(syrupCodec);
+
+/** @param {ArrayBufferLike | Uint8Array} bytes */
+const toHex = bytes =>
+  Array.from(
+    bytes instanceof Uint8Array ? bytes : bytesFromImmutable(bytes),
+    byte => byte.toString(16).padStart(2, '0'),
+  ).join('');
 
 const makeSessionKeys = () => {
   const key1 = makeOcapnKeyPair();
@@ -116,4 +127,36 @@ test('makeOcapnKeyPair', t => {
   const key = makeOcapnKeyPair();
   t.is(key.publicKey.bytes.byteLength, 32);
   t.is(key.publicKey.id.byteLength, 32);
+});
+
+test('protocol domain constants match their wire goldens', t => {
+  const peerIdOne = Uint8Array.from({ length: 32 }, (_, index) => index);
+  const peerIdTwo = Uint8Array.from({ length: 32 }, (_, index) => 0xff - index);
+  t.is(
+    toHex(makeSessionId(peerIdOne.buffer, peerIdTwo.buffer)),
+    '6e862c41ed70e923d1da2ac2544f64651812b57cd3f699d461b98b5011647477',
+  );
+
+  const privateKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
+  const keyPair = makeOcapnKeyPairFromPrivateKey(privateKey);
+  /** @type {import('../src/codecs/components.js').OcapnLocation} */
+  const location = harden({
+    type: 'ocapn-peer',
+    transport: 'tcp-test-only',
+    designator: 'golden',
+    hints: false,
+  });
+  const signature = signLocation(
+    location,
+    keyPair,
+    Uint8Array.of(0xde, 0xad, 0xbe, 0xef).buffer,
+  );
+  t.is(
+    toHex(signature.r),
+    '610011d441793f1a210aa607cee4c70624a9878200cad05fb333340f53d65eb6',
+  );
+  t.is(
+    toHex(signature.s),
+    'dad39d603bf910537bb3d59d9df9b392c912c3d31ebf15317accef8838497000',
+  );
 });
