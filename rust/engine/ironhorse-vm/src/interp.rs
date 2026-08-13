@@ -20514,6 +20514,39 @@ impl Interp {
             Payload::Reference(receiver_inst) if receiver.kind == Kind::Reference => receiver_inst,
             _ => return Ok(false),
         };
+        // When the receiver is itself a proxy (a trap-absent `[[Set]]` forwarded
+        // to the target with the original proxy as Receiver), the final
+        // create/update runs the receiver's own `[[GetOwnProperty]]` /
+        // `[[DefineOwnProperty]]` (ECMA-262 OrdinarySetWithOwnDescriptor), so it
+        // reaches the proxy's target — not the proxy's own inert instance slot.
+        if self.proxies.contains_key(&receiver_inst) {
+            if let Some(existing) = self.mop_get_own_property(code, receiver_inst, id)? {
+                if existing.is_accessor() || existing.writable == Some(false) {
+                    return Ok(false);
+                }
+                return self.mop_define_own_property(
+                    code,
+                    receiver_inst,
+                    id,
+                    OrdinaryDescriptor {
+                        value: Some(value),
+                        ..OrdinaryDescriptor::default()
+                    },
+                );
+            }
+            return self.mop_define_own_property(
+                code,
+                receiver_inst,
+                id,
+                OrdinaryDescriptor {
+                    value: Some(value),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(true),
+                    ..OrdinaryDescriptor::default()
+                },
+            );
+        }
         if let Some(existing) = self.ordinary_get_own_descriptor(receiver_inst, id) {
             if existing.is_accessor() || existing.writable == Some(false) {
                 return Ok(false);

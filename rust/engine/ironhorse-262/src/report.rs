@@ -2240,10 +2240,10 @@ mod tests {
         // The convergence design's explicit Proxy check, as a committed,
         // reproducible, real-oracle-backed slice: run a bounded set of official
         // Proxy cases through the full runner and REPORT the observed result
-        // rather than assuming absence. Today the observed result is that no
-        // Proxy case runs end-to-end (every one is an honest unsupported gap,
-        // none a false covered/failure); this assertion flips the day Proxy
-        // lands, turning the report's Proxy row green.
+        // rather than assuming absence. Since the object-MOP child landed Proxy
+        // (garden issue 51), the observed result is that the slice runs
+        // end-to-end — covered cases with zero manufactured failures — turning
+        // the report's Proxy row green.
         use crate::test262::{collect_js, locate_test262};
         use crate::xst::{run_files, Config};
         let (root, harness) = match locate_test262() {
@@ -2285,18 +2285,20 @@ mod tests {
             eprintln!("    {:>4}  {}", n, reason);
         }
         assert!(report.total() > 0);
-        // Observed, not assumed: Proxy is not implemented.
-        assert_eq!(
-            category_counts.covered, 0,
-            "no Proxy case runs end-to-end today"
+        // Observed, not assumed: Proxy is now IMPLEMENTED (garden issue 51, the
+        // object-MOP child). The assertion flipped the day Proxy landed — the
+        // apply/revocable slice now runs end-to-end and the report's Proxy row is
+        // green. A residual of honest unsupported gaps remains (revocable's
+        // function-name/length descriptor attributes and the cross-realm `$262`
+        // cases lean on non-Proxy engine features), but no Proxy case is a
+        // manufactured failure.
+        assert!(
+            category_counts.covered > 0,
+            "Proxy cases now run end-to-end (apply/revocable slice)"
         );
         assert_eq!(
             category_counts.ironhorse_failure, 0,
             "the honest split never manufactures a Proxy failure"
-        );
-        assert!(
-            category_counts.unsupported > 0,
-            "Proxy cases are honest unsupported gaps, not infra non-results"
         );
     }
 }
