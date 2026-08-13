@@ -479,6 +479,33 @@ fn complete_descriptor(mut d: OrdinaryDescriptor) -> OrdinaryDescriptor {
     d
 }
 
+/// Whether an `Object.*` static native method takes the object it operates on
+/// as its first argument (so a proxy first argument must route through the
+/// proxy-aware MOP). `create`/`assign`/`fromEntries` are excluded (their first
+/// argument is a prototype / target-plus-sources, handled by their own arms);
+/// `getPrototypeOf`/`setPrototypeOf` are excluded because their arms already
+/// call the proxy-aware `mop_*` dispatchers directly.
+fn is_object_static_on_operand(m: NativeMethod) -> bool {
+    matches!(
+        m,
+        NativeMethod::ObjectKeys
+            | NativeMethod::ObjectValues
+            | NativeMethod::ObjectEntries
+            | NativeMethod::ObjectGetOwnPropertyDescriptor
+            | NativeMethod::ObjectGetOwnPropertyDescriptors
+            | NativeMethod::ObjectGetOwnPropertyNames
+            | NativeMethod::ObjectGetOwnPropertySymbols
+            | NativeMethod::ObjectDefineProperty
+            | NativeMethod::ObjectDefineProperties
+            | NativeMethod::ObjectPreventExtensions
+            | NativeMethod::ObjectIsExtensible
+            | NativeMethod::ObjectSeal
+            | NativeMethod::ObjectFreeze
+            | NativeMethod::ObjectIsSealed
+            | NativeMethod::ObjectIsFrozen
+    )
+}
+
 /// `ToLength(n)` (ECMA-262 7.1.20) over an already-`ToNumber`'d value: clamp to
 /// the integer range `[0, 2^53 − 1]`.
 fn to_length_u64(n: f64) -> u64 {
@@ -1726,6 +1753,12 @@ pub enum NativeMethod {
     /// The `revoke` function `Proxy.revocable` returns: trips its proxy's
     /// `[[ProxyTarget]]`/`[[ProxyHandler]]` to null and marks it revoked.
     ProxyRevoke,
+    /// `Object.getPrototypeOf(O)` (`fx_Object_getPrototypeOf`): the object's
+    /// `[[GetPrototypeOf]]` — routes through the proxy `getPrototypeOf` trap.
+    ObjectGetPrototypeOf,
+    /// `Object.setPrototypeOf(O, proto)` (`fx_Object_setPrototypeOf`): the
+    /// object's `[[SetPrototypeOf]]` — routes through the proxy trap.
+    ObjectSetPrototypeOf,
     FunctionToString,
     /// `Function.prototype.call` — a re-entrant trampoline: invoke the
     /// receiver function with the first argument as `this` and the rest as
@@ -4271,6 +4304,12 @@ impl Interp {
             self.proto_methods.push((object_ctor, "isSealed", issealed));
             let isfrozen = self.alloc_method(NativeMethod::ObjectIsFrozen);
             self.proto_methods.push((object_ctor, "isFrozen", isfrozen));
+            let getproto = self.alloc_method(NativeMethod::ObjectGetPrototypeOf);
+            self.proto_methods
+                .push((object_ctor, "getPrototypeOf", getproto));
+            let setproto = self.alloc_method(NativeMethod::ObjectSetPrototypeOf);
+            self.proto_methods
+                .push((object_ctor, "setPrototypeOf", setproto));
         }
         let fp_tostring = self.alloc_method(NativeMethod::FunctionToString);
         self.proto_methods
@@ -13389,6 +13428,20 @@ impl Interp {
             .copied()
             .unwrap_or_else(Slot::undefined);
         let _ = argc;
+        // `Object.*` statics whose object operand (`arg0`) is a proxy route
+        // through the proxy-aware MOP (ECMA-262 20.1.2.*, each delegating to an
+        // internal method). Handled here so the trap cannot be bypassed.
+        if let Payload::Reference(pinst) = arg0.value {
+            if arg0.kind == Kind::Reference
+                && self.proxies.contains_key(&pinst)
+                && is_object_static_on_operand(m)
+            {
+                let r = self.object_static_proxy(m, pinst, base, argc, code)?;
+                self.stack.truncate(base);
+                self.push(r);
+                return Ok(());
+            }
+        }
         let result: Slot = match m {
             // `Proxy.revocable(target, handler)` (`fx_Proxy_revocable`): a fresh
             // proxy plus a `revoke` function tied to it, returned as
@@ -13434,6 +13487,66 @@ impl Interp {
                 }
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
                 Slot::undefined()
+            }
+            // `Object.getPrototypeOf(O)` (ECMA-262 20.1.2.12): the object's
+            // `[[GetPrototypeOf]]` (proxy-aware). A primitive coerces to its
+            // wrapper prototype; `undefined`/`null` throw.
+            NativeMethod::ObjectGetPrototypeOf => {
+                let inst = match arg0.value {
+                    Payload::Reference(o) if arg0.kind == Kind::Reference => o,
+                    _ => {
+                        // Primitive receiver: box to the matching prototype.
+                        let proto = match arg0.kind {
+                            Kind::String => self.string_proto,
+                            Kind::Integer | Kind::Number => self.number_proto,
+                            Kind::Symbol => self.symbol_proto,
+                            Kind::Boolean => self
+                                .intrinsics
+                                .get("Boolean")
+                                .and_then(|&c| self.ctor_prototype.get(&c).copied())
+                                .unwrap_or(crate::value::SlotIndex::NULL),
+                            _ => return Err(self.catchable_type_error()),
+                        };
+                        if proto.is_null() {
+                            return Err(self.catchable_type_error());
+                        }
+                        self.stack.truncate(base);
+                        self.push(Slot::of(Kind::Reference, Payload::Reference(proto)));
+                        return Ok(());
+                    }
+                };
+                self.meter.tick_raw(REFLECT_FRAME_METERING);
+                self.mop_get_prototype(code, inst)?
+            }
+            // `Object.setPrototypeOf(O, proto)` (ECMA-262 20.1.2.22): the
+            // object's `[[SetPrototypeOf]]` (proxy-aware); returns `O`. A `false`
+            // result throws. `proto` must be an object or `null`.
+            NativeMethod::ObjectSetPrototypeOf => {
+                let proto = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                if proto.kind != Kind::Reference && proto.kind != Kind::Null {
+                    return Err(self.catchable_type_error());
+                }
+                let inst = match arg0.value {
+                    Payload::Reference(o) if arg0.kind == Kind::Reference => o,
+                    _ => {
+                        if arg0.kind == Kind::Undefined || arg0.kind == Kind::Null {
+                            return Err(self.catchable_type_error());
+                        }
+                        // A primitive receiver: return it unchanged.
+                        self.stack.truncate(base);
+                        self.push(arg0);
+                        return Ok(());
+                    }
+                };
+                self.meter.tick_raw(REFLECT_FRAME_METERING);
+                if !self.mop_set_prototype(code, inst, proto)? {
+                    return Err(self.catchable_type_error());
+                }
+                arg0
             }
             NativeMethod::CopyObject => {
                 // XS's internal helper is called as
@@ -21285,6 +21398,214 @@ impl Interp {
             return Err(self.catchable_type_error());
         }
         Ok(result)
+    }
+
+    /// Dispatch an `Object.*` static whose object operand is a **proxy**
+    /// (ECMA-262 20.1.2.*), routing through the proxy-aware `mop_*` internal
+    /// methods so the traps run and their invariants hold.
+    fn object_static_proxy(
+        &mut self,
+        m: NativeMethod,
+        proxy: crate::value::SlotIndex,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        let proxy_slot = Slot::of(Kind::Reference, Payload::Reference(proxy));
+        let arg = |slf: &Self, i: usize| -> Slot {
+            slf.stack
+                .get(base + 4 + i)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        };
+        match m {
+            NativeMethod::ObjectIsExtensible => {
+                Ok(Slot::boolean(self.mop_is_extensible(code, proxy)?))
+            }
+            NativeMethod::ObjectPreventExtensions => {
+                if !self.mop_prevent_extensions(code, proxy)? {
+                    return Err(self.catchable_type_error());
+                }
+                Ok(proxy_slot)
+            }
+            NativeMethod::ObjectGetOwnPropertyDescriptor => {
+                let id = self.to_property_id(code, arg(self, 1))?;
+                match self.mop_get_own_property(code, proxy, id)? {
+                    Some(d) => Ok(self.descriptor_object(d)),
+                    None => Ok(Slot::undefined()),
+                }
+            }
+            NativeMethod::ObjectGetOwnPropertyDescriptors => {
+                let keys = self.mop_own_keys(code, proxy)?;
+                let result = self.slots.alloc(Slot::instance(self.object_proto));
+                for key in keys {
+                    let id = self.to_property_id(code, key)?;
+                    if let Some(d) = self.mop_get_own_property(code, proxy, id)? {
+                        let desc = self.descriptor_object(d);
+                        self.define_descriptor_field_slot(result, key, desc);
+                    }
+                }
+                Ok(Slot::of(Kind::Reference, Payload::Reference(result)))
+            }
+            NativeMethod::ObjectGetOwnPropertyNames => {
+                let keys = self.mop_own_keys(code, proxy)?;
+                let strings: Vec<Slot> =
+                    keys.into_iter().filter(|k| k.kind == Kind::String).collect();
+                Ok(self.array_from_slots(&strings))
+            }
+            NativeMethod::ObjectGetOwnPropertySymbols => {
+                let keys = self.mop_own_keys(code, proxy)?;
+                let symbols: Vec<Slot> =
+                    keys.into_iter().filter(|k| k.kind == Kind::Symbol).collect();
+                Ok(self.array_from_slots(&symbols))
+            }
+            NativeMethod::ObjectKeys
+            | NativeMethod::ObjectValues
+            | NativeMethod::ObjectEntries => {
+                // EnumerableOwnPropertyNames: string keys whose own descriptor
+                // is enumerable; then keys / values / [key,value] entries.
+                let keys = self.mop_own_keys(code, proxy)?;
+                let mut out = Vec::new();
+                for key in keys {
+                    if key.kind != Kind::String {
+                        continue;
+                    }
+                    let id = self.to_property_id(code, key)?;
+                    let desc = match self.mop_get_own_property(code, proxy, id)? {
+                        Some(d) if d.enumerable == Some(true) => d,
+                        _ => continue,
+                    };
+                    let _ = desc;
+                    match m {
+                        NativeMethod::ObjectKeys => out.push(key),
+                        NativeMethod::ObjectValues => {
+                            out.push(self.mop_get(code, proxy, id, proxy_slot)?)
+                        }
+                        _ => {
+                            let value = self.mop_get(code, proxy, id, proxy_slot)?;
+                            let pair = self.array_from_slots(&[key, value]);
+                            out.push(pair);
+                        }
+                    }
+                }
+                Ok(self.array_from_slots(&out))
+            }
+            NativeMethod::ObjectDefineProperty => {
+                let id = self.to_property_id(code, arg(self, 1))?;
+                let descref = match arg(self, 2).value {
+                    Payload::Reference(d) if arg(self, 2).kind == Kind::Reference => d,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let desc = self.descriptor_from_object(code, descref)?;
+                if !self.mop_define_own_property(code, proxy, id, desc)? {
+                    return Err(self.catchable_type_error());
+                }
+                Ok(proxy_slot)
+            }
+            NativeMethod::ObjectDefineProperties => {
+                let props = match arg(self, 1).value {
+                    Payload::Reference(p) if arg(self, 1).kind == Kind::Reference => p,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                // Own enumerable keys of the descriptor map, each defined.
+                let ids = self.ordered_own_key_ids(props);
+                for pid in ids {
+                    let enumerable = self
+                        .ordinary_get_own_descriptor(props, pid)
+                        .map(|d| d.enumerable == Some(true))
+                        .unwrap_or(false);
+                    if !enumerable {
+                        continue;
+                    }
+                    let descref = match self.instance_get(props, pid).value {
+                        Payload::Reference(d) => d,
+                        _ => return Err(self.catchable_type_error()),
+                    };
+                    let desc = self.descriptor_from_object(code, descref)?;
+                    if !self.mop_define_own_property(code, proxy, pid, desc)? {
+                        return Err(self.catchable_type_error());
+                    }
+                }
+                Ok(proxy_slot)
+            }
+            NativeMethod::ObjectSeal | NativeMethod::ObjectFreeze => {
+                let frozen = matches!(m, NativeMethod::ObjectFreeze);
+                if !self.mop_prevent_extensions(code, proxy)? {
+                    return Err(self.catchable_type_error());
+                }
+                let keys = self.mop_own_keys(code, proxy)?;
+                for key in keys {
+                    let id = self.to_property_id(code, key)?;
+                    let desc = if frozen {
+                        match self.mop_get_own_property(code, proxy, id)? {
+                            None => continue,
+                            Some(d) if d.is_accessor() => OrdinaryDescriptor {
+                                configurable: Some(false),
+                                ..OrdinaryDescriptor::default()
+                            },
+                            Some(_) => OrdinaryDescriptor {
+                                configurable: Some(false),
+                                writable: Some(false),
+                                ..OrdinaryDescriptor::default()
+                            },
+                        }
+                    } else {
+                        OrdinaryDescriptor {
+                            configurable: Some(false),
+                            ..OrdinaryDescriptor::default()
+                        }
+                    };
+                    if !self.mop_define_own_property(code, proxy, id, desc)? {
+                        return Err(self.catchable_type_error());
+                    }
+                }
+                Ok(proxy_slot)
+            }
+            NativeMethod::ObjectIsSealed | NativeMethod::ObjectIsFrozen => {
+                let frozen = matches!(m, NativeMethod::ObjectIsFrozen);
+                if self.mop_is_extensible(code, proxy)? {
+                    return Ok(Slot::boolean(false));
+                }
+                let keys = self.mop_own_keys(code, proxy)?;
+                for key in keys {
+                    let id = self.to_property_id(code, key)?;
+                    if let Some(d) = self.mop_get_own_property(code, proxy, id)? {
+                        if d.configurable != Some(false) {
+                            return Ok(Slot::boolean(false));
+                        }
+                        if frozen && d.is_data() && d.writable == Some(true) {
+                            return Ok(Slot::boolean(false));
+                        }
+                    }
+                }
+                Ok(Slot::boolean(true))
+            }
+            _ => {
+                let _ = argc;
+                Err(Halt::Unsupported("Object-static:unexpected-proxy"))
+            }
+        }
+    }
+
+    /// Add one own enumerable data property with a **key slot** (string or
+    /// symbol) — the symbol-keyed analogue of [`Self::define_descriptor_field`].
+    fn define_descriptor_field_slot(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        key: Slot,
+        value: Slot,
+    ) {
+        let id = match self.to_property_id(&[], key) {
+            Ok(id) => id,
+            Err(_) => return,
+        };
+        let head = self.slots.get(inst).next;
+        let mut prop = value;
+        prop.id = id;
+        prop.flag = 0;
+        prop.next = head;
+        let idx = self.slots.alloc(prop);
+        self.slots.get_mut(inst).next = idx;
     }
 
     /// Build a dense `Array` from a slot list (`CreateArrayFromList`).
