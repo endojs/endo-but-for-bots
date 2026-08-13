@@ -6,8 +6,9 @@ category: Reference
 
 # Justin: the safe-expression subset that expresses `pass-style`
 
-*Justin* is the smallest of a nested family of JavaScript subsets. It is the
-expression-only notation that `@endo/marshal` uses to render any *passable*
+*Justin* is one rung of a nested family of JavaScript subsets — larger than
+JSON, smaller than Jessie. It is the expression-only notation that
+`@endo/marshal` uses to render any *passable*
 value (anything `@endo/pass-style`'s `passStyleOf` accepts) as a human-readable
 JavaScript expression. This document defines Justin, reconciles its grammar
 against the renderer that actually ships in this repository, and maps each
