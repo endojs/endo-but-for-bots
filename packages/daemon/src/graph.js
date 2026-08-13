@@ -497,7 +497,11 @@ export const makeFormulaGraph = ({
       // cannot add is a formula it cannot boot past. Drop the hole instead,
       // matching how the snapshot consumer already reads these pairs.
       const localDeps = labeled.filter(
-        ([, dep]) => dep !== undefined && isLocalId(dep),
+        /**
+         * @param {[string, FormulaIdentifier | undefined]} labeledDep
+         * @returns {labeledDep is [string, FormulaIdentifier]}
+         */
+        labeledDep => labeledDep[1] !== undefined && isLocalId(labeledDep[1]),
       );
 
       formulaDeps.set(id, new Set(localDeps.map(([, dep]) => dep)));

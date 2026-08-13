@@ -95,7 +95,7 @@ export const enlivenSturdyRef = async (
     typeof secret === 'string'
       ? encodeSwissnum(secret)
       : swissnumFromBytes(secret);
-  return E(/** @type {any} */ (ocapn.getRemoteBootstrap())).fetch(wireSecret);
+  return E(ocapn.getRemoteBootstrap()).fetch(wireSecret);
 };
 
 /**

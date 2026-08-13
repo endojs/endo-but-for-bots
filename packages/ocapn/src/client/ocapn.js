@@ -51,9 +51,17 @@ import { makeGrantDetails } from './grant-tracker.js';
 const sink = harden(() => {});
 
 /**
+ * An OCapN operation record as it crosses the comms boundary: `type` is
+ * the operation selector (e.g. 'op:deliver', 'op:abort'); the remaining
+ * fields are operation-specific.
+ *
+ * @typedef {{ type: string } & Record<string, any>} OcapnMessage
+ */
+
+/**
  * @callback MessageObserver
  * @param {'send' | 'receive'} direction - Whether the message was sent or received
- * @param {object} message - The message object
+ * @param {OcapnMessage} message - The message object
  * @returns {void}
  */
 
@@ -137,7 +145,7 @@ const makeOcapnCommsKit = ({
   };
 
   /**
-   * @param {Record<string, any>} message
+   * @param {OcapnMessage} message
    */
   const send = message => {
     // Don't throw here if unplugged, just don't send.
@@ -486,6 +494,19 @@ const makeCodecKit = (referenceKit, codec) => {
 };
 
 /**
+ * The OCapN bootstrap protocol surface. Both peers implement this shape
+ * (see the object returned below); `getRemoteBootstrap()` yields the
+ * peer's side of it as a remote presence, so callers go through
+ * `E(bootstrap)`.
+ *
+ * @typedef {{
+ *   fetch: (swissnum: SwissNum) => Promise<any>,
+ *   'deposit-gift': (giftId: ArrayBufferLike, gift: any) => void,
+ *   'withdraw-gift': (signedHandoffReceive: HandoffReceiveSigEnvelope) => any,
+ * }} OcapnBootstrap
+ */
+
+/**
  * @param {string} label
  * @param {Logger} logger
  * @param {SessionId} sessionId
@@ -494,7 +515,7 @@ const makeCodecKit = (referenceKit, codec) => {
  * @param {Map<string, any>} giftTable
  * @param {(sessionId: SessionId) => OcapnPublicKey | undefined} getPeerPublicKeyForSessionId
  * @param {Cryptography} cryptography
- * @returns {any}
+ * @returns {OcapnBootstrap}
  */
 const makeBootstrapObject = (
   label,
@@ -674,7 +695,7 @@ const makeBootstrapObject = (
  * @typedef {object} Ocapn
  * @property {((reason?: Error) => void)} abort
  * @property {((data: Uint8Array) => void)} dispatchMessageData
- * @property {() => object} getRemoteBootstrap
+ * @property {() => OcapnBootstrap} getRemoteBootstrap
  * @property {ReferenceKit} referenceKit
  * @property {(position: bigint, value: object) => void} restoreExport
  *   re-seat a local export at a recorded position (session resumption)
@@ -1385,7 +1406,11 @@ export const makeOcapn = (
   );
   ocapnTable.registerSlot(localBootstrapSlot, bootstrapObj);
 
-  const remoteBootstrap = referenceKit.provideRemoteBootstrapValue();
+  // The reference kit mints an untyped remote presence; this is the
+  // boundary that knows it speaks the bootstrap protocol.
+  const remoteBootstrap = /** @type {OcapnBootstrap} */ (
+    referenceKit.provideRemoteBootstrapValue()
+  );
   const getRemoteBootstrap = () => {
     return remoteBootstrap;
   };

@@ -1392,8 +1392,13 @@ const makeDaemonCore = async (
       }),
     );
     const stale = candidates.filter(
-      ({ formula }) =>
-        formula.type === 'host' && formula.registry === undefined,
+      /**
+       * @param {(typeof candidates)[number]} candidate
+       * @returns {candidate is (typeof candidates)[number] & { formula: HostFormula }}
+       */
+      candidate =>
+        candidate.formula.type === 'host' &&
+        candidate.formula.registry === undefined,
     );
 
     await Promise.all(
@@ -3241,7 +3246,7 @@ const makeDaemonCore = async (
       // derived face begins throwing. The control stays captive in this
       // closure — callers only ever receive `mount`.
       context.onCancel(() => {
-        /** @type {{ revoke: () => void }} */ (control).revoke();
+        control.revoke();
       });
       return mount;
     },
@@ -3266,7 +3271,7 @@ const makeDaemonCore = async (
         deniedSegments,
       });
       context.onCancel(() => {
-        /** @type {{ revoke: () => void }} */ (control).revoke();
+        control.revoke();
       });
       return mount;
     },
