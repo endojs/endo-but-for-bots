@@ -106,6 +106,14 @@ export default defineConfig(
     settings: importResolverSettingsFor('test-endo-ses'),
   },
 
+  // endo-fs-asset-server imports @endo/platform's node-only HTTP entry
+  // (`@endo/platform/http/node`), whose exports map deliberately offers only
+  // a `node` condition; resolve with that condition here.
+  {
+    files: ['packages/endo-fs-asset-server/**'],
+    settings: importResolverSettingsFor('node'),
+  },
+
   // packages/dirs where Node.js globals are used
   {
     files: [
@@ -131,6 +139,7 @@ export default defineConfig(
       'packages/preact-container/**',
       'packages/space-channel/**',
       'packages/space-chat/**',
+      'packages/space-endo-mgmt/src/**',
       'packages/space-file-explorer/**',
       'packages/space-floot/**',
       'packages/space-inventory-graph/**',

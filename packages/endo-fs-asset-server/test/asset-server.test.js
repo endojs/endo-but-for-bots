@@ -1,6 +1,5 @@
 // @ts-nocheck
 /* eslint-disable import/order, no-await-in-loop */
-/* global globalThis, setTimeout */
 
 import '@endo/init/debug.js';
 
