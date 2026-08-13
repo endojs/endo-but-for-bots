@@ -99,7 +99,12 @@ const setupPair = async (t, { dialerGateway }) => {
 
   const capturedGatewayKit = makePromiseKit();
   const capturingGreeter = Far('Greeter', {
-    hello: async (_remoteNodeId, remoteGateway, _canceller, connectionCancelled) => {
+    hello: async (
+      _remoteNodeId,
+      remoteGateway,
+      _canceller,
+      connectionCancelled,
+    ) => {
       // Consume the connection's cancellation signal so tearing the dial down
       // does not surface as an unhandled rejection on this (listener) side.
       Promise.resolve(connectionCancelled).catch(() => {});
