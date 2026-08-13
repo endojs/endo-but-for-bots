@@ -134,6 +134,30 @@ const swissnumHex = swissnum =>
     ? hexFromBytes(encodeAscii(swissnum, 'swissnum'))
     : hexFromBytes(swissnum);
 
+/**
+ * Derive a durable session key for the exporter named by an inbound handoff.
+ * JSON control characters are already escaped; escaping the remaining
+ * non-ASCII code units makes the key portable without imposing the swissnum
+ * alphabet on peer-supplied location strings.
+ *
+ * @param {any} exporterLocation
+ * @returns {string}
+ */
+export const makeHandoffSessionKey = exporterLocation => {
+  const json = JSON.stringify(exporterLocation);
+  if (json === undefined) {
+    throw TypeError('handoff exporter location must be JSON-serializable');
+  }
+  const asciiJson = json.replace(
+    /[\u0080-\uffff]/g,
+    codeUnit => `\\u${codeUnit.charCodeAt(0).toString(16).padStart(4, '0')}`,
+  );
+  return `handoff:${hexFromBytes(
+    encodeAscii(asciiJson, 'handoff exporter location'),
+  )}`;
+};
+harden(makeHandoffSessionKey);
+
 const makeMemoryHubStore = () => {
   /** @type {any} */
   let state;
@@ -782,9 +806,7 @@ export const makeOcapnHub = ({
           );
         }
         const { exporterLocation } = signedGive.object;
-        const outKey = `handoff:${swissnumHex(
-          JSON.stringify(exporterLocation),
-        )}`;
+        const outKey = makeHandoffSessionKey(exporterLocation);
         const outSession = provideSessionState(outKey);
         // Frames toward the exporter queue until the dial completes;
         // the location persists so a successor process (or a later

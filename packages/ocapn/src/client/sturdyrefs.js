@@ -5,8 +5,9 @@
  * @import { InternalSession } from './types.js'
  */
 
-import harden from '@endo/harden';
+import { decodeAscii } from '@endo/ascii';
 import { E } from '@endo/eventual-send';
+import harden from '@endo/harden';
 import { makeTagged } from '@endo/pass-style';
 import { encodeSwissnum, swissnumFromBytes } from './util.js';
 
@@ -113,7 +114,6 @@ export const enlivenSturdyRef = async (
  * @returns {SturdyRefTracker}
  */
 export const makeSturdyRefTracker = locator => {
-  const textDecoder = new TextDecoder('ascii', { fatal: true });
   return harden({
     makeSturdyRef: (location, secret) => makeSturdyRef(location, secret),
     lookup: async secretBytes => {
@@ -127,7 +127,7 @@ export const makeSturdyRefTracker = locator => {
       // the raw bytes through; locators that index by bytes can match
       // those, locators that don't will simply return undefined.
       try {
-        const secret = textDecoder.decode(view);
+        const secret = decodeAscii(view, 'sturdyref secret');
         return locator.get(secret);
       } catch {
         return locator.get(view);

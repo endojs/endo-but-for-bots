@@ -2,6 +2,7 @@
 
 import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import harden from '@endo/harden';
 import test from '@endo/ses-ava/test.js';
 
 import {
@@ -9,8 +10,11 @@ import {
   encodeSwissnum,
   swissnumFromBytes,
 } from '../src/client/util.js';
-import { makeOcapnHub } from '../src/hub/hub.js';
+import { makeSturdyRefTracker } from '../src/client/sturdyrefs.js';
+import { makeHandoffSessionKey, makeOcapnHub } from '../src/hub/hub.js';
 import { syrupCodec } from '../src/syrup/index.js';
+
+/** @import { OcapnLocation } from '../src/codecs/components.js' */
 
 test('encodeSwissnum preserves every ASCII byte', t => {
   let asciiText = '';
@@ -58,6 +62,38 @@ test('hub string swissnums reject U+0080 without restricting bytes', t => {
     instanceOf: RangeError,
     message: /Non-ASCII code unit 0x80 at offset 0 of string swissnum/,
   });
-  t.notThrows(() => hub.unpublish(Uint8Array.of(0x80)));
-  t.notThrows(() => hub.unpublish(bytesToImmutable(Uint8Array.of(0x80))));
+  hub.publish(Uint8Array.of(0x80), {
+    session: 'byte-swissnum-origin',
+    position: 0n,
+  });
+  t.deepEqual(hub.inspect().publishedOrigins, ['byte-swissnum-origin']);
+  hub.unpublish(bytesToImmutable(Uint8Array.of(0x80)));
+  t.deepEqual(hub.inspect().publishedOrigins, []);
+});
+
+test('sturdyref lookup falls back to raw non-ASCII bytes', async t => {
+  /** @type {unknown} */
+  let lookedUp;
+  const tracker = makeSturdyRefTracker({
+    get: secret => {
+      lookedUp = secret;
+      return undefined;
+    },
+  });
+
+  await tracker.lookup(Uint8Array.of(0x80).buffer);
+  t.deepEqual(lookedUp, Uint8Array.of(0x80));
+});
+
+test('handoff session keys admit Unicode exporter locations', t => {
+  /** @type {OcapnLocation} */
+  const unicodeLocation = harden({
+    type: 'ocapn-peer',
+    transport: 'tcp-test-only',
+    designator: 'caf\u00e9',
+    hints: false,
+  });
+  const key = makeHandoffSessionKey(unicodeLocation);
+  t.regex(key, /^handoff:[0-9a-f]+$/);
+  t.not(key, makeHandoffSessionKey({ ...unicodeLocation, designator: 'cafe' }));
 });
