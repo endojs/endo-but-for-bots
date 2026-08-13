@@ -70,7 +70,7 @@ excludes, relative to Jessie and JavaScript:
 What Justin *does* keep from JavaScript is the pure-expression core: unary and
 binary operators, `?:`, `&&`/`||`, member access (`.name` and numeric
 indexing), **function calls**, template literals, and **free-variable
-references**. That last pair is decisive. Justin is not closed data. A Justin
+references**. Justin is not closed data. A Justin
 expression may name variables it does not bind and call functions it does not
 define, so its meaning (and its purity and termination) depend entirely on the
 *endowments* supplied for those free names by whatever evaluates it. See
