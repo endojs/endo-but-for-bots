@@ -45,6 +45,10 @@ const makeMockPowers = () => {
 };
 
 // Build a linear chain of `depth` nodes and return the leaf id.
+/**
+ * @param {ReturnType<typeof makeConversationTree>} tree
+ * @param {number} depth
+ */
 const buildChain = async (tree, depth) => {
   const root = await tree.addNode(null, [{ role: 'system', content: 'sys' }]);
   let leaf = root.id;

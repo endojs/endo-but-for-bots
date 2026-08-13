@@ -1,5 +1,4 @@
 // @ts-check
-/* global harden */
 
 import { E } from '@endo/far';
 import { h } from 'preact';
@@ -25,10 +24,11 @@ import { useEffect, useRef, useState } from 'preact/hooks';
  */
 
 /** @param {string | undefined} rev */
+/** @param {string | null | undefined} rev */
 const shortRev = rev =>
   rev && rev.length > 12 ? rev.slice(0, 12) : rev || '—';
 
-/** @param {string | undefined} phase */
+/** @param {string | null | undefined} phase */
 const phaseClass = phase => {
   if (phase === 'ok') return 'mgmt-badge mgmt-badge-ok';
   if (phase === 'error') return 'mgmt-badge mgmt-badge-error';
@@ -96,7 +96,6 @@ export const MgmtView = ({ powers }) => {
       live = false;
       clearInterval(id);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /** @param {'update' | 'restart'} kind */

@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 // @ts-nocheck
-/* global process */
 // Stand-in for the piper binary used by tts-server-caplet tests. Mimics the
 // wire shape the caplet depends on: one utterance per stdin line, "audio"
 // streamed to stdout as each line lands, exit 0 on stdin EOF. Each process

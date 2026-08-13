@@ -48,6 +48,7 @@ test('exec leaves inline backticks in real code untouched', async t => {
   const tool = makeExecTool(powers);
   // A template literal is not a wrapping fence; it must survive verbatim.
   const result = await tool.execute({
+    // eslint-disable-next-line no-template-curly-in-string -- code under test
     code: 'const name = "floot";\nreturn `hello ${name}`;',
   });
   t.is(result, '"hello floot"');

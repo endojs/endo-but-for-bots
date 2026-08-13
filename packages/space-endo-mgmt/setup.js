@@ -1,5 +1,5 @@
 // @ts-check
-/* global harden, process */
+/* global process */
 // endo run --UNCONFINED setup.js --powers @agent
 //
 // Provisions the hosted-Endo management controller and stores it in the
