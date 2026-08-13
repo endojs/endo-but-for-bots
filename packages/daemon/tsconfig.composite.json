@@ -72,6 +72,9 @@
       "path": "../netstring/tsconfig.composite.json"
     },
     {
+      "path": "../ocapn/tsconfig.composite.json"
+    },
+    {
       "path": "../pass-style/tsconfig.composite.json"
     },
     {
