@@ -3000,6 +3000,21 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/sturdyref@workspace:packages/sturdyref":
+  version: 0.0.0-use.local
+  resolution: "@endo/sturdyref@workspace:packages/sturdyref"
+  dependencies:
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/pass-style": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    tsd: "catalog:dev"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/syrup-frame@workspace:^, @endo/syrup-frame@workspace:packages/syrup-frame":
   version: 0.0.0-use.local
   resolution: "@endo/syrup-frame@workspace:packages/syrup-frame"
