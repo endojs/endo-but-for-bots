@@ -41,7 +41,10 @@ import {
 } from './locator.js';
 import { toHex, fromHex } from './hex.js';
 import { makePetSitter } from './pet-sitter.js';
-import { isSturdyRef, resolveSturdyRefToId } from './sturdyref-resolution.js';
+import {
+  isSturdyRef,
+  resolveSturdyRefToIdWith,
+} from './sturdyref-resolution.js';
 
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { makeFormulaRecord } from './formula-record.js';
@@ -298,6 +301,11 @@ harden(normalizeHttpClientPolicy);
  * @param {(formulaIdentifier: FormulaIdentifier, type?: string) => Promise<{ sturdyRef: SturdyRef, grantHandle: string }>} args.mintSturdyRefGrant
  * @param {() => Promise<SturdyRefGrant[]>} args.getSturdyRefGrants
  * @param {(grantHandle: string) => Promise<boolean>} args.deleteSturdyRefGrant
+ * @param {(uri: string) => Promise<FormulaIdentifier>} args.acceptSturdyRefUri
+ *   Accept a foreign SturdyRef carried out-of-band as an `ocapn://` URI and
+ *   internalize it (design cut 5).
+ * @param {(sturdyRef: unknown) => Promise<FormulaIdentifier | undefined>} [args.internalizeForeignSturdyRef]
+ *   The daemon's foreign-SturdyRef internalizer (design cut 5).
  * @param {DaemonCore['cancelValue']} args.cancelValue
  * @param {DaemonCore['formulateWorker']} args.formulateWorker
  * @param {DaemonCore['formulateHost']} args.formulateHost
@@ -352,6 +360,8 @@ export const makeHostMaker = ({
   mintSturdyRefGrant,
   getSturdyRefGrants,
   deleteSturdyRefGrant,
+  acceptSturdyRefUri,
+  internalizeForeignSturdyRef,
   cancelValue,
   formulateWorker,
   formulateHost,
@@ -1229,23 +1239,30 @@ export const makeHostMaker = ({
         (resultName !== undefined ? `eval:${resultName}` : 'eval');
 
       /** @type {(FormulaIdentifier | NamePath)[]} */
-      const endowmentFormulaIdsOrPaths = petNamePaths.map(petNameOrPath => {
-        if (isSturdyRef(petNameOrPath)) {
-          // A SturdyRef slot resolves to a formula identifier at the
-          // facet boundary; the swiss number never reaches the worker.
-          return resolveSturdyRefToId(petNameOrPath);
-        }
-        const petNamePath = namePathFrom(petNameOrPath);
-        if (petNamePath.length === 1) {
-          const id = petStore.identifyLocal(petNamePath[0]);
-          if (id === undefined) {
-            throw new Error(`Unknown pet name ${q(petNamePath[0])}`);
+      const endowmentFormulaIdsOrPaths = await Promise.all(
+        petNamePaths.map(async petNameOrPath => {
+          if (isSturdyRef(petNameOrPath)) {
+            // A SturdyRef slot resolves to a formula identifier at the
+            // facet boundary; the swiss number never reaches the worker. A
+            // foreign SturdyRef internalizes through the OCapN capability
+            // (cut 5).
+            return resolveSturdyRefToIdWith(
+              petNameOrPath,
+              internalizeForeignSturdyRef,
+            );
           }
-          return /** @type {FormulaIdentifier} */ (id);
-        }
+          const petNamePath = namePathFrom(petNameOrPath);
+          if (petNamePath.length === 1) {
+            const id = petStore.identifyLocal(petNamePath[0]);
+            if (id === undefined) {
+              throw new Error(`Unknown pet name ${q(petNamePath[0])}`);
+            }
+            return /** @type {FormulaIdentifier} */ (id);
+          }
 
-        return petNamePath;
-      });
+          return petNamePath;
+        }),
+      );
 
       if (resultName !== undefined) {
         const { namePath: resultNamePath } = petNamePathFrom(resultName);
@@ -2067,6 +2084,24 @@ export const makeHostMaker = ({
           /** @type {EndoSturdyRefs['revokeSturdyRefGrant']} */
           revokeSturdyRefGrant: async grantHandle =>
             deleteSturdyRefGrant(grantHandle),
+          /**
+           * Accept a foreign SturdyRef carried out-of-band as an `ocapn://`
+           * URI (design cut 5, "daemon as B"): internalize it to a local
+           * formula identifier and bind it under a pet name so it can be
+           * looked up, identified, and re-enlivened on demand. Host-tier only
+           * (the URI is secret-bearing); a confined guest has no `sturdyRefs`
+           * facet, so it never reaches this accept surface.
+           *
+           * @type {EndoSturdyRefs['acceptSturdyRefUri']}
+           */
+          acceptSturdyRefUri: async (uri, petName) => {
+            const id = await acceptSturdyRefUri(uri);
+            if (petName !== undefined) {
+              const { namePath } = petNamePathFrom(petName);
+              await E(directory).storeIdentifier(namePath, id);
+            }
+            return id;
+          },
         });
       }
       return sturdyRefsExo;

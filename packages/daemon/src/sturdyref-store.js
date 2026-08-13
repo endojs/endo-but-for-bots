@@ -150,6 +150,13 @@ harden(makeSturdyRefStore);
  * @property {(sturdyRef: SturdyRef) => ({ location: OcapnLocation, secret: string | Uint8Array } | undefined)} reveal
  *   The closely-held reveal side: the off-band `(location, swissNum)` of a
  *   SturdyRef this exporter minted, or `undefined` for anything else.
+ * @property {(location: OcapnLocation, secret: string | Uint8Array, type?: string) => SturdyRef} materialize
+ *   Materialize a foreign SturdyRef from `(location, secret)` through this
+ *   exporter's session-manager tracker, so its off-band details are held and
+ *   `reveal` answers for it. Used by the out-of-band `acceptSturdyRefUri`
+ *   accept path (design cut 5) — the URI carries `(location, swissNum)` and a
+ *   SturdyRef object must exist for the seam to internalize. The secret stays
+ *   off-band; the returned object carries no secret property.
  * @property {(sturdyRef: SturdyRef) => Promise<unknown>} enlivenSelf
  *   Serve a self-minted SturdyRef in-process (the one-process equivalent of
  *   a peer's `fetch`): reveal, confirm the self-location, then resolve the
@@ -241,12 +248,17 @@ export const makeSturdyRefExporter = ({
     return value;
   };
 
+  /** @type {SturdyRefExporter['materialize']} */
+  const materialize = (location, secret, type) =>
+    tracker.makeSturdyRef(location, secret, type);
+
   return harden({
     locator,
     mintGrant,
     listGrants: () => store.list(),
     revokeGrant: grantHandle => store.revokeByHandle(grantHandle),
     reveal: sturdyRef => tracker.reveal(sturdyRef),
+    materialize,
     enlivenSelf,
   });
 };
