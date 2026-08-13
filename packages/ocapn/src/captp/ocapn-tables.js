@@ -9,7 +9,7 @@ import { makePairwiseTable, parseSlot } from './pairwise.js';
 
 /**
  * @typedef {PairwiseTable & {
- *   getLocalAnswerToPosition: (answer: object) => bigint | undefined,
+ *   getLocalAnswerToPosition: (answer: unknown) => bigint | undefined,
  * }} OcapnTable
  */
 

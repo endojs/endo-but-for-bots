@@ -1,6 +1,7 @@
 // @ts-check
 
 /**
+ * @import { RemotableObject } from '@endo/pass-style'
  * @import { CodecTestEntry } from './_codecs_util.js'
  */
 
@@ -170,7 +171,14 @@ const table = [
     name: 'tagged with reference (local object)',
     makeValue: testKit => makeTagged('myTag', testKit.makeLocalObject(100n)),
     makeExpectedValue: testKit =>
-      makeTagged('myTag', testKit.referenceKit.provideRemoteObjectValue(100n)),
+      makeTagged(
+        'myTag',
+        // The reference kit types its remote presences as bare `object`;
+        // at this boundary they are remotables.
+        /** @type {RemotableObject} */ (
+          testKit.referenceKit.provideRemoteObjectValue(100n)
+        ),
+      ),
   },
   {
     name: 'tagged with reference (local promise)',
@@ -189,7 +197,12 @@ const table = [
     makeExpectedValue: testKit =>
       makeTagged(
         'listTag',
-        harden([testKit.referenceKit.provideRemoteObjectValue(102n), 'hello']),
+        harden([
+          /** @type {RemotableObject} */ (
+            testKit.referenceKit.provideRemoteObjectValue(102n)
+          ),
+          'hello',
+        ]),
       ),
   },
   {

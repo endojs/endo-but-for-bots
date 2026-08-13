@@ -1427,6 +1427,18 @@ export interface EndoMount extends PathEntryIssuer {
   help(method?: string): string;
 }
 
+/**
+ * Caretaker facet paired with a revocable mount by `makeRevocableMount`.
+ * `revoke()` flips the shared liveness record, so the paired mount and
+ * every face derived from it (sub-views, entries, opened files,
+ * `readOnly()` views, open `followNameChanges` streams) begin throwing.
+ * Mirrors the runtime `MountControlInterface` guard.
+ */
+export interface EndoMountControl {
+  revoke(): void;
+  help(method?: string): string;
+}
+
 export interface EndoWorker {}
 
 export type MakeHostOrGuestOptions = {
