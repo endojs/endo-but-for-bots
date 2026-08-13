@@ -4503,6 +4503,12 @@ impl Interp {
         );
         self.intrinsics.insert("Proxy", f);
         let revocable = self.alloc_method(NativeMethod::ProxyRevocable);
+        let revocable_name = self.alloc_str_text(b"revocable");
+        if let Some(info) = self.functions.get_mut(&revocable) {
+            info.name = "revocable".to_string();
+            info.name_chunk = revocable_name;
+            info.arity = 2;
+        }
         self.proto_methods.push((f, "revocable", revocable));
     }
 
@@ -16612,13 +16618,10 @@ impl Interp {
             Payload::Reference(i) if value.kind == Kind::Reference => i,
             _ => return Err(self.catchable_type_error()),
         };
-        let length_id = self.intern_key("length");
-        let len_value = self.mop_get(code, inst, length_id, value)?;
-        let len = to_length_u64(to_number(&len_value));
+        let len = to_length_u64(to_number(&self.arraylike_length(code, inst, value)?));
         let mut out = Vec::new();
         for i in 0..len {
-            let id = self.intern_key(&i.to_string());
-            out.push(self.mop_get(code, inst, id, value)?);
+            out.push(self.arraylike_index(code, inst, i, value)?);
         }
         Ok(out)
     }
@@ -20441,6 +20444,11 @@ impl Interp {
     ) -> Result<Slot, Halt> {
         let mut owner = inst;
         while !owner.is_null() {
+            // A proxy encountered while climbing the prototype chain runs its
+            // own `[[Get]]` (ECMA-262 OrdinaryGet step 4: `parent.[[Get]]`).
+            if owner != inst && self.proxies.contains_key(&owner) {
+                return self.proxy_get(code, owner, id, receiver);
+            }
             if let Some(descriptor) = self.ordinary_get_own_descriptor(owner, id) {
                 if descriptor.is_accessor() {
                     let getter = descriptor.get.unwrap_or_else(Slot::undefined);
@@ -20480,6 +20488,11 @@ impl Interp {
         } else {
             let mut prototype = self.instance_prototype(inst);
             while !prototype.is_null() {
+                // A proxy in the prototype chain runs its own `[[Set]]`
+                // (ECMA-262 OrdinarySet: `parent.[[Set]](P, V, Receiver)`).
+                if self.proxies.contains_key(&prototype) {
+                    return self.proxy_set(code, prototype, id, value, receiver);
+                }
                 if let Some(descriptor) = self.ordinary_get_own_descriptor(prototype, id) {
                     if descriptor.is_accessor() {
                         let setter = descriptor.set.unwrap_or_else(Slot::undefined);
@@ -20729,19 +20742,51 @@ impl Interp {
             Payload::Reference(i) if value.kind == Kind::Reference => i,
             _ => return Err(self.catchable_type_error()),
         };
-        let length_id = self.intern_key("length");
-        let len_value = self.mop_get(code, inst, length_id, value)?;
-        let len = to_length_u64(to_number(&len_value));
+        let len = to_length_u64(to_number(&self.arraylike_length(code, inst, value)?));
         let mut out = Vec::new();
         for i in 0..len {
-            let id = self.intern_key(&i.to_string());
-            let element = self.mop_get(code, inst, id, value)?;
+            let element = self.arraylike_index(code, inst, i, value)?;
             if element.kind != Kind::String && element.kind != Kind::Symbol {
                 return Err(self.catchable_type_error());
             }
             out.push(element);
         }
         Ok(out)
+    }
+
+    /// `Get(arrayLike, "length")` honoring the exotic-array length accessor
+    /// (which lives in the `arrays` side table, not an ordinary property).
+    fn arraylike_length(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        receiver: Slot,
+    ) -> Result<Slot, Halt> {
+        if let Some(a) = self.arrays.get(&inst) {
+            return Ok(Slot::integer(a.length as i32));
+        }
+        let length_id = self.intern_key("length");
+        self.mop_get(code, inst, length_id, receiver)
+    }
+
+    /// `Get(arrayLike, ToString(index))` honoring exotic-array indexed elements.
+    fn arraylike_index(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        i: u64,
+        receiver: Slot,
+    ) -> Result<Slot, Halt> {
+        if self.arrays.contains_key(&inst) {
+            return Ok(self
+                .arrays
+                .get(&inst)
+                .and_then(|a| a.items.get(&(i as u32)).copied())
+                .map(|s| Slot::of(s.kind, s.value))
+                .unwrap_or_else(Slot::undefined));
+        }
+        let id = self.intern_key(&i.to_string());
+        self.mop_get(code, inst, id, receiver)
     }
 
     // ---- the `mop_*` dispatchers: an object's internal method, proxy-aware ---
@@ -20832,6 +20877,11 @@ impl Interp {
         if self.proxies.contains_key(&inst) {
             return self.proxy_get_own_property(code, inst, id);
         }
+        if self.find_property(inst, id).is_none() {
+            if let Some(d) = self.exotic_own_descriptor(inst, id) {
+                return Ok(Some(d));
+            }
+        }
         Ok(self.ordinary_get_own_descriptor(inst, id))
     }
 
@@ -20854,6 +20904,9 @@ impl Interp {
         if self.proxies.contains_key(&inst) {
             return self.proxy_has(code, inst, id);
         }
+        if self.find_property(inst, id).is_none() && self.exotic_own_descriptor(inst, id).is_some() {
+            return Ok(true);
+        }
         Ok(self.instance_has(inst, id).0)
     }
 
@@ -20868,7 +20921,94 @@ impl Interp {
         if self.proxies.contains_key(&inst) {
             return self.proxy_get(code, inst, id, receiver);
         }
+        // An exotic-array / function target's `length` / integer-index / `name`
+        // / `prototype` own values live in side tables, not the slot chain (they
+        // are not visible to `ordinary_get`), so honor them when a proxy
+        // forwards `[[Get]]` here — but only if the target does not carry an
+        // ordinary own slot for the same id (a user-defined override wins).
+        if self.find_property(inst, id).is_none() {
+            if let Some(d) = self.exotic_own_descriptor(inst, id) {
+                if d.is_data() {
+                    return Ok(d.value.unwrap_or_else(Slot::undefined));
+                }
+            }
+        }
         self.ordinary_get(code, inst, id, receiver)
+    }
+
+    /// The exotic own descriptor for an array (`length` / index) or function
+    /// (`length` / `name` / `prototype`) target `id`, or `None` — so a proxy
+    /// forwarding an internal method to an exotic target honors the exotic own
+    /// properties the opcode dispatch materializes.
+    fn exotic_own_descriptor(
+        &self,
+        inst: crate::value::SlotIndex,
+        id: u16,
+    ) -> Option<OrdinaryDescriptor> {
+        if let Some(d) = self.array_own_descriptor(inst, id) {
+            return Some(d);
+        }
+        let fi = self.functions.get(&inst)?;
+        if Some(id) == self.length_id {
+            return Some(OrdinaryDescriptor {
+                value: Some(Slot::integer(fi.arity as i32)),
+                writable: Some(false),
+                enumerable: Some(false),
+                configurable: Some(true),
+                ..OrdinaryDescriptor::default()
+            });
+        }
+        if Some(id) == self.name_id {
+            return Some(OrdinaryDescriptor {
+                value: Some(Slot::of(Kind::String, Payload::String(fi.name_chunk))),
+                writable: Some(false),
+                enumerable: Some(false),
+                configurable: Some(true),
+                ..OrdinaryDescriptor::default()
+            });
+        }
+        if let Some(&proto) = self.ctor_prototype.get(&inst) {
+            let prototype_id = self.symbol_ids.get("prototype").copied();
+            if Some(id) == prototype_id {
+                return Some(OrdinaryDescriptor {
+                    value: Some(Slot::of(Kind::Reference, Payload::Reference(proto))),
+                    writable: Some(true),
+                    enumerable: Some(false),
+                    configurable: Some(false),
+                    ..OrdinaryDescriptor::default()
+                });
+            }
+        }
+        None
+    }
+
+    /// The exotic-array own descriptor for `id` (`length` or an in-range index),
+    /// or `None` when the id is neither — so `mop_get_own_property` /
+    /// `mop_own_keys` see an array target's exotic own properties.
+    fn array_own_descriptor(
+        &self,
+        inst: crate::value::SlotIndex,
+        id: u16,
+    ) -> Option<OrdinaryDescriptor> {
+        let a = self.arrays.get(&inst)?;
+        if Some(id) == self.length_id {
+            return Some(OrdinaryDescriptor {
+                value: Some(Slot::integer(a.length as i32)),
+                writable: Some(true),
+                enumerable: Some(false),
+                configurable: Some(false),
+                ..OrdinaryDescriptor::default()
+            });
+        }
+        let idx = self.string_key_name(id).and_then(|n| string_to_index(&n))?;
+        let s = a.items.get(&idx).copied()?;
+        Some(OrdinaryDescriptor {
+            value: Some(Slot::of(s.kind, s.value)),
+            writable: Some(true),
+            enumerable: Some(true),
+            configurable: Some(true),
+            ..OrdinaryDescriptor::default()
+        })
     }
 
     /// `O.[[Set]](P, V, Receiver)`.
@@ -20908,6 +21048,48 @@ impl Interp {
     ) -> Result<Vec<Slot>, Halt> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_own_keys(code, inst);
+        }
+        // An exotic-array target: integer indices ascending, then `length`,
+        // then the ordinary string keys, then symbol keys.
+        if self.arrays.contains_key(&inst) {
+            let mut out = Vec::new();
+            let mut idxs: Vec<u32> = self.arrays[&inst].items.keys().copied().collect();
+            idxs.sort_unstable();
+            for i in idxs {
+                let id = self.intern_key(&i.to_string());
+                out.push(self.property_key_slot(id)?);
+            }
+            let length_id = self.intern_key("length");
+            out.push(self.property_key_slot(length_id)?);
+            for id in self.ordered_own_key_ids(inst) {
+                if id == length_id {
+                    continue;
+                }
+                out.push(self.property_key_slot(id)?);
+            }
+            return Ok(out);
+        }
+        // A function target: `length`, `name`, then ordinary own keys, then
+        // `prototype` (if it has one) — the non-configurable key ownKeys
+        // invariants require the trap result to preserve.
+        if self.functions.contains_key(&inst) {
+            let mut out = Vec::new();
+            let length_id = self.intern_key("length");
+            let name_id = self.intern_key("name");
+            let prototype_id = self.intern_key("prototype");
+            let has_proto = self.ctor_prototype.contains_key(&inst);
+            out.push(self.property_key_slot(length_id)?);
+            out.push(self.property_key_slot(name_id)?);
+            for id in self.ordered_own_key_ids(inst) {
+                if id == length_id || id == name_id || (has_proto && id == prototype_id) {
+                    continue;
+                }
+                out.push(self.property_key_slot(id)?);
+            }
+            if has_proto {
+                out.push(self.property_key_slot(prototype_id)?);
+            }
+            return Ok(out);
         }
         let ids = self.ordered_own_key_ids(inst);
         let mut out = Vec::with_capacity(ids.len());
