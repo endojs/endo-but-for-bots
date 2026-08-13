@@ -6345,9 +6345,8 @@ test('provideHostPath is an EndoHost-only capability not reachable through an En
   );
 });
 
-test('provideHostPath rejects a spoof that passes the genie shape gate', async t => {
-  // Pins the layering documented in `@endo/genie`'s `assertIsMountCap`
-  // (see `packages/genie/src/sandbox/slice.js`):
+test('provideHostPath rejects a spoof that passes the MountCap shape gate', async t => {
+  // Pins the layering documented in the agent host's `assertIsMountCap`:
   //
   //   - `assertIsMountCap` (in `spawnAgent`'s workspace / rootfs
   //     pet-name branches) is a **shape** gate.  It probes
@@ -6360,7 +6359,7 @@ test('provideHostPath rejects a spoof that passes the genie shape gate', async t
   //     anything not minted via `provideMount` / `provideScratchMount`
   //     with `not a daemon-minted mount`.
   //
-  // Saboteur finding 3 in TODO/60 flagged that the shape gate is the
+  // A saboteur finding flagged that the shape gate is the
   // *only* authentication on a pet-name Mount cap; this test pins the
   // identity gate's downstream rejection so a spoofed exo with the
   // right method names cannot widen the slice's bind set.  If a
@@ -6377,7 +6376,7 @@ test('provideHostPath rejects a spoof that passes the genie shape gate', async t
   const realMount = await E(host).lookup(['shape-gate-mount']);
   t.is(await E(host).provideHostPath(realMount), mountPath);
 
-  // Hand-roll a `makeExo` with the exact method set the genie's shape
+  // Hand-roll a `makeExo` with the exact method set the shape
   // gate probes for.  This is the canonical "minted by `Far(...)`
   // rather than `formulateMount`" spoof — `__getMethodNames__()`
   // returns the required surface, so the shape gate would happily
@@ -6407,11 +6406,10 @@ test('provideHostPath rejects a spoof that passes the genie shape gate', async t
     },
   });
 
-  // Inline the genie's shape-gate probe (we can't import
-  // `assertIsMountCap` from `@endo/genie` here because
-  // `@endo/daemon` is a dependency of genie, not the other way
-  // around — the genie test in
-  // `packages/genie/test/local-sandbox-powers.test.js` exercises
+  // Inline the agent host's shape-gate probe (we can't import
+  // `assertIsMountCap` from the agent host here because
+  // `@endo/daemon` is a dependency of the agent host, not the other way
+  // around — the agent host's own test exercises
   // the helper directly against the dev-repl's local powers).  The
   // probe matches the helper verbatim so the assertion still pins
   // the saboteur-3 layering: the spoof passes the shape probe but

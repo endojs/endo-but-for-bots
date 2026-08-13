@@ -18,8 +18,8 @@ import { makeTool } from '../tool.js';
 
 /**
  * Build an advisory command-string veto from `@endo/exo-shell`-style reject
- * entries.  Ported from genie's `rejectPatterns` / `rejectFlags`
- * (`packages/genie/src/tools/command.js`).  These run in the tool layer,
+ * entries.  Ported from the prior agent framework's command-tool policy
+ * (`rejectPatterns` / `rejectFlags`).  These run in the tool layer,
  * *before* the call reaches `Shell.exec`, and are hardening advice — not the
  * boundary.  The boundary is the formula-owned allowlist enforced inside the
  * `Shell` exo (design § Shell capability); an allowlisted child is still an
@@ -151,10 +151,11 @@ const positionalArgGuards = method => {
  *
  * @param {ERef<ShellToolCapability>} shellCap
  * @param {ShellToolOptions} [options]
- *   Advisory reject entries ported from genie's command-tool policy closures.
+ *   Advisory reject entries ported from the prior agent framework's
+ *   command-tool policy closures.
  *   They veto a command string *before* it reaches `Shell.exec`; they are not
  *   the boundary (the formula-owned allowlist is). `rejectPatterns` /
- *   `rejectFlags` default to empty (unlike genie's command tool, which ships a
+ *   `rejectFlags` default to empty (unlike that prior policy, which shipped a
  *   curated `DANGEROUS_PATTERNS` set); a caller wanting advisory vetoes must
  *   pass them.
  * @returns {ToolRecord[]}

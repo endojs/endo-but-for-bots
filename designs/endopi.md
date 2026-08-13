@@ -353,17 +353,20 @@ follow.
 
 ### Source-file citations (Genie)
 
-- [`packages/genie/README.md`](../packages/genie/README.md)
-- [`packages/genie/DESIGN.md`](../packages/genie/DESIGN.md)
-- [`packages/genie/src/agent/index.js`](../packages/genie/src/agent/index.js) — `makePiAgent`, `buildOllamaModel`, `runAgentRound`, the `pi-agent-core` event-to-`ChatEvent` translation
-- [`packages/genie/src/observer/index.js`](../packages/genie/src/observer/index.js) — observer subagent (token + idle compaction)
-- [`packages/genie/src/reflector/index.js`](../packages/genie/src/reflector/index.js) — reflector subagent (long-term consolidation)
-- [`packages/genie/src/heartbeat/index.js`](../packages/genie/src/heartbeat/index.js) — autonomous task executor
-- [`packages/genie/src/system/index.js`](../packages/genie/src/system/index.js) — system-prompt builder (Claw-modeled)
-- [`packages/genie/src/agent/tool-gate.js`](../packages/genie/src/agent/tool-gate.js) — sub-agent tool-coverage gate
-- [`packages/genie/src/tools/`](../packages/genie/src/tools/) — `vfs`, `command`, `web-fetch`, `web-search`, `memory`
-- [`packages/genie/src/interval/index.js`](../packages/genie/src/interval/index.js) — cron-style interval scheduler
-- [`packages/genie/workspace_template/`](../packages/genie/workspace_template/) — Claw-compatible `SOUL.md`, `HEARTBEAT.md`, `memory/`
+The `@endo/genie` package was retired; these citations point at the last
+commit before its removal, preserved in this repository's git history.
+
+- [`packages/genie/README.md`](https://github.com/endojs/endo-but-for-bots/blob/a54c3adb/packages/genie/README.md)
+- [`packages/genie/DESIGN.md`](https://github.com/endojs/endo-but-for-bots/blob/a54c3adb/packages/genie/DESIGN.md)
+- [`packages/genie/src/agent/index.js`](https://github.com/endojs/endo-but-for-bots/blob/a54c3adb/packages/genie/src/agent/index.js) — `makePiAgent`, `buildOllamaModel`, `runAgentRound`, the `pi-agent-core` event-to-`ChatEvent` translation
+- [`packages/genie/src/observer/index.js`](https://github.com/endojs/endo-but-for-bots/blob/a54c3adb/packages/genie/src/observer/index.js) — observer subagent (token + idle compaction)
+- [`packages/genie/src/reflector/index.js`](https://github.com/endojs/endo-but-for-bots/blob/a54c3adb/packages/genie/src/reflector/index.js) — reflector subagent (long-term consolidation)
+- [`packages/genie/src/heartbeat/index.js`](https://github.com/endojs/endo-but-for-bots/blob/a54c3adb/packages/genie/src/heartbeat/index.js) — autonomous task executor
+- [`packages/genie/src/system/index.js`](https://github.com/endojs/endo-but-for-bots/blob/a54c3adb/packages/genie/src/system/index.js) — system-prompt builder (Claw-modeled)
+- [`packages/genie/src/agent/tool-gate.js`](https://github.com/endojs/endo-but-for-bots/blob/a54c3adb/packages/genie/src/agent/tool-gate.js) — sub-agent tool-coverage gate
+- [`packages/genie/src/tools/`](https://github.com/endojs/endo-but-for-bots/tree/a54c3adb/packages/genie/src/tools/) — `vfs`, `command`, `web-fetch`, `web-search`, `memory`
+- [`packages/genie/src/interval/index.js`](https://github.com/endojs/endo-but-for-bots/blob/a54c3adb/packages/genie/src/interval/index.js) — cron-style interval scheduler
+- [`packages/genie/workspace_template/`](https://github.com/endojs/endo-but-for-bots/tree/a54c3adb/packages/genie/workspace_template/) — Claw-compatible `SOUL.md`, `HEARTBEAT.md`, `memory/`
 
 ### Upstream-Pi cross-reference (per jcorbin's comment on PR #265)
 

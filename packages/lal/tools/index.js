@@ -19,7 +19,7 @@
  * @property {object} [parameters] - JSON-schema-like shape (for documentation).
  * @property {import('@endo/patterns').Pattern} [params] - `@endo/patterns`
  *   matcher run against the decoded args object before dispatch. Inspired by
- *   `packages/genie/src/tools/common.js`, which uses the same matcher
+ *   the prior agent framework's common tool layer, which uses the same matcher
  *   discipline to validate tool inputs at the `@endo/patterns` layer that
  *   the rest of the Endo capability surface already speaks.
  */

@@ -6,21 +6,21 @@ filesystem view, optional network) as one or more `Exo` handles, so a
 caller-granted process tree runs under additional kernel-level
 confinement on top of Endo's capability boundary.
 
-The architecture is documented in
-[`PLAN/endo_posix_sandbox.md`](../../PLAN/endo_posix_sandbox.md).
+The architecture is documented in this README. The original design
+rationale is preserved in this repository's history at
+[`PLAN/endo_posix_sandbox.md`](https://github.com/endojs/endo-but-for-bots/blob/a54c3adb/PLAN/endo_posix_sandbox.md).
 
 ## Status
 
-- **Phase 0** (`12_endo_posix_sandbox_phase0_interfaces.md`): typed
+- **Phase 0**: typed
   contract, runtime guards, stub factory.
   Done.
-- **Phase 1** (`13_endo_posix_sandbox_phase1_bwrap.md`): `bwrap`
+- **Phase 1**: `bwrap`
   driver on Linux, `network: 'none'` and `network: 'private'`
   profiles, scratch-mount-backed writable upper layer, dispose
   semantics.
-  Done — see "Status notes" in the Phase 1 TODO for what is
-  intentionally deferred.
-- **Phase 1.5** (`14_endo_posix_sandbox_phase1_5_bwrap_hardening.md`):
+  Done, with some items intentionally deferred.
+- **Phase 1.5**:
   `host-loopback` / `host-lan` / `host-net` profiles, Landlock probe
   (kernel ≥ 5.13), seccomp profile rebase against
   `containers/common`, `prlimit` resource caps, cgroup v2 detection,
@@ -28,7 +28,7 @@ The architecture is documented in
   surfaced via `slice.help()`.
   Done — see § "Phase 1.5 status notes" below for what is
   intentionally deferred.
-- **Phase 2** (`15_endo_posix_sandbox_phase2_podman.md`): rootless
+- **Phase 2**: rootless
   `podman` driver with OCI image rootfs, `--cap-drop ALL` +
   `no-new-privileges` + `--read-only` posture, slirp4netns / pasta
   rootless network backends, boot-time orphan-container sweep, and
@@ -147,7 +147,7 @@ rootfs: { kind: 'oci', ref: 'docker.io/library/alpine:3.19' } })`.
 
 ## Capability surface
 
-Mirrors `PLAN/endo_posix_sandbox.md` § "Capability surface":
+The capability surface:
 
 - `SandboxFactory` — root cap; `help`, `listBackends`, `make`.
 - `SandboxHandle` — one slice; `spawn`, `mount`, `scratch`, `open`,
@@ -456,7 +456,7 @@ Items intentionally deferred:
 - **Full pasta + nftables wiring** for `network: 'private'`.  The
   egress filter is documented and the driver accepts the profile;
   the actual pasta subprocess + `nft -f` invocation lands
-  alongside the genie workspace integration that needs it.
+  alongside the first consumer that needs `network: 'private'` egress.
 - **In-slice Landlock ruleset installation.**  The probe is wired;
   the call-site that runs `landlock_create_ruleset` inside the
   slice's child (after bwrap execs the slice's init) is a focused

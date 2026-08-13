@@ -16,8 +16,7 @@
  *      caller does not pass `limits`.
  *
  * The actual cgroup-write / classid plumbing is left for
- * a follow-up patch that lands alongside the genie workspace
- * integration; this module focuses on detection and
+ * a follow-up patch; this module focuses on detection and
  * argv-assembly so the rest of the driver can rely on it.
  *
  * The defaults are deliberately generous — the goal is to prevent

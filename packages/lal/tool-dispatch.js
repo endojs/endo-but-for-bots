@@ -47,8 +47,8 @@ import { tools } from './tools/index.js';
 
 // Pre-index each tool's @endo/patterns matcher by tool name. The matcher
 // validates the SmallCaps-decoded args record before dispatch, matching the
-// discipline `packages/genie/src/tools/common.js` applies (per-tool schema
-// + nested-JSON fixup) but expressed at the args-record level since lal's
+// discipline the prior agent framework's common tool layer applies (per-tool
+// schema + nested-JSON fixup) but expressed at the args-record level since lal's
 // tools share one switch-dispatcher rather than per-tool closures.
 const paramsByTool = new Map(
   tools.filter(t => t.params !== undefined).map(t => [t.name, t.params]),

@@ -78,7 +78,7 @@ export const ResponderInterface = M.interface('EndoResponder', {
 // `readableNameHubMethodGuards` (help / has / list / lookup / maybeLookup) and
 // `directoryFileMethodGuards` (makeDirectory / readText / maybeReadText /
 // writeText) are the portable name-hub records, now owned by
-// `@endo/platform/fs` so non-daemon hosts (genie, future browser/Go/Rust
+// `@endo/platform/fs` so non-daemon hosts (a browser/Go/Rust client, and other
 // clients) can consume them without depending on the daemon. They are imported
 // above; the daemon adds only the registry/locator surface below.
 

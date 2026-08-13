@@ -19,7 +19,6 @@
         "packages/demo",
         "packages/fae",
         "packages/familiar",
-        "packages/genie",
         "packages/eventual-send-test",
         "packages/harden-test",
         "packages/hex-test",
