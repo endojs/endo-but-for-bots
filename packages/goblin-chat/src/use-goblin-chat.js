@@ -60,13 +60,9 @@ const ASCII_DECODER = new TextDecoder('ascii');
  *      that appear in `ocapn://…/s/<base64url>` URIs. Render in the
  *      same canonical base64url form they appeared on the wire.
  *
- * NOTE: this used to delegate to `decodeSwissnum` and rely on its
- * `TextDecoder('ascii', { fatal: true })` to throw on non-ASCII. That
- * doesn't work — per the WHATWG encoding spec the `'ascii'` label is
- * aliased to `'windows-1252'`, every byte 0–255 is "valid" in
- * windows-1252, so `fatal` never fires and 32 random bytes come back
- * as Latin-1 garbage like `ôr¤\`RB…`. We do the printable-ASCII check
- * ourselves now.
+ * `decodeSwissnum` enforces 7-bit ASCII, but log display is narrower:
+ * control characters are not printable and should use the canonical
+ * base64url form too. Check the printable range here before decoding.
  *
  * @param {SwissNum} swissNum
  * @returns {string}

@@ -1,23 +1,25 @@
 ---
-'@endo/ocapn': minor
+'@endo/ocapn': major
 ---
 
-Enforce 7-bit ASCII on both directions of the swissnum string codec, routing
-`encodeSwissnum` and the hub's `swissnumHex` through `@endo/ascii`'s
-`encodeAscii`, and `decodeSwissnum` through the new `decodeAscii`.
-
-This tightens validation on public surface, so it is a behavior change rather
-than a pure refactor:
+Swissnums represented as strings must now be 7-bit ASCII. Pass a `Uint8Array`
+or immutable bytes instead when a secret contains arbitrary bytes; raw-byte
+swissnums still ride the wire verbatim.
 
 - The hub API (`publish`/`publishHeld`/`unpublish`) previously accepted any
   string swissnum and silently UTF-8-encoded it; a non-ASCII string swissnum now
-  throws a `RangeError`.
-- `decodeSwissnum` previously leaned on `TextDecoder('ascii', { fatal: true })`,
-  which per the WHATWG Encoding Standard aliases `'ascii'` to `windows-1252` and
-  so silently mis-decoded wire bytes `0x80`–`0xff` instead of rejecting them; it
-  now rejects them.
+  throws a `RangeError`. To revoke a publication persisted under the old
+  behavior, pass the UTF-8 bytes of its former string swissnum to `unpublish`.
+- `decodeSwissnum` now rejects wire bytes `0x80`–`0xff` instead of silently
+  decoding them as `windows-1252` characters.
+- Sturdyref readers preserve a non-ASCII secret as raw bytes instead of
+  mis-decoding it as `windows-1252` text, so arbitrary-byte secrets can reach
+  byte-keyed locators unchanged.
 - The client-side `encodeSwissnum` already rejected non-ASCII input; its thrown
-  error changes type and message (generic `Error` → `RangeError`).
+  error changes type and message (generic `Error` -> `RangeError`), and a
+  non-string argument now throws `TypeError` instead of being coerced.
+- `publish`, `publishHeld`, and `unpublish` now declare their existing support
+  for immutable `ArrayBufferLike` swissnums in addition to `Uint8Array`.
 
-Raw-bytes swissnums still ride the wire verbatim, preserving the byte identity
-of ASCII swissnums.
+Handoff session keys continue to accept the full Unicode permitted in peer
+locations; the new swissnum validation does not apply to those location keys.
