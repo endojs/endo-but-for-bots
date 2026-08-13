@@ -10,7 +10,7 @@ import { makeRefCounter } from './refcount.js';
  * @typedef {import('./finalize.js').FinalizingMap<Slot, object>} ImportTable
  *
  * @typedef {object} PairwiseTable
- * @property {(value: object) => Slot | undefined} getSlotForValue - Lookup the slot for a value. Does NOT increment refcount.
+ * @property {(value: unknown) => Slot | undefined} getSlotForValue - Lookup the slot for a value. Does NOT increment refcount. Returns undefined for values that can never be registered (e.g. primitives, which cannot be WeakMap keys).
  * @property {(slot: Slot) => object | undefined} getValueForSlot - Lookup the value for a slot. Does NOT increment refcount.
  * @property {(slot: Slot, value: object) => void} registerSlot - Register a slot and value. Does NOT increment refcount.
  * @property {(slot: Slot, refcount: number) => void} dropSlot - Decrements refcount by the given amount, Drops the slot and value if the refcount reaches 0.
