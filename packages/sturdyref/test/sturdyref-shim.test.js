@@ -53,7 +53,7 @@ test('no location: sturdyref is passStyleOf-opaque and leaks no locator', t => {
   const locator = harden({ kind: 'secret-locator', endpoint: 'wormhole:xyz' });
   const sturdyRef = fromLocation(locator);
 
-  t.is(passStyleOf(sturdyRef), 'remotable', 'opaque passable, not a record');
+  t.is(passStyleOf(sturdyRef), 'sturdyRef', 'opaque passable, not a record');
 
   // No own property (string or symbol) exposes the locator.
   for (const key of Reflect.ownKeys(sturdyRef)) {

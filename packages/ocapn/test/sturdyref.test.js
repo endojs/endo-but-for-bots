@@ -4,10 +4,10 @@ import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 import { passStyleOf } from '@endo/pass-style';
 import { test, testWithErrorUnwrapping, makeTestClient } from './_util.js';
-import { isSturdyRef, getSturdyRefDetails } from '../src/client/sturdyrefs.js';
+import { isSturdyRef, getSturdyRefLocator } from '../src/client/sturdyrefs.js';
 import { ocapnPassStyleOf } from '../src/codecs/ocapn-pass-style.js';
 
-testWithErrorUnwrapping('SturdyRef is a tagged type', async t => {
+testWithErrorUnwrapping('SturdyRef is a first-class pass-style', async t => {
   const { client: clientA, location: locationB } = await makeTestClient({
     debugLabel: 'A',
   });
@@ -15,45 +15,68 @@ testWithErrorUnwrapping('SturdyRef is a tagged type', async t => {
 
   const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
 
-  t.is(passStyleOf(sturdyRef), 'tagged', 'passStyleOf returns tagged');
+  t.is(passStyleOf(sturdyRef), 'sturdyRef', 'passStyleOf returns sturdyref');
   t.is(
     ocapnPassStyleOf(sturdyRef),
-    'sturdyref',
+    'sturdyRef',
     'ocapnPassStyleOf returns sturdyref',
   );
   t.is(
     sturdyRef[Symbol.toStringTag],
-    'ocapn-sturdyref',
-    'has correct tag name',
+    'SturdyRef',
+    'has the SturdyRef tag name',
   );
-  t.is(sturdyRef.payload, undefined, 'payload is undefined');
-
-  clientA.shutdown();
-  clientB.shutdown();
-});
-
-testWithErrorUnwrapping("SturdyRef doesn't expose secret/location", async t => {
-  const { client: clientA, location: locationB } = await makeTestClient({
-    debugLabel: 'A',
-  });
-  const { client: clientB } = await makeTestClient({ debugLabel: 'B' });
-
-  const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
-
-  t.false('location' in sturdyRef, 'no location property');
-  t.false('secret' in sturdyRef, 'no secret property');
-  t.false('swissNum' in sturdyRef, 'no swissNum property');
-
-  const stringified = String(sturdyRef);
   t.is(
-    stringified,
-    '[object ocapn-sturdyref]',
-    'stringification shows tag name',
+    /** @type {any} */ (sturdyRef).payload,
+    undefined,
+    'is opaque: no payload',
   );
 
   clientA.shutdown();
   clientB.shutdown();
 });
+
+testWithErrorUnwrapping(
+  'SturdyRef is opaque: neither location nor secret is a property',
+  async t => {
+    const { client: clientA, location: locationB } = await makeTestClient({
+      debugLabel: 'A',
+    });
+    const { client: clientB } = await makeTestClient({ debugLabel: 'B' });
+
+    const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
+
+    // The SturdyRef is fully opaque: it reveals nothing about where it
+    // points. The (location, secret) locator is held off-band in the
+    // realm-global mapping, reachable only through the closely-held
+    // `SturdyRef` namespace, never as a property on the SturdyRef.
+    t.false('location' in sturdyRef, 'no location property');
+    t.false('secret' in sturdyRef, 'no secret property');
+    t.false('swissNum' in sturdyRef, 'no swissNum property');
+    t.deepEqual(Reflect.ownKeys(sturdyRef), [], 'no own properties');
+    let protoChainLeak = false;
+    for (
+      let p = Object.getPrototypeOf(sturdyRef);
+      p !== null;
+      p = Object.getPrototypeOf(p)
+    ) {
+      if (
+        Reflect.ownKeys(p).some(
+          k => k === 'secret' || k === 'swissNum' || k === 'location',
+        )
+      ) {
+        protoChainLeak = true;
+      }
+    }
+    t.false(protoChainLeak, 'no locator anywhere on the prototype chain');
+
+    const stringified = String(sturdyRef);
+    t.is(stringified, '[object SturdyRef]', 'stringification shows tag name');
+
+    clientA.shutdown();
+    clientB.shutdown();
+  },
+);
 
 testWithErrorUnwrapping(
   'isSturdyRef correctly identifies SturdyRefs',
@@ -77,7 +100,7 @@ testWithErrorUnwrapping(
 );
 
 testWithErrorUnwrapping(
-  'getSturdyRefDetails returns correct details',
+  'the off-band locator is reachable only through the closely-held mapping',
   async t => {
     const { client: clientA, location: locationB } = await makeTestClient({
       debugLabel: 'A',
@@ -86,19 +109,21 @@ testWithErrorUnwrapping(
 
     const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
 
-    const details = getSturdyRefDetails(sturdyRef);
-    t.truthy(details, 'getSturdyRefDetails returns details');
-    if (details) {
-      t.deepEqual(details.location, locationB, 'location matches');
-      t.is(details.secret, 'test-object', 'secret matches');
+    // The realm-global mapping (installed by the first-wins shim) retains the
+    // (location, secret) locator keyed by the opaque SturdyRef's identity.
+    const locator = getSturdyRefLocator(sturdyRef);
+    t.truthy(locator, 'getSturdyRefLocator returns the off-band locator');
+    if (locator) {
+      t.deepEqual(locator.location, locationB, 'location matches');
+      t.is(locator.secret, 'test-object', 'secret matches');
     }
 
     const notASturdyRef = /** @type {any} */ ({});
-    const noDetails = getSturdyRefDetails(notASturdyRef);
+    const noLocator = getSturdyRefLocator(notASturdyRef);
     t.is(
-      noDetails,
+      noLocator,
       undefined,
-      'getSturdyRefDetails returns undefined for non-SturdyRef',
+      'getSturdyRefLocator returns undefined for non-SturdyRef',
     );
 
     clientA.shutdown();

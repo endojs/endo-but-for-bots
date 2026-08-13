@@ -59,7 +59,8 @@ export type PassStyle =
   | ContainerStyle
   | 'remotable'
   | 'error'
-  | 'promise';
+  | 'promise'
+  | 'sturdyRef';
 
 export type PassStyleMarker = 'tagged' | 'remotable';
 
@@ -140,6 +141,7 @@ export type PassStyleOf = {
   (p: Promise<any>): 'promise';
   (p: Error): 'error';
   (p: CopyTagged): 'tagged';
+  (p: SturdyRef): 'sturdyRef';
   (p: readonly any[]): 'copyArray';
   (p: Iterable<any>): 'remotable';
   (p: Iterator<any, any, undefined>): 'remotable';
@@ -234,6 +236,23 @@ export type CopyTagged<
   Tag extends string = string,
   Payload extends Passable = any,
 > = PassStyled<'tagged', Tag> & { payload: Payload };
+
+/**
+ * A SturdyRef is an **opaque**, first-class, pass-by-copy `@endo/pass-style`
+ * category that addresses a capability. `passStyleOf` returns `'sturdyRef'`. It
+ * is a bare identity: it carries **no** readable structure — no `location`, no
+ * `secret`, no `type`. The mapping from a SturdyRef to its locator is held
+ * off-band by the realm-global `SturdyRef` shim (see `SturdyRefNamespace`) and,
+ * closely held, by each CapTP instance (`@endo/ocapn`).
+ *
+ * `@endo/pass-style` constructs the opaque identity (`makeSturdyRef`) and
+ * recognises/validates the shape, but knows nothing of where a SturdyRef
+ * points.
+ */
+export type SturdyRef = {
+  [PASS_STYLE]: 'sturdyRef';
+  [Symbol.toStringTag]: 'SturdyRef';
+};
 
 /**
  * This is an interface specification.

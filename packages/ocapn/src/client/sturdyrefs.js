@@ -3,65 +3,82 @@
 /**
  * @import { OcapnLocation } from '../codecs/components.js'
  * @import { InternalSession } from './types.js'
+ * @import { SturdyRef } from '@endo/pass-style'
  */
 
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
-import { makeTagged } from '@endo/pass-style';
+import { isSturdyRef } from '@endo/pass-style';
+import { fromLocation, toLocation } from '@endo/sturdyref';
 import { encodeSwissnum, swissnumFromBytes } from './util.js';
 
+export { isSturdyRef };
+
 /**
- * @import { CopyTagged } from '@endo/pass-style'
- * @typedef {CopyTagged<'ocapn-sturdyref', undefined>} SturdyRef
- * A `SturdyRef` addresses a capability by `(location, secret)`. It is
- * reified in JavaScript as a tagged value purely so `passStyleOf` has
- * something to return; it never crosses the wire in this form (on the
- * wire OCapN uses the `'ocapn-sturdyref'` spec tag).
+ * The off-band locator a SturdyRef points at: the parsed `location`, the
+ * `secret` (swiss number) needed to re-acquire the capability, and an optional
+ * advisory `type` hint. This is the **object locator** the realm-global
+ * `SturdyRef` shim retains, keyed by SturdyRef identity — it is never a URL or
+ * URN string, and it is never a property on the opaque SturdyRef itself.
  *
- * The `secret` may be a printable ASCII string (the friendly form for
- * locators keyed by name) or raw bytes (Uint8Array) for arbitrary-byte
- * sturdyrefs minted by other implementations such as Spritely Goblins,
- * whose 24-byte random secrets generally aren't valid ASCII.
- *
- * @typedef {object} SturdyRefDetails
+ * @typedef {object} SturdyRefLocator
  * @property {OcapnLocation} location
  * @property {string | Uint8Array} secret
+ * @property {string} [type]
  */
 
-/** @type {WeakMap<SturdyRef, SturdyRefDetails>} */
-const sturdyRefDetails = new WeakMap();
-
-/** @param {any} value */
-export const isSturdyRef = value => sturdyRefDetails.has(value);
-
-/** @param {SturdyRef} sturdyRef */
-export const getSturdyRefDetails = sturdyRef => sturdyRefDetails.get(sturdyRef);
-
 /**
- * Resolve a `SturdyRef` to an actual reference: local values come from
- * the injected `locator`; remote values are fetched from the peer's
- * bootstrap over a session.
+ * Reveal a SturdyRef's off-band locator through the closely-held realm-global
+ * mapping, or `undefined` when `sturdyRef` is not a SturdyRef or has no locator
+ * registered in this realm. This is the only path that yields the secret; it is
+ * reachable only by holders of the closely-held `SturdyRef` namespace, never
+ * through the opaque SturdyRef object.
  *
-/**
  * @param {SturdyRef} sturdyRef
+ * @returns {SturdyRefLocator | undefined}
+ */
+export const getSturdyRefLocator = sturdyRef =>
+  isSturdyRef(sturdyRef)
+    ? /** @type {SturdyRefLocator | undefined} */ (toLocation(sturdyRef))
+    : undefined;
+harden(getSturdyRefLocator);
+
+/**
+ * Per-client cache from a SturdyRef to its in-flight or settled
+ * enlivenment. A SturdyRef is an inert opaque data box, so enlivening it
+ * to a live presence is a side-effecting step worth memoizing: repeated
+ * `enlivenSturdyRef` calls on the same SturdyRef reuse the same
+ * enlivenment rather than re-dialing the peer or re-reading the locator.
+ *
+ * The cache deliberately lives here in `@endo/ocapn`, not in
+ * `@endo/eventual-send`: SturdyRefs are not `E()`-dispatch targets, so the
+ * eventual-send layer needs no knowledge of them. A rejected enlivenment
+ * is evicted so a later call can retry.
+ *
+ * @type {WeakMap<SturdyRef, Promise<any>>}
+ */
+const sturdyRefToEnlivened = new WeakMap();
+
+/**
+ * The actual resolution, factored out of `enlivenSturdyRef` so the
+ * memoization wrapper stays synchronous up to the point it caches the
+ * resulting promise.
+ *
+ * @param {SturdyRefLocator} locator
  * @param {(location: OcapnLocation) => Promise<InternalSession>} provideSession
  * @param {(location: OcapnLocation) => boolean} isSelfLocation
- * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} locator
+ * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} localLocator
  */
-export const enlivenSturdyRef = async (
-  sturdyRef,
+const resolveSturdyRef = async (
+  locator,
   provideSession,
   isSelfLocation,
-  locator,
+  localLocator,
 ) => {
-  const details = sturdyRefDetails.get(sturdyRef);
-  if (!details) {
-    throw Error('SturdyRef details not found');
-  }
-  const { location, secret } = details;
+  const { location, secret } = locator;
 
   if (isSelfLocation(location)) {
-    const value = await locator.get(secret);
+    const value = await localLocator.get(secret);
     if (value === undefined) {
       // Intentionally do NOT include `secret` in the message: this
       // error rides up into rejection chains that may be serialized
@@ -84,8 +101,57 @@ export const enlivenSturdyRef = async (
 };
 
 /**
+ * Resolve a `SturdyRef` to an actual reference: local values come from the
+ * injected `localLocator`; remote values are fetched from the peer's bootstrap
+ * over a session. The result is memoized per SturdyRef.
+ *
+ * This enlivener is closely held by each CapTP instance (it is never endowed to
+ * a child compartment or exposed through the opaque SturdyRef). It resolves a
+ * SturdyRef's locator through the realm-global mapping, so a SturdyRef minted by
+ * an eval twin in the same realm can be enlivened here.
+ *
+ * @param {SturdyRef} sturdyRef
+ * @param {(location: OcapnLocation) => Promise<InternalSession>} provideSession
+ * @param {(location: OcapnLocation) => boolean} isSelfLocation
+ * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} localLocator
+ */
+export const enlivenSturdyRef = (
+  sturdyRef,
+  provideSession,
+  isSelfLocation,
+  localLocator,
+) => {
+  const cached = sturdyRefToEnlivened.get(sturdyRef);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  // The off-band locator lives in the realm-global mapping; a SturdyRef with no
+  // entry (never minted in this realm) cannot be enlivened.
+  const locator = getSturdyRefLocator(sturdyRef);
+  if (locator === undefined) {
+    throw Error(
+      'ocapn: cannot enliven a sturdyref with no locator in this realm',
+    );
+  }
+
+  const enlivened = resolveSturdyRef(
+    locator,
+    provideSession,
+    isSelfLocation,
+    localLocator,
+  );
+  sturdyRefToEnlivened.set(sturdyRef, enlivened);
+  // Evict a failed enlivenment so a later call can retry rather than
+  // replaying a stale rejection forever.
+  enlivened.catch(() => sturdyRefToEnlivened.delete(sturdyRef));
+  return enlivened;
+};
+harden(enlivenSturdyRef);
+
+/**
  * @typedef {object} SturdyRefTracker
- * @property {(location: OcapnLocation, secret: string | Uint8Array) => SturdyRef} makeSturdyRef
+ * @property {(location: OcapnLocation, secret: string | Uint8Array, type?: string) => SturdyRef} makeSturdyRef
  * @property {(secretBytes: ArrayBufferLike) => Promise<any | undefined>} lookup
  *   Async look up a locally-held capability by the on-wire secret
  *   bytes. Calls through to the injected locator with either the
@@ -94,16 +160,18 @@ export const enlivenSturdyRef = async (
  */
 
 /**
- * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} locator
+ * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} localLocator
  * @returns {SturdyRefTracker}
  */
-export const makeSturdyRefTracker = locator => {
+export const makeSturdyRefTracker = localLocator => {
   const textDecoder = new TextDecoder('ascii', { fatal: true });
   return harden({
-    makeSturdyRef: (location, secret) => {
-      const sturdyRef = makeTagged('ocapn-sturdyref', undefined);
-      sturdyRefDetails.set(sturdyRef, { location, secret });
-      return harden(sturdyRef);
+    makeSturdyRef: (location, secret, type = undefined) => {
+      // Mint an opaque SturdyRef through the realm-global shim and retain its
+      // `(location, secret, type)` locator off-band, keyed by the SturdyRef's
+      // identity. The secret is never a property on the SturdyRef, and the
+      // locator is reachable only through the closely-held namespace.
+      return fromLocation(harden({ location, secret, type }));
     },
     lookup: async secretBytes => {
       const view =
@@ -117,10 +185,11 @@ export const makeSturdyRefTracker = locator => {
       // those, locators that don't will simply return undefined.
       try {
         const secret = textDecoder.decode(view);
-        return locator.get(secret);
+        return localLocator.get(secret);
       } catch {
-        return locator.get(view);
+        return localLocator.get(view);
       }
     },
   });
 };
+harden(makeSturdyRefTracker);
