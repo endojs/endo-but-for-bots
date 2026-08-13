@@ -27,13 +27,38 @@ import { decodeSwissnum, makeOcapn } from '@endo/ocapn';
 import { makeWebSocketNetLayer } from '@endo/ocapn/netlayer/ws';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { hostRoom, hostRegistry } from '../src/host-room.js';
+import {
+  hostRoom,
+  hostRegistry,
+  swissStringToBytes,
+} from '../src/host-room.js';
 import { parseLocator } from '../src/uri-parse.js';
 
 // Match what the in-process interop test uses; the websocket loopback
 // path through `makeOcapn`/`makeWebSocketNetLayer` is most-tested at
 // this version.
 const CAPTP_VERSION = 'goblins-0.16';
+
+test('swissStringToBytes encodes an ASCII swissnum one byte per code unit', t => {
+  const bytes = swissStringToBytes('abc-_123');
+  t.deepEqual(
+    bytes,
+    Uint8Array.from([0x61, 0x62, 0x63, 0x2d, 0x5f, 0x31, 0x32, 0x33]),
+  );
+});
+
+test('swissStringToBytes rejects a non-ASCII swissnum instead of truncating', t => {
+  // The old `charCodeAt` copy masked each code unit to its low byte, so a
+  // non-ASCII swissnum silently produced wrong bytes. `encodeAscii` now
+  // hard-fails on the first code unit above 0x7f.
+  t.throws(() => swissStringToBytes('swïss'), {
+    instanceOf: RangeError,
+    message: /Non-ASCII code unit/u,
+  });
+  // A non-BMP code point is a surrogate pair; the leading surrogate is
+  // itself above 0x7f, so it is rejected too (never truncated to a byte).
+  t.throws(() => swissStringToBytes('\u{1f4a9}'), { instanceOf: RangeError });
+});
 
 // Both tests in this file touch the module-level `hostRegistry`, so
 // run them serially: a stray `shutdownAll()` from one would otherwise

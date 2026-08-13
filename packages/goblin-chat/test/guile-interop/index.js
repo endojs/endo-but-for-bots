@@ -18,13 +18,12 @@ import '@endo/init';
  * @import { OcapnLocation } from '@endo/ocapn'
  */
 
+import { encodeAscii } from '@endo/ascii';
 import { makeOcapn } from '@endo/ocapn';
 import { makeWebSocketNetLayer } from '@endo/ocapn/netlayer/ws';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import { decodeBase64Url } from '../../src/base64url.js';
 import { runChatParticipant } from '../../src/interop-driver.js';
-
-const swissnumEncoder = new TextEncoder();
 
 const DEFAULT_PORT = 0;
 const DEFAULT_CAPTP_VERSION = '1.0';
@@ -65,16 +64,10 @@ const parseSturdyrefUri = uri => {
     }
     swissNum = decodeBase64Url(path.slice(3));
   } else if (typeof hints.swiss === 'string' && hints.swiss.length > 0) {
-    // Validate ASCII so a stray non-ASCII char in a `?swiss=…` hint
-    // fails loudly here rather than producing a wire-level mystery.
-    for (let i = 0; i < hints.swiss.length; i += 1) {
-      if (hints.swiss.charCodeAt(i) > 127) {
-        throw Error(
-          `Non-ASCII byte in swissnum at position ${i}: ${hints.swiss[i]}`,
-        );
-      }
-    }
-    swissNum = swissnumEncoder.encode(hints.swiss);
+    // `encodeAscii` is the canonical 7-bit-asserted encoder: a stray
+    // non-ASCII char in a `?swiss=…` hint fails loudly here rather than
+    // being silently mangled into a wire-level mystery downstream.
+    swissNum = encodeAscii(hints.swiss, 'swissnum');
   } else {
     throw Error(`No sturdyref swiss number found in URI: ${uri}`);
   }

@@ -33,6 +33,7 @@
 
 import { randomBytes } from 'node:crypto';
 
+import { encodeAscii } from '@endo/ascii';
 import { makeOcapn, formatSturdyRefUri } from '@endo/ocapn';
 import { makeWebSocketNetLayer } from '@endo/ocapn/netlayer/ws';
 import { syrupCodec } from '@endo/ocapn/syrup';
@@ -69,16 +70,16 @@ const makeFreshSwissString = () =>
  * `decodeSwissnum` pair in `@endo/ocapn`), so each character's code
  * point is one byte.
  *
+ * Delegates to `@endo/ascii`'s `encodeAscii`, the canonical 7-bit-asserted
+ * encoder: a swissnum is ASCII by construction, so a stray non-ASCII code
+ * unit is a bug to surface loudly rather than silently truncate the way the
+ * old `charCodeAt` copy did (`0x1f4a9` would have masked down to a stray
+ * byte). Exported so the reject-non-ASCII contract can be exercised directly.
+ *
  * @param {string} swissStr
  * @returns {Uint8Array}
  */
-const swissStringToBytes = swissStr => {
-  const bytes = new Uint8Array(swissStr.length);
-  for (let i = 0; i < swissStr.length; i += 1) {
-    bytes[i] = swissStr.charCodeAt(i);
-  }
-  return bytes;
-};
+export const swissStringToBytes = swissStr => encodeAscii(swissStr, 'swissnum');
 
 /**
  * Format the user-facing sturdyref URI for a hosted chatroom from its
