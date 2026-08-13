@@ -73,6 +73,26 @@ test('rejects a non-Uint8Array input', t => {
   t.throws(() => decodeAscii([0x41]), { instanceOf: TypeError });
 });
 
+test('reads the intrinsic Uint8Array length and rejects proxies', t => {
+  class MisleadingLength extends Uint8Array {
+    // eslint-disable-next-line class-methods-use-this
+    get length() {
+      return 4;
+    }
+  }
+
+  t.is(decodeAscii(new MisleadingLength([0x41])), 'A');
+  t.throws(() => decodeAscii(new Proxy(Uint8Array.of(0x41), {})), {
+    instanceOf: TypeError,
+  });
+});
+
+test('rejects a Uint8Array over a detached buffer', t => {
+  const bytes = Uint8Array.of(0x41);
+  structuredClone(bytes.buffer, { transfer: [bytes.buffer] });
+  t.throws(() => decodeAscii(bytes), { instanceOf: TypeError });
+});
+
 test('round-trips with encodeAscii across the full admitted range', t => {
   let text = '';
   for (let i = 0; i < 0x80; i += 1) {

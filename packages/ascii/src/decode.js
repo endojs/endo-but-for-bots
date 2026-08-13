@@ -2,6 +2,19 @@
 
 import harden from '@endo/harden';
 
+const TypedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+const { apply } = Reflect;
+const { fromCharCode } = String;
+const { values: typedArrayValues } = TypedArrayPrototype;
+const { get: typedArrayLength } = /** @type {PropertyDescriptor} */ (
+  Object.getOwnPropertyDescriptor(TypedArrayPrototype, 'length')
+);
+const { get: typedArrayTag } = /** @type {PropertyDescriptor} */ (
+  Object.getOwnPropertyDescriptor(TypedArrayPrototype, Symbol.toStringTag)
+);
+
+const CODE_UNIT_CHUNK_SIZE = 4096;
+
 /**
  * Decodes bytes to ASCII text, one UTF-16 code unit per byte, asserting that
  * every byte is in the admitted 7-bit range `0x00`–`0x7f` and hard-failing on
@@ -22,21 +35,51 @@ import harden from '@endo/harden';
  * @returns {string}
  */
 export const decodeAscii = (bytes, name = '<unknown>') => {
-  if (!(bytes instanceof Uint8Array)) {
+  /** @type {number} */
+  let length;
+  try {
+    if (
+      apply(
+        /** @type {(this: unknown) => string | undefined} */ (typedArrayTag),
+        bytes,
+        [],
+      ) !== 'Uint8Array'
+    ) {
+      throw TypeError('not a Uint8Array');
+    }
+    // Creating an iterator performs the spec's detached/out-of-bounds check
+    // without invoking a subclass species constructor or reading through a
+    // caller-controlled Proxy.
+    apply(typedArrayValues, bytes, []);
+    length = apply(
+      /** @type {(this: unknown) => number} */ (typedArrayLength),
+      bytes,
+      [],
+    );
+  } catch (cause) {
     throw TypeError(
-      `ascii: expected a Uint8Array to decode, got ${typeof bytes}`,
+      `ascii: expected bytes ${name} to be a genuine Uint8Array`,
+      { cause },
     );
   }
-  let text = '';
-  for (let i = 0; i < bytes.length; i += 1) {
-    const byte = bytes[i];
-    if (byte > 0x7f) {
-      throw RangeError(
-        `Non-ASCII byte 0x${byte.toString(16)} at offset ${i} of bytes ${name}`,
-      );
+
+  /** @type {string[]} */
+  const chunks = [];
+  for (let offset = 0; offset < length; offset += CODE_UNIT_CHUNK_SIZE) {
+    const chunkLength = Math.min(CODE_UNIT_CHUNK_SIZE, length - offset);
+    const codeUnits = new Array(chunkLength);
+    for (let index = 0; index < chunkLength; index += 1) {
+      const byteOffset = offset + index;
+      const byte = bytes[byteOffset];
+      if (!(byte >= 0 && byte <= 0x7f)) {
+        throw RangeError(
+          `Non-ASCII byte 0x${byte.toString(16)} at offset ${byteOffset} of bytes ${name}`,
+        );
+      }
+      codeUnits[index] = byte;
     }
-    text += String.fromCharCode(byte);
+    chunks.push(apply(fromCharCode, undefined, codeUnits));
   }
-  return text;
+  return chunks.join('');
 };
 harden(decodeAscii);
