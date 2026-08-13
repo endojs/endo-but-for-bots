@@ -275,12 +275,15 @@ jobs:
             # otherwise land inside the host step's 240-second
             # sturdyref window and can starve it entirely (observed
             # 2026-08-13: 38.7 MB of profile substitutes consumed the
-            # whole window before Guile ever started). `-- true`
-            # materializes the profile and exits, letting this
-            # retried step absorb the slow network instead of the
-            # timed one.
+            # whole window before Guile ever started). Running
+            # `guile --version` materializes the profile and exits,
+            # letting this retried step absorb the slow network
+            # instead of the timed one. The probe command must be one
+            # the profile itself provides: `--pure` strips coreutils
+            # from PATH, so e.g. `-- true` fails with exit 127.
             guix shell --pure --no-grafts --fallback \
-              guile guile-fibers guile-websocket guile-gnutls guile-gcrypt -- true
+              guile guile-fibers guile-websocket guile-gnutls guile-gcrypt -- \
+              guile --version
             scratch="$(mktemp)"
             {
               echo "FIBERS_OUT=$FIBERS"
