@@ -1155,8 +1155,9 @@ test('E.get rejects Symbol property access', async t => {
     const testSymbol = Symbol('test');
     const error = await t.throwsAsync(
       async () => {
-        // @ts-expect-error - intentionally using symbol for testing
-        await E.get(objectPromise)[testSymbol];
+        // Intentionally using a symbol key for testing; E.get's mapped
+        // type is string-keyed, so widen to index by symbol.
+        await /** @type {any} */ (E.get(objectPromise))[testSymbol];
       },
       {
         instanceOf: Error,

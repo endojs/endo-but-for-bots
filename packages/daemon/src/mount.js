@@ -2,7 +2,7 @@
 /// <reference types="ses"/>
 
 /** @import { SnapshotTree } from '@endo/platform/fs/lite/types' */
-/** @import { EndoMount, FilePowers, MountNameChange } from './types.js' */
+/** @import { EndoMount, EndoMountControl, FilePowers, MountNameChange } from './types.js' */
 
 import { E } from '@endo/eventual-send';
 import { q } from '@endo/errors';
@@ -1813,7 +1813,7 @@ harden(makeMount);
  * cancellation, and keep the `control` captive so only the daemon can revoke.
  *
  * @param {Parameters<typeof makeMount>[0]} opts
- * @returns {{ mount: object, control: object }}
+ * @returns {{ mount: EndoMount, control: EndoMountControl }}
  */
 export const makeRevocableMount = opts => {
   // `whenRevoked` settles the instant `revoke()` runs, so an open
