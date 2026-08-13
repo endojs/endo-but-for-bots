@@ -266,6 +266,21 @@ jobs:
             WEBSOCKET=$(resolve guile-websocket)
             GNUTLS=$(resolve guile-gnutls)
             GCRYPT=$(resolve guile-gcrypt)
+            # Prime the exact profile the host step requests below
+            # (same package set, same --no-grafts, so the derivation
+            # is identical), including the `guile` package itself and
+            # the profile-hook outputs (CA bundle, fonts and info
+            # directories) that the four module resolutions above do
+            # not cover. On degraded-substitute days those fetches
+            # otherwise land inside the host step's 240-second
+            # sturdyref window and can starve it entirely (observed
+            # 2026-08-13: 38.7 MB of profile substitutes consumed the
+            # whole window before Guile ever started). `-- true`
+            # materializes the profile and exits, letting this
+            # retried step absorb the slow network instead of the
+            # timed one.
+            guix shell --pure --no-grafts --fallback \
+              guile guile-fibers guile-websocket guile-gnutls guile-gcrypt -- true
             scratch="$(mktemp)"
             {
               echo "FIBERS_OUT=$FIBERS"
