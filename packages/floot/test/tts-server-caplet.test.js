@@ -63,7 +63,9 @@ test('one piper process serves a whole multi-sentence reply', async t => {
   const { server, spawnCount } = await makeTtsServer(t);
 
   const { push, reader: textReader } = makeBufferedReader();
-  const audioReader = server.synthesize(textReader);
+  // The static reader type carries no remotable brand, but at runtime the
+  // buffered reader is an exo — cast across the guarded Passable boundary.
+  const audioReader = server.synthesize(/** @type {any} */ (textReader));
   // Deltas arrive as an LLM would stream them; the chunker flushes a sentence
   // once its trailing whitespace confirms the boundary.
   push({ type: 'delta', text: 'First sentence here. Second sentence ' });
@@ -94,7 +96,9 @@ test('an empty reply spawns no piper at all', async t => {
   t.timeout(20_000);
   const { server, spawnCount } = await makeTtsServer(t);
   const { push, reader: textReader } = makeBufferedReader();
-  const audioReader = server.synthesize(textReader);
+  // The static reader type carries no remotable brand, but at runtime the
+  // buffered reader is an exo — cast across the guarded Passable boundary.
+  const audioReader = server.synthesize(/** @type {any} */ (textReader));
   push({ type: 'end' });
   const events = await collect(audioReader);
   t.deepEqual(events, [
@@ -108,7 +112,9 @@ test('a text-side abort aborts the audio stream', async t => {
   t.timeout(20_000);
   const { server } = await makeTtsServer(t);
   const { push, reader: textReader } = makeBufferedReader();
-  const audioReader = server.synthesize(textReader);
+  // The static reader type carries no remotable brand, but at runtime the
+  // buffered reader is an exo — cast across the guarded Passable boundary.
+  const audioReader = server.synthesize(/** @type {any} */ (textReader));
   push({ type: 'delta', text: 'Something to say. ' });
   push({ type: 'abort', reason: 'barge-in' });
   const events = await collect(audioReader);

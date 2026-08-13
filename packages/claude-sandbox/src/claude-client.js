@@ -451,7 +451,7 @@ export const makeClaudeClient = ({
    * `ProcessHandle`.
    *
    * @param {string} prompt
-   * @param {{ model?: string }} [opts]
+   * @param {{ model?: string, systemPrompt?: string }} [opts]
    * @returns {Promise<ProcessHandle>}
    */
   const spawnClaude = async (prompt, opts = {}) => {

@@ -63,6 +63,7 @@ export const main = async hostAgent => {
   if (!(await E(hostAgent).has(SANDBOX_DIR, 'fs-mounter'))) {
     /** @type {Record<string, string>} */
     const mounterEnv = {};
+    /** @type {[string, string | undefined][]} */
     const envSources = [
       ['NINEP_SUDO', env.NINEP_SUDO ?? process.env.NINEP_SUDO],
       [

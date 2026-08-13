@@ -46,7 +46,19 @@ import { mountAsFilesystem } from '@endo/platform/fs/extended/from-mount.js';
 import { contentTypeForName } from './mime.js';
 import { AssetServerInterface, AssetMountInterface } from './type-guards.js';
 
-/** @import { HttpRequest, HttpResponse } from '@endo/platform/http/server' */
+/** @import { HttpAddress, HttpRequest, HttpResponse } from '@endo/platform/http/server' */
+
+/**
+ * The slice of the `HttpServer` exo surface this module drives.
+ * `makeHttpServer` declares its return type as only `object`, so name the
+ * methods used here (they mirror `HttpServerInterface` in
+ * `@endo/platform/http/server`).
+ *
+ * @typedef {object} HttpServerFacet
+ * @property {() => Promise<void>} start
+ * @property {() => Promise<HttpAddress>} whenBound
+ * @property {() => Promise<void>} stop
+ */
 
 /* eslint-disable no-underscore-dangle */
 
@@ -384,6 +396,7 @@ export const makeAssetServer = async ({
       return plainResponse(404, 'Not found\n');
     }
 
+    /** @type {[string, string][]} */
     const headers = [
       ['Content-Type', contentTypeForName(fileName)],
       ['Content-Length', String(size)],
@@ -401,11 +414,13 @@ export const makeAssetServer = async ({
     return { status: 200, headers, body: readFileBody(fileNode, size) };
   };
 
-  const httpServer = makeHttpServer({
-    backend,
-    handler,
-    address: { host, port },
-  });
+  const httpServer = /** @type {HttpServerFacet} */ (
+    makeHttpServer({
+      backend,
+      handler,
+      address: { host, port },
+    })
+  );
   await E(httpServer).start();
   const bound = /** @type {{ host: string, port: number }} */ (
     await E(httpServer).whenBound()
