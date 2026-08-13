@@ -1399,7 +1399,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/ascii@workspace:packages/ascii":
+"@endo/ascii@workspace:^, @endo/ascii@workspace:packages/ascii":
   version: 0.0.0-use.local
   resolution: "@endo/ascii@workspace:packages/ascii"
   dependencies:
@@ -2824,6 +2824,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/ocapn@workspace:packages/ocapn"
   dependencies:
+    "@endo/ascii": "workspace:^"
     "@endo/bytes": "workspace:^"
     "@endo/chacha12": "workspace:^"
     "@endo/eventual-send": "workspace:^"
