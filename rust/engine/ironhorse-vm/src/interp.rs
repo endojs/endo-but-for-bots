@@ -2051,6 +2051,10 @@ pub enum NativeMethod {
     /// resume by throwing `e` at the suspension point (a named skip until the
     /// throw-into-suspended path is modeled).
     GeneratorThrow,
+    AsyncGeneratorNext,
+    AsyncGeneratorReturn,
+    AsyncGeneratorThrow,
+    AsyncIteratorIdentity,
     /// `Promise.resolve(value)` (`fx_Promise_resolve`): a promise resolved
     /// with `value` (returned as-is when already a native promise).
     PromiseResolveStatic,
@@ -2402,6 +2406,9 @@ enum ReactionKind {
     /// awaited promise: resume the suspended async instance (the payload) with
     /// the settled value (fulfilled → `NoStatus`, rejected → `Throw`).
     AsyncAwait(crate::value::SlotIndex),
+    AsyncGeneratorAwait(crate::value::SlotIndex),
+    AsyncGeneratorYield(crate::value::SlotIndex),
+    AsyncGeneratorReturn(crate::value::SlotIndex),
     /// A `Promise.prototype.finally` reaction (XS's `then` whose native
     /// handlers run `onFinally` and pass the settlement through). The
     /// reaction's `on_fulfilled` slot carries the `onFinally` function (or
@@ -2744,6 +2751,9 @@ pub enum Halt {
     /// `XS_CODE_AWAIT` shares the `YIELD` `mxCase` and likewise `goto
     /// XS_CODE_END_ALL`s out of `fxRunID`.
     Await(Slot),
+    /// An async-generator body reached `YIELD`; its active request remains
+    /// pending while the yielded value is assimilated as a promise.
+    AsyncYield(Slot),
 }
 
 /// Propagate a native/helper result from the bytecode dispatch loop, resuming
@@ -3203,6 +3213,14 @@ pub struct Interp {
     /// arm reads the top to snapshot the right instance — the async analog of
     /// [`Self::gen_run_stack`].
     async_run_stack: Vec<AsyncRunFrame>,
+    /// Async-generator instances combine generator suspension with promise
+    /// request queues. Each `.next`/`.return`/`.throw` capability is kept in
+    /// FIFO order until the currently executing/awaiting request finishes.
+    async_generators: std::collections::HashMap<crate::value::SlotIndex, AsyncGeneratorData>,
+    async_generator_proto: crate::value::SlotIndex,
+    async_generator_function_proto: crate::value::SlotIndex,
+    async_iterator_identity: crate::value::SlotIndex,
+    async_gen_run_stack: Vec<AsyncGenRunFrame>,
     /// The resume mode threaded into the `BRANCH_STATUS` epilogue after an
     /// `AWAIT` resume (XS's `the->status`): `NoStatus` (a fulfilled resume —
     /// branch by offset, leaving the resolved value on the stack) or `Throw`
@@ -3453,6 +3471,37 @@ struct AsyncRunFrame {
     call_depth_base: usize,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum AsyncGeneratorState {
+    SuspendedStart,
+    SuspendedYield,
+    Executing,
+    Awaiting,
+    Completed,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AsyncGeneratorRequest {
+    status: GenStatus,
+    value: Slot,
+    resolve: Slot,
+    reject: Slot,
+}
+
+struct AsyncGeneratorData {
+    state: AsyncGeneratorState,
+    frame: Option<SavedFrame>,
+    requests: std::collections::VecDeque<AsyncGeneratorRequest>,
+    active: Option<AsyncGeneratorRequest>,
+}
+
+struct AsyncGenRunFrame {
+    gen: crate::value::SlotIndex,
+    stack_base: usize,
+    jumps_base: usize,
+    call_depth_base: usize,
+}
+
 /// The resume mode threaded into the `BRANCH_STATUS` epilogue after an `AWAIT`
 /// resume (XS's `the->status` bits, restricted to the two an async body can see).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -3583,6 +3632,11 @@ impl Interp {
             async_instances: std::collections::HashMap::new(),
             async_function_proto: crate::value::SlotIndex::NULL,
             async_run_stack: Vec::new(),
+            async_generators: std::collections::HashMap::new(),
+            async_generator_proto: crate::value::SlotIndex::NULL,
+            async_generator_function_proto: crate::value::SlotIndex::NULL,
+            async_iterator_identity: crate::value::SlotIndex::NULL,
+            async_gen_run_stack: Vec::new(),
             resume_status: ResumeStatus::NoStatus,
             promise_functions: std::collections::HashMap::new(),
             promise_guards: Vec::new(),
@@ -4018,6 +4072,21 @@ impl Interp {
         // check reaches it); its own `Symbol.toStringTag` is unread and omitted.
         let async_function_proto = self.slots.alloc(Slot::instance(self.function_proto));
         self.async_function_proto = async_function_proto;
+        // `%AsyncGeneratorPrototype%` and `%AsyncGeneratorFunction.prototype%`.
+        // Async-generator instances expose the same three request methods as
+        // generators, but each returns a promise and requests are serialized.
+        let async_generator_proto = self.slots.alloc(Slot::instance(self.object_proto));
+        self.async_generator_proto = async_generator_proto;
+        for (name, m) in [
+            ("next", NativeMethod::AsyncGeneratorNext),
+            ("return", NativeMethod::AsyncGeneratorReturn),
+            ("throw", NativeMethod::AsyncGeneratorThrow),
+        ] {
+            let mf = self.alloc_method(m);
+            self.proto_methods.push((async_generator_proto, name, mf));
+        }
+        self.async_iterator_identity = self.alloc_method(NativeMethod::AsyncIteratorIdentity);
+        self.async_generator_function_proto = self.slots.alloc(Slot::instance(self.function_proto));
         // `Promise.*` statics — own methods of the `Promise` constructor
         // instance (not the prototype).
         if let Some(&promise_ctor) = self.intrinsics.get("Promise") {
@@ -4701,6 +4770,17 @@ impl Interp {
             }
             self.well_known_symbols = wks;
         }
+        if let Some(id) = self.well_known_symbol_property_id("asyncIterator") {
+            self.set_own_unmetered_with_flag(
+                self.async_generator_proto,
+                id,
+                Slot::of(
+                    Kind::Reference,
+                    Payload::Reference(self.async_iterator_identity),
+                ),
+                XS_DONT_ENUM_FLAG,
+            );
+        }
     }
 
     /// The native identity of a function instance, if it is an intrinsic.
@@ -5135,9 +5215,11 @@ impl Interp {
         // top-level result). A job that reaches an un-modeled path turns the
         // whole run into an honest `Halt::Unsupported`.
         if halt == Halt::Return {
+            let script_result = self.result;
             if let Err(h) = self.run_promise_jobs(code) {
                 halt = h;
             }
+            self.result = script_result;
         }
         // A program that completes with a Symbol *value* is coerced to a
         // string by the harness (`String(result)`), which throws — so the
@@ -5789,7 +5871,7 @@ impl Interp {
                 // retain allocation-faithful intrinsic fast paths. The
                 // surrounding loop drives the returned `{value, done}`
                 // protocol through ordinary property/call opcodes.
-                XS_CODE_FOR_OF => {
+                XS_CODE_FOR_OF | XS_CODE_FOR_AWAIT_OF => {
                     let iterable = self.pop();
                     // A guest-defined `@@iterator` takes precedence over the
                     // intrinsic dense fast paths below. Accessor lookup and a
@@ -5798,8 +5880,13 @@ impl Interp {
                     // `next`/`done`/`value` loop.
                     let custom_iterator = match iterable.value {
                         Payload::Reference(instance) => {
+                            let symbol_name = if op == XS_CODE_FOR_AWAIT_OF {
+                                "asyncIterator"
+                            } else {
+                                "iterator"
+                            };
                             let symbol_id = self
-                                .well_known_symbol_property_id("iterator")
+                                .well_known_symbol_property_id(symbol_name)
                                 .unwrap_or(crate::value::XS_NO_ID);
                             if symbol_id == crate::value::XS_NO_ID {
                                 None
@@ -5824,6 +5911,15 @@ impl Interp {
                         self.push(iterator);
                         pc += size as usize;
                         continue;
+                    }
+                    // `for await` falls back to the synchronous iterator and
+                    // awaits each compiler-emitted `next()` result/value.
+                    // Async generators themselves have no synchronous fallback.
+                    if op == XS_CODE_FOR_AWAIT_OF {
+                        if matches!(iterable.value, Payload::Reference(i) if self.async_generators.contains_key(&i))
+                        {
+                            return self.catchable_type_error();
+                        }
                     }
                     match iterable.value {
                         Payload::Reference(i) if self.arrays.contains_key(&i) => {
@@ -6579,6 +6675,12 @@ impl Interp {
                 XS_CODE_ASYNC_FUNCTION => {
                     let name = id!(1);
                     let f = self.new_async_function(name);
+                    self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
+                    pc += ilen;
+                }
+                XS_CODE_ASYNC_GENERATOR_FUNCTION => {
+                    let name = id!(1);
+                    let f = self.new_async_generator_function(name);
                     self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
                     pc += ilen;
                 }
@@ -8250,6 +8352,7 @@ impl Interp {
                         if return_depth != 0 {
                             let _ = self.leave_call();
                             self.push(gen_slot);
+                            self.callback_return_depth = Some(return_depth);
                         }
                         return Halt::Return;
                     }
@@ -8268,6 +8371,57 @@ impl Interp {
                 // result). `YIELD_STAR` uses the same suspension machinery,
                 // carrying the delegate's iterator-result object as-is.
                 XS_CODE_YIELD | XS_CODE_YIELD_STAR => {
+                    // A synchronous generator can run inside an async-generator
+                    // step (for example, a custom iterator used by parameter
+                    // destructuring), and the reverse nesting is possible too.
+                    // Suspend the innermost driver, not merely whichever flavor
+                    // happens to have a non-empty stack.
+                    let async_is_innermost = self.async_gen_run_stack.last().is_some_and(|a| {
+                        self.gen_run_stack
+                            .last()
+                            .is_none_or(|g| a.call_depth_base > g.call_depth_base)
+                    });
+                    if async_is_innermost {
+                        let a = self.async_gen_run_stack.last().unwrap();
+                        let (gen, stack_base, jumps_base, call_depth_base) =
+                            (a.gen, a.stack_base, a.jumps_base, a.call_depth_base);
+                        let resume_pc = pc + size as usize;
+                        let yielded = self.pop();
+                        let stack_slice = self.stack.split_off(stack_base);
+                        let jumps = self
+                            .jumps
+                            .split_off(jumps_base)
+                            .into_iter()
+                            .map(|jump| SavedJump {
+                                target_pc: jump.target_pc,
+                                stack_offset: jump.stack_len.saturating_sub(stack_base),
+                                locals_len: jump.locals_len,
+                                id_map: jump.id_map,
+                                call_depth_offset: jump.call_depth.saturating_sub(call_depth_base),
+                                flag: jump.flag,
+                            })
+                            .collect();
+                        self.meter.tick_raw(GENERATOR_YIELD_METERING);
+                        let frame = SavedFrame {
+                            locals: std::mem::take(&mut self.locals),
+                            id_map: std::mem::take(&mut self.id_map),
+                            args: std::mem::take(&mut self.args),
+                            this_val: self.this_val,
+                            cur_func: self.cur_func,
+                            cur_target: self.cur_target,
+                            target_func: self.target_func,
+                            strict: self.strict,
+                            result: self.result,
+                            stack_slice,
+                            jumps,
+                            resume_pc,
+                        };
+                        if let Some(g) = self.async_generators.get_mut(&gen) {
+                            g.frame = Some(frame);
+                            g.state = AsyncGeneratorState::Awaiting;
+                        }
+                        return Halt::AsyncYield(yielded);
+                    }
                     let (gen, stack_base, jumps_base, call_depth_base) =
                         match self.gen_run_stack.last() {
                             Some(g) => (g.gen, g.stack_base, g.jumps_base, g.call_depth_base),
@@ -8316,6 +8470,31 @@ impl Interp {
                 }
 
                 // ---- async functions --------------------------------
+                XS_CODE_START_ASYNC_GENERATOR => {
+                    if self.cur_target {
+                        return Halt::Unsupported("async-generator:new-target");
+                    }
+                    let resume_pc = pc + size as usize;
+                    let proto = self
+                        .prototype_of(self.cur_func)
+                        .unwrap_or(self.async_generator_proto);
+                    let gen = self.new_async_generator_instance(proto, resume_pc);
+                    let slot = Slot::of(Kind::Reference, Payload::Reference(gen));
+                    if self.call_stack.len() == return_depth {
+                        if return_depth != 0 {
+                            let _ = self.leave_call();
+                            self.push(slot);
+                            self.callback_return_depth = Some(return_depth);
+                        }
+                        return Halt::Return;
+                    }
+                    let resume = self.leave_call();
+                    self.push(slot);
+                    pc = resume;
+                    if self.check_meter() == MeterCheck::Abort {
+                        return Halt::MeterAbort;
+                    }
+                }
                 // `start_async` (`XS_CODE_START_ASYNC`, xsRun.c:1094): the
                 // leading opcode of an async-function body. Create the async
                 // instance (result promise + resolving/await functions), snapshot
@@ -8349,6 +8528,7 @@ impl Interp {
                         if return_depth != 0 {
                             let _ = self.leave_call();
                             self.push(promise_slot);
+                            self.callback_return_depth = Some(return_depth);
                         }
                         return Halt::Return;
                     }
@@ -8370,6 +8550,46 @@ impl Interp {
                 // (the same increment generators defer for `yield-in-try`) — an
                 // honest named skip for now.
                 XS_CODE_AWAIT => {
+                    if let Some(a) = self.async_gen_run_stack.last() {
+                        let (gen, stack_base, jumps_base, call_depth_base) =
+                            (a.gen, a.stack_base, a.jumps_base, a.call_depth_base);
+                        let resume_pc = pc + size as usize;
+                        let awaited = self.pop();
+                        let stack_slice = self.stack.split_off(stack_base);
+                        let jumps = self
+                            .jumps
+                            .split_off(jumps_base)
+                            .into_iter()
+                            .map(|jump| SavedJump {
+                                target_pc: jump.target_pc,
+                                stack_offset: jump.stack_len.saturating_sub(stack_base),
+                                locals_len: jump.locals_len,
+                                id_map: jump.id_map,
+                                call_depth_offset: jump.call_depth.saturating_sub(call_depth_base),
+                                flag: jump.flag,
+                            })
+                            .collect();
+                        self.meter.tick_raw(GENERATOR_YIELD_METERING);
+                        let frame = SavedFrame {
+                            locals: std::mem::take(&mut self.locals),
+                            id_map: std::mem::take(&mut self.id_map),
+                            args: std::mem::take(&mut self.args),
+                            this_val: self.this_val,
+                            cur_func: self.cur_func,
+                            cur_target: self.cur_target,
+                            target_func: self.target_func,
+                            strict: self.strict,
+                            result: self.result,
+                            stack_slice,
+                            jumps,
+                            resume_pc,
+                        };
+                        if let Some(g) = self.async_generators.get_mut(&gen) {
+                            g.frame = Some(frame);
+                            g.state = AsyncGeneratorState::Awaiting;
+                        }
+                        return Halt::Await(awaited);
+                    }
                     let (inst, stack_base, jumps_base, call_depth_base) =
                         match self.async_run_stack.last() {
                             Some(a) => (a.inst, a.stack_base, a.jumps_base, a.call_depth_base),
@@ -8660,6 +8880,39 @@ impl Interp {
         inst
     }
 
+    fn new_async_generator_instance(
+        &mut self,
+        proto: crate::value::SlotIndex,
+        resume_pc: usize,
+    ) -> crate::value::SlotIndex {
+        self.meter.tick_raw(GENERATOR_START_METERING);
+        let inst = self.slots.alloc(Slot::instance(proto));
+        let frame = SavedFrame {
+            locals: self.locals.clone(),
+            id_map: self.id_map.clone(),
+            args: self.args.clone(),
+            this_val: self.this_val,
+            cur_func: self.cur_func,
+            cur_target: self.cur_target,
+            target_func: self.target_func,
+            strict: self.strict,
+            result: self.result,
+            stack_slice: Vec::new(),
+            jumps: Vec::new(),
+            resume_pc,
+        };
+        self.async_generators.insert(
+            inst,
+            AsyncGeneratorData {
+                state: AsyncGeneratorState::SuspendedStart,
+                frame: Some(frame),
+                requests: std::collections::VecDeque::new(),
+                active: None,
+            },
+        );
+        inst
+    }
+
     /// Define an async function (`XS_CODE_ASYNC_FUNCTION` →
     /// `fxNewFunctionInstance`). Like [`Self::new_function`] but the function
     /// instance's own `[[Prototype]]` chains to `%AsyncFunction.prototype%`
@@ -8684,6 +8937,19 @@ impl Interp {
         // [`FUNCTION_DEFINE_METERING`] cluster includes. Back that allocation
         // out — the calibrated define delta vs a plain function.
         self.meter.untick_raw(ASYNC_FUNCTION_DEFINE_DELTA);
+        f
+    }
+
+    fn new_async_generator_function(&mut self, name: u16) -> crate::value::SlotIndex {
+        let f = self.new_generator_function(name);
+        self.slots.get_mut(f).value = Payload::Reference(self.async_generator_function_proto);
+        if let Some(&proto) = self.ctor_prototype.get(&f) {
+            self.slots.get_mut(proto).value = Payload::Reference(self.async_generator_proto);
+        }
+        // Like an async function, an async generator is not constructable.
+        if let Some(info) = self.functions.get_mut(&f) {
+            info.is_generator = true;
+        }
         f
     }
 
@@ -9160,6 +9426,235 @@ impl Interp {
         }
     }
 
+    fn enqueue_async_generator(
+        &mut self,
+        code: &[u8],
+        gen: crate::value::SlotIndex,
+        value: Slot,
+        status: GenStatus,
+    ) -> Result<Slot, Halt> {
+        if !self.async_generators.contains_key(&gen) {
+            return Err(Halt::Unsupported("async-generator:not-an-async-generator"));
+        }
+        let (promise, resolve, reject) = self.new_promise_capability();
+        self.async_generators
+            .get_mut(&gen)
+            .unwrap()
+            .requests
+            .push_back(AsyncGeneratorRequest {
+                status,
+                value,
+                resolve,
+                reject,
+            });
+        self.kick_async_generator(code, gen)?;
+        Ok(Slot::of(Kind::Reference, Payload::Reference(promise)))
+    }
+
+    fn kick_async_generator(
+        &mut self,
+        code: &[u8],
+        gen: crate::value::SlotIndex,
+    ) -> Result<(), Halt> {
+        let state = self.async_generators[&gen].state;
+        if matches!(
+            state,
+            AsyncGeneratorState::Executing | AsyncGeneratorState::Awaiting
+        ) || self.async_generators[&gen].active.is_some()
+        {
+            return Ok(());
+        }
+        let request = match self
+            .async_generators
+            .get_mut(&gen)
+            .unwrap()
+            .requests
+            .pop_front()
+        {
+            Some(r) => r,
+            None => return Ok(()),
+        };
+        self.async_generators.get_mut(&gen).unwrap().active = Some(request);
+        match state {
+            AsyncGeneratorState::Completed => match request.status {
+                GenStatus::Next => {
+                    let result = self.new_generator_result(Slot::undefined(), true);
+                    self.finish_async_generator_request(code, gen, result, false)
+                }
+                GenStatus::Return => self
+                    .schedule_native_await(request.value, ReactionKind::AsyncGeneratorReturn(gen)),
+                GenStatus::Throw => {
+                    self.finish_async_generator_request(code, gen, request.value, true)
+                }
+            },
+            AsyncGeneratorState::SuspendedStart if request.status != GenStatus::Next => {
+                let data = self.async_generators.get_mut(&gen).unwrap();
+                data.state = AsyncGeneratorState::Completed;
+                data.frame = None;
+                match request.status {
+                    GenStatus::Return => self.schedule_native_await(
+                        request.value,
+                        ReactionKind::AsyncGeneratorReturn(gen),
+                    ),
+                    GenStatus::Throw => {
+                        self.finish_async_generator_request(code, gen, request.value, true)
+                    }
+                    GenStatus::Next => unreachable!(),
+                }
+            }
+            _ => self.step_async_generator(
+                code,
+                gen,
+                match request.status {
+                    GenStatus::Next => ResumeStatus::NoStatus,
+                    GenStatus::Return => ResumeStatus::Return,
+                    GenStatus::Throw => ResumeStatus::Throw,
+                },
+                request.value,
+                state == AsyncGeneratorState::SuspendedStart,
+            ),
+        }
+    }
+
+    fn finish_async_generator_request(
+        &mut self,
+        code: &[u8],
+        gen: crate::value::SlotIndex,
+        value: Slot,
+        reject: bool,
+    ) -> Result<(), Halt> {
+        let request = self
+            .async_generators
+            .get_mut(&gen)
+            .and_then(|g| g.active.take())
+            .ok_or(Halt::Unsupported("async-generator:no-active-request"))?;
+        self.settle_via_function(
+            if reject {
+                request.reject
+            } else {
+                request.resolve
+            },
+            value,
+        )?;
+        self.kick_async_generator(code, gen)
+    }
+
+    fn step_async_generator(
+        &mut self,
+        code: &[u8],
+        gen: crate::value::SlotIndex,
+        status: ResumeStatus,
+        sent: Slot,
+        is_start: bool,
+    ) -> Result<(), Halt> {
+        let saved = self
+            .async_generators
+            .get_mut(&gen)
+            .and_then(|g| g.frame.take())
+            .ok_or(Halt::Unsupported("async-generator:no-frame"))?;
+        if !is_start {
+            self.meter.tick_raw(GENERATOR_RESUME_METERING);
+        }
+        let driver_footprint = FRAME_OVERHEAD_SLOTS + self.args.len() + self.locals.len();
+        self.frame_slots += driver_footprint;
+        self.call_stack.push(CallerState {
+            locals: std::mem::take(&mut self.locals),
+            id_map: std::mem::take(&mut self.id_map),
+            result: self.result,
+            strict: self.strict,
+            args: std::mem::take(&mut self.args),
+            this_val: self.this_val,
+            cur_func: self.cur_func,
+            cur_target: self.cur_target,
+            target_func: self.target_func,
+            ret_pc: 0,
+        });
+        let stack_base = self.stack.len();
+        let jumps_base = self.jumps.len();
+        self.locals = saved.locals;
+        self.id_map = saved.id_map;
+        self.args = saved.args;
+        self.this_val = saved.this_val;
+        self.cur_func = saved.cur_func;
+        self.cur_target = saved.cur_target;
+        self.target_func = saved.target_func;
+        self.strict = saved.strict;
+        self.result = saved.result;
+        self.stack.extend(saved.stack_slice);
+        if !is_start {
+            self.push(sent);
+        }
+        self.resume_status = if is_start {
+            ResumeStatus::NoStatus
+        } else {
+            status
+        };
+        self.async_generators.get_mut(&gen).unwrap().state = AsyncGeneratorState::Executing;
+        let return_depth = self.call_stack.len();
+        self.jumps
+            .extend(saved.jumps.into_iter().map(|jump| CatchJump {
+                target_pc: jump.target_pc,
+                stack_len: stack_base + jump.stack_offset,
+                locals_len: jump.locals_len,
+                id_map: jump.id_map,
+                call_depth: return_depth + jump.call_depth_offset,
+                flag: jump.flag,
+            }));
+        self.async_gen_run_stack.push(AsyncGenRunFrame {
+            gen,
+            stack_base,
+            jumps_base,
+            call_depth_base: return_depth,
+        });
+        let outcome = self.dispatch_at(code, saved.resume_pc, return_depth);
+        self.async_gen_run_stack.pop();
+        self.resume_status = ResumeStatus::NoStatus;
+        match outcome {
+            Halt::AsyncYield(value) => {
+                let _ = self.leave_call();
+                self.stack.truncate(stack_base);
+                self.jumps.truncate(jumps_base);
+                self.schedule_native_await(value, ReactionKind::AsyncGeneratorYield(gen))
+            }
+            Halt::Await(value) => {
+                let _ = self.leave_call();
+                self.stack.truncate(stack_base);
+                self.jumps.truncate(jumps_base);
+                self.schedule_native_await(value, ReactionKind::AsyncGeneratorAwait(gen))
+            }
+            Halt::Return => {
+                let value = self.pop();
+                self.stack.truncate(stack_base);
+                self.jumps.truncate(jumps_base);
+                let data = self.async_generators.get_mut(&gen).unwrap();
+                data.state = AsyncGeneratorState::Completed;
+                data.frame = None;
+                self.schedule_native_await(value, ReactionKind::AsyncGeneratorReturn(gen))
+            }
+            Halt::Throw(_) => {
+                while self.call_stack.len() >= return_depth {
+                    let _ = self.leave_call();
+                }
+                self.stack.truncate(stack_base);
+                self.jumps.truncate(jumps_base);
+                let reason = self.exception;
+                self.exception = Slot::undefined();
+                let data = self.async_generators.get_mut(&gen).unwrap();
+                data.state = AsyncGeneratorState::Completed;
+                data.frame = None;
+                self.finish_async_generator_request(code, gen, reason, true)
+            }
+            other => {
+                while self.call_stack.len() >= return_depth {
+                    let _ = self.leave_call();
+                }
+                self.stack.truncate(stack_base);
+                self.jumps.truncate(jumps_base);
+                Err(other)
+            }
+        }
+    }
+
     /// Run one step of an async-function instance (XS's `fxStepAsync`): install
     /// the suspended activation, run a nested [`Self::dispatch_at`] to the next
     /// `await` or completion, then act on the outcome — schedule the await, or
@@ -9354,6 +9849,10 @@ impl Interp {
     ///   fulfills with a primitive (queuing the resume for the next microtask
     ///   turn, so a bare `await 1` still costs one turn) or adopts a thenable.
     fn await_schedule(&mut self, inst: crate::value::SlotIndex, value: Slot) -> Result<(), Halt> {
+        self.schedule_native_await(value, ReactionKind::AsyncAwait(inst))
+    }
+
+    fn schedule_native_await(&mut self, value: Slot, kind: ReactionKind) -> Result<(), Halt> {
         if let Payload::Reference(r) = value.value {
             if self.promises.contains_key(&r) {
                 // XS's fast path is `mxGetID(_constructor)` + `fxIsSameValue` +
@@ -9365,13 +9864,13 @@ impl Interp {
                 // job-queue accounting (shaped for the general/`.then` path) down
                 // to XS's leaner null-capability `fxPromiseThen`.
                 self.meter.untick_raw(ASYNC_AWAIT_FASTPATH_CREDIT);
-                self.promise_then_native(r, ReactionKind::AsyncAwait(inst));
+                self.promise_then_native(r, kind);
                 return Ok(());
             }
         }
         self.meter.tick_raw(ASYNC_AWAIT_GENERAL_METERING);
         let (derived, resolve, _reject) = self.new_promise_capability();
-        self.promise_then_native(derived, ReactionKind::AsyncAwait(inst));
+        self.promise_then_native(derived, kind);
         self.settle_via_function(resolve, value)
     }
 
@@ -11295,6 +11794,39 @@ impl Interp {
                 ResumeStatus::NoStatus
             };
             return self.step_async(code, inst, status, value, false);
+        }
+        if let ReactionKind::AsyncGeneratorAwait(gen) = reaction.kind {
+            self.meter.tick_raw(PROMISE_JOB_FRAME_METERING);
+            let status = if rejected {
+                ResumeStatus::Throw
+            } else {
+                ResumeStatus::NoStatus
+            };
+            return self.step_async_generator(code, gen, status, value, false);
+        }
+        if let ReactionKind::AsyncGeneratorYield(gen) = reaction.kind {
+            self.meter.tick_raw(PROMISE_JOB_FRAME_METERING);
+            if rejected {
+                let data = self
+                    .async_generators
+                    .get_mut(&gen)
+                    .ok_or(Halt::Unsupported("async-generator:yield-reaction-missing"))?;
+                data.state = AsyncGeneratorState::Completed;
+                data.frame = None;
+                return self.finish_async_generator_request(code, gen, value, true);
+            }
+            let result = self.new_generator_result(value, false);
+            self.async_generators.get_mut(&gen).unwrap().state =
+                AsyncGeneratorState::SuspendedYield;
+            return self.finish_async_generator_request(code, gen, result, false);
+        }
+        if let ReactionKind::AsyncGeneratorReturn(gen) = reaction.kind {
+            self.meter.tick_raw(PROMISE_JOB_FRAME_METERING);
+            if rejected {
+                return self.finish_async_generator_request(code, gen, value, true);
+            }
+            let result = self.new_generator_result(value, true);
+            return self.finish_async_generator_request(code, gen, result, false);
         }
         // The `finally` native reaction: run `onFinally` and pass the
         // settlement through (the `fxOnResolvedPromise`/`fxOnRejectedPromise`
@@ -15043,6 +15575,28 @@ impl Interp {
                 };
                 self.resume_generator(code, gen, arg0, GenStatus::Throw)?
             }
+            NativeMethod::AsyncGeneratorNext => {
+                let gen = match this.value {
+                    Payload::Reference(r) if self.async_generators.contains_key(&r) => r,
+                    _ => return Err(Halt::Unsupported("async-generator:next-non-generator")),
+                };
+                self.enqueue_async_generator(code, gen, arg0, GenStatus::Next)?
+            }
+            NativeMethod::AsyncGeneratorReturn => {
+                let gen = match this.value {
+                    Payload::Reference(r) if self.async_generators.contains_key(&r) => r,
+                    _ => return Err(Halt::Unsupported("async-generator:return-non-generator")),
+                };
+                self.enqueue_async_generator(code, gen, arg0, GenStatus::Return)?
+            }
+            NativeMethod::AsyncGeneratorThrow => {
+                let gen = match this.value {
+                    Payload::Reference(r) if self.async_generators.contains_key(&r) => r,
+                    _ => return Err(Halt::Unsupported("async-generator:throw-non-generator")),
+                };
+                self.enqueue_async_generator(code, gen, arg0, GenStatus::Throw)?
+            }
+            NativeMethod::AsyncIteratorIdentity => this,
             // `Promise.resolve(v)` (`fx_Promise_resolve`): a native promise
             // whose constructor is `Promise` is returned as-is; otherwise a
             // capability is built and its `resolve` called with `v`. Resolving
@@ -21496,6 +22050,9 @@ mod tests {
                 // `Await` is produced only inside a `step_async` nested dispatch
                 // and consumed there; it never escapes to a top-level outcome.
                 Halt::Await(_) => unreachable!("await escaped a step_async resume"),
+                Halt::AsyncYield(_) => {
+                    unreachable!("yield escaped an async-generator resume")
+                }
                 Halt::Resume(_) => unreachable!("catch resume escaped a nested dispatch"),
             }
         }
