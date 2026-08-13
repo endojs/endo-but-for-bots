@@ -5,7 +5,7 @@
  * @import { LocationId, SwissNum } from './types.js'
  */
 
-import { encodeAscii } from '@endo/ascii';
+import { decodeAscii, encodeAscii } from '@endo/ascii';
 import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { encodeHex } from '@endo/hex';
@@ -49,14 +49,21 @@ export const locationToLocationId = location => {
   return uri;
 };
 
-const swissnumDecoder = new TextDecoder('ascii', { fatal: true });
-
 /**
+ * Decode a swissnum's wire bytes back to its string form, rejecting any byte
+ * outside the 7-bit ASCII range. This is the strict inverse of
+ * `encodeSwissnum`: `TextDecoder('ascii')` cannot enforce this, because per the
+ * WHATWG Encoding Standard the `'ascii'` label is an alias for `windows-1252`,
+ * so `fatal: true` never fires on bytes `0x80`–`0xff` and they decode to
+ * Latin-1/windows-1252 characters instead of throwing. Raw-bytes swissnums that
+ * carry non-ASCII bytes on the wire are represented as bytes, not decoded to a
+ * string, so they are unaffected.
+ *
  * @param {ArrayBufferLike} value
  * @returns {string}
  */
 export const decodeSwissnum = value => {
-  return swissnumDecoder.decode(bytesFromImmutable(value));
+  return decodeAscii(bytesFromImmutable(value), 'swissnum');
 };
 
 /**

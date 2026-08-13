@@ -23,6 +23,7 @@
   "exports": {
     ".": "./index.js",
     "./encode.js": "./encode.js",
+    "./decode.js": "./decode.js",
     "./src/*": {
       "test-endo-ascii": "./src/*"
     },
