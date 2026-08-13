@@ -2007,6 +2007,17 @@ pub enum NativeMethod {
     StringTrim,
     StringTrimStart,
     StringTrimEnd,
+    /// `String.prototype.padStart` / `padEnd`.
+    StringPadStart,
+    StringPadEnd,
+    /// ES2024 well-formed Unicode string predicates/conversion.
+    StringIsWellFormed,
+    StringToWellFormed,
+    /// `String.fromCharCode` / `String.fromCodePoint` constructor statics.
+    StringFromCharCode,
+    StringFromCodePoint,
+    /// `String.prototype[Symbol.iterator]()`.
+    StringIterator,
     /// `Number.isFinite`/`isInteger`/`isNaN`/`isSafeInteger` (`xsNumber.c`) —
     /// statics on the `Number` constructor that inspect the argument's slot
     /// **kind** directly (no coercion): an integer is always finite/integer/
@@ -3248,6 +3259,8 @@ pub struct Interp {
     /// this chain. Held here so a `GET_PROPERTY` on a `Kind::String` receiver
     /// routes here without materializing a wrapper object.
     string_proto: crate::value::SlotIndex,
+    /// The intrinsic function installed at `%String.prototype%[Symbol.iterator]`.
+    string_iterator_method: crate::value::SlotIndex,
     /// The realm's `%Number.prototype%` (a boot object) — the box target for a
     /// primitive number's method access (`(42).toString(2)`, …).
     number_proto: crate::value::SlotIndex,
@@ -3732,6 +3745,7 @@ impl Interp {
             array_iterator_proto: crate::value::SlotIndex::NULL,
             math_object: crate::value::SlotIndex::NULL,
             string_proto: crate::value::SlotIndex::NULL,
+            string_iterator_method: crate::value::SlotIndex::NULL,
             number_proto: crate::value::SlotIndex::NULL,
             symbol_proto: crate::value::SlotIndex::NULL,
             symbol_registry: std::collections::HashMap::new(),
@@ -4591,6 +4605,16 @@ impl Interp {
             return;
         }
         use NativeMethod::*;
+        self.string_iterator_method = self.alloc_method(StringIterator);
+        if let Some(&ctor) = self.intrinsics.get("String") {
+            for (name, m) in [
+                ("fromCharCode", StringFromCharCode),
+                ("fromCodePoint", StringFromCodePoint),
+            ] {
+                let mf = self.alloc_method(m);
+                self.proto_methods.push((ctor, name, mf));
+            }
+        }
         for (name, m) in [
             ("charCodeAt", StringCharCodeAt),
             ("codePointAt", StringCodePointAt),
@@ -4610,6 +4634,10 @@ impl Interp {
             ("trim", StringTrim),
             ("trimStart", StringTrimStart),
             ("trimEnd", StringTrimEnd),
+            ("padStart", StringPadStart),
+            ("padEnd", StringPadEnd),
+            ("isWellFormed", StringIsWellFormed),
+            ("toWellFormed", StringToWellFormed),
             // The RegExp-consuming String methods (`xsString.c`
             // `fx_String_prototype_match`/`search`/`replace`/`split`), driving
             // child 8's matcher over a string-or-RegExp argument.
@@ -4937,6 +4965,17 @@ impl Interp {
                 Slot::of(
                     Kind::Reference,
                     Payload::Reference(self.async_iterator_identity),
+                ),
+                XS_DONT_ENUM_FLAG,
+            );
+        }
+        if let Some(id) = self.well_known_symbol_property_id("iterator") {
+            self.set_own_unmetered_with_flag(
+                self.string_proto,
+                id,
+                Slot::of(
+                    Kind::Reference,
+                    Payload::Reference(self.string_iterator_method),
                 ),
                 XS_DONT_ENUM_FLAG,
             );
@@ -15858,7 +15897,15 @@ impl Interp {
             | NativeMethod::StringRepeat
             | NativeMethod::StringTrim
             | NativeMethod::StringTrimStart
-            | NativeMethod::StringTrimEnd => self.call_string(m, this, base, argc)?,
+            | NativeMethod::StringTrimEnd
+            | NativeMethod::StringPadStart
+            | NativeMethod::StringPadEnd
+            | NativeMethod::StringIsWellFormed
+            | NativeMethod::StringToWellFormed
+            | NativeMethod::StringIterator => self.call_string(m, this, base, argc, code)?,
+            NativeMethod::StringFromCharCode | NativeMethod::StringFromCodePoint => {
+                self.call_string_static(m, base, argc, code)?
+            }
             NativeMethod::NumberIsFinite
             | NativeMethod::NumberIsInteger
             | NativeMethod::NumberIsNaN
@@ -17929,6 +17976,107 @@ impl Interp {
         Slot::of(Kind::String, Payload::String(off))
     }
 
+    /// ECMAScript `ToString`, retaining UTF-16 code units when the primitive
+    /// already is a String (so lone surrogates never pass through Rust's
+    /// scalar-value `String`). Objects use the shared, re-entrant
+    /// `ToPrimitive` machinery; null and undefined are allowed here because
+    /// this helper is also used for ordinary arguments.
+    fn to_string_units(&mut self, code: &[u8], value: Slot) -> Result<Vec<u16>, Halt> {
+        let primitive = if value.kind == Kind::Reference {
+            self.to_primitive(code, value, true)?
+        } else {
+            value
+        };
+        if primitive.kind == Kind::Symbol {
+            return Err(self.catchable_type_error());
+        }
+        if let Payload::String(off) = primitive.value {
+            return Ok(self.str_units(off));
+        }
+        let bytes = self.to_string_bytes_metered(primitive);
+        Ok(String::from_utf8_lossy(&bytes).encode_utf16().collect())
+    }
+
+    /// `RequireObjectCoercible(this)` followed by `ToString(this)` for the
+    /// generic String prototype algorithms.
+    fn string_this_units(&mut self, code: &[u8], this: Slot) -> Result<Vec<u16>, Halt> {
+        if matches!(this.kind, Kind::Null | Kind::Undefined) {
+            return Err(self.catchable_type_error());
+        }
+        if let Some(units) = self.string_receiver_units(this) {
+            return Ok(units);
+        }
+        self.to_string_units(code, this)
+    }
+
+    fn catchable_range_error(&mut self) -> Halt {
+        let error = self.build_error("RangeError", 0, 0);
+        match self.raise_js(error) {
+            Ok(target) => Halt::Resume(target),
+            Err(halt) => halt,
+        }
+    }
+
+    /// String constructor statics. Both consume numeric arguments through
+    /// the shared `ToNumber` path, preserving the observable left-to-right
+    /// coercion order.
+    fn call_string_static(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        if self
+            .stack
+            .get(base)
+            .is_some_and(|this| this.kind == Kind::Uninitialized)
+        {
+            return Err(self.catchable_type_error());
+        }
+        let mut out = Vec::with_capacity(argc.saturating_mul(2));
+        for i in 0..argc {
+            let value = self
+                .stack
+                .get(base + 4 + i)
+                .copied()
+                .unwrap_or_else(Slot::undefined);
+            if matches!(value.kind, Kind::BigInt | Kind::Symbol) {
+                return Err(self.catchable_type_error());
+            }
+            let number = self.to_number_value(code, value)?;
+            let n = to_number(&number);
+            match m {
+                NativeMethod::StringFromCharCode => {
+                    let integer = if !n.is_finite() || n == 0.0 {
+                        0i64
+                    } else {
+                        n.trunc() as i64
+                    };
+                    out.push(integer.rem_euclid(0x1_0000) as u16);
+                }
+                NativeMethod::StringFromCodePoint => {
+                    if !n.is_finite()
+                        || n.fract() != 0.0
+                        || !(0.0..=0x10_FFFF as f64).contains(&n)
+                    {
+                        return Err(self.catchable_range_error());
+                    }
+                    let cp = n as u32;
+                    if cp <= 0xFFFF {
+                        out.push(cp as u16);
+                    } else {
+                        let x = cp - 0x10000;
+                        out.push(0xD800 + (x >> 10) as u16);
+                        out.push(0xDC00 + (x & 0x3FF) as u16);
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+        Ok(self.new_string_units(&out))
+    }
+
     /// Dispatch a `String.prototype` method (`xsString.c`) over the primitive
     /// receiver's UTF-16 code units (the stored form — indexing is direct, no
     /// boundary walk). A position/search argument that is not a number/string
@@ -17941,11 +18089,9 @@ impl Interp {
         this: Slot,
         base: usize,
         argc: usize,
+        code: &[u8],
     ) -> Result<Slot, Halt> {
-        let content = match self.string_receiver_units(this) {
-            Some(c) => c,
-            None => return Err(Halt::Unsupported("string-method:non-string-receiver")),
-        };
+        let content = self.string_this_units(code, this)?;
         let ulen = content.len() as i64; // UTF-16 code-unit length
                                          // Clamp a (possibly negative / out-of-range) code-unit position to a
                                          // valid slice index into `content` (units). Replaces the CESU-8
@@ -17960,18 +18106,15 @@ impl Interp {
                 unit as usize
             }
         };
-        let argn = |i: usize| -> Option<Slot> {
-            if i < argc {
-                Some(
-                    self.stack
-                        .get(base + 4 + i)
-                        .copied()
-                        .unwrap_or_else(Slot::undefined),
-                )
-            } else {
-                None
-            }
-        };
+        let args: Vec<Slot> = (0..argc)
+            .map(|i| {
+                self.stack
+                    .get(base + 4 + i)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined)
+            })
+            .collect();
+        let argn = |i: usize| -> Option<Slot> { args.get(i).copied() };
         // ToInteger/ToNumber over a numeric operand only (a string/reference
         // position argument self-names — ironhorse does not model string→number
         // coercion in these built-ins).
@@ -18224,15 +18367,27 @@ impl Interp {
                 self.meter.tick_builtin_some(ulen as u64);
                 self.new_string_units(&out)
             }
-            // trim / trimStart / trimEnd: strip ASCII whitespace. The pin
+            // trim / trimStart / trimEnd: strip the ECMAScript WhiteSpace and
+            // LineTerminator code points. The pin
             // meters mxMeterSome(leading byte count) and/or mxMeterSome(kept
-            // length), then allocates the result chunk. Non-ASCII content
-            // self-names (its whitespace decode is not modeled).
+            // length), then allocates the result chunk.
             StringTrim | StringTrimStart | StringTrimEnd => {
-                if content.iter().any(|&u| u >= 0x80) {
-                    return Err(Halt::Unsupported("trim:non-ascii"));
-                }
-                let is_ws = |u: u16| matches!(u, 0x09 | 0x0A | 0x0B | 0x0C | 0x0D | 0x20);
+                let is_ws = |u: u16| {
+                    matches!(
+                        u,
+                        0x0009..=0x000D
+                            | 0x0020
+                            | 0x00A0
+                            | 0x1680
+                            | 0x2000..=0x200A
+                            | 0x2028
+                            | 0x2029
+                            | 0x202F
+                            | 0x205F
+                            | 0x3000
+                            | 0xFEFF
+                    )
+                };
                 let trim_start = m != StringTrimEnd;
                 let trim_end = m != StringTrimStart;
                 self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
@@ -18252,6 +18407,83 @@ impl Interp {
                 }
                 self.new_string_units(&content[lo..hi])
             }
+            StringPadStart | StringPadEnd => {
+                let target = match argn(0) {
+                    Some(v) => {
+                        let n = self.to_number_value(code, v)?;
+                        let n = to_number(&n);
+                        if n.is_nan() || n <= 0.0 {
+                            0usize
+                        } else if n.is_infinite() || n > usize::MAX as f64 {
+                            return Err(self.catchable_range_error());
+                        } else {
+                            n.floor() as usize
+                        }
+                    }
+                    None => 0,
+                };
+                if target <= content.len() {
+                    self.new_string_units(&content)
+                } else {
+                    let fill = match argn(1) {
+                        None | Some(Slot { kind: Kind::Undefined, .. }) => vec![0x20],
+                        Some(v) => self.to_string_units(code, v)?,
+                    };
+                    if fill.is_empty() {
+                        self.new_string_units(&content)
+                    } else {
+                        let needed = target - content.len();
+                        let mut padding = Vec::with_capacity(needed);
+                        while padding.len() < needed {
+                            let take = (needed - padding.len()).min(fill.len());
+                            padding.extend_from_slice(&fill[..take]);
+                        }
+                        let mut out = Vec::with_capacity(target);
+                        if m == StringPadEnd {
+                            out.extend_from_slice(&content);
+                            out.extend_from_slice(&padding);
+                        } else {
+                            out.extend_from_slice(&padding);
+                            out.extend_from_slice(&content);
+                        }
+                        self.new_string_units(&out)
+                    }
+                }
+            }
+            StringIsWellFormed | StringToWellFormed => {
+                let mut well_formed = true;
+                let mut out = Vec::with_capacity(content.len());
+                let mut i = 0usize;
+                while i < content.len() {
+                    let u = content[i];
+                    if (0xD800..=0xDBFF).contains(&u) {
+                        if i + 1 < content.len()
+                            && (0xDC00..=0xDFFF).contains(&content[i + 1])
+                        {
+                            out.push(u);
+                            out.push(content[i + 1]);
+                            i += 2;
+                            continue;
+                        }
+                        well_formed = false;
+                        out.push(0xFFFD);
+                    } else if (0xDC00..=0xDFFF).contains(&u) {
+                        well_formed = false;
+                        out.push(0xFFFD);
+                    } else {
+                        out.push(u);
+                    }
+                    i += 1;
+                }
+                if m == StringIsWellFormed {
+                    Slot::boolean(well_formed)
+                } else if well_formed {
+                    self.new_string_units(&content)
+                } else {
+                    self.new_string_units(&out)
+                }
+            }
+            StringIterator => self.make_string_iterator(units_to_be16(&content)),
             _ => return Err(Halt::Unsupported("string-method:unmodeled")),
         };
         Ok(result)
