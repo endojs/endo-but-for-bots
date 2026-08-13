@@ -22,7 +22,7 @@
   "scripts": {
     "build": "exit 0",
     "setup": "endo run --UNCONFINED setup.js --powers @agent",
-    "test": "ses-ava",
+    "test": "ses-ava --no-worker-threads",
     "test:integration": "bash test/integration.sh -E GENIE_MODEL=ollama/llama3.2 -E GENIE_TEST=test/scenarios/workspace-tool.sh",
     "test:integration:sandbox-slice": "bash test/integration.sh -E GENIE_MODEL=ollama/llama3.2 -E GENIE_TEST=test/scenarios/sandbox-slice.sh",
     "test:integration:dev-repl-sandbox": "ava test/dev-repl-sandbox.test.js --timeout=120s",
