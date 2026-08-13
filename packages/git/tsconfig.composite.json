@@ -9,6 +9,9 @@
       "path": "../base64/tsconfig.composite.json"
     },
     {
+      "path": "../bytes/tsconfig.composite.json"
+    },
+    {
       "path": "../errors/tsconfig.composite.json"
     },
     {
@@ -24,7 +27,13 @@
       "path": "../harden/tsconfig.composite.json"
     },
     {
+      "path": "../hex/tsconfig.composite.json"
+    },
+    {
       "path": "../platform/tsconfig.composite.json"
+    },
+    {
+      "path": "../sha256/tsconfig.composite.json"
     },
     {
       "path": "../stream/tsconfig.composite.json"

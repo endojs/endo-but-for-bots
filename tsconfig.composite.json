@@ -210,6 +210,9 @@
       "path": "packages/ses-ava/tsconfig.composite.json"
     },
     {
+      "path": "packages/sha256/tsconfig.composite.json"
+    },
+    {
       "path": "packages/skel/tsconfig.composite.json"
     },
     {

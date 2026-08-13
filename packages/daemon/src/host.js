@@ -5,7 +5,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
-/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 
 import { E } from '@endo/eventual-send';
@@ -18,7 +18,6 @@ import {
   makeGitCloner,
   makeGitRemoteEndpoint,
 } from '@endo/exo-git';
-import { gitClone } from '@endo/git';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import {
   assertPetName,
@@ -303,6 +302,7 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['formulateFromTree']} args.formulateFromTree
  * @param {(id: FormulaIdentifier) => string} args.getScratchMountPath
  * @param {(id: FormulaIdentifier) => string} args.getMountHostPath
+ * @param {HostToolPowers['gitClone']} [args.gitClone]
  * @param {(ref: unknown) => FormulaIdentifier | undefined} args.getIdForRef
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['checkinTree']} args.checkinTree
@@ -384,6 +384,13 @@ export const makeHostMaker = ({
   getAgentIdForHandleId,
   getMountHostPath = /** @param {FormulaIdentifier} _id */ _id => {
     throw makeError(X`getMountHostPath not wired into makeHostMaker`);
+  },
+  // Cloning a remote runs the host's `git`, so the implementation is
+  // injected from the daemon core's host tool powers rather than
+  // imported here: a static `@endo/git` import would put nine `node:`
+  // builtins on the XS daemon bundle's compartment graph.
+  gitClone = /** @param {...any} _args */ (..._args) => {
+    throw makeError(X`gitClone not wired into makeHostMaker`);
   },
   getIdForRef = /** @param {unknown} _ref */ _ref => undefined,
   writeRemoteAgentKey = /** @param {string} _pk @param {string} _dn */ (

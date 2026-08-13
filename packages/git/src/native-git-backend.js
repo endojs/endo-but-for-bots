@@ -3,7 +3,6 @@
 
 import { Buffer } from 'node:buffer';
 import { execFile, spawn } from 'node:child_process';
-import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import process from 'node:process';
 import { setTimeout, clearTimeout } from 'node:timers';
@@ -12,10 +11,13 @@ import path from 'node:path';
 import { URL, fileURLToPath } from 'node:url';
 
 import { encodeBase64 } from '@endo/base64';
+import { bytesFromText } from '@endo/bytes/from-string.js';
 import { q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
+import { encodeHex } from '@endo/hex';
+import { sha256 } from '@endo/sha256';
 import { mapReader } from '@endo/stream';
 // `GitBlob` exposes the whole-value read surface plus the richer `BlobRef`
 // range-I/O surface (`getInfo` / `fetch`), so a remote reader of a git tree can
@@ -960,10 +962,7 @@ const hashIdentityConfig = configText => {
         !/^\s*\[branch /u.test(line) &&
         !/^\s*(url|pushurl|remote|merge)\s*=/u.test(line),
     );
-  return crypto
-    .createHash('sha256')
-    .update(stableLines.join('\n'))
-    .digest('hex');
+  return encodeHex(sha256(bytesFromText(stableLines.join('\n'))));
 };
 harden(hashIdentityConfig);
 
@@ -1916,9 +1915,7 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
       // sha1 OID.
       async getInfo() {
         const bytes = await readBlobBytes(blobOid);
-        const hash = encodeBase64(
-          crypto.createHash('sha256').update(bytes).digest(),
-        );
+        const hash = encodeBase64(sha256(bytes));
         return harden({
           algorithm: 'sha256',
           hash,

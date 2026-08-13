@@ -21,7 +21,6 @@ import {
   snapshotTreeMethods,
 } from '@endo/platform/fs/lite';
 import { toSafeNumber } from '@endo/platform/fs/extended/shared/helpers.js';
-import { makeNativeGitBackend } from '@endo/git';
 import {
   makeBasicCredential,
   makeBearerCredential,
@@ -31,7 +30,6 @@ import {
   makeUnavailableGitCredential,
 } from '@endo/exo-git';
 import { makeShell } from '@endo/exo-shell';
-import { makeHostSpawner } from '@endo/host-spawner';
 import { makeHttpClientAndControl } from '@endo/exo-http-client';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
@@ -53,6 +51,7 @@ import { assertMailboxStoreName, makeMailboxMaker } from './mail.js';
 import { makeGuestMaker } from './guest.js';
 import { makeChannelMaker } from './channel.js';
 import { makeHostMaker } from './host.js';
+import { provideHostToolPowers } from './host-tool-powers.js';
 import { makeRemoteControlProvider } from './remote-control.js';
 import {
   assertName,
@@ -487,8 +486,15 @@ const makeDaemonCore = async (
     control: controlPowers,
     filePowers,
     registry: registryPowers,
+    hostTools,
   } = powers;
   const { randomHex256, generateEd25519Keypair } = cryptoPowers;
+  // `git` and `shell` formulas spawn host processes.  The supervisor
+  // injects the implementations rather than the daemon core importing
+  // them, so the core stays free of `node:` builtins; a supervisor that
+  // cannot spawn gets stand-ins that refuse.
+  const { gitClone, makeNativeGitBackend, makeHostSpawner } =
+    provideHostToolPowers(hostTools);
   const contentStore = persistencePowers.makeContentStore();
   /** @type {WeakMap<object, ERef<WorkerDaemonFacet>>} */
   const workerDaemonFacets = new WeakMap();
@@ -7183,6 +7189,7 @@ const makeDaemonCore = async (
   };
 
   const makeHost = makeHostMaker({
+    gitClone,
     provide,
     provideStoreController,
     cancelValue,

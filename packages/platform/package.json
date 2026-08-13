@@ -80,6 +80,7 @@
     "@endo/hex": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/patterns": "workspace:^",
+    "@endo/sha256": "workspace:^",
     "@endo/stream": "workspace:^",
     "@endo/stream-node": "workspace:^"
   },

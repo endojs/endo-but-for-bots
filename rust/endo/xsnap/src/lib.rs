@@ -2343,6 +2343,41 @@ mod tests {
             ),
             other => panic!("expected hash string, got {:?}", js_value_debug(&other)),
         }
+
+        // The binary one-shot path preserves bytes above ASCII and returns
+        // the digest as a fresh ArrayBuffer rather than a hex string.
+        match machine
+            .eval(
+                "(function () { \
+                    var digest = sha256Bytes(new Uint8Array([0, 127, 128, 255])); \
+                    return (digest instanceof ArrayBuffer) + ':' + \
+                      Array.from(new Uint8Array(digest), function (byte) { \
+                        return byte.toString(16).padStart(2, '0'); \
+                      }).join(''); \
+                })()",
+            )
+            .unwrap()
+        {
+            JsValue::String(s) => assert_eq!(
+                s,
+                "true:89273d2f70b93285bb7ddb4bcee86a5347ca7159352e3cbdd20c23e9d1e507d3"
+            ),
+            other => panic!("expected binary hash result, got {:?}", js_value_debug(&other)),
+        }
+
+        match machine
+            .eval("new Uint8Array(sha256Bytes(new Uint8Array())).length")
+            .unwrap()
+        {
+            JsValue::Integer(n) => assert_eq!(n, 32),
+            other => panic!("expected 32-byte hash, got {:?}", js_value_debug(&other)),
+        }
+
+        machine.eval(HOST_ALIASES).unwrap();
+        match machine.eval("hostSha256Bytes === sha256Bytes").unwrap() {
+            JsValue::Boolean(equal) => assert!(equal),
+            other => panic!("expected host alias comparison, got {:?}", js_value_debug(&other)),
+        }
     }
 
     #[test]
