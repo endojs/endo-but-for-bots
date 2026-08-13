@@ -449,6 +449,50 @@ impl OrdinaryDescriptor {
         self.value.is_some() || self.writable.is_some()
     }
 }
+
+/// `CompletePropertyDescriptor(Desc)` (ECMA-262 6.2.5.6): fill a partial
+/// descriptor (as returned by a proxy trap through `ToPropertyDescriptor`) with
+/// the spec defaults, so the target-consistency checks see every field. A
+/// generic descriptor completes as a data descriptor.
+fn complete_descriptor(mut d: OrdinaryDescriptor) -> OrdinaryDescriptor {
+    if !d.is_accessor() {
+        if d.value.is_none() {
+            d.value = Some(Slot::undefined());
+        }
+        if d.writable.is_none() {
+            d.writable = Some(false);
+        }
+    } else {
+        if d.get.is_none() {
+            d.get = Some(Slot::undefined());
+        }
+        if d.set.is_none() {
+            d.set = Some(Slot::undefined());
+        }
+    }
+    if d.enumerable.is_none() {
+        d.enumerable = Some(false);
+    }
+    if d.configurable.is_none() {
+        d.configurable = Some(false);
+    }
+    d
+}
+
+/// `ToLength(n)` (ECMA-262 7.1.20) over an already-`ToNumber`'d value: clamp to
+/// the integer range `[0, 2^53 − 1]`.
+fn to_length_u64(n: f64) -> u64 {
+    if n.is_nan() || n <= 0.0 {
+        0
+    } else {
+        let m = n.floor();
+        if m >= 9007199254740991.0 {
+            9007199254740991
+        } else {
+            m as u64
+        }
+    }
+}
 /// `harden`/`petrify` per-hardened-object base: `fx_hardenFreezeAndTraverse`
 /// builds the two `fxNewInstance` ownKeys holders (the freeze pass and the
 /// traverse pass) over the `mxBehaviorPreventExtensions` frame. Modeled as two
@@ -1417,6 +1461,21 @@ struct BoundData {
     args: Vec<Slot>,
 }
 
+/// A `Proxy`'s internal slots (`[[ProxyTarget]]` / `[[ProxyHandler]]`, ECMA-262
+/// 10.5), kept in the [`Interp::proxies`] side table keyed by the proxy exotic's
+/// arena instance slot — the same allocation-faithful shape as [`BoundData`] and
+/// the other exotic tables (`arrays`/`collections`/…). A proxy instance is an
+/// ordinary `Kind::Instance` slot with a null prototype (a proxy has no identity
+/// prototype of its own); its behavior is entirely the trap dispatch keyed off
+/// membership here. Revocation nulls both slots and trips `revoked`, after which
+/// every internal-method dispatch throws a realm-local `TypeError`.
+#[derive(Clone, Debug)]
+struct ProxyData {
+    target: crate::value::SlotIndex,
+    handler: crate::value::SlotIndex,
+    revoked: bool,
+}
+
 #[derive(Clone, Debug)]
 struct FuncInfo {
     /// Start offset of the function body in the program code buffer (the
@@ -1659,6 +1718,14 @@ pub enum NativeMethod {
     /// named skip this child: re-entrant construction with a spread argument
     /// list, out of the covered trampoline scope.
     ReflectConstruct,
+    /// `Proxy.revocable(target, handler)` (`xsProxy.c` `fx_Proxy_revocable`):
+    /// returns `{ proxy, revoke }` where `revoke` is a
+    /// [`NativeMethod::ProxyRevoke`] function bound (via
+    /// [`Interp::proxy_revokers`]) to the freshly-minted proxy.
+    ProxyRevocable,
+    /// The `revoke` function `Proxy.revocable` returns: trips its proxy's
+    /// `[[ProxyTarget]]`/`[[ProxyHandler]]` to null and marks it revoked.
+    ProxyRevoke,
     FunctionToString,
     /// `Function.prototype.call` — a re-entrant trampoline: invoke the
     /// receiver function with the first argument as `this` and the rest as
@@ -2598,6 +2665,12 @@ pub enum Native {
     /// integer property. The matcher itself is the `ironhorse-regexp` crate
     /// (child 8).
     RegExp,
+    /// `Proxy` — the proxy constructor (`xsProxy.c` `fx_Proxy`). A special
+    /// constructor: it has **no** `.prototype` property and its instances have
+    /// no identity prototype. Constructing it validates the target/handler are
+    /// objects and records a [`ProxyData`] in the [`Interp::proxies`] side
+    /// table; the exotic behavior is the trap dispatch keyed off that table.
+    Proxy,
 }
 
 impl Native {
@@ -2629,6 +2702,7 @@ impl Native {
             Native::DataView => "DataView",
             Native::Promise => "Promise",
             Native::RegExp => "RegExp",
+            Native::Proxy => "Proxy",
         }
     }
 
@@ -2637,6 +2711,7 @@ impl Native {
         match self {
             Native::AggregateError => 2,
             Native::RegExp => 2,
+            Native::Proxy => 2,
             Native::TypedArray(_) => 3,
             Native::DataView => 1,
             Native::Symbol | Native::Map | Native::Set | Native::WeakMap | Native::WeakSet => 0,
@@ -2905,6 +2980,14 @@ pub struct Interp {
     /// the `run` dispatch trampolines into the target (XS's
     /// `fx_Function_prototype_bound`).
     bound_functions: std::collections::HashMap<crate::value::SlotIndex, BoundData>,
+    /// The `Proxy` exotics' `[[ProxyTarget]]`/`[[ProxyHandler]]` internal slots,
+    /// keyed by the proxy instance slot (see [`ProxyData`]). Membership here is
+    /// what makes an instance a proxy: [`Interp::is_ordinary_object`] excludes
+    /// it and every internal-method dispatch site routes it to the trap logic.
+    proxies: std::collections::HashMap<crate::value::SlotIndex, ProxyData>,
+    /// Maps a `revoke` function slot (returned by `Proxy.revocable`) to the
+    /// proxy instance it revokes (`fx_Proxy_revoke`'s bound `[[RevocableProxy]]`).
+    proxy_revokers: std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>,
     /// The saved caller states of the active call chain (design §
     /// Interpreter and dispatch: "frames are stack slots ... fixed offsets
     /// for result/function/this"). The top-level program is the base
@@ -3569,6 +3652,8 @@ impl Interp {
             n_dispatched: 0,
             functions: std::collections::HashMap::new(),
             bound_functions: std::collections::HashMap::new(),
+            proxies: std::collections::HashMap::new(),
+            proxy_revokers: std::collections::HashMap::new(),
             call_stack: Vec::new(),
             args: Vec::new(),
             this_val: Slot::undefined(),
@@ -3805,6 +3890,9 @@ impl Interp {
                 // compiled program lives in the `regexps` side table;
                 // `lastIndex` is an ordinary own property of the instance.
                 Native::RegExp => self.slots.alloc(Slot::instance(object_proto)),
+                // `Proxy` is registered separately (`create_proxy`) and never
+                // iterated here — it has no `.prototype`. Unreachable in this loop.
+                Native::Proxy => unreachable!("Proxy is not a create_intrinsics loop entry"),
             };
             self.ctor_prototype.insert(f, proto);
             // The two realm-local identity links required of every built-in
@@ -4293,6 +4381,7 @@ impl Interp {
         self.create_number_globals();
         self.create_json();
         self.create_reflect();
+        self.create_proxy();
         self.create_hardened_globals();
     }
 
@@ -4350,6 +4439,32 @@ impl Interp {
             let mf = self.alloc_method(m);
             self.intrinsics.insert(name, mf);
         }
+    }
+
+    /// Build the `Proxy` constructor (XS's `mxProxyConstructor`, `xsProxy.c`
+    /// `fx_Proxy`). Unlike the ordinary intrinsic constructors it is registered
+    /// here rather than through the `create_intrinsics` loop, because a proxy
+    /// constructor is **special**: it has no `.prototype` property (so the loop's
+    /// unconditional `constructor`/`prototype` link pair must not be installed).
+    /// It is a callable whose own prototype is `%Function.prototype%`, dispatched
+    /// as `Native::Proxy` in `call_native`. `Proxy.revocable` is its lone static.
+    fn create_proxy(&mut self) {
+        let func_proto = self.function_proto;
+        let f = self.slots.alloc(Slot::instance(func_proto));
+        let name_chunk = self.alloc_str_text(b"Proxy");
+        self.functions.insert(
+            f,
+            FuncInfo {
+                native: Some(Native::Proxy),
+                name: "Proxy".to_string(),
+                name_chunk,
+                arity: Native::Proxy.arity(),
+                ..FuncInfo::default()
+            },
+        );
+        self.intrinsics.insert("Proxy", f);
+        let revocable = self.alloc_method(NativeMethod::ProxyRevocable);
+        self.proto_methods.push((f, "revocable", revocable));
     }
 
     /// Build the `JSON` namespace object (XS's `mxJSONObject`, `xsJSON.c`): a
@@ -5755,11 +5870,13 @@ impl Interp {
                 XS_CODE_GET_PROPERTY_AT => {
                     let key = self.pop();
                     let obj = self.pop();
-                    let v = self.property_at_get(code, obj, key);
-                    match v {
-                        Ok(s) => self.push(s),
-                        Err(h) => return h,
-                    }
+                    let s = dispatch_result!(
+                        self.property_at_get(code, obj, key),
+                        pc,
+                        self,
+                        return_depth
+                    );
+                    self.push(s);
                     pc += size as usize;
                 }
                 // `arr[k] = v` (`XS_CODE_SET_PROPERTY_AT`). Stack:
@@ -5768,9 +5885,12 @@ impl Interp {
                     let value = self.pop();
                     let key = self.pop();
                     let obj = self.pop();
-                    if let Err(h) = self.property_at_set(code, obj, key, value, false) {
-                        return h;
-                    }
+                    dispatch_result!(
+                        self.property_at_set(code, obj, key, value, false),
+                        pc,
+                        self,
+                        return_depth
+                    );
                     self.push(value);
                     pc += size as usize;
                 }
@@ -5858,9 +5978,12 @@ impl Interp {
                         _ => false,
                     };
                     if !handled_class_member {
-                        if let Err(h) = self.property_at_set(code, obj, key, value, true) {
-                            return h;
-                        }
+                        dispatch_result!(
+                            self.property_at_set(code, obj, key, value, true),
+                            pc,
+                            self,
+                            return_depth
+                        );
                     }
                     pc += 3;
                 }
@@ -6291,7 +6414,29 @@ impl Interp {
                     let value = self.pop();
                     let obj = self.pop();
                     if let Payload::Reference(inst) = obj.value {
-                        if self.arrays.contains_key(&inst) && Some(id) == self.length_id {
+                        if self.proxies.contains_key(&inst) {
+                            // `p.k = v` routes through the `set` trap (ECMA-262
+                            // 10.5.9); a `false` result throws in strict mode.
+                            let accepted = dispatch_result!(
+                                self.proxy_set(code, inst, id, value, obj),
+                                pc,
+                                self,
+                                return_depth
+                            );
+                            if !accepted && self.strict {
+                                let error = self.build_error("TypeError", 0, 0);
+                                match self.raise_js(error) {
+                                    Ok(target) => {
+                                        pc = target;
+                                        if self.check_meter() == MeterCheck::Abort {
+                                            return Halt::MeterAbort;
+                                        }
+                                        continue;
+                                    }
+                                    Err(halt) => return halt,
+                                }
+                            }
+                        } else if self.arrays.contains_key(&inst) && Some(id) == self.length_id {
                             // `arr.length = N`: the exotic-array length accessor
                             // setter (`fxArrayLengthSetter` → `fxArraySetLength`).
                             self.array_set_length(inst, value);
@@ -6484,6 +6629,16 @@ impl Interp {
                         {
                             self.instance_get(self.symbol_proto, id)
                         }
+                        // A proxy `p.k` routes through the `get` trap
+                        // (ECMA-262 10.5.8), never the ordinary store.
+                        Payload::Reference(inst) if self.proxies.contains_key(&inst) => {
+                            dispatch_result!(
+                                self.proxy_get(code, inst, id, obj),
+                                pc,
+                                self,
+                                return_depth
+                            )
+                        }
                         Payload::Reference(inst) => match self.ordinary_get(code, inst, id, obj) {
                             Ok(value) => value,
                             Err(halt) => return halt,
@@ -6525,7 +6680,18 @@ impl Interp {
                             // exactly `XS_BUILTIN_METERING` over the
                             // allocation-free unlink.
                             self.meter.tick_builtin();
-                            let deleted = self.delete_own_property(inst, id);
+                            let deleted = if self.proxies.contains_key(&inst) {
+                                // `delete p.k` routes through the
+                                // `deleteProperty` trap (ECMA-262 10.5.10).
+                                dispatch_result!(
+                                    self.proxy_delete(code, inst, id),
+                                    pc,
+                                    self,
+                                    return_depth
+                                )
+                            } else {
+                                self.delete_own_property(inst, id)
+                            };
                             // A strict `delete` of a non-configurable own
                             // property throws a realm-local, catchable
                             // `TypeError` (XS's `fxRunDelete` on a `false` from
@@ -6585,7 +6751,14 @@ impl Interp {
                     let deleted = match obj.value {
                         Payload::Reference(inst) => {
                             self.meter.tick_builtin();
-                            if let Some(index) =
+                            if self.proxies.contains_key(&inst) {
+                                dispatch_result!(
+                                    self.proxy_delete(code, inst, id),
+                                    pc,
+                                    self,
+                                    return_depth
+                                )
+                            } else if let Some(index) =
                                 numeric_index.filter(|_| self.arrays.contains_key(&inst))
                             {
                                 self.arrays.get_mut(&inst).unwrap().items.remove(&index);
@@ -6970,6 +7143,15 @@ impl Interp {
                             None
                         }
                     });
+                    // A callable/constructable proxy: its `apply`/`construct`
+                    // trap (or, trap-absent, the target) runs the call.
+                    let proxy_callee = func_ref.and_then(|(f, base)| {
+                        if self.proxies.contains_key(&f) {
+                            Some((f, base))
+                        } else {
+                            None
+                        }
+                    });
                     // A promise resolve/reject function (XS's `fxResolvePromise`/
                     // `fxRejectPromise`, handed to an executor / capability):
                     // recognized by its `promise_functions` entry. Checked
@@ -7123,6 +7305,40 @@ impl Interp {
                             }
                             Err(h) => return h,
                         }
+                    } else if let Some((px, base)) = proxy_callee {
+                        // `p(...)` / `new p(...)`: collect the frame's args and
+                        // receiver, clear the frame, and run the proxy's
+                        // `[[Call]]`/`[[Construct]]` (its `apply`/`construct`
+                        // trap, or the target). `new.target` for a construct is
+                        // the proxy itself.
+                        let args: Vec<Slot> = self
+                            .stack
+                            .get(base + 4..base + 4 + argc)
+                            .map(|s| s.to_vec())
+                            .unwrap_or_default();
+                        let this = self.stack.get(base).copied().unwrap_or_else(Slot::undefined);
+                        self.stack.truncate(base);
+                        let result = if has_target {
+                            let nt = Slot::of(Kind::Reference, Payload::Reference(px));
+                            dispatch_result!(
+                                self.proxy_construct(code, px, &args, nt),
+                                pc,
+                                self,
+                                return_depth
+                            )
+                        } else {
+                            dispatch_result!(
+                                self.proxy_call(code, px, this, &args),
+                                pc,
+                                self,
+                                return_depth
+                            )
+                        };
+                        self.push(result);
+                        if self.check_meter() == MeterCheck::Abort {
+                            return Halt::MeterAbort;
+                        }
+                        pc = ret_pc;
                     } else {
                         match self.enter_call(argc, ret_pc, has_target) {
                             Ok(body_start) => {
@@ -7398,7 +7614,9 @@ impl Interp {
                         Kind::Integer | Kind::Number => self.static_str.number,
                         Kind::String => self.static_str.string,
                         Kind::Reference => match top.value {
-                            Payload::Reference(r) if self.functions.contains_key(&r) => {
+                            // A callable proxy (target is callable) is a
+                            // function for `typeof`; any function instance is.
+                            Payload::Reference(r) if self.slot_is_callable(r) => {
                                 self.static_str.function
                             }
                             _ => self.static_str.object,
@@ -7967,6 +8185,30 @@ impl Interp {
                         Payload::Reference(r) => r,
                         _ => return Halt::Unsupported(op.name()),
                     };
+                    // `k in p`: the proxy `has` trap (ECMA-262 10.5.7). No index /
+                    // boot-default gate applies — a proxy honors any string key.
+                    if self.proxies.contains_key(&objref) {
+                        let id = match key.kind {
+                            Kind::Symbol => match key.value {
+                                Payload::Reference(desc) => self.intern_symbol_key(desc),
+                                _ => return Halt::Unsupported(op.name()),
+                            },
+                            Kind::String => match key.value {
+                                Payload::String(off) => {
+                                    let s = self.str_text(off);
+                                    self.intern_key(&s)
+                                }
+                                _ => return Halt::Unsupported(op.name()),
+                            },
+                            _ => return Halt::Unsupported(op.name()),
+                        };
+                        let present =
+                            dispatch_result!(self.proxy_has(code, objref, id), pc, self, return_depth);
+                        self.meter.tick_raw(IN_METERING);
+                        self.push(Slot::boolean(present));
+                        pc += size as usize;
+                        continue;
+                    }
                     // A **symbol** key (`sym in o`) resolves its descriptor-slot
                     // identity to the interned id (`mxID(symbol)`); no index /
                     // boot-default gate applies (a symbol is never an index and
@@ -10166,6 +10408,20 @@ impl Interp {
                 );
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
+            // `new Proxy(target, handler)` (`fx_Proxy` → `fxNewProxyInstance`):
+            // both arguments must be objects; records the internal slots in the
+            // `proxies` side table and returns the fresh exotic. `Proxy(...)`
+            // without `new` is a TypeError (a constructor-only intrinsic).
+            Native::Proxy => {
+                if !has_target {
+                    return Err(self.catchable_type_error());
+                }
+                let target = arg(0);
+                let handler = arg(1);
+                let proxy = self.make_proxy(target, handler)?;
+                self.meter.tick_raw(REFLECT_FRAME_METERING);
+                proxy
+            }
             // `new WeakMap()` / `new WeakSet()` (`fxNewWeakMapInstance`): only
             // two `fxNewSlot`s (instance + weak list); there is no table or
             // address chunk — the entries hang off the key objects. An iterable
@@ -11719,7 +11975,20 @@ impl Interp {
     /// Whether a slot is a callable value (a reference to a modeled function —
     /// user, native, bound, or promise resolving function). XS's `fxIsCallable`.
     fn is_callable_value(&self, v: Slot) -> bool {
-        matches!(v.value, Payload::Reference(r) if self.functions.contains_key(&r))
+        matches!(v.value, Payload::Reference(r) if v.kind == Kind::Reference && self.slot_is_callable(r))
+    }
+
+    /// Whether a heap instance has `[[Call]]`: a function instance, or a live
+    /// proxy whose target is (recursively) callable (ECMA-262 10.5.12 gates
+    /// `[[Call]]` on the target being callable).
+    fn slot_is_callable(&self, r: crate::value::SlotIndex) -> bool {
+        if self.functions.contains_key(&r) {
+            return true;
+        }
+        match self.proxies.get(&r) {
+            Some(data) if !data.revoked => self.slot_is_callable(data.target),
+            _ => false,
+        }
     }
 
     /// Whether a slot is a **user** (bytecode) function — one `run_callback` can
@@ -13121,6 +13390,51 @@ impl Interp {
             .unwrap_or_else(Slot::undefined);
         let _ = argc;
         let result: Slot = match m {
+            // `Proxy.revocable(target, handler)` (`fx_Proxy_revocable`): a fresh
+            // proxy plus a `revoke` function tied to it, returned as
+            // `{ proxy, revoke }`.
+            NativeMethod::ProxyRevocable => {
+                let target = arg0;
+                let handler = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let proxy = self.make_proxy(target, handler)?;
+                let proxy_inst = match proxy.value {
+                    Payload::Reference(p) => p,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let revoke = self.alloc_method(NativeMethod::ProxyRevoke);
+                self.proxy_revokers.insert(revoke, proxy_inst);
+                let result_obj = self.slots.alloc(Slot::instance(self.object_proto));
+                self.define_descriptor_field(result_obj, "proxy", proxy);
+                self.define_descriptor_field(
+                    result_obj,
+                    "revoke",
+                    Slot::of(Kind::Reference, Payload::Reference(revoke)),
+                );
+                self.meter.tick_raw(REFLECT_FRAME_METERING);
+                Slot::of(Kind::Reference, Payload::Reference(result_obj))
+            }
+            // The `revoke` function itself (`fx_Proxy_revoke`): trip its bound
+            // proxy's internal slots to null. Idempotent (a second call is a
+            // no-op). Returns `undefined`.
+            NativeMethod::ProxyRevoke => {
+                let func = match self.stack.get(base + 1).map(|s| s.value) {
+                    Some(Payload::Reference(f)) => f,
+                    _ => crate::value::SlotIndex::NULL,
+                };
+                if let Some(&proxy) = self.proxy_revokers.get(&func) {
+                    if let Some(data) = self.proxies.get_mut(&proxy) {
+                        data.revoked = true;
+                        data.target = crate::value::SlotIndex::NULL;
+                        data.handler = crate::value::SlotIndex::NULL;
+                    }
+                }
+                self.meter.tick_raw(REFLECT_FRAME_METERING);
+                Slot::undefined()
+            }
             NativeMethod::CopyObject => {
                 // XS's internal helper is called as
                 // `%CopyObject%(target, source, ...excludedKeys)`; unlike
@@ -15801,6 +16115,19 @@ impl Interp {
             .get(base + 7)
             .copied()
             .unwrap_or_else(Slot::undefined);
+        // A proxy target routes every reflective property op through the
+        // proxy-aware MOP (ECMA-262 28.1.*, each delegating to the target's
+        // internal method). `apply`/`construct` fall through to the general
+        // implementations below (which handle a proxy target via `invoke_value`
+        // / `construct_value`).
+        if let Payload::Reference(pinst) = arg0.value {
+            if arg0.kind == Kind::Reference
+                && self.proxies.contains_key(&pinst)
+                && !matches!(m, NativeMethod::ReflectApply | NativeMethod::ReflectConstruct)
+            {
+                return self.call_reflect_proxy(m, pinst, arg1, arg2, arg3, argc, code);
+            }
+        }
         match m {
             // `Reflect.getPrototypeOf(target)`: the target's `[[Prototype]]` —
             // a reference to the prototype instance, or `null`. Sound for any
@@ -16137,13 +16464,122 @@ impl Interp {
             // `Reflect.apply` / `Reflect.construct`: re-entrant (spread argument
             // list into the interpreter frame machinery); an honest named skip
             // this child.
+            // `Reflect.apply(target, thisArgument, argumentsList)` (ECMA-262
+            // 28.1.1): `Call(target, thisArgument, CreateListFromArrayLike(...))`.
             NativeMethod::ReflectApply => {
-                Err(Halt::Unsupported("Reflect.apply:reentrant-trampoline"))
+                if !self.is_callable_value(arg0) {
+                    return Err(self.catchable_type_error());
+                }
+                let args = self.arraylike_to_vec(code, arg2)?;
+                self.meter.tick_raw(REFLECT_FRAME_METERING);
+                self.invoke_value(code, arg0, arg1, &args)
             }
+            // `Reflect.construct(target, argumentsList[, newTarget])` (ECMA-262
+            // 28.1.2): `Construct(target, args, newTarget)`.
             NativeMethod::ReflectConstruct => {
-                Err(Halt::Unsupported("Reflect.construct:reentrant-trampoline"))
+                if !self.is_callable_value(arg0) {
+                    return Err(self.catchable_type_error());
+                }
+                let new_target = if argc >= 3 { arg2 } else { arg0 };
+                if !self.is_callable_value(new_target) {
+                    return Err(self.catchable_type_error());
+                }
+                let args = self.arraylike_to_vec(code, arg1)?;
+                self.meter.tick_raw(REFLECT_FRAME_METERING);
+                self.construct_value(code, arg0, &args, new_target)
             }
             _ => Err(Halt::Unsupported("Reflect:unexpected")),
+        }
+    }
+
+    /// `CreateListFromArrayLike(value)` (ECMA-262 7.3.18) with the default
+    /// element-type list (any) — read `length`, then each indexed element.
+    fn arraylike_to_vec(&mut self, code: &[u8], value: Slot) -> Result<Vec<Slot>, Halt> {
+        let inst = match value.value {
+            Payload::Reference(i) if value.kind == Kind::Reference => i,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let length_id = self.intern_key("length");
+        let len_value = self.mop_get(code, inst, length_id, value)?;
+        let len = to_length_u64(to_number(&len_value));
+        let mut out = Vec::new();
+        for i in 0..len {
+            let id = self.intern_key(&i.to_string());
+            out.push(self.mop_get(code, inst, id, value)?);
+        }
+        Ok(out)
+    }
+
+    /// Dispatch a `Reflect.*` property operation whose target is a **proxy**:
+    /// each routes through the proxy-aware `mop_*` internal method, which runs
+    /// the corresponding trap (ECMA-262 10.5). `apply`/`construct` are handled
+    /// by the general implementations, not here.
+    fn call_reflect_proxy(
+        &mut self,
+        m: NativeMethod,
+        proxy: crate::value::SlotIndex,
+        arg1: Slot,
+        arg2: Slot,
+        arg3: Slot,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        let proxy_slot = Slot::of(Kind::Reference, Payload::Reference(proxy));
+        match m {
+            NativeMethod::ReflectGetPrototypeOf => self.mop_get_prototype(code, proxy),
+            NativeMethod::ReflectSetPrototypeOf => {
+                if arg1.kind != Kind::Reference && arg1.kind != Kind::Null {
+                    return Err(self.catchable_type_error());
+                }
+                Ok(Slot::boolean(self.mop_set_prototype(code, proxy, arg1)?))
+            }
+            NativeMethod::ReflectIsExtensible => {
+                Ok(Slot::boolean(self.mop_is_extensible(code, proxy)?))
+            }
+            NativeMethod::ReflectPreventExtensions => {
+                Ok(Slot::boolean(self.mop_prevent_extensions(code, proxy)?))
+            }
+            NativeMethod::ReflectGetOwnPropertyDescriptor => {
+                let id = self.to_property_id(code, arg1)?;
+                match self.mop_get_own_property(code, proxy, id)? {
+                    Some(descriptor) => Ok(self.descriptor_object(descriptor)),
+                    None => Ok(Slot::undefined()),
+                }
+            }
+            NativeMethod::ReflectDefineProperty => {
+                let descref = match arg2.value {
+                    Payload::Reference(d) if arg2.kind == Kind::Reference => d,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let id = self.to_property_id(code, arg1)?;
+                let descriptor = self.descriptor_from_object(code, descref)?;
+                Ok(Slot::boolean(
+                    self.mop_define_own_property(code, proxy, id, descriptor)?,
+                ))
+            }
+            NativeMethod::ReflectOwnKeys => {
+                let keys = self.mop_own_keys(code, proxy)?;
+                Ok(self.array_from_slots(&keys))
+            }
+            NativeMethod::ReflectHas => {
+                let id = self.to_property_id(code, arg1)?;
+                Ok(Slot::boolean(self.mop_has(code, proxy, id)?))
+            }
+            NativeMethod::ReflectGet => {
+                let id = self.to_property_id(code, arg1)?;
+                let receiver = if argc >= 3 { arg2 } else { proxy_slot };
+                self.mop_get(code, proxy, id, receiver)
+            }
+            NativeMethod::ReflectSet => {
+                let id = self.to_property_id(code, arg1)?;
+                let receiver = if argc >= 4 { arg3 } else { proxy_slot };
+                Ok(Slot::boolean(self.mop_set(code, proxy, id, arg2, receiver)?))
+            }
+            NativeMethod::ReflectDeleteProperty => {
+                let id = self.to_property_id(code, arg1)?;
+                Ok(Slot::boolean(self.mop_delete(code, proxy, id)?))
+            }
+            _ => Err(Halt::Unsupported("Reflect:unexpected-proxy")),
         }
     }
 
@@ -19121,6 +19557,16 @@ impl Interp {
             Payload::Reference(i) => i,
             _ => return Ok(Slot::undefined()),
         };
+        if self.proxies.contains_key(&inst) {
+            // `p[k]` routes through the `get` trap; an integer index key is a
+            // canonical numeric string for the proxy.
+            let key_id = if id == crate::value::XS_NO_ID {
+                self.intern_key(&index.to_string())
+            } else {
+                id
+            };
+            return self.proxy_get(code, inst, key_id, obj);
+        }
         if id == crate::value::XS_NO_ID {
             // An index key.
             if self.arrays.contains_key(&inst) {
@@ -19180,6 +19626,31 @@ impl Interp {
             Payload::At(id, index) => (id, index),
             _ => return Err(Halt::Unsupported("set_property_at")),
         };
+        if self.proxies.contains_key(&inst) {
+            // `p[k] = v` (or a computed define) routes through the proxy's
+            // `[[Set]]`/`[[DefineOwnProperty]]` trap.
+            let key_id = if id == crate::value::XS_NO_ID {
+                self.intern_key(&index.to_string())
+            } else {
+                id
+            };
+            if define {
+                let desc = OrdinaryDescriptor {
+                    value: Some(value),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(true),
+                    ..OrdinaryDescriptor::default()
+                };
+                self.proxy_define_own_property(code, inst, key_id, desc)?;
+            } else {
+                let accepted = self.proxy_set(code, inst, key_id, value, obj)?;
+                if !accepted && self.strict {
+                    return Err(self.catchable_type_error());
+                }
+            }
+            return Ok(());
+        }
         if id == crate::value::XS_NO_ID {
             if self.arrays.contains_key(&inst) {
                 self.array_item_set(inst, index, value, define);
@@ -19461,7 +19932,8 @@ impl Interp {
             || self.array_buffers.contains_key(&inst)
             || self.data_views.contains_key(&inst)
             || self.wrapper_data.contains_key(&inst)
-            || self.regexps.contains_key(&inst))
+            || self.regexps.contains_key(&inst)
+            || self.proxies.contains_key(&inst))
     }
 
     /// The slot indices of every own property of `inst`, in creation
@@ -19940,6 +20412,944 @@ impl Interp {
             ..OrdinaryDescriptor::default()
         };
         Ok(self.ordinary_define_own_property(receiver_inst, id, descriptor))
+    }
+
+    // =====================================================================
+    // Proxy (ECMA-262 10.5) — exotic behavior over the object MOP.
+    //
+    // A proxy is a `Kind::Instance` slot recorded in `self.proxies`. Its
+    // thirteen internal methods dispatch here: each looks up the handler trap
+    // (`GetMethod`), and — trap absent — forwards to the target's corresponding
+    // internal method through the `mop_*` dispatchers below, so a proxy over a
+    // proxy (or over an ordinary object) composes. Every trap enforces the
+    // spec's target-consistency invariants, throwing a realm-local, catchable
+    // `TypeError` on violation. All ordinary/`Object.*`/`Reflect.*`/syntax
+    // property operations route through the same `mop_*` seam so a trap cannot
+    // be bypassed.
+    // =====================================================================
+
+    /// `new Proxy(target, handler)` / `Proxy.revocable` core: validate both
+    /// operands are objects and mint the exotic (ECMA-262 10.5.1
+    /// ProxyCreate). Returns the proxy reference slot.
+    fn make_proxy(&mut self, target: Slot, handler: Slot) -> Result<Slot, Halt> {
+        let target_inst = match target.value {
+            Payload::Reference(t) if target.kind == Kind::Reference => t,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let handler_inst = match handler.value {
+            Payload::Reference(h) if handler.kind == Kind::Reference => h,
+            _ => return Err(self.catchable_type_error()),
+        };
+        // A proxy instance has no identity prototype of its own (null proto);
+        // its `[[Get]]`/`[[GetPrototypeOf]]` come from the traps/target.
+        let inst = self.slots.alloc(Slot::instance(crate::value::SlotIndex::NULL));
+        self.proxies.insert(
+            inst,
+            ProxyData {
+                target: target_inst,
+                handler: handler_inst,
+                revoked: false,
+            },
+        );
+        Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
+    }
+
+    /// The `(target, handler)` pair of a live proxy, or a `TypeError` if it has
+    /// been revoked (every trap begins with this check, ECMA-262 10.5.*).
+    fn proxy_target_handler(
+        &mut self,
+        proxy: crate::value::SlotIndex,
+    ) -> Result<(crate::value::SlotIndex, crate::value::SlotIndex), Halt> {
+        match self.proxies.get(&proxy) {
+            Some(data) if !data.revoked => Ok((data.target, data.handler)),
+            _ => Err(self.catchable_type_error()),
+        }
+    }
+
+    /// `GetMethod(handler, name)` (ECMA-262 7.3.11): the trap function, `None`
+    /// when it is `undefined`/`null`, a `TypeError` when present-but-uncallable.
+    fn proxy_trap(
+        &mut self,
+        code: &[u8],
+        handler: crate::value::SlotIndex,
+        name: &str,
+    ) -> Result<Option<Slot>, Halt> {
+        let id = self.intern_key(name);
+        let hslot = Slot::of(Kind::Reference, Payload::Reference(handler));
+        let m = self.mop_get(code, handler, id, hslot)?;
+        if m.kind == Kind::Undefined || m.kind == Kind::Null {
+            return Ok(None);
+        }
+        if !self.is_callable_value(m) {
+            return Err(self.catchable_type_error());
+        }
+        Ok(Some(m))
+    }
+
+    /// Invoke any callable value with an explicit `this` and argument list —
+    /// the substrate a trap dispatch and `Reflect.apply` need. Routes a user /
+    /// bound function through `run_callback`, a native or native-method through
+    /// its stack-frame dispatch, and a callable proxy through its `apply` trap.
+    fn invoke_value(
+        &mut self,
+        code: &[u8],
+        func: Slot,
+        this: Slot,
+        args: &[Slot],
+    ) -> Result<Slot, Halt> {
+        let f = match func.value {
+            Payload::Reference(f) if func.kind == Kind::Reference => f,
+            _ => return Err(self.catchable_type_error()),
+        };
+        if self.proxies.contains_key(&f) {
+            return self.proxy_call(code, f, this, args);
+        }
+        let fi = match self.functions.get(&f) {
+            Some(fi) => fi,
+            None => return Err(self.catchable_type_error()),
+        };
+        let native = fi.native;
+        let method = fi.method;
+        let is_bound = self.bound_functions.contains_key(&f);
+        if native.is_some() || method.is_some() {
+            // Native / native-method: build the [THIS, FUNCTION, RESULT, FRAME]
+            // frame + args, dispatch, and take the pushed result.
+            let base = self.stack.len();
+            self.push(this);
+            self.push(func);
+            self.push(Slot::undefined());
+            self.push(Slot::of(Kind::Uninitialized, Payload::None));
+            for a in args {
+                self.push(*a);
+            }
+            if let Some(n) = native {
+                self.call_native(n, base, args.len(), false, code)?;
+            } else {
+                self.call_native_method(method.unwrap(), base, args.len(), code)?;
+            }
+            return Ok(self.pop());
+        }
+        let _ = is_bound; // run_callback trampolines a bound target itself.
+        self.run_callback(code, func, this, args)
+    }
+
+    /// Construct any constructor value with an explicit argument list — the
+    /// substrate `Reflect.construct` and a proxy's default `[[Construct]]` need.
+    /// A native constructor dispatches with the construct flag; a callable proxy
+    /// routes to its `construct` trap; a user constructor re-enters through the
+    /// construct-capable callback path.
+    fn construct_value(
+        &mut self,
+        code: &[u8],
+        func: Slot,
+        args: &[Slot],
+        new_target: Slot,
+    ) -> Result<Slot, Halt> {
+        let f = match func.value {
+            Payload::Reference(f) if func.kind == Kind::Reference => f,
+            _ => return Err(self.catchable_type_error()),
+        };
+        if self.proxies.contains_key(&f) {
+            return self.proxy_construct(code, f, args, new_target);
+        }
+        if let Some(n) = self.native_of(f) {
+            let base = self.stack.len();
+            self.push(Slot::of(Kind::Uninitialized, Payload::None)); // THIS = construct flag
+            self.push(func);
+            self.push(Slot::undefined());
+            self.push(Slot::of(Kind::Uninitialized, Payload::None));
+            for a in args {
+                self.push(*a);
+            }
+            self.call_native(n, base, args.len(), true, code)?;
+            return Ok(self.pop());
+        }
+        // A user-defined constructor: re-enter with the construct geometry.
+        self.run_callback_construct(code, func, args, new_target)
+    }
+
+    /// Run a user (bytecode) constructor to completion with an explicit
+    /// argument list, returning the constructed object (ECMA-262 Ordinary
+    /// [[Construct]] shape, modeled on [`Self::run_callback`] but with the
+    /// construct flag set so the callee body's `this` is a fresh instance).
+    fn run_callback_construct(
+        &mut self,
+        code: &[u8],
+        func: Slot,
+        args: &[Slot],
+        new_target: Slot,
+    ) -> Result<Slot, Halt> {
+        let f = match func.value {
+            Payload::Reference(f) if self.functions.contains_key(&f) => f,
+            _ => return Err(self.catchable_type_error()),
+        };
+        if self.functions[&f].native.is_some()
+            || self.functions[&f].method.is_some()
+            || self.bound_functions.contains_key(&f)
+        {
+            // Only a plain user constructor is driven here.
+            return Err(Halt::Unsupported("proxy:construct-nonuser-target"));
+        }
+        let _ = new_target;
+        let argc = args.len();
+        self.push(Slot::of(Kind::Uninitialized, Payload::None)); // THIS (construct)
+        self.push(func);
+        self.push(Slot::undefined());
+        self.push(Slot::of(Kind::Uninitialized, Payload::None));
+        for a in args {
+            self.push(*a);
+        }
+        let body_start = self.enter_call(argc, 0, true)?;
+        let return_depth = self.call_stack.len();
+        self.callback_return_depth = None;
+        match self.dispatch_at(code, body_start, return_depth) {
+            Halt::Return if self.callback_return_depth != Some(return_depth) => Err(Halt::Return),
+            Halt::Return => Ok(self.pop()),
+            other => Err(other),
+        }
+    }
+
+    /// `CreateListFromArrayLike(value, «String, Symbol»)` (ECMA-262 7.3.18) —
+    /// read `length`, then each indexed element, rejecting a non-string/symbol.
+    fn proxy_key_list(&mut self, code: &[u8], value: Slot) -> Result<Vec<Slot>, Halt> {
+        let inst = match value.value {
+            Payload::Reference(i) if value.kind == Kind::Reference => i,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let length_id = self.intern_key("length");
+        let len_value = self.mop_get(code, inst, length_id, value)?;
+        let len = to_length_u64(to_number(&len_value));
+        let mut out = Vec::new();
+        for i in 0..len {
+            let id = self.intern_key(&i.to_string());
+            let element = self.mop_get(code, inst, id, value)?;
+            if element.kind != Kind::String && element.kind != Kind::Symbol {
+                return Err(self.catchable_type_error());
+            }
+            out.push(element);
+        }
+        Ok(out)
+    }
+
+    // ---- the `mop_*` dispatchers: an object's internal method, proxy-aware ---
+
+    /// `O.[[GetPrototypeOf]]()` as a slot (`Reference(proto)` or `Null`).
+    fn mop_get_prototype(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+    ) -> Result<Slot, Halt> {
+        if self.proxies.contains_key(&inst) {
+            return self.proxy_get_prototype(code, inst);
+        }
+        let proto = self.instance_prototype(inst);
+        Ok(if proto.is_null() {
+            Slot::null()
+        } else {
+            Slot::of(Kind::Reference, Payload::Reference(proto))
+        })
+    }
+
+    /// `O.[[SetPrototypeOf]](V)` — `proto` is `Reference`/`Null`.
+    fn mop_set_prototype(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        proto: Slot,
+    ) -> Result<bool, Halt> {
+        if self.proxies.contains_key(&inst) {
+            return self.proxy_set_prototype(code, inst, proto);
+        }
+        let new_proto = match proto.kind {
+            Kind::Null => crate::value::SlotIndex::NULL,
+            Kind::Reference => match proto.value {
+                Payload::Reference(p) => p,
+                _ => return Ok(false),
+            },
+            _ => return Ok(false),
+        };
+        let current = self.instance_prototype(inst);
+        if current == new_proto {
+            return Ok(true);
+        }
+        if !self.instance_extensible(inst) {
+            return Ok(false);
+        }
+        let slot = self.slots.get_mut(inst);
+        slot.value = if new_proto.is_null() {
+            Payload::None
+        } else {
+            Payload::Reference(new_proto)
+        };
+        Ok(true)
+    }
+
+    /// `O.[[IsExtensible]]()`.
+    fn mop_is_extensible(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+    ) -> Result<bool, Halt> {
+        if self.proxies.contains_key(&inst) {
+            return self.proxy_is_extensible(code, inst);
+        }
+        Ok(self.instance_extensible(inst))
+    }
+
+    /// `O.[[PreventExtensions]]()`.
+    fn mop_prevent_extensions(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+    ) -> Result<bool, Halt> {
+        if self.proxies.contains_key(&inst) {
+            return self.proxy_prevent_extensions(code, inst);
+        }
+        self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG;
+        Ok(true)
+    }
+
+    /// `O.[[GetOwnProperty]](P)`.
+    fn mop_get_own_property(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+    ) -> Result<Option<OrdinaryDescriptor>, Halt> {
+        if self.proxies.contains_key(&inst) {
+            return self.proxy_get_own_property(code, inst, id);
+        }
+        Ok(self.ordinary_get_own_descriptor(inst, id))
+    }
+
+    /// `O.[[DefineOwnProperty]](P, Desc)`.
+    fn mop_define_own_property(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        desc: OrdinaryDescriptor,
+    ) -> Result<bool, Halt> {
+        if self.proxies.contains_key(&inst) {
+            return self.proxy_define_own_property(code, inst, id, desc);
+        }
+        Ok(self.ordinary_define_own_property(inst, id, desc))
+    }
+
+    /// `O.[[HasProperty]](P)`.
+    fn mop_has(&mut self, code: &[u8], inst: crate::value::SlotIndex, id: u16) -> Result<bool, Halt> {
+        if self.proxies.contains_key(&inst) {
+            return self.proxy_has(code, inst, id);
+        }
+        Ok(self.instance_has(inst, id).0)
+    }
+
+    /// `O.[[Get]](P, Receiver)`.
+    fn mop_get(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        receiver: Slot,
+    ) -> Result<Slot, Halt> {
+        if self.proxies.contains_key(&inst) {
+            return self.proxy_get(code, inst, id, receiver);
+        }
+        self.ordinary_get(code, inst, id, receiver)
+    }
+
+    /// `O.[[Set]](P, V, Receiver)`.
+    fn mop_set(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<bool, Halt> {
+        if self.proxies.contains_key(&inst) {
+            return self.proxy_set(code, inst, id, value, receiver);
+        }
+        self.ordinary_set(code, inst, id, value, receiver)
+    }
+
+    /// `O.[[Delete]](P)`.
+    fn mop_delete(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+    ) -> Result<bool, Halt> {
+        if self.proxies.contains_key(&inst) {
+            return self.proxy_delete(code, inst, id);
+        }
+        Ok(self.delete_own_property(inst, id))
+    }
+
+    /// `O.[[OwnPropertyKeys]]()` as a list of key slots (string / symbol),
+    /// in the spec integer→string→symbol order for an ordinary object.
+    fn mop_own_keys(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+    ) -> Result<Vec<Slot>, Halt> {
+        if self.proxies.contains_key(&inst) {
+            return self.proxy_own_keys(code, inst);
+        }
+        let ids = self.ordered_own_key_ids(inst);
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            out.push(self.property_key_slot(id)?);
+        }
+        Ok(out)
+    }
+
+    /// An ordinary object's own key ids in `[[OwnPropertyKeys]]` order:
+    /// array-index keys ascending, then other string keys in creation order,
+    /// then symbol keys in creation order.
+    fn ordered_own_key_ids(&self, inst: crate::value::SlotIndex) -> Vec<u16> {
+        let mut ids: Vec<u16> = self
+            .own_property_slots(inst)
+            .into_iter()
+            .map(|property| self.slots.get(property).id)
+            .collect();
+        ids.sort_by_key(|id| {
+            if self.is_symbol_key_id(*id) {
+                (2u8, 0u32)
+            } else {
+                self.string_key_name(*id)
+                    .and_then(|name| string_to_index(&name))
+                    .map(|index| (0u8, index))
+                    .unwrap_or((1u8, 0))
+            }
+        });
+        ids
+    }
+
+    // -------------------------- the thirteen traps -----------------------
+
+    /// `[[GetPrototypeOf]]` (ECMA-262 10.5.1).
+    fn proxy_get_prototype(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+    ) -> Result<Slot, Halt> {
+        let (target, handler) = self.proxy_target_handler(proxy)?;
+        let trap = match self.proxy_trap(code, handler, "getPrototypeOf")? {
+            Some(t) => t,
+            None => return self.mop_get_prototype(code, target),
+        };
+        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
+        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        let result = self.invoke_value(code, trap, handler_slot, &[target_slot])?;
+        if result.kind != Kind::Reference && result.kind != Kind::Null {
+            return Err(self.catchable_type_error());
+        }
+        if self.mop_is_extensible(code, target)? {
+            return Ok(result);
+        }
+        let target_proto = self.mop_get_prototype(code, target)?;
+        if !self.same_value(result, target_proto) {
+            return Err(self.catchable_type_error());
+        }
+        Ok(result)
+    }
+
+    /// `[[SetPrototypeOf]]` (ECMA-262 10.5.2).
+    fn proxy_set_prototype(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        proto: Slot,
+    ) -> Result<bool, Halt> {
+        let (target, handler) = self.proxy_target_handler(proxy)?;
+        let trap = match self.proxy_trap(code, handler, "setPrototypeOf")? {
+            Some(t) => t,
+            None => return self.mop_set_prototype(code, target, proto),
+        };
+        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
+        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        let result = self.invoke_value(code, trap, handler_slot, &[target_slot, proto])?;
+        if !self.truthy(&result) {
+            return Ok(false);
+        }
+        if self.mop_is_extensible(code, target)? {
+            return Ok(true);
+        }
+        let target_proto = self.mop_get_prototype(code, target)?;
+        if !self.same_value(proto, target_proto) {
+            return Err(self.catchable_type_error());
+        }
+        Ok(true)
+    }
+
+    /// `[[IsExtensible]]` (ECMA-262 10.5.3).
+    fn proxy_is_extensible(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+    ) -> Result<bool, Halt> {
+        let (target, handler) = self.proxy_target_handler(proxy)?;
+        let trap = match self.proxy_trap(code, handler, "isExtensible")? {
+            Some(t) => t,
+            None => return self.mop_is_extensible(code, target),
+        };
+        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
+        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        let result = self.invoke_value(code, trap, handler_slot, &[target_slot])?;
+        let boolean = self.truthy(&result);
+        let target_result = self.mop_is_extensible(code, target)?;
+        if boolean != target_result {
+            return Err(self.catchable_type_error());
+        }
+        Ok(boolean)
+    }
+
+    /// `[[PreventExtensions]]` (ECMA-262 10.5.4).
+    fn proxy_prevent_extensions(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+    ) -> Result<bool, Halt> {
+        let (target, handler) = self.proxy_target_handler(proxy)?;
+        let trap = match self.proxy_trap(code, handler, "preventExtensions")? {
+            Some(t) => t,
+            None => return self.mop_prevent_extensions(code, target),
+        };
+        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
+        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        let result = self.invoke_value(code, trap, handler_slot, &[target_slot])?;
+        let boolean = self.truthy(&result);
+        if boolean && self.mop_is_extensible(code, target)? {
+            return Err(self.catchable_type_error());
+        }
+        Ok(boolean)
+    }
+
+    /// `[[GetOwnProperty]]` (ECMA-262 10.5.5).
+    fn proxy_get_own_property(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        id: u16,
+    ) -> Result<Option<OrdinaryDescriptor>, Halt> {
+        let (target, handler) = self.proxy_target_handler(proxy)?;
+        let trap = match self.proxy_trap(code, handler, "getOwnPropertyDescriptor")? {
+            Some(t) => t,
+            None => return self.mop_get_own_property(code, target, id),
+        };
+        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
+        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        let key = self.property_key_slot(id)?;
+        let trap_result = self.invoke_value(code, trap, handler_slot, &[target_slot, key])?;
+        if trap_result.kind != Kind::Undefined && trap_result.kind != Kind::Reference {
+            return Err(self.catchable_type_error());
+        }
+        let target_desc = self.mop_get_own_property(code, target, id)?;
+        if trap_result.kind == Kind::Undefined {
+            match target_desc {
+                None => return Ok(None),
+                Some(d) => {
+                    if d.configurable == Some(false) {
+                        return Err(self.catchable_type_error());
+                    }
+                    if !self.mop_is_extensible(code, target)? {
+                        return Err(self.catchable_type_error());
+                    }
+                    return Ok(None);
+                }
+            }
+        }
+        let obj = match trap_result.value {
+            Payload::Reference(o) => o,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let result_desc = self.descriptor_from_object(code, obj)?;
+        let result_desc = complete_descriptor(result_desc);
+        let extensible = self.mop_is_extensible(code, target)?;
+        if !self.is_compatible_descriptor(extensible, &result_desc, target_desc.as_ref()) {
+            return Err(self.catchable_type_error());
+        }
+        if result_desc.configurable == Some(false) {
+            match &target_desc {
+                None => return Err(self.catchable_type_error()),
+                Some(d) if d.configurable != Some(false) => {
+                    return Err(self.catchable_type_error())
+                }
+                Some(d) => {
+                    // A non-configurable non-writable target data property may
+                    // not be reported writable.
+                    if result_desc.is_data()
+                        && result_desc.writable == Some(false)
+                        && d.is_data()
+                        && d.writable == Some(true)
+                    {
+                        return Err(self.catchable_type_error());
+                    }
+                }
+            }
+        }
+        Ok(Some(result_desc))
+    }
+
+    /// `[[DefineOwnProperty]]` (ECMA-262 10.5.6).
+    fn proxy_define_own_property(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        id: u16,
+        desc: OrdinaryDescriptor,
+    ) -> Result<bool, Halt> {
+        let (target, handler) = self.proxy_target_handler(proxy)?;
+        let trap = match self.proxy_trap(code, handler, "defineProperty")? {
+            Some(t) => t,
+            None => return self.mop_define_own_property(code, target, id, desc),
+        };
+        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
+        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        let key = self.property_key_slot(id)?;
+        let desc_obj = self.descriptor_object(desc);
+        let result =
+            self.invoke_value(code, trap, handler_slot, &[target_slot, key, desc_obj])?;
+        if !self.truthy(&result) {
+            return Ok(false);
+        }
+        let target_desc = self.mop_get_own_property(code, target, id)?;
+        let extensible = self.mop_is_extensible(code, target)?;
+        let setting_config_false = desc.configurable == Some(false);
+        match &target_desc {
+            None => {
+                if !extensible || setting_config_false {
+                    return Err(self.catchable_type_error());
+                }
+            }
+            Some(d) => {
+                if !self.is_compatible_descriptor(extensible, &desc, Some(d)) {
+                    return Err(self.catchable_type_error());
+                }
+                if setting_config_false && d.configurable != Some(false) {
+                    return Err(self.catchable_type_error());
+                }
+                if d.is_data()
+                    && d.configurable == Some(false)
+                    && d.writable == Some(true)
+                    && desc.writable == Some(false)
+                {
+                    return Err(self.catchable_type_error());
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// `[[HasProperty]]` (ECMA-262 10.5.7).
+    fn proxy_has(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        id: u16,
+    ) -> Result<bool, Halt> {
+        let (target, handler) = self.proxy_target_handler(proxy)?;
+        let trap = match self.proxy_trap(code, handler, "has")? {
+            Some(t) => t,
+            None => return self.mop_has(code, target, id),
+        };
+        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
+        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        let key = self.property_key_slot(id)?;
+        let result = self.invoke_value(code, trap, handler_slot, &[target_slot, key])?;
+        let boolean = self.truthy(&result);
+        if !boolean {
+            if let Some(d) = self.mop_get_own_property(code, target, id)? {
+                if d.configurable == Some(false) {
+                    return Err(self.catchable_type_error());
+                }
+                if !self.mop_is_extensible(code, target)? {
+                    return Err(self.catchable_type_error());
+                }
+            }
+        }
+        Ok(boolean)
+    }
+
+    /// `[[Get]]` (ECMA-262 10.5.8).
+    fn proxy_get(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        id: u16,
+        receiver: Slot,
+    ) -> Result<Slot, Halt> {
+        let (target, handler) = self.proxy_target_handler(proxy)?;
+        let trap = match self.proxy_trap(code, handler, "get")? {
+            Some(t) => t,
+            None => return self.mop_get(code, target, id, receiver),
+        };
+        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
+        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        let key = self.property_key_slot(id)?;
+        let trap_result =
+            self.invoke_value(code, trap, handler_slot, &[target_slot, key, receiver])?;
+        if let Some(d) = self.mop_get_own_property(code, target, id)? {
+            if d.configurable == Some(false) {
+                if d.is_data()
+                    && d.writable == Some(false)
+                    && !self.same_value(trap_result, d.value.unwrap_or_else(Slot::undefined))
+                {
+                    return Err(self.catchable_type_error());
+                }
+                if d.is_accessor()
+                    && d.get.map(|g| g.kind == Kind::Undefined).unwrap_or(true)
+                    && trap_result.kind != Kind::Undefined
+                {
+                    return Err(self.catchable_type_error());
+                }
+            }
+        }
+        Ok(trap_result)
+    }
+
+    /// `[[Set]]` (ECMA-262 10.5.9).
+    fn proxy_set(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<bool, Halt> {
+        let (target, handler) = self.proxy_target_handler(proxy)?;
+        let trap = match self.proxy_trap(code, handler, "set")? {
+            Some(t) => t,
+            None => return self.mop_set(code, target, id, value, receiver),
+        };
+        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
+        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        let key = self.property_key_slot(id)?;
+        let result =
+            self.invoke_value(code, trap, handler_slot, &[target_slot, key, value, receiver])?;
+        if !self.truthy(&result) {
+            return Ok(false);
+        }
+        if let Some(d) = self.mop_get_own_property(code, target, id)? {
+            if d.configurable == Some(false) {
+                if d.is_data()
+                    && d.writable == Some(false)
+                    && !self.same_value(value, d.value.unwrap_or_else(Slot::undefined))
+                {
+                    return Err(self.catchable_type_error());
+                }
+                if d.is_accessor() && d.set.map(|s| s.kind == Kind::Undefined).unwrap_or(true) {
+                    return Err(self.catchable_type_error());
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// `[[Delete]]` (ECMA-262 10.5.10).
+    fn proxy_delete(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        id: u16,
+    ) -> Result<bool, Halt> {
+        let (target, handler) = self.proxy_target_handler(proxy)?;
+        let trap = match self.proxy_trap(code, handler, "deleteProperty")? {
+            Some(t) => t,
+            None => return self.mop_delete(code, target, id),
+        };
+        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
+        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        let key = self.property_key_slot(id)?;
+        let result = self.invoke_value(code, trap, handler_slot, &[target_slot, key])?;
+        if !self.truthy(&result) {
+            return Ok(false);
+        }
+        match self.mop_get_own_property(code, target, id)? {
+            None => Ok(true),
+            Some(d) => {
+                if d.configurable == Some(false) {
+                    return Err(self.catchable_type_error());
+                }
+                if !self.mop_is_extensible(code, target)? {
+                    return Err(self.catchable_type_error());
+                }
+                Ok(true)
+            }
+        }
+    }
+
+    /// `[[OwnPropertyKeys]]` (ECMA-262 10.5.11).
+    fn proxy_own_keys(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+    ) -> Result<Vec<Slot>, Halt> {
+        let (target, handler) = self.proxy_target_handler(proxy)?;
+        let trap = match self.proxy_trap(code, handler, "ownKeys")? {
+            Some(t) => t,
+            None => return self.mop_own_keys(code, target),
+        };
+        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
+        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        let trap_result_array = self.invoke_value(code, trap, handler_slot, &[target_slot])?;
+        let trap_keys = self.proxy_key_list(code, trap_result_array)?;
+        // No duplicate keys allowed in the trap result.
+        let mut seen: Vec<u16> = Vec::with_capacity(trap_keys.len());
+        for k in &trap_keys {
+            let kid = self.to_property_id(code, *k)?;
+            if seen.contains(&kid) {
+                return Err(self.catchable_type_error());
+            }
+            seen.push(kid);
+        }
+        let extensible = self.mop_is_extensible(code, target)?;
+        let target_keys = self.mop_own_keys(code, target)?;
+        let mut target_configurable: Vec<u16> = Vec::new();
+        let mut target_nonconfigurable: Vec<u16> = Vec::new();
+        for tk in &target_keys {
+            let tid = self.to_property_id(code, *tk)?;
+            match self.mop_get_own_property(code, target, tid)? {
+                Some(d) if d.configurable == Some(false) => target_nonconfigurable.push(tid),
+                _ => target_configurable.push(tid),
+            }
+        }
+        if extensible && target_nonconfigurable.is_empty() {
+            return Ok(trap_keys);
+        }
+        let mut unchecked = seen.clone();
+        for tid in &target_nonconfigurable {
+            match unchecked.iter().position(|u| u == tid) {
+                Some(pos) => {
+                    unchecked.remove(pos);
+                }
+                None => return Err(self.catchable_type_error()),
+            }
+        }
+        if extensible {
+            return Ok(trap_keys);
+        }
+        for tid in &target_configurable {
+            match unchecked.iter().position(|u| u == tid) {
+                Some(pos) => {
+                    unchecked.remove(pos);
+                }
+                None => return Err(self.catchable_type_error()),
+            }
+        }
+        if !unchecked.is_empty() {
+            return Err(self.catchable_type_error());
+        }
+        Ok(trap_keys)
+    }
+
+    /// `[[Call]]` (ECMA-262 10.5.12).
+    fn proxy_call(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        this: Slot,
+        args: &[Slot],
+    ) -> Result<Slot, Halt> {
+        let (target, handler) = self.proxy_target_handler(proxy)?;
+        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        let trap = match self.proxy_trap(code, handler, "apply")? {
+            Some(t) => t,
+            None => return self.invoke_value(code, target_slot, this, args),
+        };
+        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
+        let arg_array = self.array_from_slots(args);
+        self.invoke_value(code, trap, handler_slot, &[target_slot, this, arg_array])
+    }
+
+    /// `[[Construct]]` (ECMA-262 10.5.13).
+    fn proxy_construct(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        args: &[Slot],
+        new_target: Slot,
+    ) -> Result<Slot, Halt> {
+        let (target, handler) = self.proxy_target_handler(proxy)?;
+        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        let trap = match self.proxy_trap(code, handler, "construct")? {
+            Some(t) => t,
+            None => return self.construct_value(code, target_slot, args, new_target),
+        };
+        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
+        let arg_array = self.array_from_slots(args);
+        let result =
+            self.invoke_value(code, trap, handler_slot, &[target_slot, arg_array, new_target])?;
+        if result.kind != Kind::Reference {
+            return Err(self.catchable_type_error());
+        }
+        Ok(result)
+    }
+
+    /// Build a dense `Array` from a slot list (`CreateArrayFromList`).
+    fn array_from_slots(&mut self, items: &[Slot]) -> Slot {
+        let inst = self.slots.alloc(Slot::instance(self.array_proto));
+        let mut data = ArrayData::default();
+        data.length = items.len() as u32;
+        for (i, s) in items.iter().enumerate() {
+            data.items.insert(i as u32, *s);
+        }
+        self.arrays.insert(inst, data);
+        Slot::of(Kind::Reference, Payload::Reference(inst))
+    }
+
+    /// `ValidateAndApplyPropertyDescriptor(undefined, P, extensible, Desc,
+    /// current)` reduced to its boolean validity result (ECMA-262 10.1.6.3 with
+    /// `O` undefined — `IsCompatiblePropertyDescriptor`). `Desc` is a completed
+    /// descriptor; `current` is the target's own descriptor (or `None`).
+    fn is_compatible_descriptor(
+        &self,
+        extensible: bool,
+        desc: &OrdinaryDescriptor,
+        current: Option<&OrdinaryDescriptor>,
+    ) -> bool {
+        let current = match current {
+            None => return extensible,
+            Some(c) => c,
+        };
+        if current.configurable == Some(false) {
+            if desc.configurable == Some(true) {
+                return false;
+            }
+            if desc.enumerable.is_some() && desc.enumerable != current.enumerable {
+                return false;
+            }
+            let desc_generic = !desc.is_accessor() && !desc.is_data();
+            if desc_generic {
+                return true;
+            }
+            if desc.is_accessor() != current.is_accessor() {
+                return false;
+            }
+            if current.is_accessor() {
+                if let Some(g) = desc.get {
+                    if !self.same_value(g, current.get.unwrap_or_else(Slot::undefined)) {
+                        return false;
+                    }
+                }
+                if let Some(s) = desc.set {
+                    if !self.same_value(s, current.set.unwrap_or_else(Slot::undefined)) {
+                        return false;
+                    }
+                }
+            } else if current.writable == Some(false) {
+                if desc.writable == Some(true) {
+                    return false;
+                }
+                if let Some(v) = desc.value {
+                    if !self.same_value(v, current.value.unwrap_or_else(Slot::undefined)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
     }
 
     fn descriptor_from_object(
@@ -21153,6 +22563,7 @@ fn native_unsupported_name(native: Native) -> &'static str {
         Native::DataView => "native-call:DataView",
         Native::Promise => "native-call:Promise",
         Native::RegExp => "native-call:RegExp",
+        Native::Proxy => "native-call:Proxy",
     }
 }
 

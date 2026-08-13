@@ -111,6 +111,13 @@ pub enum SideTable {
     Functions,
     /// `bound_functions` — `Function.prototype.bind` target/`this`/args.
     BoundFunctions,
+    /// `proxies` (+ `proxy_revokers`) — each `Proxy` exotic's
+    /// `[[ProxyTarget]]`/`[[ProxyHandler]]` internal slots and the revoke-fn →
+    /// proxy back-links. Runtime-minted per `new Proxy`/`Proxy.revocable`, not
+    /// arena-recoverable and not boot-derived, so honestly `Pending` (like
+    /// `BoundFunctions`) until an atom carries it — a machine suspended holding
+    /// a live proxy cannot yet round-trip.
+    Proxies,
     /// `call_stack` — the suspended `CallerState` activations (scope,
     /// args, result) of the active call chain.
     CallStack,
@@ -211,6 +218,7 @@ impl SideTable {
     pub const ALL: &'static [SideTable] = &[
         SideTable::Functions,
         SideTable::BoundFunctions,
+        SideTable::Proxies,
         SideTable::CallStack,
         SideTable::Jumps,
         SideTable::GlobalProps,
@@ -294,6 +302,7 @@ impl SideTable {
             // into dedicated atoms (child-3-adjacent; the honest remainder).
             SideTable::Functions => ("functions", Pending),
             SideTable::BoundFunctions => ("bound_functions", Pending),
+            SideTable::Proxies => ("proxies/proxy_revokers", Pending),
             SideTable::CallStack => ("call_stack", Pending),
             SideTable::Jumps => ("jumps", Pending),
             SideTable::ErrorData => ("error_data", Pending),
@@ -360,7 +369,7 @@ mod tests {
     fn all_is_exhaustive() {
         // Count of variants, kept beside the enum. Bump when a variant is
         // added — the assertion below then forces the ALL entry too.
-        const VARIANT_COUNT: usize = 31;
+        const VARIANT_COUNT: usize = 32;
         assert_eq!(SideTable::ALL.len(), VARIANT_COUNT);
 
         // No duplicates: each field name appears once.
