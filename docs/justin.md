@@ -36,7 +36,7 @@ JSON  ⊂  Justin  ⊂  Jessie  ⊂  JavaScript
 - **Justin** extends JSON with the rest of JavaScript's *pure expression*
   syntax (operators, member access, function *calls*, template literals,
   comments, `undefined`, unquoted property names) while still admitting **no
-  statements and no definitions**. Justin is [defined by jessica](#the-grammar)
+  statements and no definitions**. Justin is [defined by Jessie](#the-grammar)
   as *"the safe JavaScript expression language, a potentially pure terminating
   superset of JSON and subset of Jessie."*
 - **Jessie** extends Justin back up to a full (but ocap-safe, `harden`-oriented)
@@ -52,7 +52,7 @@ reverse never holds.
 ### "Expression-only", exactly
 
 Justin's top-level production parses **a single expression** and nothing else
-(jessica's `start <- _WS assignExpr _EOF`). Concretely, "expression-only"
+(the grammar's `start <- _WS assignExpr _EOF`). Concretely, "expression-only"
 excludes, relative to Jessie and JavaScript:
 
 - **No statements**: no `if`/`else`, `while`, `for`, `switch`, `try`/`catch`,
@@ -78,28 +78,44 @@ define, so its meaning (and its purity and termination) depend entirely on the
 
 ## The grammar
 
-Justin is not defined in this repository. It is defined by the **jessica**
+Justin is not defined in this repository. It is defined by the **Jessie**
 project (the reference implementation of the Jessie/Justin subset languages),
 as a bootstrapped PEG grammar that extends a JSON grammar and is in turn
 extended by the Jessie grammar.
 
 > **Source, and why the revision matters.** The grammar lives at
-> [`agoric-labs/jessica`](https://github.com/agoric-labs/jessica), file
-> `lib/quasi-justin.js` (Justin), extending `lib/quasi-json.js` (the JSON base)
-> and extended by `lib/quasi-jessie.js` (Jessie). It is **not** versioned in
-> this repository and will drift independently, so this document pins the exact
-> revision it was read from. The Justin grammar's own last-touched commit is
-> **`e8ab6f70065360e201d5230824796b1ce6557cb7`** (*"fix: minor Jessie/Justin
-> grammar fixes."*, 2021-10-18). The jessica default-branch HEAD at time of
-> writing was `fef07a883d373c57ae69b62f8da6a5996dee896c` (2026-05-29), a
-> dependency bump that does not touch the grammar. When reconciling in future,
-> diff against `lib/quasi-justin.js` at that grammar commit specifically.
+> [`endojs/Jessie`](https://github.com/endojs/Jessie/tree/main/packages/parse),
+> file `packages/parse/src/quasi-justin.js` (Justin), extending
+> `quasi-json.js` (the JSON base) and extended by `quasi-jessie.js.ts` (Jessie).
+> This is `endojs`'s own actively-maintained copy of the grammar; the older
+> [`agoric-labs/jessica`](https://github.com/agoric-labs/jessica)
+> (`lib/quasi-justin.js` / `lib/quasi-json.js` / `lib/quasi-jessie.js`) is the
+> ancestral reference and has been frozen since 2021 — this document originally
+> read from it, then moved to the Jessie copy at
+> [dckc's suggestion](https://github.com/endojs/endo-but-for-bots/pull/972#issuecomment-5280941723).
+> The grammar is **not** versioned in this repository and will drift
+> independently, so this document pins the exact revision it was read from:
+> **`481af9f50d08eb11e1f4eea13bd816556ab3b1ba`** (2025-08-25, a repo-wide
+> `chore: make prettier` pass). The Justin grammar's own last **substantive**
+> touches are `3fe1ab2ea` (*"feat(parse): add bigint literals to justin"*) and
+> `77855d53a` (*"feat(parse): permit number and bigint underscore separators"*),
+> both 2025-03-13 — the two changes that carried Justin past the frozen jessica
+> text (see [§ D3](#d3-bigint-literals-are-in-the-grammar)). When reconciling in
+> future, diff against `packages/parse/src/quasi-justin.js` at the pinned commit
+> specifically.
 
 ### What Justin adds to JSON
 
-Reading the jessica productions, Justin adds to JSON:
+Reading the Jessie productions, Justin adds to JSON:
 
 - **`undefined`** as a primary data structure.
+- **BigInt literals** (`123n`): `bigintLiteral <- < int > "n"`, a data structure
+  alongside `undefined`. (This is the material advance of the maintained Jessie
+  grammar over the frozen jessica text, which had no bigint — see
+  [§ D3](#d3-bigint-literals-are-in-the-grammar).)
+- **Underscore digit separators** in both numbers and bigints (`1_000`,
+  `1_000_000n`), stripped to their unseparated value. The renderer never *emits*
+  a separator, so this is grammar-admits-more, not a renderer divergence.
 - **Comments**: `//` line and `/* … */` block.
 - **Single-quoted strings** in addition to JSON's double-quoted (normalized to
   double-quoted).
@@ -175,7 +191,7 @@ cross-checked against `packages/pass-style/src` and the fixtures in
 | `number` `Infinity` | `Infinity` | `Infinity` | bare free variable |
 | `number` `-Infinity` | `-Infinity` | `-Infinity` | unary `-` on `Infinity` |
 | `number` `-0` | `-0` | `0` | **not expressible**; encoder collapses `-0` to `0` |
-| `bigint` | `4n` | `4n` | native bigint literal |
+| `bigint` | `4n` | `4n` | native bigint literal (in-grammar, [§ D3](#d3-bigint-literals-are-in-the-grammar)) |
 | `string` | `"abc"` | `"abc"` | JSON string literal |
 | `symbol` | `Symbol.for('foo')` | `passableSymbolForName("foo")` | a **call**, not a literal |
 | `symbol` (well-known) | `Symbol.asyncIterator` | `passableSymbolForName("@@asyncIterator")` | see below |
@@ -373,7 +389,7 @@ controls end to end.
 
 ## Divergences (grammar versus implementation)
 
-These are the concrete disagreements between the jessica grammar
+These are the concrete disagreements between the Jessie grammar
 ([§ The grammar](#the-grammar)) and the shipped renderer
 ([§ The renderer](#the-renderer-that-ships-here)). **Each is an open question
 for the review that locks the dialect**, not something this document resolves.
@@ -383,7 +399,7 @@ the renderer is left untouched and any implementation fix is a separate job.
 ### D1. The `__proto__` record key is *outside* the Justin grammar
 
 The renderer emits `{ ["__proto__"]: 8 }`, a **computed property name**, to
-express a `copyRecord` with a genuine own key `"__proto__"`. But the jessica
+express a `copyRecord` with a genuine own key `"__proto__"`. But the Jessie
 grammar admits **no computed property names** at all (`# No computed property
 name`), and separately forbids `__proto__` both as an identifier property name
 (`IDENT_NAME <- ~(HIDDEN_PFX / "__proto__" _WSN) …`) and as a quoted one (the
@@ -420,18 +436,27 @@ deprecated `@@asyncIterator` special case are latent inconsistencies to clean up
 in a separate job), or should well-known symbols render as `Symbol.iterator`
 member access (fewer endowments, closer to the grammar)?
 
-### D3. BigInt literals are not in the pinned grammar
+### D3. BigInt literals are in the grammar
+
+*(Resolved by adopting the maintained Jessie source.)*
 
 The renderer emits `4n`, `9007199254740993n`, native JavaScript **bigint
-literals**. The jessica grammar at the pinned revision has no bigint: its
-`NUMBER` production is `< int frac? exp? >` with no `n` suffix, and the header
-comment says only that Justin *"will include BigInt once available."* So the
-shipped `4n` form is ahead of the pinned grammar.
+literals**. Against the *frozen* jessica grammar this was a divergence: that
+grammar's `NUMBER` production is `< int frac? exp? >` with no `n` suffix, and its
+header comment said only that Justin *"will include BigInt once available."*
 
-*Decision needed:* the locked dialect should state that Justin includes bigint
-literals (updating the grammar reference), which is almost certainly the intent,
-but it is a real gap between the pinned text and the code and should be recorded
-as such.
+That gap is **closed** in the actively-maintained Jessie grammar this document
+now cites (the reason to prefer it). The pinned revision has a first-class
+`bigintLiteral <- < int > "n" _WSN` production, admitted as a `dataStructure`
+beside `undefined`, added in `3fe1ab2ea` (*"feat(parse): add bigint literals to
+justin"*, 2025-03-13); its header comment now reads *"includes BigInt literals:
+123n."* The shipped `4n` form is therefore **exactly in-grammar**, not ahead of
+it. (The same source also added underscore digit separators, `1_000_000n`, in
+`77855d53a` — a feature the grammar admits but the renderer never emits.)
+
+*No decision needed:* recorded as resolved. `4n` is Justin under the pinned
+grammar; the only thing the lock must confirm is the choice of the Jessie source
+over the frozen jessica one, which is what moving this citation does.
 
 ### D4. Error `cause`, aggregate `errors`, and `stack` are unrepresented
 
@@ -472,17 +497,23 @@ endowments must an evaluator provide?"*, answered in
    passable symbols (retiring the dead `Symbol.` branch and the deprecated
    `@@asyncIterator` path), or should well-known symbols use `Symbol.` member
    access?
-3. **D3**: confirm bigint literals (`4n`) are part of the locked dialect, ahead
-   of the pinned jessica grammar.
+3. **D3** *(resolved)*: bigint literals (`4n`) are in the maintained Jessie
+   grammar, so the shipped form is in-grammar; the lock need only ratify citing
+   the Jessie source over the frozen jessica one.
 4. **D4**: is the lossy `Name("message")` error form permanent, or should
    `cause`/`errors`/`stack` gain Justin forms (separate job)?
 5. **D5**: `byteArray` is out of scope until marshalling of it is implemented.
 
 ## References
 
-- Grammar: [`agoric-labs/jessica`](https://github.com/agoric-labs/jessica),
-  `lib/quasi-justin.js` / `lib/quasi-json.js` / `lib/quasi-jessie.js` at grammar
-  commit `e8ab6f70065360e201d5230824796b1ce6557cb7` (2021-10-18).
+- Grammar: [`endojs/Jessie`](https://github.com/endojs/Jessie/tree/main/packages/parse),
+  `packages/parse/src/quasi-justin.js` / `quasi-json.js` / `quasi-jessie.js.ts`
+  at commit `481af9f50d08eb11e1f4eea13bd816556ab3b1ba` (2025-08-25); the
+  substantive Justin changes past the ancestral grammar are `3fe1ab2ea` (bigint
+  literals) and `77855d53a` (underscore separators), both 2025-03-13. Ancestral
+  reference (frozen 2021): [`agoric-labs/jessica`](https://github.com/agoric-labs/jessica),
+  `lib/quasi-justin.js` at commit `e8ab6f70065360e201d5230824796b1ce6557cb7`
+  (2021-10-18).
 - Renderer: `packages/marshal/src/marshal-justin.js`; fixtures
   `packages/marshal/tools/marshal-test-data.js` (`jsonJustinPairs`); test
   `packages/marshal/test/marshal-justin.test.js`.
