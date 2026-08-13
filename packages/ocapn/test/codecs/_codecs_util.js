@@ -338,7 +338,7 @@ export const makeCodecTestKit = (
  * @property {(testKit: CodecTestKit) => any} [makeValue]
  * @property {(testKit: CodecTestKit) => any} [makeExpectedValue]
  * @property {boolean} [skipRead]
- * @property {(t: any, actual: any, expected: any, descriptor: string) => void} [customAssert]
+ * @property {(t: any, actual: any, expected: any, descriptor: string, testKit: CodecTestKit) => void} [customAssert]
  */
 
 /**
@@ -420,6 +420,7 @@ export const testBidirectionally = (
       readValueResult,
       expectedValue,
       `value check: ${testDescriptor}`,
+      testKit,
     );
   } else {
     t.deepEqual(
