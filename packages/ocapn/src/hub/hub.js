@@ -1,4 +1,5 @@
 // @ts-check
+import { encodeAscii } from '@endo/ascii';
 import harden from '@endo/harden';
 import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 import { Far } from '@endo/marshal';
@@ -130,7 +131,7 @@ const bytesFromHex = hex => {
  */
 const swissnumHex = swissnum =>
   typeof swissnum === 'string'
-    ? hexFromBytes(new TextEncoder().encode(swissnum))
+    ? hexFromBytes(encodeAscii(swissnum, 'swissnum'))
     : hexFromBytes(swissnum);
 
 const makeMemoryHubStore = () => {
@@ -2014,7 +2015,7 @@ export const makeOcapnHub = ({
      * Publish a reference row under a swissnum: `(origin session,
      * position there, flavor)`. Position 0 is the origin's bootstrap.
      *
-     * @param {string | Uint8Array} swissnum
+     * @param {string | Uint8Array | ArrayBufferLike} swissnum
      * @param {{ session: string, position: bigint, flavor?: 'object' | 'promise' }} at
      */
     publish: (swissnum, { session, position, flavor = 'object' }) => {
@@ -2046,7 +2047,7 @@ export const makeOcapnHub = ({
      * positions toward it — the natural form for an embedder endpoint
      * that knows its own import positions.
      *
-     * @param {string | Uint8Array} swissnum
+     * @param {string | Uint8Array | ArrayBufferLike} swissnum
      * @param {{ session: string, position: bigint }} at
      */
     publishHeld: (swissnum, { session, position }) => {
@@ -2120,7 +2121,7 @@ export const makeOcapnHub = ({
       }
       return harden(dials);
     },
-    /** @param {string | Uint8Array} swissnum */
+    /** @param {string | Uint8Array | ArrayBufferLike} swissnum */
     unpublish: swissnum => {
       const key = swissnumHex(swissnum);
       const refId = publications.get(key);

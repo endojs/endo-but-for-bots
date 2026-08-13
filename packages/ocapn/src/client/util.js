@@ -5,6 +5,7 @@
  * @import { LocationId, SwissNum } from './types.js'
  */
 
+import { encodeAscii } from '@endo/ascii';
 import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { encodeHex } from '@endo/hex';
@@ -49,7 +50,6 @@ export const locationToLocationId = location => {
 };
 
 const swissnumDecoder = new TextDecoder('ascii', { fatal: true });
-const swissnumEncoder = new TextEncoder();
 
 /**
  * @param {ArrayBufferLike} value
@@ -64,17 +64,8 @@ export const decodeSwissnum = value => {
  * @returns {SwissNum}
  */
 export const encodeSwissnum = value => {
-  // Validate the value is strictly valid ASCII
-  for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
-    if (code > 127) {
-      throw new Error(
-        `Invalid ASCII character in swissnum at position ${i}: ${value[i]}`,
-      );
-    }
-  }
   // @ts-expect-error - Branded type: SwissNum is ArrayBufferLike at runtime
-  return bytesToImmutable(swissnumEncoder.encode(value));
+  return bytesToImmutable(encodeAscii(value, 'swissnum'));
 };
 
 /**
