@@ -6370,6 +6370,15 @@ const makeDaemonCore = async (
       `Endo daemon dialing peer node ${nodeId.slice(0, 8)} at ${JSON.stringify(addresses)}`,
     );
     const remoteControl = provideRemoteControl(nodeId);
+    // The gateway we present on this outbound connection is bound to the peer
+    // we dialed: its `followRetentionSet` answers only for `nodeId`'s own node,
+    // so a peer we dial can never enumerate a third node's retained formula
+    // numbers (nor the local node's). This closes the outbound residual left by
+    // the inbound `hello` binding — there the greeter binds the gateway to the
+    // authenticated peer; here we know the dialed peer's node up front and bind
+    // the same way. Only loopback, which has no distinct authenticated peer,
+    // still presents the shared `localGateway`. See makeGatewayForPeer.
+    const outboundGateway = makeGatewayForPeer(nodeId);
     // The state machine may abandon our outbound dial attempt (e.g.,
     // due to crossed-hellos accept bias).  That cancellation must not
     // cancel the peer formula itself — the peer keeps working with the
@@ -6455,6 +6464,7 @@ const makeDaemonCore = async (
               const remoteGateway = await E(network).connect(
                 address,
                 /** @type {any} */ (attemptContext),
+                outboundGateway,
               );
               console.log(
                 `Endo daemon makePeer ${nodeId.slice(0, 8)}: dial succeeded in ${Date.now() - attemptStartedAt}ms`,

@@ -457,8 +457,13 @@ export const make = async (
     // so we just continue and return the network object.
   }
 
-  const connect = async (address, connectionContext) => {
+  const connect = async (address, connectionContext, peerGateway) => {
     const { value: connectionNumber } = connectionNumbers.next();
+
+    // Present a gateway bound to the dialed peer when the caller supplies one,
+    // so the peer we dial can follow only its own retention set — never a third
+    // node's. Fall back to the shared `localGateway` (loopback / older callers).
+    const outboundGateway = peerGateway || localGateway;
 
     const url = new URL(address);
     const targetNodeId = url.hostname;
@@ -528,7 +533,7 @@ export const make = async (
       closed: capTpClosed,
       getBootstrap,
       close: closeCapTp,
-    } = makeNetstringCapTP('Endo', writer, reader, cancelled, localGateway);
+    } = makeNetstringCapTP('Endo', writer, reader, cancelled, outboundGateway);
 
     closed.then(
       () => closeCapTp(new Error('Relay channel closed')),
@@ -546,7 +551,7 @@ export const make = async (
     const remoteGreeter = getBootstrap();
     return E(remoteGreeter).hello(
       localNodeId,
-      localGateway,
+      outboundGateway,
       Far('Canceller', cancelConnection),
       connectionCancelled,
     );

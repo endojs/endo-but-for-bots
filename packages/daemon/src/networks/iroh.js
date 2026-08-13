@@ -106,15 +106,24 @@ export const make = async (powers, context) => {
    * @param {any} connection - iroh Connection.
    * @param {number} connectionNumber
    * @param {boolean} inbound
+   * @param {any} [outboundGateway] - On the outbound path, the gateway to
+   *   present as our CapTP bootstrap; bound to the dialed peer so it can follow
+   *   only its own retention set. Defaults to the shared `localGateway`.
    * @returns {{ capTp: ReturnType<typeof makeNetstringCapTP>, tearDown: (reason: Error) => void }}
    */
-  const serveStream = (bi, connection, connectionNumber, inbound) => {
+  const serveStream = (
+    bi,
+    connection,
+    connectionNumber,
+    inbound,
+    outboundGateway = localGateway,
+  ) => {
     const {
       reader,
       writer,
       closed: streamClosed,
     } = adaptIrohStream(bi, connection);
-    const bootstrap = inbound ? localGreeter : localGateway;
+    const bootstrap = inbound ? localGreeter : outboundGateway;
     const capTp = makeNetstringCapTP(
       'Endo',
       writer,
@@ -271,10 +280,18 @@ export const make = async (powers, context) => {
   /**
    * @param {string} address
    * @param {any} connectionContext
+   * @param {any} [peerGateway] - Gateway bound to the dialed peer; presented
+   *   instead of the shared `localGateway` so the peer can follow only its own
+   *   retention set. Falls back to `localGateway` when omitted.
    */
-  const connect = async (address, connectionContext) => {
+  const connect = async (address, connectionContext, peerGateway) => {
     const { value: connectionNumber } = connectionNumbers.next();
     const nodeAddr = parseIrohAddress(address);
+
+    // Present a gateway bound to the dialed peer when the caller supplies one,
+    // so the peer we dial can follow only its own retention set — never a third
+    // node's. Fall back to the shared `localGateway` (loopback / older callers).
+    const outboundGateway = peerGateway || localGateway;
 
     const connectionCancelled = /** @type {Promise<never>} */ (
       E(connectionContext).whenCancelled()
@@ -308,6 +325,7 @@ export const make = async (powers, context) => {
         connection,
         connectionNumber,
         false,
+        outboundGateway,
       );
       handedOff = true;
 
@@ -339,7 +357,7 @@ export const make = async (powers, context) => {
       const remoteGreeter = capTp.getBootstrap();
       return await E(remoteGreeter).hello(
         localNodeId,
-        localGateway,
+        outboundGateway,
         Far('Canceller', cancelConnection),
         connectionCancelled,
       );
