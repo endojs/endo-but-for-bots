@@ -158,7 +158,7 @@ Rows are returned as JSON strings from Rust to JS.
 
 - `stmtGet` → single JSON object or `"null"`
 - `stmtAll` → JSON array of objects
-- `stmtRun` → `'{"changes": "<bigint>", "lastInsertRowid": "<bigint>"}'`
+- `stmtRun` → `'{"changes": "<bigint>", "last_insert_row_id": "<bigint>"}'`
 
 | SQLite type | FFI JSON encoding | JS wrapper conversion |
 |-------------|-------------------|-----------------------|
@@ -191,7 +191,7 @@ Path `":memory:"` opens an in-memory database.
 | `host_sqlite_close` | `sqliteClose` | 1 | `sqliteClose(dbH)` | undefined |
 | `host_sqlite_exec` | `sqliteExec` | 2 | `sqliteExec(dbH, sql)` | undefined or `"Error: ..."` |
 | `host_sqlite_prepare` | `sqlitePrepare` | 2 | `sqlitePrepare(dbH, sql)` | handle (number) or `"Error: ..."` |
-| `host_sqlite_stmt_run` | `sqliteStmtRun` | 2 | `sqliteStmtRun(stmtH, paramsJson)` | JSON `{changes, lastInsertRowid}` |
+| `host_sqlite_stmt_run` | `sqliteStmtRun` | 2 | `sqliteStmtRun(stmtH, paramsJson)` | JSON `{changes, last_insert_row_id}` |
 | `host_sqlite_stmt_get` | `sqliteStmtGet` | 2 | `sqliteStmtGet(stmtH, paramsJson)` | JSON object, `"null"`, or error |
 | `host_sqlite_stmt_all` | `sqliteStmtAll` | 2 | `sqliteStmtAll(stmtH, paramsJson)` | JSON array or error |
 | `host_sqlite_stmt_columns` | `sqliteStmtColumns` | 1 | `sqliteStmtColumns(stmtH)` | JSON array of `{name, type}` |
@@ -409,7 +409,7 @@ export const makeXsSqlitePowers = () => {
         const parsed = JSON.parse(result);
         return harden({
           changes: BigInt(parsed.changes),
-          lastInsertRowid: BigInt(parsed.lastInsertRowid),
+          lastInsertRowid: BigInt(parsed.last_insert_row_id),
         });
       };
 
