@@ -265,14 +265,14 @@ pub fn run(source: &str) -> Option<OracleOutcome> {
 /// The outcome of compiling one **Module** on XS (parse + code, no run).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleOutcome {
-    /// The exact XS module bytecode the XS compiler emitted, or empty on
-    /// a parse rejection.
+    /// The exact XS module bytecode the XS compiler emitted. In console mode a
+    /// parse rejection is a small SyntaxError throw stub rather than empty.
     pub bytecode: Vec<u8>,
     /// The serialized symbols atom.
     pub symbols: Vec<u8>,
     /// `true` if the module parsed and coded; `false` on a `SyntaxError`.
     pub compiled: bool,
-    /// The parse error message (valid when `!compiled`).
+    /// The parse error message when the C parser surfaced one directly.
     pub error: String,
 }
 
@@ -320,10 +320,20 @@ pub fn compile_module(source: &str) -> Option<ModuleOutcome> {
         }
     };
 
+    // In console mode XS represents a Module-goal syntax error as a small
+    // bytecode program that constructs and throws a SyntaxError.  The C entry
+    // therefore cannot use `script != NULL` as the acceptance signal.  A
+    // successfully coded module always ends in
+    // `MODULE <flags>; SET_RESULT; END`; the throw stub never does.  Recognize
+    // that pin-stable trailer so module early errors remain distinguishable
+    // from accepted modules without executing either one as a Script.
+    let emitted_module_record = bytecode
+        .get(bytecode.len().saturating_sub(4)..)
+        .is_some_and(|trailer| trailer[0] == 126 && trailer[2] == 187 && trailer[3] == 68);
     let outcome = ModuleOutcome {
         bytecode,
         symbols,
-        compiled: raw.ok != 0,
+        compiled: raw.ok != 0 && emitted_module_record,
         error: cstr_field(&raw.error),
     };
 
@@ -518,12 +528,10 @@ mod tests {
         // runs in console mode, so a syntax error emits a throw-`SyntaxError`
         // code sequence rather than a null script (the same shape the script
         // entry runs to observe its rejection) — so the module entry returns
-        // `Some(..)` and does not machine-fail. The byte-identity corpus only
-        // exercises VALID modules, where ironhorse and the oracle both accept; a
-        // truly-malformed module is out of the differential's scope.
+        // `Some(..)` and does not machine-fail. The acceptance classifier must
+        // still identify that throw stub as a parse rejection.
         let o = compile_module("export const = ;").expect("machine must not fail");
-        // Either a rejection or a throw-code module — never a process crash.
-        let _ = o.compiled;
+        assert!(!o.compiled, "the SyntaxError throw stub is not a module");
     }
 
     #[test]

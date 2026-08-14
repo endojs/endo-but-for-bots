@@ -24,6 +24,7 @@ use crate::report::CaseRecord;
 use crate::{dual_run, dual_run_async, Agreement, AsyncDualRun, DualRun, IronhorseCompile};
 use ironhorse_vm::Halt;
 use std::collections::{BTreeMap, HashSet};
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 /// The ironhorse not-yet-implemented feature skip list — the analogue of
@@ -762,9 +763,13 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
         return preskip(&format!("feature:{}", f));
     }
 
-    // Structural pre-skips: shapes the differential cannot model yet.
+    // Modules use their own syntactic goal.  Drive both real front ends now,
+    // rather than feeding module syntax to the Script runner or reporting the
+    // former blanket `structural:module` pre-skip.  Parse-phase negatives are
+    // complete executions of the applicable phase; accepted modules proceed
+    // to the explicitly named linker/evaluator boundary below.
     if fm.flags.iter().any(|f| f == "module") {
-        return preskip("structural:module");
+        return run_module_case(cfg, src, &fm);
     }
     // `CanBlockIsFalse` marks the `$262.agent`/Atomics blocking-agent tests,
     // which need a threading story ironhorse does not have — a named structural
@@ -896,6 +901,117 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
         verdict,
         strict_skipped,
         computron_gap,
+    }
+}
+
+/// Execute the Module-goal phase of one official test262 case against both
+/// compilers.  XS's console parser emits a SyntaxError throw stub for malformed
+/// modules; [`xs_oracle::compile_module`] recognizes the absence of the
+/// `MODULE; SET_RESULT; END` trailer and reports that as a rejection.  This
+/// makes parse-negative coverage a genuine XS differential rather than a
+/// frontmatter-based relabel.
+///
+/// Static resolution and evaluation remain separate, honestly named run
+/// skips.  In particular, compiling a positive module is never called
+/// "covered": fixture loading, namespace creation, top-level-await ordering,
+/// and dynamic import must all execute before that claim is available.
+fn run_module_case(cfg: &Config, src: &str, fm: &Frontmatter) -> CaseResult {
+    let oracle = match xs_oracle::compile_module(src) {
+        Some(outcome) => outcome,
+        None => {
+            return CaseResult {
+                verdict: Verdict::RunSkip("oracle-machine-error".into()),
+                strict_skipped: false,
+                computron_gap: false,
+            };
+        }
+    };
+
+    let ironhorse = panic::catch_unwind(AssertUnwindSafe(|| {
+        ironhorse_compile::compile_module_atoms(src)
+    }));
+
+    if let Some(negative) = &fm.negative {
+        if negative.phase == "parse" {
+            let ironhorse_rejected = match &ironhorse {
+                Ok(Err(error)) => {
+                    if matches!(
+                        error.kind,
+                        ironhorse_compile::parser::ParseErrorKind::Unsupported
+                    ) {
+                        return CaseResult {
+                            verdict: Verdict::RunSkip("compiler-unimplemented:parse".into()),
+                            strict_skipped: false,
+                            computron_gap: false,
+                        };
+                    }
+                    true
+                }
+                Err(_) => {
+                    return CaseResult {
+                        verdict: Verdict::RunSkip("compiler-unimplemented:parse".into()),
+                        strict_skipped: false,
+                        computron_gap: false,
+                    };
+                }
+                Ok(Ok(_)) => false,
+            };
+
+            let verdict = match (oracle.compiled, ironhorse_rejected) {
+                (false, true) => Verdict::Covered,
+                (false, false) if cfg.oracle => Verdict::Fail(
+                    "negative over-acceptance: ironhorse module compiler accepted a source XS rejected"
+                        .into(),
+                ),
+                (false, false) => {
+                    Verdict::RunSkip("oracle-gate-off:negative-over-acceptance".into())
+                }
+                (true, _) => Verdict::RunSkip("negative-oracle-unexpected".into()),
+            };
+            return CaseResult {
+                verdict,
+                strict_skipped: false,
+                computron_gap: false,
+            };
+        }
+
+        if negative.phase == "resolution" {
+            return CaseResult {
+                verdict: Verdict::RunSkip("module:resolution-linking".into()),
+                strict_skipped: false,
+                computron_gap: false,
+            };
+        }
+    }
+
+    let verdict = match ironhorse {
+        Ok(Ok((bytes, symbols))) if oracle.compiled => {
+            if cfg.oracle && (bytes != oracle.bytecode || symbols != oracle.symbols) {
+                Verdict::RunSkip("module:compiler-byte-divergence".into())
+            } else {
+                Verdict::RunSkip("module:evaluation".into())
+            }
+        }
+        Ok(Ok(_)) if cfg.oracle => {
+            Verdict::Fail("module over-acceptance: XS rejected the source".into())
+        }
+        Ok(Ok(_)) => Verdict::RunSkip("oracle-gate-off:module-over-acceptance".into()),
+        Ok(Err(error))
+            if matches!(
+                error.kind,
+                ironhorse_compile::parser::ParseErrorKind::Unsupported
+            ) =>
+        {
+            Verdict::RunSkip("compiler-unimplemented:module".into())
+        }
+        Ok(Err(_)) => Verdict::RunSkip("module:compiler-rejected".into()),
+        Err(_) => Verdict::RunSkip("compiler-unimplemented:module".into()),
+    };
+
+    CaseResult {
+        verdict,
+        strict_skipped: false,
+        computron_gap: false,
     }
 }
 
@@ -1382,6 +1498,33 @@ pub fn run_files(cfg: &Config, harness_dir: &Path, root: &Path, files: &[PathBuf
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn module_parse_negative_runs_both_module_front_ends() {
+        let source = "/*---\nflags: [module]\nnegative:\n  phase: parse\n  type: SyntaxError\n---*/\nexport const = ;";
+        let result = run_case(&Config::default(), Path::new("."), source);
+        assert_eq!(result.verdict, Verdict::Covered);
+    }
+
+    #[test]
+    fn accepted_module_reaches_named_evaluation_boundary() {
+        let source = "/*---\nflags: [module]\n---*/\nexport const value = 1;";
+        let result = run_case(&Config::default(), Path::new("."), source);
+        assert_eq!(
+            result.verdict,
+            Verdict::RunSkip("module:evaluation".into())
+        );
+    }
+
+    #[test]
+    fn module_resolution_negative_reaches_named_linking_boundary() {
+        let source = "/*---\nflags: [module]\nnegative:\n  phase: resolution\n  type: SyntaxError\n---*/\nimport { missing } from './fixture.js';";
+        let result = run_case(&Config::default(), Path::new("."), source);
+        assert_eq!(
+            result.verdict,
+            Verdict::RunSkip("module:resolution-linking".into())
+        );
+    }
 
     #[test]
     fn mode_selection_mirrors_xst() {

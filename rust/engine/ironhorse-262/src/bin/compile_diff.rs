@@ -9,6 +9,7 @@
 //! Usage:
 //!   cargo run -p ironhorse-262 --bin compile-diff                       # curated corpora (bounded)
 //!   cargo run -p ironhorse-262 --bin compile-diff -- language/expressions/addition
+//!   cargo run -p ironhorse-262 --bin compile-diff -- --module language/module-code
 //!   cargo run -p ironhorse-262 --bin compile-diff -- built-ins/Boolean
 //!
 //! Memory note (same as `ironhorse-xst`): the XS oracle accumulates
@@ -20,8 +21,8 @@
 //! accept/reject disagreement), so CI/nightly can gate on it.
 
 use ironhorse_262::compile_diff::{
-    collect_js, compile_diff_files, compile_diff_programs, corpora_programs, print_report,
-    print_symbols_report, symbols_diff_programs,
+    collect_js, compile_diff_files, compile_diff_programs, corpora_programs,
+    module_compile_diff_programs, print_report, print_symbols_report, symbols_diff_programs,
 };
 use ironhorse_262::test262::locate_test262;
 
@@ -32,7 +33,14 @@ fn main() {
     // default relies on (ironhorse emits its own symbols, not the oracle's).
     let mut symbols_report = None;
 
-    let (report, label) = if args.is_empty() {
+    let module_mode = args.first().map(String::as_str) == Some("--module");
+    let paths = if module_mode { &args[1..] } else { &args[..] };
+    if module_mode && paths.is_empty() {
+        eprintln!("--module requires a test262 subtree");
+        std::process::exit(2);
+    }
+
+    let (report, label) = if paths.is_empty() && !module_mode {
         // Default: the bounded curated corpora (no test262 subset needed).
         let programs = corpora_programs();
         symbols_report = Some(symbols_diff_programs(&programs));
@@ -45,7 +53,7 @@ fn main() {
                 std::process::exit(2);
             }
         };
-        let sub = &args[0];
+        let sub = &paths[0];
         let base = if sub.starts_with("language") || sub.starts_with("built-ins") {
             root.join(sub)
         } else {
@@ -57,7 +65,22 @@ fn main() {
             std::process::exit(2);
         }
         eprintln!("compiling {} files under {}", files.len(), base.display());
-        (compile_diff_files(&files), base.display().to_string())
+        if module_mode {
+            let programs = files
+                .iter()
+                .filter_map(|path| {
+                    std::fs::read_to_string(path)
+                        .ok()
+                        .map(|source| (path.display().to_string(), source))
+                })
+                .collect::<Vec<_>>();
+            (
+                module_compile_diff_programs(&programs),
+                format!("{} (Module goal)", base.display()),
+            )
+        } else {
+            (compile_diff_files(&files), base.display().to_string())
+        }
     };
 
     let stdout = std::io::stdout();
