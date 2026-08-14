@@ -29757,9 +29757,20 @@ fn iso_datetime_difference(start: TemporalPlainRecord, end: TemporalPlainRecord,
 /// this model, so only its date matters.
 fn iso_duration_span_nanoseconds(start: TemporalPlainRecord, d: TemporalDurationRecord) -> Option<i128> {
     const DAY_NS: i128 = 86_400_000_000_000;
+    // The ISO datetime limit: `nsMaxInstant` (±10^8 days) plus a one-day margin.
+    // A `start + duration` endpoint beyond it is a `RangeError` — and bounds the
+    // span so the calendar-unit total loop can never run away.
+    const LIMIT_NS: i128 = 8_640_000_000_000_000_000_000 + DAY_NS;
     let end = iso_date_add(start, d.years, d.months, d.weeks, d.days)?;
+    let time = d.time_only_nanoseconds()?;
+    let end_epoch = days_from_civil(end.year, end.month, end.day)?
+        .checked_mul(DAY_NS)?
+        .checked_add(time)?;
+    if end_epoch.abs() > LIMIT_NS {
+        return None;
+    }
     let date_ns = iso_days_between(start, end)?.checked_mul(DAY_NS)?;
-    date_ns.checked_add(d.time_only_nanoseconds()?)
+    date_ns.checked_add(time)
 }
 
 /// The fractional count of `unit` (`"year"` or `"month"`) that a nanosecond
@@ -29782,7 +29793,13 @@ fn iso_total_calendar_units(start: TemporalPlainRecord, span_ns: i128, unit: &st
         };
         Some(iso_days_between(start, d)?.checked_mul(DAY_NS)?)
     };
-    let mut k = 0i64;
+    // Seed `k` near the answer so the adjustment loops are O(1) rather than
+    // stepping one unit at a time across a span that can be ~10^8 days.
+    let avg_unit_days = if unit == "year" { 365.2425 } else { 30.436875 };
+    let mut k = (span_ns as f64 / (avg_unit_days * DAY_NS as f64)) as i64;
+    while (sign as i128) * (span_ns - boundary(k)?) < 0 {
+        k -= sign;
+    }
     while (sign as i128) * (span_ns - boundary(k + sign)?) >= 0 {
         k += sign;
     }
