@@ -97,6 +97,20 @@ test('grep forwards maxResults', async t => {
   ]);
 });
 
+test('grep with a glob forwards maxResults to the fused glorp surface', async t => {
+  const { calls, run } = makeStub();
+  await run('grep', {
+    petNameOrPath: 'workspace',
+    pattern: 'TODO',
+    glob: 'src/**/*.js',
+    maxResults: 7,
+  });
+  t.deepEqual(calls, [
+    ['lookup', 'workspace'],
+    ['glorp', 'src/**/*.js', 'TODO', { maxResults: 7 }],
+  ]);
+});
+
 test('grep validates optional argument shapes before dispatch', async t => {
   const { calls, run } = makeStub();
   await t.throwsAsync(
