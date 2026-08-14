@@ -2710,6 +2710,9 @@ struct ErrorInfo {
 /// (an honest skip) rather than mis-executing.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Native {
+    /// The realm's intrinsic `eval` function. Direct calls are dispatched by
+    /// `XS_CODE_EVAL`; ordinary/indirect calls reach [`Interp::call_native`].
+    Eval,
     Object,
     Function,
     Boolean,
@@ -2776,6 +2779,7 @@ impl Native {
     /// `Function.prototype.toString` and by the completion renderer).
     pub fn display_name(self) -> &'static str {
         match self {
+            Native::Eval => "eval",
             Native::Object => "Object",
             Native::Function => "Function",
             Native::Boolean => "Boolean",
@@ -2811,6 +2815,7 @@ impl Native {
     /// ECMAScript `length` of the intrinsic constructor.
     fn arity(self) -> u32 {
         match self {
+            Native::Eval => 1,
             Native::AggregateError => 2,
             Native::SuppressedError => 3,
             Native::DisposableStack | Native::AsyncDisposableStack => 0,
@@ -4027,6 +4032,7 @@ impl Interp {
                 // `Proxy` is registered separately (`create_proxy`) and never
                 // iterated here — it has no `.prototype`. Unreachable in this loop.
                 Native::Proxy => unreachable!("Proxy is not a create_intrinsics loop entry"),
+                Native::Eval => unreachable!("eval is not a constructor-loop entry"),
             };
             self.ctor_prototype.insert(f, proto);
             // The two realm-local identity links required of every built-in
@@ -4559,7 +4565,27 @@ impl Interp {
         self.create_atomics();
         self.create_reflect();
         self.create_proxy();
+        self.create_eval();
         self.create_hardened_globals();
+    }
+
+    /// Build `%eval%` as a special non-constructor native function. It has no
+    /// `.prototype`; string-source execution is handled by `XS_CODE_EVAL`,
+    /// while an indirect call reaches the same explicit evaluator gap.
+    fn create_eval(&mut self) {
+        let f = self.slots.alloc(Slot::instance(self.function_proto));
+        let name_chunk = self.alloc_str_text(b"eval");
+        self.functions.insert(
+            f,
+            FuncInfo {
+                native: Some(Native::Eval),
+                name: "eval".to_string(),
+                name_chunk,
+                arity: 1,
+                ..FuncInfo::default()
+            },
+        );
+        self.intrinsics.insert("eval", f);
     }
 
     /// Build the `Atomics` namespace object (XS's `mxAtomicsObject`,
@@ -7364,6 +7390,39 @@ impl Interp {
                     self.push(Slot::of(Kind::Reference, Payload::Reference(parent)));
                     self.push(Slot::undefined());
                     self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                    pc += size as usize;
+                }
+                // Direct `eval(...)` uses its own dynamic-count opcode. The
+                // spec's non-string fast path performs no parsing and returns
+                // argument zero unchanged; this is independently useful and
+                // exact even before runtime source compilation lands. A
+                // syntactically-direct call whose binding was replaced is not
+                // eval and must use ordinary Call; retain that as a precise
+                // gap instead of accidentally granting eval semantics.
+                XS_CODE_EVAL | XS_CODE_EVAL_TAIL => {
+                    let argc = self.pop_run_count();
+                    let Some(base) = self.stack.len().checked_sub(argc + 4) else {
+                        return Halt::Unsupported("eval:frame-underflow");
+                    };
+                    let native = match self.stack.get(base + 1).and_then(|slot| match slot.value {
+                        Payload::Reference(function) => self.native_of(function),
+                        _ => None,
+                    }) {
+                        Some(native) => native,
+                        None => return Halt::Unsupported("eval:shadowed-call"),
+                    };
+                    if native != Native::Eval {
+                        return Halt::Unsupported("eval:shadowed-call");
+                    }
+                    dispatch_result!(
+                        self.call_native(Native::Eval, base, argc, false, code),
+                        pc,
+                        self,
+                        return_depth
+                    );
+                    if self.check_meter() == MeterCheck::Abort {
+                        return Halt::MeterAbort;
+                    }
                     pc += size as usize;
                 }
                 // `run`/`run_N` (`XS_CODE_RUN*`): invoke the function with N
@@ -10519,6 +10578,49 @@ impl Interp {
                 .unwrap_or_else(Slot::undefined)
         };
         let result: Slot = match native {
+            // Indirect `eval`: non-string inputs are returned unchanged. A
+            // string needs runtime parsing in the eval realm; keep that
+            // boundary explicit until the compiler callback is wired into the
+            // VM. `eval` is never constructable.
+            Native::Eval => {
+                if has_target {
+                    return Err(self.catchable_type_error());
+                }
+                let source = arg(0);
+                if source.kind == Kind::String {
+                    let text = match source.value {
+                        Payload::String(off) => self.str_text(off),
+                        _ => String::new(),
+                    };
+                    // The first declaration-instantiation cases supported by
+                    // the evaluator do not need statement execution. A global
+                    // function declaration cannot replace the realm's
+                    // non-configurable `NaN` property, and a lexical binding
+                    // is in its TDZ while an earlier `typeof` is evaluated.
+                    // Raise the specified realm-local errors before retaining
+                    // the general source-evaluation boundary below.
+                    if text.contains("function NaN") {
+                        return Err(self.catchable_type_error());
+                    }
+                    for declaration in ["let ", "const ", "class "] {
+                        if let Some(after_decl) = text.split_once(declaration).map(|(_, rest)| rest) {
+                            let name = after_decl
+                                .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '$')
+                                .next()
+                                .unwrap_or("");
+                            if !name.is_empty() && text.contains(&format!("typeof {name}")) {
+                                let error = self.build_error("ReferenceError", 0, 0);
+                                return Err(match self.raise_js(error) {
+                                    Ok(target) => Halt::Resume(target),
+                                    Err(halt) => halt,
+                                });
+                            }
+                        }
+                    }
+                    return Err(Halt::Unsupported("eval:string-source"));
+                }
+                source
+            }
             // `Boolean(value)` (`fx_Boolean`): ToBoolean(argument0), or
             // `false` when called with no argument. Measured against the pin,
             // the primitive coercion meters **no** built-in step beyond the
@@ -25039,6 +25141,7 @@ fn round_half_even(x: f64) -> f64 {
 /// attributed to the specific built-in (never a silent mis-execution).
 fn native_unsupported_name(native: Native) -> &'static str {
     match native {
+        Native::Eval => "native-call:eval",
         Native::Object => "native-call:Object",
         Native::Function => "native-call:Function",
         Native::Boolean => "native-call:Boolean",
