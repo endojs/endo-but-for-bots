@@ -183,6 +183,14 @@ test('grep evaluates the pattern as an ECMAScript regular expression', async t =
   );
 });
 
+test('grep rejects a potentially catastrophic regular expression', async t => {
+  const cwd = makeFixture(t, { 'a.txt': `${'a'.repeat(100)}!\n` });
+  const tool = makeGrepTool(cwd);
+  await t.throwsAsync(tool.execute({ pattern: '^(a+)+$' }), {
+    message: 'Regular expression is too complex to evaluate safely',
+  });
+});
+
 test('grep restricts the file set with a glob pattern', async t => {
   const cwd = makeFixture(t, {
     'a.js': 'target\n',

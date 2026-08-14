@@ -11,6 +11,7 @@ import {
   GREP_MAX_RESULTS,
 } from '@endo/platform/fs/search';
 import { makeNodeSearchPowers } from '@endo/platform/fs/node/search';
+import safeRegex from 'safe-regex2';
 
 /**
  * @typedef {object} ToolFunction
@@ -574,6 +575,10 @@ export const makeGrepTool = cwd => {
       );
       if (!pattern) {
         throw new Error('pattern is required');
+      }
+      const regex = new RegExp(pattern);
+      if (!safeRegex(regex)) {
+        throw new Error('Regular expression is too complex to evaluate safely');
       }
       const { root, confinementRoot } = await resolveSearchRoot(cwd, dirPath);
       const paths =
