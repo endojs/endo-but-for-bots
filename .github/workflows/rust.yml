@@ -1,0 +1,132 @@
+name: rust
+
+# Validates the Rust implementation of the endor daemon end-to-end:
+# build XS from source via the c/moddable submodule, compile the
+# endor binary, run slots unit tests, then run the JavaScript
+# daemon test suite against the freshly-built binary.
+#
+# Triggers match the repo's other test workflows (ci.yml): all pull
+# requests, and pushes to the master branch.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# Read-only: this workflow only builds and tests.  It creates no
+# releases, writes no caches through the API, and posts no comments,
+# so `contents: read` is the whole grant it needs.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: rust
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install C toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+
+      - name: Cache cargo
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust/endo/**/Cargo.lock', 'rust/endo/**/Cargo.toml') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Use Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22.x
+          cache: yarn
+
+      - name: Install JS dependencies
+        run: yarn install --immutable
+
+      - name: Cargo test (slots unit tests)
+        run: cargo test -p slots
+
+      # Bundle the XS-side bootstrap scripts before any cargo step
+      # that compiles `xsnap` (lib): `lib.rs` `include_str!`s these
+      # files and they are gitignored (generated artifacts).
+      # The three builders are driven by a single `yarn bundle:xs`
+      # script (packages/daemon/package.json -> scripts/bundle-xs.mjs),
+      # which runs all three even when one fails and names the
+      # failures in its summary.
+      # This must remain a required step: `xsnap` can compile against
+      # a generated throwing stub, but the resulting daemon would fail
+      # when it evaluates the bootstrap.
+      - name: Generate XS bootstrap bundles
+        working-directory: packages/daemon
+        run: yarn bundle:xs
+
+      - name: Cargo test (endo lib)
+        run: cargo test -p endo --lib
+
+      - name: Build release endor binary
+        run: cargo build --release --bin endor
+
+      # Daemon integration tests are reported but not required: the
+      # XS worker in packages/daemon currently lacks `makeBundle` and
+      # `makeUnconfined` host functions, which cascades into ~150
+      # failures unrelated to slot-machine.  Flip `continue-on-error`
+      # to `false` once the XS worker implements those verbs.
+      - name: Daemon integration tests against endor (CapTP)
+        working-directory: packages/daemon
+        continue-on-error: true
+        env:
+          ENDO_BIN: ../../target/release/endor
+          ENDO_WORKER_BIN: ../../target/release/endor worker
+        run: yarn ava --timeout=120s
+
+      # Slot-machine validation: same bench harness that pins down
+      # the CapTP baseline, but with ENDO_USE_SLOT_MACHINE=1 so the
+      # whole chain (bench-client - daemon - workers) speaks the
+      # slot-machine wire protocol.  Validates Rust+XS only, since
+      # Rust+Node also speaks slot-machine end-to-end through the
+      # same code paths and the XS variant exercises the supervisor
+      # kref translation that is unique to that path.  Reports but
+      # does not block CI for now (continue-on-error: true) so a
+      # transient bench hang doesn't take the rest of the workflow
+      # down with it; promote to required once the bench is stable
+      # across two consecutive runs.
+      - name: Slot-machine bench (Rust+XS, end-to-end)
+        working-directory: packages/daemon
+        continue-on-error: true
+        timeout-minutes: 4
+        env:
+          ENDO_BIN: ../../target/release/endor
+          ENDO_WORKER_BIN: ../../target/release/endor worker
+          ENDO_USE_SLOT_MACHINE: '1'
+        run: node test/bench-daemon.js --rust-only
+
+      # Slot-machine unit tests (the @endo/slots package) under the
+      # CapTP-mode workflow.  These pin down the wire format and
+      # codec invariants; they do not require the endor binary.
+      - name: '@endo/slots unit tests'
+        run: yarn workspace @endo/slots ava
