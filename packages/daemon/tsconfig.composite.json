@@ -18,6 +18,9 @@
       "path": "../captp/tsconfig.composite.json"
     },
     {
+      "path": "../cbor/tsconfig.composite.json"
+    },
+    {
       "path": "../compartment-mapper/tsconfig.composite.json"
     },
     {

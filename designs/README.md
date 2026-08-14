@@ -358,7 +358,7 @@ LLM-agent stack).*
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-tcp-syrups-framing](ocapn-tcp-syrups-framing.md) | 2026-04-23 | 2026-05-06 | Not Started |
 | [syrups](syrups.md) | 2026-05-04 | 2026-05-06 | Deprecated |
-| [cbors](cbors.md) | 2026-05-04 | 2026-05-05 | Not Started |
+| [cbor-frame](cbor-frame.md) | 2026-05-04 | 2026-05-05 | Not Started |
 | [cbor-codec](cbor-codec.md) | 2026-07-12 | 2026-07-28 | Phase 1 implemented |
 | [trust-on-first-bind](trust-on-first-bind.md) | 2026-05-08 | 2026-05-10 | Reference |
 | [outliner-design-doc](outliner-design-doc.md) | 2026-03-17 | 2026-03-18 | In Progress |

@@ -100,6 +100,74 @@ test('round-trip with empty verb', t => {
   t.is(decoded.verb, '');
 });
 
+// Golden vectors: the exact canonical bytes for a handful of envelopes and one
+// frame, derived by hand from RFC 8949 independently of the codec. These lock
+// the wire format so a future codec change (e.g. a further primitive swap)
+// cannot silently move the bytes exchanged with the Rust peer.
+const hex = u8 => Buffer.from(u8).toString('hex');
+
+test('golden vectors: envelope encoding is canonical', t => {
+  // 84 00 60 40 00: array(4), uint 0, text"", bytes[], uint 0.
+  t.is(
+    hex(
+      encodeEnvelope({
+        handle: 0,
+        verb: '',
+        payload: new Uint8Array(0),
+        nonce: 0,
+      }),
+    ),
+    '8400604000',
+  );
+  // 84 01 65 "hello" 43 010203 07.
+  t.is(
+    hex(
+      encodeEnvelope({
+        handle: 1,
+        verb: 'hello',
+        payload: new Uint8Array([1, 2, 3]),
+        nonce: 7,
+      }),
+    ),
+    '84016568656c6c6f4301020307',
+  );
+  // 84 20 60 40 00: array(4), negint -1 (major 1, arg 0), text"", bytes[], uint 0.
+  t.is(
+    hex(
+      encodeEnvelope({
+        handle: -1,
+        verb: '',
+        payload: new Uint8Array(0),
+        nonce: 0,
+      }),
+    ),
+    '8420604000',
+  );
+  // 84 19ffff 64 "data" 40 1903e7: uint 65535 (2-byte head), nonce 999 (2-byte head).
+  t.is(
+    hex(
+      encodeEnvelope({
+        handle: 65_535,
+        verb: 'data',
+        payload: new Uint8Array(0),
+        nonce: 999,
+      }),
+    ),
+    '8419ffff6464617461401903e7',
+  );
+  // 44 0a141e28: byte-string frame of [10,20,30,40].
+  t.is(hex(encodeFrame(new Uint8Array([10, 20, 30, 40]))), '440a141e28');
+});
+
+test('decoder rejects a non-minimal head (strict reader)', t => {
+  // 84 1800 60 40 00: the handle 0 is encoded in the non-minimal 1-byte form
+  // (0x18 0x00) rather than the inline 0x00. The previous tolerant reader
+  // accepted this; @endo/cbor's strict reader rejects it. Canonical traffic
+  // (the Rust peer writes minimal heads) is unaffected.
+  const nonMinimal = new Uint8Array([0x84, 0x18, 0x00, 0x60, 0x40, 0x00]);
+  t.throws(() => decodeEnvelope(nonMinimal), { message: /[Nn]on-minimal/ });
+});
+
 // --- Stream functions ---
 
 test('writeFrameToStream and readFrameFromStream round-trip', async t => {

@@ -38,7 +38,7 @@ design doc title, and PR title and body.
 
 ## Effect on the sibling `@endo/cbors` design
 
-[`cbors.md`](./cbors.md) (the sibling design in this PR) is unaffected.
+[`cbor-frame.md`](./cbor-frame.md) (the sibling design in this PR) is unaffected.
 It already carries `Uint8Array` at its boundaries and is the precise
 peer of `@endo/syrups`.
 
