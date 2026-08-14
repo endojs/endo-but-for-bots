@@ -9,12 +9,11 @@
  *   - {@link Spawner}: a single-method interface (`spawn(argv, opts)`)
  *     returning a {@link ProcessLike}. The shape mirrors `DriverProcess`
  *     from `@endo/sandbox/types.d.ts` so a slice's `ProcessHandle` can drop
- *     in via a thin adapter (genie's `sandbox-spawner`).
+ *     in via a thin adapter (a sandbox spawner).
  *   - {@link makeHostSpawner}: the default host implementation that wraps
  *     `child_process.spawn` with `searchPath` / env handling. The
  *     timeout / kill / output-accumulation loop deliberately lives in the
- *     caller (`@endo/genie`'s command tool) so it stays uniform across
- *     spawners.
+ *     caller's command tool so it stays uniform across spawners.
  *
  * The async-iterable stdout / stderr surface keeps the contract uniform:
  * both the host (`child_process` event streams) and the sandbox
@@ -94,8 +93,8 @@ import harden from '@endo/harden';
  * the absolute path on success, or `null` when the program cannot be
  * located.
  *
- * Mirrors the `whichProgram` helper that previously lived inline in
- * `@endo/genie`'s command tool.  Pulled out here so the host spawner can
+ * Mirrors the `whichProgram` helper that previously lived inline in a
+ * caller's command tool.  Pulled out here so the host spawner can
  * reuse it without duplicating the logic.
  *
  * @param {string} prog
@@ -163,7 +162,7 @@ const readableToAsyncIterable = stream => {
  * stdout / stderr surface the sandbox spawner produces.
  *
  * The host spawner does *not* implement timeout / kill itself; the
- * caller (`@endo/genie`'s command tool) layers that behaviour on top of the
+ * caller's command tool layers that behaviour on top of the
  * returned {@link ProcessLike} so it stays uniform across spawners.
  *
  * @param {object} [options]
@@ -184,8 +183,8 @@ const readableToAsyncIterable = stream => {
  *   Shell) needs this so a child that traps `SIGTERM` (or forks a
  *   descendant holding the stdio pipes open) is actually reaped when the
  *   deadline passes, rather than leaking and hanging `wait()`.  Defaults to
- *   false so the historical single-process-kill behaviour (genie's command
- *   tools) is unchanged.
+ *   false so the historical single-process-kill behaviour (the caller's
+ *   command tools) is unchanged.
  * @returns {Spawner}
  */
 export const makeHostSpawner = ({
@@ -217,8 +216,8 @@ export const makeHostSpawner = ({
       // `whichProgram`-checking the first whitespace-delimited token,
       // because that would (a) be wrong for argv-shaped payloads
       // (`args: ["ls", "-F"]` would treat `ls` as the literal first
-      // token) and (b) re-introduce the silent failure mode reported
-      // in TODO/57 where `args: ["ls -F"]` failed with "command not
+      // token) and (b) re-introduce the silent failure mode
+      // where `args: ["ls -F"]` failed with "command not
       // found: ls -F" before the shell ever got a look.
       //
       // Node's `child_process.spawn(cmd, args, { shell: true })`

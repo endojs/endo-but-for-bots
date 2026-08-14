@@ -264,10 +264,10 @@ export declare function makeGitRemoteTool(
  */
 export type ShellToolCapability = Pick<EndoShell, 'exec' | 'inspect'>;
 
-/** A command-string reject pattern; ported from genie's command-tool policy. */
+/** A command-string reject pattern; ported from the prior agent framework's command-tool policy. */
 export type RejectPatternEntry = RegExp | { pattern: RegExp; reason?: string };
 
-/** A forbidden-flag entry; ported from genie's command-tool policy. */
+/** A forbidden-flag entry; ported from the prior agent framework's command-tool policy. */
 export type RejectFlagEntry = string | { flag: string; reason?: string };
 
 export interface ShellToolOptions {

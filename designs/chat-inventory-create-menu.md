@@ -210,7 +210,7 @@ Today the harnesses are separate; the maintainer has named convergence on "a uni
 |---|---|---|
 | Lal | [`packages/lal/`](../packages/lal/) | Reply-chain transcripts; static tools. |
 | Fae | [`packages/fae/`](../packages/fae/) | Flat transcripts; dynamic tool discovery. |
-| Genie | [`packages/genie/`](../packages/genie/) | Sandboxed workspace; tool set tuned for agentic coding via `@mariozechner/pi-ai`. |
+| Genie | [`packages/genie/`](https://github.com/endojs/endo-but-for-bots/tree/a54c3adb/packages/genie/) (retired; link points at git history) | Sandboxed workspace; tool set tuned for agentic coding via `@mariozechner/pi-ai`. |
 
 Discovery:
 The list is sourced from the introduced names in the current host's namespace.

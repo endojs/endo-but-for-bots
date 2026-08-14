@@ -64,8 +64,8 @@ test('private-egress.nft references every documented PRIVATE_BLOCKED_RANGES CIDR
 test('PRIVATE_BLOCKED_RANGES covers the four address-family classes', t => {
   // RFC 1918 (10/8, 172.16/12, 192.168/16) + CGNAT (100.64/10) +
   // link-local (169.254/16) + loopback (127/8) + IPv6 ULA + IPv6
-  // loopback + IPv6 link-local.  The shape is the contract documented
-  // in PLAN/endo_posix_sandbox.md § "Network policy".
+  // loopback + IPv6 link-local.  The shape is the documented
+  // network-policy contract.
   const cidrs = PRIVATE_BLOCKED_RANGES.map(r => r.cidr);
   t.true(cidrs.includes('10.0.0.0/8'));
   t.true(cidrs.includes('172.16.0.0/12'));

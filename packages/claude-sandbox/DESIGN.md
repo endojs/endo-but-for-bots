@@ -126,7 +126,7 @@ the natural follow-up to restore peer-controlled lifetime.
 ### Teardown — the cancellation context
 
 The client module wires `context.whenCancelled()` (the pattern `@endo/9p-server`
-and genie use). When the formula is cancelled or collected, the session tears
+and other agent hosts use). When the formula is cancelled or collected, the session tears
 down: dispose the slice (kills the container) then unmount the 9P workspace.
 `terminate()` does the same and is a no-op when nothing was provisioned, so a
 never-used session cancels for free.

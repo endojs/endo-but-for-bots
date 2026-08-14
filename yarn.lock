@@ -2320,36 +2320,6 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/genie@workspace:packages/genie":
-  version: 0.0.0-use.local
-  resolution: "@endo/genie@workspace:packages/genie"
-  dependencies:
-    "@earendil-works/pi-agent-core": "npm:^0.81.1"
-    "@earendil-works/pi-ai": "npm:^0.81.1"
-    "@endo/cli": "workspace:^"
-    "@endo/daemon": "workspace:^"
-    "@endo/errors": "workspace:^"
-    "@endo/eventual-send": "workspace:^"
-    "@endo/exo": "workspace:^"
-    "@endo/exo-stream": "workspace:^"
-    "@endo/far": "workspace:^"
-    "@endo/harden": "workspace:^"
-    "@endo/host-spawner": "workspace:^"
-    "@endo/init": "workspace:^"
-    "@endo/marshal": "workspace:^"
-    "@endo/pass-style": "workspace:^"
-    "@endo/patterns": "workspace:^"
-    "@endo/platform": "workspace:^"
-    "@endo/promise-kit": "workspace:^"
-    "@endo/sandbox": "workspace:^"
-    "@endo/ses-ava": "workspace:^"
-    "@fast-check/ava": "catalog:dev"
-    ava: "catalog:dev"
-    better-sqlite3: "npm:^11.0.0"
-    eslint: "catalog:dev"
-  languageName: unknown
-  linkType: soft
-
 "@endo/git@workspace:^, @endo/git@workspace:packages/git":
   version: 0.0.0-use.local
   resolution: "@endo/git@workspace:packages/git"
