@@ -2,6 +2,10 @@
 
 import '@endo/harden';
 
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import test from 'ava';
 import { makeFileTools } from '../../src/tools/filesystem.js';
 import { makeMemoryVFS } from '../../src/tools/vfs-memory.js';
@@ -434,6 +438,25 @@ test('glob rejects paths escaping the root', async t => {
   );
 });
 
+test('glob excludes symlinks that escape the root and broken symlinks', async t => {
+  const parent = await mkdtemp(join(tmpdir(), 'genie-filesystem-'));
+  t.teardown(() => rm(parent, { recursive: true, force: true }));
+
+  const root = join(parent, 'workspace');
+  const outside = join(parent, 'outside');
+  await mkdir(root);
+  await mkdir(outside);
+  await writeFile(join(root, 'inside.txt'), 'visible');
+  await writeFile(join(outside, 'secret.txt'), 'hidden');
+  await symlink(outside, join(root, 'escape'));
+  await symlink(join(parent, 'missing'), join(root, 'broken'));
+
+  const tools = makeFileTools({ root });
+  const result = await tools.glob.execute({ pattern: '**/*.txt' });
+
+  t.deepEqual(result.matches, ['inside.txt']);
+});
+
 // ---------------------------------------------------------------------------
 // grep
 // ---------------------------------------------------------------------------
@@ -490,6 +513,20 @@ test('grep uses ECMAScript regular expressions', async t => {
     result.matches.map(m => m.line),
     [2],
   );
+});
+
+test('grep caps results and reports truncation', async t => {
+  const tools = await setup();
+  await tools.writeFile.execute({
+    path: 'many.txt',
+    content: 'hit\n'.repeat(1001),
+  });
+
+  const result = await tools.grep.execute({ pattern: 'hit' });
+
+  t.is(result.matches.length, 1000);
+  t.is(result.matches.at(-1)?.line, 1000);
+  t.true(result.truncated);
 });
 
 // ---------------------------------------------------------------------------
