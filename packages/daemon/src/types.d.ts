@@ -16,6 +16,7 @@ import type {
   PathEntry,
   PathEntryIssuer,
   ReadableTree,
+  RichReadableBlob,
   SnapshotTree,
   TreeEntry,
 } from '@endo/platform/fs/lite/types';
@@ -1221,7 +1222,8 @@ export interface EndoReadable {
   text(): Promise<string>;
   json(): Promise<unknown>;
   getInfo(): Promise<BlobInfo>;
-  fetch(offset: bigint, length: bigint): Promise<PassableBytesReader>;
+  range(start: bigint, end?: bigint): Promise<RichReadableBlob>;
+  textRange(startLine: number, endLine: number): Promise<RichReadableBlob>;
   help(method?: string): string;
 }
 
@@ -1275,7 +1277,8 @@ export interface ReadableBlobView {
   text(): Promise<string>;
   json(): Promise<unknown>;
   getInfo(): Promise<BlobInfo>;
-  fetch(offset: bigint, length: bigint): Promise<PassableBytesReader>;
+  range(start: bigint, end?: bigint): Promise<RichReadableBlob>;
+  textRange(startLine: number, endLine: number): Promise<RichReadableBlob>;
   help(method?: string): string;
 }
 
@@ -1324,7 +1327,8 @@ export interface EndoMountFile {
   ): Promise<StreamNode<string, undefined>>;
   json(): Promise<unknown>;
   getInfo(): Promise<BlobInfo>;
-  fetch(offset: bigint, length: bigint): Promise<PassableBytesReader>;
+  range(start: bigint, end?: bigint): Promise<RichReadableBlob>;
+  textRange(startLine: number, endLine: number): Promise<RichReadableBlob>;
   writeText(content: string): Promise<void>;
   append(content: string): Promise<void>;
   writeBytes(readableRef: ERef<PassableBytesReader>): Promise<void>;
@@ -2172,6 +2176,10 @@ export type FilePowers = {
   readFileText: (path: string) => Promise<string>;
   readFileBytes: (path: string) => Promise<Uint8Array>;
   readFile: (path: string) => Promise<Uint8Array>;
+  /**
+   * Copy `[offset, offset + length)` into a fresh backing buffer. A view into a
+   * whole-file allocation would expose bytes outside an attenuated window.
+   */
   readFileRange: (
     path: string,
     offset: number,

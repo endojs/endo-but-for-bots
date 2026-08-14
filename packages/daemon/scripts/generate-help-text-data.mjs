@@ -11,6 +11,7 @@ import '@endo/init';
 import fs from 'fs';
 import url from 'url';
 import path from 'path';
+import prettier from 'prettier';
 import { parseHelpdown } from '../src/helpdown.js';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
@@ -43,5 +44,14 @@ for (const [name, helpObj] of entries) {
 lines.push(']);');
 lines.push('');
 
-fs.writeFileSync(outPath, lines.join('\n'));
+// Format with the repo's Prettier config before writing, so the committed
+// artifact matches CI's `prettier --check` and a regeneration never re-breaks
+// lint (a hand-Prettier'd artifact is reverted by the next run otherwise).
+const prettierConfig = await prettier.resolveConfig(outPath);
+const formatted = await prettier.format(lines.join('\n'), {
+  ...prettierConfig,
+  filepath: outPath,
+});
+
+fs.writeFileSync(outPath, formatted);
 console.log(`Wrote ${outPath} (${entries.length} entities)`);

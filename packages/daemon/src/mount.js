@@ -2,24 +2,24 @@
 /// <reference types="ses"/>
 
 /** @import { SnapshotTree } from '@endo/platform/fs/lite/types' */
-/** @import { EndoMount, FilePowers, MountNameChange } from './types.js' */
+/** @import { EndoMount, FilePowers, MountNameChange, Sha256 } from './types.js' */
 
 import { E } from '@endo/eventual-send';
-import { q } from '@endo/errors';
+import { q, Fail } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { makePromiseKit } from '@endo/promise-kit';
 import { encodeBase64 } from '@endo/base64';
 import { mapReader } from '@endo/stream';
 import {
-  ReadableBlobRangeInterface,
+  RichReadableBlobInterface,
   ReadableTreeInterface,
+  makeBlobRangeMethods,
   provideSearch,
   GLOB_MAX_RESULTS,
   GREP_MAX_RESULTS,
 } from '@endo/platform/fs/lite';
 import { toSafeNumber } from '@endo/platform/fs/extended/shared/helpers.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
-import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
@@ -45,6 +45,18 @@ const mountRecords = new WeakMap();
 // possible watcher iterator result.
 const revokedSentinel = Symbol('mount-revoked');
 
+// A U+FEFF at the very start of a file is a byte-order mark; strip it from a
+// whole-value decode so `EndoMountFile.text()` / `json()` agree with a
+// `range(0n, size)` derived read (the shared range attenuator strips it at
+// offset 0 too — packages/platform/src/fs/blob-range.js), and so a whole-value
+// `text()` here matches every other producer's whole-value decode, which routes
+// through a BOM-stripping `TextDecoder`. `filePowers.readFileText` decodes via
+// Node's string reader, which retains the BOM, so strip it here. An interior
+// U+FEFF is content and is preserved. See
+// designs/readableblob-range-attenuation.md § Text ranges.
+const stripLeadingBom = text =>
+  text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+
 /**
  * Narrow a remote source after the Exo method-name check used by `write()`.
  * The runtime guard proves that a source advertising `streamBase64` is the
@@ -60,22 +72,6 @@ const assertReadableBlobSource = (value, methodNames) => {
   }
 };
 harden(assertReadableBlobSource);
-
-/**
- * Wrap a byte range as a `PassableBytesReader` (what `fetch` returns). An empty
- * range yields a reader that is immediately done.
- *
- * @param {Uint8Array} bytes
- */
-const bytesFromRange = bytes => {
-  function* generator() {
-    if (bytes.length > 0) {
-      yield bytes;
-    }
-  }
-  return bytesReaderFromIterator(generator());
-};
-harden(bytesFromRange);
 
 // Monotonic suffix for the scratch path `write()` streams a blob into
 // before atomically renaming it onto the target.  The counter alone is
@@ -531,6 +527,10 @@ harden(resolvePhysicalPath);
  *   the mount is never revocable. `whenRevoked` settles when `revoke()` runs,
  *   so an open stream can wake promptly rather than waiting on the next
  *   coincidental filesystem event.
+ * @property {() => Sha256} [makeSha256]  SHA-256 factory
+ *   used to hash the selected bytes of a live-file `range` / `textRange`
+ *   attenuation's `getInfo`. Threaded from CryptoPowers so the mount stays free
+ *   of a direct host `crypto` import.
  */
 
 /**
@@ -552,6 +552,7 @@ const makeMountExo = ctx => {
     snapshotFile,
     deniedSegments,
     revocation,
+    makeSha256,
   } = ctx;
 
   // Liveness gate shared by every method. A revocable mount carries a
@@ -727,6 +728,7 @@ const makeMountExo = ctx => {
       confinementRoot,
       snapshotFile,
       revocation,
+      makeSha256,
     );
   };
 
@@ -1534,6 +1536,9 @@ harden(makeMountEntryExo);
  * @param {{ revoked: boolean, whenRevoked: Promise<undefined> }} [revocation]
  *   Liveness record shared with the minting mount; a flip trips this file
  *   handle too.
+ * @param {() => Sha256} [makeSha256]  SHA-256 factory for
+ *   hashing the selected bytes of a `range` / `textRange` attenuation's
+ *   `getInfo`; threaded from CryptoPowers.
  * @returns {object}
  */
 const makeMountFileExo = (
@@ -1543,6 +1548,7 @@ const makeMountFileExo = (
   confinementRoot,
   snapshotFile = undefined,
   revocation = undefined,
+  makeSha256 = undefined,
 ) => {
   const assertLive = () => {
     if (revocation !== undefined && revocation.revoked) {
@@ -1558,6 +1564,70 @@ const makeMountFileExo = (
   };
 
   const help = makeHelp(mountFileHelp);
+
+  // Byte-window / line-window attenuation over the *live* file: each read
+  // observes the file at that operation, subject to the fixed interval; a
+  // caller needing a stable selection first `snapshot()`s. `getInfo` on a
+  // derived range reports the SHA-256 of the selected bytes. See
+  // designs/readableblob-range-attenuation.md.
+  const { range, textRange } = makeBlobRangeMethods({
+    readWindow: async (start, end) => {
+      assertLive();
+      await assertConfined(filePath, confinementRoot, filePowers);
+      const from = toSafeNumber(start, 'start');
+      // `filePowers.readFileRange` already stats the live file internally to
+      // clamp the request to the bytes available and short-reads at EOF, so we
+      // don't pre-`statPath` here: an explicit `end` passes its own length (an
+      // over-long one is clamped down), and `end === undefined` (to
+      // end-of-content) passes a sentinel the power clamps to the current file
+      // size.
+      const len =
+        end === undefined
+          ? Number.MAX_SAFE_INTEGER - from
+          : Math.max(0, toSafeNumber(end, 'end') - from);
+      if (len <= 0) {
+        return new Uint8Array(0);
+      }
+      return filePowers.readFileRange(filePath, from, len);
+    },
+    streamBytes: async function* streamBytes() {
+      assertLive();
+      await assertConfined(filePath, confinementRoot, filePowers);
+      // The shared attenuator applies the byte interval while consuming this
+      // one reader. On XS the reader materializes the host file once, instead
+      // of `readFileRange` rematerializing it for every 48 KiB window.
+      const reader = filePowers.makeFileReader(filePath);
+      try {
+        for (;;) {
+          assertLive();
+          // eslint-disable-next-line no-await-in-loop
+          const result = await reader.next();
+          if (result.done) {
+            return;
+          }
+          yield result.value;
+        }
+      } finally {
+        if (reader.return !== undefined) {
+          await reader.return(undefined);
+        }
+      }
+    },
+    hashBytes: bytes => {
+      // `makeSha256` is optional on the mount constructor but `getInfo` on a
+      // derived range cannot be honored without it. Name the missing power
+      // rather than let `undefined()` surface as a bare TypeError; the
+      // interface guard promises `getInfo` on every derived range, so a mount
+      // constructed without a hasher is mis-configured, not merely limited.
+      if (makeSha256 === undefined) {
+        throw Fail`range().getInfo() requires a makeSha256 power; this mount was constructed without one (thread cryptoPowers.makeSha256 through makeMount/makeRevocableMount)`;
+      }
+      const digester = makeSha256();
+      digester.update(bytes);
+      return fromHex(digester.digestHex());
+    },
+    label: 'EndoMountFile range',
+  });
 
   return makeExo('EndoMountFile', MountFileInterface, {
     help,
@@ -1579,7 +1649,7 @@ const makeMountFileExo = (
       await null;
       assertLive();
       await assertConfined(filePath, confinementRoot, filePowers);
-      return filePowers.readFileText(filePath);
+      return stripLeadingBom(await filePowers.readFileText(filePath));
     },
 
     /** @param {import('@endo/eventual-send').ERef<unknown>} synPromise */
@@ -1619,7 +1689,7 @@ const makeMountFileExo = (
       await null;
       assertLive();
       await assertConfined(filePath, confinementRoot, filePowers);
-      const text = await filePowers.readFileText(filePath);
+      const text = stripLeadingBom(await filePowers.readFileText(filePath));
       return JSON.parse(text);
     },
 
@@ -1658,11 +1728,13 @@ const makeMountFileExo = (
       return filePowers.statPath(filePath);
     },
 
-    // `getInfo` / `fetch` are the rich `BlobRef` range-I/O surface over the
-    // *live* file (this is a read-only face, not a snapshot — the content can
-    // still change underneath and is observed on each call). `getInfo` returns
-    // the `{ algorithm, hash, size }` triple of the current bytes (hash base64,
-    // matching `BlobRef`); `fetch` is a windowed read.
+    // `getInfo` / `range` / `textRange` are the rich `ReadableBlob`
+    // content-address + attenuation surface over the *live* file (this is a
+    // read-only face, not a snapshot — the content can still change underneath
+    // and is observed on each call). `getInfo` returns the
+    // `{ algorithm, hash, size }` triple of the current bytes (hash base64,
+    // matching `BlobRef`); `range` / `textRange` attenuate to a byte / line
+    // window.
     //
     // The hash and size are read with one concurrent `Promise.all` to keep the
     // window minimal, but a fully atomic snapshot would require a single
@@ -1671,7 +1743,7 @@ const makeMountFileExo = (
     // concurrent writer mutating the file between the two reads can therefore
     // yield a hash and size from adjacent instants; callers needing a stable
     // identity should `snapshot()` (content-addressed, immutable) rather than
-    // reading a live face. See designs/fs-interface-consolidation.md § C4.
+    // reading a live face. See designs/readableblob-range-attenuation.md.
     async getInfo() {
       await null;
       assertLive();
@@ -1687,24 +1759,8 @@ const makeMountFileExo = (
       });
     },
 
-    /**
-     * @param {bigint} offset
-     * @param {bigint} length
-     */
-    async fetch(offset, length) {
-      await null;
-      assertLive();
-      await assertConfined(filePath, confinementRoot, filePowers);
-      // Validate at the bigint→Number boundary (same `toSafeNumber` the
-      // extended `BlobRef.fetch` uses) so negative or out-of-range windows
-      // throw `EINVAL` rather than silently losing precision in `fs.read`.
-      const bytes = await filePowers.readFileRange(
-        filePath,
-        toSafeNumber(offset, 'offset'),
-        toSafeNumber(length, 'length'),
-      );
-      return bytesFromRange(bytes);
-    },
+    range,
+    textRange,
 
     async snapshot() {
       assertLive();
@@ -1729,6 +1785,7 @@ const makeMountFileExo = (
         confinementRoot,
         snapshotFile,
         revocation,
+        makeSha256,
       );
       return makeReadableBlobView(readOnlyFile);
     },
@@ -1737,17 +1794,17 @@ const makeMountFileExo = (
 harden(makeMountFileExo);
 
 /**
- * Structural-narrowing view exposing the read-only `ReadableBlob` surface
- * (`streamBase64`, `text`, `json`) plus the rich range-I/O surface (`getInfo`,
- * `fetch`) over a read-only mount file. This is a write-disabled *face* over a
- * live file — it delegates to the underlying file, so content changes are
- * observed; it just cannot be written through.
+ * Structural-narrowing view exposing the read-only rich `ReadableBlob` surface
+ * (`streamBase64`, `text`, `json`, `getInfo`, `range`, `textRange`) over a
+ * read-only mount file. This is a write-disabled *face* over a live file — it
+ * delegates to the underlying file, so content changes are observed; it just
+ * cannot be written through.
  *
  * @param {object} readOnlyFile - An EndoMountFile whose `readOnly` is true.
  * @returns {object}
  */
 const makeReadableBlobView = readOnlyFile => {
-  return makeExo('EndoMountReadableBlob', ReadableBlobRangeInterface, {
+  return makeExo('EndoMountReadableBlob', RichReadableBlobInterface, {
     /** @param {import('@endo/eventual-send').ERef<any>} synPromise */
     async streamBase64(synPromise) {
       return E(readOnlyFile).streamBase64(synPromise);
@@ -1762,15 +1819,22 @@ const makeReadableBlobView = readOnlyFile => {
       return E(readOnlyFile).getInfo();
     },
     /**
-     * @param {bigint} offset
-     * @param {bigint} length
+     * @param {bigint} start
+     * @param {bigint} [end]  omit to select from `start` to end-of-content
      */
-    async fetch(offset, length) {
-      return E(readOnlyFile).fetch(offset, length);
+    async range(start, end) {
+      return E(readOnlyFile).range(start, end);
+    },
+    /**
+     * @param {number} startLine
+     * @param {number} endLine
+     */
+    async textRange(startLine, endLine) {
+      return E(readOnlyFile).textRange(startLine, endLine);
     },
     help(method) {
       return method === undefined
-        ? 'EndoMountReadableBlob: read-only ReadableBlob view over a live mount file (text, json, streamBase64, getInfo, fetch).'
+        ? 'EndoMountReadableBlob: read-only ReadableBlob view over a live mount file (text, json, streamBase64, getInfo, range, textRange).'
         : `No documentation for method ${q(method)}.`;
     },
   });
@@ -1792,6 +1856,9 @@ harden(makeReadableBlobView);
  * @param {{ revoked: boolean, whenRevoked: Promise<undefined> }} [opts.revocation]
  *   Liveness record shared across every derived face; `makeRevocableMount`
  *   supplies it. Undefined means the mount is never revocable.
+ * @param {() => Sha256} [opts.makeSha256]  SHA-256 factory
+ *   for hashing a live-file `range` / `textRange` attenuation's `getInfo`;
+ *   threaded from CryptoPowers.
  * @returns {EndoMount}
  */
 export const makeMount = ({
@@ -1802,6 +1869,7 @@ export const makeMount = ({
   snapshotFile = undefined,
   deniedSegments = undefined,
   revocation = undefined,
+  makeSha256 = undefined,
 }) => {
   const prefix = readOnly ? 'Read-only mount' : 'Mount';
   /** @type {MountContext} */
@@ -1817,6 +1885,7 @@ export const makeMount = ({
     snapshotFile,
     deniedSegments: resolveDeniedSegments(deniedSegments),
     revocation,
+    makeSha256,
   };
 
   return makeMountExo(ctx);

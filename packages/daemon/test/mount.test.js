@@ -8,6 +8,7 @@ import test from 'ava';
 import os from 'os';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
@@ -16,7 +17,10 @@ import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { checkinTree } from '@endo/platform/fs/lite';
 
-import { makeFilePowers } from '../src/manager-node-powers.js';
+import {
+  makeFilePowers,
+  makeCryptoPowers,
+} from '../src/manager-node-powers.js';
 import { makeMount } from '../src/mount.js';
 import { makeMemoryStore } from './_mount-test-helpers.js';
 
@@ -184,7 +188,7 @@ test('maybeLookup confines a `..` escape to undefined (does not leak an out-of-r
   t.is(fs.readFileSync(path.join(parent, 'secret.txt'), 'utf8'), 'do-not-leak');
 });
 
-test('readOnly() blob view exposes getInfo/fetch over the LIVE file (not a snapshot)', async t => {
+test('readOnly() blob view exposes getInfo/range over the LIVE file (not a snapshot)', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['f.txt'], 'hello');
@@ -211,8 +215,8 @@ test('readOnly() blob view exposes getInfo/fetch over the LIVE file (not a snaps
   const info1 = await E(view).getInfo();
   t.is(info1.algorithm, 'sha256');
   t.is(info1.size, 5n);
-  t.is(await collect(await E(view).fetch(0n, 5n)), 'hello');
-  t.is(await collect(await E(view).fetch(0n, 3n)), 'hel');
+  t.is(await collect(await E(view).range(0n, 5n)), 'hello');
+  t.is(await collect(await E(view).range(0n, 3n)), 'hel');
 
   // The view is a read-only FACE, not a snapshot: change the underlying file
   // and the same view observes the new content + size + hash.
@@ -220,7 +224,7 @@ test('readOnly() blob view exposes getInfo/fetch over the LIVE file (not a snaps
   const info2 = await E(view).getInfo();
   t.is(info2.size, 13n);
   t.not(info2.hash, info1.hash);
-  t.is(await collect(await E(view).fetch(0n, 13n)), 'goodbye world');
+  t.is(await collect(await E(view).range(0n, 13n)), 'goodbye world');
 
   // But the face itself cannot be written to (no write methods).
   // eslint-disable-next-line no-underscore-dangle
@@ -228,19 +232,122 @@ test('readOnly() blob view exposes getInfo/fetch over the LIVE file (not a snaps
   t.false(viewMethods.includes('writeText'));
 });
 
-test('EndoMountFile.fetch rejects a negative or out-of-range window with EINVAL', async t => {
+test('EndoMountFile reconciles BOM decoding across whole-value and window reads', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  const preserveDecoder = new TextDecoder('utf-8', { ignoreBOM: true });
+
+  // An interior U+FEFF (its UTF-8 bytes begin at offset 3, not 0) is literal
+  // content: the whole-value text() preserves it, and a derived window that
+  // begins on it must too. The mount face decodes the whole value via Node's
+  // string reader (which retains a leading BOM, hence the explicit strip) and a
+  // derived window via the shared attenuator; the two must agree. The U+FEFF is
+  // written as an escape so no invisible byte-order mark lives in this source.
+  await E(mount).writeText(['i.txt'], 'abc\uFEFFdef'); // 'abc' EF BB BF 'def' = 9 bytes
+  const ifile = /** @type {EndoMountFile} */ (await E(mount).lookup('i.txt'));
+  const whole = await E(ifile).text();
+  t.is(whole, 'abc\uFEFFdef');
+  t.is(await E(await E(ifile).range(0n, 9n)).text(), whole);
+  const window = await E(ifile).range(3n, 9n); // begins on the interior U+FEFF
+  t.is(await E(window).text(), '\uFEFFdef');
+  t.is(
+    await E(window).text(),
+    preserveDecoder.decode(
+      new TextEncoder().encode('abc\uFEFFdef').subarray(3),
+    ),
+  );
+
+  // A genuine leading BOM (offset 0) is stripped by both the whole-value read
+  // and range(0, size), so range(0n, size).text() === text() holds here too.
+  await E(mount).writeText(['l.txt'], '\uFEFFhello'); // EF BB BF | 'hello' = 8 bytes
+  const lfile = /** @type {EndoMountFile} */ (await E(mount).lookup('l.txt'));
+  const leadingWhole = await E(lfile).text();
+  t.is(leadingWhole, 'hello');
+  t.is(await E(await E(lfile).range(0n, 8n)).text(), leadingWhole);
+});
+
+test('EndoMountFile.range rejects a negative or out-of-range interval with EINVAL', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['f.txt'], 'hello');
   const file = /** @type {EndoMountFile} */ (await E(mount).lookup('f.txt'));
-  // The mount-file fetch validates the bigint→Number boundary via
-  // toSafeNumber, so a negative or over-MAX_SAFE_INTEGER window throws EINVAL
-  // rather than reaching readFileRange with a bad position.
-  await t.throwsAsync(() => E(file).fetch(-1n, 4n), { message: /EINVAL/ });
-  await t.throwsAsync(() => E(file).fetch(0n, -1n), { message: /EINVAL/ });
-  await t.throwsAsync(() => E(file).fetch(2n ** 60n, 4n), {
+  // The mount-file range validates the half-open [start, end) byte interval:
+  // a negative endpoint, an inverted (start > end) interval, or an endpoint
+  // past MAX_SAFE_INTEGER throws EINVAL rather than reaching readFileRange
+  // with a bad position.
+  await t.throwsAsync(() => E(file).range(-1n, 3n), { message: /EINVAL/ });
+  await t.throwsAsync(() => E(file).range(0n, -1n), { message: /EINVAL/ });
+  await t.throwsAsync(() => E(file).range(2n ** 60n, 2n ** 60n + 4n), {
     message: /EINVAL/,
   });
+});
+
+test('EndoMountFile.range reads a half-open byte interval and composes', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['hw.txt'], 'hello world');
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('hw.txt'));
+  const r = await E(file).range(6n, 11n);
+  t.is(await E(r).text(), 'world');
+  // The range blob is itself a ReadableBlob, so range() composes on it.
+  const r2 = await E(r).range(0n, 3n);
+  t.is(await E(r2).text(), 'wor');
+});
+
+test('EndoMountFile.textRange reads a half-open line interval on the live file', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['lines.txt'], 'a\nb\nc\n');
+  const file = /** @type {EndoMountFile} */ (
+    await E(mount).lookup('lines.txt')
+  );
+  // The live-file textRange path differs materially from BlobRef's snapshot
+  // path (it re-stats + reads the file per call, and freezes the located byte
+  // offsets at call time), so it needs its own behavioral pin rather than only
+  // the method-name conformance check. `textRange(from, to)` selects the
+  // half-open [from, to) LINE window, equivalent to
+  // `text.split('\n').slice(from, to).join('\n')`.
+  const middle = await E(file).textRange(1, 3);
+  t.is(await E(middle).text(), 'b\nc');
+  const first = await E(file).textRange(0, 1);
+  t.is(await E(first).text(), 'a');
+});
+
+test('a derived range getInfo hashes the selected bytes when makeSha256 is threaded', async t => {
+  const rootPath = makeTempRoot(t);
+  const { makeSha256 } = makeCryptoPowers(crypto);
+  const mount = makeMount({
+    rootPath,
+    readOnly: false,
+    filePowers,
+    makeSha256,
+  });
+  await E(mount).writeText(['hw.txt'], 'hello world');
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('hw.txt'));
+  // getInfo() on a *derived range* (not the whole-value view) is the path that
+  // needs the injected SHA-256 power; the whole-value view hashes via
+  // filePowers. Assert it reports {algorithm, hash, size} for the selection.
+  const r = await E(file).range(6n, 11n); // 'world'
+  const info = await E(r).getInfo();
+  t.is(info.algorithm, 'sha256');
+  t.is(info.size, 5n);
+  const expectedHash = crypto
+    .createHash('sha256')
+    .update(Buffer.from('world'))
+    .digest('base64');
+  t.is(info.hash, expectedHash);
+});
+
+test('a derived range getInfo names the missing makeSha256 power (no bare TypeError)', async t => {
+  const rootPath = makeTempRoot(t);
+  // A mount constructed WITHOUT makeSha256 (as ~every test/agent-tools site
+  // does) cannot honor getInfo on a derived range. It must fail with a located
+  // error naming the missing power, not `undefined is not a function`.
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await E(mount).writeText(['hw.txt'], 'hello world');
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('hw.txt'));
+  const r = await E(file).range(6n, 11n);
+  await t.throwsAsync(() => E(r).getInfo(), { message: /makeSha256/ });
 });
 
 test('followNameChanges yields existing entries as the initial snapshot', async t => {

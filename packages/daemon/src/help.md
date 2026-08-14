@@ -572,8 +572,9 @@ Example: writeText(["my-mount", "output.txt"], "hello")
 
 Blobs store binary content with a content-addressed hash.
 Use text() to read as a string, json() to parse as JSON,
-streamBase64() for streaming access, or getInfo()/fetch()
-for the content-addressed range-I/O surface.
+streamBase64() for streaming access, getInfo() for the
+content-addressed identity, or range()/textRange() to attenuate
+to a byte or line window as a new ReadableBlob.
 
 ## help(methodName?) -> string
 
@@ -585,11 +586,21 @@ The content-addressed identity of the blob in one round-trip:
 algorithm ("sha256"), hash (base64), and size (bigint bytes).
 Lets a caller consult a local content store before fetching.
 
-## fetch(offset, length) -> Promise<PassableBytesReader>
+## range(start, end?) -> Promise<ReadableBlob>
 
-Read the byte range [offset, offset + length) without
-streaming the whole blob. offset and length are bigints;
-the range is clamped at end-of-content.
+Attenuate to the half-open byte interval [start, end) as a new
+ReadableBlob with exactly the authority to read those bytes.
+start and end are non-negative bigints; start > end, a negative,
+or a non-safe value throws EINVAL; the selection clamps at
+end-of-content, and ranges compose. end is optional — omitting it
+(range(start)) reads from start to end-of-content.
+
+## textRange(startLine, endLine) -> Promise<ReadableBlob>
+
+Attenuate to lines [startLine, endLine) (zero-based, end-exclusive,
+LF-delimited) of the current bytes, returning that byte slice as a
+new ReadableBlob. Line indices are non-negative safe integers; an
+endLine past the last line clamps to the end.
 
 ## streamBase64(syndicationPromise) -> Promise
 
@@ -749,6 +760,35 @@ Each argument is one path segment: list("subdir").
 Call with no arguments to list the root.
 Entries with symlinks escaping the mount root are excluded.
 
+## glob(pattern) -> Promise<string[]>
+
+Recursively find files under this face whose path matches the glob pattern.
+pattern: string — A glob (e.g. "src/**/*.js").
+Returns the matching paths in UTF-16 code-unit order, capped at a fixed
+maximum applied after the sort so the dropped set is deterministic.
+Restricted segments and paths escaping the mount root are excluded.
+
+## grep(pattern, paths?, options?) -> Promise<Array<{ file, line, text }>>
+
+Search file contents for an ECMAScript RegExp source (no flags), yielding
+{ file, line, text } records with 1-based line numbers and CRLF-normalized text.
+pattern: string — The regular-expression source to match.
+paths: string[] — Files to search; may be a glob() result
+(grep("TODO", glob("src/**"))). Omit to search every file under the root.
+options: { maxResults?: number } — Cap on the number of matches returned.
+Denied, out-of-confinement, directory, or unreadable paths are skipped silently.
+
+## glorp(globPattern, grepPattern, options?) -> Promise<Array<{ file, line, text }>>
+
+Fused glob + grep: enumerate the files matching globPattern and search them for
+grepPattern, returning grep's { file, line, text } records.
+globPattern: string — The glob selecting which files to search.
+grepPattern: string — The regular-expression source to match within them.
+options: { maxResults?: number } — Cap on the number of matches returned.
+Both patterns are required so a native powers layer may push the whole
+operation down as a single enumerate-and-scan pass; the reference
+implementation composes grep(grepPattern, glob(globPattern)).
+
 ## lookup(path) -> Promise<EndoMount | EndoMountFile>
 
 Resolve a path within the mount.
@@ -837,10 +877,10 @@ Capture current state as an immutable readable-tree.
 # EndoMountFile - A file within a mounted directory.
 
 A live, host-backed file. Read it with text() / json() / streamBase64(),
-inspect and range-read it with getInfo() / fetch(), write it with
-writeText() / append() / writeBytes(), or snapshot() it into the content
-store. kind() returns "file" and stat() returns the bigint-nanosecond metadata
-record.
+inspect it with getInfo(), attenuate to a byte or line window with
+range() / textRange(), write it with writeText() / append() /
+writeBytes(), or snapshot() it into the content store. stat() returns the
+bigint-nanosecond metadata record.
 
 ## help(methodName?) -> string
 
@@ -861,11 +901,21 @@ The content-addressed identity of the file's current bytes in one
 round-trip: algorithm ("sha256"), hash (base64), and size (bigint).
 Recomputed each call, since the live file may change.
 
-## fetch(offset, length) -> Promise<PassableBytesReader>
+## range(start, end?) -> Promise<ReadableBlob>
 
-Read the byte range [offset, offset + length) of the live file without
-streaming the whole thing. offset and length are bigints; the range is
-clamped at end-of-content.
+Attenuate to the half-open byte interval [start, end) of the live file
+as a new ReadableBlob. start and end are non-negative bigints; start >
+end, a negative, or a non-safe value throws EINVAL; the selection clamps
+at end-of-content. end is optional — omitting it (range(start)) reads
+from start to end-of-content. Each read of the result observes the live
+file at that operation, subject to the fixed interval.
+
+## textRange(startLine, endLine) -> Promise<ReadableBlob>
+
+Attenuate to lines [startLine, endLine) (zero-based, end-exclusive,
+LF-delimited) of the live file's current bytes, as a new ReadableBlob.
+Line indices are non-negative safe integers; an endLine past the last
+line clamps to the end.
 
 ## text() -> Promise<string>
 
@@ -895,5 +945,6 @@ Write bytes from an async iterator. Throws if read-only.
 ## readOnly() -> ReadableBlob
 
 Returns a structural ReadableBlob view (text, json, streamBase64, getInfo,
-fetch) of this file. The view is a write-disabled face over the live file,
-not a snapshot. Mount-specific extensions (stat, snapshot) are not on it.
+range, textRange) of this file. The view is a write-disabled face over the
+live file, not a snapshot. Mount-specific extensions (stat, snapshot) are not
+on it.

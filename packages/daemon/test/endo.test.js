@@ -716,7 +716,7 @@ test('store with name', async t => {
   }
 });
 
-test('stored blob exposes the rich BlobRef range-I/O surface (getInfo + fetch)', async t => {
+test('stored blob exposes the rich BlobRef range-I/O surface (getInfo + range)', async t => {
   const { cancelled, config } = await prepareConfig(t);
   const { host } = await makeHost(config, cancelled);
 
@@ -747,11 +747,12 @@ test('stored blob exposes the rich BlobRef range-I/O surface (getInfo + fetch)',
   t.is(info.size, 12n);
   t.is(info.hash, crypto.createHash('sha256').update(payload).digest('base64'));
 
-  // fetch(offset, length) is a windowed read, clamped at EOF.
-  t.is(await collect(await E(blob).fetch(0n, 12n)), 'hello world\n');
-  t.is(await collect(await E(blob).fetch(0n, 5n)), 'hello');
-  t.is(await collect(await E(blob).fetch(6n, 100n)), 'world\n');
-  t.is(await collect(await E(blob).fetch(100n, 4n)), '');
+  // range(start, end) is a windowed read over the half-open byte interval
+  // [start, end), clamped at EOF.
+  t.is(await collect(await E(blob).range(0n, 12n)), 'hello world\n');
+  t.is(await collect(await E(blob).range(0n, 5n)), 'hello');
+  t.is(await collect(await E(blob).range(6n, 106n)), 'world\n');
+  t.is(await collect(await E(blob).range(100n, 104n)), '');
 });
 
 test('store blob in subdirectory', async t => {
@@ -5121,7 +5122,7 @@ test('provideGit tree exposes immutable commit contents', async t => {
   const main = await E(tree).lookup(['src', 'main.js']);
   t.is(await E(main).text(), 'export default 1;\n');
 
-  // GitBlob exposes the rich BlobRef range-I/O surface (getInfo + fetch).
+  // GitBlob exposes the rich BlobRef range-I/O surface (getInfo + range).
   const mainInfo = await E(main).getInfo();
   t.is(mainInfo.algorithm, 'sha256');
   t.is(mainInfo.size, 18n); // 'export default 1;\n'
@@ -5140,8 +5141,8 @@ test('provideGit tree exposes immutable commit contents', async t => {
     }
     return new TextDecoder().decode(out);
   };
-  t.is(await collectText(await E(main).fetch(0n, 6n)), 'export');
-  t.is(await collectText(await E(main).fetch(0n, 18n)), 'export default 1;\n');
+  t.is(await collectText(await E(main).range(0n, 6n)), 'export');
+  t.is(await collectText(await E(main).range(0n, 18n)), 'export default 1;\n');
 
   await fs.promises.writeFile(
     path.join(repoPath, 'src', 'main.js'),

@@ -129,9 +129,10 @@ const PLATFORM_READABLE_TREE_METHODS = [
 
 /**
  * Method names the rich `ReadableBlob` view exposes: the whole-value surface
- * plus the `BlobRef` range-I/O surface (`getInfo` / `fetch`). The mount-file
- * `readOnly()` view is a write-disabled face over a live file, so it carries
- * the range methods too. See designs/fs-interface-consolidation.md § C4.
+ * plus the content-address `getInfo` and the `range` / `textRange` attenuation.
+ * The mount-file `readOnly()` view is a write-disabled face over a live file, so
+ * it carries the attenuation methods too. See
+ * designs/readableblob-range-attenuation.md.
  */
 const PLATFORM_READABLE_BLOB_METHODS = [
   'streamBase64',
@@ -139,7 +140,8 @@ const PLATFORM_READABLE_BLOB_METHODS = [
   'json',
   'help',
   'getInfo',
-  'fetch',
+  'range',
+  'textRange',
 ];
 
 /**
@@ -218,9 +220,18 @@ const ENDOMOUNT_EXTENSIONS = [
 
 /**
  * Mount-specific extensions beyond the platform File contract. `getInfo` /
- * `fetch` are the rich `BlobRef` range-I/O surface over the live file (§ C4).
+ * `range` / `textRange` are the rich `ReadableBlob` content-address +
+ * attenuation surface over the live file. See
+ * designs/readableblob-range-attenuation.md.
  */
-const ENDOMOUNTFILE_EXTENSIONS = ['stat', 'getInfo', 'fetch', 'kind', 'list'];
+const ENDOMOUNTFILE_EXTENSIONS = [
+  'stat',
+  'getInfo',
+  'range',
+  'textRange',
+  'kind',
+  'list',
+];
 
 test('EndoMount diverges from PlatformDirectoryInterface by named extensions only', async t => {
   // The divergence is deliberate and named: callers who hold a plain
@@ -614,6 +625,27 @@ test('XS file powers expose the EndoMount call sites that regressed', t => {
       `XS powers must implement ${name}`,
     );
   }
+});
+
+test.serial('XS readFileRange returns copied window bytes', async t => {
+  const backing = new Uint8Array([10, 20, 30, 40, 50, 60]);
+  const realHostReadFileBytes = /** @type {any} */ (globalThis)
+    .hostReadFileBytes;
+  /** @type {any} */ (globalThis).hostReadFileBytes = () => backing.buffer;
+  t.teardown(() => {
+    /** @type {any} */ (globalThis).hostReadFileBytes = realHostReadFileBytes;
+  });
+
+  const xsPowers = makeXsFilePowers();
+  const selected = await xsPowers.readFileRange('/fixture.bin', 2, 3);
+  t.deepEqual([...selected], [30, 40, 50]);
+  t.not(selected.buffer, backing.buffer);
+
+  // Neither holder can reach the other's bytes through a retained allocation.
+  selected[0] = 99;
+  t.is(backing[2], 30);
+  backing[3] = 88;
+  t.deepEqual([...selected], [99, 40, 50]);
 });
 
 test('XS statPath converts a fractional mtime (ms) to bigint nanoseconds without crashing', async t => {
