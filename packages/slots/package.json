@@ -35,6 +35,7 @@
     "test:xs": "exit 0"
   },
   "dependencies": {
+    "@endo/bytes": "workspace:^",
     "@endo/cbor": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",

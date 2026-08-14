@@ -16,6 +16,8 @@ import {
   readByteString,
   readOptionalNull,
 } from '@endo/cbor';
+import { bytesFromText } from '@endo/bytes/from-string.js';
+import { bytesToText } from '@endo/bytes/to-string.js';
 import { writeDescriptor, readDescriptor } from './descriptor.js';
 
 /** @import { Descriptor } from './descriptor.js' */
@@ -227,16 +229,13 @@ harden(decodeDropPayload);
 
 // ---- abort ----
 
-const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder('utf-8', { fatal: true });
-
 /**
  * @param {string} reason
  * @returns {Uint8Array}
  */
 export const encodeAbortPayload = reason => {
   const w = makeCborWriter();
-  writeByteString(w, textEncoder.encode(reason));
+  writeByteString(w, bytesFromText(reason));
   return cborWriterBytes(w);
 };
 harden(encodeAbortPayload);
@@ -250,7 +249,7 @@ export const decodeAbortPayload = bytes => {
   const raw = readByteString(r);
   assertConsumed(r);
   try {
-    return textDecoder.decode(raw);
+    return bytesToText(raw, { fatal: true });
   } catch (e) {
     throw makeError(X`abort reason not valid utf-8: ${q(String(e))}`);
   }

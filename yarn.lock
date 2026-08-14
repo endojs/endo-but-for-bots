@@ -3144,6 +3144,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/slots@workspace:packages/slots"
   dependencies:
+    "@endo/bytes": "workspace:^"
     "@endo/cbor": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
