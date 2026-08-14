@@ -43,7 +43,6 @@ use std::path::{Path, PathBuf};
 /// with.
 pub const DEFAULT_ENDOR_SKIP_FEATURES: &[&str] = &[
     // xst `gxFeatures` analogues — surfaces ironhorse does not implement.
-    "Temporal",
     "ShadowRealm",
     // `Atomics`/`SharedArrayBuffer` are now implemented single-agent
     // (`ironhorse-vm::interp` `create_atomics` + the `SharedArrayBuffer`
@@ -451,6 +450,14 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
         Halt::Decode(_) => return Verdict::RunSkip("parse-or-decode".into()),
         _ => {}
     }
+    // The pinned Moddable oracle has no Temporal global. Official tests often
+    // catch that ReferenceError and complete with an assertion sentinel, so
+    // the absence is not always visible in `oracle_error`. Keep this host-only
+    // exclusion scoped to a source that names Temporal and an observable
+    // disagreement; agreeing programs remain genuinely covered.
+    if cfg.oracle && oracle_missing_temporal(run) {
+        return Verdict::RunSkip("oracle-host-missing-temporal".into());
+    }
     let meter_violation = |run: &DualRun| -> Verdict {
         Verdict::Fail(format!(
             "meter-exact violation: oracle={} ironhorse={} computrons",
@@ -589,6 +596,12 @@ fn oracle_missing_intl(run: &DualRun) -> bool {
         && (run.oracle_error == "ReferenceError: get Intl: undefined variable"
             || (run.oracle_error.starts_with("Test262Error:")
                 && run.oracle_error.ends_with("but got a ReferenceError")))
+}
+
+fn oracle_missing_temporal(run: &DualRun) -> bool {
+    run.oracle_parsed
+        && run.source.contains("Temporal")
+        && (!run.result_agrees || run.oracle_error.contains("Temporal: undefined variable"))
 }
 
 fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
@@ -1811,6 +1824,23 @@ mod tests {
             assert!(!oracle_missing_intl(&run));
             assert!(matches!(evaluate_positive(&cfg, &run, false), Verdict::Fail(_)));
         }
+    }
+
+    #[test]
+    fn missing_temporal_oracle_is_a_precise_host_exclusion() {
+        let cfg = Config::default();
+        let mut run = synthetic_ironhorse_only_complete(
+            true,
+            "ReferenceError: get Temporal: undefined variable",
+        );
+        run.source = "Temporal.Instant.fromEpochNanoseconds(0n)".to_string();
+        assert!(oracle_missing_temporal(&run));
+        assert_eq!(
+            evaluate_positive(&cfg, &run, false),
+            Verdict::RunSkip("oracle-host-missing-temporal".into())
+        );
+        run.source = "Other.Instant.fromEpochNanoseconds(0n)".to_string();
+        assert!(!oracle_missing_temporal(&run));
     }
 
     #[test]

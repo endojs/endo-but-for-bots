@@ -1619,6 +1619,31 @@ pub enum MathId {
 /// user code — the `call`/`apply`/`bind` re-entrant methods are separate.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NativeMethod {
+    TemporalInstantFrom,
+    TemporalInstantFromEpochMilliseconds,
+    TemporalInstantFromEpochNanoseconds,
+    TemporalInstantCompare,
+    TemporalInstantAdd,
+    TemporalInstantSubtract,
+    TemporalInstantUntil,
+    TemporalInstantSince,
+    TemporalInstantRound,
+    TemporalInstantEquals,
+    TemporalInstantToString,
+    TemporalInstantToJSON,
+    TemporalInstantValueOf,
+    TemporalDurationFrom,
+    TemporalDurationCompare,
+    TemporalDurationWith,
+    TemporalDurationNegated,
+    TemporalDurationAbs,
+    TemporalDurationAdd,
+    TemporalDurationSubtract,
+    TemporalDurationRound,
+    TemporalDurationTotal,
+    TemporalDurationToString,
+    TemporalDurationToJSON,
+    TemporalDurationValueOf,
     IntlGetCanonicalLocales,
     IntlSupportedValuesOf,
     IntlSupportedLocalesOf,
@@ -2722,6 +2747,66 @@ struct ErrorInfo {
     message: Option<String>,
 }
 
+/// Exact, immutable Temporal records.  Keeping these independent from the
+/// ordinary-property store gives Temporal its required internal-slot branding
+/// and gives the later Plain*/ZonedDateTime implementation one shared record
+/// boundary instead of encoding temporal state in mutable guest properties.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TemporalInstantRecord {
+    epoch_nanoseconds: i128,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct TemporalDurationRecord {
+    years: i64,
+    months: i64,
+    weeks: i64,
+    days: i64,
+    hours: i64,
+    minutes: i64,
+    seconds: i64,
+    milliseconds: i64,
+    microseconds: i64,
+    nanoseconds: i64,
+}
+
+impl TemporalDurationRecord {
+    fn fields(self) -> [i64; 10] {
+        [self.years, self.months, self.weeks, self.days, self.hours,
+         self.minutes, self.seconds, self.milliseconds, self.microseconds,
+         self.nanoseconds]
+    }
+
+    fn sign(self) -> i64 {
+        self.fields().into_iter().find(|&v| v != 0).map(i64::signum).unwrap_or(0)
+    }
+
+    fn negated(self) -> Option<Self> {
+        let mut f = self.fields();
+        for v in &mut f { *v = v.checked_neg()?; }
+        Some(Self::from_fields(f))
+    }
+
+    fn from_fields(f: [i64; 10]) -> Self {
+        Self { years:f[0], months:f[1], weeks:f[2], days:f[3], hours:f[4],
+            minutes:f[5], seconds:f[6], milliseconds:f[7], microseconds:f[8], nanoseconds:f[9] }
+    }
+
+    fn time_nanoseconds(self, allow_days: bool) -> Option<i128> {
+        if self.years != 0 || self.months != 0 || self.weeks != 0 || (!allow_days && self.days != 0) {
+            return None;
+        }
+        let mut n = if allow_days { self.days as i128 * 86_400 } else { 0 };
+        n = n.checked_add(self.hours as i128 * 3_600)?;
+        n = n.checked_add(self.minutes as i128 * 60)?;
+        n = n.checked_add(self.seconds as i128)?;
+        n = n.checked_mul(1_000_000_000)?;
+        n = n.checked_add(self.milliseconds as i128 * 1_000_000)?;
+        n = n.checked_add(self.microseconds as i128 * 1_000)?;
+        n.checked_add(self.nanoseconds as i128)
+    }
+}
+
 /// One intrinsic (native) function ironhorse models. The variant is the
 /// identity the `run`/`new` dispatch and the completion renderer key off;
 /// [`Native::display_name`] is the name XS's `Function.prototype.toString`
@@ -2744,6 +2829,8 @@ pub enum Native {
     PluralRules,
     Segmenter,
     DateTimeFormat,
+    TemporalInstant,
+    TemporalDuration,
     Object,
     Function,
     Boolean,
@@ -2817,6 +2904,8 @@ impl Native {
             Native::PluralRules => "PluralRules",
             Native::Segmenter => "Segmenter",
             Native::DateTimeFormat => "DateTimeFormat",
+            Native::TemporalInstant => "Instant",
+            Native::TemporalDuration => "Duration",
             Native::Object => "Object",
             Native::Function => "Function",
             Native::Boolean => "Boolean",
@@ -2859,6 +2948,8 @@ impl Native {
             Native::PluralRules => 0,
             Native::Segmenter => 0,
             Native::DateTimeFormat => 0,
+            Native::TemporalInstant => 1,
+            Native::TemporalDuration => 0,
             Native::AggregateError => 2,
             Native::SuppressedError => 3,
             Native::DisposableStack | Native::AsyncDisposableStack => 0,
@@ -3217,6 +3308,11 @@ pub struct Interp {
     segments: std::collections::HashMap<crate::value::SlotIndex, SegmentsData>,
     segment_iterators: std::collections::HashMap<crate::value::SlotIndex, SegmentIteratorData>,
     date_time_formats: std::collections::HashMap<crate::value::SlotIndex, DateTimeFormatData>,
+    temporal_object: crate::value::SlotIndex,
+    temporal_instant_proto: crate::value::SlotIndex,
+    temporal_duration_proto: crate::value::SlotIndex,
+    temporal_instants: std::collections::HashMap<crate::value::SlotIndex, TemporalInstantRecord>,
+    temporal_durations: std::collections::HashMap<crate::value::SlotIndex, TemporalDurationRecord>,
     collator_compare_functions:
         std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>,
     /// The realm's `%Object.prototype%` (XS's `mxObjectPrototype`), the root
@@ -3977,6 +4073,11 @@ impl Interp {
             segments: std::collections::HashMap::new(),
             segment_iterators: std::collections::HashMap::new(),
             date_time_formats: std::collections::HashMap::new(),
+            temporal_object: crate::value::SlotIndex::NULL,
+            temporal_instant_proto: crate::value::SlotIndex::NULL,
+            temporal_duration_proto: crate::value::SlotIndex::NULL,
+            temporal_instants: std::collections::HashMap::new(),
+            temporal_durations: std::collections::HashMap::new(),
             collator_compare_functions: std::collections::HashMap::new(),
             object_proto: crate::value::SlotIndex::NULL,
             function_proto: crate::value::SlotIndex::NULL,
@@ -4221,8 +4322,10 @@ impl Interp {
                 | Native::ListFormat
                 | Native::PluralRules
                 | Native::Segmenter
-                | Native::DateTimeFormat => {
-                    unreachable!("Intl constructors are registered by create_intl")
+                | Native::DateTimeFormat
+                | Native::TemporalInstant
+                | Native::TemporalDuration => {
+                    unreachable!("namespace constructors are registered separately")
                 }
                 // `Proxy` is registered separately (`create_proxy`) and never
                 // iterated here — it has no `.prototype`. Unreachable in this loop.
@@ -4762,6 +4865,7 @@ impl Interp {
         self.create_proxy();
         self.create_eval();
         self.create_intl();
+        self.create_temporal();
         self.create_hardened_globals();
     }
 
@@ -4932,6 +5036,65 @@ impl Interp {
         // depending on a host database.
         self.proto_data
             .push((intl, "__ironhorseDataVersion", INTL_DATA_VERSION.to_string()));
+    }
+
+    /// Build the first Temporal intrinsic family.  The namespace and its
+    /// constructors are boot objects, while instances are branded by the two
+    /// exact side tables above.  Later Temporal families can extend this
+    /// namespace without changing the record representation used here.
+    fn create_temporal(&mut self) {
+        let temporal = self.slots.alloc(Slot::instance(self.object_proto));
+        self.temporal_object = temporal;
+        self.intrinsics.insert("Temporal", temporal);
+
+        let instant = self.alloc_named_native(Native::TemporalInstant);
+        let ip = self.slots.alloc(Slot::instance(self.object_proto));
+        self.temporal_instant_proto = ip;
+        self.ctor_prototype.insert(instant, ip);
+        self.proto_methods.push((instant, "prototype", ip));
+        self.proto_methods.push((ip, "constructor", instant));
+        self.proto_methods.push((temporal, "Instant", instant));
+        for (name, method) in [
+            ("from", NativeMethod::TemporalInstantFrom),
+            ("fromEpochMilliseconds", NativeMethod::TemporalInstantFromEpochMilliseconds),
+            ("fromEpochNanoseconds", NativeMethod::TemporalInstantFromEpochNanoseconds),
+            ("compare", NativeMethod::TemporalInstantCompare),
+        ] { let f = self.alloc_method(method); self.proto_methods.push((instant, name, f)); }
+        for (name, method) in [
+            ("add", NativeMethod::TemporalInstantAdd),
+            ("subtract", NativeMethod::TemporalInstantSubtract),
+            ("until", NativeMethod::TemporalInstantUntil),
+            ("since", NativeMethod::TemporalInstantSince),
+            ("round", NativeMethod::TemporalInstantRound),
+            ("equals", NativeMethod::TemporalInstantEquals),
+            ("toString", NativeMethod::TemporalInstantToString),
+            ("toJSON", NativeMethod::TemporalInstantToJSON),
+            ("valueOf", NativeMethod::TemporalInstantValueOf),
+        ] { let f = self.alloc_method(method); self.proto_methods.push((ip, name, f)); }
+
+        let duration = self.alloc_named_native(Native::TemporalDuration);
+        let dp = self.slots.alloc(Slot::instance(self.object_proto));
+        self.temporal_duration_proto = dp;
+        self.ctor_prototype.insert(duration, dp);
+        self.proto_methods.push((duration, "prototype", dp));
+        self.proto_methods.push((dp, "constructor", duration));
+        self.proto_methods.push((temporal, "Duration", duration));
+        for (name, method) in [
+            ("from", NativeMethod::TemporalDurationFrom),
+            ("compare", NativeMethod::TemporalDurationCompare),
+        ] { let f = self.alloc_method(method); self.proto_methods.push((duration, name, f)); }
+        for (name, method) in [
+            ("with", NativeMethod::TemporalDurationWith),
+            ("negated", NativeMethod::TemporalDurationNegated),
+            ("abs", NativeMethod::TemporalDurationAbs),
+            ("add", NativeMethod::TemporalDurationAdd),
+            ("subtract", NativeMethod::TemporalDurationSubtract),
+            ("round", NativeMethod::TemporalDurationRound),
+            ("total", NativeMethod::TemporalDurationTotal),
+            ("toString", NativeMethod::TemporalDurationToString),
+            ("toJSON", NativeMethod::TemporalDurationToJSON),
+            ("valueOf", NativeMethod::TemporalDurationValueOf),
+        ] { let f = self.alloc_method(method); self.proto_methods.push((dp, name, f)); }
     }
 
     /// Build `%eval%` as a special non-constructor native function. It has no
@@ -7238,6 +7401,27 @@ impl Interp {
                             // getter (`fxArrayLengthGetter`).
                             self.meter.tick_raw(ARRAY_LENGTH_GET_METERING);
                             Slot::integer(self.arrays[&inst].length as i32)
+                        }
+                        Payload::Reference(inst) if self.temporal_instants.contains_key(&inst) => {
+                            let ns = self.temporal_instants[&inst].epoch_nanoseconds;
+                            match self.string_key_name(id).as_deref() {
+                                Some("epochNanoseconds") => self.temporal_i128_bigint(ns),
+                                Some("epochMilliseconds") => Slot::number((ns / 1_000_000) as f64),
+                                _ => self.instance_get(inst, id),
+                            }
+                        }
+                        Payload::Reference(inst) if self.temporal_durations.contains_key(&inst) => {
+                            let d = self.temporal_durations[&inst];
+                            match self.string_key_name(id).as_deref() {
+                                Some("years") => Slot::number(d.years as f64), Some("months") => Slot::number(d.months as f64),
+                                Some("weeks") => Slot::number(d.weeks as f64), Some("days") => Slot::number(d.days as f64),
+                                Some("hours") => Slot::number(d.hours as f64), Some("minutes") => Slot::number(d.minutes as f64),
+                                Some("seconds") => Slot::number(d.seconds as f64), Some("milliseconds") => Slot::number(d.milliseconds as f64),
+                                Some("microseconds") => Slot::number(d.microseconds as f64), Some("nanoseconds") => Slot::number(d.nanoseconds as f64),
+                                Some("sign") => Slot::number(d.sign() as f64),
+                                Some("blank") => Slot::boolean(d.sign() == 0),
+                                _ => self.instance_get(inst, id),
+                            }
                         }
                         Payload::Reference(inst)
                             if self.symbol_ids.get("disposed") == Some(&id)
@@ -11321,6 +11505,25 @@ impl Interp {
                 let inst = self.slots.alloc(Slot::instance(self.date_time_format_proto));
                 self.date_time_formats.insert(inst, data);
                 Slot::of(Kind::Reference, Payload::Reference(inst))
+            }
+            Native::TemporalInstant => {
+                if !has_target { return Err(self.catchable_type_error()); }
+                let ns = self.temporal_bigint_to_i128(arg(0))
+                    .ok_or_else(|| self.catchable_type_error())?;
+                self.temporal_new_instant(ns)?
+            }
+            Native::TemporalDuration => {
+                if !has_target { return Err(self.catchable_type_error()); }
+                let values: Vec<Slot> = (0..10).map(arg).collect();
+                let mut fields = [0i64; 10];
+                for (i, field) in fields.iter_mut().enumerate() {
+                    let value = values[i];
+                    if value.kind == Kind::Undefined { continue; }
+                    *field = self.temporal_integer(value)?;
+                }
+                let record = TemporalDurationRecord::from_fields(fields);
+                if !temporal_duration_sign_valid(record) { return Err(self.catchable_range_error()); }
+                self.temporal_new_duration(record)?
             }
             // `Boolean(value)` (`fx_Boolean`): ToBoolean(argument0), or
             // `false` when called with no argument. Measured against the pin,
@@ -15912,6 +16115,208 @@ impl Interp {
         }
     }
 
+    fn temporal_bigint_to_i128(&self, value: Slot) -> Option<i128> {
+        let Payload::BigInt(off) = value.value else { return None };
+        let (negative, limbs) = self.read_bigint(off);
+        let mut magnitude = 0u128;
+        for &limb in limbs.iter().rev() {
+            magnitude = magnitude.checked_mul(1u128 << 32)?.checked_add(limb as u128)?;
+        }
+        if negative {
+            if magnitude == (1u128 << 127) { Some(i128::MIN) }
+            else { i128::try_from(magnitude).ok()?.checked_neg() }
+        } else { i128::try_from(magnitude).ok() }
+    }
+
+    fn temporal_i128_bigint(&mut self, value: i128) -> Slot {
+        let negative = value < 0;
+        let mut magnitude = value.unsigned_abs();
+        let mut limbs = Vec::new();
+        while magnitude != 0 {
+            limbs.push(magnitude as u32);
+            magnitude >>= 32;
+        }
+        if limbs.is_empty() { limbs.push(0); }
+        self.make_bigint(negative, limbs)
+    }
+
+    fn temporal_integer(&mut self, value: Slot) -> Result<i64, Halt> {
+        let value = self.to_number_value(&[], value)?;
+        let n = to_number(&value);
+        if !n.is_finite() || n.fract() != 0.0 || n.abs() > 9_007_199_254_740_991.0 {
+            return Err(self.catchable_range_error());
+        }
+        Ok(n as i64)
+    }
+
+    fn temporal_new_instant(&mut self, epoch_nanoseconds: i128) -> Result<Slot, Halt> {
+        const LIMIT: i128 = 8_640_000_000_000_000_000_000;
+        if !(-LIMIT..=LIMIT).contains(&epoch_nanoseconds) {
+            return Err(self.catchable_range_error());
+        }
+        let inst = self.slots.alloc(Slot::instance(self.temporal_instant_proto));
+        self.temporal_instants.insert(inst, TemporalInstantRecord { epoch_nanoseconds });
+        Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
+    }
+
+    fn temporal_new_duration(&mut self, record: TemporalDurationRecord) -> Result<Slot, Halt> {
+        if !temporal_duration_sign_valid(record) { return Err(self.catchable_range_error()); }
+        let inst = self.slots.alloc(Slot::instance(self.temporal_duration_proto));
+        self.temporal_durations.insert(inst, record);
+        Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
+    }
+
+    fn temporal_instant_from(&mut self, value: Slot, code: &[u8]) -> Result<i128, Halt> {
+        if let Payload::Reference(r) = value.value {
+            if let Some(record) = self.temporal_instants.get(&r) { return Ok(record.epoch_nanoseconds); }
+        }
+        let text = self.value_to_string(code, value)?;
+        parse_temporal_instant(&text).ok_or_else(|| self.catchable_range_error())
+    }
+
+    fn temporal_duration_from(&mut self, value: Slot, code: &[u8]) -> Result<TemporalDurationRecord, Halt> {
+        if let Payload::Reference(r) = value.value {
+            if let Some(record) = self.temporal_durations.get(&r) { return Ok(*record); }
+            let names = ["years","months","weeks","days","hours","minutes","seconds",
+                "milliseconds","microseconds","nanoseconds"];
+            let mut fields = [0i64; 10];
+            let mut any = false;
+            for (i, name) in names.iter().enumerate() {
+                let Some(&id) = self.symbol_ids.get(*name) else { continue };
+                let receiver = Slot::of(Kind::Reference, Payload::Reference(r));
+                let item = self.ordinary_get(code, r, id, receiver)?;
+                if item.kind != Kind::Undefined { fields[i] = self.temporal_integer(item)?; any = true; }
+            }
+            if !any { return Err(self.catchable_type_error()); }
+            let record = TemporalDurationRecord::from_fields(fields);
+            if !temporal_duration_sign_valid(record) { return Err(self.catchable_range_error()); }
+            return Ok(record);
+        }
+        let text = self.value_to_string(code, value)?;
+        parse_temporal_duration(&text).ok_or_else(|| self.catchable_range_error())
+    }
+
+    fn temporal_unit_option(&mut self, value: Slot, code: &[u8], default: &str) -> Result<String, Halt> {
+        if value.kind == Kind::Undefined { return Ok(default.to_string()); }
+        if let Payload::Reference(r) = value.value {
+            for name in ["smallestUnit", "unit"] {
+                if let Some(text) = self.intl_option_string(code, r, name)? { return Ok(text); }
+            }
+            return Ok(default.to_string());
+        }
+        self.value_to_string(code, value)
+    }
+
+    fn temporal_method(&mut self, method: NativeMethod, this: Slot, arg0: Slot, arg1: Slot, code: &[u8]) -> Result<Slot, Halt> {
+        use NativeMethod::*;
+        match method {
+            TemporalInstantFrom => {
+                let ns = self.temporal_instant_from(arg0, code)?;
+                self.temporal_new_instant(ns)
+            }
+            TemporalInstantFromEpochMilliseconds => {
+                let n = self.temporal_integer(arg0)? as i128;
+                let ns = match n.checked_mul(1_000_000) { Some(ns) => ns, None => return Err(self.catchable_range_error()) };
+                self.temporal_new_instant(ns)
+            }
+            TemporalInstantFromEpochNanoseconds => {
+                let ns = self.temporal_bigint_to_i128(arg0).ok_or_else(|| self.catchable_type_error())?;
+                self.temporal_new_instant(ns)
+            }
+            TemporalInstantCompare => {
+                let a = self.temporal_instant_from(arg0, code)?;
+                let b = self.temporal_instant_from(arg1, code)?;
+                Ok(Slot::integer(a.cmp(&b) as i32))
+            }
+            TemporalInstantAdd | TemporalInstantSubtract => {
+                let inst = temporal_brand(this, &self.temporal_instants).ok_or_else(|| self.catchable_type_error())?;
+                let d = self.temporal_duration_from(arg0, code)?;
+                let mut delta = d.time_nanoseconds(false).ok_or_else(|| self.catchable_range_error())?;
+                if method == TemporalInstantSubtract { delta = delta.checked_neg().ok_or_else(|| self.catchable_range_error())?; }
+                let ns = match inst.epoch_nanoseconds.checked_add(delta) { Some(ns) => ns, None => return Err(self.catchable_range_error()) };
+                self.temporal_new_instant(ns)
+            }
+            TemporalInstantUntil | TemporalInstantSince => {
+                let inst = temporal_brand(this, &self.temporal_instants).ok_or_else(|| self.catchable_type_error())?;
+                let other = self.temporal_instant_from(arg0, code)?;
+                let delta = if method == TemporalInstantUntil { other - inst.epoch_nanoseconds } else { inst.epoch_nanoseconds - other };
+                self.temporal_new_duration(duration_from_nanoseconds(delta))
+            }
+            TemporalInstantRound => {
+                let inst = temporal_brand(this, &self.temporal_instants).ok_or_else(|| self.catchable_type_error())?;
+                let unit = self.temporal_unit_option(arg0, code, "nanosecond")?;
+                let quantum = temporal_unit_nanoseconds(&unit).ok_or_else(|| self.catchable_range_error())?;
+                let ns = round_half_expand(inst.epoch_nanoseconds, quantum);
+                self.temporal_new_instant(ns)
+            }
+            TemporalInstantEquals => {
+                let inst = temporal_brand(this, &self.temporal_instants).ok_or_else(|| self.catchable_type_error())?;
+                Ok(Slot::boolean(inst.epoch_nanoseconds == self.temporal_instant_from(arg0, code)?))
+            }
+            TemporalInstantToString | TemporalInstantToJSON => {
+                let inst = temporal_brand(this, &self.temporal_instants).ok_or_else(|| self.catchable_type_error())?;
+                Ok(self.new_string_metered(format_temporal_instant(inst.epoch_nanoseconds).as_bytes()))
+            }
+            TemporalInstantValueOf | TemporalDurationValueOf => Err(self.catchable_type_error()),
+            TemporalDurationFrom => {
+                let record = self.temporal_duration_from(arg0, code)?;
+                self.temporal_new_duration(record)
+            }
+            TemporalDurationCompare => {
+                let a = self.temporal_duration_from(arg0, code)?;
+                let b = self.temporal_duration_from(arg1, code)?;
+                let a = a.time_nanoseconds(true).ok_or(Halt::Unsupported("Temporal.Duration.compare:relativeTo"))?;
+                let b = b.time_nanoseconds(true).ok_or(Halt::Unsupported("Temporal.Duration.compare:relativeTo"))?;
+                Ok(Slot::integer(a.cmp(&b) as i32))
+            }
+            TemporalDurationNegated | TemporalDurationAbs => {
+                let mut d = temporal_brand(this, &self.temporal_durations).ok_or_else(|| self.catchable_type_error())?;
+                if method == TemporalDurationNegated || d.sign() < 0 { d = d.negated().ok_or_else(|| self.catchable_range_error())?; }
+                self.temporal_new_duration(d)
+            }
+            TemporalDurationAdd | TemporalDurationSubtract => {
+                let a = temporal_brand(this, &self.temporal_durations).ok_or_else(|| self.catchable_type_error())?;
+                let mut b = self.temporal_duration_from(arg0, code)?;
+                if method == TemporalDurationSubtract { b = b.negated().ok_or_else(|| self.catchable_range_error())?; }
+                let af = a.fields(); let bf = b.fields(); let mut out = [0i64; 10];
+                for i in 0..10 { out[i] = af[i].checked_add(bf[i]).ok_or_else(|| self.catchable_range_error())?; }
+                self.temporal_new_duration(TemporalDurationRecord::from_fields(out))
+            }
+            TemporalDurationWith => {
+                let old = temporal_brand(this, &self.temporal_durations).ok_or_else(|| self.catchable_type_error())?;
+                let Payload::Reference(r) = arg0.value else { return Err(self.catchable_type_error()) };
+                let names = ["years","months","weeks","days","hours","minutes","seconds","milliseconds","microseconds","nanoseconds"];
+                let mut fields = old.fields(); let mut any = false;
+                for (i, name) in names.iter().enumerate() {
+                    let Some(&id) = self.symbol_ids.get(*name) else { continue };
+                    let item = self.ordinary_get(code, r, id, arg0)?;
+                    if item.kind != Kind::Undefined { fields[i] = self.temporal_integer(item)?; any = true; }
+                }
+                if !any { return Err(self.catchable_type_error()); }
+                self.temporal_new_duration(TemporalDurationRecord::from_fields(fields))
+            }
+            TemporalDurationRound => {
+                let d = temporal_brand(this, &self.temporal_durations).ok_or_else(|| self.catchable_type_error())?;
+                let total = d.time_nanoseconds(true).ok_or(Halt::Unsupported("Temporal.Duration.round:relativeTo"))?;
+                let unit = self.temporal_unit_option(arg0, code, "nanosecond")?;
+                let q = temporal_unit_nanoseconds(&unit).ok_or_else(|| self.catchable_range_error())?;
+                self.temporal_new_duration(duration_from_nanoseconds(round_half_expand(total, q)))
+            }
+            TemporalDurationTotal => {
+                let d = temporal_brand(this, &self.temporal_durations).ok_or_else(|| self.catchable_type_error())?;
+                let total = d.time_nanoseconds(true).ok_or(Halt::Unsupported("Temporal.Duration.total:relativeTo"))?;
+                let unit = self.temporal_unit_option(arg0, code, "nanosecond")?;
+                let q = temporal_unit_nanoseconds(&unit).ok_or_else(|| self.catchable_range_error())?;
+                Ok(Slot::number(total as f64 / q as f64))
+            }
+            TemporalDurationToString | TemporalDurationToJSON => {
+                let d = temporal_brand(this, &self.temporal_durations).ok_or_else(|| self.catchable_type_error())?;
+                Ok(self.new_string_metered(format_temporal_duration(d).as_bytes()))
+            }
+            _ => unreachable!("non-Temporal method routed to temporal_method"),
+        }
+    }
+
     fn call_native_method(
         &mut self,
         m: NativeMethod,
@@ -15953,6 +16358,34 @@ impl Interp {
             }
         }
         let result: Slot = match m {
+            NativeMethod::TemporalInstantFrom
+            | NativeMethod::TemporalInstantFromEpochMilliseconds
+            | NativeMethod::TemporalInstantFromEpochNanoseconds
+            | NativeMethod::TemporalInstantCompare
+            | NativeMethod::TemporalInstantAdd
+            | NativeMethod::TemporalInstantSubtract
+            | NativeMethod::TemporalInstantUntil
+            | NativeMethod::TemporalInstantSince
+            | NativeMethod::TemporalInstantRound
+            | NativeMethod::TemporalInstantEquals
+            | NativeMethod::TemporalInstantToString
+            | NativeMethod::TemporalInstantToJSON
+            | NativeMethod::TemporalInstantValueOf
+            | NativeMethod::TemporalDurationFrom
+            | NativeMethod::TemporalDurationCompare
+            | NativeMethod::TemporalDurationWith
+            | NativeMethod::TemporalDurationNegated
+            | NativeMethod::TemporalDurationAbs
+            | NativeMethod::TemporalDurationAdd
+            | NativeMethod::TemporalDurationSubtract
+            | NativeMethod::TemporalDurationRound
+            | NativeMethod::TemporalDurationTotal
+            | NativeMethod::TemporalDurationToString
+            | NativeMethod::TemporalDurationToJSON
+            | NativeMethod::TemporalDurationValueOf => {
+                let arg1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+                self.temporal_method(m, this, arg0, arg1, code)?
+            }
             NativeMethod::IntlGetCanonicalLocales => {
                 let locales = self.intl_locale_list(code, arg0)?;
                 let values = locales
@@ -28162,6 +28595,183 @@ fn round_half_even(x: f64) -> f64 {
 /// A `&'static str` naming an unmodeled native **call** for
 /// [`Halt::Unsupported`], so the differential runner records the skip
 /// attributed to the specific built-in (never a silent mis-execution).
+fn temporal_brand<T: Copy>(
+    value: Slot,
+    records: &std::collections::HashMap<crate::value::SlotIndex, T>,
+) -> Option<T> {
+    match value.value {
+        Payload::Reference(r) if value.kind == Kind::Reference => records.get(&r).copied(),
+        _ => None,
+    }
+}
+
+fn temporal_duration_sign_valid(record: TemporalDurationRecord) -> bool {
+    let sign = record.sign();
+    sign == 0 || record.fields().into_iter().all(|v| v == 0 || v.signum() == sign)
+}
+
+fn temporal_unit_nanoseconds(unit: &str) -> Option<i128> {
+    Some(match unit.trim_end_matches('s') {
+        "day" => 86_400_000_000_000,
+        "hour" => 3_600_000_000_000,
+        "minute" => 60_000_000_000,
+        "second" => 1_000_000_000,
+        "millisecond" => 1_000_000,
+        "microsecond" => 1_000,
+        "nanosecond" => 1,
+        _ => return None,
+    })
+}
+
+fn round_half_expand(value: i128, quantum: i128) -> i128 {
+    let q = value / quantum;
+    let r = value % quantum;
+    if r.unsigned_abs() * 2 >= quantum as u128 { (q + value.signum()) * quantum } else { q * quantum }
+}
+
+fn duration_from_nanoseconds(value: i128) -> TemporalDurationRecord {
+    let sign = value.signum();
+    let mut n = value.unsigned_abs();
+    let hours = (n / 3_600_000_000_000) as i64 * sign as i64; n %= 3_600_000_000_000;
+    let minutes = (n / 60_000_000_000) as i64 * sign as i64; n %= 60_000_000_000;
+    let seconds = (n / 1_000_000_000) as i64 * sign as i64; n %= 1_000_000_000;
+    let milliseconds = (n / 1_000_000) as i64 * sign as i64; n %= 1_000_000;
+    let microseconds = (n / 1_000) as i64 * sign as i64;
+    let nanoseconds = (n % 1_000) as i64 * sign as i64;
+    TemporalDurationRecord { hours, minutes, seconds, milliseconds, microseconds, nanoseconds, ..Default::default() }
+}
+
+fn parse_temporal_duration(text: &str) -> Option<TemporalDurationRecord> {
+    let (sign, text) = if let Some(s) = text.strip_prefix('-') { (-1i64, s) }
+        else if let Some(s) = text.strip_prefix('+') { (1, s) } else { (1, text) };
+    let mut rest = text.strip_prefix('P')?;
+    if rest.is_empty() { return None; }
+    let mut out = TemporalDurationRecord::default();
+    let mut time = false; let mut saw = false;
+    while !rest.is_empty() {
+        if let Some(r) = rest.strip_prefix('T') { if time { return None; } time = true; rest = r; continue; }
+        let end = rest.find(|c: char| !(c.is_ascii_digit() || c == '.'))?;
+        if end == 0 { return None; }
+        let number = &rest[..end]; let designator = rest.as_bytes().get(end).copied()? as char;
+        rest = &rest[end + 1..]; saw = true;
+        if number.contains('.') {
+            if designator != 'S' || !time { return None; }
+            let (whole, frac) = number.split_once('.')?;
+            let seconds: i64 = whole.parse().ok()?;
+            if frac.is_empty() || frac.len() > 9 || !frac.bytes().all(|b| b.is_ascii_digit()) { return None; }
+            let fraction: i64 = format!("{frac:0<9}").parse().ok()?;
+            out.seconds = sign.checked_mul(seconds)?;
+            out.milliseconds = sign.checked_mul(fraction / 1_000_000)?;
+            out.microseconds = sign.checked_mul((fraction / 1_000) % 1_000)?;
+            out.nanoseconds = sign.checked_mul(fraction % 1_000)?;
+            continue;
+        }
+        let v = sign.checked_mul(number.parse::<i64>().ok()?)?;
+        match (time, designator) {
+            (false, 'Y') => out.years = v, (false, 'M') => out.months = v,
+            (false, 'W') => out.weeks = v, (false, 'D') => out.days = v,
+            (true, 'H') => out.hours = v, (true, 'M') => out.minutes = v,
+            (true, 'S') => out.seconds = v, _ => return None,
+        }
+    }
+    saw.then_some(out)
+}
+
+fn format_temporal_duration(d: TemporalDurationRecord) -> String {
+    if d.sign() == 0 { return "PT0S".to_string(); }
+    let sign = if d.sign() < 0 { "-" } else { "" };
+    let f = d.fields().map(i64::unsigned_abs);
+    let mut s = format!("{sign}P");
+    for (v, mark) in [(f[0],"Y"),(f[1],"M"),(f[2],"W"),(f[3],"D")] { if v != 0 { s.push_str(&format!("{v}{mark}")); } }
+    if f[4..].iter().any(|&v| v != 0) {
+        s.push('T');
+        if f[4] != 0 { s.push_str(&format!("{}H", f[4])); }
+        if f[5] != 0 { s.push_str(&format!("{}M", f[5])); }
+        let fraction = f[7] * 1_000_000 + f[8] * 1_000 + f[9];
+        if f[6] != 0 || fraction != 0 {
+            if fraction == 0 { s.push_str(&format!("{}S", f[6])); }
+            else {
+                let digits = format!("{fraction:09}");
+                s.push_str(&format!("{}.{}S", f[6], digits.trim_end_matches('0')));
+            }
+        }
+    }
+    s
+}
+
+// Proleptic-Gregorian civil date conversion (Howard Hinnant's algorithms),
+// expressed entirely in integers so every supported Instant stays nanosecond exact.
+fn days_from_civil(year: i64, month: u32, day: u32) -> Option<i128> {
+    let leap = year.rem_euclid(4) == 0
+        && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0);
+    let month_days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return None,
+    };
+    if day == 0 || day > month_days { return None; }
+    let y = year - i64::from(month <= 2);
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = month as i64 + if month > 2 { -3 } else { 9 };
+    let doy = (153 * mp + 2) / 5 + day as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some((era * 146097 + doe - 719468) as i128)
+}
+
+fn civil_from_days(days: i128) -> (i64, u32, u32) {
+    let z = days as i64 + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let mut y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    y += i64::from(m <= 2);
+    (y, m as u32, d as u32)
+}
+
+fn parse_temporal_instant(text: &str) -> Option<i128> {
+    let t = text.find(['T','t'])?;
+    let (date, mut time) = text.split_at(t); time = &time[1..];
+    let mut dp = date.rsplitn(3, '-');
+    let day: u32 = dp.next()?.parse().ok()?; let month: u32 = dp.next()?.parse().ok()?;
+    let year_text = dp.next()?; let year: i64 = year_text.parse().ok()?;
+    let zone_at = time.rfind(['Z','z','+','-'])?;
+    let (clock, zone) = time.split_at(zone_at);
+    let mut cp = clock.split(':');
+    let hour: i128 = cp.next()?.parse().ok()?; let minute: i128 = cp.next()?.parse().ok()?;
+    let second_text = cp.next()?; if cp.next().is_some() || hour > 23 || minute > 59 { return None; }
+    let (second, fraction) = second_text.split_once('.').unwrap_or((second_text, ""));
+    let second: i128 = second.parse().ok()?; if second > 59 { return None; }
+    if fraction.len() > 9 || !fraction.bytes().all(|b| b.is_ascii_digit()) { return None; }
+    let frac: i128 = if fraction.is_empty() { 0 } else { format!("{fraction:0<9}").parse().ok()? };
+    let offset_seconds: i128 = if zone.eq_ignore_ascii_case("z") { 0 } else {
+        let sign = if zone.starts_with('-') { -1 } else if zone.starts_with('+') { 1 } else { return None };
+        let mut zp = zone[1..].split(':'); let zh: i128 = zp.next()?.parse().ok()?;
+        let zm: i128 = zp.next().unwrap_or("0").parse().ok()?;
+        if zh > 23 || zm > 59 || zp.next().is_some() { return None; }
+        sign * (zh * 3600 + zm * 60)
+    };
+    let days = days_from_civil(year, month, day)?;
+    Some(((days * 86_400 + hour * 3600 + minute * 60 + second - offset_seconds) * 1_000_000_000) + frac)
+}
+
+fn format_temporal_instant(ns: i128) -> String {
+    let seconds = ns.div_euclid(1_000_000_000);
+    let fraction = ns.rem_euclid(1_000_000_000);
+    let days = seconds.div_euclid(86_400); let sod = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let hour = sod / 3600; let minute = (sod % 3600) / 60; let second = sod % 60;
+    let y = if (0..=9999).contains(&year) { format!("{year:04}") } else { format!("{year:+07}") };
+    if fraction == 0 { format!("{y}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z") }
+    else { format!("{y}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{}Z", format!("{fraction:09}").trim_end_matches('0')) }
+}
+
 fn native_unsupported_name(native: Native) -> &'static str {
     match native {
             Native::Eval => "native-call:eval",
@@ -28171,6 +28781,8 @@ fn native_unsupported_name(native: Native) -> &'static str {
         Native::PluralRules => "native-call:PluralRules",
         Native::Segmenter => "native-call:Segmenter",
         Native::DateTimeFormat => "native-call:DateTimeFormat",
+        Native::TemporalInstant => "native-call:Temporal.Instant",
+        Native::TemporalDuration => "native-call:Temporal.Duration",
         Native::Object => "native-call:Object",
         Native::Function => "native-call:Function",
         Native::Boolean => "native-call:Boolean",

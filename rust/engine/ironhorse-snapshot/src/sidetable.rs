@@ -171,6 +171,9 @@ pub enum SideTable {
     /// `regexps` — compiled RegExp program + source/flags (note:
     /// `lastIndex` is an ordinary own property, in the arena).
     RegExps,
+    /// `temporal_instants` + `temporal_durations` — exact immutable Temporal
+    /// internal-slot records keyed by their branded instance slots.
+    TemporalRecords,
     /// `ctor_prototype` — each constructor instance's `.prototype` object.
     /// The `.prototype` *object* is an arena slot, but the constructor→proto
     /// link is HashMap-only (never an own-property slot), so it is not
@@ -241,6 +244,7 @@ impl SideTable {
         SideTable::AsyncInstances,
         SideTable::AsyncRunStack,
         SideTable::RegExps,
+        SideTable::TemporalRecords,
         SideTable::CtorPrototype,
         SideTable::SymbolRegistry,
         SideTable::SymbolTables,
@@ -324,6 +328,7 @@ impl SideTable {
             SideTable::AsyncInstances => ("async_instances", Pending),
             SideTable::AsyncRunStack => ("async_run_stack", Pending),
             SideTable::RegExps => ("regexps", Pending),
+            SideTable::TemporalRecords => ("temporal_instants/temporal_durations", Pending),
             SideTable::Modules => ("module::ModuleGraph", Pending),
             SideTable::HardenState => ("lockdown/harden state", Pending),
             // The metering state — carried by the METR atom (child 3).
@@ -369,7 +374,7 @@ mod tests {
     fn all_is_exhaustive() {
         // Count of variants, kept beside the enum. Bump when a variant is
         // added — the assertion below then forces the ALL entry too.
-        const VARIANT_COUNT: usize = 32;
+        const VARIANT_COUNT: usize = 33;
         assert_eq!(SideTable::ALL.len(), VARIANT_COUNT);
 
         // No duplicates: each field name appears once.
