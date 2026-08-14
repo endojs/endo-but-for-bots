@@ -1,16 +1,14 @@
 import { expectTypeOf } from 'expect-type';
 
-import type { PassableBytesReader } from '@endo/exo-stream';
 import type {
   ContentStore as PackageContentStore,
   ContentStoreBlob as PackageContentStoreBlob,
   ReadableBlob as PackageReadableBlob,
-  ReadableBlobRange as PackageReadableBlobRange,
-  ReadableBlobRangeRead as PackageReadableBlobRangeRead,
+  RichReadableBlob as PackageRichReadableBlob,
 } from '@endo/platform/fs/lite/types';
 import type {
   ReadableBlob as PackageJsReadableBlob,
-  ReadableBlobRange as PackageJsReadableBlobRange,
+  RichReadableBlob as PackageJsRichReadableBlob,
 } from '@endo/platform/fs/lite/types.js';
 import type {
   Search as PackageSearch,
@@ -50,8 +48,7 @@ import type {
   ContentStore as SourceContentStore,
   ContentStoreBlob as SourceContentStoreBlob,
   ReadableBlob as SourceReadableBlob,
-  ReadableBlobRange as SourceReadableBlobRange,
-  ReadableBlobRangeRead as SourceReadableBlobRangeRead,
+  RichReadableBlob as SourceRichReadableBlob,
 } from '../src/fs/types.js';
 import type {
   Search as SourceSearch,
@@ -88,29 +85,17 @@ expectTypeOf<PackageReadableBlob>().toEqualTypeOf<SourceReadableBlob>();
 expectTypeOf<PackageJsReadableBlob>().toEqualTypeOf<SourceReadableBlob>();
 expectTypeOf<SourceReadableBlob>().toEqualTypeOf<ExpectedReadableBlob>();
 
-// ReadableBlobRange extends the plain blob surface with range-fetch
-// members; its exported and source shapes must match, and `fetch` must stay
-// the streaming range read rather than widen to a buffered one.
-expectTypeOf<PackageReadableBlobRange>().toEqualTypeOf<SourceReadableBlobRange>();
-expectTypeOf<PackageJsReadableBlobRange>().toEqualTypeOf<SourceReadableBlobRange>();
-expectTypeOf<keyof SourceReadableBlobRange>().toEqualTypeOf<
-  keyof ExpectedReadableBlob | 'getInfo' | 'fetch'
->();
-expectTypeOf<SourceReadableBlobRange['fetch']>().toEqualTypeOf<
-  (offset: bigint, length: bigint) => Promise<PassableBytesReader>
->();
-
-// ReadableBlobRangeRead layers `rangeRead`/`rangeReadText` convenience
-// helpers on top of ReadableBlobRange; its exported and source shapes must
-// match.
-expectTypeOf<PackageReadableBlobRangeRead>().toEqualTypeOf<SourceReadableBlobRangeRead>();
-expectTypeOf<keyof SourceReadableBlobRangeRead>().toEqualTypeOf<
-  keyof SourceReadableBlobRange | 'rangeRead' | 'rangeReadText'
+// RichReadableBlob extends the plain blob surface with content identity and
+// composable byte and line attenuation. Its exported and source shapes match.
+expectTypeOf<PackageRichReadableBlob>().toEqualTypeOf<SourceRichReadableBlob>();
+expectTypeOf<PackageJsRichReadableBlob>().toEqualTypeOf<SourceRichReadableBlob>();
+expectTypeOf<keyof SourceRichReadableBlob>().toEqualTypeOf<
+  keyof ExpectedReadableBlob | 'getInfo' | 'range' | 'textRange'
 >();
 
 // ContentStoreBlob and ContentStore must stay in parity with the source, and
 // a fetched ContentStoreBlob must not leak host-only backing helpers
-// (`makeFileReader`, `size`, `readRange`) onto the public range-read surface
+// (`makeFileReader`, `size`, `readRange`) onto the public rich blob surface
 // that crosses the wire.
 expectTypeOf<PackageContentStoreBlob>().toEqualTypeOf<SourceContentStoreBlob>();
 expectTypeOf<SourceContentStoreBlob>().toEqualTypeOf<ExpectedContentStoreBlob>();
@@ -119,10 +104,7 @@ expectTypeOf<
   ReturnType<SourceContentStore['fetch']>
 >().toEqualTypeOf<SourceContentStoreBlob>();
 expectTypeOf<
-  Extract<
-    keyof SourceReadableBlobRangeRead,
-    'makeFileReader' | 'size' | 'readRange'
-  >
+  Extract<keyof SourceRichReadableBlob, 'makeFileReader' | 'size' | 'readRange'>
 >().toEqualTypeOf<never>();
 
 // The `fs/search.types` subpath-export entrypoints (bare and `.js`) must

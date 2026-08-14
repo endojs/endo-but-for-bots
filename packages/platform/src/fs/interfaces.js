@@ -77,52 +77,49 @@ export const directoryFileMethodGuards = harden({
 
 // `getInfo()` is the uniform content-address identity accessor: it returns the
 // `{ algorithm, hash, size }` triple in one round-trip. It is the shared half
-// of the range-I/O surface (live blobs add `fetch` for windowed reads) and is
-// *also* carried by the content-addressed snapshot caps (`SnapshotBlob`,
-// `SnapshotTree`, daemon `EndoReadableTree`), so a caller can read a content
-// hash off *any* blob or tree uniformly via `getInfo().hash` without
-// feature-detecting `sha256()` vs `getInfo()`. See
+// of the range-I/O surface (rich blobs add `range` / `textRange` for windowed
+// reads) and is *also* carried by the content-addressed snapshot caps
+// (`SnapshotBlob`, `SnapshotTree`, daemon `EndoReadableTree`), so a caller can
+// read a content hash off *any* blob or tree uniformly via `getInfo().hash`
+// without feature-detecting `sha256()` vs `getInfo()`. See
 // designs/fs-interface-consolidation.md § C4.
 export const getInfoMethodGuard = harden({
   getInfo: M.call().returns(M.any()),
 });
 
-// The range-I/O surface for content-addressed bytes — the richer
-// `BlobRef` shape (see `@endo/platform/fs/extended` `BlobRefInterface`),
-// lifted to a portable record so the daemon's remote blob cap can expose it
-// too. `getInfo()` returns the `{ algorithm, hash, size }` triple in a single
-// round-trip (so a caller can consult a local CAS before fetching), and
-// `fetch(offset, length)` reads a byte *range* without streaming the whole
-// blob — the two methods that make remote reads optimal. The whole-value
-// `text` / `json` / `streamBase64` accessors layer on top. See
-// designs/fs-interface-consolidation.md § C4.
-export const rangeReadMethodGuards = harden({
-  ...getInfoMethodGuard,
-  fetch: M.call(M.bigint(), M.bigint()).returns(M.any()),
-});
-
-// Whole-value range-read conveniences, layered on top of the streaming
-// `fetch` primitive. These consolidate the windowed-read features that
-// previously lived in the lal / fae agent toolkits into the
-// platform's own readable-blob surface (those toolkits are being retired in
-// favour of the platform). See designs/platform-range-and-tree-reads.md.
+// The range-*attenuation* surface for content-addressed bytes
+// (designs/readableblob-range-attenuation.md). `range` and `textRange` return
+// a new, ephemeral `ReadableBlob` with exactly the authority to read the
+// selected portion of the receiver — an attenuation, not a one-shot bytes
+// reader — so ranges compose and can be handed to any code that already
+// accepts a readable blob. This replaces the retired `fetch(offset, length)`
+// windowed read and the `rangeRead` / `rangeReadText` conveniences: a caller
+// reads the returned attenuated blob by its normal `text` / `json` /
+// `streamBase64` / `getInfo` methods rather than consuming a special value.
 //
-// - `rangeRead(offset, length) → Uint8Array` returns the raw bytes of the
-//   window `[offset, offset + length)`, clamped at EOF, in one round-trip —
-//   the ergonomic form (a plain byte array) distinct from `fetch`'s
-//   incremental `PassableBytesReader`. Offsets are `bigint` to match `fetch`
-//   (a blob may exceed `Number.MAX_SAFE_INTEGER` bytes).
-// - `rangeReadText(startLine, endLine) → string` decodes the blob as UTF-8
-//   and returns lines `[startLine, endLine)` (0-based, end-exclusive) joined
-//   with '\n'. Line indices are plain numbers (ordinary counts, not byte
-//   offsets). An `endLine` past the last line clamps to the end.
+// - `range(start, end?)` selects the half-open **byte** interval `[start, end)`
+//   relative to the receiver. `start` and `end` are non-negative `bigint`s in
+//   the safe-offset domain; `start > end`, a negative, or a non-safe value
+//   rejects with `EINVAL`; `start === end` is an empty attenuation; the
+//   selection clamps at end-of-content. `end` is *optional* — omitting it
+//   selects from `start` to end-of-content, the same domain the implementation
+//   already models (`end === undefined`); a caller need not synthesize a
+//   sentinel upper bound (`range(start, MAX)`) to express "to EOF".
+// - `textRange(startLine, endLine)` selects lines `[startLine, endLine)`
+//   (zero-based, end-exclusive, LF-delimited with a terminal empty line for a
+//   final LF) relative to the receiver's current bytes and returns the
+//   corresponding byte slice as a `ReadableBlob`. Line indices are plain
+//   non-negative safe-integer `number`s; an `endLine` past the last line
+//   clamps to the end.
 //
-// Note: `stat` is deliberately **not** part of this surface — a whole-file
-// `stat` leaks host implementation details (mtime/atime/mode/inode) that are
-// germane to security; a caller that needs size uses `getInfo().size`.
-export const rangeReadConvenienceMethodGuards = harden({
-  rangeRead: M.call(M.bigint(), M.bigint()).returns(M.promise()),
-  rangeReadText: M.call(M.number(), M.number()).returns(M.promise()),
+// The runtime guards require each method return a promise; they do **not**
+// constrain the fulfillment value's interface (`M.promise()` is opaque to the
+// resolution), so promiseness — not "the resolved value is a `ReadableBlob`" —
+// is what the boundary enforces. Callers that compose ranges detect the rich
+// surface by its method names, not by any guard-level interface guarantee.
+export const rangeAttenuationMethodGuards = harden({
+  range: M.call(M.bigint()).optional(M.bigint()).returns(M.promise()),
+  textRange: M.call(M.number(), M.number()).returns(M.promise()),
 });
 
 // `listTree(petNamePath, options?)` is the recursive counterpart to `list`:
@@ -156,38 +153,34 @@ export const ReadableBlobInterface = M.interface('ReadableBlob', {
 });
 harden(ReadableBlobInterface);
 
-// A `ReadableBlob` that also exposes the `BlobRef` range-I/O surface
-// (`getInfo` / `fetch`) — the rich shape for content-addressed blobs read
-// remotely. Pre-assembled so implementers (LocalBlob, GitBlob) can adopt the
-// full surface without re-spreading the records or depending on `@endo/patterns`
-// themselves. The interface tag is distinct from `ReadableBlobInterface`'s so
-// the two shapes don't collide in diagnostics / marshaled interface names
-// (feature detection keys on method names, not the tag). See
-// designs/fs-interface-consolidation.md § C4.
-export const ReadableBlobRangeInterface = M.interface('ReadableBlobRange', {
+// The one rich `ReadableBlob` surface: the whole-value read methods, the
+// content-address `getInfo`, and the `range` / `textRange` attenuation
+// (designs/readableblob-range-attenuation.md). Every public rich blob — the
+// extended `BlobRef`, platform `LocalBlob`, the daemon's stored and transient
+// blobs, live mount-file views, and the Git blob — implements exactly this
+// surface, and every derived range is again this same surface, so a range of a
+// range composes. This single interface replaces the former
+// `ReadableBlobRange` (getInfo + `fetch`) / `ReadableBlobRangeRead`
+// (+ `rangeRead` / `rangeReadText`) split; those names are retired. The tag is
+// `'RichReadableBlob'` — distinct from the whole-value `ReadableBlobInterface`'s
+// `'ReadableBlob'` so the two different method sets do not marshal under one
+// interface name and a diagnostic can tell a whole-value blob from a rich one
+// (feature detection still keys on method names, not the tag).
+export const RichReadableBlobInterface = M.interface('RichReadableBlob', {
   ...readableBlobMethodGuards,
-  ...rangeReadMethodGuards,
+  ...getInfoMethodGuard,
+  ...rangeAttenuationMethodGuards,
 });
-harden(ReadableBlobRangeInterface);
+harden(RichReadableBlobInterface);
 
-// A `ReadableBlobRange` that also carries the whole-value range
-// conveniences (`rangeRead` / `rangeReadText`). This is the full read
-// surface the platform's own `LocalBlob` implements; the daemon / git blob
-// exos keep the leaner `ReadableBlobRangeInterface` until they adopt the
-// conveniences (a documented follow-up in
-// designs/platform-range-and-tree-reads.md). The interface tag is distinct
-// so the shapes don't collide in diagnostics; feature detection keys on
-// method names, not the tag.
-export const ReadableBlobRangeReadInterface = M.interface(
-  'ReadableBlobRangeRead',
-  {
-    ...readableBlobMethodGuards,
-    ...rangeReadMethodGuards,
-    ...rangeReadConvenienceMethodGuards,
-  },
-);
-harden(ReadableBlobRangeReadInterface);
-
+// `SnapshotBlob` is the immutable content-addressed *identity* surface (its
+// `sha256` is a fixed, whole-value address). It deliberately does **not** carry
+// the `range` / `textRange` attenuation that `RichReadableBlobInterface` adds:
+// a derived range is a generic `RichReadableBlob` over a byte/line window with
+// no snapshot identity of its own, so mixing the two on one cap would imply a
+// `sha256`-bearing value that a range silently strips. A holder that needs a
+// windowed read of a snapshot's bytes loads the bytes (e.g. through the CAS or a
+// rich blob) and ranges there; the snapshot family stays the identity surface.
 export const SnapshotBlobInterface = M.interface('SnapshotBlob', {
   ...readableBlobMethodGuards,
   ...getInfoMethodGuard,

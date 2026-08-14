@@ -16,6 +16,8 @@
 
 import { M } from '@endo/patterns';
 
+import { rangeAttenuationMethodGuards } from '../interfaces.js';
+
 // Re-export exo-stream's interface guards so consumers of endo-fs can
 // import the stream interfaces from one place.
 export {
@@ -399,28 +401,25 @@ harden(NodeWatcherInterface);
 
 /**
  * `BlobRef` is the content-addressed handle returned by
- * `File.snapshot()` (DESIGN.md §6). `getInfo()` returns
- * `{ algorithm, hash, size }`; `fetch(offset, length)` returns a
- * bytes stream over the immutable bytes captured at snapshot
- * time. `getInfo()` is a sync getter on the responder; callers
- * pipeline it alongside `snapshot` / `fetch` so the round-trip is
- * shared with the surrounding call (DESIGN.md §4.10).
- *
- * `text()` / `json()` are whole-value conveniences mirroring the daemon
- * `EndoBlob` / lite `SnapshotBlob` surface, so a `BlobRef` and a daemon blob
- * are mutually interchangeable for the common read shapes: `getInfo` + `fetch`
- * (range I/O) and `text` + `json` (whole value). `streamBase64` stays
- * daemon-only — the extended layer streams via `fetch` / `PassableBytesReader`
- * rather than the CapTP base64 pump. See
- * designs/fs-interface-consolidation.md § C4.
+ * `File.snapshot()` (DESIGN.md §6). It implements the one rich `ReadableBlob`
+ * surface (designs/readableblob-range-attenuation.md): `getInfo()` returns the
+ * `{ algorithm, hash, size }` triple over the immutable bytes captured at
+ * snapshot time; `range(start, end)` / `textRange(startLine, endLine)`
+ * attenuate to a byte / line window, returning a new `ReadableBlob` over the
+ * captured bytes; `text` / `json` / `streamBase64` read the whole value.
+ * `getInfo()` is a sync getter on the responder; callers pipeline it alongside
+ * `snapshot` so the round-trip is shared with the surrounding call
+ * (DESIGN.md §4.10). Because a `BlobRef` and a daemon `EndoBlob` implement the
+ * same method set, they are mutually interchangeable. The tag stays `BlobRef`;
+ * the method set matches `RichReadableBlobInterface`, and every derived range
+ * exposes exactly the same methods as its parent.
  */
 export const BlobRefInterface = M.interface('BlobRef', {
-  getInfo: M.call().returns(BlobInfoShape),
-  fetch: M.call(M.bigint(), M.bigint()).returns(
-    M.eref(M.remotable('PassableBytesReader')),
-  ),
+  help: M.call().optional(M.string()).returns(M.string()),
+  streamBase64: M.call(M.any()).returns(M.promise()),
   text: M.call().returns(M.promise()),
   json: M.call().returns(M.promise()),
-  help: M.call().optional(M.string()).returns(M.string()),
+  getInfo: M.call().returns(BlobInfoShape),
+  ...rangeAttenuationMethodGuards,
 });
 harden(BlobRefInterface);
