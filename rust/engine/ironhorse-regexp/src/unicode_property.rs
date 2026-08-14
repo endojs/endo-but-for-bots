@@ -1,7 +1,7 @@
 //! ECMAScript Unicode property aliases and endpoint sets extracted from the
-//! repository's pinned Moddable XS `xsre.c` by `build.rs`.
+//! the repository's pinned Moddable XS `xsre.c`.
 
-include!(concat!(env!("OUT_DIR"), "/unicode_properties.rs"));
+include!("unicode_properties_generated.rs");
 
 pub(crate) fn lookup(name: &str, value: Option<&str>) -> Option<&'static [i32]> {
     match value {

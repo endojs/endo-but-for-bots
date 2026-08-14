@@ -34,7 +34,7 @@
 //!
 //! Unicode property escapes (`\p{}` / `\P{}`) use the canonical binary,
 //! general-category, Script, and Script_Extensions aliases and endpoint tables
-//! extracted from the pinned XS source at build time. Every remaining deferred surface is a **named**
+//! extracted from the pinned XS source. Every remaining deferred surface is a **named**
 //! [`compile::CompileError::Unsupported`], never a wrong meter or a wrong
 //! value: the `v` flag's string sets
 //! and `[...]` set-expression grammar, inline modifiers (`(?flags:)`), and —
