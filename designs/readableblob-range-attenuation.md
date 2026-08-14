@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-07-22 |
-| **Updated** | 2026-07-22 |
+| **Updated** | 2026-08-01 |
 | **Author** | kriscendobot (prompted) |
-| **Status** | Proposed |
+| **Status** | Accepted — implemented (`range` / `textRange` replace `fetch` / `rangeRead` / `rangeReadText`) |
 
 ## Problem
 
@@ -19,9 +19,17 @@ ephemeral `ReadableBlob` with exactly the authority to read the selected
 portion. The returned value has the same interface, so ranges compose and can
 be handed to code that already accepts a readable blob.
 
-## Current surface and terminology
+## Prior surface and terminology
 
-The current public range method is not confined to the daemon. The shared
+> **Retired.** This section records the `fetch` / `rangeRead` / `rangeReadText`
+> surface as it stood *before* this design. That surface has since been replaced
+> by the [Proposed interface](#proposed-interface) below, which is now
+> implemented (`range` / `textRange` on the one rich `ReadableBlob`). It is kept
+> for the migration record; the names below (`rangeReadMethodGuards`,
+> `ReadableBlobRangeInterface`, `fetch`, `rangeRead`, `rangeReadText`) no longer
+> exist in the tree.
+
+The prior public range method was not confined to the daemon. The shared
 platform guard `rangeReadMethodGuards` in
 [`packages/platform/src/fs/interfaces.js`](../packages/platform/src/fs/interfaces.js)
 declares `getInfo()` and `fetch(offset: bigint, length: bigint)`. It is
@@ -40,7 +48,7 @@ shape is also implemented by platform `LocalBlob`
 ([`packages/platform/src/fs-node/local-blob.js`](../packages/platform/src/fs-node/local-blob.js)),
 extended `BlobRef`
 ([`packages/platform/src/fs/extended/type-guards.js`](../packages/platform/src/fs/extended/type-guards.js)
-and `shared/blobref.js`), and the Git blob in
+and `shared/blob-ref.js`), and the Git blob in
 [`packages/git/src/native-git-backend.js`](../packages/git/src/native-git-backend.js).
 `packages/exo-git/src/types.ts` aliases this rich type as its `ReadableBlob`.
 
@@ -113,9 +121,21 @@ LF. This keeps `await E(blob).textRange(a, b).text()` consistent with
 `rangeReadText`: the same line-origin, endpoint, clamping, and trailing-newline
 behavior, so the two spellings never disagree about which bytes a line range
 selects.
-UTF-8 decoding is only performed by `text()` or `json()` and follows their
-existing decoder behavior; finding LF byte boundaries neither normalizes nor
-materializes unrelated bytes.
+UTF-8 decoding is only performed by `text()` or `json()`; finding LF byte
+boundaries neither normalizes nor materializes unrelated bytes.
+
+A U+FEFF byte-order mark is stripped only when it is the first code point of the
+whole content — a read whose selection begins at absolute byte offset `0`. A
+U+FEFF at any interior offset, including one that begins a derived window, is
+preserved as literal content. This single rule keeps text decoding
+position-independent: every window's text is the exact slice of the whole
+value's text, so `range(0n, size).text() === text()` and, more generally, a
+window's text equals the corresponding substring of the whole value on every
+producer — including a window whose first byte is an interior U+FEFF. (Every
+whole-value producer already strips only a leading BOM by decoding through a
+default `TextDecoder`; the mount face, which decodes via Node's string reader,
+strips it explicitly, and the derived-window path preserves a BOM whenever its
+selection does not begin at offset `0`.)
 
 `textRange` is intentionally defined on the receiver, not on the original
 blob. A text range of a byte range indexes the lines visible in that byte
@@ -152,7 +172,7 @@ HTTP, Git-transport, and content-store methods also named `fetch`:
 | Area | Definitions or callers to update |
 |---|---|
 | Shared lite contract | `packages/platform/src/fs/interfaces.js`, `types.d.ts`, `index.js`, and `packages/exo-git/src/types.ts` |
-| Implementations | `packages/platform/src/fs-node/local-blob.js`; `packages/platform/src/fs/extended/shared/blobref.js`; `packages/daemon/src/manager.js` (`makeReadableBlob`, `makeBytesBlob`); `packages/daemon/src/mount.js` (`makeMountFileExo`, `makeReadableBlobView`); `packages/git/src/native-git-backend.js` |
+| Implementations | `packages/platform/src/fs-node/local-blob.js`; `packages/platform/src/fs/extended/shared/blob-ref.js`; `packages/daemon/src/manager.js` (`makeReadableBlob`, `makeBytesBlob`); `packages/daemon/src/mount.js` (`makeMountFileExo`, `makeReadableBlobView`); `packages/git/src/native-git-backend.js` |
 | Extended guard and consumers | `packages/platform/src/fs/extended/type-guards.js`, `cas.js`, and `cached-fs.js` |
 | Daemon guard, declarations, and help | `packages/daemon/src/interfaces.js`, `types.d.ts`, `help-text-data.js`, and `help.md` |
 | Existing range tests | `packages/platform/test/{local-blob,blobref,node-fs,optimal-querying}.test.js`; `packages/daemon/test/{endo,mount,git}.test.js`; the mount conformance tests |
