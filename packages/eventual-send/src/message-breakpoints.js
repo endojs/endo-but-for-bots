@@ -105,7 +105,11 @@ export const makeMessageBreakpointTester = optionName => {
       Fail`Expected ${q(optionName)} option to be a JSON breakpoints record`;
 
     /** @type {BreakpointTable} */
-    // @ts-expect-error confused by __proto__
+    // Must stay ts-ignore (not ts-expect-error): a downstream package such as
+    // @endo/slots pulls this source into its own tsc program where the __proto__
+    // confusion does not occur, so an expect-error directive would be reported
+    // unused (TS2578) over there.
+    // @ts-ignore confused by __proto__
     const newBreakpointsTable = { __proto__: null };
 
     for (const [tag, methodBPs] of entries(newBreakpoints)) {
@@ -127,7 +131,9 @@ export const makeMessageBreakpointTester = optionName => {
         const classBPs = hasOwn(newBreakpointsTable, methodName)
           ? newBreakpointsTable[methodName]
           : (newBreakpointsTable[methodName] = {
-              // @ts-expect-error confused by __proto__
+              // Must stay ts-ignore (see note above) so a downstream tsc
+              // program does not flag an expect-error directive as unused.
+              // @ts-ignore confused by __proto__
               __proto__: null,
             });
         classBPs[tag] = count;
