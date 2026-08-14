@@ -94,6 +94,9 @@ test('handoff session keys admit Unicode exporter locations', t => {
     hints: false,
   });
   const key = makeHandoffSessionKey(unicodeLocation);
-  t.regex(key, /^handoff:[0-9a-f]+$/);
+  t.is(
+    key,
+    'handoff:7b2274797065223a226f6361706e2d70656572222c227472616e73706f7274223a227463702d746573742d6f6e6c79222c2264657369676e61746f72223a22636166c3a9222c2268696e7473223a66616c73657d',
+  );
   t.not(key, makeHandoffSessionKey({ ...unicodeLocation, designator: 'cafe' }));
 });

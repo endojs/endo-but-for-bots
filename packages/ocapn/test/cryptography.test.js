@@ -15,6 +15,8 @@ import {
   makeHandoffReceiveSigEnvelope,
 } from '../src/codecs/descriptors.js';
 
+/** @import { OcapnLocation } from '../src/codecs/components.js' */
+
 const {
   makeOcapnKeyPair,
   makeOcapnKeyPairFromPrivateKey,
@@ -139,7 +141,7 @@ test('protocol domain constants match their wire goldens', t => {
 
   const privateKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
   const keyPair = makeOcapnKeyPairFromPrivateKey(privateKey);
-  /** @type {import('../src/codecs/components.js').OcapnLocation} */
+  /** @type {OcapnLocation} */
   const location = harden({
     type: 'ocapn-peer',
     transport: 'tcp-test-only',

@@ -15,6 +15,8 @@ import { makeOcapnOperationsCodecs } from '../codecs/operations.js';
 import { getSelectorName, makeSelector } from '../selector.js';
 import { makeSturdyRef } from '../client/sturdyrefs.js';
 
+/** @import { OcapnLocation } from '../codecs/components.js' */
+
 /**
  * An OCapN hub: a comms-vat-style forwarding node that is NOT a
  * client. The hub holds no presences, no promises, no locator of live
@@ -136,11 +138,10 @@ const swissnumHex = swissnum =>
 
 /**
  * Derive a durable session key for the exporter named by an inbound handoff.
- * JSON control characters are already escaped; escaping the remaining
- * non-ASCII code units makes the key portable without imposing the swissnum
- * alphabet on peer-supplied location strings.
+ * Its UTF-8 representation is intentionally preserved for compatibility with
+ * durable sessions created before string swissnums became ASCII-only.
  *
- * @param {any} exporterLocation
+ * @param {OcapnLocation} exporterLocation
  * @returns {string}
  */
 export const makeHandoffSessionKey = exporterLocation => {
@@ -148,13 +149,7 @@ export const makeHandoffSessionKey = exporterLocation => {
   if (json === undefined) {
     throw TypeError('handoff exporter location must be JSON-serializable');
   }
-  const asciiJson = json.replace(
-    /[\u0080-\uffff]/g,
-    codeUnit => `\\u${codeUnit.charCodeAt(0).toString(16).padStart(4, '0')}`,
-  );
-  return `handoff:${hexFromBytes(
-    encodeAscii(asciiJson, 'handoff exporter location'),
-  )}`;
+  return `handoff:${hexFromBytes(new TextEncoder().encode(json))}`;
 };
 harden(makeHandoffSessionKey);
 

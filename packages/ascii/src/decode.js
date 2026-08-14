@@ -5,7 +5,7 @@ import harden from '@endo/harden';
 const TypedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
 const { apply } = Reflect;
 const { fromCharCode } = String;
-const { values: typedArrayValues } = TypedArrayPrototype;
+const { fill: typedArrayFill } = TypedArrayPrototype;
 const { get: typedArrayLength } = /** @type {PropertyDescriptor} */ (
   Object.getOwnPropertyDescriptor(TypedArrayPrototype, 'length')
 );
@@ -47,10 +47,10 @@ export const decodeAscii = (bytes, name = '<unknown>') => {
     ) {
       throw TypeError('not a Uint8Array');
     }
-    // Creating an iterator performs the spec's detached/out-of-bounds check
-    // without invoking a subclass species constructor or reading through a
-    // caller-controlled Proxy.
-    apply(typedArrayValues, bytes, []);
+    // A zero-length intrinsic fill performs ValidateTypedArray, including the
+    // detached/out-of-bounds check, without invoking a subclass species
+    // constructor or reading through a caller-controlled Proxy.
+    apply(typedArrayFill, bytes, [0, 0, 0]);
     length = apply(
       /** @type {(this: unknown) => number} */ (typedArrayLength),
       bytes,

@@ -6,6 +6,9 @@ Swissnums represented as strings must now be 7-bit ASCII. Pass a `Uint8Array`
 or immutable bytes instead when a secret contains arbitrary bytes; raw-byte
 swissnums still ride the wire verbatim.
 
+This is a `major` release because it rejects previously accepted string inputs
+and changes the error contract of a public client helper.
+
 - The hub API (`publish`/`publishHeld`/`unpublish`) previously accepted any
   string swissnum and silently UTF-8-encoded it; a non-ASCII string swissnum now
   throws a `RangeError`. To revoke a publication persisted under the old
