@@ -83,7 +83,7 @@ export const fsToolDefs = harden([
       'restrict files with a glob pattern and cap the number of results. ' +
       'Returns { file, line, text } records with 1-based line numbers. ' +
       'Arguments: petNameOrPath, pattern (string), glob (optional string), ' +
-      'maxResults (optional number).',
+      'maxResults (optional positive number).',
     params: M.splitRecord(
       {
         petNameOrPath: NameOrPathShape,
@@ -91,12 +91,17 @@ export const fsToolDefs = harden([
       },
       {
         glob: M.string(),
-        // A non-negative finite count: bare `M.number()` admits `NaN`/`±Infinity`
+        // A positive finite count. Bare `M.number()` admits `NaN`/`+/-Infinity`
         // (Endo's pass-style treats them as valid numbers), and the daemon's cap
         // (`matches.length >= maxResults`) only defaults on `undefined`, so those
         // values would defeat the result cap — and `NaN` additionally coerces
         // `slice(0, maxResults)` to `slice(0, 0)`, silently returning no matches.
-        maxResults: M.and(M.gte(0), M.lte(Number.MAX_SAFE_INTEGER)),
+        // `0` is the same silent-empty hazard (`slice(0, 0)` → `[]`), so the
+        // lower bound is `1`, not `0`: a zero cap is indistinguishable to the
+        // caller from a genuinely empty result set. The explicit `M.number()`
+        // conjunct names the type so a bigint/string argument fails with a type
+        // diagnostic rather than incidentally via cross-passStyle key ordering.
+        maxResults: M.and(M.number(), M.gte(1), M.lte(Number.MAX_SAFE_INTEGER)),
       },
     ),
   },

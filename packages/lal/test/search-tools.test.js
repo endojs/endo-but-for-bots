@@ -127,10 +127,18 @@ test('grep validates optional argument shapes before dispatch', async t => {
 
 test('grep rejects out-of-range maxResults before dispatch', async t => {
   await null;
-  // `NaN`/`Infinity`/negative counts would defeat the daemon's result cap (and
-  // `NaN` silently truncates results to empty), so they must be rejected at the
-  // tool boundary rather than forwarded to the capability.
-  for (const maxResults of [NaN, Infinity, -Infinity, -1]) {
+  // `NaN`/`Infinity`/negative/zero counts would defeat or degenerate the
+  // daemon's result cap (`NaN` and `0` both collapse `slice(0, maxResults)` to
+  // `slice(0, 0)`, silently truncating to empty), so they must be rejected at
+  // the tool boundary rather than forwarded to the capability.
+  //
+  // The non-finite values are fed as their SmallCaps encodings (`'#NaN'`,
+  // `'#Infinity'`, `'#-Infinity'`) — which is how they actually arrive over the
+  // wire — because a JS `NaN`/`Infinity` JSON-stringifies to `null` inside
+  // `decodeToolArgs` before the range matcher ever sees it, so a plain-number
+  // case would prove nothing about the guard (`null` is rejected by a bare
+  // `M.number()` too). `-1` and `0` survive as plain numbers.
+  for (const maxResults of ['#NaN', '#Infinity', '#-Infinity', -1, 0]) {
     const { calls, run } = makeStub();
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(
