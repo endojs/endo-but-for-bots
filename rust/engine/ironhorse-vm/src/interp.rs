@@ -11223,12 +11223,10 @@ impl Interp {
             Payload::String(off) => self.str_text(off).into_bytes(),
             _ => Vec::new(),
         };
-        let named = self.regexps[&inst].program.name_count > 0;
-        if named {
-            // Named-group result shaping (`groups` object) is a later
-            // increment — self-name rather than emit a wrong `groups`.
-            return Err(Halt::Unsupported("RegExp.exec:named-groups"));
-        }
+        // The declared named groups, `(name, capture_index)` in the order they
+        // appear in the pattern — the `groups` object's own-key order.
+        let group_names: Vec<(String, i32)> =
+            self.regexps[&inst].program.capture_group_names.clone();
         let (matched, captures) = self.regexp_match_drive(inst, &subject)?;
         if !matched {
             return Ok((Slot::null(), None));
@@ -11244,6 +11242,9 @@ impl Interp {
         // The result array: one element per capture (whole match at 0).
         let result = self.new_array_unmetered();
         let mut items: Vec<(u32, Slot)> = Vec::with_capacity(captures.len());
+        // The per-capture value slots, indexed by capture number, so the
+        // `groups` object can point each name at its group's value.
+        let mut capture_slots: Vec<Slot> = Vec::with_capacity(captures.len());
         for (i, &(from, to)) in captures.iter().enumerate() {
             // `resultItem = fxNewSlot` per capture.
             self.meter.tick_slot_alloc();
@@ -11253,6 +11254,7 @@ impl Interp {
             } else {
                 Slot::undefined()
             };
+            capture_slots.push(slot);
             items.push((i as u32, slot));
         }
         {
@@ -11276,7 +11278,31 @@ impl Interp {
         }
         self.meter.tick_slot_alloc(); // groups
         if let Some(id) = self.regexp_result_ids.groups {
-            self.instance_put_raw(result, id, Slot::undefined());
+            // `RegExpBuiltinExec` step 24/25: a pattern with named groups gets a
+            // `groups` object built with `ObjectCreate(null)`; otherwise
+            // `groups` is `undefined`. Each name is a `CreateDataProperty`
+            // (writable/enumerable/configurable) pointing at its group's value,
+            // in pattern (left-to-right) order.
+            let groups = if group_names.is_empty() {
+                Slot::undefined()
+            } else {
+                let obj = self.new_object();
+                // ObjectCreate(null): a null [[Prototype]], stored in the
+                // instance payload exactly as `Object.create(null)` does.
+                self.slots.get_mut(obj).value =
+                    Payload::Reference(crate::value::SlotIndex::NULL);
+                for (name, cap_idx) in &group_names {
+                    let key = self.intern_key(name);
+                    let val = capture_slots
+                        .get(*cap_idx as usize)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined);
+                    self.meter.tick_slot_alloc();
+                    self.instance_put_raw(obj, key, val);
+                }
+                Slot::of(Kind::Reference, Payload::Reference(obj))
+            };
+            self.instance_put_raw(result, id, groups);
         }
         Ok((
             Slot::of(Kind::Reference, Payload::Reference(result)),

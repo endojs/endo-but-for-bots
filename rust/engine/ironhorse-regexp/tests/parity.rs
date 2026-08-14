@@ -169,6 +169,29 @@ fn corpus() -> Vec<Case> {
     v.push(("(.)\\1", "", "xy", 0));
     v.push(("(a)(b)\\2\\1", "", "abba", 0));
 
+    // Named capture groups. A `(?<name>…)` group codegens identically to
+    // its numbered peer, so the whole-match / capture offsets AND the
+    // per-step meter must stay bit-exact with XS; a `\k<name>` reference
+    // resolves through the runtime `names[]` array like `\N`.
+    for &s in &["2026-08-14", "abcd", "", "x"] {
+        v.push(("(?<year>\\d{4})-(?<month>\\d{2})-(?<day>\\d{2})", "", s, 0));
+        v.push(("(?<a>.)(?<b>.)", "", s, 0));
+    }
+    v.push(("(?<w>\\w+)", "", "hello world", 0));
+    v.push(("(?<pair>(?<inner>a)b)c", "", "abc", 0)); // nested named groups
+    v.push(("(?<opt>x)?y", "", "y", 0)); // unmatched named group -> (-1,-1)
+    v.push(("(?<opt>x)?y", "", "xy", 0));
+    v.push(("(?<a>x)|(?<b>y)", "", "y", 0)); // alternation, one side unset
+    // Named backreferences (`\k<name>`), forward and backward.
+    v.push(("(?<c>.)\\k<c>", "", "aa", 0));
+    v.push(("(?<c>.)\\k<c>", "", "ab", 0));
+    v.push(("(?<q>['\"]).*?\\k<q>", "", "say \"hi\" now", 0));
+    v.push(("\\k<a>(?<a>x)", "", "x", 0)); // forward reference (matches empty then x)
+    v.push(("(?<a>foo)(bar)\\2\\k<a>", "", "foobarbarfoo", 0)); // mixed named + numbered
+    // Named groups fold under the `i` flag exactly as numbered groups do.
+    v.push(("(?<h>h)(?<e>e)\\k<e>", "i", "hEE", 0));
+    v.push(("(?<w>\\w+)", "i", "AbC", 0));
+
     // Anchors and word boundaries.
     for &s in &["hello", "  hi ", "a b c", "", "x", "cat cats"] {
         v.push(("^hello$", "", s, 0));

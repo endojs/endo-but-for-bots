@@ -28,10 +28,10 @@
 //! (`* + ? {n,m}`, greedy and lazy), disjunction (`|`), numeric
 //! backreferences (`\1`..), and lookaround (`(?=) (?!) (?<=) (?<!)`).
 //! Every deferred surface is a **named** [`compile::CompileError::Unsupported`],
-//! never a wrong meter or a wrong value: the `i` flag (case folding), the
-//! `u`/`v` flags (CESU-8 surrogate walk, unicode property escapes, V-mode
-//! string sets), `\p{}`/`\P{}`, named captures (`(?<name>)` / `\k<name>`),
-//! inline modifiers (`(?flags:)`), and astral (`> 0xFFFF`) code points.
+//! never a wrong meter or a wrong value: the `u`/`v` flags (CESU-8 surrogate
+//! walk, unicode property escapes, V-mode string sets), `\p{}`/`\P{}`, inline
+//! modifiers (`(?flags:)`), and astral (`> 0xFFFF`) code points. The `i` flag
+//! (case folding) and named captures (`(?<name>)` / `\k<name>`) are ported.
 
 mod charcase;
 mod encoding;
@@ -127,6 +127,56 @@ mod tests {
         assert!(m);
         assert_eq!(c[0], (0, 4));
         assert_eq!(c[1], (0, 2));
+    }
+
+    #[test]
+    fn named_capture_groups_match_and_expose_names() {
+        // A named group is a numbered group with a name: the capture
+        // offsets are those of its ordinal position, and the compiler
+        // exposes `(name, capture_index)` in name-slot order for the JS
+        // `.groups` surface.
+        let r = run("(?<year>\\d{4})-(?<month>\\d{2})", "", "2026-08", 0).expect("compiles");
+        assert!(r.outcome.matched);
+        assert_eq!(r.outcome.captures[0], (0, 7));
+        assert_eq!(r.outcome.captures[1], (0, 4)); // year
+        assert_eq!(r.outcome.captures[2], (5, 7)); // month
+        assert_eq!(
+            r.program.capture_group_names,
+            vec![("year".to_string(), 1), ("month".to_string(), 2)]
+        );
+    }
+
+    #[test]
+    fn named_capture_index_follows_ordinal_position() {
+        // A leading unnamed group shifts the named group's ordinal index;
+        // the slot (name order) is independent of the capture index.
+        let r = run("(a)(?<tail>b)", "", "ab", 0).expect("compiles");
+        assert_eq!(r.outcome.captures[1], (0, 1)); // unnamed group 1
+        assert_eq!(r.outcome.captures[2], (1, 2)); // named group 2
+        assert_eq!(r.program.capture_group_names, vec![("tail".to_string(), 2)]);
+    }
+
+    #[test]
+    fn named_backreference_matches_and_forward_ref_is_empty() {
+        // `\k<name>` matches the text the named group captured.
+        let (m, c) = caps("(?<c>.)\\k<c>", "", "aa");
+        assert!(m);
+        assert_eq!(c[0], (0, 2));
+        assert!(!caps("(?<c>.)\\k<c>", "", "ab").0);
+        // A forward reference to a not-yet-matched group matches empty.
+        let (fm, fc) = caps("\\k<a>(?<a>x)", "", "x");
+        assert!(fm);
+        assert_eq!(fc[0], (0, 1));
+    }
+
+    #[test]
+    fn unmatched_named_group_is_unset() {
+        // An optional named group that does not participate is (-1, -1),
+        // which the JS surface renders as `groups.opt === undefined`.
+        let r = run("(?<opt>x)?y", "", "y", 0).expect("compiles");
+        assert!(r.outcome.matched);
+        assert_eq!(r.outcome.captures[1], (-1, -1));
+        assert_eq!(r.program.capture_group_names, vec![("opt".to_string(), 1)]);
     }
 
     #[test]

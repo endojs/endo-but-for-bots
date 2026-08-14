@@ -10,12 +10,13 @@
 //! bit-exact and the emitted graph is structurally identical, which in
 //! turn makes the matcher's per-step meter bit-exact.
 //!
-//! Honest scope (the stage bar names deferred surfaces): the `i`, `u`,
-//! and `v` flags, `\p{}`/`\P{}` unicode property escapes, named captures
-//! (`(?<name>)` / `\k<name>`), inline modifiers (`(?flags:...)`), and
-//! astral (`> 0xFFFF`) code points are compiled to a named
-//! [`CompileError::Unsupported`], never to a wrong meter or a wrong
-//! value.
+//! Honest scope (the stage bar names deferred surfaces): the `u` and `v`
+//! flags, `\p{}`/`\P{}` unicode property escapes, inline modifiers
+//! (`(?flags:...)`), and astral (`> 0xFFFF`) code points are compiled to a
+//! named [`CompileError::Unsupported`], never to a wrong meter or a wrong
+//! value. The `i` flag and named captures (`(?<name>)` / `\k<name>`) ARE
+//! ported: a named group codegens identically to its numbered peer, plus a
+//! name-slot operand the matcher records into its runtime `names[]` array.
 
 use crate::flags::*;
 use crate::opcode::*;
@@ -49,6 +50,11 @@ pub struct Program {
     /// Compile meter in raw 16.16 fixed point:
     /// `size_bytes * XS_PARSE_REGEXP_METERING`.
     pub compile_meter_raw: u64,
+    /// The declared named-capture groups in first-seen (name-slot) order:
+    /// `(name, capture_index)`. The JS `RegExp` surface reads this to build
+    /// the `.groups` object on an exec result (`fxCaptureName*`); the matcher
+    /// itself only needs the numeric slots in the code stream.
+    pub capture_group_names: Vec<(String, i32)>,
 }
 
 impl Program {
@@ -88,8 +94,8 @@ enum Kind {
     WordContinue,
     Disjunction { left: NodeId, right: NodeId },
     Sequence { left: NodeId, right: NodeId },
-    Capture { term: NodeId, capture_index: i32 },
-    CaptureReference { capture_index: i32 },
+    Capture { term: NodeId, capture_index: i32, name_slot: i32 },
+    CaptureReference { capture_index: i32, name_slot: i32 },
     Assertion { term: NodeId, not: bool, direction: i32, assertion_index: i32 },
     Quantifier {
         term: NodeId,
@@ -134,6 +140,14 @@ struct Compiler {
     /// (in the non-`UV` path) forces the second parse where `\k` becomes a
     /// named backreference.
     saw_named_group: bool,
+    /// The declared named groups in name-slot order: `(name, capture_index)`.
+    /// Slot `i` is `code[5 + i]` in XS; the matcher's runtime `names[]` array
+    /// resolves a `\k<name>` reference through it.
+    named_groups: Vec<(String, i32)>,
+    /// `(node, name)` for each `\k<name>` reference, resolved to its name slot
+    /// after the whole pattern is parsed (a forward reference is legal, so the
+    /// slot is not known at the point the reference is read).
+    pending_named_refs: Vec<(NodeId, String)>,
 }
 
 type PResult<T> = Result<T, CompileError>;
@@ -177,6 +191,8 @@ pub fn compile(pattern: &str, flags: &str) -> PResult<Program> {
         capture_names: Vec::new(),
         named_refs: Vec::new(),
         saw_named_group: false,
+        named_groups: Vec::new(),
+        pending_named_refs: Vec::new(),
     };
     // The `u`/`v` flags' match/compile machinery (CESU-8 surrogate walk,
     // unicode property sets, V-mode string sets) is a named later
@@ -213,7 +229,7 @@ impl Compiler {
         // number (e.g. `\11` with fewer than 11 groups; XS reads the whole
         // decimal greedily and rejects, it does not fall back to `\1`).
         for node in &self.nodes {
-            if let Kind::CaptureReference { capture_index } = &node.kind {
+            if let Kind::CaptureReference { capture_index, .. } = &node.kind {
                 if *capture_index >= 0 && *capture_index >= self.capture_index {
                     return Err(self.error("invalid reference number"));
                 }
@@ -225,6 +241,21 @@ impl Compiler {
         for name in &self.named_refs {
             if !self.capture_names.iter().any(|n| n == name) {
                 return Err(self.error("invalid reference name"));
+            }
+        }
+        // Resolve each `\k<name>` reference to its group's name slot. The
+        // reference emits `capture_index = -1` and this slot as its name-id
+        // operand; the matcher's runtime `names[]` array (populated when the
+        // named group completes) maps the slot to the live capture index. A
+        // slot always exists here — the dangling-name check above already ran.
+        for (node_id, name) in std::mem::take(&mut self.pending_named_refs) {
+            let slot = self
+                .named_groups
+                .iter()
+                .position(|(n, _)| n == &name)
+                .expect("named reference resolved after the dangling-name check") as i32;
+            if let Kind::CaptureReference { name_slot, .. } = &mut self.nodes[node_id].kind {
+                *name_slot = slot;
             }
         }
         // A syntactically valid pattern that uses a matcher surface this
@@ -267,6 +298,7 @@ impl Compiler {
             assertion_count: self.assertion_index as usize,
             quantifier_count: self.quantifier_index as usize,
             compile_meter_raw,
+            capture_group_names: std::mem::take(&mut self.named_groups),
         })
     }
 
@@ -327,6 +359,8 @@ impl Compiler {
         self.capture_names.clear();
         self.named_refs.clear();
         self.saw_named_group = false;
+        self.named_groups.clear();
+        self.pending_named_refs.clear();
     }
 
     /// `fxCaptureNameParse`: read a `<name>` up to and including `>`,
@@ -1096,9 +1130,12 @@ impl Compiler {
             self.flags |= XS_REGEXP_NAME;
             self.next()?;
             let name = self.capture_name_parse()?;
-            self.named_refs.push(name);
-            self.unsupported.get_or_insert("\\k<name> named backreference");
-            let node = self.add_node(Kind::CaptureReference { capture_index: -1 });
+            self.named_refs.push(name.clone());
+            // Emit a named reference: `capture_index = -1` with the name slot
+            // resolved after the whole pattern is parsed (forward references
+            // are legal). The matcher reads the live index out of `names[]`.
+            let node = self.add_node(Kind::CaptureReference { capture_index: -1, name_slot: -1 });
+            self.pending_named_refs.push((node, name));
             self.quantifier_parse(node, current_index)
         } else if (b'1' as i64..=b'9' as i64).contains(&self.character) {
             let mut value: u32 = (self.character - b'0' as i64) as u32;
@@ -1106,7 +1143,7 @@ impl Compiler {
             while self.decimal(&mut value) {
                 self.next()?;
             }
-            let node = self.add_node(Kind::CaptureReference { capture_index: value as i32 });
+            let node = self.add_node(Kind::CaptureReference { capture_index: value as i32, name_slot: -1 });
             self.quantifier_parse(node, current_index)
         } else {
             // \0, control, hex, \u, \d\w\s, identity escapes → a charset.
@@ -1169,22 +1206,28 @@ impl Compiler {
                     // `(?<name>…)` named capture. Validate the name
                     // (`fxCaptureNameParse`) and register it — a repeat is
                     // `mxDuplicateCapture` — then parse the body as a normal
-                    // capturing group. The matcher does not emit named
-                    // captures yet, so the pattern is `Unsupported`, but the
-                    // full accept/reject verdict is decided here first.
+                    // capturing group. It codegens exactly like a numbered
+                    // group; the only difference is the name-slot operand on
+                    // its completion, which the matcher records into `names[]`
+                    // so `\k<name>` and the JS `.groups` object can resolve it.
                     self.saw_named_group = true;
-                    self.unsupported.get_or_insert("(?<name>) named capture");
                     self.capture_index += 1;
                     current_index += 1;
                     let name = self.capture_name_parse()?;
                     if self.capture_names.iter().any(|n| n == &name) {
                         return Err(self.error("duplicate capture"));
                     }
-                    self.capture_names.push(name);
+                    let slot = self.name_index;
+                    self.capture_names.push(name.clone());
+                    self.named_groups.push((name, current_index));
                     self.name_index += 1;
                     let term = self.disjunction_parse(b')' as i64)?;
                     self.next()?;
-                    let capture = self.add_node(Kind::Capture { term, capture_index: current_index });
+                    let capture = self.add_node(Kind::Capture {
+                        term,
+                        capture_index: current_index,
+                        name_slot: slot,
+                    });
                     self.quantifier_parse(capture, current_index - 1)
                 }
             } else {
@@ -1239,7 +1282,7 @@ impl Compiler {
             current_index += 1;
             let term = self.disjunction_parse(b')' as i64)?;
             self.next()?;
-            let capture = self.add_node(Kind::Capture { term, capture_index: current_index });
+            let capture = self.add_node(Kind::Capture { term, capture_index: current_index, name_slot: -1 });
             self.quantifier_parse(capture, current_index - 1)
         }
     }
@@ -1357,13 +1400,13 @@ impl Compiler {
                 }
             }
             Shape::Capture(term) => {
-                let (step, completion, capture_index) = {
+                let (step, completion, capture_index, name_slot) = {
                     let n = &self.nodes[id];
-                    let ci = match &n.kind {
-                        Kind::Capture { capture_index, .. } => *capture_index,
+                    let (ci, ns) = match &n.kind {
+                        Kind::Capture { capture_index, name_slot, .. } => (*capture_index, *name_slot),
                         _ => unreachable!(),
                     };
-                    (n.step, n.completion, ci)
+                    (n.step, n.completion, ci, ns)
                 };
                 let term_step = self.nodes[term].step;
                 let at = (step / 4) as usize;
@@ -1375,19 +1418,24 @@ impl Compiler {
                 self.code[ct] = if direction == 1 { CX_CAPTURE_FORWARD_COMPLETION } else { CX_CAPTURE_BACKWARD_COMPLETION };
                 self.code[ct + 1] = sequel;
                 self.code[ct + 2] = capture_index;
-                // No name in this increment: the name-id operand is -1.
-                self.code[ct + 3] = -1;
+                // The name-id operand: the group's name slot for a named
+                // capture (so the matcher records `names[slot] = index` on
+                // completion), or -1 for a plain numbered group.
+                self.code[ct + 3] = name_slot;
             }
             Shape::CaptureReference => {
-                let capture_index = match &self.nodes[id].kind {
-                    Kind::CaptureReference { capture_index } => *capture_index,
+                let (capture_index, name_slot) = match &self.nodes[id].kind {
+                    Kind::CaptureReference { capture_index, name_slot } => (*capture_index, *name_slot),
                     _ => unreachable!(),
                 };
                 let at = (self.nodes[id].step / 4) as usize;
                 self.code[at] = if direction == 1 { CX_CAPTURE_REFERENCE_FORWARD_STEP } else { CX_CAPTURE_REFERENCE_BACKWARD_STEP };
                 self.code[at + 1] = sequel;
+                // A numbered `\N` reference carries its resolved index and a
+                // name-id of -1; a `\k<name>` reference carries index -1 and
+                // its name slot, resolved at match time through `names[]`.
                 self.code[at + 2] = capture_index;
-                self.code[at + 3] = -1; // nameIndex (numeric ref)
+                self.code[at + 3] = name_slot;
             }
             Shape::Assertion { term, not, direction: dir } => {
                 let (step, completion, ai) = {
