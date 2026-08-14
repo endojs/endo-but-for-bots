@@ -3,12 +3,14 @@
 | | |
 |---|---|
 | **Created** | 2026-08-14 |
+| **Updated** | 2026-08-14 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 
 ## What is the Problem Being Solved?
 
 The daemon can retain immutable file content as `readable-blob` and `readable-tree` formulas, but a readable tree is only Git's checked-out content.
+A *formula* is the daemon's content-addressed description of a capability and its dependencies; [daemon-checkin-checkout](daemon-checkin-checkout.md) defines the content formulas, and [namehub-interface-unification](namehub-interface-unification.md) defines the lookup and retention model used here.
 It does not carry tree modes, parents, author and committer stamps, commit messages, signatures, annotated tags, or mutable refs.
 Reconstructing a Git commit from only that tree would invent metadata on every fetch and change the commit object ID.
 
@@ -21,13 +23,15 @@ This design answers the
 with daemon-native formulas for Git commits, trees, and tags, plus a refs view over the formula DAG, so Strategy B's synthesis is byte-stable.
 It does not implement the Minion Town remote.
 
-Throughout this design a **partition** is one served object namespace: a single daemon-hosted Git remote instance with its own ref database and its own declared object format (SHA-1 or SHA-256), the unit a Minion Town remote adapter serves one fetch or push against.
+Throughout this design a **partition** is one served object namespace: a single daemon-hosted Git remote instance with its own ref database and its own declared object format (SHA-1 or SHA-256).
+It is the unit a Minion Town remote adapter serves one fetch or push against.
 A daemon may host several partitions, and refs and objects never cross a partition boundary.
 
 ## Design
 
 ### Formula paths
 
+A *name hub* is any daemon lookup structure that binds names to values, such as a host, guest, directory, or pet store.
 A mutable Git ref stores a lookup path rather than a fixed formula identifier so that the ref tracks a name hub's live binding: when a name hub rebinds a component beneath an unchanged path, the ref's compare-and-swap detects the drift (§ Synthetic refs tree), which a stored fixed identifier could not.
 
 A mutable Git ref therefore names a formula path:
@@ -40,8 +44,8 @@ type FormulaPath = {
 ```
 
 Resolution starts from `root`, then calls `lookup(component)` for every component in `path`.
-Intermediate values may be any daemon *name hub*, meaning any daemon lookup structure that binds names to values, such as a host, guest, directory, or pet store.
-The final value must have the formula type required by the edge.
+Intermediate values may be any daemon name hub.
+The final value must have the formula type required by the retaining edge (the binding that holds the referenced formula alive).
 An empty path names the root formula itself.
 
 The ref store retains the root through an ordinary formula dependency.
@@ -95,10 +99,14 @@ type GitHeader = {
   valueBase64: string;
 };
 
+type GitCommitParent =
+  | { kind: 'formula'; target: FormulaIdentifier }
+  | { kind: 'shallow'; oidHex: string };
+
 type GitCommitFormula = {
   type: 'git-commit';
   tree: FormulaIdentifier;
-  parents: FormulaIdentifier[];
+  parents: GitCommitParent[];
   author: GitActor;
   committer: GitActor;
   extraHeaders: GitHeader[];
@@ -130,9 +138,7 @@ type GitTagFormula = {
 };
 ```
 
-`GitTreeEntry` discriminates on Git's own native `mode` literal rather than an added `kind` field, because `mode` is already the wire-level tag Git assigns each entry: `160000` is the gitlink variant, the other four modes share the formula-target shape.
-The `FormulaRef` union below instead carries an explicit `kind` because its variants (`direct`, `symbolic`) have no such pre-existing native discriminant.
-The two idioms are deliberate: a formula-native union tags itself, a Git-native one reuses Git's tag.
+`GitTreeEntry` discriminates on Git's own native `mode` literal rather than an added `kind` field, because `mode` is already the wire-level tag Git assigns each entry: `160000` is the gitlink variant, while the other four modes share the formula-target shape.
 
 `git-tree` carries the information `readable-tree` omits: raw path bytes, modes, symlinks, and gitlinks.
 Its entries are stored in Git's canonical tree sort order: sorted by raw name bytes, with each directory entry compared as if its name ended in a `/` (`0x2f`) byte, so a blob named `foo.txt` sorts before a tree named `foo` (because `.` at `0x2e` precedes `/` at `0x2f`) even though a plain lexical sort of the bare names would order `foo` first.
@@ -143,7 +149,12 @@ Mode `160000` is a submodule gitlink, and it is the design's answer for a refere
 A gitlink's OID names a commit in a *different* repository, which is routinely absent from the repo being ingested (that is the purpose of a gitlink, not an oversight), so requiring it to resolve to a formulated `git-commit` would fail ingest for the ordinary submodule case.
 A gitlink entry therefore carries its raw OID (`gitlinkOidHex`) opaquely: the OID is preserved verbatim for byte-stable tree serialization and is never formulated, resolved, or checked for reachability at ref-update time.
 A daemon that also happens to hold the referenced submodule commit may formulate it separately, but ingest and projection never require it.
-Shallow-fetch boundaries are handled the same way: an object outside the fetched set is only ever referenced, never required to be present.
+
+Commit parents use the same explicit distinction.
+A `formula` parent targets a formulated commit, contributes an ordinary formula dependency, and serializes with that commit's projected OID.
+A `shallow` parent carries the raw parent OID from a shallow boundary, where the parent object is intentionally absent from the fetched object set; it contributes no formula dependency and is serialized without a reachability check.
+The maker accepts `shallow` only while ingesting an object against a declared shallow boundary and validates that `oidHex` has the partition's object-format width.
+Daemon-authored commits and complete ingests must use `formula` parents, so the opaque form cannot hide an accidentally missing in-partition object.
 
 A directory entry may target a `readable-tree` instead of a `git-tree`, and a `readable-tree` carries no modes of its own.
 Wherever a directory entry targets a `readable-tree`, a default-mode rule applies recursively within that subtree and every `readable-tree` nested beneath it: child trees serialize at `40000` and readable blobs at `100644`.
@@ -201,6 +212,14 @@ type FormulaRefExpectation =
 type FormulaRefStore = {
   list(prefix: string): Promise<Record<string, FormulaRef>>;
   get(ref: string): Promise<FormulaRef | undefined>;
+  resolve(ref: string): Promise<
+    | {
+        ref: string;
+        binding: { kind: 'direct'; target: FormulaPath };
+        terminal: FormulaIdentifier;
+      }
+    | undefined
+  >;
   compareAndSwap(
     ref: string,
     expected: FormulaRefExpectation,
@@ -209,10 +228,13 @@ type FormulaRefStore = {
 };
 ```
 
+Unlike `GitTreeEntry`, `FormulaRef` carries an explicit `kind` because its variants have no native Git field that is also a safe TypeScript discriminant.
+The two idioms are deliberate: this formula-native union tags itself, while the Git-native tree-entry union reuses Git's mode tag.
+
 Typing `expected` as the `FormulaRefExpectation` discriminated union puts the invariant in the data shape rather than in prose: a caller cannot construct a direct-ref expectation that omits `terminal`, so the mistake is a compile error at the call site rather than a runtime rejection.
 
 For example, `refs/heads/main` may point at `{ root: hostId, path: ['projects', 'site', 'release'] }`.
-The synthetic directory presented to Git is therefore:
+The synthetic path presented to Git is therefore:
 
 ```text
 refs/heads/main -> hostId / projects / site / release
@@ -222,13 +244,22 @@ The first component is always an arbitrary formula identifier.
 Remaining components are name-hub lookups.
 The terminal may be a `git-commit`, `git-tag`, `git-tree`, or `readable-tree`.
 Ref names and symbolic-ref targets are validated with Git's refname rules before storage.
-`get(ref)` reads a single known binding, the common shape before a compare-and-swap, without enumerating a prefix through `list`.
+`get(ref)` reads one stored binding and `list(prefix)` reads stored bindings under a prefix; neither follows a symbolic chain or traverses a formula path.
+`resolve(ref)` is the caller-facing dereference operation.
+It follows symbolic refs to a direct binding, traverses that binding's formula path, and returns both the direct binding and its terminal identifier.
+It returns `undefined` only when the requested ref itself is absent.
+If a symbolic target is absent, a path component has been removed or renamed, or the terminal has the wrong formula type, `resolve` rejects with a structured dangling-ref error.
+Ref advertisement and fetch propagate that error and fail the request rather than silently omitting the ref, which would make a broken repository look like a valid but different one.
 
 A direct-ref update compares both the stored `FormulaRef` (the *selector*, the formula path defined above) and the terminal formula identifier the client last resolved that path to.
 For a direct-ref expectation `terminal` is mandatory: the store rejects a direct-ref `compareAndSwap` that omits it rather than silently degrading to a binding-only comparison.
 Binding-only CAS is never a caller's option, because it would miss a name-hub binding that changed beneath an unchanged path, the exact drift this store exists to detect.
 The daemon resolves and updates under its formula-graph lock, so a change to any path component makes the comparison fail.
 This `FormulaRefStore` implements the `RefStore` concurrency contract named in the Minion Town design: the compare-and-swap fails even when the stored selector has not changed but a name-hub binding beneath it has.
+
+That operation repoints the ref's stored path or root; it does not itself rebind the terminal name hub.
+The ordinary "advance this branch" push instead compare-and-swaps the terminal hub's binding under the same formula-graph lock, after confirming the stored path and observed terminal still match.
+Whether that terminal mutation uses a new generic `NameAdmin` operation or a daemon-private pet-store operation is the open implementation choice recorded under § Open Questions.
 
 The initial adapter accepts only selectors whose terminal name hub supports a daemon-internal compare-and-swap binding operation.
 Read-only paths through arbitrary `NameHub` implementations remain fetchable but cannot be push targets.
@@ -263,15 +294,18 @@ Persisting it as a `git-commit` is permitted when a caller wants to name or pare
 type FormulaGitObjectStore = {
   resolve(target: FormulaPath): Promise<FormulaIdentifier>;
   computeOid(target: FormulaPath, format: 'sha1' | 'sha256'): Promise<string>;
-  readObject(oid: string): Promise<{
-    type: 'blob' | 'tree' | 'commit' | 'tag';
-    payload: Uint8Array;
-  }>;
-  ingestObject(type: string, payload: Uint8Array): Promise<FormulaPath>;
+  readObject(oid: string): Promise<GitObject>;
+  ingestObject(object: GitObject): Promise<FormulaPath>;
+};
+
+type GitObject = {
+  type: 'blob' | 'tree' | 'commit' | 'tag';
+  payload: Uint8Array;
 };
 ```
 
-`resolve` produces the terminal `FormulaIdentifier` that is the currency shared across the two stores rather than a fourth address consumed by this interface's own read methods: a caller pins a snapshot with `resolve`, then hands that identifier to `FormulaRefStore.compareAndSwap` as `expected.terminal` (the drift check of § Synthetic refs tree) and it is the memoization key of projection step 4 below.
+`resolve` produces the terminal `FormulaIdentifier` shared across the two stores; it does not introduce another addressing scheme alongside `FormulaPath` and Git OIDs.
+A caller pins a snapshot with `resolve`, then hands that identifier to `FormulaRefStore.compareAndSwap` as `expected.terminal` (the drift check of § Synthetic refs tree), and projection step 4 below uses it as the memoization key.
 The object-store read methods stay addressed by `FormulaPath` and `oid` because a fetch enters with a ref path and negotiates by OID; the resolved identifier is the cross-store pin, not a per-read argument.
 
 Projection follows Git's byte grammar:
@@ -284,9 +318,9 @@ Projection follows Git's byte grammar:
 4. Memoize by object format and resolved terminal formula identifier.
    Record the reverse OID-to-formula index needed for `readObject` and negotiation.
 
-`ingestObject` parses and validates the payload, interns blob and message bytes, formulates its referenced objects bottom-up, and records every raw field needed to serialize the same payload.
+`ingestObject` parses and validates the payload, interns blob and message bytes, formulates present referenced objects bottom-up, records an explicitly declared shallow parent as an opaque parent OID, and records every raw field needed to serialize the same payload.
 A non-conforming actor line, or any object that violates the declared grammar or the § Security and Lifetime bounds, is rejected whole rather than repaired or partially ingested, so the "ingest followed by projection reproduces the input byte for byte" guarantee never rests on a lossy fixup.
-It rejects dangling references at ref-update time.
+Except for validated gitlinks and declared shallow parents, it rejects dangling object references at ref-update time.
 Ingest followed by projection must reproduce the input payload byte for byte and yield the same OID.
 
 This interface also admits Strategy A.
@@ -296,9 +330,8 @@ The remote can therefore choose stored objects or formula synthesis per partitio
 ### Capability construction
 
 `FormulaGitObjectStore` and `FormulaRefStore` are trusted daemon internals, not guest-facing capabilities.
-The guest-facing Git caps in
-[daemon-git-capability](daemon-git-capability.md) § Capability Construction and
-[daemon-git-remotes](daemon-git-remotes.md) are minted through the normative `await E(host).provideGit(cap, petName, [opts])` entry point, which those designs state is the only normative form.
+The local Git capability in [daemon-git-capability](daemon-git-capability.md) § Capability Construction is minted through that design's normative `await E(host).provideGit(cap, petName, [opts])` entry point.
+The `GitRemote` capabilities in [daemon-git-remotes](daemon-git-remotes.md) are instead minted through that design's `provideGitRemote` and `provideGitClone` entry points.
 These two stores are different: they are constructed by the Minion Town remote adapter (or a daemon-local pack experiment) from the explicit authorities named under § Security and Lifetime (read authority for the ref roots served and binding authority for the writable ref leaves), and there is no `provideX` for either.
 A guest never holds one directly.
 If a later revision exposes object-store or ref-store authority to guests, it must introduce a `provideX` entry point and restate here the authority bound to it.
@@ -314,14 +347,16 @@ A fetch pins its resolved snapshot until pack generation ends.
 A successful ref compare-and-swap installs the new retention edge before releasing the old edge, so garbage collection cannot observe a gap.
 
 Object parsing enforces size, depth, entry-count, and parent-count limits before formulation.
-Symbolic refs carry the same discipline as a caller-triggerable indirection: `get` and `list` bound every symbolic-ref chain by a fixed maximum hop count and refuse a chain that revisits a ref name, so a cyclic or overlong chain such as `refs/heads/a` pointing to `refs/heads/b` pointing back to `refs/heads/a` is rejected at resolution rather than looping.
+All invalid construction and lookup cases in this design reject their promise with a structured `@endo/errors` failure that identifies the operation and violated rule; they never use a sentinel return.
+In particular, `compareAndSwap` returns `false` only for a well-formed expectation that lost its race, while malformed input rejects.
+Symbolic refs are treated with the same discipline as any other caller-triggerable indirection: `resolve` bounds every symbolic-ref chain by a fixed maximum hop count and rejects a chain that revisits a ref name, so a cyclic or overlong chain such as `refs/heads/a` pointing to `refs/heads/b` pointing back to `refs/heads/a` is rejected rather than looping.
 Hash verification alone is not a resource bound.
 
 ## Implementation Phases
 
 1. Add the `git-tree`, `git-commit`, and `git-tag` formula schemas, makers, dependency extraction, inspector records, and round-trip serializers.
 2. Add `FormulaGitObjectStore`, OID indexes, SHA-1 and SHA-256 golden vectors, and deterministic orphan projection for readable trees.
-3. Add the synthetic `FormulaRefStore` view, symbolic refs, atomic updates, and fetch-snapshot pinning.
+3. After [namehub-interface-unification](namehub-interface-unification.md) has landed its uniform `lookup` surface, add the synthetic `FormulaRefStore` view, symbolic refs, atomic updates, and fetch-snapshot pinning.
 4. Connect the interfaces to a daemon-local pack protocol experiment.
    Minion Town integration remains in its separately chained follow-up.
 
@@ -331,6 +366,8 @@ Hash verification alone is not a resource bound.
 |---|---|
 | [daemon-checkin-checkout](daemon-checkin-checkout.md) | Supplies content-addressed `readable-blob` and `readable-tree` formulas. |
 | [daemon-git-capability](daemon-git-capability.md) | Supplies the existing local Git capability and `ReadableTree` historical projection. |
+| [daemon-git-remotes](daemon-git-remotes.md) | Defines the distinct guest-facing remote construction entry points contrasted with these internal stores. |
+| [daemon-git-next-steps](daemon-git-next-steps.md) | Consumes this object-store seam as a prerequisite for the later daemon-native Git integration. |
 | [namehub-interface-unification](namehub-interface-unification.md) | Defines the lookup vocabulary traversed by formula paths. |
 | [daemon-content-store-gc](daemon-content-store-gc.md) | Owns content and formula collection while refs and fetch snapshots retain objects. |
 | [formula-inspector](formula-inspector.md) | Displays the new formula fields and references. |
@@ -345,9 +382,13 @@ Hash verification alone is not a resource bound.
 - Mutate a traversed name-hub binding during a fetch and assert the in-flight fetch keeps its pinned snapshot while the next fetch sees the new terminal.
 - Race two compare-and-swap ref updates and assert exactly one wins without a GC retention gap.
 - Compare-and-swap a direct ref whose stored selector is unchanged but whose terminal formula identifier changed because a traversed name-hub binding was rebound, and assert the swap fails (the reader-observed-stale-terminal case), distinct from the writer-versus-writer race above.
+- Assert a well-formed compare-and-swap race loss returns `false`, while malformed object, ref, and path inputs reject with distinct structured errors.
 - Reject payloads that exceed each bound named under § Security and Lifetime: an oversized object, an over-deep tree nesting, a tree with too many entries, and a commit exceeding the parent-count bound, asserting each is refused before formulation rather than accepted or truncated.
 - Resolve a symbolic ref through a bounded chain, then assert a cyclic and an overlong symbolic-ref chain are each rejected at resolution rather than looping or exhausting resources.
 - Round-trip a `git-tree` bearing a submodule gitlink (ingest then project) and assert the raw gitlink OID bytes survive without formulating the referenced commit; assert a malformed gitlink OID is rejected.
+- Ingest and project a shallow-boundary commit whose absent parent is declared by the repository's shallow metadata; assert its raw parent OID survives without formulation, and assert the same missing parent is rejected when it is not a declared shallow boundary.
+- Break an intermediate formula-path binding after a ref is stored and assert `resolve`, advertisement, and fetch reject with a dangling-ref error rather than dropping the ref.
+- For each fixture, intern its raw object as Strategy A and synthesize the same object through Strategy B, then assert both strategies return identical type, payload bytes, and OID under each supported object format.
 - Project the same readable tree through two refs and assert one identical synthetic orphan commit; assert unsupported readable-tree children fail.
 
 ## Design Decisions
