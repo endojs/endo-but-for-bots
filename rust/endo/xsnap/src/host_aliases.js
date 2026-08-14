@@ -1,6 +1,6 @@
 // Host function aliases.
 //
-// Bundled JS code (bus-worker-xs.js, bus-daemon-rust-xs-powers.js)
+// Bundled JS code (bus-worker-xs.js, bus-manager-endor-powers.js)
 // references host functions via `host<Name>` identifiers — e.g.
 // `hostSendRawFrame`, `hostReadFile`, `hostGetDaemonHandle`. The
 // Rust side registers them under bare names (`sendRawFrame`,

@@ -7,6 +7,8 @@ use std::time::SystemTime;
 use tokio::net::UnixStream;
 use tokio::sync::Notify;
 
+use slots::{SlotMachine, SlotStore};
+
 use crate::cas::ContentStore;
 use crate::codec;
 use crate::engine::{self, Engine};
@@ -50,6 +52,8 @@ pub struct Endo {
     node_path: String,
     daemon_script_path: String,
     shutdown_notify: Arc<Notify>,
+    slot_machine: Arc<SlotMachine>,
+    slot_store_path: std::path::PathBuf,
 }
 
 impl Endo {
@@ -70,6 +74,20 @@ impl Endo {
 
         let (supervisor, outbox_rx) = Supervisor::new();
 
+        // Load or initialize the slot-machine.  The on-disk store
+        // at <state>/slots.sqlite holds per-session c-lists across
+        // daemon restarts.  If the file is missing or unreadable,
+        // start fresh — sessions rebuild from worker registrations.
+        let slot_store_path = paths.state_path.join("slots.sqlite");
+        let slot_machine = match SlotStore::open(&slot_store_path).and_then(|s| s.restore()) {
+            Ok(sm) => Arc::new(sm),
+            Err(e) => {
+                eprintln!("endor: slot-machine restore failed ({e}); starting fresh");
+                Arc::new(SlotMachine::new())
+            }
+        };
+        supervisor.attach_slot_machine(Arc::clone(&slot_machine));
+
         Ok(Endo {
             supervisor,
             outbox_rx: Some(outbox_rx),
@@ -78,6 +96,8 @@ impl Endo {
             node_path: find_node(),
             daemon_script_path: String::new(),
             shutdown_notify: Arc::new(Notify::new()),
+            slot_machine,
+            slot_store_path,
         })
     }
 
@@ -166,6 +186,20 @@ impl Endo {
             Ok(()) => {}
             Err(_) => {
                 eprintln!("endor: supervisor wait timed out, forcing exit");
+            }
+        }
+        // Checkpoint the slot-machine before releasing the pid file.
+        // Failure is non-fatal — we still want to exit cleanly — but
+        // it leaves the sqlite file untouched, which is the correct
+        // "no-op" outcome for an unrecoverable write error.
+        match SlotStore::open(&self.slot_store_path) {
+            Ok(mut store) => {
+                if let Err(e) = store.checkpoint(&self.slot_machine) {
+                    eprintln!("endor: slot-machine checkpoint failed: {e}");
+                }
+            }
+            Err(e) => {
+                eprintln!("endor: slot-machine store open failed on stop: {e}");
             }
         }
         pidfile::remove_pid(&self.paths.ephemeral_path);
