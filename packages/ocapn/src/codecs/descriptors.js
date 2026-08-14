@@ -334,7 +334,7 @@ export const makeDescCodecs = referenceKit => {
         if (!(error instanceof RangeError)) {
           throw error;
         }
-        secret = secretBytes;
+        secret = new Uint8Array(secretBytes);
       }
       const value = referenceKit.makeSturdyRef(node, secret);
       return value;

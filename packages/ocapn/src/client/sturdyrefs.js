@@ -6,6 +6,8 @@
  */
 
 import { decodeAscii } from '@endo/ascii';
+import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
+import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { E } from '@endo/eventual-send';
 import harden from '@endo/harden';
 import { makeTagged } from '@endo/pass-style';
@@ -29,14 +31,33 @@ import { encodeSwissnum, swissnumFromBytes } from './util.js';
  * @property {string | Uint8Array} secret
  */
 
-/** @type {WeakMap<SturdyRef, SturdyRefDetails>} */
+/**
+ * @typedef {object} InternalSturdyRefDetails
+ * @property {OcapnLocation} location
+ * @property {string | ArrayBuffer} secret
+ */
+
+/** @type {WeakMap<SturdyRef, InternalSturdyRefDetails>} */
 const sturdyRefDetails = new WeakMap();
 
 /** @param {any} value */
 export const isSturdyRef = value => sturdyRefDetails.has(value);
 
-/** @param {SturdyRef} sturdyRef */
-export const getSturdyRefDetails = sturdyRef => sturdyRefDetails.get(sturdyRef);
+/**
+ * @param {SturdyRef} sturdyRef
+ * @returns {SturdyRefDetails | undefined}
+ */
+export const getSturdyRefDetails = sturdyRef => {
+  const details = sturdyRefDetails.get(sturdyRef);
+  if (!details) {
+    return undefined;
+  }
+  const { location, secret } = details;
+  return harden({
+    location,
+    secret: typeof secret === 'string' ? secret : bytesFromImmutable(secret),
+  });
+};
 
 /**
  * Mint a `SturdyRef` value for `(location, secret)`. Sturdyrefs are
@@ -49,7 +70,9 @@ export const getSturdyRefDetails = sturdyRef => sturdyRefDetails.get(sturdyRef);
  */
 export const makeSturdyRef = (location, secret) => {
   const sturdyRef = makeTagged('ocapn-sturdyref', undefined);
-  sturdyRefDetails.set(sturdyRef, { location, secret });
+  const durableSecret =
+    typeof secret === 'string' ? secret : bytesToImmutable(secret);
+  sturdyRefDetails.set(sturdyRef, harden({ location, secret: durableSecret }));
   return harden(sturdyRef);
 };
 
@@ -70,7 +93,7 @@ export const enlivenSturdyRef = async (
   isSelfLocation,
   locator,
 ) => {
-  const details = sturdyRefDetails.get(sturdyRef);
+  const details = getSturdyRefDetails(sturdyRef);
   if (!details) {
     throw Error('SturdyRef details not found');
   }
@@ -126,12 +149,16 @@ export const makeSturdyRefTracker = locator => {
       // a Spritely-style random 24-byte secret), fall back to passing
       // the raw bytes through; locators that index by bytes can match
       // those, locators that don't will simply return undefined.
+      let secret;
       try {
-        const secret = decodeAscii(view, 'sturdyref secret');
-        return locator.get(secret);
-      } catch {
-        return locator.get(view);
+        secret = decodeAscii(view, 'sturdyref secret');
+      } catch (error) {
+        if (!(error instanceof RangeError)) {
+          throw error;
+        }
+        secret = view;
       }
+      return locator.get(secret);
     },
   });
 };
