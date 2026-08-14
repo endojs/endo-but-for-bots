@@ -134,6 +134,18 @@ export const InspectorInterface = M.interface('TuiInspector', {
       },
     ),
   ).returns(M.promise()),
+  group: M.call(
+    M.splitRecord(
+      { label: M.string() },
+      {
+        collapsed: M.boolean(),
+        worker: M.string(),
+        time: M.number(),
+        fields: M.recordOf(M.string(), M.any()),
+      },
+    ),
+  ).returns(M.promise()),
+  groupEnd: M.call().returns(M.promise()),
   appendSample: M.call(
     M.splitRecord(
       { name: M.string(), value: M.number() },

@@ -1172,6 +1172,15 @@ The inspector has three roles, all stubbed in this PR:
    Worker `console.*` records are intercepted by the daemon's
    per-worker log sink and forwarded across the bus to the
    inspector's `appendLog` verb.
+   Console **message grouping** is preserved: `console.group` /
+   `console.groupCollapsed` / `console.groupEnd` forward to the
+   inspector's `group` / `groupEnd` verbs, so records that arrive
+   between a group and its end nest under it and the inspector pane
+   renders an indented, collapsible tree instead of a flat list.
+   The Endo/SES console taming already carries this grouping
+   structure (`@endo/ses`'s `error/console.js` and `reporting.js`
+   emit `groupCollapsed`/`groupEnd` around error detail), so the
+   inspector mirrors it rather than discarding it.
    See "Logging is not console.log" below for why this is a
    dedicated channel and not a side-channel onto stdout.
 2. **Telemetry samples.**
@@ -1214,8 +1223,13 @@ The JS-side encodes the invariant in two places:
   An explicit capability that library code asks for and uses
   instead of `console.*`.
 - `makeInspectorLogSink(inspector)` (`packages/tui/src/inspector.js`).
-  Adapts the `LogSink` interface onto the inspector's `appendLog`
-  verb.
+  Adapts the `LogSink` interface onto the inspector's `appendLog`,
+  `group`, and `groupEnd` verbs.
+  The `LogSink` carries the five console levels
+  (`trace`/`debug`/`info`/`warn`/`error`) plus message grouping
+  (`group`/`groupCollapsed`/`groupEnd`), so library code emits the
+  same nested structure the console taming produces and the
+  inspector renders it faithfully.
 
 The Rust side encodes it by forwarding worker log records to the
 inspector exo over the bus instead of unioning them with the

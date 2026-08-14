@@ -154,6 +154,9 @@ export const makeSilentLogSink = () =>
     info: () => undefined,
     warn: () => undefined,
     error: () => undefined,
+    group: () => undefined,
+    groupCollapsed: () => undefined,
+    groupEnd: () => undefined,
   });
 harden(makeSilentLogSink);
 

@@ -87,6 +87,33 @@ export interface LogSink {
   info(message: string, fields?: Record<string, unknown>): void;
   warn(message: string, fields?: Record<string, unknown>): void;
   error(message: string, fields?: Record<string, unknown>): void;
+
+  // Message grouping.  The Endo/SES console taming preserves the
+  // `console.group` / `console.groupCollapsed` / `console.groupEnd`
+  // structure of worker output (see `@endo/ses`'s `error/console.js`
+  // and `reporting.js`), so a captured record stream is not a flat
+  // list — nested groups carry the causal shape of the diagnostics.
+  // The `LogSink` mirrors that grouping so library code emits the
+  // same structure the inspector pane renders as an indented,
+  // collapsible tree.
+
+  /**
+   * Open a message group.  Subsequent records nest under `label`
+   * until a matching `groupEnd`.  Mirrors `console.group`.
+   */
+  group(label: string, fields?: Record<string, unknown>): void;
+
+  /**
+   * Open a message group that renders collapsed by default.  Mirrors
+   * `console.groupCollapsed`.
+   */
+  groupCollapsed(label: string, fields?: Record<string, unknown>): void;
+
+  /**
+   * Close the innermost open message group.  Mirrors
+   * `console.groupEnd`.  A `groupEnd` with no open group is ignored.
+   */
+  groupEnd(): void;
 }
 
 export interface TuiRegion {

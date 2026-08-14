@@ -9,7 +9,12 @@
 
 import test from '@endo/ses-ava/test.js';
 
-import { make, makeNoopInspector, makeStubInspector } from '../index.js';
+import {
+  make,
+  makeNoopInspector,
+  makeStubInspector,
+  makeInspectorLogSink,
+} from '../index.js';
 
 test('default mode is unix', async t => {
   const tui = await make();
@@ -44,6 +49,79 @@ test('log sink is silent by default in unix mode', async t => {
   // a side-channel onto stdout/stderr.
   t.notThrows(() => tui.log.info('hello'));
   t.notThrows(() => tui.log.error('boom', { err: 'x' }));
+});
+
+test('silent log sink supports message grouping', async t => {
+  const tui = await make({ mode: 'unix' });
+  // Grouping is part of the LogSink contract; the silent sink
+  // accepts group/groupCollapsed/groupEnd like any other level.
+  t.notThrows(() => {
+    tui.log.group('request', { id: 7 });
+    tui.log.info('step one');
+    tui.log.groupCollapsed('detail');
+    tui.log.debug('inner');
+    tui.log.groupEnd();
+    tui.log.groupEnd();
+  });
+});
+
+test('inspector log sink forwards grouping to the inspector', async t => {
+  // Drive a recording inspector directly so we can assert the sink
+  // maps console-style grouping onto the inspector's group/groupEnd
+  // verbs and drops omitted optional arguments.
+  const calls = [];
+  const recorder = {
+    help: () => 'recorder',
+    appendLog: async record => {
+      calls.push(['appendLog', record]);
+    },
+    group: async record => {
+      calls.push(['group', record]);
+    },
+    groupEnd: async () => {
+      calls.push(['groupEnd']);
+    },
+    appendSample: async () => undefined,
+    open: async () => undefined,
+    close: async () => undefined,
+  };
+  const sink = makeInspectorLogSink(recorder);
+
+  sink.group('outer', { id: 1 });
+  sink.info('hello');
+  sink.groupCollapsed('inner');
+  sink.groupEnd();
+  sink.groupEnd();
+
+  // Fire-and-forget sends resolve on the microtask queue.
+  await null;
+
+  t.deepEqual(calls, [
+    ['group', { label: 'outer', fields: { id: 1 } }],
+    ['appendLog', { level: 'info', message: 'hello' }],
+    ['group', { label: 'inner', collapsed: true }],
+    ['groupEnd'],
+    ['groupEnd'],
+  ]);
+  // `group('outer', …)` carries no `collapsed`, and `info('hello')`
+  // carries no `fields`; both omit the undefined optional key rather
+  // than forwarding it (which the Exo guard would reject).
+  t.false('collapsed' in calls[0][1]);
+  t.false('fields' in calls[1][1]);
+});
+
+test('makeStubInspector exposes the grouping verbs', async t => {
+  const inspector = makeStubInspector();
+  // eslint-disable-next-line no-underscore-dangle
+  const methods = await inspector.__getMethodNames__();
+  t.true(methods.includes('group'));
+  t.true(methods.includes('groupEnd'));
+});
+
+test('no-op inspector accepts grouping silently', async t => {
+  const inspector = makeNoopInspector();
+  await t.notThrowsAsync(() => inspector.group({ label: 'g', collapsed: true }));
+  await t.notThrowsAsync(() => inspector.groupEnd());
 });
 
 test('caller-supplied inspector overrides mode default', async t => {

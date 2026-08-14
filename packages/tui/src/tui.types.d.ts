@@ -113,6 +113,28 @@ export interface InspectorSurface {
   }): Promise<void>;
 
   /**
+   * Open a message group.  Worker `console.group` /
+   * `console.groupCollapsed` records forward here; `appendLog`
+   * records that arrive before the matching `groupEnd` nest under
+   * this group, so the inspector pane renders them as an indented,
+   * collapsible tree rather than a flat list.  `collapsed` requests
+   * the group start folded.
+   */
+  group(record: {
+    label: string;
+    collapsed?: boolean;
+    worker?: string;
+    time?: number;
+    fields?: Record<string, unknown>;
+  }): Promise<void>;
+
+  /**
+   * Close the innermost open message group.  A `groupEnd` with no
+   * open group is a no-op.  Mirrors `console.groupEnd`.
+   */
+  groupEnd(): Promise<void>;
+
+  /**
    * Append a telemetry sample.  Stub — see TODO above.
    */
   appendSample(sample: {
