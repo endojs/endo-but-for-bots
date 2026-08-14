@@ -16,12 +16,18 @@ commit from only that tree would invent metadata on every fetch and change the
 commit object ID.
 
 This blocks Strategy B in Minion Town's
-[Git object store design, section 4](https://github.com/kriscendobot/minion.town/blob/609fdd5251a0297ce15355acc8d902f973c99a18/designs/git-remote-capability.md#4-git-objects---cas-two-storage-strategies-behind-one-wire):
-Git objects synthesized from CAS-native state must be byte-identical across
-fetches. This design answers the
+[Git object store design, section 4](https://github.com/kriscendobot/minion.town/blob/609fdd5251a0297ce15355acc8d902f973c99a18/designs/git-remote-capability.md#4-git-objects---cas-two-storage-strategies-behind-one-wire).
+That design lets a Git remote answer for an object two ways: **Strategy A**
+interns each raw Git object in content-addressed storage and serves the stored
+bytes back verbatim, while **Strategy B** holds only CAS-native daemon state
+(`readable-blob` and `readable-tree` formulas) and *synthesizes* the Git objects
+on demand. Strategy B stays blocked until those synthesized objects are
+byte-identical across fetches: the same tree, commit, or tag must reproduce the
+same object ID every time. This design answers the
 [review request](https://github.com/kriscendobot/minion.town/pull/41#discussion_r3785689633)
 with daemon-native formulas for Git commits, trees, and tags, plus a refs view
-over the formula DAG. It does not implement the Minion Town remote.
+over the formula DAG, so Strategy B's synthesis is byte-stable. It does not
+implement the Minion Town remote.
 
 ## Design
 
@@ -36,14 +42,15 @@ type FormulaPath = {
 };
 ```
 
-Resolution starts by providing `root`, then calls `lookup(component)` for every
-component in `path`. Intermediate values may be any daemon name hub. The final
-value must have the formula type required by the edge. An empty path names the
-root formula itself.
+Resolution starts from `root`, then calls `lookup(component)` for every
+component in `path`. Intermediate values may be any daemon *name hub*, meaning
+any daemon lookup structure that binds names to values, such as a host, guest,
+directory, or pet store. The final value must have the formula type required by
+the edge. An empty path names the root formula itself.
 
 The ref store retains the root through an ordinary formula dependency. Every
 traversed name hub retains its named child through its existing dynamic
-pet-store edge. A commit constructor can therefore accept a direct
+pet-store edge (the name hub's own retained name-to-formula binding). A commit constructor can therefore accept a direct
 `readable-tree`, or accept a host, guest, directory, or other name hub followed
 by a lookup path that ends at a `readable-tree` or `git-tree`.
 
@@ -62,11 +69,22 @@ of the Git object header and those exact content bytes, so a second blob formula
 would add no information.
 
 ```ts
-type GitTreeEntry = {
-  mode: '40000' | '100644' | '100755' | '120000' | '160000';
-  nameBase64: string;
-  target: FormulaIdentifier;
-};
+type GitTreeEntry =
+  | {
+      // Directory, file, and symlink entries resolve to a formula this repo
+      // owns.
+      mode: '40000' | '100644' | '100755' | '120000';
+      nameBase64: string;
+      target: FormulaIdentifier;
+    }
+  | {
+      // Submodule gitlink. The OID names a commit in a *different*
+      // repository's object set, routinely absent here, so it is carried
+      // opaquely as raw bytes rather than a resolvable formula target.
+      mode: '160000';
+      nameBase64: string;
+      gitlinkOidHex: string;
+    };
 
 type GitTreeFormula = {
   type: 'git-tree';
@@ -122,16 +140,49 @@ type GitTagFormula = {
 ```
 
 `git-tree` carries the information `readable-tree` omits: raw path bytes, modes,
-symlinks, and gitlinks. Its entries are stored in Git tree sort order and are
-rejected if names, modes, ordering, or target types are invalid. Mode `160000`
-targets a `git-commit`; directory mode targets `git-tree` or `readable-tree`;
-the remaining modes target `readable-blob`.
+symlinks, and gitlinks. Its entries are stored in Git tree sort order. An entry
+is rejected if its name, mode, ordering, or target type is invalid. Directory
+mode (`40000`) targets a `git-tree` or a `readable-tree`; the file and symlink
+modes (`100644`, `100755`, `120000`) target a `readable-blob`.
 
-`git-commit` makes author and committer timestamps explicit decimal seconds
-plus a four-digit signed UTC offset. `rawBase64` is the authoritative complete
-actor header value; the parsed fields are validated indexes for inspection and
-construction. This preserves unusual but valid spacing while making timestamps
-available without reparsing. Parent order is preserved because it is part of
+Mode `160000` is a submodule gitlink, and it is the design's answer for a
+reference that points outside the object store this tree owns. A gitlink's OID
+names a commit in a *different* repository, which is routinely absent from the
+repo being ingested (that is the purpose of a gitlink, not an oversight), so
+requiring it to resolve to a formulated `git-commit` would fail ingest for the
+ordinary submodule case. A gitlink entry therefore carries its raw OID
+(`gitlinkOidHex`) opaquely: the OID is preserved verbatim for byte-stable tree
+serialization and is never formulated, resolved, or checked for reachability at
+ref-update time. A daemon that also happens to hold the referenced submodule
+commit may formulate it separately, but ingest and projection never require it.
+Shallow-fetch boundaries are handled the same way: an object outside the fetched
+set is only ever referenced, never required to be present.
+
+The default-mode assignment rule for `readable-tree` children (§ Synthetic
+orphan commits) applies recursively wherever a directory entry targets a
+`readable-tree`: within that subtree and every `readable-tree` nested beneath it,
+child trees serialize at `40000` and readable blobs at `100644`. A
+`readable-tree` subtree cannot express an executable bit, symlink, or gitlink, so
+any tree needing a non-default mode anywhere beneath it must use `git-tree`
+formulas all the way down to each such entry rather than mixing in a
+`readable-tree` at an intermediate level.
+
+`git-commit` represents author and committer timestamps as explicit decimal
+seconds plus a four-digit signed UTC offset. `rawBase64` holds the complete
+actor header value and is the sole input to object hashing; the parsed
+`nameBase64`, `emailBase64`, `seconds`, and `utcOffset` fields are validated
+projections of those bytes, provided for inspection and time-based logic without
+reparsing. The two representations are never supplied independently, and they
+have one derivation direction fixed at construction: for an ingested commit the
+parser derives the parsed fields from `rawBase64`; for a daemon-authored commit
+the maker synthesizes `rawBase64` from the structured fields using Git's actor
+grammar, `name SP "<" email ">" SP seconds SP offset`, where `name` and `email`
+are the decoded `nameBase64`/`emailBase64` bytes, `seconds` is decimal, and
+`offset` is a signed four-digit `+HHMM` or `-HHMM`, then derives the parsed
+fields back from those bytes. Because hashing reads only `rawBase64` and the parsed fields
+are always derived from it, an internally inconsistent record whose raw bytes
+and parsed fields disagree cannot be constructed. This preserves unusual but
+valid spacing while making timestamps available without reparsing. Parent order is preserved because it is part of
 merge commit identity. The message is a readable blob so arbitrary bytes and
 the presence or absence of a trailing newline survive round trips.
 `extraHeaders` retains `encoding`, multiline `gpgsig`, `mergetag`, and unknown
@@ -160,11 +211,16 @@ type FormulaRef =
 
 type FormulaRefStore = {
   list(prefix: string): Promise<Record<string, FormulaRef>>;
+  get(ref: string): Promise<FormulaRef | undefined>;
   compareAndSwap(
     ref: string,
     expected: {
       binding: FormulaRef | undefined;
-      terminal?: FormulaIdentifier;
+      // Required whenever `binding` is a direct ref: the terminal formula
+      // identifier the caller last resolved the path to. `undefined` only
+      // when `binding` is absent (creating the ref) or symbolic, cases with
+      // no terminal to observe. Never optional for a direct ref.
+      terminal: FormulaIdentifier | undefined;
     },
     replacement: FormulaRef | undefined,
   ): Promise<boolean>;
@@ -182,12 +238,22 @@ refs/heads/main -> hostId / projects / site / release
 The first component is always an arbitrary formula identifier. Remaining
 components are name-hub lookups. The terminal may be a `git-commit`, `git-tag`,
 `git-tree`, or `readable-tree`. Ref names and symbolic-ref targets are validated
-with Git's refname rules before storage. A direct-ref update compares both the
-stored `FormulaRef` and the terminal formula identifier observed by the client.
-The daemon resolves and updates under its formula-graph lock, so a change to any
-path component makes the comparison fail. This matches the `RefStore`
-concurrency contract in the Minion Town design even when a stored selector has
-not changed but a name-hub binding beneath it has.
+with Git's refname rules before storage. `get(ref)` reads a single known
+binding, the common shape before a compare-and-swap, without enumerating a
+prefix through `list`.
+
+A direct-ref update compares both the stored `FormulaRef` (the *selector*, the
+formula path defined above) and the terminal formula identifier the client last
+resolved that path to. For a direct-ref expectation `terminal` is mandatory: the
+store rejects a direct-ref `compareAndSwap` that omits it rather than silently
+degrading to a binding-only comparison. Binding-only CAS is never a caller's
+option, because it would miss a name-hub binding that changed beneath an
+unchanged path, the exact drift this store exists to detect. The daemon resolves
+and updates under its formula-graph lock, so a change to any path component makes
+the comparison fail. This `FormulaRefStore` implements the `RefStore`
+concurrency contract named in the Minion Town design: the compare-and-swap fails
+even when the stored selector has not changed but a name-hub binding beneath it
+has.
 
 The initial adapter accepts only selectors whose terminal name hub supports a
 daemon-internal compare-and-swap binding operation. Read-only paths through
@@ -224,7 +290,7 @@ Strategy A/B seam:
 ```ts
 type FormulaGitObjectStore = {
   resolve(target: FormulaPath): Promise<FormulaIdentifier>;
-  oidFor(target: FormulaPath, format: 'sha1' | 'sha256'): Promise<string>;
+  computeOid(target: FormulaPath, format: 'sha1' | 'sha256'): Promise<string>;
   readObject(oid: string): Promise<{
     type: 'blob' | 'tree' | 'commit' | 'tag';
     payload: Uint8Array;
@@ -249,12 +315,28 @@ Projection follows Git's byte grammar:
 formulates its referenced objects bottom-up, and records every raw field needed
 to serialize the same payload. It rejects dangling references at ref-update
 time. Ingest followed by projection must reproduce the input payload byte for
-byte and the same OID.
+byte and yield the same OID.
 
 This interface also admits Strategy A. An implementation may index an interned
 raw Git object instead of projecting a formula, while refs still point into the
 same formula namespace. The remote can therefore choose stored objects or
 formula synthesis per partition without changing smart HTTP.
+
+### Capability construction
+
+`FormulaGitObjectStore` and `FormulaRefStore` are trusted daemon internals, not
+guest-facing capabilities. The guest-facing Git caps in
+[daemon-git-capability](daemon-git-capability.md) § Capability Construction and
+[daemon-git-remotes](daemon-git-remotes.md) are minted through the normative
+`await E(host).provideGit(cap, petName, [opts])` entry point, which those designs
+state is the only normative form. These two stores are different: they are
+constructed by the Minion Town remote adapter (or a daemon-local pack experiment)
+from the explicit authorities named under § Security and Lifetime (read
+authority for the ref roots served and binding authority for the writable ref
+leaves), and there is no `provideX` for either. A guest never holds one directly.
+If a later revision exposes object-store or ref-store authority to guests, it
+must introduce a `provideX` entry point and restate here the authority bound to
+it.
 
 ## Security and Lifetime
 
@@ -306,6 +388,17 @@ formulation. Hash verification alone is not a resource bound.
   fetch keeps its pinned snapshot while the next fetch sees the new terminal.
 - Race two compare-and-swap ref updates and assert exactly one wins without a GC
   retention gap.
+- Compare-and-swap a direct ref whose stored selector is unchanged but whose
+  terminal formula identifier changed because a traversed name-hub binding was
+  rebound, and assert the swap fails (the reader-observed-stale-terminal case),
+  distinct from the writer-versus-writer race above.
+- Reject payloads that exceed each bound named under § Security and Lifetime:
+  an oversized object, an over-deep tree nesting, a tree with too many entries,
+  and a commit exceeding the parent-count bound, asserting each is refused
+  before formulation rather than accepted or truncated.
+- Round-trip a `git-tree` bearing a submodule gitlink (ingest then project) and
+  assert the raw gitlink OID bytes survive without formulating the referenced
+  commit; assert a malformed gitlink OID is rejected.
 - Project the same readable tree through two refs and assert one identical
   synthetic orphan commit; assert unsupported readable-tree children fail.
 
