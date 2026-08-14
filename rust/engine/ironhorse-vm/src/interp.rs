@@ -18239,34 +18239,12 @@ impl Interp {
                     _ => Slot::undefined(),
                 }
             }
-            // `Object.prototype.hasOwnProperty(k)`: is `k` an OWN property.
-            // A key that is not a program symbol cannot be an own property
-            // (own keys are interned symbol ids) ⇒ `false` — safe, unlike
-            // `in`, because this never consults the prototype chain.
+            // `Object.prototype.hasOwnProperty(V)` (ECMA-262 20.1.3.2): the full
+            // `? ToPropertyKey(V)` / `? ToObject(this)` / `HasOwnProperty(O, P)`
+            // path — primitive-boxing receivers, symbol / number / index keys,
+            // and the array/function/string-wrapper exotic own-property views.
             NativeMethod::ObjectHasOwnProperty => {
-                // `hasOwnProperty` checks only the receiver's OWN properties
-                // (never the prototype chain), so it is sound for *any* string
-                // key once the key is resolved through the global intern table
-                // (XS's `fxAt` → `fxNewNameX`): a name that is a program symbol
-                // or a pre-interned default key resolves with no allocation; a
-                // genuinely-novel name interns one metered key slot. Either
-                // way the own-property check answers `false`/`true` exactly,
-                // and a well-known inherited name (`"toString"`) is correctly
-                // `false` because it is not an own property.
-                let (o, key) = match (this.value, arg0.value) {
-                    (Payload::Reference(o), Payload::String(off)) => (o, self.str_text(off)),
-                    _ => return Err(Halt::Unsupported("hasOwnProperty:non-string-key")),
-                };
-                // An index-valued string key routes to the exotic index
-                // `[[GetOwnProperty]]` (an array's item chunk / an ordinary
-                // object's index chunk), whose own-check + metering ironhorse does
-                // not model here — honest skip rather than a wrong answer.
-                if string_to_index(&key).is_some() {
-                    return Err(Halt::Unsupported("hasOwnProperty:index-key"));
-                }
-                let id = self.intern_key(&key);
-                self.meter.tick_raw(METHOD_HAS_OWN_PROPERTY_METERING);
-                Slot::boolean(self.find_property(o, id).is_some())
+                self.object_has_own_property(code, this, arg0)?
             }
             // `Object.prototype.isPrototypeOf(v)`: is the receiver in `v`'s
             // prototype chain.
@@ -26646,6 +26624,146 @@ impl Interp {
             }
         }
         Ok(self.ordinary_get_own_descriptor(inst, id))
+    }
+
+    /// `Object.prototype.hasOwnProperty(V)` (ECMA-262 20.1.3.2). Matches XS's
+    /// `fx_Object_prototype_hasOwnProperty`: coerce the receiver first (so a
+    /// `null`/`undefined` `this` throws a TypeError before the key is
+    /// stringified), then `? ToPropertyKey(V)`, then whether the resulting
+    /// object has `P` as an OWN property — `O.[[GetOwnProperty]](P) is not
+    /// undefined`, never consulting the prototype chain.
+    fn object_has_own_property(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+        arg0: Slot,
+    ) -> Result<Slot, Halt> {
+        // `? ToObject(this)`: `null`/`undefined` throw (XS's `fxToInstance`); a
+        // primitive boxes to its wrapper, whose own-property set is computed
+        // directly below without materializing the wrapper.
+        if matches!(this.kind, Kind::Null | Kind::Undefined) {
+            return Err(self.catchable_type_error());
+        }
+        // `? ToPropertyKey(V)` (XS's `fxAt`): a symbol resolves to its stable
+        // key id; a string interns as a name; any other primitive coerces
+        // through ToPrimitive → ToString first (a number key renders and meters
+        // its result chunk). An index-valued string interns as a name too — the
+        // exotic index own-check re-derives the index from the id.
+        let id = self.to_property_id(code, arg0)?;
+        // The `mxBehaviorGetOwnProperty` probe native-body residual, metered
+        // once per call exactly as the pre-existing string-key path did.
+        self.meter.tick_raw(METHOD_HAS_OWN_PROPERTY_METERING);
+        let present = match this.value {
+            Payload::Reference(o) if this.kind == Kind::Reference => {
+                self.object_own_property_present(code, o, id)?
+            }
+            // A String primitive's boxed wrapper exposes its canonical integer
+            // indices `[0, length)` and `length` as own properties (the
+            // String-exotic `[[GetOwnProperty]]`, ECMA-262 10.4.3.5).
+            Payload::String(off) if this.kind == Kind::String => {
+                let len = self.str_len(off);
+                let name = self.string_key_name(id);
+                let index = name.as_deref().and_then(string_to_index);
+                self.string_exotic_has_own(len, name.as_deref(), index)
+            }
+            // Every other primitive (Number/Boolean/Symbol/BigInt) boxes to a
+            // fresh wrapper with no own properties of its own.
+            _ => false,
+        };
+        Ok(Slot::boolean(present))
+    }
+
+    /// Whether object `o` has `id` as an own property — `O.[[GetOwnProperty]]`
+    /// projected to presence, dispatched on the receiver's exotic shape. Exotic
+    /// own names (`length`/`name`/`prototype`, integer indices) are matched by
+    /// the key's resolved *name* rather than a cached program-symbol id, because
+    /// a key that reaches `hasOwnProperty` only as a string literal (never as a
+    /// `.length` access) is interned under a fresh runtime id that the boot
+    /// `length_id`/`name_id` caches never equal.
+    fn object_own_property_present(
+        &mut self,
+        code: &[u8],
+        o: crate::value::SlotIndex,
+        id: u16,
+    ) -> Result<bool, Halt> {
+        // A Proxy routes through its `getOwnProperty` trap and the invariant
+        // checks the MOP enforces.
+        if self.proxies.contains_key(&o) {
+            return Ok(self.mop_get_own_property(code, o, id)?.is_some());
+        }
+        // The key's string name (a symbol key resolves to `None` — never an
+        // exotic index / `length` / `name`), and the canonical integer index it
+        // names, if any.
+        let name = self.string_key_name(id);
+        let index = name.as_deref().and_then(string_to_index);
+        // A TypedArray / ArrayBuffer / DataView carries integer-indexed (and
+        // buffer-length) own properties whose exact own-check + metering are the
+        // typed-array cluster's residual, not this seam's — an index-valued key
+        // on such a receiver honest-skips to that child. A non-index key names
+        // an ordinary expando slot (`length`/`byteLength`/… are inherited
+        // getters, not own), answered soundly by the ordinary probe.
+        if self.typed_arrays.contains_key(&o)
+            || self.array_buffers.contains_key(&o)
+            || self.data_views.contains_key(&o)
+        {
+            if index.is_some() {
+                return Err(Halt::Unsupported("hasOwnProperty:typed-array-index"));
+            }
+            return Ok(self.find_property(o, id).is_some());
+        }
+        // An Array's exotic own properties: the present integer indices (kept in
+        // the item side table, not the slot chain) and `length`; named expandos
+        // live in the slot chain.
+        if let Some(a) = self.arrays.get(&o) {
+            if name.as_deref() == Some("length") {
+                return Ok(true);
+            }
+            if let Some(idx) = index {
+                if a.items.contains_key(&idx) {
+                    return Ok(true);
+                }
+            }
+            return Ok(self.find_property(o, id).is_some());
+        }
+        // A String wrapper (`new String("ab")`) exposes the same exotic string
+        // indices + `length` as a primitive string, plus any ordinary expando
+        // own slots. Every other wrapper (Number/Boolean/Symbol) has only its
+        // ordinary own slots (the boxed primitive is internal, not an own
+        // property).
+        if let Some(prim) = self.wrapper_data.get(&o).copied() {
+            if let (Kind::String, Payload::String(off)) = (prim.kind, prim.value) {
+                let len = self.str_len(off);
+                if self.string_exotic_has_own(len, name.as_deref(), index) {
+                    return Ok(true);
+                }
+            }
+            return Ok(self.find_property(o, id).is_some());
+        }
+        // A Function's exotic own properties: `length` and `name` (always), and
+        // `prototype` for a constructor that carries one; named expandos live in
+        // the slot chain.
+        if self.functions.contains_key(&o) {
+            match name.as_deref() {
+                Some("length") | Some("name") => return Ok(true),
+                Some("prototype") if self.ctor_prototype.contains_key(&o) => return Ok(true),
+                _ => return Ok(self.find_property(o, id).is_some()),
+            }
+        }
+        // Ordinary object: the whole own set lives in the slot chain (an
+        // integer-index-named property on a plain object is an ordinary slot
+        // keyed by the interned name, not a side-table item).
+        Ok(self.find_property(o, id).is_some())
+    }
+
+    /// Whether a String-exotic receiver of code-unit length `len` has the key
+    /// (its resolved `name` and canonical `index`, if any) as an own property:
+    /// its integer indices `[0, len)` and the non-configurable `length`
+    /// (String-exotic `[[GetOwnProperty]]`).
+    fn string_exotic_has_own(&self, len: usize, name: Option<&str>, index: Option<u32>) -> bool {
+        if name == Some("length") {
+            return true;
+        }
+        matches!(index, Some(idx) if (idx as usize) < len)
     }
 
     /// `O.[[DefineOwnProperty]](P, Desc)`.
