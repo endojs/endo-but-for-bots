@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-04-14 |
-| **Updated** | 2026-04-16 |
+| **Updated** | 2026-08-06 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | **Complete** |
 | **Supersedes** | designs/daemon-endor-sqlite.md |
@@ -545,9 +545,10 @@ thereafter).
 
 These can be added as follow-up work:
 
-- **`iterate()`** — would need a cursor handle and a third map.
-  The daemon can use `all()` for small result sets or page with
-  `LIMIT`/`OFFSET`.
+- **`iterate()`** — specified by
+  [daemon-endor-sqlite-iterate-streaming](daemon-endor-sqlite-iterate-streaming.md)
+  as the cursor-handle and third-map follow-up. It remains unimplemented in
+  this v1 surface.
 - **User-defined functions** (`db.function(name, fn)`) — requires
   calling back into JS from Rust, which is complex with XS FFI.
 - **`setAllowBareNamedParameters`** — use `$` / `:` / `@`

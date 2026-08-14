@@ -7,6 +7,8 @@ top-level packaged-application fixture corpus shared by Node,
 compartment-mapper, and Endor; summary, dependency graph, M11 row, estimate,
 totals, and timeline synced.*
 
+*Layered on 2026-08-06: added [daemon-endor-sqlite-iterate-streaming](daemon-endor-sqlite-iterate-streaming.md) to M11 (Rust Daemon): a one-row XS SQLite cursor and `StatementSync.iterate()` parity surface that removes the pet-store startup's temporary all-rows allocation while preserving its final in-memory name map. Summary table, M11 row, dependency graph, estimate, totals, and timeline synced.*
+
 *Layered on 2026-07-29: revised [conservative-regexp-subset](conservative-regexp-subset.md) to settle review choices for block-determinism safety, builder-selected corpus-backed limits, whole-string plus contains/composition modes, the XS `xsre` / #600 native direction, and the shared Node/compartment-mapper `endor` package-export condition.*
 
 *Layered on 2026-07-22: retired the superseded `streamReply` roadmap entry in favor of the merged [daemon-message-streaming](daemon-message-streaming.md) revision surface, filed the previously unattended designs, and made the Minion Town federation experiment the roadmap's execution lead; existing milestone order remains the dependency order.*
@@ -22,6 +24,7 @@ package graph, using compartment-mapper's shared package resolver to emit a
 source-only archive; replaces Endor's handwritten `main` / `exports` /
 `imports` runtime resolver and establishes one top-level packaged-application
 fixture corpus for Node, compartment-mapper, and Endor),
+[daemon-endor-sqlite-iterate-streaming](daemon-endor-sqlite-iterate-streaming.md) (added 2026-08-06; a native XS SQLite cursor, `hostSqliteStmtNext(stmt)`, and hardened `StatementSync.iterate(...params)` parity path that binds once and yields one decoded row per host call; the manager pet-store loads its required in-memory map directly from that iterator without a transient all-rows array),
 [conservative-regexp-subset](conservative-regexp-subset.md) (added 2026-07-10,
 revised 2026-07-29; settles review choices: block-determinism safety,
 builder-selected corpus-backed limits, whole-string plus contains/composition
@@ -319,8 +322,9 @@ LLM-agent stack).*
 | [daemon-guest-eval-simplification](daemon-guest-eval-simplification.md) | 2026-03-21 | 2026-05-04 | **Implemented** |
 | [daemon-docker-selfhost](daemon-docker-selfhost.md) | 2026-03-02 | 2026-03-02 | Not Started |
 | [daemon-capability-bus](daemon-capability-bus.md) | 2026-02-25 | 2026-04-11 | In Progress |
-| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) | 2026-04-14 | 2026-04-16 | **Complete** |
 | [daemon-sqlite-shutdown-checkpoint](daemon-sqlite-shutdown-checkpoint.md) | 2026-08-06 | 2026-08-06 | Not Started |
+| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) | 2026-04-14 | 2026-08-06 | **Complete** |
+| [daemon-endor-sqlite-iterate-streaming](daemon-endor-sqlite-iterate-streaming.md) | 2026-08-06 | — | Proposed |
 | [daemon-xs-worker-debugger](daemon-xs-worker-debugger.md) | 2026-04-14 | 2026-04-15 | In Progress |
 | [daemon-endor-architecture](daemon-endor-architecture.md) | 2026-04-16 | 2026-04-16 | Active |
 | [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | 2026-04-15 | 2026-04-16 | In Progress |
@@ -651,6 +655,8 @@ flowchart TD
         ernpm[endor-npm-registry-proxy<br/><i>IN PROGRESS</i>]
         erworker[endor-registry-proxy-worker<br/><i>PROPOSED</i>]
         ercas[daemon-cas-management<br/><i>IN PROGRESS</i>]
+        dsql[daemon-endo-rust-sqlite<br/><i>COMPLETE</i>]
+        dsqli[daemon-endor-sqlite-iterate-streaming<br/><i>PROPOSED</i>]
         egitcas[endor-git-bindings<br/><i>PROPOSED</i>]
         errun[endor-run-expanded<br/><i>IN PROGRESS</i>]
         pfs --> dfs
@@ -688,6 +694,7 @@ flowchart TD
         errun -.-> dwimp
         ercas --> dwicap
         ercas --> egitcas
+        dsql --> dsqli
         egitcas -.-> dgit
     end
 
@@ -1188,6 +1195,7 @@ user interface move to Rust.
 | ironhorse-snapshot-store-seam | In Progress | Seam below the `XS_M` atom grammar and above the Ironhorse index arenas so the whole-heap snapshot can be backed by a keyed store (SQLite first, daemon-side behind a pure `HeapStore` trait): paged slot/chunk images reusing the canonical record codec, dirty-page incremental checkpoints at crank boundaries, lazy grow-only reification at resume. The atom container stays the canonical interchange and CAS identity; determinism is enforced by a metamorphic agreement suite (results/computrons invariant across store backend, residency schedule, and checkpoint cadence). Extends ironhorse-engine § Snapshots (requirement 1c). Phases 1-4 landed 2026-08-06/07 (PR #963): paged `HeapStore` model + reference stores with container byte-identity and root-hash locks, vm dirty-page tracking, owning `StoreSession` checkpoints with (epoch, seal) succession guards, lazy reification with pinned faults and the six-way metamorphic determinism suite, seeded hardening arms, and the `rust/endo/ironhorse-store-sqlite` backend (WAL + application_id gate, transactional dirty-row commits, full-close contract) — hardened by a wide adversarial multi-agent review (8 dimensions; all confirmed findings fixed). Remaining: cargo-fuzz promotion, supervisor wiring/cadence, attached-mode + wake-latency benchmarks, and the phase 5-9 never-reify-the-whole-heap roadmap (incremental Merkle root hash, summary-driven generational mark, identity-keyed chunk rows, eviction, sparse attach + paged free list). |
 | endor-registry-proxy-worker | Proposed | Map Rust-acquired CAS package graphs in a separate XS worker using `@endo/compartment-mapper`; replace handwritten package resolution and share packaged-application fixtures with Node and compartment-mapper. |
 | ironhorse-debugger-recovery-and-uncaught | Proposed | Recovers the Ironhorse debugger row (roadmap stage 7) that left the branch before PR #600 merged, and lands break-on-uncaught-exceptions natively. Recovery recommendation: a fresh `builder` re-deriving against current `llm` (not a `weaver` cherry-pick) — the three unreachable slices (`2b6a8d7070`/`6bac90c221`/`8024ee3f55`) predate a wholesale `endor-* → ironhorse-*` crate rename and a 505-commit interpreter rewrite, so they are reference material, not a mergeable branch; slice 1 (`ironhorse-debug` protocol core) ports nearly verbatim, slice 2's VM seam re-derives against today's `interp.rs`. Break-on-uncaught uses the structural predicate `jumps.is_empty()` plus a one-byte target-opcode peek for finally-only handlers (no bytecode change, oracle-locked to `fxTryNodeCode`), the `uncaughtExceptions` pseudo-breakpoint (option A, matching the already-shipped client), and a `caught` attribute on `<break>`. Gating prerequisite: Ironhorse's engine-raised errors must first unwind through the jump chain (verified: they `return Halt::Throw` inline with no raise helper, so `try/catch` cannot catch an engine `TypeError`). Folds the three `BreakpointTable` parity nits into slice 1's re-land. The Endo debugger client, not xsbug, is the protocol compatibility target; C-XS receives no new work and retires once Ironhorse reaches parity. The required modes are exactly `none`, `uncaught`, and `all`; caught-only breaking is out of scope. Supersedes the break-on-uncaught section of daemon-xs-worker-debugger for the Ironhorse engine. |
+| daemon-endor-sqlite-iterate-streaming | Proposed | One-row-at-a-time XS SQLite iterator, preserving the existing value mapping while avoiding the pet-store startup result-array allocation. |
 | endor-tui | Not Started | TUI entry point for `endor`: Chat UI in terminal idiom, and an integrated stepping debugger for XS workers (XS `mxDebug` protocol) |
 | endor-bus-tui | Not Started | Bus-protocol verbs for worker-owned TUI regions, XS handle API, Exo/CapTP wrapper |
 | endor-native-zip-xs | Proposed | Raw-DEFLATE host functions selected by `@endo/zip` under `-C xs`, with bounded inflation and snapshot ABI update |
@@ -1502,6 +1510,7 @@ have been remapped: 0 → 1, ½ → 2, 1 → 3, 2 → 4, 3 → 7, 4 → 9,
 | endoclaw-skill-registry | S-M | 3 days | 10 | Skills directory with capability declarations; PR #105 open |
 | endor-git-bindings | M | 4-5 days | 11 | `GitCas` trait and pure-Rust `gix` local backend, Endor-tree adapter, corruption/quarantine coverage, and a cross-compilation release check; vendored libgit2 is the documented contingency. HTTPS and SSH are separately designed follow-ups. |
 | endor-registry-proxy-worker | M-L | 1.5-2 weeks | 11 | XS mapper bundle, virtual CAS read powers, normalized package-resolution archive tables, Rust loader simplification, and the three-adapter packaged-application fixture corpus. |
+| daemon-endor-sqlite-iterate-streaming | M | 4-5 days | 11 | Native SQLite cursor map, one-row host ABI, hardened shim iterator, lifecycle cleanup, and real XS plus pet-store large-set coverage. |
 | endor-tui | XL | 5-8 weeks | 11 | Rust TUI: ratatui/crossterm, concept-map of every Chat component, XS `mxDebug` debugger integration (XL bumped 1.3x) |
 | endor-bus-tui | XL | 4-7 weeks | 11 | Bus-verb spec, XS handle API, Exo/CapTP wrapper; cross-worker layout composition (XL bumped 1.3x) |
 | endor-native-zip-xs | S-M | 2-3 days | 11 | Pure-Rust raw-DEFLATE host functions, `@endo/zip` `xs` conditional exports, bounded inflation, and XS snapshot callback-table migration |
@@ -1541,8 +1550,8 @@ date of this pass.
 | M8: Peer App Sharing (was Milestone A) | 3 net-new (`familiar-deep-link-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); existing constituents counted under M3/M4/M7 | 2-3 weeks | 3-5 weeks |
 | M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
 | M10: Confinement & Ecosystem (was M5) | 6 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
-| M11: Rust Daemon (`endor`) (was M6) | 5 (`endor-git-bindings`, `endor-registry-proxy-worker`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 14-21 weeks | 16-23 weeks |
-| **Total remaining** | **61** + 7 M5 rows (4 in-flight + 3 design gaps) + 1 M6 own-work row | **~60-82 weeks** + M5 4-6 weeks + M6 ~2 weeks | **~72-98 weeks** |
+| M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
+| **Total remaining** | **62** + 7 M5 rows (4 in-flight + 3 design gaps) + 1 M6 own-work row | **~61-83 weeks** + M5 4-6 weeks + M6 ~2 weeks | **~73-99 weeks** |
 
 The 2026-05-20 reconciliation corrects a counting gap in the prior
 snapshot's narrative: M1, M3, and M4 had absorbed new rows since the
@@ -1622,7 +1631,7 @@ dates project from that anchor at the upper-bound effort.
 | M8: Peer App Sharing (was Milestone A) | 2-3 weeks | 27-35 weeks | Late December 2026 to early February 2027 |
 | M9: UX & Tooling (was M4) | 9-12 weeks | 36-47 weeks | Mid February to mid April 2027 |
 | M10: Confinement & Ecosystem (was M5) | 14-20 weeks | 50-67 weeks | Late May to early September 2027 |
-| M11: Rust Daemon (`endor`) (was M6) | 14-21 weeks | 64-88 weeks | Q3 to Q4 2027 (research-heavy; may run in parallel) |
+| M11: Rust Daemon (`endor`) (was M6) | 15-22 weeks | 65-89 weeks | Q3 to Q4 2027 (research-heavy; may run in parallel) |
 
 *M3 and M7 (weblets) are less order-dependent and can be interleaved
 once their respective dependencies have landed; the M5/M6 hosted-Gateway
