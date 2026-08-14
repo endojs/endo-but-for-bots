@@ -17,11 +17,11 @@ import { makeGrepTool } from '../src/tool-makers.js';
  */
 export const make = (_powers, _context, { env = {} }) => {
   const cwd = env.FAE_CWD || process.cwd();
-  const impl = makeGrepTool(cwd);
+  const implementation = makeGrepTool(cwd);
   return makeExo('GrepTool', FaeToolInterface, {
-    schema: () => impl.schema(),
-    execute: args => impl.execute(args),
-    help: () => impl.help(),
+    schema: () => implementation.schema(),
+    execute: args => implementation.execute(args),
+    help: () => implementation.help(),
   });
 };
 harden(make);

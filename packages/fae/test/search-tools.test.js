@@ -26,11 +26,13 @@ import {
   makeReadFileTool,
 } from '../src/tool-makers.js';
 
+/** @import { ExecutionContext } from 'ava' */
+
 /**
  * Create a fresh temp dir populated from a { relativePath: contents } record,
  * returning its path.
  *
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @param {Record<string, string>} files
  */
 const makeFixture = (t, files) => {

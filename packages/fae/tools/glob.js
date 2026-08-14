@@ -16,11 +16,11 @@ import { makeGlobTool } from '../src/tool-makers.js';
  */
 export const make = (_powers, _context, { env = {} }) => {
   const cwd = env.FAE_CWD || process.cwd();
-  const impl = makeGlobTool(cwd);
+  const implementation = makeGlobTool(cwd);
   return makeExo('GlobTool', FaeToolInterface, {
-    schema: () => impl.schema(),
-    execute: args => impl.execute(args),
-    help: () => impl.help(),
+    schema: () => implementation.schema(),
+    execute: args => implementation.execute(args),
+    help: () => implementation.help(),
   });
 };
 harden(make);
