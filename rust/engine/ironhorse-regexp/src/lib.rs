@@ -32,9 +32,11 @@
 //! unicode (lower-ward) case fold and its interaction with classes/ranges/`\w`,
 //! and unicode-aware backreferences.
 //!
-//! Every remaining deferred surface is a **named**
+//! Unicode property escapes (`\p{}` / `\P{}`) use the canonical binary,
+//! general-category, Script, and Script_Extensions aliases and endpoint tables
+//! extracted from the pinned XS source at build time. Every remaining deferred surface is a **named**
 //! [`compile::CompileError::Unsupported`], never a wrong meter or a wrong
-//! value: `\p{}`/`\P{}` unicode property escapes, the `v` flag's string sets
+//! value: the `v` flag's string sets
 //! and `[...]` set-expression grammar, inline modifiers (`(?flags:)`), and —
 //! outside `u`/`v`/a group name — an astral code point in the pattern (which
 //! XS splits into surrogates, a path this stage does not emit).
@@ -43,6 +45,7 @@ mod charcase;
 mod encoding;
 mod flags;
 mod opcode;
+mod unicode_property;
 
 pub mod compile;
 pub mod matcher;
@@ -264,21 +267,25 @@ mod tests {
     }
 
     #[test]
-    fn v_flag_remains_a_named_skip() {
-        // The `v` flag (string sets) is still a named skip, not relabelled.
-        match compile("abc", "v") {
-            Err(CompileError::Unsupported(_)) => {}
-            other => panic!("expected named Unsupported for v, got {:?}", other),
-        }
+    fn v_flag_core_and_character_properties_execute() {
+        assert!(caps("abc", "v", "abc").0);
+        assert!(caps("\\p{Script=Greek}+", "v", "\u{03B1}\u{03B2}").0);
+        assert!(caps("[\\p{ASCII}]", "v", "A").0);
+        assert!(matches!(
+            compile("[a&&b]", "v"),
+            Err(CompileError::Unsupported("v unicode set expression"))
+        ));
     }
 
     #[test]
-    fn property_escape_remains_a_named_skip_under_u() {
-        // `\p{...}` is still deferred even though `u` core now runs.
-        match compile("\\p{Letter}", "u") {
-            Err(CompileError::Unsupported(_)) => {}
-            other => panic!("expected named Unsupported for \\p, got {:?}", other),
-        }
+    fn unicode_property_aliases_negation_and_ignore_case_execute() {
+        assert!(caps("\\p{Letter}+", "u", "A\u{03B1}").0);
+        assert!(caps("\\p{gc=Lu}", "u", "A").0);
+        assert!(caps("\\p{sc=Grek}", "u", "\u{03B1}").0);
+        assert!(caps("\\p{Script_Extensions=Hira}", "u", "\u{30FC}").0);
+        assert!(caps("\\P{ASCII}", "u", "\u{00E9}").0);
+        assert!(!caps("^\\P{Lowercase_Letter}$", "iu", "A").0);
+        assert!(matches!(compile("\\p{letter}", "u"), Err(CompileError::Syntax(_))));
     }
 
     // ---- compile-time accept/reject validation (the lexer's verdict) ----

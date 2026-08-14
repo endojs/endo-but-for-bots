@@ -13,8 +13,8 @@
 //! meter is the consensus-relevant cost, and *that* is pinned exactly.
 //!
 //! A pattern the oracle compiles but this increment names
-//! [`CompileError::Unsupported`] (the `i`/`u`/`v` flags, named captures,
-//! `\p`, …) is an HONEST NAMED skip: it is counted and reported, never
+//! [`CompileError::Unsupported`] (v-mode set expressions and string
+//! properties, inline modifiers, …) is an HONEST NAMED skip: it is counted and reported, never
 //! silently passed and never asserted as a divergence.
 
 use xs_oracle::regexp as oracle_regexp;
@@ -95,7 +95,7 @@ fn check(case: Case) -> Result<bool, String> {
 /// anchors, alternation, lookaround, pathological backtracking, the `i` fold,
 /// and — since the `u`-core increment — the `u` flag's astral scalars,
 /// `\u{...}` escapes, unicode (lower-ward) case fold, and unicode-aware
-/// classes/quantifiers/backreferences. Every entry is fully ported (checked
+/// classes/quantifiers/backreferences, and Unicode properties. Every entry is fully ported (checked
 /// bit-exact); the still-deferred surfaces are pinned separately in
 /// [`deferred_surfaces_remain_named_skips`].
 fn corpus() -> Vec<Case> {
@@ -328,6 +328,35 @@ fn corpus() -> Vec<Case> {
     v.push(("[\u{10400}-\u{10427}]", "iu", "\u{10428}", 0));
     v.push(("(\u{10400})\\1", "iu", "\u{10428}\u{10400}", 0));
 
+    // Unicode property escapes: canonical aliases, binary properties,
+    // categories, Script/Script_Extensions, complements, classes, and u/v
+    // ignoreCase behavior all execute through the pinned XS endpoint tables.
+    for &flags in &["u", "v"] {
+        v.push(("\\p{ASCII}", flags, "A", 0));
+        v.push(("\\p{ASCII}", flags, "\u{00E9}", 0));
+        v.push(("\\P{ASCII}", flags, "\u{00E9}", 0));
+        v.push(("\\p{Alphabetic}+", flags, "A\u{03B1}", 0));
+        v.push(("\\p{L}+", flags, "A\u{03B1}", 0));
+        v.push(("\\p{General_Category=Uppercase_Letter}", flags, "A", 0));
+        v.push(("\\p{gc=Lu}", flags, "A", 0));
+        v.push(("\\p{Script=Greek}", flags, "\u{03B1}", 0));
+        v.push(("\\p{sc=Grek}", flags, "\u{03B1}", 0));
+        v.push(("\\p{Script_Extensions=Hira}", flags, "\u{30FC}", 0));
+        v.push(("\\p{scx=Kana}", flags, "\u{30FC}", 0));
+        v.push(("[\\p{Letter}\\p{Number}]+", flags, "abc123", 0));
+        v.push(("[^\\p{ASCII}]", flags, "\u{1F600}", 0));
+    }
+    v.push(("^\\p{Lowercase_Letter}$", "iu", "A", 0));
+    v.push(("^\\P{Lowercase_Letter}$", "iu", "A", 0));
+    v.push(("^\\p{Lowercase_Letter}$", "iv", "A", 0));
+    v.push(("^\\P{Lowercase_Letter}$", "iv", "A", 0));
+
+    // Exact spelling/casing is required; unsupported property names and
+    // unsupported name=value families are syntax errors in both engines.
+    v.push(("\\p{letter}", "u", "a", 0));
+    v.push(("\\p{ASCII=Yes}", "u", "A", 0));
+    v.push(("\\p{Block=Basic_Latin}", "u", "A", 0));
+
     // `u`-mode syntax errors (both must reject): under `u` an unknown
     // identity escape, an out-of-range `\u{}`, a bare quantifier brace, and
     // a lone `]`/`}` are SyntaxErrors that non-`u` tolerates.
@@ -378,23 +407,18 @@ fn matcher_parity_against_the_pin() {
     assert!(checked > 100, "corpus should exercise many cases, got {}", checked);
 }
 
-/// The surfaces still deferred after the `u`-core increment stay HONEST
+/// The surfaces still deferred after the property increment stay HONEST
 /// named skips: the oracle compiles them, but ironhorse returns a named
 /// `Unsupported` (never a wrong answer). This pins the "removed the skip only
-/// where implemented" boundary — `\p{}`/`\P{}` property escapes (inside `u`)
-/// and the `v` flag as a whole remain unported. (The `v` flag's set-expression
-/// *grammar* — `\q{}`, `&&`, nested `[[...]]` — is a separate later increment;
-/// this stage does not attempt to validate it, so only cleanly-parsing `v`
-/// patterns are asserted here.)
+/// where implemented" boundary: only v-mode string properties and
+/// set-expression grammar remain here.
 #[test]
 fn deferred_surfaces_remain_named_skips() {
     let deferred: &[Case] = &[
-        ("\\p{Letter}", "u", "a", 0),
-        ("\\p{Script=Greek}", "u", "\u{03B1}", 0),
-        ("\\P{ASCII}", "u", "\u{00E9}", 0),
-        ("[\\p{L}]", "u", "a", 0),
-        ("abc", "v", "abc", 0),
-        ("[a-z]", "v", "m", 0),
+        ("\\p{RGI_Emoji}", "v", "\u{1F600}", 0),
+        ("[a&&b]", "v", "a", 0),
+        ("[a--b]", "v", "a", 0),
+        ("[[a][b]]", "v", "a", 0),
     ];
     for &case in deferred {
         let (pattern, flags, _, _) = case;

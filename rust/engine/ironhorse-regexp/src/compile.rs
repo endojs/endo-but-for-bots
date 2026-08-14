@@ -10,9 +10,9 @@
 //! bit-exact and the emitted graph is structurally identical, which in
 //! turn makes the matcher's per-step meter bit-exact.
 //!
-//! Honest scope (the stage bar names deferred surfaces): the `u` and `v`
-//! flags, `\p{}`/`\P{}` unicode property escapes, inline modifiers
-//! (`(?flags:...)`), and astral (`> 0xFFFF`) code points are compiled to a
+//! Honest scope (the stage bar names deferred surfaces): `v` string sets and
+//! set expressions, inline modifiers (`(?flags:...)`), and astral
+//! (`> 0xFFFF`) code points outside unicode mode are compiled to a
 //! named [`CompileError::Unsupported`], never to a wrong meter or a wrong
 //! value. The `i` flag and named captures (`(?<name>)` / `\k<name>`) ARE
 //! ported: a named group codegens identically to its numbered peer, plus a
@@ -124,7 +124,7 @@ struct Compiler {
     nodes: Vec<Node>,
     code: Vec<i32>,
     /// A pin feature whose SYNTAX this parser validates but whose matcher
-    /// code it does not emit yet (u/v flag, named captures, `\p`, inline
+    /// code it does not emit yet (v string sets, inline
     /// modifiers, astral). Set during the parse; when set, [`compile`]
     /// returns it as `Unsupported` *after* the full accept/reject decision,
     /// so a syntactically invalid such pattern is still a `Syntax` error
@@ -194,17 +194,9 @@ pub fn compile(pattern: &str, flags: &str) -> PResult<Program> {
         named_groups: Vec::new(),
         pending_named_refs: Vec::new(),
     };
-    // The `u` flag's core execution (astral scalars kept whole, unicode
-    // case folding, unicode-aware atoms/classes/quantifiers/backreferences)
-    // is ported below and runs for real. The `v` flag additionally brings
-    // string sets and the `[...]` set-expression grammar, which this stage
-    // has not ported — so `v` remains a named skip whose SYNTAX is still
-    // validated (parse under the flag, surface the unsupported matcher at the
-    // end). `\p{}`/`\P{}` property escapes are likewise a named skip inside
-    // either flag (see `charset_parse_escape`).
-    if parser_flags & XS_REGEXP_V != 0 {
-        c.unsupported = Some("v flag (unicode sets)");
-    }
+    // Core u/v scalar execution and character-valued Unicode properties run
+    // for real. Only syntax that actually uses v's string/set-expression
+    // extension is marked unsupported at its parse site.
     c.compile_pattern()
 }
 
@@ -262,7 +254,7 @@ impl Compiler {
             }
         }
         // A syntactically valid pattern that uses a matcher surface this
-        // stage has not ported (u/v flag, named captures, `\p`, inline
+        // stage has not ported (v string sets, inline
         // modifiers, astral) is accepted by the oracle at parse time; the
         // lexer treats this `Unsupported` as accept. Bail here, AFTER the
         // full accept/reject decision, so an invalid such pattern is still
@@ -709,7 +701,7 @@ impl Compiler {
     }
 
     /// `fxCharSetParseEscape`: the `\`-escapes valid as a character set
-    /// (both bare and inside `[...]`). `\p`/`\P` are the named skip.
+    /// (both bare and inside `[...]`).
     fn charset_parse_escape(&mut self, punctuator: bool) -> PResult<NodeId> {
         let result = match self.character {
             c if c == C_EOF => return Err(self.error("invalid escape")),
@@ -746,9 +738,8 @@ impl Compiler {
                 self.next()?;
                 r
             }
-            c if c == b'p' as i64 || c == b'P' as i64 => {
-                return Err(CompileError::Unsupported("\\p / \\P unicode property escape"));
-            }
+            c if (c == b'p' as i64 || c == b'P' as i64)
+                && self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0 => self.charset_unicode_property()?,
             _ => {
                 self.pattern_escape(punctuator)?;
                 let r = self.charset_single(self.character);
@@ -756,6 +747,62 @@ impl Compiler {
                 r
             }
         };
+        Ok(result)
+    }
+
+    /// `fxCharSetUnicodeProperty`: parse the exact ECMAScript property alias
+    /// grammar and copy the XS endpoint table into a normal charset node.
+    fn charset_unicode_property(&mut self) -> PResult<NodeId> {
+        let negate = self.character == b'P' as i64;
+        self.next()?;
+        if self.character != b'{' as i64 {
+            return Err(self.error("invalid escape"));
+        }
+        self.next()?;
+        let name = self.property_identifier()?;
+        let value = if self.character == b'=' as i64 {
+            self.next()?;
+            Some(self.property_identifier()?)
+        } else {
+            None
+        };
+        if self.character != b'}' as i64 || name.is_empty() || value.as_deref() == Some("") {
+            return Err(self.error("invalid escape"));
+        }
+        let endpoints = crate::unicode_property::lookup(&name, value.as_deref());
+        if endpoints.is_none()
+            && value.is_none()
+            && self.flags & XS_REGEXP_V != 0
+            && crate::unicode_property::is_v_string_property(&name)
+        {
+            return Err(CompileError::Unsupported("v unicode string property"));
+        }
+        let endpoints = endpoints.ok_or_else(|| self.error("invalid escape"))?;
+        let mut chars = Vec::with_capacity(endpoints.len() + 1);
+        chars.push(endpoints.len() as i32);
+        chars.extend_from_slice(endpoints);
+        let set = self.add_node(Kind::CharSet { chars });
+        self.next()?;
+        if negate {
+            self.charset_not(set)
+        } else {
+            Ok(set)
+        }
+    }
+
+    fn property_identifier(&mut self) -> PResult<String> {
+        let mut result = String::new();
+        while matches!(self.character, c if (b'a' as i64..=b'z' as i64).contains(&c)
+            || (b'A' as i64..=b'Z' as i64).contains(&c)
+            || (b'0' as i64..=b'9' as i64).contains(&c)
+            || c == b'_' as i64)
+        {
+            if result.len() == 127 {
+                return Err(self.error("property name overflow"));
+            }
+            result.push(self.character as u8 as char);
+            self.next()?;
+        }
         Ok(result)
     }
 
@@ -1089,6 +1136,9 @@ impl Compiler {
         } else if ch == b')' as i64 {
             Err(self.error("invalid character"))
         } else if ch == b'[' as i64 {
+            if self.flags & XS_REGEXP_V != 0 && self.v_class_uses_set_syntax() {
+                return Err(CompileError::Unsupported("v unicode set expression"));
+            }
             self.next()?;
             let current = self.charset_parse_list()?;
             if self.character != b']' as i64 {
@@ -1124,6 +1174,38 @@ impl Compiler {
             self.next()?;
             self.quantifier_parse(single, current_index)
         }
+    }
+
+    /// Whether the class beginning at the current `[` uses syntax unique to
+    /// unicodeSets mode. Plain v-mode classes share the u-mode charset path;
+    /// intersections, subtraction, nesting, and string disjunctions remain a
+    /// precisely named later surface.
+    fn v_class_uses_set_syntax(&self) -> bool {
+        let mut index = self.offset;
+        let mut escaped = false;
+        while let Some(&byte) = self.pattern.get(index) {
+            if byte == 0 || (!escaped && byte == b']') {
+                return false;
+            }
+            if escaped {
+                if byte == b'q' {
+                    return true;
+                }
+                escaped = false;
+                index += 1;
+                continue;
+            }
+            if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'['
+                || (byte == b'&' && self.pattern.get(index + 1) == Some(&b'&'))
+                || (byte == b'-' && self.pattern.get(index + 1) == Some(&b'-'))
+            {
+                return true;
+            }
+            index += 1;
+        }
+        false
     }
 
     /// The `\`-prefixed atoms in atom position (assertions, references,
