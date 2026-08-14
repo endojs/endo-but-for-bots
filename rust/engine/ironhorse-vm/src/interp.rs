@@ -1625,6 +1625,13 @@ pub enum NativeMethod {
     /// shared ISO algorithms below genuinely shared instead of six copied
     /// native dispatch tables.
     TemporalPlain(u8, u8),
+    /// A `Temporal.ZonedDateTime` static or prototype method.  The byte is the
+    /// operation code dispatched in [`Interp::temporal_zoned_method`].
+    TemporalZoned(u8),
+    /// A `Temporal.Now` namespace function.  The byte selects the hook
+    /// (`instant`, `timeZoneId`, `zonedDateTimeISO`, …) in
+    /// [`Interp::temporal_now_method`].
+    TemporalNow(u8),
     TemporalInstantFrom,
     TemporalInstantFromEpochMilliseconds,
     TemporalInstantFromEpochNanoseconds,
@@ -2802,6 +2809,25 @@ struct TemporalPlainRecord {
     nanosecond: u32,
 }
 
+/// A `Temporal.ZonedDateTime`: an exact instant (`epoch_nanoseconds`) paired
+/// with a resolved time zone.  The garden's time-zone strategy is deliberately
+/// **fixed-offset** (shared with `Intl.DateTimeFormat`, see [`resolve_time_zone`]):
+/// UTC and its aliases, numeric `±HH:MM[:SS]` offsets, the `Etc/GMT±N` zones, and
+/// a table of common IANA names carried at their standard offset.  A fixed offset
+/// has no DST transitions, so disambiguation never triggers, `hoursInDay` is
+/// always 24, and `getTimeZoneTransition` is always `null` — each of which is the
+/// correct answer for an offset zone.  Only `iso8601` is modeled for the calendar.
+/// Not `Copy` because the time-zone identifier is an owned string.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TemporalZonedRecord {
+    epoch_nanoseconds: i128,
+    /// The canonical time-zone identifier `timeZoneId` renders (`"UTC"`,
+    /// `"+05:30"`, `"America/New_York"`, …).
+    time_zone: String,
+    /// The zone's fixed offset, nanoseconds east of UTC.
+    offset_ns: i64,
+}
+
 impl TemporalDurationRecord {
     fn fields(self) -> [i64; 10] {
         [self.years, self.months, self.weeks, self.days, self.hours,
@@ -2866,6 +2892,9 @@ pub enum Native {
     /// PlainDate, PlainTime, PlainDateTime, PlainYearMonth, PlainMonthDay,
     /// and Calendar respectively.
     TemporalPlain(u8),
+    /// The `Temporal.ZonedDateTime` constructor (`new` only; a bare call is a
+    /// `TypeError`). Instances are branded by the `temporal_zoneds` side table.
+    TemporalZonedDateTime,
     Object,
     Function,
     Boolean,
@@ -2942,6 +2971,7 @@ impl Native {
             Native::TemporalInstant => "Instant",
             Native::TemporalDuration => "Duration",
             Native::TemporalPlain(i) => TEMPORAL_PLAIN_NAMES[i as usize],
+            Native::TemporalZonedDateTime => "ZonedDateTime",
             Native::Object => "Object",
             Native::Function => "Function",
             Native::Boolean => "Boolean",
@@ -2987,6 +3017,7 @@ impl Native {
             Native::TemporalInstant => 1,
             Native::TemporalDuration => 0,
             Native::TemporalPlain(i) => [3, 0, 3, 2, 2, 1][i as usize],
+            Native::TemporalZonedDateTime => 2,
             Native::AggregateError => 2,
             Native::SuppressedError => 3,
             Native::DisposableStack | Native::AsyncDisposableStack => 0,
@@ -3349,9 +3380,13 @@ pub struct Interp {
     temporal_instant_proto: crate::value::SlotIndex,
     temporal_duration_proto: crate::value::SlotIndex,
     temporal_plain_protos: [crate::value::SlotIndex; 6],
+    temporal_zoned_proto: crate::value::SlotIndex,
+    /// The `Temporal.Now` namespace object (a boot object, not a constructor).
+    temporal_now_object: crate::value::SlotIndex,
     temporal_instants: std::collections::HashMap<crate::value::SlotIndex, TemporalInstantRecord>,
     temporal_durations: std::collections::HashMap<crate::value::SlotIndex, TemporalDurationRecord>,
     temporal_plains: std::collections::HashMap<crate::value::SlotIndex, TemporalPlainRecord>,
+    temporal_zoneds: std::collections::HashMap<crate::value::SlotIndex, TemporalZonedRecord>,
     collator_compare_functions:
         std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>,
     /// The realm's `%Object.prototype%` (XS's `mxObjectPrototype`), the root
@@ -4116,9 +4151,12 @@ impl Interp {
             temporal_instant_proto: crate::value::SlotIndex::NULL,
             temporal_duration_proto: crate::value::SlotIndex::NULL,
             temporal_plain_protos: [crate::value::SlotIndex::NULL; 6],
+            temporal_zoned_proto: crate::value::SlotIndex::NULL,
+            temporal_now_object: crate::value::SlotIndex::NULL,
             temporal_instants: std::collections::HashMap::new(),
             temporal_durations: std::collections::HashMap::new(),
             temporal_plains: std::collections::HashMap::new(),
+            temporal_zoneds: std::collections::HashMap::new(),
             collator_compare_functions: std::collections::HashMap::new(),
             object_proto: crate::value::SlotIndex::NULL,
             function_proto: crate::value::SlotIndex::NULL,
@@ -4366,7 +4404,8 @@ impl Interp {
                 | Native::DateTimeFormat
                 | Native::TemporalInstant
                 | Native::TemporalDuration
-                | Native::TemporalPlain(_) => {
+                | Native::TemporalPlain(_)
+                | Native::TemporalZonedDateTime => {
                     unreachable!("namespace constructors are registered separately")
                 }
                 // `Proxy` is registered separately (`create_proxy`) and never
@@ -5177,6 +5216,49 @@ impl Interp {
                 self.proto_methods.push((proto, "toString", to_string));
             }
         }
+
+        // `Temporal.ZonedDateTime` — an exact instant carried with a fixed-offset
+        // zone (see [`TemporalZonedRecord`]).  Its getters are dispatched by name
+        // in `GET_PROPERTY`; only the callable statics/methods are bound here.
+        let zoned = self.alloc_named_native(Native::TemporalZonedDateTime);
+        let zp = self.slots.alloc(Slot::instance(self.object_proto));
+        self.temporal_zoned_proto = zp;
+        self.ctor_prototype.insert(zoned, zp);
+        self.proto_methods.push((zoned, "prototype", zp));
+        self.proto_methods.push((zp, "constructor", zoned));
+        self.proto_methods.push((temporal, "ZonedDateTime", zoned));
+        for (name, op, arity) in [("from", 0u8, 1u32), ("compare", 1, 2)] {
+            let f = self.alloc_named_method(NativeMethod::TemporalZoned(op), name, arity);
+            self.proto_methods.push((zoned, name, f));
+        }
+        for (name, op, arity) in [
+            ("with", 2u8, 1u32), ("add", 3, 1), ("subtract", 4, 1),
+            ("until", 5, 1), ("since", 6, 1), ("round", 7, 1), ("equals", 8, 1),
+            ("startOfDay", 9, 0), ("getTimeZoneTransition", 10, 1),
+            ("toInstant", 11, 0), ("toPlainDate", 12, 0), ("toPlainTime", 13, 0),
+            ("toPlainDateTime", 14, 0), ("withPlainTime", 15, 0),
+            ("withTimeZone", 16, 1), ("withCalendar", 17, 1),
+            ("toString", 18, 0), ("toJSON", 19, 0), ("toLocaleString", 20, 0),
+            ("valueOf", 21, 0),
+        ] {
+            let f = self.alloc_named_method(NativeMethod::TemporalZoned(op), name, arity);
+            self.proto_methods.push((zp, name, f));
+        }
+
+        // `Temporal.Now` — a namespace object (like `Atomics`/`Reflect`), not a
+        // constructor.  Its clock is a deterministic host hook (a fixed epoch and
+        // the `"UTC"` system zone), so every reading is reproducible under the
+        // metered VM.
+        let now = self.slots.alloc(Slot::instance(self.object_proto));
+        self.temporal_now_object = now;
+        self.proto_methods.push((temporal, "Now", now));
+        for (name, op) in [
+            ("instant", 0u8), ("timeZoneId", 1), ("zonedDateTimeISO", 2),
+            ("plainDateISO", 3), ("plainDateTimeISO", 4), ("plainTimeISO", 5),
+        ] {
+            let f = self.alloc_named_method(NativeMethod::TemporalNow(op), name, 0);
+            self.proto_methods.push((now, name, f));
+        }
     }
 
     /// Build `%eval%` as a special non-constructor native function. It has no
@@ -5786,6 +5868,8 @@ impl Interp {
                 (self.segmenter_proto, "Intl.Segmenter"),
                 (self.date_time_format_proto, "Intl.DateTimeFormat"),
                 (self.segment_iterator_proto, "Segmenter String Iterator"),
+                (self.temporal_zoned_proto, "Temporal.ZonedDateTime"),
+                (self.temporal_now_object, "Temporal.Now"),
             ] {
                 if proto.is_null() {
                     continue;
@@ -7524,6 +7608,41 @@ impl Interp {
                                 Some("daysInYear") => Slot::number(if days_from_civil(r.year,2,29).is_some(){366.0}else{365.0}),
                                 Some("monthsInYear") => Slot::number(12.0),
                                 Some("inLeapYear") => Slot::boolean(days_from_civil(r.year,2,29).is_some()),
+                                _ => self.instance_get(inst, id),
+                            }
+                        }
+                        Payload::Reference(inst) if self.temporal_zoneds.contains_key(&inst) => {
+                            let rec = self.temporal_zoneds[&inst].clone();
+                            let p = zoned_local_datetime(rec.epoch_nanoseconds, rec.offset_ns);
+                            match self.string_key_name(id).as_deref() {
+                                Some("year") => Slot::number(p.year as f64),
+                                Some("month") => Slot::number(p.month as f64),
+                                Some("monthCode") => self.new_string_metered(format!("M{:02}",p.month).as_bytes()),
+                                Some("day") => Slot::number(p.day as f64),
+                                Some("hour") => Slot::number(p.hour as f64),
+                                Some("minute") => Slot::number(p.minute as f64),
+                                Some("second") => Slot::number(p.second as f64),
+                                Some("millisecond") => Slot::number(p.millisecond as f64),
+                                Some("microsecond") => Slot::number(p.microsecond as f64),
+                                Some("nanosecond") => Slot::number(p.nanosecond as f64),
+                                Some("calendarId") => self.new_string_metered(b"iso8601"),
+                                Some("timeZoneId") => self.new_string_metered(rec.time_zone.as_bytes()),
+                                Some("offset") => self.new_string_metered(format_offset_string(rec.offset_ns).as_bytes()),
+                                Some("offsetNanoseconds") => Slot::number(rec.offset_ns as f64),
+                                Some("epochMilliseconds") => Slot::number(rec.epoch_nanoseconds.div_euclid(1_000_000) as f64),
+                                Some("epochNanoseconds") => self.temporal_i128_bigint(rec.epoch_nanoseconds),
+                                Some("hoursInDay") => Slot::number(24.0),
+                                Some("dayOfWeek") => Slot::number((days_from_civil(p.year,p.month,p.day).unwrap_or(0)+3).rem_euclid(7) as f64+1.0),
+                                Some("dayOfYear") => Slot::number((days_from_civil(p.year,p.month,p.day).unwrap_or(0)-days_from_civil(p.year,1,1).unwrap_or(0)+1) as f64),
+                                Some("weekOfYear") => { let (w,_)=iso_week_of_year(p.year,p.month,p.day); Slot::number(w as f64) }
+                                Some("yearOfWeek") => { let (_,y)=iso_week_of_year(p.year,p.month,p.day); Slot::number(y as f64) }
+                                Some("daysInWeek") => Slot::number(7.0),
+                                Some("daysInMonth") => Slot::number((1..=31).rev().find(|&d|days_from_civil(p.year,p.month,d).is_some()).unwrap_or(0) as f64),
+                                Some("daysInYear") => Slot::number(if days_from_civil(p.year,2,29).is_some(){366.0}else{365.0}),
+                                Some("monthsInYear") => Slot::number(12.0),
+                                Some("inLeapYear") => Slot::boolean(days_from_civil(p.year,2,29).is_some()),
+                                // The ISO 8601 calendar exposes no era/eraYear.
+                                Some("era") | Some("eraYear") => Slot::undefined(),
                                 _ => self.instance_get(inst, id),
                             }
                         }
@@ -11633,6 +11752,26 @@ impl Interp {
                 if !has_target { return Err(self.catchable_type_error()); }
                 let values = (0..10).map(arg).collect::<Vec<_>>();
                 self.temporal_plain_construct(kind, &values, code)?
+            }
+            Native::TemporalZonedDateTime => {
+                // `new Temporal.ZonedDateTime(epochNanoseconds, timeZone[, calendar])`.
+                if !has_target { return Err(self.catchable_type_error()); }
+                let (epoch_arg, tz_value, cal) = (arg(0), arg(1), arg(2));
+                let ns = self.temporal_bigint_to_i128(epoch_arg)
+                    .ok_or_else(|| self.catchable_type_error())?;
+                if tz_value.kind != Kind::String {
+                    // The constructor requires a *string* time-zone identifier
+                    // (an object is not accepted here, unlike `from`).
+                    return Err(self.catchable_type_error());
+                }
+                let tz_text = self.value_to_string(code, tz_value)?;
+                let (time_zone, offset_ns) =
+                    resolve_zoned_time_zone(&tz_text).ok_or_else(|| self.catchable_range_error())?;
+                if cal.kind != Kind::Undefined {
+                    let id = self.value_to_string(code, cal)?;
+                    if id.to_ascii_lowercase() != "iso8601" { return Err(self.catchable_range_error()); }
+                }
+                self.temporal_new_zoned(ns, time_zone, offset_ns)?
             }
             // `Boolean(value)` (`fx_Boolean`): ToBoolean(argument0), or
             // `false` when called with no argument. Measured against the pin,
@@ -16548,6 +16687,352 @@ impl Interp {
         }
     }
 
+    fn temporal_new_zoned(
+        &mut self,
+        epoch_nanoseconds: i128,
+        time_zone: String,
+        offset_ns: i64,
+    ) -> Result<Slot, Halt> {
+        const LIMIT: i128 = 8_640_000_000_000_000_000_000;
+        if !(-LIMIT..=LIMIT).contains(&epoch_nanoseconds) {
+            return Err(self.catchable_range_error());
+        }
+        let inst = self.slots.alloc(Slot::instance(self.temporal_zoned_proto));
+        self.temporal_zoneds.insert(inst, TemporalZonedRecord { epoch_nanoseconds, time_zone, offset_ns });
+        Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
+    }
+
+    /// The branded `TemporalZonedRecord` of a `this` value, or `None` if the
+    /// receiver is not a `Temporal.ZonedDateTime` (the `TypeError` at the call site).
+    fn temporal_zoned_brand(&self, this: Slot) -> Option<TemporalZonedRecord> {
+        match this.value {
+            Payload::Reference(r) if this.kind == Kind::Reference => {
+                self.temporal_zoneds.get(&r).cloned()
+            }
+            _ => None,
+        }
+    }
+
+    /// ToTemporalZonedDateTime: an existing brand (copied), a property bag with a
+    /// required `timeZone` plus ISO fields, or an ISO string with a `[timeZone]`
+    /// annotation.
+    fn temporal_zoned_from(&mut self, value: Slot, code: &[u8]) -> Result<TemporalZonedRecord, Halt> {
+        if let Some(rec) = self.temporal_zoned_brand(value) { return Ok(rec); }
+        if let Payload::Reference(r) = value.value {
+            if value.kind == Kind::Reference {
+                let Some(&tz_id) = self.symbol_ids.get("timeZone") else { return Err(self.catchable_type_error()) };
+                let tz_val = self.ordinary_get(code, r, tz_id, value)?;
+                if tz_val.kind == Kind::Undefined { return Err(self.catchable_type_error()); }
+                let tz_text = self.value_to_string(code, tz_val)?;
+                let (time_zone, offset_ns) =
+                    resolve_zoned_time_zone(&tz_text).ok_or_else(|| self.catchable_range_error())?;
+                let mut p = TemporalPlainRecord { kind: 2, ..Default::default() };
+                let names = ["year","month","day","hour","minute","second","millisecond","microsecond","nanosecond"];
+                let mut seen = [false; 9];
+                for (n, name) in names.iter().enumerate() {
+                    let Some(&fid) = self.symbol_ids.get(*name) else { continue };
+                    let item = self.ordinary_get(code, r, fid, value)?;
+                    if item.kind == Kind::Undefined { continue; }
+                    let v = self.temporal_integer(item)?; seen[n] = true;
+                    match n {
+                        0 => p.year = v,
+                        1 => p.month = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        2 => p.day = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        3 => p.hour = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        4 => p.minute = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        5 => p.second = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        6 => p.millisecond = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        7 => p.microsecond = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        _ => p.nanosecond = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                    }
+                }
+                if !(seen[0] && seen[1] && seen[2]) || !temporal_plain_valid(p) {
+                    return Err(self.catchable_type_error());
+                }
+                // A provided `offset` must agree with the fixed zone offset
+                // (Temporal's default `offset: "reject"`).
+                if let Some(&off_id) = self.symbol_ids.get("offset") {
+                    let off_val = self.ordinary_get(code, r, off_id, value)?;
+                    if off_val.kind != Kind::Undefined {
+                        let s = self.value_to_string(code, off_val)?;
+                        let provided = parse_offset_ns(&s).ok_or_else(|| self.catchable_range_error())?;
+                        if provided != offset_ns { return Err(self.catchable_range_error()); }
+                    }
+                }
+                let epoch = local_datetime_to_epoch(&p, offset_ns).ok_or_else(|| self.catchable_range_error())?;
+                return Ok(TemporalZonedRecord { epoch_nanoseconds: epoch, time_zone, offset_ns });
+            }
+        }
+        let text = self.value_to_string(code, value)?;
+        parse_temporal_zoned(&text).ok_or_else(|| self.catchable_range_error())
+    }
+
+    /// Resolve `round`/`until`/`since`'s options argument (a string smallestUnit
+    /// shorthand, an object, or `undefined`) into `(smallestUnit, largestUnit,
+    /// roundingIncrement, roundingMode)`. `largest_default`/`smallest_default` are
+    /// the per-operation defaults; a required-but-absent smallestUnit yields `None`.
+    fn temporal_zoned_round_options(
+        &mut self,
+        arg: Slot,
+        code: &[u8],
+        smallest_default: Option<&str>,
+        largest_default: &str,
+        mode_default: &str,
+    ) -> Result<(String, String, i128, String), Halt> {
+        // A bare string argument is the smallestUnit.
+        if arg.kind == Kind::String {
+            let unit = self.value_to_string(code, arg)?;
+            return Ok((unit, largest_default.to_string(), 1, mode_default.to_string()));
+        }
+        let Payload::Reference(r) = arg.value else {
+            return match smallest_default {
+                Some(d) => Ok((d.to_string(), largest_default.to_string(), 1, mode_default.to_string())),
+                None => Err(self.catchable_type_error()),
+            };
+        };
+        if arg.kind != Kind::Reference {
+            return Err(self.catchable_type_error());
+        }
+        let smallest = match self.intl_option_string(code, r, "smallestUnit")? {
+            Some(u) => u,
+            None => match smallest_default {
+                Some(d) => d.to_string(),
+                None => return Err(self.catchable_range_error()),
+            },
+        };
+        let largest = self.intl_option_string(code, r, "largestUnit")?
+            .unwrap_or_else(|| largest_default.to_string());
+        let mode = self.intl_option_string(code, r, "roundingMode")?
+            .unwrap_or_else(|| mode_default.to_string());
+        let increment = if let Some(&id) = self.symbol_ids.get("roundingIncrement") {
+            let v = self.instance_get(r, id);
+            if v.kind == Kind::Undefined { 1 } else { self.temporal_integer(v)? as i128 }
+        } else { 1 };
+        if increment < 1 { return Err(self.catchable_range_error()); }
+        Ok((smallest, largest, increment, mode))
+    }
+
+    fn temporal_zoned_method(&mut self, op: u8, this: Slot, arg0: Slot, arg1: Slot, code: &[u8]) -> Result<Slot, Halt> {
+        // Statics: from(0), compare(1) — no `this` brand.
+        if op == 0 {
+            let rec = self.temporal_zoned_from(arg0, code)?;
+            return self.temporal_new_zoned(rec.epoch_nanoseconds, rec.time_zone, rec.offset_ns);
+        }
+        if op == 1 {
+            let a = self.temporal_zoned_from(arg0, code)?;
+            let b = self.temporal_zoned_from(arg1, code)?;
+            return Ok(Slot::integer(a.epoch_nanoseconds.cmp(&b.epoch_nanoseconds) as i32));
+        }
+        let old = self.temporal_zoned_brand(this).ok_or_else(|| self.catchable_type_error())?;
+        match op {
+            2 => {
+                // with(fields): override present ISO date/time fields; the zone is fixed.
+                let Payload::Reference(r) = arg0.value else { return Err(self.catchable_type_error()) };
+                if arg0.kind != Kind::Reference { return Err(self.catchable_type_error()); }
+                let mut p = zoned_local_datetime(old.epoch_nanoseconds, old.offset_ns);
+                let mut any = false;
+                for (n, name) in ["year","month","day","hour","minute","second","millisecond","microsecond","nanosecond"].iter().enumerate() {
+                    let Some(&id) = self.symbol_ids.get(*name) else { continue };
+                    let v = self.ordinary_get(code, r, id, arg0)?;
+                    if v.kind == Kind::Undefined { continue; }
+                    let v = self.temporal_integer(v)?; any = true;
+                    match n {
+                        0 => p.year = v,
+                        1 => p.month = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        2 => p.day = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        3 => p.hour = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        4 => p.minute = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        5 => p.second = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        6 => p.millisecond = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        7 => p.microsecond = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        _ => p.nanosecond = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                    }
+                }
+                if !any || !temporal_plain_valid(p) { return Err(self.catchable_type_error()); }
+                let epoch = local_datetime_to_epoch(&p, old.offset_ns).ok_or_else(|| self.catchable_range_error())?;
+                self.temporal_new_zoned(epoch, old.time_zone, old.offset_ns)
+            }
+            3 | 4 => {
+                // add / subtract a duration.
+                let mut d = self.temporal_duration_from(arg0, code)?;
+                if op == 4 { d = d.negated().ok_or_else(|| self.catchable_range_error())?; }
+                let mut p = zoned_local_datetime(old.epoch_nanoseconds, old.offset_ns);
+                // Add the date part (years/months/weeks/days) to the wall-clock
+                // *date* only — a bare `PlainDate` (kind 0) so `temporal_plain_add`
+                // never routes days through its time branch — then recombine with
+                // the original wall-clock time.
+                let date = TemporalPlainRecord { kind: 0, year: p.year, month: p.month, day: p.day, ..Default::default() };
+                let date_only = TemporalDurationRecord { years: d.years, months: d.months, weeks: d.weeks, days: d.days, ..Default::default() };
+                let shifted = temporal_plain_add(date, date_only).ok_or_else(|| self.catchable_range_error())?;
+                p.year = shifted.year; p.month = shifted.month; p.day = shifted.day;
+                let intermediate = local_datetime_to_epoch(&p, old.offset_ns).ok_or_else(|| self.catchable_range_error())?;
+                let time_ns = TemporalDurationRecord { hours: d.hours, minutes: d.minutes, seconds: d.seconds, milliseconds: d.milliseconds, microseconds: d.microseconds, nanoseconds: d.nanoseconds, ..Default::default() }
+                    .time_nanoseconds(false).ok_or_else(|| self.catchable_range_error())?;
+                let epoch = intermediate.checked_add(time_ns).ok_or_else(|| self.catchable_range_error())?;
+                self.temporal_new_zoned(epoch, old.time_zone, old.offset_ns)
+            }
+            5 | 6 => {
+                // until / since: exact difference, balanced to the requested units.
+                let other = self.temporal_zoned_from(arg0, code)?;
+                let (a, b) = if op == 5 { (&old, &other) } else { (&other, &old) };
+                let (smallest, largest, increment, mode) =
+                    self.temporal_zoned_round_options(arg1, code, Some("nanosecond"), "hour", "trunc")?;
+                let mut diff = b.epoch_nanoseconds - a.epoch_nanoseconds;
+                let quantum = temporal_unit_nanoseconds(&smallest)
+                    .ok_or_else(|| self.catchable_range_error())?
+                    .checked_mul(increment).ok_or_else(|| self.catchable_range_error())?;
+                diff = round_temporal(diff, quantum, &mode).ok_or_else(|| self.catchable_range_error())?;
+                let record = balance_zoned_diff(diff, &largest).ok_or(Halt::Unsupported("Temporal.ZonedDateTime:calendar-difference-unit"))?;
+                self.temporal_new_duration(record)
+            }
+            7 => {
+                // round(smallestUnit | options).
+                let (smallest, _largest, increment, mode) =
+                    self.temporal_zoned_round_options(arg0, code, None, "hour", "halfExpand")?;
+                let unit_ns = temporal_unit_nanoseconds(&smallest).ok_or_else(|| self.catchable_range_error())?;
+                let quantum = unit_ns.checked_mul(increment).ok_or_else(|| self.catchable_range_error())?;
+                // Fixed-offset day boundaries align to every sub-day quantum, so
+                // rounding the local wall-time value is exact for all units.
+                let local = old.epoch_nanoseconds + old.offset_ns as i128;
+                let rounded_local = round_temporal(local, quantum, &mode).ok_or_else(|| self.catchable_range_error())?;
+                let epoch = rounded_local - old.offset_ns as i128;
+                self.temporal_new_zoned(epoch, old.time_zone, old.offset_ns)
+            }
+            8 => {
+                let other = self.temporal_zoned_from(arg0, code)?;
+                Ok(Slot::boolean(old.epoch_nanoseconds == other.epoch_nanoseconds && old.time_zone == other.time_zone))
+            }
+            9 => {
+                // startOfDay: local midnight of the same calendar day.
+                let local = old.epoch_nanoseconds + old.offset_ns as i128;
+                let day_start = local.div_euclid(86_400_000_000_000) * 86_400_000_000_000;
+                let epoch = day_start - old.offset_ns as i128;
+                self.temporal_new_zoned(epoch, old.time_zone, old.offset_ns)
+            }
+            10 => {
+                // getTimeZoneTransition(direction): a fixed offset never transitions.
+                if arg0.kind == Kind::Undefined { return Err(self.catchable_type_error()); }
+                Ok(Slot::null())
+            }
+            11 => self.temporal_new_instant(old.epoch_nanoseconds),
+            12 => {
+                let p = zoned_local_datetime(old.epoch_nanoseconds, old.offset_ns);
+                self.temporal_new_plain(TemporalPlainRecord { kind: 0, year: p.year, month: p.month, day: p.day, ..Default::default() })
+            }
+            13 => {
+                let p = zoned_local_datetime(old.epoch_nanoseconds, old.offset_ns);
+                self.temporal_new_plain(TemporalPlainRecord { kind: 1, hour: p.hour, minute: p.minute, second: p.second, millisecond: p.millisecond, microsecond: p.microsecond, nanosecond: p.nanosecond, ..Default::default() })
+            }
+            14 => {
+                let p = zoned_local_datetime(old.epoch_nanoseconds, old.offset_ns);
+                self.temporal_new_plain(p)
+            }
+            15 => {
+                // withPlainTime(plainTimeLike?): keep the date, replace the time.
+                let mut p = zoned_local_datetime(old.epoch_nanoseconds, old.offset_ns);
+                let t = if arg0.kind == Kind::Undefined {
+                    TemporalPlainRecord { kind: 1, ..Default::default() }
+                } else {
+                    self.temporal_plain_from(1, arg0, code)?
+                };
+                p.hour = t.hour; p.minute = t.minute; p.second = t.second;
+                p.millisecond = t.millisecond; p.microsecond = t.microsecond; p.nanosecond = t.nanosecond;
+                let epoch = local_datetime_to_epoch(&p, old.offset_ns).ok_or_else(|| self.catchable_range_error())?;
+                self.temporal_new_zoned(epoch, old.time_zone, old.offset_ns)
+            }
+            16 => {
+                // withTimeZone: same instant, different zone.
+                let text = self.value_to_string(code, arg0)?;
+                let (time_zone, offset_ns) = resolve_zoned_time_zone(&text).ok_or_else(|| self.catchable_range_error())?;
+                self.temporal_new_zoned(old.epoch_nanoseconds, time_zone, offset_ns)
+            }
+            17 => {
+                // withCalendar: only iso8601 is modeled.
+                let id = self.value_to_string(code, arg0)?;
+                if id.to_ascii_lowercase() != "iso8601" { return Err(self.catchable_range_error()); }
+                self.temporal_new_zoned(old.epoch_nanoseconds, old.time_zone, old.offset_ns)
+            }
+            18 | 19 => {
+                // toString / toJSON.
+                let s = if op == 18 {
+                    self.temporal_zoned_to_string(&old, arg0, code)?
+                } else {
+                    format_zoned(&old, "auto", true, true)
+                };
+                Ok(self.new_string_metered(s.as_bytes()))
+            }
+            20 => Err(Halt::Unsupported("Temporal.ZonedDateTime.toLocaleString:needs-intl")),
+            21 => Err(self.catchable_type_error()),
+            _ => Err(Halt::Unsupported("Temporal.ZonedDateTime:method")),
+        }
+    }
+
+    /// `toString(options)`: validate and apply the `calendarName`/`offset`/
+    /// `timeZoneName` display toggles, then render.
+    fn temporal_zoned_to_string(&mut self, rec: &TemporalZonedRecord, options: Slot, code: &[u8]) -> Result<String, Halt> {
+        let mut calendar_name = "auto".to_string();
+        let mut show_offset = true;
+        let mut show_zone = true;
+        if options.kind == Kind::Reference {
+            if let Payload::Reference(r) = options.value {
+                if let Some(cn) = self.intl_option_string(code, r, "calendarName")? {
+                    if !matches!(cn.as_str(), "auto" | "always" | "never" | "critical") {
+                        return Err(self.catchable_range_error());
+                    }
+                    calendar_name = cn;
+                }
+                if let Some(off) = self.intl_option_string(code, r, "offset")? {
+                    match off.as_str() { "auto" => {}, "never" => show_offset = false, _ => return Err(self.catchable_range_error()) }
+                }
+                if let Some(tzn) = self.intl_option_string(code, r, "timeZoneName")? {
+                    match tzn.as_str() { "auto" | "critical" => {}, "never" => show_zone = false, _ => return Err(self.catchable_range_error()) }
+                }
+            }
+        } else if options.kind != Kind::Undefined {
+            return Err(self.catchable_type_error());
+        }
+        let show_cal = matches!(calendar_name.as_str(), "always" | "critical");
+        Ok(format_zoned(rec, if show_cal { "always" } else { "auto" }, show_offset, show_zone))
+    }
+
+    fn temporal_now_method(&mut self, op: u8, arg0: Slot, code: &[u8]) -> Result<Slot, Halt> {
+        // Deterministic host clock: the Unix epoch, and the `UTC` system zone.
+        const NOW_EPOCH_NS: i128 = 0;
+        let zone_offset = |this: &mut Self, arg: Slot| -> Result<i64, Halt> {
+            if arg.kind == Kind::Undefined { return Ok(0); }
+            let s = this.value_to_string(code, arg)?;
+            resolve_zoned_time_zone(&s).map(|(_, off)| off).ok_or_else(|| this.catchable_range_error())
+        };
+        match op {
+            0 => self.temporal_new_instant(NOW_EPOCH_NS),
+            1 => Ok(self.new_string_metered(b"UTC")),
+            2 => {
+                let (time_zone, offset_ns) = if arg0.kind == Kind::Undefined {
+                    ("UTC".to_string(), 0)
+                } else {
+                    let s = self.value_to_string(code, arg0)?;
+                    resolve_zoned_time_zone(&s).ok_or_else(|| self.catchable_range_error())?
+                };
+                self.temporal_new_zoned(NOW_EPOCH_NS, time_zone, offset_ns)
+            }
+            3 => {
+                let off = zone_offset(self, arg0)?;
+                let p = zoned_local_datetime(NOW_EPOCH_NS, off);
+                self.temporal_new_plain(TemporalPlainRecord { kind: 0, year: p.year, month: p.month, day: p.day, ..Default::default() })
+            }
+            4 => {
+                let off = zone_offset(self, arg0)?;
+                self.temporal_new_plain(zoned_local_datetime(NOW_EPOCH_NS, off))
+            }
+            5 => {
+                let off = zone_offset(self, arg0)?;
+                let p = zoned_local_datetime(NOW_EPOCH_NS, off);
+                self.temporal_new_plain(TemporalPlainRecord { kind: 1, hour: p.hour, minute: p.minute, second: p.second, millisecond: p.millisecond, microsecond: p.microsecond, nanosecond: p.nanosecond, ..Default::default() })
+            }
+            _ => Err(Halt::Unsupported("Temporal.Now:method")),
+        }
+    }
+
     fn call_native_method(
         &mut self,
         m: NativeMethod,
@@ -16593,6 +17078,11 @@ impl Interp {
                 let arg1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
                 self.temporal_plain_method(kind, op, this, arg0, arg1, code)?
             }
+            NativeMethod::TemporalZoned(op) => {
+                let arg1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+                self.temporal_zoned_method(op, this, arg0, arg1, code)?
+            }
+            NativeMethod::TemporalNow(op) => self.temporal_now_method(op, arg0, code)?,
             NativeMethod::TemporalInstantFrom
             | NativeMethod::TemporalInstantFromEpochMilliseconds
             | NativeMethod::TemporalInstantFromEpochNanoseconds
@@ -29105,6 +29595,277 @@ fn format_temporal_instant(ns: i128) -> String {
     else { format!("{y}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{}Z", format!("{fraction:09}").trim_end_matches('0')) }
 }
 
+// -----------------------------------------------------------------------------
+// Temporal.ZonedDateTime / Temporal.Now support (fixed-offset time-zone model).
+// -----------------------------------------------------------------------------
+
+/// The wall-clock ISO PlainDateTime (`kind == 2`) an instant shows in a zone with
+/// the given fixed `offset_ns`.
+fn zoned_local_datetime(epoch_ns: i128, offset_ns: i64) -> TemporalPlainRecord {
+    let local = epoch_ns + offset_ns as i128;
+    let seconds = local.div_euclid(1_000_000_000);
+    let fraction = local.rem_euclid(1_000_000_000);
+    let days = seconds.div_euclid(86_400);
+    let sod = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    TemporalPlainRecord {
+        kind: 2, year, month, day,
+        hour: (sod / 3600) as u32,
+        minute: ((sod % 3600) / 60) as u32,
+        second: (sod % 60) as u32,
+        millisecond: (fraction / 1_000_000) as u32,
+        microsecond: ((fraction / 1_000) % 1_000) as u32,
+        nanosecond: (fraction % 1_000) as u32,
+    }
+}
+
+/// The epoch nanoseconds a wall-clock ISO datetime maps to under a fixed offset.
+fn local_datetime_to_epoch(p: &TemporalPlainRecord, offset_ns: i64) -> Option<i128> {
+    let days = days_from_civil(p.year, p.month, p.day)?;
+    let sod = (p.hour as i128 * 60 + p.minute as i128) * 60 + p.second as i128;
+    let local = (days * 86_400 + sod).checked_mul(1_000_000_000)?
+        + p.millisecond as i128 * 1_000_000
+        + p.microsecond as i128 * 1_000
+        + p.nanosecond as i128;
+    Some(local - offset_ns as i128)
+}
+
+/// Render a fixed offset (ns east of UTC) as `±HH:MM`, `±HH:MM:SS`, or
+/// `±HH:MM:SS.fffffffff` (trailing-zero-trimmed) — the `offset` string form.
+fn format_offset_string(offset_ns: i64) -> String {
+    let sign = if offset_ns < 0 { '-' } else { '+' };
+    let a = offset_ns.unsigned_abs();
+    let total_seconds = a / 1_000_000_000;
+    let frac = a % 1_000_000_000;
+    let h = total_seconds / 3600;
+    let m = (total_seconds % 3600) / 60;
+    let s = total_seconds % 60;
+    if s == 0 && frac == 0 {
+        format!("{sign}{h:02}:{m:02}")
+    } else if frac == 0 {
+        format!("{sign}{h:02}:{m:02}:{s:02}")
+    } else {
+        format!("{sign}{h:02}:{m:02}:{s:02}.{}", format!("{frac:09}").trim_end_matches('0'))
+    }
+}
+
+/// Parse an offset token (`Z`, `±HH`, `±HHMM`, `±HH:MM`, `±HH:MM:SS`,
+/// `±HH:MM:SS.fff…`) into nanoseconds east of UTC.
+fn parse_offset_ns(text: &str) -> Option<i64> {
+    let t = text.trim();
+    if t.eq_ignore_ascii_case("z") { return Some(0); }
+    let (sign, rest) = match t.strip_prefix('+') {
+        Some(r) => (1i64, r),
+        None => (-1i64, t.strip_prefix('-')?),
+    };
+    let (clock, frac) = rest.split_once('.').unwrap_or((rest, ""));
+    let has_colons = clock.contains(':');
+    let (h, m, s) = if has_colons {
+        let mut p = clock.split(':');
+        let h: i64 = p.next()?.parse().ok()?;
+        let m: i64 = p.next().unwrap_or("0").parse().ok()?;
+        let s: i64 = p.next().unwrap_or("0").parse().ok()?;
+        if p.next().is_some() { return None; }
+        (h, m, s)
+    } else {
+        // Compact HH / HHMM / HHMMSS.
+        if !clock.bytes().all(|b| b.is_ascii_digit()) { return None; }
+        match clock.len() {
+            2 => (clock.parse().ok()?, 0, 0),
+            4 => (clock[0..2].parse().ok()?, clock[2..4].parse().ok()?, 0),
+            6 => (clock[0..2].parse().ok()?, clock[2..4].parse().ok()?, clock[4..6].parse().ok()?),
+            _ => return None,
+        }
+    };
+    if h > 23 || m > 59 || s > 59 { return None; }
+    let frac_ns: i64 = if frac.is_empty() { 0 } else {
+        if frac.len() > 9 || !frac.bytes().all(|b| b.is_ascii_digit()) { return None; }
+        format!("{frac:0<9}").parse().ok()?
+    };
+    Some(sign * ((h * 3600 + m * 60 + s) * 1_000_000_000 + frac_ns))
+}
+
+/// A signed numeric offset used *as a time-zone identifier* (`+05:30`), yielding
+/// `(canonical id, offset ns)`. Requires a leading sign so a bare `UTC`/named
+/// zone falls through to [`resolve_time_zone`].
+fn parse_offset_time_zone(text: &str) -> Option<(String, i64)> {
+    let t = text.trim();
+    if !(t.starts_with('+') || t.starts_with('-')) { return None; }
+    let ns = parse_offset_ns(t)?;
+    Some((format_offset_string(ns), ns))
+}
+
+/// Resolve a `Temporal.ZonedDateTime` time-zone identifier to `(canonical id,
+/// offset ns)`, reusing the shared fixed-offset [`resolve_time_zone`] table for
+/// named/`Etc`/`UTC` zones and adding sub-minute numeric offsets.
+fn resolve_zoned_time_zone(raw: &str) -> Option<(String, i64)> {
+    if let Some(pair) = parse_offset_time_zone(raw) { return Some(pair); }
+    let (canonical, minutes) = resolve_time_zone(raw)?;
+    Some((canonical, minutes as i64 * 60_000_000_000))
+}
+
+/// Parse an ISO `ZonedDateTime` string. A `[timeZone]` annotation is **required**
+/// (e.g. `1970-01-01T00:00:00+00:00[UTC]`); a numeric offset in the string, when
+/// present, must agree with the fixed zone offset (Temporal's `offset: "reject"`).
+fn parse_temporal_zoned(text: &str) -> Option<TemporalZonedRecord> {
+    let bracket = text.find('[')?;
+    let main = &text[..bracket];
+    let annotations = &text[bracket..];
+    // The first `[...]` that is not a `[u-ca=…]` calendar annotation is the zone;
+    // a leading `!` marks a critical annotation and is stripped.
+    let mut zone_id: Option<&str> = None;
+    let mut rest = annotations;
+    while let Some(open) = rest.find('[') {
+        let close = rest[open..].find(']')? + open;
+        let inner = rest[open + 1..close].trim_start_matches('!');
+        if !inner.starts_with("u-ca=") && zone_id.is_none() {
+            zone_id = Some(inner);
+        }
+        rest = &rest[close + 1..];
+    }
+    let (time_zone, zone_off) = resolve_zoned_time_zone(zone_id?)?;
+    // Parse the datetime + optional trailing offset from `main`.
+    let (date_part, time_part) = match main.find(['T', 't']) {
+        Some(at) => (&main[..at], Some(&main[at + 1..])),
+        None => (main, None),
+    };
+    let mut p = TemporalPlainRecord { kind: 2, ..Default::default() };
+    let mut dp = date_part.rsplitn(3, '-');
+    p.day = dp.next()?.parse().ok()?;
+    p.month = dp.next()?.parse().ok()?;
+    p.year = dp.next()?.parse().ok()?;
+    let mut string_offset: Option<i64> = None;
+    if let Some(time) = time_part {
+        // Split the clock from a trailing offset (`Z` or a signed offset). A `-`
+        // in a bare time can only be the offset sign (no negative time fields).
+        let zone_at = time.rfind(['Z', 'z', '+', '-']);
+        let (clock, off) = match zone_at {
+            Some(i) => (&time[..i], Some(&time[i..])),
+            None => (time, None),
+        };
+        let mut cp = clock.split(':');
+        p.hour = cp.next()?.parse().ok()?;
+        p.minute = cp.next().unwrap_or("0").parse().ok()?;
+        let sec = cp.next().unwrap_or("0");
+        if cp.next().is_some() { return None; }
+        let (whole, frac) = sec.split_once('.').unwrap_or((sec, ""));
+        p.second = whole.parse().ok()?;
+        if !frac.is_empty() {
+            if frac.len() > 9 || !frac.bytes().all(|b| b.is_ascii_digit()) { return None; }
+            let n: u32 = format!("{frac:0<9}").parse().ok()?;
+            p.millisecond = n / 1_000_000; p.microsecond = (n / 1_000) % 1_000; p.nanosecond = n % 1_000;
+        }
+        if let Some(o) = off { string_offset = Some(parse_offset_ns(o)?); }
+    }
+    if !temporal_plain_valid(p) { return None; }
+    if let Some(so) = string_offset {
+        if so != zone_off { return None; }
+    }
+    let epoch = local_datetime_to_epoch(&p, zone_off)?;
+    Some(TemporalZonedRecord { epoch_nanoseconds: epoch, time_zone, offset_ns: zone_off })
+}
+
+/// Render a `Temporal.ZonedDateTime`: the local datetime, then (optionally) the
+/// offset, the `[timeZone]` annotation, and a `[u-ca=iso8601]` calendar tag.
+fn format_zoned(rec: &TemporalZonedRecord, calendar_name: &str, show_offset: bool, show_zone: bool) -> String {
+    let p = zoned_local_datetime(rec.epoch_nanoseconds, rec.offset_ns);
+    let mut s = format_temporal_plain(p);
+    if show_offset { s.push_str(&format_offset_string(rec.offset_ns)); }
+    if show_zone { s.push_str(&format!("[{}]", rec.time_zone)); }
+    if calendar_name == "always" { s.push_str("[u-ca=iso8601]"); }
+    s
+}
+
+/// The ISO-8601 week-of-year and its week-numbering year.
+fn iso_week_of_year(year: i64, month: u32, day: u32) -> (u32, i64) {
+    let weeks_in = |y: i64| -> u32 {
+        let p = |y: i64| ((y + y.div_euclid(4) - y.div_euclid(100) + y.div_euclid(400)) % 7 + 7) % 7;
+        if p(y) == 4 || p(y - 1) == 3 { 53 } else { 52 }
+    };
+    let ordinal = (days_from_civil(year, month, day).unwrap_or(0)
+        - days_from_civil(year, 1, 1).unwrap_or(0)) as i64 + 1;
+    // ISO weekday, Monday = 1 … Sunday = 7.
+    let dow = ((days_from_civil(year, month, day).unwrap_or(0) + 3).rem_euclid(7)) as i64 + 1;
+    let mut week = (ordinal - dow + 10).div_euclid(7);
+    let mut week_year = year;
+    if week < 1 {
+        week_year = year - 1;
+        week = weeks_in(week_year) as i64;
+    } else if week > weeks_in(year) as i64 {
+        week = 1;
+        week_year = year + 1;
+    }
+    (week as u32, week_year)
+}
+
+/// Round `value` to a multiple of `quantum` (> 0) under a Temporal rounding mode.
+/// Returns `None` for an unrecognized mode.
+fn round_temporal(value: i128, quantum: i128, mode: &str) -> Option<i128> {
+    if quantum <= 0 { return None; }
+    let lo = value.div_euclid(quantum) * quantum;
+    let r = value - lo;
+    if r == 0 { return Some(value); }
+    let hi = lo + quantum;
+    let idx = value.div_euclid(quantum);
+    let res = match mode {
+        "trunc" => if value >= 0 { lo } else { hi },
+        "floor" => lo,
+        "ceil" => hi,
+        "expand" => if value >= 0 { hi } else { lo },
+        "halfExpand" | "halfCeil" | "halfFloor" | "halfEven" | "halfTrunc" => {
+            if 2 * r < quantum { lo }
+            else if 2 * r > quantum { hi }
+            else {
+                match mode {
+                    "halfExpand" => if value >= 0 { hi } else { lo },
+                    "halfTrunc" => if value >= 0 { lo } else { hi },
+                    "halfCeil" => hi,
+                    "halfFloor" => lo,
+                    "halfEven" => if idx.rem_euclid(2) == 0 { lo } else { hi },
+                    _ => hi,
+                }
+            }
+        }
+        _ => return None,
+    };
+    Some(res)
+}
+
+/// Balance an exact nanosecond difference into a `Temporal.Duration` down from
+/// `largest` (a fixed-size unit, `day`…`nanosecond`). Calendar units
+/// (`week`/`month`/`year`) return `None` — the fixed-offset model cannot express
+/// them without calendar-relative arithmetic.
+fn balance_zoned_diff(ns: i128, largest: &str) -> Option<TemporalDurationRecord> {
+    let sizes: [(&str, i128); 7] = [
+        ("day", 86_400_000_000_000),
+        ("hour", 3_600_000_000_000),
+        ("minute", 60_000_000_000),
+        ("second", 1_000_000_000),
+        ("millisecond", 1_000_000),
+        ("microsecond", 1_000),
+        ("nanosecond", 1),
+    ];
+    let start = sizes.iter().position(|(name, _)| *name == largest)?;
+    let sign = ns.signum();
+    let mut n = ns.unsigned_abs() as i128;
+    let mut vals = [0i128; 7];
+    for (i, (_, size)) in sizes.iter().enumerate().skip(start) {
+        vals[i] = n / size;
+        n %= size;
+    }
+    let f = |v: i128| -> Option<i64> { i64::try_from(v * sign).ok() };
+    Some(TemporalDurationRecord {
+        days: f(vals[0])?,
+        hours: f(vals[1])?,
+        minutes: f(vals[2])?,
+        seconds: f(vals[3])?,
+        milliseconds: f(vals[4])?,
+        microseconds: f(vals[5])?,
+        nanoseconds: f(vals[6])?,
+        ..Default::default()
+    })
+}
+
 fn native_unsupported_name(native: Native) -> &'static str {
     match native {
             Native::Eval => "native-call:eval",
@@ -29124,6 +29885,7 @@ fn native_unsupported_name(native: Native) -> &'static str {
             4 => "native-call:Temporal.PlainMonthDay",
             _ => "native-call:Temporal.Calendar",
         },
+        Native::TemporalZonedDateTime => "native-call:Temporal.ZonedDateTime",
         Native::Object => "native-call:Object",
         Native::Function => "native-call:Function",
         Native::Boolean => "native-call:Boolean",
