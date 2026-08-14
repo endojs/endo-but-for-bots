@@ -417,6 +417,22 @@ pub const XS_DONT_PATCH_FLAG: u8 = 16;
 /// property), so the overlap is harmless, exactly as `XS_DONT_PATCH_FLAG`'s is.
 pub const XS_DONT_MARSHALL_FLAG: u8 = 64;
 
+/// XS instance-slot flag bit (`xsAll.h` `XS_EXOTIC_FLAG = 1`): an environment
+/// instance (and other exotics) carries it on its `XS_INSTANCE_KIND` head slot.
+/// `fxNewEnvironmentInstance` stamps it so the instance is never mistaken for an
+/// ordinary object; ironhorse's `with`-environment head carries it for fidelity.
+pub const XS_EXOTIC_FLAG: u8 = 1;
+/// XS property-slot flag bit (`xsAll.h` `XS_INTERNAL_FLAG = 1`): an instance's
+/// internal (non-JS-visible) slot. The environment behavior slot carries it.
+pub const XS_INTERNAL_FLAG: u8 = 1;
+/// The reserved property-key id of an environment instance's behavior slot
+/// (XS's `XS_ENVIRONMENT_BEHAVIOR`). It must not collide with any program symbol
+/// id (`1..=names.len()`) or runtime-interned key (past `names.len()`); the top
+/// of the `u16` space is unreachable by either, and ironhorse never looks the
+/// slot up by id (the `with`-walk reads it positionally as `instance.next`), so
+/// the value is faithfulness-only.
+pub const XS_ENVIRONMENT_BEHAVIOR_ID: u16 = u16::MAX;
+
 /// The callable pair carried by an ordinary accessor property. XS stores the
 /// getter and setter in adjacent property slots. Ironhorse keeps the public
 /// property slot in the ordinary property chain (so attributes and key order
@@ -599,6 +615,38 @@ pub const INSTANCEOF_METERING: u64 = 2 << 16;
 /// code unit plus one built-in step. Measured against the pin `48ee02d8cfe0`
 /// as exactly `(1<<16) + (1<<14)` (81920 raw), independent of the object.
 pub const IN_METERING: u64 = (1 << 16) + (1 << 14);
+
+/// The raw 16.16 cost `XS_CODE_EVAL_REFERENCE`/`PROGRAM_REFERENCE` accrues per
+/// **object** environment level it tests with `fxIsScopableSlot`: the host-frame
+/// `mxHasID` (`fxBeginHost`/`HasProperty`/`fxEndHost`), measured as one
+/// `XS_CODE_METERING` beyond the per-prototype-level recursion cost (which the
+/// walk adds separately via `tick_code_n`). Calibrated exactly against the
+/// pinned XS oracle on the `language/statements/with` slice (a present own hit
+/// with no prototype recursion costs exactly this plus one
+/// [`WITH_UNSCOPABLES_GET_METERING`]).
+pub const WITH_SCOPABLE_HAS_METERING: u64 = 1 << 16;
+
+/// The raw 16.16 cost of the host `mxGetID(@@unscopables)` inside
+/// `fxIsScopableSlot`, charged whenever the property is present (XS always reads
+/// `obj[@@unscopables]` on a hit). One `XS_CODE_METERING`, calibrated against the
+/// pinned XS oracle.
+pub const WITH_UNSCOPABLES_GET_METERING: u64 = 1 << 16;
+
+/// The raw 16.16 cost of the *second* host get inside `fxIsScopableSlot` —
+/// `obj[@@unscopables][id]` — charged only when `obj[@@unscopables]` is itself an
+/// object (a blocklist to consult). Measured as half a `WITH_UNSCOPABLES_GET_METERING`
+/// (the first get carries the shared host-frame teardown), calibrated against the
+/// pinned XS oracle.
+pub const WITH_UNSCOPABLES_BLOCKLIST_GET_METERING: u64 = 1 << 15;
+
+/// The raw 16.16 environment-setup residual `XS_CODE_WITH` accrues beyond its
+/// two `fxNewSlot` allocations and its own dispatch: the host-frame work
+/// `fxNewEnvironmentInstance` runs to splice the environment instance into the
+/// chain (two `mxMeterOne` steps). Measured as exactly `2 × XS_BUILTIN_METERING`
+/// against the pinned XS oracle on the empty-body `with`. Attributed to `WITH`
+/// (not the co-emitted `TO_INSTANCE`, whose zero-cost `ToObject` on an object is
+/// already calibrated by object destructuring).
+pub const WITH_ENV_SETUP_METERING: u64 = 2 * (1 << 14);
 
 /// The additional raw 16.16 cost when the left operand is an object:
 /// `fxOrdinaryHasInstance` reads the constructor's `.prototype` and walks the
@@ -3344,6 +3392,21 @@ pub struct Interp {
     /// The active frame's `this` (`mxFrameThis`). Bound by `begin_*`;
     /// the covered subset does not yet branch on it.
     this_val: Slot,
+    /// The active frame's variable-environment head (XS's `mxEnvironment`
+    /// register). A `Kind::Reference` names the innermost live `with`/eval
+    /// environment instance (a real 2-slot arena object: an
+    /// `XS_INSTANCE_KIND` head whose `next` behavior slot holds the `with`
+    /// value and whose payload prototype chains to the prior environment
+    /// head). Any non-reference kind (the default `undefined`) means **no**
+    /// active `with`/eval environment: the frame's own scope
+    /// (`locals`/`id_map`) and the global object are the whole environment,
+    /// exactly as before this register existed. `XS_CODE_WITH`/`WITHOUT`
+    /// push/pop it; `EVAL_REFERENCE`/`PROGRAM_REFERENCE` walk it (consulted
+    /// only when it is a reference, so the empty-chain path is byte-identical
+    /// to the pre-`with` engine). Reset to `undefined` at every frame entry
+    /// (XS resets `mxEnvironment` at frame setup, `xsRun.c`) and restored on
+    /// return / throw-unwind, so a callee never inherits its caller's `with`.
+    env: Slot,
     /// The active frame's function instance (`mxFrameFunction`), whose
     /// [`FuncInfo`] carries the closure environment closure opcodes resolve
     /// against. `NULL` in the program frame.
@@ -3890,6 +3953,10 @@ struct CallerState {
     strict: bool,
     args: Vec<Slot>,
     this_val: Slot,
+    /// The caller's `with`/eval environment head (XS's `mxEnvironment`),
+    /// saved so a callee starts with an empty environment and the caller's
+    /// active `with` is restored on return.
+    env: Slot,
     cur_func: crate::value::SlotIndex,
     cur_target: bool,
     target_func: crate::value::SlotIndex,
@@ -3913,6 +3980,11 @@ struct CatchJump {
     locals_len: usize,
     id_map: std::collections::HashMap<u16, usize>,
     call_depth: usize,
+    /// The `with`/eval environment head active when the catch was
+    /// established (XS restores `mxEnvironment` from `jump->scope` on a
+    /// longjmp), so a throw out of a `with` body resets the environment for
+    /// the surviving catch/finally code in the establishing frame.
+    env: Slot,
     flag: u8,
 }
 
@@ -3949,6 +4021,10 @@ struct SavedFrame {
     id_map: std::collections::HashMap<u16, usize>,
     args: Vec<Slot>,
     this_val: Slot,
+    /// The generator's `with`/eval environment head at the suspend point,
+    /// reinstalled on resume so a `yield` inside a `with` continues in the
+    /// same environment.
+    env: Slot,
     cur_func: crate::value::SlotIndex,
     cur_target: bool,
     target_func: crate::value::SlotIndex,
@@ -3969,6 +4045,9 @@ struct SavedJump {
     locals_len: usize,
     id_map: std::collections::HashMap<u16, usize>,
     call_depth_offset: usize,
+    /// The environment head active when this handler was established (see
+    /// [`CatchJump::env`]).
+    env: Slot,
     flag: u8,
 }
 
@@ -4144,6 +4223,7 @@ impl Interp {
             call_stack: Vec::new(),
             args: Vec::new(),
             this_val: Slot::undefined(),
+            env: Slot::undefined(),
             cur_func: crate::value::SlotIndex::NULL,
             cur_target: false,
             target_func: crate::value::SlotIndex::NULL,
@@ -6692,6 +6772,19 @@ impl Interp {
                 }
                 XS_CODE_EVAL_REFERENCE | XS_CODE_PROGRAM_REFERENCE => {
                     let name = id!(1);
+                    // Additive `with`/eval environment walk: consult the active
+                    // environment chain first (XS's `mxEnvironment` walk). When
+                    // an object environment binds `name` (scopable), push a real
+                    // `Reference` to that object so `GET_VARIABLE`/`SET_VARIABLE`
+                    // resolve against it (and, for a `GET_THIS_VARIABLE` callee,
+                    // the `DUB`'d copy becomes the receiver). When no environment
+                    // is active this returns `None` without metering, so the
+                    // empty-chain sentinel path below is byte-identical.
+                    if let Some(obj) = self.resolve_env_object(name) {
+                        self.push(Slot::of(Kind::Reference, Payload::Reference(obj)));
+                        pc += ilen;
+                        continue;
+                    }
                     let env = if self.id_map.contains_key(&name) {
                         // Frame scope: NULL sentinel reference.
                         Slot::of(
@@ -6707,6 +6800,48 @@ impl Interp {
                     };
                     self.push(env);
                     pc += ilen;
+                }
+                // `with` (`XS_CODE_WITH`, xsRun.c ~L4429): establish an object
+                // environment over the top-of-stack `with` value (already
+                // `ToObject`-coerced by the preceding `TO_INSTANCE`).
+                // `fxNewEnvironmentInstance` allocates the 2-slot environment
+                // instance (prototype = prior head, behavior slot = the `with`
+                // value), makes it the new `mxEnvironment` head, and **replaces**
+                // the top of stack with a reference to it — the compiled `POP`
+                // that follows balances the stack, and a later `STORE`
+                // (child B) can target the head. Metering is the two slot
+                // allocations only (the dispatch code unit is charged centrally).
+                XS_CODE_WITH => {
+                    let with_value = *self.stack.last().unwrap_or(&Slot::undefined());
+                    self.meter.tick_raw(WITH_ENV_SETUP_METERING);
+                    let inst = self.new_environment_instance(with_value);
+                    let head = Slot::of(Kind::Reference, Payload::Reference(inst));
+                    if let Some(top) = self.stack.last_mut() {
+                        *top = head;
+                    } else {
+                        self.push(head);
+                    }
+                    self.env = head;
+                    pc += size as usize;
+                }
+                // `without` (`XS_CODE_WITHOUT`, xsRun.c ~L4438): leave the
+                // innermost `with`/eval environment — set `mxEnvironment` to the
+                // current head's prototype. A `NULL` prototype (the outermost
+                // `with` in the frame) restores the empty environment, so the
+                // frame's own scope + global path resumes byte-identically.
+                // Pure register manipulation: dispatch-metered only.
+                XS_CODE_WITHOUT => {
+                    if self.env.kind == Kind::Reference {
+                        if let Payload::Reference(cur) = self.env.value {
+                            let proto = self.instance_prototype(cur);
+                            self.env = if proto.is_null() {
+                                Slot::undefined()
+                            } else {
+                                Slot::of(Kind::Reference, Payload::Reference(proto))
+                            };
+                        }
+                    }
+                    pc += size as usize;
                 }
 
                 // ---- scope slots ------------------------------------
@@ -6795,7 +6930,24 @@ impl Interp {
                     let name = id!(1);
                     // Consume the environment reference EVAL_REFERENCE
                     // pushed and resolve the name.
-                    let _envref = self.pop();
+                    let envref = self.pop();
+                    // A real `Reference` (not the `EnvReference` sentinel) means
+                    // `EVAL_REFERENCE` resolved the name to a live `with`/eval
+                    // object environment; do an ordinary property get on it
+                    // (`mxBehaviorGetProperty`, metered exactly like
+                    // `GET_PROPERTY` — no built-in step for a data property, the
+                    // getter's `mxMeterOne` for an accessor).
+                    if envref.kind == Kind::Reference {
+                        if let Payload::Reference(inst) = envref.value {
+                            let v = match self.ordinary_get(code, inst, name, envref) {
+                                Ok(value) => value,
+                                Err(halt) => return halt,
+                            };
+                            self.push(v);
+                            pc += ilen;
+                            continue;
+                        }
+                    }
                     let v = self.resolve_get(name);
                     match v {
                         Some(s) => self.push(s),
@@ -6872,7 +7024,31 @@ impl Interp {
                     // the reference from under it (XS's SET_ALL pops the
                     // reference and leaves the assigned value).
                     let value = self.pop();
-                    let _envref = self.pop();
+                    let envref = self.pop();
+                    // A real `Reference` (not the `EnvReference` sentinel) means
+                    // the name resolved to a live `with`/eval object
+                    // environment; do an ordinary property set on it. XS's
+                    // `SET_VARIABLE` runs `fxRunHas` before the store (its host
+                    // teardown is the one built-in step every `SET_VARIABLE`
+                    // meters, present here too) then `mxBehaviorSetProperty`
+                    // (metered like `SET_PROPERTY`). A sloppy failed set (frozen
+                    // / non-writable) silently keeps the RHS as the result; a
+                    // strict callee — unreachable, `with` is a strict-mode
+                    // SyntaxError — would throw.
+                    if envref.kind == Kind::Reference {
+                        if let Payload::Reference(inst) = envref.value {
+                            let (_present, recursions) = self.instance_has(inst, name);
+                            self.meter.tick_code_n(recursions);
+                            match self.ordinary_set(code, inst, name, value, envref) {
+                                Ok(_accepted) => {}
+                                Err(halt) => return halt,
+                            }
+                            self.meter.tick_builtin();
+                            self.push(value);
+                            pc += ilen;
+                            continue;
+                        }
+                    }
                     // A frame-local var writes its scope slot; an
                     // undeclared name resolves to the global object,
                     // creating the property (a sloppy global) if absent —
@@ -9900,6 +10076,7 @@ impl Interp {
                                 locals_len: jump.locals_len,
                                 id_map: jump.id_map,
                                 call_depth_offset: jump.call_depth.saturating_sub(call_depth_base),
+                                env: jump.env,
                                 flag: jump.flag,
                             })
                             .collect();
@@ -9909,6 +10086,7 @@ impl Interp {
                             id_map: std::mem::take(&mut self.id_map),
                             args: std::mem::take(&mut self.args),
                             this_val: self.this_val,
+                            env: self.env,
                             cur_func: self.cur_func,
                             cur_target: self.cur_target,
                             target_func: self.target_func,
@@ -9942,6 +10120,7 @@ impl Interp {
                             locals_len: jump.locals_len,
                             id_map: jump.id_map,
                             call_depth_offset: jump.call_depth.saturating_sub(call_depth_base),
+                            env: jump.env,
                             flag: jump.flag,
                         })
                         .collect();
@@ -9955,6 +10134,7 @@ impl Interp {
                         id_map: std::mem::take(&mut self.id_map),
                         args: std::mem::take(&mut self.args),
                         this_val: self.this_val,
+                        env: self.env,
                         cur_func: self.cur_func,
                         cur_target: self.cur_target,
                         target_func: self.target_func,
@@ -10068,6 +10248,7 @@ impl Interp {
                                 locals_len: jump.locals_len,
                                 id_map: jump.id_map,
                                 call_depth_offset: jump.call_depth.saturating_sub(call_depth_base),
+                                env: jump.env,
                                 flag: jump.flag,
                             })
                             .collect();
@@ -10077,6 +10258,7 @@ impl Interp {
                             id_map: std::mem::take(&mut self.id_map),
                             args: std::mem::take(&mut self.args),
                             this_val: self.this_val,
+                            env: self.env,
                             cur_func: self.cur_func,
                             cur_target: self.cur_target,
                             target_func: self.target_func,
@@ -10110,6 +10292,7 @@ impl Interp {
                             locals_len: jump.locals_len,
                             id_map: jump.id_map,
                             call_depth_offset: jump.call_depth.saturating_sub(call_depth_base),
+                            env: jump.env,
                             flag: jump.flag,
                         })
                         .collect();
@@ -10119,6 +10302,7 @@ impl Interp {
                         id_map: std::mem::take(&mut self.id_map),
                         args: std::mem::take(&mut self.args),
                         this_val: self.this_val,
+                        env: self.env,
                         cur_func: self.cur_func,
                         cur_target: self.cur_target,
                         target_func: self.target_func,
@@ -10160,6 +10344,7 @@ impl Interp {
                         locals_len: self.locals.len(),
                         id_map: self.id_map.clone(),
                         call_depth: self.call_stack.len(),
+                        env: self.env,
                         flag: 1,
                     });
                     pc += size as usize;
@@ -10435,6 +10620,7 @@ impl Interp {
             id_map: self.id_map.clone(),
             args: self.args.clone(),
             this_val: self.this_val,
+            env: self.env,
             cur_func: self.cur_func,
             cur_target: self.cur_target,
             target_func: self.target_func,
@@ -10466,6 +10652,7 @@ impl Interp {
             id_map: self.id_map.clone(),
             args: self.args.clone(),
             this_val: self.this_val,
+            env: self.env,
             cur_func: self.cur_func,
             cur_target: self.cur_target,
             target_func: self.target_func,
@@ -10556,6 +10743,7 @@ impl Interp {
             id_map: self.id_map.clone(),
             args: self.args.clone(),
             this_val: self.this_val,
+            env: self.env,
             cur_func: self.cur_func,
             cur_target: self.cur_target,
             target_func: self.target_func,
@@ -10590,9 +10778,22 @@ impl Interp {
         // `env.next.next`. The two-slot cost is folded into
         // [`FUNCTION_DEFINE_METERING`] (calibrated on a function whose
         // `function_environment` runs), so it is not metered again here.
-        let env = self
-            .slots
-            .alloc(Slot::instance(crate::value::SlotIndex::NULL));
+        // A function defined while a `with`/eval environment is active
+        // captures it (XS's `FUNCTION_ENVIRONMENT` chains the new closure
+        // environment's prototype to the current `mxEnvironment`), so the
+        // callee's free names resolve through the enclosing `with` when it
+        // runs. Outside any `with` the prototype is `NULL`, exactly as before —
+        // the closure environment stays a flat declarative frame and this is
+        // byte-identical to the pre-`with` engine.
+        let proto = if self.env.kind == Kind::Reference {
+            match self.env.value {
+                Payload::Reference(r) => r,
+                _ => crate::value::SlotIndex::NULL,
+            }
+        } else {
+            crate::value::SlotIndex::NULL
+        };
+        let env = self.slots.alloc(Slot::instance(proto));
         let behavior = self
             .slots
             .alloc(Slot::of(Kind::Uninitialized, Payload::None));
@@ -10680,6 +10881,7 @@ impl Interp {
             strict: self.strict,
             args: std::mem::take(&mut self.args),
             this_val: self.this_val,
+            env: self.env,
             cur_func: self.cur_func,
             cur_target: self.cur_target,
             target_func: self.target_func,
@@ -10689,6 +10891,21 @@ impl Interp {
         self.strict = false;
         self.args = args;
         self.this_val = this_val;
+        // Install the callee's captured `with`/eval environment (XS resets
+        // `mxEnvironment` at frame setup to the function instance's closure
+        // environment). A function defined inside a `with` has a closure
+        // environment that chains (non-null prototype) to that `with`, so its
+        // free names resolve through it; an ordinary function's closure
+        // environment has a null prototype (or none), so the callee begins with
+        // an empty environment — byte-identical to the pre-`with` engine. The
+        // caller's head is saved above and restored by `leave_call`.
+        let closures = self.functions.get(&func).map(|fi| fi.closures);
+        self.env = match closures {
+            Some(c) if !c.is_null() && !self.instance_prototype(c).is_null() => {
+                Slot::of(Kind::Reference, Payload::Reference(c))
+            }
+            _ => Slot::undefined(),
+        };
         self.cur_func = func;
         self.cur_target = has_target;
         self.target_func = if has_target {
@@ -10903,6 +11120,7 @@ impl Interp {
             strict: self.strict,
             args: std::mem::take(&mut self.args),
             this_val: self.this_val,
+            env: self.env,
             cur_func: self.cur_func,
             cur_target: self.cur_target,
             target_func: self.target_func,
@@ -10914,6 +11132,7 @@ impl Interp {
         self.id_map = saved.id_map;
         self.args = saved.args;
         self.this_val = saved.this_val;
+        self.env = saved.env;
         self.cur_func = saved.cur_func;
         self.cur_target = saved.cur_target;
         self.target_func = saved.target_func;
@@ -10942,6 +11161,7 @@ impl Interp {
                 locals_len: jump.locals_len,
                 id_map: jump.id_map,
                 call_depth: return_depth + jump.call_depth_offset,
+                env: jump.env,
                 flag: jump.flag,
             }));
         self.gen_run_stack.push(GenRunFrame {
@@ -11138,6 +11358,7 @@ impl Interp {
             strict: self.strict,
             args: std::mem::take(&mut self.args),
             this_val: self.this_val,
+            env: self.env,
             cur_func: self.cur_func,
             cur_target: self.cur_target,
             target_func: self.target_func,
@@ -11149,6 +11370,7 @@ impl Interp {
         self.id_map = saved.id_map;
         self.args = saved.args;
         self.this_val = saved.this_val;
+        self.env = saved.env;
         self.cur_func = saved.cur_func;
         self.cur_target = saved.cur_target;
         self.target_func = saved.target_func;
@@ -11172,6 +11394,7 @@ impl Interp {
                 locals_len: jump.locals_len,
                 id_map: jump.id_map,
                 call_depth: return_depth + jump.call_depth_offset,
+                env: jump.env,
                 flag: jump.flag,
             }));
         self.async_gen_run_stack.push(AsyncGenRunFrame {
@@ -11289,6 +11512,7 @@ impl Interp {
             strict: self.strict,
             args: std::mem::take(&mut self.args),
             this_val: self.this_val,
+            env: self.env,
             cur_func: self.cur_func,
             cur_target: self.cur_target,
             target_func: self.target_func,
@@ -11300,6 +11524,7 @@ impl Interp {
         self.id_map = saved.id_map;
         self.args = saved.args;
         self.this_val = saved.this_val;
+        self.env = saved.env;
         self.cur_func = saved.cur_func;
         self.cur_target = saved.cur_target;
         self.target_func = saved.target_func;
@@ -11325,6 +11550,7 @@ impl Interp {
                 locals_len: jump.locals_len,
                 id_map: jump.id_map,
                 call_depth: return_depth + jump.call_depth_offset,
+                env: jump.env,
                 flag: jump.flag,
             }));
         self.async_run_stack.push(AsyncRunFrame {
@@ -24580,6 +24806,7 @@ impl Interp {
         self.strict = caller.strict;
         self.args = caller.args;
         self.this_val = caller.this_val;
+        self.env = caller.env;
         self.cur_func = caller.cur_func;
         self.cur_target = caller.cur_target;
         self.target_func = caller.target_func;
@@ -24608,6 +24835,10 @@ impl Interp {
         self.stack.truncate(jump.stack_len);
         self.locals.truncate(jump.locals_len);
         self.id_map = jump.id_map;
+        // Restore the environment head active at catch establishment (XS's
+        // `mxEnvironment` restore from `jump->scope`), so a throw out of a
+        // `with` body resets the environment for the surviving catch/finally.
+        self.env = jump.env;
         let _ = jump.flag; // every ironhorse jump is a JS jump (flag == 1)
         Some(jump.target_pc)
     }
@@ -27714,6 +27945,117 @@ impl Interp {
         }
     }
 
+    /// Allocate a `with`/eval environment instance (XS's
+    /// `fxNewEnvironmentInstance`, `xsType.c`). Two slots: an
+    /// `XS_INSTANCE_KIND` head carrying `XS_EXOTIC_FLAG`, whose payload
+    /// prototype is the prior environment head (`self.env` when it is a
+    /// reference, else `NULL`), and a behavior slot (`instance.next`) keyed
+    /// [`XS_ENVIRONMENT_BEHAVIOR_ID`] whose kind/value are copied from the
+    /// `with` value on top of the stack (a `Reference` for `with(obj)`;
+    /// `NULL`/`undefined` for the eval prelude). Meters exactly two
+    /// `fxNewSlot` allocations (`2 × SLOT_ALLOCATION_METERING`) — no built-in
+    /// step, no prototype-link to `%Object.prototype%` (an environment is not
+    /// an ordinary object). Returns the head instance index.
+    fn new_environment_instance(&mut self, with_value: Slot) -> crate::value::SlotIndex {
+        let proto = if self.env.kind == Kind::Reference {
+            match self.env.value {
+                Payload::Reference(r) => r,
+                _ => crate::value::SlotIndex::NULL,
+            }
+        } else {
+            crate::value::SlotIndex::NULL
+        };
+        // fxNewSlot #1: the instance head.
+        let mut head = Slot::instance(proto);
+        head.flag = XS_EXOTIC_FLAG;
+        let inst = self.slots.alloc(head);
+        self.meter.tick_slot_alloc();
+        // fxNewSlot #2: the behavior slot, carrying the `with` value.
+        let mut behavior = Slot::of(with_value.kind, with_value.value);
+        behavior.id = XS_ENVIRONMENT_BEHAVIOR_ID;
+        behavior.flag = XS_INTERNAL_FLAG;
+        let behavior_idx = self.slots.alloc(behavior);
+        self.meter.tick_slot_alloc();
+        self.slots.get_mut(inst).next = behavior_idx;
+        inst
+    }
+
+    /// `fxIsScopableSlot` (`xsRun.c`): is `id` resolvable as a scopable
+    /// binding of the `with` object `obj`? True when `obj` **has** the
+    /// property (own or inherited) AND it is not blocked by the object's
+    /// `@@unscopables` list — `obj[@@unscopables]` being an object whose `id`
+    /// property is truthy hides the binding (ECMA-262 9.1.1.2.1). Meters the
+    /// host-frame `mxHasID` walk exactly (the calibrated
+    /// [`WITH_SCOPABLE_BASE_METERING`] host teardown plus one
+    /// `XS_CODE_METERING` per prototype level the `HasProperty` recursion
+    /// descends); the `@@unscopables` consultation is charged only on a hit
+    /// via [`WITH_UNSCOPABLES_GET_METERING`], matching the extra host `mxGetID`
+    /// XS runs only when the property is present.
+    fn is_scopable_slot(&mut self, obj: crate::value::SlotIndex, id: u16) -> bool {
+        let (present, recursions) = self.instance_has(obj, id);
+        self.meter.tick_raw(WITH_SCOPABLE_HAS_METERING);
+        self.meter.tick_code_n(recursions);
+        if !present {
+            return false;
+        }
+        // Consult `obj[@@unscopables]` only when the property is present, as
+        // XS does. The well-known symbol's key id is minted on first use; a
+        // program that never names `Symbol.unscopables` has no object keyed by
+        // it, so `unscopables` is `undefined` and never blocks.
+        self.meter.tick_raw(WITH_UNSCOPABLES_GET_METERING);
+        if let Some(unscopables_id) = self.well_known_symbol_property_id("unscopables") {
+            let blocklist = self.instance_get(obj, unscopables_id);
+            if let Payload::Reference(list) = blocklist.value {
+                if blocklist.kind == Kind::Reference {
+                    // A further host `mxGetID(id)` on the blocklist object.
+                    self.meter.tick_raw(WITH_UNSCOPABLES_BLOCKLIST_GET_METERING);
+                    let flag = self.instance_get(list, id);
+                    if self.truthy(&flag) {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Walk the active `with`/eval environment chain (XS's
+    /// `XS_CODE_EVAL_REFERENCE`/`PROGRAM_REFERENCE` `mxEnvironment` walk),
+    /// returning the object a variable read/write of `name` should resolve
+    /// against, or `None` when no active environment binds it (the caller then
+    /// falls through to the frame scope / global object, byte-identically to
+    /// the pre-`with` engine). Only **object** environments (a `with(obj)`
+    /// behavior slot holding a `Reference`) are consulted with
+    /// [`Self::is_scopable_slot`]; a declarative/closure environment (a
+    /// non-reference behavior slot) is transparent here (its bindings are
+    /// ironhorse's frame scope). Returns `None` immediately — and meters
+    /// nothing — when no environment is active, preserving the empty-chain
+    /// dispatch cost exactly.
+    fn resolve_env_object(&mut self, name: u16) -> Option<crate::value::SlotIndex> {
+        if self.env.kind != Kind::Reference {
+            return None;
+        }
+        let mut env = match self.env.value {
+            Payload::Reference(r) => r,
+            _ => return None,
+        };
+        while !env.is_null() {
+            let behavior = self.slots.get(env).next;
+            if !behavior.is_null() {
+                let beh = self.slots.get(behavior);
+                if beh.kind == Kind::Reference {
+                    if let Payload::Reference(obj) = beh.value {
+                        if self.is_scopable_slot(obj, name) {
+                            return Some(obj);
+                        }
+                    }
+                }
+            }
+            env = self.instance_prototype(env);
+        }
+        None
+    }
+
     /// Read a `*_LOCAL_*` opcode's 1-based scope-index operand: a `u8` for
     /// the `_1` variant (`size == 2`), a little-endian `u16` for `_2`
     /// (`size == 3`) — the wide-index form the compiler emits once a frame
@@ -27763,6 +28105,21 @@ impl Interp {
     fn resolve_get(&self, name: u16) -> Option<Slot> {
         if let Some(&i) = self.id_map.get(&name) {
             let s = self.locals[i];
+            // A closure-captured local holds a `Kind::Closure` cell indirection
+            // (`store`/`retrieve`), not the value inline. Reached by name only
+            // through the `with`/eval reference path (a plain access uses
+            // `GET_CLOSURE` by index); dereference the shared cell so the read
+            // yields the value, not the cell — TDZ if the cell is uninitialized.
+            if s.kind == Kind::Closure {
+                if let Payload::Reference(cell) = s.value {
+                    let c = self.slots.get(cell);
+                    return if c.kind == Kind::Uninitialized {
+                        None
+                    } else {
+                        Some(Slot::of(c.kind, c.value))
+                    };
+                }
+            }
             if s.kind == Kind::Uninitialized {
                 None
             } else {
@@ -27781,6 +28138,18 @@ impl Interp {
     /// caller materializes it and meters the creation first).
     fn resolve_set(&mut self, name: u16, value: Slot) {
         if let Some(&i) = self.id_map.get(&name) {
+            // A closure-captured local writes through its shared `Kind::Closure`
+            // cell (so the mutation is visible to every capturer), mirroring
+            // `resolve_get`'s dereference. Reached by name only through the
+            // `with`/eval path; a plain write uses `SET_CLOSURE` by index.
+            if self.locals[i].kind == Kind::Closure {
+                if let Payload::Reference(cell) = self.locals[i].value {
+                    let c = self.slots.get_mut(cell);
+                    c.kind = value.kind;
+                    c.value = value.value;
+                    return;
+                }
+            }
             self.locals[i].kind = value.kind;
             self.locals[i].value = value.value;
         } else if let Some(&idx) = self.global_props.get(&name) {
