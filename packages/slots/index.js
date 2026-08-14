@@ -23,6 +23,7 @@ export {
   encodeAbortPayload,
   decodeAbortPayload,
 } from './src/payload.js';
+export { makeSelector, getSelectorName } from './src/selector.js';
 export { sessionIdFromLabel, sessionIdHex } from './src/session.js';
 export { makeCList } from './src/clist.js';
 export { makeSlotCodec } from './src/codec.js';
