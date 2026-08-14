@@ -2088,6 +2088,10 @@ pub enum NativeMethod {
     /// report whether present. A Map shrink may reallocate the address chunk
     /// (`fxResizeEntries`); a WeakMap unlink is allocation-free.
     MapDelete,
+    WeakMapSet,
+    WeakMapGet,
+    WeakMapHas,
+    WeakMapDelete,
     /// `Set.prototype.add(v)` / `WeakSet.prototype.add(v)`: insert `v`,
     /// returning the receiver (`fxSetEntry` with no pair → two entry slots;
     /// the weak form allocates three).
@@ -2096,6 +2100,9 @@ pub enum NativeMethod {
     SetHas,
     /// `Set.prototype.delete(v)` / `WeakSet.prototype.delete(v)`.
     SetDelete,
+    WeakSetAdd,
+    WeakSetHas,
+    WeakSetDelete,
     /// `Map.prototype.forEach(cb[, thisArg])` / `Set.prototype.forEach(...)`
     /// (`fx_Map_prototype_forEach` / `fx_Set_prototype_forEach`): call
     /// `cb(value, key, coll)` for each live entry in insertion order (a Set
@@ -2283,7 +2290,10 @@ enum CollKind {
 #[derive(Clone, Debug)]
 struct CollectionData {
     kind: CollKind,
-    entries: Vec<(Slot, Slot)>,
+    /// Insertion-ordered entries. Deletion leaves a tombstone so live
+    /// iterators and `forEach` cursors do not skip the following entry; a
+    /// delete followed by re-add appends a new entry at the tail.
+    entries: Vec<Option<(Slot, Slot)>>,
     table_length: u32,
 }
 
@@ -4117,15 +4127,15 @@ impl Interp {
                     ("clear", NativeMethod::CollClear),
                 ],
                 2 => &[
-                    ("set", NativeMethod::MapSet),
-                    ("get", NativeMethod::MapGet),
-                    ("has", NativeMethod::MapHas),
-                    ("delete", NativeMethod::MapDelete),
+                    ("set", NativeMethod::WeakMapSet),
+                    ("get", NativeMethod::WeakMapGet),
+                    ("has", NativeMethod::WeakMapHas),
+                    ("delete", NativeMethod::WeakMapDelete),
                 ],
                 _ => &[
-                    ("add", NativeMethod::SetAdd),
-                    ("has", NativeMethod::SetHas),
-                    ("delete", NativeMethod::SetDelete),
+                    ("add", NativeMethod::WeakSetAdd),
+                    ("has", NativeMethod::WeakSetHas),
+                    ("delete", NativeMethod::WeakSetDelete),
                 ],
             };
             for &(m_name, m) in methods {
@@ -6661,7 +6671,13 @@ impl Interp {
                             // accessor getter (`fx_Map_prototype_size`), reading
                             // the size slot. WeakMap/WeakSet have no `size`.
                             self.meter.tick_raw(COLLECTION_SIZE_GET_METERING);
-                            Slot::integer(self.collections[&inst].entries.len() as i32)
+                            Slot::integer(
+                                self.collections[&inst]
+                                    .entries
+                                    .iter()
+                                    .filter(|entry| entry.is_some())
+                                    .count() as i32,
+                            )
                         }
                         Payload::Reference(inst)
                             if Some(id) == self.byte_length_id
@@ -10533,9 +10549,6 @@ impl Interp {
             // throws a TypeError (its abort metering is a later increment).
             Native::Map | Native::Set if has_target => {
                 let a = arg(0);
-                if argc >= 1 && a.kind != Kind::Undefined && a.kind != Kind::Null {
-                    return Err(Halt::Unsupported("native-call:Map:iterable"));
-                }
                 let (proto, kind) = match native {
                     Native::Map => (self.map_proto, CollKind::Map),
                     _ => (self.set_proto, CollKind::Set),
@@ -10555,6 +10568,9 @@ impl Interp {
                         table_length: MAP_MIN_TABLE_LENGTH,
                     },
                 );
+                if argc >= 1 && a.kind != Kind::Undefined && a.kind != Kind::Null {
+                    self.populate_collection_from_dense_array(code, inst, a)?;
+                }
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
             // `new Proxy(target, handler)` (`fx_Proxy` → `fxNewProxyInstance`):
@@ -10577,9 +10593,6 @@ impl Interp {
             // argument self-names.
             Native::WeakMap | Native::WeakSet if has_target => {
                 let a = arg(0);
-                if argc >= 1 && a.kind != Kind::Undefined && a.kind != Kind::Null {
-                    return Err(Halt::Unsupported("native-call:WeakMap:iterable"));
-                }
                 let (proto, kind) = match native {
                     Native::WeakMap => (self.weakmap_proto, CollKind::WeakMap),
                     _ => (self.weakset_proto, CollKind::WeakSet),
@@ -10596,6 +10609,9 @@ impl Interp {
                         table_length: 0,
                     },
                 );
+                if argc >= 1 && a.kind != Kind::Undefined && a.kind != Kind::Null {
+                    self.populate_collection_from_dense_array(code, inst, a)?;
+                }
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
             // `new ArrayBuffer(byteLength)` (`fx_ArrayBuffer` +
@@ -16188,9 +16204,16 @@ impl Interp {
             | NativeMethod::MapGet
             | NativeMethod::MapHas
             | NativeMethod::MapDelete
+            | NativeMethod::WeakMapSet
+            | NativeMethod::WeakMapGet
+            | NativeMethod::WeakMapHas
+            | NativeMethod::WeakMapDelete
             | NativeMethod::SetAdd
             | NativeMethod::SetHas
-            | NativeMethod::SetDelete => self.call_collection(m, this, base, argc)?,
+            | NativeMethod::SetDelete
+            | NativeMethod::WeakSetAdd
+            | NativeMethod::WeakSetHas
+            | NativeMethod::WeakSetDelete => self.call_collection(m, this, base, argc)?,
             // `Map`/`Set` `forEach` — re-entrant (drives a user callback per
             // live entry); needs the code buffer for the nested dispatch.
             NativeMethod::CollForEach => self.call_collection_foreach(this, base, argc, code)?,
@@ -16198,7 +16221,7 @@ impl Interp {
             NativeMethod::CollEntries | NativeMethod::CollKeys | NativeMethod::CollValues => {
                 let inst = match self.collection_ref(this) {
                     Some(i) => i,
-                    None => return Err(Halt::Unsupported("collection-iterator:non-collection")),
+                    None => return Err(self.catchable_type_error()),
                 };
                 // WeakMap/WeakSet have no iterator methods (never bound); a Map/
                 // Set kind maps entries→2, keys→0, values→1.
@@ -16218,7 +16241,7 @@ impl Interp {
             NativeMethod::CollClear => {
                 let inst = match self.collection_ref(this) {
                     Some(i) => i,
-                    None => return Err(Halt::Unsupported("collection-clear:non-collection")),
+                    None => return Err(self.catchable_type_error()),
                 };
                 match self.collections[&inst].kind {
                     CollKind::Map | CollKind::Set => {}
@@ -17095,17 +17118,30 @@ impl Interp {
             .unwrap_or_else(Slot::undefined);
         let inst = match self.collection_ref(this) {
             Some(i) => i,
-            None => return Err(Halt::Unsupported("collection-method:non-collection-this")),
+            None => return Err(self.catchable_type_error()),
         };
         let kind = self.collections[&inst].kind;
-        // The method families: `MapSet`/`MapGet`/`MapHas`/`MapDelete` serve Map
-        // AND WeakMap; `SetAdd`/`SetHas`/`SetDelete` serve Set AND WeakSet. A
-        // receiver of the wrong family self-names.
-        let is_map_family = matches!(kind, CollKind::Map | CollKind::WeakMap);
-        let is_set_family = matches!(kind, CollKind::Set | CollKind::WeakSet);
+        let expected_kind = match m {
+            NativeMethod::MapSet
+            | NativeMethod::MapGet
+            | NativeMethod::MapHas
+            | NativeMethod::MapDelete => CollKind::Map,
+            NativeMethod::WeakMapSet
+            | NativeMethod::WeakMapGet
+            | NativeMethod::WeakMapHas
+            | NativeMethod::WeakMapDelete => CollKind::WeakMap,
+            NativeMethod::SetAdd | NativeMethod::SetHas | NativeMethod::SetDelete => CollKind::Set,
+            NativeMethod::WeakSetAdd | NativeMethod::WeakSetHas | NativeMethod::WeakSetDelete => {
+                CollKind::WeakSet
+            }
+            _ => return Err(self.catchable_type_error()),
+        };
+        if kind != expected_kind {
+            return Err(self.catchable_type_error());
+        }
         let weak = matches!(kind, CollKind::WeakMap | CollKind::WeakSet);
         match m {
-            NativeMethod::MapSet if is_map_family => {
+            NativeMethod::MapSet | NativeMethod::WeakMapSet => {
                 let val = self
                     .stack
                     .get(base + 5)
@@ -17113,11 +17149,14 @@ impl Interp {
                     .unwrap_or_else(Slot::undefined);
                 let key = self.normalize_coll_key(arg0);
                 if weak && key.kind != Kind::Reference {
-                    return Err(Halt::Unsupported("WeakMap.set:non-object-key"));
+                    return Err(self.catchable_type_error());
                 }
                 match self.collection_find(inst, &key) {
                     Some(p) => {
-                        self.collections.get_mut(&inst).unwrap().entries[p].1 = val;
+                        self.collections.get_mut(&inst).unwrap().entries[p]
+                            .as_mut()
+                            .unwrap()
+                            .1 = val;
                     }
                     None => {
                         // `fxSetEntry`/`fxSetWeakEntry` new key: three slots
@@ -17128,16 +17167,16 @@ impl Interp {
                             .get_mut(&inst)
                             .unwrap()
                             .entries
-                            .push((key, val));
+                            .push(Some((key, val)));
                         self.collection_table_resize(inst);
                     }
                 }
                 Ok(this)
             }
-            NativeMethod::SetAdd if is_set_family => {
+            NativeMethod::SetAdd | NativeMethod::WeakSetAdd => {
                 let key = self.normalize_coll_key(arg0);
                 if weak && key.kind != Kind::Reference {
-                    return Err(Halt::Unsupported("WeakSet.add:non-object-value"));
+                    return Err(self.catchable_type_error());
                 }
                 if self.collection_find(inst, &key).is_none() {
                     // `fxSetEntry` with no pair → two slots (value + entry);
@@ -17148,35 +17187,35 @@ impl Interp {
                         .get_mut(&inst)
                         .unwrap()
                         .entries
-                        .push((key, Slot::undefined()));
+                        .push(Some((key, Slot::undefined())));
                     self.collection_table_resize(inst);
                 }
                 Ok(this)
             }
-            NativeMethod::MapGet if is_map_family => {
+            NativeMethod::MapGet | NativeMethod::WeakMapGet => {
                 let key = self.normalize_coll_key(arg0);
                 let v = self
                     .collection_find(inst, &key)
-                    .map(|p| self.collections[&inst].entries[p].1)
+                    .map(|p| self.collections[&inst].entries[p].unwrap().1)
                     .unwrap_or_else(Slot::undefined);
                 Ok(v)
             }
-            NativeMethod::MapHas if is_map_family => {
+            NativeMethod::MapHas | NativeMethod::WeakMapHas => {
                 let key = self.normalize_coll_key(arg0);
                 Ok(Slot::boolean(self.collection_find(inst, &key).is_some()))
             }
-            NativeMethod::SetHas if is_set_family => {
+            NativeMethod::SetHas | NativeMethod::WeakSetHas => {
                 let key = self.normalize_coll_key(arg0);
                 Ok(Slot::boolean(self.collection_find(inst, &key).is_some()))
             }
-            NativeMethod::MapDelete | NativeMethod::SetDelete
-                if (m == NativeMethod::MapDelete && is_map_family)
-                    || (m == NativeMethod::SetDelete && is_set_family) =>
-            {
+            NativeMethod::MapDelete
+            | NativeMethod::WeakMapDelete
+            | NativeMethod::SetDelete
+            | NativeMethod::WeakSetDelete => {
                 let key = self.normalize_coll_key(arg0);
                 match self.collection_find(inst, &key) {
                     Some(p) => {
-                        self.collections.get_mut(&inst).unwrap().entries.remove(p);
+                        self.collections.get_mut(&inst).unwrap().entries[p] = None;
                         // `fxDeleteEntry` calls `fxResizeEntries` (a Map/Set may
                         // shrink its address chunk; a weak unlink is
                         // allocation-free).
@@ -17186,8 +17225,136 @@ impl Interp {
                     None => Ok(Slot::boolean(false)),
                 }
             }
-            _ => Err(Halt::Unsupported("collection-method:wrong-kind")),
+            _ => Err(self.catchable_type_error()),
         }
+    }
+
+    /// Populate a freshly-created collection from the intrinsic iterator of a
+    /// dense Array. This is the common Test262 constructor path. An own
+    /// `@@iterator` is left to the general iterator-protocol increment; the
+    /// constructor still observes an overridden `set`/`add`, including a
+    /// thrown completion, before consuming elements.
+    fn populate_collection_from_dense_array(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        iterable: Slot,
+    ) -> Result<(), Halt> {
+        let array = match iterable.value {
+            Payload::Reference(array) if self.arrays.contains_key(&array) => array,
+            _ => return Err(Halt::Unsupported("collection-constructor:general-iterable")),
+        };
+        if let Some(iterator_id) = self.well_known_symbol_property_id("iterator") {
+            if self.find_property(array, iterator_id).is_some() {
+                return Err(Halt::Unsupported(
+                    "collection-constructor:custom-array-iterator",
+                ));
+            }
+        }
+        let data = &self.arrays[&array];
+        if (0..data.length).any(|index| !data.items.contains_key(&index)) {
+            return Err(Halt::Unsupported("collection-constructor:sparse-array"));
+        }
+        let elements: Vec<Slot> = (0..data.length).map(|index| data.items[&index]).collect();
+        let kind = self.collections[&inst].kind;
+        let method_name = if matches!(kind, CollKind::Map | CollKind::WeakMap) {
+            "set"
+        } else {
+            "add"
+        };
+        let method_was_linked = self.symbol_ids.contains_key(method_name);
+        let method_id = self.intern_key(method_name);
+        let receiver = Slot::of(Kind::Reference, Payload::Reference(inst));
+        let expected = match kind {
+            CollKind::Map => NativeMethod::MapSet,
+            CollKind::Set => NativeMethod::SetAdd,
+            CollKind::WeakMap => NativeMethod::WeakMapSet,
+            CollKind::WeakSet => NativeMethod::WeakSetAdd,
+        };
+        let mut adder = self.ordinary_get(code, inst, method_id, receiver)?;
+        // Intrinsics are linked sparsely by program atom. The constructor's
+        // implicit Get(adder) still sees the boot method when source never
+        // spells its name, so recover that already-allocated method identity.
+        if !method_was_linked && adder.kind == Kind::Undefined {
+            if let Some((&function, _)) = self
+                .functions
+                .iter()
+                .find(|(_, info)| info.method == Some(expected))
+            {
+                adder = Slot::of(Kind::Reference, Payload::Reference(function));
+            }
+        }
+        if !self.is_callable_value(adder) {
+            return Err(self.catchable_type_error());
+        }
+        let intrinsic_adder = match adder.value {
+            Payload::Reference(function) => self.method_of(function) == Some(expected),
+            _ => false,
+        };
+        if !intrinsic_adder && !self.is_user_function_value(adder) {
+            return Err(Halt::Unsupported(
+                "collection-constructor:native-custom-adder",
+            ));
+        }
+
+        for element in elements {
+            let (key, value) = if matches!(kind, CollKind::Map | CollKind::WeakMap) {
+                let entry = match element.value {
+                    Payload::Reference(entry) if self.arrays.contains_key(&entry) => entry,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let entry_data = &self.arrays[&entry];
+                if entry_data.length < 2
+                    || !entry_data.items.contains_key(&0)
+                    || !entry_data.items.contains_key(&1)
+                {
+                    return Err(Halt::Unsupported("collection-constructor:sparse-map-entry"));
+                }
+                (entry_data.items[&0], entry_data.items[&1])
+            } else {
+                (element, Slot::undefined())
+            };
+            if !intrinsic_adder {
+                let args = if matches!(kind, CollKind::Map | CollKind::WeakMap) {
+                    vec![key, value]
+                } else {
+                    vec![key]
+                };
+                self.run_callback(code, adder, receiver, &args)?;
+                continue;
+            }
+            let key = self.normalize_coll_key(key);
+            if matches!(kind, CollKind::WeakMap | CollKind::WeakSet) && key.kind != Kind::Reference
+            {
+                if key.kind == Kind::Symbol {
+                    return Err(Halt::Unsupported(
+                        "collection-constructor:weak-symbol-oracle-version",
+                    ));
+                }
+                return Err(self.catchable_type_error());
+            }
+            if let Some(position) = self.collection_find(inst, &key) {
+                if matches!(kind, CollKind::Map | CollKind::WeakMap) {
+                    self.collections.get_mut(&inst).unwrap().entries[position]
+                        .as_mut()
+                        .unwrap()
+                        .1 = value;
+                }
+            } else {
+                let slots = match kind {
+                    CollKind::Map | CollKind::WeakMap | CollKind::WeakSet => 3,
+                    CollKind::Set => 2,
+                };
+                self.charge_new_entry_slots(slots);
+                self.collections
+                    .get_mut(&inst)
+                    .unwrap()
+                    .entries
+                    .push(Some((key, value)));
+                self.collection_table_resize(inst);
+            }
+        }
+        Ok(())
     }
 
     /// Dispatch a `Math.*` static (`xsMath.c`). Reads the positional
@@ -18890,7 +19057,13 @@ impl Interp {
             .get(&st.iterable)
             .map(|c| c.entries.len() as u32)
             .unwrap_or(0);
-        let (new_value, new_done, next_index): (Slot, bool, u32) = if st.done || st.index >= len {
+        let mut live_index = st.index;
+        while live_index < len
+            && self.collections[&st.iterable].entries[live_index as usize].is_none()
+        {
+            live_index += 1;
+        }
+        let (new_value, new_done, next_index): (Slot, bool, u32) = if st.done || live_index >= len {
             (Slot::undefined(), true, st.index)
         } else {
             // A keys/values yield carries no residual; an entries yield charges
@@ -18899,7 +19072,7 @@ impl Interp {
             if st.kind == 7 {
                 self.meter.tick_raw(COLLECTION_ITERATOR_ENTRY_METERING);
             }
-            let (k, v) = self.collections[&st.iterable].entries[st.index as usize];
+            let (k, v) = self.collections[&st.iterable].entries[live_index as usize].unwrap();
             let is_set = matches!(self.collections[&st.iterable].kind, CollKind::Set);
             let value = match st.kind {
                 5 => k, // keys
@@ -18919,7 +19092,7 @@ impl Interp {
                     Slot::of(Kind::Reference, Payload::Reference(pair))
                 }
             };
-            (value, false, st.index + 1)
+            (value, false, live_index + 1)
         };
         if let Some(s) = self.iterators.get_mut(&iter) {
             s.index = next_index;
@@ -18951,7 +19124,7 @@ impl Interp {
         let _ = argc;
         let inst = match self.collection_ref(this) {
             Some(i) => i,
-            None => return Err(Halt::Unsupported("collection-forEach:non-collection")),
+            None => return Err(self.catchable_type_error()),
         };
         let is_set = match self.collections[&inst].kind {
             CollKind::Map => false,
@@ -18973,16 +19146,17 @@ impl Interp {
         } else {
             MAP_FOREACH_FRAME_METERING
         });
-        // Index into the live entry list (XS walks the linked list resiliently;
-        // the covered grammar does not mutate mid-iteration).
+        // Index into the insertion list. Deletions leave tombstones and
+        // additions append, matching XS's live linked-list walk.
         let mut i = 0u32;
         loop {
-            let entry = self
-                .collections
-                .get(&inst)
-                .and_then(|c| c.entries.get(i as usize).copied());
+            let entry = self.collections.get(&inst).and_then(|c| c.entries.get(i as usize));
             let (k, v) = match entry {
-                Some(kv) => kv,
+                Some(Some(kv)) => *kv,
+                Some(None) => {
+                    i += 1;
+                    continue;
+                }
                 None => break,
             };
             self.meter.tick_raw(COLLECTION_FOREACH_PER_ENTRY_METERING);
@@ -20316,7 +20490,7 @@ impl Interp {
         let data = self.collections.get(&inst)?;
         data.entries
             .iter()
-            .position(|(k, _)| self.same_value_zero(k, key))
+            .position(|entry| entry.is_some_and(|(k, _)| self.same_value_zero(&k, key)))
     }
 
     /// Charge the metering of an inserting `fxSetEntry`/`fxSetWeakEntry` new
@@ -20341,7 +20515,10 @@ impl Interp {
             if data.kind == CollKind::WeakMap || data.kind == CollKind::WeakSet {
                 return;
             }
-            (data.table_length, data.entries.len() as u32)
+            (
+                data.table_length,
+                data.entries.iter().filter(|entry| entry.is_some()).count() as u32,
+            )
         };
         // mxTableThreshold(L) = (L>>1) + (L>>2); high = threshold, low = high>>1.
         let high = (former >> 1) + (former >> 2);
