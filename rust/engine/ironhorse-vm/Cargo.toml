@@ -17,6 +17,7 @@ path = "src/lib.rs"
 # `match_regexp`. Both halves are `#![forbid(unsafe_code)]`.
 ironhorse-regexp = { path = "../ironhorse-regexp" }
 icu_normalizer = "=2.2.0"
+icu_segmenter = "=2.2.0"
 
 [features]
 # Off by default. The determinism firewall (design

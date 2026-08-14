@@ -1633,6 +1633,17 @@ pub enum NativeMethod {
     PluralRulesSelect,
     PluralRulesSelectRange,
     PluralRulesResolvedOptions,
+    SegmenterSegment,
+    SegmenterResolvedOptions,
+    SegmentsContaining,
+    SegmentsIterator,
+    SegmentIteratorNext,
+    SegmentIteratorSymbolIterator,
+    DateTimeFormatFormat,
+    DateTimeFormatFormatToParts,
+    DateTimeFormatFormatRange,
+    DateTimeFormatFormatRangeToParts,
+    DateTimeFormatResolvedOptions,
     /// The internal `%CopyObject%` helper used by object spread and object
     /// rest. It copies the source's own enumerable properties to `this`.
     CopyObject,
@@ -2731,6 +2742,8 @@ pub enum Native {
     Collator,
     ListFormat,
     PluralRules,
+    Segmenter,
+    DateTimeFormat,
     Object,
     Function,
     Boolean,
@@ -2802,6 +2815,8 @@ impl Native {
             Native::Collator => "Collator",
             Native::ListFormat => "ListFormat",
             Native::PluralRules => "PluralRules",
+            Native::Segmenter => "Segmenter",
+            Native::DateTimeFormat => "DateTimeFormat",
             Native::Object => "Object",
             Native::Function => "Function",
             Native::Boolean => "Boolean",
@@ -2842,6 +2857,8 @@ impl Native {
             Native::Collator => 0,
             Native::ListFormat => 0,
             Native::PluralRules => 0,
+            Native::Segmenter => 0,
+            Native::DateTimeFormat => 0,
             Native::AggregateError => 2,
             Native::SuppressedError => 3,
             Native::DisposableStack | Native::AsyncDisposableStack => 0,
@@ -3188,10 +3205,18 @@ pub struct Interp {
     collator_proto: crate::value::SlotIndex,
     list_format_proto: crate::value::SlotIndex,
     plural_rules_proto: crate::value::SlotIndex,
+    segmenter_proto: crate::value::SlotIndex,
+    segments_proto: crate::value::SlotIndex,
+    segment_iterator_proto: crate::value::SlotIndex,
+    date_time_format_proto: crate::value::SlotIndex,
     locales: std::collections::HashMap<crate::value::SlotIndex, LocaleData>,
     collators: std::collections::HashMap<crate::value::SlotIndex, CollatorData>,
     list_formats: std::collections::HashMap<crate::value::SlotIndex, ListFormatData>,
     plural_rules: std::collections::HashMap<crate::value::SlotIndex, PluralRulesData>,
+    segmenters: std::collections::HashMap<crate::value::SlotIndex, SegmenterData>,
+    segments: std::collections::HashMap<crate::value::SlotIndex, SegmentsData>,
+    segment_iterators: std::collections::HashMap<crate::value::SlotIndex, SegmentIteratorData>,
+    date_time_formats: std::collections::HashMap<crate::value::SlotIndex, DateTimeFormatData>,
     collator_compare_functions:
         std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>,
     /// The realm's `%Object.prototype%` (XS's `mxObjectPrototype`), the root
@@ -3611,6 +3636,57 @@ struct PluralRulesData {
     trailing_zero_display: String,
 }
 
+#[derive(Clone, Debug)]
+struct SegmenterData {
+    locale: String,
+    /// `grapheme` | `word` | `sentence`
+    granularity: String,
+}
+
+/// One `%Segments%` object (the result of `segmenter.segment(string)`): the
+/// input's UTF-16 code units, the precomputed boundary segments, and the
+/// granularity carried for `isWordLike`. Segmentation is deterministic over the
+/// pinned `icu_segmenter` Unicode data, so precomputing the whole list at
+/// `segment()` time is equivalent to the spec's lazy FindBoundary and lets both
+/// iteration and `containing` share one immutable result.
+#[derive(Clone, Debug)]
+struct SegmentsData {
+    units: Vec<u16>,
+    /// Each `(start, end, is_word_like)` in UTF-16 code-unit offsets.
+    segments: Vec<(usize, usize, bool)>,
+    /// `grapheme` | `word` | `sentence` — only `word` exposes `isWordLike`.
+    granularity: String,
+}
+
+/// One `%SegmentIterator%` — a cursor into a `%Segments%` object's precomputed
+/// list (the segment index to yield next).
+#[derive(Clone, Debug)]
+struct SegmentIteratorData {
+    segments_inst: crate::value::SlotIndex,
+    pos: usize,
+}
+
+/// One `Intl.DateTimeFormat` object's resolved options. The frozen profile
+/// carries the proleptic Gregorian calendar and a fixed offset time-zone
+/// table; formatting is deterministic and host-independent.
+#[derive(Clone, Debug)]
+struct DateTimeFormatData {
+    locale: String,
+    calendar: String,
+    numbering_system: String,
+    /// The resolved IANA time-zone name (canonicalized).
+    time_zone: String,
+    /// Minutes east of UTC for the resolved zone (the frozen table is
+    /// fixed-offset: UTC and the `Etc/GMT±N` / numeric-offset zones).
+    offset_minutes: i32,
+    hour_cycle: Option<String>,
+    /// Each present component's resolved representation, in resolvedOptions
+    /// enumeration order. `(key, value)` e.g. `("year","numeric")`.
+    components: Vec<(&'static str, String)>,
+    date_style: Option<String>,
+    time_style: Option<String>,
+}
+
 /// A suspended activation: the caller's scope and resume point, saved by
 /// `run` and restored by `end` (XS's `mxFrame->value.frame.{code,scope}`
 /// plus the environment the frame aliases). The value stack is shared and
@@ -3889,10 +3965,18 @@ impl Interp {
             collator_proto: crate::value::SlotIndex::NULL,
             list_format_proto: crate::value::SlotIndex::NULL,
             plural_rules_proto: crate::value::SlotIndex::NULL,
+            segmenter_proto: crate::value::SlotIndex::NULL,
+            segments_proto: crate::value::SlotIndex::NULL,
+            segment_iterator_proto: crate::value::SlotIndex::NULL,
+            date_time_format_proto: crate::value::SlotIndex::NULL,
             locales: std::collections::HashMap::new(),
             collators: std::collections::HashMap::new(),
             list_formats: std::collections::HashMap::new(),
             plural_rules: std::collections::HashMap::new(),
+            segmenters: std::collections::HashMap::new(),
+            segments: std::collections::HashMap::new(),
+            segment_iterators: std::collections::HashMap::new(),
+            date_time_formats: std::collections::HashMap::new(),
             collator_compare_functions: std::collections::HashMap::new(),
             object_proto: crate::value::SlotIndex::NULL,
             function_proto: crate::value::SlotIndex::NULL,
@@ -4135,7 +4219,9 @@ impl Interp {
                 Native::Locale
                 | Native::Collator
                 | Native::ListFormat
-                | Native::PluralRules => {
+                | Native::PluralRules
+                | Native::Segmenter
+                | Native::DateTimeFormat => {
                     unreachable!("Intl constructors are registered by create_intl")
                 }
                 // `Proxy` is registered separately (`create_proxy`) and never
@@ -4745,7 +4831,37 @@ impl Interp {
             .push((plural_rules_proto, "constructor", plural_rules));
         self.proto_methods.push((intl, "PluralRules", plural_rules));
 
-        for ctor in [locale, collator, list_format, plural_rules] {
+        let segmenter = self.alloc_named_native(Native::Segmenter);
+        let segmenter_proto = self.slots.alloc(Slot::instance(self.object_proto));
+        self.segmenter_proto = segmenter_proto;
+        self.ctor_prototype.insert(segmenter, segmenter_proto);
+        self.proto_methods
+            .push((segmenter, "prototype", segmenter_proto));
+        self.proto_methods
+            .push((segmenter_proto, "constructor", segmenter));
+        self.proto_methods.push((intl, "Segmenter", segmenter));
+        // `%Segments.prototype%` and `%SegmentsIterator.prototype%` are
+        // anonymous intrinsics reached only through `segment()`; they chain to
+        // `%Object.prototype%` (the iterator ultimately to `%IteratorPrototype%`
+        // for `[Symbol.iterator]`, installed in `link_intrinsics`).
+        let segments_proto = self.slots.alloc(Slot::instance(self.object_proto));
+        self.segments_proto = segments_proto;
+        let segment_iterator_proto = self.slots.alloc(Slot::instance(self.object_proto));
+        self.segment_iterator_proto = segment_iterator_proto;
+
+        let date_time_format = self.alloc_named_native(Native::DateTimeFormat);
+        let date_time_format_proto = self.slots.alloc(Slot::instance(self.object_proto));
+        self.date_time_format_proto = date_time_format_proto;
+        self.ctor_prototype
+            .insert(date_time_format, date_time_format_proto);
+        self.proto_methods
+            .push((date_time_format, "prototype", date_time_format_proto));
+        self.proto_methods
+            .push((date_time_format_proto, "constructor", date_time_format));
+        self.proto_methods
+            .push((intl, "DateTimeFormat", date_time_format));
+
+        for ctor in [locale, collator, list_format, plural_rules, segmenter, date_time_format] {
             let f =
                 self.alloc_named_method(NativeMethod::IntlSupportedLocalesOf, "supportedLocalesOf", 1);
             self.proto_methods.push((ctor, "supportedLocalesOf", f));
@@ -4776,6 +4892,41 @@ impl Interp {
         ] {
             let f = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((plural_rules_proto, name, f));
+        }
+        for (name, method, arity) in [
+            ("segment", NativeMethod::SegmenterSegment, 1),
+            ("resolvedOptions", NativeMethod::SegmenterResolvedOptions, 0),
+        ] {
+            let f = self.alloc_named_method(method, name, arity);
+            self.proto_methods.push((segmenter_proto, name, f));
+        }
+        let containing = self.alloc_named_method(NativeMethod::SegmentsContaining, "containing", 1);
+        self.proto_methods
+            .push((segments_proto, "containing", containing));
+        let seg_next = self.alloc_named_method(NativeMethod::SegmentIteratorNext, "next", 0);
+        self.proto_methods
+            .push((segment_iterator_proto, "next", seg_next));
+        for (name, method, arity) in [
+            ("format", NativeMethod::DateTimeFormatFormat, 1),
+            (
+                "formatToParts",
+                NativeMethod::DateTimeFormatFormatToParts,
+                1,
+            ),
+            ("formatRange", NativeMethod::DateTimeFormatFormatRange, 2),
+            (
+                "formatRangeToParts",
+                NativeMethod::DateTimeFormatFormatRangeToParts,
+                2,
+            ),
+            (
+                "resolvedOptions",
+                NativeMethod::DateTimeFormatResolvedOptions,
+                0,
+            ),
+        ] {
+            let f = self.alloc_named_method(method, name, arity);
+            self.proto_methods.push((date_time_format_proto, name, f));
         }
         // Keep the profile version observable to regression tooling without
         // depending on a host database.
@@ -5387,6 +5538,9 @@ impl Interp {
             for (proto, tag) in [
                 (self.list_format_proto, "Intl.ListFormat"),
                 (self.plural_rules_proto, "Intl.PluralRules"),
+                (self.segmenter_proto, "Intl.Segmenter"),
+                (self.date_time_format_proto, "Intl.DateTimeFormat"),
+                (self.segment_iterator_proto, "Segmenter String Iterator"),
             ] {
                 if proto.is_null() {
                     continue;
@@ -5421,6 +5575,29 @@ impl Interp {
                 ),
                 XS_DONT_ENUM_FLAG,
             );
+            // `%Segments.prototype%[Symbol.iterator]` mints a `%SegmentIterator%`;
+            // the iterator itself carries the identity `[Symbol.iterator]`
+            // (`%IteratorPrototype%`) so it survives spread/`Array.from`.
+            if !self.segments_proto.is_null() {
+                let iter = self.alloc_named_method(NativeMethod::SegmentsIterator, "[Symbol.iterator]", 0);
+                self.set_own_unmetered_with_flag(
+                    self.segments_proto,
+                    id,
+                    Slot::of(Kind::Reference, Payload::Reference(iter)),
+                    XS_DONT_ENUM_FLAG,
+                );
+                let identity = self.alloc_named_method(
+                    NativeMethod::SegmentIteratorSymbolIterator,
+                    "[Symbol.iterator]",
+                    0,
+                );
+                self.set_own_unmetered_with_flag(
+                    self.segment_iterator_proto,
+                    id,
+                    Slot::of(Kind::Reference, Payload::Reference(identity)),
+                    XS_DONT_ENUM_FLAG,
+                );
+            }
         }
         for (native, string_name, symbol_name) in [
             (Native::DisposableStack, "dispose", "dispose"),
@@ -11099,6 +11276,52 @@ impl Interp {
                 self.plural_rules.insert(inst, data);
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
+            Native::Segmenter => {
+                if !has_target {
+                    return Err(self.catchable_type_error());
+                }
+                let locale_arg = arg(0);
+                let options_arg = arg(1);
+                let resolved = self.intl_resolve_locale(code, locale_arg)?;
+                let options = self.intl_get_options_object(options_arg)?;
+                if let Some(opts) = options {
+                    self.intl_get_option_enum(
+                        code,
+                        opts,
+                        "localeMatcher",
+                        &["lookup", "best fit"],
+                        "best fit",
+                    )?;
+                }
+                let granularity = match options {
+                    Some(opts) => self.intl_get_option_enum(
+                        code,
+                        opts,
+                        "granularity",
+                        &["grapheme", "word", "sentence"],
+                        "grapheme",
+                    )?,
+                    None => "grapheme".to_string(),
+                };
+                let data = SegmenterData {
+                    locale: resolved,
+                    granularity,
+                };
+                let inst = self.slots.alloc(Slot::instance(self.segmenter_proto));
+                self.segmenters.insert(inst, data);
+                Slot::of(Kind::Reference, Payload::Reference(inst))
+            }
+            Native::DateTimeFormat => {
+                if !has_target {
+                    return Err(self.catchable_type_error());
+                }
+                let locale_arg = arg(0);
+                let options_arg = arg(1);
+                let data = self.build_date_time_format(code, locale_arg, options_arg)?;
+                let inst = self.slots.alloc(Slot::instance(self.date_time_format_proto));
+                self.date_time_formats.insert(inst, data);
+                Slot::of(Kind::Reference, Payload::Reference(inst))
+            }
             // `Boolean(value)` (`fx_Boolean`): ToBoolean(argument0), or
             // `false` when called with no argument. Measured against the pin,
             // the primitive coercion meters **no** built-in step beyond the
@@ -12139,6 +12362,395 @@ impl Interp {
             }
             None => Ok("en".to_string()),
         }
+    }
+
+    /// Build one segment-data object (`CreateSegmentDataObject`): the
+    /// `{segment, index, input[, isWordLike]}` record a `%Segments%` iterator
+    /// yields or `containing` returns, in that own-property enumeration order.
+    /// `isWordLike` is present only for `word` granularity.
+    fn make_segment_data_object(
+        &mut self,
+        segments_inst: crate::value::SlotIndex,
+        seg_index: usize,
+    ) -> Slot {
+        let (start, end, is_word_like, is_word) = {
+            let s = &self.segments[&segments_inst];
+            let (st, en, wl) = s.segments[seg_index];
+            (st, en, wl, s.granularity == "word")
+        };
+        let seg_units = self.segments[&segments_inst].units[start..end].to_vec();
+        let input_units = self.segments[&segments_inst].units.clone();
+        let obj = self.slots.alloc(Slot::instance(self.object_proto));
+        let segment = self.new_string_units(&seg_units);
+        self.define_descriptor_field(obj, "segment", segment);
+        self.define_descriptor_field(obj, "index", Slot::number(start as f64));
+        let input = self.new_string_units(&input_units);
+        self.define_descriptor_field(obj, "input", input);
+        if is_word {
+            self.define_descriptor_field(obj, "isWordLike", Slot::boolean(is_word_like));
+        }
+        Slot::of(Kind::Reference, Payload::Reference(obj))
+    }
+
+    /// `GetOption(options, property, "string", values, undefined)` returning
+    /// `None` when the property is absent/`undefined` rather than a default —
+    /// the presence-sensitive form the DateTimeFormat option resolution needs.
+    fn intl_get_option_enum_opt(
+        &mut self,
+        code: &[u8],
+        options: crate::value::SlotIndex,
+        name: &str,
+        allowed: &[&str],
+    ) -> Result<Option<String>, Halt> {
+        let Some(&id) = self.symbol_ids.get(name) else {
+            return Ok(None);
+        };
+        let receiver = Slot::of(Kind::Reference, Payload::Reference(options));
+        let value = self.ordinary_get(code, options, id, receiver)?;
+        if value.kind == Kind::Undefined {
+            return Ok(None);
+        }
+        let text = self.value_to_string(code, value)?;
+        if allowed.iter().any(|a| *a == text) {
+            Ok(Some(text))
+        } else {
+            Err(self.catchable_range_error())
+        }
+    }
+
+    /// `CreateDateTimeFormat` (ECMA-402): resolve the locale, calendar,
+    /// numbering system, time zone, hour cycle, and the date/time component or
+    /// style options against the frozen profile. Order of reads mirrors the
+    /// spec so `constructor-options-order` observes the same get sequence.
+    fn build_date_time_format(
+        &mut self,
+        code: &[u8],
+        locale_arg: Slot,
+        options_arg: Slot,
+    ) -> Result<DateTimeFormatData, Halt> {
+        let requested = self.intl_first_locale(code, locale_arg)?;
+        let (locale_base, ext) = match &requested {
+            Some(raw) => {
+                let loc = canonicalize_locale(raw).ok_or_else(|| self.catchable_range_error())?;
+                (locale_base_name(&loc), loc.unicode.clone())
+            }
+            None => ("en".to_string(), std::collections::BTreeMap::new()),
+        };
+        let options = self.intl_get_options_object(options_arg)?;
+        if let Some(opts) = options {
+            self.intl_get_option_enum(
+                code,
+                opts,
+                "localeMatcher",
+                &["lookup", "best fit"],
+                "best fit",
+            )?;
+        }
+        // calendar / numberingSystem: well-formed Unicode `type` subtags.
+        let mut calendar = ext.get("ca").cloned();
+        let mut numbering = ext.get("nu").cloned();
+        if let Some(opts) = options {
+            if let Some(v) = self.intl_option_string(code, opts, "calendar")? {
+                let v = v.to_ascii_lowercase();
+                if !valid_unicode_type(&v) {
+                    return Err(self.catchable_range_error());
+                }
+                calendar = Some(v);
+            }
+            if let Some(v) = self.intl_option_string(code, opts, "numberingSystem")? {
+                let v = v.to_ascii_lowercase();
+                if !valid_unicode_type(&v) {
+                    return Err(self.catchable_range_error());
+                }
+                numbering = Some(v);
+            }
+        }
+        // hour12 / hourCycle.
+        let mut hour12 = None;
+        let mut hour_cycle = ext.get("hc").cloned();
+        if let Some(opts) = options {
+            hour12 = self.intl_option_bool(opts, "hour12");
+            if let Some(hc) =
+                self.intl_get_option_enum_opt(code, opts, "hourCycle", &["h11", "h12", "h23", "h24"])?
+            {
+                hour_cycle = Some(hc);
+            }
+        }
+        // timeZone: default UTC, else canonicalize the requested identifier.
+        let (time_zone, offset_minutes) = match options {
+            Some(opts) => match self.intl_option_string(code, opts, "timeZone")? {
+                Some(raw) => resolve_time_zone(&raw).ok_or_else(|| self.catchable_range_error())?,
+                None => ("UTC".to_string(), 0),
+            },
+            None => ("UTC".to_string(), 0),
+        };
+        // Component and style options.
+        let (date_style, time_style) = match options {
+            Some(opts) => (
+                self.intl_get_option_enum_opt(
+                    code,
+                    opts,
+                    "dateStyle",
+                    &["full", "long", "medium", "short"],
+                )?,
+                self.intl_get_option_enum_opt(
+                    code,
+                    opts,
+                    "timeStyle",
+                    &["full", "long", "medium", "short"],
+                )?,
+            ),
+            None => (None, None),
+        };
+        // Each date/time component option and its allowed representations.
+        let component_specs: &[(&'static str, &[&str])] = &[
+            ("weekday", &["narrow", "short", "long"]),
+            ("era", &["narrow", "short", "long"]),
+            ("year", &["2-digit", "numeric"]),
+            ("month", &["2-digit", "numeric", "narrow", "short", "long"]),
+            ("day", &["2-digit", "numeric"]),
+            ("dayPeriod", &["narrow", "short", "long"]),
+            ("hour", &["2-digit", "numeric"]),
+            ("minute", &["2-digit", "numeric"]),
+            ("second", &["2-digit", "numeric"]),
+        ];
+        let mut components: Vec<(&'static str, String)> = Vec::new();
+        let mut any_component = false;
+        if let Some(opts) = options {
+            for (name, allowed) in component_specs {
+                if let Some(v) = self.intl_get_option_enum_opt(code, opts, name, allowed)? {
+                    components.push((name, v));
+                    any_component = true;
+                }
+            }
+            // fractionalSecondDigits: GetNumberOption 1..3.
+            if let Some(n) =
+                self.intl_get_number_option(code, opts, "fractionalSecondDigits", 1.0, 3.0, None)?
+            {
+                components.push(("fractionalSecondDigits", n.to_string()));
+                any_component = true;
+            }
+            // timeZoneName.
+            if let Some(v) = self.intl_get_option_enum_opt(
+                code,
+                opts,
+                "timeZoneName",
+                &[
+                    "short",
+                    "long",
+                    "shortOffset",
+                    "longOffset",
+                    "shortGeneric",
+                    "longGeneric",
+                ],
+            )? {
+                components.push(("timeZoneName", v));
+                any_component = true;
+            }
+            // formatMatcher is read and validated but does not steer the frozen
+            // pattern set.
+            self.intl_get_option_enum(code, opts, "formatMatcher", &["basic", "best fit"], "best fit")?;
+        }
+        // A dateStyle/timeStyle cannot combine with explicit components.
+        if (date_style.is_some() || time_style.is_some()) && any_component {
+            return Err(self.catchable_type_error());
+        }
+        // Default: with neither style nor components, the date defaults to
+        // numeric year/month/day (ToDateTimeOptions "date" required, "any").
+        if date_style.is_none() && time_style.is_none() && !any_component {
+            components.push(("year", "numeric".to_string()));
+            components.push(("month", "numeric".to_string()));
+            components.push(("day", "numeric".to_string()));
+        }
+        // The resolved hour cycle only surfaces when an hour is formatted.
+        let formats_hour =
+            components.iter().any(|(k, _)| *k == "hour") || time_style.is_some();
+        // Resolve the hour cycle: an explicit `hour12` wins (h12/h11 for true,
+        // h23 for false), then an explicit `hourCycle`, then the locale
+        // default. The frozen profile uses h12 everywhere except Japanese,
+        // whose 24-hour default is h23 and 12-hour is h11.
+        let is_ja = locale_base.starts_with("ja");
+        let resolved_hour_cycle = if formats_hour {
+            let cycle = match hour12 {
+                Some(true) => {
+                    if is_ja {
+                        "h11".to_string()
+                    } else {
+                        "h12".to_string()
+                    }
+                }
+                Some(false) => "h23".to_string(),
+                None => hour_cycle.clone().unwrap_or_else(|| {
+                    if is_ja {
+                        "h23".to_string()
+                    } else {
+                        "h12".to_string()
+                    }
+                }),
+            };
+            Some(cycle)
+        } else {
+            None
+        };
+        Ok(DateTimeFormatData {
+            locale: locale_base,
+            calendar: calendar.unwrap_or_else(|| "gregory".to_string()),
+            numbering_system: numbering.unwrap_or_else(|| "latn".to_string()),
+            time_zone,
+            offset_minutes,
+            hour_cycle: resolved_hour_cycle,
+            components,
+            date_style,
+            time_style,
+        })
+    }
+
+    /// Dispatch the DateTimeFormat prototype methods (`format`,
+    /// `formatToParts`, `formatRange`, `formatRangeToParts`,
+    /// `resolvedOptions`), each branded on the receiver.
+    fn date_time_format_method(
+        &mut self,
+        m: NativeMethod,
+        this: Slot,
+        arg0: Slot,
+        arg1: Slot,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        let inst = match this.value {
+            Payload::Reference(r) if self.date_time_formats.contains_key(&r) => r,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let data = self.date_time_formats[&inst].clone();
+        match m {
+            NativeMethod::DateTimeFormatResolvedOptions => {
+                Ok(self.date_time_format_resolved_options(&data))
+            }
+            NativeMethod::DateTimeFormatFormat | NativeMethod::DateTimeFormatFormatToParts => {
+                let t = self.date_time_arg_to_time(code, arg0)?;
+                let parts = format_date_time_parts(&data, t);
+                if m == NativeMethod::DateTimeFormatFormat {
+                    let mut s = String::new();
+                    for (_, v) in &parts {
+                        s.push_str(v);
+                    }
+                    Ok(self.intl_string(&s))
+                } else {
+                    Ok(self.date_time_parts_array(&parts, false))
+                }
+            }
+            NativeMethod::DateTimeFormatFormatRange
+            | NativeMethod::DateTimeFormatFormatRangeToParts => {
+                if arg0.kind == Kind::Undefined || arg1.kind == Kind::Undefined {
+                    return Err(self.catchable_type_error());
+                }
+                let t1 = self.date_time_arg_to_time(code, arg0)?;
+                let t2 = self.date_time_arg_to_time(code, arg1)?;
+                let (parts, source_shared) = format_date_time_range_parts(&data, t1, t2);
+                if m == NativeMethod::DateTimeFormatFormatRange {
+                    let mut s = String::new();
+                    for (_, v, _) in &parts {
+                        s.push_str(v);
+                    }
+                    Ok(self.intl_string(&s))
+                } else {
+                    let _ = source_shared;
+                    Ok(self.date_time_range_parts_array(&parts))
+                }
+            }
+            _ => unreachable!("date_time_format_method dispatched a non-DTF method"),
+        }
+    }
+
+    /// `? ToNumber` the date argument (or `undefined` → epoch), then require a
+    /// finite integral time value in range (a non-finite one is a RangeError).
+    fn date_time_arg_to_time(&mut self, code: &[u8], arg: Slot) -> Result<f64, Halt> {
+        let n = if arg.kind == Kind::Undefined {
+            0.0
+        } else {
+            let v = self.to_number_value(code, arg)?;
+            to_number(&v)
+        };
+        if !n.is_finite() || n.abs() > 8.64e15 {
+            return Err(self.catchable_range_error());
+        }
+        Ok(n.trunc())
+    }
+
+    fn date_time_format_resolved_options(&mut self, data: &DateTimeFormatData) -> Slot {
+        let result = self.slots.alloc(Slot::instance(self.object_proto));
+        let locale = self.intl_string(&data.locale);
+        self.define_descriptor_field(result, "locale", locale);
+        let calendar = self.intl_string(&data.calendar);
+        self.define_descriptor_field(result, "calendar", calendar);
+        let nu = self.intl_string(&data.numbering_system);
+        self.define_descriptor_field(result, "numberingSystem", nu);
+        let tz = self.intl_string(&data.time_zone);
+        self.define_descriptor_field(result, "timeZone", tz);
+        if let Some(hc) = &data.hour_cycle {
+            let hc_s = self.intl_string(hc);
+            self.define_descriptor_field(result, "hourCycle", hc_s);
+            let h12 = Slot::boolean(hc == "h11" || hc == "h12");
+            self.define_descriptor_field(result, "hour12", h12);
+        }
+        // Explicit component options, in the spec's fixed enumeration order
+        // (weekday … timeZoneName), as built in `build_date_time_format`.
+        for (key, value) in &data.components {
+            if *key == "fractionalSecondDigits" {
+                if let Ok(n) = value.parse::<i32>() {
+                    self.define_descriptor_field(result, key, Slot::integer(n));
+                }
+            } else {
+                let v = self.intl_string(value);
+                self.define_descriptor_field(result, key, v);
+            }
+        }
+        // dateStyle / timeStyle come last (ECMA-402 resolvedOptions order).
+        if let Some(ds) = &data.date_style {
+            let s = self.intl_string(ds);
+            self.define_descriptor_field(result, "dateStyle", s);
+        }
+        if let Some(ts) = &data.time_style {
+            let s = self.intl_string(ts);
+            self.define_descriptor_field(result, "timeStyle", s);
+        }
+        Slot::of(Kind::Reference, Payload::Reference(result))
+    }
+
+    /// Build the `formatToParts` result array from `(type, value)` parts.
+    fn date_time_parts_array(&mut self, parts: &[(&'static str, String)], _range: bool) -> Slot {
+        let arr = self.new_array();
+        for (i, (ty, value)) in parts.iter().enumerate() {
+            let obj = self.slots.alloc(Slot::instance(self.object_proto));
+            let type_slot = self.intl_string(ty);
+            let value_slot = self.intl_string(value);
+            self.define_descriptor_field(obj, "type", type_slot);
+            self.define_descriptor_field(obj, "value", value_slot);
+            let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
+            item.id = 0;
+            item.next = crate::value::SlotIndex::NULL;
+            self.arrays.get_mut(&arr).unwrap().items.insert(i as u32, item);
+        }
+        self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
+        Slot::of(Kind::Reference, Payload::Reference(arr))
+    }
+
+    fn date_time_range_parts_array(&mut self, parts: &[(&'static str, String, &'static str)]) -> Slot {
+        let arr = self.new_array();
+        for (i, (ty, value, source)) in parts.iter().enumerate() {
+            let obj = self.slots.alloc(Slot::instance(self.object_proto));
+            let type_slot = self.intl_string(ty);
+            let value_slot = self.intl_string(value);
+            let source_slot = self.intl_string(source);
+            self.define_descriptor_field(obj, "type", type_slot);
+            self.define_descriptor_field(obj, "value", value_slot);
+            self.define_descriptor_field(obj, "source", source_slot);
+            let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
+            item.id = 0;
+            item.next = crate::value::SlotIndex::NULL;
+            self.arrays.get_mut(&arr).unwrap().items.insert(i as u32, item);
+        }
+        self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
+        Slot::of(Kind::Reference, Payload::Reference(arr))
     }
 
     /// `StringListFromIterable(iterable)` (ECMA-402): drive the iterator
@@ -15592,6 +16204,104 @@ impl Interp {
                 self.define_descriptor_field(result, "trailingZeroDisplay", trailing);
                 Slot::of(Kind::Reference, Payload::Reference(result))
             }
+            NativeMethod::SegmenterSegment => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.segmenters.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let granularity = self.segmenters[&inst].granularity.clone();
+                let units = self.to_string_units(code, arg0)?;
+                let segments = segment_units(&granularity, &units);
+                let sdata = SegmentsData {
+                    units,
+                    segments,
+                    granularity,
+                };
+                let sinst = self.slots.alloc(Slot::instance(self.segments_proto));
+                self.segments.insert(sinst, sdata);
+                Slot::of(Kind::Reference, Payload::Reference(sinst))
+            }
+            NativeMethod::SegmenterResolvedOptions => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.segmenters.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let data = self.segmenters[&inst].clone();
+                let result = self.slots.alloc(Slot::instance(self.object_proto));
+                let locale = self.intl_string(&data.locale);
+                self.define_descriptor_field(result, "locale", locale);
+                let g = self.intl_string(&data.granularity);
+                self.define_descriptor_field(result, "granularity", g);
+                Slot::of(Kind::Reference, Payload::Reference(result))
+            }
+            NativeMethod::SegmentsIterator => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.segments.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let it = self.slots.alloc(Slot::instance(self.segment_iterator_proto));
+                self.segment_iterators.insert(
+                    it,
+                    SegmentIteratorData {
+                        segments_inst: inst,
+                        pos: 0,
+                    },
+                );
+                Slot::of(Kind::Reference, Payload::Reference(it))
+            }
+            NativeMethod::SegmentIteratorSymbolIterator => this,
+            NativeMethod::SegmentIteratorNext => {
+                let it = match this.value {
+                    Payload::Reference(r) if self.segment_iterators.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let (segments_inst, pos) = {
+                    let s = &self.segment_iterators[&it];
+                    (s.segments_inst, s.pos)
+                };
+                let seg_count = self.segments[&segments_inst].segments.len();
+                let result = self.slots.alloc(Slot::instance(self.object_proto));
+                if pos >= seg_count {
+                    self.define_descriptor_field(result, "value", Slot::undefined());
+                    self.define_descriptor_field(result, "done", Slot::boolean(true));
+                } else {
+                    let seg_obj = self.make_segment_data_object(segments_inst, pos);
+                    self.segment_iterators.get_mut(&it).unwrap().pos = pos + 1;
+                    self.define_descriptor_field(result, "value", seg_obj);
+                    self.define_descriptor_field(result, "done", Slot::boolean(false));
+                }
+                Slot::of(Kind::Reference, Payload::Reference(result))
+            }
+            NativeMethod::SegmentsContaining => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.segments.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let n = self.to_number_value(code, arg0)?;
+                let idx = to_number(&n).trunc();
+                let len = self.segments[&inst].units.len() as f64;
+                if idx.is_nan() || idx < 0.0 || idx >= len {
+                    Slot::undefined()
+                } else {
+                    let idx = idx as usize;
+                    let pos = self.segments[&inst]
+                        .segments
+                        .iter()
+                        .position(|&(s, e, _)| idx >= s && idx < e);
+                    match pos {
+                        Some(p) => self.make_segment_data_object(inst, p),
+                        None => Slot::undefined(),
+                    }
+                }
+            }
+            NativeMethod::DateTimeFormatFormat
+            | NativeMethod::DateTimeFormatFormatToParts
+            | NativeMethod::DateTimeFormatFormatRange
+            | NativeMethod::DateTimeFormatFormatRangeToParts
+            | NativeMethod::DateTimeFormatResolvedOptions => {
+                let arg1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+                self.date_time_format_method(m, this, arg0, arg1, code)?
+            }
             NativeMethod::DisposableStackUse
             | NativeMethod::DisposableStackAdopt
             | NativeMethod::DisposableStackDefer
@@ -15789,13 +16499,32 @@ impl Interp {
             // later increment). Allocates the result string chunk.
             NativeMethod::ObjectToString => {
                 self.meter.tick_raw(METHOD_OBJECT_TOSTRING_METERING);
-                let text: &[u8] = match this.value {
-                    Payload::Reference(r) if self.error_data.contains_key(&r) => b"[object Error]",
-                    _ => b"[object Object]",
+                // A `Symbol.toStringTag` string on the receiver's chain wins
+                // (`Object.prototype.toString` step 15). Only the Intl
+                // formatter/segmenter objects carry one in the frozen profile —
+                // objects the pinned oracle cannot construct — so this
+                // unmetered chain read never perturbs a covered/metered case
+                // (which has no such tag and falls through unchanged).
+                let tag = match this.value {
+                    Payload::Reference(r) => self.string_to_string_tag(r),
+                    _ => None,
                 };
-                self.meter.tick_chunk_new(text.len() as u64);
-                let off = self.alloc_str_text(text);
-                Slot::of(Kind::String, Payload::String(off))
+                if let Some(tag) = tag {
+                    let owned = format!("[object {}]", tag);
+                    self.meter.tick_chunk_new(owned.len() as u64);
+                    let off = self.alloc_str_text(owned.as_bytes());
+                    Slot::of(Kind::String, Payload::String(off))
+                } else {
+                    let text: &[u8] = match this.value {
+                        Payload::Reference(r) if self.error_data.contains_key(&r) => {
+                            b"[object Error]"
+                        }
+                        _ => b"[object Object]",
+                    };
+                    self.meter.tick_chunk_new(text.len() as u64);
+                    let off = self.alloc_str_text(text);
+                    Slot::of(Kind::String, Payload::String(off))
+                }
             }
             // `Function.prototype.toString`: XS renders any function as
             // `function ["name"] (){[native code]}`.
@@ -23303,6 +24032,28 @@ impl Interp {
     /// (XS's property slots hold the value directly, keyed by `id`), so
     /// the match is by `id` alone — a property slot's `kind` is the
     /// value's kind, not a separate marker.
+    /// The `Symbol.toStringTag` string on `inst`'s own+inherited chain, if any.
+    /// Unmetered — used only by `Object.prototype.toString` for the frozen Intl
+    /// objects (the pinned oracle cannot construct one, so no metered case
+    /// reaches this).
+    fn string_to_string_tag(&mut self, inst: crate::value::SlotIndex) -> Option<String> {
+        let tag_id = self.well_known_symbol_property_id("toStringTag")?;
+        let mut cur = inst;
+        while !cur.is_null() {
+            if let Some(prop) = self.find_property(cur, tag_id) {
+                let slot = self.slots.get(prop);
+                if let Payload::String(off) = slot.value {
+                    if slot.kind == Kind::String {
+                        return Some(self.str_text(off));
+                    }
+                }
+                return None;
+            }
+            cur = self.instance_prototype(cur);
+        }
+        None
+    }
+
     fn find_property(
         &self,
         inst: crate::value::SlotIndex,
@@ -26659,6 +27410,527 @@ fn list_patterns(locale: &str, kind: &str, style: &str) -> [&'static str; 4] {
 
 /// Assemble the `{type, value}` parts of a formatted list per the ECMA-402
 /// CreatePartsFromList algorithm.
+/// Segment `units` (UTF-16 code units) at the requested granularity using the
+/// pinned `icu_segmenter` Unicode data, returning each `(start, end,
+/// is_word_like)` in code-unit offsets. `is_word_like` is meaningful only for
+/// `word` granularity (always `false` otherwise). Boundaries the segmenter
+/// yields are `[0, b1, …, len]`; the leading `0` is dropped so each segment is
+/// the half-open range from the previous boundary.
+fn segment_units(granularity: &str, units: &[u16]) -> Vec<(usize, usize, bool)> {
+    use icu_segmenter::options::{SentenceBreakInvariantOptions, WordBreakInvariantOptions};
+    use icu_segmenter::{GraphemeClusterSegmenter, SentenceSegmenter, WordSegmenter};
+    let mut segs = Vec::new();
+    let mut prev = 0usize;
+    match granularity {
+        "word" => {
+            let seg = WordSegmenter::new_auto(WordBreakInvariantOptions::default());
+            for (b, wt) in seg.segment_utf16(units).iter_with_word_type() {
+                if b == 0 {
+                    continue;
+                }
+                segs.push((prev, b, wt.is_word_like()));
+                prev = b;
+            }
+        }
+        "sentence" => {
+            let seg = SentenceSegmenter::new(SentenceBreakInvariantOptions::default());
+            for b in seg.segment_utf16(units) {
+                if b == 0 {
+                    continue;
+                }
+                segs.push((prev, b, false));
+                prev = b;
+            }
+        }
+        _ => {
+            let seg = GraphemeClusterSegmenter::new();
+            for b in seg.segment_utf16(units) {
+                if b == 0 {
+                    continue;
+                }
+                segs.push((prev, b, false));
+                prev = b;
+            }
+        }
+    }
+    segs
+}
+
+/// Civil calendar fields of a time value `t` (ms since the epoch) after
+/// applying a fixed zone offset (minutes east of UTC). Proleptic Gregorian,
+/// Howard Hinnant's `civil_from_days`. Returns
+/// `(year, month1_12, day, weekday0_sun, hour, minute, second, millis)`.
+fn civil_fields(t: f64, offset_minutes: i32) -> (i64, u32, u32, u32, u32, u32, u32, u32) {
+    let local = t + offset_minutes as f64 * 60_000.0;
+    let day_ms = 86_400_000.0;
+    let days = (local / day_ms).floor() as i64;
+    let ms_of_day = (local - days as f64 * day_ms) as i64; // [0, 86_400_000)
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146_096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = if m <= 2 { y + 1 } else { y };
+    let weekday = (((days % 7 + 4) % 7 + 7) % 7) as u32; // 0 = Sunday
+    let secs = ms_of_day / 1000;
+    let hour = (secs / 3600) as u32;
+    let minute = ((secs % 3600) / 60) as u32;
+    let second = (secs % 60) as u32;
+    let millis = (ms_of_day % 1000) as u32;
+    (year, m, d, weekday, hour, minute, second, millis)
+}
+
+const EN_MONTHS_LONG: [&str; 12] = [
+    "January", "February", "March", "April", "May", "June", "July", "August",
+    "September", "October", "November", "December",
+];
+const EN_MONTHS_SHORT: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+const EN_MONTHS_NARROW: [&str; 12] = [
+    "J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D",
+];
+const EN_WEEKDAYS_LONG: [&str; 7] = [
+    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+];
+const EN_WEEKDAYS_SHORT: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const EN_WEEKDAYS_NARROW: [&str; 7] = ["S", "M", "T", "W", "T", "F", "S"];
+
+fn two_digit(n: u32) -> String {
+    format!("{:02}", n)
+}
+
+/// Resolve a requested time-zone identifier to `(canonical name, fixed offset
+/// minutes east of UTC)` over the frozen profile: UTC and its aliases, numeric
+/// `±HH[:MM]` offsets, the `Etc/GMT±N` fixed zones, and a small table of common
+/// IANA names carried at their **standard** (non-DST) offset. An unrecognized
+/// identifier yields `None` (a RangeError at the call site).
+fn resolve_time_zone(raw: &str) -> Option<(String, i32)> {
+    let trimmed = raw.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if matches!(lower.as_str(), "utc" | "etc/utc" | "gmt" | "etc/gmt" | "zulu" | "etc/zulu") {
+        return Some(("UTC".to_string(), 0));
+    }
+    // Numeric offset: +HH, +HHMM, +HH:MM (and the minus forms).
+    if let Some((sign, rest)) = trimmed
+        .strip_prefix('+')
+        .map(|r| (1, r))
+        .or_else(|| trimmed.strip_prefix('-').map(|r| (-1, r)))
+    {
+        let digits: String = rest.chars().filter(|c| c.is_ascii_digit()).collect();
+        let colon_ok = rest.chars().all(|c| c.is_ascii_digit() || c == ':');
+        if colon_ok && (digits.len() == 2 || digits.len() == 4) {
+            let hh: i32 = digits[0..2].parse().ok()?;
+            let mm: i32 = if digits.len() == 4 {
+                digits[2..4].parse().ok()?
+            } else {
+                0
+            };
+            if hh <= 23 && mm <= 59 {
+                let total = sign * (hh * 60 + mm);
+                let canonical = format!(
+                    "{}{:02}:{:02}",
+                    if sign < 0 { "-" } else { "+" },
+                    hh,
+                    mm
+                );
+                return Some((canonical, total));
+            }
+        }
+        return None;
+    }
+    // Etc/GMT±N (sign inverted: Etc/GMT+1 is UTC-1).
+    if let Some(rest) = lower.strip_prefix("etc/gmt") {
+        if let Some((sign, num)) = rest
+            .strip_prefix('+')
+            .map(|n| (1, n))
+            .or_else(|| rest.strip_prefix('-').map(|n| (-1, n)))
+        {
+            if let Ok(n) = num.parse::<i32>() {
+                if n <= 14 {
+                    let canonical = format!("Etc/GMT{}{}", if sign < 0 { "-" } else { "+" }, n);
+                    return Some((canonical, -sign * n * 60));
+                }
+            }
+        }
+    }
+    // Common IANA zones at their standard offset (DST not modeled).
+    let table: &[(&str, &str, i32)] = &[
+        ("america/new_york", "America/New_York", -300),
+        ("america/chicago", "America/Chicago", -360),
+        ("america/denver", "America/Denver", -420),
+        ("america/los_angeles", "America/Los_Angeles", -480),
+        ("america/sao_paulo", "America/Sao_Paulo", -180),
+        ("america/anchorage", "America/Anchorage", -540),
+        ("america/halifax", "America/Halifax", -240),
+        ("america/mexico_city", "America/Mexico_City", -360),
+        ("europe/london", "Europe/London", 0),
+        ("europe/paris", "Europe/Paris", 60),
+        ("europe/berlin", "Europe/Berlin", 60),
+        ("europe/moscow", "Europe/Moscow", 180),
+        ("africa/cairo", "Africa/Cairo", 120),
+        ("asia/jerusalem", "Asia/Jerusalem", 120),
+        ("asia/kolkata", "Asia/Kolkata", 330),
+        ("asia/calcutta", "Asia/Kolkata", 330),
+        ("asia/shanghai", "Asia/Shanghai", 480),
+        ("asia/tokyo", "Asia/Tokyo", 540),
+        ("asia/hong_kong", "Asia/Hong_Kong", 480),
+        ("asia/seoul", "Asia/Seoul", 540),
+        ("australia/sydney", "Australia/Sydney", 600),
+        ("pacific/auckland", "Pacific/Auckland", 720),
+        ("pacific/honolulu", "Pacific/Honolulu", -600),
+    ];
+    for (key, canonical, offset) in table {
+        if lower == *key {
+            return Some((canonical.to_string(), *offset));
+        }
+    }
+    None
+}
+
+/// Expand the resolved options into a component→representation map, folding
+/// `dateStyle`/`timeStyle` into the concrete en profile.
+fn effective_components(data: &DateTimeFormatData) -> Vec<(&'static str, String)> {
+    if data.date_style.is_none() && data.time_style.is_none() {
+        return data.components.clone();
+    }
+    let mut comps: Vec<(&'static str, String)> = Vec::new();
+    match data.date_style.as_deref() {
+        Some("full") => {
+            comps.push(("weekday", "long".into()));
+            comps.push(("year", "numeric".into()));
+            comps.push(("month", "long".into()));
+            comps.push(("day", "numeric".into()));
+        }
+        Some("long") => {
+            comps.push(("year", "numeric".into()));
+            comps.push(("month", "long".into()));
+            comps.push(("day", "numeric".into()));
+        }
+        Some("medium") => {
+            comps.push(("year", "numeric".into()));
+            comps.push(("month", "short".into()));
+            comps.push(("day", "numeric".into()));
+        }
+        Some("short") => {
+            comps.push(("year", "2-digit".into()));
+            comps.push(("month", "numeric".into()));
+            comps.push(("day", "numeric".into()));
+        }
+        _ => {}
+    }
+    match data.time_style.as_deref() {
+        Some("full") | Some("long") => {
+            comps.push(("hour", "numeric".into()));
+            comps.push(("minute", "2-digit".into()));
+            comps.push(("second", "2-digit".into()));
+            comps.push(("timeZoneName", "short".into()));
+        }
+        Some("medium") => {
+            comps.push(("hour", "numeric".into()));
+            comps.push(("minute", "2-digit".into()));
+            comps.push(("second", "2-digit".into()));
+        }
+        Some("short") => {
+            comps.push(("hour", "numeric".into()));
+            comps.push(("minute", "2-digit".into()));
+        }
+        _ => {}
+    }
+    comps
+}
+
+fn comp_rep<'a>(comps: &'a [(&'static str, String)], name: &str) -> Option<&'a str> {
+    comps.iter().find(|(k, _)| *k == name).map(|(_, v)| v.as_str())
+}
+
+/// Render `hour` (0..23) under the resolved cycle, returning `(displayed hour,
+/// day-period AM/PM or None)`.
+fn cycle_hour(hour: u32, cycle: &str) -> (u32, Option<&'static str>) {
+    let pm = hour >= 12;
+    match cycle {
+        "h11" => (hour % 12, Some(if pm { "PM" } else { "AM" })),
+        "h12" => (
+            {
+                let h = hour % 12;
+                if h == 0 {
+                    12
+                } else {
+                    h
+                }
+            },
+            Some(if pm { "PM" } else { "AM" }),
+        ),
+        "h24" => (if hour == 0 { 24 } else { hour }, None),
+        _ => (hour, None), // h23
+    }
+}
+
+/// The frozen en time-zone-name rendering for the resolved zone.
+fn time_zone_name(data: &DateTimeFormatData, style: &str) -> String {
+    let long = style.starts_with("long");
+    if data.time_zone == "UTC" {
+        return if long {
+            "Coordinated Universal Time".into()
+        } else {
+            "UTC".into()
+        };
+    }
+    // GMT±HH:MM for offset/named zones.
+    let off = data.offset_minutes;
+    let sign = if off < 0 { "-" } else { "+" };
+    let a = off.abs();
+    if a % 60 == 0 {
+        format!("GMT{}{}", sign, a / 60)
+    } else {
+        format!("GMT{}{:02}:{:02}", sign, a / 60, a % 60)
+    }
+}
+
+/// Produce the ordered `(part-type, value)` list for `format`/`formatToParts`.
+fn format_date_time_parts(data: &DateTimeFormatData, t: f64) -> Vec<(&'static str, String)> {
+    let (year, month, day, weekday, hour, minute, second, millis) =
+        civil_fields(t, data.offset_minutes);
+    let comps = effective_components(data);
+    let mut parts: Vec<(&'static str, String)> = Vec::new();
+
+    // --- Date section ---
+    let mut date_parts: Vec<(&'static str, String)> = Vec::new();
+    if let Some(rep) = comp_rep(&comps, "weekday") {
+        let idx = weekday as usize;
+        let name = match rep {
+            "narrow" => EN_WEEKDAYS_NARROW[idx],
+            "short" => EN_WEEKDAYS_SHORT[idx],
+            _ => EN_WEEKDAYS_LONG[idx],
+        };
+        date_parts.push(("weekday", name.to_string()));
+    }
+    let year_val = |rep: &str| -> String {
+        if rep == "2-digit" {
+            two_digit((((year % 100) + 100) % 100) as u32)
+        } else {
+            year.to_string()
+        }
+    };
+    let month_present = comp_rep(&comps, "month");
+    let day_present = comp_rep(&comps, "day");
+    let year_present = comp_rep(&comps, "year");
+    let numeric_month = matches!(month_present, Some("numeric") | Some("2-digit"));
+    if month_present.is_some() && numeric_month {
+        // Slash form: month/day/year (only the present ones).
+        let mut cluster: Vec<(&'static str, String)> = Vec::new();
+        if let Some(rep) = month_present {
+            let v = if rep == "2-digit" {
+                two_digit(month)
+            } else {
+                month.to_string()
+            };
+            cluster.push(("month", v));
+        }
+        if let Some(rep) = day_present {
+            let v = if rep == "2-digit" {
+                two_digit(day)
+            } else {
+                day.to_string()
+            };
+            cluster.push(("day", v));
+        }
+        if let Some(rep) = year_present {
+            cluster.push(("year", year_val(rep)));
+        }
+        for (i, p) in cluster.into_iter().enumerate() {
+            if i > 0 {
+                date_parts.push(("literal", "/".to_string()));
+            }
+            date_parts.push(p);
+        }
+    } else if month_present.is_some() {
+        // Named month: "Month day, year".
+        if let Some(rep) = month_present {
+            let idx = (month - 1) as usize;
+            let name = match rep {
+                "narrow" => EN_MONTHS_NARROW[idx],
+                "short" => EN_MONTHS_SHORT[idx],
+                _ => EN_MONTHS_LONG[idx],
+            };
+            date_parts.push(("month", name.to_string()));
+        }
+        if let Some(rep) = day_present {
+            date_parts.push(("literal", " ".to_string()));
+            let v = if rep == "2-digit" {
+                two_digit(day)
+            } else {
+                day.to_string()
+            };
+            date_parts.push(("day", v));
+        }
+        if let Some(rep) = year_present {
+            date_parts.push(("literal", ", ".to_string()));
+            date_parts.push(("year", year_val(rep)));
+        }
+    } else {
+        // No month; render whatever of day/year is present.
+        if let Some(rep) = day_present {
+            let v = if rep == "2-digit" {
+                two_digit(day)
+            } else {
+                day.to_string()
+            };
+            date_parts.push(("day", v));
+        }
+        if let Some(rep) = year_present {
+            if !date_parts.is_empty() {
+                date_parts.push(("literal", " ".to_string()));
+            }
+            date_parts.push(("year", year_val(rep)));
+        }
+    }
+    // Era (rare): appended after the date cluster.
+    if let Some(rep) = comp_rep(&comps, "era") {
+        let era = if year > 0 { "AD" } else { "BC" };
+        let era_long = if year > 0 {
+            "Anno Domini"
+        } else {
+            "Before Christ"
+        };
+        let v = match rep {
+            "long" => era_long.to_string(),
+            "narrow" => era.chars().next().unwrap().to_string(),
+            _ => era.to_string(),
+        };
+        if !date_parts.is_empty() {
+            date_parts.push(("literal", " ".to_string()));
+        }
+        date_parts.push(("era", v));
+    }
+    // Weekday separator ", " before the date cluster (en full/long).
+    if date_parts.len() >= 2 && date_parts[0].0 == "weekday" {
+        date_parts.insert(1, ("literal", ", ".to_string()));
+    }
+
+    // --- Time section ---
+    let mut time_parts: Vec<(&'static str, String)> = Vec::new();
+    let cycle = data.hour_cycle.clone().unwrap_or_else(|| "h12".to_string());
+    if let Some(rep) = comp_rep(&comps, "hour") {
+        let (h, ap) = cycle_hour(hour, &cycle);
+        let v = if rep == "2-digit" {
+            two_digit(h)
+        } else {
+            h.to_string()
+        };
+        time_parts.push(("hour", v));
+        if let Some(rep) = comp_rep(&comps, "minute") {
+            time_parts.push(("literal", ":".to_string()));
+            let v = if rep == "2-digit" {
+                two_digit(minute)
+            } else {
+                minute.to_string()
+            };
+            time_parts.push(("minute", v));
+        }
+        if let Some(rep) = comp_rep(&comps, "second") {
+            time_parts.push(("literal", ":".to_string()));
+            let v = if rep == "2-digit" {
+                two_digit(second)
+            } else {
+                second.to_string()
+            };
+            time_parts.push(("second", v));
+        }
+        if let Some(digits) = comp_rep(&comps, "fractionalSecondDigits") {
+            if let Ok(n) = digits.parse::<usize>() {
+                let frac = format!("{:03}", millis);
+                let frac = &frac[..n.min(3)];
+                time_parts.push(("literal", ".".to_string()));
+                time_parts.push(("fractionalSecond", frac.to_string()));
+            }
+        }
+        if let Some(ap) = ap {
+            time_parts.push(("literal", " ".to_string()));
+            time_parts.push(("dayPeriod", ap.to_string()));
+        }
+    } else {
+        // Time without hour: minute/second alone (uncommon).
+        if let Some(rep) = comp_rep(&comps, "minute") {
+            let v = if rep == "2-digit" {
+                two_digit(minute)
+            } else {
+                minute.to_string()
+            };
+            time_parts.push(("minute", v));
+        }
+        if let Some(rep) = comp_rep(&comps, "second") {
+            if !time_parts.is_empty() {
+                time_parts.push(("literal", ":".to_string()));
+            }
+            let v = if rep == "2-digit" {
+                two_digit(second)
+            } else {
+                second.to_string()
+            };
+            time_parts.push(("second", v));
+        }
+    }
+    // Standalone dayPeriod component (no hour requested).
+    if comp_rep(&comps, "hour").is_none() {
+        if let Some(_rep) = comp_rep(&comps, "dayPeriod") {
+            let ap = if hour >= 12 { "PM" } else { "AM" };
+            time_parts.push(("dayPeriod", ap.to_string()));
+        }
+    }
+
+    // --- Assemble ---
+    parts.extend(date_parts.iter().cloned());
+    if !parts.is_empty() && !time_parts.is_empty() {
+        parts.push(("literal", ", ".to_string()));
+    }
+    parts.extend(time_parts.iter().cloned());
+    // timeZoneName.
+    if let Some(style) = comp_rep(&comps, "timeZoneName") {
+        if !parts.is_empty() {
+            parts.push(("literal", " ".to_string()));
+        }
+        parts.push(("timeZoneName", time_zone_name(data, style)));
+    }
+    if parts.is_empty() {
+        parts.push(("literal", String::new()));
+    }
+    parts
+}
+
+/// `formatRange`/`formatRangeToParts`: when both endpoints render identically
+/// the result is the single formatting with every part `source: "shared"`;
+/// otherwise the two formattings joined by an en dash, tagged `startRange` /
+/// `endRange`. Returns `(parts, endpoints_equal)`.
+fn format_date_time_range_parts(
+    data: &DateTimeFormatData,
+    t1: f64,
+    t2: f64,
+) -> (Vec<(&'static str, String, &'static str)>, bool) {
+    let a = format_date_time_parts(data, t1);
+    let b = format_date_time_parts(data, t2);
+    if a == b {
+        let shared = a
+            .into_iter()
+            .map(|(ty, v)| (ty, v, "shared"))
+            .collect::<Vec<_>>();
+        return (shared, true);
+    }
+    let mut parts: Vec<(&'static str, String, &'static str)> = Vec::new();
+    for (ty, v) in a {
+        parts.push((ty, v, "startRange"));
+    }
+    parts.push(("literal", " \u{2009}\u{2013}\u{2009} ".to_string(), "shared"));
+    for (ty, v) in b {
+        parts.push((ty, v, "endRange"));
+    }
+    (parts, false)
+}
+
 fn list_format_parts(data: &ListFormatData, list: &[String]) -> Vec<(&'static str, String)> {
     let [two, start, middle, end] = list_patterns(&data.locale, &data.kind, &data.style);
     let n = list.len();
@@ -26897,6 +28169,8 @@ fn native_unsupported_name(native: Native) -> &'static str {
         Native::Collator => "native-call:Collator",
         Native::ListFormat => "native-call:ListFormat",
         Native::PluralRules => "native-call:PluralRules",
+        Native::Segmenter => "native-call:Segmenter",
+        Native::DateTimeFormat => "native-call:DateTimeFormat",
         Native::Object => "native-call:Object",
         Native::Function => "native-call:Function",
         Native::Boolean => "native-call:Boolean",
