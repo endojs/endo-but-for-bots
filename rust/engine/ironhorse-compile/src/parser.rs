@@ -119,10 +119,11 @@ pub struct Parser {
     lexer: Lexer,
     /// `parser->states[0]` — the current token.
     cur: Lexeme,
-    /// `parser->states[1]` — the one-token lookahead, present only after
-    /// an explicit `fxLookAheadOnce` (XS's `ahead` counter as an
-    /// `Option`).
+    /// `parser->states[1..=2]` — the token lookahead window. Most grammar
+    /// productions need one token; explicit-resource-management's
+    /// `for (using of of iterable)` disambiguation needs two.
     ahead: Option<Lexeme>,
+    ahead2: Option<Lexeme>,
     /// `parser->flags` (mode bits; see [`crate::ast::flags`]).
     flags: u32,
     /// The node-build stack (`parser->root`, top = last pushed).
@@ -153,7 +154,15 @@ impl Parser {
         // the first token, for both the program and module goals.
         lexer.skip_shebang();
         let cur = lexer.next()?;
-        Ok(Parser { lexer, cur, ahead: None, flags, stack: Vec::new(), property_name_async_flag: 0 })
+        Ok(Parser {
+            lexer,
+            cur,
+            ahead: None,
+            ahead2: None,
+            flags,
+            stack: Vec::new(),
+            property_name_async_flag: 0,
+        })
     }
 
     /// Parse a single expression (an `AssignmentExpression` — XS's
@@ -205,6 +214,7 @@ impl Parser {
     fn get_next_token(&mut self) -> PResult<()> {
         if let Some(next) = self.ahead.take() {
             self.cur = next;
+            self.ahead = self.ahead2.take();
         } else {
             self.sync_lexer_flags();
             self.cur = self.lexer.next()?;
@@ -216,6 +226,15 @@ impl Parser {
         if self.ahead.is_none() {
             self.sync_lexer_flags();
             self.ahead = Some(self.lexer.next()?);
+        }
+        Ok(())
+    }
+
+    fn look_ahead_twice(&mut self) -> PResult<()> {
+        self.look_ahead_once()?;
+        if self.ahead2.is_none() {
+            self.sync_lexer_flags();
+            self.ahead2 = Some(self.lexer.next()?);
         }
         Ok(())
     }
@@ -437,6 +456,10 @@ impl Parser {
     /// buffered lookahead token.
     fn ahead_crlf(&self) -> bool {
         self.ahead.as_ref().map(|s| s.crlf).unwrap_or(false)
+    }
+
+    fn ahead2_token(&self) -> Token {
+        self.ahead2.as_ref().map(|s| s.token).unwrap_or(Token::NoToken)
     }
 
     /// The symbol of the top-of-stack `Access` node (its `child[0]`), if

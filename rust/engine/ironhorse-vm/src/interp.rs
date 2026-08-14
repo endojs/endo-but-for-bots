@@ -1786,6 +1786,16 @@ pub enum NativeMethod {
     /// dispatch.
     FunctionBind,
     ErrorToString,
+    DisposableStackUse,
+    DisposableStackAdopt,
+    DisposableStackDefer,
+    DisposableStackMove,
+    DisposableStackDispose,
+    AsyncDisposableStackUse,
+    AsyncDisposableStackAdopt,
+    AsyncDisposableStackDefer,
+    AsyncDisposableStackMove,
+    AsyncDisposableStackDisposeAsync,
     /// A primitive wrapper's `valueOf` (returns the wrapped primitive).
     WrapperValueOf,
     /// A primitive wrapper's `toString` (stringifies the wrapped primitive).
@@ -2264,6 +2274,20 @@ struct ArrayData {
     items: std::collections::BTreeMap<u32, Slot>,
 }
 
+#[derive(Clone, Debug)]
+struct DisposalRecord {
+    resource: Slot,
+    method: Slot,
+    pass_resource: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+struct DisposableStackData {
+    disposed: bool,
+    asynchronous: bool,
+    records: Vec<DisposalRecord>,
+}
+
 /// Which collection an instance is (XS's `XS_MAP_KIND`/`XS_SET_KIND`/
 /// `XS_WEAK_MAP_KIND`/`XS_WEAK_SET_KIND` internal slot).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -2701,6 +2725,9 @@ pub enum Native {
     TypeError,
     URIError,
     AggregateError,
+    SuppressedError,
+    DisposableStack,
+    AsyncDisposableStack,
     Map,
     Set,
     WeakMap,
@@ -2764,6 +2791,9 @@ impl Native {
             Native::TypeError => "TypeError",
             Native::URIError => "URIError",
             Native::AggregateError => "AggregateError",
+            Native::SuppressedError => "SuppressedError",
+            Native::DisposableStack => "DisposableStack",
+            Native::AsyncDisposableStack => "AsyncDisposableStack",
             Native::Map => "Map",
             Native::Set => "Set",
             Native::WeakMap => "WeakMap",
@@ -2782,6 +2812,8 @@ impl Native {
     fn arity(self) -> u32 {
         match self {
             Native::AggregateError => 2,
+            Native::SuppressedError => 3,
+            Native::DisposableStack | Native::AsyncDisposableStack => 0,
             Native::RegExp => 2,
             Native::Proxy => 2,
             Native::TypedArray(_) => 3,
@@ -2827,6 +2859,9 @@ impl Native {
             ("TypeError", Native::TypeError),
             ("URIError", Native::URIError),
             ("AggregateError", Native::AggregateError),
+            ("SuppressedError", Native::SuppressedError),
+            ("DisposableStack", Native::DisposableStack),
+            ("AsyncDisposableStack", Native::AsyncDisposableStack),
             ("Map", Native::Map),
             ("Set", Native::Set),
             ("WeakMap", Native::WeakMap),
@@ -3216,6 +3251,11 @@ pub struct Interp {
     /// item value slots (which may be references) are never swept underneath
     /// it (the stage-2 GC roots contract).
     arrays: std::collections::HashMap<crate::value::SlotIndex, ArrayData>,
+    /// Explicit-resource-management internal slots. Records are registered in
+    /// source order and consumed from the tail, implementing the proposal's
+    /// mandatory LIFO cleanup order.
+    disposable_stacks:
+        std::collections::HashMap<crate::value::SlotIndex, DisposableStackData>,
     /// Per-instance Map/Set/WeakMap/WeakSet data (XS's exotic collection
     /// internal slots). Keyed by the collection instance's slot, like
     /// [`Self::arrays`]. See [`CollectionData`].
@@ -3762,6 +3802,7 @@ impl Interp {
             wrapper_data: std::collections::HashMap::new(),
             array_proto: crate::value::SlotIndex::NULL,
             arrays: std::collections::HashMap::new(),
+            disposable_stacks: std::collections::HashMap::new(),
             collections: std::collections::HashMap::new(),
             map_proto: crate::value::SlotIndex::NULL,
             set_proto: crate::value::SlotIndex::NULL,
@@ -3925,7 +3966,11 @@ impl Interp {
                 | Native::TypeError
                 | Native::URIError
                 | Native::AggregateError => self.slots.alloc(Slot::instance(error_proto)),
+                Native::SuppressedError => self.slots.alloc(Slot::instance(error_proto)),
                 Native::Boolean | Native::Symbol | Native::Number | Native::String => {
+                    self.slots.alloc(Slot::instance(object_proto))
+                }
+                Native::DisposableStack | Native::AsyncDisposableStack => {
                     self.slots.alloc(Slot::instance(object_proto))
                 }
                 // `%Array.prototype%` is itself an (empty) exotic array in XS;
@@ -4296,6 +4341,40 @@ impl Interp {
             let mf = self.alloc_method(m);
             self.proto_methods.push((self.regexp_proto, name, mf));
         }
+        for (native, methods) in [
+            (
+                Native::DisposableStack,
+                &[
+                    ("use", NativeMethod::DisposableStackUse),
+                    ("adopt", NativeMethod::DisposableStackAdopt),
+                    ("defer", NativeMethod::DisposableStackDefer),
+                    ("move", NativeMethod::DisposableStackMove),
+                    ("dispose", NativeMethod::DisposableStackDispose),
+                ][..],
+            ),
+            (
+                Native::AsyncDisposableStack,
+                &[
+                    ("use", NativeMethod::AsyncDisposableStackUse),
+                    ("adopt", NativeMethod::AsyncDisposableStackAdopt),
+                    ("defer", NativeMethod::AsyncDisposableStackDefer),
+                    ("move", NativeMethod::AsyncDisposableStackMove),
+                    (
+                        "disposeAsync",
+                        NativeMethod::AsyncDisposableStackDisposeAsync,
+                    ),
+                ][..],
+            ),
+        ] {
+            if let Some(&ctor) = self.intrinsics.get(native.display_name()) {
+                if let Some(proto) = self.prototype_of(ctor) {
+                    for &(name, method) in methods {
+                        let function = self.alloc_method(method);
+                        self.proto_methods.push((proto, name, function));
+                    }
+                }
+            }
+        }
         // Native prototype methods (bound to their prototype at link time,
         // only when the program references the method name). %Object.prototype%
         // carries toString/valueOf/hasOwnProperty/isPrototypeOf; each Error
@@ -4447,6 +4526,8 @@ impl Interp {
             "toPrimitive",
             "toStringTag",
             "unscopables",
+            "asyncDispose",
+            "dispose",
         ] {
             let desc = self.alloc_str_text(format!("Symbol.{}", name).as_bytes());
             let d = self
@@ -5054,6 +5135,32 @@ impl Interp {
                 ),
                 XS_DONT_ENUM_FLAG,
             );
+        }
+        for (native, string_name, symbol_name) in [
+            (Native::DisposableStack, "dispose", "dispose"),
+            (
+                Native::AsyncDisposableStack,
+                "disposeAsync",
+                "asyncDispose",
+            ),
+        ] {
+            let Some(proto) = self
+                .intrinsics
+                .get(native.display_name())
+                .and_then(|&ctor| self.prototype_of(ctor))
+            else {
+                continue;
+            };
+            let Some(&string_id) = self.symbol_ids.get(string_name) else {
+                continue;
+            };
+            let Some(symbol_id) = self.well_known_symbol_property_id(symbol_name) else {
+                continue;
+            };
+            let function = self.instance_get(proto, string_id);
+            if self.is_callable_value(function) {
+                self.set_own_unmetered_with_flag(proto, symbol_id, function, XS_DONT_ENUM_FLAG);
+            }
         }
     }
 
@@ -6658,6 +6765,12 @@ impl Interp {
                             // getter (`fxArrayLengthGetter`).
                             self.meter.tick_raw(ARRAY_LENGTH_GET_METERING);
                             Slot::integer(self.arrays[&inst].length as i32)
+                        }
+                        Payload::Reference(inst)
+                            if self.symbol_ids.get("disposed") == Some(&id)
+                                && self.disposable_stacks.contains_key(&inst) =>
+                        {
+                            Slot::boolean(self.disposable_stacks[&inst].disposed)
                         }
                         Payload::Reference(inst)
                             if Some(id) == self.size_id
@@ -9139,6 +9252,78 @@ impl Interp {
                     pc += size as usize;
                 }
 
+                // Explicit resource management. `USING` validates the
+                // resource's well-known disposer and replaces the value on
+                // the stack with that callable (or null for a nullish
+                // resource). The compiler stores it in the declaration's
+                // adjacent synthetic disposal slot while preserving the
+                // resource as the binding value.
+                XS_CODE_USING | XS_CODE_USING_ASYNC => {
+                    let resource = *self.stack.last().unwrap_or(&Slot::undefined());
+                    let disposer = if matches!(resource.kind, Kind::Null | Kind::Undefined) {
+                        Slot::null()
+                    } else {
+                        let inst = match resource.value {
+                            Payload::Reference(inst) if resource.kind == Kind::Reference => inst,
+                            _ => {
+                                let error = self.build_error("TypeError", 0, 0);
+                                pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                                continue;
+                            }
+                        };
+                        let mut value = Slot::undefined();
+                        if op == XS_CODE_USING_ASYNC {
+                            if let Some(id) = self.well_known_symbol_property_id("asyncDispose") {
+                                value = dispatch_result!(
+                                    self.mop_get(code, inst, id, resource),
+                                    pc,
+                                    self,
+                                    return_depth
+                                );
+                            }
+                        }
+                        if !self.is_callable_value(value) {
+                            if op == XS_CODE_USING_ASYNC {
+                                if let Some(id) = self.well_known_symbol_property_id("dispose") {
+                                    value = dispatch_result!(
+                                        self.mop_get(code, inst, id, resource),
+                                        pc,
+                                        self,
+                                        return_depth
+                                    );
+                                }
+                            }
+                        }
+                        if !self.is_callable_value(value) {
+                            let error = self.build_error("TypeError", 0, 0);
+                            pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                            continue;
+                        }
+                        value
+                    };
+                    if let Some(top) = self.stack.last_mut() {
+                        *top = disposer;
+                    }
+                    pc += size as usize;
+                }
+                XS_CODE_USED_1 | XS_CODE_USED_2 => {
+                    let selector_index = self.local_operand(op, code, pc);
+                    let exception_index = selector_index.saturating_sub(1);
+                    let current = self.exception;
+                    let selector = self.get_local(selector_index).unwrap_or_else(Slot::undefined);
+                    let has_prior = matches!(selector.value, Payload::Integer(0));
+                    if has_prior {
+                        let prior = self.get_local(exception_index).unwrap_or_else(Slot::undefined);
+                        let suppressed = self.build_suppressed_error(current, prior);
+                        self.set_local(exception_index, suppressed);
+                    } else {
+                        self.set_local(exception_index, current);
+                        self.set_local(selector_index, Slot::integer(0));
+                    }
+                    self.exception = Slot::undefined();
+                    pc += size as usize;
+                }
+
                 // Dynamic `import()` and `import.meta` (xsModule.c's
                 // `fxRunImport` / `mxModuleInternal` meta): these need the
                 // asynchronous host loader (`importHook`/`resolveHook`) and
@@ -10481,6 +10666,26 @@ impl Interp {
             // Array errors argument is modeled; any other iterable drives the
             // general `fxGetIterator` protocol and self-names an honest skip.
             Native::AggregateError => self.build_aggregate_error(base, argc)?,
+            Native::SuppressedError => self.build_suppressed_error(arg(0), arg(1)),
+            Native::DisposableStack | Native::AsyncDisposableStack => {
+                if !has_target {
+                    return Err(self.catchable_type_error());
+                }
+                let proto = self
+                    .intrinsics
+                    .get(native.display_name())
+                    .and_then(|&ctor| self.prototype_of(ctor))
+                    .unwrap_or(self.object_proto);
+                let inst = self.slots.alloc(Slot::instance(proto));
+                self.disposable_stacks.insert(
+                    inst,
+                    DisposableStackData {
+                        asynchronous: native == Native::AsyncDisposableStack,
+                        ..DisposableStackData::default()
+                    },
+                );
+                Slot::of(Kind::Reference, Payload::Reference(inst))
+            }
             // `Symbol([description])`: a fresh unique symbol. Its descriptor
             // slot holds the description (or `undefined`), and its identity is
             // that slot — so `Symbol('a') !== Symbol('a')`. Metering-neutral,
@@ -13134,6 +13339,33 @@ impl Interp {
         Slot::of(Kind::Reference, Payload::Reference(inst))
     }
 
+    /// Construct `SuppressedError(error, suppressed, message)`. Disposal
+    /// chaining uses the first two fields directly; ordinary constructor
+    /// calls share the same realm prototype and non-enumerable own fields.
+    fn build_suppressed_error(&mut self, error: Slot, suppressed: Slot) -> Slot {
+        let inst = self.new_object();
+        if let Some(proto) = self
+            .intrinsics
+            .get("SuppressedError")
+            .and_then(|&c| self.prototype_of(c))
+        {
+            self.slots.get_mut(inst).value = Payload::Reference(proto);
+        }
+        self.error_data.insert(
+            inst,
+            ErrorInfo {
+                name: "SuppressedError",
+                message: None,
+            },
+        );
+        for (name, value) in [("error", error), ("suppressed", suppressed)] {
+            if let Some(&id) = self.symbol_ids.get(name) {
+                self.set_own_unmetered_with_flag(inst, id, value, XS_DONT_ENUM_FLAG);
+            }
+        }
+        Slot::of(Kind::Reference, Payload::Reference(inst))
+    }
+
     /// `new AggregateError(errors, message)` (`fx_AggregateError`): the base
     /// error (name "AggregateError", message from arg **1**), plus an own
     /// `errors` Array built by iterating arg 0. XS builds the base with
@@ -13729,6 +13961,195 @@ impl Interp {
     /// user code), meters the method's steps, collapses the region to the
     /// result, and pushes it. A method whose receiver shape ironhorse cannot model
     /// self-names (an honest skip).
+    fn explicit_resource_method(
+        &mut self,
+        method: NativeMethod,
+        this: Slot,
+        base: usize,
+        _argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        let inst = match (this.kind, this.value) {
+            (Kind::Reference, Payload::Reference(inst))
+                if self.disposable_stacks.contains_key(&inst) =>
+            {
+                inst
+            }
+            _ => return Err(self.catchable_type_error()),
+        };
+        let arg = |n: usize| {
+            self.stack
+                .get(base + 4 + n)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        };
+        let is_async = self.disposable_stacks[&inst].asynchronous;
+        let expected_async = matches!(
+            method,
+            NativeMethod::AsyncDisposableStackUse
+                | NativeMethod::AsyncDisposableStackAdopt
+                | NativeMethod::AsyncDisposableStackDefer
+                | NativeMethod::AsyncDisposableStackMove
+                | NativeMethod::AsyncDisposableStackDisposeAsync
+        );
+        if is_async != expected_async {
+            return Err(self.catchable_type_error());
+        }
+        if matches!(
+            method,
+            NativeMethod::DisposableStackUse | NativeMethod::AsyncDisposableStackUse
+        ) {
+            let resource = arg(0);
+            if matches!(resource.kind, Kind::Null | Kind::Undefined) {
+                return Ok(resource);
+            }
+            let resource_inst = match (resource.kind, resource.value) {
+                (Kind::Reference, Payload::Reference(i)) => i,
+                _ => return Err(self.catchable_type_error()),
+            };
+            let symbol_name = if is_async { "asyncDispose" } else { "dispose" };
+            let mut disposer = self
+                .well_known_symbol_property_id(symbol_name)
+                .map(|id| self.instance_get(resource_inst, id))
+                .unwrap_or_else(Slot::undefined);
+            if is_async && matches!(disposer.kind, Kind::Undefined | Kind::Null) {
+                disposer = self
+                    .well_known_symbol_property_id("dispose")
+                    .map(|id| self.instance_get(resource_inst, id))
+                    .unwrap_or_else(Slot::undefined);
+            }
+            if !self.is_callable_value(disposer) {
+                return Err(self.catchable_type_error());
+            }
+            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
+            if data.disposed {
+                return Err(self.catchable_type_error());
+            }
+            data.records.push(DisposalRecord {
+                resource,
+                method: disposer,
+                pass_resource: false,
+            });
+            return Ok(resource);
+        }
+        if matches!(
+            method,
+            NativeMethod::DisposableStackAdopt | NativeMethod::AsyncDisposableStackAdopt
+        ) {
+            let resource = arg(0);
+            let disposer = arg(1);
+            if !self.is_callable_value(disposer) {
+                return Err(self.catchable_type_error());
+            }
+            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
+            if data.disposed {
+                return Err(self.catchable_type_error());
+            }
+            data.records.push(DisposalRecord {
+                resource,
+                method: disposer,
+                pass_resource: true,
+            });
+            return Ok(resource);
+        }
+        if matches!(
+            method,
+            NativeMethod::DisposableStackDefer | NativeMethod::AsyncDisposableStackDefer
+        ) {
+            let disposer = arg(0);
+            if !self.is_callable_value(disposer) {
+                return Err(self.catchable_type_error());
+            }
+            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
+            if data.disposed {
+                return Err(self.catchable_type_error());
+            }
+            data.records.push(DisposalRecord {
+                resource: Slot::undefined(),
+                method: disposer,
+                pass_resource: false,
+            });
+            return Ok(Slot::undefined());
+        }
+        if matches!(
+            method,
+            NativeMethod::DisposableStackMove | NativeMethod::AsyncDisposableStackMove
+        ) {
+            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
+            if data.disposed {
+                return Err(self.catchable_type_error());
+            }
+            data.disposed = true;
+            let records = std::mem::take(&mut data.records);
+            let proto = match self.slots.get(inst).value {
+                Payload::Reference(proto) => proto,
+                _ => self.object_proto,
+            };
+            let moved = self.slots.alloc(Slot::instance(proto));
+            self.disposable_stacks.insert(
+                moved,
+                DisposableStackData {
+                    disposed: false,
+                    asynchronous: is_async,
+                    records,
+                },
+            );
+            return Ok(Slot::of(Kind::Reference, Payload::Reference(moved)));
+        }
+
+        let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
+        if data.disposed {
+            if is_async {
+                let promise = self.new_promise_instance();
+                self.settle_promise(promise, Slot::undefined(), false)?;
+                return Ok(Slot::of(Kind::Reference, Payload::Reference(promise)));
+            }
+            return Ok(Slot::undefined());
+        }
+        data.disposed = true;
+        let mut records = std::mem::take(&mut data.records);
+        let mut pending_error: Option<Slot> = None;
+        while let Some(record) = records.pop() {
+            let args = if record.pass_resource {
+                vec![record.resource]
+            } else {
+                Vec::new()
+            };
+            let this_arg = if record.pass_resource {
+                Slot::undefined()
+            } else {
+                record.resource
+            };
+            if let Err(error) = self.run_callback_catching_throw(
+                code,
+                record.method,
+                this_arg,
+                &args,
+            )? {
+                pending_error = Some(match pending_error {
+                    Some(suppressed) => self.build_suppressed_error(error, suppressed),
+                    None => error,
+                });
+            }
+        }
+        if is_async {
+            let promise = self.new_promise_instance();
+            self.settle_promise(
+                promise,
+                pending_error.unwrap_or_else(Slot::undefined),
+                pending_error.is_some(),
+            )?;
+            Ok(Slot::of(Kind::Reference, Payload::Reference(promise)))
+        } else if let Some(error) = pending_error {
+            match self.raise_js(error) {
+                Ok(target) => Err(Halt::Resume(target)),
+                Err(halt) => Err(halt),
+            }
+        } else {
+            Ok(Slot::undefined())
+        }
+    }
+
     fn call_native_method(
         &mut self,
         m: NativeMethod,
@@ -13770,6 +14191,18 @@ impl Interp {
             }
         }
         let result: Slot = match m {
+            NativeMethod::DisposableStackUse
+            | NativeMethod::DisposableStackAdopt
+            | NativeMethod::DisposableStackDefer
+            | NativeMethod::DisposableStackMove
+            | NativeMethod::DisposableStackDispose
+            | NativeMethod::AsyncDisposableStackUse
+            | NativeMethod::AsyncDisposableStackAdopt
+            | NativeMethod::AsyncDisposableStackDefer
+            | NativeMethod::AsyncDisposableStackMove
+            | NativeMethod::AsyncDisposableStackDisposeAsync => {
+                self.explicit_resource_method(m, this, base, argc, code)?
+            }
             // `Proxy.revocable(target, handler)` (`fx_Proxy_revocable`): a fresh
             // proxy plus a `revoke` function tied to it, returned as
             // `{ proxy, revoke }`.
@@ -24621,6 +25054,9 @@ fn native_unsupported_name(native: Native) -> &'static str {
         Native::TypeError => "native-call:TypeError",
         Native::URIError => "native-call:URIError",
         Native::AggregateError => "native-call:AggregateError",
+        Native::SuppressedError => "native-call:SuppressedError",
+        Native::DisposableStack => "native-call:DisposableStack",
+        Native::AsyncDisposableStack => "native-call:AsyncDisposableStack",
         Native::Map => "native-call:Map",
         Native::Set => "native-call:Set",
         Native::WeakMap => "native-call:WeakMap",

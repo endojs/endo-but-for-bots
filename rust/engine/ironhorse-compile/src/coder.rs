@@ -836,7 +836,13 @@ impl<'a> Coder<'a> {
         assert!(
             matches!(
                 token,
-                Token::Var | Token::Let | Token::Const | Token::Arg | Token::Define | Token::NoToken
+                Token::Var
+                    | Token::Let
+                    | Token::Const
+                    | Token::Using
+                    | Token::Arg
+                    | Token::Define
+                    | Token::NoToken
             ),
             "declaration kind {:?} reached (function/class slice)",
             token
@@ -1334,7 +1340,13 @@ impl Coder<'_> {
             self.add_byte(0, XS_CODE_START_ASYNC);
         }
         self.return_target = Some(self.create_target());
-        self.code(&node.children[0]);
+        if self.tree.scopes[scope].disposable_count > 0 {
+            let context = self.scope_code_using(scope);
+            self.code(&node.children[0]);
+            self.scope_code_used(scope, context);
+        } else {
+            self.code(&node.children[0]);
+        }
         let rt = self.return_target.take().expect("module return target");
         self.place_target(0, rt);
         self.add_byte(0, XS_CODE_END);
@@ -1464,7 +1476,13 @@ impl Coder<'_> {
         let scope = self.scope_of(node);
         self.scope_coding_block(scope);
         self.code_define_nodes(&node.children[0]);
-        self.code(&node.children[0]);
+        if self.tree.scopes[scope].disposable_count > 0 {
+            let context = self.scope_code_using(scope);
+            self.code(&node.children[0]);
+            self.scope_code_used(scope, context);
+        } else {
+            self.code(&node.children[0]);
+        }
         self.scope_coded(scope);
     }
 
@@ -1718,6 +1736,8 @@ impl Coder<'_> {
 
         self.scope_coding_block(scope);
         self.scope_code_define_nodes(scope);
+        let using_context = (self.tree.scopes[scope].disposable_count > 0)
+            .then(|| self.scope_code_using(scope));
         let next_target = self.create_target();
         let done_target = self.create_target();
         if !matches!(node.children[0], Item::Null) {
@@ -1753,6 +1773,9 @@ impl Coder<'_> {
         }
         self.add_branch(0, XS_CODE_BRANCH_1, next_target);
         self.place_target(0, done_target);
+        if let Some(context) = using_context {
+            self.scope_code_used(scope, context);
+        }
         self.scope_coded(scope);
 
         self.targets[continue_target].next_target = self.first_continue_target;
@@ -1956,10 +1979,122 @@ impl Coder<'_> {
     /// `fxScopeCodeUsedReverse` — run `using` disposers in reverse at scope
     /// exit. Only `using` declarations emit disposers; plain `let`/`const`
     /// heads are a no-op. `using` in a `for`-head is deferred.
-    fn scope_code_used_reverse(&mut self, scope: usize, _exception: i32, _selector: i32) {
-        for d in &self.tree.scopes[scope].declares {
-            assert_ne!(d.token, Token::Using, "`using` in a for-in/of head deferred");
+    fn scope_code_used_reverse(&mut self, scope: usize, _exception: i32, selector: i32) {
+        let declares = self.declares_of(scope);
+        for (position, (id, token, _, flags)) in declares.iter().enumerate().rev() {
+            if *token != Token::Using {
+                continue;
+            }
+            let disposal_id = declares
+                .get(position + 1)
+                .map(|d| d.0)
+                .expect("using declaration has a disposal slot");
+            let resource_index = self.declare_index(scope, *id);
+            let disposal_index = self.declare_index(scope, disposal_id);
+            let catch_target = self.create_target();
+            let chain_target = self.create_target();
+            let normal_target = self.create_target();
+
+            self.add_index(1, XS_CODE_GET_LOCAL_1, disposal_index);
+            self.add_byte(1, XS_CODE_UNDEFINED);
+            self.add_byte(-1, XS_CODE_STRICT_EQUAL);
+            self.add_branch(-1, XS_CODE_BRANCH_IF_1, normal_target);
+            self.add_branch(0, XS_CODE_CATCH_1, catch_target);
+            let get = if flags & crate::scoper::dflags::CLOSURE != 0 {
+                XS_CODE_GET_CLOSURE_1
+            } else {
+                XS_CODE_GET_LOCAL_1
+            };
+            self.add_index(1, get, resource_index);
+            self.add_branch(0, XS_CODE_BRANCH_CHAIN_1, chain_target);
+            self.add_index(1, XS_CODE_GET_LOCAL_1, disposal_index);
+            self.add_byte(1, XS_CODE_CALL);
+            self.add_integer(-2, XS_CODE_RUN_1, 0);
+            self.place_target(0, chain_target);
+            // Await-using declarations await the disposer result before
+            // continuing the unwind.
+            if flags & crate::scoper::dflags::ASYNC_DISPOSABLE != 0 {
+                self.add_byte(0, XS_CODE_AWAIT);
+                self.add_byte(0, XS_CODE_THROW_STATUS);
+            }
+            self.add_byte(-1, XS_CODE_POP);
+            self.add_byte(0, XS_CODE_UNCATCH);
+            self.add_branch(0, XS_CODE_BRANCH_1, normal_target);
+            self.place_target(0, catch_target);
+            self.add_index(1, XS_CODE_USED_1, selector);
+            self.place_target(0, normal_target);
         }
+    }
+
+    /// Open the implicit try region protecting a disposal scope.
+    fn scope_code_using(&mut self, scope: usize) -> (i32, i32, usize) {
+        if self.tree.scopes[scope].token == Token::Module {
+            let disposable_ids: Vec<u32> = self.tree.scopes[scope]
+                .declares
+                .iter()
+                .filter(|d| d.flags & crate::scoper::dflags::DISPOSABLE != 0)
+                .map(|d| d.id)
+                .collect();
+            for id in disposable_ids {
+                if self.declare_index_opt(scope, id).is_none() {
+                    let index = self.set_declare_index(scope, id);
+                    self.add_index(0, XS_CODE_NEW_TEMPORARY, index);
+                }
+            }
+        }
+        let exception = self.use_temporary();
+        let selector = self.use_temporary();
+        self.first_break_target = self.alias_targets(self.first_break_target);
+        self.first_continue_target = self.alias_targets(self.first_continue_target);
+        self.return_target = self.alias_targets(self.return_target);
+        let catch_target = self.create_target();
+        self.add_branch(0, XS_CODE_CATCH_1, catch_target);
+        (exception, selector, catch_target)
+    }
+
+    /// Close a disposal scope, preserving abrupt-completion ordering and
+    /// routing disposer throws through `USED` for SuppressedError chaining.
+    fn scope_code_used(&mut self, scope: usize, context: (i32, i32, usize)) {
+        let (exception, selector, catch_target) = context;
+        let normal_target = self.create_target();
+        let uncatch_target = self.create_target();
+        let finally_target = self.create_target();
+        let else_target = self.create_target();
+        self.add_branch(0, XS_CODE_BRANCH_1, normal_target);
+        self.place_target(0, catch_target);
+        self.add_byte(1, XS_CODE_EXCEPTION);
+        self.add_index(-1, XS_CODE_PULL_LOCAL_1, exception);
+        self.add_integer(1, XS_CODE_INTEGER_1, 0);
+        self.add_index(-1, XS_CODE_PULL_LOCAL_1, selector);
+        self.add_branch(0, XS_CODE_BRANCH_1, finally_target);
+        let mut selection = 1;
+        self.first_break_target =
+            self.finalize_targets(self.first_break_target, selector, &mut selection, uncatch_target);
+        self.first_continue_target = self.finalize_targets(
+            self.first_continue_target,
+            selector,
+            &mut selection,
+            uncatch_target,
+        );
+        self.return_target =
+            self.finalize_targets(self.return_target, selector, &mut selection, uncatch_target);
+        self.place_target(0, normal_target);
+        self.add_integer(1, XS_CODE_INTEGER_1, selection);
+        self.add_index(-1, XS_CODE_PULL_LOCAL_1, selector);
+        self.place_target(0, uncatch_target);
+        self.add_byte(0, XS_CODE_UNCATCH);
+        self.place_target(0, finally_target);
+        self.scope_code_used_reverse(scope, exception, selector);
+        self.add_index(1, XS_CODE_GET_LOCAL_1, selector);
+        self.add_branch(-1, XS_CODE_BRANCH_IF_1, else_target);
+        self.add_index(1, XS_CODE_GET_LOCAL_1, exception);
+        self.add_byte(-1, XS_CODE_THROW);
+        self.place_target(0, else_target);
+        let mut selection = 1;
+        self.jump_targets(self.first_break_target, selector, &mut selection);
+        self.jump_targets(self.first_continue_target, selector, &mut selection);
+        self.jump_targets(self.return_target, selector, &mut selection);
+        self.unuse_temporaries(2);
     }
 
     /// `fxBreakContinueNodeCode`. Child `[symbol-or-null]`.
@@ -2371,7 +2506,7 @@ impl Coder<'_> {
                 let index = self.declare_index(scope, id);
                 let closure = self.is_closure(scope, id);
                 let op = match node.token {
-                    Token::Const => {
+                    Token::Const | Token::Using => {
                         if closure { XS_CODE_CONST_CLOSURE_1 } else { XS_CODE_CONST_LOCAL_1 }
                     }
                     Token::Let => {
@@ -2382,6 +2517,21 @@ impl Coder<'_> {
                     }
                 };
                 self.add_index(0, op, index);
+                if node.token == Token::Using {
+                    self.add_byte(
+                        0,
+                        if node.flags & crate::ast::flags::AWAITING != 0 {
+                            XS_CODE_USING_ASYNC
+                        } else {
+                            XS_CODE_USING
+                        },
+                    );
+                    let declares = &self.tree.scopes[scope].declares;
+                    let position = declares.iter().position(|d| d.id == id).unwrap();
+                    let disposal_id = declares[position + 1].id;
+                    let disposal_index = self.declare_index(scope, disposal_id);
+                    self.add_index(0, XS_CODE_SET_LOCAL_1, disposal_index);
+                }
             }
         }
     }
@@ -3819,7 +3969,13 @@ impl Coder<'_> {
             self.scope_coding_block(scope);
         }
         self.code_define_nodes(&node.children[0]);
-        self.code(&node.children[0]);
+        if self.tree.scopes[scope].disposable_count > 0 {
+            let context = self.scope_code_using(scope);
+            self.code(&node.children[0]);
+            self.scope_code_used(scope, context);
+        } else {
+            self.code(&node.children[0]);
+        }
         // `fxScopeCodedBody` keys the two-`WITHOUT` teardown on the enclosing
         // FUNCTION node's eval flag, not the body's — so the `with` frames
         // `fxScopeCodingParams`' eval branch pushed unwind even though the body
@@ -4935,6 +5091,8 @@ impl Coder<'_> {
         let scope = self.scope_of(node);
         self.code(&node.children[0]);
         self.scope_coding_block(scope);
+        let using_context = (self.tree.scopes[scope].disposable_count > 0)
+            .then(|| self.scope_code_using(scope));
         let break_target = self.create_target();
         // XS gives the switch break target a zeroed (anonymous) label so a
         // bare `break;` matches it.
@@ -4977,6 +5135,9 @@ impl Coder<'_> {
         }
         self.place_target(0, break_target);
         self.first_break_target = self.targets[break_target].next_target;
+        if let Some(context) = using_context {
+            self.scope_code_used(scope, context);
+        }
         self.scope_coded(scope);
         self.add_byte(-1, XS_CODE_POP);
     }
@@ -4990,7 +5151,13 @@ impl Coder<'_> {
             let statement_scope = self.scope_of(node);
             self.scope_coding_block(statement_scope);
             self.scope_code_define_nodes(statement_scope);
-            self.code(&node.children[1]);
+            if self.tree.scopes[statement_scope].disposable_count > 0 {
+                let context = self.scope_code_using(statement_scope);
+                self.code(&node.children[1]);
+                self.scope_code_used(statement_scope, context);
+            } else {
+                self.code(&node.children[1]);
+            }
             self.scope_coded(statement_scope);
         } else {
             // `catch (e) { … }`: the primary scope binds the parameter, the
@@ -5005,7 +5172,13 @@ impl Coder<'_> {
             self.add_byte(-1, XS_CODE_POP);
             self.scope_coding_block(statement_scope);
             self.scope_code_define_nodes(statement_scope);
-            self.code(&node.children[1]);
+            if self.tree.scopes[statement_scope].disposable_count > 0 {
+                let context = self.scope_code_using(statement_scope);
+                self.code(&node.children[1]);
+                self.scope_code_used(statement_scope, context);
+            } else {
+                self.code(&node.children[1]);
+            }
             self.scope_coded(statement_scope);
             self.scope_coded(param_scope);
         }
