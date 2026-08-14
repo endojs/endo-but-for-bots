@@ -5,7 +5,9 @@ import harden from '@endo/harden';
 const TypedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
 const { apply } = Reflect;
 const { fromCharCode } = String;
+const isView = /** @type {(value: unknown) => boolean} */ (ArrayBuffer.isView);
 const { fill: typedArrayFill } = TypedArrayPrototype;
+const { slice: typedArraySlice } = TypedArrayPrototype;
 const { get: typedArrayLength } = /** @type {PropertyDescriptor} */ (
   Object.getOwnPropertyDescriptor(TypedArrayPrototype, 'length')
 );
@@ -35,33 +37,41 @@ const CODE_UNIT_CHUNK_SIZE = 4096;
  * @returns {string}
  */
 export const decodeAscii = (bytes, name = '<unknown>') => {
-  /** @type {number} */
-  let length;
+  /** @type {Uint8Array} */
+  let genuineBytes;
   try {
-    if (
-      apply(
-        /** @type {(this: unknown) => string | undefined} */ (typedArrayTag),
-        bytes,
-        [],
-      ) !== 'Uint8Array'
-    ) {
-      throw TypeError('not a Uint8Array');
+    if (isView(bytes)) {
+      if (
+        apply(
+          /** @type {(this: unknown) => string | undefined} */ (typedArrayTag),
+          bytes,
+          [],
+        ) !== 'Uint8Array'
+      ) {
+        throw TypeError('not a Uint8Array');
+      }
+      // A zero-length intrinsic fill performs ValidateTypedArray, including the
+      // detached/out-of-bounds check, without invoking a subclass species
+      // constructor or reading through a caller-controlled Proxy.
+      apply(typedArrayFill, bytes, [0, 0, 0]);
+      genuineBytes = bytes;
+    } else {
+      // The freezable-TypedArray shim represents a Uint8Array over an emulated
+      // immutable ArrayBuffer with a non-exotic wrapper. Its shimmed `slice`
+      // amplifies the wrapper and copies its bytes into a genuine Uint8Array,
+      // matching the compatibility path used by @endo/bytes and @endo/utf8.
+      genuineBytes = apply(typedArraySlice, bytes, []);
     }
-    // A zero-length intrinsic fill performs ValidateTypedArray, including the
-    // detached/out-of-bounds check, without invoking a subclass species
-    // constructor or reading through a caller-controlled Proxy.
-    apply(typedArrayFill, bytes, [0, 0, 0]);
-    length = apply(
-      /** @type {(this: unknown) => number} */ (typedArrayLength),
-      bytes,
-      [],
-    );
   } catch (cause) {
-    throw TypeError(
-      `ascii: expected bytes ${name} to be a genuine Uint8Array`,
-      { cause },
-    );
+    throw TypeError(`ascii: expected bytes ${name} to be a Uint8Array`, {
+      cause,
+    });
   }
+  const length = apply(
+    /** @type {(this: unknown) => number} */ (typedArrayLength),
+    genuineBytes,
+    [],
+  );
 
   /** @type {string[]} */
   const chunks = [];
@@ -70,7 +80,7 @@ export const decodeAscii = (bytes, name = '<unknown>') => {
     const codeUnits = new Array(chunkLength);
     for (let index = 0; index < chunkLength; index += 1) {
       const byteOffset = offset + index;
-      const byte = bytes[byteOffset];
+      const byte = genuineBytes[byteOffset];
       if (!(byte >= 0 && byte <= 0x7f)) {
         throw RangeError(
           `Non-ASCII byte 0x${byte.toString(16)} at offset ${byteOffset} of bytes ${name}`,

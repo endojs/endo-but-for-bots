@@ -8,6 +8,7 @@ one byte per code unit. Its `encodeAscii` and `decodeAscii` functions assert
 every value is in the admitted 7-bit range `0x00`–`0x7f`, hard-failing on the
 first that is not. Both functions are available from the package entry, and
 from the `./encode.js` and `./decode.js` subpaths respectively.
+`decodeAscii` accepts both genuine and emulated frozen `Uint8Array` values.
 
 This initial release is intentionally `major`: it establishes the stable
 public API for the package rather than publishing an intermediate pre-1.0
