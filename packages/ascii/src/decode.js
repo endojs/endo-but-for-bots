@@ -27,8 +27,9 @@ const CODE_UNIT_CHUNK_SIZE = 4096;
  * Pure JavaScript with no `TextDecoder`, no `node:` imports, and no host
  * globals, so it imports and runs under XS (`xst`) exactly as it does under
  * Node.js and browsers. It is also the strict counterpart the `TextDecoder`
- * label `'ascii'` is not: per the WHATWG Encoding Standard that label is an
- * alias for `windows-1252`, so `new TextDecoder('ascii', { fatal: true })`
+ * label `'ascii'` is not: per the [WHATWG Encoding
+ * Standard](https://encoding.spec.whatwg.org/#names-and-labels) that label is
+ * an alias for `windows-1252`, so `new TextDecoder('ascii', { fatal: true })`
  * silently maps bytes `0x80`–`0xff` to Latin-1/windows-1252 characters instead
  * of throwing — the exact trap this primitive avoids.
  *

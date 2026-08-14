@@ -53,11 +53,12 @@ export const locationToLocationId = location => {
  * Decode a swissnum's wire bytes back to its string form, rejecting any byte
  * outside the 7-bit ASCII range. This is the strict inverse of
  * `encodeSwissnum`: `TextDecoder('ascii')` cannot enforce this, because per the
- * WHATWG Encoding Standard the `'ascii'` label is an alias for `windows-1252`,
- * so `fatal: true` never fires on bytes `0x80`–`0xff` and they decode to
- * Latin-1/windows-1252 characters instead of throwing. Raw-bytes swissnums that
- * carry non-ASCII bytes on the wire are represented as bytes, not decoded to a
- * string, so they are unaffected.
+ * [WHATWG Encoding Standard](https://encoding.spec.whatwg.org/#names-and-labels)
+ * the `'ascii'` label is an alias for `windows-1252`, so `fatal: true` never
+ * fires on bytes `0x80`–`0xff` and they decode to Latin-1/windows-1252
+ * characters instead of throwing. Raw-bytes swissnums that carry non-ASCII
+ * bytes on the wire are represented as bytes, not decoded to a string, so they
+ * are unaffected.
  *
  * @param {ArrayBufferLike} value
  * @returns {string}

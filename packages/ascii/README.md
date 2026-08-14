@@ -15,10 +15,11 @@ decodeAscii(Uint8Array.of(0x80)); // throws RangeError: 0x80 is past 0x7f
 ```
 
 `decodeAscii` is the strict inverse of `encodeAscii`, and the counterpart the
-`TextDecoder` label `'ascii'` is not: per the WHATWG Encoding Standard that
-label is an alias for `windows-1252`, so `new TextDecoder('ascii', { fatal:
-true })` silently maps bytes `0x80`–`0xff` to Latin-1/windows-1252 characters
-rather than throwing.
+`TextDecoder` label `'ascii'` is not: per the
+[WHATWG Encoding Standard](https://encoding.spec.whatwg.org/#names-and-labels)
+that label is an alias for `windows-1252`, so `new TextDecoder('ascii', {
+fatal: true })` silently maps bytes `0x80`–`0xff` to Latin-1/windows-1252
+characters rather than throwing.
 
 It is pure JavaScript — no `TextEncoder`, no `TextDecoder`, no `node:` imports,
 and no host globals — so it imports and runs under XS (`xst`) exactly as it does

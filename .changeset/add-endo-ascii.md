@@ -1,6 +1,5 @@
 ---
 '@endo/ascii': major
-'@endo/sha256': patch
 ---
 
 Add `@endo/ascii`, a platform-neutral transcoder between ASCII text and bytes,
@@ -18,5 +17,7 @@ The package is pure JavaScript, with no `TextEncoder`, `TextDecoder`, `node:`
 imports, or host globals, so it runs under XS exactly as under Node.js and
 browsers. `encodeAscii` replaces ad hoc encoders that truncate rather than
 reject non-ASCII code units. `decodeAscii` is the strict counterpart the
-`TextDecoder` label `'ascii'` is not: the WHATWG Encoding Standard aliases that
-label to `windows-1252`, so `fatal: true` never fires on bytes `0x80`–`0xff`.
+`TextDecoder` label `'ascii'` is not: the
+[WHATWG Encoding Standard](https://encoding.spec.whatwg.org/#names-and-labels)
+aliases that label to `windows-1252`, so `fatal: true` never fires on bytes
+`0x80`–`0xff`.
