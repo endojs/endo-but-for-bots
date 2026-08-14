@@ -34,6 +34,7 @@
  */
 
 import { useCallback, useEffect, useReducer, useRef } from 'react';
+import { decodeAscii } from '@endo/ascii';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 
@@ -44,8 +45,6 @@ import { makeUserControllerPair } from './backend.js';
 import { parseLocator } from './uri-parse.js';
 import { encodeBase64Url } from './base64url.js';
 import { initialState, reducer, formatError } from './chat-state.js';
-
-const ASCII_DECODER = new TextDecoder('ascii');
 
 /**
  * Render a swissnum for log display.
@@ -81,7 +80,7 @@ const formatSwissnumForLog = swissNum => {
     }
   }
   if (allPrintable) {
-    return ASCII_DECODER.decode(bytes);
+    return decodeAscii(bytes, 'swissnum');
   }
   return encodeBase64Url(bytes);
 };
