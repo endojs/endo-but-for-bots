@@ -11077,16 +11077,16 @@ impl Interp {
     /// (`fx_RegExp` → `fxNewRegExpInstance` + `fxInitializeRegExp`): compile
     /// the pattern with child 8's matcher, chain the instance to
     /// `%RegExp.prototype%`, and record its program/source/flags +
-    /// `lastIndex` = 0 in the `regexps` side table. A syntax error or a
-    /// not-yet-ported pattern feature self-names an honest skip (XS throws a
-    /// catchable `SyntaxError`; ironhorse does not model native-error throws with
-    /// metering this stage, consistent with the other constructors' abort
-    /// handling).
+    /// `lastIndex` = 0 in the `regexps` side table. An invalid pattern throws a
+    /// catchable `SyntaxError` (as `fxCompileRegExp` failing does); a
+    /// not-yet-ported pattern feature self-names an honest skip.
     fn build_regexp(&mut self, pattern: String, flags: String) -> Result<Slot, Halt> {
         let program = match ironhorse_regexp::compile(&pattern, &flags) {
             Ok(p) => p,
             Err(ironhorse_regexp::CompileError::Syntax(_)) => {
-                return Err(Halt::Unsupported("RegExp:syntax-error-throw"))
+                // An invalid pattern is a catchable `SyntaxError`, exactly as
+                // `fxCompileRegExp` failing makes `new RegExp(...)` throw.
+                return Err(self.catchable_syntax_error());
             }
             Err(ironhorse_regexp::CompileError::Unsupported(name)) => {
                 return Err(Halt::Unsupported(name))
@@ -20077,6 +20077,20 @@ impl Interp {
     /// error retains the ordinary host `Throw` result from [`Self::raise_js`].
     fn catchable_type_error(&mut self) -> Halt {
         let error = self.build_error("TypeError", 0, 0);
+        match self.raise_js(error) {
+            Ok(target) => Halt::Resume(target),
+            Err(halt) => halt,
+        }
+    }
+
+    /// Raise a realm-local, catchable `SyntaxError` from a native helper —
+    /// the shape `new RegExp(badPattern)` throws (`fxThrowMessage` with
+    /// `XS_SYNTAX_ERROR`). Like [`Self::catchable_type_error`], `try`/`catch`
+    /// observes a realm-correct `SyntaxError` object (so `instanceof
+    /// SyntaxError` and `assert.throws(SyntaxError, …)` hold) rather than an
+    /// uncatchable host `Unsupported` halt.
+    fn catchable_syntax_error(&mut self) -> Halt {
+        let error = self.build_error("SyntaxError", 0, 0);
         match self.raise_js(error) {
             Ok(target) => Halt::Resume(target),
             Err(halt) => halt,
