@@ -45,6 +45,15 @@ test('decodeSwissnum round-trips every ASCII byte', t => {
   t.is(decodeSwissnum(encodeSwissnum(asciiText)), asciiText);
 });
 
+test('swissnum wrappers round-trip beyond the ASCII decoder chunk size', t => {
+  let asciiText = '';
+  for (let index = 0; index < 4096 * 2 + 1; index += 1) {
+    asciiText += String.fromCharCode(index % 0x80);
+  }
+
+  t.is(decodeSwissnum(encodeSwissnum(asciiText)), asciiText);
+});
+
 test('decodeSwissnum rejects a non-ASCII wire byte', t => {
   // A raw-bytes swissnum carrying 0x80 must not silently decode to a
   // windows-1252 character (the trap `TextDecoder('ascii')` falls into);

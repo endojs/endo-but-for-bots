@@ -101,6 +101,14 @@ test('round-trips with encodeAscii across the full admitted range', t => {
   t.is(decodeAscii(encodeAscii(text)), text);
 });
 
+test('round-trips inputs longer than the code-unit chunk size', t => {
+  let text = '';
+  for (let index = 0; index < 4096 * 2 + 1; index += 1) {
+    text += String.fromCharCode(index % 0x80);
+  }
+  t.is(decodeAscii(encodeAscii(text)), text);
+});
+
 test('the package entry and the decode.js subpath export the same function', t => {
   t.is(decodeAscii, decodeAsciiFromSubpath);
 });
