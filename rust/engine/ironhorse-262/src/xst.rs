@@ -44,8 +44,10 @@ pub const DEFAULT_ENDOR_SKIP_FEATURES: &[&str] = &[
     // xst `gxFeatures` analogues — surfaces ironhorse does not implement.
     "Temporal",
     "ShadowRealm",
-    "Atomics",
-    "SharedArrayBuffer",
+    // `Atomics`/`SharedArrayBuffer` are now implemented single-agent
+    // (`ironhorse-vm::interp` `create_atomics` + the `SharedArrayBuffer`
+    // constructor). The truly multi-agent slice (`$262.agent`) is a structural
+    // host exclusion below, not a feature pre-skip.
     "tail-call-optimization",
     "IsHTMLDDA",
     // The guest Hardened-JavaScript surface ironhorse does not yet expose as a
@@ -769,6 +771,23 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
     // skip. (`async` no longer rides this pre-skip; it runs below.)
     if fm.flags.iter().any(|f| f == "CanBlockIsFalse") {
         return preskip("structural:can-block");
+    }
+    // The multi-agent Atomics/SharedArrayBuffer slice drives a second agent
+    // through the `$262.agent` host contract (`$262.agent.start`/`broadcast`/
+    // `receiveBroadcast`/`report`), and the blocking-agent primitives
+    // `Atomics.wait`/`notify`/`waitAsync` coordinate across agents. ironhorse
+    // is single-agent, so these are a standards-grounded host exclusion (a
+    // spec-optional host capability — the agent-cluster API and blocking are
+    // not required of a conforming implementation; `Atomics.wait` on a
+    // non-`can-block` agent is itself a spec TypeError). A named structural
+    // skip rather than a divergence, and it also keeps the oracle off the
+    // `wait` cases where XS blocks past the watchdog. The single-agent Atomics
+    // surface (load/store/add/…) runs and is covered.
+    if src.contains("$262.agent")
+        || src.contains("Atomics.wait")
+        || src.contains("Atomics.notify")
+    {
+        return preskip("structural:multi-agent");
     }
 
     let (mut run_sloppy, mut run_strict, only_strict) = strict_mode_status(&fm.flags);

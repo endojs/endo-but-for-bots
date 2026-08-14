@@ -912,6 +912,10 @@ pub const TYPED_ARRAY_LENGTH_GET_METERING: u64 = 0;
 /// exotic index behavior (`fxTypedArrayGetter`/`fxTypedArraySetter` →
 /// `mxMeterOne`) beyond the index-property dispatch: one built-in step.
 pub const TYPED_ARRAY_ELEMENT_METERING: u64 = 1 << 14;
+/// The raw 16.16 cost of a single `Atomics.*` read-modify-write beyond the
+/// method dispatch (`xsAtomics.c` element access → `mxMeterOne`). Result-gated
+/// on the official slice (the Atomics computron parity is not asserted).
+pub const ATOMICS_OP_METERING: u64 = 1 << 14;
 /// The raw 16.16 cost of `ArrayBuffer.isView(v)` beyond its dispatch,
 /// calibrated raw against the pin.
 pub const ARRAY_BUFFER_ISVIEW_METERING: u64 = 0;
@@ -2128,6 +2132,12 @@ pub enum NativeMethod {
     /// `ArrayBuffer.isView(arg)` (`fx_ArrayBuffer_isView`): `true` iff the
     /// argument is a TypedArray or DataView view, else `false`.
     ArrayBufferIsView,
+    /// An `Atomics.*` namespace method (`xsAtomics.c`). The payload selects the
+    /// operation (see [`AtomicOp`]). Single-agent: the read-modify-write is a
+    /// plain non-atomic sequence over the view's backing store (ironhorse runs
+    /// one agent). `wait`/`notify`/`waitAsync` and BigInt-element ops self-name
+    /// honest skips.
+    Atomic(u8),
     /// `DataView.prototype.get<Type>(byteOffset[, littleEndian])`
     /// (`fx_DataView_prototype_get`): read an element of the type indexed by
     /// the payload (into [`TYPED_ARRAY_TYPES`]) at the byte offset, honoring
@@ -2689,6 +2699,13 @@ pub enum Native {
     /// `fx_ArrayBuffer`). Its per-instance backing store lives in the
     /// [`Interp::array_buffers`] side table.
     ArrayBuffer,
+    /// `SharedArrayBuffer` — a shared raw byte-buffer constructor
+    /// (`xsAtomics.c` `fx_SharedArrayBuffer`). ironhorse is single-agent, so a
+    /// SharedArrayBuffer is a plain byte buffer (its backing store lives in the
+    /// same [`Interp::array_buffers`] side table, marked in
+    /// [`Interp::shared_buffers`]); the "shared" distinction only gates
+    /// `Atomics.wait`/`notify` and `ArrayBuffer.isView`-style brand checks.
+    SharedArrayBuffer,
     /// A concrete TypedArray constructor (`Uint8Array`/`Int32Array`/… —
     /// `xsDataView.c` `fx_TypedArray`). The payload indexes
     /// [`TYPED_ARRAY_TYPES`] (the element type). Its per-instance view state
@@ -2742,6 +2759,7 @@ impl Native {
             Native::WeakMap => "WeakMap",
             Native::WeakSet => "WeakSet",
             Native::ArrayBuffer => "ArrayBuffer",
+            Native::SharedArrayBuffer => "SharedArrayBuffer",
             Native::TypedArray(i) => TYPED_ARRAY_TYPES[i as usize].name,
             Native::DataView => "DataView",
             Native::Promise => "Promise",
@@ -2773,6 +2791,7 @@ impl Native {
             | Native::TypeError
             | Native::URIError
             | Native::ArrayBuffer
+            | Native::SharedArrayBuffer
             | Native::Promise => 1,
         }
     }
@@ -2803,6 +2822,7 @@ impl Native {
             ("WeakMap", Native::WeakMap),
             ("WeakSet", Native::WeakSet),
             ("ArrayBuffer", Native::ArrayBuffer),
+            ("SharedArrayBuffer", Native::SharedArrayBuffer),
         ];
         // The concrete TypedArray constructors (`Uint8Array`/…), each a
         // `fx_TypedArray` callback distinguished by its element type index.
@@ -3201,6 +3221,12 @@ pub struct Interp {
     /// internal slot). Keyed by the buffer instance's slot, like
     /// [`Self::collections`]. See [`ArrayBufferData`].
     array_buffers: std::collections::HashMap<crate::value::SlotIndex, ArrayBufferData>,
+    /// The subset of [`Self::array_buffers`] instances that are
+    /// `SharedArrayBuffer`s (XS's `XS_ARRAY_BUFFER_KIND` with the shared flag).
+    /// ironhorse is single-agent, so a shared buffer is byte-identical to a
+    /// plain one; this set only gates the `Atomics.wait`/`notify` shared
+    /// requirement and the `SharedArrayBuffer` brand.
+    shared_buffers: std::collections::HashSet<crate::value::SlotIndex>,
     /// The realm's `%ArrayBuffer.prototype%` (a boot object), so a
     /// `new ArrayBuffer()` instance chains to it and its methods resolve.
     arraybuffer_proto: crate::value::SlotIndex,
@@ -3732,6 +3758,7 @@ impl Interp {
             weakmap_proto: crate::value::SlotIndex::NULL,
             weakset_proto: crate::value::SlotIndex::NULL,
             array_buffers: std::collections::HashMap::new(),
+            shared_buffers: std::collections::HashSet::new(),
             arraybuffer_proto: crate::value::SlotIndex::NULL,
             byte_length_id: None,
             typed_arrays: std::collections::HashMap::new(),
@@ -3909,6 +3936,11 @@ impl Interp {
                 // the `slice` method bound below. The per-instance backing
                 // store lives in the `array_buffers` side table.
                 Native::ArrayBuffer => self.slots.alloc(Slot::instance(object_proto)),
+                // `%SharedArrayBuffer.prototype%`: a plain boot object chaining
+                // to %Object.prototype%, carrying the `byteLength` accessor
+                // (special-cased by id, shared with ArrayBuffer). The backing
+                // store lives in `array_buffers`, marked in `shared_buffers`.
+                Native::SharedArrayBuffer => self.slots.alloc(Slot::instance(object_proto)),
                 // `%Uint8Array.prototype%` &co.: each concrete TypedArray
                 // prototype is a plain boot object chaining to
                 // %Object.prototype% (ironhorse does not model the intermediate
@@ -4433,9 +4465,42 @@ impl Interp {
         self.create_string_proto();
         self.create_number_globals();
         self.create_json();
+        self.create_atomics();
         self.create_reflect();
         self.create_proxy();
         self.create_hardened_globals();
+    }
+
+    /// Build the `Atomics` namespace object (XS's `mxAtomicsObject`,
+    /// `xsAtomics.c`): a boot object chaining to `%Object.prototype%`, carrying
+    /// the `Atomics.*` functions as own properties (bound at link time only for
+    /// the names the program references). Registered in `intrinsics` under
+    /// `"Atomics"` so [`Self::link_intrinsics`] binds it into the global object
+    /// like `Math` — not a function, so `typeof Atomics === "object"`.
+    fn create_atomics(&mut self) {
+        let object_proto = self.object_proto;
+        let atomics = self.slots.alloc(Slot::instance(object_proto));
+        self.intrinsics.insert("Atomics", atomics);
+        // (name, op-code) — the op-code indexes the dispatch in the
+        // NativeMethod::Atomic arm.
+        for (name, op) in [
+            ("add", 0u8),
+            ("and", 1),
+            ("compareExchange", 2),
+            ("exchange", 3),
+            ("load", 4),
+            ("or", 5),
+            ("store", 6),
+            ("sub", 7),
+            ("xor", 8),
+            ("isLockFree", 9),
+            ("wait", 10),
+            ("notify", 11),
+            ("waitAsync", 12),
+        ] {
+            let mf = self.alloc_method(NativeMethod::Atomic(op));
+            self.proto_methods.push((atomics, name, mf));
+        }
     }
 
     /// Build the `Reflect` namespace object (XS's `mxReflectObject`,
@@ -10580,6 +10645,58 @@ impl Interp {
                 let inst = self.alloc_array_buffer(byte_length);
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
+            // `new SharedArrayBuffer(byteLength)` (`xsAtomics.c`
+            // `fx_SharedArrayBuffer`). Single-agent: a plain byte buffer marked
+            // shared. Only the integer/number fixed-length form is covered; a
+            // growable buffer (2nd option-bag arg) or a byteLength needing
+            // general ToNumber self-names an honest skip.
+            Native::SharedArrayBuffer if has_target => {
+                if argc >= 2 && arg(1).kind == Kind::Reference {
+                    return Err(Halt::Unsupported(
+                        "native-call:SharedArrayBuffer:growable",
+                    ));
+                }
+                let a = arg(0);
+                let byte_length: u32 = match a.kind {
+                    Kind::Undefined => 0,
+                    Kind::Integer => match a.value {
+                        Payload::Integer(i) if i >= 0 => i as u32,
+                        _ => {
+                            return Err(Halt::Unsupported(
+                                "native-call:SharedArrayBuffer:bad-length",
+                            ))
+                        }
+                    },
+                    Kind::Number => match a.value {
+                        Payload::Number(n) => {
+                            let t = n.trunc();
+                            if t.is_nan() {
+                                0
+                            } else if t < 0.0 || t > 0x7FFF_FFFF as f64 {
+                                return Err(Halt::Unsupported(
+                                    "native-call:SharedArrayBuffer:bad-length",
+                                ));
+                            } else {
+                                t as u32
+                            }
+                        }
+                        _ => {
+                            return Err(Halt::Unsupported(
+                                "native-call:SharedArrayBuffer:bad-length",
+                            ))
+                        }
+                    },
+                    _ => {
+                        return Err(Halt::Unsupported(
+                            "native-call:SharedArrayBuffer:coerce-length",
+                        ))
+                    }
+                };
+                self.meter.tick_raw(ARRAY_BUFFER_CTOR_FRAME_METERING);
+                let inst = self.alloc_array_buffer(byte_length);
+                self.shared_buffers.insert(inst);
+                Slot::of(Kind::Reference, Payload::Reference(inst))
+            }
             // `new <TypedArray>(...)` (`fx_TypedArray` + `fxConstructTypedArray`
             // + `fxNewTypedArrayInstance`). Two covered forms:
             //   - `new TA(length)`: allocate a fresh `new ArrayBuffer(length <<
@@ -16151,6 +16268,11 @@ impl Interp {
                 };
                 Slot::boolean(is_view)
             }
+            // `Atomics.*` — single-agent read-modify-write over an integer
+            // TypedArray. All logic (validation, ToIndex, coercion, the RMW)
+            // lives in the helper; a non-integer view / OOB index / non-clean
+            // operand / the blocking-agent surface self-names an honest skip.
+            NativeMethod::Atomic(op) => self.atomics_dispatch(op, base)?,
             // `DataView.prototype.get<Type>(byteOffset[, littleEndian])`
             // (`fx_DataView_prototype_get`): read an element at `byteOffset`
             // honoring endianness (default big-endian). One `mxMeterOne`.
@@ -19771,6 +19893,198 @@ impl Interp {
         let u = u64::from_le_bytes(b);
         let (neg, mag) = u64_to_signed_limbs(ta.kind == 0, u);
         self.make_bigint(neg, mag)
+    }
+
+    /// `Atomics.<op>(...)` (`xsAtomics.c`). ironhorse runs one agent, so the
+    /// read-modify-write is a plain non-atomic byte sequence over the view's
+    /// backing store. Scope: the integer element views (`Int8/16/32`,
+    /// `Uint8/16/32`) with clean integer operands; a non-integer view (BigInt,
+    /// `Uint8Clamped`, float), an out-of-range index, a non-clean operand, and
+    /// the `wait`/`notify`/`waitAsync` blocking-agent surface each self-name an
+    /// honest skip (never a wrong answer). `op`: 0 add, 1 and, 2
+    /// compareExchange, 3 exchange, 4 load, 5 or, 6 store, 7 sub, 8 xor, 9
+    /// isLockFree, ≥10 wait/notify/waitAsync.
+    fn atomics_dispatch(&mut self, op: u8, base: usize) -> Result<Slot, Halt> {
+        let a0 = self.stack.get(base + 4).copied().unwrap_or_else(Slot::undefined);
+        let a1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+        let a2 = self.stack.get(base + 6).copied().unwrap_or_else(Slot::undefined);
+        let a3 = self.stack.get(base + 7).copied().unwrap_or_else(Slot::undefined);
+
+        // `Atomics.isLockFree(size)`: a pure numeric query. XS
+        // (`fx_Atomics_isLockFree`) reports lock-free only for the 4-byte
+        // element (`(size == 4) ? 1 : 0`); match it exactly.
+        if op == 9 {
+            let lf = matches!(self.element_value_to_number(a0), Some(v) if v == 4.0);
+            self.meter.tick_raw(ATOMICS_OP_METERING);
+            return Ok(Slot::boolean(lf));
+        }
+        // `wait`/`notify`/`waitAsync`: the blocking-agent surface a
+        // single-agent host cannot model — a standards-grounded host exclusion.
+        if op >= 10 {
+            return Err(Halt::Unsupported("atomics:wait-notify"));
+        }
+
+        // ValidateIntegerTypedArray: an integer-element TypedArray receiver.
+        let inst = match a0.value {
+            Payload::Reference(r) if self.typed_arrays.contains_key(&r) => r,
+            _ => return Err(Halt::Unsupported("atomics:non-typedarray")),
+        };
+        let ta = self.typed_arrays[&inst];
+        // Int8/16/32 (4/5/6), Uint8/16/32 (7/8/9), and BigInt64/BigUint64
+        // (0/1). Uint8Clamped (10) and the float views (2/3) self-name.
+        if !((4..=9).contains(&ta.kind) || ta.kind <= 1) {
+            return Err(Halt::Unsupported("atomics:non-integer-typedarray"));
+        }
+        // ValidateAtomicAccess: ToIndex(index) in `[0, length)`.
+        let idx = match self.element_value_to_number(a1) {
+            Some(v) if v >= 0.0 && v.fract() == 0.0 && (v as u64) < ta.length as u64 => v as u32,
+            _ => return Err(Halt::Unsupported("atomics:access-index")),
+        };
+        let size = TYPED_ARRAY_TYPES[ta.kind as usize].size as usize;
+        let data = self.array_buffers[&ta.buffer].data;
+        let bpos = ta.offset as usize + idx as usize * size;
+
+        // The BigInt64/BigUint64 element domain: the read-modify-write runs in
+        // u64 (modulo 2^64, matching the 64-bit element), returning a BigInt.
+        if ta.kind <= 1 {
+            return self.atomics_dispatch_bigint(op, ta.kind, data, bpos, a2, a3);
+        }
+
+        // The current element (an integer view always decodes).
+        let mut old_bytes = vec![0u8; size];
+        {
+            let bytes = self.chunks.payload(data);
+            old_bytes.copy_from_slice(&bytes[bpos..bpos + size]);
+        }
+        let old_slot =
+            decode_element_le(ta.kind, &old_bytes).ok_or(Halt::Unsupported("atomics:decode"))?;
+
+        // `load(ta, idx)`: no write.
+        if op == 4 {
+            self.meter.tick_raw(ATOMICS_OP_METERING);
+            return Ok(old_slot);
+        }
+
+        // `compareExchange(ta, idx, expected, replacement)`: replace iff the
+        // stored bytes equal `expected` coerced to the element type.
+        if op == 2 {
+            let expected = self
+                .element_value_to_number(a2)
+                .ok_or(Halt::Unsupported("atomics:coerce"))?;
+            let replacement = self
+                .element_value_to_number(a3)
+                .ok_or(Halt::Unsupported("atomics:coerce"))?;
+            let exp_bytes = encode_element_le(ta.kind, expected.trunc())
+                .ok_or(Halt::Unsupported("atomics:encode"))?;
+            if exp_bytes == old_bytes {
+                let le = encode_element_le(ta.kind, replacement.trunc())
+                    .ok_or(Halt::Unsupported("atomics:encode"))?;
+                let out = self.chunks.slice_mut(data, bpos + size);
+                out[bpos..bpos + size].copy_from_slice(&le);
+            }
+            self.meter.tick_raw(ATOMICS_OP_METERING);
+            return Ok(old_slot);
+        }
+
+        // The single-operand ops. `store` returns the coerced value; every
+        // other op returns the prior element value.
+        let v = self
+            .element_value_to_number(a2)
+            .ok_or(Halt::Unsupported("atomics:coerce"))?;
+        let v_i = v.trunc() as i64;
+        let old_i = element_slot_to_i64(old_slot);
+        let (new_i, ret): (i64, Slot) = match op {
+            0 => (old_i.wrapping_add(v_i), old_slot),
+            1 => (old_i & v_i, old_slot),
+            3 => (v_i, old_slot),
+            5 => (old_i | v_i, old_slot),
+            6 => (v_i, Slot::number(v.trunc())),
+            7 => (old_i.wrapping_sub(v_i), old_slot),
+            8 => (old_i ^ v_i, old_slot),
+            _ => return Err(Halt::Unsupported("atomics:op")),
+        };
+        let le =
+            encode_element_le(ta.kind, new_i as f64).ok_or(Halt::Unsupported("atomics:encode"))?;
+        let out = self.chunks.slice_mut(data, bpos + size);
+        out[bpos..bpos + size].copy_from_slice(&le);
+        self.meter.tick_raw(ATOMICS_OP_METERING);
+        Ok(ret)
+    }
+
+    /// The BigInt64/BigUint64 domain of [`Self::atomics_dispatch`]: the
+    /// read-modify-write runs in u64 (two's complement, modulo 2^64 — the exact
+    /// 64-bit element wrap), the operand is `ToBigInt(value)`'s low 64 bits, and
+    /// the result is a freshly allocated BigInt (`store` returns the coerced
+    /// value, every other op the prior element). A value needing general
+    /// coercion (a Number `TypeError`, an object `ToPrimitive`) self-names.
+    fn atomics_dispatch_bigint(
+        &mut self,
+        op: u8,
+        kind: u8,
+        data: crate::value::ChunkOffset,
+        bpos: usize,
+        a2: Slot,
+        a3: Slot,
+    ) -> Result<Slot, Halt> {
+        let mut old_b = [0u8; 8];
+        {
+            let bytes = self.chunks.payload(data);
+            old_b.copy_from_slice(&bytes[bpos..bpos + 8]);
+        }
+        let old_u = u64::from_le_bytes(old_b);
+
+        // `load`: no write.
+        if op == 4 {
+            self.meter.tick_raw(ATOMICS_OP_METERING);
+            let (neg, mag) = u64_to_signed_limbs(kind == 0, old_u);
+            return Ok(self.make_bigint(neg, mag));
+        }
+
+        // `compareExchange(ta, idx, expected, replacement)`.
+        if op == 2 {
+            let expected = self
+                .slot_to_bigint_u64(a2)
+                .ok_or(Halt::Unsupported("atomics:coerce"))?;
+            let replacement = self
+                .slot_to_bigint_u64(a3)
+                .ok_or(Halt::Unsupported("atomics:coerce"))?;
+            if old_u == expected {
+                let out = self.chunks.slice_mut(data, bpos + 8);
+                out[bpos..bpos + 8].copy_from_slice(&replacement.to_le_bytes());
+            }
+            self.meter.tick_raw(ATOMICS_OP_METERING);
+            let (neg, mag) = u64_to_signed_limbs(kind == 0, old_u);
+            return Ok(self.make_bigint(neg, mag));
+        }
+
+        let v = self
+            .slot_to_bigint_u64(a2)
+            .ok_or(Halt::Unsupported("atomics:coerce"))?;
+        let new_u: u64 = match op {
+            0 => old_u.wrapping_add(v),
+            1 => old_u & v,
+            3 => v,
+            5 => old_u | v,
+            6 => v,
+            7 => old_u.wrapping_sub(v),
+            8 => old_u ^ v,
+            _ => return Err(Halt::Unsupported("atomics:op")),
+        };
+        let out = self.chunks.slice_mut(data, bpos + 8);
+        out[bpos..bpos + 8].copy_from_slice(&new_u.to_le_bytes());
+        self.meter.tick_raw(ATOMICS_OP_METERING);
+
+        // `store` returns the coerced value (the original BigInt, or `1n`/`0n`
+        // for a Boolean); every other op returns the prior element.
+        if op == 6 {
+            return Ok(match a2.value {
+                Payload::BigInt(_) => a2,
+                Payload::Boolean(b) => self.make_bigint(false, vec![b as u32]),
+                _ => a2,
+            });
+        }
+        let (neg, mag) = u64_to_signed_limbs(kind == 0, old_u);
+        Ok(self.make_bigint(neg, mag))
     }
 
     /// Coerce a primitive element write value to the `f64` the element
@@ -24135,6 +24449,7 @@ fn native_unsupported_name(native: Native) -> &'static str {
         Native::WeakMap => "native-call:WeakMap",
         Native::WeakSet => "native-call:WeakSet",
         Native::ArrayBuffer => "native-call:ArrayBuffer",
+        Native::SharedArrayBuffer => "native-call:SharedArrayBuffer",
         Native::TypedArray(_) => "native-call:TypedArray",
         Native::DataView => "native-call:DataView",
         Native::Promise => "native-call:Promise",
@@ -26017,6 +26332,17 @@ fn bi_mul(neg_a: bool, a: &[u32], neg_b: bool, b: &[u32]) -> (bool, Vec<u32>) {
 /// bit is a negative magnitude); otherwise it is the unsigned magnitude.
 /// This is the numeric core of `DataView.prototype.getBigInt64`/
 /// `getBigUint64` and the BigInt64/BigUint64 typed-array element read.
+/// The i64 value of a decoded integer TypedArray element (an `Integer` or, for
+/// a large `Uint32`, a `Number` slot). Used as the arithmetic operand of an
+/// `Atomics` read-modify-write; the write re-wraps to the element width.
+fn element_slot_to_i64(s: Slot) -> i64 {
+    match s.value {
+        Payload::Integer(i) => i as i64,
+        Payload::Number(n) => n as i64,
+        _ => 0,
+    }
+}
+
 fn u64_to_signed_limbs(signed: bool, u: u64) -> (bool, Vec<u32>) {
     let (neg, mag) = if signed && (u as i64) < 0 {
         // Magnitude of a negative i64 without overflowing at i64::MIN.
