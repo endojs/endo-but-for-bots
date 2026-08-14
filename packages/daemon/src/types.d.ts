@@ -1474,7 +1474,17 @@ export interface PeerInfo {
 export interface EndoNetwork {
   supports: (network: string) => boolean;
   addresses: () => Array<string>;
-  connect: (address: string, farContext: FarContext) => Promise<EndoGateway>;
+  /**
+   * Dial `address`. On an outbound peer dial the caller passes a gateway bound
+   * to the dialed peer as `peerGateway`; the transport presents it instead of
+   * the shared bearer gateway, so the dialed peer can only follow its own
+   * retention set. Omitted for loopback, where the shared gateway is presented.
+   */
+  connect: (
+    address: string,
+    farContext: FarContext,
+    peerGateway?: EndoGateway,
+  ) => Promise<EndoGateway>;
 }
 
 export interface EndoAgent

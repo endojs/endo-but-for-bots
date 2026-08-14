@@ -127,8 +127,14 @@ export const make = async (powers, context) => {
 
   E.sendOnly(context).addDisposalHook(() => stopped);
 
-  const connect = async (address, connectionContext) => {
+  const connect = async (address, connectionContext, peerGateway) => {
     const { value: connectionNumber } = connectionNumbers.next();
+
+    // On the outbound path the caller passes a gateway bound to the peer we
+    // dialed; present that rather than the shared `localGateway`, so the dialed
+    // peer can follow only its own retention set. Fall back to `localGateway`
+    // when no peer-bound gateway is supplied (loopback / older callers).
+    const outboundGateway = peerGateway || localGateway;
 
     const { port: portname, hostname: host } = new URL(address);
     const port = Number(portname);
@@ -171,7 +177,7 @@ export const make = async (powers, context) => {
       messageWriter,
       messageReader,
       cancelled,
-      localGateway,
+      outboundGateway,
     );
 
     connectionClosed.then(
@@ -192,7 +198,7 @@ export const make = async (powers, context) => {
     const remoteGreeter = getBootstrap();
     return E(remoteGreeter).hello(
       localNodeId,
-      localGateway,
+      outboundGateway,
       Far('Canceller', cancelConnection),
       connectionCancelled,
     );
