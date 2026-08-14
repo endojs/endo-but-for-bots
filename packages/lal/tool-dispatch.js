@@ -394,6 +394,31 @@ export const makeExecuteTool = powers => {
         await E(capability).writeText(fileName, updated);
         return harden({ applied, diff });
       }
+      case 'glob': {
+        const { petNameOrPath, pattern } = args;
+        if (petNameOrPath === undefined || pattern === undefined) {
+          throw new Error('petNameOrPath and pattern are required');
+        }
+        const capability = await E(powers).lookup(petNameOrPath);
+        return E(capability).glob(pattern);
+      }
+      case 'grep': {
+        const { petNameOrPath, pattern, glob, maxResults } = args;
+        if (petNameOrPath === undefined || pattern === undefined) {
+          throw new Error('petNameOrPath and pattern are required');
+        }
+        const capability = await E(powers).lookup(petNameOrPath);
+        const options =
+          maxResults === undefined ? undefined : harden({ maxResults });
+        if (glob !== undefined) {
+          return options === undefined
+            ? E(capability).glorp(glob, pattern)
+            : E(capability).glorp(glob, pattern, options);
+        }
+        return options === undefined
+          ? E(capability).grep(pattern)
+          : E(capability).grep(pattern, undefined, options);
+      }
 
       // Code evaluation
       case 'evaluate': {
