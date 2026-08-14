@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt: tests exercise existing public dirPath and tool maker names.
 /**
  * Unit tests for the Fae `glob` and `grep` tool makers (`makeGlobTool`,
  * `makeGrepTool`), the node-fs side of the tool-call-surface parity arc
@@ -18,7 +19,12 @@ import path from 'path';
 
 import { GLOB_MAX_RESULTS, GREP_MAX_RESULTS } from '@endo/platform/fs/search';
 
-import { makeGlobTool, makeGrepTool } from '../src/tool-makers.js';
+import {
+  makeGlobTool,
+  makeGrepTool,
+  makeListDirTool,
+  makeReadFileTool,
+} from '../src/tool-makers.js';
 
 /**
  * Create a fresh temp dir populated from a { relativePath: contents } record,
@@ -39,7 +45,7 @@ const makeFixture = (t, files) => {
 };
 
 test('glob schema requires pattern and offers dirPath', t => {
-  const tool = makeGlobTool('/tmp');
+  const tool = makeGlobTool(os.tmpdir());
   const schema = tool.schema();
   t.is(schema.function.name, 'glob');
   const { properties, required } = schema.function.parameters;
@@ -50,7 +56,7 @@ test('glob schema requires pattern and offers dirPath', t => {
 });
 
 test('grep schema requires pattern and offers dirPath and glob', t => {
-  const tool = makeGrepTool('/tmp');
+  const tool = makeGrepTool(os.tmpdir());
   const schema = tool.schema();
   t.is(schema.function.name, 'grep');
   const { properties, required } = schema.function.parameters;
@@ -131,6 +137,62 @@ test('glob excludes symlinks resolving outside the working directory', async t =
   t.is(await tool.execute({ pattern: '**/*.js' }), 'a.js');
 });
 
+test('glob works when the working directory is a symlink', async t => {
+  const cwd = makeFixture(t, { 'a.js': '' });
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'fae-search-link-'));
+  t.teardown(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const link = path.join(parent, 'root');
+  fs.symlinkSync(cwd, link);
+  const tool = makeGlobTool(link);
+  t.is(await tool.execute({ pattern: '*.js' }), 'a.js');
+});
+
+test('glob rejects missing and non-directory search roots', async t => {
+  const cwd = makeFixture(t, { 'a.js': '' });
+  const tool = makeGlobTool(cwd);
+  await t.throwsAsync(tool.execute({ pattern: '*', dirPath: 'missing' }), {
+    code: 'ENOENT',
+  });
+  await t.throwsAsync(tool.execute({ pattern: '*', dirPath: 'a.js' }), {
+    message: 'Search root is not a directory: a.js',
+  });
+});
+
+test('filesystem tools normalize trailing separators and filesystem roots', async t => {
+  const cwd = makeFixture(t, { 'a.js': 'content' });
+  const readFile = makeReadFileTool(`${cwd}${path.sep}`);
+  t.is(await readFile.execute({ filePath: 'a.js' }), 'content');
+
+  const root = path.parse(cwd).root;
+  const listRoot = makeListDirTool(root);
+  t.is(typeof (await listRoot.execute({ dirPath: '.' })), 'string');
+});
+
+test('read-file rejects a same-prefix sibling path', async t => {
+  const cwd = makeFixture(t, { 'a.js': '' });
+  const sibling = `${cwd}-secret`;
+  fs.mkdirSync(sibling);
+  fs.writeFileSync(path.join(sibling, 'secret.txt'), 'secret');
+  t.teardown(() => fs.rmSync(sibling, { recursive: true, force: true }));
+  const tool = makeReadFileTool(cwd);
+  await t.throwsAsync(
+    tool.execute({
+      filePath: path.relative(cwd, path.join(sibling, 'secret.txt')),
+    }),
+    { message: /Path traversal not allowed/ },
+  );
+});
+
+test('glob skips default-denied credential segments', async t => {
+  const cwd = makeFixture(t, {
+    'public/a.txt': '',
+    '.env/secret.txt': '',
+    '.ssh/id.txt': '',
+  });
+  const tool = makeGlobTool(cwd);
+  t.is(await tool.execute({ pattern: '**/*.txt' }), 'public/a.txt');
+});
+
 test('glob requires a non-empty pattern', async t => {
   const cwd = makeFixture(t, {});
   const tool = makeGlobTool(cwd);
@@ -156,6 +218,20 @@ test('glob truncates beyond the cap and says so', async t => {
     rendered[GLOB_MAX_RESULTS],
     `... (truncated at ${GLOB_MAX_RESULTS} results)`,
   );
+});
+
+test('glob does not report an exactly-at-cap result as truncated', async t => {
+  const files = Object.fromEntries(
+    Array.from({ length: GLOB_MAX_RESULTS }, (_, index) => [
+      `${String(index).padStart(5, '0')}.js`,
+      '',
+    ]),
+  );
+  const cwd = makeFixture(t, files);
+  const tool = makeGlobTool(cwd);
+  const result = await tool.execute({ pattern: '*.js' });
+  t.is(result.split('\n').length, GLOB_MAX_RESULTS);
+  t.false(result.includes('truncated'));
 });
 
 test('grep renders file:line: text matches in path-then-line order', async t => {
@@ -184,10 +260,18 @@ test('grep evaluates the pattern as an ECMAScript regular expression', async t =
 });
 
 test('grep rejects a potentially catastrophic regular expression', async t => {
-  const cwd = makeFixture(t, { 'a.txt': `${'a'.repeat(100)}!\n` });
+  const cwd = makeFixture(t, { 'a.txt': 'ok\n' });
   const tool = makeGrepTool(cwd);
   await t.throwsAsync(tool.execute({ pattern: '^(a+)+$' }), {
-    message: 'Regular expression is too complex to evaluate safely',
+    message: 'Regular expression fails a conservative complexity check',
+  });
+});
+
+test('grep gives a tool-shaped error for malformed regular expressions', async t => {
+  const cwd = makeFixture(t, {});
+  const tool = makeGrepTool(cwd);
+  await t.throwsAsync(tool.execute({ pattern: '(' }), {
+    message: 'pattern must be a valid ECMAScript regular expression',
   });
 });
 
@@ -214,6 +298,72 @@ test('grep searches under dirPath with results relative to it', async t => {
     await tool.execute({ pattern: 'target', dirPath: 'src' }),
     'c.js:1: target',
   );
+});
+
+test('grep rejects traversal and a same-prefix sibling search root', async t => {
+  const cwd = makeFixture(t, { 'a.txt': 'target\n' });
+  const sibling = `${cwd}-secret`;
+  fs.mkdirSync(sibling);
+  fs.writeFileSync(path.join(sibling, 'secret.txt'), 'target\n');
+  t.teardown(() => fs.rmSync(sibling, { recursive: true, force: true }));
+  const tool = makeGrepTool(cwd);
+  await t.throwsAsync(tool.execute({ pattern: 'target', dirPath: '../..' }), {
+    message: /Path traversal not allowed/,
+  });
+  await t.throwsAsync(
+    tool.execute({
+      pattern: 'target',
+      dirPath: path.relative(cwd, sibling),
+    }),
+    { message: /Path traversal not allowed/ },
+  );
+});
+
+test('grep excludes symlink and glob escapes from the working directory', async t => {
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'fae-search-out-'));
+  t.teardown(() => fs.rmSync(outside, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(outside, 'secret.txt'), 'target\n');
+  const cwd = makeFixture(t, { 'a.txt': 'target\n' });
+  fs.symlinkSync(outside, path.join(cwd, 'escape'));
+  const tool = makeGrepTool(cwd);
+  t.is(await tool.execute({ pattern: 'target' }), 'a.txt:1: target');
+  t.is(
+    await tool.execute({ pattern: 'target', glob: '../*.txt' }),
+    'No matches for target',
+  );
+});
+
+test('grep skips default-denied credential segments', async t => {
+  const cwd = makeFixture(t, {
+    'public/a.txt': 'target\n',
+    '.env/secret.txt': 'target\n',
+    '.ssh/id.txt': 'target\n',
+  });
+  const tool = makeGrepTool(cwd);
+  t.is(await tool.execute({ pattern: 'target' }), 'public/a.txt:1: target');
+});
+
+test('grep validates model-supplied argument types', async t => {
+  const cwd = makeFixture(t, {});
+  const tool = makeGrepTool(cwd);
+  await t.throwsAsync(tool.execute({ pattern: 42 }), {
+    message: 'pattern is required',
+  });
+  await t.throwsAsync(tool.execute({ pattern: 'x', dirPath: null }), {
+    message: 'dirPath must be a string',
+  });
+  await t.throwsAsync(tool.execute({ pattern: 'x', glob: null }), {
+    message: 'glob must be a string',
+  });
+});
+
+test('grep truncates long matching lines', async t => {
+  const cwd = makeFixture(t, { 'big.txt': `target${'x'.repeat(2000)}\n` });
+  const tool = makeGrepTool(cwd);
+  const result = await tool.execute({ pattern: 'target' });
+  t.true(result.startsWith('big.txt:1: target'));
+  t.true(result.endsWith('... (truncated at 1000 characters)'));
+  t.true(result.length < 1100);
 });
 
 test('grep reports no matches without error', async t => {

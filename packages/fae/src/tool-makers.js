@@ -1,10 +1,12 @@
 // @ts-check
+// spell-out-exempt: preserve existing public dirPath and makeListDirTool names.
 
 import fs from 'fs';
 import path from 'path';
 
 import { E } from '@endo/eventual-send';
 import { applyEdits, normalizeEdits } from '@endo/agentry/edit-text';
+import { defaultDeniedSegments } from '@endo/daemon/src/mount.js';
 import {
   makeSearch,
   GLOB_MAX_RESULTS,
@@ -12,6 +14,8 @@ import {
 } from '@endo/platform/fs/search';
 import { makeNodeSearchPowers } from '@endo/platform/fs/node/search';
 import safeRegex from 'safe-regex2';
+
+/** @import { GrepMatch } from '@endo/platform/fs/search.types.js' */
 
 /**
  * @typedef {object} ToolFunction
@@ -42,8 +46,10 @@ import safeRegex from 'safe-regex2';
  * @returns {string}
  */
 const resolveSafe = (relativePath, cwd) => {
-  const resolved = path.resolve(cwd, relativePath);
-  if (resolved !== cwd && !resolved.startsWith(`${cwd}${path.sep}`)) {
+  const root = path.resolve(cwd);
+  const resolved = path.resolve(root, relativePath);
+  const rootPrefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+  if (resolved !== root && !resolved.startsWith(rootPrefix)) {
     throw new Error(`Path traversal not allowed: ${relativePath}`);
   }
   return resolved;
@@ -421,11 +427,10 @@ export const makeListDirTool = cwd => {
 harden(makeListDirTool);
 
 // The platform search engine (`@endo/platform/fs/search`) over `node:fs`
-// powers — the same engine the daemon mount and the genie agent delegate
-// their glob/grep to, so all three surfaces share one normative definition
-// of the two dialects. Pure over ambient `node:fs`; one instance serves
-// every tool.
+// powers. Pure over ambient `node:fs`; one instance serves every tool.
 const search = makeSearch(makeNodeSearchPowers());
+
+const GREP_MAX_MATCH_CHARACTERS = 1000;
 
 /**
  * Resolve the working directory to its symlink-free physical path and the
@@ -441,6 +446,12 @@ const search = makeSearch(makeNodeSearchPowers());
 const resolveSearchRoot = async (cwd, dirPath) => {
   const confinementRoot = await fs.promises.realpath(cwd);
   const root = resolveSafe(dirPath, confinementRoot);
+  const rootStat = await fs.promises.stat(root);
+  if (!rootStat.isDirectory()) {
+    throw new Error(`Search root is not a directory: ${dirPath}`);
+  }
+  const physicalRoot = await fs.promises.realpath(root);
+  resolveSafe(path.relative(confinementRoot, physicalRoot), confinementRoot);
   return { root, confinementRoot };
 };
 
@@ -485,8 +496,11 @@ export const makeGlobTool = cwd => {
     async execute(args) {
       const { pattern, dirPath = '.' } =
         /** @type {{ pattern: string, dirPath?: string }} */ (args);
-      if (!pattern) {
+      if (typeof pattern !== 'string' || pattern.length === 0) {
         throw new Error('pattern is required');
+      }
+      if (typeof dirPath !== 'string') {
+        throw new Error('dirPath must be a string');
       }
       const { root, confinementRoot } = await resolveSearchRoot(cwd, dirPath);
       /** @type {string[]} */
@@ -494,6 +508,7 @@ export const makeGlobTool = cwd => {
       let truncated = false;
       for await (const batch of search.globPaths(root, pattern, {
         confinementRoot,
+        deniedSegments: [...defaultDeniedSegments],
       })) {
         for (const match of batch) {
           if (matches.length >= GLOB_MAX_RESULTS) {
@@ -535,14 +550,17 @@ export const makeGrepTool = cwd => {
         'Search file contents for an ECMAScript regular expression, like ' +
         '`grep -n`. Returns `file:line: text` matches in path-then-line ' +
         'order with 1-based line numbers and paths relative to the searched ' +
-        'directory. Unreadable (e.g. binary) files are skipped.',
+        'directory. Files that cannot be read are skipped, and long matching ' +
+        'lines are truncated in the rendered result.',
       parameters: {
         type: 'object',
         properties: {
           pattern: {
             type: 'string',
             description:
-              'ECMAScript regular expression source, e.g. "TODO\\\\(".',
+              'Flagless, case-sensitive ECMAScript regular expression source, ' +
+              'e.g. "TODO\\(". A conservative complexity check rejects ' +
+              'nested quantifiers and some other high-risk structures.',
           },
           dirPath: {
             type: 'string',
@@ -573,12 +591,28 @@ export const makeGrepTool = cwd => {
       } = /** @type {{ pattern: string, dirPath?: string, glob?: string }} */ (
         args
       );
-      if (!pattern) {
+      if (typeof pattern !== 'string' || pattern.length === 0) {
         throw new Error('pattern is required');
       }
-      const regex = new RegExp(pattern);
-      if (!safeRegex(regex)) {
-        throw new Error('Regular expression is too complex to evaluate safely');
+      if (typeof dirPath !== 'string') {
+        throw new Error('dirPath must be a string');
+      }
+      if (globPattern !== undefined && typeof globPattern !== 'string') {
+        throw new Error('glob must be a string');
+      }
+      try {
+        // Compile once at the tool boundary so malformed sources get a
+        // tool-shaped error before the engine starts walking the filesystem.
+        RegExp(pattern);
+      } catch {
+        throw new Error(
+          'pattern must be a valid ECMAScript regular expression',
+        );
+      }
+      if (!safeRegex(pattern)) {
+        throw new Error(
+          'Regular expression fails a conservative complexity check',
+        );
       }
       const { root, confinementRoot } = await resolveSearchRoot(cwd, dirPath);
       const paths =
@@ -587,13 +621,15 @@ export const makeGrepTool = cwd => {
           : search.globPaths(root, globPattern, {
               confinementRoot,
               includeDirectories: false,
+              deniedSegments: [...defaultDeniedSegments],
             });
       // Ask for one match beyond the cap so truncation is detectable
       // without misreporting an exactly-at-cap result as truncated.
-      /** @type {Array<{ file: string, line: number, text: string }>} */
+      /** @type {GrepMatch[]} */
       const matches = [];
       for await (const batch of search.grepFiles(root, pattern, paths, {
         confinementRoot,
+        deniedSegments: [...defaultDeniedSegments],
         maxResults: GREP_MAX_RESULTS + 1,
       })) {
         matches.push(...batch);
@@ -605,7 +641,16 @@ export const makeGrepTool = cwd => {
       if (matches.length === 0) {
         return `No matches for ${pattern}`;
       }
-      const lines = matches.map(m => `${m.file}:${m.line}: ${m.text}`);
+      const lines = matches.map(match => {
+        const text =
+          match.text.length > GREP_MAX_MATCH_CHARACTERS
+            ? `${match.text.slice(
+                0,
+                GREP_MAX_MATCH_CHARACTERS,
+              )}... (truncated at ${GREP_MAX_MATCH_CHARACTERS} characters)`
+            : match.text;
+        return `${match.file}:${match.line}: ${text}`;
+      });
       if (truncated) {
         lines.push(`... (truncated at ${GREP_MAX_RESULTS} matches)`);
       }

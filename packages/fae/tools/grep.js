@@ -8,18 +8,15 @@ import { makeGrepTool } from '../src/tool-makers.js';
 
 /**
  * FaeTool caplet: search file contents for an ECMAScript regular expression
- * (the platform search engine's grep dialect) under a root directory. Root is
- * set at creation time via env.FAE_CWD (default: process.cwd()).
- * @param _powers
- * @param _context
- * @param root0
- * @param root0.env
+ * under a root directory. Root is set at creation time via env.FAE_CWD
+ * (default: process.cwd()).
+ *
+ * @param {unknown} _powers
+ * @param {unknown} _context
+ * @param {{ env?: Record<string, string | undefined> }} options
  */
-// eslint-disable-next-line no-underscore-dangle
 export const make = (_powers, _context, { env = {} }) => {
-  const cwd =
-    /** @type {Record<string, string | undefined>} */ (env).FAE_CWD ||
-    process.cwd();
+  const cwd = env.FAE_CWD || process.cwd();
   const impl = makeGrepTool(cwd);
   return makeExo('GrepTool', FaeToolInterface, {
     schema: () => impl.schema(),
