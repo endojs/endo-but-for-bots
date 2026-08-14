@@ -2863,6 +2863,27 @@ impl TemporalDurationRecord {
         n = n.checked_add(self.microseconds as i128 * 1_000)?;
         n.checked_add(self.nanoseconds as i128)
     }
+
+    /// The pure time part (`hours`…`nanoseconds`) as a single nanosecond count,
+    /// ignoring the calendar/day fields entirely. Unlike [`time_nanoseconds`]
+    /// this never rejects a duration that also carries date units — the caller
+    /// handles those through calendar arithmetic against a `relativeTo` date.
+    fn time_only_nanoseconds(self) -> Option<i128> {
+        let mut n = (self.hours as i128).checked_mul(3_600)?;
+        n = n.checked_add(self.minutes as i128 * 60)?;
+        n = n.checked_add(self.seconds as i128)?;
+        n = n.checked_mul(1_000_000_000)?;
+        n = n.checked_add(self.milliseconds as i128 * 1_000_000)?;
+        n = n.checked_add(self.microseconds as i128 * 1_000)?;
+        n.checked_add(self.nanoseconds as i128)
+    }
+
+    /// Does this duration carry any calendar (non-fixed-length) unit? Years,
+    /// months, and weeks are the units that cannot be resolved to an exact
+    /// nanosecond span without a `relativeTo` reference point.
+    fn has_calendar_units(self) -> bool {
+        self.years != 0 || self.months != 0 || self.weeks != 0
+    }
 }
 
 /// One intrinsic (native) function ironhorse models. The variant is the
@@ -16577,7 +16598,146 @@ impl Interp {
         self.value_to_string(code, value)
     }
 
-    fn temporal_method(&mut self, method: NativeMethod, this: Slot, arg0: Slot, arg1: Slot, code: &[u8]) -> Result<Slot, Halt> {
+    /// Resolve a `relativeTo` option to its ISO `PlainDate` (`kind == 0`). In
+    /// the fixed-offset, constant-24-hour-day model the *date* is the only part
+    /// of a relative reference that affects a duration total/round/compare — a
+    /// `PlainDate`, `PlainDateTime`, or `ZonedDateTime` all reduce to their
+    /// (local, for zoned) calendar date. Returns `None` when `relativeTo` is
+    /// absent (`undefined`/`null`), letting the caller decide whether the
+    /// operation needs a reference (a `RangeError` for calendar units).
+    fn temporal_relative_to_date(&mut self, options: Slot, code: &[u8]) -> Result<Option<TemporalPlainRecord>, Halt> {
+        if options.kind == Kind::Undefined { return Ok(None); }
+        let Payload::Reference(r) = options.value else {
+            // A non-object, non-undefined options argument is a TypeError for
+            // every Temporal reader that accepts an options bag.
+            return Err(self.catchable_type_error());
+        };
+        if options.kind != Kind::Reference { return Err(self.catchable_type_error()); }
+        let Some(&id) = self.symbol_ids.get("relativeTo") else { return Ok(None); };
+        let value = self.ordinary_get(code, r, id, options)?;
+        if value.kind == Kind::Undefined || value.kind == Kind::Null { return Ok(None); }
+        // A branded `ZonedDateTime` resolves to its local wall-clock date; every
+        // other date-bearing value (`PlainDate`/`PlainDateTime` brand, property
+        // bag, or ISO string) is read as a `PlainDate` via the shared reader,
+        // which sources `year`/`month`/`day` (getters on a branded instance,
+        // own properties on a bag) or parses a string's date portion.
+        if let Some(zoned) = self.temporal_zoned_brand(value) {
+            let local = zoned_local_datetime(zoned.epoch_nanoseconds, zoned.offset_ns);
+            return Ok(Some(iso_date(local.year, local.month, local.day)));
+        }
+        let date = self.temporal_plain_from(0, value, code)?;
+        Ok(Some(iso_date(date.year, date.month, date.day)))
+    }
+
+    /// The exact nanosecond span a duration represents. With a `relative` date
+    /// the calendar units are resolved by ISO `dateAdd`; without one a duration
+    /// carrying calendar units (`years`/`months`/`weeks`) is a `RangeError`
+    /// (`relativeTo` is required), while days are treated as fixed 24-hour days.
+    fn temporal_duration_span(&mut self, d: TemporalDurationRecord, relative: Option<TemporalPlainRecord>) -> Result<i128, Halt> {
+        match relative {
+            Some(start) => iso_duration_span_nanoseconds(start, d).ok_or_else(|| self.catchable_range_error()),
+            None => {
+                if d.has_calendar_units() { return Err(self.catchable_range_error()); }
+                d.time_nanoseconds(true).ok_or_else(|| self.catchable_range_error())
+            }
+        }
+    }
+
+    /// `Temporal.Duration.prototype.round`: round a duration to a smallest unit /
+    /// increment and re-balance to a largest unit. A bare string argument is the
+    /// smallestUnit; an options bag supplies `smallestUnit`/`largestUnit`/
+    /// `roundingIncrement`/`roundingMode`/`relativeTo`. Calendar units (in the
+    /// duration, the smallest, or the largest unit) require a `relativeTo`; the
+    /// exact nanosecond span is resolved against that ISO date under the
+    /// constant-24-hour-day model.
+    fn temporal_duration_round(&mut self, d: TemporalDurationRecord, options: Slot, code: &[u8]) -> Result<TemporalDurationRecord, Halt> {
+        const DAY_NS: i128 = 86_400_000_000_000;
+        let (smallest, largest_opt, increment, mode, relative) = if options.kind == Kind::String {
+            (Some(self.value_to_string(code, options)?), None, 1i64, "halfExpand".to_string(), None)
+        } else if let Payload::Reference(r) = options.value {
+            if options.kind != Kind::Reference { return Err(self.catchable_type_error()); }
+            let smallest = self.intl_option_string(code, r, "smallestUnit")?;
+            let largest = self.intl_option_string(code, r, "largestUnit")?;
+            if smallest.is_none() && largest.is_none() { return Err(self.catchable_range_error()); }
+            let increment = if let Some(&id) = self.symbol_ids.get("roundingIncrement") {
+                let v = self.ordinary_get(code, r, id, options)?;
+                if v.kind == Kind::Undefined { 1 } else { self.temporal_integer(v)? }
+            } else { 1 };
+            if increment < 1 { return Err(self.catchable_range_error()); }
+            let mode = self.intl_option_string(code, r, "roundingMode")?.unwrap_or_else(|| "halfExpand".to_string());
+            let relative = self.temporal_relative_to_date(options, code)?;
+            (smallest, largest, increment, mode, relative)
+        } else {
+            return Err(self.catchable_type_error());
+        };
+
+        let default_present = temporal_duration_default_largest_rank(d);
+        let smallest_rank = match &smallest {
+            Some(s) => temporal_unit_rank(s).ok_or_else(|| self.catchable_range_error())?,
+            None => 9,
+        };
+        let largest_rank = match largest_opt.as_deref() {
+            Some("auto") | None => default_present.min(smallest_rank),
+            Some(l) => temporal_unit_rank(l).ok_or_else(|| self.catchable_range_error())?,
+        };
+        // largestUnit must be the same size or coarser (smaller rank) than smallestUnit.
+        if largest_rank > smallest_rank { return Err(self.catchable_range_error()); }
+        validate_duration_increment(smallest_rank, increment).ok_or_else(|| self.catchable_range_error())?;
+
+        let smallest_name = temporal_unit_name(smallest_rank);
+        let largest_name = temporal_unit_name(largest_rank);
+
+        let calendar_involved = d.has_calendar_units() || smallest_rank < 3 || largest_rank < 3;
+        if calendar_involved && relative.is_none() {
+            return Err(self.catchable_range_error());
+        }
+
+        if smallest_rank >= 3 {
+            // Fixed-length smallest unit: round the exact nanosecond span.
+            let span = self.temporal_duration_span(d, relative)?;
+            let unit_ns = if smallest_name == "day" { DAY_NS } else { temporal_unit_nanoseconds(smallest_name).ok_or_else(|| self.catchable_range_error())? };
+            let quantum = unit_ns.checked_mul(increment as i128).ok_or_else(|| self.catchable_range_error())?;
+            let rounded = round_temporal(span, quantum, &mode).ok_or_else(|| self.catchable_range_error())?;
+            if largest_rank >= 3 {
+                balance_zoned_diff(rounded, largest_name).ok_or_else(|| self.catchable_range_error())
+            } else {
+                let start = relative.ok_or_else(|| self.catchable_range_error())?;
+                let start_days = days_from_civil(start.year, start.month, start.day).ok_or_else(|| self.catchable_range_error())?;
+                let day_offset = rounded.div_euclid(DAY_NS);
+                let time_ns = rounded.rem_euclid(DAY_NS);
+                let (ey, em, ed) = civil_from_days(start_days + day_offset);
+                let start_dt = TemporalPlainRecord { kind: 2, year: start.year, month: start.month, day: start.day, ..Default::default() };
+                let end_dt = TemporalPlainRecord {
+                    kind: 2, year: ey, month: em, day: ed,
+                    hour: (time_ns / 3_600_000_000_000) as u32,
+                    minute: ((time_ns / 60_000_000_000) % 60) as u32,
+                    second: ((time_ns / 1_000_000_000) % 60) as u32,
+                    millisecond: ((time_ns / 1_000_000) % 1000) as u32,
+                    microsecond: ((time_ns / 1_000) % 1000) as u32,
+                    nanosecond: (time_ns % 1000) as u32,
+                };
+                iso_datetime_difference(start_dt, end_dt, largest_name).ok_or_else(|| self.catchable_range_error())
+            }
+        } else {
+            // Calendar smallest unit: round the fractional calendar total, then
+            // re-express the whole-unit endpoint as a calendar difference.
+            let start = relative.ok_or_else(|| self.catchable_range_error())?;
+            let span = iso_duration_span_nanoseconds(start, d).ok_or_else(|| self.catchable_range_error())?;
+            let total = match smallest_name {
+                "year" | "month" => iso_total_calendar_units(start, span, smallest_name).ok_or_else(|| self.catchable_range_error())?,
+                _ => span as f64 / (7.0 * DAY_NS as f64), // week
+            };
+            let count = round_number_to_increment(total, increment, &mode) as i64;
+            let dest = match smallest_name {
+                "year" => iso_date_add(start, count, 0, 0, 0),
+                "month" => iso_date_add(start, 0, count, 0, 0),
+                _ => iso_date_add(start, 0, 0, count, 0), // week
+            }.ok_or_else(|| self.catchable_range_error())?;
+            iso_date_until(start, dest, largest_name).ok_or_else(|| self.catchable_range_error())
+        }
+    }
+
+    fn temporal_method(&mut self, method: NativeMethod, this: Slot, arg0: Slot, arg1: Slot, arg2: Slot, code: &[u8]) -> Result<Slot, Halt> {
         use NativeMethod::*;
         match method {
             TemporalInstantFrom => {
@@ -16635,9 +16795,19 @@ impl Interp {
             TemporalDurationCompare => {
                 let a = self.temporal_duration_from(arg0, code)?;
                 let b = self.temporal_duration_from(arg1, code)?;
-                let a = a.time_nanoseconds(true).ok_or(Halt::Unsupported("Temporal.Duration.compare:relativeTo"))?;
-                let b = b.time_nanoseconds(true).ok_or(Halt::Unsupported("Temporal.Duration.compare:relativeTo"))?;
-                Ok(Slot::integer(a.cmp(&b) as i32))
+                // Field-identical durations compare equal without a relativeTo
+                // (spec: identical internal slots return +0), even when they
+                // carry calendar units a bare comparison could not resolve.
+                if a.fields() == b.fields() {
+                    // A relativeTo is still observed if present (its getters run),
+                    // but never required for the identical case.
+                    let _ = self.temporal_relative_to_date(arg2, code)?;
+                    return Ok(Slot::integer(0));
+                }
+                let relative = self.temporal_relative_to_date(arg2, code)?;
+                let av = self.temporal_duration_span(a, relative)?;
+                let bv = self.temporal_duration_span(b, relative)?;
+                Ok(Slot::integer(av.cmp(&bv) as i32))
             }
             TemporalDurationNegated | TemporalDurationAbs => {
                 let mut d = temporal_brand(this, &self.temporal_durations).ok_or_else(|| self.catchable_type_error())?;
@@ -16667,17 +16837,42 @@ impl Interp {
             }
             TemporalDurationRound => {
                 let d = temporal_brand(this, &self.temporal_durations).ok_or_else(|| self.catchable_type_error())?;
-                let total = d.time_nanoseconds(true).ok_or(Halt::Unsupported("Temporal.Duration.round:relativeTo"))?;
-                let unit = self.temporal_unit_option(arg0, code, "nanosecond")?;
-                let q = temporal_unit_nanoseconds(&unit).ok_or_else(|| self.catchable_range_error())?;
-                self.temporal_new_duration(duration_from_nanoseconds(round_half_expand(total, q)))
+                let record = self.temporal_duration_round(d, arg0, code)?;
+                self.temporal_new_duration(record)
             }
             TemporalDurationTotal => {
                 let d = temporal_brand(this, &self.temporal_durations).ok_or_else(|| self.catchable_type_error())?;
-                let total = d.time_nanoseconds(true).ok_or(Halt::Unsupported("Temporal.Duration.total:relativeTo"))?;
-                let unit = self.temporal_unit_option(arg0, code, "nanosecond")?;
-                let q = temporal_unit_nanoseconds(&unit).ok_or_else(|| self.catchable_range_error())?;
-                Ok(Slot::number(total as f64 / q as f64))
+                // `total` requires a `unit`: a bare string argument IS the unit,
+                // an options bag must carry a `unit` property (no default), and
+                // anything else is a TypeError.
+                let (unit, relative) = if arg0.kind == Kind::String {
+                    (self.value_to_string(code, arg0)?, None)
+                } else if let Payload::Reference(r) = arg0.value {
+                    if arg0.kind != Kind::Reference { return Err(self.catchable_type_error()); }
+                    let unit = self.intl_option_string(code, r, "unit")?.ok_or_else(|| self.catchable_range_error())?;
+                    (unit, self.temporal_relative_to_date(arg0, code)?)
+                } else {
+                    return Err(self.catchable_type_error());
+                };
+                let unit_key = unit.trim_end_matches('s');
+                match unit_key {
+                    "year" | "month" => {
+                        let start = relative.ok_or_else(|| self.catchable_range_error())?;
+                        let span = iso_duration_span_nanoseconds(start, d).ok_or_else(|| self.catchable_range_error())?;
+                        let total = iso_total_calendar_units(start, span, unit_key).ok_or_else(|| self.catchable_range_error())?;
+                        Ok(Slot::number(total))
+                    }
+                    "week" | "day" | "hour" | "minute" | "second" | "millisecond" | "microsecond" | "nanosecond" => {
+                        let span = self.temporal_duration_span(d, relative)?;
+                        let q = if unit_key == "week" {
+                            7 * 86_400_000_000_000i128
+                        } else {
+                            temporal_unit_nanoseconds(unit_key).ok_or_else(|| self.catchable_range_error())?
+                        };
+                        Ok(Slot::number(span as f64 / q as f64))
+                    }
+                    _ => Err(self.catchable_range_error()),
+                }
             }
             TemporalDurationToString | TemporalDurationToJSON => {
                 let d = temporal_brand(this, &self.temporal_durations).ok_or_else(|| self.catchable_type_error())?;
@@ -16877,13 +17072,42 @@ impl Interp {
                 let (a, b) = if op == 5 { (&old, &other) } else { (&other, &old) };
                 let (smallest, largest, increment, mode) =
                     self.temporal_zoned_round_options(arg1, code, Some("nanosecond"), "hour", "trunc")?;
-                let mut diff = b.epoch_nanoseconds - a.epoch_nanoseconds;
-                let quantum = temporal_unit_nanoseconds(&smallest)
-                    .ok_or_else(|| self.catchable_range_error())?
-                    .checked_mul(increment).ok_or_else(|| self.catchable_range_error())?;
-                diff = round_temporal(diff, quantum, &mode).ok_or_else(|| self.catchable_range_error())?;
-                let record = balance_zoned_diff(diff, &largest).ok_or(Halt::Unsupported("Temporal.ZonedDateTime:calendar-difference-unit"))?;
-                self.temporal_new_duration(record)
+                let smallest_rank = temporal_unit_rank(&smallest).ok_or_else(|| self.catchable_range_error())?;
+                let largest_rank = temporal_unit_rank(&largest).ok_or_else(|| self.catchable_range_error())?;
+                // largestUnit must be the same size or coarser than smallestUnit.
+                if largest_rank > smallest_rank { return Err(self.catchable_range_error()); }
+                validate_duration_increment(smallest_rank, increment as i64).ok_or_else(|| self.catchable_range_error())?;
+                if largest_rank >= 3 {
+                    // Fixed-length largest unit: round the exact instant difference.
+                    let mut diff = b.epoch_nanoseconds - a.epoch_nanoseconds;
+                    let quantum = temporal_unit_nanoseconds(temporal_unit_name(smallest_rank))
+                        .ok_or_else(|| self.catchable_range_error())?
+                        .checked_mul(increment).ok_or_else(|| self.catchable_range_error())?;
+                    diff = round_temporal(diff, quantum, &mode).ok_or_else(|| self.catchable_range_error())?;
+                    let record = balance_zoned_diff(diff, temporal_unit_name(largest_rank))
+                        .ok_or_else(|| self.catchable_range_error())?;
+                    self.temporal_new_duration(record)
+                } else {
+                    // Calendar largest unit (week/month/year): difference the local
+                    // wall-clock datetimes on the ISO calendar. Under the fixed
+                    // offset the wall clock and the instant advance together, so
+                    // this is exact. A sub-day smallestUnit rounds the time part.
+                    let a_local = zoned_local_datetime(a.epoch_nanoseconds, a.offset_ns);
+                    let b_local = zoned_local_datetime(b.epoch_nanoseconds, b.offset_ns);
+                    let mut record = iso_datetime_difference(a_local, b_local, temporal_unit_name(largest_rank))
+                        .ok_or_else(|| self.catchable_range_error())?;
+                    if smallest_rank > 3 {
+                        let time_ns = record.time_only_nanoseconds().ok_or_else(|| self.catchable_range_error())?;
+                        let quantum = temporal_unit_nanoseconds(temporal_unit_name(smallest_rank))
+                            .ok_or_else(|| self.catchable_range_error())?
+                            .checked_mul(increment).ok_or_else(|| self.catchable_range_error())?;
+                        let rounded = round_temporal(time_ns, quantum, &mode).ok_or_else(|| self.catchable_range_error())?;
+                        let t = duration_from_nanoseconds(rounded);
+                        record.hours = t.hours; record.minutes = t.minutes; record.seconds = t.seconds;
+                        record.milliseconds = t.milliseconds; record.microseconds = t.microseconds; record.nanoseconds = t.nanoseconds;
+                    }
+                    self.temporal_new_duration(record)
+                }
             }
             7 => {
                 // round(smallestUnit | options).
@@ -17109,7 +17333,8 @@ impl Interp {
             | NativeMethod::TemporalDurationToJSON
             | NativeMethod::TemporalDurationValueOf => {
                 let arg1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
-                self.temporal_method(m, this, arg0, arg1, code)?
+                let arg2 = self.stack.get(base + 6).copied().unwrap_or_else(Slot::undefined);
+                self.temporal_method(m, this, arg0, arg1, arg2, code)?
             }
             NativeMethod::IntlGetCanonicalLocales => {
                 let locales = self.intl_locale_list(code, arg0)?;
@@ -29357,7 +29582,14 @@ fn parse_temporal_plain(kind: u8, text: &str) -> Option<TemporalPlainRecord> {
     };
     let mut r = TemporalPlainRecord { kind, year: if kind == 4 { 1972 } else { 0 }, day: if kind == 3 { 1 } else { 0 }, ..Default::default() };
     if matches!(kind,0|2|3|4) {
-        if kind == 4 && date.matches('-').count() == 1 {
+        let basic = !date.is_empty() && date.bytes().all(|b| b.is_ascii_digit());
+        if basic && matches!(kind, 0|2) && date.len() == 8 {
+            // ISO 8601 basic-format calendar date `YYYYMMDD`.
+            r.year = date[0..4].parse().ok()?; r.month = date[4..6].parse().ok()?; r.day = date[6..8].parse().ok()?;
+        } else if basic && kind == 3 && date.len() == 6 {
+            // Basic-format year-month `YYYYMM`.
+            r.year = date[0..4].parse().ok()?; r.month = date[4..6].parse().ok()?;
+        } else if kind == 4 && date.matches('-').count() == 1 {
             let mut p=date.trim_start_matches('-').split('-'); r.month=p.next()?.parse().ok()?; r.day=p.next()?.parse().ok()?; if p.next().is_some(){return None;}
         } else {
             let mut p=date.rsplitn(3,'-');
@@ -29410,6 +29642,160 @@ fn temporal_plain_difference(a: TemporalPlainRecord,b: TemporalPlainRecord)->Opt
     }
 }
 
+/// A bare ISO `PlainDate` record (`kind == 0`) at the given civil date.
+fn iso_date(year: i64, month: u32, day: u32) -> TemporalPlainRecord {
+    TemporalPlainRecord { kind: 0, year, month, day, ..Default::default() }
+}
+
+/// ISO-calendar `dateAdd`: `start`'s date advanced by `(years, months, weeks,
+/// days)` with the day clamped to the target month's length (the ISO
+/// `overflow: "constrain"` default). Operates on the date fields only.
+fn iso_date_add(start: TemporalPlainRecord, years: i64, months: i64, weeks: i64, days: i64) -> Option<TemporalPlainRecord> {
+    temporal_plain_add(
+        iso_date(start.year, start.month, start.day),
+        TemporalDurationRecord { years, months, weeks, days, ..Default::default() },
+    )
+}
+
+/// The signed civil-day offset from `start`'s date to `end`'s date.
+fn iso_days_between(start: TemporalPlainRecord, end: TemporalPlainRecord) -> Option<i128> {
+    Some(days_from_civil(end.year, end.month, end.day)? - days_from_civil(start.year, start.month, start.day)?)
+}
+
+/// The ISO-calendar `dateUntil`: the difference between two ISO dates expressed
+/// as `(years, months, weeks, days)` bounded by `largest` (`"year"`, `"month"`,
+/// `"week"`, or `"day"`). The result carries the sign of `end - start`. Whole
+/// years/months are counted by `dateAdd` from `start` so day-clamping matches
+/// the constructive Temporal semantics (e.g. Jan 31 + 1 month = Feb 28).
+fn iso_date_until(start: TemporalPlainRecord, end: TemporalPlainRecord, largest: &str) -> Option<TemporalDurationRecord> {
+    let total_days = iso_days_between(start, end)?;
+    match largest {
+        "day" => Some(TemporalDurationRecord { days: i64::try_from(total_days).ok()?, ..Default::default() }),
+        "week" => {
+            let weeks = total_days / 7;
+            let days = total_days % 7;
+            Some(TemporalDurationRecord {
+                weeks: i64::try_from(weeks).ok()?,
+                days: i64::try_from(days).ok()?,
+                ..Default::default()
+            })
+        }
+        "year" | "month" => {
+            if total_days == 0 {
+                return Some(TemporalDurationRecord::default());
+            }
+            let end_days = days_from_civil(end.year, end.month, end.day)?;
+            let sign: i64 = if total_days > 0 { 1 } else { -1 };
+            // How does `cand` compare to `end`, in units of `sign`? Positive
+            // means `cand` has overshot `end` in the travel direction.
+            let overshoot = |cand: TemporalPlainRecord| -> Option<i64> {
+                let cmp = days_from_civil(cand.year, cand.month, cand.day)?.cmp(&end_days) as i64;
+                Some(cmp * sign)
+            };
+            // Whole years: the largest count (in the sign direction) whose
+            // dateAdd from `start` has not passed `end`.
+            let mut years = end.year - start.year;
+            while overshoot(iso_date_add(start, years, 0, 0, 0)?)? > 0 {
+                years -= sign;
+            }
+            while overshoot(iso_date_add(start, years + sign, 0, 0, 0)?)? <= 0 {
+                years += sign;
+            }
+            // Whole months from `start + years`.
+            let mut months = 0i64;
+            while overshoot(iso_date_add(start, years, months + sign, 0, 0)?)? <= 0 {
+                months += sign;
+            }
+            let mid = iso_date_add(start, years, months, 0, 0)?;
+            let days = i64::try_from(iso_days_between(mid, end)?).ok()?;
+            if largest == "month" {
+                let months = years.checked_mul(12)?.checked_add(months)?;
+                Some(TemporalDurationRecord { months, days, ..Default::default() })
+            } else {
+                Some(TemporalDurationRecord { years, months, days, ..Default::default() })
+            }
+        }
+        _ => None,
+    }
+}
+
+/// `DifferenceISODateTime`: the calendar-aware difference between two wall-clock
+/// ISO datetimes (`kind == 2`), bounded by `largest`. The time part is balanced
+/// into `hours`…`nanoseconds`; a day is borrowed toward `end` when the
+/// time-of-day difference opposes the date-of-month difference so the result
+/// carries a single sign. Correct for the fixed-offset (constant 24-hour-day)
+/// model, where the wall clock and the exact instant advance together.
+fn iso_datetime_difference(start: TemporalPlainRecord, end: TemporalPlainRecord, largest: &str) -> Option<TemporalDurationRecord> {
+    const DAY_NS: i128 = 86_400_000_000_000;
+    let mut time_diff = temporal_plain_time_ns(end) - temporal_plain_time_ns(start);
+    let start_date = iso_date(start.year, start.month, start.day);
+    let end_date = iso_date(end.year, end.month, end.day);
+    let date_sign = iso_days_between(start_date, end_date)?.signum() as i64;
+    let time_sign = time_diff.signum() as i64;
+    let mut adjusted_start = start_date;
+    if date_sign != 0 && time_sign != 0 && time_sign == -date_sign {
+        // The time-of-day runs opposite the date direction: borrow one day
+        // toward `end` so the residual time part shares the date's sign.
+        adjusted_start = iso_date_add(start_date, 0, 0, 0, date_sign)?;
+        time_diff += (date_sign as i128) * DAY_NS;
+    }
+    let mut record = iso_date_until(adjusted_start, end_date, largest)?;
+    let time = duration_from_nanoseconds(time_diff);
+    record.hours = time.hours;
+    record.minutes = time.minutes;
+    record.seconds = time.seconds;
+    record.milliseconds = time.milliseconds;
+    record.microseconds = time.microseconds;
+    record.nanoseconds = time.nanoseconds;
+    Some(record)
+}
+
+/// The exact nanosecond span from `start`'s date to `start + duration`, in the
+/// constant-24-hour-day ISO model: the date part advances the calendar date
+/// (day-clamped) and the time part is a plain nanosecond addend. `None` on
+/// calendar overflow. The time-of-day of `start` is irrelevant to a duration in
+/// this model, so only its date matters.
+fn iso_duration_span_nanoseconds(start: TemporalPlainRecord, d: TemporalDurationRecord) -> Option<i128> {
+    const DAY_NS: i128 = 86_400_000_000_000;
+    let end = iso_date_add(start, d.years, d.months, d.weeks, d.days)?;
+    let date_ns = iso_days_between(start, end)?.checked_mul(DAY_NS)?;
+    date_ns.checked_add(d.time_only_nanoseconds()?)
+}
+
+/// The fractional count of `unit` (`"year"` or `"month"`) that a nanosecond
+/// span `span_ns` measured from `start` represents. Whole units are stepped by
+/// `dateAdd`; the residual is a linear fraction of the unit that contains the
+/// endpoint. Matches the Temporal `total` semantics for calendar units under
+/// the constant-24-hour-day model.
+fn iso_total_calendar_units(start: TemporalPlainRecord, span_ns: i128, unit: &str) -> Option<f64> {
+    const DAY_NS: i128 = 86_400_000_000_000;
+    let sign: i64 = match span_ns.cmp(&0) {
+        std::cmp::Ordering::Greater => 1,
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => return Some(0.0),
+    };
+    let boundary = |k: i64| -> Option<i128> {
+        let d = match unit {
+            "year" => iso_date_add(start, k, 0, 0, 0)?,
+            "month" => iso_date_add(start, 0, k, 0, 0)?,
+            _ => return None,
+        };
+        Some(iso_days_between(start, d)?.checked_mul(DAY_NS)?)
+    };
+    let mut k = 0i64;
+    while (sign as i128) * (span_ns - boundary(k + sign)?) >= 0 {
+        k += sign;
+    }
+    let lower = boundary(k)?;
+    let upper = boundary(k + sign)?;
+    let denom = upper - lower;
+    if denom == 0 {
+        return Some(k as f64);
+    }
+    let frac = (span_ns - lower) as f64 / denom as f64;
+    Some(k as f64 + sign as f64 * frac)
+}
+
 fn format_temporal_plain(r:TemporalPlainRecord)->String{
     if r.kind==5{return "iso8601".to_string()} let y=if(0..=9999).contains(&r.year){format!("{:04}",r.year)}else{format!("{:+07}",r.year)};
     let date=match r.kind {3=>format!("{y}-{:02}",r.month),4=>format!("{:02}-{:02}",r.month,r.day),_=>format!("{y}-{:02}-{:02}",r.month,r.day)};
@@ -29444,6 +29830,87 @@ fn temporal_unit_nanoseconds(unit: &str) -> Option<i128> {
         "nanosecond" => 1,
         _ => return None,
     })
+}
+
+/// The coarse-to-fine rank of a Temporal duration unit (`year` = 0 … `nanosecond`
+/// = 9), accepting the singular or plural spelling. A *larger* unit has a
+/// *smaller* rank. `None` for an unrecognized unit.
+fn temporal_unit_rank(unit: &str) -> Option<u8> {
+    Some(match unit.trim_end_matches('s') {
+        "year" => 0,
+        "month" => 1,
+        "week" => 2,
+        "day" => 3,
+        "hour" => 4,
+        "minute" => 5,
+        "second" => 6,
+        "millisecond" => 7,
+        "microsecond" => 8,
+        "nanosecond" => 9,
+        _ => return None,
+    })
+}
+
+/// The canonical singular unit name for a rank produced by [`temporal_unit_rank`].
+fn temporal_unit_name(rank: u8) -> &'static str {
+    ["year", "month", "week", "day", "hour", "minute", "second", "millisecond", "microsecond", "nanosecond"][rank as usize]
+}
+
+/// The rank of a duration's largest *present* (non-zero) unit — the `"auto"`
+/// `largestUnit` default. An all-zero duration defaults to `nanosecond`.
+fn temporal_duration_default_largest_rank(d: TemporalDurationRecord) -> u8 {
+    d.fields().iter().position(|&v| v != 0).map(|i| i as u8).unwrap_or(9)
+}
+
+/// `ValidateTemporalRoundingIncrement` for a duration unit: sub-day units carry
+/// a maximum the increment must divide and stay strictly below (`hour` → 24,
+/// `minute`/`second` → 60, sub-second → 1000); `day` and coarser units have no
+/// maximum. `None` signals a `RangeError`.
+fn validate_duration_increment(rank: u8, increment: i64) -> Option<()> {
+    let max: i64 = match rank {
+        4 => 24,
+        5 | 6 => 60,
+        7 | 8 | 9 => 1000,
+        _ => return Some(()),
+    };
+    if increment >= max || max % increment != 0 { None } else { Some(()) }
+}
+
+/// Round a real `value` to the nearest multiple of `increment` under `mode`,
+/// returning the integer multiplier. Sign-aware for the directed modes; the
+/// duration `round` calendar path exercises non-negative values, so the
+/// half-tie resolution follows the same table as [`round_temporal`].
+fn round_number_to_increment(value: f64, increment: i64, mode: &str) -> f64 {
+    let inc = increment as f64;
+    let quotient = value / inc;
+    let floor = quotient.floor();
+    let ceil = quotient.ceil();
+    if floor == ceil {
+        return floor * inc;
+    }
+    let frac = quotient - floor; // in (0, 1)
+    let chosen = match mode {
+        "ceil" => ceil,
+        "floor" => floor,
+        "trunc" => if quotient >= 0.0 { floor } else { ceil },
+        "expand" => if quotient >= 0.0 { ceil } else { floor },
+        _ => {
+            if frac < 0.5 {
+                floor
+            } else if frac > 0.5 {
+                ceil
+            } else {
+                match mode {
+                    "halfFloor" => floor,
+                    "halfCeil" => ceil,
+                    "halfTrunc" => if quotient >= 0.0 { floor } else { ceil },
+                    "halfEven" => if (floor as i64).rem_euclid(2) == 0 { floor } else { ceil },
+                    _ => if quotient >= 0.0 { ceil } else { floor }, // halfExpand
+                }
+            }
+        }
+    };
+    chosen * inc
 }
 
 fn round_half_expand(value: i128, quantum: i128) -> i128 {
