@@ -99,6 +99,10 @@ a frame buffer, but is out of scope for the MVP.
   "parameters": {
     "type": "object",
     "properties": {
+      "name": {
+        "type": "string",
+        "description": "The pet name the AGENT assigns to this subscription. It is the handle used to cancel the stream and heads every notification from it. Per pet-name discipline the agent picks it (like the result name it gives `evaluate` or `writeText`); the harness never mints one. Must be unique among the agent's currently-open monitors."
+      },
       "petNameOrPath": {
         "oneOf": [
           {"type": "string"},
@@ -114,10 +118,6 @@ a frame buffer, but is out of scope for the MVP.
         "type": "array",
         "description": "Optional arguments to pass to the method, decoded as SmallCaps."
       },
-      "label": {
-        "type": "string",
-        "description": "Short label that appears at the head of every notification from this stream."
-      },
       "maxFramesPerNotification": {
         "type": "integer",
         "description": "Coalesce up to N frames into one notification (default 16)."
@@ -131,23 +131,32 @@ a frame buffer, but is out of scope for the MVP.
         "description": "Optional pattern guard (M.* expression), parsed as SmallCaps; only frames matching the guard are surfaced."
       }
     },
-    "required": ["petNameOrPath"]
+    "required": ["name", "petNameOrPath"]
   }
 }
 ```
 
-The result of a successful `monitor` call is a small record:
+The agent-assigned `name` is the sole identity of the subscription: it
+heads every notification, subsumes what a separate display `label` would
+have carried, and is the argument `cancelMonitor` takes. The result of a
+successful `monitor` call simply echoes the resolved binding back to the
+agent:
 
 ```js
 {
-  handle: 'monitor-7',         // opaque, monotonic per worker
+  name: 'my-counter',         // the pet name the agent assigned (echoed back)
   capability: 'my-counter',   // echo of the resolved input
   method: 'followMessages',
 }
 ```
 
-The handle is used by `cancelMonitor` and identifies which subscription
-a notification belongs to.
+Because the agent chose the name, no harness-minted token has to be
+learned or looked up; the agent already knows how to cancel the stream
+and which notifications belong to it. A `monitor` call whose `name`
+collides with an already-open subscription is rejected synchronously (no
+second stream is opened), so a name unambiguously denotes one live
+subscription at a time — the same non-collision guarantee the pet-store
+gives any other name the agent binds.
 
 ### `cancelMonitor`
 
@@ -158,17 +167,18 @@ a notification belongs to.
   "parameters": {
     "type": "object",
     "properties": {
-      "handle": {"type": "string", "description": "The handle returned by monitor."}
+      "name": {"type": "string", "description": "The pet name the agent assigned when it called monitor."}
     },
-    "required": ["handle"]
+    "required": ["name"]
   }
 }
 ```
 
 Cancellation is idempotent.
-A `cancelMonitor` against an unknown handle returns
+A `cancelMonitor` against a name with no open subscription returns
 `{ already: 'closed' }` rather than throwing, so the LLM does not have
 to know the precise close-state of every stream it ever opened.
+Once cancelled, a name is free to be reused for a fresh `monitor` call.
 
 ### Notification shape
 
@@ -177,7 +187,7 @@ or `system`-role message (depending on which tool harness convention
 the model expects), structured as:
 
 ```
-<monitor-notification handle="monitor-7" label="my-counter">
+<monitor-notification name="my-counter">
 [depth:N seq:42 ts:2026-05-12T17:04:33Z]
 {Justin-rendered passable}
 </monitor-notification>
@@ -188,7 +198,7 @@ inside one notification block, each on its own line, with a shared
 prefix:
 
 ```
-<monitor-notification handle="monitor-7" label="my-counter" frames="3">
+<monitor-notification name="my-counter" frames="3">
 [seq:42 ts:2026-05-12T17:04:33Z] { type: 'add', name: 'counter-7' }
 [seq:43 ts:2026-05-12T17:04:33Z] { type: 'add', name: 'counter-8' }
 [seq:44 ts:2026-05-12T17:04:34Z] { type: 'remove', name: 'counter-3' }
@@ -198,11 +208,11 @@ prefix:
 Two terminal notification kinds close the stream:
 
 ```
-<monitor-notification handle="monitor-7" terminal="done">
+<monitor-notification name="my-counter" terminal="done">
 Stream completed cleanly after 244 frames.
 </monitor-notification>
 
-<monitor-notification handle="monitor-7" terminal="error">
+<monitor-notification name="my-counter" terminal="error">
 Error{message: "lost connection to remote daemon"}
 </monitor-notification>
 ```
@@ -223,29 +233,31 @@ strings).
 ```
 agent                                follow harness               iterator producer
   │                                         │                              │
-  ├─ tool: monitor(my-iter) ──────────────► │                              │
+  ├─ tool: monitor("my-iter", my-iter) ────► │                              │
   │                                         ├─ E(cap).followMessages() ──► │
-  │ ◄───────── handle="monitor-7" ──────────┤                              │
+  │ ◄──────── name="my-iter" (echoed) ──────┤                              │
   │                                         │ ◄─── { value, done:false } ──┤
   │                                         │ (buffer / coalesce)          │
   │ ◄ <monitor-notification>... </> (queued)┤                              │
   ├─ tool: someOtherWork() ───────────────► │                              │
   │ ◄──────── result + queued frames ───────┤                              │
-  ├─ tool: cancelMonitor("monitor-7") ────► │                              │
+  ├─ tool: cancelMonitor("my-iter") ──────► │                              │
   │                                         ├─ iter.return() ─────────────►│
-  │ ◄────── { handle, status: "closed" } ───┤                              │
+  │ ◄─────── { name, status: "closed" } ────┤                              │
 ```
 
 Steady state:
 
-1. The agent calls `monitor(petName)`.
+1. The agent calls `monitor(name, petName)`, choosing `name` itself.
 2. The agent's worker resolves the pet name to a remote
    capability and calls the configured method (`followMessages` by
    default), wrapping the returned iterator-ref with
    `makeRefIterator` from `@endo/daemon/ref-reader.js`.
-   The wrapper is parked in a per-worker `Map<handle, subscription>`.
+   The wrapper is parked in a per-worker `Map<name, subscription>`
+   keyed by the agent-assigned name (a name already in the map is
+   rejected before the method is sent).
 3. A background pump reads the iterator and pushes each frame into a
-   queue keyed by handle.
+   queue keyed by that name.
    The pump is structured to never block on the agent: a slow LLM
    does not exert backpressure on the producer past the configured
    buffer size.
@@ -262,12 +274,12 @@ Steady state:
    When the iterator throws, the harness emits a terminal
    notification with `terminal="error"` and the
    `passableAsJustin`-rendered error.
-6. `cancelMonitor(handle)` calls `iter.return()` and, on success,
-   removes the subscription.
+6. `cancelMonitor(name)` calls `iter.return()` and, on success,
+   removes the subscription, freeing the name for reuse.
    No terminal notification is emitted for an agent-initiated
    cancellation; the caller already knows.
 7. When the worker loop exits (cancellation, agent removal,
-   process shutdown), every still-open handle is cancelled
+   process shutdown), every still-open subscription is cancelled
    automatically.
 
 The lifecycle integrates into the existing `runAgenticLoop` in
@@ -322,7 +334,7 @@ The truncation marker is placed inside the
 `<monitor-notification>` wrapper:
 
 ```
-<monitor-notification handle="monitor-7" truncated="true">
+<monitor-notification name="my-counter" truncated="true">
 [seq:42] { large: { many: [...
 ... 12 KiB of Justin elided (frame seq 42 was 16 KiB) ...
 ] } }
@@ -357,7 +369,7 @@ The harness maintains a per-handle frame queue with these defaults:
 - **Drop annotation.** If `droppedSinceLastDrain > 0`, the first
   notification of the next drain prepends a sentinel:
   ```
-  <monitor-notification handle="monitor-7" dropped="14">
+  <monitor-notification name="my-counter" dropped="14">
   ... 14 older frames were dropped because the buffer overflowed.
   </monitor-notification>
   ```
@@ -394,7 +406,8 @@ questions" because it bears on user-visible behaviour.
 | Iterator yields `done: true`   | `<monitor-notification terminal="done">` with the final frame count.           |
 | Network drop on remote stream  | Underlying CapTP rejection bubbles through to `terminal="error"`.             |
 | Slow agent attention           | Ring-drop oldest; `dropped="N"` annotation on next surfaced notification.     |
-| `petNameOrPath` does not exist | Synchronous tool-call rejection (no handle issued).                           |
+| `petNameOrPath` does not exist | Synchronous tool-call rejection (no subscription registered).                 |
+| `name` already open            | Synchronous tool-call rejection (a name denotes one live subscription).       |
 | Capability lacks the method    | Synchronous tool-call rejection from the `E(cap).method()` send.              |
 | Worker process exit            | All open subscriptions are cancelled (`iter.return()`), no notifications.    |
 | Agent loop exits normally      | All open subscriptions are cancelled before the loop returns.                 |
@@ -416,15 +429,19 @@ This design adds two new cases to that switch (`monitor`,
 `activeLeafNode`, etc.:
 
 ```js
-/** @type {Map<string, Subscription>} */
+/** @type {Map<string, Subscription>} — keyed by the agent-assigned name */
 const subscriptions = new Map();
 
-/** @type {Array<{handle: string, frame: unknown, seq: number, ts: string}>} */
+/** @type {Array<{name: string, frame: unknown, seq: number, ts: string}>} */
 const frameQueue = [];
 
-let nextHandle = 0;
 let nextSeq = 0;
 ```
+
+There is no handle counter: the subscription key is the pet name the
+agent supplied to `monitor`, so the harness mints nothing. A `monitor`
+call whose name is already present in `subscriptions` is rejected before
+any method is sent.
 
 The harness loop in `runAgenticLoop` (line 1336) gains a fourth
 condition for whether to keep looping:
@@ -474,9 +491,9 @@ The MVP lands the implementation per-agent and defers consolidation.
 | What it watches        | A child process's stdout                    | A passable async iterator over CapTP                |
 | Frame format           | One stdout *line* per notification          | One *passable value* per notification               |
 | Rendering              | Raw text                                    | `passableAsJustin` rendering                        |
-| Identity               | Process pid                                 | Per-worker opaque handle                            |
+| Identity               | Process pid                                 | Agent-assigned pet name (per pet-name discipline)   |
 | Authority              | Inherits the agent harness's process rights | Authority is in the capability the petname resolves to |
-| Cancellation           | Kill child; harness teardown                | `cancelMonitor(handle)` calls `iter.return()`        |
+| Cancellation           | Kill child; harness teardown                | `cancelMonitor(name)` calls `iter.return()`          |
 | Buffering              | Harness-internal, line-based                | Per-handle frame queue with ring-drop-oldest        |
 | Coalescing             | Implicit (chunks of stdout)                 | Explicit `maxFramesPerNotification`                 |
 | Side-channel surfacing | `<task-notification>` between tool calls    | `<monitor-notification>` between tool calls          |
@@ -493,9 +510,10 @@ familiar.
 
 ### Phase 1 (MVP)
 
-- `monitor(petNameOrPath, [method], [label],
-  [maxFramesPerNotification])` returning a `handle`.
-- `cancelMonitor(handle)`.
+- `monitor(name, petNameOrPath, [method],
+  [maxFramesPerNotification])` where `name` is the agent-assigned pet
+  name that identifies the subscription (echoed back, not minted).
+- `cancelMonitor(name)`.
 - Per-worker subscription registry and frame queue with
   ring-drop-oldest.
 - Drain hook in the agent loop that surfaces queued frames as
@@ -509,11 +527,12 @@ familiar.
 - `filter` parameter accepting a serialised `M.*` pattern that the
   harness applies to each frame before queueing.
 - `frameBudget` parameter for auto-cancel after N frames.
-- A `peekMonitor(handle)` tool that returns the current queued frames
+- A `peekMonitor(name)` tool that returns the current queued frames
   without consuming them, for explicit polling.
 - Cross-conversation persistence: a subscription opened in transcript
   T1 can be inherited by transcript T2 if the same agent reincarnates,
-  by storing handle metadata under a `streams/` pet name.
+  by promoting the subscription's name and metadata to a `streams/`
+  pet-store entry.
 - Lifting the registry, drain, and formatter into a shared
   `@endo/agent-streams` package consumed by both lal and fae.
 - A daemon-side `coalesce` exo that fronts an iterator with a
@@ -581,15 +600,31 @@ familiar.
    an addition to `@endo/lal`'s exported surface, or a section of
    `@endo/exo-stream`?
 
-4. **Stream handle representation.** Three options:
-   - **Opaque per-worker token** (recommended; e.g. `"monitor-7"`):
-     simple, no daemon round-trip, no formula identifier leaked.
-   - Pet name: would let the agent `lookup(handle)` later, but
-     conflates a transient subscription with a persistent name and
-     would require the agent to clean up.
-   - Formula id: precise, but exposes daemon internals to the LLM
-     and ties a transient subscription to the permanent formula
-     graph.
+4. **Stream handle representation — RESOLVED: agent-assigned pet
+   name.** Per the maintainer's review call, the subscription handle is
+   the **name the agent assigns when it calls `monitor`**, following
+   pet-name discipline (the agent names the subscription the same way it
+   names an `evaluate` result or a `writeText` file; the harness never
+   mints a token). The name heads every notification and is the argument
+   `cancelMonitor` takes; a name denotes one live subscription at a time
+   and is freed for reuse on cancellation or terminal close.
+
+   The candidates originally weighed here, for the record:
+   - *Opaque per-worker token* (e.g. `"monitor-7"`): simple and leaks no
+     formula id, but forces the agent to learn and track a handle the
+     harness invented — exactly the coupling pet-name discipline exists
+     to avoid.
+   - *Formula id*: precise, but exposes daemon internals to the LLM and
+     ties a transient subscription to the permanent formula graph.
+
+   The chosen agent-assigned name keeps the subscription **transient**
+   (it is per-worker registry state, **not** a pet-store binding, so it
+   requires no `remove` cleanup and does not conflate with a persistent
+   name) while letting the agent use a handle it already knows — the
+   best of both rejected options. Should a future phase want to survive
+   a reincarnation (Phase-2 cross-conversation persistence), the same
+   name can be promoted to a real `streams/` pet-store entry without a
+   representation change.
 
 5. **Authorization model.** The proposed semantics are
    "authority-by-capability": if the agent's pet name resolves to a
