@@ -4746,7 +4746,8 @@ impl Interp {
         self.proto_methods.push((intl, "PluralRules", plural_rules));
 
         for ctor in [locale, collator, list_format, plural_rules] {
-            let f = self.alloc_method(NativeMethod::IntlSupportedLocalesOf);
+            let f =
+                self.alloc_named_method(NativeMethod::IntlSupportedLocalesOf, "supportedLocalesOf", 1);
             self.proto_methods.push((ctor, "supportedLocalesOf", f));
         }
         for (name, method) in [
@@ -4760,20 +4761,20 @@ impl Interp {
         let resolved = self.alloc_method(NativeMethod::CollatorResolvedOptions);
         self.proto_methods
             .push((collator_proto, "resolvedOptions", resolved));
-        for (name, method) in [
-            ("format", NativeMethod::ListFormatFormat),
-            ("formatToParts", NativeMethod::ListFormatFormatToParts),
-            ("resolvedOptions", NativeMethod::ListFormatResolvedOptions),
+        for (name, method, arity) in [
+            ("format", NativeMethod::ListFormatFormat, 1),
+            ("formatToParts", NativeMethod::ListFormatFormatToParts, 1),
+            ("resolvedOptions", NativeMethod::ListFormatResolvedOptions, 0),
         ] {
-            let f = self.alloc_method(method);
+            let f = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((list_format_proto, name, f));
         }
-        for (name, method) in [
-            ("select", NativeMethod::PluralRulesSelect),
-            ("selectRange", NativeMethod::PluralRulesSelectRange),
-            ("resolvedOptions", NativeMethod::PluralRulesResolvedOptions),
+        for (name, method, arity) in [
+            ("select", NativeMethod::PluralRulesSelect, 1),
+            ("selectRange", NativeMethod::PluralRulesSelectRange, 2),
+            ("resolvedOptions", NativeMethod::PluralRulesResolvedOptions, 0),
         ] {
-            let f = self.alloc_method(method);
+            let f = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((plural_rules_proto, name, f));
         }
         // Keep the profile version observable to regression tooling without
@@ -5127,6 +5128,30 @@ impl Interp {
             FuncInfo {
                 method: Some(m),
                 name_chunk,
+                ..FuncInfo::default()
+            },
+        );
+        f
+    }
+
+    /// Like [`Self::alloc_method`] but with the specified `name` and `length`
+    /// (arity), so the method's `.name`/`.length` own data properties match the
+    /// specification — `verifyProperty`/`propertyHelper` reads these from
+    /// [`FuncInfo`].
+    fn alloc_named_method(
+        &mut self,
+        m: NativeMethod,
+        name: &str,
+        arity: u32,
+    ) -> crate::value::SlotIndex {
+        let f = self.slots.alloc(Slot::instance(self.function_proto));
+        let name_chunk = self.alloc_str_text(name.as_bytes());
+        self.functions.insert(
+            f,
+            FuncInfo {
+                method: Some(m),
+                name_chunk,
+                arity,
                 ..FuncInfo::default()
             },
         );
@@ -12111,6 +12136,15 @@ impl Interp {
     /// otherwise). `undefined` yields the empty list; a primitive string is
     /// iterated by code point. Re-enters user code for a guest-defined iterator
     /// exactly as `for..of` does.
+    /// A single list element must be a String (ECMA-402 StringListFromIterable
+    /// step: `If Type(next) is not String, throw a TypeError`).
+    fn list_element_string(&mut self, value: Slot) -> Result<String, Halt> {
+        match value.value {
+            Payload::String(off) if value.kind == Kind::String => Ok(self.str_text(off)),
+            _ => Err(self.catchable_type_error()),
+        }
+    }
+
     fn string_list_from_iterable(
         &mut self,
         code: &[u8],
@@ -12129,17 +12163,66 @@ impl Interp {
             Payload::Reference(r) => r,
             _ => return Err(self.catchable_type_error()),
         };
+        // GetIterator: a guest-defined `@@iterator` takes precedence. Arrays and
+        // the intrinsic array iterators do not expose `@@iterator`/`next` as
+        // ordinary properties (ironhorse special-cases them in `for..of`), so
+        // read their elements directly rather than driving a native protocol.
         let iterator_id = self
             .well_known_symbol_property_id("iterator")
             .unwrap_or(crate::value::XS_NO_ID);
-        if iterator_id == crate::value::XS_NO_ID {
+        let custom = if iterator_id == crate::value::XS_NO_ID {
+            Slot::undefined()
+        } else {
+            self.ordinary_get(code, obj, iterator_id, iterable)?
+        };
+        if custom.kind == Kind::Undefined {
+            // Dense array: iterate its elements in index order.
+            if let Some(array) = self.arrays.get(&obj) {
+                let length = array.length;
+                let mut result = Vec::new();
+                for i in 0..length {
+                    let item = self
+                        .arrays
+                        .get(&obj)
+                        .and_then(|a| a.items.get(&i))
+                        .copied()
+                        .unwrap_or_else(Slot::undefined);
+                    let s = self.list_element_string(item)?;
+                    result.push(s);
+                }
+                return Ok(result);
+            }
+            // An intrinsic array iterator handed in directly
+            // (`array[Symbol.iterator]()`): read its remaining array elements.
+            if let Some(state) = self.iterators.get(&obj) {
+                if state.done {
+                    return Ok(Vec::new());
+                }
+                let source = state.iterable;
+                let start = state.index;
+                if let Some(array) = self.arrays.get(&source) {
+                    let length = array.length;
+                    let mut result = Vec::new();
+                    for i in start..length {
+                        let item = self
+                            .arrays
+                            .get(&source)
+                            .and_then(|a| a.items.get(&i))
+                            .copied()
+                            .unwrap_or_else(Slot::undefined);
+                        let s = self.list_element_string(item)?;
+                        result.push(s);
+                    }
+                    if let Some(st) = self.iterators.get_mut(&obj) {
+                        st.index = length;
+                        st.done = true;
+                    }
+                    return Ok(result);
+                }
+            }
             return Err(self.catchable_type_error());
         }
-        let method = self.ordinary_get(code, obj, iterator_id, iterable)?;
-        if method.kind == Kind::Undefined {
-            return Err(self.catchable_type_error());
-        }
-        let iterator = self.call_primitive_method(code, method, iterable, &[])?;
+        let iterator = self.call_primitive_method(code, custom, iterable, &[])?;
         let iterator_inst = match iterator.value {
             Payload::Reference(r) => r,
             _ => return Err(self.catchable_type_error()),
