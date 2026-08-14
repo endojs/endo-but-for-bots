@@ -11,21 +11,33 @@
 
 The original version selected pure-Rust `gix` and rejected libgit2 after the
 2026-07-26 review of
-[PR 740](https://github.com/endojs/endo-but-for-bots/pull/740).
+[PR #740](https://github.com/endojs/endo-but-for-bots/pull/740).
 The newer
 [Minion Town review](https://github.com/kriscendobot/minion.town/pull/41#discussion_r3785717342)
+(Minion Town is a separate project building a multi-tenant, Git-remote-capable
+weblet host)
 reopens that decision and asks Endor to lead with Rust bindings to libgit2,
 provided that Zig can make the C dependency cross-compilable for Windows,
 macOS, and Linux.
 This revision supersedes the earlier `gix`-only decision and makes the
 cross-build matrix an executable gate rather than an assumption.
+The premise that Zig resolves the C cross-compile cost is the least-proven
+claim in this document, so it carries an explicit escalation trigger,
+mirroring the SHA-256 release-gate discipline: if any release-matrix target
+cannot reach a reproducible cross-build plus a passing native run with the
+pinned Zig toolchain (the Windows GNU lane is the first expected point of
+failure, since `cargo-zigbuild` does not yet claim Windows support), the build
+owner escalates that target to the maintainer as a blocking result and the
+`gix` fallback (see Alternatives considered) is reconsidered for that target
+rather than the target being quietly dropped or its C toolchain hand-patched
+indefinitely.
 
 The companion
 [Minion Town Git remote design](https://github.com/kriscendobot/minion.town/blob/609fdd5251a0297ce15355acc8d902f973c99a18/designs/git-remote-capability.md#5--research--how-much-of-gits-wire-protocol-and-the-prior-art)
 section 5 is the server-half and pluggable-object-database prior art for this
 design.
 Its review comment is also the source of the requirement that the two projects
-share an implementation seam and build experience.
+share an implementation seam and gain shared build experience.
 
 ## Goals and scope
 
@@ -63,7 +75,7 @@ The crate has no dependency on either daemon's database schema.
 ```mermaid
 flowchart LR
     E["Endor daemon"] --> EC["Endor filesystem adapter"]
-    M["Minion Town smart-HTTP service"] --> MC["Minion CAS + SQLite adapter"]
+    M["Minion Town smart-HTTP service"] --> MC["Minion CAS and SQLite adapter"]
     EC --> C["endor-git safe Rust contract"]
     MC --> C
     C --> F["small audited FFI module"]
@@ -74,7 +86,7 @@ flowchart LR
 
 `endor-git` has three layers:
 
-1. `GitStore` is the safe Rust contract used by both applications.
+1. `GitObjectDb` is the safe Rust contract used by both applications.
 2. `Libgit2Repository` implements ordinary on-disk repositories through the
    safe [`git2`](https://docs.rs/git2) crate.
 3. `Libgit2Backend` installs custom object and reference databases through
@@ -87,7 +99,7 @@ No raw libgit2 pointer crosses its module boundary.
 ## Safe Rust contract
 
 ```rust
-pub trait GitStore: Send + Sync {
+pub trait GitObjectDb: Send + Sync {
     fn object_exists(&self, oid: &GitObjectId) -> Result<bool, GitError>;
     fn read_object(&self, oid: &GitObjectId) -> Result<GitObject, GitError>;
     fn write_object(
@@ -117,19 +129,30 @@ authorized SHA-1 repositories remain readable.
 Because libgit2 and `git2` still label SHA-256 support experimental, the Cargo
 feature `unstable-sha256` and its ABI are pinned together and the SHA-256 tests
 are release gates.
+This is the same SHA-256 maturity risk the superseded `gix` version carried;
+moving from `gix` to libgit2 neither improves nor worsens it, so the release
+gate stays as the mitigation and the backend switch claims no benefit on this
+axis.
 
 `update_ref_if` is the only mutating ref operation.
 It rejects symbolic refs in the writable namespace, a missing target object,
 an object-format mismatch, and an unexpected current value.
 Endor restricts writes to `refs/endor/`.
-Minion Town scopes the same operation by partition before it reaches the
-backend.
+Minion Town scopes the same operation by partition (its tenancy boundary: the
+per-tenant slice of object and ref storage that a capability URL grants access
+to, so no request can read or write another tenant's Git data) before it
+reaches the backend.
 
 The C callbacks are synchronous, so adapter methods are synchronous too.
 `git2::Repository` is not `Sync`, so `Libgit2Repository` serializes access to
 each repository behind a mutex while allowing separate repositories to proceed
 in parallel.
-An async web server calls them from a bounded blocking pool.
+An async web server calls those adapter methods from a bounded blocking pool.
+The blocking-pool bridge is not left to each consumer to reinvent: `endor-git`
+owns it as a documented, reusable affordance (a small `spawn_blocking`-style
+helper that runs a `GitObjectDb` call on a bounded pool and returns a future),
+so Endor and Minion Town share one implementation of the sync-to-async seam
+rather than forking two.
 No Rust panic may unwind through C: every callback catches panics, stores a
 sanitized Rust error in request-local state, and returns a libgit2 error code.
 The FFI module owns callback allocation, pointer lifetime, shutdown ordering,
@@ -180,10 +203,12 @@ updates to `endor-git`.
 
 The shared boundary is deliberately below HTTP:
 
-- Endor owns `GitStore`, the libgit2 wrapper, backend callback safety, object
+- Endor owns `GitObjectDb`, the libgit2 wrapper, backend callback safety, object
   validation, and the golden fixture corpus.
 - Minion Town owns capability-URL authentication, HTTP routing, request limits,
-  partition selection, and projection of a pushed tip into a weblet manifest.
+  partition selection, and projection of a pushed tip into a weblet manifest (a
+  weblet is a Minion Town unit of hosted web content, and its manifest is the
+  deployable description Minion Town derives from the pushed Git tip).
 - Protocol transcripts and packs from Minion Town become fixtures in
   `rust/endor-git/tests/fixtures/`.
 - Every `endor-git` change runs both the filesystem backend suite and a generic
@@ -203,7 +228,7 @@ Cargo pins `git2`, `libgit2-sys`, and their checksums in `Cargo.lock`.
 The `vendored-libgit2` feature makes `libgit2-sys` compile the libgit2 source
 included in its crate package and statically link it into `endor`.
 The local-storage profile disables `https` and `ssh`, uses the bundled parser
-and hashing code selected by `libgit2-sys`, and must not discover a system
+and hashing code selected by `libgit2-sys`, and does not discover a system
 libgit2 through `pkg-config`.
 
 ```toml
@@ -238,6 +263,21 @@ ship them.
 Every cross-built artifact therefore runs on its native operating system before
 release.
 
+This is a smaller version of, not an escape from, the per-target C cross
+toolchain burden that the 2026-07-26 review of PR #740 used to rule libgit2 out
+(the objection is quoted in that PR's revision context). Zig is claimed to be
+cheaper here on a specific, bounded axis rather than uniformly across the
+matrix: for the two Linux families (four target triples) it supplies one
+pinned `cargo zigbuild` compiler and linker in place of four native C
+toolchains, which is the bulk of the matrix and where the saving is real.
+The two harder lanes are conceded explicitly rather than presented as solved:
+the Windows GNU lane still needs hand-maintained, checked-in `zig cc`/`zig ar`
+wrappers, and the macOS lane still needs a pinned, legally provisioned SDK plus
+native signing. The design accepts that residual burden because it is confined
+to two lanes and gated by the escalation trigger above, not because Zig makes
+it disappear; if either lane's hand-maintenance cost grows past that bound, the
+escalation trigger reopens the choice for that target.
+
 ## Verification gates
 
 | Gate | Required observation |
@@ -246,6 +286,7 @@ release.
 | Object formats | SHA-1 fixtures are readable; daemon-created SHA-256 objects and refs round-trip and match ordinary Git's object IDs. |
 | ODB parity | Loose and packed objects, prefix lookups, streaming writes, and corrupted objects have identical results across filesystem and test backends. |
 | Ref atomicity | Exactly one of two updates with the same expected old ID succeeds; external-writer races preserve the winning ref. |
+| Pack resource bounds | Oversized, truncated, and adversarially malformed packs (delta bombs, declared-vs-actual size mismatch, excessive object counts) are rejected against the configured limits before indexing, in bounded memory and time, and never reach a ref transaction; this exercises the one network-supplied, guest-controlled input path (Minion Town's capability-URL git remote). |
 | Smart HTTP corpus | Stock Git can clone, fetch, and push through Minion Town's service; captured protocol-v2 transcripts replay against the shared store contract. |
 | Cross-build | Every matrix target builds from the canonical build host with the pinned Zig toolchain and no target C compiler installed. |
 | Native execution | Each artifact runs the same object, pack, ref, corruption, and protocol corpus on its target operating system and architecture. |
@@ -267,16 +308,26 @@ system Git library at runtime.
    by archive imports and Git-tree materialization.
 4. Add the Zig release wrapper and run the cross-build plus native-execution
    matrix before declaring any target supported.
-5. In Minion Town, depend on the reviewed Endo commit, implement the CAS/SQLite
-   adapter and smart-HTTP server, and contribute its protocol corpus back to
-   `endor-git`.
+5. Depend on the reviewed Endo commit in Minion Town; implement the CAS and
+   SQLite adapter and smart-HTTP server there; and contribute its protocol
+   corpus back to `endor-git`.
 
 ## Alternatives considered
 
-- **Pure-Rust `gix`.** This avoids the C toolchain, but no longer follows the
-  2026-08-14 direction to align Endor and Minion Town around libgit2's ODB/refdb
-  seams. Keep it as a benchmark and emergency redesign option, not a second
-  production backend.
+- **Pure-Rust `gix`.** This avoids the C toolchain. The load-bearing technical
+  reason to prefer libgit2 is that this architecture pivots on libgit2's stable
+  `git_odb_backend`/`git_refdb_backend` extension points (Architecture layer 3),
+  which let Minion Town supply its CAS-and-SQLite object and ref store as a
+  drop-in backend behind the same object-graph, pack, and ref-transaction code.
+  `gix` today exposes no equivalent published, stable custom-object-store /
+  custom-ref-store plug-in seam; its object and ref database types are not a
+  documented extension boundary a third-party store can implement against. That
+  capability gap, not merely the 2026-08-14 direction to align Endor and Minion
+  Town, is why `gix` is not the production backend. It also carries the same
+  experimental SHA-256 status as libgit2, so the switch is neutral on that axis.
+  Keep `gix` as a benchmark and emergency redesign option (and, per the
+  escalation trigger in Revision context, the fallback for any release target
+  Zig cannot cross-build), not a second production backend.
 - **System libgit2.** Rejected because it makes behavior and ABI depend on the
   host and defeats the standalone artifact.
 - **Prebuilt libgit2 archives.** Rejected for the first implementation because
