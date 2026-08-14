@@ -16063,9 +16063,9 @@ impl Interp {
             | NativeMethod::GlobalParseInt
             | NativeMethod::GlobalParseFloat
             | NativeMethod::GlobalIsNaN
-            | NativeMethod::GlobalIsFinite => self.call_number(m, this, base, argc)?,
+            | NativeMethod::GlobalIsFinite => self.call_number(m, this, base, argc, code)?,
             NativeMethod::JsonStringify | NativeMethod::JsonParse => {
-                self.call_json(m, base, argc)?
+                self.call_json(m, base, argc, code)?
             }
             NativeMethod::MapSet
             | NativeMethod::MapGet
@@ -17314,6 +17314,7 @@ impl Interp {
         this: Slot,
         base: usize,
         argc: usize,
+        code: &[u8],
     ) -> Result<Slot, Halt> {
         let arg0 = if argc > 0 {
             Some(
@@ -17358,22 +17359,24 @@ impl Interp {
             }
             // Number.prototype.toString([radix]) — radix 10 renders through the
             // metered `fxNumberToString`; a radix in [2,36] runs the digit
-            // conversion (integer values only this stage; a fractional value or
-            // out-of-range radix self-names).
+            // conversion. The non-decimal path covers the finite integral
+            // domain plus the three non-finite/zero spellings; a fractional
+            // finite value keeps an honest named skip until its shortest-round-
+            // trip digit generation is modeled.
             NumberToString => {
                 let prim = match this.value {
                     Payload::Integer(_) | Payload::Number(_) => this,
                     Payload::Reference(r) => match self.wrapper_data.get(&r).copied() {
                         Some(s) if matches!(s.value, Payload::Integer(_) | Payload::Number(_)) => s,
-                        _ => return Err(Halt::Unsupported("Number.toString:non-number-receiver")),
+                        _ => return Err(self.catchable_type_error()),
                     },
-                    _ => return Err(Halt::Unsupported("Number.toString:non-number-receiver")),
+                    _ => return Err(self.catchable_type_error()),
                 };
                 let radix = match arg0 {
                     Some(s) if s.kind != Kind::Undefined => {
-                        let r = to_number(&s).trunc();
+                        let r = to_number(&self.to_number_value(code, s)?).trunc();
                         if !(2.0..=36.0).contains(&r) {
-                            return Err(Halt::Unsupported("Number.toString:radix-range"));
+                            return Err(self.catchable_range_error());
                         }
                         r as u32
                     }
@@ -17390,21 +17393,30 @@ impl Interp {
                     let off = self.alloc_str_text(&bytes);
                     Slot::of(Kind::String, Payload::String(off))
                 } else {
-                    return Err(Halt::Unsupported("Number.toString:non-decimal-radix"));
+                    let n = to_number(&prim);
+                    let bytes = match number_to_radix_string(n, radix) {
+                        Some(bytes) => bytes,
+                        None => {
+                            return Err(Halt::Unsupported(
+                                "Number.toString:fractional-non-decimal-radix",
+                            ));
+                        }
+                    };
+                    self.meter.tick_builtin();
+                    self.meter.tick_chunk_new((bytes.len() + 1) as u64);
+                    let off = self.alloc_str_text(&bytes);
+                    Slot::of(Kind::String, Payload::String(off))
                 }
             }
-            // parseInt(string[,radix]) — the integer prefix parse. A non-string
-            // argument would route through a metered `fxToString`; ironhorse models
-            // the string-argument case exactly and self-names the rest.
+            // parseInt(string[,radix]) — ToString followed by the integer
+            // prefix parse.
             GlobalParseInt => {
-                let bytes = match arg0.map(|s| s.value) {
-                    Some(Payload::String(off)) => self.str_text(off).into_bytes(),
-                    None => return Ok(Slot::number(f64::NAN)),
-                    _ => return Err(Halt::Unsupported("parseInt:non-string-argument")),
-                };
-                let radix = match self.stack.get(base + 5).copied() {
+                let units = self.to_string_units(code, arg0.unwrap_or_else(Slot::undefined))?;
+                let bytes = String::from_utf16_lossy(&units).into_bytes();
+                let radix_arg = self.stack.get(base + 5).copied();
+                let radix = match radix_arg {
                     Some(s) if argc > 1 && s.kind != Kind::Undefined => {
-                        let r = to_number(&s).trunc();
+                        let r = to_number(&self.to_number_value(code, s)?).trunc();
                         if r != 0.0 && !(2.0..=36.0).contains(&r) {
                             return Ok(Slot::number(f64::NAN));
                         }
@@ -17414,34 +17426,23 @@ impl Interp {
                 };
                 parse_int(&bytes, radix)
             }
-            // parseFloat(string) — the float prefix parse (fxStringToNumber,
-            // whole = 0). String argument only.
+            // parseFloat(string) — ToString followed by the float prefix parse
+            // (`fxStringToNumber`, whole = 0).
             GlobalParseFloat => {
-                let bytes = match arg0.map(|s| s.value) {
-                    Some(Payload::String(off)) => self.str_text(off).into_bytes(),
-                    None => return Ok(Slot::number(f64::NAN)),
-                    _ => return Err(Halt::Unsupported("parseFloat:non-string-argument")),
-                };
+                let units = self.to_string_units(code, arg0.unwrap_or_else(Slot::undefined))?;
+                let bytes = String::from_utf16_lossy(&units).into_bytes();
                 Slot::number(string_to_number(&bytes, false))
             }
             // isNaN(x)/isFinite(x) — ToNumber then the fpclassify test. A
-            // string routes through the whole-string parse; a numeric operand
-            // is identity; a non-numeric non-string self-names (its ToNumber
-            // may allocate/throw).
+            // string routes through the whole-string parse; objects use the
+            // shared re-entrant ToPrimitive/ToNumber machinery.
             GlobalIsNaN | GlobalIsFinite => {
                 let n = match arg0 {
                     None => f64::NAN,
-                    Some(s) => match s.kind {
-                        Kind::Integer | Kind::Number => to_number(&s),
-                        Kind::String => match s.value {
-                            Payload::String(off) => {
-                                string_to_number(&self.str_text(off).into_bytes(), true)
-                            }
-                            _ => f64::NAN,
-                        },
-                        Kind::Boolean | Kind::Null | Kind::Undefined => to_number(&s),
-                        _ => return Err(Halt::Unsupported("isNaN/isFinite:uncoercible")),
-                    },
+                    Some(s) if matches!(s.kind, Kind::BigInt | Kind::Symbol) => {
+                        return Err(self.catchable_type_error());
+                    }
+                    Some(s) => to_number(&self.to_number_value(code, s)?),
                 };
                 Slot::boolean(if m == GlobalIsNaN {
                     n.is_nan()
@@ -17457,7 +17458,13 @@ impl Interp {
     /// Dispatch `JSON.stringify` / `JSON.parse`. The stringifier's working
     /// buffer is unmetered (C-malloc'd in XS); only the final result chunk
     /// meters. `parse` allocates the parsed strings' chunks.
-    fn call_json(&mut self, m: NativeMethod, base: usize, argc: usize) -> Result<Slot, Halt> {
+    fn call_json(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
         let arg0 = if argc > 0 {
             self.stack
                 .get(base + 4)
@@ -17527,18 +17534,9 @@ impl Interp {
                         return Err(Halt::Unsupported("JSON.parse:reviver"));
                     }
                 }
-                // XS coerces a non-string argument via `fxToString`; ironhorse models
-                // only an already-string text (the coercion + its metering is a
-                // corner) — self-name otherwise.
-                let off = match arg0 {
-                    Slot {
-                        kind: Kind::String,
-                        value: Payload::String(o),
-                        ..
-                    } => o,
-                    _ => return Err(Halt::Unsupported("JSON.parse:non-string")),
-                };
-                let input = self.str_text(off).into_bytes();
+                // `JSON.parse` applies ToString before tokenization.
+                let units = self.to_string_units(code, arg0)?;
+                let input = String::from_utf16_lossy(&units).into_bytes();
                 self.meter.tick_raw(JSON_PARSE_SETUP_METERING);
                 let mut pos = 0usize;
                 let mut cost: u64 = 0;
@@ -17547,8 +17545,8 @@ impl Interp {
                 self.json_parse_whitespace(&input, &mut pos);
                 if pos != input.len() {
                     // Trailing content after the value: XS's "missing EOF"
-                    // SyntaxError. Its exact partial metering is unmodeled.
-                    return Err(Halt::Unsupported("JSON.parse:syntax"));
+                    // SyntaxError.
+                    return Err(self.catchable_syntax_error());
                 }
                 self.meter.tick_raw(cost);
                 Ok(value)
@@ -17633,7 +17631,7 @@ impl Interp {
                     }
                 }
                 if visited.contains(&inst) {
-                    return Err(Halt::Throw("TypeError: cyclic value".to_string()));
+                    return Err(self.catchable_type_error());
                 }
                 visited.push(inst);
                 let out = if let Some(a) = self.arrays.get(&inst).cloned() {
@@ -17770,8 +17768,7 @@ impl Interp {
     /// Parse one JSON value at `pos` (`fxParseJSONValue`), building it in the
     /// heap and accumulating the recursive per-node metering into `cost` (the
     /// caller charges [`JSON_PARSE_SETUP_METERING`] once and `cost` at the end).
-    /// A malformed input self-names `JSON.parse:syntax` — ironhorse does not model
-    /// the exact partial metering of XS's `SyntaxError`.
+    /// A malformed input throws a catchable `SyntaxError`.
     fn json_parse_value(
         &mut self,
         input: &[u8],
@@ -17779,7 +17776,7 @@ impl Interp {
         cost: &mut u64,
     ) -> Result<Slot, Halt> {
         if *pos >= input.len() {
-            return Err(Halt::Unsupported("JSON.parse:syntax"));
+            return Err(self.catchable_syntax_error());
         }
         match input[*pos] {
             b'{' => self.json_parse_object(input, pos, cost),
@@ -17805,17 +17802,22 @@ impl Interp {
                 Ok(Slot::null())
             }
             b'-' | b'0'..=b'9' => self.json_parse_number(input, pos),
-            _ => Err(Halt::Unsupported("JSON.parse:syntax")),
+            _ => Err(self.catchable_syntax_error()),
         }
     }
 
     /// Match a bare keyword (`true`/`false`/`null`), advancing past it.
-    fn json_parse_keyword(&self, input: &[u8], pos: &mut usize, word: &[u8]) -> Result<(), Halt> {
+    fn json_parse_keyword(
+        &mut self,
+        input: &[u8],
+        pos: &mut usize,
+        word: &[u8],
+    ) -> Result<(), Halt> {
         if input.len() - *pos >= word.len() && &input[*pos..*pos + word.len()] == word {
             *pos += word.len();
             Ok(())
         } else {
-            Err(Halt::Unsupported("JSON.parse:syntax"))
+            Err(self.catchable_syntax_error())
         }
     }
 
@@ -17823,7 +17825,7 @@ impl Interp {
     /// classify it exactly as XS does: an integral value in `txInteger` range
     /// (and not zero, which XS leaves as `XS_NUMBER_KIND`) is an integer, else a
     /// number. The number token itself allocates nothing.
-    fn json_parse_number(&self, input: &[u8], pos: &mut usize) -> Result<Slot, Halt> {
+    fn json_parse_number(&mut self, input: &[u8], pos: &mut usize) -> Result<Slot, Halt> {
         let start = *pos;
         let n = input.len();
         let mut i = *pos;
@@ -17839,7 +17841,7 @@ impl Interp {
                 i += 1;
             }
         } else {
-            return Err(Halt::Unsupported("JSON.parse:syntax"));
+            return Err(self.catchable_syntax_error());
         }
         // fraction
         if i < n && input[i] == b'.' {
@@ -17850,7 +17852,7 @@ impl Interp {
                     i += 1;
                 }
             } else {
-                return Err(Halt::Unsupported("JSON.parse:syntax"));
+                return Err(self.catchable_syntax_error());
             }
         }
         // exponent
@@ -17865,16 +17867,16 @@ impl Interp {
                     i += 1;
                 }
             } else {
-                return Err(Halt::Unsupported("JSON.parse:syntax"));
+                return Err(self.catchable_syntax_error());
             }
         }
         let text = match std::str::from_utf8(&input[start..i]) {
             Ok(t) => t,
-            Err(_) => return Err(Halt::Unsupported("JSON.parse:syntax")),
+            Err(_) => return Err(self.catchable_syntax_error()),
         };
         let value: f64 = match text.parse() {
             Ok(v) => v,
-            Err(_) => return Err(Halt::Unsupported("JSON.parse:syntax")),
+            Err(_) => return Err(self.catchable_syntax_error()),
         };
         *pos = i;
         // XS: INTEGER iff `number == (txInteger)number && number != 0`.
@@ -17893,13 +17895,17 @@ impl Interp {
     /// unescaped content bytes. Handles the JSON escapes and BMP `\u` escapes;
     /// a surrogate `\u` escape (astral / lone surrogate — XS's CESU-8 corner) or
     /// a malformed escape self-names.
-    fn json_parse_string_bytes(&self, input: &[u8], pos: &mut usize) -> Result<Vec<u8>, Halt> {
+    fn json_parse_string_bytes(
+        &mut self,
+        input: &[u8],
+        pos: &mut usize,
+    ) -> Result<Vec<u8>, Halt> {
         let n = input.len();
         let mut i = *pos + 1; // past opening quote
         let mut out: Vec<u8> = Vec::new();
         loop {
             if i >= n {
-                return Err(Halt::Unsupported("JSON.parse:syntax"));
+                return Err(self.catchable_syntax_error());
             }
             let c = input[i];
             if c == b'"' {
@@ -17908,7 +17914,7 @@ impl Interp {
             } else if c == b'\\' {
                 i += 1;
                 if i >= n {
-                    return Err(Halt::Unsupported("JSON.parse:syntax"));
+                    return Err(self.catchable_syntax_error());
                 }
                 match input[i] {
                     b'"' => out.push(b'"'),
@@ -17921,14 +17927,14 @@ impl Interp {
                     b't' => out.push(b'\t'),
                     b'u' => {
                         if i + 4 >= n {
-                            return Err(Halt::Unsupported("JSON.parse:syntax"));
+                            return Err(self.catchable_syntax_error());
                         }
                         let hex = match std::str::from_utf8(&input[i + 1..i + 5])
                             .ok()
                             .and_then(|h| u32::from_str_radix(h, 16).ok())
                         {
                             Some(v) => v,
-                            None => return Err(Halt::Unsupported("JSON.parse:syntax")),
+                            None => return Err(self.catchable_syntax_error()),
                         };
                         // A surrogate half is XS's CESU-8 corner — self-name.
                         if (0xD800..=0xDFFF).contains(&hex) {
@@ -17936,18 +17942,18 @@ impl Interp {
                         }
                         let ch = match char::from_u32(hex) {
                             Some(c) => c,
-                            None => return Err(Halt::Unsupported("JSON.parse:syntax")),
+                            None => return Err(self.catchable_syntax_error()),
                         };
                         let mut b = [0u8; 4];
                         out.extend_from_slice(ch.encode_utf8(&mut b).as_bytes());
                         i += 4;
                     }
-                    _ => return Err(Halt::Unsupported("JSON.parse:syntax")),
+                    _ => return Err(self.catchable_syntax_error()),
                 }
                 i += 1;
             } else if c < 0x20 {
                 // A raw control character is a JSON syntax error.
-                return Err(Halt::Unsupported("JSON.parse:syntax"));
+                return Err(self.catchable_syntax_error());
             } else if c < 0x80 {
                 out.push(c);
                 i += 1;
@@ -18007,7 +18013,7 @@ impl Interp {
                     *pos += 1;
                     break;
                 }
-                _ => return Err(Halt::Unsupported("JSON.parse:syntax")),
+                _ => return Err(self.catchable_syntax_error()),
             }
         }
         self.arrays.get_mut(&inst).unwrap().length = length;
@@ -18036,7 +18042,7 @@ impl Interp {
         loop {
             self.json_parse_whitespace(input, pos);
             if *pos >= input.len() || input[*pos] != b'"' {
-                return Err(Halt::Unsupported("JSON.parse:syntax"));
+                return Err(self.catchable_syntax_error());
             }
             let key_bytes = self.json_parse_string_bytes(input, pos)?;
             let key = match String::from_utf8(key_bytes.clone()) {
@@ -18051,7 +18057,7 @@ impl Interp {
             let id = self.intern_key(&key);
             self.json_parse_whitespace(input, pos);
             if *pos >= input.len() || input[*pos] != b':' {
-                return Err(Halt::Unsupported("JSON.parse:syntax"));
+                return Err(self.catchable_syntax_error());
             }
             *pos += 1;
             self.json_parse_whitespace(input, pos);
@@ -18066,7 +18072,7 @@ impl Interp {
                     *pos += 1;
                     break;
                 }
-                _ => return Err(Halt::Unsupported("JSON.parse:syntax")),
+                _ => return Err(self.catchable_syntax_error()),
             }
         }
         Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
@@ -24333,6 +24339,45 @@ fn parse_int(bytes: &[u8], mut radix: i32) -> Slot {
     } else {
         Slot::number(result)
     }
+}
+
+/// The non-decimal integral arm of `Number.prototype.toString(radix)`.
+/// ECMAScript permits an implementation-defined digit algorithm for this
+/// radix-generalized spelling. Integers up to the exact-number boundary need
+/// no rounding choice, so repeated division produces the canonical digits.
+fn number_to_radix_string(number: f64, radix: u32) -> Option<Vec<u8>> {
+    if number.is_nan() {
+        return Some(b"NaN".to_vec());
+    }
+    if number == f64::INFINITY {
+        return Some(b"Infinity".to_vec());
+    }
+    if number == f64::NEG_INFINITY {
+        return Some(b"-Infinity".to_vec());
+    }
+    if number == 0.0 {
+        return Some(b"0".to_vec());
+    }
+    if number.fract() != 0.0 || number.abs() > 9007199254740992.0 {
+        return None;
+    }
+    let negative = number.is_sign_negative();
+    let mut magnitude = number.abs() as u64;
+    let mut reversed = Vec::new();
+    while magnitude != 0 {
+        let digit = (magnitude % radix as u64) as u8;
+        reversed.push(if digit < 10 {
+            b'0' + digit
+        } else {
+            b'a' + digit - 10
+        });
+        magnitude /= radix as u64;
+    }
+    if negative {
+        reversed.push(b'-');
+    }
+    reversed.reverse();
+    Some(reversed)
 }
 
 /// `fxStringToNumber` (`xsdtoa.c`): coerce a CESU-8 string to a number.
