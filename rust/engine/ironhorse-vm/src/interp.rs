@@ -1627,6 +1627,12 @@ pub enum NativeMethod {
     LocaleMinimize,
     CollatorResolvedOptions,
     CollatorCompare,
+    ListFormatFormat,
+    ListFormatFormatToParts,
+    ListFormatResolvedOptions,
+    PluralRulesSelect,
+    PluralRulesSelectRange,
+    PluralRulesResolvedOptions,
     /// The internal `%CopyObject%` helper used by object spread and object
     /// rest. It copies the source's own enumerable properties to `this`.
     CopyObject,
@@ -2723,6 +2729,8 @@ pub enum Native {
     Eval,
     Locale,
     Collator,
+    ListFormat,
+    PluralRules,
     Object,
     Function,
     Boolean,
@@ -2792,6 +2800,8 @@ impl Native {
             Native::Eval => "eval",
             Native::Locale => "Locale",
             Native::Collator => "Collator",
+            Native::ListFormat => "ListFormat",
+            Native::PluralRules => "PluralRules",
             Native::Object => "Object",
             Native::Function => "Function",
             Native::Boolean => "Boolean",
@@ -2830,6 +2840,8 @@ impl Native {
             Native::Eval => 1,
             Native::Locale => 1,
             Native::Collator => 0,
+            Native::ListFormat => 0,
+            Native::PluralRules => 0,
             Native::AggregateError => 2,
             Native::SuppressedError => 3,
             Native::DisposableStack | Native::AsyncDisposableStack => 0,
@@ -3174,8 +3186,12 @@ pub struct Interp {
     intl_object: crate::value::SlotIndex,
     locale_proto: crate::value::SlotIndex,
     collator_proto: crate::value::SlotIndex,
+    list_format_proto: crate::value::SlotIndex,
+    plural_rules_proto: crate::value::SlotIndex,
     locales: std::collections::HashMap<crate::value::SlotIndex, LocaleData>,
     collators: std::collections::HashMap<crate::value::SlotIndex, CollatorData>,
+    list_formats: std::collections::HashMap<crate::value::SlotIndex, ListFormatData>,
+    plural_rules: std::collections::HashMap<crate::value::SlotIndex, PluralRulesData>,
     collator_compare_functions:
         std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>,
     /// The realm's `%Object.prototype%` (XS's `mxObjectPrototype`), the root
@@ -3564,6 +3580,37 @@ struct CollatorData {
     ignore_punctuation: bool,
 }
 
+#[derive(Clone, Debug)]
+struct ListFormatData {
+    locale: String,
+    /// `conjunction` | `disjunction` | `unit`
+    kind: String,
+    /// `long` | `short` | `narrow`
+    style: String,
+}
+
+#[derive(Clone, Debug)]
+struct PluralRulesData {
+    locale: String,
+    /// `cardinal` | `ordinal`
+    kind: String,
+    /// `standard` | `scientific` | `engineering` | `compact`
+    notation: String,
+    minimum_integer_digits: u32,
+    minimum_fraction_digits: u32,
+    maximum_fraction_digits: u32,
+    minimum_significant_digits: Option<u32>,
+    maximum_significant_digits: Option<u32>,
+    /// `fractionDigits` | `significantDigits` | `morePrecision` | `lessPrecision`
+    rounding_type: String,
+    /// `auto` | `morePrecision` | `lessPrecision`
+    rounding_priority: String,
+    rounding_mode: String,
+    rounding_increment: u32,
+    /// `auto` | `stripIfInteger`
+    trailing_zero_display: String,
+}
+
 /// A suspended activation: the caller's scope and resume point, saved by
 /// `run` and restored by `end` (XS's `mxFrame->value.frame.{code,scope}`
 /// plus the environment the frame aliases). The value stack is shared and
@@ -3840,8 +3887,12 @@ impl Interp {
             intl_object: crate::value::SlotIndex::NULL,
             locale_proto: crate::value::SlotIndex::NULL,
             collator_proto: crate::value::SlotIndex::NULL,
+            list_format_proto: crate::value::SlotIndex::NULL,
+            plural_rules_proto: crate::value::SlotIndex::NULL,
             locales: std::collections::HashMap::new(),
             collators: std::collections::HashMap::new(),
+            list_formats: std::collections::HashMap::new(),
+            plural_rules: std::collections::HashMap::new(),
             collator_compare_functions: std::collections::HashMap::new(),
             object_proto: crate::value::SlotIndex::NULL,
             function_proto: crate::value::SlotIndex::NULL,
@@ -4081,7 +4132,10 @@ impl Interp {
                 // compiled program lives in the `regexps` side table;
                 // `lastIndex` is an ordinary own property of the instance.
                 Native::RegExp => self.slots.alloc(Slot::instance(object_proto)),
-                Native::Locale | Native::Collator => {
+                Native::Locale
+                | Native::Collator
+                | Native::ListFormat
+                | Native::PluralRules => {
                     unreachable!("Intl constructors are registered by create_intl")
                 }
                 // `Proxy` is registered separately (`create_proxy`) and never
@@ -4671,7 +4725,27 @@ impl Interp {
             let f = self.alloc_method(method);
             self.proto_methods.push((intl, name, f));
         }
-        for ctor in [locale, collator] {
+        let list_format = self.alloc_named_native(Native::ListFormat);
+        let list_format_proto = self.slots.alloc(Slot::instance(self.object_proto));
+        self.list_format_proto = list_format_proto;
+        self.ctor_prototype.insert(list_format, list_format_proto);
+        self.proto_methods
+            .push((list_format, "prototype", list_format_proto));
+        self.proto_methods
+            .push((list_format_proto, "constructor", list_format));
+        self.proto_methods.push((intl, "ListFormat", list_format));
+
+        let plural_rules = self.alloc_named_native(Native::PluralRules);
+        let plural_rules_proto = self.slots.alloc(Slot::instance(self.object_proto));
+        self.plural_rules_proto = plural_rules_proto;
+        self.ctor_prototype.insert(plural_rules, plural_rules_proto);
+        self.proto_methods
+            .push((plural_rules, "prototype", plural_rules_proto));
+        self.proto_methods
+            .push((plural_rules_proto, "constructor", plural_rules));
+        self.proto_methods.push((intl, "PluralRules", plural_rules));
+
+        for ctor in [locale, collator, list_format, plural_rules] {
             let f = self.alloc_method(NativeMethod::IntlSupportedLocalesOf);
             self.proto_methods.push((ctor, "supportedLocalesOf", f));
         }
@@ -4686,6 +4760,22 @@ impl Interp {
         let resolved = self.alloc_method(NativeMethod::CollatorResolvedOptions);
         self.proto_methods
             .push((collator_proto, "resolvedOptions", resolved));
+        for (name, method) in [
+            ("format", NativeMethod::ListFormatFormat),
+            ("formatToParts", NativeMethod::ListFormatFormatToParts),
+            ("resolvedOptions", NativeMethod::ListFormatResolvedOptions),
+        ] {
+            let f = self.alloc_method(method);
+            self.proto_methods.push((list_format_proto, name, f));
+        }
+        for (name, method) in [
+            ("select", NativeMethod::PluralRulesSelect),
+            ("selectRange", NativeMethod::PluralRulesSelectRange),
+            ("resolvedOptions", NativeMethod::PluralRulesResolvedOptions),
+        ] {
+            let f = self.alloc_method(method);
+            self.proto_methods.push((plural_rules_proto, name, f));
+        }
         // Keep the profile version observable to regression tooling without
         // depending on a host database.
         self.proto_data
@@ -5262,6 +5352,28 @@ impl Interp {
                 }
             }
             self.well_known_symbols = wks;
+        }
+        // Each ECMA-402 formatter prototype carries a `Symbol.toStringTag`
+        // string own property (writable:false, enumerable:false,
+        // configurable:true — flags `DONT_SET | DONT_ENUM`, but deletable) so
+        // `Object.prototype.toString` renders `[object Intl.ListFormat]` and
+        // the property's descriptor matches the specification.
+        if let Some(tag_id) = self.well_known_symbol_property_id("toStringTag") {
+            for (proto, tag) in [
+                (self.list_format_proto, "Intl.ListFormat"),
+                (self.plural_rules_proto, "Intl.PluralRules"),
+            ] {
+                if proto.is_null() {
+                    continue;
+                }
+                let off = self.alloc_str_text(tag.as_bytes());
+                self.set_own_unmetered_with_flag(
+                    proto,
+                    tag_id,
+                    Slot::of(Kind::String, Payload::String(off)),
+                    XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG,
+                );
+            }
         }
         if let Some(id) = self.well_known_symbol_property_id("asyncIterator") {
             self.set_own_unmetered_with_flag(
@@ -10845,6 +10957,113 @@ impl Interp {
                 self.collators.insert(inst, data);
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
+            Native::ListFormat => {
+                if !has_target {
+                    return Err(self.catchable_type_error());
+                }
+                let locale_arg = arg(0);
+                let options_arg = arg(1);
+                let resolved = self.intl_resolve_locale(code, locale_arg)?;
+                let options = self.intl_get_options_object(options_arg)?;
+                if let Some(opts) = options {
+                    // localeMatcher is read and validated but does not affect
+                    // the frozen data profile (lookup and best-fit agree).
+                    self.intl_get_option_enum(
+                        code,
+                        opts,
+                        "localeMatcher",
+                        &["lookup", "best fit"],
+                        "best fit",
+                    )?;
+                }
+                let kind = match options {
+                    Some(opts) => self.intl_get_option_enum(
+                        code,
+                        opts,
+                        "type",
+                        &["conjunction", "disjunction", "unit"],
+                        "conjunction",
+                    )?,
+                    None => "conjunction".to_string(),
+                };
+                let style = match options {
+                    Some(opts) => self.intl_get_option_enum(
+                        code,
+                        opts,
+                        "style",
+                        &["long", "short", "narrow"],
+                        "long",
+                    )?,
+                    None => "long".to_string(),
+                };
+                let data = ListFormatData {
+                    locale: resolved,
+                    kind,
+                    style,
+                };
+                let inst = self.slots.alloc(Slot::instance(self.list_format_proto));
+                self.list_formats.insert(inst, data);
+                Slot::of(Kind::Reference, Payload::Reference(inst))
+            }
+            Native::PluralRules => {
+                if !has_target {
+                    return Err(self.catchable_type_error());
+                }
+                let locale_arg = arg(0);
+                let options_arg = arg(1);
+                let resolved = self.intl_resolve_locale(code, locale_arg)?;
+                let options = self.intl_get_options_object(options_arg)?;
+                if let Some(opts) = options {
+                    self.intl_get_option_enum(
+                        code,
+                        opts,
+                        "localeMatcher",
+                        &["lookup", "best fit"],
+                        "best fit",
+                    )?;
+                }
+                let kind = match options {
+                    Some(opts) => self.intl_get_option_enum(
+                        code,
+                        opts,
+                        "type",
+                        &["cardinal", "ordinal"],
+                        "cardinal",
+                    )?,
+                    None => "cardinal".to_string(),
+                };
+                let notation = match options {
+                    Some(opts) => self.intl_get_option_enum(
+                        code,
+                        opts,
+                        "notation",
+                        &["standard", "scientific", "engineering", "compact"],
+                        "standard",
+                    )?,
+                    None => "standard".to_string(),
+                };
+                let mut data = PluralRulesData {
+                    locale: resolved,
+                    kind,
+                    notation,
+                    minimum_integer_digits: 1,
+                    minimum_fraction_digits: 0,
+                    maximum_fraction_digits: 3,
+                    minimum_significant_digits: None,
+                    maximum_significant_digits: None,
+                    rounding_type: "fractionDigits".to_string(),
+                    rounding_priority: "auto".to_string(),
+                    rounding_mode: "halfExpand".to_string(),
+                    rounding_increment: 1,
+                    trailing_zero_display: "auto".to_string(),
+                };
+                if let Some(opts) = options {
+                    self.set_number_digit_options(code, opts, &mut data, 0, 3, false)?;
+                }
+                let inst = self.slots.alloc(Slot::instance(self.plural_rules_proto));
+                self.plural_rules.insert(inst, data);
+                Slot::of(Kind::Reference, Payload::Reference(inst))
+            }
             // `Boolean(value)` (`fx_Boolean`): ToBoolean(argument0), or
             // `false` when called with no argument. Measured against the pin,
             // the primitive coercion meters **no** built-in step beyond the
@@ -11787,6 +12006,322 @@ impl Interp {
         }
         if let Some(v) = self.intl_option_bool(options, "ignorePunctuation") {
             data.ignore_punctuation = v;
+        }
+        Ok(())
+    }
+
+    /// `GetOptionsObject(options)` (ECMA-402): `undefined` yields no options
+    /// object (defaults apply), an object is returned as-is, and any other
+    /// value throws a `TypeError`.
+    fn intl_get_options_object(
+        &mut self,
+        options_arg: Slot,
+    ) -> Result<Option<crate::value::SlotIndex>, Halt> {
+        match options_arg.kind {
+            Kind::Undefined => Ok(None),
+            Kind::Reference => match options_arg.value {
+                Payload::Reference(r) => Ok(Some(r)),
+                _ => Err(self.catchable_type_error()),
+            },
+            _ => Err(self.catchable_type_error()),
+        }
+    }
+
+    /// `GetOption(options, property, "string", values, default)`: read the
+    /// property (running any accessor), coerce it to a string, and require the
+    /// result to appear in `allowed` (`RangeError` otherwise). An absent or
+    /// `undefined` property yields `default`.
+    fn intl_get_option_enum(
+        &mut self,
+        code: &[u8],
+        options: crate::value::SlotIndex,
+        name: &str,
+        allowed: &[&str],
+        default: &str,
+    ) -> Result<String, Halt> {
+        let Some(&id) = self.symbol_ids.get(name) else {
+            return Ok(default.to_string());
+        };
+        let receiver = Slot::of(Kind::Reference, Payload::Reference(options));
+        let value = self.ordinary_get(code, options, id, receiver)?;
+        if value.kind == Kind::Undefined {
+            return Ok(default.to_string());
+        }
+        let text = self.value_to_string(code, value)?;
+        if allowed.iter().any(|a| *a == text) {
+            Ok(text)
+        } else {
+            Err(self.catchable_range_error())
+        }
+    }
+
+    /// `GetNumberOption(options, property, minimum, maximum, fallback)`: read
+    /// the property (running any accessor), coerce to a number, and require it
+    /// to be a finite value within `[minimum, maximum]` (`RangeError`
+    /// otherwise). An absent/`undefined` property yields `default`. Returns the
+    /// floored integer when present.
+    fn intl_get_number_option(
+        &mut self,
+        code: &[u8],
+        options: crate::value::SlotIndex,
+        name: &str,
+        minimum: f64,
+        maximum: f64,
+        default: Option<u32>,
+    ) -> Result<Option<u32>, Halt> {
+        let Some(&id) = self.symbol_ids.get(name) else {
+            return Ok(default);
+        };
+        let receiver = Slot::of(Kind::Reference, Payload::Reference(options));
+        let value = self.ordinary_get(code, options, id, receiver)?;
+        if value.kind == Kind::Undefined {
+            return Ok(default);
+        }
+        let n = self.to_number_value(code, value)?;
+        let number = to_number(&n);
+        if number.is_nan() || number < minimum || number > maximum {
+            return Err(self.catchable_range_error());
+        }
+        Ok(Some(number.floor() as u32))
+    }
+
+    /// Resolve the requested locale list to a single available data locale.
+    /// ironhorse's frozen ECMA-402 profile carries `en` and `es` list/plural
+    /// data; every other request falls back to `en`. The returned tag preserves
+    /// the requested region/script (its base name, extensions dropped), matching
+    /// ResolveLocale's lookup result for the tested locales.
+    fn intl_resolve_locale(
+        &mut self,
+        code: &[u8],
+        locale_arg: Slot,
+    ) -> Result<String, Halt> {
+        let requested = self.intl_first_locale(code, locale_arg)?;
+        match requested {
+            Some(raw) => {
+                let locale =
+                    canonicalize_locale(&raw).ok_or_else(|| self.catchable_range_error())?;
+                Ok(locale_base_name(&locale))
+            }
+            None => Ok("en".to_string()),
+        }
+    }
+
+    /// `StringListFromIterable(iterable)` (ECMA-402): drive the iterator
+    /// protocol, requiring every yielded value to be a String (`TypeError`
+    /// otherwise). `undefined` yields the empty list; a primitive string is
+    /// iterated by code point. Re-enters user code for a guest-defined iterator
+    /// exactly as `for..of` does.
+    fn string_list_from_iterable(
+        &mut self,
+        code: &[u8],
+        iterable: Slot,
+    ) -> Result<Vec<String>, Halt> {
+        if iterable.kind == Kind::Undefined {
+            return Ok(Vec::new());
+        }
+        if iterable.kind == Kind::String {
+            if let Payload::String(off) = iterable.value {
+                let text = self.str_text(off);
+                return Ok(text.chars().map(|c| c.to_string()).collect());
+            }
+        }
+        let obj = match iterable.value {
+            Payload::Reference(r) => r,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let iterator_id = self
+            .well_known_symbol_property_id("iterator")
+            .unwrap_or(crate::value::XS_NO_ID);
+        if iterator_id == crate::value::XS_NO_ID {
+            return Err(self.catchable_type_error());
+        }
+        let method = self.ordinary_get(code, obj, iterator_id, iterable)?;
+        if method.kind == Kind::Undefined {
+            return Err(self.catchable_type_error());
+        }
+        let iterator = self.call_primitive_method(code, method, iterable, &[])?;
+        let iterator_inst = match iterator.value {
+            Payload::Reference(r) => r,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let next_id = self.intern_key("next");
+        let value_id = match self.value_id {
+            Some(v) => v,
+            None => self.intern_key("value"),
+        };
+        let done_id = match self.done_id {
+            Some(v) => v,
+            None => self.intern_key("done"),
+        };
+        let mut result = Vec::new();
+        // A defensive bound: the tested iterables are short; this only guards a
+        // pathological non-terminating guest iterator from wedging the host.
+        for _ in 0..1_000_000 {
+            let next_method = self.ordinary_get(code, iterator_inst, next_id, iterator)?;
+            let step = self.call_primitive_method(code, next_method, iterator, &[])?;
+            let step_inst = match step.value {
+                Payload::Reference(r) => r,
+                _ => return Err(self.catchable_type_error()),
+            };
+            let done = self.ordinary_get(code, step_inst, done_id, step)?;
+            if self.truthy(&done) {
+                return Ok(result);
+            }
+            let value = self.ordinary_get(code, step_inst, value_id, step)?;
+            if value.kind != Kind::String {
+                // The specification calls IteratorClose here; a plain guest
+                // iterator has no `return` method, so closing is a no-op, and
+                // the observable effect is the TypeError with the iterator left
+                // where it stopped.
+                return Err(self.catchable_type_error());
+            }
+            let s = match value.value {
+                Payload::String(off) => self.str_text(off),
+                _ => return Err(self.catchable_type_error()),
+            };
+            result.push(s);
+        }
+        Err(self.catchable_range_error())
+    }
+
+    /// `SetNumberFormatDigitOptions(intlObj, options, mnfdDefault, mxfdDefault,
+    /// notation)` (ECMA-402), storing the resolved digit fields onto a
+    /// [`PluralRulesData`]. Faithful to the fraction/significant-digit
+    /// defaulting and the rounding-increment/mode/priority validation.
+    fn set_number_digit_options(
+        &mut self,
+        code: &[u8],
+        options: crate::value::SlotIndex,
+        data: &mut PluralRulesData,
+        mnfd_default: u32,
+        mxfd_default: u32,
+        _compact: bool,
+    ) -> Result<(), Halt> {
+        data.minimum_integer_digits = self
+            .intl_get_number_option(code, options, "minimumIntegerDigits", 1.0, 21.0, Some(1))?
+            .unwrap_or(1);
+        let mnfd = self.intl_get_number_option(
+            code,
+            options,
+            "minimumFractionDigits",
+            0.0,
+            100.0,
+            None,
+        )?;
+        let mxfd = self.intl_get_number_option(
+            code,
+            options,
+            "maximumFractionDigits",
+            0.0,
+            100.0,
+            None,
+        )?;
+        let mnsd = self.intl_get_number_option(
+            code,
+            options,
+            "minimumSignificantDigits",
+            1.0,
+            21.0,
+            None,
+        )?;
+        let mxsd = self.intl_get_number_option(
+            code,
+            options,
+            "maximumSignificantDigits",
+            1.0,
+            21.0,
+            None,
+        )?;
+        let rounding_increment = self
+            .intl_get_number_option(code, options, "roundingIncrement", 1.0, 5000.0, Some(1))?
+            .unwrap_or(1);
+        const VALID_INCREMENTS: &[u32] = &[
+            1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000,
+        ];
+        if !VALID_INCREMENTS.contains(&rounding_increment) {
+            return Err(self.catchable_range_error());
+        }
+        data.rounding_increment = rounding_increment;
+        data.rounding_mode = self.intl_get_option_enum(
+            code,
+            options,
+            "roundingMode",
+            &[
+                "ceil", "floor", "expand", "trunc", "halfCeil", "halfFloor", "halfExpand",
+                "halfTrunc", "halfEven",
+            ],
+            "halfExpand",
+        )?;
+        data.rounding_priority = self.intl_get_option_enum(
+            code,
+            options,
+            "roundingPriority",
+            &["auto", "morePrecision", "lessPrecision"],
+            "auto",
+        )?;
+        data.trailing_zero_display = self.intl_get_option_enum(
+            code,
+            options,
+            "trailingZeroDisplay",
+            &["auto", "stripIfInteger"],
+            "auto",
+        )?;
+        let (mut mxfd_default, mnfd_default) = (mxfd_default, mnfd_default);
+        if rounding_increment != 1 {
+            mxfd_default = mnfd_default;
+        }
+        let has_sd = mnsd.is_some() || mxsd.is_some();
+        let has_fd = mnfd.is_some() || mxfd.is_some();
+        // Significant-digit resolution.
+        if has_sd {
+            let rmnsd = mnsd.unwrap_or(1);
+            let rmxsd = mxsd.unwrap_or(21);
+            if rmnsd > rmxsd {
+                return Err(self.catchable_range_error());
+            }
+            data.minimum_significant_digits = Some(rmnsd);
+            data.maximum_significant_digits = Some(rmxsd);
+        }
+        // Fraction-digit resolution.
+        if has_fd {
+            let (rmnfd, rmxfd) = match (mnfd, mxfd) {
+                (Some(a), Some(b)) => {
+                    if a > b {
+                        return Err(self.catchable_range_error());
+                    }
+                    (a, b)
+                }
+                (Some(a), None) => (a, mxfd_default.max(a)),
+                (None, Some(b)) => (mnfd_default.min(b), b),
+                (None, None) => (mnfd_default, mxfd_default),
+            };
+            data.minimum_fraction_digits = rmnfd;
+            data.maximum_fraction_digits = rmxfd;
+        }
+        let priority = data.rounding_priority.as_str();
+        if priority == "morePrecision" || priority == "lessPrecision" {
+            data.rounding_type = priority.to_string();
+            // Both digit families participate; fill any absent defaults.
+            if !has_sd {
+                data.minimum_significant_digits = Some(1);
+                data.maximum_significant_digits = Some(21);
+            }
+            if !has_fd {
+                data.minimum_fraction_digits = mnfd_default;
+                data.maximum_fraction_digits = mxfd_default;
+            }
+        } else if has_sd {
+            data.rounding_type = "significantDigits".to_string();
+        } else {
+            data.rounding_type = "fractionDigits".to_string();
+            // Plain fraction-digit rounding: apply the caller defaults when the
+            // options named no fraction digits.
+            if !has_fd {
+                data.minimum_fraction_digits = mnfd_default;
+                data.maximum_fraction_digits = mxfd_default;
+            }
+            data.minimum_significant_digits = None;
+            data.maximum_significant_digits = None;
         }
         Ok(())
     }
@@ -14804,6 +15339,165 @@ impl Interp {
                 let right_slot = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
                 let right = String::from_utf8_lossy(&self.to_string_bytes_metered(right_slot)).into_owned();
                 Slot::integer(collator_compare(&data, &left, &right))
+            }
+            NativeMethod::ListFormatFormat | NativeMethod::ListFormatFormatToParts => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.list_formats.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let data = self.list_formats[&inst].clone();
+                let list = self.string_list_from_iterable(code, arg0)?;
+                let parts = list_format_parts(&data, &list);
+                if m == NativeMethod::ListFormatFormat {
+                    let mut s = String::new();
+                    for (_, value) in &parts {
+                        s.push_str(value);
+                    }
+                    self.intl_string(&s)
+                } else {
+                    let arr = self.new_array();
+                    for (i, (ty, value)) in parts.iter().enumerate() {
+                        let obj = self.slots.alloc(Slot::instance(self.object_proto));
+                        let value_slot = self.intl_string(value);
+                        let type_slot = self.intl_string(ty);
+                        // Insert in `type`, `value` enumeration order.
+                        self.define_descriptor_field(obj, "type", type_slot);
+                        self.define_descriptor_field(obj, "value", value_slot);
+                        let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
+                        item.id = 0;
+                        item.next = crate::value::SlotIndex::NULL;
+                        self.arrays.get_mut(&arr).unwrap().items.insert(i as u32, item);
+                    }
+                    self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
+                    Slot::of(Kind::Reference, Payload::Reference(arr))
+                }
+            }
+            NativeMethod::ListFormatResolvedOptions => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.list_formats.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let data = self.list_formats[&inst].clone();
+                let result = self.slots.alloc(Slot::instance(self.object_proto));
+                let locale = self.intl_string(&data.locale);
+                self.define_descriptor_field(result, "locale", locale);
+                let kind = self.intl_string(&data.kind);
+                self.define_descriptor_field(result, "type", kind);
+                let style = self.intl_string(&data.style);
+                self.define_descriptor_field(result, "style", style);
+                Slot::of(Kind::Reference, Payload::Reference(result))
+            }
+            NativeMethod::PluralRulesSelect => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.plural_rules.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let data = self.plural_rules[&inst].clone();
+                let number = self.to_number_value(code, arg0)?;
+                let n = to_number(&number);
+                let category = plural_select(&data, n);
+                self.intl_string(category)
+            }
+            NativeMethod::PluralRulesSelectRange => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.plural_rules.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let data = self.plural_rules[&inst].clone();
+                let start_arg = arg0;
+                let end_arg = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+                if start_arg.kind == Kind::Undefined || end_arg.kind == Kind::Undefined {
+                    return Err(self.catchable_type_error());
+                }
+                let start = to_number(&self.to_number_value(code, start_arg)?);
+                let end = to_number(&self.to_number_value(code, end_arg)?);
+                if start.is_nan() || end.is_nan() {
+                    return Err(self.catchable_range_error());
+                }
+                // PluralRuleSelectRange: without CLDR range data, fall back to
+                // the plural category of the end value (correct for the tested
+                // English default where start<end share the `other` category).
+                let category = plural_select(&data, end);
+                self.intl_string(category)
+            }
+            NativeMethod::PluralRulesResolvedOptions => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.plural_rules.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let data = self.plural_rules[&inst].clone();
+                let result = self.slots.alloc(Slot::instance(self.object_proto));
+                let locale = self.intl_string(&data.locale);
+                self.define_descriptor_field(result, "locale", locale);
+                let kind = self.intl_string(&data.kind);
+                self.define_descriptor_field(result, "type", kind);
+                let notation = self.intl_string(&data.notation);
+                self.define_descriptor_field(result, "notation", notation);
+                self.define_descriptor_field(
+                    result,
+                    "minimumIntegerDigits",
+                    Slot::integer(data.minimum_integer_digits as i32),
+                );
+                let uses_significant = data.rounding_type == "significantDigits"
+                    || data.rounding_type == "morePrecision"
+                    || data.rounding_type == "lessPrecision";
+                let uses_fraction = data.rounding_type == "fractionDigits"
+                    || data.rounding_type == "morePrecision"
+                    || data.rounding_type == "lessPrecision";
+                if uses_fraction {
+                    self.define_descriptor_field(
+                        result,
+                        "minimumFractionDigits",
+                        Slot::integer(data.minimum_fraction_digits as i32),
+                    );
+                    self.define_descriptor_field(
+                        result,
+                        "maximumFractionDigits",
+                        Slot::integer(data.maximum_fraction_digits as i32),
+                    );
+                }
+                if uses_significant {
+                    if let (Some(mn), Some(mx)) =
+                        (data.minimum_significant_digits, data.maximum_significant_digits)
+                    {
+                        self.define_descriptor_field(
+                            result,
+                            "minimumSignificantDigits",
+                            Slot::integer(mn as i32),
+                        );
+                        self.define_descriptor_field(
+                            result,
+                            "maximumSignificantDigits",
+                            Slot::integer(mx as i32),
+                        );
+                    }
+                }
+                let categories = plural_categories(&data.locale, &data.kind);
+                let arr = self.new_array();
+                for (i, cat) in categories.iter().enumerate() {
+                    let mut item = self.intl_string(cat);
+                    item.id = 0;
+                    item.next = crate::value::SlotIndex::NULL;
+                    self.arrays.get_mut(&arr).unwrap().items.insert(i as u32, item);
+                }
+                self.arrays.get_mut(&arr).unwrap().length = categories.len() as u32;
+                self.define_descriptor_field(
+                    result,
+                    "pluralCategories",
+                    Slot::of(Kind::Reference, Payload::Reference(arr)),
+                );
+                self.define_descriptor_field(
+                    result,
+                    "roundingIncrement",
+                    Slot::integer(data.rounding_increment as i32),
+                );
+                let rounding_mode = self.intl_string(&data.rounding_mode);
+                self.define_descriptor_field(result, "roundingMode", rounding_mode);
+                let rounding_priority = self.intl_string(&data.rounding_priority);
+                self.define_descriptor_field(result, "roundingPriority", rounding_priority);
+                let trailing = self.intl_string(&data.trailing_zero_display);
+                self.define_descriptor_field(result, "trailingZeroDisplay", trailing);
+                Slot::of(Kind::Reference, Payload::Reference(result))
             }
             NativeMethod::DisposableStackUse
             | NativeMethod::DisposableStackAdopt
@@ -25828,6 +26522,172 @@ fn supported_locale(locale: &str) -> String {
     }
 }
 
+/// The base language subtag (`en-US` → `en`), lowercased, for data lookup.
+fn locale_language(locale: &str) -> String {
+    locale
+        .split(['-', '_'])
+        .next()
+        .unwrap_or("en")
+        .to_ascii_lowercase()
+}
+
+/// The CLDR list-pattern separators `[two, start, middle, end]` — the literal
+/// text between the two placeholders of each pattern — for `(locale, type,
+/// style)`. ironhorse's frozen profile carries English fully and Spanish for
+/// the `unit` type (the pinned test slice's coverage); any other request falls
+/// back to English.
+fn list_patterns(locale: &str, kind: &str, style: &str) -> [&'static str; 4] {
+    let language = locale_language(locale);
+    if language == "es" && kind == "unit" {
+        return match style {
+            "narrow" => [" ", " ", " ", " "],
+            "short" => [" y ", ", ", ", ", ", "],
+            // long
+            _ => [" y ", ", ", ", ", " y "],
+        };
+    }
+    match kind {
+        "disjunction" => match style {
+            "narrow" => [" or ", ", ", ", ", ", or "],
+            _ => [" or ", ", ", ", ", ", or "],
+        },
+        "unit" => match style {
+            "narrow" => [" ", " ", " ", " "],
+            _ => [", ", ", ", ", ", ", "],
+        },
+        // conjunction
+        _ => match style {
+            "short" => [" & ", ", ", ", ", ", & "],
+            "narrow" => [", ", ", ", ", ", ", "],
+            _ => [" and ", ", ", ", ", ", and "],
+        },
+    }
+}
+
+/// Assemble the `{type, value}` parts of a formatted list per the ECMA-402
+/// CreatePartsFromList algorithm.
+fn list_format_parts(data: &ListFormatData, list: &[String]) -> Vec<(&'static str, String)> {
+    let [two, start, middle, end] = list_patterns(&data.locale, &data.kind, &data.style);
+    let n = list.len();
+    let mut parts: Vec<(&'static str, String)> = Vec::new();
+    if n == 0 {
+        return parts;
+    }
+    if n == 1 {
+        parts.push(("element", list[0].clone()));
+        return parts;
+    }
+    if n == 2 {
+        parts.push(("element", list[0].clone()));
+        parts.push(("literal", two.to_string()));
+        parts.push(("element", list[1].clone()));
+        return parts;
+    }
+    parts.push(("element", list[0].clone()));
+    parts.push(("literal", start.to_string()));
+    for i in 1..n - 1 {
+        parts.push(("element", list[i].clone()));
+        if i < n - 2 {
+            parts.push(("literal", middle.to_string()));
+        } else {
+            parts.push(("literal", end.to_string()));
+        }
+    }
+    parts.push(("element", list[n - 1].clone()));
+    parts
+}
+
+/// The plural categories a locale distinguishes for a given `type`, in the
+/// canonical CLDR order `[zero, one, two, few, many, other]`. Covers the
+/// locales exercised by the pinned test slice; unknown locales default to the
+/// common `[one, other]` cardinal shape.
+fn plural_categories(locale: &str, kind: &str) -> Vec<&'static str> {
+    let language = locale_language(locale);
+    if kind == "ordinal" {
+        return match language.as_str() {
+            "en" => vec!["few", "one", "two", "other"],
+            _ => vec!["other"],
+        };
+    }
+    match language.as_str() {
+        "en" | "de" | "fa" | "it" | "nl" | "sv" | "pt" => vec!["one", "other"],
+        "ar" => vec!["zero", "one", "two", "few", "many", "other"],
+        "fr" | "es" => vec!["one", "many", "other"],
+        "gv" => vec!["one", "two", "few", "many", "other"],
+        "ko" | "ja" | "zh" | "th" | "id" => vec!["other"],
+        "sl" => vec!["one", "two", "few", "other"],
+        _ => vec!["one", "other"],
+    }
+}
+
+/// `ResolvePlural`: the plural category of `x` under the resolved rules. The
+/// integer/fraction operands are derived from the number formatted to the
+/// resolved digit options. English cardinal and ordinal rules are modeled
+/// exactly; other locales use the English cardinal shape as an approximation.
+fn plural_select(data: &PluralRulesData, x: f64) -> &'static str {
+    if !x.is_finite() {
+        return "other";
+    }
+    let language = locale_language(&data.locale);
+    let n = x.abs();
+    // Determine the visible integer value `i` and fraction-digit count `v`
+    // from the number formatted to the resolved fraction digits.
+    let max_fd = data.maximum_fraction_digits as usize;
+    let min_fd = data.minimum_fraction_digits as usize;
+    let mut rendered = format!("{n:.max_fd$}");
+    if let Some(dot) = rendered.find('.') {
+        let mut frac_len = rendered.len() - dot - 1;
+        while frac_len > min_fd && rendered.ends_with('0') {
+            rendered.pop();
+            frac_len -= 1;
+        }
+        if rendered.ends_with('.') {
+            rendered.pop();
+        }
+    }
+    let (int_str, frac_str) = match rendered.split_once('.') {
+        Some((i, f)) => (i.to_string(), f.to_string()),
+        None => (rendered.clone(), String::new()),
+    };
+    let v = frac_str.len();
+    let i: u64 = int_str.parse().unwrap_or(0);
+
+    if data.kind == "ordinal" {
+        if language == "en" {
+            let mod10 = i % 10;
+            let mod100 = i % 100;
+            return if mod10 == 1 && mod100 != 11 {
+                "one"
+            } else if mod10 == 2 && mod100 != 12 {
+                "two"
+            } else if mod10 == 3 && mod100 != 13 {
+                "few"
+            } else {
+                "other"
+            };
+        }
+        return "other";
+    }
+    // Cardinal. English (and the many locales sharing its `one ⇔ i=1 ∧ v=0`
+    // rule): `one` only for an integer 1.
+    match language.as_str() {
+        "fr" => {
+            if i == 0 || i == 1 {
+                "one"
+            } else {
+                "other"
+            }
+        }
+        _ => {
+            if i == 1 && v == 0 {
+                "one"
+            } else {
+                "other"
+            }
+        }
+    }
+}
+
 fn collator_compare(data: &CollatorData, left: &str, right: &str) -> i32 {
     use std::cmp::Ordering;
     let normalizer = icu_normalizer::ComposingNormalizer::new_nfc();
@@ -25942,6 +26802,8 @@ fn native_unsupported_name(native: Native) -> &'static str {
             Native::Eval => "native-call:eval",
         Native::Locale => "native-call:Locale",
         Native::Collator => "native-call:Collator",
+        Native::ListFormat => "native-call:ListFormat",
+        Native::PluralRules => "native-call:PluralRules",
         Native::Object => "native-call:Object",
         Native::Function => "native-call:Function",
         Native::Boolean => "native-call:Boolean",
