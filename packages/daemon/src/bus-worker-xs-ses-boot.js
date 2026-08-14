@@ -38,7 +38,7 @@
 // and it runs first.
 //
 // Bundled into `rust/endo/xsnap/src/ses_boot.js` via
-// `packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.mjs`; that
+// `packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.js`; that
 // artifact is generated, not committed, and
 // `test/xs-worker-bundles.test.js` asserts it matches this entry.
 

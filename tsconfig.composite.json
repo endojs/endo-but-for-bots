@@ -219,6 +219,9 @@
       "path": "packages/skel/tsconfig.composite.json"
     },
     {
+      "path": "packages/slots/tsconfig.composite.json"
+    },
+    {
       "path": "packages/stream/tsconfig.composite.json"
     },
     {

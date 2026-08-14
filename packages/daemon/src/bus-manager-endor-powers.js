@@ -1,5 +1,5 @@
 // @ts-check
-/// <reference path="./bus-xs-host-globals.d.ts" />
+/// <reference path="./endor.d.ts" />
 /* global btoa, atob,
    hostReadFile, hostReadFileBytes, hostMaybeReadFileBytes,
    hostWriteFile, hostAppendFile, hostStat,
@@ -720,7 +720,7 @@ export const makeXsSqlitePowers = () => {
         const parsed = JSON.parse(/** @type {string} */ (result));
         return harden({
           changes: BigInt(parsed.changes),
-          lastInsertRowid: BigInt(parsed.lastInsertRowid),
+          lastInsertRowid: BigInt(parsed.last_insert_row_id),
         });
       };
 

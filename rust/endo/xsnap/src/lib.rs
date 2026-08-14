@@ -884,7 +884,7 @@ pub const HOST_ALIASES: &str = include_str!("host_aliases.js");
 
 /// The `HandledPromise` shim, generated from
 /// `packages/daemon/src/bus-worker-xs-ses-boot.js` by
-/// `packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.mjs`.
+/// `packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.js`.
 ///
 /// Despite the name this bundle does NOT call `lockdown()`, and
 /// nothing else in the boot path does either (`fx_lockdown` is

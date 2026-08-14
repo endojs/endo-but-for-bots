@@ -37,7 +37,7 @@ Key files:
   these files participate in, not to a child named "bus")
 - `packages/daemon/src/bus-daemon-node-powers.js` — manager powers
   (worker spawning, envelope demux)
-- `packages/daemon/src/bus-daemon-rust-xs.js` — XS manager bootstrap
+- `packages/daemon/src/bus-manager-endor.js` - XS manager bootstrap
   (runs inside the Rust `endor manager` binary)
 - `packages/daemon/src/bus-worker-node.js` — Node.js worker entry point
 - `packages/daemon/src/bus-worker-node-powers.js` — worker powers
@@ -131,7 +131,7 @@ in-process "daemon" JS is now played by a manager child subprocess:
 |----------|--------------|---------------|-------------|---------------|
 | Node.js (in-process) | `daemon-node.js` | `daemon-node-powers.js` | `worker-node.js` | `worker-node-powers.js` |
 | Bus (Node manager) | `bus-daemon-node.js` | `bus-daemon-node-powers.js` | `bus-worker-node.js` | `bus-worker-node-powers.js` |
-| Bus (XS manager) | `bus-daemon-rust-xs.js` | — | `bus-worker-xs.js` | — |
+| Bus (XS manager) | `bus-manager-endor.js` | - | `bus-worker-xs.js` | - |
 
 `bus-daemon-node.js` and `bus-daemon-node-powers.js` are derivatives of
 their `-node` counterparts and implement the manager role over the
@@ -213,7 +213,7 @@ Each envelope is a CBOR array:
 2. Daemon sends an init envelope:
    `[managerHandle, "init", empty, 0]` where `managerHandle` is the
    manager's assigned handle.
-3. The manager (`bus-daemon-node.js` for Node, or `bus-daemon-rust-xs.js`
+3. The manager (`bus-daemon-node.js` for Node, or `bus-manager-endor.js`
    for XS) reads the init envelope, extracts configuration, and begins
    normal manager startup using `bus-daemon-node-powers.js` (or the
    XS-side equivalent).
@@ -340,14 +340,14 @@ Minimal powers for workers under the daemon. A derivative of
   `[managerHandle, "deliver", frameBytes, 0]` envelopes for sending and
   unwrapped from incoming envelopes for receiving.
 
-#### bus-daemon-rust-xs.js
+#### bus-manager-endor.js
 
 XS manager bootstrap. Despite the "daemon" in its file name (kept
 for symmetry with `bus-daemon-node.js`), this module implements the
 **manager** role, not the daemon. It runs inside the unified `endor`
 binary invoked as `endor manager -e xs` and uses `issueCommand`
 plus host powers in place of Node.js APIs. Bundled at build time via
-`scripts/bundle-bus-daemon-rust-xs.mjs` into
+`scripts/bundle-bus-daemon-endor.js` into
 `rust/endo/xsnap/src/daemon_bootstrap.js`, which the xsnap library
 embeds as `MANAGER_BOOTSTRAP`.
 
@@ -361,7 +361,7 @@ Worker bootstrap for the XS JavaScript engine. Runs inside the Rust
 - Uses `hostImportArchive` to load compartment-map archives natively
   in XS.
 - Bundled at build time via
-  `scripts/bundle-bus-worker-xs.mjs`.
+  `scripts/bundle-bus-worker-xs.js`.
 
 ### CBOR framing
 

@@ -6,7 +6,7 @@
  * callers in the Node-supervised daemon path can use the
  * synchronous prepared-statement surface without thinking about
  * which engine implements it.  The XS-on-Rust supervisor passes
- * its own `./better-sqlite3-xs.js` constructor and therefore
+ * its own `./endor-sqlite.js` constructor and therefore
  * imports `daemon-database.js` directly, which keeps
  * `better-sqlite3`'s native binding out of the XS bundle.
  */

@@ -205,7 +205,7 @@ export default defineConfig(
     },
   },
   {
-    files: ['packages/daemon/src/bus-xs-host-globals.d.ts'],
+    files: ['packages/daemon/src/endor.d.ts'],
     rules: {
       // Ambient declarations intentionally use `declare var` for host globals.
       'no-var': 'off',

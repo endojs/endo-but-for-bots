@@ -1,5 +1,5 @@
 // @ts-check
-/// <reference path="./bus-xs-host-globals.d.ts" />
+/// <reference path="./endor.d.ts" />
 /* global hostGetDaemonHandle */
 
 /**
@@ -17,7 +17,7 @@
  * both directions.
  *
  * Bundled into `rust/endo/xsnap/src/worker_bootstrap.js` via
- * `packages/daemon/scripts/bundle-bus-worker-xs.mjs`, which is the
+ * `packages/daemon/scripts/bundle-bus-worker-xs.js`, which is the
  * file `rust/endo/xsnap/src/lib.rs` `include_str!`s as
  * `WORKER_BOOTSTRAP`.  That artifact is generated, not committed
  * (`.gitignore`), so it can go stale against this module or be

@@ -2,7 +2,7 @@
 /* eslint-disable @endo/restrict-comparison-operands -- inbound envelope
    byte length is a plain number; the rule's inference flags it because
    we access it through an `unknown`-typed input parameter. */
-/// <reference path="./bus-xs-host-globals.d.ts" />
+/// <reference path="./endor.d.ts" />
 /* global sendRawFrame, trace */
 
 /**
@@ -56,7 +56,7 @@ export { installShouldTerminate, markShouldTerminate, silentReject };
 // and the eval question never receives a `CTP_RETURN`. The result is a
 // hang any time a cross-CapTP-session call rejects.
 //
-// `bus-daemon-rust-xs.js` already installs its own polyfill; this one
+// `bus-manager-endor.js` already installs its own polyfill; this one
 // covers the worker bootstrap (and any other future consumer of
 // `bus-xs-core`).
 if (typeof globalThis.console === 'undefined') {

@@ -8,7 +8,7 @@
 //!   sqliteClose(dbH) -> undefined
 //!   sqliteExec(dbH, sql) -> undefined or "Error: ..."
 //!   sqlitePrepare(dbH, sql) -> number (handle) or "Error: ..."
-//!   sqliteStmtRun(stmtH, paramsJson) -> JSON {changes, lastInsertRowid}
+//!   sqliteStmtRun(stmtH, paramsJson) -> JSON {changes, last_insert_row_id}
 //!   sqliteStmtGet(stmtH, paramsJson) -> JSON object, "null", or error
 //!   sqliteStmtAll(stmtH, paramsJson) -> JSON array or error
 //!   sqliteStmtColumns(stmtH) -> JSON array of {name, type}
@@ -394,7 +394,7 @@ pub unsafe extern "C" fn host_sqlite_stmt_run(the: *mut XsMachine) {
             Ok(changes) => {
                 let rowid = conn.last_insert_rowid();
                 let result = format!(
-                    "{{\"changes\":\"{}\",\"lastInsertRowid\":\"{}\"}}",
+                    "{{\"changes\":\"{}\",\"last_insert_row_id\":\"{}\"}}",
                     changes, rowid
                 );
                 set_result_string(the, &result);

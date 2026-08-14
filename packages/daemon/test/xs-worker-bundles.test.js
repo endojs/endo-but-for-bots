@@ -35,14 +35,14 @@ const bundles = [
   {
     label: 'worker bootstrap',
     entry: 'src/bus-worker-xs.js',
-    generator: 'scripts/bundle-bus-worker-xs.mjs',
+    generator: 'scripts/bundle-bus-worker-xs.js',
     artifact: 'worker_bootstrap.js',
     rustConst: 'WORKER_BOOTSTRAP',
   },
   {
     label: 'SES boot',
     entry: 'src/bus-worker-xs-ses-boot.js',
-    generator: 'scripts/bundle-bus-worker-xs-ses-boot.mjs',
+    generator: 'scripts/bundle-bus-worker-xs-ses-boot.js',
     artifact: 'ses_boot.js',
     rustConst: 'SES_BOOT',
   },

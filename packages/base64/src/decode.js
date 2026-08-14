@@ -82,7 +82,7 @@ Object.freeze(jsDecodeBase64);
 // load, before any caller can reach `decodeBase64` and before SES
 // lockdown freezes `Uint8Array`.
 // Post-lockdown mutation cannot redirect the dispatched binding.
-/** @type {typeof Uint8Array.fromBase64 | undefined} */
+/** @type {((input: string, opts?: object) => Uint8Array) | undefined} */
 const nativeFromBase64 = /** @type {any} */ (Uint8Array).fromBase64;
 
 // Pin native options to the strictest semantics that match
@@ -101,7 +101,9 @@ const nativeFromBase64Options = Object.freeze({
 const nativeDecodeBase64 = (string, name) => {
   try {
     return apply(
-      /** @type {typeof Uint8Array.fromBase64} */ (nativeFromBase64),
+      /** @type {(input: string, opts?: object) => Uint8Array} */ (
+        nativeFromBase64
+      ),
       Uint8Array,
       [string, nativeFromBase64Options],
     );

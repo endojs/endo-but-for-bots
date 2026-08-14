@@ -17,7 +17,7 @@
 ## What is the Problem Being Solved?
 
 On the Rust/XS supervisor, `FilePowers.watchDirectory`
-(`packages/daemon/src/bus-manager-rust-xs-powers.js`) is a
+(`packages/daemon/src/bus-manager-endor-powers.js`) is a
 graceful-degradation **stub**: it returns an immediately-closed diff
 stream, so `EndoMount.followNameChanges` yields its initial snapshot and
 then ends cleanly instead of delivering live add/remove/replace events.
@@ -194,7 +194,7 @@ existing `openDir`/`readDir`/`closeDir` handle-map pattern (a
   event loop favors push over pull; see Open Questions.)
 - `watchClose(handle) -> undefined`.
 
-Then `bus-manager-rust-xs-powers.js` replaces the stubbed
+Then `bus-manager-endor-powers.js` replaces the stubbed
 `watchDirectory` with an async-iterator adapter over those three host
 functions, mirroring the event coalescing/debounce the Node
 `fs.watch`-backed powers already implement, so the two hosts present the

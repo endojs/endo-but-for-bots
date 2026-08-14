@@ -9,7 +9,7 @@
 
 ## Problem
 
-`bundle-bus-daemon-rust-xs.mjs` cannot generate `daemon_bootstrap.js` because a
+`bundle-bus-daemon-endor.js` cannot generate `daemon_bootstrap.js` because a
 module in the daemon's compartment graph statically imports **`node:crypto`**,
 which the SES/XS bundler (`@endo/compartment-mapper/bundle.js`) cannot resolve.
 The named blocker is `@endo/platform/fs/extended/shared/blobref.js`:
@@ -21,10 +21,10 @@ const hashBytes = createHash('sha256').update(captured).digest();
 ```
 
 `blobref.js` is reached from `@endo/platform/fs/extended` (via
-`wrap-backend.js` → `makeBlobRefExo`), and `fs/extended` is **not** in the
-bundler's `EXCLUDED_PACKAGES` set — the daemon's content-addressed blob handling
-genuinely depends on it, so it cannot simply be elided the way
-`@endo/platform/fs/node`, `@endo/platform/exo-fs`, and `better-sqlite3` are. The
+`wrap-backend.js` → `makeBlobRefExo`). The package filter has been removed, and
+the unfiltered graph confirms that the daemon's content-addressed blob handling
+genuinely depends on this module, so its host dependencies must be selected by
+package export conditions or supplied as injected powers rather than elided. The
 Rust engine itself is healthy (82/82 cargo tests, ~2750 dual-run oracle tests,
 stage-5 byte-identity met); the blocker is purely this static host-crypto import
 in the bundle graph, which blocks `test:rust` and full endor daemon integration
@@ -223,10 +223,10 @@ assert against `node:crypto`.
 **The git backend is a separate lever, not part of this package's critical
 path.** `rust/endo/README.md` records that `@endo/git`'s `makeNativeGitBackend`
 (imported eagerly in `daemon.js`) is *also* a bundle blocker, but its fix is to
-make the git backend **injectable** (as `better-sqlite3` already is) and add it to
-`EXCLUDED_PACKAGES` — `native-git-backend.js` also uses `child_process` to spawn
-`git`, which cannot run under XS regardless. So git leaves the XS bundle graph by
-exclusion, not by adopting `@endo/sha256`. Migrating its two `createHash` sites to
+make the git backend **injectable** (as `better-sqlite3` already is) and select a
+non-Node implementation through package export conditions —
+`native-git-backend.js` also uses `child_process` to spawn `git`, which cannot
+run under XS regardless. Migrating its two `createHash` sites to
 `@endo/sha256` is a worthwhile consistency follow-up (tracked separately; to be
 filed against `endojs/endo-but-for-bots`), **not** a prerequisite for generating
 `daemon_bootstrap.js`.
@@ -241,7 +241,7 @@ filed against `endojs/endo-but-for-bots`), **not** a prerequisite for generating
 2. **Point `blobref.js` at `@endo/sha256`;** add the dependency; run
    `blobref.test.js` / `local-blob.test.js`.
 3. **Regenerate the bundle:** `node
-   packages/daemon/scripts/bundle-bus-daemon-rust-xs.mjs` now passes the
+   packages/daemon/scripts/bundle-bus-daemon-endor.js` now passes the
    blobref/`fs/extended` leg. (Resolve the `@endo/git` exclusion in parallel per
    the README; the two are independent legs of the same "no `node:` builtins in
    the graph" fix.) Then `yarn --cwd packages/daemon test:rust`.
@@ -260,9 +260,9 @@ press has been recommending, not the hourly press.
   contexts across three `Filesystem` implementations; threading a power through
   every call site is a far larger, more invasive change than a static-import swap
   — and the injected-power path is already covered for the *streaming* consumers.
-- **Extend `EXCLUDED_PACKAGES` to drop `fs/extended`.** Rejected: unlike
-  `fs-node`, the daemon's blob handling actually executes `makeBlobRefExo` at
-  runtime, so it cannot be elided from the compartment graph.
+- **Restore a package filter to drop `fs/extended`.** Rejected: the daemon's
+  blob handling actually executes `makeBlobRefExo` at runtime, so filtering it
+  would mask a real platform dependency rather than make the bundle viable.
 - **Ship an `@endo/sha512` alongside.** Rejected as premature: no SHA-512 site is
   on the XS daemon bundle graph. Reserve the name; do not build it.
 

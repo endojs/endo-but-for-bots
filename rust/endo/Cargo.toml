@@ -29,6 +29,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+slots = { path = "slots" }
 tar = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "signal", "process", "io-util", "net", "time"] }
 ureq = "2"

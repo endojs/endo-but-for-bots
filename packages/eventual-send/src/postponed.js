@@ -39,7 +39,7 @@ export const makePostponedHandler = HandledPromise => {
     applyMethodSendOnly: makePostponedOperation('applyMethodSendOnly'),
   };
 
-  // @ts-expect-error 2454
+  // @ts-ignore 2454
   assert(donePostponing);
 
   return [postponedHandler, donePostponing];

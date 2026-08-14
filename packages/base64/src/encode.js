@@ -80,16 +80,12 @@ Object.freeze(jsEncodeBase64);
 // module load, before any caller can reach `encodeBase64` and before
 // SES lockdown freezes the prototype.
 // Post-lockdown mutation cannot redirect the dispatched binding.
-/** @type {typeof Uint8Array.prototype.toBase64 | undefined} */
+/** @type {((this: Uint8Array) => string) | undefined} */
 const nativeToBase64 = /** @type {any} */ (Uint8Array.prototype).toBase64;
 
 /** @type {typeof jsEncodeBase64} */
 const nativeEncodeBase64 = data =>
-  apply(
-    /** @type {typeof Uint8Array.prototype.toBase64} */ (nativeToBase64),
-    data,
-    [],
-  );
+  apply(/** @type {(this: Uint8Array) => string} */ (nativeToBase64), data, []);
 
 // Legacy XSnap path.
 // Older Moddable/XS builds ship a native `globalThis.Base64.encode`

@@ -1,6 +1,6 @@
 /**
  * Ambient declarations for host-injected globals available inside
- * XS bootstraps (bus-daemon-rust-xs.js, bus-xs-core.js,
+ * XS bootstraps (bus-manager-endor.js, bus-xs-core.js,
  * bus-xs-daemon-polyfills.js, bus-worker-xs.js).  These symbols are
  * injected by the Rust supervisor and by polyfills.js.  Signatures
  * are intentionally permissive (`any`) because they sit at the FFI
@@ -46,6 +46,9 @@ declare var hostSqliteStmtGet: (...args: any[]) => any;
 declare var hostSqliteStmtAll: (...args: any[]) => any;
 declare var hostSqliteStmtColumns: (...args: any[]) => any;
 declare var hostSqliteStmtFinalize: (...args: any[]) => any;
+
+// Worker-side host functions injected by bus-worker-xs.
+declare var hostGetDaemonHandle: () => number;
 
 // Convenience wrappers installed by bus-xs-core / polyfills.
 declare var trace: (...args: any[]) => any;

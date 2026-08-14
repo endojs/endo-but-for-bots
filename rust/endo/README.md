@@ -19,9 +19,9 @@ rather than committed (`.gitignore`), so they must be produced before
 
 | Bundle | Generator |
 | --- | --- |
-| `ses_boot.js` | `packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.mjs` |
-| `worker_bootstrap.js` | `packages/daemon/scripts/bundle-bus-worker-xs.mjs` |
-| `daemon_bootstrap.js` (the manager bundle, kept under its legacy filename to minimize bundler churn) | `packages/daemon/scripts/bundle-bus-daemon-rust-xs.mjs` |
+| `ses_boot.js` | `packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.js` |
+| `worker_bootstrap.js` | `packages/daemon/scripts/bundle-bus-worker-xs.js` |
+| `daemon_bootstrap.js` (the manager bundle, kept under its legacy filename to minimize bundler churn) | `packages/daemon/scripts/bundle-bus-daemon-endor.js` |
 
 The first two run from a clean checkout. The third does not yet; see
 [Implementation status](#implementation-status) below, where
@@ -207,24 +207,26 @@ Implemented and verified:
   verb, exercised end to end by `tests/iroh_supervisor.rs` (gated behind
   `ENDO_IROH_INTEGRATION=1`): a real peer dials the bound endpoint and frames
   bridge both ways.
-- The XS manager wiring in `packages/daemon/src/bus-daemon-rust-xs.js`
+- The XS manager wiring in `packages/daemon/src/bus-manager-endor.js`
   (the `listen-iroh` request and greeter-backed peer sessions), which passes
   `node --check` and eslint.
 
-Not yet runnable as a full daemon-to-daemon CapTP handshake in this tree, for
-reasons **out of scope for the iroh work**:
+Not yet runnable as a full daemon-to-daemon CapTP handshake in this tree because:
 
 1. **The XS daemon bundle pulls in Node-only packages.** *Resolved.*
-   `bundle-bus-daemon-rust-xs.mjs` used to fail on sixteen `node:` imports the
+   `bundle-bus-daemon-endor.js` used to fail on sixteen `node:` imports the
    bundler's `EXCLUDED_PACKAGES` list did not cover: `@endo/git`
    (`makeNativeGitBackend`, imported by `manager.js`) and `@endo/host-spawner`
    (imported by `manager.js`; `gitClone` by `host.js`), a transitive path
    under `@endo/platform/fs/extended` reached through `@endo/exo-git`, and
    `blob-ref.js`'s `node:crypto`.
    The git backend and the host spawner are now injectable as
-   `DaemonicPowers.hostTools` (as `better-sqlite3` already was) and excluded;
-   `@endo/exo-git` imports the two `fs/extended` modules it uses directly
-   instead of the index; and `blob-ref.js` hashes through `@endo/sha256`.
+   `DaemonicPowers.hostTools` (as `better-sqlite3` already was), so they are
+   supplied as powers rather than statically imported; `@endo/exo-git` imports
+   the two `fs/extended` modules it uses directly instead of the index; and
+   `blob-ref.js` hashes through `@endo/sha256`. With Node-only implementations
+   routed through injected powers and package export conditions, the manual
+   `EXCLUDED_PACKAGES` filter is no longer needed and has been removed.
    See `designs/platform-neutral-hash.md`.
 2. **The XS realm is not locked down.**
    `ses_boot.js` installs the `HandledPromise` shim but calls no

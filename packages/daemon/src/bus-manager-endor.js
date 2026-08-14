@@ -15,7 +15,7 @@
 /* eslint-disable no-continue, no-plusplus, no-new -- CBOR decoding
    loop, timer id allocation, and URL polyfill constructor-only
    side-effect probe. */
-/// <reference path="./bus-xs-host-globals.d.ts" />
+/// <reference path="./endor.d.ts" />
 /* global hostSendRawFrame, hostTrace, hostGetPid, hostGetEnv, hostDecodeUtf8 */
 
 /**
@@ -47,11 +47,12 @@ import { mapWriter, mapReader, makePipe } from '@endo/stream';
 import { bytesFromText } from '@endo/bytes/from-string.js';
 import { bytesToText } from '@endo/bytes/to-string.js';
 import { makeError, X } from '@endo/errors';
+import { makeMessageSlots, isSlotVerb, flipEnvelopePayload } from '@endo/slots';
 
 import { makeDaemon } from './manager.js';
 import { makeDaemonicPersistencePowers } from './manager-persistence-powers.js';
 import { makeDaemonDatabase } from './manager-database.js';
-import XsDatabase from './better-sqlite3-xs.js';
+import XsDatabase from './endor-sqlite.js';
 import { makePetStoreMaker } from './pet-store.js';
 import {
   makeMessageCapTP,
@@ -62,7 +63,7 @@ import { encodeEnvelope, decodeEnvelope } from './envelope.js';
 import {
   makeXsFilePowers,
   makeXsCryptoPowers,
-} from './bus-manager-rust-xs-powers.js';
+} from './bus-manager-endor-powers.js';
 import { makeDebugSession } from './debug-session.js';
 import { makeDebugger } from './debugger.js';
 
@@ -283,24 +284,20 @@ const config = harden({
 const filePowers = makeXsFilePowers();
 const cryptoPowers = makeXsCryptoPowers();
 
-// SQLite parity with the Node-supervised daemon.  The shared
-// daemonDb (opened via the XS-side better-sqlite3 shim that
-// routes prepared-statement calls through Rust's rusqlite host
-// functions) backs both the pet-store's DaemonDatabase contract
-// and the persistence powers' formula/agent-key/retention
-// queries, so a single state directory can be opened by either
-// supervisor with no migration step.
-//
-// The actual database open requires statePath to exist, so we
-// defer construction until inside main() where
-// initializePersistence has run.
-
-/** @type {ReturnType<typeof makeDaemonDatabase> | null} */
-let daemonDb = null;
-/** @type {ReturnType<typeof makePetStoreMaker> | null} */
-let petStorePowers = null;
-/** @type {ReturnType<typeof makeDaemonicPersistencePowers> | null} */
-let daemonicPersistencePowers = null;
+// `daemonDb`, `petStorePowers`, and `daemonicPersistencePowers` are
+// initialised inside `main()` once the state directory has been
+// created and the SQLite database file can be opened.  Declaring
+// them as `let` here keeps a single, sharable binding for code paths
+// that need to inspect them after `main()` runs.
+/** @type {ReturnType<typeof makeDaemonDatabase>} */
+// @ts-expect-error initialised in main()
+let daemonDb;
+/** @type {ReturnType<typeof makePetStoreMaker>} */
+// @ts-expect-error initialised in main()
+let petStorePowers;
+/** @type {ReturnType<typeof makeDaemonicPersistencePowers>} */
+// @ts-expect-error initialised in main()
+let daemonicPersistencePowers;
 
 // ---------------------------------------------------------------------------
 // Envelope I/O via issueCommand
@@ -341,6 +338,13 @@ const pendingSpawns = new Map();
 /** @type {Map<number, { writer: import('@endo/stream').Writer<Uint8Array> }>} */
 const workerWriters = new Map();
 
+// When ENDO_USE_SLOT_MACHINE=1 is in effect, the daemon-side worker
+// session is built with `makeMessageSlots` instead of CapTP and the
+// envelope inbox lives here, keyed by worker handle.  Inbound slot
+// verbs (deliver/resolve/drop/abort) from the worker route here.
+/** @type {Map<number, (env: { verb: string, payload: Uint8Array }) => void>} */
+const workerSlotInboxes = new Map();
+
 /** @type {Map<number, (value: undefined) => void>} */
 const workerExitResolvers = new Map();
 
@@ -359,6 +363,15 @@ const peerSessions = new Map();
 // iroh peer sessions.
 /** @type {unknown} */
 let endoGreeter = null;
+
+// Slot-machine client sessions, keyed by client connection handle.
+// Populated when an external connection is set up under
+// ENDO_USE_SLOT_MACHINE=1; inbound slot verbs from the client route
+// here.
+/** @type {Map<number, (env: { verb: string, payload: Uint8Array }) => void>} */
+const clientSlotInboxes = new Map();
+
+const useSlotMachineClient = hostGetEnv('ENDO_USE_SLOT_MACHINE') === '1';
 
 // Debug sessions per worker handle.
 /** @type {Map<number, import('./types.js').DebugSession>} */
@@ -514,7 +527,117 @@ const makeWorker = async (
   const workerHandle = decodeCborInt(response.payload);
   hostTrace(`Endo worker spawned for ${workerId} handle=${workerHandle}`);
 
-  // Set up CapTP session over envelope protocol.
+  const useSlotMachine = hostGetEnv('ENDO_USE_SLOT_MACHINE') === '1';
+  hostTrace(
+    `daemon-xs: makeWorker handle=${workerHandle} mode=${useSlotMachine ? 'slot-machine' : 'captp'}`,
+  );
+
+  const workerClosed = new Promise(resolve => {
+    workerExitResolvers.set(workerHandle, resolve);
+    cancelled.catch(() => resolve(undefined));
+  });
+
+  if (useSlotMachine) {
+    // Slot-machine path: speak the four slot verbs end-to-end with
+    // the worker.  Inbound envelopes from `handleCommand` route into
+    // a per-worker async-generator inbox; outbound envelopes go via
+    // `sendEnvelope` with the verb intact.
+    /** @type {Array<{ verb: string, payload: Uint8Array }>} */
+    const inboxQueue = [];
+    /** @type {((value: IteratorResult<{verb: string, payload: Uint8Array}>) => void) | null} */
+    let inboxWaiter = null;
+    let inboxClosed = false;
+
+    workerSlotInboxes.set(workerHandle, env => {
+      if (inboxWaiter) {
+        const w = inboxWaiter;
+        inboxWaiter = null;
+        // Use Object.freeze (not harden) — the env's Uint8Array payload
+        // has non-configurable indexed elements under XS, so deep-
+        // freezing the wrapper throws "cannot configure property".
+        w(Object.freeze({ done: false, value: env }));
+      } else {
+        inboxQueue.push(env);
+      }
+    });
+
+    const inboundReader = harden({
+      next() {
+        if (inboxQueue.length > 0) {
+          const value = /** @type {{verb: string, payload: Uint8Array}} */ (
+            inboxQueue.shift()
+          );
+          return Promise.resolve(Object.freeze({ done: false, value }));
+        }
+        if (inboxClosed) {
+          return Promise.resolve(harden({ done: true, value: undefined }));
+        }
+        return new Promise(resolve => {
+          inboxWaiter = resolve;
+        });
+      },
+      return() {
+        inboxClosed = true;
+        if (inboxWaiter) {
+          const w = inboxWaiter;
+          inboxWaiter = null;
+          w(harden({ done: true, value: undefined }));
+        }
+        return Promise.resolve(harden({ done: true, value: undefined }));
+      },
+      throw() {
+        inboxClosed = true;
+        return Promise.resolve(harden({ done: true, value: undefined }));
+      },
+      [Symbol.asyncIterator]() {
+        return inboundReader;
+      },
+    });
+
+    const envelopeWriter = harden({
+      /** @param {{ verb: string, payload: Uint8Array }} env */
+      async next(env) {
+        hostTrace(
+          `daemon-xs(slots): SEND ${env.verb} handle=${workerHandle} bytes=${env.payload.length}`,
+        );
+        sendEnvelope(workerHandle, env.verb, env.payload);
+        return harden({ done: false, value: undefined });
+      },
+      async return() {
+        return harden({ done: true, value: undefined });
+      },
+      async throw() {
+        return harden({ done: true, value: undefined });
+      },
+      [Symbol.asyncIterator]() {
+        return envelopeWriter;
+      },
+    });
+
+    const { getBootstrap, closed: slotsClosed } = makeMessageSlots(
+      `Worker ${workerId}`,
+      envelopeWriter,
+      inboundReader,
+      cancelled,
+      daemonWorkerFacet,
+    );
+
+    slotsClosed.finally(() => {
+      workerSlotInboxes.delete(workerHandle);
+      hostTrace(
+        `Endo worker connection closed (slots) handle=${workerHandle} id=${workerId}`,
+      );
+    });
+
+    const workerTerminated = Promise.race([workerClosed, slotsClosed]);
+
+    /** @type {ERef<WorkerDaemonFacet>} */
+    const workerDaemonFacet = /** @type {any} */ (getBootstrap());
+
+    return { workerTerminated, workerDaemonFacet };
+  }
+
+  // CapTP path (default).
   const [captpReadFrom, captpWriteTo] = makePipe();
 
   workerWriters.set(workerHandle, { writer: captpWriteTo });
@@ -541,11 +664,6 @@ const makeWorker = async (
 
   const messageWriter = mapWriter(envelopeBytesWriter, messageToBytes);
   const messageReader = mapReader(captpReadFrom, bytesToMessage);
-
-  const workerClosed = new Promise(resolve => {
-    workerExitResolvers.set(workerHandle, resolve);
-    cancelled.catch(() => resolve(undefined));
-  });
 
   const { getBootstrap, closed: capTpClosed } = makeMessageCapTP(
     `Worker ${workerId}`,
@@ -698,7 +816,8 @@ const main = async () => {
     cancelled,
     {},
     {
-      defaultWorkerKind: 'locked',
+      defaultWorkerKind:
+        hostGetEnv('ENDO_DEFAULT_PLATFORM') === 'node' ? 'node' : 'locked',
       gcEnabled,
     },
   );
@@ -776,7 +895,19 @@ const main = async () => {
 const silentReject = _err => {};
 
 /**
- * Set up a CapTP session for a new client connection.
+ * Set up a session for a new external client connection.
+ *
+ * Default mode: CapTP with JSON-encoded messages wrapped in
+ * `deliver` envelopes addressed to the client handle.
+ *
+ * Slot-machine mode (`ENDO_USE_SLOT_MACHINE=1`): mirror the
+ * worker-session path — every slot verb (deliver/resolve/drop/
+ * abort) flows through a per-client async-iterator inbox, with
+ * outbound envelopes shipped via `sendEnvelope` and a single
+ * direction-flip on send (no Rust supervisor translation in the
+ * client edge — the kref pre-binding does fire for h ≥ 2, but
+ * the client-side client doesn't know to use the kref's view, so
+ * we treat it as a peer-to-peer bootstrap and flip locally).
  *
  * @param {number} connectionHandle
  */
@@ -789,27 +920,118 @@ const setupClientSession = connectionHandle => {
     return;
   }
 
-  /**
-   * @param {Record<string, unknown>} message
-   */
-  const send = message => {
-    const json = JSON.stringify(message);
-    const bytes = bytesFromText(json);
-    hostTrace(
-      `daemon-xs: client SEND handle=${connectionHandle} type=${message.type || '?'}`,
+  if (useSlotMachineClient) {
+    /** @type {Array<{ verb: string, payload: Uint8Array }>} */
+    const inboxQueue = [];
+    /** @type {((value: IteratorResult<{verb: string, payload: Uint8Array}>) => void) | null} */
+    let inboxWaiter = null;
+    let inboxClosed = false;
+
+    clientSlotInboxes.set(connectionHandle, env => {
+      if (inboxWaiter) {
+        const w = inboxWaiter;
+        inboxWaiter = null;
+        w(Object.freeze({ done: false, value: env }));
+      } else {
+        inboxQueue.push(env);
+      }
+    });
+
+    const inboundReader = harden({
+      next() {
+        if (inboxQueue.length > 0) {
+          const value = /** @type {{verb: string, payload: Uint8Array}} */ (
+            inboxQueue.shift()
+          );
+          return Promise.resolve(Object.freeze({ done: false, value }));
+        }
+        if (inboxClosed) {
+          return Promise.resolve(harden({ done: true, value: undefined }));
+        }
+        return new Promise(resolve => {
+          inboxWaiter = resolve;
+        });
+      },
+      return() {
+        inboxClosed = true;
+        if (inboxWaiter) {
+          const w = inboxWaiter;
+          inboxWaiter = null;
+          w(harden({ done: true, value: undefined }));
+        }
+        return Promise.resolve(harden({ done: true, value: undefined }));
+      },
+      throw() {
+        inboxClosed = true;
+        return Promise.resolve(harden({ done: true, value: undefined }));
+      },
+      [Symbol.asyncIterator]() {
+        return inboundReader;
+      },
+    });
+
+    const envelopeWriter = harden({
+      /** @param {{ verb: string, payload: Uint8Array }} env */
+      async next(env) {
+        // Flip direction on send to match the bench-client's side
+        // (which also flips on send via makeNetstringSlots) — this
+        // gives one flip per hop end-to-end on the client edge,
+        // standing in for kref translation through the supervisor.
+        const flipped = flipEnvelopePayload(env.verb, env.payload);
+        hostTrace(
+          `daemon-xs(slots): client SEND ${env.verb} handle=${connectionHandle} bytes=${flipped.length}`,
+        );
+        sendEnvelope(connectionHandle, env.verb, flipped);
+        return harden({ done: false, value: undefined });
+      },
+      async return() {
+        return harden({ done: true, value: undefined });
+      },
+      async throw() {
+        return harden({ done: true, value: undefined });
+      },
+      [Symbol.asyncIterator]() {
+        return envelopeWriter;
+      },
+    });
+
+    /** @type {Promise<never>} */
+    const sessionCancelled = new Promise(() => {});
+
+    makeMessageSlots(
+      `Client ${connectionHandle}`,
+      envelopeWriter,
+      inboundReader,
+      sessionCancelled,
+      bootstrap,
     );
-    sendEnvelope(connectionHandle, 'deliver', bytes);
-  };
 
-  const { dispatch, abort } = makeCapTP(
-    `Client ${connectionHandle}`,
-    send,
-    bootstrap,
-    { onReject: silentReject },
-  );
+    hostTrace(
+      `daemon-xs(slots): client session created handle=${connectionHandle}`,
+    );
+  } else {
+    /**
+     * @param {Record<string, unknown>} message
+     */
+    const send = message => {
+      const json = JSON.stringify(message);
+      const bytes = bytesFromText(json);
+      hostTrace(
+        `daemon-xs: client SEND handle=${connectionHandle} type=${message.type || '?'}`,
+      );
+      sendEnvelope(connectionHandle, 'deliver', bytes);
+    };
 
-  clientSessions.set(connectionHandle, { dispatch, abort });
-  hostTrace(`daemon-xs: client session created handle=${connectionHandle}`);
+    const { dispatch, abort } = makeCapTP(
+      `Client ${connectionHandle}`,
+      send,
+      bootstrap,
+      { onReject: silentReject },
+    );
+
+    clientSessions.set(connectionHandle, { dispatch, abort });
+    hostTrace(`daemon-xs: client session created handle=${connectionHandle}`);
+  }
 };
 
 /**
@@ -888,6 +1110,29 @@ globalThis.handleCommand = harden(bytes => {
       );
     }
     return;
+  }
+
+  // Slot-machine traffic from a worker or external client
+  // (deliver / resolve / drop / abort).  Routes to the per-handle
+  // slot inbox set up at session creation; falls through to the
+  // CapTP path when neither inbox is registered.
+  if (isSlotVerb(env.verb)) {
+    const workerInbox = workerSlotInboxes.get(env.handle);
+    if (workerInbox) {
+      hostTrace(
+        `daemon-xs(slots): RECV ${env.verb} handle=${env.handle} bytes=${env.payload.length}`,
+      );
+      workerInbox({ verb: env.verb, payload: env.payload });
+      return;
+    }
+    const clientInbox = clientSlotInboxes.get(env.handle);
+    if (clientInbox) {
+      hostTrace(
+        `daemon-xs(slots): client RECV ${env.verb} handle=${env.handle} bytes=${env.payload.length}`,
+      );
+      clientInbox({ verb: env.verb, payload: env.payload });
+      return;
+    }
   }
 
   // Worker CapTP messages.

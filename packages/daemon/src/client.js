@@ -1,8 +1,9 @@
 // @ts-check
+/* global process */
 
 import net from 'net';
 import { makeNodeReader, makeNodeWriter } from '@endo/stream-node';
-import { makeNetstringCapTP } from './connection.js';
+import { makeNetstringCapTP, makeNetstringSlots } from './connection.js';
 
 /**
  * @template TBootstrap
@@ -34,6 +35,22 @@ export const makeEndoClient = async (
       }
     });
   });
+
+  // Under ENDO_USE_SLOT_MACHINE=1 the daemon's external listener
+  // speaks slot-machine on its private socket; clients must speak
+  // the same wire protocol.  Otherwise default to CapTP.
+  if (
+    typeof process !== 'undefined' &&
+    process.env.ENDO_USE_SLOT_MACHINE === '1'
+  ) {
+    return makeNetstringSlots(
+      name,
+      makeNodeWriter(conn),
+      makeNodeReader(conn),
+      cancelled,
+      bootstrap,
+    );
+  }
 
   return makeNetstringCapTP(
     name,
