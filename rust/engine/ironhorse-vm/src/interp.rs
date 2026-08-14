@@ -11395,12 +11395,10 @@ impl Interp {
             Some(c) => c,
             None => return Err(Halt::Unsupported("String.replace:non-string-receiver")),
         };
-        // Coerce the replacement to string; the `$`-substitution grammar is a
-        // later increment, so a `$`-bearing replacement self-names.
+        // Coerce the replacement to string. A `$`-bearing replacement is
+        // expanded per `GetSubstitution` once the match is known (below).
         let repl_bytes = self.to_string_bytes_metered(replacement);
-        if repl_bytes.contains(&b'$') {
-            return Err(Halt::Unsupported("String.replace:dollar-substitution"));
-        }
+        let has_dollar = repl_bytes.contains(&b'$');
         self.meter.tick_raw(STRING_REPLACE_FRAME_METERING);
         // `mxGetID(_flags)` (the `globalFlag` test) — the eight-property
         // cascade.
@@ -11439,11 +11437,17 @@ impl Interp {
                     self.meter.tick_chunk_new((pos + 1) as u64);
                     out.extend_from_slice(&subject_bytes[..pos]);
                 }
-                // The substitution segment (the literal replacement copied) +
-                // its slot.
+                // The substitution segment: the replacement, with any `$`
+                // tokens expanded per `GetSubstitution` (`$$`, `$&`, `` $` ``,
+                // `$'`, `$n`/`$nn`, and `$<name>`), then copied + its slot.
+                let subst_bytes = if has_dollar {
+                    self.regexp_get_substitution(inst, result, &subject_bytes, pos, match_len, &repl_bytes)
+                } else {
+                    repl_bytes.clone()
+                };
                 self.meter.tick_slot_alloc();
-                self.meter.tick_chunk_new((repl_bytes.len() + 1) as u64);
-                out.extend_from_slice(&repl_bytes);
+                self.meter.tick_chunk_new((subst_bytes.len() + 1) as u64);
+                out.extend_from_slice(&subst_bytes);
                 if former < subject_bytes.len() {
                     // `post` segment (`split_aux` copy) + its slot.
                     self.meter.tick_slot_alloc();
@@ -11469,6 +11473,125 @@ impl Interp {
             }
         }
         0
+    }
+
+    /// The byte text of capture group `idx` from an `exec` result array, or
+    /// `None` when the group did not participate (its result element is
+    /// `undefined`).
+    fn regexp_capture_bytes(&self, result: Slot, idx: usize) -> Option<Vec<u8>> {
+        let r = match result.value {
+            Payload::Reference(r) => r,
+            _ => return None,
+        };
+        let item = self.arrays.get(&r)?.items.get(&(idx as u32)).copied()?;
+        match item.value {
+            Payload::String(off) if item.kind == Kind::String => {
+                Some(self.str_text(off).into_bytes())
+            }
+            _ => None,
+        }
+    }
+
+    /// `GetSubstitution` (ECMA-262 22.1.3.19.1): expand the `$` tokens of a
+    /// `String.prototype.replace` replacement string against one match —
+    /// `$$`→`$`, `$&`→matched, `` $` ``→prefix, `$'`→suffix, `$n`/`$nn`→the
+    /// nth capture (empty when the group is unset, literal when out of range),
+    /// and `$<name>`→the named capture (only when the pattern declares named
+    /// groups; empty when the name is absent or unset). Any other `$X` is
+    /// literal.
+    fn regexp_get_substitution(
+        &self,
+        inst: crate::value::SlotIndex,
+        result: Slot,
+        subject: &[u8],
+        pos: usize,
+        match_len: usize,
+        repl: &[u8],
+    ) -> Vec<u8> {
+        let count = self.regexp_capture_count(result); // includes whole match at 0
+        let names: Vec<(String, i32)> =
+            self.regexps[&inst].program.capture_group_names.clone();
+        let matched = &subject[pos..(pos + match_len).min(subject.len())];
+        let mut out = Vec::with_capacity(repl.len());
+        let mut i = 0;
+        while i < repl.len() {
+            if repl[i] != b'$' || i + 1 >= repl.len() {
+                out.push(repl[i]);
+                i += 1;
+                continue;
+            }
+            match repl[i + 1] {
+                b'$' => {
+                    out.push(b'$');
+                    i += 2;
+                }
+                b'&' => {
+                    out.extend_from_slice(matched);
+                    i += 2;
+                }
+                b'`' => {
+                    out.extend_from_slice(&subject[..pos]);
+                    i += 2;
+                }
+                b'\'' => {
+                    out.extend_from_slice(&subject[(pos + match_len).min(subject.len())..]);
+                    i += 2;
+                }
+                b'0'..=b'9' => {
+                    let d1 = (repl[i + 1] - b'0') as usize;
+                    // Prefer a two-digit reference when the second digit forms
+                    // an in-range group number, else fall back to one digit.
+                    let mut group = 0usize;
+                    let mut consumed = 0usize;
+                    if i + 2 < repl.len() && repl[i + 2].is_ascii_digit() {
+                        let two = d1 * 10 + (repl[i + 2] - b'0') as usize;
+                        if two >= 1 && two < count {
+                            group = two;
+                            consumed = 3;
+                        }
+                    }
+                    if consumed == 0 && d1 >= 1 && d1 < count {
+                        group = d1;
+                        consumed = 2;
+                    }
+                    if consumed == 0 {
+                        // Out of range: `$` and the digits stay literal.
+                        out.push(b'$');
+                        i += 1;
+                    } else {
+                        if let Some(bytes) = self.regexp_capture_bytes(result, group) {
+                            out.extend_from_slice(&bytes);
+                        }
+                        i += consumed;
+                    }
+                }
+                b'<' if !names.is_empty() => {
+                    // `$<name>`: scan to the next `>`; a missing `>` leaves the
+                    // `$<` literal (matching the `$<snd` → `$<snd` case).
+                    if let Some(rel) = repl[i + 2..].iter().position(|&c| c == b'>') {
+                        let name = &repl[i + 2..i + 2 + rel];
+                        if let Some((_, cidx)) =
+                            names.iter().find(|(nm, _)| nm.as_bytes() == name)
+                        {
+                            if let Some(bytes) = self.regexp_capture_bytes(result, *cidx as usize) {
+                                out.extend_from_slice(&bytes);
+                            }
+                            // An unset or absent name expands to the empty string.
+                        }
+                        i += 2 + rel + 1;
+                    } else {
+                        out.extend_from_slice(b"$<");
+                        i += 2;
+                    }
+                }
+                _ => {
+                    // `$` followed by any other code unit is a literal `$`.
+                    out.push(b'$');
+                    i += 1;
+                }
+            }
+        }
+        out
     }
 
     /// Build the ephemeral **splitter** RegExp `split` constructs via the
