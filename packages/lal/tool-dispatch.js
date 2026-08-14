@@ -396,17 +396,11 @@ export const makeExecuteTool = powers => {
       }
       case 'glob': {
         const { petNameOrPath, pattern } = args;
-        if (petNameOrPath === undefined || pattern === undefined) {
-          throw new Error('petNameOrPath and pattern are required');
-        }
         const capability = await E(powers).lookup(petNameOrPath);
         return E(capability).glob(pattern);
       }
       case 'grep': {
         const { petNameOrPath, pattern, glob, maxResults } = args;
-        if (petNameOrPath === undefined || pattern === undefined) {
-          throw new Error('petNameOrPath and pattern are required');
-        }
         const capability = await E(powers).lookup(petNameOrPath);
         const options =
           maxResults === undefined ? undefined : harden({ maxResults });
