@@ -11,13 +11,13 @@
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { makeError, q, X } from '@endo/errors';
+import { getGitCredentialController as getGitCredentialControllerForCap } from '@endo/exo-git/src/git-credential.js';
 import {
-  getGitCredentialController as getGitCredentialControllerForCap,
   getGitRemoteController as getGitRemoteControllerForCap,
-  isGitReadOnly,
-  makeGitCloner,
   makeGitRemoteEndpoint,
-} from '@endo/exo-git';
+} from '@endo/exo-git/src/git-remote.js';
+import { isGitReadOnly } from '@endo/exo-git/src/git.js';
+import { makeGitCloner } from '@endo/exo-git/src/git-cloner.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import {
   assertPetName,
@@ -339,6 +339,8 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['listRetentionPaths']} [args.listRetentionPaths]
  * @param {DaemonCore['followRetentionPaths']} [args.followRetentionPaths]
  * @param {ReturnType<typeof makeTraceAggregator>} [args.traceAggregator]
+ * @param {typeof import('@endo/git/src/native-git-backend.js').gitClone} args.gitClone
+ *   Host-specific native Git clone operation.
  *   Optional. When provided, `host.traces()` returns an Exo whose
  *   methods proxy to this aggregator. Without it, `host.traces()`
  *   throws.

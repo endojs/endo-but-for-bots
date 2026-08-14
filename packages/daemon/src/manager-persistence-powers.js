@@ -12,7 +12,7 @@
  *
  * The Node daemon path passes `better-sqlite3` as the Database
  * constructor; the XS-on-Rust-supervisor path passes
- * `./better-sqlite3-xs.js`, which forwards prepared-statement
+ * `./endor-sqlite.js`, which forwards prepared-statement
  * calls through host functions to rusqlite.  Both backends agree
  * on the on-disk schema (`<statePath>/endo.sqlite`), so a single
  * state directory can be opened by either supervisor without a

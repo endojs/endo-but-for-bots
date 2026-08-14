@@ -21,14 +21,13 @@ import {
   snapshotTreeMethods,
 } from '@endo/platform/fs/lite';
 import { toSafeNumber } from '@endo/platform/fs/extended/shared/helpers.js';
+import { makeGit, makeGitOperations } from '@endo/exo-git/src/git.js';
+import { makeGitRemote } from '@endo/exo-git/src/git-remote.js';
 import {
   makeBasicCredential,
   makeBearerCredential,
-  makeGit,
-  makeGitOperations,
-  makeGitRemote,
   makeUnavailableGitCredential,
-} from '@endo/exo-git';
+} from '@endo/exo-git/src/git-credential.js';
 import { makeShell } from '@endo/exo-shell';
 import { makeHttpClientAndControl } from '@endo/exo-http-client';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
@@ -3464,7 +3463,7 @@ const makeDaemonCore = async (
       makeIdentifiedWorker(
         formulaNumber,
         context,
-        formula.kind,
+        formula.kind ?? defaultWorkerKind,
         formula.trustedShims,
         formula.label,
       ),
@@ -5219,7 +5218,7 @@ const makeDaemonCore = async (
     {
       trustedShims,
       label = '<untitled>',
-      kind,
+      kind = defaultWorkerKind,
       nodeNumber = localNodeNumber,
     } = {},
   ) => {

@@ -8,6 +8,8 @@ import { mapWriter, mapReader } from '@endo/stream';
 import { makeNetstringReader, makeNetstringWriter } from '@endo/netstring';
 import { bytesFromText } from '@endo/bytes/from-string.js';
 import { bytesToText } from '@endo/bytes/to-string.js';
+import { makeMessageSlots, flipEnvelopePayload } from '@endo/slots';
+import { encodeEnvelope, decodeEnvelope } from './envelope.js';
 
 /** @import { Stream, Reader, Writer } from '@endo/stream' */
 /** @import { CapTpConnectionRegistrar } from './types.js' */
@@ -305,5 +307,71 @@ export const makeNetstringCapTP = (
     bootstrap,
     capTpOptions,
     capTpConnectionRegistrar,
+  );
+};
+
+/**
+ * Slot-machine analogue of {@link makeNetstringCapTP}.
+ *
+ * Wraps a byte-level pipe (a UNIX socket, TCP socket, …) in
+ * netstring framing and runs `makeMessageSlots` over the resulting
+ * envelope stream.  Each netstring frame carries one CBOR envelope
+ * (the same envelope codec the Rust supervisor speaks on fd 3/4),
+ * so the wire format stays uniform across daemon-internal pipes
+ * and external sockets.
+ *
+ * For 1:1 stream connections the envelope `handle` and `nonce`
+ * fields are unused — we emit `handle = 0` and ignore the inbound
+ * `handle` on read.
+ *
+ * @template TBootstrap
+ * @param {string} name
+ * @param {Writer<Uint8Array>} bytesWriter
+ * @param {Reader<Uint8Array>} bytesReader
+ * @param {Promise<void>} cancelled
+ * @param {TBootstrap} bootstrap
+ * @returns {{
+ *   getBootstrap: () => TBootstrap,
+ *   closed: Promise<void>,
+ *   close: (reason?: Error) => Promise<void>,
+ * }}
+ */
+export const makeNetstringSlots = (
+  name,
+  bytesWriter,
+  bytesReader,
+  cancelled,
+  bootstrap,
+) => {
+  const frameWriter = makeNetstringWriter(bytesWriter, { chunked: true });
+  const frameReader = makeNetstringReader(bytesReader);
+  // Peer-to-peer slot-machine over a stream socket has no translating
+  // supervisor, so we flip descriptor direction once per hop on send
+  // (the loopback / unit-test convention from packages/slots/test/_loopback.js).
+  // Each side flipping on send means each direction sees exactly one
+  // flip end-to-end, which is the kref-free equivalent of the
+  // supervisor's translate_deliver under the position-1 bootstrap.
+  const envelopeWriter = mapWriter(frameWriter, ({ verb, payload }) =>
+    encodeEnvelope({
+      handle: 0,
+      verb,
+      payload: flipEnvelopePayload(verb, payload),
+      nonce: 0,
+    }),
+  );
+  const envelopeReader = mapReader(frameReader, frame => {
+    const env = decodeEnvelope(frame);
+    return { verb: env.verb, payload: env.payload };
+  });
+  return /** @type {ReturnType<typeof makeNetstringSlots<TBootstrap>>} */ (
+    /** @type {unknown} */ (
+      makeMessageSlots(
+        name,
+        /** @type {any} */ (envelopeWriter),
+        /** @type {any} */ (envelopeReader),
+        cancelled,
+        bootstrap,
+      )
+    )
   );
 };

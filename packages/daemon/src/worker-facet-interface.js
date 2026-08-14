@@ -11,7 +11,7 @@
  *   - `./worker.js` (the Node worker) reads it from `./interfaces.js`,
  *     which imports `@endo/platform/fs/lite`.
  *   - `./bus-worker-xs.js` (the XS worker) is bundled for XS by
- *     `../scripts/bundle-bus-worker-xs.mjs`, and must not drag
+ *     `../scripts/bundle-bus-worker-xs.js`, and must not drag
  *     `@endo/platform`'s Node-only paths into that bundle.
  *
  * Hoisting the guard here gives both a single definition to import.

@@ -1,8 +1,9 @@
 // @ts-check
+/* global process */
 
 import harden from '@endo/harden';
 import { q } from '@endo/errors';
-import { makeNetstringCapTP } from './connection.js';
+import { makeNetstringCapTP, makeNetstringSlots } from './connection.js';
 
 /** @import { CapTpConnectionRegistrar } from './types.js' */
 
@@ -50,6 +51,17 @@ export const servePrivatePath = (
 
     const connections = await connectionsP;
 
+    // Under ENDO_USE_SLOT_MACHINE=1 the daemon's external listener
+    // speaks slot-machine instead of CapTP, so the entire chain
+    // (external client → daemon → workers → daemon → other workers)
+    // stays in a single wire protocol.  Avoids the CapTP↔slot-machine
+    // marshalling boundary that otherwise blocks worker-to-worker
+    // forwarding (a slot-machine HandledPromise never settles
+    // through CapTP's marshal layer).
+    const useSlotMachine =
+      typeof process !== 'undefined' &&
+      process.env.ENDO_USE_SLOT_MACHINE === '1';
+
     for await (const {
       reader,
       writer,
@@ -58,20 +70,22 @@ export const servePrivatePath = (
       (async () => {
         const { value: connectionNumber } = connectionNumbers.next();
         console.log(
-          `Endo daemon received domain connection ${connectionNumber} at ${new Date().toISOString()}`,
+          `Endo daemon received domain connection ${connectionNumber} at ${new Date().toISOString()} (${useSlotMachine ? 'slots' : 'captp'})`,
         );
 
-        const { closed: capTpClosed } = makeNetstringCapTP(
-          'Endo',
-          writer,
-          reader,
-          cancelled,
-          endoBootstrap,
-          { marshalSaveError },
-          capTpConnectionRegistrar,
-        );
+        const { closed: sessionClosed } = useSlotMachine
+          ? makeNetstringSlots('Endo', writer, reader, cancelled, endoBootstrap)
+          : makeNetstringCapTP(
+              'Endo',
+              writer,
+              reader,
+              cancelled,
+              endoBootstrap,
+              { marshalSaveError },
+              capTpConnectionRegistrar,
+            );
 
-        const closed = Promise.race([connectionClosed, capTpClosed]);
+        const closed = Promise.race([connectionClosed, sessionClosed]);
         connectionClosedPromises.add(closed);
         closed.finally(() => {
           connectionClosedPromises.delete(closed);

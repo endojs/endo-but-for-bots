@@ -3,7 +3,7 @@
    class-methods-use-this, no-undef -- this module is bundled
    into the XS daemon (no Node-style globalThis / class-style
    linting); the underscore-dunder convention is consistent with
-   the rest of bus-daemon-rust-xs.js. */
+   the rest of bus-manager-endor.js. */
 // XS-side adapter that presents a `better-sqlite3`-compatible
 // surface backed by the Rust supervisor's SQLite host functions
 // (powers/sqlite.rs registered in xsnap, aliased to host* in
@@ -133,7 +133,7 @@ class XsStatement {
     const parsed = JSON.parse(result);
     return {
       changes: decodeCell(parsed.changes),
-      lastInsertRowid: decodeCell(parsed.lastInsertRowid),
+      lastInsertRowid: decodeCell(parsed.last_insert_row_id),
     };
   }
 
@@ -188,6 +188,86 @@ class XsDatabase {
    */
   pragma(stmt) {
     this.exec(`PRAGMA ${stmt};`);
+  }
+
+  /**
+   * better-sqlite3-compatible transaction wrapper.
+   *
+   * Returns a callable that, when invoked, runs `fn(...args)`
+   * inside a `BEGIN ... COMMIT` block on this connection.  Any
+   * exception thrown by `fn` triggers `ROLLBACK` and re-throws.
+   *
+   * The returned callable also exposes `.deferred`,
+   * `.immediate`, and `.exclusive` siblings that mirror
+   * better-sqlite3's transaction modes by changing the BEGIN
+   * verb.  The default mode (`tx(...)`) is DEFERRED, matching
+   * better-sqlite3.
+   *
+   * Nested transactions on the same connection use SAVEPOINTs
+   * — better-sqlite3's behaviour — so that an outer transaction
+   * still commits or rolls back atomically when an inner one
+   * throws.
+   *
+   * @template {(...args: any[]) => any} F
+   * @param {F} fn
+   * @returns {F & {
+   *   deferred: F,
+   *   immediate: F,
+   *   exclusive: F,
+   * }}
+   */
+  transaction(fn) {
+    if (typeof fn !== 'function') {
+      throw new TypeError('transaction(fn): fn must be a function');
+    }
+    const db = this;
+    let depth = 0;
+    const run = (mode, args) => {
+      const isOuter = depth === 0;
+      const sp = `endo_sp_${depth}`;
+      if (isOuter) {
+        db.exec(`BEGIN ${mode} TRANSACTION`);
+      } else {
+        db.exec(`SAVEPOINT ${sp}`);
+      }
+      depth += 1;
+      let result;
+      try {
+        result = fn(...args);
+      } catch (err) {
+        depth -= 1;
+        if (isOuter) {
+          try {
+            db.exec('ROLLBACK');
+          } catch (_e) {
+            // Best-effort: a ROLLBACK against an already-broken
+            // connection still surfaces the original error to
+            // the caller.
+          }
+        } else {
+          db.exec(`ROLLBACK TO SAVEPOINT ${sp}`);
+          db.exec(`RELEASE SAVEPOINT ${sp}`);
+        }
+        throw err;
+      }
+      depth -= 1;
+      if (isOuter) {
+        db.exec('COMMIT');
+      } else {
+        db.exec(`RELEASE SAVEPOINT ${sp}`);
+      }
+      return result;
+    };
+    /** @type {any} */
+    const deferred = (...args) => run('DEFERRED', args);
+    /** @type {any} */
+    const immediate = (...args) => run('IMMEDIATE', args);
+    /** @type {any} */
+    const exclusive = (...args) => run('EXCLUSIVE', args);
+    deferred.deferred = deferred;
+    deferred.immediate = immediate;
+    deferred.exclusive = exclusive;
+    return deferred;
   }
 
   close() {
