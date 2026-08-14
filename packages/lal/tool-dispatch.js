@@ -54,6 +54,17 @@ const paramsByTool = new Map(
   tools.filter(t => t.params !== undefined).map(t => [t.name, t.params]),
 );
 
+// Free-form string arguments the LLM authors in their own dialect — a glob or
+// an ECMAScript regexp source — rather than in SmallCaps. Their first character
+// is routinely a SmallCaps special prefix (`*`, `(`, `#`, `-`, `+`, `%`, …),
+// which `fromCapData` would either throw on (`glob("*.js")` → *Special char "*"
+// reserved for future use*) or silently coerce (`grep("+1")` → BigInt `1n`).
+// These fields therefore bypass the SmallCaps decode and reach the tool
+// verbatim — honoring the "every other string field arrives verbatim" contract
+// stated in `primer/smallcaps.md` and `agent.types.d.ts`, and matching the
+// glob/regexp dialects the tool summaries and primer teach with no escape note.
+const verbatimArgFields = new Set(['pattern', 'glob']);
+
 /**
  * Decode inbound tool args from their SmallCaps JSON representation and
  * validate them against the tool's `@endo/patterns` matcher.
@@ -77,15 +88,32 @@ const paramsByTool = new Map(
  * @returns {Record<string, unknown>} SmallCaps-decoded, validated args.
  */
 const decodeToolArgs = (name, rawArgs) => {
+  // Split off the verbatim (non-SmallCaps) fields before decoding: their raw
+  // string values (glob/regexp sources) must not pass through the SmallCaps
+  // codec, which would throw on or silently coerce a pattern whose first
+  // character is a SmallCaps special prefix.
+  /** @type {Record<string, unknown>} */
+  const toDecode = {};
+  /** @type {Record<string, unknown>} */
+  const verbatim = {};
+  for (const [key, val] of Object.entries(rawArgs)) {
+    if (verbatimArgFields.has(key)) {
+      verbatim[key] = val;
+    } else {
+      toDecode[key] = val;
+    }
+  }
+
   // Reconstruct the SmallCaps body from the JSON-parsed args.
   // `rawArgs` came from JSON.parse (Pi already decoded the JSON wire), so
   // JSON.stringify is lossless for all JSON-representable values. The `#`
   // prefix tells fromCapData to parse as smallcaps rather than capdata.
-  const body = `#${JSON.stringify(rawArgs)}`;
+  const body = `#${JSON.stringify(toDecode)}`;
   /** @type {Record<string, unknown>} */
-  const decoded = /** @type {any} */ (
-    smallcapsMarshal.fromCapData({ body, slots: [] })
-  );
+  const decoded = {
+    .../** @type {any} */ (smallcapsMarshal.fromCapData({ body, slots: [] })),
+    ...verbatim,
+  };
 
   const pattern = paramsByTool.get(name);
   if (pattern === undefined) return decoded;
@@ -103,7 +131,10 @@ const decodeToolArgs = (name, rawArgs) => {
     /** @type {Record<string, unknown>} */
     const next = { ...decoded };
     for (const [key, val] of Object.entries(decoded)) {
-      if (typeof val === 'string') {
+      // Verbatim fields (glob/regexp sources) are never re-parsed: a pattern
+      // that happens to be valid JSON (e.g. `"true"`, `"123"`) must still reach
+      // the tool as the literal string the LLM authored.
+      if (!verbatimArgFields.has(key) && typeof val === 'string') {
         try {
           next[key] = JSON.parse(val);
           fixedAny = true;
@@ -393,6 +424,25 @@ export const makeExecuteTool = powers => {
         } = applyEdits(original, edits, { fileName });
         await E(capability).writeText(fileName, updated);
         return harden({ applied, diff });
+      }
+      case 'glob': {
+        const { petNameOrPath, pattern } = args;
+        const capability = await E(powers).lookup(petNameOrPath);
+        return E(capability).glob(pattern);
+      }
+      case 'grep': {
+        const { petNameOrPath, pattern, glob, maxResults } = args;
+        const capability = await E(powers).lookup(petNameOrPath);
+        const options =
+          maxResults === undefined ? undefined : harden({ maxResults });
+        if (glob !== undefined) {
+          return options === undefined
+            ? E(capability).glorp(glob, pattern)
+            : E(capability).glorp(glob, pattern, options);
+        }
+        return options === undefined
+          ? E(capability).grep(pattern)
+          : E(capability).grep(pattern, undefined, options);
       }
 
       // Code evaluation
