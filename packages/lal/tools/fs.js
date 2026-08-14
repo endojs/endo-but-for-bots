@@ -91,7 +91,12 @@ export const fsToolDefs = harden([
       },
       {
         glob: M.string(),
-        maxResults: M.number(),
+        // A non-negative finite count: bare `M.number()` admits `NaN`/`±Infinity`
+        // (Endo's pass-style treats them as valid numbers), and the daemon's cap
+        // (`matches.length >= maxResults`) only defaults on `undefined`, so those
+        // values would defeat the result cap — and `NaN` additionally coerces
+        // `slice(0, maxResults)` to `slice(0, 0)`, silently returning no matches.
+        maxResults: M.and(M.gte(0), M.lte(Number.MAX_SAFE_INTEGER)),
       },
     ),
   },

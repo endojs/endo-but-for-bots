@@ -124,3 +124,25 @@ test('grep validates optional argument shapes before dispatch', async t => {
   );
   t.deepEqual(calls, []);
 });
+
+test('grep rejects out-of-range maxResults before dispatch', async t => {
+  await null;
+  // `NaN`/`Infinity`/negative counts would defeat the daemon's result cap (and
+  // `NaN` silently truncates results to empty), so they must be rejected at the
+  // tool boundary rather than forwarded to the capability.
+  for (const maxResults of [NaN, Infinity, -Infinity, -1]) {
+    const { calls, run } = makeStub();
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        run('grep', {
+          petNameOrPath: 'workspace',
+          pattern: 'TODO',
+          maxResults,
+        }),
+      { message: /grep args/ },
+      `maxResults ${maxResults} should be rejected`,
+    );
+    t.deepEqual(calls, []);
+  }
+});
