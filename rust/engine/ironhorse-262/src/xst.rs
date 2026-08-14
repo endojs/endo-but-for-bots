@@ -530,7 +530,16 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
         // it as an oracle non-result rather than an ironhorse defect.
         Agreement::IronhorseOnlyComplete => {
             if cfg.oracle {
-                if oracle_host_aborted(run) {
+                if run.oracle_parsed
+                    && run.oracle_error == "ReferenceError: get Intl: undefined variable"
+                {
+                    // The pinned official Moddable XS build has no ECMA-402
+                    // host at all. Ironhorse can therefore execute Intl cases,
+                    // but this exact oracle cannot certify their values. Keep
+                    // the host-only exclusion precise: any other oracle throw
+                    // remains an over-acceptance failure.
+                    Verdict::RunSkip("oracle-host-missing-intl".into())
+                } else if oracle_host_aborted(run) {
                     Verdict::RunSkip("oracle-host-stack-limit".into())
                 } else {
                     Verdict::Fail(

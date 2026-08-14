@@ -173,6 +173,9 @@ pub fn classify(outcome: Verdict, reason: &str) -> Category {
             }
         }
         Verdict::RunSkip => {
+            if reason == "oracle-host-missing-intl" {
+                return Category::Skipped;
+            }
             // Harness/oracle/infrastructure non-results — not an Ironhorse gap.
             const INFRASTRUCTURE_REASONS: &[&str] = &[
                 "oracle-machine-error",

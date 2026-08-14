@@ -1619,6 +1619,14 @@ pub enum MathId {
 /// user code — the `call`/`apply`/`bind` re-entrant methods are separate.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NativeMethod {
+    IntlGetCanonicalLocales,
+    IntlSupportedValuesOf,
+    IntlSupportedLocalesOf,
+    LocaleToString,
+    LocaleMaximize,
+    LocaleMinimize,
+    CollatorResolvedOptions,
+    CollatorCompare,
     /// The internal `%CopyObject%` helper used by object spread and object
     /// rest. It copies the source's own enumerable properties to `this`.
     CopyObject,
@@ -2713,6 +2721,8 @@ pub enum Native {
     /// The realm's intrinsic `eval` function. Direct calls are dispatched by
     /// `XS_CODE_EVAL`; ordinary/indirect calls reach [`Interp::call_native`].
     Eval,
+    Locale,
+    Collator,
     Object,
     Function,
     Boolean,
@@ -2780,6 +2790,8 @@ impl Native {
     pub fn display_name(self) -> &'static str {
         match self {
             Native::Eval => "eval",
+            Native::Locale => "Locale",
+            Native::Collator => "Collator",
             Native::Object => "Object",
             Native::Function => "Function",
             Native::Boolean => "Boolean",
@@ -2816,6 +2828,8 @@ impl Native {
     fn arity(self) -> u32 {
         match self {
             Native::Eval => 1,
+            Native::Locale => 1,
+            Native::Collator => 0,
             Native::AggregateError => 2,
             Native::SuppressedError => 3,
             Native::DisposableStack | Native::AsyncDisposableStack => 0,
@@ -3157,6 +3171,13 @@ pub struct Interp {
     /// XS compiler assigned that name. Each value is a `functions`-tracked
     /// native function instance.
     intrinsics: std::collections::HashMap<&'static str, crate::value::SlotIndex>,
+    intl_object: crate::value::SlotIndex,
+    locale_proto: crate::value::SlotIndex,
+    collator_proto: crate::value::SlotIndex,
+    locales: std::collections::HashMap<crate::value::SlotIndex, LocaleData>,
+    collators: std::collections::HashMap<crate::value::SlotIndex, CollatorData>,
+    collator_compare_functions:
+        std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>,
     /// The realm's `%Object.prototype%` (XS's `mxObjectPrototype`), the root
     /// of every ordinary object's prototype chain. A boot object; ordinary
     /// objects ([`Self::new_object`]) and constructed `this` instances point
@@ -3518,6 +3539,31 @@ struct StaticStrings {
     bigint: crate::value::ChunkOffset,
 }
 
+// Frozen, in-tree locale-data profile. Intl never consults the host locale,
+// libc, environment variables, or a dynamically-updated database.
+const INTL_DATA_VERSION: &str = "ironhorse-intl-2026a";
+
+#[derive(Clone, Debug)]
+struct LocaleData {
+    tag: String,
+    language: String,
+    script: Option<String>,
+    region: Option<String>,
+    variants: Vec<String>,
+    unicode: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug)]
+struct CollatorData {
+    locale: String,
+    usage: String,
+    sensitivity: String,
+    collation: String,
+    numeric: bool,
+    case_first: String,
+    ignore_punctuation: bool,
+}
+
 /// A suspended activation: the caller's scope and resume point, saved by
 /// `run` and restored by `end` (XS's `mxFrame->value.frame.{code,scope}`
 /// plus the environment the frame aliases). The value stack is shared and
@@ -3791,6 +3837,12 @@ impl Interp {
             exception: Slot::undefined(),
             frame_slots: 0,
             intrinsics: std::collections::HashMap::new(),
+            intl_object: crate::value::SlotIndex::NULL,
+            locale_proto: crate::value::SlotIndex::NULL,
+            collator_proto: crate::value::SlotIndex::NULL,
+            locales: std::collections::HashMap::new(),
+            collators: std::collections::HashMap::new(),
+            collator_compare_functions: std::collections::HashMap::new(),
             object_proto: crate::value::SlotIndex::NULL,
             function_proto: crate::value::SlotIndex::NULL,
             ctor_prototype: std::collections::HashMap::new(),
@@ -4029,6 +4081,9 @@ impl Interp {
                 // compiled program lives in the `regexps` side table;
                 // `lastIndex` is an ordinary own property of the instance.
                 Native::RegExp => self.slots.alloc(Slot::instance(object_proto)),
+                Native::Locale | Native::Collator => {
+                    unreachable!("Intl constructors are registered by create_intl")
+                }
                 // `Proxy` is registered separately (`create_proxy`) and never
                 // iterated here — it has no `.prototype`. Unreachable in this loop.
                 Native::Proxy => unreachable!("Proxy is not a create_intrinsics loop entry"),
@@ -4566,7 +4621,75 @@ impl Interp {
         self.create_reflect();
         self.create_proxy();
         self.create_eval();
+        self.create_intl();
         self.create_hardened_globals();
+    }
+
+    fn alloc_named_native(&mut self, native: Native) -> crate::value::SlotIndex {
+        let f = self.slots.alloc(Slot::instance(self.function_proto));
+        let name = native.display_name();
+        let name_chunk = self.alloc_str_text(name.as_bytes());
+        self.functions.insert(
+            f,
+            FuncInfo {
+                native: Some(native),
+                name: name.to_string(),
+                name_chunk,
+                arity: native.arity(),
+                ..FuncInfo::default()
+            },
+        );
+        f
+    }
+
+    /// Build the ECMA-402 namespace from a frozen in-tree data profile.
+    fn create_intl(&mut self) {
+        let intl = self.slots.alloc(Slot::instance(self.object_proto));
+        self.intl_object = intl;
+        self.intrinsics.insert("Intl", intl);
+
+        let locale = self.alloc_named_native(Native::Locale);
+        let locale_proto = self.slots.alloc(Slot::instance(self.object_proto));
+        self.locale_proto = locale_proto;
+        self.ctor_prototype.insert(locale, locale_proto);
+        self.proto_methods.push((locale, "prototype", locale_proto));
+        self.proto_methods.push((locale_proto, "constructor", locale));
+        self.proto_methods.push((intl, "Locale", locale));
+
+        let collator = self.alloc_named_native(Native::Collator);
+        let collator_proto = self.slots.alloc(Slot::instance(self.object_proto));
+        self.collator_proto = collator_proto;
+        self.ctor_prototype.insert(collator, collator_proto);
+        self.proto_methods.push((collator, "prototype", collator_proto));
+        self.proto_methods.push((collator_proto, "constructor", collator));
+        self.proto_methods.push((intl, "Collator", collator));
+
+        for (name, method) in [
+            ("getCanonicalLocales", NativeMethod::IntlGetCanonicalLocales),
+            ("supportedValuesOf", NativeMethod::IntlSupportedValuesOf),
+        ] {
+            let f = self.alloc_method(method);
+            self.proto_methods.push((intl, name, f));
+        }
+        for ctor in [locale, collator] {
+            let f = self.alloc_method(NativeMethod::IntlSupportedLocalesOf);
+            self.proto_methods.push((ctor, "supportedLocalesOf", f));
+        }
+        for (name, method) in [
+            ("toString", NativeMethod::LocaleToString),
+            ("maximize", NativeMethod::LocaleMaximize),
+            ("minimize", NativeMethod::LocaleMinimize),
+        ] {
+            let f = self.alloc_method(method);
+            self.proto_methods.push((locale_proto, name, f));
+        }
+        let resolved = self.alloc_method(NativeMethod::CollatorResolvedOptions);
+        self.proto_methods
+            .push((collator_proto, "resolvedOptions", resolved));
+        // Keep the profile version observable to regression tooling without
+        // depending on a host database.
+        self.proto_data
+            .push((intl, "__ironhorseDataVersion", INTL_DATA_VERSION.to_string()));
     }
 
     /// Build `%eval%` as a special non-constructor native function. It has no
@@ -6903,6 +7026,54 @@ impl Interp {
                             } else {
                                 self.instance_get(inst, id)
                             }
+                        }
+                        Payload::Reference(inst) if self.locales.contains_key(&inst) => {
+                            let name = self
+                                .symbol_names
+                                .get(id.saturating_sub(1) as usize)
+                                .cloned()
+                                .unwrap_or_default();
+                            let locale = self.locales[&inst].clone();
+                            if name == "numeric" {
+                                Slot::boolean(locale.unicode.get("kn").map_or(false, |v| v == "true"))
+                            } else {
+                                let (recognized, text) = match name.as_str() {
+                                    "baseName" => (true, Some(locale_base_name(&locale))),
+                                    "language" => (true, Some(locale.language)),
+                                    "script" => (true, locale.script),
+                                    "region" => (true, locale.region),
+                                    "variants" => (true, Some(locale.variants.join("-"))),
+                                    "calendar" => (true, locale.unicode.get("ca").cloned()),
+                                    "caseFirst" => (true, locale.unicode.get("kf").cloned()),
+                                    "collation" => (true, locale.unicode.get("co").cloned()),
+                                    "firstDayOfWeek" => (true, locale.unicode.get("fw").cloned()),
+                                    "hourCycle" => (true, locale.unicode.get("hc").cloned()),
+                                    "numberingSystem" => (true, locale.unicode.get("nu").cloned()),
+                                    _ => (false, None),
+                                };
+                                if let Some(text) = text {
+                                    self.intl_string(&text)
+                                } else if recognized {
+                                    Slot::undefined()
+                                } else {
+                                    self.instance_get(inst, id)
+                                }
+                            }
+                        }
+                        Payload::Reference(inst)
+                            if self.collators.contains_key(&inst)
+                                && self.symbol_ids.get("compare") == Some(&id) =>
+                        {
+                            let existing = self
+                                .collator_compare_functions
+                                .iter()
+                                .find_map(|(function, owner)| (*owner == inst).then_some(*function));
+                            let function = existing.unwrap_or_else(|| {
+                                let f = self.alloc_method(NativeMethod::CollatorCompare);
+                                self.collator_compare_functions.insert(f, inst);
+                                f
+                            });
+                            Slot::of(Kind::Reference, Payload::Reference(function))
                         }
                         Payload::Reference(inst)
                             if (Some(id) == self.length_id || Some(id) == self.name_id)
@@ -10621,6 +10792,59 @@ impl Interp {
                 }
                 source
             }
+            Native::Locale => {
+                if !has_target {
+                    return Err(self.catchable_type_error());
+                }
+                let source = arg(0);
+                let options_arg = arg(1);
+                let text = self.intl_locale_argument(code, source)?;
+                let mut locale = match canonicalize_locale(&text) {
+                    Some(locale) => locale,
+                    None => return Err(self.catchable_range_error()),
+                };
+                if let Payload::Reference(options) = options_arg.value {
+                    self.apply_locale_options(code, options, &mut locale)?;
+                }
+                locale.tag = locale_to_tag(&locale);
+                let inst = self.slots.alloc(Slot::instance(self.locale_proto));
+                self.locales.insert(inst, locale);
+                Slot::of(Kind::Reference, Payload::Reference(inst))
+            }
+            Native::Collator => {
+                let locale_arg = arg(0);
+                let options_arg = arg(1);
+                let locale = self
+                    .intl_first_locale(code, locale_arg)?
+                    .unwrap_or_else(|| "en".to_string());
+                let locale = match canonicalize_locale(&locale) {
+                    Some(locale) => locale,
+                    None => return Err(self.catchable_range_error()),
+                };
+                let mut data = CollatorData {
+                    locale: supported_locale(&locale.tag),
+                    usage: "sort".to_string(),
+                    sensitivity: "variant".to_string(),
+                    collation: locale
+                        .unicode
+                        .get("co")
+                        .cloned()
+                        .unwrap_or_else(|| "default".to_string()),
+                    numeric: locale.unicode.get("kn").map_or(false, |v| v == "true"),
+                    case_first: locale
+                        .unicode
+                        .get("kf")
+                        .cloned()
+                        .unwrap_or_else(|| "false".to_string()),
+                    ignore_punctuation: false,
+                };
+                if let Payload::Reference(options) = options_arg.value {
+                    self.apply_collator_options(code, options, &mut data)?;
+                }
+                let inst = self.slots.alloc(Slot::instance(self.collator_proto));
+                self.collators.insert(inst, data);
+                Slot::of(Kind::Reference, Payload::Reference(inst))
+            }
             // `Boolean(value)` (`fx_Boolean`): ToBoolean(argument0), or
             // `false` when called with no argument. Measured against the pin,
             // the primitive coercion meters **no** built-in step beyond the
@@ -11368,6 +11592,202 @@ impl Interp {
         let _ = argc;
         self.stack.truncate(base);
         self.push(result);
+        Ok(())
+    }
+
+    fn intl_locale_argument(&mut self, code: &[u8], value: Slot) -> Result<String, Halt> {
+        if let Payload::Reference(r) = value.value {
+            if let Some(locale) = self.locales.get(&r) {
+                return Ok(locale.tag.clone());
+            }
+        }
+        let primitive = if value.kind == Kind::Reference {
+            self.to_primitive(code, value, true)?
+        } else {
+            value
+        };
+        if primitive.kind != Kind::String {
+            return Err(self.catchable_type_error());
+        }
+        match primitive.value {
+            Payload::String(off) => Ok(self.str_text(off)),
+            _ => Err(self.catchable_type_error()),
+        }
+    }
+
+    fn intl_first_locale(&mut self, code: &[u8], value: Slot) -> Result<Option<String>, Halt> {
+        if value.kind == Kind::Undefined {
+            return Ok(None);
+        }
+        if let Payload::Reference(r) = value.value {
+            if let Some(locale) = self.locales.get(&r) {
+                return Ok(Some(locale.tag.clone()));
+            }
+            if let Some(array) = self.arrays.get(&r) {
+                let first = array.items.get(&0).copied();
+                return first
+                    .map(|slot| self.intl_locale_argument(code, slot).map(Some))
+                    .unwrap_or(Ok(None));
+            }
+        }
+        self.intl_locale_argument(code, value).map(Some)
+    }
+
+    fn intl_locale_list(&mut self, code: &[u8], value: Slot) -> Result<Vec<String>, Halt> {
+        if value.kind == Kind::Undefined {
+            return Ok(Vec::new());
+        }
+        let values = if let Payload::Reference(r) = value.value {
+            if let Some(array) = self.arrays.get(&r) {
+                (0..array.length)
+                    .filter_map(|i| array.items.get(&i).copied())
+                    .collect::<Vec<_>>()
+            } else {
+                vec![value]
+            }
+        } else {
+            vec![value]
+        };
+        let mut result = Vec::new();
+        for item in values {
+            let raw = self.intl_locale_argument(code, item)?;
+            let canonical = canonicalize_locale(&raw)
+                .ok_or_else(|| self.catchable_range_error())?
+                .tag;
+            if !result.contains(&canonical) {
+                result.push(canonical);
+            }
+        }
+        Ok(result)
+    }
+
+    fn intl_string(&mut self, text: &str) -> Slot {
+        self.new_string_metered(text.as_bytes())
+    }
+
+    fn new_locale_from_data(&mut self, locale: LocaleData) -> Slot {
+        let inst = self.slots.alloc(Slot::instance(self.locale_proto));
+        self.locales.insert(inst, locale);
+        Slot::of(Kind::Reference, Payload::Reference(inst))
+    }
+
+    fn intl_option_string(
+        &mut self,
+        code: &[u8],
+        options: crate::value::SlotIndex,
+        name: &str,
+    ) -> Result<Option<String>, Halt> {
+        let Some(&id) = self.symbol_ids.get(name) else {
+            return Ok(None);
+        };
+        let value = self.instance_get(options, id);
+        if value.kind == Kind::Undefined {
+            return Ok(None);
+        }
+        let primitive = if value.kind == Kind::Reference {
+            self.to_primitive(code, value, true)?
+        } else {
+            value
+        };
+        let bytes = self.to_string_bytes_metered(primitive);
+        Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+    }
+
+    fn intl_option_bool(
+        &self,
+        options: crate::value::SlotIndex,
+        name: &str,
+    ) -> Option<bool> {
+        let id = *self.symbol_ids.get(name)?;
+        let value = self.instance_get(options, id);
+        (value.kind != Kind::Undefined).then(|| self.truthy(&value))
+    }
+
+    fn apply_locale_options(
+        &mut self,
+        code: &[u8],
+        options: crate::value::SlotIndex,
+        locale: &mut LocaleData,
+    ) -> Result<(), Halt> {
+        if let Some(language) = self.intl_option_string(code, options, "language")? {
+            if !valid_language(&language) {
+                return Err(self.catchable_range_error());
+            }
+            locale.language = language.to_ascii_lowercase();
+        }
+        if let Some(script) = self.intl_option_string(code, options, "script")? {
+            if !valid_script(&script) {
+                return Err(self.catchable_range_error());
+            }
+            locale.script = Some(titlecase_ascii(&script));
+        }
+        if let Some(region) = self.intl_option_string(code, options, "region")? {
+            if !valid_region(&region) {
+                return Err(self.catchable_range_error());
+            }
+            locale.region = Some(region.to_ascii_uppercase());
+        }
+        for (option, key, allowed) in [
+            ("calendar", "ca", &[][..]),
+            ("collation", "co", &[][..]),
+            ("hourCycle", "hc", &["h11", "h12", "h23", "h24"][..]),
+            ("caseFirst", "kf", &["upper", "lower", "false"][..]),
+            ("numberingSystem", "nu", &[][..]),
+            ("firstDayOfWeek", "fw", &["mon", "tue", "wed", "thu", "fri", "sat", "sun"][..]),
+        ] {
+            if let Some(value) = self.intl_option_string(code, options, option)? {
+                let value = value.to_ascii_lowercase();
+                if !valid_unicode_type(&value) || (!allowed.is_empty() && !allowed.contains(&value.as_str())) {
+                    return Err(self.catchable_range_error());
+                }
+                locale.unicode.insert(key.to_string(), value);
+            }
+        }
+        if let Some(numeric) = self.intl_option_bool(options, "numeric") {
+            locale.unicode.insert(
+                "kn".to_string(),
+                if numeric { "true" } else { "false" }.to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    fn apply_collator_options(
+        &mut self,
+        code: &[u8],
+        options: crate::value::SlotIndex,
+        data: &mut CollatorData,
+    ) -> Result<(), Halt> {
+        for (name, target, allowed) in [
+            ("usage", &mut data.usage, &["sort", "search"][..]),
+            (
+                "sensitivity",
+                &mut data.sensitivity,
+                &["base", "accent", "case", "variant"][..],
+            ),
+            (
+                "caseFirst",
+                &mut data.case_first,
+                &["upper", "lower", "false"][..],
+            ),
+            ("collation", &mut data.collation, &[][..]),
+        ] {
+            if let Some(value) = self.intl_option_string(code, options, name)? {
+                let value = value.to_ascii_lowercase();
+                if (!allowed.is_empty() && !allowed.contains(&value.as_str()))
+                    || (name == "collation" && !valid_unicode_type(&value))
+                {
+                    return Err(self.catchable_range_error());
+                }
+                *target = value;
+            }
+        }
+        if let Some(v) = self.intl_option_bool(options, "numeric") {
+            data.numeric = v;
+        }
+        if let Some(v) = self.intl_option_bool(options, "ignorePunctuation") {
+            data.ignore_punctuation = v;
+        }
         Ok(())
     }
 
@@ -14293,6 +14713,98 @@ impl Interp {
             }
         }
         let result: Slot = match m {
+            NativeMethod::IntlGetCanonicalLocales => {
+                let locales = self.intl_locale_list(code, arg0)?;
+                let values = locales
+                    .iter()
+                    .map(|locale| self.intl_string(locale))
+                    .collect::<Vec<_>>();
+                self.array_from_slots(&values)
+            }
+            NativeMethod::IntlSupportedLocalesOf => {
+                let locales = self.intl_locale_list(code, arg0)?;
+                let values = locales
+                    .iter()
+                    .filter(|locale| locale_is_supported(locale))
+                    .map(|locale| self.intl_string(locale))
+                    .collect::<Vec<_>>();
+                self.array_from_slots(&values)
+            }
+            NativeMethod::IntlSupportedValuesOf => {
+                let key = self.intl_locale_argument(code, arg0)?;
+                let values: &[&str] = match key.as_str() {
+                    "calendar" => &["buddhist", "chinese", "coptic", "dangi", "ethioaa", "ethiopic", "gregory", "hebrew", "indian", "islamic", "islamic-civil", "iso8601", "japanese", "persian", "roc"],
+                    "collation" => &["big5han", "compat", "dict", "emoji", "eor", "gb2312", "phonebk", "phonetic", "pinyin", "searchjl", "stroke", "trad", "unihan", "zhuyin"],
+                    "currency" => &["AED", "AUD", "BRL", "CAD", "CHF", "CNY", "EUR", "GBP", "INR", "JPY", "KRW", "MXN", "RUB", "USD", "ZAR"],
+                    "numberingSystem" => &["arab", "arabext", "beng", "deva", "fullwide", "gujr", "guru", "hanidec", "khmr", "knda", "laoo", "latn", "limb", "mlym", "mong", "mymr", "orya", "tamldec", "telu", "thai", "tibt"],
+                    "timeZone" => &["Africa/Cairo", "America/Los_Angeles", "America/New_York", "Asia/Shanghai", "Asia/Tokyo", "Europe/Berlin", "Europe/London", "Pacific/Auckland", "UTC"],
+                    "unit" => &["acre", "bit", "byte", "celsius", "centimeter", "day", "degree", "fahrenheit", "foot", "gallon", "gigabit", "gigabyte", "gram", "hectare", "hour", "inch", "kilobit", "kilobyte", "kilogram", "kilometer", "liter", "megabit", "megabyte", "meter", "mile", "mile-scandinavian", "milliliter", "millimeter", "millisecond", "minute", "month", "ounce", "percent", "petabyte", "pound", "second", "stone", "terabit", "terabyte", "week", "yard", "year"],
+                    _ => return Err(self.catchable_range_error()),
+                };
+                let slots = values
+                    .iter()
+                    .map(|value| self.intl_string(value))
+                    .collect::<Vec<_>>();
+                self.array_from_slots(&slots)
+            }
+            NativeMethod::LocaleToString => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.locales.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let tag = self.locales[&inst].tag.clone();
+                self.intl_string(&tag)
+            }
+            NativeMethod::LocaleMaximize | NativeMethod::LocaleMinimize => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.locales.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let mut locale = self.locales[&inst].clone();
+                if m == NativeMethod::LocaleMaximize {
+                    maximize_locale(&mut locale);
+                } else {
+                    minimize_locale(&mut locale);
+                }
+                locale.tag = locale_to_tag(&locale);
+                self.new_locale_from_data(locale)
+            }
+            NativeMethod::CollatorResolvedOptions => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.collators.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let data = self.collators[&inst].clone();
+                let result = self.slots.alloc(Slot::instance(self.object_proto));
+                for (name, value) in [
+                    ("locale", self.intl_string(&data.locale)),
+                    ("usage", self.intl_string(&data.usage)),
+                    ("sensitivity", self.intl_string(&data.sensitivity)),
+                    ("ignorePunctuation", Slot::boolean(data.ignore_punctuation)),
+                    ("collation", self.intl_string(&data.collation)),
+                    ("numeric", Slot::boolean(data.numeric)),
+                    ("caseFirst", self.intl_string(&data.case_first)),
+                ] {
+                    self.define_descriptor_field(result, name, value);
+                }
+                Slot::of(Kind::Reference, Payload::Reference(result))
+            }
+            NativeMethod::CollatorCompare => {
+                let function = self.stack.get(base + 1).copied().unwrap_or_else(Slot::undefined);
+                let f = match function.value {
+                    Payload::Reference(r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let collator = match self.collator_compare_functions.get(&f).copied() {
+                    Some(collator) => collator,
+                    None => return Err(self.catchable_type_error()),
+                };
+                let data = self.collators[&collator].clone();
+                let left = String::from_utf8_lossy(&self.to_string_bytes_metered(arg0)).into_owned();
+                let right_slot = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+                let right = String::from_utf8_lossy(&self.to_string_bytes_metered(right_slot)).into_owned();
+                Slot::integer(collator_compare(&data, &left, &right))
+            }
             NativeMethod::DisposableStackUse
             | NativeMethod::DisposableStackAdopt
             | NativeMethod::DisposableStackDefer
@@ -25083,6 +25595,292 @@ fn decode_element_le(kind: u8, b: &[u8]) -> Option<Slot> {
 /// (ToInteger truncation + width wrap for the int/uint types, ToNumber +
 /// clamp/round for `Uint8ClampedArray`, IEEE for the floats). `None` for a
 /// BigInt element (kind 0/1).
+fn valid_language(value: &str) -> bool {
+    (2..=8).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_alphabetic())
+}
+
+fn valid_script(value: &str) -> bool {
+    value.len() == 4 && value.bytes().all(|b| b.is_ascii_alphabetic())
+}
+
+fn valid_region(value: &str) -> bool {
+    (value.len() == 2 && value.bytes().all(|b| b.is_ascii_alphabetic()))
+        || (value.len() == 3 && value.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn valid_unicode_type(value: &str) -> bool {
+    !value.is_empty()
+        && value.split('-').all(|part| {
+            (3..=8).contains(&part.len()) && part.bytes().all(|b| b.is_ascii_alphanumeric())
+        })
+}
+
+fn titlecase_ascii(value: &str) -> String {
+    let mut result = value.to_ascii_lowercase();
+    if let Some(first) = result.get_mut(0..1) {
+        first.make_ascii_uppercase();
+    }
+    result
+}
+
+fn canonicalize_locale(input: &str) -> Option<LocaleData> {
+    let grandfathered = match input.to_ascii_lowercase().as_str() {
+        "art-lojban" => "jbo",
+        "i-ami" => "ami",
+        "i-bnn" => "bnn",
+        "i-hak" => "hak",
+        "i-klingon" => "tlh",
+        "i-lux" => "lb",
+        "i-navajo" => "nv",
+        "i-pwn" => "pwn",
+        "i-tao" => "tao",
+        "i-tay" => "tay",
+        "i-tsu" => "tsu",
+        "no-bok" => "nb",
+        "no-nyn" => "nn",
+        "sgn-be-fr" => "sfb",
+        "sgn-be-nl" => "vgt",
+        "sgn-ch-de" => "sgg",
+        "zh-guoyu" => "cmn",
+        "zh-hakka" => "hak",
+        "zh-min-nan" => "nan",
+        "zh-xiang" => "hsn",
+        _ => input,
+    };
+    if grandfathered.is_empty()
+        || grandfathered.contains('_')
+        || grandfathered.starts_with('-')
+        || grandfathered.ends_with('-')
+        || grandfathered.contains("--")
+    {
+        return None;
+    }
+    let parts = grandfathered.split('-').collect::<Vec<_>>();
+    if parts.is_empty() || !valid_language(parts[0]) {
+        return None;
+    }
+    let mut language = parts[0].to_ascii_lowercase();
+    language = match language.as_str() {
+        "iw" => "he",
+        "in" => "id",
+        "ji" => "yi",
+        "mo" => "ro",
+        other => other,
+    }
+    .to_string();
+    let mut script = None;
+    let mut region = None;
+    let mut variants = Vec::new();
+    let mut unicode = std::collections::BTreeMap::new();
+    let mut seen_variants = std::collections::HashSet::new();
+    let mut i = 1;
+    while i < parts.len() {
+        let part = parts[i];
+        if part.eq_ignore_ascii_case("u") {
+            i += 1;
+            while i < parts.len() {
+                let key = parts[i].to_ascii_lowercase();
+                if key.len() != 2 || !key.bytes().all(|b| b.is_ascii_alphanumeric()) {
+                    // Unicode attributes are accepted and sorted ahead of keys;
+                    // this compact profile ignores their non-semantic identity.
+                    if (3..=8).contains(&key.len()) {
+                        i += 1;
+                        continue;
+                    }
+                    return None;
+                }
+                if unicode.contains_key(&key) {
+                    return None;
+                }
+                i += 1;
+                let start = i;
+                while i < parts.len() && (3..=8).contains(&parts[i].len()) {
+                    i += 1;
+                }
+                let mut value = if start == i {
+                    "true".to_string()
+                } else {
+                    parts[start..i].join("-").to_ascii_lowercase()
+                };
+                value = match (key.as_str(), value.as_str()) {
+                    ("ca", "islamicc") => "islamic-civil".to_string(),
+                    (_, "yes") => "true".to_string(),
+                    _ => value,
+                };
+                unicode.insert(key, value);
+            }
+            break;
+        } else if part.len() == 1 {
+            // Other extensions/private use are structurally valid but retained
+            // only by the canonical string profile in later formatter work.
+            break;
+        } else if script.is_none() && valid_script(part) {
+            script = Some(titlecase_ascii(part));
+        } else if region.is_none() && valid_region(part) {
+            region = Some(part.to_ascii_uppercase());
+        } else if ((5..=8).contains(&part.len())
+            || (part.len() == 4 && part.as_bytes()[0].is_ascii_digit()))
+            && part.bytes().all(|b| b.is_ascii_alphanumeric())
+        {
+            let variant = part.to_ascii_lowercase();
+            if !seen_variants.insert(variant.clone()) {
+                return None;
+            }
+            variants.push(variant);
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    let mut locale = LocaleData {
+        tag: String::new(),
+        language,
+        script,
+        region,
+        variants,
+        unicode,
+    };
+    locale.tag = locale_to_tag(&locale);
+    Some(locale)
+}
+
+fn locale_base_name(locale: &LocaleData) -> String {
+    let mut parts = vec![locale.language.clone()];
+    parts.extend(locale.script.clone());
+    parts.extend(locale.region.clone());
+    parts.extend(locale.variants.clone());
+    parts.join("-")
+}
+
+fn locale_to_tag(locale: &LocaleData) -> String {
+    let mut tag = locale_base_name(locale);
+    if !locale.unicode.is_empty() {
+        tag.push_str("-u");
+        for (key, value) in &locale.unicode {
+            tag.push('-');
+            tag.push_str(key);
+            if value != "true" {
+                tag.push('-');
+                tag.push_str(value);
+            }
+        }
+    }
+    tag
+}
+
+fn maximize_locale(locale: &mut LocaleData) {
+    let (script, region) = match locale.language.as_str() {
+        "zh" => ("Hans", "CN"),
+        "sr" => ("Cyrl", "RS"),
+        "ru" => ("Cyrl", "RU"),
+        "ar" => ("Arab", "EG"),
+        "ja" => ("Jpan", "JP"),
+        "ko" => ("Kore", "KR"),
+        "de" => ("Latn", "DE"),
+        "fr" => ("Latn", "FR"),
+        "es" => ("Latn", "ES"),
+        "pt" => ("Latn", "BR"),
+        _ => ("Latn", "US"),
+    };
+    if locale.script.is_none() {
+        locale.script = Some(script.to_string());
+    }
+    if locale.region.is_none() {
+        locale.region = Some(region.to_string());
+    }
+}
+
+fn minimize_locale(locale: &mut LocaleData) {
+    let mut maximal = locale.clone();
+    maximize_locale(&mut maximal);
+    let defaults = {
+        let mut base = LocaleData {
+            tag: String::new(),
+            language: locale.language.clone(),
+            script: None,
+            region: None,
+            variants: Vec::new(),
+            unicode: std::collections::BTreeMap::new(),
+        };
+        maximize_locale(&mut base);
+        base
+    };
+    if maximal.script == defaults.script && maximal.region == defaults.region {
+        locale.script = None;
+        locale.region = None;
+    }
+}
+
+fn locale_is_supported(locale: &str) -> bool {
+    let language = locale.split('-').next().unwrap_or("");
+    matches!(
+        language,
+        "ar" | "de" | "en" | "es" | "fr" | "he" | "id" | "it" | "ja" | "ko"
+            | "nl" | "pl" | "pt" | "ro" | "ru" | "sv" | "tr" | "yi" | "zh"
+    )
+}
+
+fn supported_locale(locale: &str) -> String {
+    if locale_is_supported(locale) {
+        locale.to_string()
+    } else {
+        "en".to_string()
+    }
+}
+
+fn collator_compare(data: &CollatorData, left: &str, right: &str) -> i32 {
+    use std::cmp::Ordering;
+    let normalizer = icu_normalizer::ComposingNormalizer::new_nfc();
+    let mut left = normalizer.normalize(left).into_owned();
+    let mut right = normalizer.normalize(right).into_owned();
+    if data.ignore_punctuation {
+        left.retain(|c| !c.is_ascii_punctuation() && !c.is_whitespace());
+        right.retain(|c| !c.is_ascii_punctuation() && !c.is_whitespace());
+    }
+    if data.collation == "phonebk" && data.locale.starts_with("de") {
+        for (s, replacement) in [("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")] {
+            left = left.replace(s, replacement);
+            right = right.replace(s, replacement);
+        }
+    }
+    let insensitive = matches!(data.sensitivity.as_str(), "base" | "accent");
+    let left_key = if insensitive { left.to_lowercase() } else { left.clone() };
+    let right_key = if insensitive { right.to_lowercase() } else { right.clone() };
+    let ordering = if data.numeric {
+        numeric_string_cmp(&left_key, &right_key)
+    } else {
+        left_key.cmp(&right_key)
+    };
+    match ordering {
+        Ordering::Less => -1,
+        Ordering::Greater => 1,
+        Ordering::Equal if data.sensitivity == "case" || data.sensitivity == "variant" => {
+            let case_ordering = match data.case_first.as_str() {
+                "upper" => right.cmp(&left),
+                _ => left.cmp(&right),
+            };
+            match case_ordering {
+                Ordering::Less => -1,
+                Ordering::Equal => 0,
+                Ordering::Greater => 1,
+            }
+        }
+        Ordering::Equal => 0,
+    }
+}
+
+fn numeric_string_cmp(left: &str, right: &str) -> std::cmp::Ordering {
+    let parse = |s: &str| {
+        s.split(|c: char| !c.is_ascii_digit())
+            .find(|part| !part.is_empty())
+            .and_then(|part| part.parse::<u128>().ok())
+    };
+    match (parse(left), parse(right)) {
+        (Some(a), Some(b)) if a != b => a.cmp(&b),
+        _ => left.cmp(right),
+    }
+}
+
 fn encode_element_le(kind: u8, n: f64) -> Option<Vec<u8>> {
     // ToInteger: truncate toward zero, NaN → 0.
     let to_int = |x: f64| -> f64 {
@@ -25141,7 +25939,9 @@ fn round_half_even(x: f64) -> f64 {
 /// attributed to the specific built-in (never a silent mis-execution).
 fn native_unsupported_name(native: Native) -> &'static str {
     match native {
-        Native::Eval => "native-call:eval",
+            Native::Eval => "native-call:eval",
+        Native::Locale => "native-call:Locale",
+        Native::Collator => "native-call:Collator",
         Native::Object => "native-call:Object",
         Native::Function => "native-call:Function",
         Native::Boolean => "native-call:Boolean",
