@@ -154,3 +154,41 @@ test('grep rejects out-of-range maxResults before dispatch', async t => {
     t.deepEqual(calls, []);
   }
 });
+
+test('glob passes special-character patterns through verbatim', async t => {
+  await null;
+  // These patterns begin with SmallCaps special-prefix characters (`*`, `(`,
+  // `#`, `-`), which the arg decoder would otherwise throw on or silently
+  // coerce. They are the modal inputs for these tools (`**/*.js`, an alternation
+  // group), so they must reach the capability byte-for-byte.
+  for (const pattern of ['*.js', '**/*.js', '(foo|bar)', '#define', '-x']) {
+    const { calls, run } = makeStub();
+    // eslint-disable-next-line no-await-in-loop
+    const result = await run('glob', {
+      petNameOrPath: 'workspace',
+      pattern,
+    });
+    t.deepEqual(result, ['src/a.js', 'src/b.js']);
+    t.deepEqual(
+      calls,
+      [
+        ['lookup', 'workspace'],
+        ['glob', pattern],
+      ],
+      `glob(${pattern}) should reach the capability verbatim`,
+    );
+  }
+});
+
+test('grep passes a special-character regexp and glob filter through verbatim', async t => {
+  const { calls, run } = makeStub();
+  await run('grep', {
+    petNameOrPath: 'workspace',
+    pattern: '(foo|bar)',
+    glob: '*.js',
+  });
+  t.deepEqual(calls, [
+    ['lookup', 'workspace'],
+    ['glorp', '*.js', '(foo|bar)', undefined],
+  ]);
+});
