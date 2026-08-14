@@ -64,6 +64,51 @@ for the splice plan.
   reference and `SessionId` digests.  Either side will fail-loudly
   if the wire shape drifts.
 
+## Calling convention
+
+`deliver` carries **one flat passable argument vector** in its body,
+following the OCapN **Body Content Format**
+(`packages/ocapn/docs/cbor-encoding.md` § Body Content Format) and
+mirroring `@endo/ocapn`'s client (`packages/ocapn/src/client/ocapn.js`,
+`packages/ocapn/src/selector.js`):
+
+- **Function application** — `E(fn)(...args)` — sends its arguments
+  unchanged: the body is exactly `[...args]`, no selector.
+- **String-named method invocation** — `E(obj).method(...args)` —
+  prepends the method's passable-symbol selector
+  (`passableSymbolForName(method)`), so the body is
+  `[selector, ...args]`.
+- **Symbol-named methods are unreachable.**  A symbol method name has
+  no wire selector, so slot-machine rejects it at the sender rather
+  than delivering it.
+
+On receipt the target's own shape decides dispatch, exactly as
+`@endo/ocapn`'s `invokeDeliver` does:
+
+- a **function** Exo receives the complete argument vector through
+  `applyFunction`;
+- an **object** Exo validates and decodes the leading selector to a
+  string method name and dispatches through `applyMethod`.  A
+  malformed or non-selector leading argument is rejected.
+
+There is no `__call__` sentinel and no `[method, args]` body shape —
+both are retired in favour of the flat vector above.
+
+**Property access (`__get__`) stays a private slot-machine
+convention.**  `E(p).prop` resolves through a `deliver` of a
+conventional `__get__` string method carrying the property name as its
+sole argument (so, like any method call, its selector is prepended).
+This is deliberately **not** promoted to a distinct OCapN operation:
+OCapN models field access with dedicated `op:get` / `op:index` opcodes
+against `Struct` / `List` targets, but slot-machine's body is a single
+opaque marshalled vector with no separate get/index verbs, and a
+distinct verb would have to be mirrored in the Rust supervisor's verb
+set (`rust/endo/slots/src/wire`). Carrying get-as-call keeps the
+four-verb bus (`deliver` / `resolve` / `drop` / `abort`) intact and
+the property name private to the two peers. Promoting it to a first-
+class OCapN operation is left as future work should slot-machine ever
+need to interoperate with an OCapN peer that distinguishes them.
+
 ## Daemon integration
 
 The worker-side splice is in `packages/daemon/src/bus-worker-node-raw.js`,
@@ -91,7 +136,7 @@ If `makeMessageSlots` is too high-level, drop down to:
 ## Testing
 
 ```sh
-yarn test         # 74 unit tests
+yarn test         # 82 unit tests
 yarn lint         # eslint + tsc
 ```
 

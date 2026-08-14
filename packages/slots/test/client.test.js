@@ -2,6 +2,7 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far, E } from '@endo/far';
+import { HandledPromise } from '@endo/eventual-send';
 
 import { Direction, Kind } from '../src/descriptor.js';
 import { makeCList } from '../src/clist.js';
@@ -180,6 +181,41 @@ test('rejections surface via is_reject', async t => {
   });
 
   await t.throwsAsync(() => E(presence).boom(), { message: /kaboom/ });
+});
+
+test('object delivery whose leading arg is not a selector rejects', async t => {
+  const { a, b } = makeLoopback();
+
+  const target = Far('target', { greet: () => 'hi' });
+  const targetDesc = b.clist.exportLocal(target, Kind.Object);
+  const presence = a.client.makePresence({
+    ...targetDesc,
+    direction: Direction.Remote,
+  });
+
+  // Bypass the method-call handler and send a raw argument vector
+  // whose leading element is a plain string, not a passable-symbol
+  // selector — the malformed object-call case.
+  const replyP = a.client.deliver(presence, ['greet']);
+  await t.throwsAsync(() => replyP, { message: /must be a symbol/ });
+});
+
+test('symbol-named methods are rejected before send', async t => {
+  const { a, b } = makeLoopback();
+
+  const target = Far('target', { greet: () => 'hi' });
+  const targetDesc = b.clist.exportLocal(target, Kind.Object);
+  const presence = a.client.makePresence({
+    ...targetDesc,
+    direction: Direction.Remote,
+  });
+
+  // A symbol method name has no wire selector, so slot-machine
+  // rejects it at the sender rather than delivering it.
+  await t.throwsAsync(
+    () => HandledPromise.applyMethod(presence, Symbol.for('greet'), []),
+    { message: /string methods/ },
+  );
 });
 
 test('unknown resolve targets are silently ignored', t => {

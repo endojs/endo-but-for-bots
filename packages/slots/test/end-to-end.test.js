@@ -59,6 +59,67 @@ test('primitive return values flow back', async t => {
   t.is(await E(remoteRoot).concat('left', 'right'), 'left/right');
 });
 
+test('E(function)(value) applies the whole argument vector', async t => {
+  const { a, b } = makeLoopback();
+
+  // B's root is a *function* Exo — a callable remotable.  A function
+  // application carries no method selector; the receiver hands the
+  // complete argument vector to `applyFunction`.
+  const bRoot = Far('b-fn', (x, y) => `fn(${x}, ${y})`);
+  bootstrap({ clist: b.clist, client: b.client, root: bRoot });
+  const { remoteRoot } = bootstrap({
+    clist: a.clist,
+    client: a.client,
+    root: Far('a-root', {}),
+  });
+
+  t.is(await E(remoteRoot)('left', 'right'), 'fn(left, right)');
+});
+
+test('send-only method and function deliveries reach the target', async t => {
+  const { a, b } = makeLoopback();
+
+  const seen = [];
+  const bRoot = Far('b-root', {
+    note(value) {
+      seen.push(['method', value]);
+    },
+  });
+  bootstrap({ clist: b.clist, client: b.client, root: bRoot });
+  const { remoteRoot } = bootstrap({
+    clist: a.clist,
+    client: a.client,
+    root: Far('a-root', {}),
+  });
+
+  E.sendOnly(remoteRoot).note('hello');
+  // Let the loopback pump the inbound deliver.
+  await null;
+  await null;
+  t.deepEqual(seen, [['method', 'hello']]);
+});
+
+test('E(function) send-only applies with no reply tracking', async t => {
+  const { a, b } = makeLoopback();
+
+  const seen = [];
+  const bRoot = Far('b-fn', (...args) => {
+    seen.push(args);
+  });
+  bootstrap({ clist: b.clist, client: b.client, root: bRoot });
+  const { remoteRoot } = bootstrap({
+    clist: a.clist,
+    client: a.client,
+    root: Far('a-root', {}),
+  });
+
+  E.sendOnly(remoteRoot)('fire', 'forget');
+  await null;
+  await null;
+  t.deepEqual(seen, [['fire', 'forget']]);
+  t.is(a.client.pendingCount(), 0);
+});
+
 test('rejections propagate across the loopback', async t => {
   const { a, b } = makeLoopback();
 
