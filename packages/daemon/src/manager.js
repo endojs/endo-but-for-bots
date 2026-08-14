@@ -480,6 +480,15 @@ const makeDaemonCore = async (
   const { gitClone, makeNativeGitBackend, makeHostSpawner } =
     provideHostToolPowers(hostTools);
   const contentStore = persistencePowers.makeContentStore();
+  /**
+   * @param {Uint8Array} bytes
+   * @returns {Uint8Array}
+   */
+  const hashBytes = bytes => {
+    const digester = cryptoPowers.makeSha256();
+    digester.update(bytes);
+    return fromHex(digester.digestHex());
+  };
   /** @type {WeakMap<object, ERef<WorkerDaemonFacet>>} */
   const workerDaemonFacets = new WeakMap();
   /** @type {Map<string, (reason?: Error) => Promise<void>>} */
@@ -1890,11 +1899,7 @@ const makeDaemonCore = async (
           }
         }
       },
-      hashBytes: selected => {
-        const digester = cryptoPowers.makeSha256();
-        digester.update(selected);
-        return fromHex(digester.digestHex());
-      },
+      hashBytes,
       // The derived-range exo tag must NOT embed the parent's SHA-256: this
       // range is an attenuation, and its label travels over CapTP to whoever
       // holds the derived cap, so a `${sha256.slice(0, 8)}` prefix would leak 32
@@ -2325,11 +2330,7 @@ const makeDaemonCore = async (
             : bytes.slice(from, to),
         );
       },
-      hashBytes: selected => {
-        const digester = cryptoPowers.makeSha256();
-        digester.update(selected);
-        return fromHex(digester.digestHex());
-      },
+      hashBytes,
       // `<parent exo tag> <derivation>`; the parent exo is tagged
       // `TransientBlob` (below), matching the sibling range adopters.
       label: 'TransientBlob range',
