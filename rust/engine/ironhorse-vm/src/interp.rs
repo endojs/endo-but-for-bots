@@ -19732,17 +19732,45 @@ impl Interp {
         index: u32,
         value: Slot,
     ) -> Result<(), Halt> {
-        let n = self
-            .element_value_to_number(value)
-            .ok_or(Halt::Unsupported("typed-array-set:coerce"))?;
         let size = TYPED_ARRAY_TYPES[ta.kind as usize].size as usize;
         let buf = self.array_buffers[&ta.buffer];
         let base = ta.offset as usize + index as usize * size;
+        // A BigInt64/BigUint64 element (kinds 0/1): `ToBigInt(value)` then
+        // store the low 64 bits (two's complement). A non-BigInt value that
+        // needs general coercion self-names an honest skip.
+        if ta.kind <= 1 {
+            let u = self
+                .slot_to_bigint_u64(value)
+                .ok_or(Halt::Unsupported("typed-array-set:bigint-coerce"))?;
+            let le = u.to_le_bytes();
+            let out = self.chunks.slice_mut(buf.data, base + 8);
+            out[base..base + 8].copy_from_slice(&le);
+            return Ok(());
+        }
+        let n = self
+            .element_value_to_number(value)
+            .ok_or(Halt::Unsupported("typed-array-set:coerce"))?;
         let le =
             encode_element_le(ta.kind, n).ok_or(Halt::Unsupported("typed-array-set:bigint"))?;
         let out = self.chunks.slice_mut(buf.data, base + size);
         out[base..base + size].copy_from_slice(&le);
         Ok(())
+    }
+
+    /// Read a BigInt64/BigUint64 TypedArray element (kinds 0/1) into a freshly
+    /// allocated BigInt (the exotic index [[Get]] BigInt path). Native-endian
+    /// storage on the little-endian oracle target.
+    fn typed_array_element_get_bigint(&mut self, ta: TypedArrayData, index: u32) -> Slot {
+        let buf = self.array_buffers[&ta.buffer];
+        let base = ta.offset as usize + index as usize * 8;
+        let mut b = [0u8; 8];
+        {
+            let bytes = self.chunks.payload(buf.data);
+            b.copy_from_slice(&bytes[base..base + 8]);
+        }
+        let u = u64::from_le_bytes(b);
+        let (neg, mag) = u64_to_signed_limbs(ta.kind == 0, u);
+        self.make_bigint(neg, mag)
     }
 
     /// Coerce a primitive element write value to the `f64` the element
@@ -20708,6 +20736,10 @@ impl Interp {
                 // BigInt-element view self-names.
                 if index >= ta.length {
                     Ok(Slot::undefined())
+                } else if ta.kind <= 1 {
+                    let v = self.typed_array_element_get_bigint(ta, index);
+                    self.meter.tick_raw(TYPED_ARRAY_ELEMENT_METERING);
+                    Ok(v)
                 } else {
                     match self.typed_array_element_get(ta, index) {
                         Some(v) => {
