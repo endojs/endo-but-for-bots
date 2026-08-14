@@ -681,6 +681,7 @@ flowchart TD
         dmount[daemon-mount<br/><i>IN PROGRESS</i>]
         dmcap[daemon-mount-capabilities]
         dcommit[daemon-commit-formula]
+        nhub[namehub-interface-unification]
         dgit[daemon-git-capability]
         dgitfollow[exo-git-follow-root-advancement]
         dgitremote[daemon-git-remotes]
@@ -708,6 +709,10 @@ flowchart TD
         pfs --> dmount
         dmount --> dmcap
         dci --> dcommit
+        dgit --> dcommit
+        nhub --> dcommit
+        dcsgc --> dcommit
+        dcommit --> finsp
         dcommit --> dgitnext
         dmcap --> dgit
         dgit --> dgitfollow
