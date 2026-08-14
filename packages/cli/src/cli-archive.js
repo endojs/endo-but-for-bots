@@ -90,10 +90,10 @@ export const makeCliArchive = (moduleLocation, options = {}) => {
   const parserForLanguage = {
     ...effectiveSourceParserForLanguage,
     mts:
-      options.parserForLanguage?.mts ||
+      options.parserForLanguage?.mts ??
       makeTypeScriptParser(effectiveSourceParserForLanguage.mjs),
     cts:
-      options.parserForLanguage?.cts ||
+      options.parserForLanguage?.cts ??
       makeTypeScriptParser(effectiveSourceParserForLanguage.cjs),
   };
   return makeArchive(readPowers, moduleLocation, {
