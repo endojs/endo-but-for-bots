@@ -1285,11 +1285,11 @@ finding lands a durable regression, and *where* depends on its shape:
 
 - A **source-level** result/completion divergence (a JS program where Ironhorse and
   the oracle disagree at run time) is minimized, fixed, and checked in as a
-  test262 case under `ironhorse-262/cases/regressions/` — `features:
+  test262 case under `../../packages/test262-runner/test262/test/ironhorse/regressions/` — `features:
   [ironhorse-dual-run, …]`, the fuzz arm named in `info:`, the fix referenced.
   `ironhorse-262/tests/regressions_dual_run.rs` then gates it forever (a re-opened
   divergence fails there). This is the portable, upstream-eligible home; see
-  [`ironhorse-262/cases/regressions/README.md`](ironhorse-262/cases/regressions/README.md).
+  [`test/ironhorse/regressions/README.md`](../../packages/test262-runner/test262/test/ironhorse/regressions/README.md).
 - A **decoder / bytecode** trophy (target 2 — malformed bytes with no JS-source
   preimage, like the self-loop above) has no dual-run form, so its lock stays a
   Rust regression test in `ironhorse-fuzz` (here, `decoder_hang_is_bounded_not_infinite`).

@@ -11,7 +11,7 @@
 //! `src/scoper/tests.rs`.
 //!
 //! The corpus programs are the curated corpus lines, now carried verbatim
-//! in the `info: Source:` frontmatter of the `ironhorse-262/cases/` tree (the
+//! in the `info: Source:` frontmatter of the shared `test/ironhorse/` tree (the
 //! `corpora/*.js` line files retired in PR #600 convergence 2/5).
 
 mod corpus_cases;
@@ -32,7 +32,7 @@ fn corpus_scope_smoke() {
     assert_eq!(
         programs.len(),
         CORPUS_PROGRAM_COUNT,
-        "expected {CORPUS_PROGRAM_COUNT} corpus programs in ironhorse-262/cases, found {}",
+        "expected {CORPUS_PROGRAM_COUNT} corpus programs in test/ironhorse, found {}",
         programs.len()
     );
 
@@ -49,6 +49,9 @@ fn corpus_scope_smoke() {
             Err(_) => early_errors += 1,
         }
     }
-    eprintln!("corpus scope smoke: {} programs, {scoped} scoped, {early_errors} early errors", programs.len());
+    eprintln!(
+        "corpus scope smoke: {} programs, {scoped} scoped, {early_errors} early errors",
+        programs.len()
+    );
     assert!(scoped > 0, "expected to scope at least one corpus program");
 }

@@ -20,9 +20,8 @@
 //! language/expressions/addition/11.6.1-1.js  sloppy pass
 //! ```
 //!
-//! The mechanism is independent of whether the two case trees merge
-//! (design § Open Decision): the header records the `corpus` a list scores,
-//! so one list scores one tree and two lists score two.
+//! The header records the `corpus` a list scores, so every annotated slice of
+//! the shared test262 tree uses the same parser and comparator.
 
 use std::collections::BTreeMap;
 

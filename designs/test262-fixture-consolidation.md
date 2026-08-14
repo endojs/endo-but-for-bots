@@ -3,8 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
+| **Updated** | 2026-08-14 |
 | **Author** | endolinbot (prompted) |
-| **Status** | Proposed (follow-up refactor of [ironhorse-test262-convergence](ironhorse-test262-convergence.md); one open decision for the maintainer, see § Open Decision) |
+| **Status** | In Progress (shared case tree and Ironhorse expectation mechanism implemented; host expectation scoring remains) |
 
 The maintainer directive (@kriskowal, liaison relay 2026-07-26) asks the
 test262 fixtures to converge on "one source of truth ... consumed by
@@ -18,13 +19,11 @@ prerequisite groundwork for the end-state
 [decommission-cxs-rust-default-xst-ci-parity] (Rust VM default, parity
 proved through the downloaded `xst` binary under `test262-harness`).
 
-The directive supersedes one decision in the parent convergence design.
-That design (2026-07-05) chose two corpora with different jobs
-(decision 2). This refactor collapses the *expectation model* onto one
-mechanism; whether it also collapses the two *case trees* is the one
-question this document leaves to the maintainer, because the premise the
-directive rests on (that the ironhorse cases "duplicate upstream") is not
-what the tree actually holds. See § Open Decision.
+The maintainer resolved the parent design's two-corpus decision on
+2026-08-14: all test262-shaped cases live in one tree. Host-specific
+`features:` annotations determine which suites run them. A runner that cannot
+check Ironhorse metering excludes `ironhorse-meter-exact` and
+`ironhorse-meter-determinism` by classifier.
 
 ## Ground Truth: what exists today
 
@@ -32,7 +31,7 @@ All facts below were read and measured in the `llm` tree at
 `18963b77a` (the ironhorse rename has landed; the crate is
 `rust/engine/ironhorse-262`, PR #600 merged).
 
-**Two fixture trees.**
+**One fixture tree.**
 
 1. `packages/test262-runner/test262/test/**`: the upstream test262
    subset (the design's prior head counted 38,181 `.js` files), the
@@ -42,13 +41,13 @@ All facts below were read and measured in the `llm` tree at
      --prelude prelude/xs.js --features-include ses-xs-parity`),
    - `test262:node` (same, `--host-type node`),
    - `test262:ironhorse` (`node scripts/run-ironhorse-host.js`, which
-     builds and invokes the `ironhorse-xst` Rust binary over the same
+     builds and invokes the `endot-ih` Rust binary over the same
      tree with `-l --feature-filter ses-xs-parity --features-include
      ses-xs-parity`).
 
-2. `rust/engine/ironhorse-262/cases/**`: 1,712 test262-shaped case
-   files, generated 1:1 from the retired bespoke bring-up corpora by
-   `bin/corpus-to-262` (design § Part 1). These are **not** copies of
+2. `packages/test262-runner/test262/test/ironhorse/**`: 1,712
+   test262-shaped case files, generated 1:1 from the retired bespoke bring-up
+   corpora by `bin/corpus-to-262` (design § Part 1). These are not copies of
    upstream test262 cases. Each is a bespoke micro-case carrying the
    `ironhorse-dual-run`, `ironhorse-meter-exact`, and
    `ironhorse-meter-determinism` feature markers, and preserving its
@@ -59,9 +58,9 @@ All facts below were read and measured in the `llm` tree at
      `info: Source:` line back out for the byte-identity compile-diff
      gate,
    - the in-crate `cargo test` suites,
-   - `ironhorse-xst` when a positional path names the tree directly.
+   - `endot-ih` when a positional path names the tree directly.
 
-**One shared annotation parser.** `src/frontmatter.rs` is a full YAML
+**One shared annotation model.** `src/frontmatter.rs` is a full YAML
 1.2 parse (`yaml-rust2`, pure Rust so `#![forbid(unsafe_code)]` holds)
 of `description`, `flags`, `includes`, `negative` (`phase` + `type`),
 `features`, `info`. Both the legacy dual-run path (`src/test262.rs`) and
@@ -88,7 +87,7 @@ so:
   (a real divergence or over-acceptance) reddens the build.
 
 Measured on a bounded oracle-backed slice to confirm the model runs
-here (`ironhorse-xst language/expressions/addition`, oracle on): 48
+here (`endot-ih language/expressions/addition`, oracle on): 48
 files, 15 covered, 0 failed, 33 skipped, of which 47 carried a
 strict-mode run that was named-skipped (strict lands with the stage-5
 compiler). The named skip breakdown was `unsupported-opcode:add` 23,
@@ -100,65 +99,34 @@ exact per-case shape the committed lists must capture.
 
 | Directive ask | Today | This design |
 |---|---|---|
-| One corpus + shared annotation parser, no duplicated case trees (regressions excepted) | Two trees; one ironhorse-side parser already | § Open Decision (tree unification) + the parser is already single |
+| One corpus + shared annotation model, no duplicated case trees | Two trees at the directive's time | One `test262/test/**` tree; `features:` selects each suite |
 | Committed parameterized expected-pass/fail/skip lists; green iff observed == expected; ratchet both directions | Honest split, green iff zero `Fail`; no committed per-case expectation | § The expectation-list mechanism |
 | Honest-skip ledger fully represented as list entries | Skips named at runtime, not committed | § Mapping the honest split to list entries |
-| Differential oracle + CI hosts report against the same lists | Oracle wired into `ironhorse-xst`; `xs`/`node` report pass/fail via `test262-harness` independently | § Wiring the three hosts through one list set |
+| Differential oracle + CI hosts report against the same lists | Oracle wired into `endot-ih`; `xs`/`node` report pass/fail via `test262-harness` independently | § Wiring the three hosts through one list set |
 | No net change to what passes today, proven by before/after run at a pinned tip | n/a | § Equivalence proof |
 
-The single-parser and oracle-wiring asks are already met. The real new
-work is the committed, parameterized expectation lists with a
-two-directional ratchet, and the decision about the two trees.
+The case-tree and Ironhorse expectation-list work are implemented. The
+remaining work is to score the XS and Node host outputs against the same list
+format and enable the list gates in CI.
 
-## Open Decision (maintainer): do the two case trees merge?
+## Resolved corpus layout
 
-The directive's sketch says "the ironhorse dual-run harness reads cases
-from `packages/test262-runner/test262/test/**` ... instead of
-`ironhorse-262/cases`. Keep `ironhorse-262/cases/regressions` only ...
-migrate `built-ins`/`language` cases that duplicate upstream to
-references into the corpus." That phrasing assumes the 1,712 cases in
-`ironhorse-262/cases` are duplicates of upstream test262 files. They are
-not. They are bespoke bit-exact metering micro-cases (`assert`-free
-one-liners such as `[]`, tagged `ironhorse-meter-exact`) generated from
-the engine bring-up corpora. Upstream test262 has no analogue for them,
-and by design (parent § Design decision 1) it never will: test262 has
-no cost model, so the computron and byte-identity coverage those cases
-carry cannot live in the upstream tree without either polluting the
-XS-Node parity axis with `ironhorse-*`-tagged cases or losing the
-metering regression coverage entirely.
+All test262-shaped files live below
+`packages/test262-runner/test262/test/`. The bespoke Ironhorse cases retain
+their `ironhorse/` namespace and their existing annotations. Their location no
+longer determines which runner sees them:
 
-Two coherent resolutions:
+- XS and Node select `ses-xs-parity` and explicitly exclude
+  `ironhorse-dual-run`, `ironhorse-meter-exact`, and
+  `ironhorse-meter-determinism`.
+- Ironhorse's parity invocation selects `ses-xs-parity`.
+- Ironhorse's corpus and regression gates select `test/ironhorse/**` and apply
+  the differential, exact-meter, and deterministic-meter checks they support.
 
-- **A. Keep two trees, unify only the expectation model (recommended).**
-  Respect the parent design's decision 2 and the metering-is-proprietary
-  doctrine. The consolidation the directive actually wants (one
-  expectation mechanism, ratchet both directions, keyed off annotations)
-  is delivered by § The expectation-list mechanism applied to both
-  trees. `ironhorse-262/cases` stays the engine's proprietary
-  meter/byte-identity corpus; the upstream tree stays the parity corpus;
-  both are scored by one committed list format. "One source of truth"
-  becomes true of the *expectation accounting*, which is where the
-  drift the directive worries about actually lives.
-
-- **B. Collapse to the upstream tree.** Drop `ironhorse-262/cases`
-  except `regressions/`, and rely on the upstream tree for coverage.
-  This satisfies the sketch literally but deletes the 1,712 metering
-  micro-cases and the byte-identity compile-diff gate they feed
-  (`corpora_programs()`), unless those are first re-homed. Choosing B
-  means explicitly accepting the loss of, or a migration plan for, the
-  `ironhorse-meter-exact` / `ironhorse-meter-determinism` /
-  compile-diff coverage.
-
-Recommendation: **A**. It delivers the directive's goal (parameterized
-expectation lists, both-direction ratchet, one annotation-keyed model)
-without discarding the metering coverage the parent design called
-proprietary-forever. B should be taken only on an explicit maintainer
-call that the metering micro-corpus is no longer wanted, or with a
-companion plan to re-home its coverage.
-
-The rest of this document specs the expectation mechanism so that it is
-correct under **either** resolution: the list format is keyed by tree
-root, so it scores one tree or two without change.
+The metering and byte-identity evidence remains intact. The Rust gates and
+`corpora_programs()` now read the cases from the shared tree. The annotations
+are the classifier boundary: adding a metering-tagged case does not require a
+second corpus or a path-based exception in another host.
 
 ## The expectation-list mechanism
 
@@ -173,7 +141,7 @@ A committed expectation is keyed by the tuple the directive names:
   `strict_mode_status()` (already implemented).
 - **feature-set / stage**: the opt-in axis (`ses-xs-parity`, and the
   ironhorse stage ladder). Selected exactly as
-  `test262-harness --features-include` and `ironhorse-xst
+  `test262-harness --features-include` and `endot-ih
   --features-include` already select, so no new selection concept is
   introduced.
 
@@ -182,9 +150,8 @@ where `skip:<reason>` carries the honest named reason (§ Mapping).
 
 ### File format and location
 
-One committed file per (engine, feature-set) under a new
-`rust/engine/ironhorse-262/expectations/` directory (and, if resolution
-B, the same format under `packages/test262-runner/`). Format is line
+One committed file per (engine, feature-set) under
+`packages/test262-runner/expectations/`. Format is line
 oriented and diff-friendly so the ratchet shows up as a reviewable
 patch:
 
@@ -253,7 +220,7 @@ is satisfied by construction: the list is the serialized ledger.
 
 - **ironhorse**: `run_files` in `src/xst.rs` gains an optional
   `Expectations` loaded from the committed file; `XstReport` compares
-  and reports ratchet events; `ironhorse-xst` grows
+  and reports ratchet events; `endot-ih` grows
   `--expectations <file>` / `--update-expectations`.
 - **xst / node**: `test262-harness` already emits per-case pass/fail.
   A thin post-processor (extend `run-ironhorse-host.js` into a shared
@@ -263,7 +230,7 @@ is satisfied by construction: the list is the serialized ledger.
   their `skip` reasons are `test262-harness`'s own (feature filtered,
   unsupported), which the format already accommodates as opaque
   `skip:<reason>` strings.
-- The **differential oracle** stays where it is (inside `ironhorse-xst`,
+- The **differential oracle** stays where it is (inside `endot-ih`,
   gating verdict + observable agreement). Its output feeds the
   `ironhorse` list exactly as the honest split does today; the oracle is
   the source of the `pass`/`fail` truth for the `ironhorse` engine, not
@@ -279,15 +246,14 @@ changes nothing:
 1. At the pinned tip, run every (engine, feature-set) over its corpus
    and record the verdict per (case, mode). This is the "before"
    snapshot and the initial committed list.
-2. Apply the refactor (list loading + ratchet gate; and, under
-   resolution B, the tree move).
+2. Apply the refactor (shared tree, list loading, and ratchet gate).
 3. Re-run. The gate must report zero ratchet events and zero new
    `fail`: observed == the committed list for every (case, mode). Any
    delta is a bug in the refactor, not an accepted change.
 
 The ironhorse run is oracle-backed and memory-heavy: the XS oracle
 accumulates process memory across machine create/destroy cycles, which
-is why `ironhorse-xst` already walks one subtree per process, and why a
+is why `endot-ih` already walks one subtree per process, and why a
 whole-tree oracle run is a multi-hour, memory-bounded batch (tracked
 separately as the test262-oracle-OOM concern). The generation step
 therefore runs as a batched, per-subtree sweep on a host with the Rust
@@ -298,20 +264,18 @@ OOM ceiling is per subtree.
 
 ## Rollout
 
-Each step independently green, PR kept DRAFT until the maintainer
-resolves § Open Decision (the tree question changes step 2 only):
+Each step is independently green:
 
 1. **List format + loader + gate + ratchet, engine=ironhorse.** Add
    `expectations/` loading to `src/xst.rs`, the `Expectations` type, the
-   two-directional ratchet, and the `ironhorse-xst
+   two-directional ratchet, and the `endot-ih
    --expectations/--update-expectations` flags. Unit-testable without
    the full oracle: synthetic observed maps against synthetic
    expectation files exercise every gate branch. Generate the initial
    `ironhorse` lists by the batched sweep; commit them.
-2. **Tree resolution.** Under A: nothing moves; the same list format
-   also scores `ironhorse-262/cases` (its own committed list). Under B:
-   move `built-ins`/`language` bring-up cases out, re-home or retire the
-   metering/compile-diff coverage, keep `regressions/`.
+2. **Tree consolidation.** Move the bring-up and regression cases under
+   `test262/test/ironhorse/`; retarget the Rust gates and converter; classify
+   unsupported metering cases out of XS and Node. Implemented.
 3. **xst / node host scoring.** The shared post-processor maps
    `test262-harness` output to the list format and applies the ratchet,
    so all three engines are gated by committed lists. Generate and
@@ -322,22 +286,18 @@ resolves § Open Decision (the tree question changes step 2 only):
 
 ## Open Questions
 
-1. § Open Decision (A vs B): the one maintainer call this document
-   needs.
-2. Committed `fail` entries: are accepted-divergence quarantine entries
+1. Committed `fail` entries: are accepted-divergence quarantine entries
    wanted at all, or is `fail` always a red build (no quarantine)? The
    parent design's honest-split discipline suggests never committing a
    `fail`; a quarantine lane is only for a known oracle-shim defect that
    cannot be fixed immediately.
-3. Skip-reason churn: default `--strict-skip-reasons` off (soft ratchet)
+2. Skip-reason churn: default `--strict-skip-reasons` off (soft ratchet)
    while the opcode surface still grows, or on from the start?
 
 ## Dependencies
 
 | Design | Relationship |
 |---|---|
-| [ironhorse-test262-convergence](ironhorse-test262-convergence.md) | Parent. This refactor supersedes its decision 2 (two corpora) only to the extent § Open Decision resolves; it keeps decision 1 (expectations never in a case body) intact. |
+| [ironhorse-test262-convergence](ironhorse-test262-convergence.md) | Parent. This refactor supersedes its decision 2 with one annotation-classified tree; it keeps decision 1 (expectations never in a case body) intact. |
 | [ironhorse-engine](ironhorse-engine.md) | The stage ladder that lands the opcodes/features whose skip-to-pass flips the ratchet surfaces. |
 | `decommission-cxs-rust-default-xst-ci-parity` (parked plan) | The end-state this consolidation is groundwork for: one annotation-driven corpus with parameterized expectations is the precondition for proving parity through the downloaded `xst` binary under `test262-harness` once the C engine is removed. |
-</content>
-</invoke>

@@ -199,7 +199,7 @@ fn main() {
     let mut files = Vec::new();
     for sub in &subtrees {
         // A positional that already names an existing filesystem path (a case
-        // file or a directory of cases — e.g. the generated `ironhorse-262/cases`
+        // file or a directory of cases — e.g. the generated `test/ironhorse`
         // tree) is run directly, exactly as `xst` takes case paths. Otherwise
         // it resolves as a subtree under the located test262 root.
         let direct = PathBuf::from(sub);

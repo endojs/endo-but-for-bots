@@ -1,8 +1,8 @@
-# `cases/regressions/` — the fuzz-trophies regression tree
+# `test/ironhorse/regressions/` - the fuzz-trophies regression tree
 
 This directory is the durable, portable home for **differential-fuzz
 trophies** (design
-[`designs/ironhorse-test262-convergence.md`](../../../../../designs/ironhorse-test262-convergence.md)
+[`designs/ironhorse-test262-convergence.md`](../../../../../../designs/ironhorse-test262-convergence.md)
 § Part 1, "The fuzz-grammar arms"). The `ironhorse-fuzz` generators are
 generative instruments, not corpus, and stay unchanged; what migrates here is
 their *output*. When a differential arm surfaces a divergence between Ironhorse and
@@ -42,7 +42,7 @@ machinery a nightly run uses and holds every case to one bar: **zero
 divergence**. A case may be a *named* skip (a parse-negative awaiting the
 compiler flip), but a verdict/observable disagreement fails the build. This
 tree is deliberately kept **out** of `corpus_conversion_equivalence` (which
-proves the corpus → `cases/` conversion preserved coverage and so requires
+proves the corpus -> shared-test-tree conversion preserved coverage and so requires
 every case be *covered*): regressions are not corpus and legitimately carry
 parse-negative skips.
 
@@ -52,7 +52,7 @@ The differential campaign runs its arms bit-exact by construction — each arm i
 armed only once its grammar region is bit-exact against the oracle — so the
 **source-level runtime axis carries no residual named trophies**: every runtime
 divergence found during bring-up was folded into the stage corpus (now the
-`cases/language` and `cases/built-ins` trees) as it was fixed, not kept as a
+`test/ironhorse/language` and `test/ironhorse/built-ins` trees) as it was fixed, not kept as a
 standalone trophy. The tree is therefore sparse by design; it grows one case
 per *future* source divergence via the fix workflow below.
 
@@ -92,7 +92,7 @@ When a differential-fuzz arm surfaces a source-level result/completion divergenc
 
 1. **Minimize** the generated program to its smallest diverging form.
 2. **Fix** the engine; land any low-level lock the fix needs (a Rust unit test).
-3. **Check in the trophy here** as `cases/regressions/<slug>.js` with the case
+3. **Check in the trophy here** as `test/ironhorse/regressions/<slug>.js` with the case
    shape above — `ironhorse-dual-run`, the arm named in `info:`, the fix
    referenced. `tests/regressions_dual_run.rs` then gates it forever: a later
    fix that re-opens the divergence fails there.
