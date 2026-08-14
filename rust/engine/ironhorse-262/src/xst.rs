@@ -530,9 +530,7 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
         // it as an oracle non-result rather than an ironhorse defect.
         Agreement::IronhorseOnlyComplete => {
             if cfg.oracle {
-                if run.oracle_parsed
-                    && run.oracle_error == "ReferenceError: get Intl: undefined variable"
-                {
+                if oracle_missing_intl(run) {
                     // The pinned official Moddable XS build has no ECMA-402
                     // host at all. Ironhorse can therefore execute Intl cases,
                     // but this exact oracle cannot certify their values. Keep
@@ -580,6 +578,17 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
 /// host abort from an empty string.
 fn oracle_host_aborted(run: &DualRun) -> bool {
     run.oracle_parsed && run.oracle_error.is_empty()
+}
+
+/// The pinned XS oracle omits the `Intl` global. Most tests expose its direct
+/// ReferenceError; assertion-based error tests wrap the same missing binding
+/// in Test262Error after observing ReferenceError instead of their expected
+/// ECMA-402 error constructor.
+fn oracle_missing_intl(run: &DualRun) -> bool {
+    run.oracle_parsed
+        && (run.oracle_error == "ReferenceError: get Intl: undefined variable"
+            || (run.oracle_error.starts_with("Test262Error:")
+                && run.oracle_error.ends_with("but got a ReferenceError")))
 }
 
 fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
@@ -1776,6 +1785,32 @@ mod tests {
             crate::report::classify(crate::report::Verdict::RunSkip, "oracle-host-stack-limit"),
             crate::report::Category::Infrastructure
         );
+    }
+
+    #[test]
+    fn missing_intl_oracle_is_a_precise_host_exclusion() {
+        let cfg = Config::default();
+        for error in [
+            "ReferenceError: get Intl: undefined variable",
+            "Test262Error: Expected a RangeError but got a ReferenceError",
+            "Test262Error: context Expected a TypeError but got a ReferenceError",
+        ] {
+            let run = synthetic_ironhorse_only_complete(true, error);
+            assert!(oracle_missing_intl(&run));
+            assert_eq!(
+                evaluate_positive(&cfg, &run, false),
+                Verdict::RunSkip("oracle-host-missing-intl".into())
+            );
+        }
+
+        for error in [
+            "ReferenceError: another missing binding",
+            "Test262Error: Expected a RangeError but got a TypeError",
+        ] {
+            let run = synthetic_ironhorse_only_complete(true, error);
+            assert!(!oracle_missing_intl(&run));
+            assert!(matches!(evaluate_positive(&cfg, &run, false), Verdict::Fail(_)));
+        }
     }
 
     #[test]
