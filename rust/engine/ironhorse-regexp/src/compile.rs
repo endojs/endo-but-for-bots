@@ -194,13 +194,16 @@ pub fn compile(pattern: &str, flags: &str) -> PResult<Program> {
         named_groups: Vec::new(),
         pending_named_refs: Vec::new(),
     };
-    // The `u`/`v` flags' match/compile machinery (CESU-8 surrogate walk,
-    // unicode property sets, V-mode string sets) is a named later
-    // increment, but the SYNTAX they accept/reject is validated here so the
-    // compile-time verdict matches the oracle: parse under the flag, then
-    // surface the unsupported matcher at the end.
-    if parser_flags & (XS_REGEXP_U | XS_REGEXP_V) != 0 {
-        c.unsupported = Some("u/v flag (unicode)");
+    // The `u` flag's core execution (astral scalars kept whole, unicode
+    // case folding, unicode-aware atoms/classes/quantifiers/backreferences)
+    // is ported below and runs for real. The `v` flag additionally brings
+    // string sets and the `[...]` set-expression grammar, which this stage
+    // has not ported — so `v` remains a named skip whose SYNTAX is still
+    // validated (parse under the flag, surface the unsupported matcher at the
+    // end). `\p{}`/`\P{}` property escapes are likewise a named skip inside
+    // either flag (see `charset_parse_escape`).
+    if parser_flags & XS_REGEXP_V != 0 {
+        c.unsupported = Some("v flag (unicode sets)");
     }
     c.compile_pattern()
 }
@@ -507,8 +510,10 @@ impl Compiler {
         if self.flags & XS_REGEXP_I != 0 {
             if let Kind::CharSet { chars } = &self.nodes[id].kind {
                 if chars[0] == 2 && chars[1] + 1 == chars[2] {
-                    // Non-`u`/`v` fold (flag == 0); `u`/`v` is rejected above.
-                    let c = crate::charcase::canonicalize(chars[1] as i64) as i32;
+                    // `fxCharSetCanonicalizeSingle`: fold table is `Fold` under
+                    // `u`/`v` (flag == 1), `Ignore` otherwise.
+                    let fold = self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0;
+                    let c = crate::charcase::canonicalize(chars[1] as i64, fold) as i32;
                     if let Kind::CharSet { chars } = &mut self.nodes[id].kind {
                         chars[1] = c;
                         chars[2] = c + 1;
@@ -537,16 +542,28 @@ impl Compiler {
     }
 
     fn charset_words(&mut self) -> NodeId {
-        // Under `i` (non-`u`/`v`), the subject char is canonicalized to
-        // its `A`..`Z` form at match time, so `\w` drops the `a`..`z`
-        // range (fxCharSetWords, the non-UV `I` branch).
+        // Under `i`, the subject char is canonicalized at match time, so one
+        // case of the ASCII letters suffices in the compiled `\w` set. The
+        // non-`u`/`v` `Ignore` fold maps toward the upper case, so `\w` keeps
+        // `A`..`Z` and drops `a`..`z`; the `u`/`v` `Fold` fold maps toward the
+        // lower case, so it keeps `a`..`z` and drops `A`..`Z`
+        // (`fxCharSetWords`, the two `I` branches). Endpoints stay sorted.
         let chars = if self.flags & XS_REGEXP_I != 0 {
-            vec![
-                6,
-                b'0' as i32, b'9' as i32 + 1,
-                b'A' as i32, b'Z' as i32 + 1,
-                b'_' as i32, b'_' as i32 + 1,
-            ]
+            if self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0 {
+                vec![
+                    6,
+                    b'0' as i32, b'9' as i32 + 1,
+                    b'_' as i32, b'_' as i32 + 1,
+                    b'a' as i32, b'z' as i32 + 1,
+                ]
+            } else {
+                vec![
+                    6,
+                    b'0' as i32, b'9' as i32 + 1,
+                    b'A' as i32, b'Z' as i32 + 1,
+                    b'_' as i32, b'_' as i32 + 1,
+                ]
+            }
         } else {
             vec![
                 8,
@@ -664,13 +681,15 @@ impl Compiler {
         }
         if self.flags & XS_REGEXP_I != 0 {
             // Fold every code point in `[begin, end]` and union the
-            // canonical singletons (fxCharSetRange, the `I` branch).
+            // canonical singletons (fxCharSetRange, the `I` branch). The fold
+            // table is `Fold` under `u`/`v` (flag == 1), `Ignore` otherwise.
+            let fold = self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0;
             let begin = c1[1];
             let end = c2[1];
             let mut result = self.charset_empty();
             let mut ch = begin;
             while ch <= end {
-                let canon = crate::charcase::canonicalize(ch as i64) as i32;
+                let canon = crate::charcase::canonicalize(ch as i64, fold) as i32;
                 let single = self.add_node(Kind::CharSet { chars: vec![2, canon, canon + 1] });
                 result = self.charset_combine(result, single, MX_CHARSET_UNION_OP)?;
                 ch += 1;

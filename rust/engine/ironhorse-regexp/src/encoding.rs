@@ -9,10 +9,15 @@
 //! the C engine does (design's resolved question 6), so offsets compare
 //! directly against the oracle shim with no UTF-16 conversion.
 //!
-//! Scope note (honest, per the stage bar): this is the **non-`u`/`v`**
-//! codec — plain `fxUTF8Decode`, the branch `fxGetCharacter` takes when
-//! `XS_REGEXP_UV` is clear. The `u`/`v` CESU-8 surrogate path and astral
-//! (`> 0xFFFF`) handling are a named later increment.
+//! Scope note: XS's `u`/`v` codec (`mxStringByteDecode` = `fxCESU8Decode`,
+//! and the `XS_REGEXP_UV` branches of `fxFindCharacter`/`fxGetCharacter`)
+//! differs from the plain path only when the bytes encode a surrogate as its
+//! own sub-sequence (CESU-8) — which a well-formed UTF-8 subject never does.
+//! For every input this engine is actually fed, the `u`/`v` decode and the
+//! plain decode yield the identical scalar and the identical byte stride, so
+//! [`find_character`] needs no `UV` branch and [`get_character`] differs only
+//! in which case-fold table the `i` flag consults. The remaining `v`-only
+//! surface (string sets) stays a named skip in the compiler.
 
 /// XS `C_EOF` (`EOF`, `-1`): the sentinel `fxUTF8Decode` returns at the
 /// terminating NUL.
@@ -140,14 +145,24 @@ pub fn find_character(bytes: &[u8], offset: usize, direction: i32) -> usize {
     }
 }
 
-/// Port of `fxGetCharacter` (the non-`UV` branch): decode the character
-/// at `offset`, and — under the `i` flag — fold it to its canonical code
-/// point (`fxCharCaseCanonicalize`), exactly as XS does before every
-/// comparison in the match loop.
+/// Port of `fxGetCharacter`: decode the character at `offset`, and — under
+/// the `i` flag — fold it to its canonical code point
+/// (`fxCharCaseCanonicalize`), exactly as XS does before every comparison in
+/// the match loop. The fold table is selected by `u`/`v` (`flag == 1` in XS):
+/// the `u`/`v` path folds lower-ward and folds astral, the plain `i` path
+/// folds upper-ward over the BMP only.
+///
+/// For a well-formed UTF-8 subject (all this engine is fed), the `u`/`v`
+/// CESU-8 decode (`mxStringByteDecode`) and the plain `fxUTF8Decode` produce
+/// the identical scalar — a lone/paired surrogate byte sequence cannot occur
+/// — so the codec branch collapses to one `utf8_decode`; only the fold table
+/// differs between the two modes.
 pub fn get_character(bytes: &[u8], offset: usize, flags: u32) -> i64 {
+    use crate::flags::{XS_REGEXP_I, XS_REGEXP_U, XS_REGEXP_V};
     let c = utf8_decode(bytes, offset).0;
-    if flags & crate::flags::XS_REGEXP_I != 0 && c >= 0 {
-        crate::charcase::canonicalize(c)
+    if flags & XS_REGEXP_I != 0 && c >= 0 {
+        let fold = flags & (XS_REGEXP_U | XS_REGEXP_V) != 0;
+        crate::charcase::canonicalize(c, fold)
     } else {
         c
     }

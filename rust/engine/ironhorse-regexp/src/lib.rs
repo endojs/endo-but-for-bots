@@ -21,17 +21,23 @@
 //!
 //! ## Scope and honest skips (the stage bar)
 //!
-//! This increment ports the core grammar over the **non-`u`/`v`,
-//! non-`i`** subset: literals, `.`, character classes (`[...]` with
-//! ranges, negation, `\d\D\w\W\s\S`, control/hex/`\uXXXX` escapes),
-//! anchors (`^ $ \b \B`), groups (capturing and `(?:...)`), quantifiers
-//! (`* + ? {n,m}`, greedy and lazy), disjunction (`|`), numeric
-//! backreferences (`\1`..), and lookaround (`(?=) (?!) (?<=) (?<!)`).
-//! Every deferred surface is a **named** [`compile::CompileError::Unsupported`],
-//! never a wrong meter or a wrong value: the `u`/`v` flags (CESU-8 surrogate
-//! walk, unicode property escapes, V-mode string sets), `\p{}`/`\P{}`, inline
-//! modifiers (`(?flags:)`), and astral (`> 0xFFFF`) code points. The `i` flag
-//! (case folding) and named captures (`(?<name>)` / `\k<name>`) are ported.
+//! This engine ports the core grammar: literals, `.`, character classes
+//! (`[...]` with ranges, negation, `\d\D\w\W\s\S`, control/hex/`\uXXXX`
+//! escapes), anchors (`^ $ \b \B`), groups (capturing and `(?:...)`),
+//! quantifiers (`* + ? {n,m}`, greedy and lazy), disjunction (`|`), numeric
+//! backreferences (`\1`..), and lookaround (`(?=) (?!) (?<=) (?<!)`). The `i`
+//! flag (case folding) and named captures (`(?<name>)` / `\k<name>`) are
+//! ported, as is the **`u` flag's core execution**: astral (`> 0xFFFF`) code
+//! points kept whole and consumed as one unit, `\u{...}` escapes, the
+//! unicode (lower-ward) case fold and its interaction with classes/ranges/`\w`,
+//! and unicode-aware backreferences.
+//!
+//! Every remaining deferred surface is a **named**
+//! [`compile::CompileError::Unsupported`], never a wrong meter or a wrong
+//! value: `\p{}`/`\P{}` unicode property escapes, the `v` flag's string sets
+//! and `[...]` set-expression grammar, inline modifiers (`(?flags:)`), and —
+//! outside `u`/`v`/a group name — an astral code point in the pattern (which
+//! XS splits into surrogates, a path this stage does not emit).
 
 mod charcase;
 mod encoding;
@@ -196,10 +202,82 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_u_flag_is_named() {
-        match compile("abc", "u") {
+    fn u_flag_core_executes_not_skipped() {
+        // The `u` flag's core grammar now runs for real — a plain pattern
+        // under `u` compiles and matches, it is no longer a named skip.
+        let (m, c) = caps("abc", "u", "xabcy");
+        assert!(m);
+        assert_eq!(c[0], (1, 4));
+    }
+
+    #[test]
+    fn u_flag_astral_matches_whole_code_point() {
+        // An astral literal under `u` is one code point: `😀` (U+1F600,
+        // 4 UTF-8 bytes) matches the 4-byte subject as a single unit.
+        let (m, c) = caps("a\u{1F600}b", "u", "a\u{1F600}b");
+        assert!(m);
+        assert_eq!(c[0], (0, 6)); // 1 + 4 + 1 bytes
+        // `.` under `u` consumes the whole astral scalar (4 bytes), not a
+        // surrogate half.
+        let (dm, dc) = caps(".", "u", "\u{1F600}");
+        assert!(dm);
+        assert_eq!(dc[0], (0, 4));
+    }
+
+    #[test]
+    fn u_flag_braced_escape_and_astral_class() {
+        // `\u{1F600}` is the same astral scalar; a class range spanning astral
+        // matches it, and one just outside does not.
+        assert!(caps("\\u{1F600}", "u", "\u{1F600}").0);
+        assert!(caps("[\\u{1F600}-\\u{1F64F}]", "u", "\u{1F603}").0);
+        assert!(!caps("[\\u{1F610}-\\u{1F64F}]", "u", "\u{1F600}").0);
+    }
+
+    #[test]
+    fn u_flag_ignore_case_folds_lower_ward_including_astral() {
+        // Under `iu` the fold is lower-ward (Fold table): `K` (0x4B), `k`
+        // (0x6B) and the Kelvin sign `K` (U+212A) all canonicalize to `k`.
+        assert!(caps("k", "iu", "K").0);
+        assert!(caps("k", "iu", "\u{212A}").0);
+        assert!(caps("[a-z]", "iu", "A").0);
+        // Astral case folding: Deseret capital (U+10400) folds to small
+        // (U+10428) under the Fold1 table.
+        assert!(caps("\u{10400}", "iu", "\u{10428}").0);
+        assert!(caps("\u{10428}", "iu", "\u{10400}").0);
+    }
+
+    #[test]
+    fn u_flag_word_class_folds_lower_ward() {
+        // `\w` under `iu` keeps `a`..`z` (lower-ward fold), so an uppercase
+        // subject letter still matches (it folds into the set).
+        assert!(caps("\\w", "iu", "Z").0);
+        assert!(caps("\\w", "iu", "z").0);
+    }
+
+    #[test]
+    fn u_flag_backreference_folds_under_ignore_case() {
+        // A backreference under `iu` compares folded code points.
+        let (m, c) = caps("(\u{1F600})\\1", "u", "\u{1F600}\u{1F600}");
+        assert!(m);
+        assert_eq!(c[0], (0, 8)); // two 4-byte astral scalars
+        assert!(caps("(k)\\1", "iu", "K\u{212A}").0);
+    }
+
+    #[test]
+    fn v_flag_remains_a_named_skip() {
+        // The `v` flag (string sets) is still a named skip, not relabelled.
+        match compile("abc", "v") {
             Err(CompileError::Unsupported(_)) => {}
-            other => panic!("expected named Unsupported, got {:?}", other),
+            other => panic!("expected named Unsupported for v, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn property_escape_remains_a_named_skip_under_u() {
+        // `\p{...}` is still deferred even though `u` core now runs.
+        match compile("\\p{Letter}", "u") {
+            Err(CompileError::Unsupported(_)) => {}
+            other => panic!("expected named Unsupported for \\p, got {:?}", other),
         }
     }
 

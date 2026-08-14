@@ -91,9 +91,13 @@ fn check(case: Case) -> Result<bool, String> {
 }
 
 /// The curated case corpus, one entry per grammar surface the stage bar
-/// names. Kept ASCII/BMP (astral is a named skip), covering character
-/// classes, greedy/lazy quantifiers, groups/backreferences, anchors,
-/// alternation, lookaround, and pathological backtracking.
+/// names: character classes, greedy/lazy quantifiers, groups/backreferences,
+/// anchors, alternation, lookaround, pathological backtracking, the `i` fold,
+/// and — since the `u`-core increment — the `u` flag's astral scalars,
+/// `\u{...}` escapes, unicode (lower-ward) case fold, and unicode-aware
+/// classes/quantifiers/backreferences. Every entry is fully ported (checked
+/// bit-exact); the still-deferred surfaces are pinned separately in
+/// [`deferred_surfaces_remain_named_skips`].
 fn corpus() -> Vec<Case> {
     let mut v: Vec<Case> = Vec::new();
 
@@ -257,6 +261,83 @@ fn corpus() -> Vec<Case> {
     v.push(("K", "i", "k", 0));
     v.push(("[k]", "i", "K", 0));
 
+    // ---- the `u` flag's core execution (astral, `\u{}`, unicode fold) ----
+    //
+    // Every case here is fully ported, so it is `checked` (never a named
+    // skip). The subjects are standard UTF-8; XS is fed the same bytes and
+    // the offsets are compared bit-exact, meter included.
+    let grin = "\u{1F600}"; // U+1F600, 4 UTF-8 bytes
+    let grinning = "\u{1F600}\u{1F601}\u{1F602}";
+    // Plain BMP grammar under `u` behaves as without it.
+    for &s in &["abcd", "xabcy", "", "a1b2"] {
+        v.push(("abc", "u", s, 0));
+        v.push(("[a-z]+", "u", s, 0));
+        v.push(("\\d+", "u", s, 0));
+        v.push(("\\w+", "u", s, 0));
+    }
+    // Astral literals: matched whole, consumed as one 4-byte unit.
+    v.push((grin, "u", grin, 0));
+    v.push((&grinning[..], "u", &grinning[..], 0));
+    v.push((".", "u", grin, 0));
+    v.push(("..", "u", grin, 0)); // one astral is one dot, so `..` fails
+    v.push(("^.$", "u", grin, 0));
+    v.push((".", "u", &grinning[..], 0));
+    v.push(("^...$", "u", &grinning[..], 0));
+    v.push((".+", "u", &grinning[..], 0));
+    v.push((".+?", "u", &grinning[..], 0));
+    v.push((".{2}", "u", &grinning[..], 0));
+    // `\u{...}` and the surrogate-pair `\uHHHH\uHHHH` form both denote the
+    // astral scalar under `u`.
+    v.push(("\\u{1F600}", "u", grin, 0));
+    v.push(("\\uD83D\\uDE00", "u", grin, 0));
+    v.push(("a\\u{1F600}b", "u", "a\u{1F600}b", 0));
+    // Astral character classes and ranges.
+    v.push(("[\\u{1F600}-\\u{1F64F}]", "u", grin, 0));
+    v.push(("[\\u{1F600}-\\u{1F64F}]+", "u", &grinning[..], 0));
+    v.push(("[\\u{1F610}-\\u{1F64F}]", "u", grin, 0)); // just below range
+    v.push(("[^\\u{1F600}]", "u", grin, 0));
+    v.push(("[a\\u{1F600}z]", "u", grin, 0));
+    // Astral quantifiers and groups.
+    v.push(("\u{1F600}+", "u", "\u{1F600}\u{1F600}\u{1F600}", 0));
+    v.push(("(\u{1F600})\\1", "u", "\u{1F600}\u{1F600}", 0));
+    v.push(("(\u{1F600})+", "u", "\u{1F600}\u{1F600}", 0));
+    // Word boundary around an astral (non-word) char.
+    v.push(("\\bfoo\\b\u{1F600}", "u", "foo\u{1F600}", 0));
+    // Anchors and start offsets over astral.
+    v.push((grin, "u", "x\u{1F600}", 1));
+
+    // ---- `iu`: unicode case folding (lower-ward, including astral) ----
+    for &s in &["ABC", "abc", "AbC", "HELLO"] {
+        v.push(("abc", "iu", s, 0));
+        v.push(("[a-c]+", "iu", s, 0));
+        v.push(("[A-C]+", "iu", s, 0));
+        v.push(("\\w+", "iu", s, 0));
+        v.push(("[^a-c]", "iu", s, 0));
+    }
+    // Kelvin sign / K / k all fold together under the Fold table.
+    v.push(("k", "iu", "K", 0));
+    v.push(("k", "iu", "\u{212A}", 0));
+    v.push(("K", "iu", "\u{212A}", 0));
+    v.push(("[a-z]", "iu", "\u{212A}", 0)); // Kelvin folds to 'k' in [a-z]
+    // Final/medial sigma family folds together.
+    v.push(("\u{03C3}", "iu", "\u{03A3}", 0));
+    v.push(("\u{03C2}", "iu", "\u{03A3}", 0));
+    // Astral case folding (Deseret, Adlam) through the Fold1 table.
+    v.push(("\u{10400}", "iu", "\u{10428}", 0));
+    v.push(("\u{10428}", "iu", "\u{10400}", 0));
+    v.push(("[\u{10400}-\u{10427}]", "iu", "\u{10428}", 0));
+    v.push(("(\u{10400})\\1", "iu", "\u{10428}\u{10400}", 0));
+
+    // `u`-mode syntax errors (both must reject): under `u` an unknown
+    // identity escape, an out-of-range `\u{}`, a bare quantifier brace, and
+    // a lone `]`/`}` are SyntaxErrors that non-`u` tolerates.
+    v.push(("\\M", "u", "M", 0));
+    v.push(("\\u{110000}", "u", "x", 0));
+    v.push(("a{", "u", "a{", 0));
+    v.push(("]", "u", "]", 0));
+    v.push(("}", "u", "}", 0));
+    v.push(("\\1", "u", "x", 0)); // backref with no group
+
     // Syntax errors (both must reject).
     v.push(("(", "", "x", 0));
     v.push((")", "", "x", 0));
@@ -295,4 +376,43 @@ fn matcher_parity_against_the_pin() {
     // The curated corpus is all supported grammar; nothing should skip.
     assert_eq!(skipped, 0, "curated corpus should contain no named skips");
     assert!(checked > 100, "corpus should exercise many cases, got {}", checked);
+}
+
+/// The surfaces still deferred after the `u`-core increment stay HONEST
+/// named skips: the oracle compiles them, but ironhorse returns a named
+/// `Unsupported` (never a wrong answer). This pins the "removed the skip only
+/// where implemented" boundary — `\p{}`/`\P{}` property escapes (inside `u`)
+/// and the `v` flag as a whole remain unported. (The `v` flag's set-expression
+/// *grammar* — `\q{}`, `&&`, nested `[[...]]` — is a separate later increment;
+/// this stage does not attempt to validate it, so only cleanly-parsing `v`
+/// patterns are asserted here.)
+#[test]
+fn deferred_surfaces_remain_named_skips() {
+    let deferred: &[Case] = &[
+        ("\\p{Letter}", "u", "a", 0),
+        ("\\p{Script=Greek}", "u", "\u{03B1}", 0),
+        ("\\P{ASCII}", "u", "\u{00E9}", 0),
+        ("[\\p{L}]", "u", "a", 0),
+        ("abc", "v", "abc", 0),
+        ("[a-z]", "v", "m", 0),
+    ];
+    for &case in deferred {
+        let (pattern, flags, _, _) = case;
+        // The oracle must accept it (so this really is a deferral, not a
+        // shared reject), and ironhorse must name it Unsupported.
+        let oracle = oracle_regexp(pattern, flags, "x", 0)
+            .unwrap_or_else(|| panic!("oracle machine failure for /{pattern}/{flags}"));
+        assert!(
+            oracle.compiled,
+            "/{pattern}/{flags} should compile on the oracle (a real deferral)"
+        );
+        match compile(pattern, flags) {
+            Err(CompileError::Unsupported(_)) => {}
+            other => panic!(
+                "/{pattern}/{flags} must stay a named Unsupported skip, got {other:?}"
+            ),
+        }
+        // And it is counted as a skip (not a divergence) by the harness.
+        assert_eq!(check(case), Ok(false), "/{pattern}/{flags} should be a named skip");
+    }
 }
