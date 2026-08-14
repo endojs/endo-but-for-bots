@@ -1,11 +1,11 @@
 name: Test project mutual dependency versions
 
-# run CI on pushes to master, and on all PRs (even the ones that target other
-# branches)
+# run CI on pushes to the repository trunks, and on all PRs (even the ones that
+# target other branches)
 
 on:
   push:
-    branches: [master]
+    branches: [master, llm]
   pull_request:
 
 permissions:

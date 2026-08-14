@@ -17,7 +17,7 @@ name: Workflow security audit
 
 on:
   push:
-    branches: [master]
+    branches: [master, llm]
   pull_request:
 
 permissions:
