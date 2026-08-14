@@ -1619,6 +1619,12 @@ pub enum MathId {
 /// user code — the `call`/`apply`/`bind` re-entrant methods are separate.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NativeMethod {
+    /// A method on one of the ISO Temporal plain families.  The first byte is
+    /// the family (date, time, date-time, year-month, month-day, calendar),
+    /// and the second is the operation.  Keeping this compact makes the
+    /// shared ISO algorithms below genuinely shared instead of six copied
+    /// native dispatch tables.
+    TemporalPlain(u8, u8),
     TemporalInstantFrom,
     TemporalInstantFromEpochMilliseconds,
     TemporalInstantFromEpochNanoseconds,
@@ -2756,6 +2762,15 @@ struct TemporalInstantRecord {
     epoch_nanoseconds: i128,
 }
 
+const TEMPORAL_PLAIN_NAMES: [&str; 6] = [
+    "PlainDate",
+    "PlainTime",
+    "PlainDateTime",
+    "PlainYearMonth",
+    "PlainMonthDay",
+    "Calendar",
+];
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct TemporalDurationRecord {
     years: i64,
@@ -2768,6 +2783,23 @@ struct TemporalDurationRecord {
     milliseconds: i64,
     microseconds: i64,
     nanoseconds: i64,
+}
+
+/// ISO-8601 fields shared by PlainDate, PlainTime, PlainDateTime,
+/// PlainYearMonth, and PlainMonthDay.  `kind` identifies which fields are
+/// observable.  Calendar instances use kind 5 and otherwise-zero fields.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct TemporalPlainRecord {
+    kind: u8,
+    year: i64,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    millisecond: u32,
+    microsecond: u32,
+    nanosecond: u32,
 }
 
 impl TemporalDurationRecord {
@@ -2831,6 +2863,9 @@ pub enum Native {
     DateTimeFormat,
     TemporalInstant,
     TemporalDuration,
+    /// PlainDate, PlainTime, PlainDateTime, PlainYearMonth, PlainMonthDay,
+    /// and Calendar respectively.
+    TemporalPlain(u8),
     Object,
     Function,
     Boolean,
@@ -2906,6 +2941,7 @@ impl Native {
             Native::DateTimeFormat => "DateTimeFormat",
             Native::TemporalInstant => "Instant",
             Native::TemporalDuration => "Duration",
+            Native::TemporalPlain(i) => TEMPORAL_PLAIN_NAMES[i as usize],
             Native::Object => "Object",
             Native::Function => "Function",
             Native::Boolean => "Boolean",
@@ -2950,6 +2986,7 @@ impl Native {
             Native::DateTimeFormat => 0,
             Native::TemporalInstant => 1,
             Native::TemporalDuration => 0,
+            Native::TemporalPlain(i) => [3, 0, 3, 2, 2, 1][i as usize],
             Native::AggregateError => 2,
             Native::SuppressedError => 3,
             Native::DisposableStack | Native::AsyncDisposableStack => 0,
@@ -3311,8 +3348,10 @@ pub struct Interp {
     temporal_object: crate::value::SlotIndex,
     temporal_instant_proto: crate::value::SlotIndex,
     temporal_duration_proto: crate::value::SlotIndex,
+    temporal_plain_protos: [crate::value::SlotIndex; 6],
     temporal_instants: std::collections::HashMap<crate::value::SlotIndex, TemporalInstantRecord>,
     temporal_durations: std::collections::HashMap<crate::value::SlotIndex, TemporalDurationRecord>,
+    temporal_plains: std::collections::HashMap<crate::value::SlotIndex, TemporalPlainRecord>,
     collator_compare_functions:
         std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>,
     /// The realm's `%Object.prototype%` (XS's `mxObjectPrototype`), the root
@@ -4076,8 +4115,10 @@ impl Interp {
             temporal_object: crate::value::SlotIndex::NULL,
             temporal_instant_proto: crate::value::SlotIndex::NULL,
             temporal_duration_proto: crate::value::SlotIndex::NULL,
+            temporal_plain_protos: [crate::value::SlotIndex::NULL; 6],
             temporal_instants: std::collections::HashMap::new(),
             temporal_durations: std::collections::HashMap::new(),
+            temporal_plains: std::collections::HashMap::new(),
             collator_compare_functions: std::collections::HashMap::new(),
             object_proto: crate::value::SlotIndex::NULL,
             function_proto: crate::value::SlotIndex::NULL,
@@ -4324,7 +4365,8 @@ impl Interp {
                 | Native::Segmenter
                 | Native::DateTimeFormat
                 | Native::TemporalInstant
-                | Native::TemporalDuration => {
+                | Native::TemporalDuration
+                | Native::TemporalPlain(_) => {
                     unreachable!("namespace constructors are registered separately")
                 }
                 // `Proxy` is registered separately (`create_proxy`) and never
@@ -5095,6 +5137,46 @@ impl Interp {
             ("toJSON", NativeMethod::TemporalDurationToJSON),
             ("valueOf", NativeMethod::TemporalDurationValueOf),
         ] { let f = self.alloc_method(method); self.proto_methods.push((dp, name, f)); }
+
+        // ISO plain Temporal families.  They deliberately share a record and
+        // method dispatcher: calendar arithmetic is one set of algorithms,
+        // while each public brand exposes only its applicable conversions.
+        for kind in 0u8..6 {
+            let ctor = self.alloc_named_native(Native::TemporalPlain(kind));
+            let proto = self.slots.alloc(Slot::instance(self.object_proto));
+            self.temporal_plain_protos[kind as usize] = proto;
+            self.ctor_prototype.insert(ctor, proto);
+            self.proto_methods.push((ctor, "prototype", proto));
+            self.proto_methods.push((proto, "constructor", ctor));
+            self.proto_methods.push((temporal, TEMPORAL_PLAIN_NAMES[kind as usize], ctor));
+
+            let from = self.alloc_named_method(NativeMethod::TemporalPlain(kind, 0), "from", 1);
+            self.proto_methods.push((ctor, "from", from));
+            if kind < 5 {
+                let compare = self.alloc_named_method(NativeMethod::TemporalPlain(kind, 1), "compare", 2);
+                self.proto_methods.push((ctor, "compare", compare));
+                for (name, op, arity) in [
+                    ("with", 2, 1), ("add", 3, 1), ("subtract", 4, 1),
+                    ("until", 5, 1), ("since", 6, 1), ("equals", 7, 1),
+                    ("toString", 8, 0), ("toJSON", 9, 0), ("valueOf", 10, 0),
+                ] {
+                    let f = self.alloc_named_method(NativeMethod::TemporalPlain(kind, op), name, arity);
+                    self.proto_methods.push((proto, name, f));
+                }
+                if kind == 2 {
+                    for (name, op) in [("toPlainDate", 11), ("toPlainTime", 12)] {
+                        let f = self.alloc_named_method(NativeMethod::TemporalPlain(kind, op), name, 0);
+                        self.proto_methods.push((proto, name, f));
+                    }
+                } else if kind == 0 || kind == 1 {
+                    let f = self.alloc_named_method(NativeMethod::TemporalPlain(kind, 13), "toPlainDateTime", 1);
+                    self.proto_methods.push((proto, "toPlainDateTime", f));
+                }
+            } else {
+                let to_string = self.alloc_named_method(NativeMethod::TemporalPlain(kind, 8), "toString", 0);
+                self.proto_methods.push((proto, "toString", to_string));
+            }
+        }
     }
 
     /// Build `%eval%` as a special non-constructor native function. It has no
@@ -7420,6 +7502,28 @@ impl Interp {
                                 Some("microseconds") => Slot::number(d.microseconds as f64), Some("nanoseconds") => Slot::number(d.nanoseconds as f64),
                                 Some("sign") => Slot::number(d.sign() as f64),
                                 Some("blank") => Slot::boolean(d.sign() == 0),
+                                _ => self.instance_get(inst, id),
+                            }
+                        }
+                        Payload::Reference(inst) if self.temporal_plains.contains_key(&inst) => {
+                            let r = self.temporal_plains[&inst];
+                            let key = self.string_key_name(id);
+                            match key.as_deref() {
+                                Some("year") => Slot::number(r.year as f64), Some("month") => Slot::number(r.month as f64),
+                                Some("monthCode") => self.new_string_metered(format!("M{:02}",r.month).as_bytes()),
+                                Some("day") => Slot::number(r.day as f64), Some("hour") => Slot::number(r.hour as f64),
+                                Some("minute") => Slot::number(r.minute as f64), Some("second") => Slot::number(r.second as f64),
+                                Some("millisecond") => Slot::number(r.millisecond as f64), Some("microsecond") => Slot::number(r.microsecond as f64),
+                                Some("nanosecond") => Slot::number(r.nanosecond as f64),
+                                Some("calendarId") | Some("id") => self.new_string_metered(b"iso8601"),
+                                Some("era") => self.new_string_metered(if r.year <= 0 { b"bce" } else { b"ce" }),
+                                Some("eraYear") => Slot::number(if r.year <= 0 { (1-r.year) as f64 } else { r.year as f64 }),
+                                Some("dayOfWeek") => Slot::number((days_from_civil(r.year,r.month,r.day).unwrap_or(0)+3).rem_euclid(7) as f64+1.0),
+                                Some("dayOfYear") => Slot::number((days_from_civil(r.year,r.month,r.day).unwrap_or(0)-days_from_civil(r.year,1,1).unwrap_or(0)+1) as f64),
+                                Some("daysInMonth") => Slot::number((1..=31).rev().find(|&d|days_from_civil(r.year,r.month,d).is_some()).unwrap_or(0) as f64),
+                                Some("daysInYear") => Slot::number(if days_from_civil(r.year,2,29).is_some(){366.0}else{365.0}),
+                                Some("monthsInYear") => Slot::number(12.0),
+                                Some("inLeapYear") => Slot::boolean(days_from_civil(r.year,2,29).is_some()),
                                 _ => self.instance_get(inst, id),
                             }
                         }
@@ -11524,6 +11628,11 @@ impl Interp {
                 let record = TemporalDurationRecord::from_fields(fields);
                 if !temporal_duration_sign_valid(record) { return Err(self.catchable_range_error()); }
                 self.temporal_new_duration(record)?
+            }
+            Native::TemporalPlain(kind) => {
+                if !has_target { return Err(self.catchable_type_error()); }
+                let values = (0..10).map(arg).collect::<Vec<_>>();
+                self.temporal_plain_construct(kind, &values, code)?
             }
             // `Boolean(value)` (`fx_Boolean`): ToBoolean(argument0), or
             // `false` when called with no argument. Measured against the pin,
@@ -16166,6 +16275,128 @@ impl Interp {
         Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
     }
 
+    fn temporal_new_plain(&mut self, record: TemporalPlainRecord) -> Result<Slot, Halt> {
+        if !temporal_plain_valid(record) { return Err(self.catchable_range_error()); }
+        let inst = self.slots.alloc(Slot::instance(self.temporal_plain_protos[record.kind as usize]));
+        self.temporal_plains.insert(inst, record);
+        Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
+    }
+
+    fn temporal_plain_construct(&mut self, kind: u8, args: &[Slot], code: &[u8]) -> Result<Slot, Halt> {
+        if kind == 5 {
+            let id = self.value_to_string(code, args.first().copied().unwrap_or_else(Slot::undefined))?;
+            if id != "iso8601" { return Err(self.catchable_range_error()); }
+            return self.temporal_new_plain(TemporalPlainRecord { kind, ..Default::default() });
+        }
+        let integer = |this: &mut Self, i: usize, default: i64| -> Result<i64, Halt> {
+            let value = args.get(i).copied().unwrap_or_else(Slot::undefined);
+            if value.kind == Kind::Undefined { Ok(default) } else { this.temporal_integer(value) }
+        };
+        let mut r = TemporalPlainRecord { kind, ..Default::default() };
+        match kind {
+            0 | 2 => {
+                r.year = integer(self, 0, 0)?;
+                r.month = u32::try_from(integer(self, 1, 0)?).map_err(|_| self.catchable_range_error())?;
+                r.day = u32::try_from(integer(self, 2, 0)?).map_err(|_| self.catchable_range_error())?;
+                if kind == 2 { temporal_set_time_args(self, &mut r, args, 3)?; }
+            }
+            1 => temporal_set_time_args(self, &mut r, args, 0)?,
+            3 => {
+                r.year = integer(self, 0, 0)?;
+                r.month = u32::try_from(integer(self, 1, 0)?).map_err(|_| self.catchable_range_error())?;
+                r.day = u32::try_from(integer(self, 3, 1)?).map_err(|_| self.catchable_range_error())?;
+            }
+            4 => {
+                r.month = u32::try_from(integer(self, 0, 0)?).map_err(|_| self.catchable_range_error())?;
+                r.day = u32::try_from(integer(self, 1, 0)?).map_err(|_| self.catchable_range_error())?;
+                r.year = integer(self, 3, 1972)?;
+            }
+            _ => unreachable!(),
+        }
+        self.temporal_new_plain(r)
+    }
+
+    fn temporal_plain_from(&mut self, kind: u8, value: Slot, code: &[u8]) -> Result<TemporalPlainRecord, Halt> {
+        if kind == 5 {
+            if let Payload::Reference(i) = value.value {
+                if let Some(r) = self.temporal_plains.get(&i).filter(|r| r.kind == 5) { return Ok(*r); }
+            }
+            let id = self.value_to_string(code, value)?;
+            return if id == "iso8601" { Ok(TemporalPlainRecord { kind, ..Default::default() }) }
+                else { Err(self.catchable_range_error()) };
+        }
+        if let Payload::Reference(i) = value.value {
+            if let Some(r) = self.temporal_plains.get(&i).filter(|r| r.kind == kind) { return Ok(*r); }
+            let mut r = TemporalPlainRecord { kind, year: if kind == 4 { 1972 } else { 0 }, day: if kind == 3 { 1 } else { 0 }, ..Default::default() };
+            let names = ["year","month","day","hour","minute","second","millisecond","microsecond","nanosecond"];
+            let mut seen = [false; 9];
+            for (n, name) in names.iter().enumerate() {
+                let Some(&id) = self.symbol_ids.get(*name) else { continue };
+                let item = self.ordinary_get(code, i, id, value)?;
+                if item.kind == Kind::Undefined { continue; }
+                let v = self.temporal_integer(item)?;
+                seen[n] = true;
+                match n { 0 => r.year=v, 1 => r.month=u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                    2 => r.day=u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                    3 => r.hour=u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                    4 => r.minute=u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                    5 => r.second=u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                    6 => r.millisecond=u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                    7 => r.microsecond=u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                    _ => r.nanosecond=u32::try_from(v).map_err(|_| self.catchable_range_error())? }
+            }
+            let required = match kind { 0|2 => seen[0]&&seen[1]&&seen[2], 1 => seen[3]||seen[4]||seen[5]||seen[6]||seen[7]||seen[8], 3 => seen[0]&&seen[1], 4 => seen[1]&&seen[2], _ => false };
+            if !required || !temporal_plain_valid(r) { return Err(self.catchable_type_error()); }
+            return Ok(r);
+        }
+        let text = self.value_to_string(code, value)?;
+        parse_temporal_plain(kind, &text).ok_or_else(|| self.catchable_range_error())
+    }
+
+    fn temporal_plain_method(&mut self, kind: u8, op: u8, this: Slot, arg0: Slot, arg1: Slot, code: &[u8]) -> Result<Slot, Halt> {
+        if op == 0 {
+            let r = self.temporal_plain_from(kind, arg0, code)?;
+            return self.temporal_new_plain(r);
+        }
+        if op == 1 {
+            let a = self.temporal_plain_from(kind, arg0, code)?;
+            let b = self.temporal_plain_from(kind, arg1, code)?;
+            return Ok(Slot::integer(temporal_plain_key(a).cmp(&temporal_plain_key(b)) as i32));
+        }
+        let old = temporal_brand(this, &self.temporal_plains)
+            .filter(|r| r.kind == kind).ok_or_else(|| self.catchable_type_error())?;
+        match op {
+            2 => {
+                let Payload::Reference(i) = arg0.value else { return Err(self.catchable_type_error()) };
+                let mut r = old; let mut any = false;
+                for (n,name) in ["year","month","day","hour","minute","second","millisecond","microsecond","nanosecond"].iter().enumerate() {
+                    let Some(&id)=self.symbol_ids.get(*name) else { continue }; let v=self.ordinary_get(code,i,id,arg0)?;
+                    if v.kind==Kind::Undefined { continue } let v=self.temporal_integer(v)?; any=true;
+                    match n {0=>r.year=v,1=>r.month=u32::try_from(v).map_err(|_|self.catchable_range_error())?,2=>r.day=u32::try_from(v).map_err(|_|self.catchable_range_error())?,3=>r.hour=u32::try_from(v).map_err(|_|self.catchable_range_error())?,4=>r.minute=u32::try_from(v).map_err(|_|self.catchable_range_error())?,5=>r.second=u32::try_from(v).map_err(|_|self.catchable_range_error())?,6=>r.millisecond=u32::try_from(v).map_err(|_|self.catchable_range_error())?,7=>r.microsecond=u32::try_from(v).map_err(|_|self.catchable_range_error())?,_=>r.nanosecond=u32::try_from(v).map_err(|_|self.catchable_range_error())?}
+                }
+                if !any { return Err(self.catchable_type_error()) } self.temporal_new_plain(r)
+            }
+            3|4 => {
+                let mut d=self.temporal_duration_from(arg0,code)?; if op==4 {d=d.negated().ok_or_else(||self.catchable_range_error())?;}
+                let r=temporal_plain_add(old,d).ok_or_else(||self.catchable_range_error())?; self.temporal_new_plain(r)
+            }
+            5|6 => {
+                let other=self.temporal_plain_from(kind,arg0,code)?;
+                let (a,b)=if op==5 {(old,other)} else {(other,old)};
+                let d=temporal_plain_difference(a,b).ok_or(Halt::Unsupported("Temporal.Plain:difference-calendar"))?;
+                self.temporal_new_duration(d)
+            }
+            7 => Ok(Slot::boolean(old == self.temporal_plain_from(kind,arg0,code)?)),
+            8|9 => Ok(self.new_string_metered(format_temporal_plain(old).as_bytes())),
+            10 => Err(self.catchable_type_error()),
+            11 => self.temporal_new_plain(TemporalPlainRecord{kind:0,..old}),
+            12 => self.temporal_new_plain(TemporalPlainRecord{kind:1,year:0,month:0,day:0,..old}),
+            13 if kind==0 => { let t=self.temporal_plain_from(1,arg0,code)?; self.temporal_new_plain(TemporalPlainRecord{kind:2,year:old.year,month:old.month,day:old.day,..t}) }
+            13 if kind==1 => { let d=self.temporal_plain_from(0,arg0,code)?; self.temporal_new_plain(TemporalPlainRecord{kind:2,hour:old.hour,minute:old.minute,second:old.second,millisecond:old.millisecond,microsecond:old.microsecond,nanosecond:old.nanosecond,..d}) }
+            _ => Err(Halt::Unsupported("Temporal.Plain:method")),
+        }
+    }
+
     fn temporal_instant_from(&mut self, value: Slot, code: &[u8]) -> Result<i128, Halt> {
         if let Payload::Reference(r) = value.value {
             if let Some(record) = self.temporal_instants.get(&r) { return Ok(record.epoch_nanoseconds); }
@@ -16358,6 +16589,10 @@ impl Interp {
             }
         }
         let result: Slot = match m {
+            NativeMethod::TemporalPlain(kind, op) => {
+                let arg1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+                self.temporal_plain_method(kind, op, this, arg0, arg1, code)?
+            }
             NativeMethod::TemporalInstantFrom
             | NativeMethod::TemporalInstantFromEpochMilliseconds
             | NativeMethod::TemporalInstantFromEpochNanoseconds
@@ -28595,6 +28830,104 @@ fn round_half_even(x: f64) -> f64 {
 /// A `&'static str` naming an unmodeled native **call** for
 /// [`Halt::Unsupported`], so the differential runner records the skip
 /// attributed to the specific built-in (never a silent mis-execution).
+fn temporal_set_time_args(
+    interp: &mut Interp,
+    record: &mut TemporalPlainRecord,
+    args: &[Slot],
+    start: usize,
+) -> Result<(), Halt> {
+    let mut out = [0u32; 6];
+    for (n, field) in out.iter_mut().enumerate() {
+        let value = args.get(start + n).copied().unwrap_or_else(Slot::undefined);
+        if value.kind != Kind::Undefined {
+            *field = u32::try_from(interp.temporal_integer(value)?)
+                .map_err(|_| interp.catchable_range_error())?;
+        }
+    }
+    [record.hour, record.minute, record.second, record.millisecond, record.microsecond, record.nanosecond] = out;
+    Ok(())
+}
+
+fn temporal_plain_valid(r: TemporalPlainRecord) -> bool {
+    if r.kind >= 6 { return false; }
+    if r.kind == 5 { return true; }
+    if matches!(r.kind, 0|2|3|4) && days_from_civil(r.year, r.month, r.day).is_none() { return false; }
+    if matches!(r.kind, 1|2) && (r.hour > 23 || r.minute > 59 || r.second > 59
+        || r.millisecond > 999 || r.microsecond > 999 || r.nanosecond > 999) { return false; }
+    true
+}
+
+fn parse_temporal_plain(kind: u8, text: &str) -> Option<TemporalPlainRecord> {
+    let text = text.split('[').next()?;
+    if kind == 5 { return (text == "iso8601").then_some(TemporalPlainRecord { kind, ..Default::default() }); }
+    let (date, time) = match text.find(['T','t']) {
+        Some(at) => (&text[..at], Some(&text[at+1..])),
+        None if kind == 1 => ("", Some(text)),
+        None => (text, None),
+    };
+    let mut r = TemporalPlainRecord { kind, year: if kind == 4 { 1972 } else { 0 }, day: if kind == 3 { 1 } else { 0 }, ..Default::default() };
+    if matches!(kind,0|2|3|4) {
+        if kind == 4 && date.matches('-').count() == 1 {
+            let mut p=date.trim_start_matches('-').split('-'); r.month=p.next()?.parse().ok()?; r.day=p.next()?.parse().ok()?; if p.next().is_some(){return None;}
+        } else {
+            let mut p=date.rsplitn(3,'-');
+            if kind == 3 { r.month=p.next()?.parse().ok()?; r.year=p.next()?.parse().ok()?; }
+            else { r.day=p.next()?.parse().ok()?; r.month=p.next()?.parse().ok()?; r.year=p.next()?.parse().ok()?; }
+        }
+    }
+    if matches!(kind,1|2) {
+        let mut p=time?.split(':'); r.hour=p.next()?.parse().ok()?; r.minute=p.next().unwrap_or("0").parse().ok()?;
+        let sec=p.next().unwrap_or("0"); if p.next().is_some(){return None;} let (whole,frac)=sec.split_once('.').unwrap_or((sec,"")); r.second=whole.parse().ok()?;
+        if frac.len()>9 || !frac.bytes().all(|b|b.is_ascii_digit()){return None;} let f=format!("{frac:0<9}");
+        if !frac.is_empty(){let n:u32=f.parse().ok()?;r.millisecond=n/1_000_000;r.microsecond=(n/1_000)%1_000;r.nanosecond=n%1_000;}
+    }
+    temporal_plain_valid(r).then_some(r)
+}
+
+fn temporal_plain_key(r: TemporalPlainRecord) -> (i64,u32,u32,u32,u32,u32,u32,u32,u32) {
+    (r.year,r.month,r.day,r.hour,r.minute,r.second,r.millisecond,r.microsecond,r.nanosecond)
+}
+
+fn temporal_plain_time_ns(r: TemporalPlainRecord) -> i128 {
+    (((((r.hour as i128*60+r.minute as i128)*60+r.second as i128)*1000+r.millisecond as i128)*1000+r.microsecond as i128)*1000)+r.nanosecond as i128
+}
+
+fn temporal_plain_add(mut r: TemporalPlainRecord, d: TemporalDurationRecord) -> Option<TemporalPlainRecord> {
+    if r.kind == 5 { return None; }
+    if matches!(r.kind,0|2|3|4) {
+        let mut year=r.year.checked_add(d.years)?; let month0=(r.month as i64-1).checked_add(d.months)?;
+        year=year.checked_add(month0.div_euclid(12))?; r.month=(month0.rem_euclid(12)+1) as u32;
+        let max_day=(1..=31).rev().find(|&day|days_from_civil(year,r.month,day).is_some())?; r.day=r.day.min(max_day); r.year=year;
+        let base=days_from_civil(r.year,r.month,r.day)?; let days=base.checked_add((d.weeks as i128).checked_mul(7)?)?.checked_add(d.days as i128)?;
+        (r.year,r.month,r.day)=civil_from_days(days);
+    } else if d.years!=0||d.months!=0||d.weeks!=0||d.days!=0 { return None; }
+    if matches!(r.kind,1|2) {
+        let delta=d.time_nanoseconds(false)?; let total=temporal_plain_time_ns(r).checked_add(delta)?;
+        let carry=total.div_euclid(86_400_000_000_000); let n=total.rem_euclid(86_400_000_000_000);
+        if r.kind==2 && carry!=0 { let day=days_from_civil(r.year,r.month,r.day)?.checked_add(carry)?;(r.year,r.month,r.day)=civil_from_days(day); }
+        r.hour=(n/3_600_000_000_000) as u32;r.minute=((n/60_000_000_000)%60) as u32;r.second=((n/1_000_000_000)%60) as u32;r.millisecond=((n/1_000_000)%1000) as u32;r.microsecond=((n/1000)%1000) as u32;r.nanosecond=(n%1000) as u32;
+    } else if d.hours!=0||d.minutes!=0||d.seconds!=0||d.milliseconds!=0||d.microseconds!=0||d.nanoseconds!=0 { return None; }
+    temporal_plain_valid(r).then_some(r)
+}
+
+fn temporal_plain_difference(a: TemporalPlainRecord,b: TemporalPlainRecord)->Option<TemporalDurationRecord>{
+    if a.kind!=b.kind{return None} match a.kind {
+        0 => Some(TemporalDurationRecord{days:i64::try_from(days_from_civil(b.year,b.month,b.day)?-days_from_civil(a.year,a.month,a.day)?).ok()?,..Default::default()}),
+        1 => Some(duration_from_nanoseconds(temporal_plain_time_ns(b)-temporal_plain_time_ns(a))),
+        2 => {let days=days_from_civil(b.year,b.month,b.day)?-days_from_civil(a.year,a.month,a.day)?;Some(duration_from_nanoseconds(days*86_400_000_000_000+temporal_plain_time_ns(b)-temporal_plain_time_ns(a)))},
+        3 => Some(TemporalDurationRecord{months:(b.year-a.year).checked_mul(12)?.checked_add(b.month as i64-a.month as i64)?,..Default::default()}),
+        _ => None,
+    }
+}
+
+fn format_temporal_plain(r:TemporalPlainRecord)->String{
+    if r.kind==5{return "iso8601".to_string()} let y=if(0..=9999).contains(&r.year){format!("{:04}",r.year)}else{format!("{:+07}",r.year)};
+    let date=match r.kind {3=>format!("{y}-{:02}",r.month),4=>format!("{:02}-{:02}",r.month,r.day),_=>format!("{y}-{:02}-{:02}",r.month,r.day)};
+    if !matches!(r.kind,1|2){return date} let fraction=r.millisecond*1_000_000+r.microsecond*1_000+r.nanosecond;
+    let time=if fraction==0{format!("{:02}:{:02}:{:02}",r.hour,r.minute,r.second)}else{format!("{:02}:{:02}:{:02}.{}",r.hour,r.minute,r.second,format!("{fraction:09}").trim_end_matches('0'))};
+    if r.kind==1{time}else{format!("{date}T{time}")}
+}
+
 fn temporal_brand<T: Copy>(
     value: Slot,
     records: &std::collections::HashMap<crate::value::SlotIndex, T>,
@@ -28783,6 +29116,14 @@ fn native_unsupported_name(native: Native) -> &'static str {
         Native::DateTimeFormat => "native-call:DateTimeFormat",
         Native::TemporalInstant => "native-call:Temporal.Instant",
         Native::TemporalDuration => "native-call:Temporal.Duration",
+        Native::TemporalPlain(i) => match i {
+            0 => "native-call:Temporal.PlainDate",
+            1 => "native-call:Temporal.PlainTime",
+            2 => "native-call:Temporal.PlainDateTime",
+            3 => "native-call:Temporal.PlainYearMonth",
+            4 => "native-call:Temporal.PlainMonthDay",
+            _ => "native-call:Temporal.Calendar",
+        },
         Native::Object => "native-call:Object",
         Native::Function => "native-call:Function",
         Native::Boolean => "native-call:Boolean",
