@@ -6109,10 +6109,20 @@ impl Interp {
                     pc += size as usize;
                 }
                 // Materialize the active frame's arguments as an iterable
-                // indexed object. The default derived constructor uses this
-                // form to forward all arguments through `super(...args)`.
+                // indexed object. The default derived constructor uses the plain
+                // `XS_CODE_ARGUMENTS` form to forward all arguments through
+                // `super(...args)`, where the operand is a leading-slot offset.
+                // The `_SLOPPY`/`_STRICT` forms build the `arguments` object
+                // itself: there the operand is the formal-parameter count
+                // (`fxRunArguments`'s aliasing count), NOT a skip offset — the
+                // object contains ALL passed arguments, so `arguments.length`
+                // must equal the actual argument count.
                 XS_CODE_ARGUMENTS | XS_CODE_ARGUMENTS_SLOPPY | XS_CODE_ARGUMENTS_STRICT => {
-                    let offset = code[pc + 1] as usize;
+                    let offset = if op == XS_CODE_ARGUMENTS {
+                        code[pc + 1] as usize
+                    } else {
+                        0
+                    };
                     let values: Vec<Slot> = self.args.iter().copied().skip(offset).collect();
                     let array = self.new_array();
                     if let Some(data) = self.arrays.get_mut(&array) {
