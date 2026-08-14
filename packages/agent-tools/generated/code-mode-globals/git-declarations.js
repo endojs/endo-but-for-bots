@@ -64,10 +64,12 @@ type GitBlobInfo = {
 };
 type GitBlobRef = {
     getInfo: () => GitExtendedBlobInfo;
-    fetch: (offset: bigint, length: bigint) => GitERef<GitPassableBytesReader>;
+    streamBase64: (synPromise: unknown) => Promise<unknown>;
     text: () => Promise<string>;
     json: () => Promise<unknown>;
     help: (method?: string) => string;
+    range: (start: bigint, end?: bigint) => Promise<GitRichReadableBlob>;
+    textRange: (startLine: number, endLine: number) => Promise<GitRichReadableBlob>;
 };
 type GitCursor = {
     read: (limit?: bigint) => Promise<GitDirectoryPage>;
@@ -253,6 +255,12 @@ type GitLitePathEntry = {
 type GitLitePathEntryIssuer = {
     entry: (path: string | string[]) => GitLitePathEntry;
 };
+type GitLiteReadableBlob = {
+    streamBase64: (synPromise: unknown) => Promise<unknown>;
+    text: () => Promise<string>;
+    json: () => Promise<any>;
+    help: (method?: string) => string;
+};
 type GitLiteReadableTree = {
     has: (...petNamePath: string[]) => Promise<boolean>;
     list: (...petNamePath: string[]) => Promise<readonly string[]>;
@@ -353,6 +361,11 @@ type GitReadableBlobSource = {
     streamBase64: (...args: any[]) => PromiseLike<unknown>;
 };
 type GitReadableTree = GitLiteReadableTree;
+type GitRichReadableBlob = GitLiteReadableBlob & {
+    getInfo: () => Promise<GitBlobInfo>;
+    range: (start: bigint, end?: bigint) => Promise<GitRichReadableBlob>;
+    textRange: (startLine: number, endLine: number) => Promise<GitRichReadableBlob>;
+};
 type GitSnapshotTree = GitLiteReadableTree & {
     sha256: () => string;
     getInfo: () => Promise<GitBlobInfo>;
@@ -451,10 +464,12 @@ type GitBlobInfo = {
 };
 type GitBlobRef = {
     getInfo: () => GitBlobInfo;
-    fetch: (offset: bigint, length: bigint) => GitERef<GitPassableBytesReader>;
+    streamBase64: (synPromise: unknown) => Promise<unknown>;
     text: () => Promise<string>;
     json: () => Promise<unknown>;
     help: (method?: string) => string;
+    range: (start: bigint, end?: bigint) => Promise<GitRichReadableBlob>;
+    textRange: (startLine: number, endLine: number) => Promise<GitRichReadableBlob>;
 };
 type GitCursor = {
     read: (limit?: bigint) => Promise<GitDirectoryPage>;
@@ -591,10 +606,21 @@ type GitTrackingStatus = {
     detached: boolean;
 };
 type GitWorktreeStatus = 'clean' | 'modified' | 'deleted' | 'untracked' | 'ignored' | 'conflicted';
+type GitLiteBlobInfo = {
+    algorithm: string;
+    hash: string;
+    size: bigint;
+};
 type GitLitePathEntry = {
     segments: () => string[];
     displayPath: () => string;
     child: (name: string) => GitLitePathEntry;
+    help: (method?: string) => string;
+};
+type GitLiteReadableBlob = {
+    streamBase64: (synPromise: unknown) => Promise<unknown>;
+    text: () => Promise<string>;
+    json: () => Promise<any>;
     help: (method?: string) => string;
 };
 type GitLiteReadableTree = {
@@ -676,6 +702,11 @@ type GitQid<K = GitNodeKind> = {
 };
 type GitReadOnlyGitWorktree = GitReadableTree;
 type GitReadableTree = GitLiteReadableTree;
+type GitRichReadableBlob = GitLiteReadableBlob & {
+    getInfo: () => Promise<GitLiteBlobInfo>;
+    range: (start: bigint, end?: bigint) => Promise<GitRichReadableBlob>;
+    textRange: (startLine: number, endLine: number) => Promise<GitRichReadableBlob>;
+};
 type GitStreamNode<Y = undefined, R = undefined> = GitStreamYieldNode<Y, R> | GitStreamReturnNode<R>;
 type GitStreamReturnNode<R = undefined> = {
     value: R;
