@@ -22,6 +22,13 @@ after filing the 17 unattended documents and recording the merged
 
 ## Historical groom notes
 
+*Layered on 2026-08-14: added
+[daemon-commit-formula](daemon-commit-formula.md) to M3, defining immutable
+daemon formulas for Git trees, commits, and annotated tags; formula-rooted ref
+paths through name hubs; deterministic readable-tree orphan envelopes; and the
+byte-stable object-store seam required by Minion Town's CAS-native git remote.
+Summary, dependency graph, M3 row, estimate, and totals synced.*
+
 *Layered on 2026-07-30: added [cbor-encode-decode](cbor-encode-decode.md) to M4 (Networking): a packaging refactor that splits `@endo/cbor` into `@endo/cbor/encode` and `@endo/cbor/decode` subpath exports over an internal `internals.js` for the shared `canonicalInfo`/`CANONICAL_NAN`/bounds, so decoding consumers retain no encoding machinery and encoding consumers retain no decoding machinery; the root `.` re-export is preserved; follow-up to kriskowal's approving review of #885; summary table, M4 row, and per-design estimate synced.*
 
 *Layered on 2026-08-24 (rolling index refresh): indexed six design files that had
