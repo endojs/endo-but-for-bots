@@ -16159,9 +16159,6 @@ impl Interp {
                     Payload::Reference(r) if self.data_views.contains_key(&r) => r,
                     _ => return Err(Halt::Unsupported("data-view-get:non-dataview")),
                 };
-                if kind <= 1 {
-                    return Err(Halt::Unsupported("data-view-get:bigint"));
-                }
                 let dv = self.data_views[&inst];
                 let delta = TYPED_ARRAY_TYPES[kind as usize].size as u32;
                 let offset = match self.arg_to_byte_length(base, 0, 0) {
@@ -16175,7 +16172,14 @@ impl Interp {
                 let little = self.arg_is_truthy(base, 1);
                 let abs = dv.offset + offset;
                 self.meter.tick_raw(DATA_VIEW_GET_METERING);
-                self.data_view_read(dv.buffer, abs, kind, little)?
+                // `getBigInt64`/`getBigUint64` (kinds 0/1) decode into a
+                // freshly allocated BigInt (metered by `make_bigint`); the
+                // numeric getters return a metering-neutral primitive.
+                if kind <= 1 {
+                    self.data_view_read_bigint(dv.buffer, abs, kind, little)
+                } else {
+                    self.data_view_read(dv.buffer, abs, kind, little)?
+                }
             }
             // `DataView.prototype.set<Type>(byteOffset, value[, littleEndian])`
             // (`fx_DataView_prototype_set`): coerce + write. One `mxMeterOne`.
@@ -16184,9 +16188,6 @@ impl Interp {
                     Payload::Reference(r) if self.data_views.contains_key(&r) => r,
                     _ => return Err(Halt::Unsupported("data-view-set:non-dataview")),
                 };
-                if kind <= 1 {
-                    return Err(Halt::Unsupported("data-view-set:bigint"));
-                }
                 let dv = self.data_views[&inst];
                 let delta = TYPED_ARRAY_TYPES[kind as usize].size as u32;
                 let offset = match self.arg_to_byte_length(base, 0, 0) {
@@ -16204,7 +16205,14 @@ impl Interp {
                 // The littleEndian flag is argument 2 for set.
                 let little = self.arg_is_truthy(base, 2);
                 let abs = dv.offset + offset;
-                self.data_view_write(dv.buffer, abs, kind, value, little)?;
+                // `setBigInt64`/`setBigUint64` (kinds 0/1) take a BigInt value
+                // (ToBigInt); the 8-byte two's-complement store is identical
+                // for signed/unsigned, differing only in the getter's decode.
+                if kind <= 1 {
+                    self.data_view_write_bigint(dv.buffer, abs, value, little)?;
+                } else {
+                    self.data_view_write(dv.buffer, abs, kind, value, little)?;
+                }
                 self.meter.tick_raw(DATA_VIEW_SET_METERING);
                 Slot::undefined()
             }
@@ -19816,6 +19824,82 @@ impl Interp {
         let out = self.chunks.slice_mut(buf.data, abs as usize + size);
         out[abs as usize..abs as usize + size].copy_from_slice(&le);
         Ok(())
+    }
+
+    /// Read a `getBigInt64`/`getBigUint64` element (`kind` 0 signed, 1
+    /// unsigned) at absolute byte offset `abs`, honoring `little` endianness,
+    /// into a freshly allocated BigInt (XS's `fx_DataView_prototype_get`
+    /// BigInt path → `fxNewBigInt` from the 64-bit value). A big-endian read
+    /// reverses the eight element bytes before the little-endian decode.
+    fn data_view_read_bigint(
+        &mut self,
+        buffer: crate::value::SlotIndex,
+        abs: u32,
+        kind: u8,
+        little: bool,
+    ) -> Slot {
+        let buf = self.array_buffers[&buffer];
+        let mut b = [0u8; 8];
+        {
+            let bytes = self.chunks.payload(buf.data);
+            b.copy_from_slice(&bytes[abs as usize..abs as usize + 8]);
+        }
+        if !little {
+            b.reverse();
+        }
+        let u = u64::from_le_bytes(b);
+        let (neg, mag) = u64_to_signed_limbs(kind == 0, u);
+        self.make_bigint(neg, mag)
+    }
+
+    /// Coerce `value` to a BigInt and write a `setBigInt64`/`setBigUint64`
+    /// element at absolute byte offset `abs`, honoring `little` endianness
+    /// (XS's `fx_DataView_prototype_set` BigInt path: `ToBigInt(value)` then
+    /// store the low 64 bits, two's complement). `ToBigInt` accepts a BigInt
+    /// or a Boolean; every other type (a Number is a `TypeError`, a String
+    /// parses) self-names an honest skip rather than assert a wrong result.
+    fn data_view_write_bigint(
+        &mut self,
+        buffer: crate::value::SlotIndex,
+        abs: u32,
+        value: Slot,
+        little: bool,
+    ) -> Result<(), Halt> {
+        let u = self
+            .slot_to_bigint_u64(value)
+            .ok_or(Halt::Unsupported("data-view-set:bigint-coerce"))?;
+        let mut le = u.to_le_bytes();
+        if !little {
+            le.reverse();
+        }
+        let buf = self.array_buffers[&buffer];
+        let out = self.chunks.slice_mut(buf.data, abs as usize + 8);
+        out[abs as usize..abs as usize + 8].copy_from_slice(&le);
+        Ok(())
+    }
+
+    /// `ToBigInt(value)` reduced to its low 64 bits (the value modulo 2^64,
+    /// two's complement — what a BigInt64/BigUint64 store keeps). A BigInt
+    /// takes its two low limbs (negated for a negative value); a Boolean is
+    /// `1n`/`0n`. Returns `None` for a type that needs general coercion (a
+    /// Number `TypeError`, a String parse, an object `ToPrimitive`), so the
+    /// caller self-names a skip.
+    fn slot_to_bigint_u64(&self, value: Slot) -> Option<u64> {
+        match value.value {
+            Payload::BigInt(off) => {
+                let (neg, mag) = self.read_bigint(off);
+                let mut u: u64 = 0;
+                if let Some(&l0) = mag.first() {
+                    u |= l0 as u64;
+                }
+                if let Some(&l1) = mag.get(1) {
+                    u |= (l1 as u64) << 32;
+                }
+                Some(if neg { u.wrapping_neg() } else { u })
+            }
+            Payload::Boolean(b) => Some(b as u64),
+            _ => None,
+        }
     }
 
     /// XS's `fxArgToByteLength(argi, length)`: coerce call argument `argi`
@@ -25896,6 +25980,21 @@ fn bi_mul(neg_a: bool, a: &[u32], neg_b: bool, b: &[u32]) -> (bool, Vec<u32>) {
 /// magnitude by repeated division by `2^32`, then peel the limbs
 /// most-significant first through the fractional carry. The limb count is XS's
 /// allocated `bigint.size` (the `fxNewChunk(size*4)` the caller meters).
+/// Decode the 64-bit value `u` into a BigInt `(negative, LE u32 limbs)`.
+/// When `signed`, `u` is interpreted as two's-complement `i64` (a set high
+/// bit is a negative magnitude); otherwise it is the unsigned magnitude.
+/// This is the numeric core of `DataView.prototype.getBigInt64`/
+/// `getBigUint64` and the BigInt64/BigUint64 typed-array element read.
+fn u64_to_signed_limbs(signed: bool, u: u64) -> (bool, Vec<u32>) {
+    let (neg, mag) = if signed && (u as i64) < 0 {
+        // Magnitude of a negative i64 without overflowing at i64::MIN.
+        (true, (u as i64 as i128).unsigned_abs() as u64)
+    } else {
+        (false, u)
+    };
+    (neg, vec![(mag & 0xFFFF_FFFF) as u32, (mag >> 32) as u32])
+}
+
 fn number_to_bigint(number: f64) -> (bool, Vec<u32>) {
     let sign = number < 0.0;
     let mut number = if sign { -number } else { number };
