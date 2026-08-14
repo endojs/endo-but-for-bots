@@ -1558,7 +1558,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/cbor@workspace:packages/cbor":
+"@endo/cbor@workspace:^, @endo/cbor@workspace:packages/cbor":
   version: 0.0.0-use.local
   resolution: "@endo/cbor@workspace:packages/cbor"
   dependencies:
@@ -2794,6 +2794,7 @@ __metadata:
   resolution: "@endo/ocapn@workspace:packages/ocapn"
   dependencies:
     "@endo/bytes": "workspace:^"
+    "@endo/cbor": "workspace:^"
     "@endo/chacha12": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
