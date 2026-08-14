@@ -109,6 +109,18 @@ test('glob rejects a dirPath escaping the working directory', async t => {
   });
 });
 
+test('glob rejects a same-prefix sibling dirPath', async t => {
+  const cwd = makeFixture(t, { 'a.js': '' });
+  const sibling = `${cwd}-secret`;
+  fs.mkdirSync(sibling);
+  t.teardown(() => fs.rmSync(sibling, { recursive: true, force: true }));
+  const tool = makeGlobTool(cwd);
+  await t.throwsAsync(
+    tool.execute({ pattern: '*', dirPath: path.relative(cwd, sibling) }),
+    { message: /Path traversal not allowed/ },
+  );
+});
+
 test('glob excludes symlinks resolving outside the working directory', async t => {
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'fae-search-out-'));
   t.teardown(() => fs.rmSync(outside, { recursive: true, force: true }));

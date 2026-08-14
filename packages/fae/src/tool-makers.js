@@ -42,7 +42,7 @@ import { makeNodeSearchPowers } from '@endo/platform/fs/node/search';
  */
 const resolveSafe = (relativePath, cwd) => {
   const resolved = path.resolve(cwd, relativePath);
-  if (!resolved.startsWith(cwd)) {
+  if (resolved !== cwd && !resolved.startsWith(`${cwd}${path.sep}`)) {
     throw new Error(`Path traversal not allowed: ${relativePath}`);
   }
   return resolved;
