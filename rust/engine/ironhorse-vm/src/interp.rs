@@ -1794,6 +1794,14 @@ pub enum NativeMethod {
     DateTimeFormatFormatRangeToParts,
     DateTimeFormatResolvedOptions,
     NumberFormatFormat,
+    /// `get Intl.NumberFormat.prototype.format` — the accessor **getter**
+    /// (name `"get format"`, length 0). Returns the receiver's cached
+    /// `[[BoundFormat]]` function, creating it on first read.
+    NumberFormatFormatGetter,
+    /// The cached `[[BoundFormat]]` function (an anonymous, length-1 built-in)
+    /// the `format` getter returns: calling `boundFormat(value)` formats
+    /// `value` with the NumberFormat the getter was read from.
+    NumberFormatBoundFormat,
     NumberFormatFormatToParts,
     NumberFormatFormatRange,
     NumberFormatFormatRangeToParts,
@@ -3642,6 +3650,15 @@ pub struct Interp {
     temporal_zoneds: std::collections::HashMap<crate::value::SlotIndex, TemporalZonedRecord>,
     collator_compare_functions:
         std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>,
+    /// The cached `[[BoundFormat]]` functions of `Intl.NumberFormat`, keyed by
+    /// the bound function's own slot → the owning NumberFormat instance (the
+    /// reverse of [`NumberFormatData::bound_format`]). The `format` accessor
+    /// getter allocates one native `NumberFormatBoundFormat` function per
+    /// instance on first read and records it here so the bound function's call
+    /// handler can recover its NumberFormat — the same "native function slot +
+    /// owner side table" shape as `collator_compare_functions`.
+    number_format_bound_functions:
+        std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>,
     /// The realm's `%Object.prototype%` (XS's `mxObjectPrototype`), the root
     /// of every ordinary object's prototype chain. A boot object; ordinary
     /// objects ([`Self::new_object`]) and constructed `this` instances point
@@ -3686,6 +3703,32 @@ pub struct Interp {
     /// `err.hasOwnProperty('name')` is correctly `false`, matching XS). Bound
     /// only when the program references the name; unmetered.
     proto_data: Vec<(crate::value::SlotIndex, &'static str, String)>,
+    /// Native prototype **accessor** properties to bind at link time:
+    /// `(prototype, property name, getter function, guard name)`. Each installs
+    /// a real ordinary accessor property `{get, set: undefined,
+    /// enumerable: false, configurable: true}` — a live slot in the prototype's
+    /// property chain carrying `XS_GETTER_FLAG|XS_SETTER_FLAG` plus an
+    /// `accessors` entry — so it is revealed by
+    /// `Object.getOwnPropertyDescriptor` and invoked on read with the receiver
+    /// as `this` (unlike the RegExp `flags` / Map `size` native getters, which
+    /// are id-special-cased in `GET_PROPERTY` and stay invisible to descriptor
+    /// reflection). `Intl.NumberFormat.prototype.format` is the first such
+    /// property. Unlike a plain method, an accessor the conformance tests read
+    /// only by the **string** key `"format"` (never a static `.format`) has no
+    /// SYMB atom entry, so it must be force-installed rather than gated on the
+    /// property name being referenced. To keep this from perturbing metering
+    /// for programs that never touch Intl (the Intl-less XS oracle would then
+    /// diverge), it is installed only when the **guard name** — the owning
+    /// constructor, `NumberFormat` — is referenced; such a program always
+    /// aborts in the oracle at the missing `Intl`, so its metering is never
+    /// compared. The property key is interned **unmetered** (XS builds this
+    /// accessor at realm boot, off the guest meter).
+    proto_accessors: Vec<(
+        crate::value::SlotIndex,
+        &'static str,
+        crate::value::SlotIndex,
+        &'static str,
+    )>,
     /// The well-known symbols (`Symbol.iterator`, `Symbol.hasInstance`, …) as
     /// `(name, symbol value)` — fixed `Kind::Symbol` values created once at
     /// boot and bound as own properties of the `Symbol` constructor at link
@@ -4508,6 +4551,7 @@ impl Interp {
             temporal_plains: std::collections::HashMap::new(),
             temporal_zoneds: std::collections::HashMap::new(),
             collator_compare_functions: std::collections::HashMap::new(),
+            number_format_bound_functions: std::collections::HashMap::new(),
             object_proto: crate::value::SlotIndex::NULL,
             function_proto: crate::value::SlotIndex::NULL,
             ctor_prototype: std::collections::HashMap::new(),
@@ -4515,6 +4559,7 @@ impl Interp {
             private_accessors: std::collections::HashMap::new(),
             proto_methods: Vec::new(),
             proto_data: Vec::new(),
+            proto_accessors: Vec::new(),
             well_known_symbols: Vec::new(),
             symbol_ids: std::collections::HashMap::new(),
             default_keys: crate::default_keys::DEFAULT_KEYS.iter().copied().collect(),
@@ -5608,11 +5653,17 @@ impl Interp {
             let f = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((date_time_format_proto, name, f));
         }
+        // `format` is an **accessor property** whose getter returns a cached
+        // bound function (ECMA-402 `get Intl.NumberFormat.prototype.format`),
+        // not a plain method: `getOwnPropertyDescriptor` must report
+        // `{get, set: undefined, enumerable: false, configurable: true}` and a
+        // `.format` read yields the same length-1 anonymous bound function each
+        // time. Installed as a real native accessor via `proto_accessors`.
+        let format_getter =
+            self.alloc_named_method(NativeMethod::NumberFormatFormatGetter, "get format", 0);
+        self.proto_accessors
+            .push((number_format_proto, "format", format_getter, "NumberFormat"));
         for (name, method, arity) in [
-            // `format` is modeled here as an own method of the prototype; the
-            // spec's accessor-getter-returning-a-bound-function shape (observed
-            // only by the `format`/`prop-desc` property tests) is a follow-up.
-            ("format", NativeMethod::NumberFormatFormat, 1),
             ("formatToParts", NativeMethod::NumberFormatFormatToParts, 1),
             ("formatRange", NativeMethod::NumberFormatFormatRange, 2),
             (
@@ -6485,6 +6536,28 @@ impl Interp {
             }
         }
         self.proto_data = data;
+        // Native prototype accessor properties (`Intl.NumberFormat.prototype`'s
+        // `format` getter). Installed as a real ordinary accessor property so
+        // `getOwnPropertyDescriptor` reveals `{get, set: undefined,
+        // enumerable: false, configurable: true}` and a `.format` read invokes
+        // the getter with the receiver as `this`. Bound only when referenced.
+        let accessors = std::mem::take(&mut self.proto_accessors);
+        for &(proto, pname, getter, guard) in &accessors {
+            // Install only when the owning constructor is referenced (so a
+            // non-Intl program's metering is untouched), then force-intern the
+            // property key **without** metering — the tests read it by string,
+            // so it has no atom id of its own.
+            if self.symbol_ids.contains_key(guard) {
+                let pid = self.intern_key_unmetered(pname);
+                self.set_own_accessor_unmetered(
+                    proto,
+                    pid,
+                    Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
+                    None,
+                );
+            }
+        }
+        self.proto_accessors = accessors;
         // Native numeric data properties (`Math.PI` &co.): bound as own
         // properties of their owner under the program-local id, unmetered.
         let vdata = std::mem::take(&mut self.proto_value_data);
@@ -17996,6 +18069,41 @@ impl Interp {
         }
     }
 
+    /// Insert an own **accessor** property `id = {get, set}` on `inst` with the
+    /// standard built-in accessor attributes `{enumerable: false,
+    /// configurable: true}`, without metering — the boot-time analog of
+    /// [`Self::set_own_unmetered_with_flag`] for a native getter/setter pair.
+    /// The property slot carries `XS_GETTER_FLAG|XS_SETTER_FLAG` (its own value
+    /// blanked) and the callables live in the `accessors` side table, exactly
+    /// the shape `ordinary_get_own_descriptor`/`ordinary_get` and
+    /// `getOwnPropertyDescriptor` already consume.
+    fn set_own_accessor_unmetered(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        id: u16,
+        get: Option<Slot>,
+        set: Option<Slot>,
+    ) {
+        // `{enumerable: false, configurable: true}`: DONT_ENUM set, DONT_DELETE
+        // clear. The getter/setter flags mark the slot an accessor.
+        let flag = XS_DONT_ENUM_FLAG | XS_GETTER_FLAG | XS_SETTER_FLAG;
+        if let Some(p) = self.find_property(inst, id) {
+            let s = self.slots.get_mut(p);
+            s.kind = Kind::Undefined;
+            s.value = Payload::None;
+            s.flag = flag;
+        } else {
+            let head = self.slots.get(inst).next;
+            let mut prop = Slot::undefined();
+            prop.id = id;
+            prop.flag = flag;
+            prop.next = head;
+            let idx = self.slots.alloc(prop);
+            self.slots.get_mut(inst).next = idx;
+        }
+        self.accessors.insert((inst, id), AccessorData { get, set });
+    }
+
     /// Dispatch `native.call(thisArg, ...args)` without entering a bytecode
     /// frame. Returns `false` when the receiver is not a native constructor or
     /// native method, allowing the ordinary user-function trampoline to run.
@@ -19724,6 +19832,47 @@ impl Interp {
                 let s = crate::intl_number::format_to_string(&resolved, n);
                 self.intl_string(&s)
             }
+            NativeMethod::NumberFormatFormatGetter => {
+                // `get format`: `this` must be an initialized NumberFormat.
+                // Return its cached `[[BoundFormat]]`, allocating an anonymous
+                // length-1 native function on first read and recording the
+                // instance both on the instance (`bound_format`) and in the
+                // reverse side table the bound call handler consults.
+                let inst = match this.value {
+                    Payload::Reference(r) if self.number_formats.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let function = match self.number_formats[&inst].bound_format {
+                    Some(f) => f,
+                    None => {
+                        let f = self
+                            .alloc_named_method(NativeMethod::NumberFormatBoundFormat, "", 1);
+                        self.number_format_bound_functions.insert(f, inst);
+                        self.number_formats.get_mut(&inst).unwrap().bound_format = Some(f);
+                        f
+                    }
+                };
+                Slot::of(Kind::Reference, Payload::Reference(function))
+            }
+            NativeMethod::NumberFormatBoundFormat => {
+                // The bound function recovers its NumberFormat from its own
+                // function slot (`stack[base + 1]`) — like `CollatorCompare` —
+                // then formats `arg0` exactly as `format` would.
+                let function =
+                    self.stack.get(base + 1).copied().unwrap_or_else(Slot::undefined);
+                let f = match function.value {
+                    Payload::Reference(r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let inst = match self.number_format_bound_functions.get(&f).copied() {
+                    Some(inst) => inst,
+                    None => return Err(self.catchable_type_error()),
+                };
+                let n = to_number(&self.to_number_value(code, arg0)?);
+                let resolved = self.nf_resolved(&self.number_formats[&inst].clone());
+                let s = crate::intl_number::format_to_string(&resolved, n);
+                self.intl_string(&s)
+            }
             NativeMethod::NumberFormatFormatToParts => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.number_formats.contains_key(&r) => r,
@@ -20148,10 +20297,15 @@ impl Interp {
                     let off = self.alloc_str_text(owned.as_bytes());
                     Slot::of(Kind::String, Payload::String(off))
                 } else {
+                    // `Object.prototype.toString` builtinTag (ECMA-262
+                    // 20.1.3.6): a callable receiver is `[object Function]`
+                    // (step 6) — the shape the `format` accessor getter's
+                    // `builtin.js` reads — otherwise Error / plain Object.
                     let text: &[u8] = match this.value {
                         Payload::Reference(r) if self.error_data.contains_key(&r) => {
                             b"[object Error]"
                         }
+                        _ if self.is_callable_value(this) => b"[object Function]",
                         _ => b"[object Object]",
                     };
                     self.meter.tick_chunk_new(text.len() as u64);
@@ -28504,6 +28658,20 @@ impl Interp {
         id
     }
 
+    /// Intern a property key **without** metering — for a realm-boot property
+    /// XS builds off the guest meter (the `Intl.NumberFormat.prototype.format`
+    /// accessor key). Returns the existing id if the name is already interned,
+    /// so a program that also names the key keeps the compiler's atom id.
+    fn intern_key_unmetered(&mut self, name: &str) -> u16 {
+        if let Some(&id) = self.symbol_ids.get(name) {
+            return id;
+        }
+        let id = self.next_intern_id;
+        self.next_intern_id = self.next_intern_id.saturating_add(1);
+        self.symbol_ids.insert(name.to_string(), id);
+        id
+    }
+
     /// The program-local property **id** a symbol value is keyed under (XS's
     /// `mxID(symbol)` — a symbol already carries its id there; here a symbol's
     /// descriptor-slot identity is minted a stable id on first key-use). The
@@ -29530,6 +29698,33 @@ impl Interp {
         false
     }
 
+    /// Invoke an accessor `getter` with `receiver` as `this`. A user-function
+    /// (or bound) getter runs through [`Self::run_callback`]; a **native-method**
+    /// getter (the boot-installed `Intl.NumberFormat.prototype.format`) is
+    /// dispatched directly through the native seam, since `run_callback`
+    /// deliberately rejects native callees (`callback:non-user-function`). The
+    /// native path builds the `[THIS, FUNCTION, RESULT, FRAME]` frame the call
+    /// opcode would, dispatches with zero arguments, and pops the pushed result.
+    fn invoke_getter(
+        &mut self,
+        code: &[u8],
+        getter: Slot,
+        receiver: Slot,
+    ) -> Result<Slot, Halt> {
+        if let Payload::Reference(f) = getter.value {
+            if let Some(m) = self.method_of(f) {
+                let base = self.stack.len();
+                self.push(receiver);
+                self.push(getter);
+                self.push(Slot::undefined());
+                self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                self.call_native_method(m, base, 0, code)?;
+                return Ok(self.pop());
+            }
+        }
+        self.run_callback(code, getter, receiver, &[])
+    }
+
     fn ordinary_get(
         &mut self,
         code: &[u8],
@@ -29550,7 +29745,7 @@ impl Interp {
                     if getter.kind == Kind::Undefined {
                         return Ok(Slot::undefined());
                     }
-                    return self.run_callback(code, getter, receiver, &[]);
+                    return self.invoke_getter(code, getter, receiver);
                 }
                 return Ok(descriptor.value.unwrap_or_else(Slot::undefined));
             }
