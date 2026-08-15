@@ -5,6 +5,7 @@ import '@endo/init/debug.js';
 import test from 'ava';
 import { createDOM, tick } from '../helpers/dom-setup.js';
 import {
+  renderAppHeader,
   renderProfileBar,
   mountMentionNotifyArea,
   mountInboxSection,
@@ -41,6 +42,33 @@ const makeMount = () => {
   testDocument.body.appendChild($mount);
   return $mount;
 };
+
+// ---------------------------------------------------------------------------
+// AppHeader
+// ---------------------------------------------------------------------------
+
+test.serial('AppHeader renders the Familiar mark and wordmark', async t => {
+  const $header = makeMount();
+  renderAppHeader($header, () => {});
+  await waitFor(() => !!$header.querySelector('.app-header-home'));
+
+  t.truthy($header.querySelector('.app-header-logo'));
+  t.is($header.querySelector('.app-header-wordmark').textContent, 'Familiar');
+});
+
+test.serial('AppHeader logo click goes home', async t => {
+  const $header = makeMount();
+  let homes = 0;
+  renderAppHeader($header, () => {
+    homes += 1;
+  });
+  await waitFor(() => !!$header.querySelector('.app-header-home'));
+
+  $header
+    .querySelector('.app-header-home')
+    .dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+  t.is(homes, 1);
+});
 
 // ---------------------------------------------------------------------------
 // ProfileBar

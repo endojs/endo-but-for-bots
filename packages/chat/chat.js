@@ -42,12 +42,15 @@ import { flootComponent } from './floot-component.js';
 import { workflowComponent } from './workflow-component.js';
 import { secretsComponent } from './secrets-component.js';
 import {
+  renderAppHeader,
   renderProfileBar,
   mountMentionNotifyArea,
   mountInboxSection,
 } from './chat-chrome.js';
 
 const template = `
+<div id="app-header"></div>
+
 <div id="spaces-gutter"></div>
 
 <div id="pets">
@@ -292,6 +295,9 @@ const bodyComponent = (
   const $spacesGutter = /** @type {HTMLElement} */ (
     $parent.querySelector('#spaces-gutter')
   );
+  const $appHeader = /** @type {HTMLElement} */ (
+    $parent.querySelector('#app-header')
+  );
   const $addSpaceModal = /** @type {HTMLElement} */ (
     $parent.querySelector('#add-space-modal-container')
   );
@@ -374,6 +380,12 @@ const bodyComponent = (
       onProfileChange(newPath, spaceInfo);
     },
   });
+
+  // The app header is the root chrome shared by every space. It is mounted
+  // after the gutter because its logo navigates through the gutter's API,
+  // which is what already owns "what does Home mean" (scheme, profile path,
+  // and the active-space highlight the gutter repaints).
+  renderAppHeader($appHeader, () => spacesGutterAPI.selectSpace('home'));
 
   // Set up share modal
   const $shareModalContainer = /** @type {HTMLElement} */ (
