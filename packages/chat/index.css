@@ -30,6 +30,10 @@
   --transition-fast: 150ms ease;
   --transition-normal: 200ms ease;
 
+  /* Monospace / teletype stack, shared by code fences, the timestamp tooltip,
+     and the preformatted message render mode. */
+  --font-mono: 'SF Mono', 'Fira Code', 'Consolas', 'Monaco', monospace;
+
   /* Danger / Error */
   --danger: #e03131;
   --danger-hover: #c92a2a;
@@ -2604,33 +2608,43 @@ body.resizing * {
   opacity: 1;
 }
 
+/* The render-mode toggle sits at the foot of the message body it controls.
+   Kept subtle and out of the way until the message is hovered or the toggle
+   itself has focus, so it does not compete with the content for attention. */
 .render-mode-toggle {
   display: flex;
   gap: 2px;
+  justify-content: flex-end;
   margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
 }
 
-.render-mode-btn {
+.message:hover .render-mode-toggle,
+.render-mode-toggle:focus-within {
+  opacity: 1;
+}
+
+.message .render-mode-btn {
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--bubble-border);
   border-radius: var(--radius-sm);
-  color: var(--text-muted);
+  color: var(--bubble-muted);
   cursor: pointer;
   font-size: 11px;
-  padding: 2px 6px;
+  line-height: 1.4;
+  padding: 1px 7px;
   transition:
-    background 0.15s,
-    color 0.15s;
+    background var(--transition-fast),
+    color var(--transition-fast);
 }
 
-.render-mode-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--text-primary);
+.message .render-mode-btn:hover {
+  background: var(--bg-hover);
+  color: var(--bubble-fg);
 }
 
-.render-mode-btn.active {
+.message .render-mode-btn.active {
   background: var(--accent-primary);
   border-color: var(--accent-primary);
   color: white;

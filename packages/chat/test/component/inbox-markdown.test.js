@@ -286,7 +286,7 @@ test.serial(
 );
 
 test.serial(
-  'per-message render-mode toggle switches between markdown, raw, and preformatted',
+  'per-message render-mode toggle switches between markdown and preformatted',
   async t => {
     const { $parent, $end } = createInboxDOM();
     const dismissedKit = makePromiseKit();
@@ -321,14 +321,14 @@ test.serial(
     // Markdown mode (default): **bold** renders as a real <strong>.
     t.truthy($parent.querySelector('strong'), 'default mode renders markdown');
 
-    // The three-button toggle is present, with the markdown button active.
+    // The two-button toggle is present, with the markdown button active.
     const buttons = () => [
       ...$parent.querySelectorAll('.render-mode-toggle .render-mode-btn'),
     ];
     t.deepEqual(
       buttons().map(b => b.textContent),
-      ['md', 'raw', 'pre'],
-      'toggle offers md/raw/pre',
+      ['md', 'pre'],
+      'toggle offers md/pre',
     );
     const buttonFor = label => buttons().find(b => b.textContent === label);
     t.true(
@@ -336,32 +336,33 @@ test.serial(
       'markdown button starts active',
     );
 
-    // Raw mode: no markdown parsing, so the asterisks survive and there is no
-    // <strong>. The active class follows the click.
-    buttonFor('raw').click();
-    await waitFor(() => !$parent.querySelector('strong'));
-    t.falsy(
-      $parent.querySelector('strong'),
-      'raw mode does not parse markdown',
-    );
-    t.true(
-      $parent.textContent.includes('**bold**'),
-      'raw mode shows literal asterisks',
-    );
-    t.true(
-      buttonFor('raw').classList.contains('active'),
-      'raw button is active after click',
-    );
-    t.false(buttonFor('md').classList.contains('active'));
-
-    // Preformatted mode: wrapped in a monospace <pre class="md-preformatted">.
+    // Preformatted mode: no markdown parsing, so the asterisks survive and the
+    // body is wrapped in a monospace <pre class="md-preformatted">. The active
+    // class follows the click.
     buttonFor('pre').click();
     await waitFor(() => $parent.querySelector('pre.md-preformatted'));
     const $pre = $parent.querySelector('pre.md-preformatted');
     t.truthy($pre, 'preformatted mode wraps the body in pre.md-preformatted');
-    t.true($pre.textContent.includes('**bold**'));
+    // The sender chip is reparented inside the <pre> and leads the first line,
+    // rather than being stranded on its own line above the block.
+    const $chip = $pre.querySelector('b');
+    t.truthy($chip, 'sender chip renders inside the pre');
+    t.is($pre.firstChild, $chip, 'sender chip is the first child of the pre');
+    t.falsy(
+      $parent.querySelector('strong'),
+      'preformatted mode does not parse markdown',
+    );
+    t.true(
+      $pre.textContent.includes('**bold**'),
+      'preformatted mode shows literal asterisks',
+    );
+    t.true(
+      buttonFor('pre').classList.contains('active'),
+      'pre button is active after click',
+    );
+    t.false(buttonFor('md').classList.contains('active'));
 
-    // Back to markdown: the <strong> returns and the fenced text is gone.
+    // Back to markdown: the <strong> returns and the preformatted block is gone.
     buttonFor('md').click();
     await waitFor(() => $parent.querySelector('strong'));
     t.truthy(
