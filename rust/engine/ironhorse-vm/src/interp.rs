@@ -2299,6 +2299,19 @@ pub enum NativeMethod {
     SetHas,
     /// `Set.prototype.delete(v)` / `WeakSet.prototype.delete(v)`.
     SetDelete,
+    /// The seven "new Set methods" (ES2025 set-methods proposal):
+    /// `union`/`intersection`/`difference`/`symmetricDifference` return a fresh
+    /// Set; `isSubsetOf`/`isSupersetOf`/`isDisjointFrom` return a Boolean. Each
+    /// first coerces its argument through `GetSetRecord` (read `size`→ToNumber,
+    /// `has`, `keys` — all observably, in that order) and drives the argument's
+    /// `keys()` iterator or its `has` callback per the specification.
+    SetUnion,
+    SetIntersection,
+    SetDifference,
+    SetSymmetricDifference,
+    SetIsSubsetOf,
+    SetIsSupersetOf,
+    SetIsDisjointFrom,
     WeakSetAdd,
     WeakSetHas,
     WeakSetDelete,
@@ -4956,6 +4969,23 @@ impl Interp {
                 let mf = self.alloc_method(m);
                 self.proto_methods.push((proto, m_name, mf));
             }
+            // The seven ES2025 "new Set methods" carry a proper `.name`/`.length`
+            // (arity 1), so `verifyProperty`/`propertyHelper` read the spec
+            // descriptor. Bound only on `Set.prototype` (cache == 1).
+            if cache == 1 {
+                for (m_name, m) in [
+                    ("union", NativeMethod::SetUnion),
+                    ("intersection", NativeMethod::SetIntersection),
+                    ("difference", NativeMethod::SetDifference),
+                    ("symmetricDifference", NativeMethod::SetSymmetricDifference),
+                    ("isSubsetOf", NativeMethod::SetIsSubsetOf),
+                    ("isSupersetOf", NativeMethod::SetIsSupersetOf),
+                    ("isDisjointFrom", NativeMethod::SetIsDisjointFrom),
+                ] {
+                    let mf = self.alloc_named_method(m, m_name, 1);
+                    self.proto_methods.push((proto, m_name, mf));
+                }
+            }
         }
         // `%ArrayBuffer.prototype%`: the `slice` method (a dense fast path)
         // plus the recognized-but-unimplemented methods bound so a reference
@@ -6372,6 +6402,48 @@ impl Interp {
                 // property's value slot points back at `global_obj`.
                 let g = self.global_obj;
                 self.create_global_property(id, (Kind::Reference, Payload::Reference(g)));
+            }
+        }
+        // The seven ES2025 "new Set methods" reach the ARGUMENT's `has`/`keys`
+        // members and (through the returned iterator) `next` via `GetSetRecord`,
+        // even when the program never names them textually (e.g.
+        // `s1.union(new Set([2,3]))`). Those are XS boot default keys, so
+        // force-interning them here — after `bind_program_symbols` populated
+        // `symbol_ids` and before the prototype-method binding pass below —
+        // makes the gated `Map`/`Set`/array-iterator prototype bindings fire, so
+        // a native collection argument resolves `has`/`keys`/`next` through the
+        // ordinary prototype chain exactly like a set-like object literal. The
+        // names are all boot default keys, so interning charges no metering; the
+        // widening fires only for programs that reference a set method, none of
+        // which is covered before this change.
+        let set_methods_used = [
+            "union",
+            "intersection",
+            "difference",
+            "symmetricDifference",
+            "isSubsetOf",
+            "isSupersetOf",
+            "isDisjointFrom",
+        ]
+        .iter()
+        .any(|n| self.symbol_ids.contains_key(*n));
+        if set_methods_used {
+            for name in ["size", "has", "keys", "values", "next", "done", "value", "return"] {
+                self.intern_key(name);
+            }
+            // The set methods drive a native collection's `keys()`/`values()`
+            // iterator from Rust, reading the reused result object's `value`/
+            // `done` own properties — which `make_collection_iterator` writes
+            // only under the cached `value_id`/`done_id`. When the program never
+            // spelled those names, `bind_program_symbols` left the caches `None`,
+            // so the result carried no `done` and the driver spun forever. Point
+            // the caches at the just-interned ids (a no-op when the program did
+            // spell them, so their compiled id already wins).
+            if self.value_id.is_none() {
+                self.value_id = Some(self.intern_key("value"));
+            }
+            if self.done_id.is_none() {
+                self.done_id = Some(self.intern_key("done"));
             }
         }
         // Install the native prototype methods whose names this program
@@ -22309,6 +22381,16 @@ impl Interp {
             // `Map`/`Set` `forEach` — re-entrant (drives a user callback per
             // live entry); needs the code buffer for the nested dispatch.
             NativeMethod::CollForEach => self.call_collection_foreach(this, base, argc, code)?,
+            // The seven ES2025 "new Set methods" — each drives the argument's
+            // `has` callback or `keys()` iterator (re-entrant), so it needs the
+            // code buffer for the nested dispatch.
+            NativeMethod::SetUnion
+            | NativeMethod::SetIntersection
+            | NativeMethod::SetDifference
+            | NativeMethod::SetSymmetricDifference
+            | NativeMethod::SetIsSubsetOf
+            | NativeMethod::SetIsSupersetOf
+            | NativeMethod::SetIsDisjointFrom => self.call_set_method(m, this, base, code)?,
             // `entries`/`keys`/`values` → a Map/Set Iterator over the receiver.
             NativeMethod::CollEntries | NativeMethod::CollKeys | NativeMethod::CollValues => {
                 let inst = match self.collection_ref(this) {
@@ -23367,7 +23449,19 @@ impl Interp {
         // Intrinsics are linked sparsely by program atom. The constructor's
         // implicit Get(adder) still sees the boot method when source never
         // spells its name, so recover that already-allocated method identity.
-        if !method_was_linked && adder.kind == Kind::Undefined {
+        //
+        // The gate is genuine property ABSENCE, not `method_was_linked`: a prior
+        // collection constructed in the same program `intern_key`s the adder
+        // name (below), so by the second `new Set([...])` the name is in
+        // `symbol_ids` yet the `add` property is still unbound on the prototype
+        // (binding happens once at link time). Keying recovery on the interned
+        // name therefore mis-fired for every collection past the first, throwing
+        // a spurious TypeError. Recover when the adder resolved to `undefined`
+        // AND no `add`/`set` descriptor exists anywhere on the receiver's chain
+        // (a truly unbound intrinsic); a user who cleared `add` to `undefined`
+        // leaves a descriptor, so that case still throws per specification.
+        let _ = method_was_linked;
+        if adder.kind == Kind::Undefined && !self.chain_has_descriptor(inst, method_id) {
             if let Some((&function, _)) = self
                 .functions
                 .iter()
@@ -25261,6 +25355,410 @@ impl Interp {
             i += 1;
         }
         Ok(Slot::undefined())
+    }
+
+    // ------------------------------------------------------------------
+    // ES2025 "new Set methods" (set-methods proposal): union, intersection,
+    // difference, symmetricDifference, isSubsetOf, isSupersetOf,
+    // isDisjointFrom. Each requires the receiver to be a real Set (its
+    // [[SetData]] internal slot is read directly, NEVER through overridden
+    // methods) and coerces its argument through GetSetRecord — observing
+    // `size` (→ ToNumber, NaN throws TypeError, negative throws RangeError),
+    // then `has`, then `keys` (both must be callable). union / intersection /
+    // difference / symmetricDifference return a fresh %Set.prototype% Set;
+    // the three predicates return a Boolean.
+    // ------------------------------------------------------------------
+
+    /// The receiver's collection instance if it is a real (non-weak) Set, else
+    /// a catchable TypeError (`RequireInternalSlot(O, [[SetData]])`).
+    fn require_set_receiver(&mut self, this: Slot) -> Result<crate::value::SlotIndex, Halt> {
+        match self.collection_ref(this) {
+            Some(inst) if self.collections[&inst].kind == CollKind::Set => Ok(inst),
+            _ => Err(self.catchable_type_error()),
+        }
+    }
+
+    /// The number of live (non-tombstone) entries of a native collection.
+    fn collection_live_len(&self, inst: crate::value::SlotIndex) -> usize {
+        self.collections
+            .get(&inst)
+            .map(|c| c.entries.iter().filter(|e| e.is_some()).count())
+            .unwrap_or(0)
+    }
+
+    /// The live key slots of a native collection, in insertion order (for a Set
+    /// the key half is the value). A snapshot the algorithms iterate.
+    fn collection_live_keys(&self, inst: crate::value::SlotIndex) -> Vec<Slot> {
+        self.collections
+            .get(&inst)
+            .map(|c| c.entries.iter().filter_map(|e| e.map(|(k, _)| k)).collect())
+            .unwrap_or_default()
+    }
+
+    /// `Get(obj, id)` walking the ordinary prototype chain, but resolving the
+    /// native `Map`/`Set` `size` accessor (which XS/ironhorse handle inline in
+    /// GET_PROPERTY rather than as a stored accessor) when the chain carries no
+    /// own/inherited `size` property. A user `get size()` override IS a stored
+    /// accessor and is found by the chain walk first, so it still wins.
+    fn set_record_get_size(
+        &mut self,
+        code: &[u8],
+        obj: crate::value::SlotIndex,
+        obj_slot: Slot,
+    ) -> Result<Slot, Halt> {
+        let size_id = self.intern_key("size");
+        let mut owner = obj;
+        while !owner.is_null() {
+            if owner != obj && self.proxies.contains_key(&owner) {
+                return self.ordinary_get(code, obj, size_id, obj_slot);
+            }
+            if self.ordinary_get_own_descriptor(owner, size_id).is_some() {
+                return self.ordinary_get(code, obj, size_id, obj_slot);
+            }
+            owner = self.instance_prototype(owner);
+        }
+        if let Some(c) = self.collections.get(&obj) {
+            if matches!(c.kind, CollKind::Map | CollKind::Set) {
+                return Ok(Slot::integer(self.collection_live_len(obj) as i32));
+            }
+        }
+        Ok(Slot::undefined())
+    }
+
+    /// `GetSetRecord(obj)` (set-methods proposal): returns `(obj, size, has,
+    /// keys)` after the exact observable get order — `size` → ToNumber →
+    /// NaN/negative checks, then `has`, then `keys`. `size` is stored as an
+    /// `f64` so `+Infinity` is representable.
+    fn get_set_record(
+        &mut self,
+        code: &[u8],
+        arg: Slot,
+    ) -> Result<(Slot, f64, Slot, Slot), Halt> {
+        let obj = match arg.value {
+            Payload::Reference(inst) if arg.kind == Kind::Reference => inst,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let raw_size = self.set_record_get_size(code, obj, arg)?;
+        let num = self.to_number_value(code, raw_size)?;
+        let num = to_number(&num);
+        if num.is_nan() {
+            return Err(self.catchable_type_error());
+        }
+        let int_size = if num.is_infinite() { num } else { num.trunc() };
+        if int_size < 0.0 {
+            return Err(self.catchable_range_error());
+        }
+        let has_id = self.intern_key("has");
+        let has = self.ordinary_get(code, obj, has_id, arg)?;
+        if !self.value_is_callable(has) {
+            return Err(self.catchable_type_error());
+        }
+        let keys_id = self.intern_key("keys");
+        let keys = self.ordinary_get(code, obj, keys_id, arg)?;
+        if !self.value_is_callable(keys) {
+            return Err(self.catchable_type_error());
+        }
+        Ok((arg, int_size, has, keys))
+    }
+
+    /// Whether a slot value is a callable function value (ordinary, native
+    /// method, bound, or a callable proxy) — the value-typed wrapper over
+    /// [`Self::slot_is_callable`].
+    fn value_is_callable(&self, s: Slot) -> bool {
+        match s.value {
+            Payload::Reference(f) if s.kind == Kind::Reference => self.slot_is_callable(f),
+            _ => false,
+        }
+    }
+
+    /// `GetKeysIterator(setRecord)`: `keysIter = ? Call(keys, obj)` (must be an
+    /// Object) and `nextMethod = ? Get(keysIter, "next")`. Returns
+    /// `(keysIter, nextMethod)`.
+    fn get_keys_iterator(
+        &mut self,
+        code: &[u8],
+        obj: Slot,
+        keys: Slot,
+    ) -> Result<(Slot, Slot), Halt> {
+        let iter = self.call_primitive_method(code, keys, obj, &[])?;
+        let iter_inst = match iter.value {
+            Payload::Reference(i) if iter.kind == Kind::Reference => i,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let next_id = self.intern_key("next");
+        let next = self.ordinary_get(code, iter_inst, next_id, iter)?;
+        Ok((iter, next))
+    }
+
+    /// `IteratorStepValue(keysIter, nextMethod)`: one step of the keys
+    /// iterator. `Ok(Some(value))` for a produced value, `Ok(None)` when done.
+    fn set_keys_iterator_step(
+        &mut self,
+        code: &[u8],
+        iter: Slot,
+        next: Slot,
+    ) -> Result<Option<Slot>, Halt> {
+        let result = self.call_primitive_method(code, next, iter, &[])?;
+        let result_inst = match result.value {
+            Payload::Reference(i) if result.kind == Kind::Reference => i,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let done_id = self.intern_key("done");
+        let done = self.ordinary_get(code, result_inst, done_id, result)?;
+        if self.truthy(&done) {
+            return Ok(None);
+        }
+        let value_id = self.intern_key("value");
+        let value = self.ordinary_get(code, result_inst, value_id, result)?;
+        Ok(Some(value))
+    }
+
+    /// `IteratorClose(keysIter, NormalCompletion)`: call the iterator's
+    /// `return` method if present; a thrown completion from `return`
+    /// propagates.
+    fn set_keys_iterator_close(&mut self, code: &[u8], iter: Slot) -> Result<(), Halt> {
+        let iter_inst = match iter.value {
+            Payload::Reference(i) if iter.kind == Kind::Reference => i,
+            _ => return Ok(()),
+        };
+        let return_id = self.intern_key("return");
+        let ret = self.ordinary_get(code, iter_inst, return_id, iter)?;
+        if ret.kind == Kind::Undefined || ret.kind == Kind::Null {
+            return Ok(());
+        }
+        if self.value_is_callable(ret) {
+            self.call_primitive_method(code, ret, iter, &[])?;
+        }
+        Ok(())
+    }
+
+    /// Canonicalize a set element key (`CanonicalizeKeyedCollectionKey`): only
+    /// `-0` normalizes to `+0`, matching [`Self::normalize_coll_key`].
+    fn canonicalize_set_key(&self, key: Slot) -> Slot {
+        self.normalize_coll_key(key)
+    }
+
+    /// Whether `keys` (a working list built by a set method) already contains
+    /// `key` by SameValueZero.
+    fn key_list_contains(&self, keys: &[Slot], key: &Slot) -> bool {
+        keys.iter().any(|k| self.same_value_zero(k, key))
+    }
+
+    /// Build a fresh `%Set.prototype%` Set holding exactly `keys` (already
+    /// deduped and canonicalized by the caller), charging the same allocation
+    /// metering the `new Set` constructor path charges.
+    fn new_set_from_keys(&mut self, keys: Vec<Slot>) -> Slot {
+        self.meter.tick_raw(MAP_CTOR_FRAME_METERING);
+        self.meter.tick_slot_alloc(); // instance
+        self.meter.tick_slot_alloc(); // table
+        self.meter.tick_slot_alloc(); // list
+        self.meter.tick_slot_alloc(); // size
+        self.meter.tick_chunk_new(MAP_MIN_TABLE_LENGTH as u64 * 8);
+        let inst = self.slots.alloc(Slot::instance(self.set_proto));
+        self.collections.insert(
+            inst,
+            CollectionData {
+                kind: CollKind::Set,
+                entries: Vec::new(),
+                table_length: MAP_MIN_TABLE_LENGTH,
+            },
+        );
+        for key in keys {
+            self.charge_new_entry_slots(2);
+            self.collections
+                .get_mut(&inst)
+                .unwrap()
+                .entries
+                .push(Some((key, Slot::undefined())));
+            self.collection_table_resize(inst);
+        }
+        Slot::of(Kind::Reference, Payload::Reference(inst))
+    }
+
+    fn call_set_method(
+        &mut self,
+        m: NativeMethod,
+        this: Slot,
+        base: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        let inst = self.require_set_receiver(this)?;
+        let arg0 = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let (obj, other_size, has, keys) = self.get_set_record(code, arg0)?;
+        match m {
+            NativeMethod::SetUnion => {
+                let mut result = self.collection_live_keys(inst);
+                let (iter, next) = self.get_keys_iterator(code, obj, keys)?;
+                while let Some(v) = self.set_keys_iterator_step(code, iter, next)? {
+                    let v = self.canonicalize_set_key(v);
+                    if !self.key_list_contains(&result, &v) {
+                        result.push(v);
+                    }
+                }
+                Ok(self.new_set_from_keys(result))
+            }
+            NativeMethod::SetIntersection => {
+                let mut result: Vec<Slot> = Vec::new();
+                let this_len = self.collection_live_len(inst);
+                if (this_len as f64) <= other_size {
+                    // Walk THIS in order; keep those the other set `has`. `has`
+                    // may mutate THIS, so re-check the element is still present.
+                    let mut i = 0u32;
+                    loop {
+                        let entry =
+                            self.collections.get(&inst).and_then(|c| c.entries.get(i as usize));
+                        let k = match entry {
+                            Some(Some((k, _))) => *k,
+                            Some(None) => {
+                                i += 1;
+                                continue;
+                            }
+                            None => break,
+                        };
+                        let in_other = self.call_primitive_method(code, has, obj, &[k])?;
+                        if self.truthy(&in_other)
+                            && self.collection_find(inst, &k).is_some()
+                            && !self.key_list_contains(&result, &k)
+                        {
+                            result.push(k);
+                        }
+                        i += 1;
+                    }
+                } else {
+                    // Iterate the OTHER set's keys; keep those THIS contains.
+                    let (iter, next) = self.get_keys_iterator(code, obj, keys)?;
+                    while let Some(v) = self.set_keys_iterator_step(code, iter, next)? {
+                        let v = self.canonicalize_set_key(v);
+                        if self.collection_find(inst, &v).is_some()
+                            && !self.key_list_contains(&result, &v)
+                        {
+                            result.push(v);
+                        }
+                    }
+                }
+                Ok(self.new_set_from_keys(result))
+            }
+            NativeMethod::SetDifference => {
+                let mut result = self.collection_live_keys(inst);
+                let this_len = result.len();
+                if (this_len as f64) <= other_size {
+                    // For each element of THIS, remove it if the other set has it.
+                    let mut i = 0usize;
+                    while i < result.len() {
+                        let k = result[i];
+                        let in_other = self.call_primitive_method(code, has, obj, &[k])?;
+                        if self.truthy(&in_other) {
+                            result.retain(|e| !self.same_value_zero(e, &k));
+                        } else {
+                            i += 1;
+                        }
+                    }
+                } else {
+                    // Iterate the other set's keys; remove each from the result.
+                    let (iter, next) = self.get_keys_iterator(code, obj, keys)?;
+                    while let Some(v) = self.set_keys_iterator_step(code, iter, next)? {
+                        let v = self.canonicalize_set_key(v);
+                        result.retain(|e| !self.same_value_zero(e, &v));
+                    }
+                }
+                Ok(self.new_set_from_keys(result))
+            }
+            NativeMethod::SetSymmetricDifference => {
+                let mut result = self.collection_live_keys(inst);
+                let (iter, next) = self.get_keys_iterator(code, obj, keys)?;
+                while let Some(v) = self.set_keys_iterator_step(code, iter, next)? {
+                    let v = self.canonicalize_set_key(v);
+                    let in_this = self.collection_find(inst, &v).is_some();
+                    if in_this {
+                        result.retain(|e| !self.same_value_zero(e, &v));
+                    } else if !self.key_list_contains(&result, &v) {
+                        result.push(v);
+                    }
+                }
+                Ok(self.new_set_from_keys(result))
+            }
+            NativeMethod::SetIsSubsetOf => {
+                // this ⊆ other. If |this| > |other|, false. Else every element
+                // of THIS must be `has` in the other set.
+                let this_keys = self.collection_live_keys(inst);
+                if (this_keys.len() as f64) > other_size {
+                    return Ok(Slot::boolean(false));
+                }
+                let mut i = 0u32;
+                loop {
+                    let entry =
+                        self.collections.get(&inst).and_then(|c| c.entries.get(i as usize));
+                    let k = match entry {
+                        Some(Some((k, _))) => *k,
+                        Some(None) => {
+                            i += 1;
+                            continue;
+                        }
+                        None => break,
+                    };
+                    let in_other = self.call_primitive_method(code, has, obj, &[k])?;
+                    if !self.truthy(&in_other) {
+                        return Ok(Slot::boolean(false));
+                    }
+                    i += 1;
+                }
+                Ok(Slot::boolean(true))
+            }
+            NativeMethod::SetIsSupersetOf => {
+                // this ⊇ other. If |this| < |other|, false. Else every key of
+                // OTHER must be contained in THIS.
+                let this_len = self.collection_live_len(inst);
+                if (this_len as f64) < other_size {
+                    return Ok(Slot::boolean(false));
+                }
+                let (iter, next) = self.get_keys_iterator(code, obj, keys)?;
+                while let Some(v) = self.set_keys_iterator_step(code, iter, next)? {
+                    if self.collection_find(inst, &v).is_none() {
+                        self.set_keys_iterator_close(code, iter)?;
+                        return Ok(Slot::boolean(false));
+                    }
+                }
+                Ok(Slot::boolean(true))
+            }
+            NativeMethod::SetIsDisjointFrom => {
+                // No common element. Walk the smaller side.
+                let this_len = self.collection_live_len(inst);
+                if (this_len as f64) <= other_size {
+                    let mut i = 0u32;
+                    loop {
+                        let entry =
+                            self.collections.get(&inst).and_then(|c| c.entries.get(i as usize));
+                        let k = match entry {
+                            Some(Some((k, _))) => *k,
+                            Some(None) => {
+                                i += 1;
+                                continue;
+                            }
+                            None => break,
+                        };
+                        let in_other = self.call_primitive_method(code, has, obj, &[k])?;
+                        if self.truthy(&in_other) {
+                            return Ok(Slot::boolean(false));
+                        }
+                        i += 1;
+                    }
+                } else {
+                    let (iter, next) = self.get_keys_iterator(code, obj, keys)?;
+                    while let Some(v) = self.set_keys_iterator_step(code, iter, next)? {
+                        if self.collection_find(inst, &v).is_some() {
+                            self.set_keys_iterator_close(code, iter)?;
+                            return Ok(Slot::boolean(false));
+                        }
+                    }
+                }
+                Ok(Slot::boolean(true))
+            }
+            _ => Err(self.catchable_type_error()),
+        }
     }
 
     /// `fx_String_prototype_iterator_next`: decode the next code point at the
@@ -28461,6 +28959,25 @@ impl Interp {
             slot.flag = flag;
         }
         true
+    }
+
+    /// Whether `id` resolves to an own or inherited property descriptor
+    /// anywhere along `inst`'s prototype chain (used to distinguish a genuinely
+    /// absent property from one bound to `undefined`). Proxies short-circuit to
+    /// "present" — their `[[GetOwnProperty]]` trap decides, so the caller must
+    /// not treat a proxy link as absence.
+    fn chain_has_descriptor(&mut self, inst: crate::value::SlotIndex, id: u16) -> bool {
+        let mut owner = inst;
+        while !owner.is_null() {
+            if self.proxies.contains_key(&owner) {
+                return true;
+            }
+            if self.ordinary_get_own_descriptor(owner, id).is_some() {
+                return true;
+            }
+            owner = self.instance_prototype(owner);
+        }
+        false
     }
 
     fn ordinary_get(
