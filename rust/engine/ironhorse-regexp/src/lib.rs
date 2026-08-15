@@ -451,4 +451,118 @@ mod tests {
         assert!(!accepts("?", ""), "nothing to repeat");
         assert!(!accepts("{2}", ""), "quantifier with no atom");
     }
+
+    // Annex-B legacy non-Unicode grammar & early-error parity with the XS pin
+    // (`fxCompileRegExp`). XS is deliberately STRICTER than the ECMAScript
+    // Annex-B leniency in several places; these fixtures lock ironhorse to XS's
+    // actual verdict — not the spec's — since the differential bar is the pin.
+
+    #[test]
+    fn annexb_property_escape_is_unconditional() {
+        // `\p{…}` / `\P{…}` are Unicode property escapes in EVERY mode. XS's
+        // `fxCharSetParseEscape` dispatches `p`/`P` to `fxCharSetUnicodeProperty`
+        // without consulting the `u`/`v` flag, so a legacy non-Unicode pattern
+        // does NOT fall back to treating `\p` as an identity escape of `p`
+        // (the ECMAScript Annex-B reading). An unknown or malformed property is
+        // therefore a SyntaxError in non-Unicode mode too.
+        for flags in ["", "i", "g", "m", "s", "y", "d", "u", "v"] {
+            assert!(!accepts(r"\p{Foo}", flags), "unknown property /{flags}");
+            assert!(!accepts(r"\p", flags), "bare \\p /{flags}");
+            assert!(!accepts(r"\p{", flags), "unterminated \\p{{ /{flags}");
+            assert!(!accepts(r"\pL", flags), "braceless \\pL /{flags}");
+            assert!(!accepts(r"\P{Bar}", flags), "unknown \\P property /{flags}");
+            // A valid general-category property compiles in every mode.
+            assert!(accepts(r"\p{L}", flags), "valid \\p{{L}} /{flags}");
+            assert!(accepts(r"[\p{Nd}]", flags), "valid class \\p{{Nd}} /{flags}");
+        }
+        // In non-Unicode mode a property escape is a real charset, not the two
+        // literal characters `p{L}` — it must match a letter and reject `p`.
+        assert!(caps(r"\p{L}", "", "A").0, "\\p{{L}} matches a letter (non-u)");
+        assert!(!caps(r"\p{L}", "", "5").0, "\\p{{L}} rejects a digit (non-u)");
+        assert!(!caps(r"\p{L}", "", "{").0, "\\p{{L}} is not literal p{{L}} (non-u)");
+        // The v-mode string-property table stays gated on `v`.
+        assert!(!accepts(r"\p{Emoji_Keycap_Sequence}", ""), "string prop only in v");
+    }
+
+    #[test]
+    fn annexb_legacy_decimal_and_octal_escapes() {
+        // XS reads a `\<digits>` term as a capture reference and rejects it when
+        // the number exceeds the group count — it does NOT fall back to a legacy
+        // octal/identity escape (Annex-B DecimalEscape leniency is not honored).
+        assert!(!accepts(r"\1", ""), "\\1 with no group");
+        assert!(!accepts(r"\8", ""), "\\8 with no group");
+        assert!(!accepts(r"\9", ""), "\\9 with no group");
+        assert!(!accepts(r"\12", ""), "\\12 greedily reads the whole number");
+        assert!(!accepts(r"(a) \2", ""), "\\2 out of range");
+        assert!(!accepts(r"\b(\w+) \2\b", ""), "forward \\2 out of range");
+        assert!(accepts(r"(a)\1", ""), "\\1 in range");
+        // `\a` is an identity escape (letter with no meaning) in non-Unicode.
+        assert!(accepts(r"\a", ""), "\\a identity escape (non-u)");
+        assert!(caps(r"\a", "", "a").0, "\\a matches literal a");
+        // `\0` is NUL only when NOT followed by a decimal digit.
+        assert!(accepts(r"\0", ""), "\\0 NUL");
+        assert!(!accepts(r"\00", ""), "\\0 followed by a digit");
+        assert!(!accepts(r"\07", ""), "legacy octal is not accepted");
+    }
+
+    #[test]
+    fn annexb_control_escape_fallback_is_a_syntax_error() {
+        // A `\c` NOT followed by an ASCII letter is `mxInvalidEscape` in XS in
+        // every mode — XS does not implement the Annex-B "treat `\c` as literal
+        // backslash" fallback.
+        for flags in ["", "i", "u", "v"] {
+            assert!(!accepts(r"\c", flags), "bare \\c /{flags}");
+            assert!(!accepts(r"\c5", flags), "\\c + digit /{flags}");
+            assert!(!accepts(r"\c_", flags), "\\c + underscore /{flags}");
+            assert!(!accepts(r"[\c]", flags), "class \\c /{flags}");
+            assert!(!accepts(r"[\c5]", flags), "class \\c + digit /{flags}");
+        }
+        // A valid control letter still resolves.
+        assert!(accepts(r"\cA", ""), "\\cA control letter");
+        assert!(caps(r"\cA", "", "\u{1}").0, "\\cA == U+0001");
+    }
+
+    #[test]
+    fn annexb_class_range_and_malformed_boundaries() {
+        // A class range whose endpoint is a class-escape (`\d`, `\w`) is a
+        // SyntaxError (an "invalid range"), matching XS — even in non-Unicode.
+        assert!(!accepts(r"[\d-a]", ""), "class-escape as range start");
+        assert!(!accepts(r"[a-\d]", ""), "class-escape as range end");
+        assert!(!accepts(r"[\d-\w]", ""), "class-escape on both ends");
+        assert!(!accepts(r"[z-a]", ""), "reversed range");
+        assert!(!accepts(r"[", ""), "unterminated class");
+        // A legacy decimal escape as a range endpoint (`[\12-\14]`) is rejected
+        // (the `\12` reads as an out-of-range reference, not an octal).
+        assert!(!accepts(r"[\12-\14]", ""), "decimal-escape class range");
+        // A `-` at an edge is a literal, not a range operator.
+        assert!(accepts(r"[a-]", ""), "trailing dash literal");
+        assert!(accepts(r"[-a]", ""), "leading dash literal");
+        assert!(accepts(r"[\d-]", ""), "class escape then literal dash");
+    }
+
+    #[test]
+    fn annexb_quantifiable_assertions_and_malformed_quantifiers() {
+        // XS does NOT implement the ECMAScript Annex-B "QuantifiableAssertion"
+        // leniency: a quantifier directly on ANY assertion — positive or
+        // negative lookahead, either lookbehind, or a word boundary — is an
+        // `mxInvalidCharacter` error in every mode (the `*`/`+`/`?` has nothing
+        // to repeat). Locking XS's stricter reality, not the spec's.
+        for flags in ["", "u", "v"] {
+            assert!(!accepts(r"(?=x)*", flags), "quantified lookahead /{flags}");
+            assert!(!accepts(r"(?!x)+", flags), "quantified neg-lookahead /{flags}");
+            assert!(!accepts(r"(?<=x)*", flags), "quantified lookbehind /{flags}");
+            assert!(!accepts(r"(?<!x)?", flags), "quantified neg-lookbehind /{flags}");
+        }
+        assert!(!accepts(r"\b*", ""), "quantified word boundary");
+        // A bare, unquantified assertion is of course fine.
+        assert!(accepts(r"(?=x)", ""), "plain lookahead");
+        // A malformed `{…}` is a literal brace sequence in non-Unicode, but an
+        // error under u/v.
+        assert!(accepts(r"a{", ""), "bad brace is literal (non-u)");
+        assert!(accepts(r"a{2", ""), "unterminated brace is literal (non-u)");
+        assert!(!accepts(r"{2}", ""), "{{2}} with no atom is an error");
+        assert!(!accepts(r"a{", "u"), "bad brace under u is an error");
+        assert!(!accepts(r"a{2,1}", ""), "descending bounds");
+        assert!(!accepts(r"a**", ""), "double quantifier");
+    }
 }

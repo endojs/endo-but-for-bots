@@ -955,11 +955,14 @@ impl Compiler {
                 self.next()?;
                 r
             }
-            c if (c == b'p' as i64 || c == b'P' as i64)
-                && self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0 =>
-            {
-                self.charset_unicode_property()?
-            }
+            // `\p{…}` / `\P{…}` are Unicode property escapes in EVERY mode,
+            // not only `u`/`v`: XS's `fxCharSetParseEscape` dispatches `p`/`P`
+            // to `fxCharSetUnicodeProperty` unconditionally (the UV flag only
+            // gates the `v`-mode string-property table inside it). So in a
+            // legacy non-Unicode pattern `\p{Foo}` is a syntax error (unknown
+            // property), and `\pL` / `\p` / `\p{` are malformed-escape errors —
+            // XS never treats a bare `\p` as an identity escape of `p`.
+            c if c == b'p' as i64 || c == b'P' as i64 => self.charset_unicode_property()?,
             _ => {
                 self.pattern_escape(punctuator)?;
                 let r = self.charset_single(self.character);

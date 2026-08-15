@@ -46,3 +46,39 @@ fn invalid_aliases_are_parse_time_syntax_errors() {
         agrees(source);
     }
 }
+
+// A `\p{…}` escape is a property escape in NON-Unicode mode as well: XS's
+// `fxCharSetParseEscape` dispatches `p`/`P` unconditionally, so a legacy
+// pattern never treats `\p` as an identity escape of `p`. These lock that
+// behavior — accept, reject, and match — through the JS RegExp surface.
+#[test]
+fn non_unicode_property_escapes_execute() {
+    for source in [
+        "/\\p{L}/.test('A') && !/\\p{L}/.test('5')",
+        "!/\\p{L}/.test('p{L}')",
+        "/\\p{Nd}+/.test('42') && !/\\p{Nd}+/.test('ab')",
+        "/^[\\p{L}\\p{Nd}]+$/.test('abc123')",
+        "/\\P{L}/.test('5') && !/\\P{L}/.test('a')",
+        "/\\p{Nd}/.exec('a1b2')[0] === '1'",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn non_unicode_property_and_annexb_early_errors_agree() {
+    // XS rejects these at parse time in non-Unicode mode; the JS surface must
+    // throw a catchable SyntaxError, exactly as the oracle does.
+    for source in [
+        "try { RegExp('\\\\p{Foo}'); false } catch (e) { e instanceof SyntaxError }",
+        "try { RegExp('\\\\pL'); false } catch (e) { e instanceof SyntaxError }",
+        "try { RegExp('\\\\p'); false } catch (e) { e instanceof SyntaxError }",
+        "try { RegExp('\\\\1'); false } catch (e) { e instanceof SyntaxError }",
+        "try { RegExp('\\\\c5'); false } catch (e) { e instanceof SyntaxError }",
+        "try { RegExp('[\\\\d-a]'); false } catch (e) { e instanceof SyntaxError }",
+        "try { RegExp('(?=x)*'); false } catch (e) { e instanceof SyntaxError }",
+        "try { RegExp('a{2,1}'); false } catch (e) { e instanceof SyntaxError }",
+    ] {
+        agrees(source);
+    }
+}

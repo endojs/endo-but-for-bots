@@ -372,6 +372,22 @@ fn corpus() -> Vec<Case> {
     v.push(("^\\p{Lowercase_Letter}$", "iv", "A", 0));
     v.push(("^\\P{Lowercase_Letter}$", "iv", "A", 0));
 
+    // `\p{…}` is a property escape in NON-Unicode mode too (XS dispatches
+    // `p`/`P` unconditionally — a legacy `\p` is not an identity escape of
+    // `p`). Locked bit-exact on ASCII/BMP subjects so the matcher path (byte
+    // oriented for non-`u`) agrees with the pin, not just the accept verdict.
+    for &flags in &["", "i", "g", "m"] {
+        v.push(("\\p{L}", flags, "A", 0));
+        v.push(("\\p{L}", flags, "5", 0));
+        v.push(("\\p{L}", flags, "p{L}", 0));
+        v.push(("\\P{L}", flags, "5", 0));
+        v.push(("\\p{Nd}+", flags, "42a", 0));
+        v.push(("[\\p{L}\\p{Nd}]+", flags, "ab12!", 0));
+        v.push(("[^\\p{L}]", flags, "5", 0));
+        v.push(("\\p{ASCII}", flags, "A", 0));
+        v.push(("a\\p{L}c", flags, "abc", 0));
+    }
+
     // ---- `v`: nested set expressions and finite string sets ----
     for &(pattern, subject) in &[
         ("[[a-z]&&[^aeiou]]+", "rhythm"),
