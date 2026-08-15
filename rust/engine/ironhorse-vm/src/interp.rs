@@ -14338,35 +14338,30 @@ impl Interp {
             // with the native host frame into
             // [`DATA_VIEW_CTOR_FRAME_METERING`]; no backing store is allocated
             // (the view shares the argument buffer). A non-ArrayBuffer first
-            // argument (a TypeError), and a resizable-buffer corner, self-name.
+            // argument throws TypeError. Offset and length use ToIndex, and a
+            // span outside the backing store throws RangeError.
             Native::DataView if has_target => {
                 let a = arg(0);
                 let buf = match a.value {
                     Payload::Reference(r) if self.array_buffers.contains_key(&r) => r,
-                    _ => return Err(Halt::Unsupported("native-call:DataView:non-buffer")),
+                    _ => return Err(self.catchable_type_error()),
                 };
+                let offset_arg = arg(1);
+                let length_arg = arg(2);
                 let buf_len = self.array_buffers[&buf].length;
-                let offset = match self.arg_to_byte_length(base, 1, 0) {
-                    Some(o) => o,
-                    None => return Err(Halt::Unsupported("native-call:DataView:coerce-offset")),
-                };
+                let offset = self.to_index_arg(code, offset_arg)?;
                 if offset > buf_len {
-                    return Err(Halt::Unsupported("native-call:DataView:bad-offset"));
+                    return Err(self.catchable_range_error());
                 }
                 let size: u32;
-                if argc >= 3 && arg(2).kind != Kind::Undefined {
-                    let s = match self.arg_to_byte_length(base, 2, 0) {
-                        Some(s) => s,
-                        None => {
-                            return Err(Halt::Unsupported("native-call:DataView:coerce-length"))
-                        }
-                    };
+                if argc >= 3 && length_arg.kind != Kind::Undefined {
+                    let s = self.to_index_arg(code, length_arg)?;
                     let end = match offset.checked_add(s) {
                         Some(e) => e,
-                        None => return Err(Halt::Unsupported("native-call:DataView:bad-length")),
+                        None => return Err(self.catchable_range_error()),
                     };
                     if buf_len < end {
-                        return Err(Halt::Unsupported("native-call:DataView:bad-length"));
+                        return Err(self.catchable_range_error());
                     }
                     size = s;
                 } else {
@@ -14384,6 +14379,8 @@ impl Interp {
                 );
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
+            // `DataView(...)` is constructor-only.
+            Native::DataView => return Err(self.catchable_type_error()),
             // `new Promise(executor)` (`fx_Promise`): a fresh pending promise
             // whose resolve/reject functions are handed to the executor, which
             // runs synchronously inside the construct (`mxRunCount(2)`). The
@@ -23969,17 +23966,14 @@ impl Interp {
             NativeMethod::DataViewGet(kind) => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.data_views.contains_key(&r) => r,
-                    _ => return Err(Halt::Unsupported("data-view-get:non-dataview")),
+                    _ => return Err(self.catchable_type_error()),
                 };
                 let dv = self.data_views[&inst];
                 let delta = TYPED_ARRAY_TYPES[kind as usize].size as u32;
-                let offset = match self.arg_to_byte_length(base, 0, 0) {
-                    Some(o) => o,
-                    None => return Err(Halt::Unsupported("data-view-get:coerce-offset")),
-                };
+                let offset = self.to_index_arg(code, arg0)?;
                 // `(size < delta) || ((size - delta) < offset)` → RangeError.
                 if dv.size < delta || (dv.size - delta) < offset {
-                    return Err(Halt::Unsupported("data-view-get:out-of-range"));
+                    return Err(self.catchable_range_error());
                 }
                 let little = self.arg_is_truthy(base, 1);
                 let abs = dv.offset + offset;
@@ -23998,21 +23992,18 @@ impl Interp {
             NativeMethod::DataViewSet(kind) => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.data_views.contains_key(&r) => r,
-                    _ => return Err(Halt::Unsupported("data-view-set:non-dataview")),
+                    _ => return Err(self.catchable_type_error()),
                 };
                 let dv = self.data_views[&inst];
                 let delta = TYPED_ARRAY_TYPES[kind as usize].size as u32;
-                let offset = match self.arg_to_byte_length(base, 0, 0) {
-                    Some(o) => o,
-                    None => return Err(Halt::Unsupported("data-view-set:coerce-offset")),
-                };
+                let offset = self.to_index_arg(code, arg0)?;
                 let value = self
                     .stack
                     .get(base + 5)
                     .copied()
                     .unwrap_or_else(Slot::undefined);
                 if dv.size < delta || (dv.size - delta) < offset {
-                    return Err(Halt::Unsupported("data-view-set:out-of-range"));
+                    return Err(self.catchable_range_error());
                 }
                 // The littleEndian flag is argument 2 for set.
                 let little = self.arg_is_truthy(base, 2);
@@ -24021,9 +24012,9 @@ impl Interp {
                 // (ToBigInt); the 8-byte two's-complement store is identical
                 // for signed/unsigned, differing only in the getter's decode.
                 if kind <= 1 {
-                    self.data_view_write_bigint(dv.buffer, abs, value, little)?;
+                    self.data_view_write_bigint(code, dv.buffer, abs, value, little)?;
                 } else {
-                    self.data_view_write(dv.buffer, abs, kind, value, little)?;
+                    self.data_view_write(code, dv.buffer, abs, kind, value, little)?;
                 }
                 self.meter.tick_raw(DATA_VIEW_SET_METERING);
                 Slot::undefined()
@@ -29507,15 +29498,28 @@ impl Interp {
     /// big-endian write reverses the little-endian element bytes.
     fn data_view_write(
         &mut self,
+        code: &[u8],
         buffer: crate::value::SlotIndex,
         abs: u32,
         kind: u8,
         value: Slot,
         little: bool,
     ) -> Result<(), Halt> {
-        let n = self
-            .element_value_to_number(value)
-            .ok_or(Halt::Unsupported("data-view-set:coerce"))?;
+        let primitive = self.to_primitive(code, value, false)?;
+        let number = match primitive.kind {
+            Kind::Integer | Kind::Number => primitive,
+            Kind::String => match primitive.value {
+                Payload::String(off) => Slot::number(string_to_number(
+                    self.str_text(off).as_bytes(),
+                    true,
+                )),
+                _ => unreachable!(),
+            },
+            Kind::Boolean | Kind::Null | Kind::Undefined => Slot::number(to_number(&primitive)),
+            Kind::BigInt | Kind::Symbol => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error()),
+        };
+        let n = numeric_of(&number).unwrap_or(f64::NAN);
         let mut le = encode_element_le(kind, n).ok_or(Halt::Unsupported("data-view-set:bigint"))?;
         if !little {
             le.reverse();
@@ -29561,14 +29565,21 @@ impl Interp {
     /// parses) self-names an honest skip rather than assert a wrong result.
     fn data_view_write_bigint(
         &mut self,
+        code: &[u8],
         buffer: crate::value::SlotIndex,
         abs: u32,
         value: Slot,
         little: bool,
     ) -> Result<(), Halt> {
-        let u = self
-            .slot_to_bigint_u64(value)
-            .ok_or(Halt::Unsupported("data-view-set:bigint-coerce"))?;
+        let primitive = self.to_primitive(code, value, false)?;
+        let u = match primitive.value {
+            Payload::BigInt(_) | Payload::Boolean(_) => {
+                self.slot_to_bigint_u64(primitive).unwrap()
+            }
+            Payload::String(off) => parse_bigint_string_u64(&self.str_text(off))
+                .ok_or_else(|| self.catchable_syntax_error())?,
+            _ => return Err(self.catchable_type_error()),
+        };
         let mut le = u.to_le_bytes();
         if !little {
             le.reverse();
