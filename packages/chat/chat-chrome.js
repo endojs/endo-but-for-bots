@@ -21,6 +21,50 @@ import {
 } from './setup-preact-container.js';
 
 // ---------------------------------------------------------------------------
+// App header
+// ---------------------------------------------------------------------------
+
+/**
+ * The one header bar every space shares, at the root of the UI above the
+ * spaces gutter, the sidebar, and the main pane. Its only control today is the
+ * Familiar mark at the far left, which returns to the Home space from wherever
+ * you are — the same destination as the gutter's home icon, but in a spot that
+ * never moves as spaces are added, renamed, or reordered.
+ *
+ * The mark itself is an empty span the stylesheet fills with the Familiar art
+ * (`.app-header-logo`), so nothing here carries a URL: the sanitizing renderer
+ * scheme-checks `src`, and a background-image in the stylesheet is a
+ * build-time asset reference rather than a prop.
+ *
+ * @param {object} props
+ * @param {() => void} props.onHome
+ */
+const AppHeader = ({ onHome }) =>
+  h(
+    'button',
+    {
+      type: 'button',
+      class: 'app-header-home',
+      title: 'Familiar — back to Home',
+      onClick: onHome,
+    },
+    h('span', { class: 'app-header-logo', 'aria-hidden': 'true' }),
+    h('span', { class: 'app-header-wordmark' }, 'Familiar'),
+  );
+harden(AppHeader);
+
+/**
+ * Mount (or reconcile) the app header into its dedicated host element.
+ *
+ * @param {HTMLElement} $appHeader
+ * @param {() => void} onHome Navigate back to the Home space.
+ */
+export const renderAppHeader = ($appHeader, onHome) => {
+  renderConfined(h(AppHeader, { onHome }), $appHeader);
+};
+harden(renderAppHeader);
+
+// ---------------------------------------------------------------------------
 // Profile breadcrumb bar
 // ---------------------------------------------------------------------------
 
