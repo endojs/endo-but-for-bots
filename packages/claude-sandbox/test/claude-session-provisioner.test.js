@@ -8,6 +8,25 @@ import { makeClaudeSessionProvisioner } from '../src/claude-session-provisioner.
 
 const keyFor = names => names.join('/');
 
+/**
+ * `EndoHost.lookup` takes ONE name-or-path argument. A fake that accepted the
+ * rest-args form instead would let a two-argument call pass here and fail
+ * against the daemon, so the fakes below hold the real arity.
+ *
+ * @param {...unknown} args
+ */
+const lookupKeyFor = (...args) => {
+  if (args.length !== 1) {
+    throw Error(
+      `lookup takes one name-or-path argument, got ${args.length}: ${JSON.stringify(args)}`,
+    );
+  }
+  const [nameOrPath] = args;
+  return keyFor(
+    Array.isArray(nameOrPath) ? nameOrPath : [/** @type {string} */ (nameOrPath)],
+  );
+};
+
 test('provisions and removes one isolated client per Floot session', async t => {
   /** @type {Map<string, unknown>} */
   const names = new Map();
@@ -16,7 +35,7 @@ test('provisions and removes one isolated client per Floot session', async t => 
       return names.has(keyFor(path));
     },
     async lookup(...path) {
-      return names.get(keyFor(path));
+      return names.get(lookupKeyFor(...path));
     },
     async remove(...path) {
       names.delete(keyFor(path));
@@ -113,7 +132,7 @@ test('forwards the MCP tool-bridge mount options to the session provisioner', as
       return names.has(keyFor(path));
     },
     async lookup(...path) {
-      return names.get(keyFor(path));
+      return names.get(lookupKeyFor(...path));
     },
     async remove(...path) {
       names.delete(keyFor(path));
@@ -161,7 +180,7 @@ test('a workspaceDir override roots the filesystem at a shared worktree', async 
       return names.has(keyFor(path));
     },
     async lookup(...path) {
-      return names.get(keyFor(path));
+      return names.get(lookupKeyFor(...path));
     },
     async remove(...path) {
       names.delete(keyFor(path));
@@ -261,8 +280,14 @@ test('rejects session ids that could escape its namespace', async t => {
  * Harness for the bridge methods: a Map-backed host agent with
  * `lookupById` / `provideMount`, an injectable fake 9P mounter, and caps of
  * each shape the bridge must recognise.
+ *
+ * @param {object} [options]
+ * @param {boolean} [options.resolveFsMounterByName] Withhold the injected
+ *   mounter and publish it under its namespaced pet name instead, so the
+ *   provisioner's own resolution runs — the path production takes.
  */
-const makeBridgeHarness = () => {
+const makeBridgeHarness = (options = {}) => {
+  const { resolveFsMounterByName = false } = options;
   /** @type {Map<string, unknown>} */
   const names = new Map();
   /** @type {Map<string, unknown>} */
@@ -273,7 +298,7 @@ const makeBridgeHarness = () => {
       return names.has(keyFor(path));
     },
     async lookup(...path) {
-      return names.get(keyFor(path));
+      return names.get(lookupKeyFor(...path));
     },
     async remove(...path) {
       names.delete(keyFor(path));
@@ -304,6 +329,9 @@ const makeBridgeHarness = () => {
       return handle;
     },
   });
+  if (resolveFsMounterByName) {
+    names.set(keyFor(['claude-sandbox', 'fs-mounter']), fsMounter);
+  }
   const provisioner = makeClaudeSessionProvisioner(
     hostAgent,
     {
@@ -321,7 +349,7 @@ const makeBridgeHarness = () => {
       async provisionSession() {
         throw Error('unused in bridge tests');
       },
-      getFsMounter: async () => fsMounter,
+      ...(resolveFsMounterByName ? {} : { getFsMounter: async () => fsMounter }),
     },
   );
   return {
@@ -333,6 +361,26 @@ const makeBridgeHarness = () => {
     provisioner,
   };
 };
+
+test('resolves the namespaced 9P mounter through the host agent', async t => {
+  // Every other bridge test hands the mounter in directly, which skips the
+  // resolution production performs — and that resolution asked for the
+  // namespace and the name as two arguments, which `lookup` rejects, so every
+  // attach failed before it reached a bind.
+  const h = makeBridgeHarness({ resolveFsMounterByName: true });
+  h.byId.set(
+    'cap-1',
+    harden({
+      __getMethodNames__: () => ['entry', 'list', 'readText', 'writeText'],
+    }),
+  );
+
+  await E(h.provisioner).provideContainerMountBridge(
+    harden({ key: 'abc123', capId: 'cap-1', mode: 'rw' }),
+  );
+  t.is(h.mountCalls.length, 1);
+  t.is(h.mountCalls[0].mountPoint, '/attach-mounts/claude-attach-abc123');
+});
 
 test('bridges a Mount-shaped cap over 9P at a host-picked layout', async t => {
   const h = makeBridgeHarness();
