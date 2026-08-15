@@ -443,6 +443,15 @@ struct AccessorData {
     set: Option<Slot>,
 }
 
+/// Result of writing through XS's exotic closure-environment behavior.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EnvironmentSet {
+    Written,
+    Uninitialized,
+    Const,
+    Missing,
+}
+
 /// A complete or partial ECMAScript property descriptor. Presence is encoded
 /// by `Option`; this is important because an absent field and a present field
 /// whose value is `undefined` have different effects during redefinition.
@@ -6802,8 +6811,8 @@ impl Interp {
                     // the `DUB`'d copy becomes the receiver). When no environment
                     // is active this returns `None` without metering, so the
                     // empty-chain sentinel path below is byte-identical.
-                    if let Some(obj) = self.resolve_env_object(name) {
-                        self.push(Slot::of(Kind::Reference, Payload::Reference(obj)));
+                    if let Some(target) = self.resolve_env_reference(name) {
+                        self.push(Slot::of(Kind::Reference, Payload::Reference(target)));
                         pc += ilen;
                         continue;
                     }
@@ -6961,6 +6970,24 @@ impl Interp {
                     // getter's `mxMeterOne` for an accessor).
                     if envref.kind == Kind::Reference {
                         if let Payload::Reference(inst) = envref.value {
+                            if self.is_environment_instance(inst) {
+                                let Some(v) = self.environment_get(inst, name) else {
+                                    let error = self.build_error("ReferenceError", 0, 0);
+                                    match self.raise_js(error) {
+                                        Ok(target) => {
+                                            pc = target;
+                                            if self.check_meter() == MeterCheck::Abort {
+                                                return Halt::MeterAbort;
+                                            }
+                                            continue;
+                                        }
+                                        Err(halt) => return halt,
+                                    }
+                                };
+                                self.push(v);
+                                pc += ilen;
+                                continue;
+                            }
                             let v = match self.ordinary_get(code, inst, name, envref) {
                                 Ok(value) => value,
                                 Err(halt) => return halt,
@@ -7059,6 +7086,42 @@ impl Interp {
                     // SyntaxError — would throw.
                     if envref.kind == Kind::Reference {
                         if let Payload::Reference(inst) = envref.value {
+                            if self.is_environment_instance(inst) {
+                                match self.environment_set(inst, name, value) {
+                                    EnvironmentSet::Written => {
+                                        self.push(value);
+                                        pc += ilen;
+                                        continue;
+                                    }
+                                    EnvironmentSet::Uninitialized => {
+                                        let error = self.build_error("ReferenceError", 0, 0);
+                                        match self.raise_js(error) {
+                                            Ok(target) => {
+                                                pc = target;
+                                                if self.check_meter() == MeterCheck::Abort {
+                                                    return Halt::MeterAbort;
+                                                }
+                                                continue;
+                                            }
+                                            Err(halt) => return halt,
+                                        }
+                                    }
+                                    EnvironmentSet::Const => {
+                                        let error = self.build_error("TypeError", 0, 0);
+                                        match self.raise_js(error) {
+                                            Ok(target) => {
+                                                pc = target;
+                                                if self.check_meter() == MeterCheck::Abort {
+                                                    return Halt::MeterAbort;
+                                                }
+                                                continue;
+                                            }
+                                            Err(halt) => return halt,
+                                        }
+                                    }
+                                    EnvironmentSet::Missing => {}
+                                }
+                            }
                             let (_present, recursions) = self.instance_has(inst, name);
                             self.meter.tick_code_n(recursions);
                             match self.ordinary_set(code, inst, name, value, envref) {
@@ -8866,12 +8929,24 @@ impl Interp {
                 | XS_CODE_SET_CLOSURE_1
                 | XS_CODE_SET_CLOSURE_2
                 | XS_CODE_LET_CLOSURE_1
-                | XS_CODE_LET_CLOSURE_2
-                | XS_CODE_CONST_CLOSURE_1
-                | XS_CODE_CONST_CLOSURE_2 => {
+                | XS_CODE_LET_CLOSURE_2 => {
                     let k = self.closure_index(op, code, pc);
                     let top = *self.stack.last().unwrap_or(&Slot::undefined());
                     self.write_closure_cell(k, top);
+                    pc += op.size() as usize;
+                }
+                XS_CODE_CONST_CLOSURE_1 | XS_CODE_CONST_CLOSURE_2 => {
+                    let k = self.closure_index(op, code, pc);
+                    let top = *self.stack.last().unwrap_or(&Slot::undefined());
+                    if let Some(cell) = self.closure_cell(k) {
+                        let target = self.slots.get_mut(cell);
+                        target.kind = top.kind;
+                        target.value = top.value;
+                        // XS stamps the shared cell (not the closure-kind scope
+                        // indirection), so an eval-published reference observes
+                        // the same const guard as GET/SET_CLOSURE.
+                        target.flag |= XS_DONT_SET_FLAG;
+                    }
                     pc += op.size() as usize;
                 }
                 // `reset_closure #k` (xsRun.c:RESET_CLOSURE): point scope
@@ -28159,6 +28234,90 @@ impl Interp {
         true
     }
 
+    /// Whether `inst` is one of the exotic environment instances allocated by
+    /// [`Self::new_environment_instance`]. The reserved behavior slot is the
+    /// discriminator, matching XS's `XS_ENVIRONMENT_BEHAVIOR` test.
+    fn is_environment_instance(&self, inst: crate::value::SlotIndex) -> bool {
+        if inst.is_null() {
+            return false;
+        }
+        let behavior = self.slots.get(inst).next;
+        !behavior.is_null() && self.slots.get(behavior).id == XS_ENVIRONMENT_BEHAVIOR_ID
+    }
+
+    /// Find an id-keyed property published on a closure environment. The
+    /// behavior slot itself is internal; published closure cells begin at its
+    /// `next`, exactly as `fxEnvironmentHasProperty`/`GetProperty` walk them.
+    fn environment_property(
+        &self,
+        inst: crate::value::SlotIndex,
+        id: u16,
+    ) -> Option<crate::value::SlotIndex> {
+        if id == 0 || !self.is_environment_instance(inst) {
+            return None;
+        }
+        let behavior = self.slots.get(inst).next;
+        let mut property = self.slots.get(behavior).next;
+        while !property.is_null() {
+            let slot = self.slots.get(property);
+            if slot.id == id {
+                return Some(property);
+            }
+            property = slot.next;
+        }
+        None
+    }
+
+    /// `fxEnvironmentGetProperty`: return the published value, dereferencing a
+    /// closure-kind property through its shared heap cell. `None` denotes an
+    /// uninitialized cell (TDZ) or a missing property; resolution guarantees
+    /// the latter cannot normally reach this point.
+    fn environment_get(&self, inst: crate::value::SlotIndex, id: u16) -> Option<Slot> {
+        let property = self.environment_property(inst, id)?;
+        let slot = self.slots.get(property);
+        let value = if slot.kind == Kind::Closure {
+            match slot.value {
+                Payload::Reference(cell) => self.slots.get(cell),
+                _ => return None,
+            }
+        } else {
+            slot
+        };
+        (value.kind != Kind::Uninitialized).then(|| Slot::of(value.kind, value.value))
+    }
+
+    /// `fxEnvironmentSetProperty`: write through a published closure cell so
+    /// every capturer observes the assignment, retaining TDZ and const guards.
+    fn environment_set(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+    ) -> EnvironmentSet {
+        let Some(property) = self.environment_property(inst, id) else {
+            return EnvironmentSet::Missing;
+        };
+        let property_slot = self.slots.get(property);
+        let target = if property_slot.kind == Kind::Closure {
+            match property_slot.value {
+                Payload::Reference(cell) => cell,
+                _ => return EnvironmentSet::Missing,
+            }
+        } else {
+            property
+        };
+        let slot = self.slots.get_mut(target);
+        if slot.kind == Kind::Uninitialized {
+            return EnvironmentSet::Uninitialized;
+        }
+        if slot.flag & XS_DONT_SET_FLAG != 0 {
+            return EnvironmentSet::Const;
+        }
+        slot.kind = value.kind;
+        slot.value = value.value;
+        EnvironmentSet::Written
+    }
+
     /// Walk the active `with`/eval environment chain (XS's
     /// `XS_CODE_EVAL_REFERENCE`/`PROGRAM_REFERENCE` `mxEnvironment` walk),
     /// returning the object a variable read/write of `name` should resolve
@@ -28166,12 +28325,13 @@ impl Interp {
     /// falls through to the frame scope / global object, byte-identically to
     /// the pre-`with` engine). Only **object** environments (a `with(obj)`
     /// behavior slot holding a `Reference`) are consulted with
-    /// [`Self::is_scopable_slot`]; a declarative/closure environment (a
-    /// non-reference behavior slot) is transparent here (its bindings are
-    /// ironhorse's frame scope). Returns `None` immediately — and meters
+    /// [`Self::is_scopable_slot`]. A declarative/closure environment (a
+    /// null/undefined behavior slot) uses its exotic id-keyed HasProperty walk
+    /// and resolves to the environment instance itself. Returns `None`
+    /// immediately — and meters
     /// nothing — when no environment is active, preserving the empty-chain
     /// dispatch cost exactly.
-    fn resolve_env_object(&mut self, name: u16) -> Option<crate::value::SlotIndex> {
+    fn resolve_env_reference(&mut self, name: u16) -> Option<crate::value::SlotIndex> {
         if self.env.kind != Kind::Reference {
             return None;
         }
@@ -28189,6 +28349,10 @@ impl Interp {
                             return Some(obj);
                         }
                     }
+                } else if self.environment_property(env, name).is_some() {
+                    // `mxBehaviorHasProperty` on an environment instance is a
+                    // direct id walk with no allocation or metering.
+                    return Some(env);
                 }
             }
             env = self.instance_prototype(env);
