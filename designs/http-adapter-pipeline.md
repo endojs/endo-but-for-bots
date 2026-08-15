@@ -9,7 +9,7 @@
 | **Source** | PR [#286](https://github.com/endojs/endo-but-for-bots/pull/286#pullrequestreview-4943057191) review (approval of `endo http mk` Phase 1) |
 | **Elaborates** | [cli-http-client](cli-http-client.md), [http-confine](http-confine.md) |
 
-## What is the Problem Being Solved?
+## What is the problem being solved?
 
 Phase 1 of the `endo http` controller/client pair
 ([cli-http-client](cli-http-client.md)) shipped its defenses (origin
@@ -32,7 +32,11 @@ rate limiting, retries, and circuit breaking (error-based)**. This
 design answers that request, mining the substantial prior art on HTTP
 adapter pipelines (Koa/Express middleware, axios interceptors, undici
 `Dispatcher.compose`) for design precedents, per the maintainer's
-instruction to recall "that these are pass-style interfaces."
+instruction to recall "that these are pass-style interfaces" (*pass-style*:
+built from hardened, interface-guarded **exo facets** that can be shared by
+reference across a vat/CapTP boundary and called with eventual-send, rather
+than from plain closures bound to one vat -- the property observation 5 below
+develops in full).
 
 Five observations make a flat knob-set the wrong shape for these five
 concerns:
@@ -145,7 +149,7 @@ own `request`) and a stage is indistinguishable from the whole client to the
 stage above it. This is what lets the chain be **arbitrarily deep and
 partly remote**: a stage can live in the daemon vat (the common case,
 where `E(next)` is a cheap same-vat eventual-send) or in another vat
-entirely (e.g. a fee purse held by the gateway), because every hop is a
+entirely (for example, a fee purse held by the gateway), because every hop is a
 CapTP call, not a synchronous function call.
 
 ### The stage interface
@@ -158,9 +162,9 @@ import { M } from '@endo/patterns';
 // (they are valid passable numbers), and every downstream clamp/`min` and
 // `<` admission comparison fails open on them: `available < NaN` is always
 // `false` (silently admitting an unbounded-cost request), and a `NaN`
-// deadline disables the retry and timeout stops (a `remaining <= 0` test
-// against NaN is always false). So deadlines, `contentLength`, prices, and
-// reservation amounts are guarded with this, never bare `M.number()`. It
+// deadline disables both the retry-stop and timeout-stop checks (a
+// `remaining <= 0` test against NaN is always false). So deadlines, prices,
+// and reservation amounts are guarded with this, never bare `M.number()`. It
 // excludes NaN, +Infinity, and -Infinity (the three passable numbers a
 // bare number guard would let through).
 const FiniteNonNegative = M.and(
@@ -170,12 +174,29 @@ const FiniteNonNegative = M.and(
   M.not(NaN),        // rejects NaN (which rank-orders above +Infinity)
 );
 
+// A DISCRETE count, not a continuous budget: the per-request MEASURES
+// (`contentLength`, `bytesRead`, `elapsedMs`) and the byte-cap policy fields
+// (`maxRequestBytes`, `maxResponseBytes`). These are the *distinct shape* the
+// count domain needs, kept separate from the continuous `FiniteNonNegative`
+// (deadlines, prices-as-ratios) because they feed the `bigint` cost
+// arithmetic (§ Numeric domain) and so must be non-negative INTEGERS: the
+// formula widens each with `BigInt(...)`, and `BigInt(0.5)` throws
+// `RangeError` while `FiniteNonNegative` admits `0.5`. @endo/patterns has no
+// integer-number matcher, so integrality is the one constraint carried as an
+// Exo-boundary assertion rather than a pattern combinator: the shape guards
+// finite-and-non-negative, and the meter's boundary additionally rejects a
+// non-integer with a structured error before the `BigInt(...)` widening. (Per
+// this repo's AGENTS.md § Numeric domain these stay `number`, not `bigint`:
+// each is a single-request quantity whose range genuinely fits four bytes,
+// unlike the monetary terms accumulated over the daemon's whole lifetime.)
+const IntegerNonNegative = FiniteNonNegative; // + Number.isInteger() at the boundary
+
 // RequestShape / ResponseShape are the Phase 1 shapes from
 // cli-http-client.md (bodies are ReadableBlob remotables). This design
 // adds one optional field to RequestShape -- `contentLength:
-// FiniteNonNegative`, the request-body byte length the meter needs up
-// front (see § 1). A metered client supplies it; an unmetered one ignores
-// it.
+// IntegerNonNegative`, the request-body byte length the meter needs up
+// front (see § 1); an integer count, not a continuous budget. A metered
+// client supplies it; an unmetered one ignores it.
 
 // What a client/guest may propose at the client boundary: only a
 // deadline. Split from the internal stage context so the client boundary
@@ -362,34 +383,38 @@ A failure here rejects the caller's `request` immediately with the Phase
 | 4 | **Meter (reserve, then settle)** | Reserve the worst-case cost up front and **refuse before reading any bytes** if the purse cannot cover it; after the read, settle to actual usage and refund the remainder. |
 | 5 | **Transport** | Terminal. `fetch` with `redirect: 'manual'`, the timeout/cancellation `AbortSignal`, and the bounded read whose ceiling *is* the meter's reserved worst-case response size. |
 
-This is a deliberate generalization of http-confine's fixed order. Two
-substantive changes, plus one low-impact reordering. First, http-confine
-spends the rate token before it checks the origin; this pipeline moves
-origin/method/header validation into the pure **pre-flight ahead of
-everything**, so a structurally invalid request never consumes a rate
-token or a fund reservation. Second, the breaker sits **just inside** the
-retry stage rather than strictly outermost: this is the position that
-lets the breaker both gate before any resource-spending stage (an `open`
-breaker fast-rejects on the first attempt, before rate/meter/transport)
-**and** observe each individual attempt (retry calls the breaker once per
-attempt, so a retry storm against a dying origin trips the breaker, which
-then aborts the storm on the very next attempt). Third (the low-impact
-one), the pre-flight checks **origin before method/header** validation,
-where http-confine validates method and headers first; both still precede
-the effectful onion, so the reorder changes no side-effecting behavior, and
-it is named here rather than left implicit. One narrow observable does
-change: a request that fails **both** origin and method/header validation
-now surfaces the origin rejection first where http-confine surfaced the
-method/header rejection first, so a caller that pattern-matches on the
-specific rejection reason (not merely "pre-flight rejected") sees a
-different error type for that both-invalid case. This is an accepted edge
-of the reorder, not a behavior a well-formed caller depends on. Redirect
-resolution and
-byte-cap stay inside the transport stage exactly as http-confine defines
-them. Where a
-deployment omits a concern (no fees, no breaker), that stage is simply
-absent from the composed chain and the onion collapses toward the Phase 1
-behavior.
+This is a deliberate generalization of http-confine's fixed order -- two
+substantive changes plus one low-impact reordering, each with its own caveat
+tracked separately:
+
+1. **Origin/method/header validation moves ahead of everything, into the
+   pure pre-flight.** http-confine spends the rate token before it checks the
+   origin; this pipeline validates structure first, so a structurally invalid
+   request never consumes a rate token or a fund reservation.
+2. **The breaker sits *just inside* the retry stage rather than strictly
+   outermost.** This is the position that lets the breaker both gate before
+   any resource-spending stage (an `open` breaker fast-rejects on the first
+   attempt, before rate/meter/transport) **and** observe each individual
+   attempt (retry calls the breaker once per attempt, so a retry storm
+   against a dying origin trips the breaker, which then aborts the storm on
+   the very next attempt).
+3. **The pre-flight checks origin *before* method/header validation** (the
+   low-impact reorder), where http-confine validates method and headers
+   first; both still precede the effectful onion, so the reorder changes no
+   side-effecting behavior, and it is named here rather than left implicit.
+   *Behavior-change caveat (attaches to this item only):* one narrow
+   observable does change -- a request that fails **both** origin and
+   method/header validation now surfaces the origin rejection first where
+   http-confine surfaced the method/header rejection first, so a caller that
+   pattern-matches on the specific rejection reason (not merely "pre-flight
+   rejected") sees a different error type for that both-invalid case. This is
+   an accepted edge of the reorder, not a behavior a well-formed caller
+   depends on.
+
+Redirect resolution and byte-cap stay inside the transport stage exactly as
+http-confine defines them. Where a deployment omits a concern (no fees, no
+breaker), that stage is simply absent from the composed chain and the onion
+collapses toward the Phase 1 behavior.
 
 ## The five concerns
 
@@ -428,7 +453,8 @@ byte count that settlement bills is the count the **transport stage**
 observed while draining the response, never a number the guest reports.
 This is a security property, and it falls out of pass-style for free: the
 meter stage trusts the `bytesRead` reported by the far-ref transport
-stage it composed (a capability it endowed), and the guest, which holds
+stage it was composed with (a capability it was endowed with at composition
+time), and the guest, which holds
 only the outermost stage, never touches the tally. The minion.town
 direction makes this explicit ("a caller cannot report its own byte
 count") and the pipeline honors it by construction.
@@ -442,12 +468,23 @@ new schedule version through the `setMeterPrice` controller verb
 (§ Exo and CLI surface additions); "never the caller" excludes the guest
 holding the client, which has no price-setting verb. Registering a new
 version does not disturb reservations already open against the prior
-version. A request's worst-case cost is
+version, and the **mechanism** for that immunity is a **price snapshot
+captured at `reserve()`**, not a live re-read at `settle()`: when the meter
+stage opens a reservation it binds the current `PriceSchedule` version into
+that reservation (the same "capture at construction, not re-read live"
+discipline `StageContext` already applies to `next` and to the live
+reservation), and `settle()` computes `costActual` from **that captured
+snapshot**, never from whatever version is current when settlement runs. So
+a `setMeterPrice` call racing an in-flight reservation reprices only
+reservations opened *after* it lands; every open reservation settles at the
+version that computed its `costMax`, which is what makes `costActual <=
+costMax` hold across a mid-flight price change. A request's worst-case cost
+is
 ```
-costMax = price.perByteRequest  * request.contentLength     // declared up front (see below)
-        + price.perByteResponse * maxResponseBytes          // the Phase 1 byte-cap = worst-case response (aggregate pool)
-        + price.perMillisecond  * effectiveDeadlineMs        // see below: the caller deadline clamped down by timeoutMs
-        + price.perRequest                                  // fixed admission fee
+costMax = price.perByteRequest  * BigInt(request.contentLength)        // declared up front (see below)
+        + price.perByteResponse * BigInt(maxResponseBytes)            // the Phase 1 byte-cap = worst-case response (aggregate pool)
+        + price.perMillisecond  * BigInt(Math.ceil(effectiveDeadlineMs)) // caller deadline clamped down by timeoutMs, rounded UP (pessimal)
+        + price.perRequest                                            // fixed admission fee
 ```
 where `effectiveDeadlineMs = min(deadline ?? timeoutMs, timeoutMs)`: the
 time term is priced against the controller's `timeoutMs` **clamped down by
@@ -458,6 +495,24 @@ its own `costMax`, which is incentive-correct and cannot widen authority
 (the clamp is a `min`, so the caller can only shave the time term, never
 inflate it). A request with no caller `deadline` prices the full
 `timeoutMs`.
+
+**A worked pass (concrete numbers).** Take a price schedule of
+`perByteRequest = 2n`, `perByteResponse = 1n`, `perMillisecond = 10n`,
+`perRequest = 100n` (units of the metering token), a controller
+`timeoutMs = 30_000`, `maxResponseBytes = 1_000_000`, and a POST declaring
+`contentLength = 500` with no caller `deadline`. Reservation:
+`costMax = 2n*500n + 1n*1_000_000n + 10n*30_000n + 100n = 1000n + 1_000_000n
++ 300_000n + 100n = 1_301_100n`. The account must hold at least `1_301_100n`
+or `reserve` rejects with `InsufficientFundsError` before a byte is sent.
+Say the response actually returns `40_000` bytes in `220` ms: settlement is
+`costActual = 2n*500n + 1n*40_000n + 10n*220n + 100n = 1000n + 40_000n +
+2_200n + 100n = 43_300n`, and `release()` returns `costMax - costActual =
+1_257_800n` to `available`. Had the caller instead proposed
+`deadline = now + 5_000`, the time term of `costMax` would price
+`min(5_000, 30_000) = 5_000` ms -> `10n*5_000n = 50_000n` instead of
+`300_000n`, lowering `costMax` to `1_051_100n`. Every quantity is an integer
+widened with `BigInt(...)`, so no term is fractional and `costActual`
+(`43_300n`) `<= costMax` (`1_301_100n`) holds by construction.
 
 Every term is known **before headers are sent or a single response byte
 is read**. But the request-body term needs the body's size up front, and
@@ -513,15 +568,40 @@ charge account's balance) are naturals accumulated over the daemon's whole
 lifetime (settle/release/top-up without an a-priori four-byte bound), so
 per this repo's `AGENTS.md` § Numeric domain they are `bigint`, not
 `number`; the interface sketches below spell them `M.bigint()`. The
-per-request *measures* (`contentLength`, `bytesRead`, `elapsedMs`) are
-bounded single-request counts and stay `number` (`FiniteNonNegative`); the
-cost formula multiplies a `bigint` price-per-unit by an integer quantity.
+per-request *measures* (`contentLength`, `bytesRead`, `elapsedMs`) and the
+byte-cap policy fields (`maxRequestBytes`, `maxResponseBytes`) are bounded
+single-request counts whose range genuinely fits four bytes, so they stay
+`number` -- but the discrete `IntegerNonNegative`, not the continuous
+`FiniteNonNegative` (§ The stage interface), because they feed the cost
+arithmetic and must be integers.
+
+**How the two domains multiply (the mixing rule).** `bigint * number` throws
+a `TypeError` in JavaScript for *any* number operand, integer or not
+(`5n * 3` throws), so the cost formulas below never write a bare
+`price.* * quantity`. Each integer count is **widened to `bigint` with
+`BigInt(...)` at the multiplication** (`price.perByteRequest *
+BigInt(request.contentLength)`); this is safe precisely because
+`IntegerNonNegative` guarantees a non-negative integer, so the `BigInt(...)`
+never hits the `RangeError` a fractional argument would raise. The one
+genuinely continuous input, the caller-proposed `deadline` (a wall-clock ms
+value `FiniteNonNegative` may leave fractional), is the sole place a
+**rounding rule** is needed, and its direction is load-bearing: the time
+term's millisecond budget is rounded **up** (`ceil`) for `costMax`, the
+pessimal direction that preserves the refuse-before-headers invariant (a
+reservation never under-counts the time it might bill), and `costActual`
+prices `min(elapsedMs, ceil(effectiveDeadlineMs))` where `elapsedMs` is
+already an integer measure; since `ceil(effectiveDeadlineMs) >=` the exact
+budget and every other quantity is an exact integer, `costActual <= costMax`
+holds term by term -- the reservation invariant every downstream
+refuse-before-read guarantee rests on.
 
 **Reserve, perform, settle.** The meter stage runs the ledger's
 reserve/settle state machine:
 
-1. **Reserve.** Compute `costMax`; call `reserve(operationId, costMax)`
-   on the endowed charge account. The reservation atomically moves
+1. **Reserve.** Compute `costMax` against the **current `PriceSchedule`
+   version and snapshot that version into the reservation** (§ The cost
+   function); call `reserve(operationId, costMax)` on the endowed charge
+   account. The reservation atomically moves
    `available` to `reserved` and returns a `MeterReservation` capability,
    or, if the balance cannot cover the pessimal case, **rejects now** with
    `InsufficientFunds`, before `fetch` is invoked, so no header is sent
@@ -557,11 +637,12 @@ reserve/settle state machine:
    `` `${operationId}:measure` `` so a retried `settle` of the same attempt
    collides on the same key -- see the idempotency note below) + the actual
    measure, and the stage calls `settle(reservation, measurementId,
-   { bytesRead, elapsedMs })`, which computes
+   { bytesRead, elapsedMs })`, which computes (the `price.*` terms are the
+   reservation's **captured snapshot**, not live policy -- § The cost function)
    ```
-   costActual = price.perByteRequest  * request.contentLength
-               + price.perByteResponse * bytesRead                  // measured at the boundary
-               + price.perMillisecond  * min(elapsedMs, effectiveDeadlineMs)
+   costActual = price.perByteRequest  * BigInt(request.contentLength)
+               + price.perByteResponse * BigInt(bytesRead)                                  // measured at the boundary
+               + price.perMillisecond  * BigInt(Math.min(elapsedMs, Math.ceil(effectiveDeadlineMs)))
                + price.perRequest
    ```
    atomically moving `costActual` from `reserved` to revenue and
@@ -618,10 +699,13 @@ compromised meter stage can therefore drain at most the charge account's
 ```js
 // The trusted, boundary-measured actual usage the transport reports to
 // settle(). The per-request byte and time COUNTS are bounded single-request
-// measures, so they stay `number` (FiniteNonNegative), not the `bigint`
-// the monetary terms use (see § 1 Numeric domain).
+// measures, so they stay `number` (the discrete `IntegerNonNegative`, not the
+// continuous `FiniteNonNegative`), not the `bigint` the monetary terms use
+// (see § 1 Numeric domain). Integer, so the settlement arithmetic widens each
+// with `BigInt(...)` without a RangeError; the transport reports integer
+// byte and millisecond counts by construction.
 const MeasureShape = M.splitRecord(
-  { bytesRead: FiniteNonNegative, elapsedMs: FiniteNonNegative },
+  { bytesRead: IntegerNonNegative, elapsedMs: IntegerNonNegative },
 );
 
 export const MeterReservationInterface = M.interface('MeterReservation', {
@@ -697,11 +781,31 @@ atomic allowance draw, boundary measurement.
   observes fees only as the optional `cost` field on a `Response` and as
   the `InsufficientFunds` rejection.
 
+**The structured errors (one discriminant, spelled shapes).** This design
+introduces three rejection types a caller is explicitly told to
+*distinguish*, so all three get the same shape treatment rather than one
+being spelled and the others left as free-floating names. They share a
+**common discriminant** -- each is a hardened `makeError` carrying a
+`name` field (`'InsufficientFundsError'` / `'RateLimitError'` /
+`'CircuitOpenError'`), so a caller pattern-matches on `error.name` without an
+`instanceof` contract across a vat boundary -- and each carries a spelled
+payload:
+
+| Error | Shape | Meaning |
+|---|---|---|
+| `InsufficientFundsError` | `{ name, required: bigint, available: bigint }` | funds cannot cover the pessimal `costMax`; never admissible until topped up. |
+| `RateLimitError` | `{ name, retryAfterMs: IntegerNonNegative }` | a window (per-client or per-controller) is exhausted; `retryAfterMs` is when it next admits. Funds are fine; retry later. |
+| `CircuitOpenError` | `{ name, origin: string, retryAfterMs: IntegerNonNegative }` | the per-origin breaker is `open`; `retryAfterMs` is the cooldown remainder. The origin, not the request, is at fault. |
+
+`required`/`available` are monetary `bigint` (§ 1 Numeric domain);
+`retryAfterMs` is a discrete millisecond count (`IntegerNonNegative`).
+
 **How refusal-before-read surfaces to the caller.** `request` rejects
-with a structured `InsufficientFundsError { required, available }`
+with a structured `InsufficientFundsError` (shape above)
 **synchronously with respect to the network**: the promise rejects
 before the transport stage runs, so no request body is streamed and no
-response byte is read. This is distinguishable from a `RateLimitError`
+response byte is read. This is distinguishable -- by the `name` discriminant
+above -- from a `RateLimitError`
 (retry later, funds fine) and from an origin/method rejection (never
 admissible). A guest can call the client's inspection method
 (`estimateCost(req)`, a new pure, side-effect-free client method that
@@ -771,16 +875,29 @@ deterministically testable.
 The retry stage re-invokes the inner chain on a **retryable failure**,
 bounded by attempt count and the overall deadline.
 
-- **Idempotency constraint.** Retry is enabled **only for GET-class
-  (idempotent) methods**: GET, HEAD, and any method the controller's
-  closed set marks idempotent. (Phase 1's `http-confine` default
+- **Idempotency constraint.** Retry is enabled **only for methods on the
+  retry stage's own idempotent-method set**, a new closed set stored **on
+  the retry stage's policy** -- `setRetry({ maxAttempts, baseMs, capMs,
+  idempotentMethods })`, where `idempotentMethods` **defaults to
+  `['GET', 'HEAD']`**. This names where the marking lives: it is *not* an
+  annotation on `http-confine`'s `allowedMethods`/`CONFINED_ALLOWED_METHODS`
+  (a flat `Set<string>` that carries no per-method idempotency bit and that
+  this design does not extend), but a distinct retry-stage set. The two sets
+  compose: a method is retried only if it is **both** admitted by the
+  confinement policy **and** present in `idempotentMethods`. Phase 1's
   `CONFINED_ALLOWED_METHODS` is the full seven-method set -- `GET`, `HEAD`,
-  `POST`, `PUT`, `DELETE`, `OPTIONS`, `PATCH` -- so idempotency-safety is
-  an *independent* gate the retry stage applies on top of whatever methods
-  the confinement policy admits, not something the Phase 1 default already
-  narrows to GET/HEAD.) A non-idempotent method (POST/PATCH) is **never**
-  retried automatically; the stage passes it through with `maxAttempts =
-  1`. This is a hard rule, not a knob, because the pipeline cannot know a
+  `POST`, `PUT`, `DELETE`, `OPTIONS`, `PATCH` -- so idempotency-safety is an
+  *independent* gate the retry stage applies on top of whatever methods the
+  confinement policy admits, not something the Phase 1 default already
+  narrows. **PUT and DELETE** sit exactly in the gap the flat set could not
+  express: they are canonically idempotent under HTTP semantics, but whether
+  a *given origin* honors that is origin behavior the pipeline cannot verify,
+  so the default set **omits them** and retries them only when a controller
+  explicitly adds them to `idempotentMethods` (an informed opt-in that the
+  origin treats them idempotently). A method absent from the set (POST/PATCH
+  by default, PUT/DELETE unless opted in) is **never** retried automatically;
+  the stage passes it through with `maxAttempts = 1`. The default is a hard
+  GET/HEAD floor, not a free-for-all knob, because the pipeline cannot know a
   POST is safe to repeat.
 - **Retryable classes.** Retry fires on connection errors, timeouts, and
   5xx / 429 responses. A `429` with a `Retry-After` honors that hint as
@@ -788,14 +905,14 @@ bounded by attempt count and the overall deadline.
   error, deterministic) or an origin/method/header rejection (never
   admissible) or an `InsufficientFunds` (funds do not improve by
   retrying). Note the deliberate asymmetry with the breaker below: 429
-  **is** retryable here (backing off and re-sending your own request is
-  the correct response to your own throttle), but 429 is **not** breaker
+  **is** retryable here (backing off and re-sending is the correct response
+  when a caller is throttling itself), but 429 is **not** breaker
   evidence, because it reflects request volume rather than origin health,
   and counting it would let one greedy guest trip the shared breaker for
   every co-guest.
 - **Backoff.** Exponential with full jitter, `base * 2^attempt` capped at
   a ceiling, all controller policy (`setRetry({ maxAttempts, baseMs,
-  capMs })`). The backoff **sleep is itself abortable**: it waits on
+  capMs, idempotentMethods })`). The backoff **sleep is itself abortable**: it waits on
   `Promise.race([sleep(delay), cancellation])`, so a caller-side
   cancellation or the overall deadline cuts a pending backoff short
   rather than burning wall-clock the caller no longer wants.
@@ -813,8 +930,14 @@ bounded by attempt count and the overall deadline.
 
 Because each attempt is separately metered and rate-limited, the cost of
 a retry is honestly billed: a 3-attempt request reserves and settles
-three times (each with its own worst case), which is the correct
-incentive (retries are not free).
+three times (each with its own worst case). This **attributes the real
+resource cost** of each attempt rather than functioning as an *incentive*:
+`maxAttempts`/backoff is controller policy the guest neither sets nor sees
+(`inspectPipeline()` is controller-only -- § Exo and CLI surface additions),
+so the guest cannot act on a price it does not control. The accurate framing
+is that **the guest bears origin-flakiness cost as the price of automatic
+retry** (including attempts that fail purely on origin-side 5xx/timeout), not
+that the billing incentivizes the guest toward any behavior.
 
 ### 5. Circuit breaking: error-based, per-origin
 
@@ -898,10 +1021,10 @@ Phase 1 mutators; the client facet gains nothing but the pure
 | Method | Facet | Concern |
 |---|---|---|
 | `setMeterPrice(price)` | controller | metering (per-byte / per-ms / per-request rates) |
-| `setMaxRequestBytes(n)` | controller | metering (the request-side worst-case byte cap; sibling of Phase 1's `maxResponseBytes`, the pessimal default for a request that omits `contentLength`) |
+| `setMaxRequestBytes(n)` | controller | metering (the request-side worst-case byte cap; sibling of Phase 1's `maxResponseBytes`, the pessimal default for a request that omits `contentLength`) -- **rejects an over-run, does not truncate** (unlike `maxResponseBytes`, which truncates untrusted inbound data; the request body is caller-authored outbound data, so an over-run is a structured error, not a silent cut -- see § 1) |
 | `attachChargeAccount(account)` | controller | fees (integration-only endowment of an attenuated charge account; the attach is gated on **controller-holder access**, not on inspecting the account ref -- the guest never holds the controller, and the client facet has no verb that returns or accepts an account, so a client-reachable ref can never arrive here in the first place; see the "structural, not a provenance test" note below) |
 | `setControllerMaxRequestsPerMinute(n)` | controller | rate (aggregate) |
-| `setRetry({ maxAttempts, baseMs, capMs })` | controller | retries |
+| `setRetry({ maxAttempts, baseMs, capMs, idempotentMethods })` | controller | retries (`idempotentMethods` is the retry-eligible closed set, default `['GET', 'HEAD']`; see § 4) |
 | `setBreaker({ failureThreshold, windowMs, cooldownMs, halfOpenProbes })` | controller | circuit breaking |
 | `inspectPipeline()` | controller | read the composed stage list + each stage's live state (breaker states, window, balance); distinct from Phase 1's `inspect()` (static `PolicyShape`) |
 | `estimateCost(req)` | client | pure `costMax` probe; no reservation, no side effect |
@@ -919,8 +1042,8 @@ controller:
 
 ```text
 endo http set-price   <name> --per-byte-request <n> --per-byte-response <n> --per-ms <n> --per-request <n>
-endo http set-request-bytes <name> <max-bytes>   # setMaxRequestBytes(): request-side worst-case byte cap
-endo http set-retry   <name> --max-attempts <n> --base-ms <n> --cap-ms <n>
+endo http set-request-bytes <name> <max-bytes>   # setMaxRequestBytes(): request-side cap; rejects an over-run, does not truncate (cf. set-bytes)
+endo http set-retry   <name> --max-attempts <n> --base-ms <n> --cap-ms <n> [--idempotent-methods GET,HEAD]
 endo http set-breaker <name> --threshold <n> --window-ms <n> --cooldown-ms <n>
 endo http set-rate    <name> <max-per-minute> [--controller-per-minute <n>]
 endo http inspect     <name>                  # inspect(): static PolicyShape
@@ -938,7 +1061,15 @@ surface (`cli-http-client.md` § `endo http` subcommand tree):
   verb is spelled `set-request-bytes` (rather than renaming the shipped
   `set-bytes` to `set-response-bytes`, which would break a landed surface);
   the pairing is `set-bytes` = response cap, `set-request-bytes` = request
-  cap.
+  cap. **The positional shape is symmetric but the enforcement is not**, and
+  that asymmetry is surfaced where a user reads it (the verb table above and
+  the CLI help line), not left to prose: `set-bytes`/`maxResponseBytes`
+  **truncates** an over-long response (a DoS defense over untrusted inbound
+  data the caller already expects may arrive partial), while
+  `set-request-bytes`/`maxRequestBytes` **rejects** an over-run with a
+  structured error (silently truncating caller-authored outbound data would
+  corrupt it -- § 1). A user who learned "byte caps truncate" from `set-bytes`
+  is told, at the surface, that its sibling instead throws.
 - **`set-rate` keeps its Phase 1 positional argument.** Phase 1 ships
   `endo http set-rate <name> <max-per-minute>` (positional). The aggregate
   per-controller window is added as an **optional flag** on top of that
@@ -1029,7 +1160,7 @@ Nothing in the pipeline relaxes the Phase 1 defenses:
 - The fee purse and stage composition are controller-side endowments a
   guest cannot reach, so the pipeline introduces no new capability leak.
 
-## Alternatives Considered
+## Alternatives considered
 
 ### Alt A: In-process function middleware (Koa closures) instead of exo stages
 
@@ -1093,13 +1224,30 @@ suite unchanged through the refactored pipeline:
   pipeline; a well-formed call supplying only `deadline` is accepted and the
   synthesized stage context the outermost stage receives carries the trusted
   `origin`, a minted `requestId`, and `attempt: 0`.
+- **Charge account is structurally unreachable through the client (the
+  capability claim, part two):** assert `HttpClientInterface` and
+  `HttpStageInterface` expose **no** method that returns or accepts an
+  account-shaped argument, so a client- or guest-held ref can never reach
+  `attachChargeAccount` (which is a controller verb the guest never holds).
+  This pins the design's explicit "structural, not a provenance test" claim
+  (§ Exo and CLI surface additions) with a listed test: a static assertion
+  over the two client-reachable interfaces, not a runtime provenance check on
+  the argument.
 - **Numeric budgets reject non-finite values (fail-closed admission):** a
   caller `deadline` of `NaN`, `Infinity`, or `-Infinity`, and a
-  `contentLength` of the same, are **rejected by the `FiniteNonNegative`
-  guard** at the boundary (assert the guarded method throws), so a `<`/`min`
-  admission comparison downstream can never silently fail open on a
-  non-finite value; likewise a `reserve` amount or a price term that is
-  non-finite is rejected before it reaches an admission comparison.
+  `contentLength` of the same, are **rejected by the boundary guard**
+  (`FiniteNonNegative` for the continuous `deadline`, `IntegerNonNegative`
+  for the discrete `contentLength`) at the boundary (assert the guarded
+  method throws), so a `<`/`min` admission comparison downstream can never
+  silently fail open on a non-finite value; likewise a `reserve` amount or a
+  price term that is non-finite is rejected before it reaches an admission
+  comparison.
+- **Count fields reject fractional values (integer-domain guard):** a
+  `contentLength` (or `maxRequestBytes`/`maxResponseBytes`) of `0.5` is
+  **rejected at the boundary** (the `IntegerNonNegative` integrality
+  assertion), so the cost formula's `BigInt(...)` widening can never raise a
+  `RangeError` on a fractional count; a well-formed integer is accepted and
+  widened.
 - **Deadline sanity in pre-flight:** a caller `deadline` already in the past
   (against the injected `now`) is rejected in the **pure pre-flight**, before
   any rate token is spent or funds reserved (assert neither the rate limiter
@@ -1156,8 +1304,11 @@ suite unchanged through the refactored pipeline:
   each retried attempt spends its own token; the per-controller aggregate
   binds when tighter than the per-client window.
 - **Retries:** GET retries on 5xx/timeout/connection error up to
-  `maxAttempts`; POST never retries; a `Retry-After` sets the backoff
-  floor; a `cancellation` rejection mid-backoff aborts the sleep and the
+  `maxAttempts`; POST/PATCH never retry; PUT/DELETE do **not** retry under
+  the default `idempotentMethods` (`['GET', 'HEAD']`) but **do** once a
+  controller adds them to the set (assert the retry gate reads the
+  retry-stage set, not `CONFINED_ALLOWED_METHODS`); a `Retry-After` sets the
+  backoff floor; a `cancellation` rejection mid-backoff aborts the sleep and the
   loop; the shared deadline stops a doomed final attempt; 4xx and
   `InsufficientFunds` are not retried; a 429 **is** retried (backoff floor
   from `Retry-After`) yet does **not** advance the breaker's failure
@@ -1171,7 +1322,14 @@ suite unchanged through the refactored pipeline:
   trip halts the loop (assert the breaker sees each attempt, and the attempt
   after the trip fast-rejects with `CircuitOpenError`); neither 4xx nor 429
   counts toward the threshold.
-- **Cross-boundary:** a `FeePurse` held in a *different* vat participates
+- **Structured error discriminant:** `InsufficientFundsError`,
+  `RateLimitError`, and `CircuitOpenError` each reject with the spelled shape
+  (§ 2) and a distinct `name` field, so a caller pattern-matching on
+  `error.name` can tell the three apart (assert each rejection's `name` and
+  payload fields: `{ required, available }`, `{ retryAfterMs }`,
+  `{ origin, retryAfterMs }`).
+- **Cross-boundary:** a `ChargeAccount` (over a `ResourceLedger`/purse) held
+  in a *different* vat participates
   in reserve/settle over CapTP (the pass-style claim), exercised with a
   two-vat test harness; the atomic check-and-draw holds with no intervening
   `await` even when the ledger is remote (two concurrent cross-vat

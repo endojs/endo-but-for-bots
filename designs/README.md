@@ -242,8 +242,8 @@ devDep SCC; follow-up to PR #121; Cuts 2-4 merged via PRs #209, #210,
 #211 with Cut 5 open as PR #247),
 [cli-http-client](cli-http-client.md) (added 2026-05-09; PR #144 design
 revision under `endo http` subcommand tree),
-[http-adapter-pipeline](http-adapter-pipeline.md) (added 2026-08-15;
-follow-up to the PR #286 `endo http mk` Phase 1 approval that elaborates the
+[http-adapter-pipeline](http-adapter-pipeline.md) (added 2026-08-15 as a
+follow-up to the PR #286 `endo http mk` Phase 1 approval; it elaborates the
 controller/client pair into a pass-style middleware pipeline staging
 metering, fees, rate limiting, retries, and circuit breaking),
 [retention-path-notation](retention-path-notation.md) (added 2026-05-10;
