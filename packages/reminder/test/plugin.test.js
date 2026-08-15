@@ -98,7 +98,12 @@ const noCancelContext = () =>
     whenCancelled: () => new Promise(() => {}),
   });
 
-const fastBackoff = { initialMs: 30, maxMs: 30, multiplier: 1, jitterFraction: 0 };
+const fastBackoff = {
+  initialMs: 30,
+  maxMs: 30,
+  multiplier: 1,
+  jitterFraction: 0,
+};
 
 test('a firing delivers a capability-free package message to @self', async t => {
   const { powers, mailbox } = await makePowers(() => 'ok');
@@ -124,7 +129,10 @@ test('a firing delivers a capability-free package message to @self', async t => 
   );
 
   const event = decodeReminderPackage(pkg);
-  t.truthy(event);
+  if (event === undefined) {
+    t.fail('expected a decoded reminder event');
+    return;
+  }
   t.is(event.schema, REMINDER_MESSAGE_SCHEMA);
   t.is(event.reminderId.length > 0, true);
   t.is(event.label, 'heartbeat');
@@ -189,8 +197,16 @@ test('an ambiguous-send retry projects to exactly one event', async t => {
   t.is(mailbox.length, 2, 'the same firing is in the mailbox twice');
 
   const [a, b] = mailbox.map(decodeReminderPackage);
+  if (a === undefined || b === undefined) {
+    t.fail('expected both firings to decode');
+    return;
+  }
   t.is(a.reminderId, b.reminderId, 'same reminder id');
-  t.is(a.messageNumber, b.messageNumber, 'same message number across the retry');
+  t.is(
+    a.messageNumber,
+    b.messageNumber,
+    'same message number across the retry',
+  );
 
   // The mailbox projection keys events by {reminderId, messageNumber}, so the
   // duplicate collapses to one event.
@@ -224,7 +240,10 @@ test('revival from the store coalesces missed messages', async t => {
     annotation: 'count',
     consecutiveFailures: 0,
   };
-  await E(remindersDirectory).write('seed01.json', `${JSON.stringify(seeded)}\n`);
+  await E(remindersDirectory).write(
+    'seed01.json',
+    `${JSON.stringify(seeded)}\n`,
+  );
   await E(storeRoot).write(
     'config.json',
     `${JSON.stringify({ maxActive: 5, minPeriodMs: 1000, paused: false })}\n`,
@@ -237,9 +256,16 @@ test('revival from the store coalesces missed messages', async t => {
   t.is(mailbox.length, 1, 'missed firings coalesce into one catch-up message');
 
   const event = decodeReminderPackage(mailbox[0]);
+  if (event === undefined) {
+    t.fail('expected a decoded reminder event');
+    return;
+  }
   t.is(event.label, 'heartbeat');
   t.is(event.messageNumber, 4, 'one past the persisted message count');
-  t.true(event.missedMessages >= 1, 'the catch-up stands in for missed firings');
+  t.true(
+    event.missedMessages >= 1,
+    'the catch-up stands in for missed firings',
+  );
   t.deepEqual(event.annotation, {
     kind: 'count',
     count: event.missedMessages + 1,
@@ -268,7 +294,10 @@ test('revival with the skip policy delivers nothing for missed firings', async t
     annotation: 'count',
     consecutiveFailures: 0,
   };
-  await E(remindersDirectory).write('seed02.json', `${JSON.stringify(seeded)}\n`);
+  await E(remindersDirectory).write(
+    'seed02.json',
+    `${JSON.stringify(seeded)}\n`,
+  );
 
   const service = await make(powers, noCancelContext(), {
     env: { minPeriodMs: '1000' },

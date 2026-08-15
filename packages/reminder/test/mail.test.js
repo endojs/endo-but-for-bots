@@ -8,10 +8,13 @@ import {
   projectReminderEvents,
 } from '../src/mail.js';
 
+/** @import { ReminderMessage } from '../src/types.js' */
+
 /**
  * A scheduler-core in-memory message, complete with the ephemeral response.
  *
  * @param {Record<string, any>} [overrides]
+ * @returns {ReminderMessage}
  */
 const coreMessage = (overrides = {}) =>
   harden({
@@ -36,7 +39,13 @@ const coreMessage = (overrides = {}) =>
  * @param {Record<string, any>} [overrides]
  */
 const packageMessage = (payload, overrides = {}) =>
-  harden({ type: 'package', strings: [payload], names: [], ids: [], ...overrides });
+  harden({
+    type: 'package',
+    strings: [payload],
+    names: [],
+    ids: [],
+    ...overrides,
+  });
 
 test('encodeReminderMessage emits the capability-free v1 schema', t => {
   const json = encodeReminderMessage(coreMessage());
@@ -64,7 +73,10 @@ test('encode -> decode round-trips a reminder event', t => {
     }),
   );
   const event = decodeReminderPackage(packageMessage(json));
-  t.truthy(event);
+  if (event === undefined) {
+    t.fail('expected a decoded reminder event');
+    return;
+  }
   t.is(event.schema, REMINDER_MESSAGE_SCHEMA);
   t.is(event.missedMessages, 3);
   t.deepEqual(event.annotation, {
@@ -86,7 +98,9 @@ test('decodeReminderPackage rejects non-reminder and malformed mail', t => {
   );
   // More than one string.
   t.is(
-    decodeReminderPackage(harden({ strings: [good, good], names: [], ids: [] })),
+    decodeReminderPackage(
+      harden({ strings: [good, good], names: [], ids: [] }),
+    ),
     undefined,
   );
   // Missing required fields.
@@ -119,7 +133,9 @@ test('decodeReminderPackage rejects a capability-bearing message', t => {
 
 test('projectReminderEvents dedupes by {reminderId, messageNumber}', t => {
   const one = encodeReminderMessage(coreMessage({ messageNumber: 1 }));
-  const twoSameReminder = encodeReminderMessage(coreMessage({ messageNumber: 2 }));
+  const twoSameReminder = encodeReminderMessage(
+    coreMessage({ messageNumber: 2 }),
+  );
   const oneOtherReminder = encodeReminderMessage(
     coreMessage({ reminderId: 'zzz999', messageNumber: 1 }),
   );
@@ -148,10 +164,7 @@ test('projectReminderEvents dedupes by {reminderId, messageNumber}', t => {
 test('projectReminderEvents on an empty / all-noise mailbox yields nothing', t => {
   t.deepEqual(projectReminderEvents([]), []);
   t.deepEqual(
-    projectReminderEvents([
-      packageMessage('hi'),
-      packageMessage('{bad'),
-    ]),
+    projectReminderEvents([packageMessage('hi'), packageMessage('{bad')]),
     [],
   );
 });
