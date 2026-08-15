@@ -3581,6 +3581,16 @@ pub struct Interp {
     /// item value slots (which may be references) are never swept underneath
     /// it (the stage-2 GC roots contract).
     arrays: std::collections::HashMap<crate::value::SlotIndex, ArrayData>,
+    /// The subset of [`Self::arrays`] instances that are **`arguments`
+    /// objects** (materialized by `XS_CODE_ARGUMENTS_SLOPPY`/`_STRICT`). XS
+    /// stores the mapped/unmapped arguments exotic like an indexed object, and
+    /// ironhorse reuses the plain-array store for its indexed elements — but its
+    /// `Object.prototype.toString` builtinTag is `Arguments`, so a bare
+    /// `arguments` completion stringifies as `[object Arguments]`, NOT through
+    /// `Array.prototype.join`. This marker lets [`Self::render`] distinguish the
+    /// two without changing the element storage (the `.length`/indexed reads
+    /// stay the array side table).
+    arguments_objects: std::collections::HashSet<crate::value::SlotIndex>,
     /// Explicit-resource-management internal slots. Records are registered in
     /// source order and consumed from the tail, implementing the proposal's
     /// mandatory LIFO cleanup order.
@@ -4284,6 +4294,7 @@ impl Interp {
             wrapper_data: std::collections::HashMap::new(),
             array_proto: crate::value::SlotIndex::NULL,
             arrays: std::collections::HashMap::new(),
+            arguments_objects: std::collections::HashSet::new(),
             disposable_stacks: std::collections::HashMap::new(),
             collections: std::collections::HashMap::new(),
             map_proto: crate::value::SlotIndex::NULL,
@@ -6398,7 +6409,16 @@ impl Interp {
                 // toString`: `name` with an empty/absent message, else
                 // `name: message` — the abort/completion value parity the
                 // Error hierarchy graduates.
-                if let Some(a) = self.arrays.get(&r) {
+                if self.arguments_objects.contains(&r) {
+                    // An `arguments` object's `Object.prototype.toString`
+                    // builtinTag is `Arguments` (its prototype is
+                    // `Object.prototype`, so `String(arguments)` does NOT run
+                    // `Array.prototype.join`). It is stored in the array side
+                    // table for its indexed elements, so this arm precedes the
+                    // array arm to keep the join from mis-rendering `1,2` where
+                    // the oracle reports `[object Arguments]`.
+                    "[object Arguments]".to_string()
+                } else if let Some(a) = self.arrays.get(&r) {
                     // An array stringifies through `Array.prototype.toString` →
                     // `join(",")`: each index in `[0, length)` rendered, holes
                     // and `undefined`/`null` rendered as the empty string,
@@ -6415,6 +6435,44 @@ impl Interp {
                         }
                     }
                     out
+                } else if self.typed_arrays.contains_key(&r) {
+                    // A TypedArray's `toString` IS `Array.prototype.toString`
+                    // (`%TypedArray%.prototype.toString === Array.prototype.
+                    // toString`), so `String(new Int8Array(3))` is the `join(",")`
+                    // of its elements (`0,0,0`) — NOT the `[object …]` tag its
+                    // shared `Symbol.toStringTag` would give through
+                    // `Object.prototype.toString`. Render each in-bounds element.
+                    let ta = self.typed_arrays[&r];
+                    let mut out = String::new();
+                    for i in 0..ta.length {
+                        if i > 0 {
+                            out.push(',');
+                        }
+                        // A BigInt-element view (kinds 0/1) reads through the
+                        // decimal helper; every other kind decodes to a Number.
+                        let text = if ta.kind <= 1 {
+                            self.typed_array_element_bigint_decimal(ta, i)
+                        } else {
+                            self.typed_array_element_get(ta, i)
+                                .map(|slot| self.render(&slot))
+                                .unwrap_or_default()
+                        };
+                        out.push_str(&text);
+                    }
+                    out
+                } else if self.array_buffers.contains_key(&r) {
+                    // `ArrayBuffer`/`SharedArrayBuffer` inherit
+                    // `Object.prototype.toString`; their prototype's
+                    // `Symbol.toStringTag` is `ArrayBuffer`/`SharedArrayBuffer`.
+                    if self.shared_buffers.contains(&r) {
+                        "[object SharedArrayBuffer]".to_string()
+                    } else {
+                        "[object ArrayBuffer]".to_string()
+                    }
+                } else if self.data_views.contains_key(&r) {
+                    // `DataView` inherits `Object.prototype.toString`; its
+                    // prototype's `Symbol.toStringTag` is `DataView`.
+                    "[object DataView]".to_string()
                 } else if let Some(c) = self.collections.get(&r) {
                     // A Map/Set/WeakMap/WeakSet stringifies through
                     // `Object.prototype.toString` under its `Symbol.toStringTag`
@@ -6474,12 +6532,58 @@ impl Interp {
                     // rather than mis-render as an empty-named host function
                     // (which would turn an honest skip into a divergence).
                     format!("function [\"{}\"] (){{[native code]}}", fi.name)
+                } else if let Some(tag) = self.string_tag_of(r) {
+                    // An ordinary object carrying a string `Symbol.toStringTag`
+                    // on its own/inherited chain stringifies through
+                    // `Object.prototype.toString` step 15 as `[object <Tag>]`.
+                    // In the pinned oracle profile no *metered* case has such a
+                    // tag (only guest-set tags reach here), so this closes the
+                    // gap for a `Symbol.toStringTag` completion without
+                    // perturbing a covered case (which has no tag and falls
+                    // through to the generic reference stub below).
+                    format!("[object {}]", tag)
                 } else {
                     slot_to_ecma_string(s)
                 }
             }
             _ => slot_to_ecma_string(s),
         }
+    }
+
+    /// The string value of an instance's `Symbol.toStringTag` (own or
+    /// inherited), for the completion-render boundary — a read-only (`&self`)
+    /// analogue of [`Self::string_to_string_tag`] that never interns. Returns
+    /// `None` when the well-known `Symbol.toStringTag` was never used as a key
+    /// (so no property can carry it), when no chain slot holds it, or when the
+    /// held value is not a string (`Object.prototype.toString` ignores a
+    /// non-string tag).
+    fn string_tag_of(&self, inst: crate::value::SlotIndex) -> Option<String> {
+        // The well-known `Symbol.toStringTag`'s descriptor identity, then the
+        // interned key id it maps to. Both must already exist: a program that
+        // set `[Symbol.toStringTag]` interned the key when it wrote the
+        // property, so a missing entry means no such property can exist.
+        let descriptor = self.well_known_symbols.iter().find_map(|(name, value)| {
+            (*name == "toStringTag").then_some(value.value)
+        })?;
+        let descriptor = match descriptor {
+            Payload::Reference(d) => d,
+            _ => return None,
+        };
+        let tag_id = *self.symbol_key_ids.get(&descriptor)?;
+        let mut cur = inst;
+        while !cur.is_null() {
+            if let Some(prop) = self.find_property(cur, tag_id) {
+                let slot = self.slots.get(prop);
+                if slot.kind == Kind::String {
+                    if let Payload::String(off) = slot.value {
+                        return Some(self.str_text(off));
+                    }
+                }
+                return None;
+            }
+            cur = self.instance_prototype(cur);
+        }
+        None
     }
 
     /// The descriptive string of a symbol value (XS's `fxSymbolToString`):
@@ -6768,6 +6872,16 @@ impl Interp {
                         for (index, value) in values.into_iter().enumerate() {
                             data.items.insert(index as u32, value);
                         }
+                    }
+                    // The `_SLOPPY`/`_STRICT` forms build the user-visible
+                    // `arguments` exotic object (the plain `XS_CODE_ARGUMENTS`
+                    // form is an internal `super(...args)` spread array, never
+                    // `arguments` itself). Mark it so a bare `arguments`
+                    // completion renders as its `[object Arguments]` builtinTag
+                    // (`render`), not `Array.prototype.join`. Display-only — the
+                    // indexed element storage is unchanged.
+                    if op == XS_CODE_ARGUMENTS_SLOPPY || op == XS_CODE_ARGUMENTS_STRICT {
+                        self.arguments_objects.insert(array);
                     }
                     self.push(Slot::of(Kind::Reference, Payload::Reference(array)));
                     pc += size as usize;
@@ -24259,6 +24373,27 @@ impl Interp {
         // TypedArray element storage is native-endian; the oracle target
         // (x86-64) is little-endian.
         decode_element_le(ta.kind, &bytes[base..base + size])
+    }
+
+    /// The decimal string of a BigInt64/BigUint64 TypedArray element (kinds
+    /// 0/1), for the `%TypedArray%.prototype.toString`/`join` completion render
+    /// (`String(0n)` is `"0"`, no `n` suffix). A read-only (`&self`) sibling of
+    /// [`Self::typed_array_element_get_bigint`] that formats the value directly
+    /// rather than allocating a BigInt value. Native-endian storage on the
+    /// little-endian oracle target.
+    fn typed_array_element_bigint_decimal(&self, ta: TypedArrayData, index: u32) -> String {
+        let buf = self.array_buffers[&ta.buffer];
+        let base = ta.offset as usize + index as usize * 8;
+        let bytes = self.chunks.payload(buf.data);
+        let mut b = [0u8; 8];
+        b.copy_from_slice(&bytes[base..base + 8]);
+        let u = u64::from_le_bytes(b);
+        // kind 0 = BigInt64Array (signed two's complement), 1 = BigUint64Array.
+        if ta.kind == 0 {
+            (u as i64).to_string()
+        } else {
+            u.to_string()
+        }
     }
 
     /// Coerce `value` to this element type and write TypedArray element
