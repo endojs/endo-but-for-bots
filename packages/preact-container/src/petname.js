@@ -73,7 +73,7 @@ export const sealPetName = (nameOf, opts = {}) => {
       // never arrive. `partyRef` is an opaque HANDLE minted by party-identity for a party object the host chose to
       // designate — NOT an id. A handle the untrusted side invented resolves to nothing, so it can
       // only name parties it was actually given.
-      const party = partyForHandle(partyRef);
+      const party = partyForHandle(String(partyRef || ''));
       let name;
       try {
         name =

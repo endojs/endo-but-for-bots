@@ -33,12 +33,15 @@
       "default": "./src/compartment.js"
     },
     "./petname": {
+      "types": "./src/petname.d.ts",
       "default": "./src/petname.js"
     },
     "./composition": {
+      "types": "./src/composition.d.ts",
       "default": "./src/composition.js"
     },
     "./security-pattern": {
+      "types": "./src/security-pattern.d.ts",
       "default": "./src/security-pattern.js"
     },
     "./package.json": "./package.json"

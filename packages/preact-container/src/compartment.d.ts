@@ -57,4 +57,21 @@ export function confineComponent<P extends object = {}>(
 /** Returns true if `value` is a wrapper returned by `confineComponent`. */
 export function isConfinedComponent(value: unknown): boolean;
 
+/**
+ * Mint a sealed, parameterized component a confined child can PLACE but never inspect, invoke for a
+ * value, or parameterize beyond the declared params (see the "TRUSTED-IN-UNTRUSTED" comment above
+ * `sealComponent` in compartment.js for the four properties this enforces). `hostFn` runs with HOST
+ * authority and receives only the declared, coerced params — never the child's raw props, and never
+ * child-supplied functions or objects.
+ */
+export function sealComponent(
+  hostFn: (
+    params: Readonly<Record<string, string | number | boolean | bigint>>,
+  ) => unknown,
+  opts?: { params?: string[] },
+): FunctionComponent<any>;
+
+/** True iff `value` is a placeholder minted by `sealComponent` (identity, never a flag). */
+export function isSealedComponent(value: unknown): boolean;
+
 export { HostPassthrough } from './renderer.js';

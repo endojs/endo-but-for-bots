@@ -52,6 +52,7 @@ const deepFreeze = value =>
  *   _secureCtx?: boolean,
  *   _secureAllowedTags?: Set<string>,
  *   _secureSafeAttrs?: Set<string>,
+ *   _secureStrictStyle?: boolean,
  *   _secureBracketed?: boolean,
  *   _savedTrustedExitDepth?: number,
  *   _trustedExitBracketed?: boolean,

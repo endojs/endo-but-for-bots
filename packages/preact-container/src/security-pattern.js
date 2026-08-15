@@ -1,3 +1,5 @@
+// @ts-check
+
 // security-pattern.js — INCREMENT 2 of trusted-in-untrusted Secure UI: making a forgery RECOGNIZABLE.
 //
 // `sealComponent` (compartment.js) makes trusted content unreachable and unforgeable: an untrusted
