@@ -6596,7 +6596,9 @@ impl Interp {
         };
         let compiled = match compiler.compile_source(source, strict) {
             Ok(compiled) => compiled,
-            Err(SourceCompileError::Syntax(_)) => return Err(self.catchable_syntax_error()),
+            Err(SourceCompileError::Syntax(message)) => {
+                return Err(self.catchable_syntax_error_msg(message))
+            }
             Err(SourceCompileError::Unsupported(_)) => {
                 return Err(Halt::Unsupported("eval:compiler-unimplemented"))
             }
@@ -7858,7 +7860,10 @@ impl Interp {
                         if let Payload::Reference(inst) = envref.value {
                             if self.is_environment_instance(inst) {
                                 let Some(v) = self.environment_get(inst, name) else {
-                                    let error = self.build_error("ReferenceError", 0, 0);
+                                    let error = self.internal_error(
+                                        "ReferenceError",
+                                        format!("get {}: undefined variable", self.id_name(name)),
+                                    );
                                     match self.raise_js(error) {
                                         Ok(target) => {
                                             pc = target;
@@ -7917,7 +7922,10 @@ impl Interp {
                             self.push(Slot::undefined());
                         }
                         None => {
-                            let error = self.build_error("ReferenceError", 0, 0);
+                            let error = self.internal_error(
+                                "ReferenceError",
+                                format!("get {}: undefined variable", self.id_name(name)),
+                            );
                             match self.raise_js(error) {
                                 Ok(target) => {
                                     pc = target;
@@ -17498,6 +17506,47 @@ impl Interp {
         Slot::of(Kind::Reference, Payload::Reference(inst))
     }
 
+    /// An **engine-internal** error carrying XS's descriptive message text
+    /// (the `mxRunDebug`/`mxRunDebugID` diagnostics the pinned oracle emits,
+    /// e.g. `"get f: undefined variable"`). Built exactly like
+    /// `build_error(name, 0, 0)` — same object geometry, prototype chain, and
+    /// meter charge — then augmented with the message on both the render side
+    /// (`error_data`, so `String(err)` matches the oracle's `String(exception)`)
+    /// and as a real own non-enumerable `message` property (so `err.message`
+    /// is observable exactly as XS's thrown error's is). The message is set
+    /// **unmetered** — no `ERROR_MESSAGE_METERING` charge — so a program that
+    /// throws-and-catches an internal error meters identically to before this
+    /// text existed (the oracle's own message construction is likewise off the
+    /// metered opcode path, `fxThrowMessage` after `mxSaveState`).
+    fn internal_error(&mut self, name: &'static str, message: String) -> Slot {
+        let err = self.build_error(name, 0, 0);
+        if let Payload::Reference(inst) = err.value {
+            if let Some(info) = self.error_data.get_mut(&inst) {
+                info.message = Some(message.clone());
+            }
+            if let Some(&mid) = self.symbol_ids.get("message") {
+                let off = self.alloc_str_text(message.as_bytes());
+                self.set_own_unmetered_with_flag(
+                    inst,
+                    mid,
+                    Slot::of(Kind::String, Payload::String(off)),
+                    XS_DONT_ENUM_FLAG,
+                );
+            }
+        }
+        err
+    }
+
+    /// The source name of a program symbol `id` (XS's `fxIDToString` for the
+    /// variable/property diagnostics), `symbol_names[id - 1]`. An id past the
+    /// table (never expected for a resolved variable operand) renders empty.
+    fn id_name(&self, id: u16) -> String {
+        self.symbol_names
+            .get((id as usize).saturating_sub(1))
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Construct `SuppressedError(error, suppressed, message)`. Disposal
     /// chaining uses the first two fields directly; ordinary constructor
     /// calls share the same realm prototype and non-enumerable own fields.
@@ -26749,6 +26798,22 @@ impl Interp {
     /// uncatchable host `Unsupported` halt.
     fn catchable_syntax_error(&mut self) -> Halt {
         let error = self.build_error("SyntaxError", 0, 0);
+        match self.raise_js(error) {
+            Ok(target) => Halt::Resume(target),
+            Err(halt) => halt,
+        }
+    }
+
+    /// As [`Self::catchable_syntax_error`], but carrying XS's parser diagnostic
+    /// text so the thrown `SyntaxError` renders `SyntaxError: <message>` — the
+    /// pinned oracle's exact `String(exception)` for an early error the source
+    /// bridge (eval / dynamic `Function`) rejects. An empty message falls back
+    /// to the bare form.
+    fn catchable_syntax_error_msg(&mut self, message: String) -> Halt {
+        if message.is_empty() {
+            return self.catchable_syntax_error();
+        }
+        let error = self.internal_error("SyntaxError", message);
         match self.raise_js(error) {
             Ok(target) => Halt::Resume(target),
             Err(halt) => halt,

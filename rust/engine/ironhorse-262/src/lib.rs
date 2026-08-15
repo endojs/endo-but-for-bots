@@ -60,12 +60,16 @@ impl ironhorse_vm::SourceCompiler for IronhorseSourceCompiler {
                 Ok(ironhorse_vm::CompiledSource { bytecode, symbols })
             }
             Ok(Err(e)) => {
-                let rendered = e.to_string();
                 match e.kind {
                     ironhorse_compile::parser::ParseErrorKind::Unsupported => {
-                        Err(ironhorse_vm::SourceCompileError::Unsupported(rendered))
+                        Err(ironhorse_vm::SourceCompileError::Unsupported(e.to_string()))
                     }
-                    _ => Err(ironhorse_vm::SourceCompileError::Syntax(rendered)),
+                    // Carry the bare diagnostic (`e.message`, no `line N:`
+                    // prefix) so the bridge's realm-local `SyntaxError` renders
+                    // with XS's exact wording — the pinned oracle's thrown
+                    // `String(exception)` is `SyntaxError: <message>`, and the
+                    // differential harness compares the whole string.
+                    _ => Err(ironhorse_vm::SourceCompileError::Syntax(e.message)),
                 }
             }
             Err(payload) => Err(ironhorse_vm::SourceCompileError::Unsupported(panic_message(
