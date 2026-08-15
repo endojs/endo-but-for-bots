@@ -372,3 +372,65 @@ test.serial(
     t.falsy($parent.querySelector('pre.md-preformatted'));
   },
 );
+
+test.serial(
+  'preformatted mode interleaves edge names inline as literal @name text',
+  async t => {
+    const { $parent, $end } = createInboxDOM();
+    const dismissedKit = makePromiseKit();
+
+    // A message with an edge name between two string parts. In markdown mode the
+    // name renders as an interactive .token chip; in preformatted mode the same
+    // name must appear inline as literal `@greeting` text with no chip, which
+    // exercises the `index < nameParts.length` interleaving branch that the
+    // names-free toggle test above never reaches.
+    const message = {
+      type: 'package',
+      number: 5n,
+      date: new Date().toISOString(),
+      from: 'endo://localhost/host-handle-id?type=handle',
+      to: 'endo://localhost/guest-handle-id?type=handle',
+      dismissed: dismissedKit.promise,
+      strings: ['Check out ', ' please'],
+      names: ['greeting'],
+      ids: [
+        'endo://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?type=eval',
+      ],
+    };
+
+    const { powers } = makePackagePowers({
+      selfId: 'guest-handle-id',
+      message,
+    });
+
+    globalThis.requestAnimationFrame = fn => {
+      fn(0);
+      return 0;
+    };
+
+    inboxComponent($parent, $end, powers, { showValue: () => {} });
+    // Markdown mode first renders the edge name as an interactive .token chip.
+    await waitFor(() => $parent.querySelector('.token'));
+    t.truthy($parent.querySelector('.token'), 'markdown renders a token chip');
+
+    const buttons = () => [
+      ...$parent.querySelectorAll('.render-mode-toggle .render-mode-btn'),
+    ];
+    const buttonFor = label => buttons().find(b => b.textContent === label);
+
+    // Preformatted mode: the edge name is interleaved inline as literal
+    // `@greeting` text, and the interactive chip is gone.
+    buttonFor('pre').click();
+    await waitFor(() => $parent.querySelector('pre.md-preformatted'));
+    const $pre = $parent.querySelector('pre.md-preformatted');
+    t.truthy($pre, 'preformatted mode wraps the body in pre.md-preformatted');
+    t.true(
+      $pre.textContent.includes('Check out @greeting please'),
+      'edge name appears inline as literal @greeting text',
+    );
+    t.falsy(
+      $parent.querySelector('.token'),
+      'preformatted mode renders no interactive token chip',
+    );
+  },
+);
