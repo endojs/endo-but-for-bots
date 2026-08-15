@@ -10,17 +10,17 @@
 //! bit-exact and the emitted graph is structurally identical, which in
 //! turn makes the matcher's per-step meter bit-exact.
 //!
-//! Honest scope (the stage bar names deferred surfaces): `v` string sets and
-//! set expressions, inline modifiers (`(?flags:...)`), and astral
+//! Honest scope (the stage bar names deferred surfaces): inline modifiers
+//! (`(?flags:...)`) and astral
 //! (`> 0xFFFF`) code points outside unicode mode are compiled to a
 //! named [`CompileError::Unsupported`], never to a wrong meter or a wrong
 //! value. The `i` flag and named captures (`(?<name>)` / `\k<name>`) ARE
 //! ported: a named group codegens identically to its numbered peer, plus a
 //! name-slot operand the matcher records into its runtime `names[]` array.
 
+use crate::encoding::{utf8_decode, C_EOF};
 use crate::flags::*;
 use crate::opcode::*;
-use crate::encoding::{utf8_decode, C_EOF};
 
 /// Why a pattern did not compile.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,17 +86,43 @@ struct Node {
 enum Kind {
     /// A sorted list of half-open ranges: `chars[0]` = endpoint count,
     /// then `chars[1..=count]` = `[b0,e0), [b1,e1), ...`.
-    CharSet { chars: Vec<i32> },
+    CharSet {
+        chars: Vec<i32>,
+        /// Parser-only v-mode strings, sorted exactly as XS sorts them:
+        /// longest first, then descending UTF-8 byte order. Before measure,
+        /// [`Compiler::charset_strings_disjunction`] lowers these to ordinary
+        /// disjunction/sequence/charset nodes, so the emitted matcher program
+        /// remains byte-for-byte the XS shape.
+        strings: Vec<Vec<u32>>,
+    },
     Empty,
     LineBegin,
     LineEnd,
     WordBreak,
     WordContinue,
-    Disjunction { left: NodeId, right: NodeId },
-    Sequence { left: NodeId, right: NodeId },
-    Capture { term: NodeId, capture_index: i32, name_slot: i32 },
-    CaptureReference { capture_index: i32, name_slot: i32 },
-    Assertion { term: NodeId, not: bool, direction: i32, assertion_index: i32 },
+    Disjunction {
+        left: NodeId,
+        right: NodeId,
+    },
+    Sequence {
+        left: NodeId,
+        right: NodeId,
+    },
+    Capture {
+        term: NodeId,
+        capture_index: i32,
+        name_slot: i32,
+    },
+    CaptureReference {
+        capture_index: i32,
+        name_slot: i32,
+    },
+    Assertion {
+        term: NodeId,
+        not: bool,
+        direction: i32,
+        assertion_index: i32,
+    },
     Quantifier {
         term: NodeId,
         min: i32,
@@ -124,7 +150,7 @@ struct Compiler {
     nodes: Vec<Node>,
     code: Vec<i32>,
     /// A pin feature whose SYNTAX this parser validates but whose matcher
-    /// code it does not emit yet (v string sets, inline
+    /// code it does not emit yet (inline
     /// modifiers, astral). Set during the parse; when set, [`compile`]
     /// returns it as `Unsupported` *after* the full accept/reject decision,
     /// so a syntactically invalid such pattern is still a `Syntax` error
@@ -248,13 +274,14 @@ impl Compiler {
                 .named_groups
                 .iter()
                 .position(|(n, _)| n == &name)
-                .expect("named reference resolved after the dangling-name check") as i32;
+                .expect("named reference resolved after the dangling-name check")
+                as i32;
             if let Kind::CaptureReference { name_slot, .. } = &mut self.nodes[node_id].kind {
                 *name_slot = slot;
             }
         }
         // A syntactically valid pattern that uses a matcher surface this
-        // stage has not ported (v string sets, inline
+        // stage has not ported (inline
         // modifiers, astral) is accepted by the oracle at parse time; the
         // lexer treats this `Unsupported` as accept. Bail here, AFTER the
         // full accept/reject decision, so an invalid such pattern is still
@@ -329,7 +356,9 @@ impl Compiler {
     fn decimal(&self, value: &mut u32) -> bool {
         let c = self.character;
         if (b'0' as i64..=b'9' as i64).contains(&c) {
-            *value = value.wrapping_mul(10).wrapping_add((c - b'0' as i64) as u32);
+            *value = value
+                .wrapping_mul(10)
+                .wrapping_add((c - b'0' as i64) as u32);
             true
         } else {
             false
@@ -482,7 +511,12 @@ impl Compiler {
     }
 
     fn add_node(&mut self, kind: Kind) -> NodeId {
-        self.nodes.push(Node { kind, step: 0, completion: 0, loop_off: 0 });
+        self.nodes.push(Node {
+            kind,
+            step: 0,
+            completion: 0,
+            loop_off: 0,
+        });
         self.nodes.len() - 1
     }
 
@@ -491,6 +525,7 @@ impl Compiler {
     fn charset_single(&mut self, character: i64) -> NodeId {
         self.add_node(Kind::CharSet {
             chars: vec![2, character as i32, (character + 1) as i32],
+            strings: Vec::new(),
         })
     }
 
@@ -500,13 +535,13 @@ impl Compiler {
     /// is exactly one code point.
     fn charset_canonicalize_single(&mut self, id: NodeId) -> NodeId {
         if self.flags & XS_REGEXP_I != 0 {
-            if let Kind::CharSet { chars } = &self.nodes[id].kind {
+            if let Kind::CharSet { chars, .. } = &self.nodes[id].kind {
                 if chars[0] == 2 && chars[1] + 1 == chars[2] {
                     // `fxCharSetCanonicalizeSingle`: fold table is `Fold` under
                     // `u`/`v` (flag == 1), `Ignore` otherwise.
                     let fold = self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0;
                     let c = crate::charcase::canonicalize(chars[1] as i64, fold) as i32;
-                    if let Kind::CharSet { chars } = &mut self.nodes[id].kind {
+                    if let Kind::CharSet { chars, .. } = &mut self.nodes[id].kind {
                         chars[1] = c;
                         chars[2] = c + 1;
                     }
@@ -517,20 +552,39 @@ impl Compiler {
     }
 
     fn charset_empty(&mut self) -> NodeId {
-        self.add_node(Kind::CharSet { chars: vec![0] })
+        self.add_node(Kind::CharSet {
+            chars: vec![0],
+            strings: Vec::new(),
+        })
     }
 
     fn charset_any(&mut self) -> NodeId {
         let chars = if self.flags & XS_REGEXP_S != 0 {
             vec![2, 0x0000, 0x7FFF_FFFF]
         } else {
-            vec![8, 0x0000, 0x000A, 0x000B, 0x000D, 0x000E, 0x2028, 0x2030, 0x7FFF_FFFF]
+            vec![
+                8,
+                0x0000,
+                0x000A,
+                0x000B,
+                0x000D,
+                0x000E,
+                0x2028,
+                0x2030,
+                0x7FFF_FFFF,
+            ]
         };
-        self.add_node(Kind::CharSet { chars })
+        self.add_node(Kind::CharSet {
+            chars,
+            strings: Vec::new(),
+        })
     }
 
     fn charset_digits(&mut self) -> NodeId {
-        self.add_node(Kind::CharSet { chars: vec![2, b'0' as i32, b'9' as i32 + 1] })
+        self.add_node(Kind::CharSet {
+            chars: vec![2, b'0' as i32, b'9' as i32 + 1],
+            strings: Vec::new(),
+        })
     }
 
     fn charset_words(&mut self) -> NodeId {
@@ -544,43 +598,78 @@ impl Compiler {
             if self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0 {
                 vec![
                     6,
-                    b'0' as i32, b'9' as i32 + 1,
-                    b'_' as i32, b'_' as i32 + 1,
-                    b'a' as i32, b'z' as i32 + 1,
+                    b'0' as i32,
+                    b'9' as i32 + 1,
+                    b'_' as i32,
+                    b'_' as i32 + 1,
+                    b'a' as i32,
+                    b'z' as i32 + 1,
                 ]
             } else {
                 vec![
                     6,
-                    b'0' as i32, b'9' as i32 + 1,
-                    b'A' as i32, b'Z' as i32 + 1,
-                    b'_' as i32, b'_' as i32 + 1,
+                    b'0' as i32,
+                    b'9' as i32 + 1,
+                    b'A' as i32,
+                    b'Z' as i32 + 1,
+                    b'_' as i32,
+                    b'_' as i32 + 1,
                 ]
             }
         } else {
             vec![
                 8,
-                b'0' as i32, b'9' as i32 + 1,
-                b'A' as i32, b'Z' as i32 + 1,
-                b'_' as i32, b'_' as i32 + 1,
-                b'a' as i32, b'z' as i32 + 1,
+                b'0' as i32,
+                b'9' as i32 + 1,
+                b'A' as i32,
+                b'Z' as i32 + 1,
+                b'_' as i32,
+                b'_' as i32 + 1,
+                b'a' as i32,
+                b'z' as i32 + 1,
             ]
         };
-        self.add_node(Kind::CharSet { chars })
+        self.add_node(Kind::CharSet {
+            chars,
+            strings: Vec::new(),
+        })
     }
 
     fn charset_spaces(&mut self) -> NodeId {
         self.add_node(Kind::CharSet {
             chars: vec![
-                20, 0x0009, 0x000D + 1, 0x0020, 0x0020 + 1, 0x00A0, 0x00A0 + 1, 0x1680, 0x1680 + 1,
-                0x2000, 0x200A + 1, 0x2028, 0x2029 + 1, 0x202F, 0x202F + 1, 0x205F, 0x205F + 1,
-                0x3000, 0x3000 + 1, 0xFEFF, 0xFEFF + 1,
+                20,
+                0x0009,
+                0x000D + 1,
+                0x0020,
+                0x0020 + 1,
+                0x00A0,
+                0x00A0 + 1,
+                0x1680,
+                0x1680 + 1,
+                0x2000,
+                0x200A + 1,
+                0x2028,
+                0x2029 + 1,
+                0x202F,
+                0x202F + 1,
+                0x205F,
+                0x205F + 1,
+                0x3000,
+                0x3000 + 1,
+                0xFEFF,
+                0xFEFF + 1,
             ],
+            strings: Vec::new(),
         })
     }
 
     /// `fxCharSetNot`: complement over `[0, 0x7FFFFFFF)`.
     fn charset_not(&mut self, set: NodeId) -> PResult<NodeId> {
-        let src = self.charset_of(set)?;
+        let (src, strings) = self.charset_parts(set)?;
+        if !strings.is_empty() {
+            return Err(self.error("invalid pattern"));
+        }
         let mut out = vec![0i32];
         let mut character = 0i32;
         let mut i = 1usize;
@@ -600,15 +689,17 @@ impl Compiler {
             out.push(0x7FFF_FFFF);
         }
         out[0] = (out.len() - 1) as i32;
-        Ok(self.add_node(Kind::CharSet { chars: out }))
+        Ok(self.add_node(Kind::CharSet {
+            chars: out,
+            strings: Vec::new(),
+        }))
     }
 
-    /// `fxCharSetCombine` (character-set half only; the V-mode string
-    /// operands are the deferred increment). Merge two sorted endpoint
-    /// lists under a union/subtract/intersect op.
+    /// `fxCharSetCombine`: merge two sorted endpoint lists and their finite
+    /// string alternatives under a union/subtract/intersect operation.
     fn charset_combine(&mut self, set1: NodeId, set2: NodeId, op: i32) -> PResult<NodeId> {
-        let c1 = self.charset_of(set1)?.clone();
-        let c2 = self.charset_of(set2)?.clone();
+        let (c1, s1) = self.charset_parts(set1)?;
+        let (c2, s2) = self.charset_parts(set2)?;
         let count1 = c1[0] as usize;
         let count2 = c2[0] as usize;
         let mut i1 = 1usize;
@@ -649,13 +740,34 @@ impl Compiler {
             }
         }
         out[0] = (out.len() - 1) as i32;
-        Ok(self.add_node(Kind::CharSet { chars: out }))
+        let mut strings = match op {
+            MX_CHARSET_UNION_OP => s1.iter().chain(s2.iter()).cloned().collect::<Vec<_>>(),
+            MX_CHARSET_SUBTRACT_OP => s1
+                .iter()
+                .filter(|string| !s2.contains(string))
+                .cloned()
+                .collect::<Vec<_>>(),
+            MX_CHARSET_INTERSECTION_OP => s1
+                .iter()
+                .filter(|string| s2.contains(string))
+                .cloned()
+                .collect::<Vec<_>>(),
+            _ => unreachable!("known charset combine operation"),
+        };
+        Self::sort_strings(&mut strings);
+        Ok(self.add_node(Kind::CharSet {
+            chars: out,
+            strings,
+        }))
     }
 
     /// `fxCharSetRange`: build `[a-b]` from two singletons.
     fn charset_range(&mut self, set1: NodeId, set2: NodeId) -> PResult<NodeId> {
-        let c1 = self.charset_of(set1)?.clone();
-        let c2 = self.charset_of(set2)?.clone();
+        let (c1, s1) = self.charset_parts(set1)?;
+        let (c2, s2) = self.charset_parts(set2)?;
+        if !s1.is_empty() || !s2.is_empty() {
+            return Err(self.error("invalid pattern"));
+        }
         if c1[0] == 0 {
             return Ok(set2);
         }
@@ -682,22 +794,33 @@ impl Compiler {
             let mut ch = begin;
             while ch <= end {
                 let canon = crate::charcase::canonicalize(ch as i64, fold) as i32;
-                let single = self.add_node(Kind::CharSet { chars: vec![2, canon, canon + 1] });
+                let single = self.add_node(Kind::CharSet {
+                    chars: vec![2, canon, canon + 1],
+                    strings: Vec::new(),
+                });
                 result = self.charset_combine(result, single, MX_CHARSET_UNION_OP)?;
                 ch += 1;
             }
             return Ok(result);
         }
-        Ok(self.add_node(Kind::CharSet { chars: vec![2, c1[1], c2[2]] }))
+        Ok(self.add_node(Kind::CharSet {
+            chars: vec![2, c1[1], c2[2]],
+            strings: Vec::new(),
+        }))
     }
 
-    /// Borrow a node's charset endpoints, erroring if the node is not a
-    /// plain charset (e.g. a V-mode string set, which is deferred).
-    fn charset_of(&self, id: NodeId) -> PResult<&Vec<i32>> {
+    /// Borrow a node's character endpoints and finite string alternatives,
+    /// erroring if the node is not a character set.
+    fn charset_parts(&self, id: NodeId) -> PResult<(Vec<i32>, Vec<Vec<u32>>)> {
         match &self.nodes[id].kind {
-            Kind::CharSet { chars } => Ok(chars),
-            _ => Err(CompileError::Unsupported("non-charset operand")),
+            Kind::CharSet { chars, strings } => Ok((chars.clone(), strings.clone())),
+            _ => Err(self.error("invalid pattern")),
         }
+    }
+
+    fn sort_strings(strings: &mut Vec<Vec<u32>>) {
+        strings.sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| right.cmp(left)));
+        strings.dedup();
     }
 
     /// `fxCharSetParseEscape`: the `\`-escapes valid as a character set
@@ -739,7 +862,10 @@ impl Compiler {
                 r
             }
             c if (c == b'p' as i64 || c == b'P' as i64)
-                && self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0 => self.charset_unicode_property()?,
+                && self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0 =>
+            {
+                self.charset_unicode_property()?
+            }
             _ => {
                 self.pattern_escape(punctuator)?;
                 let r = self.charset_single(self.character);
@@ -769,19 +895,29 @@ impl Compiler {
         if self.character != b'}' as i64 || name.is_empty() || value.as_deref() == Some("") {
             return Err(self.error("invalid escape"));
         }
-        let endpoints = crate::unicode_property::lookup(&name, value.as_deref());
-        if endpoints.is_none()
-            && value.is_none()
-            && self.flags & XS_REGEXP_V != 0
-            && crate::unicode_property::is_v_string_property(&name)
-        {
-            return Err(CompileError::Unsupported("v unicode string property"));
-        }
-        let endpoints = endpoints.ok_or_else(|| self.error("invalid escape"))?;
+        let character_property = crate::unicode_property::lookup(&name, value.as_deref());
+        let string_property = if value.is_none() && self.flags & XS_REGEXP_V != 0 {
+            crate::unicode_property::lookup_string_property(&name)
+        } else {
+            None
+        };
+        let (endpoints, strings) = if let Some(endpoints) = character_property {
+            (endpoints, Vec::new())
+        } else if let Some((endpoints, strings)) = string_property {
+            (
+                endpoints,
+                strings
+                    .iter()
+                    .map(|string| string.chars().map(u32::from).collect())
+                    .collect(),
+            )
+        } else {
+            return Err(self.error("invalid escape"));
+        };
         let mut chars = Vec::with_capacity(endpoints.len() + 1);
         chars.push(endpoints.len() as i32);
         chars.extend_from_slice(endpoints);
-        let set = self.add_node(Kind::CharSet { chars });
+        let set = self.add_node(Kind::CharSet { chars, strings });
         self.next()?;
         if negate {
             self.charset_not(set)
@@ -971,6 +1107,221 @@ impl Compiler {
         Ok(result)
     }
 
+    /// `fxCharSetStrings`: parse a v-mode `\q{...}` string disjunction.
+    /// Empty branches contribute nothing, singleton branches join the
+    /// character set, and longer branches are de-duplicated and sorted in
+    /// XS's longest-first order before set operations consume them.
+    fn charset_strings(&mut self) -> PResult<NodeId> {
+        self.next()?;
+        if self.character != b'{' as i64 {
+            return Err(self.error("invalid escape"));
+        }
+        self.next()?;
+        let mut result = self.charset_empty();
+        let mut strings = Vec::new();
+        let mut current = Vec::new();
+        loop {
+            match self.character {
+                C_EOF => return Err(self.error("invalid escape")),
+                c if c == b'}' as i64 || c == b'|' as i64 => {
+                    if current.len() == 1 {
+                        let single = self.charset_single(current[0] as i64);
+                        result = self.charset_combine(result, single, MX_CHARSET_UNION_OP)?;
+                    } else if current.len() > 1 {
+                        strings.push(std::mem::take(&mut current));
+                    }
+                    if c == b'}' as i64 {
+                        self.next()?;
+                        break;
+                    }
+                    current.clear();
+                    self.next()?;
+                }
+                _ => {
+                    if self.character == b'\\' as i64 {
+                        self.next()?;
+                        self.pattern_escape(true)?;
+                    }
+                    let mut character = self.character;
+                    if self.flags & XS_REGEXP_I != 0 {
+                        character = crate::charcase::canonicalize(character, true);
+                    }
+                    current.push(character as u32);
+                    self.next()?;
+                }
+            }
+        }
+        Self::sort_strings(&mut strings);
+        if let Kind::CharSet {
+            strings: target, ..
+        } = &mut self.nodes[result].kind
+        {
+            *target = strings;
+        }
+        Ok(result)
+    }
+
+    /// `fxCharSetExpression`: the v-mode nested-set grammar, including
+    /// subtraction, intersection, ordinary union/ranges, reserved doubled
+    /// punctuators, and the no-mixing rule for set operators.
+    fn charset_expression(&mut self) -> PResult<NodeId> {
+        let mut not = false;
+        if self.character == b'^' as i64 {
+            self.next()?;
+            not = true;
+        }
+        let (mut left, mut left_kind) = self.charset_operand()?;
+        let mut result: Option<NodeId> = None;
+        if self.character == b'-' as i64 && self.read8(self.offset) == b'-' {
+            loop {
+                self.next()?;
+                self.next()?;
+                let (right, _) = self.charset_operand()?;
+                result = Some(self.charset_combine(left, right, MX_CHARSET_SUBTRACT_OP)?);
+                if self.character == b']' as i64 {
+                    break;
+                }
+                if self.character == b'-' as i64 && self.read8(self.offset) == b'-' {
+                    left = result.expect("subtraction has a result");
+                    continue;
+                }
+                return Err(self.error("invalid range"));
+            }
+        } else if self.character == b'&' as i64 && self.read8(self.offset) == b'&' {
+            loop {
+                self.next()?;
+                self.next()?;
+                let (right, _) = self.charset_operand()?;
+                result = Some(self.charset_combine(left, right, MX_CHARSET_INTERSECTION_OP)?);
+                if self.character == b']' as i64 {
+                    break;
+                }
+                if self.character == b'&' as i64 && self.read8(self.offset) == b'&' {
+                    left = result.expect("intersection has a result");
+                    continue;
+                }
+                return Err(self.error("invalid range"));
+            }
+        } else {
+            loop {
+                if self.character == b'-' as i64 {
+                    self.next()?;
+                    let (right, right_kind) = self.charset_operand()?;
+                    if left_kind != 0 && right_kind != 0 {
+                        return Err(self.error("invalid range"));
+                    }
+                    left = self.charset_range(left, right)?;
+                }
+                result = Some(if let Some(former) = result {
+                    self.charset_combine(former, left, MX_CHARSET_UNION_OP)?
+                } else {
+                    left
+                });
+                if self.character == b']' as i64 {
+                    break;
+                }
+                (left, left_kind) = self.charset_operand()?;
+            }
+        }
+        let mut result = result.expect("a v set expression starts with an operand");
+        if not {
+            result = self.charset_not(result)?;
+        }
+        Ok(result)
+    }
+
+    /// `fxCharSetOperand`: one v-mode set operand and its range kind (zero
+    /// for a literal singleton, one for a class/string/nested set).
+    fn charset_operand(&mut self) -> PResult<(NodeId, i32)> {
+        match self.character {
+            C_EOF => Err(self.error("invalid range")),
+            c if c == b'[' as i64 => {
+                self.next()?;
+                let result = self.charset_expression()?;
+                if self.character != b']' as i64 {
+                    return Err(self.error("invalid range"));
+                }
+                self.next()?;
+                Ok((result, 1))
+            }
+            c if c == b'\\' as i64 => {
+                self.next()?;
+                if self.character == b'q' as i64 {
+                    Ok((self.charset_strings()?, 1))
+                } else {
+                    let class = matches!(
+                        self.character,
+                        c if c == b'd' as i64
+                            || c == b'D' as i64
+                            || c == b's' as i64
+                            || c == b'S' as i64
+                            || c == b'w' as i64
+                            || c == b'W' as i64
+                            || c == b'p' as i64
+                            || c == b'P' as i64
+                    );
+                    Ok((self.charset_parse_escape(true)?, i32::from(class)))
+                }
+            }
+            c if is_v_maybe_doubled_punctuator(c) => {
+                let character = self.character;
+                self.next()?;
+                if self.character == character {
+                    return Err(self.error("invalid range"));
+                }
+                Ok((self.charset_single(character), 0))
+            }
+            c if is_v_reserved_punctuator(c) => Err(self.error("invalid range")),
+            _ => {
+                let result = self.charset_single(self.character);
+                self.next()?;
+                Ok((result, 0))
+            }
+        }
+    }
+
+    /// Lower parser-only class strings into the same ordinary term tree XS
+    /// emits: longest alternatives first, each as a right-nested sequence,
+    /// followed by the character-set alternative when it is non-empty.
+    fn charset_strings_disjunction(&mut self, set: NodeId) -> PResult<NodeId> {
+        let (chars, strings) = self.charset_parts(set)?;
+        if strings.is_empty() {
+            return Ok(set);
+        }
+        let mut result: Option<NodeId> = None;
+        for string in strings {
+            let mut atoms = Vec::with_capacity(string.len());
+            for character in string {
+                let single = self.charset_single(character as i64);
+                atoms.push(self.charset_canonicalize_single(single));
+            }
+            let mut sequence = *atoms
+                .last()
+                .expect("v strings contain at least two scalars");
+            for &atom in atoms.iter().rev().skip(1) {
+                sequence = self.add_node(Kind::Sequence {
+                    left: atom,
+                    right: sequence,
+                });
+            }
+            result = Some(if let Some(left) = result {
+                self.add_node(Kind::Disjunction {
+                    left,
+                    right: sequence,
+                })
+            } else {
+                sequence
+            });
+        }
+        if chars[0] != 0 {
+            result = Some(self.add_node(Kind::Disjunction {
+                left: result.expect("string alternatives exist"),
+                right: set,
+            }));
+        }
+        Ok(result.expect("string alternatives exist"))
+    }
+
     // ---- quantifier parsing (fxQuantifierParse*) ----
 
     fn quantifier_parse(&mut self, term: NodeId, capture_index: i32) -> PResult<NodeId> {
@@ -1107,7 +1458,10 @@ impl Compiler {
         }
         let mut result = *atoms.last().unwrap();
         for &atom in atoms.iter().rev().skip(1) {
-            result = self.add_node(Kind::Sequence { left: atom, right: result });
+            result = self.add_node(Kind::Sequence {
+                left: atom,
+                right: result,
+            });
         }
         Ok(result)
     }
@@ -1136,11 +1490,13 @@ impl Compiler {
         } else if ch == b')' as i64 {
             Err(self.error("invalid character"))
         } else if ch == b'[' as i64 {
-            if self.flags & XS_REGEXP_V != 0 && self.v_class_uses_set_syntax() {
-                return Err(CompileError::Unsupported("v unicode set expression"));
-            }
             self.next()?;
-            let current = self.charset_parse_list()?;
+            let current = if self.flags & XS_REGEXP_V != 0 {
+                let set = self.charset_expression()?;
+                self.charset_strings_disjunction(set)?
+            } else {
+                self.charset_parse_list()?
+            };
             if self.character != b']' as i64 {
                 return Err(self.error("invalid range"));
             }
@@ -1176,38 +1532,6 @@ impl Compiler {
         }
     }
 
-    /// Whether the class beginning at the current `[` uses syntax unique to
-    /// unicodeSets mode. Plain v-mode classes share the u-mode charset path;
-    /// intersections, subtraction, nesting, and string disjunctions remain a
-    /// precisely named later surface.
-    fn v_class_uses_set_syntax(&self) -> bool {
-        let mut index = self.offset;
-        let mut escaped = false;
-        while let Some(&byte) = self.pattern.get(index) {
-            if byte == 0 || (!escaped && byte == b']') {
-                return false;
-            }
-            if escaped {
-                if byte == b'q' {
-                    return true;
-                }
-                escaped = false;
-                index += 1;
-                continue;
-            }
-            if byte == b'\\' {
-                escaped = true;
-            } else if byte == b'['
-                || (byte == b'&' && self.pattern.get(index + 1) == Some(&b'&'))
-                || (byte == b'-' && self.pattern.get(index + 1) == Some(&b'-'))
-            {
-                return true;
-            }
-            index += 1;
-        }
-        false
-    }
-
     /// The `\`-prefixed atoms in atom position (assertions, references,
     /// escaped charsets).
     fn backslash_atom(&mut self, current_index: i32) -> PResult<NodeId> {
@@ -1217,7 +1541,9 @@ impl Compiler {
         } else if self.character == b'B' as i64 {
             self.next()?;
             Ok(self.add_node(Kind::WordContinue))
-        } else if self.character == b'k' as i64 && self.flags & (XS_REGEXP_U | XS_REGEXP_V | XS_REGEXP_N) != 0 {
+        } else if self.character == b'k' as i64
+            && self.flags & (XS_REGEXP_U | XS_REGEXP_V | XS_REGEXP_N) != 0
+        {
             // `\k<name>` named backreference (only when the pattern is `u`/`v`
             // or contains a named group — `XS_REGEXP_N`). Require `<`,
             // validate the name syntax, and record the reference for the
@@ -1235,7 +1561,10 @@ impl Compiler {
             // Emit a named reference: `capture_index = -1` with the name slot
             // resolved after the whole pattern is parsed (forward references
             // are legal). The matcher reads the live index out of `names[]`.
-            let node = self.add_node(Kind::CaptureReference { capture_index: -1, name_slot: -1 });
+            let node = self.add_node(Kind::CaptureReference {
+                capture_index: -1,
+                name_slot: -1,
+            });
             self.pending_named_refs.push((node, name));
             self.quantifier_parse(node, current_index)
         } else if (b'1' as i64..=b'9' as i64).contains(&self.character) {
@@ -1244,12 +1573,20 @@ impl Compiler {
             while self.decimal(&mut value) {
                 self.next()?;
             }
-            let node = self.add_node(Kind::CaptureReference { capture_index: value as i32, name_slot: -1 });
+            let node = self.add_node(Kind::CaptureReference {
+                capture_index: value as i32,
+                name_slot: -1,
+            });
             self.quantifier_parse(node, current_index)
         } else {
             // \0, control, hex, \u, \d\w\s, identity escapes → a charset.
             let set = self.charset_parse_escape(false)?;
             let set = self.charset_canonicalize_single(set);
+            let set = if self.flags & XS_REGEXP_V != 0 {
+                self.charset_strings_disjunction(set)?
+            } else {
+                set
+            };
             self.quantifier_parse(set, current_index)
         }
     }
@@ -1266,14 +1603,24 @@ impl Compiler {
                 self.next()?;
                 let ai = self.assertion_index;
                 self.assertion_index += 1;
-                Ok(self.add_node(Kind::Assertion { term, not: false, direction: 1, assertion_index: ai }))
+                Ok(self.add_node(Kind::Assertion {
+                    term,
+                    not: false,
+                    direction: 1,
+                    assertion_index: ai,
+                }))
             } else if self.character == b'!' as i64 {
                 self.next()?;
                 let term = self.disjunction_parse(b')' as i64)?;
                 self.next()?;
                 let ai = self.assertion_index;
                 self.assertion_index += 1;
-                Ok(self.add_node(Kind::Assertion { term, not: true, direction: 1, assertion_index: ai }))
+                Ok(self.add_node(Kind::Assertion {
+                    term,
+                    not: true,
+                    direction: 1,
+                    assertion_index: ai,
+                }))
             } else if self.character == b':' as i64 {
                 self.next()?;
                 let current = self.disjunction_parse(b')' as i64)?;
@@ -1295,14 +1642,24 @@ impl Compiler {
                     self.next()?;
                     let ai = self.assertion_index;
                     self.assertion_index += 1;
-                    Ok(self.add_node(Kind::Assertion { term, not: false, direction: -1, assertion_index: ai }))
+                    Ok(self.add_node(Kind::Assertion {
+                        term,
+                        not: false,
+                        direction: -1,
+                        assertion_index: ai,
+                    }))
                 } else if self.character == b'!' as i64 {
                     self.next()?;
                     let term = self.disjunction_parse(b')' as i64)?;
                     self.next()?;
                     let ai = self.assertion_index;
                     self.assertion_index += 1;
-                    Ok(self.add_node(Kind::Assertion { term, not: true, direction: -1, assertion_index: ai }))
+                    Ok(self.add_node(Kind::Assertion {
+                        term,
+                        not: true,
+                        direction: -1,
+                        assertion_index: ai,
+                    }))
                 } else {
                     // `(?<name>…)` named capture. Validate the name
                     // (`fxCaptureNameParse`) and register it — a repeat is
@@ -1383,7 +1740,11 @@ impl Compiler {
             current_index += 1;
             let term = self.disjunction_parse(b')' as i64)?;
             self.next()?;
-            let capture = self.add_node(Kind::Capture { term, capture_index: current_index, name_slot: -1 });
+            let capture = self.add_node(Kind::Capture {
+                term,
+                capture_index: current_index,
+                name_slot: -1,
+            });
             self.quantifier_parse(capture, current_index - 1)
         }
     }
@@ -1432,7 +1793,11 @@ impl Compiler {
                 self.nodes[id].step = self.size as i32;
                 self.size += 16; // mxCaptureReferenceStepSize
             }
-            Shape::Assertion { term, not, direction: dir } => {
+            Shape::Assertion {
+                term,
+                not,
+                direction: dir,
+            } => {
                 self.nodes[id].step = self.size as i32;
                 self.size += if not { 16 } else { 12 };
                 self.measure(term, dir);
@@ -1470,11 +1835,15 @@ impl Compiler {
             }
             Shape::CharSet(count) => {
                 let chars: Vec<i32> = match &self.nodes[id].kind {
-                    Kind::CharSet { chars } => chars.clone(),
+                    Kind::CharSet { chars, .. } => chars.clone(),
                     _ => unreachable!(),
                 };
                 let at = (self.nodes[id].step / 4) as usize;
-                self.code[at] = if direction == 1 { CX_CHARSET_FORWARD_STEP } else { CX_CHARSET_BACKWARD_STEP };
+                self.code[at] = if direction == 1 {
+                    CX_CHARSET_FORWARD_STEP
+                } else {
+                    CX_CHARSET_BACKWARD_STEP
+                };
                 self.code[at + 1] = sequel;
                 self.code[at + 2] = count;
                 for i in 0..count as usize {
@@ -1504,19 +1873,31 @@ impl Compiler {
                 let (step, completion, capture_index, name_slot) = {
                     let n = &self.nodes[id];
                     let (ci, ns) = match &n.kind {
-                        Kind::Capture { capture_index, name_slot, .. } => (*capture_index, *name_slot),
+                        Kind::Capture {
+                            capture_index,
+                            name_slot,
+                            ..
+                        } => (*capture_index, *name_slot),
                         _ => unreachable!(),
                     };
                     (n.step, n.completion, ci, ns)
                 };
                 let term_step = self.nodes[term].step;
                 let at = (step / 4) as usize;
-                self.code[at] = if direction == 1 { CX_CAPTURE_FORWARD_STEP } else { CX_CAPTURE_BACKWARD_STEP };
+                self.code[at] = if direction == 1 {
+                    CX_CAPTURE_FORWARD_STEP
+                } else {
+                    CX_CAPTURE_BACKWARD_STEP
+                };
                 self.code[at + 1] = term_step;
                 self.code[at + 2] = capture_index;
                 self.emit(term, direction, completion);
                 let ct = (completion / 4) as usize;
-                self.code[ct] = if direction == 1 { CX_CAPTURE_FORWARD_COMPLETION } else { CX_CAPTURE_BACKWARD_COMPLETION };
+                self.code[ct] = if direction == 1 {
+                    CX_CAPTURE_FORWARD_COMPLETION
+                } else {
+                    CX_CAPTURE_BACKWARD_COMPLETION
+                };
                 self.code[ct + 1] = sequel;
                 self.code[ct + 2] = capture_index;
                 // The name-id operand: the group's name slot for a named
@@ -1526,11 +1907,18 @@ impl Compiler {
             }
             Shape::CaptureReference => {
                 let (capture_index, name_slot) = match &self.nodes[id].kind {
-                    Kind::CaptureReference { capture_index, name_slot } => (*capture_index, *name_slot),
+                    Kind::CaptureReference {
+                        capture_index,
+                        name_slot,
+                    } => (*capture_index, *name_slot),
                     _ => unreachable!(),
                 };
                 let at = (self.nodes[id].step / 4) as usize;
-                self.code[at] = if direction == 1 { CX_CAPTURE_REFERENCE_FORWARD_STEP } else { CX_CAPTURE_REFERENCE_BACKWARD_STEP };
+                self.code[at] = if direction == 1 {
+                    CX_CAPTURE_REFERENCE_FORWARD_STEP
+                } else {
+                    CX_CAPTURE_REFERENCE_BACKWARD_STEP
+                };
                 self.code[at + 1] = sequel;
                 // A numbered `\N` reference carries its resolved index and a
                 // name-id of -1; a `\k<name>` reference carries index -1 and
@@ -1538,11 +1926,17 @@ impl Compiler {
                 self.code[at + 2] = capture_index;
                 self.code[at + 3] = name_slot;
             }
-            Shape::Assertion { term, not, direction: dir } => {
+            Shape::Assertion {
+                term,
+                not,
+                direction: dir,
+            } => {
                 let (step, completion, ai) = {
                     let n = &self.nodes[id];
                     let ai = match &n.kind {
-                        Kind::Assertion { assertion_index, .. } => *assertion_index,
+                        Kind::Assertion {
+                            assertion_index, ..
+                        } => *assertion_index,
                         _ => unreachable!(),
                     };
                     (n.step, n.completion, ai)
@@ -1571,11 +1965,37 @@ impl Compiler {
                 }
             }
             Shape::Quantifier(term) => {
-                let (step, loop_off, completion, greedy, quantifier_index, capture_index, capture_count, min, max) = {
+                let (
+                    step,
+                    loop_off,
+                    completion,
+                    greedy,
+                    quantifier_index,
+                    capture_index,
+                    capture_count,
+                    min,
+                    max,
+                ) = {
                     let n = &self.nodes[id];
                     match &n.kind {
-                        Kind::Quantifier { min, max, greedy, capture_index, capture_count, quantifier_index, .. } => (
-                            n.step, n.loop_off, n.completion, *greedy, *quantifier_index, *capture_index, *capture_count, *min, *max,
+                        Kind::Quantifier {
+                            min,
+                            max,
+                            greedy,
+                            capture_index,
+                            capture_count,
+                            quantifier_index,
+                            ..
+                        } => (
+                            n.step,
+                            n.loop_off,
+                            n.completion,
+                            *greedy,
+                            *quantifier_index,
+                            *capture_index,
+                            *capture_count,
+                            *min,
+                            *max,
                         ),
                         _ => unreachable!(),
                     }
@@ -1588,7 +2008,11 @@ impl Compiler {
                 self.code[at + 3] = min;
                 self.code[at + 4] = max;
                 let lp = (loop_off / 4) as usize;
-                self.code[lp] = if greedy { CX_QUANTIFIER_GREEDY_LOOP } else { CX_QUANTIFIER_LAZY_LOOP };
+                self.code[lp] = if greedy {
+                    CX_QUANTIFIER_GREEDY_LOOP
+                } else {
+                    CX_QUANTIFIER_LAZY_LOOP
+                };
                 self.code[lp + 1] = term_step;
                 self.code[lp + 2] = quantifier_index;
                 self.code[lp + 3] = sequel;
@@ -1610,17 +2034,26 @@ impl Compiler {
     /// charset count without holding a borrow across the recursive calls.
     fn child_shape(&self, id: NodeId) -> Shape {
         match &self.nodes[id].kind {
-            Kind::CharSet { chars } => Shape::CharSet(chars[0]),
-            Kind::Empty | Kind::LineBegin | Kind::LineEnd | Kind::WordBreak | Kind::WordContinue => {
-                Shape::Term
-            }
+            Kind::CharSet { chars, .. } => Shape::CharSet(chars[0]),
+            Kind::Empty
+            | Kind::LineBegin
+            | Kind::LineEnd
+            | Kind::WordBreak
+            | Kind::WordContinue => Shape::Term,
             Kind::Disjunction { left, right } => Shape::Disjunction(*left, *right),
             Kind::Sequence { left, right } => Shape::Sequence(*left, *right),
             Kind::Capture { term, .. } => Shape::Capture(*term),
             Kind::CaptureReference { .. } => Shape::CaptureReference,
-            Kind::Assertion { term, not, direction, .. } => {
-                Shape::Assertion { term: *term, not: *not, direction: *direction }
-            }
+            Kind::Assertion {
+                term,
+                not,
+                direction,
+                ..
+            } => Shape::Assertion {
+                term: *term,
+                not: *not,
+                direction: *direction,
+            },
             Kind::Quantifier { term, .. } => Shape::Quantifier(*term),
         }
     }
@@ -1633,7 +2066,11 @@ enum Shape {
     Sequence(NodeId, NodeId),
     Capture(NodeId),
     CaptureReference,
-    Assertion { term: NodeId, not: bool, direction: i32 },
+    Assertion {
+        term: NodeId,
+        not: bool,
+        direction: i32,
+    },
     Quantifier(NodeId),
 }
 
@@ -1676,4 +2113,37 @@ fn is_syntax_char(c: i64) -> bool {
         c as u8 as char,
         '^' | '$' | '\\' | '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '/'
     ) && (0..=0x7F).contains(&c)
+}
+
+fn is_v_maybe_doubled_punctuator(c: i64) -> bool {
+    (0..=0x7f).contains(&c)
+        && matches!(
+            c as u8 as char,
+            '&' | '!'
+                | '#'
+                | '$'
+                | '%'
+                | '*'
+                | '+'
+                | ','
+                | '.'
+                | ':'
+                | ';'
+                | '<'
+                | '='
+                | '>'
+                | '?'
+                | '@'
+                | '^'
+                | '`'
+                | '~'
+        )
+}
+
+fn is_v_reserved_punctuator(c: i64) -> bool {
+    (0..=0x7f).contains(&c)
+        && matches!(
+            c as u8 as char,
+            '(' | ')' | '[' | ']' | '{' | '}' | '/' | '-' | '\\' | '|'
+        )
 }

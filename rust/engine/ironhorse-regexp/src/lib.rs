@@ -34,12 +34,14 @@
 //!
 //! Unicode property escapes (`\p{}` / `\P{}`) use the canonical binary,
 //! general-category, Script, and Script_Extensions aliases and endpoint tables
-//! extracted from the pinned XS source. Every remaining deferred surface is a **named**
-//! [`compile::CompileError::Unsupported`], never a wrong meter or a wrong
-//! value: the `v` flag's string sets
-//! and `[...]` set-expression grammar, inline modifiers (`(?flags:)`), and —
-//! outside `u`/`v`/a group name — an astral code point in the pattern (which
-//! XS splits into surrogates, a path this stage does not emit).
+//! extracted from the pinned XS source. The `v` flag's nested set-expression
+//! grammar, finite string sets (`\q{...}`), and Unicode properties of strings
+//! are also ported, including their pinned syntax restrictions and case-folding
+//! behavior. Every remaining deferred surface is a **named**
+//! [`compile::CompileError::Unsupported`], never a wrong meter or a wrong value:
+//! inline modifiers (`(?flags:)`) and — outside `u`/`v`/a group name — an astral
+//! code point in the pattern (which XS splits into surrogates, a path this stage
+//! does not emit).
 
 mod charcase;
 mod encoding;
@@ -52,11 +54,11 @@ pub mod matcher;
 pub mod unicode;
 
 pub use compile::{compile, CompileError, Program};
-pub use matcher::{match_regexp, MatchOutcome};
 pub use flags::{
     XS_REGEXP_D, XS_REGEXP_G, XS_REGEXP_I, XS_REGEXP_M, XS_REGEXP_N, XS_REGEXP_S, XS_REGEXP_U,
     XS_REGEXP_V, XS_REGEXP_Y,
 };
+pub use matcher::{match_regexp, MatchOutcome};
 
 /// The result of compiling and running one pattern: a convenience over
 /// [`compile`] + [`match_regexp`] mirroring what the oracle shim returns,
@@ -72,7 +74,12 @@ pub struct RunOutcome {
 /// Compile `pattern` under `flags` and match it over `subject` (a UTF-8
 /// string) from byte offset `start`. Returns the compile error (syntax or
 /// a named unsupported feature) on a compile failure.
-pub fn run(pattern: &str, flags: &str, subject: &str, start: i32) -> Result<RunOutcome, CompileError> {
+pub fn run(
+    pattern: &str,
+    flags: &str,
+    subject: &str,
+    start: i32,
+) -> Result<RunOutcome, CompileError> {
     let program = compile(pattern, flags)?;
     let outcome = match_regexp(&program, subject.as_bytes(), start);
     Ok(RunOutcome { outcome, program })
@@ -220,8 +227,8 @@ mod tests {
         let (m, c) = caps("a\u{1F600}b", "u", "a\u{1F600}b");
         assert!(m);
         assert_eq!(c[0], (0, 6)); // 1 + 4 + 1 bytes
-        // `.` under `u` consumes the whole astral scalar (4 bytes), not a
-        // surrogate half.
+                                  // `.` under `u` consumes the whole astral scalar (4 bytes), not a
+                                  // surrogate half.
         let (dm, dc) = caps(".", "u", "\u{1F600}");
         assert!(dm);
         assert_eq!(dc[0], (0, 4));
@@ -267,14 +274,14 @@ mod tests {
     }
 
     #[test]
-    fn v_flag_core_and_character_properties_execute() {
+    fn v_flag_sets_and_string_properties_execute() {
         assert!(caps("abc", "v", "abc").0);
         assert!(caps("\\p{Script=Greek}+", "v", "\u{03B1}\u{03B2}").0);
         assert!(caps("[\\p{ASCII}]", "v", "A").0);
-        assert!(matches!(
-            compile("[a&&b]", "v"),
-            Err(CompileError::Unsupported("v unicode set expression"))
-        ));
+        assert!(caps("[[a-z]&&[^aeiou]]+", "v", "rhythm").0);
+        assert!(!caps("[[a-z]&&[^aeiou]]", "v", "a").0);
+        assert!(caps("[\\q{ab|xyz}]", "v", "xyz").0);
+        assert!(caps("\\p{Emoji_Keycap_Sequence}", "v", "1\u{fe0f}\u{20e3}").0);
     }
 
     #[test]
@@ -285,7 +292,10 @@ mod tests {
         assert!(caps("\\p{Script_Extensions=Hira}", "u", "\u{30FC}").0);
         assert!(caps("\\P{ASCII}", "u", "\u{00E9}").0);
         assert!(!caps("^\\P{Lowercase_Letter}$", "iu", "A").0);
-        assert!(matches!(compile("\\p{letter}", "u"), Err(CompileError::Syntax(_))));
+        assert!(matches!(
+            compile("\\p{letter}", "u"),
+            Err(CompileError::Syntax(_))
+        ));
     }
 
     // ---- compile-time accept/reject validation (the lexer's verdict) ----
@@ -363,7 +373,10 @@ mod tests {
     fn reject_u_mode_syntax() {
         assert!(!accepts("{", "u"), "bare open-brace under u");
         assert!(!accepts("\\M", "u"), "identity escape under u");
-        assert!(!accepts("(?<a>\\a)", "u"), "identity escape in named group (u)");
+        assert!(
+            !accepts("(?<a>\\a)", "u"),
+            "identity escape in named group (u)"
+        );
         assert!(!accepts("\\u{110000}", "u"), "u code point out of range");
         assert!(!accepts("\\u{1,}", "u"), "u-escape non-hex");
         assert!(!accepts("\\u{1F_639}", "u"), "u-escape separator");

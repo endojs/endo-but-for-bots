@@ -13,12 +13,12 @@
 //! meter is the consensus-relevant cost, and *that* is pinned exactly.
 //!
 //! A pattern the oracle compiles but this increment names
-//! [`CompileError::Unsupported`] (v-mode set expressions and string
-//! properties, inline modifiers, …) is an HONEST NAMED skip: it is counted and reported, never
+//! [`CompileError::Unsupported`] (inline modifiers, …) is an HONEST NAMED
+//! skip: it is counted and reported, never
 //! silently passed and never asserted as a divergence.
 
-use xs_oracle::regexp as oracle_regexp;
 use ironhorse_regexp::{compile, match_regexp, CompileError};
+use xs_oracle::regexp as oracle_regexp;
 
 /// One parity case: `(pattern, flags, subject, start_byte_offset)`.
 type Case = (&'static str, &'static str, &'static str, i32);
@@ -50,6 +50,17 @@ fn check(case: Case) -> Result<bool, String> {
                 return Err(format!(
                     "/{}/{}: ironhorse compiled but oracle rejected ({})",
                     pattern, flags, oracle.error
+                ));
+            }
+            // `fxCompileRegExp` charges exactly one parse-meter unit per
+            // emitted byte. This pins the Rust program-size accounting even
+            // though the oracle shim's raw compile figure additionally
+            // includes XS GC-chunk allocation charges.
+            let expected_compile_meter = program.code.len() as u64 * 4 * 1024;
+            if program.compile_meter_raw != expected_compile_meter {
+                return Err(format!(
+                    "/{}/{}: compile meter ironhorse={} expected={}",
+                    pattern, flags, program.compile_meter_raw, expected_compile_meter
                 ));
             }
             let outcome = match_regexp(&program, subject.as_bytes(), start);
@@ -95,9 +106,10 @@ fn check(case: Case) -> Result<bool, String> {
 /// anchors, alternation, lookaround, pathological backtracking, the `i` fold,
 /// and — since the `u`-core increment — the `u` flag's astral scalars,
 /// `\u{...}` escapes, unicode (lower-ward) case fold, and unicode-aware
-/// classes/quantifiers/backreferences, and Unicode properties. Every entry is fully ported (checked
-/// bit-exact); the still-deferred surfaces are pinned separately in
-/// [`deferred_surfaces_remain_named_skips`].
+/// classes/quantifiers/backreferences, Unicode properties, and unicodeSets
+/// expressions/string alternatives. Every entry is fully ported (checked
+/// bit-exact); the still-deferred surface is pinned separately in
+/// [`inline_modifiers_remain_a_named_skip`].
 fn corpus() -> Vec<Case> {
     let mut v: Vec<Case> = Vec::new();
 
@@ -119,7 +131,16 @@ fn corpus() -> Vec<Case> {
     }
 
     // Character classes: ranges, negation, escapes.
-    for &s in &["12345", "a1b2", "  x", "A_z9", "hello world", "[]", "-", "a-z"] {
+    for &s in &[
+        "12345",
+        "a1b2",
+        "  x",
+        "A_z9",
+        "hello world",
+        "[]",
+        "-",
+        "a-z",
+    ] {
         v.push(("[0-9]+", "", s, 0));
         v.push(("[^0-9]+", "", s, 0));
         v.push(("[a-z]", "", s, 0));
@@ -186,13 +207,13 @@ fn corpus() -> Vec<Case> {
     v.push(("(?<opt>x)?y", "", "y", 0)); // unmatched named group -> (-1,-1)
     v.push(("(?<opt>x)?y", "", "xy", 0));
     v.push(("(?<a>x)|(?<b>y)", "", "y", 0)); // alternation, one side unset
-    // Named backreferences (`\k<name>`), forward and backward.
+                                             // Named backreferences (`\k<name>`), forward and backward.
     v.push(("(?<c>.)\\k<c>", "", "aa", 0));
     v.push(("(?<c>.)\\k<c>", "", "ab", 0));
     v.push(("(?<q>['\"]).*?\\k<q>", "", "say \"hi\" now", 0));
     v.push(("\\k<a>(?<a>x)", "", "x", 0)); // forward reference (matches empty then x)
     v.push(("(?<a>foo)(bar)\\2\\k<a>", "", "foobarbarfoo", 0)); // mixed named + numbered
-    // Named groups fold under the `i` flag exactly as numbered groups do.
+                                                                // Named groups fold under the `i` flag exactly as numbered groups do.
     v.push(("(?<h>h)(?<e>e)\\k<e>", "i", "hEE", 0));
     v.push(("(?<w>\\w+)", "i", "AbC", 0));
 
@@ -319,7 +340,7 @@ fn corpus() -> Vec<Case> {
     v.push(("k", "iu", "\u{212A}", 0));
     v.push(("K", "iu", "\u{212A}", 0));
     v.push(("[a-z]", "iu", "\u{212A}", 0)); // Kelvin folds to 'k' in [a-z]
-    // Final/medial sigma family folds together.
+                                            // Final/medial sigma family folds together.
     v.push(("\u{03C3}", "iu", "\u{03A3}", 0));
     v.push(("\u{03C2}", "iu", "\u{03A3}", 0));
     // Astral case folding (Deseret, Adlam) through the Fold1 table.
@@ -350,6 +371,46 @@ fn corpus() -> Vec<Case> {
     v.push(("^\\P{Lowercase_Letter}$", "iu", "A", 0));
     v.push(("^\\p{Lowercase_Letter}$", "iv", "A", 0));
     v.push(("^\\P{Lowercase_Letter}$", "iv", "A", 0));
+
+    // ---- `v`: nested set expressions and finite string sets ----
+    for &(pattern, subject) in &[
+        ("[[a-z]&&[^aeiou]]+", "rhythm"),
+        ("[[a-z]&&[^aeiou]]+", "aeiou"),
+        ("[[a-z]--[aeiou]]+", "rhythm"),
+        ("[[a-c][x-z]]+", "abxyz"),
+        ("[\\p{ASCII}&&\\p{Letter}]+", "abcXYZ"),
+        ("[\\p{ASCII}--\\p{Letter}]+", "123!"),
+        ("[\\q{ab|a|xyz}]", "xyz"),
+        ("[\\q{ab|a|xyz}]", "ab"),
+        ("^[\\q{ab|a|xyz}]+$", "xyzaba"),
+        ("[[\\q{ab|cd}]--[\\q{cd}]]", "ab"),
+        ("[[\\q{ab|cd}]&&[\\q{cd|ef}]]", "cd"),
+    ] {
+        v.push((pattern, "v", subject, 0));
+    }
+    // Properties of strings include both multi-code-point alternatives and,
+    // for Basic_Emoji/RGI_Emoji, ordinary single-code-point members.
+    v.push(("^\\p{Basic_Emoji}$", "v", "\u{2600}\u{fe0f}", 0));
+    v.push(("^\\p{Basic_Emoji}$", "v", "\u{1f600}", 0));
+    v.push(("^\\p{Emoji_Keycap_Sequence}$", "v", "1\u{fe0f}\u{20e3}", 0));
+    v.push((
+        "^\\p{RGI_Emoji_Flag_Sequence}$",
+        "v",
+        "\u{1f1fa}\u{1f1f8}",
+        0,
+    ));
+    v.push((
+        "^\\p{RGI_Emoji_Modifier_Sequence}$",
+        "v",
+        "\u{1f44d}\u{1f3fd}",
+        0,
+    ));
+    v.push((
+        "^\\p{RGI_Emoji_ZWJ_Sequence}$",
+        "v",
+        "\u{1f469}\u{200d}\u{1f4bb}",
+        0,
+    ));
 
     // Exact spelling/casing is required; unsupported property names and
     // unsupported name=value families are syntax errors in both engines.
@@ -404,39 +465,44 @@ fn matcher_parity_against_the_pin() {
     );
     // The curated corpus is all supported grammar; nothing should skip.
     assert_eq!(skipped, 0, "curated corpus should contain no named skips");
-    assert!(checked > 100, "corpus should exercise many cases, got {}", checked);
+    assert!(
+        checked > 100,
+        "corpus should exercise many cases, got {}",
+        checked
+    );
 }
 
-/// The surfaces still deferred after the property increment stay HONEST
-/// named skips: the oracle compiles them, but ironhorse returns a named
-/// `Unsupported` (never a wrong answer). This pins the "removed the skip only
-/// where implemented" boundary: only v-mode string properties and
-/// set-expression grammar remain here.
+/// v-mode syntax rejection is pinned independently from execution parity:
+/// reserved unescaped punctuators, mixed operators, invalid ranges, string
+/// complements, and u/v mutual exclusion all reject in both engines.
 #[test]
-fn deferred_surfaces_remain_named_skips() {
-    let deferred: &[Case] = &[
+fn unicode_sets_syntax_and_execution_match_the_pin() {
+    let cases: &[Case] = &[
         ("\\p{RGI_Emoji}", "v", "\u{1F600}", 0),
         ("[a&&b]", "v", "a", 0),
         ("[a--b]", "v", "a", 0),
-        ("[[a][b]]", "v", "a", 0),
+        ("[[a][b]]", "v", "b", 0),
+        ("[\\q{ab|cd}]", "v", "cd", 0),
+        ("[a&b]", "v", "x", 0),
+        ("[a-b-c]", "v", "x", 0),
+        ("[a&&b--c]", "v", "x", 0),
+        ("[^\\q{ab}]", "v", "x", 0),
+        ("\\P{RGI_Emoji}", "v", "x", 0),
+        ("a", "uv", "a", 0),
     ];
-    for &case in deferred {
-        let (pattern, flags, _, _) = case;
-        // The oracle must accept it (so this really is a deferral, not a
-        // shared reject), and ironhorse must name it Unsupported.
-        let oracle = oracle_regexp(pattern, flags, "x", 0)
-            .unwrap_or_else(|| panic!("oracle machine failure for /{pattern}/{flags}"));
-        assert!(
-            oracle.compiled,
-            "/{pattern}/{flags} should compile on the oracle (a real deferral)"
-        );
-        match compile(pattern, flags) {
-            Err(CompileError::Unsupported(_)) => {}
-            other => panic!(
-                "/{pattern}/{flags} must stay a named Unsupported skip, got {other:?}"
-            ),
-        }
-        // And it is counted as a skip (not a divergence) by the harness.
-        assert_eq!(check(case), Ok(false), "/{pattern}/{flags} should be a named skip");
+    for &case in cases {
+        assert_eq!(check(case), Ok(true), "/{}/{} should agree", case.0, case.1);
     }
+}
+
+#[test]
+fn inline_modifiers_remain_a_named_skip() {
+    let case = ("(?i:a)", "", "A", 0);
+    let oracle = oracle_regexp(case.0, case.1, case.2, case.3).expect("oracle result");
+    assert!(oracle.compiled);
+    assert!(matches!(
+        compile(case.0, case.1),
+        Err(CompileError::Unsupported(_))
+    ));
+    assert_eq!(check(case), Ok(false));
 }

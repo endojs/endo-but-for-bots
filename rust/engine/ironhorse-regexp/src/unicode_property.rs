@@ -2,6 +2,7 @@
 //! the repository's pinned Moddable XS `xsre.c`.
 
 include!("unicode_properties_generated.rs");
+include!("unicode_string_properties_generated.rs");
 
 pub(crate) fn lookup(name: &str, value: Option<&str>) -> Option<&'static [i32]> {
     match value {
@@ -13,17 +14,4 @@ pub(crate) fn lookup(name: &str, value: Option<&str>) -> Option<&'static [i32]> 
         },
         None => lookup_general_category(name).or_else(|| lookup_binary(name)),
     }
-}
-
-pub(crate) fn is_v_string_property(name: &str) -> bool {
-    matches!(
-        name,
-        "Basic_Emoji"
-            | "Emoji_Keycap_Sequence"
-            | "RGI_Emoji"
-            | "RGI_Emoji_Flag_Sequence"
-            | "RGI_Emoji_Modifier_Sequence"
-            | "RGI_Emoji_Tag_Sequence"
-            | "RGI_Emoji_ZWJ_Sequence"
-    )
 }

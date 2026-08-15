@@ -34,12 +34,42 @@ struct Utf8Sequence {
 /// `gxUTF8Sequences`, verbatim from the pin (xsCommon.c). The `shift`
 /// field is derived (`(size - 1) * 6`) rather than stored.
 const UTF8_SEQUENCES: [Utf8Sequence; 6] = [
-    Utf8Sequence { size: 1, cmask: 0x80, cval: 0x00, lmask: 0x0000_007F },
-    Utf8Sequence { size: 2, cmask: 0xE0, cval: 0xC0, lmask: 0x0000_07FF },
-    Utf8Sequence { size: 3, cmask: 0xF0, cval: 0xE0, lmask: 0x0000_FFFF },
-    Utf8Sequence { size: 4, cmask: 0xF8, cval: 0xF0, lmask: 0x001F_FFFF },
-    Utf8Sequence { size: 5, cmask: 0xFC, cval: 0xF8, lmask: 0x03FF_FFFF },
-    Utf8Sequence { size: 6, cmask: 0xFE, cval: 0xFC, lmask: 0x7FFF_FFFF },
+    Utf8Sequence {
+        size: 1,
+        cmask: 0x80,
+        cval: 0x00,
+        lmask: 0x0000_007F,
+    },
+    Utf8Sequence {
+        size: 2,
+        cmask: 0xE0,
+        cval: 0xC0,
+        lmask: 0x0000_07FF,
+    },
+    Utf8Sequence {
+        size: 3,
+        cmask: 0xF0,
+        cval: 0xE0,
+        lmask: 0x0000_FFFF,
+    },
+    Utf8Sequence {
+        size: 4,
+        cmask: 0xF8,
+        cval: 0xF0,
+        lmask: 0x001F_FFFF,
+    },
+    Utf8Sequence {
+        size: 5,
+        cmask: 0xFC,
+        cval: 0xF8,
+        lmask: 0x03FF_FFFF,
+    },
+    Utf8Sequence {
+        size: 6,
+        cmask: 0xFE,
+        cval: 0xFC,
+        lmask: 0x7FFF_FFFF,
+    },
 ];
 
 /// Port of `fxUTF8Decode`: decode the code point at `bytes[offset]`,
@@ -72,8 +102,7 @@ pub fn utf8_decode(bytes: &[u8], offset: usize) -> (i64, usize) {
 }
 
 /// Port of `fxUTF8Length`: the byte length one `character` encodes to.
-/// (Part of the faithful codec surface; the V-mode string-set path that
-/// consumes it is a named later increment.)
+/// (Part of the faithful codec surface used by V-mode finite string sets.)
 #[allow(dead_code)]
 pub fn utf8_length(character: i64) -> usize {
     if character < 0 {
@@ -94,7 +123,7 @@ pub fn utf8_length(character: i64) -> usize {
 }
 
 /// Port of `fxUTF8Encode`: append `character`'s UTF-8 bytes to `out`.
-/// (Codec surface for the deferred V-mode string-set increment.)
+/// (Codec surface used by V-mode finite string sets.)
 #[allow(dead_code)]
 pub fn utf8_encode(out: &mut Vec<u8>, character: i64) {
     let c = character as u32;
