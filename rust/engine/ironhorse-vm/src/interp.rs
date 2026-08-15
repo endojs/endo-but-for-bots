@@ -3371,6 +3371,13 @@ pub struct Interp {
     /// orchestration); the global property slot is materialized for
     /// allocation faithfulness and GC shape.
     global_props: std::collections::HashMap<u16, crate::value::SlotIndex>,
+    /// True only while dispatching a **direct** `eval` unit's body (set by
+    /// [`Self::eval_source`] around the unit's run). The declaration-
+    /// instantiation hoist reads it to apply the direct-eval-only conflict
+    /// rule (a `var` colliding with a global lexical is a `SyntaxError`),
+    /// which an indirect eval — running in a fresh global variable scope that
+    /// does not see the caller's lexical environment — does not raise.
+    direct_eval_hoist: bool,
     result: Slot,
     /// Whether the frame runs in strict mode (`BEGIN_STRICT*`). Recorded
     /// for the exception/`this` semantics that observe it; the covered
@@ -4329,6 +4336,7 @@ impl Interp {
             id_map: std::collections::HashMap::new(),
             global_obj,
             global_props: std::collections::HashMap::new(),
+            direct_eval_hoist: false,
             result: Slot::undefined(),
             strict: false,
             callback_return_depth: None,
@@ -6318,6 +6326,10 @@ impl Interp {
         if self.eval_direct && !self.call_stack.is_empty() {
             return Err(Halt::Unsupported("eval:direct-scope"));
         }
+        // Whether this is a direct eval (its declaration instantiation observes
+        // the caller's — here the global — lexical environment). Captured before
+        // the nested-frame setup clears `eval_direct`.
+        let is_direct = self.eval_direct;
         let compiler = match &self.source_compiler {
             Some(compiler) => compiler.clone(),
             None => return Err(Halt::Unsupported("eval:no-compiler")),
@@ -6364,6 +6376,7 @@ impl Interp {
         let saved_callback_return_depth = self.callback_return_depth;
         let saved_frame_slots = self.frame_slots;
         let saved_eval_direct = self.eval_direct;
+        let saved_direct_eval_hoist = self.direct_eval_hoist;
         let saved_active_segment = self.active_segment;
         let saved_stack_len = self.stack.len();
 
@@ -6376,11 +6389,15 @@ impl Interp {
         self.callback_return_depth = None;
         self.frame_slots = 0;
         self.eval_direct = false;
+        // The unit's declaration-instantiation hoist observes the direct/indirect
+        // distinction (only a direct eval sees the caller's global lexicals).
+        self.direct_eval_hoist = is_direct;
         self.active_segment = Some(segment);
 
         let halt = self.dispatch_at(&buf[..], 0, 0);
         let completion = self.result;
         self.active_segment = saved_active_segment;
+        self.direct_eval_hoist = saved_direct_eval_hoist;
 
         // Restore the caller's activation. Drop any residue the nested unit
         // left on the shared value stack (a well-formed program is balanced;
@@ -6678,13 +6695,39 @@ impl Interp {
             // function declaration's local to `null` (its placeholder) and a
             // `var` to `undefined`, so the local's kind here tells the two
             // apart with no source inspection.
-            let is_function_declaration =
-                matches!(self.locals.get(index).map(|slot| slot.kind), Some(Kind::Null));
+            let kind = self.locals.get(index).map(|slot| slot.kind);
+            let is_function_declaration = matches!(kind, Some(Kind::Null));
+            // A **direct** eval's `var`/function declaration that collides with an
+            // enclosing lexical binding — here the realm's global lexical
+            // environment, holding the running program's top-level
+            // `let`/`const`/`class` — is the direct-eval "duplicate variable"
+            // early error, a catchable `SyntaxError` (EvalDeclarationInstantiation
+            // step 5.d.ii.2.a.i and the direct-eval scoping). The binding lives on
+            // the active declarative environment chain, which a direct eval shares
+            // with its caller; an indirect eval runs in a fresh global variable
+            // scope that does not see it, so it never raises this — matching XS,
+            // which throws only for the direct form.
+            if self.direct_eval_hoist && self.has_lexical_env_binding(id) {
+                return Err(self.build_error("SyntaxError", 0, 0));
+            }
             if self.global_props.contains_key(&id) {
                 if is_function_declaration && !self.can_declare_global_function(id) {
                     return Err(self.build_error("TypeError", 0, 0));
                 }
             } else {
+                // The property does not yet exist, so it must be *created* on the
+                // global object. Both `CanDeclareGlobalVar` (ECMA-262 9.1.1.4.15)
+                // and `CanDeclareGlobalFunction` (9.1.1.4.16) reduce, for an absent
+                // name, to `IsExtensible(globalThis)`: a non-extensible global
+                // (`Object.preventExtensions(this)`) cannot gain a new binding, so
+                // the declaration is a `TypeError` before any body runs. At the
+                // top-level program this is unobservable (nothing has run to freeze
+                // the global yet); it is reached by an `eval` whose realm already
+                // sealed its global. An extensible global (the overwhelming common
+                // case) is unaffected, so this never perturbs an existing run.
+                if !self.instance_extensible(self.global_obj) {
+                    return Err(self.build_error("TypeError", 0, 0));
+                }
                 self.materialize_global_property(id);
             }
         }
@@ -7526,6 +7569,29 @@ impl Interp {
                         // chain so a `try`/`catch` observes a realm-correct
                         // `ReferenceError`; an uncaught throw still escapes to the
                         // host as `Halt::Throw` (former behavior).
+                        //
+                        // The one exception is a `typeof` on a bare, **unbound**
+                        // name: `typeof undeclaredName` is `"undefined"`, never a
+                        // throw (ECMA-262 13.5.3.1 `typeof` step 3.a — an
+                        // unresolvable reference short-circuits to `"undefined"`).
+                        // XS encodes this by peeking the opcode following
+                        // `GET_VARIABLE`: when it is `TYPEOF` and the name resolves
+                        // in no environment, it pushes `undefined` rather than
+                        // faulting. A name that *is* bound but sits in its temporal
+                        // dead zone is not unresolvable — `typeof` of a TDZ binding
+                        // still throws — so this tolerance is gated on the name
+                        // being absent from every scope (`resolve_get` returns
+                        // `None` for both, but only the truly-unbound case is a
+                        // typeof-undefined).
+                        None if code.get(pc + ilen).copied()
+                            == Some(Opcode::XS_CODE_TYPEOF as u8)
+                            && !self.id_map.contains_key(&name)
+                            && !self.global_props.contains_key(&name) =>
+                        {
+                            // Falls through to the shared `pc += ilen` below;
+                            // the following `TYPEOF` reads this `undefined`.
+                            self.push(Slot::undefined());
+                        }
                         None => {
                             let error = self.build_error("ReferenceError", 0, 0);
                             match self.raise_js(error) {
@@ -29198,6 +29264,39 @@ impl Interp {
             env = self.instance_prototype(env);
         }
         None
+    }
+
+    /// Whether `name` is bound by a **declarative/closure** environment on the
+    /// active chain — a lexical (`let`/`const`/`class`) binding, as opposed to a
+    /// `with(obj)` object environment (whose behavior slot holds a `Reference`)
+    /// or the frame scope / global object. Used by declaration instantiation to
+    /// detect a direct eval's `var`/function colliding with an enclosing lexical
+    /// binding (the direct-eval "duplicate variable" `SyntaxError`). Read-only
+    /// and unmetered: a pure id walk over the same chain
+    /// [`Self::resolve_env_reference`] consults, restricted to its
+    /// declarative-environment arm.
+    fn has_lexical_env_binding(&self, name: u16) -> bool {
+        if self.env.kind != Kind::Reference {
+            return false;
+        }
+        let mut env = match self.env.value {
+            Payload::Reference(r) => r,
+            _ => return false,
+        };
+        while !env.is_null() {
+            let behavior = self.slots.get(env).next;
+            if !behavior.is_null() {
+                let beh = self.slots.get(behavior);
+                // A `with(obj)` environment carries the object in its behavior
+                // slot as a `Reference`; only a declarative/closure environment
+                // (a null/undefined behavior) publishes lexical closure cells.
+                if beh.kind != Kind::Reference && self.environment_property(env, name).is_some() {
+                    return true;
+                }
+            }
+            env = self.instance_prototype(env);
+        }
+        false
     }
 
     /// Read a `*_LOCAL_*` opcode's 1-based scope-index operand: a `u8` for
