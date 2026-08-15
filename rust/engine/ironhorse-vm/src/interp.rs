@@ -9283,11 +9283,33 @@ impl Interp {
                             // methods).
                             let dv = self.data_views[&inst];
                             if Some(id) == self.byte_length_id {
-                                self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
-                                Slot::integer(dv.size as i32)
+                                // `get byteLength`/`get byteOffset` throw a
+                                // TypeError on a detached backing buffer
+                                // (`GetViewByteLength` → out of bounds). `buffer`
+                                // returns the (detached) reference unconditionally.
+                                if self.detached_buffers.contains(&dv.buffer) {
+                                    dispatch_result!(
+                                        Err::<Slot, Halt>(self.catchable_type_error()),
+                                        pc,
+                                        self,
+                                        return_depth
+                                    )
+                                } else {
+                                    self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
+                                    Slot::integer(dv.size as i32)
+                                }
                             } else if Some(id) == self.byte_offset_id {
-                                self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
-                                Slot::integer(dv.offset as i32)
+                                if self.detached_buffers.contains(&dv.buffer) {
+                                    dispatch_result!(
+                                        Err::<Slot, Halt>(self.catchable_type_error()),
+                                        pc,
+                                        self,
+                                        return_depth
+                                    )
+                                } else {
+                                    self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
+                                    Slot::integer(dv.offset as i32)
+                                }
                             } else if Some(id) == self.buffer_id {
                                 self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
                                 Slot::of(Kind::Reference, Payload::Reference(dv.buffer))
@@ -23971,6 +23993,13 @@ impl Interp {
                 let dv = self.data_views[&inst];
                 let delta = TYPED_ARRAY_TYPES[kind as usize].size as u32;
                 let offset = self.to_index_arg(code, arg0)?;
+                // `GetViewValue`: after ToIndex, a detached backing buffer is a
+                // TypeError — and it precedes the out-of-range RangeError, so a
+                // detached view with an out-of-range offset still throws
+                // TypeError (`detached-buffer-before-outofrange-byteoffset`).
+                if self.detached_buffers.contains(&dv.buffer) {
+                    return Err(self.catchable_type_error());
+                }
                 // `(size < delta) || ((size - delta) < offset)` → RangeError.
                 if dv.size < delta || (dv.size - delta) < offset {
                     return Err(self.catchable_range_error());
@@ -24002,20 +24031,29 @@ impl Interp {
                     .get(base + 5)
                     .copied()
                     .unwrap_or_else(Slot::undefined);
-                if dv.size < delta || (dv.size - delta) < offset {
-                    return Err(self.catchable_range_error());
-                }
                 // The littleEndian flag is argument 2 for set.
                 let little = self.arg_is_truthy(base, 2);
-                let abs = dv.offset + offset;
+                // `SetViewValue` coerces the value (ToNumber/ToBigInt — which
+                // may run a user `valueOf`/`Symbol.toPrimitive` that detaches
+                // the buffer) BEFORE the IsDetachedBuffer and range tests.
                 // `setBigInt64`/`setBigUint64` (kinds 0/1) take a BigInt value
                 // (ToBigInt); the 8-byte two's-complement store is identical
                 // for signed/unsigned, differing only in the getter's decode.
-                if kind <= 1 {
-                    self.data_view_write_bigint(code, dv.buffer, abs, value, little)?;
+                let le = if kind <= 1 {
+                    self.data_view_encode_bigint(code, value, little)?.to_vec()
                 } else {
-                    self.data_view_write(code, dv.buffer, abs, kind, value, little)?;
+                    self.data_view_encode(code, kind, value, little)?
+                };
+                // A detached backing buffer is a TypeError, ahead of the
+                // out-of-range RangeError (`detached-buffer-*` ordering cases).
+                if self.detached_buffers.contains(&dv.buffer) {
+                    return Err(self.catchable_type_error());
                 }
+                if dv.size < delta || (dv.size - delta) < offset {
+                    return Err(self.catchable_range_error());
+                }
+                let abs = dv.offset + offset;
+                self.data_view_store(dv.buffer, abs, &le);
                 self.meter.tick_raw(DATA_VIEW_SET_METERING);
                 Slot::undefined()
             }
@@ -29493,18 +29531,19 @@ impl Interp {
         decode_element_le(kind, &b).ok_or(Halt::Unsupported("data-view-get:bigint"))
     }
 
-    /// Coerce `value` and write a DataView element of type `kind` at
-    /// absolute byte offset `abs`, honoring `little` endianness. A
-    /// big-endian write reverses the little-endian element bytes.
-    fn data_view_write(
+    /// Coerce `value` to the raw endianness-ordered bytes of a numeric
+    /// DataView element of type `kind`, honoring `little` endianness. Runs
+    /// `ToPrimitive`/`ToNumber` (which may execute a user `valueOf`/
+    /// `Symbol.toPrimitive` that detaches the backing buffer), so `SetViewValue`
+    /// performs this coercion BEFORE the `IsDetachedBuffer` and range tests —
+    /// the caller keeps that order.
+    fn data_view_encode(
         &mut self,
         code: &[u8],
-        buffer: crate::value::SlotIndex,
-        abs: u32,
         kind: u8,
         value: Slot,
         little: bool,
-    ) -> Result<(), Halt> {
+    ) -> Result<Vec<u8>, Halt> {
         let primitive = self.to_primitive(code, value, false)?;
         let number = match primitive.kind {
             Kind::Integer | Kind::Number => primitive,
@@ -29524,11 +29563,15 @@ impl Interp {
         if !little {
             le.reverse();
         }
+        Ok(le)
+    }
+
+    /// Store already-coerced element `le` bytes at absolute byte offset `abs`.
+    fn data_view_store(&mut self, buffer: crate::value::SlotIndex, abs: u32, le: &[u8]) {
         let size = le.len();
         let buf = self.array_buffers[&buffer];
         let out = self.chunks.slice_mut(buf.data, abs as usize + size);
-        out[abs as usize..abs as usize + size].copy_from_slice(&le);
-        Ok(())
+        out[abs as usize..abs as usize + size].copy_from_slice(le);
     }
 
     /// Read a `getBigInt64`/`getBigUint64` element (`kind` 0 signed, 1
@@ -29557,20 +29600,18 @@ impl Interp {
         self.make_bigint(neg, mag)
     }
 
-    /// Coerce `value` to a BigInt and write a `setBigInt64`/`setBigUint64`
-    /// element at absolute byte offset `abs`, honoring `little` endianness
-    /// (XS's `fx_DataView_prototype_set` BigInt path: `ToBigInt(value)` then
-    /// store the low 64 bits, two's complement). `ToBigInt` accepts a BigInt
-    /// or a Boolean; every other type (a Number is a `TypeError`, a String
-    /// parses) self-names an honest skip rather than assert a wrong result.
-    fn data_view_write_bigint(
+    /// Coerce `value` to a BigInt and return the endianness-ordered bytes of a
+    /// `setBigInt64`/`setBigUint64` element (XS's `fx_DataView_prototype_set`
+    /// BigInt path: `ToBigInt(value)` then the low 64 bits, two's complement).
+    /// `ToBigInt` accepts a BigInt, a Boolean, or a numeric String; a Number or
+    /// a Symbol is a `TypeError`. Run before the detached/range tests so a
+    /// `Symbol.toPrimitive` that detaches is observed in `SetViewValue` order.
+    fn data_view_encode_bigint(
         &mut self,
         code: &[u8],
-        buffer: crate::value::SlotIndex,
-        abs: u32,
         value: Slot,
         little: bool,
-    ) -> Result<(), Halt> {
+    ) -> Result<[u8; 8], Halt> {
         let primitive = self.to_primitive(code, value, false)?;
         let u = match primitive.value {
             Payload::BigInt(_) | Payload::Boolean(_) => {
@@ -29584,10 +29625,7 @@ impl Interp {
         if !little {
             le.reverse();
         }
-        let buf = self.array_buffers[&buffer];
-        let out = self.chunks.slice_mut(buf.data, abs as usize + 8);
-        out[abs as usize..abs as usize + 8].copy_from_slice(&le);
-        Ok(())
+        Ok(le)
     }
 
     /// `ToBigInt(value)` reduced to its low 64 bits (the value modulo 2^64,
