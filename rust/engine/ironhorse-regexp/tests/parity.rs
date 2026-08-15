@@ -428,6 +428,68 @@ fn corpus() -> Vec<Case> {
     v.push(("}", "u", "}", 0));
     v.push(("\\1", "u", "x", 0)); // backref with no group
 
+    // Inline modifiers `(?ims-ims:...)`: scoped case-fold, dot-all, multiline,
+    // and their restoration at the group boundary, over inputs that exercise
+    // both the added and the removed flag. Every one is fully ported, so the
+    // emitted program, captures, and per-step meter all pin bit-exact.
+    for &s in &["a", "A", "ab", "Ab", "AB", "aB", "a\nb", "A\nB", ""] {
+        // Add ignoreCase only inside the group.
+        v.push(("(?i:a)b", "", s, 0));
+        v.push(("(?i:a)b", "", s, 0));
+        v.push(("a(?i:b)c", "", s, 0));
+        // Remove ignoreCase inside an `i` pattern.
+        v.push(("a(?-i:b)", "i", s, 0));
+        v.push(("(?-i:a)b", "i", s, 0));
+        // Dot-all scoped on and off.
+        v.push(("(?s:.)", "", s, 0));
+        v.push(("(?s:.)x", "s", s, 0));
+        v.push(("a(?-s:.)", "s", s, 0));
+        // Multiline scoped on and off.
+        v.push(("(?m:^b)", "", s, 0));
+        v.push(("(?-m:$)", "m", s, 0));
+        // Multiple flags, add and remove together.
+        v.push(("(?im-s:a.b)", "", s, 0));
+        v.push(("(?ims-:a)", "", s, 0));
+        v.push(("(?i-:a)", "", s, 0));
+        // Nesting: inner remove within an outer add and vice versa.
+        v.push(("(?i:a(?-i:b)c)", "", s, 0));
+        v.push(("(?-i:a(?i:b)c)", "i", s, 0));
+        // A quantifier and a capture *inside* the scoped group.
+        v.push(("(?i:a+)b", "", s, 0));
+        v.push(("(?i:(a)b)\\1", "", s, 0));
+        // A modifier group inside a lookahead / lookbehind.
+        v.push(("a(?=(?i:b))", "", s, 0));
+        v.push(("(?<=(?i:a))b", "", s, 0));
+    }
+
+    // Invalid inline modifiers (both must reject): empty add+remove, a repeated
+    // flag, a non-modifier flag, and a directly-quantified modifier group.
+    for &p in &["(?-:a)", "(?ii:a)", "(?i-i:a)", "(?g:a)", "(?i:a)+", "(?i:a"] {
+        v.push((p, "", "a", 0));
+    }
+
+    // Duplicate named-capture groups (ES2025): legal across mutually-exclusive
+    // disjunction alternatives (shared name slot), a SyntaxError within one
+    // alternative. Accept/reject, captures, and the per-step meter pin exact.
+    for &s in &["x", "y", "z", "xy", "yx", "ab", "", "a"] {
+        v.push(("(?<a>x)|(?<a>y)", "", s, 0));
+        v.push(("(?<a>x)|(?<b>y)", "", s, 0));
+        v.push(("(?<a>.)|(?<a>..)", "", s, 0));
+        v.push(("(?<n>a)|(?<n>b)|(?<n>c)", "", s, 0));
+        v.push(("(?:(?<t>a)|(?<t>b))\\k<t>", "", s, 0));
+        v.push(("((?<y>a)|(?<y>b))+", "", s, 0));
+        v.push(("(?<a>x)(?:y|(?<a>z))", "", s, 0)); // `a` recurs only in the alt
+    }
+    // Rejected duplicates (both must reject): same alternative, and a trailing
+    // reuse of a name that is live outside the disjunction.
+    for &p in &[
+        "(?<a>x)(?<a>y)",
+        "(?<a>x)((?<b>y)|(?<a>z))",
+        "(?<a>a)(?<a>b)|c",
+    ] {
+        v.push((p, "", "x", 0));
+    }
+
     // Syntax errors (both must reject).
     v.push(("(", "", "x", 0));
     v.push((")", "", "x", 0));
@@ -507,14 +569,30 @@ fn unicode_sets_syntax_and_execution_match_the_pin() {
     }
 }
 
+/// Inline modifiers are now fully ported: the emitted program, captures, and
+/// per-step meter all pin bit-exact against the XS pin (they used to be a
+/// named `Unsupported` skip). A spread of scoped/nested cases is asserted here
+/// in addition to the corpus sweep, to lock the parity explicitly.
 #[test]
-fn inline_modifiers_remain_a_named_skip() {
-    let case = ("(?i:a)", "", "A", 0);
-    let oracle = oracle_regexp(case.0, case.1, case.2, case.3).expect("oracle result");
-    assert!(oracle.compiled);
-    assert!(matches!(
-        compile(case.0, case.1),
-        Err(CompileError::Unsupported(_))
-    ));
-    assert_eq!(check(case), Ok(false));
+fn inline_modifiers_execute_and_match_the_pin() {
+    let cases: &[Case] = &[
+        ("(?i:a)", "", "A", 0),
+        ("(?i:a)b", "", "AB", 0),
+        ("a(?-i:b)c", "i", "AbC", 0),
+        ("(?s:.)", "", "\n", 0),
+        ("(?m:^b)", "", "a\nb", 0),
+        ("(?im-s:.)", "", "\n", 0),
+        ("(?i:a(?-i:b)c)", "", "AbC", 0),
+        ("(?i:(a)b)\\1", "", "AbA", 0),
+        ("(?<=(?i:a))b", "", "Ab", 0),
+    ];
+    for &case in cases {
+        assert!(
+            matches!(compile(case.0, case.1), Ok(_)),
+            "/{}/{} should compile",
+            case.0,
+            case.1
+        );
+        assert_eq!(check(case), Ok(true), "/{}/{} should agree", case.0, case.1);
+    }
 }

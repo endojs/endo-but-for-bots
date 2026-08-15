@@ -2687,6 +2687,7 @@ struct RegExpResultIds {
     index: Option<u16>,
     input: Option<u16>,
     groups: Option<u16>,
+    indices: Option<u16>,
 }
 
 /// A promise's settlement status (XS's `mxPendingStatus`/`mxFulfilledStatus`/
@@ -3925,6 +3926,11 @@ pub struct Interp {
     /// (`index`/`input`/`groups`), set on the match array by `exec`. `None`
     /// when unreferenced.
     regexp_result_ids: RegExpResultIds,
+    /// The most recent `exec`'s runtime name→capture map (matcher `names[]`),
+    /// so `GetSubstitution`'s `$<name>` can resolve a duplicate name to the
+    /// alternative that actually matched. Set by [`Interp::regexp_exec_inner`]
+    /// immediately before `string_replace` consults it.
+    regexp_last_names: Vec<i32>,
     /// The jump-buffer chain (XS's `the->firstJump`), innermost last.
     /// `CATCH` pushes a [`CatchJump`]; `UNCATCH` pops it; `THROW`/`RETHROW`
     /// unwind to the top entry, restoring the value stack, scope, and call
@@ -4456,6 +4462,7 @@ impl Interp {
             last_index_id: None,
             regexp_getter_ids: RegExpGetterIds::default(),
             regexp_result_ids: RegExpResultIds::default(),
+            regexp_last_names: Vec::new(),
             jumps: Vec::new(),
         };
         interp.create_intrinsics();
@@ -5958,6 +5965,7 @@ impl Interp {
             index: id_of("index"),
             input: id_of("input"),
             groups: id_of("groups"),
+            indices: id_of("indices"),
         };
         // Record the program-local id for every name (first occurrence wins,
         // matching the compiler's numbering), so a native built-in can relink
@@ -14710,7 +14718,7 @@ impl Interp {
         &mut self,
         inst: crate::value::SlotIndex,
         subject: &[u8],
-    ) -> Result<(bool, Vec<(i32, i32)>), Halt> {
+    ) -> Result<(bool, Vec<(i32, i32)>, Vec<i32>), Halt> {
         let (flags_word, global, sticky, last_index) = {
             let d = &self.regexps[&inst];
             let f = d.program.flags();
@@ -14735,7 +14743,8 @@ impl Interp {
             // `lastIndex` past the end: no match, reset to 0.
             self.regexps.get_mut(&inst).unwrap().last_index = 0.0;
             let captures = vec![(-1, -1); self.regexps[&inst].program.capture_count];
-            return Ok((false, captures));
+            let names = vec![-1; self.regexps[&inst].program.name_count];
+            return Ok((false, captures, names));
         }
         if advance {
             // `fxCacheUnicodeToUTF8Offset` (read `lastIndex` → byte offset) +
@@ -14752,7 +14761,7 @@ impl Interp {
             if advance {
                 self.regexps.get_mut(&inst).unwrap().last_index = 0.0;
             }
-            return Ok((false, outcome.captures));
+            return Ok((false, outcome.captures, outcome.names));
         }
         if advance {
             // Advance `lastIndex` to the whole-match end (code units == bytes
@@ -14760,7 +14769,7 @@ impl Interp {
             let end = outcome.captures[0].1 as f64;
             self.regexps.get_mut(&inst).unwrap().last_index = end;
         }
-        Ok((true, outcome.captures))
+        Ok((true, outcome.captures, outcome.names))
     }
 
     /// `RegExp.prototype.exec(string)` (`fx_RegExp_prototype_exec`): the match
@@ -14787,14 +14796,21 @@ impl Interp {
             Payload::String(off) => self.str_text(off).into_bytes(),
             _ => Vec::new(),
         };
-        // The declared named groups, `(name, capture_index)` in the order they
-        // appear in the pattern — the `groups` object's own-key order.
+        // The declared named groups, one entry per UNIQUE name in name-slot
+        // order — the `groups` object's own-key order. Duplicate names share a
+        // slot, so a name appears once; its live capture is resolved through
+        // the matcher's runtime `names[]` array (below).
         let group_names: Vec<(String, i32)> =
             self.regexps[&inst].program.capture_group_names.clone();
-        let (matched, captures) = self.regexp_match_drive(inst, &subject)?;
+        let has_indices =
+            self.regexps[&inst].program.flags() & ironhorse_regexp::XS_REGEXP_D != 0;
+        let (matched, captures, names) = self.regexp_match_drive(inst, &subject)?;
         if !matched {
+            self.regexp_last_names.clear();
             return Ok((Slot::null(), None));
         }
+        // Expose the runtime name→capture map for `GetSubstitution`'s `$<name>`.
+        self.regexp_last_names = names.clone();
         // On a match XS charges a per-match residual plus a small per-extra-
         // capture residual (the `fxCacheUTF8ToUnicodeOffset` remaps and
         // `fxCacheArray`), beyond the explicit per-capture slot/chunk allocs.
@@ -14855,12 +14871,21 @@ impl Interp {
                 // instance payload exactly as `Object.create(null)` does.
                 self.slots.get_mut(obj).value =
                     Payload::Reference(crate::value::SlotIndex::NULL);
-                for (name, cap_idx) in &group_names {
+                for (slot, (name, _)) in group_names.iter().enumerate() {
                     let key = self.intern_key(name);
-                    let val = capture_slots
-                        .get(*cap_idx as usize)
-                        .copied()
-                        .unwrap_or_else(Slot::undefined);
+                    // `captureIndex = data[2*captureCount + nameIndex]`: the
+                    // capture the name's group last participated in (a duplicate
+                    // name resolves to whichever alternative matched), or `-1`
+                    // when it did not participate → the property stays undefined.
+                    let cap_idx = names.get(slot).copied().unwrap_or(-1);
+                    let val = if cap_idx >= 0 {
+                        capture_slots
+                            .get(cap_idx as usize)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined)
+                    } else {
+                        Slot::undefined()
+                    };
                     self.meter.tick_slot_alloc();
                     self.instance_put_raw(obj, key, val);
                 }
@@ -14868,10 +14893,104 @@ impl Interp {
             };
             self.instance_put_raw(result, id, groups);
         }
+        // The `d` flag's `.indices` array (`RegExpBuiltinExec` step 34 →
+        // `MakeMatchIndicesIndexPairArray`): one `[start, end]` pair per
+        // participating capture (an absent capture is `undefined`), plus a
+        // parallel `.indices.groups` object keyed like `.groups`. Mirrors the
+        // `hasIndicesFlag` branch of XS's `fxExecuteRegExp`.
+        if has_indices {
+            let indices = self.regexp_build_indices(&captures, &group_names, &names);
+            if let Some(id) = self.regexp_result_ids.indices {
+                self.instance_put_raw(result, id, indices);
+            }
+        }
         Ok((
             Slot::of(Kind::Reference, Payload::Reference(result)),
             Some(match_start),
         ))
+    }
+
+    /// Build the `d`-flag `.indices` array + its `.groups` object, mirroring the
+    /// `hasIndicesFlag` branch of `fxExecuteRegExp`: element `i` is the
+    /// `[start, end]` pair of capture `i` when it participated, else
+    /// `undefined`; `.indices.groups` maps each unique name to the SAME pair
+    /// (via the matcher's runtime `names[]`), or `undefined`. Allocation is
+    /// mirrored slot-for-slot (`fxNewArrayInstance`, `fxNewSlot`,
+    /// `fxConstructArrayEntry`, `fxNewInstance`) so the exec meter tracks XS.
+    fn regexp_build_indices(
+        &mut self,
+        captures: &[(i32, i32)],
+        group_names: &[(String, i32)],
+        names: &[i32],
+    ) -> Slot {
+        // `fxNewArrayInstance` for the outer indices array.
+        let arr = self.new_array_unmetered();
+        self.meter.tick_slot_alloc();
+        // The `[start, end]` pair slot per capture index (for `.indices.groups`
+        // to alias), or `None` when the capture did not participate.
+        let mut pair_slots: Vec<Option<Slot>> = Vec::with_capacity(captures.len());
+        let mut items: Vec<(u32, Slot)> = Vec::with_capacity(captures.len());
+        for (i, &(from, to)) in captures.iter().enumerate() {
+            // `indicesItem = fxNewSlot` per capture.
+            self.meter.tick_slot_alloc();
+            let entry = if from >= 0 {
+                // `fxConstructArrayEntry`: a fresh two-element `[from, to]`
+                // array (instance slot + two element slots).
+                let pair = self.new_array_unmetered();
+                self.meter.tick_slot_alloc();
+                self.meter.tick_slot_alloc();
+                self.meter.tick_slot_alloc();
+                {
+                    let a = self.arrays.get_mut(&pair).unwrap();
+                    a.items.insert(0, Slot::integer(from));
+                    a.items.insert(1, Slot::integer(to));
+                    a.length = 2;
+                }
+                let s = Slot::of(Kind::Reference, Payload::Reference(pair));
+                pair_slots.push(Some(s));
+                s
+            } else {
+                pair_slots.push(None);
+                Slot::undefined()
+            };
+            items.push((i as u32, entry));
+        }
+        {
+            let a = self.arrays.get_mut(&arr).unwrap();
+            for (i, s) in items {
+                a.items.insert(i, s);
+            }
+            a.length = captures.len() as u32;
+        }
+        // The `.groups` own property on the indices array (`indicesItem =
+        // fxNewSlot`), an `ObjectCreate(null)` object when named, else undefined.
+        self.meter.tick_slot_alloc();
+        if let Some(gid) = self.regexp_result_ids.groups {
+            let groups = if group_names.is_empty() {
+                Slot::undefined()
+            } else {
+                let obj = self.new_object();
+                self.slots.get_mut(obj).value =
+                    Payload::Reference(crate::value::SlotIndex::NULL);
+                for (slot, (name, _)) in group_names.iter().enumerate() {
+                    let key = self.intern_key(name);
+                    let cap = names.get(slot).copied().unwrap_or(-1);
+                    let val = if cap >= 0 {
+                        pair_slots
+                            .get(cap as usize)
+                            .and_then(|p| *p)
+                            .unwrap_or_else(Slot::undefined)
+                    } else {
+                        Slot::undefined()
+                    };
+                    self.meter.tick_slot_alloc();
+                    self.instance_put_raw(obj, key, val);
+                }
+                Slot::of(Kind::Reference, Payload::Reference(obj))
+            };
+            self.instance_put_raw(arr, gid, groups);
+        }
+        Slot::of(Kind::Reference, Payload::Reference(arr))
     }
 
     /// `RegExp.prototype.test(string)` (`fx_RegExp_prototype_test` →
@@ -15131,14 +15250,20 @@ impl Interp {
                 }
                 b'<' if !names.is_empty() => {
                     // `$<name>`: scan to the next `>`; a missing `>` leaves the
-                    // `$<` literal (matching the `$<snd` → `$<snd` case).
+                    // `$<` literal (matching the `$<snd` → `$<snd` case). The
+                    // name's live capture is resolved through the matcher's
+                    // runtime `names[]` (slot = the name's position in the
+                    // slot-ordered `capture_group_names`), so a duplicate name
+                    // expands to whichever alternative matched.
                     if let Some(rel) = repl[i + 2..].iter().position(|&c| c == b'>') {
                         let name = &repl[i + 2..i + 2 + rel];
-                        if let Some((_, cidx)) =
-                            names.iter().find(|(nm, _)| nm.as_bytes() == name)
-                        {
-                            if let Some(bytes) = self.regexp_capture_bytes(result, *cidx as usize) {
-                                out.extend_from_slice(&bytes);
+                        if let Some(slot) = names.iter().position(|(nm, _)| nm.as_bytes() == name) {
+                            let cidx = self.regexp_last_names.get(slot).copied().unwrap_or(-1);
+                            if cidx >= 0 {
+                                if let Some(bytes) = self.regexp_capture_bytes(result, cidx as usize)
+                                {
+                                    out.extend_from_slice(&bytes);
+                                }
                             }
                             // An unset or absent name expands to the empty string.
                         }

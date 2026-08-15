@@ -10,11 +10,11 @@
 //! bit-exact and the emitted graph is structurally identical, which in
 //! turn makes the matcher's per-step meter bit-exact.
 //!
-//! Honest scope (the stage bar names deferred surfaces): inline modifiers
-//! (`(?flags:...)`) and astral
+//! Honest scope (the stage bar names deferred surfaces): astral
 //! (`> 0xFFFF`) code points outside unicode mode are compiled to a
 //! named [`CompileError::Unsupported`], never to a wrong meter or a wrong
-//! value. The `i` flag and named captures (`(?<name>)` / `\k<name>`) ARE
+//! value. Inline modifiers (`(?ims-ims:...)`), the `i` flag, and named
+//! captures (`(?<name>)` / `\k<name>`) ARE
 //! ported: a named group codegens identically to its numbered peer, plus a
 //! name-slot operand the matcher records into its runtime `names[]` array.
 
@@ -132,6 +132,18 @@ enum Kind {
         capture_count: i32,
         quantifier_index: i32,
     },
+    /// An inline-modifier group `(?ims-ims:...)`. The scoped flags apply to
+    /// `disjunction` and are restored at the sequel step. `step` holds the
+    /// entry step block, `completion` the sequel (flag-restore) block.
+    /// `modified_flags` is `(outer | add) & ~remove`; `outer_flags` is the
+    /// ambient flags word restored when the group ends. Both are precomputed
+    /// at parse time (when the ambient flag word is naturally known), so the
+    /// code pass need not thread the running flags — matching `fxModifiersCode`.
+    Modifiers {
+        disjunction: NodeId,
+        modified_flags: i32,
+        outer_flags: i32,
+    },
 }
 
 /// The XS `0x7FFFFFFF` open-max sentinel (`*`, `+`, `{n,}`).
@@ -150,15 +162,28 @@ struct Compiler {
     nodes: Vec<Node>,
     code: Vec<i32>,
     /// A pin feature whose SYNTAX this parser validates but whose matcher
-    /// code it does not emit yet (inline
-    /// modifiers, astral). Set during the parse; when set, [`compile`]
+    /// code it does not emit yet (a non-unicode astral code point). Set
+    /// during the parse; when set, [`compile`]
     /// returns it as `Unsupported` *after* the full accept/reject decision,
     /// so a syntactically invalid such pattern is still a `Syntax` error
     /// (the lexer needs the accept/reject verdict; the matcher does not run).
     unsupported: Option<&'static str>,
-    /// Defined named-capture group names, in first-seen order — the
-    /// `firstCaptureName` chain. A repeat is `mxDuplicateCapture`.
+    /// The `fxCaptureNamePut` table: every UNIQUE named-capture name, in
+    /// first-seen order. A name slot (`code[5 + slot]`) is a name's position
+    /// here, so **duplicate** group names (legal across mutually-exclusive
+    /// disjunction alternatives, ES2025) share one slot — `nameIndex` counts
+    /// unique names. `fxCaptureNameGet` (the `\k<name>` resolver) searches it.
     capture_names: Vec<String>,
+    /// The `firstNamedCapture`/`lastNamedCapture` "participate" list — the name
+    /// slots live in the CURRENT scope — modeled as a linked arena so the
+    /// disjunction alternative-boundary detach/reattach (`fxDisjunctionParse`)
+    /// is the same pointer surgery. `participate_next[i]` is the next entry
+    /// (`-1` = none); `participate_first`/`participate_last` are the head/tail
+    /// (`-1` = empty). A slot already live here is `mxDuplicateCapture`.
+    participate_slot: Vec<i32>,
+    participate_next: Vec<i32>,
+    participate_first: i32,
+    participate_last: i32,
     /// `\k<name>` references collected during the parse; each must resolve
     /// to a defined name (`fxCaptureNameGet`, else `mxInvalidReferenceName`).
     named_refs: Vec<String>,
@@ -215,6 +240,10 @@ pub fn compile(pattern: &str, flags: &str) -> PResult<Program> {
         code: Vec::new(),
         unsupported: None,
         capture_names: Vec::new(),
+        participate_slot: Vec::new(),
+        participate_next: Vec::new(),
+        participate_first: -1,
+        participate_last: -1,
         named_refs: Vec::new(),
         saw_named_group: false,
         named_groups: Vec::new(),
@@ -281,8 +310,8 @@ impl Compiler {
             }
         }
         // A syntactically valid pattern that uses a matcher surface this
-        // stage has not ported (inline
-        // modifiers, astral) is accepted by the oracle at parse time; the
+        // stage has not ported (a non-unicode astral code point) is accepted by
+        // the oracle at parse time; the
         // lexer treats this `Unsupported` as accept. Bail here, AFTER the
         // full accept/reject decision, so an invalid such pattern is still
         // a `Syntax` error above.
@@ -381,6 +410,10 @@ impl Compiler {
         self.quantifier_index = 0;
         self.nodes.clear();
         self.capture_names.clear();
+        self.participate_slot.clear();
+        self.participate_next.clear();
+        self.participate_first = -1;
+        self.participate_last = -1;
         self.named_refs.clear();
         self.saw_named_group = false;
         self.named_groups.clear();
@@ -508,6 +541,67 @@ impl Compiler {
             }
         }
         Some((character, end))
+    }
+
+    /// `fxCaptureNamePut`: the slot for `name`, reusing an existing one when
+    /// the name repeats (duplicate group names share a slot). A brand-new name
+    /// advances `name_index` and records its `(name, capture_index)` in
+    /// name-slot order (the JS `.groups` key order). `capture_index` is this
+    /// group's ordinal, used only as the slot's representative index; the live
+    /// value is resolved through the matcher's runtime `names[]` array.
+    fn put_capture_name(&mut self, name: &str, capture_index: i32) -> i32 {
+        if let Some(pos) = self.capture_names.iter().position(|n| n == name) {
+            return pos as i32;
+        }
+        let slot = self.name_index;
+        self.capture_names.push(name.to_string());
+        self.named_groups.push((name.to_string(), capture_index));
+        self.name_index += 1;
+        slot
+    }
+
+    /// `fxCaptureNameParticipate`: register `slot` as live in the current
+    /// scope, erroring `mxDuplicateCapture` if it is already live. The
+    /// disjunction alternative boundary temporarily detaches a scope's live
+    /// slots so the same name may recur in a sibling alternative.
+    fn participate_capture_name(&mut self, slot: i32) -> PResult<()> {
+        let mut cur = self.participate_first;
+        while cur >= 0 {
+            let i = cur as usize;
+            if self.participate_slot[i] == slot {
+                return Err(self.error("duplicate capture"));
+            }
+            cur = self.participate_next[i];
+        }
+        let entry = self.participate_slot.len() as i32;
+        self.participate_slot.push(slot);
+        self.participate_next.push(-1);
+        if self.participate_last >= 0 {
+            self.participate_next[self.participate_last as usize] = entry;
+        } else {
+            self.participate_first = entry;
+        }
+        self.participate_last = entry;
+        Ok(())
+    }
+
+    /// Read the participate-list "address" — `-1` is the `firstNamedCapture`
+    /// head; otherwise the `nextNamedCapture` field of that arena node.
+    fn participate_read(&self, addr: i32) -> i32 {
+        if addr < 0 {
+            self.participate_first
+        } else {
+            self.participate_next[addr as usize]
+        }
+    }
+
+    /// Write the participate-list "address" (see [`Self::participate_read`]).
+    fn participate_write(&mut self, addr: i32, value: i32) {
+        if addr < 0 {
+            self.participate_first = value;
+        } else {
+            self.participate_next[addr as usize] = value;
+        }
     }
 
     fn add_node(&mut self, kind: Kind) -> NodeId {
@@ -1424,12 +1518,26 @@ impl Compiler {
     // ---- the recursive-descent grammar (fxDisjunctionParse etc.) ----
 
     fn disjunction_parse(&mut self, character: i64) -> PResult<NodeId> {
+        // `fxDisjunctionParse`: the named-capture scope of each alternative is
+        // independent. Before parsing the left alternative, remember the tail
+        // of the live-name list; at the `|`, detach the left alternative's
+        // names so the right alternative does not see them (a name may recur
+        // across mutually-exclusive alternatives), then reattach both — the
+        // outer scope sees the left alternative's names, matching XS's pointer
+        // surgery exactly (the right's are dropped from the walkable head).
+        let left_addr = self.participate_last;
         let mut result = self.sequence_parse(character)?;
         if self.character == b'|' as i64 {
+            let right_addr = self.participate_last;
+            let left_named = self.participate_read(left_addr);
+            self.participate_write(left_addr, -1);
             self.next()?;
             let left = result;
             let right = self.disjunction_parse(character)?;
             result = self.add_node(Kind::Disjunction { left, right });
+            let after_left = self.participate_read(left_addr);
+            self.participate_write(right_addr, after_left);
+            self.participate_write(left_addr, left_named);
         }
         if self.character != character {
             return Err(self.error("invalid sequence"));
@@ -1672,13 +1780,12 @@ impl Compiler {
                     self.capture_index += 1;
                     current_index += 1;
                     let name = self.capture_name_parse()?;
-                    if self.capture_names.iter().any(|n| n == &name) {
-                        return Err(self.error("duplicate capture"));
-                    }
-                    let slot = self.name_index;
-                    self.capture_names.push(name.clone());
-                    self.named_groups.push((name, current_index));
-                    self.name_index += 1;
+                    // `fxCaptureNamePut` then `fxCaptureNameParticipate`: a
+                    // duplicate name shares its slot but is a SyntaxError only
+                    // when already live in this scope (same alternative), not
+                    // when it recurs across sibling disjunction alternatives.
+                    let slot = self.put_capture_name(&name, current_index);
+                    self.participate_capture_name(slot)?;
                     let term = self.disjunction_parse(b')' as i64)?;
                     self.next()?;
                     let capture = self.add_node(Kind::Capture {
@@ -1689,21 +1796,22 @@ impl Compiler {
                     self.quantifier_parse(capture, current_index - 1)
                 }
             } else {
-                // `Modifiers` is `ModifierFlags` optionally followed by
-                // `- ModifierFlags`, where each side is a non-repeating run
-                // of i/m/s and the two sets are disjoint. The matcher does
-                // not implement the scoped flag semantics yet, but the lexer
-                // must still reproduce XS's complete accept/reject decision:
-                // validate the grammar, parse the enclosed disjunction, then
-                // surface the valid feature as a named Unsupported result.
-                let mut add = 0u8;
-                let mut remove = 0u8;
+                // `Modifiers` (`fxModifiersParse`) is `ModifierFlags`
+                // optionally followed by `- ModifierFlags`, where each side is
+                // a non-repeating run of i/m/s and the two sets are disjoint.
+                // The scoped flags apply to the enclosed disjunction and are
+                // restored at the sequel step (the runtime `cxModifiersStep`
+                // sets the matcher's live `flags` register), so case-folding
+                // (compile-time, baked into charsets) and dot-all/multiline
+                // (runtime) both track the scoped flag word.
+                let mut add = 0u32;
+                let mut remove = 0u32;
                 let mut removing = false;
                 loop {
                     let bit = match self.character {
-                        c if c == b'i' as i64 => Some(1u8),
-                        c if c == b'm' as i64 => Some(2u8),
-                        c if c == b's' as i64 => Some(4u8),
+                        c if c == b'i' as i64 => Some(XS_REGEXP_I),
+                        c if c == b'm' as i64 => Some(XS_REGEXP_M),
+                        c if c == b's' as i64 => Some(XS_REGEXP_S),
                         _ => None,
                     };
                     if let Some(bit) = bit {
@@ -1725,15 +1833,30 @@ impl Compiler {
                     }
                     break;
                 }
-                if self.character != b':' as i64 || (add | remove) == 0 || (removing && remove == 0)
-                {
+                // `(?:...)`-terminated, at least one flag total (`(?-:a)` — both
+                // empty — is `mxInvalidModifiers`), and disjoint add/remove
+                // (the per-flag duplicate check above already enforces that). An
+                // empty *remove* after `-` is legal (`(?i-:a)`), matching XS.
+                if self.character != b':' as i64 || (add | remove) == 0 {
                     return Err(self.error("invalid inline modifiers"));
                 }
-                self.unsupported.get_or_insert("(?flags:) inline modifiers");
                 self.next()?;
-                let current = self.disjunction_parse(b')' as i64)?;
+                let outer_flags = self.flags;
+                let modified_flags = (outer_flags | add) & !remove;
+                // Parse the enclosed disjunction under the scoped flags so its
+                // charsets fold (or not) per the modified `i`, then restore.
+                self.flags = modified_flags;
+                let disjunction = self.disjunction_parse(b')' as i64)?;
+                self.flags = outer_flags;
                 self.next()?;
-                self.quantifier_parse(current, current_index)
+                // A modifier group is not itself quantifiable in XS
+                // (`fxModifiersParse` returns without `fxQuantifierParse`); a
+                // following quantifier is a "nothing to repeat" error.
+                Ok(self.add_node(Kind::Modifiers {
+                    disjunction,
+                    modified_flags: modified_flags as i32,
+                    outer_flags: outer_flags as i32,
+                }))
             }
         } else {
             self.capture_index += 1;
@@ -1812,6 +1935,15 @@ impl Compiler {
                 self.measure(term, direction);
                 self.nodes[id].completion = self.size as i32;
                 self.size += 24; // mxQuantifierCompletionSize
+            }
+            Shape::Modifiers(disj) => {
+                // fxModifiersMeasure: an entry step block, the disjunction, then
+                // a sequel step block — each `mxModifiersStepSize` (12 bytes).
+                self.nodes[id].step = self.size as i32;
+                self.size += 12; // mxModifiersStepSize
+                self.measure(disj, direction);
+                self.nodes[id].completion = self.size as i32;
+                self.size += 12; // mxModifiersStepSize
             }
         }
     }
@@ -2027,6 +2159,33 @@ impl Compiler {
                 self.code[ct + 4] = capture_index + 1;
                 self.code[ct + 5] = capture_index + capture_count;
             }
+            Shape::Modifiers(disj) => {
+                let (step, completion, modified_flags, outer_flags) = {
+                    let n = &self.nodes[id];
+                    let (mf, of) = match &n.kind {
+                        Kind::Modifiers {
+                            modified_flags,
+                            outer_flags,
+                            ..
+                        } => (*modified_flags, *outer_flags),
+                        _ => unreachable!(),
+                    };
+                    (n.step, n.completion, mf, of)
+                };
+                let disj_step = self.nodes[disj].step;
+                // Entry: switch the live flags to the scoped word, then flow
+                // into the disjunction (fxModifiersCode).
+                let at = (step / 4) as usize;
+                self.code[at] = CX_MODIFIERS_STEP;
+                self.code[at + 1] = disj_step;
+                self.code[at + 2] = modified_flags;
+                self.emit(disj, direction, completion);
+                // Sequel: restore the outer flags, then flow to the real sequel.
+                let ct = (completion / 4) as usize;
+                self.code[ct] = CX_MODIFIERS_STEP;
+                self.code[ct + 1] = sequel;
+                self.code[ct + 2] = outer_flags;
+            }
         }
     }
 
@@ -2055,6 +2214,7 @@ impl Compiler {
                 direction: *direction,
             },
             Kind::Quantifier { term, .. } => Shape::Quantifier(*term),
+            Kind::Modifiers { disjunction, .. } => Shape::Modifiers(*disjunction),
         }
     }
 }
@@ -2072,6 +2232,7 @@ enum Shape {
         direction: i32,
     },
     Quantifier(NodeId),
+    Modifiers(NodeId),
 }
 
 fn hex_digit(c: u8) -> Option<u32> {

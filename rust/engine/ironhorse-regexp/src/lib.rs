@@ -37,11 +37,12 @@
 //! extracted from the pinned XS source. The `v` flag's nested set-expression
 //! grammar, finite string sets (`\q{...}`), and Unicode properties of strings
 //! are also ported, including their pinned syntax restrictions and case-folding
-//! behavior. Every remaining deferred surface is a **named**
-//! [`compile::CompileError::Unsupported`], never a wrong meter or a wrong value:
-//! inline modifiers (`(?flags:)`) and — outside `u`/`v`/a group name — an astral
-//! code point in the pattern (which XS splits into surrogates, a path this stage
-//! does not emit).
+//! behavior. Inline modifiers (`(?ims-ims:...)`) are ported: the scoped flag
+//! word applies to the enclosed disjunction and is restored at the sequel step
+//! (the matcher's `cxModifiersStep`). Every remaining deferred surface is a
+//! **named** [`compile::CompileError::Unsupported`], never a wrong meter or a
+//! wrong value: outside `u`/`v`/a group name, an astral code point in the
+//! pattern (which XS splits into surrogates, a path this stage does not emit).
 
 mod charcase;
 mod encoding;
@@ -196,6 +197,41 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_named_groups_share_a_slot_across_alternatives() {
+        // ES2025: the same name may appear in mutually-exclusive alternatives.
+        // Both groups share one name slot, so `name_count` is 1 and there is a
+        // single `.groups` key; the matcher's runtime `names[]` resolves it to
+        // whichever alternative matched.
+        let r = run("(?<a>x)|(?<a>y)", "", "y", 0).expect("compiles");
+        assert!(r.outcome.matched);
+        assert_eq!(r.program.name_count, 1);
+        assert_eq!(r.program.capture_group_names, vec![("a".to_string(), 1)]);
+        assert_eq!(r.outcome.captures[1], (-1, -1)); // left group unset
+        assert_eq!(r.outcome.captures[2], (0, 1)); // right group matched "y"
+        assert_eq!(r.outcome.names, vec![2]); // slot 0 → capture 2
+        // The other branch: "x" matches the left group.
+        let r2 = run("(?<a>x)|(?<a>y)", "", "x", 0).expect("compiles");
+        assert_eq!(r2.outcome.names, vec![1]);
+        assert_eq!(r2.outcome.captures[1], (0, 1));
+    }
+
+    #[test]
+    fn duplicate_named_groups_in_one_alternative_are_rejected() {
+        // Two same-named groups both live in one alternative is still a
+        // SyntaxError (`mxDuplicateCapture`).
+        assert!(matches!(
+            compile("(?<a>x)(?<a>y)", ""),
+            Err(CompileError::Syntax(_))
+        ));
+        // A trailing group re-using a name from inside a disjunction is a
+        // duplicate (both can be live in the same match).
+        assert!(matches!(
+            compile("(?<a>x)((?<b>y)|(?<a>z))", ""),
+            Err(CompileError::Syntax(_))
+        ));
+    }
+
+    #[test]
     fn lookahead() {
         let (m, c) = caps("a(?=b)", "", "ab");
         assert!(m);
@@ -336,26 +372,47 @@ mod tests {
     }
 
     #[test]
-    fn inline_modifier_syntax_is_validated_before_the_named_fold() {
-        for pattern in ["(?i:a)", "(?im-s:a)", "(?-s:a)"] {
+    fn inline_modifier_syntax_is_validated_and_executes() {
+        // Valid inline modifiers now compile to a real program (they used to be
+        // an honest Unsupported fold). An empty *remove* after `-` is legal.
+        for pattern in ["(?i:a)", "(?im-s:a)", "(?-s:a)", "(?i-:a)", "(?ims-:a)"] {
             assert!(
-                matches!(compile(pattern, ""), Err(CompileError::Unsupported(_))),
-                "valid inline modifiers remain an honest matcher fold: {pattern}"
+                compile(pattern, "").is_ok(),
+                "valid inline modifiers compile: {pattern}"
             );
         }
         for pattern in [
             "(?ii:a)",
             "(?i-i:a)",
-            "(?-:a)",
-            "(?i-:a)",
+            "(?-:a)", // both add and remove empty
             "(?g:a)",
             "(?\\u0069:a)",
             "(?i-a)",
+            "(?i:a)+", // a modifier group is not itself quantifiable in XS
         ] {
             assert!(!accepts(pattern, ""), "invalid inline modifiers: {pattern}");
         }
         assert!(!accepts("(?i:(?<>a))", ""), "invalid nested group name");
         assert!(!accepts("(?i:a", ""), "unterminated modifier group");
+    }
+
+    #[test]
+    fn inline_modifiers_scope_ignore_case_and_dot_all() {
+        // `(?i:...)` folds only inside the group.
+        assert!(caps("(?i:a)b", "", "Ab").0);
+        assert!(!caps("(?i:a)b", "", "AB").0); // the trailing `b` stays case-sensitive
+        // `(?-i:...)` removes folding inside an `i` pattern.
+        assert!(caps("a(?-i:b)", "i", "Ab").0);
+        assert!(!caps("a(?-i:b)", "i", "AB").0);
+        // `(?s:.)` makes `.` match a newline only inside the group.
+        assert!(caps("(?s:.)", "", "\n").0);
+        assert!(!caps(".", "", "\n").0);
+        // `(?m:^)` scopes multiline anchoring.
+        assert!(caps("(?m:^b)", "", "a\nb").0);
+        assert!(!caps("^b", "", "a\nb").0);
+        // Nesting: an inner remove within an outer add restores case sensitivity.
+        assert!(caps("(?i:a(?-i:b)c)", "", "AbC").0);
+        assert!(!caps("(?i:a(?-i:b)c)", "", "ABC").0);
     }
 
     #[test]

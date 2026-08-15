@@ -29,6 +29,11 @@ pub struct MatchOutcome {
     /// `(from, to)` byte-offset pairs — `capture_count` of them, index 0
     /// the whole match; an unset capture is `(-1, -1)`.
     pub captures: Vec<(i32, i32)>,
+    /// The runtime name→capture map (`data[2*captureCount + slot]`): for each
+    /// name slot, the capture index that last participated, or `-1` if none.
+    /// A duplicate name resolves through this so the JS `.groups`/`.indices`
+    /// surfaces read the alternative that actually matched, not a static slot.
+    pub names: Vec<i32>,
     /// Match meter in raw 16.16 fixed point: `steps * XS_REGEXP_METERING`.
     pub match_meter_raw: u64,
 }
@@ -483,7 +488,7 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
         }
     }
 
-    MatchOutcome { matched: result, captures, match_meter_raw: meter }
+    MatchOutcome { matched: result, captures, names, match_meter_raw: meter }
 }
 
 /// `(offset == boundary) ? 0 : \w-membership of the char before/at
