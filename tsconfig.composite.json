@@ -39,6 +39,9 @@
       "path": "packages/cbor/tsconfig.composite.json"
     },
     {
+      "path": "packages/cbor-frame/tsconfig.composite.json"
+    },
+    {
       "path": "packages/chacha12/tsconfig.composite.json"
     },
     {
