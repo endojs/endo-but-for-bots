@@ -9271,12 +9271,31 @@ impl Interp {
                         _ => return Halt::Unsupported(op.name()),
                     };
                     let numeric_index = (id == crate::value::XS_NO_ID).then_some(index);
+                    // The integer-indexed exotic `[[Delete]]` (10.4.5.7): a
+                    // canonical numeric index the view can address cannot be
+                    // deleted (a valid index is `false`); an invalid one is a
+                    // vacuous `true`.
+                    let ta_delete = self
+                        .typed_arrays
+                        .get(&match obj.value {
+                            Payload::Reference(inst) => inst,
+                            _ => crate::value::SlotIndex::NULL,
+                        })
+                        .copied()
+                        .and_then(|ta| {
+                            self.ta_numeric_index_at(id, index)
+                                .map(|n| self.ta_valid_index(ta, n).is_none())
+                        });
                     let id = if id == crate::value::XS_NO_ID {
                         self.intern_key(&index.to_string())
                     } else {
                         id
                     };
                     let deleted = match obj.value {
+                        Payload::Reference(_) if ta_delete.is_some() => {
+                            self.meter.tick_builtin();
+                            ta_delete.unwrap()
+                        }
                         Payload::Reference(inst) => {
                             self.meter.tick_builtin();
                             if self.proxies.contains_key(&inst) {
@@ -10827,6 +10846,17 @@ impl Interp {
                         self.push(Slot::boolean(present));
                         pc += size as usize;
                         continue;
+                    }
+                    // `k in sample`: the integer-indexed exotic `[[HasProperty]]`
+                    // (10.4.5.3). A canonical numeric index is present iff it is
+                    // a valid integer index; any other key walks the chain.
+                    if let Some(&ta) = self.typed_arrays.get(&objref) {
+                        if let Some(n) = self.ta_numeric_index(key) {
+                            self.meter.tick_raw(IN_METERING);
+                            self.push(Slot::boolean(self.ta_valid_index(ta, n).is_some()));
+                            pc += size as usize;
+                            continue;
+                        }
                     }
                     // A **symbol** key (`sym in o`) resolves its descriptor-slot
                     // identity to the interned id (`mxID(symbol)`); no index /
@@ -20315,15 +20345,35 @@ impl Interp {
                     Payload::Reference(o) => o,
                     _ => return Err(Halt::Unsupported("getOwnPropertyDescriptor:non-object")),
                 };
-                if self.arrays.contains_key(&inst)
+                // The integer-indexed exotic `[[GetOwnProperty]]` (10.4.5.1): a
+                // canonical numeric index yields the element data descriptor
+                // (or `undefined` for an invalid index); a non-canonical key is
+                // an ordinary own-property descriptor.
+                if let Some(&ta) = self.typed_arrays.get(&inst) {
+                    let descriptor = if let Some(n) = self.ta_numeric_index(arg1) {
+                        self.ta_index_own_descriptor(ta, n)
+                    } else {
+                        let id = self.to_property_id(code, arg1)?;
+                        self.ordinary_get_own_descriptor(inst, id)
+                    };
+                    match descriptor {
+                        Some(descriptor) => {
+                            self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
+                            self.descriptor_object(descriptor)
+                        }
+                        None => {
+                            self.meter.tick_raw(GOPD_ABSENT_RESIDUAL_METERING);
+                            Slot::undefined()
+                        }
+                    }
+                } else if self.arrays.contains_key(&inst)
                     || self.collections.contains_key(&inst)
-                    || self.typed_arrays.contains_key(&inst)
                     || self.array_buffers.contains_key(&inst)
                     || self.data_views.contains_key(&inst)
                     || self.wrapper_data.contains_key(&inst)
                 {
                     return Err(Halt::Unsupported("getOwnPropertyDescriptor:exotic-object"));
-                }
+                } else {
                 // A symbol key resolves to its interned key id; a string key
                 // interns as a name (an index-valued string is the exotic-index
                 // corner — honest skip). Own-only, so no boot-default gate: an
@@ -20370,6 +20420,7 @@ impl Interp {
                         self.meter.tick_raw(GOPD_ABSENT_RESIDUAL_METERING);
                         Slot::undefined()
                     }
+                }
                 }
             }
             NativeMethod::ObjectGetOwnPropertyNames => {
@@ -20536,6 +20587,51 @@ impl Interp {
                         return Err(Halt::Throw("TypeError: cannot define property".into()));
                     }
                     arg0
+                } else if self.typed_arrays.contains_key(&target) {
+                    // The integer-indexed exotic `[[DefineOwnProperty]]`
+                    // (10.4.5.3) under `DefinePropertyOrThrow`: a canonical
+                    // numeric index accepts only a valid-index, value-carrying
+                    // data descriptor without a `configurable:false`/
+                    // `enumerable:false`/`writable:false` clause; a rejection
+                    // throws `TypeError`. A non-canonical key defines ordinarily.
+                    let ta = self.typed_arrays[&target];
+                    let key = self
+                        .stack
+                        .get(base + 5)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined);
+                    let descriptor_value = self
+                        .stack
+                        .get(base + 6)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined);
+                    let descriptor_object = match descriptor_value.value {
+                        Payload::Reference(descriptor)
+                            if descriptor_value.kind == Kind::Reference =>
+                        {
+                            descriptor
+                        }
+                        _ => {
+                            return Err(Halt::Throw(
+                                "TypeError: descriptor is not an object".into(),
+                            ))
+                        }
+                    };
+                    let descriptor = self.descriptor_from_object(code, descriptor_object)?;
+                    self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
+                    let accepted = if let Some(n) = self.ta_numeric_index(key) {
+                        self.ta_index_define(code, ta, n, descriptor)?
+                    } else {
+                        let id = self.to_property_id(code, key)?;
+                        self.ordinary_define_own_property(target, id, descriptor)
+                    };
+                    if !accepted {
+                        // A realm-local, catchable `TypeError` (the
+                        // `DefinePropertyOrThrow` rejection an `assert.throws`
+                        // observes), not an uncatchable host escape.
+                        return Err(self.catchable_type_error());
+                    }
+                    arg0
                 } else {
                     let arg1 = self
                         .stack
@@ -20677,6 +20773,52 @@ impl Interp {
                     Payload::Reference(o) if this.kind == Kind::Reference => o,
                     _ => return Err(Halt::Unsupported("propertyIsEnumerable:non-object-this")),
                 };
+                // A TypedArray's own enumerable properties are exactly its valid
+                // integer indices (a data property is enumerable); a
+                // non-canonical / invalid key is not own, hence not enumerable.
+                if let Some(&ta) = self.typed_arrays.get(&inst) {
+                    self.meter.tick_raw(PROPERTY_IS_ENUMERABLE_METERING);
+                    // A canonical numeric index is enumerable iff it is a valid
+                    // integer index; a symbol or non-canonical string key is an
+                    // ordinary own-enumerable probe (never a live element).
+                    let ordinary_enum = |slf: &Self, id: u16| -> bool {
+                        match slf.find_property(inst, id) {
+                            Some(p) => slf.slots.get(p).flag & XS_DONT_ENUM_FLAG == 0,
+                            None => false,
+                        }
+                    };
+                    let r = match arg0.kind {
+                        Kind::String => match arg0.value {
+                            Payload::String(off) => {
+                                let key = self.str_text(off);
+                                if let Some(n) = canonical_numeric_index_string(&key) {
+                                    self.ta_valid_index(ta, n).is_some()
+                                } else {
+                                    let id = self.intern_key(&key);
+                                    ordinary_enum(self, id)
+                                }
+                            }
+                            _ => {
+                                return Err(Halt::Unsupported(
+                                    "propertyIsEnumerable:non-string-key",
+                                ))
+                            }
+                        },
+                        Kind::Symbol => match arg0.value {
+                            Payload::Reference(desc) => {
+                                let id = self.intern_symbol_key(desc);
+                                ordinary_enum(self, id)
+                            }
+                            _ => {
+                                return Err(Halt::Unsupported("propertyIsEnumerable:bad-symbol"))
+                            }
+                        },
+                        _ => {
+                            return Err(Halt::Unsupported("propertyIsEnumerable:non-string-key"))
+                        }
+                    };
+                    Slot::boolean(r)
+                } else {
                 if !self.is_ordinary_object(inst) {
                     return Err(Halt::Unsupported("propertyIsEnumerable:exotic-object"));
                 }
@@ -20699,6 +20841,7 @@ impl Interp {
                 };
                 self.meter.tick_raw(PROPERTY_IS_ENUMERABLE_METERING);
                 Slot::boolean(r)
+                }
             }
             // `Object.values(o)` / `Object.entries(o)`: a fresh `Array` of the
             // own enumerable string-keyed values (or `[key, value]` pairs), in
@@ -20821,7 +20964,9 @@ impl Interp {
             // argument). Ordinary receivers only.
             NativeMethod::ObjectPreventExtensions => {
                 if let Payload::Reference(inst) = arg0.value {
-                    if !self.is_ordinary_object(inst) {
+                    // A fixed-length TypedArray marks non-extensible through the
+                    // ordinary instance flag (its elements are unaffected).
+                    if !self.is_ordinary_object(inst) && !self.typed_arrays.contains_key(&inst) {
                         return Err(Halt::Unsupported("preventExtensions:exotic-object"));
                     }
                     self.meter.tick_raw(PREVENT_EXTENSIONS_RESIDUAL_METERING);
@@ -20860,7 +21005,7 @@ impl Interp {
             NativeMethod::ObjectIsExtensible => {
                 let r = match arg0.value {
                     Payload::Reference(inst) if arg0.kind == Kind::Reference => {
-                        if !self.is_ordinary_object(inst) {
+                        if !self.is_ordinary_object(inst) && !self.typed_arrays.contains_key(&inst) {
                             return Err(Halt::Unsupported("isExtensible:exotic-object"));
                         }
                         self.instance_extensible(inst)
@@ -22876,7 +23021,10 @@ impl Interp {
                     Payload::Reference(object) if arg0.kind == Kind::Reference => object,
                     _ => return Err(Halt::Throw("TypeError: Reflect.isExtensible target".into())),
                 };
-                if !self.is_ordinary_object(object) {
+                // A (fixed-length) TypedArray tracks extensibility through the
+                // ordinary instance flag: its integer-indexed exotic
+                // `[[IsExtensible]]` reports the ordinary `[[Extensible]]` bit.
+                if !self.is_ordinary_object(object) && !self.typed_arrays.contains_key(&object) {
                     return Err(Halt::Unsupported("Reflect.isExtensible:exotic-object"));
                 }
                 Ok(Slot::boolean(self.instance_extensible(object)))
@@ -22890,7 +23038,11 @@ impl Interp {
                         ))
                     }
                 };
-                if !self.is_ordinary_object(object) {
+                // A fixed-length TypedArray's `[[PreventExtensions]]` succeeds
+                // and marks the instance non-extensible (so a later ordinary
+                // named define is rejected); its integer-indexed elements are
+                // unaffected. A resizable/length-tracking view is not modeled.
+                if !self.is_ordinary_object(object) && !self.typed_arrays.contains_key(&object) {
                     return Err(Halt::Unsupported("Reflect.preventExtensions:exotic-object"));
                 }
                 self.slots.get_mut(object).flag |= XS_DONT_PATCH_FLAG;
@@ -22908,6 +23060,26 @@ impl Interp {
                         ))
                     }
                 };
+                // The integer-indexed exotic `[[GetOwnProperty]]` (10.4.5.1),
+                // identical to `Object.getOwnPropertyDescriptor`.
+                if let Some(&ta) = self.typed_arrays.get(&inst) {
+                    let descriptor = if let Some(n) = self.ta_numeric_index(arg1) {
+                        self.ta_index_own_descriptor(ta, n)
+                    } else {
+                        let id = self.to_property_id(code, arg1)?;
+                        self.ordinary_get_own_descriptor(inst, id)
+                    };
+                    return Ok(match descriptor {
+                        Some(descriptor) => {
+                            self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
+                            self.descriptor_object(descriptor)
+                        }
+                        None => {
+                            self.meter.tick_raw(GOPD_ABSENT_RESIDUAL_METERING);
+                            Slot::undefined()
+                        }
+                    });
+                }
                 if !self.is_ordinary_object(inst) {
                     return Err(Halt::Unsupported(
                         "Reflect.getOwnPropertyDescriptor:exotic-object",
@@ -22930,6 +23102,33 @@ impl Interp {
             // returning a boolean and never throwing on rejection. Covered
             // shape: a four-field data descriptor on a genuinely-new key.
             NativeMethod::ReflectDefineProperty => {
+                // The integer-indexed exotic `[[DefineOwnProperty]]` (10.4.5.3):
+                // a canonical numeric index accepts only a value-carrying data
+                // descriptor with no `configurable:false`/`enumerable:false`/
+                // `writable:false` clause and a valid index (storing its
+                // coerced `[[Value]]`); a non-canonical key defines ordinarily.
+                if let Payload::Reference(inst) = arg0.value {
+                    if arg0.kind == Kind::Reference && self.typed_arrays.contains_key(&inst) {
+                        let ta = self.typed_arrays[&inst];
+                        let descriptor_object = match arg2.value {
+                            Payload::Reference(d) if arg2.kind == Kind::Reference => d,
+                            _ => {
+                                return Err(Halt::Throw(
+                                    "TypeError: descriptor is not an object".into(),
+                                ))
+                            }
+                        };
+                        let descriptor = self.descriptor_from_object(code, descriptor_object)?;
+                        self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
+                        let accepted = if let Some(n) = self.ta_numeric_index(arg1) {
+                            self.ta_index_define(code, ta, n, descriptor)?
+                        } else {
+                            let id = self.to_property_id(code, arg1)?;
+                            self.ordinary_define_own_property(inst, id, descriptor)
+                        };
+                        return Ok(Slot::boolean(accepted));
+                    }
+                }
                 if let Payload::Reference(object) = arg0.value {
                     if arg0.kind != Kind::Reference {
                         return Err(Halt::Throw(
@@ -23049,6 +23248,47 @@ impl Interp {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
                     _ => return Err(Halt::Unsupported("Reflect.ownKeys:non-object")),
                 };
+                // The integer-indexed exotic `[[OwnPropertyKeys]]` (10.4.5.6):
+                // every in-range integer index (ascending, as a string) first,
+                // then the ordinary own string keys (non-index), then the own
+                // symbol keys.
+                if let Some(&ta) = self.typed_arrays.get(&inst) {
+                    let element_count = ta.length;
+                    let mut ids: Vec<u16> = self
+                        .own_property_slots(inst)
+                        .into_iter()
+                        .map(|property| self.slots.get(property).id)
+                        .collect();
+                    ids.sort_by_key(|id| {
+                        if self.is_symbol_key_id(*id) {
+                            (1u8, 0)
+                        } else {
+                            (0u8, 0)
+                        }
+                    });
+                    let n = element_count + ids.len() as u32;
+                    self.meter.tick_raw(OBJECT_KEYS_FRAME_METERING);
+                    self.meter.tick_raw(self.array_chunk_size_metering(n));
+                    for _ in 0..n {
+                        self.meter.tick_slot_alloc();
+                    }
+                    let mut items: Vec<Slot> = Vec::with_capacity(n as usize);
+                    for i in 0..element_count {
+                        let off = self.alloc_str_text(number_to_ecma_string(i as f64).as_bytes());
+                        items.push(Slot::of(Kind::String, Payload::String(off)));
+                    }
+                    for &id in &ids {
+                        items.push(self.property_key_slot(id)?);
+                    }
+                    let result = self.slots.alloc(Slot::instance(self.array_proto));
+                    let mut data = ArrayData::default();
+                    data.length = n;
+                    for (i, slot) in items.into_iter().enumerate() {
+                        data.items.insert(i as u32, slot);
+                    }
+                    self.arrays.insert(result, data);
+                    return Ok(Slot::of(Kind::Reference, Payload::Reference(result)));
+                }
                 if !self.is_ordinary_object(inst) {
                     return Err(Halt::Unsupported("Reflect.ownKeys:exotic-object"));
                 }
@@ -23089,6 +23329,20 @@ impl Interp {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
                     _ => return Err(Halt::Unsupported("Reflect.has:non-object")),
                 };
+                // The integer-indexed exotic `[[HasProperty]]` (10.4.5.3): a
+                // canonical numeric index is present iff it is a valid integer
+                // index; any other key walks the chain ordinarily.
+                if let Some(&ta) = self.typed_arrays.get(&inst) {
+                    if let Some(n) = self.ta_numeric_index(arg1) {
+                        self.meter.tick_raw(REFLECT_FRAME_METERING);
+                        return Ok(Slot::boolean(self.ta_valid_index(ta, n).is_some()));
+                    }
+                    let id = self.to_property_id(code, arg1)?;
+                    let (present, recursions) = self.instance_has(inst, id);
+                    self.meter.tick_raw(REFLECT_FRAME_METERING);
+                    self.meter.tick_code_n(recursions);
+                    return Ok(Slot::boolean(present));
+                }
                 if !self.is_ordinary_object(inst) {
                     return Err(Halt::Unsupported("Reflect.has:exotic-object"));
                 }
@@ -23106,6 +23360,18 @@ impl Interp {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
                     _ => return Err(Halt::Unsupported("Reflect.get:non-object")),
                 };
+                // The integer-indexed exotic `[[Get]]` (10.4.5.4): a canonical
+                // numeric index reads the element regardless of `receiver`; a
+                // non-canonical key is an ordinary chain `[[Get]]`.
+                if let Some(&ta) = self.typed_arrays.get(&inst) {
+                    let receiver = if argc >= 3 { arg2 } else { arg0 };
+                    self.meter.tick_raw(REFLECT_FRAME_METERING);
+                    if let Some(n) = self.ta_numeric_index(arg1) {
+                        return Ok(self.ta_indexed_element_get(ta, n));
+                    }
+                    let id = self.to_property_id(code, arg1)?;
+                    return self.ordinary_get(code, inst, id, receiver);
+                }
                 if !self.is_ordinary_object(inst) {
                     return Err(Halt::Unsupported("Reflect.get:exotic-object"));
                 }
@@ -23123,6 +23389,33 @@ impl Interp {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
                     _ => return Err(Halt::Unsupported("Reflect.set:non-object")),
                 };
+                // The integer-indexed exotic `[[Set]]` (10.4.5.5). A canonical
+                // numeric index: when the receiver IS the view, coerce+store
+                // (always `true`); an invalid index with any receiver is a
+                // silent `true`; a valid index with a DIFFERENT receiver falls
+                // to `OrdinarySetWithOwnDescriptor` (store on the receiver, the
+                // value uncoerced by the source view's element type). A
+                // non-canonical key is an ordinary `[[Set]]`.
+                if let Some(&ta) = self.typed_arrays.get(&inst) {
+                    let receiver = if argc >= 4 { arg3 } else { arg0 };
+                    self.meter.tick_raw(REFLECT_FRAME_METERING);
+                    if let Some(n) = self.ta_numeric_index(arg1) {
+                        if self.same_value(arg0, receiver) {
+                            self.ta_indexed_element_set(code, ta, n, arg2)?;
+                            return Ok(Slot::boolean(true));
+                        }
+                        if self.ta_valid_index(ta, n).is_none() {
+                            return Ok(Slot::boolean(true));
+                        }
+                        return Ok(Slot::boolean(
+                            self.set_data_on_receiver(code, receiver, arg1, arg2)?,
+                        ));
+                    }
+                    let id = self.to_property_id(code, arg1)?;
+                    return Ok(Slot::boolean(
+                        self.ordinary_set(code, inst, id, arg2, receiver)?,
+                    ));
+                }
                 if !self.is_ordinary_object(inst) {
                     return Err(Halt::Unsupported("Reflect.set:exotic-object"));
                 }
@@ -23141,6 +23434,18 @@ impl Interp {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
                     _ => return Err(Halt::Unsupported("Reflect.deleteProperty:non-object")),
                 };
+                // The integer-indexed exotic `[[Delete]]` (10.4.5.7): a valid
+                // integer index cannot be deleted (`false`); an invalid
+                // canonical numeric index deletes vacuously (`true`); a
+                // non-canonical key deletes ordinarily.
+                if let Some(&ta) = self.typed_arrays.get(&inst) {
+                    self.meter.tick_raw(REFLECT_FRAME_METERING);
+                    if let Some(n) = self.ta_numeric_index(arg1) {
+                        return Ok(Slot::boolean(self.ta_valid_index(ta, n).is_none()));
+                    }
+                    let id = self.to_property_id(code, arg1)?;
+                    return Ok(Slot::boolean(self.delete_own_property(inst, id)));
+                }
                 if !self.is_ordinary_object(inst) {
                     return Err(Halt::Unsupported("Reflect.deleteProperty:exotic-object"));
                 }
@@ -26937,6 +27242,285 @@ impl Interp {
         self.make_bigint(neg, mag)
     }
 
+    /// `IsValidIntegerIndex(O, index)` (ECMA-262 10.4.5.14) for the numeric
+    /// index `n` a canonical numeric index string named: `Some(index)` when
+    /// `n` is an integral non-negative value (`-0` excluded) strictly below
+    /// the view length, else `None`. Buffer detach is a host-only concern the
+    /// XS oracle build does not model (it exposes no `$262`), so it is not
+    /// checked here. The integer/number fast kinds keep this on the inline
+    /// arithmetic path so the meter-exact corpus is untouched.
+    fn ta_valid_index(&self, ta: TypedArrayData, n: f64) -> Option<u32> {
+        // Integral, finite, not -0, and in `[0, length)`.
+        if !n.is_finite() || n.fract() != 0.0 {
+            return None;
+        }
+        if n == 0.0 && n.is_sign_negative() {
+            return None;
+        }
+        if n < 0.0 || n >= ta.length as f64 {
+            return None;
+        }
+        Some(n as u32)
+    }
+
+    /// `CanonicalNumericIndexString(P)` for a property-key `Slot`: `Some(n)`
+    /// iff `key` is a **String** value that canonically names the number `n`
+    /// (10.4.5.1). A Symbol key — or any non-string — is never a numeric
+    /// index (`None`), routing the integer-indexed MOP to ordinary behavior.
+    fn ta_numeric_index(&self, key: Slot) -> Option<f64> {
+        if key.kind != Kind::String {
+            return None;
+        }
+        match key.value {
+            Payload::String(off) => canonical_numeric_index_string(&self.str_text(off)),
+            _ => None,
+        }
+    }
+
+    /// `CanonicalNumericIndexString(P)` for an `AT`-encoded key `(id, index)`:
+    /// reconstruct the property name string and canonicalize it. A plain
+    /// integer index (`id == XS_NO_ID`) is its own canonical decimal; a named
+    /// key resolves through the intern table (a symbol key is never numeric).
+    fn ta_numeric_index_at(&self, id: u16, index: u32) -> Option<f64> {
+        if id == crate::value::XS_NO_ID {
+            return Some(index as f64);
+        }
+        if self.is_symbol_key_id(id) {
+            return None;
+        }
+        let name = self.string_key_name(id)?;
+        canonical_numeric_index_string(&name)
+    }
+
+    /// `IntegerIndexedElementGet(O, index)` (ECMA-262 10.4.5.15): the element
+    /// value the canonical numeric index `n` reads, or `undefined` when `n` is
+    /// not a valid integer index (out of range / non-integral / detached).
+    /// Meters one built-in step exactly as the plain `sample[i]` read does.
+    fn ta_indexed_element_get(&mut self, ta: TypedArrayData, n: f64) -> Slot {
+        match self.ta_valid_index(ta, n) {
+            None => Slot::undefined(),
+            Some(index) => {
+                let v = if ta.kind <= 1 {
+                    self.typed_array_element_get_bigint(ta, index)
+                } else {
+                    self.typed_array_element_get(ta, index)
+                        .unwrap_or_else(Slot::undefined)
+                };
+                self.meter.tick_raw(TYPED_ARRAY_ELEMENT_METERING);
+                v
+            }
+        }
+    }
+
+    /// `IntegerIndexedElementSet(O, index, value)` (ECMA-262 10.4.5.16): coerce
+    /// `value` to the element type — `ToBigInt` for a BigInt view, `ToNumber`
+    /// otherwise — which runs any `valueOf`/`toString`/`Symbol.toPrimitive`
+    /// (observable side effects, and a possible throw) **before** the validity
+    /// test, then store only when `n` is a valid integer index. A write to an
+    /// invalid index is a coercion-only no-op (the coercion still runs). The
+    /// spec's completion is always the unused `true`.
+    fn ta_indexed_element_set(
+        &mut self,
+        code: &[u8],
+        ta: TypedArrayData,
+        n: f64,
+        value: Slot,
+    ) -> Result<(), Halt> {
+        if ta.kind <= 1 {
+            // ToBigInt(value) — the low 64 bits are the two's-complement store.
+            let u = self.to_bigint_low64(code, value)?;
+            if let Some(index) = self.ta_valid_index(ta, n) {
+                let base = ta.offset as usize + index as usize * 8;
+                let buf = self.array_buffers[&ta.buffer];
+                let out = self.chunks.slice_mut(buf.data, base + 8);
+                out[base..base + 8].copy_from_slice(&u.to_le_bytes());
+                self.meter.tick_raw(TYPED_ARRAY_ELEMENT_METERING);
+            }
+            return Ok(());
+        }
+        // ToNumber(value): objects run ToPrimitive(number); a BigInt or Symbol
+        // is a (catchable) TypeError — a Number-typed element accepts neither.
+        // Mirrors [`Self::typed_array_element_set`]'s coercion so the two
+        // element-write paths agree on the error surface.
+        let primitive = self.to_primitive(code, value, false)?;
+        let num = match primitive.kind {
+            Kind::Integer | Kind::Number => numeric_of(&primitive).unwrap_or(f64::NAN),
+            Kind::String => match primitive.value {
+                Payload::String(off) => string_to_number(self.str_text(off).as_bytes(), true),
+                _ => unreachable!(),
+            },
+            Kind::Boolean | Kind::Null | Kind::Undefined => to_number(&primitive),
+            Kind::BigInt | Kind::Symbol => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error()),
+        };
+        if let Some(index) = self.ta_valid_index(ta, n) {
+            let size = TYPED_ARRAY_TYPES[ta.kind as usize].size as usize;
+            let base = ta.offset as usize + index as usize * size;
+            let le =
+                encode_element_le(ta.kind, num).ok_or(Halt::Unsupported("typed-array-set:bigint"))?;
+            let buf = self.array_buffers[&ta.buffer];
+            let out = self.chunks.slice_mut(buf.data, base + size);
+            out[base..base + size].copy_from_slice(&le);
+            self.meter.tick_raw(TYPED_ARRAY_ELEMENT_METERING);
+        }
+        Ok(())
+    }
+
+    /// The integer-indexed exotic `[[GetOwnProperty]]` (ECMA-262 10.4.5.1):
+    /// `Some(descriptor)` for the numeric index `n` when it is a valid integer
+    /// index — a `{ value, writable: true, enumerable: true, configurable:
+    /// true }` data descriptor holding the element — and `None` (undefined)
+    /// for an invalid canonical numeric index. Only meaningful for a key that
+    /// is a canonical numeric index.
+    fn ta_index_own_descriptor(&mut self, ta: TypedArrayData, n: f64) -> Option<OrdinaryDescriptor> {
+        let index = self.ta_valid_index(ta, n)?;
+        let value = if ta.kind <= 1 {
+            self.typed_array_element_get_bigint(ta, index)
+        } else {
+            self.typed_array_element_get(ta, index)
+                .unwrap_or_else(Slot::undefined)
+        };
+        self.meter.tick_raw(TYPED_ARRAY_ELEMENT_METERING);
+        Some(OrdinaryDescriptor {
+            value: Some(value),
+            writable: Some(true),
+            enumerable: Some(true),
+            configurable: Some(true),
+            ..OrdinaryDescriptor::default()
+        })
+    }
+
+    /// The integer-indexed exotic `[[DefineOwnProperty]]` (ECMA-262 10.4.5.3)
+    /// for a canonical numeric index `n` and a (possibly partial) descriptor:
+    /// `Ok(true)` when the define is accepted (a valid index whose descriptor
+    /// is a data descriptor with no `configurable:false` / `enumerable:false`
+    /// / `writable:false` clause, its `[[Value]]` — if present — coerced and
+    /// stored), `Ok(false)` when rejected (an invalid index, an accessor
+    /// descriptor, or a rejected attribute). The value coercion runs (and may
+    /// throw) exactly as `[[Set]]`'s does.
+    fn ta_index_define(
+        &mut self,
+        code: &[u8],
+        ta: TypedArrayData,
+        n: f64,
+        desc: OrdinaryDescriptor,
+    ) -> Result<bool, Halt> {
+        if self.ta_valid_index(ta, n).is_none() {
+            return Ok(false);
+        }
+        if desc.configurable == Some(false)
+            || desc.enumerable == Some(false)
+            || desc.is_accessor()
+            || desc.writable == Some(false)
+        {
+            return Ok(false);
+        }
+        if let Some(value) = desc.value {
+            self.ta_indexed_element_set(code, ta, n, value)?;
+        }
+        Ok(true)
+    }
+
+    /// `OrdinarySetWithOwnDescriptor` for a **writable data** ownDesc against a
+    /// distinct `receiver` (ECMA-262 10.1.9.2 steps 3.a–3.e): the integer-
+    /// indexed `[[Set]]`'s valid-index-but-receiver-differs continuation. The
+    /// value is stored on the receiver (never on the source view, never
+    /// coerced through the source's element type) — creating an own data
+    /// property, or updating an existing writable data property, and failing
+    /// (`false`) for a non-object receiver, an accessor / non-writable existing
+    /// property, or a non-extensible receiver. A canonical numeric index on a
+    /// typed-array receiver routes to that receiver's own
+    /// `[[DefineOwnProperty]]` (coercing through its element type).
+    fn set_data_on_receiver(
+        &mut self,
+        code: &[u8],
+        receiver: Slot,
+        key: Slot,
+        value: Slot,
+    ) -> Result<bool, Halt> {
+        let robj = match receiver.value {
+            Payload::Reference(r) if receiver.kind == Kind::Reference => r,
+            _ => return Ok(false),
+        };
+        if let Some(&rta) = self.typed_arrays.get(&robj) {
+            if let Some(rn) = self.ta_numeric_index(key) {
+                let desc = OrdinaryDescriptor {
+                    value: Some(value),
+                    ..OrdinaryDescriptor::default()
+                };
+                return self.ta_index_define(code, rta, rn, desc);
+            }
+            let id = self.to_property_id(code, key)?;
+            return self.set_ordinary_data_on(robj, id, value);
+        }
+        let id = self.to_property_id(code, key)?;
+        self.set_ordinary_data_on(robj, id, value)
+    }
+
+    /// The ordinary-object half of [`Self::set_data_on_receiver`]: update an
+    /// existing writable data property (rejecting an accessor / non-writable
+    /// one) or `CreateDataProperty` a fresh own property (rejecting a
+    /// non-extensible receiver).
+    fn set_ordinary_data_on(
+        &mut self,
+        obj: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+    ) -> Result<bool, Halt> {
+        match self.ordinary_get_own_descriptor(obj, id) {
+            Some(existing) => {
+                if existing.is_accessor() || existing.writable == Some(false) {
+                    return Ok(false);
+                }
+                let desc = OrdinaryDescriptor {
+                    value: Some(value),
+                    ..OrdinaryDescriptor::default()
+                };
+                Ok(self.ordinary_define_own_property(obj, id, desc))
+            }
+            None => {
+                let desc = OrdinaryDescriptor {
+                    value: Some(value),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(true),
+                    ..OrdinaryDescriptor::default()
+                };
+                Ok(self.ordinary_define_own_property(obj, id, desc))
+            }
+        }
+    }
+
+    /// `ToBigInt(value)` reduced to the low 64 bits a BigInt64/BigUint64 store
+    /// keeps (two's complement). Runs `ToPrimitive(number)` on an object first,
+    /// then: a BigInt takes its low limbs; a Boolean is `1n`/`0n`; a String
+    /// parses as a `StringIntegerLiteral` (a non-integer body throws
+    /// `SyntaxError`); a Number/Symbol/`undefined`/`null` throws `TypeError`.
+    fn to_bigint_low64(&mut self, code: &[u8], value: Slot) -> Result<u64, Halt> {
+        let primitive = self.to_primitive(code, value, false)?;
+        match primitive.kind {
+            Kind::BigInt => Ok(self
+                .slot_to_bigint_u64(primitive)
+                .expect("a BigInt primitive reduces to its low 64 bits")),
+            Kind::Boolean => Ok(matches!(primitive.value, Payload::Boolean(true)) as u64),
+            Kind::String => {
+                let text = match primitive.value {
+                    Payload::String(off) => self.str_text(off),
+                    _ => return Err(Halt::Unsupported("to-bigint:string")),
+                };
+                // `StringToBigInt`: an integer body (decimal or `0x`/`0o`/`0b`,
+                // empty ⇒ `0n`) reduced to the low 64 bits; a non-integer body
+                // (a fraction, exponent, `n` suffix, or junk) is a SyntaxError.
+                match parse_bigint_string_u64(&text) {
+                    Some(u) => Ok(u),
+                    None => Err(self.catchable_syntax_error()),
+                }
+            }
+            // A Number, a Symbol, undefined, and null are each a TypeError.
+            _ => Err(self.catchable_type_error()),
+        }
+    }
+
     /// `Atomics.<op>(...)` (`xsAtomics.c`). ironhorse runs one agent, so the
     /// read-modify-write is a plain non-atomic byte sequence over the view's
     /// backing store. Scope: the integer element views (`Int8/16/32`,
@@ -28133,36 +28717,26 @@ impl Interp {
             };
             return self.proxy_get(code, inst, key_id, obj);
         }
-        if id != crate::value::XS_NO_ID {
-            if let Some(ta) = self.typed_arrays.get(&inst).copied() {
-                if let Some(n) = self
-                    .string_key_name(id)
-                    .as_deref()
-                    .and_then(canonical_numeric_index_string)
-                {
-                    if n == 0.0 && n.is_sign_negative()
-                        || !n.is_finite()
-                        || n < 0.0
-                        || n.fract() != 0.0
-                        || n > u32::MAX as f64
-                        || n as u32 >= ta.length
-                    {
-                        return Ok(Slot::undefined());
-                    }
-                    let index = n as u32;
-                    let value = if ta.kind <= 1 {
-                        self.typed_array_element_get_bigint(ta, index)
-                    } else {
-                        self.typed_array_element_get(ta, index)
-                            .ok_or(Halt::Unsupported("get_property_at:typed-array-bigint"))?
-                    };
-                    self.meter.tick_raw(TYPED_ARRAY_ELEMENT_METERING);
-                    return Ok(value);
-                }
+        if let Some(&ta) = self.typed_arrays.get(&inst) {
+            // The integer-indexed exotic `[[Get]]` (ECMA-262 10.4.5.4): a
+            // canonical numeric index string (`sample[0]`, `sample["1.1"]`,
+            // `sample["-0"]`, …) reads the element (or `undefined` for an
+            // invalid index — out of range / non-integral / detached), NEVER
+            // the prototype chain. Every other key (a non-canonical string, a
+            // symbol) is an ordinary `[[Get]]` up the chain.
+            if let Some(n) = self.ta_numeric_index_at(id, index) {
+                return Ok(self.ta_indexed_element_get(ta, n));
             }
+            let id = if id == crate::value::XS_NO_ID {
+                self.intern_key(&index.to_string())
+            } else {
+                id
+            };
+            return self.ordinary_get(code, inst, id, obj);
         }
         if id == crate::value::XS_NO_ID {
-            // An index key.
+            // An index key. (A TypedArray receiver is handled by the
+            // integer-indexed exotic `[[Get]]` above and never reaches here.)
             if self.arrays.contains_key(&inst) {
                 Ok(self
                     .arrays
@@ -28170,27 +28744,6 @@ impl Interp {
                     .and_then(|a| a.items.get(&index).copied())
                     .map(|s| Slot::of(s.kind, s.value))
                     .unwrap_or_else(Slot::undefined))
-            } else if let Some(&ta) = self.typed_arrays.get(&inst) {
-                // A TypedArray element read (the exotic index [[Get]] →
-                // per-type `*Getter`): in bounds decodes the element and meters
-                // one built-in step; out of bounds reads `undefined` with no
-                // element metering (the canonical numeric index is absent). A
-                // BigInt-element view self-names.
-                if index >= ta.length {
-                    Ok(Slot::undefined())
-                } else if ta.kind <= 1 {
-                    let v = self.typed_array_element_get_bigint(ta, index);
-                    self.meter.tick_raw(TYPED_ARRAY_ELEMENT_METERING);
-                    Ok(v)
-                } else {
-                    match self.typed_array_element_get(ta, index) {
-                        Some(v) => {
-                            self.meter.tick_raw(TYPED_ARRAY_ELEMENT_METERING);
-                            Ok(v)
-                        }
-                        None => Err(Halt::Unsupported("get_property_at:typed-array-bigint")),
-                    }
-                }
             } else {
                 let id = self.intern_key(&index.to_string());
                 self.ordinary_get(code, inst, id, obj)
@@ -28249,46 +28802,43 @@ impl Interp {
             }
             return Ok(());
         }
-        if id != crate::value::XS_NO_ID {
-            if let Some(ta) = self.typed_arrays.get(&inst).copied() {
-                if let Some(n) = self
-                    .string_key_name(id)
-                    .as_deref()
-                    .and_then(canonical_numeric_index_string)
-                {
-                    if n == 0.0 && n.is_sign_negative()
-                        || !n.is_finite()
-                        || n < 0.0
-                        || n.fract() != 0.0
-                        || n > u32::MAX as f64
-                        || n as u32 >= ta.length
-                    {
-                        return Ok(());
-                    }
-                    self.typed_array_element_set(code, ta, n as u32, value)?;
-                    self.meter.tick_raw(TYPED_ARRAY_ELEMENT_METERING);
-                    return Ok(());
-                }
+        if let Some(&ta) = self.typed_arrays.get(&inst) {
+            // The integer-indexed exotic `[[Set]]` (ECMA-262 10.4.5.5) with the
+            // receiver equal to the view (the direct `sample[k] = v` form):
+            // `IntegerIndexedElementSet` coerces the value (running any
+            // `valueOf`/`toString`, which may throw) and stores it only for a
+            // valid integer index — an out-of-range / non-integral / detached
+            // index is a coercion-only no-op. Any non-canonical key is an
+            // ordinary named write up the chain.
+            if let Some(n) = self.ta_numeric_index_at(id, index) {
+                return self.ta_indexed_element_set(code, ta, n, value);
             }
+            let id = if id == crate::value::XS_NO_ID {
+                self.intern_key(&index.to_string())
+            } else {
+                id
+            };
+            if define {
+                let descriptor = OrdinaryDescriptor {
+                    value: Some(value),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(true),
+                    ..OrdinaryDescriptor::default()
+                };
+                self.ordinary_define_own_property(inst, id, descriptor);
+                self.meter.tick_builtin();
+            } else {
+                let _ = self.ordinary_set(code, inst, id, value, obj)?;
+            }
+            return Ok(());
         }
         if id == crate::value::XS_NO_ID {
+            // A TypedArray receiver is handled by the integer-indexed exotic
+            // `[[Set]]` above and never reaches here.
             if self.arrays.contains_key(&inst) {
                 self.array_item_set(inst, index, value, define);
                 Ok(())
-            } else if let Some(&ta) = self.typed_arrays.get(&inst) {
-                // A TypedArray element write (the exotic index [[Set]]: coerce
-                // then per-type `*Setter` → `mxMeterOne`). In bounds coerces +
-                // writes + meters one built-in step; an out-of-bounds index is
-                // a silent no-op with no element metering (the canonical
-                // numeric index is unwritable past the length). An object value
-                // or a BigInt view self-names.
-                if index >= ta.length {
-                    Ok(())
-                } else {
-                    self.typed_array_element_set(code, ta, index, value)?;
-                    self.meter.tick_raw(TYPED_ARRAY_ELEMENT_METERING);
-                    Ok(())
-                }
             } else {
                 let id = self.intern_key(&index.to_string());
                 if define {
@@ -29533,18 +30083,23 @@ impl Interp {
         // names, if any.
         let name = self.string_key_name(id);
         let index = name.as_deref().and_then(string_to_index);
-        if let Some(ta) = self.typed_arrays.get(&o).copied() {
-            if let Some(n) = name.as_deref().and_then(canonical_numeric_index_string) {
-                return Ok(!(n == 0.0 && n.is_sign_negative())
-                    && n.is_finite()
-                    && n >= 0.0
-                    && n.fract() == 0.0
-                    && n <= u32::MAX as f64
-                    && (n as u32) < ta.length);
+        // A TypedArray's integer-indexed exotic `[[GetOwnProperty]]` projected
+        // to presence: a canonical numeric index is own iff it is a valid
+        // integer index; a non-index name is an ordinary expando probe (a
+        // canonical-but-non-integer / negative / `-0` string is not an index —
+        // `string_to_index` rejects it — and correctly misses). An
+        // ArrayBuffer/DataView index-valued key is still the buffer cluster's
+        // residual; a non-index key names an ordinary expando slot.
+        if let Some(&ta) = self.typed_arrays.get(&o) {
+            if let Some(idx) = index {
+                return Ok(self.ta_valid_index(ta, idx as f64).is_some());
             }
             return Ok(self.find_property(o, id).is_some());
         }
         if self.array_buffers.contains_key(&o) || self.data_views.contains_key(&o) {
+            if index.is_some() {
+                return Err(Halt::Unsupported("hasOwnProperty:typed-array-index"));
+            }
             return Ok(self.find_property(o, id).is_some());
         }
         // An Array's exotic own properties: the present integer indices (kept in
