@@ -9240,10 +9240,19 @@ impl Interp {
                                 return_depth
                             )
                         }
-                        Payload::Reference(inst) => match self.ordinary_get(code, inst, id, obj) {
-                            Ok(value) => value,
-                            Err(halt) => return halt,
-                        },
+                        // Route a thrown getter through the enclosing
+                        // `catch` (`Halt::Resume`), exactly as a throwing
+                        // native call does — a raw `return halt` would exit the
+                        // dispatch loop with the Resume unhandled, so a getter
+                        // that throws (the `format` accessor read on a
+                        // non-NumberFormat `this`, or any user getter) inside a
+                        // `try` would escape its handler.
+                        Payload::Reference(inst) => dispatch_result!(
+                            self.ordinary_get(code, inst, id, obj),
+                            pc,
+                            self,
+                            return_depth
+                        ),
                         // A primitive string boxes to `%String.prototype%`
                         // (XS's `fxCoerceToString`/string behavior): `.length`
                         // is the UTF-16 code-unit count; any other name
@@ -29748,8 +29757,17 @@ impl Interp {
                 self.push(getter);
                 self.push(Slot::undefined());
                 self.push(Slot::of(Kind::Uninitialized, Payload::None));
-                self.call_native_method(m, base, 0, code)?;
-                return Ok(self.pop());
+                // On success `call_native_method` truncates to `base` and
+                // pushes the result; on a throw it returns early WITHOUT
+                // truncating, so restore the stack to `base` before
+                // propagating — else the leaked frame corrupts the value stack.
+                return match self.call_native_method(m, base, 0, code) {
+                    Ok(()) => Ok(self.pop()),
+                    Err(h) => {
+                        self.stack.truncate(base);
+                        Err(h)
+                    }
+                };
             }
         }
         self.run_callback(code, getter, receiver, &[])
