@@ -16,8 +16,7 @@
 //! For every input this engine is actually fed, the `u`/`v` decode and the
 //! plain decode yield the identical scalar and the identical byte stride, so
 //! [`find_character`] needs no `UV` branch and [`get_character`] differs only
-//! in which case-fold table the `i` flag consults. The remaining `v`-only
-//! surface (string sets) stays a named skip in the compiler.
+//! in which case-fold table the `i` flag consults.
 
 /// XS `C_EOF` (`EOF`, `-1`): the sentinel `fxUTF8Decode` returns at the
 /// terminating NUL.
@@ -99,53 +98,6 @@ pub fn utf8_decode(bytes: &[u8], offset: usize) -> (i64, usize) {
         c &= seq.lmask;
     }
     (c as i64, p)
-}
-
-/// Port of `fxUTF8Length`: the byte length one `character` encodes to.
-/// (Part of the faithful codec surface used by V-mode finite string sets.)
-#[allow(dead_code)]
-pub fn utf8_length(character: i64) -> usize {
-    if character < 0 {
-        0
-    } else if character == 0 {
-        2
-    } else if character < 0x80 {
-        1
-    } else if character < 0x800 {
-        2
-    } else if character < 0x1_0000 {
-        3
-    } else if character < 0x11_0000 {
-        4
-    } else {
-        0
-    }
-}
-
-/// Port of `fxUTF8Encode`: append `character`'s UTF-8 bytes to `out`.
-/// (Codec surface used by V-mode finite string sets.)
-#[allow(dead_code)]
-pub fn utf8_encode(out: &mut Vec<u8>, character: i64) {
-    let c = character as u32;
-    if character < 0 {
-    } else if character == 0 {
-        out.push(0xC0);
-        out.push(0x80);
-    } else if character < 0x80 {
-        out.push(c as u8);
-    } else if character < 0x800 {
-        out.push((0xC0 | (c >> 6)) as u8);
-        out.push((0x80 | (c & 0x3F)) as u8);
-    } else if character < 0x1_0000 {
-        out.push((0xE0 | (c >> 12)) as u8);
-        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
-        out.push((0x80 | (c & 0x3F)) as u8);
-    } else if character < 0x11_0000 {
-        out.push((0xF0 | (c >> 18)) as u8);
-        out.push((0x80 | ((c >> 12) & 0x3F)) as u8);
-        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
-        out.push((0x80 | (c & 0x3F)) as u8);
-    }
 }
 
 /// `c_read8`: byte at `offset`, or `0` at/after the terminating NUL (the
