@@ -48,8 +48,6 @@ import {
 } from './chat-chrome.js';
 
 const template = `
-<div id="app-header"></div>
-
 <div id="spaces-gutter"></div>
 
 <div id="pets">
@@ -290,9 +288,6 @@ const bodyComponent = (
   const $spacesGutter = /** @type {HTMLElement} */ (
     $parent.querySelector('#spaces-gutter')
   );
-  const $appHeader = /** @type {HTMLElement} */ (
-    $parent.querySelector('#app-header')
-  );
   const $addSpaceModal = /** @type {HTMLElement} */ (
     $parent.querySelector('#add-space-modal-container')
   );
@@ -375,12 +370,6 @@ const bodyComponent = (
       onProfileChange(newPath, spaceInfo);
     },
   });
-
-  // The app header is the root chrome shared by every space. It is mounted
-  // after the gutter because its logo navigates through the gutter's API,
-  // which is what already owns "what does Home mean" (scheme, profile path,
-  // and the active-space highlight the gutter repaints).
-  renderAppHeader($appHeader, () => spacesGutterAPI.selectSpace('home'));
 
   // Set up share modal
   const $shareModalContainer = /** @type {HTMLElement} */ (
@@ -1723,14 +1712,30 @@ export const make = async powers => {
   /** @type {(() => void) | null} */
   let activeCleanup = null;
 
+  // Two layers, built once. The header bar is the same wherever the user is;
+  // the space root below it belongs to whichever space is open. Navigation
+  // empties only the space root, so the header outlives every space change.
+  // It used to be part of the chat body's own template, which meant every
+  // space that takes the whole page for itself — floot, whylip, files, peers,
+  // graph, management — replaced the header along with everything else and
+  // simply never built it back.
+  document.body.innerHTML =
+    '<div id="app-header"></div><div id="space-root"></div>';
+  const $appHeader = /** @type {HTMLElement} */ (
+    document.body.querySelector('#app-header')
+  );
+  const $spaceRoot = /** @type {HTMLElement} */ (
+    document.body.querySelector('#space-root')
+  );
+
   const rebuild = () => {
     if (activeCleanup) {
       activeCleanup();
       activeCleanup = null;
     }
-    document.body.innerHTML = '';
+    $spaceRoot.replaceChildren();
     activeCleanup = bodyComponent(
-      document.body,
+      $spaceRoot,
       powers,
       currentProfilePath,
       activeConversation,
@@ -1767,6 +1772,14 @@ export const make = async powers => {
     activeConversation = conversation;
     rebuild();
   };
+
+  // Home, from a header that outlives the gutter. The gutter's own
+  // `selectSpace('home')` is not reachable from out here — it is built inside
+  // the chat body, and the whole point of the header is that it also works in
+  // the spaces that have no gutter — but the destination is the same one it
+  // navigates to: the empty profile path with no space info. The gutter
+  // applies Home's color scheme as it mounts there.
+  renderAppHeader($appHeader, () => onProfileChange([], undefined));
 
   rebuild();
 };
