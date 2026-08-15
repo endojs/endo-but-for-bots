@@ -28,7 +28,73 @@
 //! differential and line-splitting primitives the converter and the runner
 //! share.
 
-use ironhorse_vm::{run_program_with_symbols, Halt, RunOutcome};
+use ironhorse_vm::{Halt, RunOutcome};
+
+/// The [`ironhorse_vm::SourceCompiler`] the VM's runtime source-execution
+/// bridge (a string `eval`, the `Function` constructor) drives to compile a
+/// source string to bytecode in the running realm. It is ironhorse's own
+/// front end ([`ironhorse_compile`]) — the same compiler the top-level
+/// program rides — so an eval'd source is held to the identical pipeline.
+///
+/// Total over the coder's panics (`catch_unwind`): a deferred coder path
+/// becomes an honest [`ironhorse_vm::SourceCompileError::Unsupported`]
+/// (a coverage gap the VM surfaces as `Halt::Unsupported`), never a harness
+/// crash. A structured parse reject splits on its kind exactly as
+/// [`compile_for`] does: an `Unsupported` parse (an unported-but-valid
+/// construct) is a coverage gap; every other reject is a genuine early error,
+/// which the bridge throws as a realm-local, catchable `SyntaxError`.
+pub struct IronhorseSourceCompiler;
+
+impl ironhorse_vm::SourceCompiler for IronhorseSourceCompiler {
+    fn compile_source(
+        &self,
+        source: &str,
+        strict: bool,
+    ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+        let source = source.to_string();
+        let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            ironhorse_compile::compile_atoms_with(&source, strict)
+        }));
+        match compiled {
+            Ok(Ok((bytecode, symbols))) => {
+                Ok(ironhorse_vm::CompiledSource { bytecode, symbols })
+            }
+            Ok(Err(e)) => {
+                let rendered = e.to_string();
+                match e.kind {
+                    ironhorse_compile::parser::ParseErrorKind::Unsupported => {
+                        Err(ironhorse_vm::SourceCompileError::Unsupported(rendered))
+                    }
+                    _ => Err(ironhorse_vm::SourceCompileError::Syntax(rendered)),
+                }
+            }
+            Err(payload) => Err(ironhorse_vm::SourceCompileError::Unsupported(panic_message(
+                payload.as_ref(),
+            ))),
+        }
+    }
+}
+
+/// Construct a realm interpreter linked against `names` **and** armed with the
+/// runtime source compiler, so a program that calls `eval` on a string (or the
+/// `Function` constructor) executes it in-realm rather than reaching the honest
+/// `eval:no-compiler` gap. This is the single wiring point that turns the
+/// compiler/VM bridge on for the conformance harness.
+fn interp_with_source_bridge(names: &[String]) -> ironhorse_vm::Interp {
+    let mut interp = ironhorse_vm::Interp::new();
+    interp.link_intrinsics(names);
+    interp.set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
+    interp
+}
+
+/// Run a program bytecode buffer with its symbols atom on a realm armed with
+/// the runtime source bridge (so an in-program `eval` of a string executes).
+/// Mirrors [`ironhorse_vm::run_program_with_symbols`] but installs the
+/// compiler, and is the entry the differential run path uses.
+fn run_program_with_symbols(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
+    let names = ironhorse_vm::parse_symbols(symbols);
+    interp_with_source_bridge(&names).run(bytecode)
+}
 
 pub mod compile_diff;
 pub mod frontmatter;
@@ -410,8 +476,7 @@ pub fn dual_run_async(source: &str, signal_name: &str) -> Option<AsyncDualRun> {
     // Mirror `run_program_with_symbols`, but retain the interpreter so the
     // async completion latch can be read after the job drain.
     let names = ironhorse_vm::parse_symbols(&symbols);
-    let mut interp = ironhorse_vm::Interp::new();
-    interp.link_intrinsics(&names);
+    let mut interp = interp_with_source_bridge(&names);
     let ironhorse: RunOutcome = interp.run(&bytecode);
 
     let ironhorse_signal = interp.global_string(signal_name);
@@ -449,9 +514,7 @@ pub fn ironhorse_only_run(source: &str) -> Halt {
         _ => return Halt::Decode("ironhorse-only: compile produced no bytecode".into()),
     };
     let names = ironhorse_vm::parse_symbols(&symbols);
-    let mut interp = ironhorse_vm::Interp::new();
-    interp.link_intrinsics(&names);
-    interp.run(&bytecode).halt
+    interp_with_source_bridge(&names).run(&bytecode).halt
 }
 
 /// Parse a corpus file: one program per non-empty, non-`//` line. Keeping

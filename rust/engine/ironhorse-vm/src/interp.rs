@@ -45,6 +45,60 @@ use crate::meter::{Meter, MeterCheck};
 use crate::opcode::Opcode;
 use crate::value::{number_to_ecma_string, to_int32, ChunkArena, Kind, Payload, Slot, SlotArena};
 
+/// A program compiled from a runtime source string for same-realm
+/// execution: the XS-shaped bytecode plus its `symbols` atom (the
+/// program-local id→name table [`crate::parse_symbols`] decodes). This is
+/// the exact pair [`crate::run_program_with_symbols`] consumes for a
+/// top-level program; the [`Interp`] eval bridge relinks its symbol ids
+/// into the host realm's symbol table before running it.
+pub struct CompiledSource {
+    /// The program bytecode, as the XS compiler emits it.
+    pub bytecode: Vec<u8>,
+    /// The `symbols` atom (`SYMB` payload): the compiler's program-local
+    /// id→name table for this unit.
+    pub symbols: Vec<u8>,
+}
+
+/// Why a [`SourceCompiler`] declined a source string. The bridge maps these
+/// to observable outcomes: a [`SourceCompileError::Syntax`] is a realm-local,
+/// catchable `SyntaxError` (as the spec's `eval`/`Function` early-error path
+/// throws); a [`SourceCompileError::Unsupported`] is an honest Ironhorse
+/// compiler-coverage gap (an unported-but-valid construct), surfaced as
+/// [`Halt::Unsupported`] rather than a mis-executed result.
+pub enum SourceCompileError {
+    /// A genuine early (parse/early) error: the source is not a valid
+    /// Script. The bridge throws a catchable realm `SyntaxError`.
+    Syntax(String),
+    /// The compiler reached a deferred/unported path (a valid construct it
+    /// does not yet compile, or a coder panic). An honest coverage gap.
+    Unsupported(String),
+}
+
+/// The compiler seam the runtime source-execution bridge drives (design
+/// `designs/ironhorse-engine.md` § roadmap — the compiler/VM boundary).
+///
+/// `eval` of a string and the `Function` constructor need to turn a source
+/// string into bytecode *in the running realm*. Rather than couple
+/// [`Interp`] to a concrete front end (which would make the VM depend on
+/// `ironhorse-compile` and invert the layering), the host installs a
+/// compiler through this trait ([`Interp::set_source_compiler`]). The VM
+/// owns linkage, nested invocation, realm identity, metering, and lifetime;
+/// the compiler owns only source → bytecode. This is the principled
+/// replacement for the former `eval:string-source` source-text boundary.
+pub trait SourceCompiler {
+    /// Compile `source` as a **Script** goal for same-realm execution,
+    /// returning its bytecode and `symbols` atom. `strict` requests the
+    /// strict-mode Script parse (the `Function` constructor and a strict
+    /// caller's direct eval); an indirect eval of ordinary source is sloppy.
+    /// The source itself may still opt into strict via a `"use strict"`
+    /// prologue, which the compiler honors regardless of this hint.
+    fn compile_source(
+        &self,
+        source: &str,
+        strict: bool,
+    ) -> Result<CompiledSource, SourceCompileError>;
+}
+
 /// The raw 16.16 cost XS accrues unwinding an **uncaught** throw across
 /// the host boundary (`fxJump` longjmps into `fxBeginHost`'s `mxTry`). Two
 /// effects combine, both measured against the pin `48ee02d8cfe0`: the
@@ -3364,6 +3418,51 @@ pub struct Interp {
     /// computron count, which now also folds in the program overhead and
     /// the allocation metering.
     n_dispatched: u64,
+    /// The host-installed source compiler ([`SourceCompiler`]) the runtime
+    /// source-execution bridge (`eval` of a string, the `Function`
+    /// constructor) drives to compile a source string to bytecode in this
+    /// realm. `None` until [`Self::set_source_compiler`] wires one in — the
+    /// VM stays compiler-agnostic (no `ironhorse-compile` dependency), and an
+    /// un-armed VM answers a string `eval` with an honest
+    /// [`Halt::Unsupported`] rather than a source-text guess.
+    source_compiler: Option<std::rc::Rc<dyn SourceCompiler>>,
+    /// Persisted bytecode buffers for units compiled at run time by the
+    /// source-execution bridge (a string `eval`, the `Function` constructor).
+    /// A function defined inside such a unit may **outlive** the eval call
+    /// (returned as the completion, stored on a global, or captured by an
+    /// outer closure), yet its body is an offset into this buffer — so the
+    /// buffer must live as long as the realm, not just the eval call. Held
+    /// behind [`std::rc::Rc`] so a cross-segment dispatch can borrow the
+    /// buffer locally without aliasing `&mut self`.
+    code_segments: Vec<std::rc::Rc<Vec<u8>>>,
+    /// The segment index the current dispatch loop is running over, or `None`
+    /// for the top-level program's external `code` buffer. A function call
+    /// whose callee lives in a *different* segment must dispatch over that
+    /// segment's buffer rather than continue in-loop; this is the comparison
+    /// key. Saved/restored around every nested cross-segment dispatch.
+    active_segment: Option<usize>,
+    /// A persisted copy of the top-level program's bytecode (the external
+    /// buffer `run` was handed), so a function defined in an eval unit can
+    /// call **back** into a top-level function even though the eval runs in a
+    /// nested dispatch that no longer holds the top-level `code` slice. Set
+    /// once per [`Self::run`]; `None` before the program starts. Only read on
+    /// the cross-segment call path, which is itself gated on
+    /// [`Self::func_segments`] being non-empty (an eval having run).
+    top_level_code: Option<std::rc::Rc<Vec<u8>>>,
+    /// Which persisted [`Self::code_segments`] buffer a function's body lives
+    /// in, for the functions defined inside an eval/`Function` unit. Absent ⇒
+    /// the top-level program buffer (the common case; the map stays empty
+    /// until the source bridge is first used, so a program that never evals
+    /// pays nothing and dispatches exactly as before).
+    func_segments: std::collections::HashMap<crate::value::SlotIndex, usize>,
+    /// Set by the `XS_CODE_EVAL` (direct-eval) dispatch site for the duration
+    /// of the `eval` native call, so the bridge can tell a **direct** eval
+    /// (whose scope is the caller's) from an **indirect** one (whose scope is
+    /// always the realm global). Indirect eval always runs in the shared
+    /// realm's program scope; a direct eval only runs when the caller scope
+    /// *is* that program scope (top level — [`Self::call_stack`] empty), else
+    /// it stays a named gap rather than a wrong-scope result.
+    eval_direct: bool,
     /// Side table of user-function metadata (body range + captured
     /// closures), keyed by the function instance's slot index. See
     /// [`FuncInfo`].
@@ -4235,6 +4334,12 @@ impl Interp {
             chunks,
             static_str,
             n_dispatched: 0,
+            source_compiler: None,
+            eval_direct: false,
+            code_segments: Vec::new(),
+            active_segment: None,
+            top_level_code: None,
+            func_segments: std::collections::HashMap::new(),
             functions: std::collections::HashMap::new(),
             bound_functions: std::collections::HashMap::new(),
             proxies: std::collections::HashMap::new(),
@@ -5879,8 +5984,25 @@ impl Interp {
         // restored `symbol_names` without re-linking intrinsics (the
         // SymbolTables ledger row's restore-time rebuild).
         self.bind_program_symbols(names);
-        for (k, name) in names.iter().enumerate() {
-            let id = (k + 1) as u16;
+        self.install_intrinsic_bindings(names);
+    }
+
+    /// Bind every intrinsic/value-global/`globalThis`/prototype-method/
+    /// prototype-data name in `names` into the realm, keyed by the symbol id
+    /// each name currently holds in [`Self::symbol_ids`]. Idempotent: a name
+    /// whose global property already exists is skipped, so it is safe to
+    /// re-run for a nested unit (the `eval`/`Function` bridge relinks the
+    /// eval program's fresh names, then calls this to bind any intrinsic the
+    /// outer program never referenced). Split from [`Self::link_intrinsics`]
+    /// so both the top-level link and the same-realm eval bridge share one
+    /// binding pass. Resolving the id through `symbol_ids` (rather than the
+    /// positional `k + 1`) is what lets it serve an eval unit whose names were
+    /// interned past the outer program's id range.
+    fn install_intrinsic_bindings(&mut self, names: &[String]) {
+        for name in names.iter() {
+            let Some(&id) = self.symbol_ids.get(name.as_str()) else {
+                continue;
+            };
             if self.global_props.contains_key(&id) {
                 continue;
             }
@@ -5896,7 +6018,14 @@ impl Interp {
                 // (XS's non-writable realm globals): bound as ordinary global
                 // properties holding the value, so a reference reads it with
                 // no built-in step (pure dispatch, bit-exact against the pin).
-                self.create_global_property(id, (v.kind, v.value));
+                // Their spec descriptor is `{writable:false, enumerable:false,
+                // configurable:false}` — carry those flags so a `NaN = x`
+                // sloppy assignment is the specified silent no-op and, at
+                // declaration instantiation, a `function NaN(){}` fails
+                // `CanDeclareGlobalFunction` ([`Self::can_declare_global_function`]).
+                let prop = self.create_global_property(id, (v.kind, v.value));
+                self.slots.get_mut(prop).flag |=
+                    XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG;
             } else if name == "globalThis" {
                 // The realm's live `globalThis`: an own global property whose
                 // value **references the global object itself** (XS's
@@ -6074,6 +6203,213 @@ impl Interp {
             if self.is_callable_value(function) {
                 self.set_own_unmetered_with_flag(proto, symbol_id, function, XS_DONT_ENUM_FLAG);
             }
+        }
+    }
+
+    /// Install the source compiler the runtime source-execution bridge drives
+    /// ([`SourceCompiler`]). Called once by the host after [`Self::new`] /
+    /// [`Self::link_intrinsics`]; a string `eval` or the `Function`
+    /// constructor is an honest [`Halt::Unsupported`] until it is armed.
+    pub fn set_source_compiler(&mut self, compiler: std::rc::Rc<dyn SourceCompiler>) {
+        self.source_compiler = Some(compiler);
+    }
+
+    /// Intern `name` into the realm's program symbol table as a **program**
+    /// symbol (a name a compiled unit references), returning its stable host
+    /// id and keeping the forward `symbol_names[id - 1]` entry in step with
+    /// the inverse `symbol_ids` [`Self::intern_key`] maintains. A shared name
+    /// resolves to the id it already holds; a novel one is appended past the
+    /// current range. This is the linkage-ownership primitive the eval bridge
+    /// relinks an independently-compiled unit's ids through, so the outer
+    /// program and every eval unit share one realm symbol space (rather than
+    /// the compiler's per-unit numbering colliding).
+    fn intern_program_symbol(&mut self, name: &str) -> u16 {
+        let id = self.intern_key(name);
+        let idx = (id as usize).saturating_sub(1);
+        if idx >= self.symbol_names.len() {
+            self.symbol_names.resize(idx + 1, String::new());
+        }
+        self.symbol_names[idx] = name.to_string();
+        id
+    }
+
+    /// Relink an independently-compiled unit's bytecode into this realm's
+    /// symbol space: rewrite every symbol-id operand from the unit's
+    /// program-local numbering (indexing `eval_names`, where `eval_names[k]`
+    /// is the name of id `k + 1`) to the host realm id the same name holds
+    /// here, interning any name the outer program never referenced.
+    ///
+    /// The walk is `fxReadCode`-exact ([`crate::opcode::instruction_len`]): an
+    /// **ID-operand** opcode is precisely one whose `gxCodeSizes` entry is `0`
+    /// ([`Opcode::size`] `== 0`), so its 2-byte operand at `pc + 1` is a
+    /// symbol id; every other opcode (including the length-prefixed string /
+    /// bigint literals whose payloads are data, not code) is skipped by its
+    /// own instruction length. Nested function bodies are **inline** after
+    /// their `XS_CODE_CODE_*` header (a fixed-size opcode, not a
+    /// length-prefixed payload), so this single linear pass rewrites their
+    /// ids too. Returns `None` only on a truncated/invalid stream.
+    fn relink_program_symbols(&mut self, code: &[u8], eval_names: &[String]) -> Option<Vec<u8>> {
+        let mut out = code.to_vec();
+        let mut pc = 0usize;
+        while pc < out.len() {
+            let op = Opcode::from_u8(out[pc])?;
+            let ilen = crate::opcode::instruction_len(&out, pc)?;
+            if op.size() == 0 {
+                let id = u16::from_le_bytes([*out.get(pc + 1)?, *out.get(pc + 2)?]);
+                // Id 0 is XS's reserved `XS_NO_ID` (an anonymous function
+                // name, an absent file): it names nothing, so it is left as-is.
+                if id != 0 {
+                    if let Some(name) = eval_names.get((id - 1) as usize) {
+                        let name = name.clone();
+                        let host_id = self.intern_program_symbol(&name);
+                        let bytes = host_id.to_le_bytes();
+                        out[pc + 1] = bytes[0];
+                        out[pc + 2] = bytes[1];
+                    }
+                }
+            }
+            pc += ilen;
+        }
+        Some(out)
+    }
+
+    /// The runtime source-execution bridge: compile `source` through the
+    /// installed [`SourceCompiler`] and execute the resulting program in
+    /// **this** realm, returning its completion value (the spec's eval /
+    /// dynamic-function evaluation result).
+    ///
+    /// This replaces the former `eval:string-source` source-text boundary
+    /// with a principled compiler/VM seam:
+    /// - **Linkage ownership.** The unit is compiled with its own program-local
+    ///   symbol numbering; [`Self::relink_program_symbols`] rewrites its ids
+    ///   into the realm's shared symbol table, and
+    ///   [`Self::install_intrinsic_bindings`] binds any intrinsic the outer
+    ///   program never named — so `Object`, `Math`, … mean the realm's.
+    /// - **Realm identity.** It runs on this same [`Interp`]: the same global
+    ///   object, intrinsics, heap, and meter. Indirect eval and `Function`
+    ///   evaluate in the realm's program (global) scope; a direct eval shares
+    ///   the caller's scope, which here is the program scope **only** at top
+    ///   level (`call_stack` empty) — a direct eval nested inside a function
+    ///   frame would need caller-local capture we do not model, so it stays a
+    ///   named gap (`eval:direct-scope`) rather than a wrong-scope result.
+    /// - **Nested invocation / safe recursion.** The unit runs as an isolated
+    ///   program activation: the caller's whole frame (scope, `this`, args,
+    ///   target, catch-jump chain, call stack, result) is saved and a clean
+    ///   one installed, so the nested program cannot corrupt the caller and
+    ///   an uncaught throw re-raises into the caller's own `try`/catch.
+    /// - **Catchable parse errors.** A [`SourceCompileError::Syntax`] is a
+    ///   realm-local, catchable `SyntaxError`; an `Unsupported` construct is
+    ///   an honest coverage gap, never a mis-execution.
+    /// - **Job/meter behavior.** Execution accrues on the shared meter; the
+    ///   eval unit's promise reactions drain with the outer program's job
+    ///   pump (not a nested drain), matching a single host crank.
+    fn eval_source(&mut self, source: &str, strict: bool) -> Result<Slot, Halt> {
+        // A direct eval (the `XS_CODE_EVAL` opcode) whose caller scope is a
+        // function frame is not modeled: only the program-scope case (top
+        // level) is faithful here. Refuse rather than run in the wrong scope.
+        if self.eval_direct && !self.call_stack.is_empty() {
+            return Err(Halt::Unsupported("eval:direct-scope"));
+        }
+        let compiler = match &self.source_compiler {
+            Some(compiler) => compiler.clone(),
+            None => return Err(Halt::Unsupported("eval:no-compiler")),
+        };
+        let compiled = match compiler.compile_source(source, strict) {
+            Ok(compiled) => compiled,
+            Err(SourceCompileError::Syntax(_)) => return Err(self.catchable_syntax_error()),
+            Err(SourceCompileError::Unsupported(_)) => {
+                return Err(Halt::Unsupported("eval:compiler-unimplemented"))
+            }
+        };
+        let eval_names = crate::symbols::parse_symbols(&compiled.symbols);
+        let code = match self.relink_program_symbols(&compiled.bytecode, &eval_names) {
+            Some(code) => code,
+            None => return Err(Halt::Unsupported("eval:relink")),
+        };
+        self.install_intrinsic_bindings(&eval_names);
+
+        // Persist this unit's bytecode for the realm's lifetime and run it
+        // under its own segment id, so a function it defines that escapes the
+        // eval (the completion, a stored global, the `Function` result) still
+        // dispatches over the right bytes when called later.
+        let segment = self.code_segments.len();
+        let buf = std::rc::Rc::new(code);
+        self.code_segments.push(buf.clone());
+
+        // Save the caller's activation and install a clean program frame for
+        // the nested unit (indirect / top-level-direct eval runs in the realm
+        // program scope). `call_stack` and `jumps` are emptied so the unit's
+        // `BEGIN` takes the top-level-program branch and an uncaught throw
+        // cannot unwind into the caller's catch targets mid-nested-dispatch.
+        let saved_locals = std::mem::take(&mut self.locals);
+        let saved_id_map = std::mem::take(&mut self.id_map);
+        let saved_args = std::mem::take(&mut self.args);
+        let saved_call_stack = std::mem::take(&mut self.call_stack);
+        let saved_jumps = std::mem::take(&mut self.jumps);
+        let saved_result = self.result;
+        let saved_strict = self.strict;
+        let saved_this = self.this_val;
+        let saved_cur_func = self.cur_func;
+        let saved_cur_target = self.cur_target;
+        let saved_target_func = self.target_func;
+        let saved_pending_new_target = self.pending_new_target;
+        let saved_callback_return_depth = self.callback_return_depth;
+        let saved_frame_slots = self.frame_slots;
+        let saved_eval_direct = self.eval_direct;
+        let saved_active_segment = self.active_segment;
+        let saved_stack_len = self.stack.len();
+
+        self.result = Slot::undefined();
+        self.strict = false;
+        self.cur_func = crate::value::SlotIndex::NULL;
+        self.cur_target = false;
+        self.target_func = crate::value::SlotIndex::NULL;
+        self.pending_new_target = None;
+        self.callback_return_depth = None;
+        self.frame_slots = 0;
+        self.eval_direct = false;
+        self.active_segment = Some(segment);
+
+        let halt = self.dispatch_at(&buf[..], 0, 0);
+        let completion = self.result;
+        self.active_segment = saved_active_segment;
+
+        // Restore the caller's activation. Drop any residue the nested unit
+        // left on the shared value stack (a well-formed program is balanced;
+        // this is the lifetime backstop).
+        self.stack.truncate(saved_stack_len);
+        self.locals = saved_locals;
+        self.id_map = saved_id_map;
+        self.args = saved_args;
+        self.call_stack = saved_call_stack;
+        self.jumps = saved_jumps;
+        self.result = saved_result;
+        self.strict = saved_strict;
+        self.this_val = saved_this;
+        self.cur_func = saved_cur_func;
+        self.cur_target = saved_cur_target;
+        self.target_func = saved_target_func;
+        self.pending_new_target = saved_pending_new_target;
+        self.callback_return_depth = saved_callback_return_depth;
+        self.frame_slots = saved_frame_slots;
+        self.eval_direct = saved_eval_direct;
+
+        match halt {
+            Halt::Return => Ok(completion),
+            // An uncaught throw inside the eval unit: `self.exception` holds
+            // the realm error value. Re-raise it into the *caller's* frame so
+            // the caller's `try`/catch (its restored jump chain) observes it —
+            // exactly as a native helper's `catchable_*` does.
+            Halt::Throw(_) => {
+                let error = self.exception;
+                Err(match self.raise_js(error) {
+                    Ok(target) => Halt::Resume(target),
+                    Err(halt) => halt,
+                })
+            }
+            // A coverage gap, meter abort, step-limit, or decode fault the
+            // nested unit hit: propagate as-is (honest, non-result outcome).
+            other => Err(other),
         }
     }
 
@@ -6323,13 +6659,49 @@ impl Interp {
     /// the global object. Materialize each not-yet-present name's global
     /// property in declaration order, metering the allocation. Idempotent
     /// across a re-declared name (its property is created once).
-    fn hoist_vars_to_global(&mut self) {
+    fn hoist_vars_to_global(&mut self) -> Result<(), Slot> {
         // Declaration order = the `locals` index the name maps to.
         let mut names: Vec<(usize, u16)> = self.id_map.iter().map(|(&id, &i)| (i, id)).collect();
         names.sort_unstable();
-        for (_, id) in names {
-            if !self.global_props.contains_key(&id) {
+        for (index, id) in names {
+            // GlobalDeclarationInstantiation: a top-level **function**
+            // declaration must satisfy `CanDeclareGlobalFunction`, else it is
+            // a `TypeError` before any body runs. The compiler hoists a
+            // function declaration's local to `null` (its placeholder) and a
+            // `var` to `undefined`, so the local's kind here tells the two
+            // apart with no source inspection.
+            let is_function_declaration =
+                matches!(self.locals.get(index).map(|slot| slot.kind), Some(Kind::Null));
+            if self.global_props.contains_key(&id) {
+                if is_function_declaration && !self.can_declare_global_function(id) {
+                    return Err(self.build_error("TypeError", 0, 0));
+                }
+            } else {
                 self.materialize_global_property(id);
+            }
+        }
+        Ok(())
+    }
+
+    /// ECMA-262 § 9.1.1.4.16 `CanDeclareGlobalFunction` over this realm's
+    /// global object. A name with no existing own global property can always
+    /// be declared (the global object is extensible in this model); an
+    /// existing property permits redeclaration as a function only if it is
+    /// configurable, or a writable-and-enumerable data property. The frozen
+    /// primordial value globals (`NaN`/`Infinity`/`undefined`) are none of
+    /// these, so `function NaN(){}` is rejected. Accessor globals are not
+    /// modeled, so every existing global here is a data property.
+    fn can_declare_global_function(&self, id: u16) -> bool {
+        match self.global_props.get(&id) {
+            None => true,
+            Some(&prop) => {
+                let flag = self.slots.get(prop).flag;
+                if flag & XS_DONT_DELETE_FLAG == 0 {
+                    return true; // configurable
+                }
+                let writable = flag & XS_DONT_SET_FLAG == 0;
+                let enumerable = flag & XS_DONT_ENUM_FLAG == 0;
+                writable && enumerable
             }
         }
     }
@@ -6613,6 +6985,11 @@ impl Interp {
     }
 
     pub fn run(&mut self, code: &[u8]) -> RunOutcome {
+        // Retain the top-level bytecode so an eval-defined function that calls
+        // back into a top-level function can be dispatched over the right
+        // buffer from a nested segment. Only the cross-segment call path reads
+        // it, and that path is gated on an eval having defined a function.
+        self.top_level_code = Some(std::rc::Rc::new(code.to_vec()));
         let mut halt = self.dispatch(code);
         // Pump-loop latch: after the script settles, drain the promise job
         // queue with metering still accumulating — the host-driven microtask
@@ -6901,8 +7278,14 @@ impl Interp {
                     // branch runs). Materialize each declared name's
                     // global property here — that is where XS allocates
                     // it — metering the allocation faithfully. The frame
-                    // property slots hold the working value from here on.
-                    self.hoist_vars_to_global();
+                    // property slots hold the working value from here on. A
+                    // top-level function declaration that fails
+                    // `CanDeclareGlobalFunction` (e.g. `function NaN(){}`)
+                    // raises a realm `TypeError` here, before any body runs.
+                    if let Err(error) = self.hoist_vars_to_global() {
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
                     // `fxRunEvalEnvironment` ends `the->scope = top + 1`,
                     // resetting the scope region: the hoisted vars now live
                     // in the global object, and their scope slots are freed
@@ -7036,10 +7419,24 @@ impl Interp {
                     let k = self.local_operand(op, code, pc);
                     let v = self.get_local(k);
                     match v {
-                        Some(s) => self.push(s),
-                        None => return Halt::Throw("get: not initialized yet".into()),
+                        Some(s) => {
+                            self.push(s);
+                            pc += size as usize;
+                        }
+                        // Reading a lexical binding still in its temporal dead
+                        // zone (`let`/`const` before its initializer) is a
+                        // **catchable** `ReferenceError` (ECMA-262
+                        // `GetValue` → an uninitialized binding), not an
+                        // uncatchable host abort — so a `try`/catch (and
+                        // `typeof x`, which the compiler codes as this
+                        // resolvable-local read) observes a realm-correct
+                        // error. Mirrors the `GET_VARIABLE` unresolved arm.
+                        None => {
+                            let error = self.build_error("ReferenceError", 0, 0);
+                            pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                            continue;
+                        }
                     }
-                    pc += size as usize;
                 }
                 // `reset_local #k` (xsRun.c:RESET_LOCAL): restore a lexical
                 // loop-head binding to the uninitialized state before the
@@ -8501,6 +8898,15 @@ impl Interp {
                         info.body_start = Some(body_start);
                         info.body_len = n;
                         info.arity = arity;
+                        // Record which run-time-compiled segment this body
+                        // lives in, so a call reaching it from a different
+                        // buffer dispatches over the right bytes even after the
+                        // eval returns. Top-level functions (`active_segment ==
+                        // None`) never enter the map — the common no-eval path
+                        // stays untouched.
+                        if let Some(seg) = self.active_segment {
+                            self.func_segments.insert(f, seg);
+                        }
                     }
                     pc = body_start + n;
                 }
@@ -8712,12 +9118,15 @@ impl Interp {
                     if native != Native::Eval {
                         return Halt::Unsupported("eval:shadowed-call");
                     }
-                    dispatch_result!(
-                        self.call_native(Native::Eval, base, argc, false, code),
-                        pc,
-                        self,
-                        return_depth
-                    );
+                    // This opcode is emitted only for a **direct** eval call,
+                    // so the source (if a string) evaluates in the caller's
+                    // scope and strictness. The flag scopes that signal to this
+                    // one native call; `eval_source` clears it for any nested
+                    // eval the unit itself performs.
+                    self.eval_direct = true;
+                    let outcome = self.call_native(Native::Eval, base, argc, false, code);
+                    self.eval_direct = false;
+                    dispatch_result!(outcome, pc, self, return_depth);
                     if self.check_meter() == MeterCheck::Abort {
                         return Halt::MeterAbort;
                     }
@@ -8974,6 +9383,23 @@ impl Interp {
                             return Halt::MeterAbort;
                         }
                         pc = ret_pc;
+                    } else if let Some(seg) = self.cross_segment_callee(argc) {
+                        // The callee's body lives in a different code segment
+                        // than this loop's buffer (an eval-defined function
+                        // called from here, or a top-level function called back
+                        // from an eval). Dispatch it over its own buffer rather
+                        // than continuing in-loop at an offset into the wrong
+                        // bytes — the eval-lifetime seam.
+                        match self.call_cross_segment(argc, has_target, seg) {
+                            Ok(result) => {
+                                self.push(result);
+                                if self.check_meter() == MeterCheck::Abort {
+                                    return Halt::MeterAbort;
+                                }
+                                pc = ret_pc;
+                            }
+                            Err(h) => return h,
+                        }
                     } else {
                         match self.enter_call(argc, ret_pc, has_target) {
                             Ok(body_start) => {
@@ -11195,12 +11621,120 @@ impl Interp {
         // stack; run until its `END` pops the stack back to this depth.
         let return_depth = self.call_stack.len();
         self.callback_return_depth = None;
-        match self.dispatch_at(code, body_start, return_depth) {
+        // Dispatch over the callee's own buffer when it lives in a different
+        // segment than the caller's `code` (an eval-defined function handed to
+        // a native driver such as `Array.prototype.map`, or the `Function`
+        // result invoked as a callback). Same-segment callbacks keep using the
+        // passed `code` with no allocation.
+        let callee_seg = match func_eff.value {
+            Payload::Reference(f) => self.callee_segment(f),
+            _ => None,
+        };
+        let seg_buf = if callee_seg == self.active_segment {
+            None
+        } else {
+            self.segment_buffer(callee_seg)
+        };
+        let saved_segment = self.active_segment;
+        if seg_buf.is_some() {
+            self.active_segment = callee_seg;
+        }
+        let body_code: &[u8] = match &seg_buf {
+            Some(buf) => &buf[..],
+            None => code,
+        };
+        let outcome = self.dispatch_at(body_code, body_start, return_depth);
+        self.active_segment = saved_segment;
+        match outcome {
             // A callback throw may unwind across this native re-entry into a
             // catch/finally established by the caller. In that case the nested
             // dispatcher has already resumed the caller and run it onward;
             // its eventual Return must propagate instead of being mistaken
             // for the callback's own result (whose frame was abandoned).
+            Halt::Return if self.callback_return_depth != Some(return_depth) => Err(Halt::Return),
+            Halt::Return => Ok(self.pop()),
+            other => Err(other),
+        }
+    }
+
+    /// The persisted bytecode buffer for `segment` (`None` ⇒ the top-level
+    /// program). Returns an owned [`std::rc::Rc`] handle so the caller can
+    /// dispatch over it without holding a borrow of `&mut self`.
+    fn segment_buffer(&self, segment: Option<usize>) -> Option<std::rc::Rc<Vec<u8>>> {
+        match segment {
+            Some(seg) => self.code_segments.get(seg).cloned(),
+            None => self.top_level_code.clone(),
+        }
+    }
+
+    /// The code segment a callee function's body lives in, and whether it
+    /// differs from the segment the current dispatch loop runs over — i.e.
+    /// whether entering it needs a cross-segment nested dispatch rather than
+    /// an in-loop `enter_call`. Cheap and allocation-free; the whole check is
+    /// gated by the caller on [`Self::func_segments`] being non-empty, so a
+    /// program that never evals never reaches it.
+    #[inline]
+    fn callee_segment(&self, f: crate::value::SlotIndex) -> Option<usize> {
+        self.func_segments.get(&f).copied()
+    }
+
+    /// For the ordinary user-function call arm (`XS_CODE_RUN`): peek the callee
+    /// on the value stack and, if its body lives in a different segment than
+    /// this loop's buffer, return `Some(callee_segment)` to route it through a
+    /// cross-segment dispatch. Returns `None` (stay in-loop) in the common
+    /// same-segment case, and — the zero-overhead fast path — immediately when
+    /// no eval has ever defined a function ([`Self::func_segments`] empty), so
+    /// a program that never evals dispatches exactly as before.
+    ///
+    /// The fast-path guard is `code_segments` empty (no eval has ever run):
+    /// only then is every callee guaranteed same-segment. Once an eval has
+    /// run, the check is needed both ways — the top-level program calling an
+    /// eval-defined function, and (while dispatching an eval segment) that
+    /// unit calling back into a top-level function.
+    #[inline]
+    fn cross_segment_callee(&self, argc: usize) -> Option<Option<usize>> {
+        if self.code_segments.is_empty() {
+            return None;
+        }
+        let base = self.stack.len().checked_sub(argc + 4)?;
+        let f = match self.stack.get(base + 1).map(|slot| slot.value) {
+            Some(Payload::Reference(f)) => f,
+            _ => return None,
+        };
+        let seg = self.callee_segment(f);
+        (seg != self.active_segment).then_some(seg)
+    }
+
+    /// Enter a user function whose body lives in a **different** code segment
+    /// than the current dispatch loop (an eval-defined function called from
+    /// the top-level program or another unit, or a top-level function called
+    /// back from an eval). The call args are already on the value stack in
+    /// frame geometry; this enters the callee frame, dispatches over the
+    /// callee's own buffer until its `END` returns to this depth, and yields
+    /// the completion — the same nested-dispatch shape as [`Self::run_callback`],
+    /// keeping each dispatch loop over a single buffer. Restores the active
+    /// segment afterward.
+    fn call_cross_segment(
+        &mut self,
+        argc: usize,
+        has_target: bool,
+        callee_segment: Option<usize>,
+    ) -> Result<Slot, Halt> {
+        let buf = match self.segment_buffer(callee_segment) {
+            Some(buf) => buf,
+            None => return Err(Halt::Unsupported("eval:missing-segment")),
+        };
+        let body_start = self.enter_call(argc, 0, has_target)?;
+        let return_depth = self.call_stack.len();
+        let saved_segment = self.active_segment;
+        self.active_segment = callee_segment;
+        self.callback_return_depth = None;
+        let outcome = self.dispatch_at(&buf[..], body_start, return_depth);
+        self.active_segment = saved_segment;
+        match outcome {
+            // A throw unwound across this boundary into a caller catch/finally
+            // (the nested dispatcher already resumed the caller): propagate the
+            // Return rather than treat it as this call's result.
             Halt::Return if self.callback_return_depth != Some(return_depth) => Err(Halt::Return),
             Halt::Return => Ok(self.pop()),
             other => Err(other),
@@ -11938,10 +12472,13 @@ impl Interp {
                 .unwrap_or_else(Slot::undefined)
         };
         let result: Slot = match native {
-            // Indirect `eval`: non-string inputs are returned unchanged. A
-            // string needs runtime parsing in the eval realm; keep that
-            // boundary explicit until the compiler callback is wired into the
-            // VM. `eval` is never constructable.
+            // `eval`: a non-string input is returned unchanged (the spec's
+            // "not a String" fast return); a string is compiled and executed
+            // in this realm through the source-execution bridge
+            // ([`Self::eval_source`]) — the principled compiler/VM seam that
+            // replaced the former `eval:string-source` text boundary. The
+            // completion value becomes the call's result. `eval` is never
+            // constructable.
             Native::Eval => {
                 if has_target {
                     return Err(self.catchable_type_error());
@@ -11952,34 +12489,52 @@ impl Interp {
                         Payload::String(off) => self.str_text(off),
                         _ => String::new(),
                     };
-                    // The first declaration-instantiation cases supported by
-                    // the evaluator do not need statement execution. A global
-                    // function declaration cannot replace the realm's
-                    // non-configurable `NaN` property, and a lexical binding
-                    // is in its TDZ while an earlier `typeof` is evaluated.
-                    // Raise the specified realm-local errors before retaining
-                    // the general source-evaluation boundary below.
-                    if text.contains("function NaN") {
-                        return Err(self.catchable_type_error());
-                    }
-                    for declaration in ["let ", "const ", "class "] {
-                        if let Some(after_decl) = text.split_once(declaration).map(|(_, rest)| rest) {
-                            let name = after_decl
-                                .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '$')
-                                .next()
-                                .unwrap_or("");
-                            if !name.is_empty() && text.contains(&format!("typeof {name}")) {
-                                let error = self.build_error("ReferenceError", 0, 0);
-                                return Err(match self.raise_js(error) {
-                                    Ok(target) => Halt::Resume(target),
-                                    Err(halt) => halt,
-                                });
-                            }
-                        }
-                    }
-                    return Err(Halt::Unsupported("eval:string-source"));
+                    // A direct eval inherits the caller's strictness; an
+                    // indirect eval of ordinary source is sloppy (a
+                    // `"use strict"` prologue still promotes it, in the
+                    // compiler). At the (only) faithful direct-eval site — top
+                    // level — `self.strict` is the program's strictness.
+                    let strict = self.eval_direct && self.strict;
+                    self.eval_source(&text, strict)?
+                } else {
+                    source
                 }
-                source
+            }
+            // The `Function` constructor (`Function(p0, …, pn, body)` and the
+            // identical `new Function(...)`): CreateDynamicFunction
+            // (ECMA-262 20.2.1.1.1) assembles the source
+            // `(function anonymous(<params>\n) {\n<body>\n})` and evaluates it
+            // in the realm; the program's completion is the new function. It
+            // rides the same source-execution bridge as `eval` — including the
+            // segment persistence that keeps the returned function callable
+            // after this native returns. String arguments only; a non-string
+            // argument would need `ToString` (identity for the common
+            // string-literal case), so it is an honest gap rather than a
+            // silently mis-coerced source.
+            Native::Function => {
+                let mut params: Vec<String> = Vec::new();
+                let mut body = String::new();
+                for i in 0..argc {
+                    let piece = match arg(i) {
+                        Slot {
+                            kind: Kind::String,
+                            value: Payload::String(off),
+                            ..
+                        } => self.str_text(off),
+                        _ => return Err(Halt::Unsupported("Function:non-string-arg")),
+                    };
+                    if i + 1 == argc {
+                        body = piece;
+                    } else {
+                        params.push(piece);
+                    }
+                }
+                let source = format!(
+                    "(function anonymous({}\n) {{\n{}\n}})",
+                    params.join(","),
+                    body
+                );
+                self.eval_source(&source, false)?
             }
             Native::Locale => {
                 if !has_target {
@@ -31936,6 +32491,58 @@ mod tests {
 
     fn b(op: Opcode) -> u8 {
         op as u8
+    }
+
+    #[test]
+    fn relink_remaps_only_symbol_id_operands_and_skips_literal_payloads() {
+        // The eval symbol-relinker must rewrite the id operand of every
+        // size-0 (ID-operand) opcode from the unit's program-local numbering
+        // to the host realm id for the same name, and must leave every other
+        // byte — including a string literal's payload that happens to contain
+        // a byte equal to a size-0 opcode — untouched. This is the invariant
+        // that makes cross-unit linkage safe.
+        let mut interp = Interp::new();
+        // Host realm: "Object" -> id 1, "bar" -> id 2.
+        interp.link_intrinsics(&["Object".to_string(), "bar".to_string()]);
+
+        let get_var = b(Opcode::XS_CODE_GET_VARIABLE); // size 0 (ID operand)
+        let string_1 = b(Opcode::XS_CODE_STRING_1); // size -1 (length-prefixed data)
+        // A unit whose program-local id 1 names "bar": a STRING_1 literal whose
+        // 2-byte payload is `[get_var, 0x00]` (data that must NOT be walked as
+        // an opcode), then a real GET_VARIABLE of program-local id 1.
+        let unit = vec![
+            string_1, 0x02, get_var, 0x00, // string literal, payload = [get_var, 0]
+            get_var, 0x01, 0x00, // GET_VARIABLE id=1 (the unit's "bar")
+        ];
+        let eval_names = vec!["bar".to_string()];
+        let relinked = interp
+            .relink_program_symbols(&unit, &eval_names)
+            .expect("relink walks the buffer");
+
+        // Same length, literal payload byte-identical (the data at index 2..4
+        // is NOT a symbol operand and is preserved verbatim).
+        assert_eq!(relinked.len(), unit.len());
+        assert_eq!(&relinked[0..4], &unit[0..4], "string literal payload preserved");
+        // The real GET_VARIABLE operand was remapped 1 -> host id 2 ("bar").
+        let host_id = u16::from_le_bytes([relinked[5], relinked[6]]);
+        assert_eq!(host_id, 2, "unit id 1 (\"bar\") relinked to host id 2");
+    }
+
+    #[test]
+    fn relink_is_byte_identity_when_names_match_the_host() {
+        // Relinking a unit whose names ARE the host's, in the host's order,
+        // is the identity — every id already resolves to itself, so no byte
+        // changes. Guards against the relinker perturbing already-aligned code.
+        let mut interp = Interp::new();
+        let names = vec!["Object".to_string(), "foo".to_string(), "bar".to_string()];
+        interp.link_intrinsics(&names);
+        let get_var = b(Opcode::XS_CODE_GET_VARIABLE);
+        let get_prop = b(Opcode::XS_CODE_GET_PROPERTY);
+        let unit = vec![get_var, 0x02, 0x00, get_prop, 0x03, 0x00, get_var, 0x01, 0x00];
+        let relinked = interp
+            .relink_program_symbols(&unit, &names)
+            .expect("relink walks the buffer");
+        assert_eq!(relinked, unit, "identity relink is byte-identical");
     }
 
     #[test]
