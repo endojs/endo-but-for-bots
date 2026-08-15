@@ -166,10 +166,23 @@ body {
   font-weight: 600;
 }
 
+/* Everything below the header. The space that is open owns this box and only
+   this box — navigation empties the space root, never the body, so the header
+   outlives every space change. Positioning it here is also what lets the panes
+   inside stay at `top: 0`: they resolve against the space root rather than the
+   window. */
+#space-root {
+  position: absolute;
+  top: var(--header-height);
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
 /* Spaces Gutter */
 #spaces-gutter {
   position: absolute;
-  top: var(--header-height);
+  top: 0;
   left: 0;
   bottom: 0;
   width: var(--gutter-width);
@@ -385,7 +398,7 @@ body {
 /* Sidebar - Inventory (shifted for gutter) */
 #pets {
   position: absolute;
-  top: var(--header-height);
+  top: 0;
   left: var(--gutter-width);
   bottom: 0;
   width: var(--sidebar-width);
@@ -399,7 +412,7 @@ body {
 /* Resize handle (shifted for gutter) */
 #resize-handle {
   position: absolute;
-  top: var(--header-height);
+  top: 0;
   bottom: 0;
   left: calc(var(--gutter-width) + var(--sidebar-width));
   width: 6px;
@@ -819,7 +832,7 @@ body.resizing * {
 /* Main content - Messages (shifted for gutter) */
 #messages {
   position: absolute;
-  top: var(--header-height);
+  top: 0;
   left: calc(var(--gutter-width) + var(--sidebar-width));
   right: 0;
   bottom: 60px;
@@ -5820,7 +5833,7 @@ button.btn-spinner::after {
 #conversation-header {
   display: none;
   position: absolute;
-  top: var(--header-height);
+  top: 0;
   left: calc(var(--gutter-width) + var(--sidebar-width));
   right: 0;
   z-index: 10;
@@ -5837,7 +5850,7 @@ button.btn-spinner::after {
 }
 
 #conversation-header.visible ~ #messages {
-  top: calc(var(--header-height) + 46px);
+  top: 46px;
 }
 
 #conversation-back {
@@ -9526,8 +9539,7 @@ button.btn-spinner::after {
 .fx-root {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  height: 100dvh;
+  height: 100%;
   width: 100%;
   background: var(--bg-primary);
   color: var(--text-primary);
