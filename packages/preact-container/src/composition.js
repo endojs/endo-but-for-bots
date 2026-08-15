@@ -54,15 +54,49 @@ export { markFor as derivePartyMark } from './party-identity.js';
  *
  * `party` is a declared primitive param, which is exactly why this component must never reach a party:
  * anyone holding it could place it claiming any name. Only this module places it.
+ *
+ * The resolver used to be ONE shared module-level variable, reassigned by every `composeRegions` call.
+ * That is wrong whenever two composed trees are live at once: Preact does not render synchronously
+ * inside `composeRegions` — it renders (and re-renders) later, on its own schedule — so a second call's
+ * assignment could land before the first tree's `Attribution` vnodes actually render, and every
+ * attribution across BOTH trees would resolve names through whichever `nameOf` happened to be assigned
+ * last. Found by Copilot review on the PR that introduced this file.
+ *
+ * Fixed the same way `partyRef` already crosses the seal boundary: mint an opaque per-call STRING
+ * token (objects cannot cross — `coerceParam` in compartment.js drops anything that isn't a
+ * string/number/boolean/bigint), key the resolver by that token, and pass the token itself as a
+ * SECOND declared param, placed by the frame exactly like `partyRef` and never exposed to a region.
+ * `resolversByToken` is a plain Map (the token is a string, not an object, so nothing here can be
+ * WeakMap-keyed); `finalizeToken` reclaims an entry once the `opts` object it was minted for is no
+ * longer reachable, which bounds growth for the common case (a caller building a fresh `opts` per
+ * render) without depending on it for correctness — a caller that keeps `opts` alive just keeps
+ * paying for one Map entry, never a cross-tree mix-up.
  */
-let nameOfParty = () => undefined; // set per composeRegions call; the resolver is host-side only
+const resolversByToken = new Map();
+const hasFinalizationRegistry = typeof FinalizationRegistry === 'function';
+const finalizeToken = hasFinalizationRegistry
+  ? new FinalizationRegistry(token => resolversByToken.delete(token))
+  : null;
+const randomToken = () => {
+  const c = globalThis.crypto;
+  if (c && typeof c.getRandomValues === 'function') {
+    const b = new Uint8Array(16);
+    c.getRandomValues(b);
+    return Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+  }
+  // No CSPRNG: still per-call and non-enumerable, but say so rather than pretending.
+  let s = '';
+  while (s.length < 32)
+    s += Math.floor(Math.random() * 0xffff_ffff).toString(16);
+  return s.slice(0, 32);
+};
 
 const Attribution = sealComponent(
-  ({ partyRef }) => {
+  ({ partyRef, resolverToken }) => {
     // NOT named `ref`: that name is in DROPPED_PROPS_ALWAYS and is stripped from every vnode, so a
     // param called `ref` silently never arrives. `partyRef` is an opaque handle for a party OBJECT the frame designated — never an id, and never a
     // name a region supplied. A handle the untrusted side invented resolves to nothing.
-    const party = partyForHandle(partyRef);
+    const party = partyForHandle(String(partyRef || ''));
     if (!party) {
       // An unattributed region renders as UNATTRIBUTED. It must never inherit the enclosing party's
       // mark — content silently borrowing authority from its container is the composition-level
@@ -78,9 +112,10 @@ const Attribution = sealComponent(
         '(unattributed)',
       );
     }
+    const resolve = resolversByToken.get(resolverToken) || (() => undefined);
     let name;
     try {
-      name = nameOfParty(party);
+      name = resolve(party);
     } catch {
       name = undefined;
     }
@@ -109,7 +144,7 @@ const Attribution = sealComponent(
       h('span', null, known ? String(name) : 'unnamed'),
     );
   },
-  { params: ['partyRef'] },
+  { params: ['partyRef', 'resolverToken'] },
 );
 
 /** Frame badges are per-secret; cache so repeated compositions do not mint (and pin) a new seal each time. */
@@ -135,7 +170,7 @@ const frameBadgeFor = secret => {
  * The region is still ATTRIBUTED and still occupies its slot, so a refusal is visible rather than a
  * silently missing region.
  *
- * @param {{ Component?: Function, props?: object }} r
+ * @param {{ Component?: import('preact').ComponentType<any>, props?: object }} r
  */
 const renderableContent = r => {
   const C = r && r.Component;
@@ -153,20 +188,30 @@ const renderableContent = r => {
 /**
  * Build the composition tree. Render the result through `renderConfined`.
  *
- * @param {Array<{ party?: object, Component: Function, props?: object }>} regions
+ * @param {Array<{ party?: object, Component: import('preact').ComponentType<any>, props?: object }>} regions
  *   `party` is the party OBJECT, not a name — see designs/designation-by-object-not-id.md.
  *   Each region's `Component` should be a `confineComponent` wrapper — the renderer drops a raw
  *   function type, which is the correct outcome for unconfined content rather than a bug to work
  *   around. `props` is that party's own input and is passed to nobody else.
- * @param {{ secret?: string, label?: string }} [opts] `secret`: the operator's pattern secret.
+ * @param {{ secret?: string, label?: string, nameOf?: (party: object) => (string | undefined) }} [opts]
+ *   `secret`: the operator's pattern secret. `nameOf`: host-side resolver, party OBJECT → the
+ *   operator's local name for them (or undefined) — never handed to a region; see the note above
+ *   `Attribution` for how it is scoped per call.
  * @returns {import('preact').VNode}
  */
 export const composeRegions = (regions, opts = {}) => {
   const list = Array.isArray(regions) ? regions : [];
   // The name resolver is HOST-SIDE and per-call. It is never handed to a region, and it is keyed on
-  // the party OBJECT — there is no lookup that turns an arbitrary string into a party.
-  nameOfParty =
-    typeof opts.nameOf === 'function' ? opts.nameOf : () => undefined;
+  // the party OBJECT — there is no lookup that turns an arbitrary string into a party. Keyed by a
+  // fresh token PER CALL (not a shared module variable — see the note above Attribution) so a second
+  // composeRegions() while this tree's vnodes are still pending render cannot overwrite the resolver
+  // they will read.
+  const resolverToken = randomToken();
+  resolversByToken.set(
+    resolverToken,
+    typeof opts.nameOf === 'function' ? opts.nameOf : () => undefined,
+  );
+  if (finalizeToken) finalizeToken.register(opts, resolverToken);
   const FrameBadge = frameBadgeFor(opts.secret);
   return h(
     'div',
@@ -184,7 +229,10 @@ export const composeRegions = (regions, opts = {}) => {
         { class: 'party-region', key: `region-${i}` },
         // The frame places the mark, parameterized by the party the FRAME composed — never by a value
         // the region's own code supplied, and never by handing the region this component.
-        h(Attribution, { partyRef: r && r.party ? handleFor(r.party) : '' }),
+        h(Attribution, {
+          partyRef: r && r.party ? handleFor(r.party) : '',
+          resolverToken,
+        }),
         h('div', { class: 'party-content' }, renderableContent(r)),
       ),
     ),

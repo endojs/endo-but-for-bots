@@ -261,4 +261,44 @@ describe('composition frame — multi-party attribution', () => {
     expect(scratch.textContent).to.contain('content refused'); // visibly refused, not silently missing
     expect(marks()[0]).to.contain('mallory'); // and the region is still attributed
   });
+
+  it('two composed trees each resolve their OWN nameOf, even built back-to-back before either renders', () => {
+    // Copilot review, PR #993: nameOf used to be ONE shared module-level variable, reassigned by
+    // every composeRegions() call. Preact does not render synchronously inside composeRegions — it
+    // renders later, on its own schedule — so building tree B here BEFORE either tree renders is
+    // exactly the ordering that broke the old code: tree B's composeRegions() call would have
+    // overwritten the resolver tree A's (still-unrendered) Attribution vnodes were about to read.
+    const scratch2 = setupScratch('scratch2');
+    try {
+      const BOB = { kind: 'person' };
+      const treeA = composeRegions(
+        [
+          {
+            party: ALICE,
+            Component: region('', 'A'),
+            props: { text: 'from A' },
+          },
+        ],
+        { secret: SECRET, nameOf: p => (p === ALICE ? 'alice' : undefined) },
+      );
+      const treeB = composeRegions(
+        [{ party: BOB, Component: region('', 'B'), props: { text: 'from B' } }],
+        { secret: SECRET, nameOf: p => (p === BOB ? 'bob' : undefined) },
+      );
+      renderConfined(treeA, scratch);
+      renderConfined(treeB, scratch2);
+      expect(marks()).to.have.lengthOf(1);
+      expect(marks()[0]).to.contain('alice');
+      expect(marks()[0]).to.not.contain('bob');
+      const marksB = [...scratch2.querySelectorAll('.party-mark')].map(
+        n => n.textContent,
+      );
+      expect(marksB).to.have.lengthOf(1);
+      expect(marksB[0]).to.contain('bob');
+      expect(marksB[0]).to.not.contain('alice');
+    } finally {
+      unmount(scratch2);
+      teardown(scratch2);
+    }
+  });
 });
