@@ -6443,6 +6443,28 @@ impl Interp {
                     // `Function.prototype.toString` as a host function
                     // (verified against the pin for a bare `Object`/`Boolean`).
                     format!("function [\"{}\"] (){{[native code]}}", n.display_name())
+                } else if let Some(fi) = self
+                    .functions
+                    .get(&r)
+                    .filter(|fi| fi.native.is_none() && fi.method.is_none())
+                {
+                    // A user (bytecode) function, an arrow, a class constructor,
+                    // or a bound function (`f.bind(...)`, whose `name` is already
+                    // `"bound "+target`) stringifies through the SAME
+                    // `Function.prototype.toString` host-function synthesis the
+                    // pinned Moddable emits for every callable:
+                    // `function ["<name>"] (){[native code]}`, its own `.name`
+                    // interpolated (empty for an anonymous function/arrow). XS's
+                    // toString never reproduces the source text, so no
+                    // source-span retention is needed; this is a display-only
+                    // render (no metering), closing the `non-primitive-
+                    // completion` gap for a function-valued completion. A native
+                    // *prototype method* (`[].map`, dispatched by `NativeMethod`
+                    // so `native_of` is `None`) is excluded here: its `FuncInfo`
+                    // carries no `.name`, so it stays the generic reference stub
+                    // rather than mis-render as an empty-named host function
+                    // (which would turn an honest skip into a divergence).
+                    format!("function [\"{}\"] (){{[native code]}}", fi.name)
                 } else {
                     slot_to_ecma_string(s)
                 }
