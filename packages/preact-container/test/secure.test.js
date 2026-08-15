@@ -1696,4 +1696,278 @@ describe('../src/renderer.js', () => {
       expect(() => render(h(HostBoundary), scratch)).to.not.throw();
     });
   });
+
+  describe('strictStyle — spatial + ambient-network containment', () => {
+    // BEHAVIORAL counterpart to the source-level ratchet in
+    // voice-agent/no-new-iframes.test.mjs. That ratchet greps
+    // SAFE_STYLE_PROPS and fails if a banned property is ADDED TO THE
+    // LIST; these tests fail if `filterStyleStrict` itself regresses —
+    // the filter silently stopping filtering while the list stays
+    // correct. Two different failure modes, two different tests.
+    //
+    // Threat model (voice-agent/designs/confinement-preact-not-iframes.md):
+    // the iframe gave spatial + network containment for FREE, from the
+    // browser. Lane A has to reproduce both in software, or a confined
+    // component can float a viewport-filling overlay over the host's
+    // root-cap consent sheet (same-page clickjacking against the
+    // trusted path) or fire an ambient same-origin GET from CSS.
+    //
+    // Read style back through the CSSOM (`el.style.x`) rather than
+    // substring-matching the attribute: several ALLOWED property names
+    // contain a banned one as a substring (`padding-top` ⊃ `top`,
+    // `border-top-color` ⊃ `top`), so a string match would pass for the
+    // wrong reason.
+
+    /** @param {Element} el */
+    const styleAttr = el => (el.getAttribute('style') || '').toLowerCase();
+
+    it('drops viewport-escape properties from an OBJECT style', () => {
+      renderConfined(
+        h(
+          'div',
+          {
+            style: {
+              position: 'fixed',
+              top: '0',
+              left: '0',
+              right: '0',
+              bottom: '0',
+              inset: '0',
+              zIndex: '2147483647',
+              transform: 'scale(40)',
+              pointerEvents: 'auto',
+              color: 'red',
+            },
+          },
+          'overlay',
+        ),
+        scratch,
+        { strictStyle: true },
+      );
+      const el = scratch.firstChild;
+      expect(el.style.position).to.equal('');
+      expect(el.style.top).to.equal('');
+      expect(el.style.left).to.equal('');
+      expect(el.style.right).to.equal('');
+      expect(el.style.bottom).to.equal('');
+      expect(el.style.inset).to.equal('');
+      expect(el.style.zIndex).to.equal('');
+      expect(el.style.transform).to.equal('');
+      expect(el.style.pointerEvents).to.equal('');
+      // The filter NARROWS — it does not blank the whole bag.
+      expect(el.style.color).to.equal('red');
+    });
+
+    it('filters a STRING style too — the form that would otherwise pass verbatim', () => {
+      // The strict branch runs BEFORE the non-strict object rebuild
+      // precisely so a string style is covered; a regression that moved
+      // it after would leave this whole vector open.
+      renderConfined(
+        h(
+          'div',
+          {
+            style:
+              'position:fixed;top:0;left:0;z-index:2147483647;transform:scale(40);color:red',
+          },
+          'overlay',
+        ),
+        scratch,
+        { strictStyle: true },
+      );
+      const el = scratch.firstChild;
+      expect(el.style.position).to.equal('');
+      expect(el.style.top).to.equal('');
+      expect(el.style.zIndex).to.equal('');
+      expect(el.style.transform).to.equal('');
+      expect(el.style.color).to.equal('red');
+    });
+
+    it('drops every url()-bearing property, and custom-property indirection', () => {
+      renderConfined(
+        h('div', {
+          style: {
+            backgroundImage: 'url(/exfil?a=1)',
+            background: 'image-set("/exfil?b=2")',
+            maskImage: 'url(/exfil?c=3)',
+            borderImageSource: 'url(/exfil?d=4)',
+            cursor: 'url(/exfil?e=5), auto',
+            listStyleImage: 'url(/exfil?f=6)',
+            content: 'url(/exfil?g=7)',
+            // Custom properties are deliberately absent from the
+            // allowlist so a component cannot define its own var()
+            // indirection to a URL.
+            '--evil': 'url(/exfil?h=8)',
+            color: 'red',
+          },
+        }),
+        scratch,
+        { strictStyle: true },
+      );
+      const el = scratch.firstChild;
+      expect(styleAttr(el)).to.not.contain('exfil');
+      expect(el.style.backgroundImage).to.equal('');
+      expect(el.style.cursor).to.equal('');
+      expect(el.style.getPropertyValue('--evil')).to.equal('');
+      expect(el.style.color).to.equal('red');
+    });
+
+    it('an escaped url() cannot smuggle a fetch past the allowlist', () => {
+      // `u\72l(...)` and `image-set("…")` both dodge a naive
+      // "value contains url(" denylist — the bypasses that motivated
+      // the inversion. Neither matters here: no ALLOWED property
+      // accepts a URL, so both are dropped BY PROPERTY NAME before
+      // their value is ever considered.
+      renderConfined(
+        h(
+          'div',
+          {
+            style:
+              'background-image:u\\72l("/exfil?a=1");background:image-set("/exfil?b=2");color:red',
+          },
+          'x',
+        ),
+        scratch,
+        { strictStyle: true },
+      );
+      expect(styleAttr(scratch.firstChild)).to.not.contain('exfil');
+      expect(scratch.firstChild.style.color).to.equal('red');
+    });
+
+    it('normal in-box layout survives', () => {
+      // The point of an allowlist over dropping `style` entirely: rich
+      // inline styling stays expressive. If this test starts failing,
+      // the allowlist got over-tightened and forks lose real capability.
+      renderConfined(
+        h('div', {
+          style: {
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+            padding: '4px',
+            paddingTop: '2px',
+            margin: '0',
+            width: '100%',
+            maxHeight: '20rem',
+            borderRadius: '6px',
+            border: '1px solid #ccc',
+            overflow: 'auto',
+            boxShadow: '0 1px 2px #0003',
+            fontSize: '14px',
+            textAlign: 'center',
+          },
+        }),
+        scratch,
+        { strictStyle: true },
+      );
+      const el = scratch.firstChild;
+      expect(el.style.display).to.equal('flex');
+      expect(el.style.flexDirection).to.equal('column');
+      expect(el.style.gap).to.equal('8px');
+      expect(el.style.paddingTop).to.equal('2px');
+      expect(el.style.width).to.equal('100%');
+      expect(el.style.maxHeight).to.equal('20rem');
+      expect(el.style.borderRadius).to.equal('6px');
+      expect(el.style.overflow).to.equal('auto');
+      expect(el.style.boxShadow).to.not.equal('');
+      expect(el.style.textAlign).to.equal('center');
+    });
+
+    it('applies to nested descendants, not just the tree root', () => {
+      renderConfined(
+        h(
+          'div',
+          null,
+          h(
+            'section',
+            null,
+            h(
+              'span',
+              { style: 'position:fixed;z-index:999;color:red' },
+              'deep',
+            ),
+          ),
+        ),
+        scratch,
+        { strictStyle: true },
+      );
+      const span = scratch.querySelector('span');
+      expect(span.style.position).to.equal('');
+      expect(span.style.zIndex).to.equal('');
+      expect(span.style.color).to.equal('red');
+    });
+
+    it('keeps filtering across a state-driven re-render', () => {
+      // A filter applied only on first mount would let a component
+      // render benignly, then escape on its first setState.
+      function App() {
+        const [n, setN] = useState(0);
+        App.bump = () => setN(prev => prev + 1);
+        return h(
+          'div',
+          {
+            style: `position:fixed;z-index:${1000 + n};color:red`,
+          },
+          String(n),
+        );
+      }
+      renderConfined(h(App, null), scratch, { strictStyle: true });
+      expect(scratch.firstChild.style.position).to.equal('');
+      App.bump();
+      rerender();
+      expect(scratch.firstChild.textContent).to.equal('1');
+      expect(scratch.firstChild.style.position).to.equal('');
+      expect(scratch.firstChild.style.zIndex).to.equal('');
+      expect(scratch.firstChild.style.color).to.equal('red');
+    });
+
+    it('is scoped per-tree — a strict tree does not stomp a default sibling', () => {
+      // `currentStrictStyle` is module-global with a save/restore
+      // stack, so two concurrently-mounted trees are exactly the case
+      // that would break if the stack discipline regressed. Mirrors
+      // the allowlist-scoping test above.
+      const scratchB = setupScratch('scratch-strict-B');
+      try {
+        function MakeApp() {
+          function App() {
+            const [n, setN] = useState(0);
+            App.bump = () => setN(prev => prev + 1);
+            return h(
+              'div',
+              { style: `position:fixed;z-index:${1000 + n};color:red` },
+              String(n),
+            );
+          }
+          return App;
+        }
+        const AppStrict = MakeApp();
+        const AppDefault = MakeApp();
+        renderConfined(h(AppStrict, null), scratch, { strictStyle: true });
+        renderConfined(h(AppDefault, null), scratchB);
+
+        expect(scratch.firstChild.style.position).to.equal('');
+        expect(scratchB.firstChild.style.position).to.equal('fixed');
+
+        // Re-render both; neither may pick up the other's profile.
+        AppStrict.bump();
+        AppDefault.bump();
+        rerender();
+        expect(scratch.firstChild.style.position).to.equal('');
+        expect(scratch.firstChild.style.zIndex).to.equal('');
+        expect(scratchB.firstChild.style.position).to.equal('fixed');
+        expect(scratchB.firstChild.style.zIndex).to.equal('1001');
+      } finally {
+        unmount(scratchB);
+        teardown(scratchB);
+      }
+    });
+
+    it('DEFAULT profile is unchanged — position still passes without strictStyle', () => {
+      // The opt is default-preserving: host-trusted chrome (the app's
+      // header/drawer/toolbar) must still position itself. If this
+      // fails, the change stopped being zero-blast-radius.
+      renderConfined(h('div', { style: 'position:fixed;z-index:5' }, 'x'), scratch);
+      expect(scratch.firstChild.style.position).to.equal('fixed');
+      expect(scratch.firstChild.style.zIndex).to.equal('5');
+    });
+  });
 });

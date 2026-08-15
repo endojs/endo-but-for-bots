@@ -413,6 +413,98 @@ const SAFE_DATA_IMG_RE =
 deepFreeze(DEFAULT_ALLOWED_TAGS);
 deepFreeze(DEFAULT_SAFE_ATTRS);
 deepFreeze(HARD_DENY_ATTRS);
+
+// ── CONFINED STYLE PROPERTY ALLOWLIST — opt-in via renderConfined({ strictStyle: true }) ──
+// `style` is admitted as an attribute NAME by DEFAULT_SAFE_ATTRS, but its VALUE is an open CSS
+// grammar — the one attribute where the denylist→allowlist inversion the rest of this file made
+// (DEFAULT_SAFE_ATTRS / isHardDeniedAttr) was never finished. Under the strict profile the style
+// bag is filtered to this PROPERTY allowlist, so a confined component STRUCTURALLY cannot express:
+//   • a viewport-escaping overlay to phish the host's trusted-path / consent chrome — there is no
+//     `position`/`z-index`/`inset`/`top`…/`transform` on the list, so it lays out in normal flow
+//     inside its (clipped) mount box; and
+//   • any url()-bearing property (`background`/`background-image`/`mask*`/`border-image*`/`cursor`/
+//     `content`/`list-style-image`) that would fire an ambient same-origin GET — none are on the list.
+// This reproduces the iframe's FREE spatial + network containment BY CONSTRUCTION rather than by a
+// bypassable value denylist (escaped `url()`, `image-set()`): the attack was never "filter the URL
+// better," it was "the component controls no property whose value is a URL." Custom properties (`--x`)
+// are deliberately absent too, so a component cannot define its own var() indirection to a URL — it
+// styles via the host-controlled inherited theme vars only. Extend DELIBERATELY; never add an
+// image/url-accepting property nor a positioning/stacking one.
+const SAFE_STYLE_PROPS = new Set([
+  'color', 'background-color', 'opacity', 'visibility',
+  'font', 'font-family', 'font-size', 'font-weight', 'font-style', 'font-variant', 'font-stretch',
+  'line-height', 'letter-spacing', 'word-spacing', 'text-align', 'text-align-last', 'text-decoration',
+  'text-decoration-line', 'text-decoration-style', 'text-decoration-color', 'text-transform',
+  'text-overflow', 'text-indent', 'white-space', 'word-break', 'overflow-wrap', 'word-wrap',
+  'hyphens', 'tab-size', 'direction', 'unicode-bidi', 'vertical-align', 'writing-mode',
+  'text-shadow', 'box-shadow',
+  'width', 'height', 'min-width', 'min-height', 'max-width', 'max-height', 'box-sizing', 'aspect-ratio',
+  'padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'padding-inline',
+  'padding-block', 'padding-inline-start', 'padding-inline-end', 'padding-block-start', 'padding-block-end',
+  'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left', 'margin-inline', 'margin-block',
+  'margin-inline-start', 'margin-inline-end', 'margin-block-start', 'margin-block-end',
+  'border', 'border-width', 'border-style', 'border-color', 'border-top', 'border-right', 'border-bottom',
+  'border-left', 'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
+  'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style',
+  'border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color',
+  'border-radius', 'border-top-left-radius', 'border-top-right-radius', 'border-bottom-left-radius',
+  'border-bottom-right-radius', 'border-collapse', 'border-spacing',
+  'outline', 'outline-color', 'outline-style', 'outline-width', 'outline-offset',
+  'display', 'flex', 'flex-direction', 'flex-wrap', 'flex-flow', 'flex-grow', 'flex-shrink', 'flex-basis',
+  'order', 'gap', 'row-gap', 'column-gap', 'align-items', 'align-content', 'align-self',
+  'justify-items', 'justify-content', 'justify-self', 'place-items', 'place-content', 'place-self',
+  'grid', 'grid-template', 'grid-template-columns', 'grid-template-rows', 'grid-template-areas',
+  'grid-auto-columns', 'grid-auto-rows', 'grid-auto-flow', 'grid-column', 'grid-column-start',
+  'grid-column-end', 'grid-row', 'grid-row-start', 'grid-row-end', 'grid-area', 'grid-gap',
+  'columns', 'column-count', 'column-width', 'column-rule',
+  'overflow', 'overflow-x', 'overflow-y',
+  'list-style-type', 'list-style-position',
+  'table-layout', 'caption-side', 'empty-cells',
+  'object-fit', 'object-position', 'resize', 'user-select',
+]);
+deepFreeze(SAFE_STYLE_PROPS);
+
+// camelCase object-style key → kebab CSS property (kebab keys pass through unchanged).
+const styleKeyToProp = k => String(k).replace(/[A-Z]/g, m => `-${m.toLowerCase()}`);
+
+// Filter a `style` value to SAFE_STYLE_PROPS. Object → a fresh null-proto object (also closing the
+// Object.prototype-pollution channel, mirroring the non-strict rebuild); string → a filtered string.
+// Accessor descriptors are skipped (a hostile getter must not fire during this rebuild).
+function filterStyleStrict(value) {
+  if (typeof value === 'string') {
+    let kept = '';
+    const decls = value.split(';');
+    for (let i = 0; i < decls.length; i++) {
+      const colon = decls[i].indexOf(':');
+      if (colon < 0) continue;
+      const prop = decls[i].slice(0, colon).trim().toLowerCase();
+      const val = decls[i].slice(colon + 1).trim();
+      if (prop && val && SAFE_STYLE_PROPS.has(prop)) kept += `${prop}:${val};`;
+    }
+    return kept;
+  }
+  const out = Object.create(null);
+  if (value === null || typeof value !== 'object') return out;
+  let keys;
+  try {
+    keys = Object.getOwnPropertyNames(value);
+  } catch (_) {
+    keys = [];
+  }
+  for (let j = 0; j < keys.length; j++) {
+    const sk = keys[j];
+    let desc;
+    try {
+      desc = Object.getOwnPropertyDescriptor(value, sk);
+    } catch (_) {
+      continue;
+    }
+    if (desc && 'value' in desc && SAFE_STYLE_PROPS.has(styleKeyToProp(sk))) {
+      out[sk] = desc.value;
+    }
+  }
+  return out;
+}
 deepFreeze(URL_ATTRS);
 deepFreeze(SAFE_URL_RE);
 deepFreeze(SAFE_DATA_IMG_RE);
@@ -795,14 +887,18 @@ let trustedExitDepth = 0;
 // any divergence would mean a bracket-cleanup bug.
 let currentAllowedTags = DEFAULT_ALLOWED_TAGS;
 let currentSafeAttrs = DEFAULT_SAFE_ATTRS;
+let currentStrictStyle = false; // whether the active confined tree filters `style` to SAFE_STYLE_PROPS
 const allowedTagsStack = [];
 const safeAttrsStack = [];
+const strictStyleStack = [];
 
-function pushAllowed(nextTags, nextAttrs) {
+function pushAllowed(nextTags, nextAttrs, nextStrictStyle) {
   allowedTagsStack.push(currentAllowedTags);
   safeAttrsStack.push(currentSafeAttrs);
+  strictStyleStack.push(currentStrictStyle);
   currentAllowedTags = nextTags;
   currentSafeAttrs = nextAttrs;
+  currentStrictStyle = !!nextStrictStyle;
 }
 
 function popAllowed() {
@@ -810,6 +906,20 @@ function popAllowed() {
     allowedTagsStack.length > 0 ? allowedTagsStack.pop() : DEFAULT_ALLOWED_TAGS;
   currentSafeAttrs =
     safeAttrsStack.length > 0 ? safeAttrsStack.pop() : DEFAULT_SAFE_ATTRS;
+  currentStrictStyle =
+    strictStyleStack.length > 0 ? strictStyleStack.pop() : false;
+}
+
+// Resolve the per-tree strict-style flag for a vnode the same way tags/attrs are resolved: prefer
+// the flag cached on the vnode (re-render clone), then the parent's, then the active stack top.
+// `undefined` (never stamped) means "inherit"; the boolean is stamped once a boundary sets it.
+function resolveInheritedStrictStyle(vnode) {
+  if (vnode._secureStrictStyle !== undefined) return vnode._secureStrictStyle;
+  const parent = vnode[VNODE_PARENT];
+  if (parent && parent._secureStrictStyle !== undefined) {
+    return parent._secureStrictStyle;
+  }
+  return currentStrictStyle;
 }
 
 function install() {
@@ -850,9 +960,11 @@ function install() {
         vnode._secureSafeAttrs ||
         (vnode[VNODE_PARENT] && vnode[VNODE_PARENT]._secureSafeAttrs) ||
         currentSafeAttrs;
+      const strictStyle = resolveInheritedStrictStyle(vnode);
       vnode._secureAllowedTags = tags;
       vnode._secureSafeAttrs = attrs;
-      sanitizeVNode(vnode, tags, attrs);
+      vnode._secureStrictStyle = strictStyle;
+      sanitizeVNode(vnode, tags, attrs, strictStyle);
     }
     if (previousVnode) previousVnode(vnode);
   };
@@ -921,9 +1033,11 @@ function install() {
         vnode._secureSafeAttrs ||
         (vnode[VNODE_PARENT] && vnode[VNODE_PARENT]._secureSafeAttrs) ||
         currentSafeAttrs;
+      const strictStyle = resolveInheritedStrictStyle(vnode);
       vnode._secureAllowedTags = tags;
       vnode._secureSafeAttrs = attrs;
-      pushAllowed(tags, attrs);
+      vnode._secureStrictStyle = strictStyle;
+      pushAllowed(tags, attrs, strictStyle);
       secureRenderDepth++;
     }
     // Trusted-exit boundary: enter a trusted island, suppress secure
@@ -963,10 +1077,12 @@ function install() {
       // renderComponent clones.
       let tags;
       let attrs;
+      let strictStyle;
       if (vnode.type === SecureBoundary) {
         tags =
           (vnode.props && vnode.props._allowedTags) || DEFAULT_ALLOWED_TAGS;
         attrs = (vnode.props && vnode.props._safeAttrs) || DEFAULT_SAFE_ATTRS;
+        strictStyle = !!(vnode.props && vnode.props._strictStyle);
       } else {
         tags =
           vnode._secureAllowedTags ||
@@ -976,10 +1092,12 @@ function install() {
           vnode._secureSafeAttrs ||
           (vnode[VNODE_PARENT] && vnode[VNODE_PARENT]._secureSafeAttrs) ||
           currentSafeAttrs;
+        strictStyle = resolveInheritedStrictStyle(vnode);
       }
       vnode._secureAllowedTags = tags;
       vnode._secureSafeAttrs = attrs;
-      pushAllowed(tags, attrs);
+      vnode._secureStrictStyle = strictStyle;
+      pushAllowed(tags, attrs, strictStyle);
       secureRenderDepth++;
     }
     if (previousRender) previousRender(vnode);
@@ -1035,7 +1153,7 @@ function install() {
   };
 }
 
-function sanitizeVNode(vnode, allowedTags, safeAttrs) {
+function sanitizeVNode(vnode, allowedTags, safeAttrs, strictStyle) {
   if (vnode.ref) vnode.ref = null;
 
   const props = vnode.props;
@@ -1074,7 +1192,7 @@ function sanitizeVNode(vnode, allowedTags, safeAttrs) {
     // fire for string-tagged vnodes. Function components can
     // receive arbitrary prop names as data; the allowlist would
     // strip every legitimate prop name a host passes through.
-    vnode.props = sanitizeElementProps(props, safeAttrs);
+    vnode.props = sanitizeElementProps(props, safeAttrs, strictStyle);
   }
   // Function component: leave props as-is (the renderer doesn't
   // write them to the DOM directly), but null out any own `ref`
@@ -1111,7 +1229,7 @@ function sanitizeVNode(vnode, allowedTags, safeAttrs) {
 // (a) we only consider own enumerable props during the gate, and
 // (b) the returned object has NO prototype, so Preact's downstream
 // `for...in` walks no inherited keys.
-function sanitizeElementProps(props, safeAttrs) {
+function sanitizeElementProps(props, safeAttrs, strictStyle) {
   const out = Object.create(null);
   // Track which lowercased attrs have already been admitted, and
   // under what casing. Two purposes:
@@ -1266,6 +1384,16 @@ function sanitizeElementProps(props, safeAttrs) {
     // call is still in flight, BEFORE the compartment's coercer
     // has a chance to substitute its descriptor-only `shallowDataCopy`
     // version. Skipping accessors here mirrors that defense.)
+    // STRICT profile: filter the `style` bag (object OR string) to SAFE_STYLE_PROPS, so a confined
+    // component cannot express a viewport-escaping overlay or any url()-bearing property — reproducing
+    // the iframe's spatial + ambient-network containment by construction. Runs BEFORE the non-strict
+    // object rebuild so it also covers a STRING style (`style="position:fixed"`), which otherwise
+    // falls through admitted verbatim.
+    if (lower === 'style' && strictStyle) {
+      admittedKeyByLower[lower] = key;
+      out[key] = filterStyleStrict(value);
+      continue;
+    }
     if (lower === 'style' && value !== null && typeof value === 'object') {
       const styleOut = Object.create(null);
       let styleKeys;
@@ -1363,20 +1491,22 @@ function wrapListener(userFn) {
  * @param node
  * @param allowedTags
  * @param safeAttrs
+ * @param strictStyle
  */
-function walkSanitize(node, allowedTags, safeAttrs) {
+function walkSanitize(node, allowedTags, safeAttrs, strictStyle) {
   if (Array.isArray(node)) {
     for (let i = 0; i < node.length; i++) {
-      walkSanitize(node[i], allowedTags, safeAttrs);
+      walkSanitize(node[i], allowedTags, safeAttrs, strictStyle);
     }
     return;
   }
   if (!node || typeof node !== 'object' || node.constructor !== undefined) {
     return;
   }
-  sanitizeVNode(node, allowedTags, safeAttrs);
+  sanitizeVNode(node, allowedTags, safeAttrs, strictStyle);
   node._secureAllowedTags = allowedTags;
   node._secureSafeAttrs = safeAttrs;
+  node._secureStrictStyle = strictStyle;
   // Stop descending if:
   //  - the type is a `HostPassthrough` (its subtree is explicitly trusted)
   //  - the type advertises that it manages its own children's
@@ -1401,7 +1531,9 @@ function walkSanitize(node, allowedTags, safeAttrs) {
   } catch (_) {
     children = undefined;
   }
-  if (children != null) walkSanitize(children, allowedTags, safeAttrs);
+  if (children != null) {
+    walkSanitize(children, allowedTags, safeAttrs, strictStyle);
+  }
 }
 
 /**
@@ -1410,15 +1542,21 @@ function walkSanitize(node, allowedTags, safeAttrs) {
  *
  * @param {*} vnode The vnode to render.
  * @param {Element} parentDom The host-controlled DOM container.
- * @param {{ allowedTags?: Iterable<string>, allowedAttrs?: Iterable<string> }} [opts]
+ * @param {{ allowedTags?: Iterable<string>, allowedAttrs?: Iterable<string>, strictStyle?: boolean }} [opts]
  *   `allowedTags` replaces the default tag allowlist for this tree.
  *   `allowedAttrs` EXTENDS the default attribute allowlist for this
  *   tree (additive — the defaults still apply). This is deliberate:
  *   shrinking the attribute allowlist is rarely useful, while adding
  *   one or two host-specific attrs (e.g. a custom data-bound name) is
  *   the common case.
+ *   `strictStyle` (default false) filters the `style` attribute to
+ *   SAFE_STYLE_PROPS for this tree — untrusted forks pass `true` so a
+ *   confined component cannot express a viewport-escaping overlay or any
+ *   url()-bearing property (spatial + ambient-network containment by
+ *   construction). Default false preserves current behavior exactly.
  */
 export function renderConfined(vnode, parentDom, opts) {
+  const strictStyle = !!(opts && opts.strictStyle);
   const allowedTags =
     opts && opts.allowedTags
       ? new Set(Array.from(opts.allowedTags, tag => String(tag).toLowerCase()))
@@ -1450,7 +1588,7 @@ export function renderConfined(vnode, parentDom, opts) {
   deepFreeze(allowedTags);
   deepFreeze(safeAttrs);
   install();
-  walkSanitize(vnode, allowedTags, safeAttrs);
+  walkSanitize(vnode, allowedTags, safeAttrs, strictStyle);
   // Stash the per-tree allowlists on the boundary so concurrent
   // secure trees with different allowlists can coexist. The
   // `_allowedTags` / `_safeAttrs` props are picked up by
@@ -1458,7 +1596,7 @@ export function renderConfined(vnode, parentDom, opts) {
   preactRender(
     h(
       SecureBoundary,
-      { _allowedTags: allowedTags, _safeAttrs: safeAttrs },
+      { _allowedTags: allowedTags, _safeAttrs: safeAttrs, _strictStyle: strictStyle },
       vnode,
     ),
     parentDom,

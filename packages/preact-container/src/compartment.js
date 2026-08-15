@@ -103,6 +103,50 @@ function popSlotMap() {
  * use them but is not required to — they may build vnode-shaped objects
  * by hand. The coercer below treats both paths identically.
  */
+// FREEZE THE VALUES, NOT JUST THE BUNDLE. `Object.freeze` is shallow, so freezing the object only
+// stopped a confined component from ADDING a key — every value inside stayed a mutable, SHARED
+// function object. `endowments.h.__x = secret` in one component was readable as `h.__x` from every
+// other one (and, worse, wrote through to preact's real `h` in the host realm).
+//
+// Parent→child confinement never noticed: one child with nothing to leak to. MULTI-PARTY INLINE
+// COMPOSITION does — two parties' regions in one render need no shared mutable channel, or one simply
+// stashes its secret where the other reads it, no vnode traversal required. Found by the sibling
+// opacity attack suite (test/sibling-opacity.test.js), which is exactly the assumption it was written
+// to check.
+//
+// Freezing in place rather than wrapping: `Fragment` is compared by IDENTITY inside preact
+// (`vnode.type === Fragment`), so handing out a wrapper would silently break Fragment rendering.
+// Preact does not assign properties to these exports at runtime, so freezing them is safe here.
+//
+// USE `harden` WHEN WE HAVE IT (dan: "that's somewhat why we have the harden function from SES" —
+// exactly right). A per-value `Object.freeze` is one level deep: it stops `h.__x = secret` but not
+// `h.prototype.__x = secret`, nor anything further up the prototype chain, and those objects are
+// shared by every party too. `harden` is the transitive version, and it is the SES primitive built
+// for precisely this. The manual freeze stays as the fallback for the no-lockdown case, where it is
+// defence-in-depth rather than a guarantee — see the note below.
+// HARDEN LAZILY, NOT AT MODULE EVAL. `lockdown()` runs in the app entry (islands.js), but ES imports
+// are hoisted: this module's body executes BEFORE that call, so `globalThis.harden` is reliably
+// undefined right here and capturing it now silently pins the shallow fallback forever. Proven under
+// a real locked-down browser — `h.prototype.__x` still crossed between two parties with lockdown on.
+// So the transitive freeze is applied from `install()` instead, which first runs when a component is
+// actually confined: after lockdown, every time.
+let hardened = false;
+const hardenEndowments = () => {
+  if (hardened) return;
+  const hard = globalThis.harden;
+  if (typeof hard !== 'function') return; // no lockdown → nothing stronger is available; see note below
+  hardened = true;
+  // eslint-disable-next-line no-use-before-define
+  hard(endowments); // transitive: reaches h.prototype and up the chain, which Object.freeze does not
+};
+for (const fn of [h, Fragment, useState, useEffect, useCallback, useMemo, useRef, useReducer]) {
+  Object.freeze(fn);
+}
+// WITHOUT `lockdown()` THIS CHANNEL CANNOT BE CLOSED FROM LIBRARY CODE, and it is not the worst
+// thing open: the warning further down already says an un-tamed `endowments.h.constructor` reaches
+// the host realm outright. Multi-party composition therefore REQUIRES lockdown to mean anything —
+// pinned as a known limitation in test/sibling-opacity.test.js rather than papered over, so nobody
+// ships a composition surface on the un-locked-down path believing the parties are isolated.
 const endowments = Object.freeze({
   h,
   Fragment,
@@ -146,6 +190,113 @@ function OpaqueChild(props) {
   opaqueChildInvocationToken = null;
   const real = currentSlotMap && currentSlotMap.get(props._slot);
   return real == null ? null : real;
+}
+
+// ── TRUSTED-IN-UNTRUSTED: a SEALED, PARAMETERIZED host component ─────────────────────────────────
+//
+// `OpaqueChild` above already lets the host hand a confined child a subtree it can PLACE but never
+// reach into. What it cannot do is let the child ASK for something: the subtree is fixed before the
+// child runs. The case that needs (vault: "trusted-in-untrusted Secure UI") is exactly the asking
+// kind — "render the local name for THIS identifier", where the untrusted context supplies the
+// identifier and must not learn, or be able to forge, the name that comes back:
+//
+//   · your friends' petnames beside an opaque did:, without the page learning or spoofing them;
+//   · a timestamp in your timezone, without disclosing your timezone;
+//   · a security-critical confirmation rendered inside a less-trusted interaction.
+//
+// So: `sealComponent(hostFn, { params })` mints an opaque PLACEHOLDER the child may use as a vnode
+// type. The child writes `h(Name, { id })`; the host function runs with HOST authority and produces
+// the real subtree. The child holds a token, never the function.
+//
+// THE FOUR PROPERTIES, and where each is enforced:
+//
+//  1. CANNOT INSPECT — the placeholder is not the host function, and the host's output is never
+//     returned to child code. Preact renders it; the child sees a vnode type it cannot call for a
+//     value. `ref` is dropped by DROPPED_PROPS_ALWAYS, so it cannot reach the DOM either.
+//  2. CANNOT INVOKE FOR A VALUE — same token guard as OpaqueChild: the placeholder only yields the
+//     host subtree when Preact itself is driving the diff. Called synchronously from child render
+//     (the exfiltration move) it returns null.
+//  3. CANNOT PARAMETERIZE BEYOND THE CONTRACT — only prop names the host DECLARED in `params` cross,
+//     and each is coerced to a primitive. A function, object, Proxy or getter-bearing value is
+//     dropped, so the child can neither smuggle a capability INTO trusted code nor hand it a prop
+//     (`dangerouslySetInnerHTML`, `onClick`, …) the host never agreed to read.
+//  4. CANNOT FORGE — placeholders are recognized by IDENTITY against a private WeakSet, never by a
+//     flag on the object. The documented CVE class here is trusting `_isSomething`; an attacker can
+//     set that on their own function. They cannot forge WeakSet membership.
+//
+// What this does NOT solve: a hostile child can still draw its OWN pixels that LOOK like a trusted
+// badge (the "Impersonation" attack in dan's note). Distinguishing real from imitation is the job of
+// an unspoofable presentation the child cannot reproduce — a per-user security pattern — which lives
+// above this seam. This primitive guarantees the trusted content is unreachable and unforgeable; it
+// does not by itself make a forgery recognizable.
+const sealedComponents = new WeakSet();
+const sealedSpecs = new WeakMap(); // placeholder → { fn, params:Set<string> } (never reachable from child code)
+let sealedInvocationToken = null;
+
+// Only primitives cross into a sealed component. Read ONCE (a Proxy/getter gets a single observation,
+// and its result is what we keep), then type-checked — the same read-once-and-rebuild discipline the
+// vnode coercer uses. Objects/arrays/functions/symbols are dropped rather than deep-copied: a sealed
+// component's parameters are DESIGNATORS (an id, a timestamp, a count), and accepting structure here
+// would be the seam through which structure carries authority.
+const coerceParam = value => {
+  const t = typeof value;
+  if (value == null) return undefined;
+  if (t === 'string' || t === 'number' || t === 'boolean' || t === 'bigint') return value;
+  return undefined;
+};
+
+/**
+ * Mint a sealed, parameterized component the confined child can place but not inspect.
+ *
+ * @param {(params: object) => any} hostFn Runs with HOST authority. Receives ONLY the declared,
+ *   coerced params — never the child's raw props, and never child-supplied functions or objects.
+ * @param {{ params?: string[] }} [opts] `params`: the prop names the child is allowed to supply.
+ *   Anything else the child passes is dropped. Omitted/empty ⇒ the child may parameterize nothing,
+ *   which degrades exactly to OpaqueChild's "fixed subtree" behaviour.
+ * @returns {Function} An opaque placeholder to hand the child as a prop.
+ */
+export function sealComponent(hostFn, opts = {}) {
+  if (typeof hostFn !== 'function') {
+    throw new TypeError('sealComponent(hostFn): hostFn must be a function');
+  }
+  const declared = new Set(
+    (Array.isArray(opts.params) ? opts.params : []).filter(p => typeof p === 'string'),
+  );
+  // The placeholder's own body is what Preact calls during the diff. It is deliberately NOT the host
+  // function: the child can reach this reference (off its own vnode's `.type`) and could call it, so
+  // it must be worthless outside a real diff.
+  const placeholder = props => {
+    if (sealedInvocationToken !== props) return null; // property 2 — see the token discussion above
+    sealedInvocationToken = null;
+    const spec = sealedSpecs.get(placeholder);
+    if (!spec) return null;
+    const args = {};
+    for (const name of spec.params) {
+      const v = coerceParam(props ? props[name] : undefined); // property 3
+      if (v !== undefined) args[name] = v;
+    }
+    let out;
+    try {
+      out = spec.fn(deepFreeze(args));
+    } catch {
+      return null; // a throwing trusted component must not take down the host render
+    }
+    return out == null ? null : out;
+  };
+  sealedComponents.add(placeholder);
+  sealedSpecs.set(placeholder, { fn: hostFn, params: declared });
+  // Register as a TRUSTED EXIT, exactly like OpaqueChild: what the host function returns is host
+  // content and must render without the child-output sanitizer rewriting it. (`_registerTrustedExitType`
+  // installs the hooks itself, so a sealed component may be minted before any render.)
+  // Note this holds a strong reference — seal a component ONCE per kind of trusted UI (a `Name` badge,
+  // a confirmation), not per render, or the exit set grows without bound.
+  _registerTrustedExitType(placeholder);
+  return deepFreeze(placeholder);
+}
+
+/** True iff `value` is a placeholder minted by `sealComponent` (identity, never a flag). */
+export function isSealedComponent(value) {
+  return typeof value === 'function' && sealedComponents.has(value);
 }
 
 // Hard cap on coercion recursion depth. A confined component controls
@@ -264,7 +415,10 @@ function coerceType(type) {
     // OpaqueChild's render output; SecureBoundary is module-private
     // to secure). Trusted-exit semantics arrive through `OpaqueChild`
     // itself, which is registered with secure as a trusted-exit type.
-    if (confinedComponents.has(type) || type === OpaqueChild) {
+    // …and a SEALED component (sealComponent): the child is allowed to PLACE it, which is the whole
+    // point — it just cannot read it, call it for a value, or parameterize it outside its contract.
+    // Identity again (a private WeakSet), never a flag the attacker could set on their own function.
+    if (confinedComponents.has(type) || type === OpaqueChild || sealedComponents.has(type)) {
       return type;
     }
   }
@@ -469,6 +623,7 @@ function warnIfNoSes() {
 
 let installed = false;
 function install() {
+  hardenEndowments(); // before `installed` short-circuits: lockdown may land after the first install
   if (installed) return;
   installed = true;
 
@@ -508,6 +663,14 @@ function install() {
     // a JS return value.
     if (vnode.type === OpaqueChild) {
       opaqueChildInvocationToken = vnode.props;
+    }
+    // Same arming for a SEALED component, and for the same reason: the child CAN reach the
+    // placeholder (it is its own vnode's `.type`) and could call it directly to get the trusted
+    // subtree back as a plain JS value — then walk it, read the petname out of it, or invoke host
+    // functions found inside. Armed only here, on the diff Preact itself drives, and consumed on
+    // first read, a direct call returns null.
+    if (sealedComponents.has(vnode.type)) {
+      sealedInvocationToken = vnode.props;
     }
     if (previousRender) previousRender(vnode);
   };
