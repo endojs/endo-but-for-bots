@@ -6769,6 +6769,10 @@ impl Interp {
                 (self.segment_iterator_proto, "Segmenter String Iterator"),
                 (self.temporal_zoned_proto, "Temporal.ZonedDateTime"),
                 (self.temporal_now_object, "Temporal.Now"),
+                // `DataView.prototype[Symbol.toStringTag]` is the string
+                // "DataView" with the same non-writable/non-enumerable/
+                // configurable descriptor.
+                (self.dataview_proto, "DataView"),
             ] {
                 if proto.is_null() {
                     continue;
@@ -14375,6 +14379,13 @@ impl Interp {
                 let length_arg = arg(2);
                 let buf_len = self.array_buffers[&buf].length;
                 let offset = self.to_index_arg(code, offset_arg)?;
+                // A buffer detached by the `ToIndex(byteOffset)` coercion (a
+                // user `valueOf`) is a TypeError — after the coercion ran, so
+                // `ToNumber(byteOffset)` is still observed once, ahead of the
+                // out-of-range RangeError.
+                if self.detached_buffers.contains(&buf) {
+                    return Err(self.catchable_type_error());
+                }
                 if offset > buf_len {
                     return Err(self.catchable_range_error());
                 }
@@ -35459,13 +35470,19 @@ fn numeric_string_cmp(left: &str, right: &str) -> std::cmp::Ordering {
 }
 
 fn encode_element_le(kind: u8, n: f64) -> Option<Vec<u8>> {
-    // ToInteger: truncate toward zero, NaN → 0.
-    let to_int = |x: f64| -> f64 {
-        if x.is_nan() {
-            0.0
-        } else {
-            x.trunc()
+    // `ToInt8`/`ToUint8`/`ToInt16`/… : `NaN` and `±∞` map to `+0`; a finite
+    // value truncates toward zero (`ToIntegerOrInfinity`) then reduces modulo
+    // `2^bits` (two's-complement wrap). A Rust `f64 as iN` cast SATURATES
+    // (`Infinity as i64` → `i64::MAX`), which is NOT the spec's modular
+    // reduction — hence the explicit `rem_euclid`.
+    let to_wrapped = |x: f64, bits: u32| -> u64 {
+        if !x.is_finite() {
+            return 0;
         }
+        let m = 2f64.powi(bits as i32);
+        // `rem_euclid` lands in `[0, 2^bits)`; the caller's `as uN` truncation
+        // then keeps the low `bits`, so `-255 mod 256 == 1`, `2^53 mod 256 == 0`.
+        x.trunc().rem_euclid(m) as u64
     };
     Some(match kind {
         0 | 1 => return None,
@@ -35474,11 +35491,11 @@ fn encode_element_le(kind: u8, n: f64) -> Option<Vec<u8>> {
         // Float64
         3 => n.to_le_bytes().to_vec(),
         // Int8 / Uint8
-        4 | 7 => vec![to_int(n) as i64 as u8],
+        4 | 7 => vec![to_wrapped(n, 8) as u8],
         // Int16 / Uint16
-        5 | 8 => (to_int(n) as i64 as u16).to_le_bytes().to_vec(),
+        5 | 8 => (to_wrapped(n, 16) as u16).to_le_bytes().to_vec(),
         // Int32 / Uint32
-        6 | 9 => (to_int(n) as i64 as u32).to_le_bytes().to_vec(),
+        6 | 9 => (to_wrapped(n, 32) as u32).to_le_bytes().to_vec(),
         // Uint8Clamped (ToNumber, clamp to [0,255], round half-to-even).
         10 => {
             let v = if n.is_nan() || n <= 0.0 {
