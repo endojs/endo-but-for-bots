@@ -82,6 +82,7 @@
   /* Layout */
   --sidebar-width: 280px;
   --gutter-width: 64px;
+  --header-height: 44px;
 }
 
 * {
@@ -106,10 +107,69 @@ body {
   padding: 0;
 }
 
+/* App header — the one bar every space shares.
+
+   It spans the whole window above the gutter, the sidebar, and the main pane,
+   so the Familiar mark sits in a fixed spot no matter which space is open (and
+   no matter how many spaces the gutter has grown). Everything below it is
+   offset by --header-height. */
+#app-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--header-height);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  z-index: 70;
+}
+
+/* The logo doubles as the "go home" control, so it is a real button rather
+   than a decorated div: keyboard focus and Enter/Space come for free. */
+.app-header-home {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px 2px 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.app-header-home:hover {
+  background: var(--bg-hover);
+}
+
+/* The mark rides in as a CSS background rather than an <img src>: the
+   sanitizing renderer scheme-checks every src, while a stylesheet url() is a
+   build-time asset reference that never becomes a prop at all. */
+.app-header-logo {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  background-image: url('./familiar.svg');
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.app-header-wordmark {
+  font-size: 14px;
+  font-weight: 600;
+}
+
 /* Spaces Gutter */
 #spaces-gutter {
   position: absolute;
-  top: 0;
+  top: var(--header-height);
   left: 0;
   bottom: 0;
   width: var(--gutter-width);
@@ -325,7 +385,7 @@ body {
 /* Sidebar - Inventory (shifted for gutter) */
 #pets {
   position: absolute;
-  top: 0;
+  top: var(--header-height);
   left: var(--gutter-width);
   bottom: 0;
   width: var(--sidebar-width);
@@ -339,7 +399,7 @@ body {
 /* Resize handle (shifted for gutter) */
 #resize-handle {
   position: absolute;
-  top: 0;
+  top: var(--header-height);
   bottom: 0;
   left: calc(var(--gutter-width) + var(--sidebar-width));
   width: 6px;
@@ -759,12 +819,12 @@ body.resizing * {
 /* Main content - Messages (shifted for gutter) */
 #messages {
   position: absolute;
-  top: 0;
+  top: var(--header-height);
   left: calc(var(--gutter-width) + var(--sidebar-width));
   right: 0;
   bottom: 60px;
   padding: 20px 24px;
-  padding-top: calc(100dvh - 160px);
+  padding-top: calc(100dvh - 160px - var(--header-height));
   overflow-y: auto;
   overflow-x: hidden;
   background: var(--bg-primary);
@@ -5760,7 +5820,7 @@ button.btn-spinner::after {
 #conversation-header {
   display: none;
   position: absolute;
-  top: 0;
+  top: var(--header-height);
   left: calc(var(--gutter-width) + var(--sidebar-width));
   right: 0;
   z-index: 10;
@@ -5777,7 +5837,7 @@ button.btn-spinner::after {
 }
 
 #conversation-header.visible ~ #messages {
-  top: 46px;
+  top: calc(var(--header-height) + 46px);
 }
 
 #conversation-back {
