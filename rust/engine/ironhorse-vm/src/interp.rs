@@ -3742,6 +3742,17 @@ pub struct Interp {
     /// owner side table" shape as `collator_compare_functions`.
     number_format_bound_functions:
         std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>,
+    /// Tombstones for a function's exotic `length`/`name` own data properties
+    /// that the guest has `delete`d. XS carries these as real slots that
+    /// `delete` unlinks; ironhorse synthesizes them from the [`FuncInfo`]
+    /// (`function_meta_own_descriptor`), so a delete cannot unlink a slot —
+    /// it records `(function, id)` here instead, and the synthesis paths
+    /// (`GET_PROPERTY`, `ordinary_get_own_descriptor`, `object_own_property_present`,
+    /// `Object.getOwnPropertyDescriptor`) treat a tombstoned pair as absent.
+    /// Keyed by the resolved property id (`length_id`/`name_id`), which
+    /// `intern_key` makes identical for the static `.length` access and the
+    /// string-literal `'length'` key.
+    deleted_fn_meta: std::collections::HashSet<(crate::value::SlotIndex, u16)>,
     /// The realm's `%Object.prototype%` (XS's `mxObjectPrototype`), the root
     /// of every ordinary object's prototype chain. A boot object; ordinary
     /// objects ([`Self::new_object`]) and constructed `this` instances point
@@ -4648,6 +4659,7 @@ impl Interp {
             temporal_zoneds: std::collections::HashMap::new(),
             collator_compare_functions: std::collections::HashMap::new(),
             number_format_bound_functions: std::collections::HashMap::new(),
+            deleted_fn_meta: std::collections::HashSet::new(),
             object_proto: crate::value::SlotIndex::NULL,
             function_proto: crate::value::SlotIndex::NULL,
             ctor_prototype: std::collections::HashMap::new(),
@@ -9365,7 +9377,9 @@ impl Interp {
                         }
                         Payload::Reference(inst)
                             if (Some(id) == self.length_id || Some(id) == self.name_id)
-                                && self.functions.contains_key(&inst) =>
+                                && self.functions.contains_key(&inst)
+                                && !self.deleted_fn_meta.contains(&(inst, id))
+                                && self.find_property(inst, id).is_none() =>
                         {
                             // A user function's own `length`/`name` data
                             // properties (`XS_DONT_ENUM|XS_DONT_SET`), created
@@ -9374,6 +9388,10 @@ impl Interp {
                             // them is a plain own-property read — no built-in
                             // step, no allocation (the value/chunk already
                             // exist), so metering is unchanged, exactly as XS.
+                            // A guest `delete` tombstones the pair (then the read
+                            // resolves up the prototype chain → `undefined`); a
+                            // `defineProperty`-installed ordinary slot shadows
+                            // this synthesized value (handled by `ordinary_get`).
                             let fi = &self.functions[&inst];
                             if Some(id) == self.length_id {
                                 Slot::integer(fi.arity as i32)
@@ -15775,11 +15793,21 @@ impl Interp {
         let guard = self.promise_guards.len();
         self.promise_guards.push(false);
         let fp = self.function_proto;
+        // A resolving function is an anonymous, length-1 built-in (spec 27.2.1.3):
+        // its `name` is the empty string and `length` is 1. Interning a real
+        // empty `name` chunk (rather than the `FuncInfo::default()` NULL) is
+        // required now that the function-meta reflective paths materialize/read
+        // `name` — a NULL chunk would fault when read. Unmetered (the boot chunk
+        // allocation is outside the guest meter), matching the pre-existing
+        // `alloc_named_method("", …)` empty-name convention.
+        let empty_name = self.alloc_str_text(b"");
         let resolve = self.slots.alloc(Slot::instance(fp));
         self.functions.insert(
             resolve,
             FuncInfo {
                 method: Some(NativeMethod::PromiseResolveFunction),
+                name_chunk: empty_name,
+                arity: 1,
                 ..FuncInfo::default()
             },
         );
@@ -15796,6 +15824,8 @@ impl Interp {
             reject,
             FuncInfo {
                 method: Some(NativeMethod::PromiseRejectFunction),
+                name_chunk: empty_name,
+                arity: 1,
                 ..FuncInfo::default()
             },
         );
@@ -21684,8 +21714,24 @@ impl Interp {
                         }
                     }
                     None => {
-                        self.meter.tick_raw(GOPD_ABSENT_RESIDUAL_METERING);
-                        Slot::undefined()
+                        // XS carries a function's `length`/`name` as real own
+                        // data properties; ironhorse synthesizes them from the
+                        // `FuncInfo` (no ordinary slot), so render the exotic
+                        // descriptor as PRESENT (not an absent miss) — matching
+                        // the residual XS charges for a present property.
+                        if let Some(desc) = self.function_meta_own_descriptor(inst, id) {
+                            self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
+                            let value = desc.value.unwrap_or_else(Slot::undefined);
+                            let d = self.slots.alloc(Slot::instance(self.object_proto));
+                            self.define_descriptor_field(d, "value", value);
+                            self.define_descriptor_field(d, "writable", Slot::boolean(false));
+                            self.define_descriptor_field(d, "enumerable", Slot::boolean(false));
+                            self.define_descriptor_field(d, "configurable", Slot::boolean(true));
+                            Slot::of(Kind::Reference, Payload::Reference(d))
+                        } else {
+                            self.meter.tick_raw(GOPD_ABSENT_RESIDUAL_METERING);
+                            Slot::undefined()
+                        }
                     }
                 }
                 }
@@ -30990,12 +31036,58 @@ impl Interp {
     /// dispatch around these methods; all ordinary property operations route
     /// through them so descriptor compatibility cannot drift between syntax,
     /// `Object.*`, and `Reflect.*`.
+    /// A function's exotic `length`/`name` as an own **data** descriptor
+    /// `{writable:false, enumerable:false, configurable:true}`, synthesized from
+    /// the [`FuncInfo`] — XS builds these as real own slots at
+    /// `fxNewFunctionInstance`, their allocation pre-paid in
+    /// [`FUNCTION_DEFINE_METERING`], so ironhorse mirrors them without a slot
+    /// (no allocation, no metering). Returns `None` for a non-function, a name
+    /// other than `length`/`name`, a pair the guest has `delete`d
+    /// ([`Self::deleted_fn_meta`]), or when an ordinary slot already shadows the
+    /// id (a `defineProperty` override wins). This is the single view all the
+    /// reflective MOP paths consult so `getOwnPropertyDescriptor` /
+    /// `hasOwnProperty` / a non-writable set / `delete` / `for-in` agree.
+    fn function_meta_own_descriptor(
+        &self,
+        inst: crate::value::SlotIndex,
+        id: u16,
+    ) -> Option<OrdinaryDescriptor> {
+        let is_length = Some(id) == self.length_id;
+        let is_name = Some(id) == self.name_id;
+        if !(is_length || is_name) {
+            return None;
+        }
+        let fi = self.functions.get(&inst)?;
+        if self.deleted_fn_meta.contains(&(inst, id)) {
+            return None;
+        }
+        let value = if is_length {
+            Slot::integer(fi.arity as i32)
+        } else {
+            Slot::of(Kind::String, Payload::String(fi.name_chunk))
+        };
+        Some(OrdinaryDescriptor {
+            value: Some(value),
+            writable: Some(false),
+            enumerable: Some(false),
+            configurable: Some(true),
+            ..OrdinaryDescriptor::default()
+        })
+    }
+
     fn ordinary_get_own_descriptor(
         &self,
         inst: crate::value::SlotIndex,
         id: u16,
     ) -> Option<OrdinaryDescriptor> {
-        let property = self.find_property(inst, id)?;
+        let property = match self.find_property(inst, id) {
+            Some(property) => property,
+            // No ordinary own slot: a function still carries `length`/`name` as
+            // exotic own data properties (so a non-writable set is rejected and
+            // `getOwnPropertyDescriptor` reveals them). `None` for every other
+            // object, preserving ordinary behavior.
+            None => return self.function_meta_own_descriptor(inst, id),
+        };
         let slot = self.slots.get(property);
         let enumerable = Some(slot.flag & XS_DONT_ENUM_FLAG == 0);
         let configurable = Some(slot.flag & XS_DONT_DELETE_FLAG == 0);
@@ -31027,6 +31119,26 @@ impl Interp {
         }
     }
 
+    /// Give a function's synthesized exotic `length`/`name` a real backing slot
+    /// (unmetered — XS holds it as a real slot whose allocation is pre-paid in
+    /// [`FUNCTION_DEFINE_METERING`]) so a `[[DefineOwnProperty]]` has an ordinary
+    /// slot to mutate. A no-op unless `id` is a live (non-tombstoned) function
+    /// `length`/`name` with no ordinary slot yet. Idempotent.
+    fn materialize_function_meta_slot(&mut self, inst: crate::value::SlotIndex, id: u16) {
+        if self.find_property(inst, id).is_some() {
+            return;
+        }
+        if let Some(desc) = self.function_meta_own_descriptor(inst, id) {
+            let value = desc.value.unwrap_or_else(Slot::undefined);
+            self.set_own_unmetered_with_flag(
+                inst,
+                id,
+                value,
+                XS_DONT_ENUM_FLAG | XS_DONT_SET_FLAG,
+            );
+        }
+    }
+
     /// Validate and apply a partial property descriptor (ECMA-262
     /// ValidateAndApplyPropertyDescriptor) to an ordinary object.
     fn ordinary_define_own_property(
@@ -31038,6 +31150,13 @@ impl Interp {
         if descriptor.is_accessor() && descriptor.is_data() {
             return false;
         }
+        // A function's `length`/`name` is synthesized from the `FuncInfo` with no
+        // ordinary slot; redefining one must mutate a real slot (the update path
+        // below unwraps `find_property`), so materialize it first. Then the
+        // ordinary ValidateAndApply runs against the exotic descriptor's existing
+        // attributes ({writable:false, configurable:true}), exactly as XS
+        // redefines its real slot.
+        self.materialize_function_meta_slot(inst, id);
         let current = self.ordinary_get_own_descriptor(inst, id);
         if current.is_none() {
             if !self.instance_extensible(inst) {
@@ -31845,7 +31964,12 @@ impl Interp {
         // the slot chain.
         if self.functions.contains_key(&o) {
             match name.as_deref() {
-                Some("length") | Some("name") => return Ok(true),
+                // `length`/`name` are own unless the guest has `delete`d them
+                // (tombstoned) or shadowed them with an ordinary slot.
+                Some("length") | Some("name") => {
+                    return Ok(self.find_property(o, id).is_some()
+                        || !self.deleted_fn_meta.contains(&(o, id)));
+                }
                 Some("prototype") if self.ctor_prototype.contains_key(&o) => return Ok(true),
                 _ => return Ok(self.find_property(o, id).is_some()),
             }
@@ -33055,6 +33179,19 @@ impl Interp {
     /// allocation, so — like XS's ordinary delete — it meters only its
     /// dispatch.
     fn delete_own_property(&mut self, inst: crate::value::SlotIndex, id: u16) -> bool {
+        // A function's exotic `length`/`name` own data property is configurable
+        // (`{configurable:true}`), but ironhorse synthesizes it from the
+        // `FuncInfo` rather than an ordinary slot, so there is nothing in the
+        // chain to unlink. When no ordinary slot shadows the id, record a
+        // tombstone (XS unlinks the real slot) so the reflective paths report it
+        // absent thereafter, and report the delete as succeeded.
+        if self.functions.contains_key(&inst)
+            && (Some(id) == self.length_id || Some(id) == self.name_id)
+            && self.find_property(inst, id).is_none()
+        {
+            self.deleted_fn_meta.insert((inst, id));
+            return true;
+        }
         let mut prev = inst;
         let mut cur = self.slots.get(inst).next;
         while !cur.is_null() {
