@@ -2115,6 +2115,14 @@ pub enum NativeMethod {
     /// `Array.prototype.toLocaleString()` — an honest named skip (locale-aware
     /// element stringification is out of this stage's scope).
     ArrayToLocaleString,
+    /// `%TypedArray%.prototype.copyWithin(target, start, end)`.
+    TypedArrayCopyWithin,
+    /// `%TypedArray%.prototype.fill(value, start, end)`.
+    TypedArrayFill,
+    /// `%TypedArray%.prototype.set(source, offset)`.
+    TypedArraySet,
+    /// `%TypedArray%.prototype.reverse()`.
+    TypedArrayReverse,
     /// `Array.from(iterable[, mapFn[, thisArg]])` — an honest named skip: the
     /// C-level `fxGetIterator`/`fxIteratorNext` protocol metering (routing
     /// through `%ArrayIteratorPrototype%.next` via `mxRunCount`) is not modeled
@@ -2254,6 +2262,8 @@ pub enum NativeMethod {
     /// Returns `x`. Allocation-driven metering (the one `fxNewInstance` ownKeys
     /// holder + its at-slots).
     GlobalPetrify,
+    /// `$262.detachArrayBuffer(buffer)`, the test262 host hook.
+    Test262DetachArrayBuffer,
     /// `JSON.stringify(value)` (`fx_JSON_stringify`): serialize `value` over
     /// XS's traversal order. The stringifier's working buffer is C-malloc'd
     /// (unmetered); only the final `fxNewChunk(offset)` meters. The
@@ -3748,6 +3758,11 @@ pub struct Interp {
     /// internal slot). Keyed by the buffer instance's slot, like
     /// [`Self::collections`]. See [`ArrayBufferData`].
     array_buffers: std::collections::HashMap<crate::value::SlotIndex, ArrayBufferData>,
+    /// ArrayBuffers detached through the test262 host hook. The backing bytes
+    /// remain allocated so existing views keep stable identities, while every
+    /// operation that performs `ValidateTypedArray` rejects the detached
+    /// buffer with a realm-local TypeError.
+    detached_buffers: std::collections::HashSet<crate::value::SlotIndex>,
     /// The subset of [`Self::array_buffers`] instances that are
     /// `SharedArrayBuffer`s (XS's `XS_ARRAY_BUFFER_KIND` with the shared flag).
     /// ironhorse is single-agent, so a shared buffer is byte-identical to a
@@ -4504,6 +4519,7 @@ impl Interp {
             weakmap_proto: crate::value::SlotIndex::NULL,
             weakset_proto: crate::value::SlotIndex::NULL,
             array_buffers: std::collections::HashMap::new(),
+            detached_buffers: std::collections::HashSet::new(),
             shared_buffers: std::collections::HashSet::new(),
             arraybuffer_proto: crate::value::SlotIndex::NULL,
             byte_length_id: None,
@@ -4824,6 +4840,25 @@ impl Interp {
         ] {
             let mf = self.alloc_method(m);
             self.proto_methods.push((self.array_proto, name, mf));
+        }
+        // The concrete TypedArray prototypes currently chain directly to
+        // `%Object.prototype%`, so bind each shared `%TypedArray.prototype%`
+        // method function on every concrete prototype. Reusing one function
+        // preserves the specified cross-constructor method identity.
+        for (name, arity, method) in [
+            ("copyWithin", 2, NativeMethod::TypedArrayCopyWithin),
+            ("fill", 1, NativeMethod::TypedArrayFill),
+            ("set", 1, NativeMethod::TypedArraySet),
+            ("reverse", 0, NativeMethod::TypedArrayReverse),
+        ] {
+            let mf = self.alloc_named_method(method, name, arity);
+            for ty in TYPED_ARRAY_TYPES {
+                if let Some(&ctor) = self.intrinsics.get(ty.name) {
+                    if let Some(&proto) = self.ctor_prototype.get(&ctor) {
+                        self.proto_methods.push((proto, name, mf));
+                    }
+                }
+            }
         }
         // `%Array Iterator.prototype%`: a boot object chaining to
         // %Object.prototype%, carrying `next` (the iterators produced by
@@ -5365,6 +5400,7 @@ impl Interp {
         self.create_intl();
         self.create_temporal();
         self.create_hardened_globals();
+        self.create_test262_host();
     }
 
     fn alloc_named_native(&mut self, native: Native) -> crate::value::SlotIndex {
@@ -5816,6 +5852,21 @@ impl Interp {
             let mf = self.alloc_method(m);
             self.intrinsics.insert(name, mf);
         }
+    }
+
+    /// Build the minimal test262 host object needed by binary-data tests.
+    /// The oracle shim installs the same `$262.detachArrayBuffer` hook, so
+    /// assembled tests exercise detached-buffer semantics on both engines.
+    fn create_test262_host(&mut self) {
+        let host = self.slots.alloc(Slot::instance(self.object_proto));
+        let detach = self.alloc_named_method(
+            NativeMethod::Test262DetachArrayBuffer,
+            "detachArrayBuffer",
+            1,
+        );
+        self.proto_methods
+            .push((host, "detachArrayBuffer", detach));
+        self.intrinsics.insert("$262", host);
     }
 
     /// Build the `Proxy` constructor (XS's `mxProxyConstructor`, `xsProxy.c`
@@ -20798,6 +20849,26 @@ impl Interp {
             NativeMethod::GlobalHarden => self.do_harden(arg0)?,
             // The global `petrify(x)` (`fx_petrify`): the single-object freeze.
             NativeMethod::GlobalPetrify => self.do_petrify(arg0)?,
+            NativeMethod::Test262DetachArrayBuffer => {
+                let buffer = match arg0.value {
+                    Payload::Reference(r)
+                        if arg0.kind == Kind::Reference
+                            && self.array_buffers.contains_key(&r)
+                            && !self.shared_buffers.contains(&r) =>
+                    {
+                        r
+                    }
+                    _ => return Err(self.catchable_type_error()),
+                };
+                self.detached_buffers.insert(buffer);
+                Slot::undefined()
+            }
+            NativeMethod::TypedArrayCopyWithin
+            | NativeMethod::TypedArrayFill
+            | NativeMethod::TypedArraySet
+            | NativeMethod::TypedArrayReverse => {
+                self.typed_array_mutator(m, this, base, argc, code)?
+            }
             // `Array.prototype.push(...items)` — dense fast path only.
             NativeMethod::ArrayPush => {
                 let inst = match self.dense_array_this(this) {
@@ -26018,6 +26089,245 @@ impl Interp {
         }
     }
 
+    /// `ValidateTypedArray(this)`: enforce the receiver brand and reject a
+    /// view whose backing ArrayBuffer has been detached.
+    fn validate_typed_array(&mut self, this: Slot) -> Result<TypedArrayData, Halt> {
+        let ta = match this.value {
+            Payload::Reference(r) if this.kind == Kind::Reference => {
+                self.typed_arrays.get(&r).copied()
+            }
+            _ => None,
+        }
+        .ok_or_else(|| self.catchable_type_error())?;
+        if self.detached_buffers.contains(&ta.buffer) {
+            return Err(self.catchable_type_error());
+        }
+        Ok(ta)
+    }
+
+    fn typed_array_relative_index(n: f64, length: u32) -> u32 {
+        if n == f64::NEG_INFINITY {
+            return 0;
+        }
+        if n < 0.0 {
+            return (length as f64 + n).max(0.0) as u32;
+        }
+        if n == f64::INFINITY {
+            return length;
+        }
+        n.min(length as f64) as u32
+    }
+
+    /// Coerce a TypedArray method's relative-index argument in spec order.
+    fn typed_array_index_arg(
+        &mut self,
+        code: &[u8],
+        value: Slot,
+        length: u32,
+    ) -> Result<u32, Halt> {
+        let n = self.array_to_integer_or_infinity(code, value)?;
+        Ok(Self::typed_array_relative_index(n, length))
+    }
+
+    /// The four in-place `%TypedArray.prototype%` mutators. All receiver and
+    /// detachment failures are realm-local TypeErrors; argument coercions run
+    /// in specification order and may execute guest code.
+    fn typed_array_mutator(
+        &mut self,
+        method: NativeMethod,
+        this: Slot,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        let arg = |this: &Self, i: usize| {
+            this.stack
+                .get(base + 4 + i)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        };
+        let ta = self.validate_typed_array(this)?;
+        let size = TYPED_ARRAY_TYPES[ta.kind as usize].size as usize;
+
+        match method {
+            NativeMethod::TypedArrayCopyWithin => {
+                let to = self.typed_array_index_arg(code, arg(self, 0), ta.length)?;
+                let from = self.typed_array_index_arg(code, arg(self, 1), ta.length)?;
+                let end = if argc < 3 || arg(self, 2).kind == Kind::Undefined {
+                    ta.length
+                } else {
+                    self.typed_array_index_arg(code, arg(self, 2), ta.length)?
+                };
+                if self.detached_buffers.contains(&ta.buffer) {
+                    return Err(self.catchable_type_error());
+                }
+                let count = end
+                    .saturating_sub(from)
+                    .min(ta.length.saturating_sub(to));
+                if count > 0 {
+                    let buffer = self.array_buffers[&ta.buffer];
+                    let src = ta.offset as usize + from as usize * size;
+                    let dst = ta.offset as usize + to as usize * size;
+                    let byte_count = count as usize * size;
+                    let snapshot = self.chunks.payload(buffer.data)[src..src + byte_count].to_vec();
+                    let out = self.chunks.slice_mut(buffer.data, dst + byte_count);
+                    out[dst..dst + byte_count].copy_from_slice(&snapshot);
+                }
+                Ok(this)
+            }
+            NativeMethod::TypedArrayFill => {
+                // The element value is coerced once, before start/end.
+                let bytes = self.typed_array_element_bytes(code, ta.kind, arg(self, 0))?;
+                let start = if argc < 2 || arg(self, 1).kind == Kind::Undefined {
+                    0
+                } else {
+                    self.typed_array_index_arg(code, arg(self, 1), ta.length)?
+                };
+                let end = if argc < 3 || arg(self, 2).kind == Kind::Undefined {
+                    ta.length
+                } else {
+                    self.typed_array_index_arg(code, arg(self, 2), ta.length)?
+                };
+                if self.detached_buffers.contains(&ta.buffer) {
+                    return Err(self.catchable_type_error());
+                }
+                let buffer = self.array_buffers[&ta.buffer];
+                for i in start..end {
+                    let pos = ta.offset as usize + i as usize * size;
+                    let out = self.chunks.slice_mut(buffer.data, pos + size);
+                    out[pos..pos + size].copy_from_slice(&bytes);
+                }
+                Ok(this)
+            }
+            NativeMethod::TypedArrayReverse => {
+                if ta.length > 1 {
+                    let buffer = self.array_buffers[&ta.buffer];
+                    let mut lo = 0u32;
+                    let mut hi = ta.length - 1;
+                    while lo < hi {
+                        let lpos = ta.offset as usize + lo as usize * size;
+                        let hpos = ta.offset as usize + hi as usize * size;
+                        let left = self.chunks.payload(buffer.data)[lpos..lpos + size].to_vec();
+                        let right = self.chunks.payload(buffer.data)[hpos..hpos + size].to_vec();
+                        let out = self.chunks.slice_mut(buffer.data, hpos + size);
+                        out[lpos..lpos + size].copy_from_slice(&right);
+                        out[hpos..hpos + size].copy_from_slice(&left);
+                        lo += 1;
+                        hi -= 1;
+                    }
+                }
+                Ok(this)
+            }
+            NativeMethod::TypedArraySet => {
+                let offset_number = self.array_to_integer_or_infinity(code, arg(self, 1))?;
+                if offset_number < 0.0
+                    || offset_number == f64::INFINITY
+                    || offset_number > u32::MAX as f64
+                {
+                    return Err(self.catchable_range_error());
+                }
+                let offset = offset_number as u32;
+                if self.detached_buffers.contains(&ta.buffer) {
+                    return Err(self.catchable_type_error());
+                }
+                let source = arg(self, 0);
+
+                if let Payload::Reference(src_ref) = source.value {
+                    if source.kind == Kind::Reference && self.typed_arrays.contains_key(&src_ref) {
+                        let src = self.validate_typed_array(source)?;
+                        if (ta.kind <= 1) != (src.kind <= 1) {
+                            return Err(self.catchable_type_error());
+                        }
+                        if src.length > ta.length.saturating_sub(offset) || offset > ta.length {
+                            return Err(self.catchable_range_error());
+                        }
+                        if ta.kind == src.kind {
+                            // Same element type copies raw bytes, preserving NaN
+                            // payloads, and snapshots before an overlapping write.
+                            let src_size = TYPED_ARRAY_TYPES[src.kind as usize].size as usize;
+                            let src_buffer = self.array_buffers[&src.buffer];
+                            let src_start = src.offset as usize;
+                            let byte_count = src.length as usize * src_size;
+                            let snapshot = self.chunks.payload(src_buffer.data)
+                                [src_start..src_start + byte_count]
+                                .to_vec();
+                            let target_buffer = self.array_buffers[&ta.buffer];
+                            let target_start = ta.offset as usize + offset as usize * size;
+                            let out = self
+                                .chunks
+                                .slice_mut(target_buffer.data, target_start + byte_count);
+                            out[target_start..target_start + byte_count]
+                                .copy_from_slice(&snapshot);
+                        } else {
+                            // Different element types convert source values. Read
+                            // the complete list first so overlapping views behave
+                            // as if the source bytes were cloned.
+                            let mut values = Vec::with_capacity(src.length as usize);
+                            for i in 0..src.length {
+                                let value = if src.kind <= 1 {
+                                    self.typed_array_element_get_bigint(src, i)
+                                } else {
+                                    self.typed_array_element_get(src, i).unwrap()
+                                };
+                                values.push(value);
+                            }
+                            for (i, value) in values.into_iter().enumerate() {
+                                self.typed_array_element_set(
+                                    code,
+                                    ta,
+                                    offset + i as u32,
+                                    value,
+                                )?;
+                            }
+                        }
+                        return Ok(Slot::undefined());
+                    }
+
+                    if source.kind == Kind::Reference {
+                        let raw_len = self.arraylike_length(code, src_ref, source)?;
+                        let len_number = self.to_number_value(code, raw_len)?;
+                        let src_len = to_length_u64(to_number(&len_number));
+                        if src_len > ta.length.saturating_sub(offset) as u64 || offset > ta.length {
+                            return Err(self.catchable_range_error());
+                        }
+                        for i in 0..src_len {
+                            let value = self.arraylike_index(code, src_ref, i, source)?;
+                            let bytes = self.typed_array_element_bytes(code, ta.kind, value)?;
+                            if self.detached_buffers.contains(&ta.buffer) {
+                                return Err(self.catchable_type_error());
+                            }
+                            let target_buffer = self.array_buffers[&ta.buffer];
+                            let pos = ta.offset as usize + (offset as usize + i as usize) * size;
+                            let out = self.chunks.slice_mut(target_buffer.data, pos + size);
+                            out[pos..pos + size].copy_from_slice(&bytes);
+                        }
+                        return Ok(Slot::undefined());
+                    }
+                }
+                // `ToObject(source)`: null/undefined reject. A primitive
+                // string's boxed exotic object exposes UTF-16 indices and a
+                // `length`; every other primitive wrapper has length 0.
+                if matches!(source.kind, Kind::Null | Kind::Undefined) {
+                    return Err(self.catchable_type_error());
+                }
+                if let Payload::String(string) = source.value {
+                    let src_len = self.str_len(string) as u32;
+                    if src_len > ta.length.saturating_sub(offset) || offset > ta.length {
+                        return Err(self.catchable_range_error());
+                    }
+                    for i in 0..src_len {
+                        let value = self.string_index_get(string, i);
+                        self.typed_array_element_set(code, ta, offset + i, value)?;
+                    }
+                } else if offset > ta.length {
+                    return Err(self.catchable_range_error());
+                }
+                Ok(Slot::undefined())
+            }
+            _ => unreachable!("typed_array_mutator called for a non-mutator"),
+        }
+    }
+
     /// Read TypedArray element `index` (XS's per-type `*Getter` →
     /// `mxMeterOne`): decode the native-endian element bytes from the
     /// backing store to a number/integer completion. `index` must be in
@@ -26056,27 +26366,16 @@ impl Interp {
         }
     }
 
-    /// Coerce `value` to this element type and write TypedArray element
-    /// `index` (XS's dispatch `coerce` — `fxToInteger`/`fxToUnsigned`/
-    /// `fxToNumber` — then the per-type `*Setter` → `mxMeterOne`). The
-    /// coercion of a primitive number/integer/boolean is metering-neutral
-    /// (like `Number(v)`); an object value needs `ToPrimitive`/`valueOf` and
-    /// a BigInt-element view needs BigInt coercion — both return `Err` so the
-    /// caller records an honest skip. `index` must be in bounds (an
-    /// out-of-bounds index is a silent no-op with no element metering).
-    fn typed_array_element_set(
+    /// Coerce one value to the exact bytes stored by a TypedArray element.
+    /// Keeping coercion separate from the write lets `fill` coerce once, as
+    /// required, and then repeat the resulting element bytes.
+    fn typed_array_element_bytes(
         &mut self,
         code: &[u8],
-        ta: TypedArrayData,
-        index: u32,
+        kind: u8,
         value: Slot,
-    ) -> Result<(), Halt> {
-        let size = TYPED_ARRAY_TYPES[ta.kind as usize].size as usize;
-        let buf = self.array_buffers[&ta.buffer];
-        let base = ta.offset as usize + index as usize * size;
-        // A BigInt64/BigUint64 element (kinds 0/1): `ToBigInt(value)` then
-        // store the low 64 bits (two's complement).
-        if ta.kind <= 1 {
+    ) -> Result<Vec<u8>, Halt> {
+        if kind <= 1 {
             let primitive = self.to_primitive(code, value, false)?;
             let u = match primitive.value {
                 Payload::BigInt(_) | Payload::Boolean(_) => {
@@ -26086,10 +26385,7 @@ impl Interp {
                     .ok_or_else(|| self.catchable_syntax_error())?,
                 _ => return Err(self.catchable_type_error()),
             };
-            let le = u.to_le_bytes();
-            let out = self.chunks.slice_mut(buf.data, base + 8);
-            out[base..base + 8].copy_from_slice(&le);
-            return Ok(());
+            return Ok(u.to_le_bytes().to_vec());
         }
         let primitive = self.to_primitive(code, value, false)?;
         let number = match primitive.kind {
@@ -26106,8 +26402,22 @@ impl Interp {
             _ => return Err(self.catchable_type_error()),
         };
         let n = numeric_of(&number).unwrap_or(f64::NAN);
-        let le =
-            encode_element_le(ta.kind, n).ok_or(Halt::Unsupported("typed-array-set:bigint"))?;
+        encode_element_le(kind, n).ok_or(Halt::Unsupported("typed-array-set:bigint"))
+    }
+
+    /// Coerce `value` to this element type and write TypedArray element
+    /// `index` (XS's per-type setter). `index` must be in bounds.
+    fn typed_array_element_set(
+        &mut self,
+        code: &[u8],
+        ta: TypedArrayData,
+        index: u32,
+        value: Slot,
+    ) -> Result<(), Halt> {
+        let le = self.typed_array_element_bytes(code, ta.kind, value)?;
+        let size = le.len();
+        let buf = self.array_buffers[&ta.buffer];
+        let base = ta.offset as usize + index as usize * size;
         let out = self.chunks.slice_mut(buf.data, base + size);
         out[base..base + size].copy_from_slice(&le);
         Ok(())

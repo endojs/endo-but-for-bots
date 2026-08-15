@@ -46,6 +46,29 @@ typedef struct {
 
 static int gEndorClusterReady = 0;
 
+static void fx_endor_detachArrayBuffer(txMachine *the)
+{
+	txSlot *slot = mxArgv(0);
+	if (slot->kind == XS_REFERENCE_KIND) {
+		txSlot *instance = slot->value.reference;
+		if (((slot = instance->next)) && (slot->flag & XS_INTERNAL_FLAG) &&
+			(slot->kind == XS_ARRAY_BUFFER_KIND) &&
+			(instance != mxArrayBufferPrototype.value.reference)) {
+			txSlot *bufferInfo = slot->next;
+			if (bufferInfo && (bufferInfo->flag & XS_INTERNAL_FLAG) &&
+				(bufferInfo->kind == XS_BUFFER_INFO_KIND)) {
+				slot->value.arrayBuffer.address = C_NULL;
+				slot->value.arrayBuffer.detachKey = C_NULL;
+				bufferInfo->value.bufferInfo.length = 0;
+				if (bufferInfo->value.bufferInfo.maxLength > 0)
+					bufferInfo->value.bufferInfo.maxLength = 0;
+				return;
+			}
+		}
+	}
+	mxTypeError("this is no ArrayBuffer instance");
+}
+
 /* Mirrors DEFAULT_CREATION in rust/endo/xsnap/src/lib.rs. */
 static txCreation gEndorCreation = {
 	128 * 1024, /* initialChunkSize */
@@ -126,6 +149,26 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 					fxID(the, "petrify"), XS_DONT_ENUM_FLAG);
 				slot = fxNextHostFunctionProperty(the, slot, fx_mutabilities, 1,
 					fxID(the, "mutabilities"), XS_DONT_ENUM_FLAG);
+				mxPop();
+			}
+
+			/* Install the test262 host hook used by detachArrayBuffer.js. */
+			{
+				txSlot *slot;
+				txSlot *global;
+				txSlot *host;
+				mxPush(mxGlobal);
+				global = the->stack;
+				mxPush(mxObjectPrototype);
+				slot = fxLastProperty(the, fxNewObjectInstance(the));
+				slot = fxNextHostFunctionProperty(the, slot,
+					fx_endor_detachArrayBuffer, 1,
+					fxID(the, "detachArrayBuffer"), XS_DONT_ENUM_FLAG);
+				host = the->stack;
+				slot = fxLastProperty(the, fxToInstance(the, global));
+				(void)fxNextSlotProperty(the, slot, host,
+					fxID(the, "$262"), XS_DONT_ENUM_FLAG);
+				mxPop();
 				mxPop();
 			}
 
