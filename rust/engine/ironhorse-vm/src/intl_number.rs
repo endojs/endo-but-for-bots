@@ -885,26 +885,25 @@ fn compute_notation_exponent(opts: &NfResolved, dec: &Decimal) -> i32 {
 /// covers decimal, percent, scientific and engineering; the mantissa is scaled
 /// then rendered, and the exponent (if any) appended.
 pub fn partition_number(opts: &NfResolved, x: f64) -> Vec<Part> {
-    let negative = x.is_sign_negative();
+    // NaN carries no numeric sign; every other value's sign follows its sign
+    // bit (so `-0` is negative).
+    let negative = x.is_sign_negative() && !x.is_nan();
+
+    // Build the number body (no sign) and learn whether the *rounded* value is
+    // zero — `signDisplay: exceptZero`/`negative` suppress the sign for a value
+    // that rounds to zero (`-0.0001` → `0`), while `auto`/`always` follow the
+    // mathematical sign regardless of rounding.
+    let (mut body, rounded_is_zero) = number_body_parts(opts, x, negative);
+
+    let sign = if x.is_nan() {
+        // Only `signDisplay: always` prepends a plus to NaN.
+        matches!(opts.sign_display, SignDisplay::Always).then_some(false)
+    } else {
+        resolve_sign(opts.sign_display, negative, rounded_is_zero)
+    };
+
     let mut parts = Vec::new();
-
-    // Non-finite handling.
-    if x.is_nan() {
-        if let Some(minus) = resolve_sign(opts.sign_display, false, false) {
-            // NaN is never signed in practice; sign resolves to none for auto.
-            let _ = minus;
-        }
-        parts.push(Part::new(PartType::Nan, "NaN"));
-        return with_percent_suffix(opts, parts);
-    }
-
-    // Percent scales the value by 100.
-    let mut value = x.abs();
-    if opts.style == Style::Percent {
-        value *= 100.0;
-    }
-    let is_zero = value == 0.0;
-    if let Some(minus) = resolve_sign(opts.sign_display, negative, is_zero) {
+    if let Some(minus) = sign {
         parts.push(Part::new(
             if minus {
                 PartType::MinusSign
@@ -914,10 +913,29 @@ pub fn partition_number(opts: &NfResolved, x: f64) -> Vec<Part> {
             if minus { "-" } else { "+" },
         ));
     }
+    parts.append(&mut body);
+    parts
+}
+
+/// Build the unsigned number-body parts (integer/group/decimal/fraction/
+/// exponent, or the NaN/Infinity token, plus the percent suffix) and report
+/// whether the rounded magnitude is zero.
+fn number_body_parts(opts: &NfResolved, x: f64, negative: bool) -> (Vec<Part>, bool) {
+    let mut parts = Vec::new();
+
+    if x.is_nan() {
+        parts.push(Part::new(PartType::Nan, "NaN"));
+        return (with_percent_suffix(opts, parts), false);
+    }
+
+    let mut value = x.abs();
+    if opts.style == Style::Percent {
+        value *= 100.0;
+    }
 
     if value.is_infinite() {
         parts.push(Part::new(PartType::Infinity, "∞"));
-        return with_percent_suffix(opts, parts);
+        return (with_percent_suffix(opts, parts), false);
     }
 
     let mut dec = Decimal::from_f64(value);
@@ -946,6 +964,9 @@ pub fn partition_number(opts: &NfResolved, x: f64) -> Vec<Part> {
     while (rendered.int_digits.len() as u32) < opts.min_integer_digits {
         rendered.int_digits.insert(0, '0');
     }
+
+    let rounded_is_zero = rendered.int_digits.bytes().all(|b| b == b'0')
+        && rendered.frac_digits.bytes().all(|b| b == b'0');
 
     let nu = &opts.numbering_system;
     let (primary, secondary) = grouping_sizes(&opts.locale);
@@ -986,7 +1007,7 @@ pub fn partition_number(opts: &NfResolved, x: f64) -> Vec<Part> {
         ));
     }
 
-    with_percent_suffix(opts, parts)
+    (with_percent_suffix(opts, parts), rounded_is_zero)
 }
 
 /// Append the percent sign for a percent-style number (en/latin placement:
@@ -1071,8 +1092,13 @@ mod tests {
         assert_eq!(format_to_string(&f, -0.0), "-0");
         f.sign_display = SignDisplay::ExceptZero;
         assert_eq!(format_to_string(&f, 0.0), "0");
-        assert_eq!(format_to_string(&f, -0.0001), "-0");
-        assert_eq!(format_to_string(&f, 0.0001), "+0");
+        // A value that rounds to zero is treated as zero: no sign under
+        // exceptZero (even though -0.0001 is mathematically negative).
+        assert_eq!(format_to_string(&f, -0.0001), "0");
+        assert_eq!(format_to_string(&f, 0.0001), "0");
+        // A non-zero-rounding value still gets its sign.
+        assert_eq!(format_to_string(&f, -0.5), "-0.5");
+        assert_eq!(format_to_string(&f, 0.5), "+0.5");
     }
 
     #[test]

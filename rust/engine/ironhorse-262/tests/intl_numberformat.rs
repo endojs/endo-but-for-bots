@@ -99,8 +99,21 @@ fn sign_display_is_exact() {
             "0",
         ),
         (
+            // -0.0001 rounds to 0, so exceptZero suppresses the sign.
             "new Intl.NumberFormat('en-US',{signDisplay:'exceptZero'}).format(-0.0001)",
-            "-0",
+            "0",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{signDisplay:'exceptZero'}).format(-987)",
+            "-987",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{signDisplay:'always'}).format(NaN)",
+            "+NaN",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{signDisplay:'always'}).format(-Infinity)",
+            "-∞",
         ),
         (
             "new Intl.NumberFormat('en-US',{signDisplay:'never'}).format(-987)",
