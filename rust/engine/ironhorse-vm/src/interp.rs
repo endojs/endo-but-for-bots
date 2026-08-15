@@ -16942,6 +16942,31 @@ impl Interp {
         matches!(v.value, Payload::Reference(r) if v.kind == Kind::Reference && self.slot_is_callable(r))
     }
 
+    /// `IsConstructor(v)` (ECMA-262 7.2.4), conservatively: every callable is a
+    /// constructor **except** a native prototype **method** (`method.is_some()`
+    /// — e.g. `Array.prototype.map`, and the `Intl.NumberFormat.prototype.format`
+    /// accessor getter / its bound function), which has no `[[Construct]]`. A
+    /// bound/proxy callable follows its target. This is the check
+    /// `Reflect.construct` and the harness `isConstructor` require; it only
+    /// *tightens* the prior callable test (which wrongly admitted methods), so
+    /// no case that constructed a genuine constructor changes.
+    fn is_constructor_value(&self, v: Slot) -> bool {
+        matches!(v.value, Payload::Reference(r) if v.kind == Kind::Reference && self.slot_is_constructor(r))
+    }
+
+    fn slot_is_constructor(&self, r: crate::value::SlotIndex) -> bool {
+        if let Some(data) = self.proxies.get(&r) {
+            return !data.revoked && self.slot_is_constructor(data.target);
+        }
+        if let Some(data) = self.bound_functions.get(&r) {
+            return self.slot_is_constructor(data.target);
+        }
+        match self.functions.get(&r) {
+            Some(fi) => fi.method.is_none(),
+            None => false,
+        }
+    }
+
     /// Whether a heap instance has `[[Call]]`: a function instance, or a live
     /// proxy whose target is (recursively) callable (ECMA-262 10.5.12 gates
     /// `[[Call]]` on the target being callable).
@@ -23623,11 +23648,16 @@ impl Interp {
             // `Reflect.construct(target, argumentsList[, newTarget])` (ECMA-262
             // 28.1.2): `Construct(target, args, newTarget)`.
             NativeMethod::ReflectConstruct => {
-                if !self.is_callable_value(arg0) {
+                // ECMA-262 28.1.2: both the target and the (defaulted) newTarget
+                // must be **constructors**, not merely callable — a native
+                // prototype method (the `format` getter, its bound function)
+                // has no `[[Construct]]`, so `Reflect.construct(fn, [], getter)`
+                // throws, and the harness `isConstructor(getter)` is `false`.
+                if !self.is_constructor_value(arg0) {
                     return Err(self.catchable_type_error());
                 }
                 let new_target = if argc >= 3 { arg2 } else { arg0 };
-                if !self.is_callable_value(new_target) {
+                if !self.is_constructor_value(new_target) {
                     return Err(self.catchable_type_error());
                 }
                 let args = self.arraylike_to_vec(code, arg1)?;
