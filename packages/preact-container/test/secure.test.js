@@ -1965,7 +1965,10 @@ describe('../src/renderer.js', () => {
       // The opt is default-preserving: host-trusted chrome (the app's
       // header/drawer/toolbar) must still position itself. If this
       // fails, the change stopped being zero-blast-radius.
-      renderConfined(h('div', { style: 'position:fixed;z-index:5' }, 'x'), scratch);
+      renderConfined(
+        h('div', { style: 'position:fixed;z-index:5' }, 'x'),
+        scratch,
+      );
       expect(scratch.firstChild.style.position).to.equal('fixed');
       expect(scratch.firstChild.style.zIndex).to.equal('5');
     });

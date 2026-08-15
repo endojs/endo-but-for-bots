@@ -22,11 +22,15 @@ describe('composition frame — multi-party attribution', () => {
   // name is resolved host-side via nameOf, keyed on the object — there is no string→party lookup.
   const ALICE = { kind: 'person' };
   const MALLORY = { kind: 'person' };
-  const nameOf = p => (p === ALICE ? 'alice' : p === MALLORY ? 'mallory' : undefined);
+  const nameOf = p =>
+    p === ALICE ? 'alice' : p === MALLORY ? 'mallory' : undefined;
   const OPTS = { secret: SECRET, nameOf };
 
   const region = (text, name) =>
-    confineComponent(({ h: ch }, props) => ch('p', { class: 'body' }, props.text), { name });
+    confineComponent(
+      ({ h: ch }, props) => ch('p', { class: 'body' }, props.text),
+      { name },
+    );
 
   beforeEach(() => {
     scratch = setupScratch();
@@ -36,14 +40,23 @@ describe('composition frame — multi-party attribution', () => {
     teardown(scratch);
   });
 
-  const marks = () => [...scratch.querySelectorAll('.party-mark')].map(n => n.textContent);
+  const marks = () =>
+    [...scratch.querySelectorAll('.party-mark')].map(n => n.textContent);
 
   it('composes every party inline, each with its own mark', () => {
     renderConfined(
       composeRegions(
         [
-          { party: ALICE, Component: region('', 'A'), props: { text: 'the original text' } },
-          { party: MALLORY, Component: region('', 'M'), props: { text: 'a friendly note' } },
+          {
+            party: ALICE,
+            Component: region('', 'A'),
+            props: { text: 'the original text' },
+          },
+          {
+            party: MALLORY,
+            Component: region('', 'M'),
+            props: { text: 'a friendly note' },
+          },
         ],
         OPTS,
       ),
@@ -61,32 +74,48 @@ describe('composition frame — multi-party attribution', () => {
     // The core rule. If `Attribution` ever reached a region's props, that region could place it with
     // any name it liked — `party` is a declared primitive param by design.
     let sawProps = [];
-    const Nosy = confineComponent(({ h: ch }, props) => {
-      sawProps = Object.keys(props);
-      return ch('p', null, props.text);
-    }, { name: 'Nosy' });
+    const Nosy = confineComponent(
+      ({ h: ch }, props) => {
+        sawProps = Object.keys(props);
+        return ch('p', null, props.text);
+      },
+      { name: 'Nosy' },
+    );
 
     renderConfined(
-      composeRegions([{ party: MALLORY, Component: Nosy, props: { text: 'hi' } }], OPTS),
+      composeRegions(
+        [{ party: MALLORY, Component: Nosy, props: { text: 'hi' } }],
+        OPTS,
+      ),
       scratch,
     );
     // (`children` is preact's own addition, not something the frame passed.)
     expect(sawProps).to.not.include('Attribution');
-    expect(sawProps.filter(k => k !== 'text' && k !== 'children')).to.deep.equal([]);
+    expect(
+      sawProps.filter(k => k !== 'text' && k !== 'children'),
+    ).to.deep.equal([]);
   });
 
   it('a party drawing a lookalike mark cannot reproduce the FRAME badge', () => {
     // Mallory can draw anything inside her own region — including something that looks like a mark.
     // What she cannot do is produce the operator's secret pattern, which is what says "this whole
     // composition is real". Her fake sits INSIDE a frame she could not authenticate.
-    const Forger = confineComponent(({ h: ch }, props) =>
-      ch('div', null,
-        ch('span', { class: 'party-mark' }, '● alice'), // a hand-drawn lookalike
-        ch('p', null, props.text)),
-    { name: 'Forger' });
+    const Forger = confineComponent(
+      ({ h: ch }, props) =>
+        ch(
+          'div',
+          null,
+          ch('span', { class: 'party-mark' }, '● alice'), // a hand-drawn lookalike
+          ch('p', null, props.text),
+        ),
+      { name: 'Forger' },
+    );
 
     renderConfined(
-      composeRegions([{ party: MALLORY, Component: Forger, props: { text: 'trust me' } }], OPTS),
+      composeRegions(
+        [{ party: MALLORY, Component: Forger, props: { text: 'trust me' } }],
+        OPTS,
+      ),
       scratch,
     );
     // the forgery is present in the DOM (pixels are not authenticated — we never claimed otherwise)…
@@ -100,13 +129,19 @@ describe('composition frame — multi-party attribution', () => {
 
   it('the frame badge renders the operator pattern and no party can read it', () => {
     let stolen = [];
-    const Peeker = confineComponent(({ h: ch }, props) => {
-      stolen = Object.values(props).map(v => String(v));
-      return ch('p', null, props.text);
-    }, { name: 'Peeker' });
+    const Peeker = confineComponent(
+      ({ h: ch }, props) => {
+        stolen = Object.values(props).map(v => String(v));
+        return ch('p', null, props.text);
+      },
+      { name: 'Peeker' },
+    );
 
     renderConfined(
-      composeRegions([{ party: MALLORY, Component: Peeker, props: { text: 'x' } }], OPTS),
+      composeRegions(
+        [{ party: MALLORY, Component: Peeker, props: { text: 'x' } }],
+        OPTS,
+      ),
       scratch,
     );
     const badge = scratch.querySelector('.secure-badge');
@@ -116,12 +151,19 @@ describe('composition frame — multi-party attribution', () => {
     expect(stolen.join(' ')).to.not.contain(badge.textContent);
   });
 
-  it('an unattributed region renders as unattributed — it does not inherit a neighbour\'s mark', () => {
+  it("an unattributed region renders as unattributed — it does not inherit a neighbour's mark", () => {
     renderConfined(
       composeRegions(
         [
-          { party: ALICE, Component: region('', 'A'), props: { text: 'signed' } },
-          { Component: region('', 'Anon'), props: { text: 'anonymous insert' } },
+          {
+            party: ALICE,
+            Component: region('', 'A'),
+            props: { text: 'signed' },
+          },
+          {
+            Component: region('', 'Anon'),
+            props: { text: 'anonymous insert' },
+          },
         ],
         OPTS,
       ),
@@ -138,7 +180,13 @@ describe('composition frame — multi-party attribution', () => {
     // `party` into its own props must not move the mark.
     renderConfined(
       composeRegions(
-        [{ party: MALLORY, Component: region('', 'M'), props: { text: 'x', party: 'alice' } }],
+        [
+          {
+            party: MALLORY,
+            Component: region('', 'M'),
+            props: { text: 'x', party: 'alice' },
+          },
+        ],
         OPTS,
       ),
       scratch,
@@ -158,14 +206,27 @@ describe('composition frame — multi-party attribution', () => {
   });
 
   it('a STRING party is refused loudly — the mistake this pattern exists to prevent', () => {
-    expect(() => composeRegions([{ party: 'alice', Component: region('', 'A'), props: {} }], OPTS))
-      .to.throw(/by OBJECT, not by id/);
+    expect(() =>
+      composeRegions(
+        [{ party: 'alice', Component: region('', 'A'), props: {} }],
+        OPTS,
+      ),
+    ).to.throw(/by OBJECT, not by id/);
   });
 
   it('an UNNAMED party is still marked and coloured (not blank, not an identifier)', () => {
     const STRANGER = { kind: 'person' };
     renderConfined(
-      composeRegions([{ party: STRANGER, Component: region('', 'S'), props: { text: 'hi' } }], OPTS),
+      composeRegions(
+        [
+          {
+            party: STRANGER,
+            Component: region('', 'S'),
+            props: { text: 'hi' },
+          },
+        ],
+        OPTS,
+      ),
       scratch,
     );
     const chip = scratch.querySelector('.party-mark');

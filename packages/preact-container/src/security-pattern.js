@@ -31,14 +31,56 @@ import { sealComponent } from './compartment.js';
 // day at a glance — a pattern nobody can recall is not a security control, and an attacker guessing
 // blind faces the product of these, which is ample when they get no feedback about a wrong guess.
 const GLYPHS = [
-  '◆', '●', '▲', '■', '★', '✦', '♦', '⬟', '⬢', '◈',
-  '✱', '❖', '▼', '⬣', '◉', '✶',
+  '◆',
+  '●',
+  '▲',
+  '■',
+  '★',
+  '✦',
+  '♦',
+  '⬟',
+  '⬢',
+  '◈',
+  '✱',
+  '❖',
+  '▼',
+  '⬣',
+  '◉',
+  '✶',
 ];
 const WORDS = [
-  'amber', 'basalt', 'cedar', 'delta', 'ember', 'fjord', 'glass', 'harbor',
-  'indigo', 'juniper', 'kelp', 'lantern', 'meadow', 'nimbus', 'onyx', 'pillar',
-  'quartz', 'ridge', 'saffron', 'thistle', 'umber', 'violet', 'willow', 'xenon',
-  'yarrow', 'zephyr', 'anchor', 'bramble', 'cinder', 'dune', 'elder', 'flint',
+  'amber',
+  'basalt',
+  'cedar',
+  'delta',
+  'ember',
+  'fjord',
+  'glass',
+  'harbor',
+  'indigo',
+  'juniper',
+  'kelp',
+  'lantern',
+  'meadow',
+  'nimbus',
+  'onyx',
+  'pillar',
+  'quartz',
+  'ridge',
+  'saffron',
+  'thistle',
+  'umber',
+  'violet',
+  'willow',
+  'xenon',
+  'yarrow',
+  'zephyr',
+  'anchor',
+  'bramble',
+  'cinder',
+  'dune',
+  'elder',
+  'flint',
 ];
 
 // FNV-1a. NOT a security hash and not asked to be one: the secret is never revealed, and this only has
@@ -101,14 +143,21 @@ export function sealPatternBadge(secret, opts = {}) {
           // Inline style, because this must not be restyleable by the surrounding (untrusted) context's
           // stylesheet — an attacker who could recolour or hide the badge could make a forgery match, or
           // make the real one disappear.
-          style: `display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;`
-            + `background:hsl(${pattern.hue} 70% 22%);color:hsl(${pattern.hue2} 90% 82%);`
-            + `border:1px solid hsl(${pattern.hue2} 70% 45%);font-size:12px;font-weight:600;`,
+          style:
+            `display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;` +
+            `background:hsl(${pattern.hue} 70% 22%);color:hsl(${pattern.hue2} 90% 82%);` +
+            `border:1px solid hsl(${pattern.hue2} 70% 45%);font-size:12px;font-weight:600;`,
           title: `Your security pattern: ${pattern.glyph} ${pattern.phrase}. If this does not match, do not trust this prompt.`,
         },
         h('span', { 'aria-hidden': 'true' }, pattern.glyph),
         h('span', null, pattern.phrase),
-        text || defaultLabel ? h('span', { style: 'opacity:.85;font-weight:400' }, String(text || defaultLabel)) : null,
+        text || defaultLabel
+          ? h(
+              'span',
+              { style: 'opacity:.85;font-weight:400' },
+              String(text || defaultLabel),
+            )
+          : null,
       ),
     { params: ['text'] },
   );
@@ -126,7 +175,11 @@ export function sealPatternBadge(secret, opts = {}) {
  * @param {string} [key]
  * @returns {string} the secret — hand it ONLY to sealPatternBadge.
  */
-export function getOrCreatePatternSecret(storage, randomHex, key = 'secure-ui-pattern-secret') {
+export function getOrCreatePatternSecret(
+  storage,
+  randomHex,
+  key = 'secure-ui-pattern-secret',
+) {
   try {
     const existing = storage.getItem(key);
     if (existing) return String(existing);

@@ -35,7 +35,8 @@ const randomHex = (n = 16) => {
   }
   // No CSPRNG: still per-boundary and non-enumerable, but say so rather than pretending.
   let s = '';
-  while (s.length < n * 2) s += Math.floor(Math.random() * 0xffffffff).toString(16);
+  while (s.length < n * 2)
+    s += Math.floor(Math.random() * 0xffffffff).toString(16);
   return s.slice(0, n * 2);
 };
 
@@ -46,10 +47,15 @@ const randomHex = (n = 16) => {
  * @returns {{ handle: string, seed: string }}
  */
 export const partyIdentity = party => {
-  if (party === null || (typeof party !== 'object' && typeof party !== 'function')) {
+  if (
+    party === null ||
+    (typeof party !== 'object' && typeof party !== 'function')
+  ) {
     // A string here is exactly the mistake this module exists to prevent, so it fails loudly rather
     // than quietly minting an identity for a forgeable designator.
-    throw new TypeError('partyIdentity: designate a party by OBJECT, not by id (see designs/designation-by-object-not-id.md)');
+    throw new TypeError(
+      'partyIdentity: designate a party by OBJECT, not by id (see designs/designation-by-object-not-id.md)',
+    );
   }
   let rec = identities.get(party);
   if (!rec) {
@@ -89,18 +95,80 @@ export const markFor = party => {
   // part a person recognises at a glance, so collisions there erode the affordance even when hue
   // differs. Independent bits for hue, so a glyph collision does not drag a hue collision with it.
   const GLYPHS = [
-    '●', '■', '▲', '◆', '⬢', '★', '✚', '❋', '◐', '◑', '◒', '◓', '◧', '◨', '◩', '◪',
-    '▣', '▤', '▥', '▦', '▧', '▨', '▩', '◈', '◉', '◍', '◎', '☀', '☁', '☂', '☘', '⚑',
+    '●',
+    '■',
+    '▲',
+    '◆',
+    '⬢',
+    '★',
+    '✚',
+    '❋',
+    '◐',
+    '◑',
+    '◒',
+    '◓',
+    '◧',
+    '◨',
+    '◩',
+    '◪',
+    '▣',
+    '▤',
+    '▥',
+    '▦',
+    '▧',
+    '▨',
+    '▩',
+    '◈',
+    '◉',
+    '◍',
+    '◎',
+    '☀',
+    '☁',
+    '☂',
+    '☘',
+    '⚑',
   ];
   // HEX, not hsl(): the renderer's inline-style sanitizer filters hsl() values, so a mark styled
   // with them arrives colourless — the badge would be consistent in glyph but not in colour, which
   // is half of what makes an unnamed party recognisable. Found by the composition suite.
   const PALETTE = [
-    '#8b5cf6', '#6366f1', '#3b82f6', '#0ea5e9', '#06b6d4', '#14b8a6', '#10b981', '#22c55e',
-    '#84cc16', '#eab308', '#f59e0b', '#f97316', '#ef4444', '#f43f5e', '#ec4899', '#d946ef',
-    '#a855f7', '#7c3aed', '#4f46e5', '#2563eb', '#0284c7', '#0891b2', '#0d9488', '#059669',
-    '#16a34a', '#65a30d', '#ca8a04', '#d97706', '#ea580c', '#dc2626', '#e11d48', '#db2777',
+    '#8b5cf6',
+    '#6366f1',
+    '#3b82f6',
+    '#0ea5e9',
+    '#06b6d4',
+    '#14b8a6',
+    '#10b981',
+    '#22c55e',
+    '#84cc16',
+    '#eab308',
+    '#f59e0b',
+    '#f97316',
+    '#ef4444',
+    '#f43f5e',
+    '#ec4899',
+    '#d946ef',
+    '#a855f7',
+    '#7c3aed',
+    '#4f46e5',
+    '#2563eb',
+    '#0284c7',
+    '#0891b2',
+    '#0d9488',
+    '#059669',
+    '#16a34a',
+    '#65a30d',
+    '#ca8a04',
+    '#d97706',
+    '#ea580c',
+    '#dc2626',
+    '#e11d48',
+    '#db2777',
   ];
   const ci = (Math.imul(hash ^ 0x9e3779b9, 0x85ebca6b) >>> 0) % PALETTE.length;
-  return { glyph: GLYPHS[hash % GLYPHS.length], hue: ci * 11, color: PALETTE[ci] };
+  return {
+    glyph: GLYPHS[hash % GLYPHS.length],
+    hue: ci * 11,
+    color: PALETTE[ci],
+  };
 };

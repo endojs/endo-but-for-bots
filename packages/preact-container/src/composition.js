@@ -71,14 +71,18 @@ const Attribution = sealComponent(
         {
           class: 'party-mark party-mark-none',
           style:
-            'display:inline;white-space:nowrap;padding:.05em .35em;border-radius:999px;'
-            + 'border:1px dashed currentColor;opacity:.7;font-size:11px;',
+            'display:inline;white-space:nowrap;padding:.05em .35em;border-radius:999px;' +
+            'border:1px dashed currentColor;opacity:.7;font-size:11px;',
         },
         '(unattributed)',
       );
     }
     let name;
-    try { name = nameOfParty(party); } catch { name = undefined; }
+    try {
+      name = nameOfParty(party);
+    } catch {
+      name = undefined;
+    }
     const { glyph, color } = markFor(party);
     const known = typeof name === 'string' && name.length > 0;
     return h(
@@ -89,12 +93,16 @@ const Attribution = sealComponent(
         // its border box and can never break — see petname.js). Inline because a plain
         // inline declaration LOSES to an author rule.
         style:
-          'display:inline;white-space:nowrap;padding:.05em .4em;border-radius:999px;'
-          + 'unicode-bidi:isolate;'
-          + `color:${color};`
-          + `border:1px solid ${color};font-size:11px;font-weight:600;`,
+          'display:inline;white-space:nowrap;padding:.05em .4em;border-radius:999px;' +
+          'unicode-bidi:isolate;' +
+          `color:${color};` +
+          `border:1px solid ${color};font-size:11px;font-weight:600;`,
       },
-      h('span', { 'aria-hidden': 'true', style: 'margin-inline-end:.25em' }, glyph),
+      h(
+        'span',
+        { 'aria-hidden': 'true', style: 'margin-inline-end:.25em' },
+        glyph,
+      ),
       // Unnamed is still MARKED and COLOURED — only the label is missing, and it says so plainly
       // rather than falling back to any identifier.
       h('span', null, known ? String(name) : 'unnamed'),
@@ -132,8 +140,11 @@ const renderableContent = r => {
   const C = r && r.Component;
   if (!C) return null;
   if (!isConfinedComponent(C)) {
-    return h('span', { class: 'party-content-refused', style: 'opacity:.7;font-style:italic' },
-      '(content refused: not confined)');
+    return h(
+      'span',
+      { class: 'party-content-refused', style: 'opacity:.7;font-style:italic' },
+      '(content refused: not confined)',
+    );
   }
   return h(C, (r && r.props) || {});
 };
@@ -153,13 +164,19 @@ export const composeRegions = (regions, opts = {}) => {
   const list = Array.isArray(regions) ? regions : [];
   // The name resolver is HOST-SIDE and per-call. It is never handed to a region, and it is keyed on
   // the party OBJECT — there is no lookup that turns an arbitrary string into a party.
-  nameOfParty = typeof opts.nameOf === 'function' ? opts.nameOf : () => undefined;
+  nameOfParty =
+    typeof opts.nameOf === 'function' ? opts.nameOf : () => undefined;
   const FrameBadge = frameBadgeFor(opts.secret);
   return h(
     'div',
     { class: 'composition' },
     // The frame's own claim, once, at the top: everything below is composed by the system.
-    h('div', { class: 'composition-frame' }, h(FrameBadge, {}), opts.label ? h('span', null, String(opts.label)) : null),
+    h(
+      'div',
+      { class: 'composition-frame' },
+      h(FrameBadge, {}),
+      opts.label ? h('span', null, String(opts.label)) : null,
+    ),
     ...list.map((r, i) =>
       h(
         'section',

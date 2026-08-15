@@ -72,7 +72,8 @@ export const sealPetName = (nameOf, opts = {}) => {
       const party = partyForHandle(partyRef);
       let name;
       try {
-        name = party && typeof nameOf === 'function' ? nameOf(party) : undefined;
+        name =
+          party && typeof nameOf === 'function' ? nameOf(party) : undefined;
       } catch {
         name = undefined; // a throwing resolver must not become a rendering hole
       }
@@ -92,7 +93,9 @@ export const sealPetName = (nameOf, opts = {}) => {
                 tabindex: 0,
                 title: 'Give this party a local name',
                 onClick: () => onName(party),
-                onKeyDown: e => { if (e && (e.key === 'Enter' || e.key === ' ')) onName(party); },
+                onKeyDown: e => {
+                  if (e && (e.key === 'Enter' || e.key === ' ')) onName(party);
+                },
               }
             : {}),
           // Inline style for the same reason the pattern badge uses one: an untrusted stylesheet
@@ -114,23 +117,37 @@ export const sealPetName = (nameOf, opts = {}) => {
           // toward the unknown presentation. Inline wins outright. (Belt for the
           // renderer's attribute filtering, not a replacement for it.)
           style:
-            'display:inline;white-space:nowrap;padding:.05em .35em;border-radius:999px;'
-            + 'unicode-bidi:isolate;' // a name of unknown script must not reorder the prose around it
-            + 'font-size:inherit;'
-            + (nameable ? 'cursor:pointer;' : '')
-            + (known
+            'display:inline;white-space:nowrap;padding:.05em .35em;border-radius:999px;' +
+            'unicode-bidi:isolate;' + // a name of unknown script must not reorder the prose around it
+            'font-size:inherit;' +
+            (nameable ? 'cursor:pointer;' : '') +
+            (known
               ? 'font-weight:600;background-color:color-mix(in srgb, currentColor 12%, transparent);font-style:normal;'
               : mk
-                // consistently badged AND coloured, per party, even with no name yet
-                ? `font-weight:600;color:${mk.color};font-style:normal;`
+                ? // consistently badged AND coloured, per party, even with no name yet
+                  `font-weight:600;color:${mk.color};font-style:normal;`
                 : 'opacity:.75;font-weight:400;font-style:italic;background-color:transparent;'),
           // No `title` carrying the raw id: a tooltip is still disclosure, and the operator did not
           // ask to see identifiers.
         },
         // `gap` is meaningless on an inline box; horizontal margin works on one. (NBSP would also
         // work but its width is font-dependent.)
-        mk || known ? h('span', { 'aria-hidden': 'true', style: 'margin-inline-end:.25em' }, mk ? mk.glyph : marker) : null,
-        h('span', null, known ? String(name) : (nameable ? 'name this ⋯' : unknownLabel(party ? partyIdentitySeedless(party) : ''))),
+        mk || known
+          ? h(
+              'span',
+              { 'aria-hidden': 'true', style: 'margin-inline-end:.25em' },
+              mk ? mk.glyph : marker,
+            )
+          : null,
+        h(
+          'span',
+          null,
+          known
+            ? String(name)
+            : nameable
+              ? 'name this ⋯'
+              : unknownLabel(party ? partyIdentitySeedless(party) : ''),
+        ),
       );
     },
     { params: ['partyRef'] },

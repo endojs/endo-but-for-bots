@@ -13,7 +13,11 @@
 // simply handed the child the host function.
 import { h } from 'preact';
 import { renderConfined, unmount } from '../src/renderer.js';
-import { confineComponent, sealComponent, isSealedComponent } from '../src/compartment.js';
+import {
+  confineComponent,
+  sealComponent,
+  isSealedComponent,
+} from '../src/compartment.js';
 import { setupScratch, teardown } from './_util/helpers.js';
 
 describe('sealComponent — trusted-in-untrusted', () => {
@@ -78,7 +82,9 @@ describe('sealComponent — trusted-in-untrusted', () => {
       return ch('div', null, 'x');
     });
     renderConfined(h(Thief, { Name }), scratch);
-    expect(stolen === 'null' || stolen === undefined || /^threw:/.test(stolen)).to.equal(true);
+    expect(
+      stolen === 'null' || stolen === undefined || /^threw:/.test(stolen),
+    ).to.equal(true);
     expect(String(stolen)).to.not.contain('Alexa');
   });
 
@@ -183,9 +189,12 @@ describe('sealComponent — trusted-in-untrusted', () => {
 
   // ── robustness ─────────────────────────────────────────────────────────────────────────────────
   it('a throwing trusted component renders nothing and does not take down the host', () => {
-    const Boom = sealComponent(() => {
-      throw new Error('trusted blew up');
-    }, { params: [] });
+    const Boom = sealComponent(
+      () => {
+        throw new Error('trusted blew up');
+      },
+      { params: [] },
+    );
     const Child = confineComponent(({ h: ch }, props) =>
       ch('div', null, 'before', ch(props.B, null), 'after'),
     );
@@ -200,7 +209,12 @@ describe('sealComponent — trusted-in-untrusted', () => {
     // the child is given ONLY A, and tries to reach B by every route it has
     const Child = confineComponent(({ h: ch }, props) => {
       const stolen = props.A.B || props.A.spec || props.A.fn;
-      return ch('div', null, ch(props.A, null), stolen ? ch(stolen, null) : 'no-B');
+      return ch(
+        'div',
+        null,
+        ch(props.A, null),
+        stolen ? ch(stolen, null) : 'no-B',
+      );
     });
     renderConfined(h(Child, { A }), scratch);
     expect(scratch.textContent).to.contain('AAA');

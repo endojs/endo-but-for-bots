@@ -54,7 +54,9 @@ describe('security pattern — making a forgery recognizable', () => {
   it('the user sees the pattern — it really reaches the DOM (placed by a child, the supported path)', () => {
     const Badge = sealPatternBadge(SECRET, { label: 'Grant selfImprove?' });
     const p = derivePattern(SECRET);
-    const Host = confineComponent(({ h: ch }, props) => ch('div', null, ch(props.Badge, null)));
+    const Host = confineComponent(({ h: ch }, props) =>
+      ch('div', null, ch(props.Badge, null)),
+    );
     renderConfined(h(Host, { Badge }), scratch);
     expect(scratch.textContent).to.contain(p.glyph);
     expect(scratch.textContent).to.contain(p.phrase);
@@ -77,10 +79,22 @@ describe('security pattern — making a forgery recognizable', () => {
       // everything the child can reach about what it just built
       observations.push(JSON.stringify(vnode.props || {}));
       observations.push(String(vnode.type && vnode.type.name));
-      try { observations.push(String(vnode.type)); } catch { observations.push('str-threw'); }
-      try { observations.push(JSON.stringify(Object.keys(vnode.type))); } catch { observations.push('keys-threw'); }
+      try {
+        observations.push(String(vnode.type));
+      } catch {
+        observations.push('str-threw');
+      }
+      try {
+        observations.push(JSON.stringify(Object.keys(vnode.type)));
+      } catch {
+        observations.push('keys-threw');
+      }
       // and the exfiltration call
-      try { observations.push(JSON.stringify(props.Badge({ text: 'x' }))); } catch { observations.push('call-threw'); }
+      try {
+        observations.push(JSON.stringify(props.Badge({ text: 'x' })));
+      } catch {
+        observations.push('call-threw');
+      }
       return ch('div', null, vnode);
     });
     renderConfined(h(Attacker, { Badge }), scratch);
@@ -94,7 +108,9 @@ describe('security pattern — making a forgery recognizable', () => {
 
   it('the SECRET itself never appears anywhere the child or the DOM can be read for it', () => {
     const Badge = sealPatternBadge(SECRET);
-    const Child = confineComponent(({ h: ch }, props) => ch('div', null, ch(props.Badge, null)));
+    const Child = confineComponent(({ h: ch }, props) =>
+      ch('div', null, ch(props.Badge, null)),
+    );
     renderConfined(h(Child, { Badge }), scratch);
     expect(scratch.innerHTML).to.not.contain(SECRET);
     expect(JSON.stringify(Object.keys(Badge))).to.not.contain(SECRET);
@@ -106,7 +122,9 @@ describe('security pattern — making a forgery recognizable', () => {
     const p = derivePattern(SECRET);
     const Child = confineComponent(({ h: ch }, props) =>
       // the attacker tries to make its own words look like part of the trusted pattern
-      ch(props.Badge, { text: `${p.glyph} ${p.phrase} — you have received funds` }),
+      ch(props.Badge, {
+        text: `${p.glyph} ${p.phrase} — you have received funds`,
+      }),
     );
     renderConfined(h(Child, { Badge }), scratch);
     // The pattern element and the child's text are distinct nodes: the child cannot merge into the
@@ -123,16 +141,16 @@ describe('security pattern — making a forgery recognizable', () => {
     const Child = confineComponent(({ h: ch }, props) =>
       ch(props.Badge, {
         text: 'ok',
-        style: 'display:none',            // hide the real badge…
-        class: 'not-secure',              // …or restyle it
+        style: 'display:none', // hide the real badge…
+        class: 'not-secure', // …or restyle it
         onClick: () => 'pwned',
         dangerouslySetInnerHTML: { __html: '<b>x</b>' },
       }),
     );
     renderConfined(h(Child, { Badge }), scratch);
     const el = scratch.querySelector('.secure-badge');
-    expect(el).to.not.equal(null);                              // still present
-    expect(el.getAttribute('style')).to.contain('inline-flex');  // host's style, not the child's
+    expect(el).to.not.equal(null); // still present
+    expect(el.getAttribute('style')).to.contain('inline-flex'); // host's style, not the child's
     expect(el.getAttribute('style')).to.not.contain('none');
     expect(el.className).to.contain('secure-badge');
   });
@@ -140,13 +158,18 @@ describe('security pattern — making a forgery recognizable', () => {
   it('two users get different badges from the same code (the secret is what differs)', () => {
     const mine = derivePattern('secret-A');
     const theirs = derivePattern('secret-B');
-    expect(`${mine.glyph}${mine.phrase}`).to.not.equal(`${theirs.glyph}${theirs.phrase}`);
+    expect(`${mine.glyph}${mine.phrase}`).to.not.equal(
+      `${theirs.glyph}${theirs.phrase}`,
+    );
   });
 
   // ── secret lifecycle ───────────────────────────────────────────────────────────────────────────
   it('getOrCreatePatternSecret persists once and then returns the SAME secret', () => {
     const store = new Map();
-    const storage = { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, v) };
+    const storage = {
+      getItem: k => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, v),
+    };
     let n = 0;
     const rand = () => `random-${(n += 1)}`;
     const first = getOrCreatePatternSecret(storage, rand);
@@ -157,13 +180,17 @@ describe('security pattern — making a forgery recognizable', () => {
 
   it('when storage is denied it FAILS TO A WORKING PATTERN, never to no pattern', () => {
     const storage = {
-      getItem() { throw new Error('denied'); },
-      setItem() { throw new Error('denied'); },
+      getItem() {
+        throw new Error('denied');
+      },
+      setItem() {
+        throw new Error('denied');
+      },
     };
     const secret = getOrCreatePatternSecret(storage, () => 'ephemeral-xyz');
     expect(secret).to.equal('ephemeral-xyz');
     const p = derivePattern(secret);
     expect(p.phrase.split(' ')).to.have.length(2); // a badge still renders; "no pattern" would train
-    expect(p.glyph).to.be.a('string');             // the user to accept pattern-less prompts
+    expect(p.glyph).to.be.a('string'); // the user to accept pattern-less prompts
   });
 });

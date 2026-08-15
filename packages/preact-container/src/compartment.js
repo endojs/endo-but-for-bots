@@ -139,7 +139,16 @@ const hardenEndowments = () => {
   // eslint-disable-next-line no-use-before-define
   hard(endowments); // transitive: reaches h.prototype and up the chain, which Object.freeze does not
 };
-for (const fn of [h, Fragment, useState, useEffect, useCallback, useMemo, useRef, useReducer]) {
+for (const fn of [
+  h,
+  Fragment,
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  useRef,
+  useReducer,
+]) {
   Object.freeze(fn);
 }
 // WITHOUT `lockdown()` THIS CHANNEL CANNOT BE CLOSED FROM LIBRARY CODE, and it is not the worst
@@ -241,7 +250,8 @@ let sealedInvocationToken = null;
 const coerceParam = value => {
   const t = typeof value;
   if (value == null) return undefined;
-  if (t === 'string' || t === 'number' || t === 'boolean' || t === 'bigint') return value;
+  if (t === 'string' || t === 'number' || t === 'boolean' || t === 'bigint')
+    return value;
   return undefined;
 };
 
@@ -260,7 +270,9 @@ export function sealComponent(hostFn, opts = {}) {
     throw new TypeError('sealComponent(hostFn): hostFn must be a function');
   }
   const declared = new Set(
-    (Array.isArray(opts.params) ? opts.params : []).filter(p => typeof p === 'string'),
+    (Array.isArray(opts.params) ? opts.params : []).filter(
+      p => typeof p === 'string',
+    ),
   );
   // The placeholder's own body is what Preact calls during the diff. It is deliberately NOT the host
   // function: the child can reach this reference (off its own vnode's `.type`) and could call it, so
@@ -418,7 +430,11 @@ function coerceType(type) {
     // …and a SEALED component (sealComponent): the child is allowed to PLACE it, which is the whole
     // point — it just cannot read it, call it for a value, or parameterize it outside its contract.
     // Identity again (a private WeakSet), never a flag the attacker could set on their own function.
-    if (confinedComponents.has(type) || type === OpaqueChild || sealedComponents.has(type)) {
+    if (
+      confinedComponents.has(type) ||
+      type === OpaqueChild ||
+      sealedComponents.has(type)
+    ) {
       return type;
     }
   }

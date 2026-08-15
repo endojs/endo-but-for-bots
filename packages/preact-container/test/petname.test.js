@@ -27,7 +27,10 @@ describe('petnames in untrusted content', () => {
   const ALICE = { kind: 'person' };
   const ERIK = { kind: 'person' };
   const STRANGER = { kind: 'person' };
-  const BOOK = new Map([[ALICE, 'Alice'], [ERIK, 'Erik (plumber)']]);
+  const BOOK = new Map([
+    [ALICE, 'Alice'],
+    [ERIK, 'Erik (plumber)'],
+  ]);
   let asked;
   const nameOf = party => {
     asked.push(party);
@@ -45,9 +48,17 @@ describe('petnames in untrusted content', () => {
 
   it('untrusted content supplies the HANDLE; the host supplies the name', () => {
     const { PetName, handleFor } = sealPetName(nameOf);
-    const Agent = confineComponent(({ h: ch }, props) =>
-      ch('p', null, 'ask ', ch(props.PetName, { partyRef: handleFor(ALICE) }), ' about the invoice'),
-    { name: 'AgentText' });
+    const Agent = confineComponent(
+      ({ h: ch }, props) =>
+        ch(
+          'p',
+          null,
+          'ask ',
+          ch(props.PetName, { partyRef: handleFor(ALICE) }),
+          ' about the invoice',
+        ),
+      { name: 'AgentText' },
+    );
 
     renderConfined(h(Agent, { PetName }), scratch);
     expect(scratch.textContent).to.contain('Alice');
@@ -58,15 +69,21 @@ describe('petnames in untrusted content', () => {
   it('the agent cannot READ the name it just caused to render', () => {
     const { PetName, handleFor } = sealPetName(nameOf);
     let stolen = 'not-run';
-    const Thief = confineComponent(({ h: ch }, props) => {
-      const v = ch(props.PetName, { partyRef: handleFor(ALICE) });
-      try {
-        stolen = JSON.stringify({ props: v.props, out: props.PetName({ partyRef: handleFor(ALICE) }) });
-      } catch (e) {
-        stolen = `threw:${(e && e.message) || e}`;
-      }
-      return ch('p', null, v);
-    }, { name: 'Thief' });
+    const Thief = confineComponent(
+      ({ h: ch }, props) => {
+        const v = ch(props.PetName, { partyRef: handleFor(ALICE) });
+        try {
+          stolen = JSON.stringify({
+            props: v.props,
+            out: props.PetName({ partyRef: handleFor(ALICE) }),
+          });
+        } catch (e) {
+          stolen = `threw:${(e && e.message) || e}`;
+        }
+        return ch('p', null, v);
+      },
+      { name: 'Thief' },
+    );
 
     renderConfined(h(Thief, { PetName }), scratch);
     expect(scratch.textContent).to.contain('Alice'); // it rendered…
@@ -76,15 +93,20 @@ describe('petnames in untrusted content', () => {
   it('the agent cannot enumerate the address book through the lookup', () => {
     const { PetName, handleFor } = sealPetName(nameOf);
     let reached = 'no';
-    const Enumerator = confineComponent(({ h: ch }, props) => {
-      // everything the agent can see about the seal it holds
-      try {
-        reached = JSON.stringify(Object.keys(props.PetName)) + String(props.PetName.toString()).slice(0, 200);
-      } catch (e) {
-        reached = `threw:${(e && e.message) || e}`;
-      }
-      return ch('p', null, 'x');
-    }, { name: 'Enumerator' });
+    const Enumerator = confineComponent(
+      ({ h: ch }, props) => {
+        // everything the agent can see about the seal it holds
+        try {
+          reached =
+            JSON.stringify(Object.keys(props.PetName)) +
+            String(props.PetName.toString()).slice(0, 200);
+        } catch (e) {
+          reached = `threw:${(e && e.message) || e}`;
+        }
+        return ch('p', null, 'x');
+      },
+      { name: 'Enumerator' },
+    );
 
     renderConfined(h(Enumerator, { PetName }), scratch);
     expect(reached).to.not.contain('Alice');
@@ -95,13 +117,19 @@ describe('petnames in untrusted content', () => {
   it('the agent cannot SPOOF a name by passing one', () => {
     // The direct attack: put your own word where the operator expects their own.
     const { PetName, handleFor } = sealPetName(nameOf);
-    const Spoofer = confineComponent(({ h: ch }, props) =>
-      ch('p', null, ch(props.PetName, {
-        partyRef: handleFor(ERIK),  // a handle it legitimately holds…
-        name: 'Alice', // …plus a name of its own choosing: not a declared param
-        children: 'Alice', // nor this
-      })),
-    { name: 'Spoofer' });
+    const Spoofer = confineComponent(
+      ({ h: ch }, props) =>
+        ch(
+          'p',
+          null,
+          ch(props.PetName, {
+            partyRef: handleFor(ERIK), // a handle it legitimately holds…
+            name: 'Alice', // …plus a name of its own choosing: not a declared param
+            children: 'Alice', // nor this
+          }),
+        ),
+      { name: 'Spoofer' },
+    );
 
     renderConfined(h(Spoofer, { PetName }), scratch);
     expect(scratch.textContent).to.contain('Erik'); // the operator's own name for that PARTY wins
@@ -112,9 +140,18 @@ describe('petnames in untrusted content', () => {
     // The fallback is the real attack surface: reference an id the operator has no name for and hope
     // the empty slot shows something you chose.
     const { PetName, handleFor } = sealPetName(nameOf);
-    const Unknown = confineComponent(({ h: ch }, props) =>
-      ch('p', null, ch(props.PetName, { partyRef: handleFor(STRANGER), name: 'Your Bank' })),
-    { name: 'Unknown' });
+    const Unknown = confineComponent(
+      ({ h: ch }, props) =>
+        ch(
+          'p',
+          null,
+          ch(props.PetName, {
+            partyRef: handleFor(STRANGER),
+            name: 'Your Bank',
+          }),
+        ),
+      { name: 'Unknown' },
+    );
 
     renderConfined(h(Unknown, { PetName }), scratch);
     expect(scratch.textContent).to.not.contain('Your Bank');
@@ -126,11 +163,16 @@ describe('petnames in untrusted content', () => {
 
   it('a known name is visually distinguishable from an unknown one', () => {
     const { PetName, handleFor } = sealPetName(nameOf);
-    const Both = confineComponent(({ h: ch }, props) =>
-      ch('p', null,
-        ch(props.PetName, { partyRef: handleFor(ALICE) }),
-        ch(props.PetName, { partyRef: handleFor(STRANGER) })),
-    { name: 'Both' });
+    const Both = confineComponent(
+      ({ h: ch }, props) =>
+        ch(
+          'p',
+          null,
+          ch(props.PetName, { partyRef: handleFor(ALICE) }),
+          ch(props.PetName, { partyRef: handleFor(STRANGER) }),
+        ),
+      { name: 'Both' },
+    );
 
     renderConfined(h(Both, { PetName }), scratch);
     const chips = scratch.querySelectorAll('.petname');
@@ -142,10 +184,20 @@ describe('petnames in untrusted content', () => {
   it('a throwing resolver degrades to unknown, not to a rendering hole', () => {
     // A broken address book must not blank the agent's sentence or crash the render — the sentence
     // still has to read, with the name slot honestly marked unknown.
-    const { PetName, handleFor } = sealPetName(() => { throw new Error('address book unavailable'); });
-    const Agent = confineComponent(({ h: ch }, props) =>
-      ch('p', null, 'ask ', ch(props.PetName, { partyRef: handleFor(ALICE) }), ' about it'),
-    { name: 'AgentText' });
+    const { PetName, handleFor } = sealPetName(() => {
+      throw new Error('address book unavailable');
+    });
+    const Agent = confineComponent(
+      ({ h: ch }, props) =>
+        ch(
+          'p',
+          null,
+          'ask ',
+          ch(props.PetName, { partyRef: handleFor(ALICE) }),
+          ' about it',
+        ),
+      { name: 'AgentText' },
+    );
 
     renderConfined(h(Agent, { PetName }), scratch);
     expect(scratch.textContent).to.contain('ask');
@@ -157,15 +209,22 @@ describe('petnames in untrusted content', () => {
     // dan: "the user should be able to click the label to label it." The handler is captured in the
     // seal; the untrusted side can neither supply one nor read the party it receives.
     const named = [];
-    const { PetName, handleFor } = sealPetName(nameOf, { onName: party => named.push(party) });
+    const { PetName, handleFor } = sealPetName(nameOf, {
+      onName: party => named.push(party),
+    });
     let hijack = 'not-run';
-    const Agent = confineComponent(({ h: ch }, props) => {
-      const v = ch(props.PetName, {
-        partyRef: handleFor(STRANGER),
-        onClick: () => { hijack = 'HIJACKED'; }, // not a declared param — must not ride in
-      });
-      return ch('p', null, v);
-    }, { name: 'AgentText' });
+    const Agent = confineComponent(
+      ({ h: ch }, props) => {
+        const v = ch(props.PetName, {
+          partyRef: handleFor(STRANGER),
+          onClick: () => {
+            hijack = 'HIJACKED';
+          }, // not a declared param — must not ride in
+        });
+        return ch('p', null, v);
+      },
+      { name: 'AgentText' },
+    );
 
     renderConfined(h(Agent, { PetName }), scratch);
     const chip = scratch.querySelector('.petname-unknown');
@@ -177,18 +236,24 @@ describe('petnames in untrusted content', () => {
 
   it('a NAMED chip is not a button — there is nothing to do to it', () => {
     const { PetName, handleFor } = sealPetName(nameOf, { onName: () => {} });
-    const Agent = confineComponent(({ h: ch }, props) =>
-      ch('p', null, ch(props.PetName, { partyRef: handleFor(ALICE) })),
-    { name: 'AgentText' });
+    const Agent = confineComponent(
+      ({ h: ch }, props) =>
+        ch('p', null, ch(props.PetName, { partyRef: handleFor(ALICE) })),
+      { name: 'AgentText' },
+    );
     renderConfined(h(Agent, { PetName }), scratch);
-    expect(scratch.querySelector('.petname').getAttribute('role')).to.equal(null);
+    expect(scratch.querySelector('.petname').getAttribute('role')).to.equal(
+      null,
+    );
   });
 
   it('with no onName the unnamed chip stays inert (no dead affordance)', () => {
     const { PetName, handleFor } = sealPetName(nameOf);
-    const Agent = confineComponent(({ h: ch }, props) =>
-      ch('p', null, ch(props.PetName, { partyRef: handleFor(STRANGER) })),
-    { name: 'AgentText' });
+    const Agent = confineComponent(
+      ({ h: ch }, props) =>
+        ch('p', null, ch(props.PetName, { partyRef: handleFor(STRANGER) })),
+      { name: 'AgentText' },
+    );
     renderConfined(h(Agent, { PetName }), scratch);
     const chip = scratch.querySelector('.petname-unknown');
     expect(chip.getAttribute('role')).to.equal(null);
@@ -197,9 +262,11 @@ describe('petnames in untrusted content', () => {
 
   it('the chip carries no title/tooltip disclosing the raw id', () => {
     const { PetName, handleFor } = sealPetName(nameOf);
-    const Agent = confineComponent(({ h: ch }, props) =>
-      ch('p', null, ch(props.PetName, { partyRef: handleFor(ALICE) })),
-    { name: 'AgentText' });
+    const Agent = confineComponent(
+      ({ h: ch }, props) =>
+        ch('p', null, ch(props.PetName, { partyRef: handleFor(ALICE) })),
+      { name: 'AgentText' },
+    );
 
     renderConfined(h(Agent, { PetName }), scratch);
     const chip = scratch.querySelector('.petname');
