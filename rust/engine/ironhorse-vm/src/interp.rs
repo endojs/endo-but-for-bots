@@ -5221,8 +5221,11 @@ impl Interp {
             ("getBigUint64", "setBigUint64", 1),
         ];
         for &(gname, sname, kind) in dv_methods {
-            let getter = self.alloc_method(NativeMethod::DataViewGet(kind));
-            let setter = self.alloc_method(NativeMethod::DataViewSet(kind));
+            // Named + arity-carrying so `get<Type>.name`/`.length` (1) and
+            // `set<Type>.name`/`.length` (2) are the spec's reflective own
+            // data properties (`verifyProperty`/`propertyHelper` reads them).
+            let getter = self.alloc_named_method(NativeMethod::DataViewGet(kind), gname, 1);
+            let setter = self.alloc_named_method(NativeMethod::DataViewSet(kind), sname, 2);
             self.proto_methods
                 .push((self.dataview_proto, gname, getter));
             self.proto_methods
