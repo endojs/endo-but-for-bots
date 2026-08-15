@@ -24,7 +24,11 @@ fn main() {
     let xs_includes = moddable_dir.join("xs/includes");
     let xs_platforms = moddable_dir.join("xs/platforms");
     let xsnap_dir = repo_root.join("rust/endo/xsnap");
-    let platform_header = xsnap_dir.join("xsnap-platform.h");
+    // The oracle links xsnap's platform verbatim but through a thin wrapper
+    // header that disables the archive-only default module loader, so the
+    // executable-module entry can use the shim's filesystem resolve/load
+    // hooks (see csrc/xsoracle-platform.h).
+    let platform_header = manifest_dir.join("csrc/xsoracle-platform.h");
     let platform_source = xsnap_dir.join("xsnap-platform.c");
 
     if !xs_sources.join("xsAll.c").exists() {
@@ -93,6 +97,7 @@ fn main() {
     build.compile("xsoracle");
 
     println!("cargo:rerun-if-changed=csrc/xs_shim.c");
+    println!("cargo:rerun-if-changed=csrc/xsoracle-platform.h");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={}", platform_source.display());
     println!("cargo:rustc-link-lib=m");

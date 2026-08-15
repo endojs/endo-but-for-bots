@@ -768,6 +768,33 @@ async `import()`/`importHook` loader, and `import.meta`. GC roots were not touch
 (no run-loop/allocation-pressure wiring in this child), so the GC-roots ledger
 note carries forward untouched.
 
+**Update (executable-module oracle seam — dynamic-`import()` child).** The
+larger, separately-audited FFI seam the static child declined to open is now
+**partially open on the oracle side**: `xs-oracle` gained an executable
+Module-goal entry, `xs_oracle::run_module_dir` (backed by
+`xs_shim.c:xs_oracle_run_module`), that LINKS and EVALUATES a whole module graph
+over XS's **filesystem** resolve/load hooks — the same loader moddable's `xst -m`
+uses (the shim supplies `fxFindModule`/`fxLoadModule` adapted from `xst.c`, with
+`csrc/xsoracle-platform.h` flipping off xsnap's archive-only default loader). It
+returns a settled outcome (fulfilled result / rejection reason / computrons) for
+a per-case directory the caller materializes the fixtures into, so **module
+execution, cyclic graphs, caching/identity, namespaces, top-level await, dynamic
+`import()`, `import.meta`, and import attributes now have a real XS oracle
+authority** — the differential the manual-`xst` method previously could not
+automate. It is locked by `xs-oracle`'s own `run_module_*` unit tests and by
+`ironhorse-262/tests/module_execution_oracle.rs` (fulfillment, rejection,
+namespace key order/values, instance caching, cyclic evaluation order,
+`import.meta` shape + per-module identity, dynamic-import fulfillment/rejection,
+import-attributes JSON module, and a genuine test262 live-binding fixture).
+**Still a named skip (the remaining half of the arc):** `ironhorse-vm` does not
+yet EXECUTE module bytecode — `XS_CODE_IMPORT`/`XS_CODE_IMPORT_META` remain the
+honest interpreter skips `module:dynamic-import` / `module:import-meta`, and
+`XS_CODE_MODULE`/`XS_CODE_TRANSFER` are unimplemented — so a positive
+`module`-flagged test262 case is **still never promoted to `covered`**
+(`xst.rs:run_module_case` caps it at `module:evaluation`). Promoting the harness
+to a true module dual-run against this new oracle authority is the follow-up the
+seam now unblocks.
+
 The stage-4b **compartment** child (3/5) grows the stage-1 `Compartment.evaluate`
 seam into the full **native `Compartment`** the SES suites probe
 (`ironhorse_vm::compartment`, `xsModule.c`'s compartment half): **per-compartment
