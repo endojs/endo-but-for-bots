@@ -25,6 +25,7 @@ pub mod cost;
 pub mod default_keys;
 pub mod gc;
 pub mod interp;
+pub mod intl_number;
 pub mod meter;
 pub mod module;
 pub mod opcode;

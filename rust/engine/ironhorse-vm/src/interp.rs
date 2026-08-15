@@ -1793,6 +1793,11 @@ pub enum NativeMethod {
     DateTimeFormatFormatRange,
     DateTimeFormatFormatRangeToParts,
     DateTimeFormatResolvedOptions,
+    NumberFormatFormat,
+    NumberFormatFormatToParts,
+    NumberFormatFormatRange,
+    NumberFormatFormatRangeToParts,
+    NumberFormatResolvedOptions,
     /// The internal `%CopyObject%` helper used by object spread and object
     /// rest. It copies the source's own enumerable properties to `this`.
     CopyObject,
@@ -3020,6 +3025,7 @@ pub enum Native {
     PluralRules,
     Segmenter,
     DateTimeFormat,
+    NumberFormat,
     TemporalInstant,
     TemporalDuration,
     /// PlainDate, PlainTime, PlainDateTime, PlainYearMonth, PlainMonthDay,
@@ -3113,6 +3119,7 @@ impl Native {
             Native::PluralRules => "PluralRules",
             Native::Segmenter => "Segmenter",
             Native::DateTimeFormat => "DateTimeFormat",
+            Native::NumberFormat => "NumberFormat",
             Native::TemporalInstant => "Instant",
             Native::TemporalDuration => "Duration",
             Native::TemporalPlain(i) => TEMPORAL_PLAIN_NAMES[i as usize],
@@ -3162,6 +3169,7 @@ impl Native {
             Native::PluralRules => 0,
             Native::Segmenter => 0,
             Native::DateTimeFormat => 0,
+            Native::NumberFormat => 0,
             Native::TemporalInstant => 1,
             Native::TemporalDuration => 0,
             Native::TemporalPlain(i) => [3, 0, 3, 2, 2, 1][i as usize],
@@ -3588,10 +3596,12 @@ pub struct Interp {
     segments_proto: crate::value::SlotIndex,
     segment_iterator_proto: crate::value::SlotIndex,
     date_time_format_proto: crate::value::SlotIndex,
+    number_format_proto: crate::value::SlotIndex,
     locales: std::collections::HashMap<crate::value::SlotIndex, LocaleData>,
     collators: std::collections::HashMap<crate::value::SlotIndex, CollatorData>,
     list_formats: std::collections::HashMap<crate::value::SlotIndex, ListFormatData>,
     plural_rules: std::collections::HashMap<crate::value::SlotIndex, PluralRulesData>,
+    number_formats: std::collections::HashMap<crate::value::SlotIndex, NumberFormatData>,
     segmenters: std::collections::HashMap<crate::value::SlotIndex, SegmenterData>,
     segments: std::collections::HashMap<crate::value::SlotIndex, SegmentsData>,
     segment_iterators: std::collections::HashMap<crate::value::SlotIndex, SegmentIteratorData>,
@@ -4049,6 +4059,49 @@ struct PluralRulesData {
     trailing_zero_display: String,
 }
 
+/// The resolved internal slots of an `Intl.NumberFormat`. The digit-option
+/// fields mirror `PluralRulesData` (both are populated by
+/// `set_number_digit_options`); the remaining fields carry the
+/// style/currency/unit/notation/sign/grouping resolution.
+#[derive(Clone, Debug)]
+struct NumberFormatData {
+    locale: String,
+    numbering_system: String,
+    /// `decimal` | `percent` | `currency` | `unit`
+    style: String,
+    /// `standard` | `scientific` | `engineering` | `compact`
+    notation: String,
+    /// `short` | `long`
+    compact_display: String,
+    /// `auto` | `always` | `never` | `exceptZero` | `negative`
+    sign_display: String,
+    /// `always` | `auto` | `min2` | `false`
+    use_grouping: String,
+    currency: Option<String>,
+    /// `symbol` | `narrowSymbol` | `code` | `name`
+    currency_display: String,
+    /// `standard` | `accounting`
+    currency_sign: String,
+    unit: Option<String>,
+    /// `short` | `narrow` | `long`
+    unit_display: String,
+    minimum_integer_digits: u32,
+    minimum_fraction_digits: u32,
+    maximum_fraction_digits: u32,
+    minimum_significant_digits: Option<u32>,
+    maximum_significant_digits: Option<u32>,
+    rounding_type: String,
+    rounding_priority: String,
+    rounding_mode: String,
+    rounding_increment: u32,
+    trailing_zero_display: String,
+    /// The lazily-created, cached `[[BoundFormat]]` function (the `format`
+    /// getter returns the same function on every read). Reserved for the
+    /// accessor-getter follow-up; the current `format` is a plain method.
+    #[allow(dead_code)]
+    bound_format: Option<crate::value::SlotIndex>,
+}
+
 #[derive(Clone, Debug)]
 struct SegmenterData {
     locale: String,
@@ -4406,10 +4459,12 @@ impl Interp {
             segments_proto: crate::value::SlotIndex::NULL,
             segment_iterator_proto: crate::value::SlotIndex::NULL,
             date_time_format_proto: crate::value::SlotIndex::NULL,
+            number_format_proto: crate::value::SlotIndex::NULL,
             locales: std::collections::HashMap::new(),
             collators: std::collections::HashMap::new(),
             list_formats: std::collections::HashMap::new(),
             plural_rules: std::collections::HashMap::new(),
+            number_formats: std::collections::HashMap::new(),
             segmenters: std::collections::HashMap::new(),
             segments: std::collections::HashMap::new(),
             segment_iterators: std::collections::HashMap::new(),
@@ -4672,6 +4727,7 @@ impl Interp {
                 | Native::PluralRules
                 | Native::Segmenter
                 | Native::DateTimeFormat
+                | Native::NumberFormat
                 | Native::TemporalInstant
                 | Native::TemporalDuration
                 | Native::TemporalPlain(_)
@@ -5407,7 +5463,19 @@ impl Interp {
         self.proto_methods
             .push((intl, "DateTimeFormat", date_time_format));
 
-        for ctor in [locale, collator, list_format, plural_rules, segmenter, date_time_format] {
+        let number_format = self.alloc_named_native(Native::NumberFormat);
+        let number_format_proto = self.slots.alloc(Slot::instance(self.object_proto));
+        self.number_format_proto = number_format_proto;
+        self.ctor_prototype
+            .insert(number_format, number_format_proto);
+        self.proto_methods
+            .push((number_format, "prototype", number_format_proto));
+        self.proto_methods
+            .push((number_format_proto, "constructor", number_format));
+        self.proto_methods
+            .push((intl, "NumberFormat", number_format));
+
+        for ctor in [locale, collator, list_format, plural_rules, segmenter, date_time_format, number_format] {
             let f =
                 self.alloc_named_method(NativeMethod::IntlSupportedLocalesOf, "supportedLocalesOf", 1);
             self.proto_methods.push((ctor, "supportedLocalesOf", f));
@@ -5473,6 +5541,27 @@ impl Interp {
         ] {
             let f = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((date_time_format_proto, name, f));
+        }
+        for (name, method, arity) in [
+            // `format` is modeled here as an own method of the prototype; the
+            // spec's accessor-getter-returning-a-bound-function shape (observed
+            // only by the `format`/`prop-desc` property tests) is a follow-up.
+            ("format", NativeMethod::NumberFormatFormat, 1),
+            ("formatToParts", NativeMethod::NumberFormatFormatToParts, 1),
+            ("formatRange", NativeMethod::NumberFormatFormatRange, 2),
+            (
+                "formatRangeToParts",
+                NativeMethod::NumberFormatFormatRangeToParts,
+                2,
+            ),
+            (
+                "resolvedOptions",
+                NativeMethod::NumberFormatResolvedOptions,
+                0,
+            ),
+        ] {
+            let f = self.alloc_named_method(method, name, arity);
+            self.proto_methods.push((number_format_proto, name, f));
         }
         // Keep the profile version observable to regression tooling without
         // depending on a host database.
@@ -6303,6 +6392,7 @@ impl Interp {
                 (self.plural_rules_proto, "Intl.PluralRules"),
                 (self.segmenter_proto, "Intl.Segmenter"),
                 (self.date_time_format_proto, "Intl.DateTimeFormat"),
+                (self.number_format_proto, "Intl.NumberFormat"),
                 (self.segment_iterator_proto, "Segmenter String Iterator"),
                 (self.temporal_zoned_proto, "Temporal.ZonedDateTime"),
                 (self.temporal_now_object, "Temporal.Now"),
@@ -13127,6 +13217,17 @@ impl Interp {
                 self.date_time_formats.insert(inst, data);
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
+            Native::NumberFormat => {
+                // `Intl.NumberFormat(...)` is callable with or without `new`
+                // (the legacy ECMA-402 constructor form). Both create a fresh
+                // instance chaining to `%NumberFormat.prototype%`.
+                let locale_arg = arg(0);
+                let options_arg = arg(1);
+                let data = self.build_number_format(code, locale_arg, options_arg)?;
+                let inst = self.slots.alloc(Slot::instance(self.number_format_proto));
+                self.number_formats.insert(inst, data);
+                Slot::of(Kind::Reference, Payload::Reference(inst))
+            }
             Native::TemporalInstant => {
                 if !has_target { return Err(self.catchable_type_error()); }
                 let ns = self.temporal_bigint_to_i128(arg(0))
@@ -14879,6 +14980,335 @@ impl Interp {
             data.maximum_significant_digits = None;
         }
         Ok(())
+    }
+
+    /// `InitializeNumberFormat` (ECMA-402): resolve the locale, numbering
+    /// system, style/currency/unit, notation, digit options, grouping, and sign
+    /// display against the frozen profile. The option-read order mirrors the
+    /// specification so `constructor-order` and the option-getter tests observe
+    /// the same get sequence.
+    fn build_number_format(
+        &mut self,
+        code: &[u8],
+        locale_arg: Slot,
+        options_arg: Slot,
+    ) -> Result<NumberFormatData, Halt> {
+        let requested = self.intl_first_locale(code, locale_arg)?;
+        let (locale_base, ext) = match &requested {
+            Some(raw) => {
+                let loc = canonicalize_locale(raw).ok_or_else(|| self.catchable_range_error())?;
+                (locale_base_name(&loc), loc.unicode.clone())
+            }
+            None => ("en".to_string(), std::collections::BTreeMap::new()),
+        };
+        let options = self.intl_get_options_object(options_arg)?;
+        if let Some(opts) = options {
+            self.intl_get_option_enum(
+                code,
+                opts,
+                "localeMatcher",
+                &["lookup", "best fit"],
+                "best fit",
+            )?;
+        }
+        let mut numbering = ext.get("nu").cloned();
+        if let Some(opts) = options {
+            if let Some(v) = self.intl_option_string(code, opts, "numberingSystem")? {
+                let v = v.to_ascii_lowercase();
+                if !valid_unicode_type(&v) {
+                    return Err(self.catchable_range_error());
+                }
+                numbering = Some(v);
+            }
+        }
+        let numbering_system = numbering.unwrap_or_else(|| "latn".to_string());
+
+        // SetNumberFormatUnitOptions.
+        let style = match options {
+            Some(o) => self.intl_get_option_enum(
+                code,
+                o,
+                "style",
+                &["decimal", "percent", "currency", "unit"],
+                "decimal",
+            )?,
+            None => "decimal".to_string(),
+        };
+        let mut currency = None;
+        let mut currency_display = "symbol".to_string();
+        let mut currency_sign = "standard".to_string();
+        let mut unit = None;
+        let mut unit_display = "short".to_string();
+        if let Some(o) = options {
+            if let Some(c) = self.intl_option_string(code, o, "currency")? {
+                if !is_well_formed_currency_code(&c) {
+                    return Err(self.catchable_range_error());
+                }
+                currency = Some(c.to_ascii_uppercase());
+            }
+            if style == "currency" && currency.is_none() {
+                return Err(self.catchable_type_error());
+            }
+            currency_display = self.intl_get_option_enum(
+                code,
+                o,
+                "currencyDisplay",
+                &["symbol", "narrowSymbol", "code", "name"],
+                "symbol",
+            )?;
+            currency_sign = self.intl_get_option_enum(
+                code,
+                o,
+                "currencySign",
+                &["standard", "accounting"],
+                "standard",
+            )?;
+            if let Some(u) = self.intl_option_string(code, o, "unit")? {
+                if !is_well_formed_unit_identifier(&u) {
+                    return Err(self.catchable_range_error());
+                }
+                unit = Some(u);
+            }
+            if style == "unit" && unit.is_none() {
+                return Err(self.catchable_type_error());
+            }
+            unit_display = self.intl_get_option_enum(
+                code,
+                o,
+                "unitDisplay",
+                &["short", "narrow", "long"],
+                "short",
+            )?;
+        } else if style == "currency" || style == "unit" {
+            // Unreachable — style defaults to decimal when no options object.
+            return Err(self.catchable_type_error());
+        }
+
+        let (mnfd_default, mxfd_default) = if style == "currency" {
+            let d = currency_digits(currency.as_deref().unwrap_or("USD"));
+            (d, d)
+        } else if style == "percent" {
+            (0, 0)
+        } else {
+            (0, 3)
+        };
+
+        let notation = match options {
+            Some(o) => self.intl_get_option_enum(
+                code,
+                o,
+                "notation",
+                &["standard", "scientific", "engineering", "compact"],
+                "standard",
+            )?,
+            None => "standard".to_string(),
+        };
+
+        let mut scratch = PluralRulesData {
+            locale: locale_base.clone(),
+            kind: "cardinal".to_string(),
+            notation: notation.clone(),
+            minimum_integer_digits: 1,
+            minimum_fraction_digits: 0,
+            maximum_fraction_digits: 3,
+            minimum_significant_digits: None,
+            maximum_significant_digits: None,
+            rounding_type: "fractionDigits".to_string(),
+            rounding_priority: "auto".to_string(),
+            rounding_mode: "halfExpand".to_string(),
+            rounding_increment: 1,
+            trailing_zero_display: "auto".to_string(),
+        };
+        if let Some(o) = options {
+            self.set_number_digit_options(
+                code,
+                o,
+                &mut scratch,
+                mnfd_default,
+                mxfd_default,
+                notation == "compact",
+            )?;
+        } else {
+            scratch.minimum_fraction_digits = mnfd_default;
+            scratch.maximum_fraction_digits = mxfd_default;
+        }
+
+        let compact_display = match options {
+            Some(o) => self.intl_get_option_enum(code, o, "compactDisplay", &["short", "long"], "short")?,
+            None => "short".to_string(),
+        };
+        let default_grouping = if notation == "compact" { "min2" } else { "auto" };
+        let use_grouping = match options {
+            Some(o) => self.get_string_or_boolean_option(code, o, "useGrouping", default_grouping)?,
+            None => default_grouping.to_string(),
+        };
+        let sign_display = match options {
+            Some(o) => self.intl_get_option_enum(
+                code,
+                o,
+                "signDisplay",
+                &["auto", "never", "always", "exceptZero", "negative"],
+                "auto",
+            )?,
+            None => "auto".to_string(),
+        };
+
+        Ok(NumberFormatData {
+            locale: locale_base,
+            numbering_system,
+            style,
+            notation,
+            compact_display,
+            sign_display,
+            use_grouping,
+            currency,
+            currency_display,
+            currency_sign,
+            unit,
+            unit_display,
+            minimum_integer_digits: scratch.minimum_integer_digits,
+            minimum_fraction_digits: scratch.minimum_fraction_digits,
+            maximum_fraction_digits: scratch.maximum_fraction_digits,
+            minimum_significant_digits: scratch.minimum_significant_digits,
+            maximum_significant_digits: scratch.maximum_significant_digits,
+            rounding_type: scratch.rounding_type,
+            rounding_priority: scratch.rounding_priority,
+            rounding_mode: scratch.rounding_mode,
+            rounding_increment: scratch.rounding_increment,
+            trailing_zero_display: scratch.trailing_zero_display,
+            bound_format: None,
+        })
+    }
+
+    /// `GetStringOrBooleanOption(options, property, ...)` specialized for
+    /// `useGrouping`: `true` → `"always"`, a falsy value → `"false"`, a string
+    /// in `{min2, auto, always}` returns itself, and anything else is a
+    /// `RangeError`. An absent/`undefined` value yields `fallback`.
+    fn get_string_or_boolean_option(
+        &mut self,
+        code: &[u8],
+        options: crate::value::SlotIndex,
+        name: &str,
+        fallback: &str,
+    ) -> Result<String, Halt> {
+        let Some(&id) = self.symbol_ids.get(name) else {
+            return Ok(fallback.to_string());
+        };
+        let receiver = Slot::of(Kind::Reference, Payload::Reference(options));
+        let value = self.ordinary_get(code, options, id, receiver)?;
+        if value.kind == Kind::Undefined {
+            return Ok(fallback.to_string());
+        }
+        if value.kind == Kind::Boolean {
+            return Ok(if self.truthy(&value) { "always" } else { "false" }.to_string());
+        }
+        if !self.truthy(&value) {
+            return Ok("false".to_string());
+        }
+        let text = self.value_to_string(code, value)?;
+        if matches!(text.as_str(), "min2" | "auto" | "always") {
+            Ok(text)
+        } else {
+            Err(self.catchable_range_error())
+        }
+    }
+
+    /// Convert a resolved [`NumberFormatData`] into the value engine's
+    /// decoupled option record.
+    fn nf_resolved(&self, data: &NumberFormatData) -> crate::intl_number::NfResolved {
+        use crate::intl_number as inf;
+        inf::NfResolved {
+            locale: data.locale.clone(),
+            numbering_system: data.numbering_system.clone(),
+            style: match data.style.as_str() {
+                "percent" => inf::Style::Percent,
+                "currency" => inf::Style::Currency,
+                "unit" => inf::Style::Unit,
+                _ => inf::Style::Decimal,
+            },
+            notation: match data.notation.as_str() {
+                "scientific" => inf::Notation::Scientific,
+                "engineering" => inf::Notation::Engineering,
+                "compact" => inf::Notation::Compact,
+                _ => inf::Notation::Standard,
+            },
+            compact_display: if data.compact_display == "long" {
+                inf::CompactDisplay::Long
+            } else {
+                inf::CompactDisplay::Short
+            },
+            sign_display: match data.sign_display.as_str() {
+                "always" => inf::SignDisplay::Always,
+                "never" => inf::SignDisplay::Never,
+                "exceptZero" => inf::SignDisplay::ExceptZero,
+                "negative" => inf::SignDisplay::Negative,
+                _ => inf::SignDisplay::Auto,
+            },
+            grouping: match data.use_grouping.as_str() {
+                "always" => inf::Grouping::Always,
+                "min2" => inf::Grouping::Min2,
+                "false" => inf::Grouping::Never,
+                _ => inf::Grouping::Auto,
+            },
+            currency: data.currency.clone(),
+            currency_display: match data.currency_display.as_str() {
+                "narrowSymbol" => inf::CurrencyDisplay::NarrowSymbol,
+                "code" => inf::CurrencyDisplay::Code,
+                "name" => inf::CurrencyDisplay::Name,
+                _ => inf::CurrencyDisplay::Symbol,
+            },
+            currency_sign: if data.currency_sign == "accounting" {
+                inf::CurrencySign::Accounting
+            } else {
+                inf::CurrencySign::Standard
+            },
+            unit: data.unit.clone(),
+            unit_display: match data.unit_display.as_str() {
+                "narrow" => inf::UnitDisplay::Narrow,
+                "long" => inf::UnitDisplay::Long,
+                _ => inf::UnitDisplay::Short,
+            },
+            min_integer_digits: data.minimum_integer_digits,
+            min_fraction_digits: data.minimum_fraction_digits,
+            max_fraction_digits: data.maximum_fraction_digits,
+            min_significant_digits: data.minimum_significant_digits,
+            max_significant_digits: data.maximum_significant_digits,
+            rounding_type: match data.rounding_type.as_str() {
+                "significantDigits" => inf::RoundingType::SignificantDigits,
+                "morePrecision" => inf::RoundingType::MorePrecision,
+                "lessPrecision" => inf::RoundingType::LessPrecision,
+                _ => inf::RoundingType::FractionDigits,
+            },
+            rounding_increment: data.rounding_increment,
+            rounding_mode: inf::RoundingMode::from_str(&data.rounding_mode)
+                .unwrap_or(inf::RoundingMode::HalfExpand),
+            trailing_zero_display: if data.trailing_zero_display == "stripIfInteger" {
+                inf::TrailingZeroDisplay::StripIfInteger
+            } else {
+                inf::TrailingZeroDisplay::Auto
+            },
+        }
+    }
+
+    /// Build the `Array<{type, value}>` a `formatToParts` call returns.
+    fn number_format_parts_array(
+        &mut self,
+        parts: Vec<crate::intl_number::Part>,
+    ) -> Slot {
+        let arr = self.new_array();
+        for (i, part) in parts.iter().enumerate() {
+            let obj = self.slots.alloc(Slot::instance(self.object_proto));
+            let ty = self.intl_string(part.kind.as_str());
+            self.define_descriptor_field(obj, "type", ty);
+            let val = self.intl_string(&part.value);
+            self.define_descriptor_field(obj, "value", val);
+            let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
+            item.id = 0;
+            item.next = crate::value::SlotIndex::NULL;
+            self.arrays.get_mut(&arr).unwrap().items.insert(i as u32, item);
+        }
+        self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
+        Slot::of(Kind::Reference, Payload::Reference(arr))
     }
 
     /// Allocate a fresh **pending** promise instance (XS's
@@ -19080,6 +19510,129 @@ impl Interp {
                 self.define_descriptor_field(result, "roundingPriority", rounding_priority);
                 let trailing = self.intl_string(&data.trailing_zero_display);
                 self.define_descriptor_field(result, "trailingZeroDisplay", trailing);
+                Slot::of(Kind::Reference, Payload::Reference(result))
+            }
+            NativeMethod::NumberFormatFormat => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.number_formats.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let n = to_number(&self.to_number_value(code, arg0)?);
+                let resolved = self.nf_resolved(&self.number_formats[&inst].clone());
+                let s = crate::intl_number::format_to_string(&resolved, n);
+                self.intl_string(&s)
+            }
+            NativeMethod::NumberFormatFormatToParts => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.number_formats.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let n = to_number(&self.to_number_value(code, arg0)?);
+                let resolved = self.nf_resolved(&self.number_formats[&inst].clone());
+                let parts = crate::intl_number::partition_number(&resolved, n);
+                self.number_format_parts_array(parts)
+            }
+            NativeMethod::NumberFormatFormatRange
+            | NativeMethod::NumberFormatFormatRangeToParts => {
+                // formatRange/formatRangeToParts require CLDR range patterns not
+                // yet modeled; self-name an honest skip rather than mis-execute.
+                let _inst = match this.value {
+                    Payload::Reference(r) if self.number_formats.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                return Err(Halt::Unsupported("Intl.NumberFormat:formatRange"));
+            }
+            NativeMethod::NumberFormatResolvedOptions => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.number_formats.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let data = self.number_formats[&inst].clone();
+                let result = self.slots.alloc(Slot::instance(self.object_proto));
+                let locale = self.intl_string(&data.locale);
+                self.define_descriptor_field(result, "locale", locale);
+                let nu = self.intl_string(&data.numbering_system);
+                self.define_descriptor_field(result, "numberingSystem", nu);
+                let style = self.intl_string(&data.style);
+                self.define_descriptor_field(result, "style", style);
+                if let Some(cur) = &data.currency {
+                    let cur = self.intl_string(cur);
+                    self.define_descriptor_field(result, "currency", cur);
+                    let cd = self.intl_string(&data.currency_display);
+                    self.define_descriptor_field(result, "currencyDisplay", cd);
+                    let cs = self.intl_string(&data.currency_sign);
+                    self.define_descriptor_field(result, "currencySign", cs);
+                }
+                if let Some(unit) = &data.unit {
+                    let unit = self.intl_string(unit);
+                    self.define_descriptor_field(result, "unit", unit);
+                    let ud = self.intl_string(&data.unit_display);
+                    self.define_descriptor_field(result, "unitDisplay", ud);
+                }
+                self.define_descriptor_field(
+                    result,
+                    "minimumIntegerDigits",
+                    Slot::integer(data.minimum_integer_digits as i32),
+                );
+                let uses_sig = data.rounding_type == "significantDigits"
+                    || data.rounding_type == "morePrecision"
+                    || data.rounding_type == "lessPrecision";
+                let uses_frac = data.rounding_type == "fractionDigits"
+                    || data.rounding_type == "morePrecision"
+                    || data.rounding_type == "lessPrecision";
+                if uses_frac {
+                    self.define_descriptor_field(
+                        result,
+                        "minimumFractionDigits",
+                        Slot::integer(data.minimum_fraction_digits as i32),
+                    );
+                    self.define_descriptor_field(
+                        result,
+                        "maximumFractionDigits",
+                        Slot::integer(data.maximum_fraction_digits as i32),
+                    );
+                }
+                if uses_sig {
+                    if let (Some(mn), Some(mx)) =
+                        (data.minimum_significant_digits, data.maximum_significant_digits)
+                    {
+                        self.define_descriptor_field(
+                            result,
+                            "minimumSignificantDigits",
+                            Slot::integer(mn as i32),
+                        );
+                        self.define_descriptor_field(
+                            result,
+                            "maximumSignificantDigits",
+                            Slot::integer(mx as i32),
+                        );
+                    }
+                }
+                if data.use_grouping == "false" {
+                    self.define_descriptor_field(result, "useGrouping", Slot::boolean(false));
+                } else {
+                    let ug = self.intl_string(&data.use_grouping);
+                    self.define_descriptor_field(result, "useGrouping", ug);
+                }
+                let notation = self.intl_string(&data.notation);
+                self.define_descriptor_field(result, "notation", notation);
+                if data.notation == "compact" {
+                    let cd = self.intl_string(&data.compact_display);
+                    self.define_descriptor_field(result, "compactDisplay", cd);
+                }
+                let sign = self.intl_string(&data.sign_display);
+                self.define_descriptor_field(result, "signDisplay", sign);
+                self.define_descriptor_field(
+                    result,
+                    "roundingIncrement",
+                    Slot::integer(data.rounding_increment as i32),
+                );
+                let rm = self.intl_string(&data.rounding_mode);
+                self.define_descriptor_field(result, "roundingMode", rm);
+                let rp = self.intl_string(&data.rounding_priority);
+                self.define_descriptor_field(result, "roundingPriority", rp);
+                let tz = self.intl_string(&data.trailing_zero_display);
+                self.define_descriptor_field(result, "trailingZeroDisplay", tz);
                 Slot::of(Kind::Reference, Payload::Reference(result))
             }
             NativeMethod::SegmenterSegment => {
@@ -31349,6 +31902,49 @@ fn list_format_parts(data: &ListFormatData, list: &[String]) -> Vec<(&'static st
 /// canonical CLDR order `[zero, one, two, few, many, other]`. Covers the
 /// locales exercised by the pinned test slice; unknown locales default to the
 /// common `[one, other]` cardinal shape.
+/// `IsWellFormedCurrencyCode` (ECMA-402): exactly three ASCII letters.
+fn is_well_formed_currency_code(code: &str) -> bool {
+    code.len() == 3 && code.bytes().all(|b| b.is_ascii_alphabetic())
+}
+
+/// The ECMA-402 sanctioned single unit identifiers.
+const SANCTIONED_UNITS: &[&str] = &[
+    "acre", "bit", "byte", "celsius", "centimeter", "day", "degree", "fahrenheit",
+    "fluid-ounce", "foot", "gallon", "gigabit", "gigabyte", "gram", "hectare", "hour",
+    "inch", "kilobit", "kilobyte", "kilogram", "kilometer", "liter", "megabit",
+    "megabyte", "meter", "microsecond", "mile", "mile-scandinavian", "milliliter",
+    "millimeter", "millisecond", "minute", "month", "nanosecond", "ounce", "percent",
+    "petabyte", "pound", "second", "stone", "terabit", "terabyte", "week", "yard", "year",
+];
+
+/// `IsWellFormedUnitIdentifier` (ECMA-402): a sanctioned single unit, or
+/// `<numerator>-per-<denominator>` where both parts are sanctioned single units.
+fn is_well_formed_unit_identifier(unit: &str) -> bool {
+    if SANCTIONED_UNITS.contains(&unit) {
+        return true;
+    }
+    if let Some((num, den)) = unit.split_once("-per-") {
+        return SANCTIONED_UNITS.contains(&num) && SANCTIONED_UNITS.contains(&den);
+    }
+    false
+}
+
+/// `CurrencyDigits` (ECMA-402): the number of minor-unit fraction digits for a
+/// currency (default 2). Only the codes the corpus exercises are tabulated
+/// exactly; the default covers the rest.
+fn currency_digits(code: &str) -> u32 {
+    match code {
+        // Zero-decimal currencies.
+        "BIF" | "CLP" | "DJF" | "GNF" | "ISK" | "JPY" | "KMF" | "KRW" | "PYG" | "RWF"
+        | "UGX" | "UYI" | "VND" | "VUV" | "XAF" | "XOF" | "XPF" => 0,
+        // Three-decimal currencies.
+        "BHD" | "IQD" | "JOD" | "KWD" | "LYD" | "OMR" | "TND" => 3,
+        // Four-decimal currencies.
+        "CLF" | "UYW" => 4,
+        _ => 2,
+    }
+}
+
 fn plural_categories(locale: &str, kind: &str) -> Vec<&'static str> {
     let language = locale_language(locale);
     if kind == "ordinal" {
@@ -32359,6 +32955,7 @@ fn native_unsupported_name(native: Native) -> &'static str {
         Native::PluralRules => "native-call:PluralRules",
         Native::Segmenter => "native-call:Segmenter",
         Native::DateTimeFormat => "native-call:DateTimeFormat",
+        Native::NumberFormat => "native-call:NumberFormat",
         Native::TemporalInstant => "native-call:Temporal.Instant",
         Native::TemporalDuration => "native-call:Temporal.Duration",
         Native::TemporalPlain(i) => match i {
