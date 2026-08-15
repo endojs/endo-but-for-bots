@@ -144,7 +144,7 @@ The mapping onto Endo:
 The crucial adaptation: Koa passes `next` as a per-call argument;
 pass-style **captures `next` at construction**. Each stage exo is built
 endowed with the far-ref to the stage beneath it, so its interface is the
-uniform `request(req, cancellation, context)` (identical to the client's
+uniform `request(request, cancellation, context)` (identical to the client's
 own `request`) and a stage is indistinguishable from the whole client to the
 stage above it. This is what lets the chain be **arbitrarily deep and
 partly remote**: a stage can live in the daemon vat (the common case,
@@ -270,7 +270,7 @@ harden(HttpStageInterface);
 **The client-to-stage seam.** The client's thin forwarder is exactly
 where a `CallerContextShape` becomes the first `StageContextShape`. The
 pure pre-flight (§ Canonical stage order) runs *before* the onion: it
-parses `req.url`, computes `origin`, and validates method/headers. The
+parses `request.url`, computes `origin`, and validates method/headers. The
 client then invokes the outermost stage with the synthesized initial
 context
 `harden({ origin, requestId, attempt: 0, ...(deadline === undefined ? {} : { deadline }) })`.
@@ -310,9 +310,9 @@ A stage's `request` body is the onion:
 ```js
 // Sketch -- a generic stage. `next` and the policy slice are captured
 // in the exo's state at make time by the controller's composer.
-request: async (req, cancellation, context) => {
+request: async (request, cancellation, context) => {
   // ...before: consult/update this stage's own scoped state...
-  const response = await E(this.state.next).request(req, cancellation, context);
+  const response = await E(this.state.next).request(request, cancellation, context);
   // ...after: observe the outcome...
   return response;
 },
@@ -356,7 +356,7 @@ requests that are structurally admissible reach the effectful stages.
 
 **Pre-flight (pure, no cost, runs once, never re-run on retry):**
 
-1. Parse `new URL(req.url)`; compute `origin`.
+1. Parse `new URL(request.url)`; compute `origin`.
 2. Origin allowlist (`checkOriginAllowed`).
 3. Method normalization + closed-set check (`normalizeMethod`).
 4. Header safety (`assertHeadersSafe`).
@@ -486,9 +486,15 @@ costMax = price.perByteRequest  * BigInt(request.contentLength)        // declar
         + price.perMillisecond  * BigInt(Math.ceil(effectiveDeadlineMs)) // caller deadline clamped down by timeoutMs, rounded UP (pessimal)
         + price.perRequest                                            // fixed admission fee
 ```
-where `effectiveDeadlineMs = min(deadline ?? timeoutMs, timeoutMs)`: the
-time term is priced against the controller's `timeoutMs` **clamped down by
-any shorter caller `deadline`**, never up. This is the deliberate
+where `effectiveDeadlineMs = min((deadline ?? (now + timeoutMs)) - now,
+timeoutMs)`: `deadline` is an **absolute** wall-clock ms timestamp (§ The
+stage interface; the same value pre-flight step 5 rejects when it is not
+still in the future against the injected `now`), so the remaining budget it
+proposes is `deadline - now`, and the time term is priced against the
+controller's `timeoutMs` **clamped down by any shorter caller `deadline`**,
+never up. The subtraction of `now` is what keeps an absolute-timestamp
+`deadline` from dwarfing `timeoutMs` (which would make the `min` a no-op and
+silently pin every request to the full `timeoutMs`). This is the deliberate
 resolution of § Open questions ("Deadline as controller policy vs caller
 proposal"): a caller that proposes a shorter `deadline` genuinely lowers
 its own `costMax`, which is incentive-correct and cannot widen authority
@@ -508,8 +514,9 @@ Say the response actually returns `40_000` bytes in `220` ms: settlement is
 `costActual = 2n*500n + 1n*40_000n + 10n*220n + 100n = 1000n + 40_000n +
 2_200n + 100n = 43_300n`, and `release()` returns `costMax - costActual =
 1_257_800n` to `available`. Had the caller instead proposed
-`deadline = now + 5_000`, the time term of `costMax` would price
-`min(5_000, 30_000) = 5_000` ms -> `10n*5_000n = 50_000n` instead of
+`deadline = now + 5_000` (an absolute timestamp 5_000 ms in the future), the
+time term of `costMax` would price `min((now + 5_000) - now, 30_000) =
+min(5_000, 30_000) = 5_000` ms -> `10n*5_000n = 50_000n` instead of
 `300_000n`, lowering `costMax` to `1_051_100n`. Every quantity is an integer
 widened with `BigInt(...)`, so no term is fractional and `costActual`
 (`43_300n`) `<= costMax` (`1_301_100n`) holds by construction.
@@ -520,8 +527,10 @@ the `body` `ReadableBlob` does **not** expose it: its interface is
 `streamBase64` / `text` / `json`, all *consuming* reads, so measuring the
 body by reading it would defeat the very reserve-before-read guarantee
 this mechanism rests on. So a metered request **declares** its size: this
-design adds `contentLength: FiniteNonNegative` to `RequestShape`, the
-request body's byte length, supplied alongside the `body` remotable. The
+design adds `contentLength: IntegerNonNegative` to `RequestShape`, the
+request body's byte length (a discrete count, not a continuous budget --
+see § Numeric domain and lines above), supplied alongside the `body`
+remotable. The
 transport stage **enforces** the declaration, but asymmetrically with the
 response side. `maxResponseBytes` *truncates* an over-long response,
 because a response is untrusted inbound data the caller already expects
@@ -532,7 +541,24 @@ the transport instead **rejects** a request whose body overruns its
 declared `contentLength` with a structured error, before the overrun
 leaves the process. Rejection protects the meter's `costActual <= costMax`
 invariant exactly as truncation would (an under-declaration still cannot
-cheat the meter) without ever shipping a corrupted request. The mirror
+cheat the meter) without ever shipping a corrupted request.
+
+`maxRequestBytes` is the outbound-byte ceiling in **both** branches, not
+only the omitted-`contentLength` one: a **declared** `contentLength` that
+itself exceeds `maxRequestBytes` is rejected at pre-flight with the same
+structured over-run error, before any body is streamed or any reservation
+is priced against the inflated declaration. Without this, a guest could
+declare an arbitrarily large `contentLength` and (in a metered deployment,
+by paying for it; in an unmetered one, for free) ship an unbounded request
+body -- exactly the outbound flood `maxRequestBytes` exists to bound, and
+falsifying the "a guest's authority only shrinks" claim of § SSRF/DoS
+posture for the declared path. So the effective declared ceiling is
+`min(contentLength, maxRequestBytes)` enforced as a rejection: the meter
+reserves against the declared `contentLength` only once it is known to be
+within `maxRequestBytes`, symmetric with how `maxResponseBytes` bounds the
+inbound side regardless of any declared `Content-Length`.
+
+The mirror
 case, a body that **under-delivers** (its stream ends before reaching the
 declared `contentLength`), does not hang the transport waiting for bytes
 that never arrive: end-of-stream is treated as completion and the
@@ -708,9 +734,18 @@ const MeasureShape = M.splitRecord(
   { bytesRead: IntegerNonNegative, elapsedMs: IntegerNonNegative },
 );
 
-export const MeterReservationInterface = M.interface('MeterReservation', {
+export const MeterReservationInterface = M.interface('EndoMeterReservation', {
   // Settle to the trusted, boundary-measured actual; release the rest.
   // Idempotent on measurementId -- a retried settle returns the receipt.
+  // settle and release are mutually exclusive terminal transitions:
+  // whichever runs first wins, and the other is thereafter a no-op that
+  // returns the same receipt (a settle after a prior release, or a release
+  // after a prior settle, never moves funds a second time). This closes the
+  // deadline-vs-late-completion race where the shared cancellation fires and
+  // release() refunds the byte/time terms to available while a late transport
+  // completion still reports its measures and calls settle() on the same
+  // reservation -- the first-wins rule keeps the already-refunded terms from
+  // being double-counted back out of available.
   settle: M.call(M.string(), MeasureShape).returns(M.promise()),
   // Abort: refund the whole REMAINING hold -- the byte and time terms.
   // The perRequest admission fee committed at reserve() is non-refundable
@@ -722,6 +757,7 @@ export const MeterReservationInterface = M.interface('MeterReservation', {
   // retried abort path cannot double-refund.
   release: M.call().returns(M.promise()),
 });
+harden(MeterReservationInterface);
 
 export const ChargeAccountInterface = M.interface('EndoChargeAccount', {
   // Reserve a hold for costMax, keyed by operationId. Rejects with
@@ -808,7 +844,7 @@ response byte is read. This is distinguishable -- by the `name` discriminant
 above -- from a `RateLimitError`
 (retry later, funds fine) and from an origin/method rejection (never
 admissible). A guest can call the client's inspection method
-(`estimateCost(req)`, a new pure, side-effect-free client method that
+(`estimateCost(request)`, a new pure, side-effect-free client method that
 returns `costMax` without reserving) to pre-check affordability, which
 is the pass-style analogue of undici's "does this request fit the
 budget" probe. **Scope of the probe (a known limitation).** `estimateCost`
@@ -829,7 +865,7 @@ reason of an actual `request`, not the probe.
 the worst case of a whole retried `request()` call. For an idempotent
 method that the retry stage may attempt up to `maxAttempts` times, and
 that reserves and settles once per attempt (§ 4), the true worst-case
-exposure of the full call is up to `maxAttempts * estimateCost(req)`. The
+exposure of the full call is up to `maxAttempts * estimateCost(request)`. The
 probe deliberately does not fold `maxAttempts` in, because retry count is
 controller policy the guest does not set and a single-attempt quote is the
 composable, stage-local number the meter actually reserves against. Sizing
@@ -840,7 +876,7 @@ facet, so a guest holding only the client cannot reach it. The host that
 mints the client already knows its own retry policy and passes the
 attempt-multiplied ceiling to the guest out of band (or provisions the
 client with a budget already sized for `maxAttempts` retries); the guest's
-in-band `estimateCost(req)` remains the honest single-attempt number.
+in-band `estimateCost(request)` remains the honest single-attempt number.
 
 ### 3. Rate limiting: position and scope
 
@@ -904,7 +940,22 @@ bounded by attempt count and the overall deadline.
   the backoff floor. It does **not** retry 4xx other than 429 (client
   error, deterministic) or an origin/method/header rejection (never
   admissible) or an `InsufficientFunds` (funds do not improve by
-  retrying). Note the deliberate asymmetry with the breaker below: 429
+  retrying). It also does **not** auto-retry a `RateLimitError` or a
+  `CircuitOpenError` bubbling up from the pipeline's own inner stages: both
+  are **terminal** to the retry stage and surface straight to the caller
+  carrying their `retryAfterMs` (§ 2). This is the deliberate counterpart
+  to the origin-429 case: an origin's HTTP `429` response is the *origin*
+  throttling us and is worth an automatic, `Retry-After`-floored resend,
+  but a `RateLimitError` is *our own* rate stage refusing because a
+  per-client or per-controller window is already exhausted -- immediately
+  re-sending it would spend the whole `maxAttempts` budget hammering a
+  window that cannot move within a backoff, the tight retry burst the rate
+  stage's below-retry position (§ 3) exists to prevent from touching funds
+  but that an auto-retry here would inflict on the window itself. The caller
+  honors the returned `retryAfterMs` out of band instead. (`RateLimitError`
+  is thus classified exactly like its sibling `CircuitOpenError`: terminal,
+  not retried, `retryAfterMs`-bearing.) Note the deliberate asymmetry with
+  the breaker below: 429
   **is** retryable here (backing off and re-sending is the correct response
   when a caller is throttling itself), but 429 is **not** breaker
   evidence, because it reflects request volume rather than origin health,
@@ -1027,7 +1078,7 @@ Phase 1 mutators; the client facet gains nothing but the pure
 | `setRetry({ maxAttempts, baseMs, capMs, idempotentMethods })` | controller | retries (`idempotentMethods` is the retry-eligible closed set, default `['GET', 'HEAD']`; see § 4) |
 | `setBreaker({ failureThreshold, windowMs, cooldownMs, halfOpenProbes })` | controller | circuit breaking |
 | `inspectPipeline()` | controller | read the composed stage list + each stage's live state (breaker states, window, balance); distinct from Phase 1's `inspect()` (static `PolicyShape`) |
-| `estimateCost(req)` | client | pure `costMax` probe; no reservation, no side effect |
+| `estimateCost(request)` | client | pure `costMax` probe; no reservation, no side effect |
 
 The two introspection methods are **deliberately two operations, not one
 with a mode**: Phase 1's `inspect()` returns the static `PolicyShape`, and
@@ -1279,7 +1330,7 @@ suite unchanged through the refactored pipeline:
   attempt**, reserves nothing (assert the charge account's `reserve` is
   never called and the balance is unchanged), and matches the `costMax` a
   real reservation would compute; for a retryable request the full-call
-  worst case is `maxAttempts * estimateCost(req)` (assert the probe does
+  worst case is `maxAttempts * estimateCost(request)` (assert the probe does
   **not** silently fold in `maxAttempts`).
 - **Byte-cap = reservation ceiling:** a response with a lying large
   `Content-Length` still bills at `bytesActuallyRead`, and
@@ -1299,7 +1350,12 @@ suite unchanged through the refactored pipeline:
   length exceeds `maxRequestBytes` is **rejected** by the transport with the
   same structured over-run error as the declared-exceeds case (assert the
   origin seam is not called), so the omitted case is a bounded cap, not an
-  unbounded outbound stream.
+  unbounded outbound stream; a **declared** `contentLength` that itself
+  exceeds `maxRequestBytes` is **rejected at pre-flight** with the same
+  structured over-run error before any body is streamed or any reservation
+  is priced (assert the origin seam and `reserve` are both un-called), so
+  `maxRequestBytes` is the outbound ceiling in the declared branch too, not
+  only the omitted one.
 - **Rate position:** a rate refusal never calls `reserve` on the purse;
   each retried attempt spends its own token; the per-controller aggregate
   binds when tighter than the per-client window.
@@ -1312,7 +1368,28 @@ suite unchanged through the refactored pipeline:
   loop; the shared deadline stops a doomed final attempt; 4xx and
   `InsufficientFunds` are not retried; a 429 **is** retried (backoff floor
   from `Retry-After`) yet does **not** advance the breaker's failure
-  count.
+  count; a `RateLimitError` or `CircuitOpenError` raised by the pipeline's
+  own inner stages is **terminal** and surfaces to the caller **without**
+  an automatic retry (assert the transport seam is called exactly once and
+  the rejection carries its `retryAfterMs`), distinguishing the origin's
+  HTTP-429 resend from our own rate/breaker refusal.
+- **Reservation terminal transitions are mutually exclusive and idempotent
+  across both methods:** a `settle` after a prior `release` is a no-op
+  returning the same receipt, and a `release` after a prior `settle` is a
+  no-op returning the same receipt (assert `available`/`reserved` move
+  exactly once across the pair, so the deadline-fires-then-late-completion
+  race -- `release()` refunds, then a late `settle()` arrives -- cannot
+  double-count the already-refunded byte/time terms back out of
+  `available`).
+- **Cost invariant holds under property-based fuzzing:** a `fast-check`
+  property asserts `costActual <= costMax` for arbitrary non-negative price
+  schedules, `contentLength`, `bytesRead`, `deadline`, and `elapsedMs`, with
+  the `bytesRead`/`elapsedMs`/`deadline` arbitraries derived to also hit the
+  boundaries `bytesRead === maxResponseBytes` and
+  `elapsedMs === ceil(effectiveDeadlineMs)`, so a rounding-direction
+  regression (the exact class of bug an earlier fix round had to correct)
+  fails the property with a minimal counterexample rather than surviving a
+  hand-picked worked example.
 - **Circuit breaker:** N failures within the window trip `open`; an open
   origin fast-rejects without spending a rate token or reserving funds; a
   sibling allowlisted origin stays `closed`; half-open admits exactly
@@ -1369,8 +1446,10 @@ suite unchanged through the refactored pipeline:
   design).** The caller may propose a `deadline` in the caller context; the
   meter/timeout stages clamp it **down** to the controller's `timeoutMs`
   (never up), and § 1's cost formula prices the time term against
-  `effectiveDeadlineMs = min(deadline ?? timeoutMs, timeoutMs)`, so a
-  shorter caller `deadline` genuinely lowers `costMax`. This is no longer
+  `effectiveDeadlineMs = min((deadline ?? (now + timeoutMs)) - now,
+  timeoutMs)` (the absolute-timestamp `deadline` becomes a remaining budget
+  by subtracting `now`), so a shorter caller `deadline` genuinely lowers
+  `costMax`. This is no longer
   open: the design adopts "a shorter caller deadline lowers `costMax`"
   (incentive-correct, cannot widen authority) as the specified behavior, not
   a deferred proposal. What remains a deployment choice is only whether a
