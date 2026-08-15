@@ -24,7 +24,18 @@
  */
 
 const identities = new WeakMap();
+// handle -> WeakRef<party> (or a strong ref, on a runtime without WeakRef — see the fallback below).
+// A strong Map here would defeat `identities` being a WeakMap: every party ever designated would be
+// pinned alive for the module's lifetime, keyed off a handle nothing else still holds. WeakRef lets a
+// party be collected once its last real holder drops it; `partyForHandle` treats a collected referent
+// the same as an unminted handle. `finalize` below reclaims the now-dead Map entry itself, so a churn
+// of many short-lived parties does not leave `byHandle` growing forever with empty WeakRefs.
 const byHandle = new Map();
+const hasWeakRef = typeof WeakRef === 'function';
+const finalize =
+  hasWeakRef && typeof FinalizationRegistry === 'function'
+    ? new FinalizationRegistry(handle => byHandle.delete(handle))
+    : null;
 
 const randomHex = (n = 16) => {
   const c = globalThis.crypto;
@@ -61,7 +72,8 @@ export const partyIdentity = party => {
   if (!rec) {
     rec = { handle: randomHex(16), seed: randomHex(8) };
     identities.set(party, rec);
-    byHandle.set(rec.handle, party);
+    byHandle.set(rec.handle, hasWeakRef ? new WeakRef(party) : party);
+    if (finalize) finalize.register(party, rec.handle);
   }
   return rec;
 };
@@ -71,18 +83,28 @@ export const handleFor = party => partyIdentity(party).handle;
 
 /**
  * Resolve a handle back to the party it was minted for. Returns undefined for anything not minted
- * here — a forged or copied-from-elsewhere string resolves to nothing rather than to some party.
+ * here — a forged or copied-from-elsewhere string resolves to nothing — AND for a party that has
+ * since been collected, which reads the same as "not minted" to every caller (there is no live party
+ * to hand back either way).
  *
  * @param {string} handle
  */
-export const partyForHandle = handle => byHandle.get(String(handle || ''));
+export const partyForHandle = handle => {
+  const key = String(handle || '');
+  const ref = byHandle.get(key);
+  if (!ref) return undefined;
+  if (!hasWeakRef) return ref; // no WeakRef on this runtime: byHandle held a strong ref instead
+  const party = ref.deref();
+  if (!party) byHandle.delete(key); // beat the FinalizationRegistry callback to a stale read
+  return party;
+};
 
 /**
  * Deterministic visual mark for a party, derived from its stable SEED — not from its name, so
  * naming or renaming never changes the mark, and an unnamed party is still consistently badged.
  *
  * @param {object} party
- * @returns {{ glyph: string, hue: number }}
+ * @returns {{ glyph: string, hue: number, color: string }}
  */
 export const markFor = party => {
   const { seed } = partyIdentity(party);
