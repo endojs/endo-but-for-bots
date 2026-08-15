@@ -500,3 +500,176 @@ test('regression: splitArray index attribution survives the rest pattern', t => 
   const text = /** @type {string} */ (report);
   t.true(text.includes('[0]'), `expected required-prefix index [0]: ${text}`);
 });
+
+// -------------------------------------------------------------------------
+// Multi-branch failures whose per-branch explanation is itself an outline.
+//
+// Requested in review of PR #313: "add tests that cover cases where a
+// specimen fails to match over multiple branches where the explanation is an
+// outline." The earlier M.or / M.and coverage only exercised branches whose
+// alternatives were flat leaves (M.string, M.bigint), so each branch
+// contributed exactly one leaf line. These tests exercise the design's
+// Example 2 shape — combinator branches whose alternatives are themselves
+// compound patterns (splitRecord, arrayOf) — so a single branch's failure
+// unrolls into a nested, multi-leaf outline rather than one leaf.
+
+test('M.or over compound alternatives: each branch explanation is a multi-leaf outline (compact)', t => {
+  // Design Example 2: three structural alternatives, none matched. Every
+  // alternative is a splitRecord, so a branch that fails on more than one
+  // field surfaces more than one leaf line under its `alt N` column — the
+  // per-branch explanation is an outline, not a single leaf.
+  const pattern = M.or(
+    M.splitRecord({ kind: 'image', url: M.string() }),
+    M.splitRecord({ kind: 'text', body: M.string() }),
+    M.splitRecord({ kind: 'embed', target: M.string() }),
+  );
+  const specimen = harden({ kind: 'image', url: 42 });
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  const lines = text.split('\n');
+
+  t.regex(
+    lines[0],
+    /or, 3 alternatives, none matched/,
+    'header names the disjunction and its arity',
+  );
+
+  // alt 0 (kind:"image") fails only on .url — a single-leaf branch.
+  const alt0 = lines.filter(l => /^\s*alt 0 \|/.test(l));
+  t.is(alt0.length, 1, `alt 0 is a one-leaf branch: ${text}`);
+  t.true(alt0[0].includes('.url'), `alt 0 attributes .url: ${text}`);
+
+  // alt 1 (kind:"text") fails on BOTH .body (missing) and .kind (wrong
+  // literal): its explanation is a two-leaf outline, each on its own line.
+  const alt1 = lines.filter(l => /^\s*alt 1 \|/.test(l));
+  t.true(
+    alt1.length >= 2,
+    `alt 1's explanation is a multi-leaf outline: ${text}`,
+  );
+  t.true(
+    alt1.some(l => l.includes('.body')) && alt1.some(l => l.includes('.kind')),
+    `alt 1 outline surfaces both .body and .kind: ${text}`,
+  );
+
+  // alt 2 (kind:"embed") likewise fails on .kind and .target.
+  const alt2 = lines.filter(l => /^\s*alt 2 \|/.test(l));
+  t.true(
+    alt2.length >= 2,
+    `alt 2's explanation is a multi-leaf outline: ${text}`,
+  );
+  t.true(
+    alt2.some(l => l.includes('.target')),
+    `alt 2 outline surfaces .target: ${text}`,
+  );
+
+  // Every alt row still carries the found | expected columns.
+  for (const row of [...alt0, ...alt1, ...alt2]) {
+    t.regex(row, /found .* \| expected /, `alt row keeps its columns: ${row}`);
+  }
+});
+
+test('M.or over compound alternatives: outline is indented per branch (expanded)', t => {
+  const pattern = M.or(
+    M.splitRecord({ kind: 'image', url: M.string() }),
+    M.splitRecord({ kind: 'text', body: M.string() }),
+    M.splitRecord({ kind: 'embed', target: M.string() }),
+  );
+  const specimen = harden({ kind: 'image', url: 42 });
+  const report = explainMismatch({ specimen, pattern }, { format: 'expanded' });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  const lines = text.split('\n');
+
+  t.regex(
+    text,
+    /or-disjunction, 3 alternatives, none matched/,
+    'header names the disjunction',
+  );
+  t.regex(text, /^\s*alt 0:/m, 'first alternative gets its own outline header');
+  t.regex(
+    text,
+    /^\s*alt 1:/m,
+    'second alternative gets its own outline header',
+  );
+  t.regex(text, /^\s*alt 2:/m, 'third alternative gets its own outline header');
+
+  // The failing branch (alt 1) unrolls into more than one `at .path` section
+  // beneath its header — an outline, not a single leaf.
+  const alt1Start = lines.findIndex(l => /^\s*alt 1:/.test(l));
+  const alt2Start = lines.findIndex(l => /^\s*alt 2:/.test(l));
+  t.true(alt1Start >= 0 && alt2Start > alt1Start, 'alt 1 precedes alt 2');
+  const alt1Block = lines.slice(alt1Start, alt2Start);
+  const alt1Sites = alt1Block.filter(l => /^\s*at \./.test(l));
+  t.true(
+    alt1Sites.length >= 2,
+    `alt 1 unrolls into multiple attribution sites: ${alt1Block.join('\n')}`,
+  );
+  t.true(
+    alt1Block.some(l => /reason:/.test(l)),
+    `alt 1 outline carries per-site reasons: ${alt1Block.join('\n')}`,
+  );
+});
+
+test('M.or over arrayOf alternatives: each branch is a multi-element outline (compact)', t => {
+  // A disjunction whose alternatives are element-wise array patterns: the
+  // specimen fails every branch, and a branch that rejects more than one
+  // element surfaces a multi-line outline of indexed failures.
+  const pattern = M.or(M.arrayOf(M.nat()), M.arrayOf(M.string()));
+  const specimen = harden([1n, 'two', 3n]); // fails nat at [1]; fails string at [0],[2]
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  const lines = text.split('\n');
+
+  t.regex(
+    lines[0],
+    /or, 2 alternatives, none matched/,
+    'header names the disjunction',
+  );
+
+  const alt0 = lines.filter(l => /^\s*alt 0 \|/.test(l));
+  t.true(
+    alt0.some(l => l.includes('[1]')),
+    `alt 0 (arrayOf nat) rejects element [1]: ${text}`,
+  );
+
+  const alt1 = lines.filter(l => /^\s*alt 1 \|/.test(l));
+  t.true(
+    alt1.length >= 2,
+    `alt 1 (arrayOf string) explanation is a multi-element outline: ${text}`,
+  );
+  t.true(
+    alt1.some(l => l.includes('[0]')) && alt1.some(l => l.includes('[2]')),
+    `alt 1 outline surfaces both [0] and [2]: ${text}`,
+  );
+});
+
+test('M.and over compound branches: branch-indexed nested outline (compact)', t => {
+  // A conjunction whose branches are themselves compound: each failing
+  // branch descends into its own shape, so the outline carries both the
+  // branch index and the nested path (e.g. `(and branch 1).b`).
+  const pattern = M.and(
+    M.splitRecord({ a: M.string() }),
+    M.splitRecord({ b: M.nat() }),
+  );
+  const specimen = harden({ a: 1, b: -2 }); // fails branch 0 at .a and branch 1 at .b
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+
+  t.true(
+    text.includes('(and branch 0)') && text.includes('(and branch 1)'),
+    `both conjunction branches are attributed: ${text}`,
+  );
+  t.regex(
+    text,
+    /\(and branch 0\)\.a/,
+    'branch 0 outline descends to the nested .a path',
+  );
+  t.regex(
+    text,
+    /\(and branch 1\)\.b/,
+    'branch 1 outline descends to the nested .b path',
+  );
+});
