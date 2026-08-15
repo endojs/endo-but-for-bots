@@ -126,7 +126,7 @@ jobs:
       - name: Download Node.js binary
         run: |
           cd packages/familiar
-          ./scripts/download-node.sh v20.18.1 "$TARGET_OS" "$TARGET_ARCH"
+          ./scripts/download-node.sh v22.22.3 "$TARGET_OS" "$TARGET_ARCH"
 
       - name: Prepare package
         run: |
