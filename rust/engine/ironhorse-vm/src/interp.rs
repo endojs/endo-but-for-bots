@@ -2808,6 +2808,25 @@ enum ReactionKind {
     /// settled element updates the shared [`CombinatorState`] and, on the
     /// completing element, settles the combinator's derived promise.
     Combine(u32, u32),
+    /// An `Array.fromAsync` await point (ECMA-262 sec-array.fromasync), keyed by
+    /// the [`FromAsyncData`] index in [`Interp::from_async`]. `fromAsync` is a
+    /// native async state machine driven entirely by these native reactions
+    /// (no user bytecode frame): each variant resumes the machine at a distinct
+    /// `Await` step and either advances the loop or settles the result promise.
+    ///
+    /// - `FromAsyncNext`: resume after `Await(nextResult)` on an **async**
+    ///   iterator's `next()` promise (the `{value, done}` step object).
+    /// - `FromAsyncElem`: resume after `Await`ing a per-element value — a
+    ///   sync-iterator step's `value` (unwrapped, close-on-rejection) or an
+    ///   array-like element `Get`.
+    /// - `FromAsyncMap`: resume after `Await(mappedValue)` from `mapfn`.
+    /// - `FromAsyncClose`: resume after `Await`ing an async iterator's
+    ///   `return()` result during `AsyncIteratorClose`; rejects with the saved
+    ///   error regardless of the close outcome.
+    FromAsyncNext(u32),
+    FromAsyncElem(u32),
+    FromAsyncMap(u32),
+    FromAsyncClose(u32),
 }
 
 /// A resolve/reject function's bound data (XS's `fxPushPromiseFunctions`
@@ -2897,6 +2916,51 @@ struct CombinatorState {
     /// Set once the derived promise is settled — subsequent element reactions
     /// short-circuit (the shared-capability guard).
     done: bool,
+}
+
+/// The captured closure state of one in-flight `Array.fromAsync` call (its
+/// implicit async function's `fromAsyncClosure`, ECMA-262 sec-array.fromasync).
+/// `fromAsync` is a **native async state machine**: it never runs guest
+/// bytecode of its own, so instead of a suspended frame it keeps this record in
+/// the [`Interp::from_async`] side table (indexed by the
+/// [`ReactionKind::FromAsyncNext`]/… payload) and steps through it at each
+/// promise-job drain. Like [`Interp::combinators`], it is append-only within a
+/// run and its reference-bearing slots stay live for the machine's lifetime
+/// (the stage-2 GC-roots contract — no mid-run collection sweeps under it).
+#[derive(Clone, Debug)]
+struct FromAsyncData {
+    /// The result promise's resolve/reject functions (`promiseCapability`).
+    resolve: Slot,
+    reject: Slot,
+    /// The accumulator object `A` (a fresh Array, or `Construct(C[, len])`).
+    target: crate::value::SlotIndex,
+    /// Fast path: `A` is an intrinsic Array (index/length via the dense store)
+    /// rather than an ordinary/proxy object (index via `[[DefineOwnProperty]]`,
+    /// length via `[[Set]]`).
+    target_is_array: bool,
+    /// The current index `k`.
+    k: u64,
+    /// The map function (`undefined` when `mapping` is false) and its `thisArg`.
+    mapfn: Slot,
+    mapping: bool,
+    this_arg: Slot,
+    /// Latched once the result promise is settled — a late reaction is a no-op.
+    settled: bool,
+    /// The iterator object (`undefined` on the array-like path).
+    iterator: Slot,
+    /// The iterator's `next` method (iterator path only).
+    next_method: Slot,
+    /// `true` for a sync iterator (its `next()` returns a plain step and each
+    /// value is `Await`ed with close-on-rejection); `false` for a native async
+    /// iterator (its `next()` returns a promise that is `Await`ed directly).
+    sync_wrapped: bool,
+    /// The array-like input object (used for `Get(arrayLike, Pk)`; only read
+    /// when `len > 0`, which implies an object).
+    array_like: Slot,
+    /// The array-like length (`iterator` is `undefined`).
+    len: u64,
+    /// The pending error an `AsyncIteratorClose` await is unwinding with.
+    close_error: Slot,
 }
 
 /// An iterator's state. For an **array iterator** (`kind` 0 = values, 1 =
@@ -4032,12 +4096,25 @@ pub struct Interp {
     /// [`ReactionKind::Combine`]'s combinator index; append-only within a run,
     /// consumed as its element reactions drain. See [`CombinatorState`].
     combinators: Vec<CombinatorState>,
+    /// In-flight `Array.fromAsync` native async state machines. Append-only
+    /// within a run; indexed by the [`ReactionKind::FromAsyncNext`]/… payload.
+    /// See [`FromAsyncData`].
+    from_async: Vec<FromAsyncData>,
     /// The program-local symbol id of `then` (XS's `mxID(_then)`), resolved
     /// at [`Self::link_intrinsics`], so thenable adoption can probe an
     /// argument's `.then`. `None` when the program never references `then`.
     /// Read by the thenable-adoption path (a later increment).
     #[allow(dead_code)]
     then_id: Option<u16>,
+    /// The program-local symbol id of `constructor`, resolved at
+    /// [`Self::link_intrinsics`]. When present, a user function's default
+    /// `.prototype` gets its spec-required own `constructor` back-reference
+    /// (`{writable, enumerable:false, configurable}`) so `x.constructor` and
+    /// `assert.throwsAsync`'s constructor check resolve. `None` (the program
+    /// never names `constructor`) skips it — the property is unobservable then,
+    /// keeping non-`constructor` programs (and the exact-metering corpus)
+    /// byte-identical.
+    constructor_id: Option<u16>,
     /// Per-instance RegExp state (XS's `XS_REGEXP_KIND` internal slot): the
     /// compiled program plus the source/flags strings. Keyed by the RegExp
     /// instance's slot, like [`Self::promises`]. `lastIndex` is an ordinary
@@ -4641,7 +4718,9 @@ impl Interp {
             promise_guards: Vec::new(),
             promise_jobs: std::collections::VecDeque::new(),
             combinators: Vec::new(),
+            from_async: Vec::new(),
             then_id: None,
+            constructor_id: None,
             regexps: std::collections::HashMap::new(),
             regexp_proto: crate::value::SlotIndex::NULL,
             last_index_id: None,
@@ -4954,7 +5033,8 @@ impl Interp {
             // Recognized-but-unimplemented statics (honest named skips).
             let from = self.alloc_method(NativeMethod::ArrayFrom);
             self.proto_methods.push((array_ctor, "from", from));
-            let from_async = self.alloc_method(NativeMethod::ArrayFromAsync);
+            let from_async =
+                self.alloc_named_method(NativeMethod::ArrayFromAsync, "fromAsync", 1);
             self.proto_methods
                 .push((array_ctor, "fromAsync", from_async));
         }
@@ -6339,6 +6419,7 @@ impl Interp {
         self.byte_offset_id = id_of("byteOffset");
         self.buffer_id = id_of("buffer");
         self.then_id = id_of("then");
+        self.constructor_id = id_of("constructor");
         self.last_index_id = id_of("lastIndex");
         self.regexp_getter_ids = RegExpGetterIds {
             source: id_of("source"),
@@ -6556,6 +6637,14 @@ impl Interp {
                 self.done_id = Some(self.intern_key("done"));
             }
         }
+        // `Array.fromAsync` is a native async state machine that drives the
+        // iterator protocol (`next`/`value`/`done`/`length`/`return`/`then`)
+        // itself, so those atoms and their intrinsic prototype methods must be
+        // present even when the guest source never names them. Force-intern
+        // them (and seed the id caches) when the program uses `fromAsync`, so
+        // the method-linking pass below reifies e.g. `%ArrayIteratorProto%.next`
+        // and intrinsic `{value, done}` result objects carry their fields.
+        self.ensure_from_async_protocol_atoms();
         // Install the native prototype methods whose names this program
         // references, as own properties of their prototype (unmetered — an
         // inherited intrinsic method, present before the guest runs).
@@ -11920,6 +12009,20 @@ impl Interp {
         // against. Its allocation is already folded into the measured
         // [`FUNCTION_DEFINE_METERING`] cluster, so it is created unmetered here.
         let proto = self.slots.alloc(Slot::instance(self.object_proto));
+        // `fxDefaultFunctionPrototype` also installs `prototype.constructor`
+        // (the spec back-reference, `{writable, enumerable:false,
+        // configurable}`). Its slot is folded into the measured
+        // [`FUNCTION_DEFINE_METERING`] cluster, so it is written unmetered —
+        // and only when the program names `constructor` (otherwise the property
+        // is unobservable and non-`constructor` programs stay byte-identical).
+        if let Some(cid) = self.constructor_id {
+            self.set_own_unmetered_with_flag(
+                proto,
+                cid,
+                Slot::of(Kind::Reference, Payload::Reference(f)),
+                XS_DONT_ENUM_FLAG,
+            );
+        }
         self.ctor_prototype.insert(f, proto);
         f
     }
@@ -17167,6 +17270,23 @@ impl Interp {
             self.meter.tick_raw(PROMISE_JOB_FRAME_METERING);
             return self.run_combine_reaction(ci as usize, ei as usize, value, rejected);
         }
+        // An `Array.fromAsync` native async-machine await resumption.
+        if let ReactionKind::FromAsyncNext(id) = reaction.kind {
+            self.meter.tick_raw(PROMISE_JOB_FRAME_METERING);
+            return self.from_async_resume_next(code, id as usize, value, rejected);
+        }
+        if let ReactionKind::FromAsyncElem(id) = reaction.kind {
+            self.meter.tick_raw(PROMISE_JOB_FRAME_METERING);
+            return self.from_async_resume_elem(code, id as usize, value, rejected);
+        }
+        if let ReactionKind::FromAsyncMap(id) = reaction.kind {
+            self.meter.tick_raw(PROMISE_JOB_FRAME_METERING);
+            return self.from_async_resume_map(code, id as usize, value, rejected);
+        }
+        if let ReactionKind::FromAsyncClose(id) = reaction.kind {
+            self.meter.tick_raw(PROMISE_JOB_FRAME_METERING);
+            return self.from_async_resume_close(id as usize);
+        }
         let handler = if rejected {
             reaction.on_rejected
         } else {
@@ -17201,7 +17321,12 @@ impl Interp {
             // (XS's `fxOnResolvedPromise` `mxCatch`: `*argument = mxException;
             // function = rejectFunction`). The thrown value is still in
             // `self.exception` after the callback unwinds to the host boundary.
-            match self.run_callback_catching_throw(code, handler, Slot::undefined(), &[value])? {
+            // The handler may be any callable — a user function, or a native /
+            // bound / **promise resolving function** (the last is what
+            // `promise.then(resolveFn, rejectFn)` installs, e.g. test262's
+            // `assert.throwsAsync`). Dispatch through `call_any` so a native
+            // reaction handler settles correctly rather than self-naming.
+            match self.call_any_catching_throw(code, handler, Slot::undefined(), &[value])? {
                 Ok(r) => (r, false),
                 Err(thrown) => (thrown, true),
             }
@@ -17209,6 +17334,887 @@ impl Interp {
         // Settle the derived promise (XS calls the captured resolve/reject
         // function); a reference resolve value adopts as a thenable.
         self.settle_promise(derived, settle_value, settle_reject)
+    }
+
+    // ------------------------------------------------------------------
+    // `Array.fromAsync` (ECMA-262 sec-array.fromasync) — a native async state
+    // machine. The entry builds the result promise, runs the synchronous
+    // prologue (GetIterator / Construct / first `next`), and returns the
+    // promise; each subsequent step resumes from a [`ReactionKind::FromAsync*`]
+    // native reaction at the promise-job drain. All state lives in the
+    // [`Self::from_async`] side table (no guest bytecode frame). Metering is
+    // advisory here (value/completion-gated), so awaits meter via the shared
+    // `schedule_native_await` and the observable async behavior is exact.
+    // ------------------------------------------------------------------
+
+    /// Unwind a JS throw that escaped a re-entrant callback/getter during a
+    /// fromAsync step: drop callee frames, restore the value/jump stacks to the
+    /// pre-call depths, take the pending exception, and re-normalize the meter
+    /// (as [`Self::run_callback_catching_throw`] does).
+    fn from_async_unwind(&mut self, sb: usize, cd: usize, jd: usize) -> Slot {
+        while self.call_stack.len() > cd {
+            let _ = self.leave_call();
+        }
+        self.stack.truncate(sb);
+        self.jumps.truncate(jd);
+        let thrown = self.exception;
+        self.exception = Slot::undefined();
+        self.unmeter_host_escape();
+        thrown
+    }
+
+    /// Convert a re-entrant result into a catchable outcome: `Ok(Ok(v))` on
+    /// success, `Ok(Err(thrown))` on a JS throw (to reject/close with), and a
+    /// propagated `Err(halt)` for a real host halt (Unsupported/MeterAbort/…).
+    fn from_async_try<T>(
+        &mut self,
+        r: Result<T, Halt>,
+        sb: usize,
+        cd: usize,
+        jd: usize,
+    ) -> Result<Result<T, Slot>, Halt> {
+        match r {
+            Ok(v) => Ok(Ok(v)),
+            Err(Halt::Throw(_)) => Ok(Err(self.from_async_unwind(sb, cd, jd))),
+            Err(h) => Err(h),
+        }
+    }
+
+    /// A fully general `Call(F, thisArg, args)` mirroring the `RUN`-opcode
+    /// dispatch: a **promise resolving function** settles its bound promise, a
+    /// native prototype method / plain native / bound function each take their
+    /// dedicated path, and a user function enters its bytecode body. The
+    /// value-stack frame `[THIS, FUNCTION, RESULT, FRAME, args…]` is built and
+    /// the single result popped. `F` must already be verified callable.
+    fn call_any(
+        &mut self,
+        code: &[u8],
+        func: Slot,
+        this: Slot,
+        args: &[Slot],
+    ) -> Result<Slot, Halt> {
+        let f = match func.value {
+            Payload::Reference(r) if func.kind == Kind::Reference => r,
+            _ => return Err(self.catchable_type_error()),
+        };
+        // A promise resolve/reject function (a capability's settler): it carries
+        // a method marker for `typeof`, but is dispatched by its
+        // `promise_functions` entry, not `call_native_method`.
+        if self.promise_functions.contains_key(&f) {
+            let base = self.stack.len();
+            self.push(this);
+            self.push(func);
+            self.push(Slot::undefined());
+            self.push(Slot::of(Kind::Uninitialized, Payload::None));
+            for a in args {
+                self.push(*a);
+            }
+            return match self.call_promise_function(f, base, args.len()) {
+                Ok(()) => Ok(self.pop()),
+                Err(h) => {
+                    self.stack.truncate(base);
+                    Err(h)
+                }
+            };
+        }
+        if let Some(nm) = self.method_of(f) {
+            let base = self.stack.len();
+            self.push(this);
+            self.push(func);
+            self.push(Slot::undefined());
+            self.push(Slot::of(Kind::Uninitialized, Payload::None));
+            for a in args {
+                self.push(*a);
+            }
+            return match self.call_native_method(nm, base, args.len(), code) {
+                Ok(()) => Ok(self.pop()),
+                Err(h) => {
+                    self.stack.truncate(base);
+                    Err(h)
+                }
+            };
+        }
+        if self.native_of(f).is_some() && !self.bound_functions.contains_key(&f) {
+            let n = self.native_of(f).unwrap();
+            let base = self.stack.len();
+            self.push(this);
+            self.push(func);
+            self.push(Slot::undefined());
+            self.push(Slot::of(Kind::Uninitialized, Payload::None));
+            for a in args {
+                self.push(*a);
+            }
+            return match self.call_native(n, base, args.len(), false, code) {
+                Ok(()) => Ok(self.pop()),
+                Err(h) => {
+                    self.stack.truncate(base);
+                    Err(h)
+                }
+            };
+        }
+        // A user (bytecode) or bound function.
+        self.run_callback(code, func, this, args)
+    }
+
+    /// [`Self::call_any`] with a JS throw captured as `Ok(Err(thrown))` (a real
+    /// host halt still propagates).
+    fn call_any_catching_throw(
+        &mut self,
+        code: &[u8],
+        func: Slot,
+        this: Slot,
+        args: &[Slot],
+    ) -> Result<Result<Slot, Slot>, Halt> {
+        let sb = self.stack.len();
+        let cd = self.call_stack.len();
+        let jd = self.jumps.len();
+        let r = self.call_any(code, func, this, args);
+        self.from_async_try(r, sb, cd, jd)
+    }
+
+    /// `Call(F, thisArg, args)` for a fromAsync step: a non-callable `F` yields
+    /// the TypeError `Call` throws; otherwise dispatch (any callable) and catch
+    /// a JS throw.
+    fn from_async_call(
+        &mut self,
+        code: &[u8],
+        f: Slot,
+        this: Slot,
+        args: &[Slot],
+    ) -> Result<Result<Slot, Slot>, Halt> {
+        if !self.is_callable_value(f) {
+            return Ok(Err(self.build_error("TypeError", 0, 0)));
+        }
+        self.call_any_catching_throw(code, f, this, args)
+    }
+
+    /// ECMAScript `IsConstructor(C)` restricted to the shapes `Array.fromAsync`
+    /// can receive as its `this` value: the intrinsic `%Array%`, an ordinary
+    /// user function / class (constructable), or a non-constructor (arrow is
+    /// not exercised; a method/generator/bound/non-callable is not a
+    /// constructor).
+    fn from_async_is_constructor(&self, c: Slot) -> bool {
+        let f = match c.value {
+            Payload::Reference(r) if c.kind == Kind::Reference => r,
+            _ => return false,
+        };
+        if self.proxies.contains_key(&f) {
+            return self.slot_is_callable(f);
+        }
+        if self.bound_functions.contains_key(&f) {
+            return false;
+        }
+        match self.functions.get(&f) {
+            Some(fi) => {
+                if fi.native.is_some() {
+                    return true;
+                }
+                if fi.method.is_some() || fi.is_generator {
+                    return false;
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Force-intern the iterator-protocol atoms `Array.fromAsync` relies on and
+    /// seed the id caches, but only when the program actually uses `fromAsync`
+    /// (so non-fromAsync programs — including the exact-metering corpus — are
+    /// untouched). Interning a name adds it to [`Self::symbol_ids`], which the
+    /// prototype-method linking pass consults to reify e.g.
+    /// `%ArrayIteratorPrototype%.next`; seeding `value_id`/`done_id`/… makes the
+    /// intrinsic `{value, done}` result objects carry those fields.
+    fn ensure_from_async_protocol_atoms(&mut self) {
+        if !self.symbol_ids.contains_key("fromAsync") {
+            return;
+        }
+        for name in ["next", "value", "done", "length", "return", "then"] {
+            let _ = self.intern_key(name);
+        }
+        if self.value_id.is_none() {
+            self.value_id = self.symbol_ids.get("value").copied();
+        }
+        if self.done_id.is_none() {
+            self.done_id = self.symbol_ids.get("done").copied();
+        }
+        if self.length_id.is_none() {
+            self.length_id = self.symbol_ids.get("length").copied();
+        }
+        if self.then_id.is_none() {
+            self.then_id = self.symbol_ids.get("then").copied();
+        }
+    }
+
+    /// `ToObject` of a primitive `Array.fromAsync` array-like input: a fresh
+    /// object chained to the value's wrapper prototype (so `length`/index reads
+    /// resolve inherited properties, e.g. `Number.prototype.length`). `None` for
+    /// `null`/`undefined` (handled earlier) or an unmapped kind. The wrapper's
+    /// own exotic data is not materialized — sufficient for array-like reads,
+    /// whose data lives on the prototype.
+    fn from_async_box_primitive(&mut self, v: Slot) -> Option<crate::value::SlotIndex> {
+        let proto = match v.kind {
+            Kind::Integer | Kind::Number => self.number_proto,
+            Kind::Symbol => self.symbol_proto,
+            Kind::Boolean => self
+                .intrinsics
+                .get("Boolean")
+                .and_then(|&c| self.ctor_prototype.get(&c).copied())
+                .unwrap_or(crate::value::SlotIndex::NULL),
+            Kind::BigInt => self
+                .intrinsics
+                .get("BigInt")
+                .and_then(|&c| self.ctor_prototype.get(&c).copied())
+                .unwrap_or(crate::value::SlotIndex::NULL),
+            _ => return None,
+        };
+        if proto.is_null() {
+            return None;
+        }
+        Some(self.slots.alloc(Slot::instance(proto)))
+    }
+
+    /// The `Array.fromAsync(asyncItems [, mapfn [, thisArg]])` entry: build the
+    /// result promise, seed the [`FromAsyncData`] machine, run the synchronous
+    /// prologue, and return the promise (the async work continues at the drain).
+    fn array_from_async(&mut self, code: &[u8], base: usize, argc: usize) -> Result<Slot, Halt> {
+        let _ = argc;
+        let this_c = self.stack.get(base).copied().unwrap_or_else(Slot::undefined);
+        let items = self.stack.get(base + 4).copied().unwrap_or_else(Slot::undefined);
+        let mapfn = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+        let this_arg = self.stack.get(base + 6).copied().unwrap_or_else(Slot::undefined);
+        self.meter.tick_builtin();
+        let (promise, resolve, reject) = self.new_promise_capability();
+        let id = self.from_async.len();
+        self.from_async.push(FromAsyncData {
+            resolve,
+            reject,
+            target: crate::value::SlotIndex::NULL,
+            target_is_array: false,
+            k: 0,
+            mapfn,
+            mapping: false,
+            this_arg,
+            settled: false,
+            iterator: Slot::undefined(),
+            next_method: Slot::undefined(),
+            sync_wrapped: false,
+            array_like: Slot::undefined(),
+            len: 0,
+            close_error: Slot::undefined(),
+        });
+        // The synchronous prologue (AsyncFunctionStart up to the first await)
+        // runs inside the caller's guest frame, whose live `try`/`catch` jumps
+        // are on the stack. An uncaught throw from the first `next()`/`Get`
+        // (e.g. a synchronous iterable whose iteration fails) must reject the
+        // result promise — not unwind into the caller's handler — so isolate the
+        // jumps stack across the prologue (the callbacks it invokes push and pop
+        // their own handlers above this boundary). Every later step already runs
+        // at the microtask drain with a clean stack.
+        let saved_jumps = std::mem::take(&mut self.jumps);
+        let r = self.from_async_start(code, id, this_c, items);
+        self.jumps = saved_jumps;
+        r?;
+        Ok(Slot::of(Kind::Reference, Payload::Reference(promise)))
+    }
+
+    /// The synchronous prologue of `fromAsyncClosure`: validate `mapfn`, probe
+    /// `@@asyncIterator` / `@@iterator`, build the accumulator `A`, and issue
+    /// the first `next` / element `Await`. Any JS throw here rejects the result
+    /// promise (the implicit async function's abrupt completion).
+    fn from_async_start(
+        &mut self,
+        code: &[u8],
+        id: usize,
+        c: Slot,
+        items: Slot,
+    ) -> Result<(), Halt> {
+        // 3.a/b: mapping validity.
+        let mapfn = self.from_async[id].mapfn;
+        let mapping = if mapfn.kind == Kind::Undefined {
+            false
+        } else if !self.is_callable_value(mapfn) {
+            let e = self.build_error("TypeError", 0, 0);
+            return self.from_async_reject(id, e);
+        } else {
+            true
+        };
+        self.from_async[id].mapping = mapping;
+
+        // GetV(items, @@asyncIterator) throws for null/undefined.
+        if items.kind == Kind::Null || items.kind == Kind::Undefined {
+            let e = self.build_error("TypeError", 0, 0);
+            return self.from_async_reject(id, e);
+        }
+
+        let sb = self.stack.len();
+        let cd = self.call_stack.len();
+        let jd = self.jumps.len();
+
+        // 3.c: GetMethod(items, @@asyncIterator). Only objects carry it
+        // (primitives, including strings, have none).
+        let mut method_async = Slot::undefined();
+        if let Payload::Reference(inst) = items.value {
+            if items.kind == Kind::Reference {
+                if let Some(aid) = self.well_known_symbol_property_id("asyncIterator") {
+                    let g = self.mop_get(code, inst, aid, items);
+                    method_async = match self.from_async_try(g, sb, cd, jd)? {
+                        Ok(m) => m,
+                        Err(e) => return self.from_async_reject(id, e),
+                    };
+                }
+            }
+        }
+        let is_async_iter = if method_async.kind == Kind::Undefined || method_async.kind == Kind::Null
+        {
+            false
+        } else if !self.is_callable_value(method_async) {
+            let e = self.build_error("TypeError", 0, 0);
+            return self.from_async_reject(id, e);
+        } else {
+            true
+        };
+
+        // 3.d: GetMethod(items, @@iterator) when no async iterator. A string
+        // primitive is iterable through the intrinsic string iterator.
+        let mut method_sync = Slot::undefined();
+        let mut string_sync = false;
+        if !is_async_iter {
+            if items.kind == Kind::String {
+                string_sync = true;
+            } else if let Payload::Reference(inst) = items.value {
+                if items.kind == Kind::Reference {
+                    if let Some(iid) = self.well_known_symbol_property_id("iterator") {
+                        let g = self.mop_get(code, inst, iid, items);
+                        method_sync = match self.from_async_try(g, sb, cd, jd)? {
+                            Ok(m) => m,
+                            Err(e) => return self.from_async_reject(id, e),
+                        };
+                    }
+                }
+            }
+        }
+        let is_sync_iter = if string_sync {
+            true
+        } else if method_sync.kind == Kind::Undefined || method_sync.kind == Kind::Null {
+            false
+        } else if !self.is_callable_value(method_sync) {
+            let e = self.build_error("TypeError", 0, 0);
+            return self.from_async_reject(id, e);
+        } else {
+            true
+        };
+
+        // Resolve the iterator record. A user `@@asyncIterator`/`@@iterator`
+        // method is called for its iterator; a string / array / collection /
+        // (async-)generator uses ironhorse's intrinsic iterator (arrays and
+        // some intrinsics do not reify a `@@iterator` own property, exactly as
+        // the `for-of` opcode special-cases them). `is_async` marks an async
+        // iterator (its `next()` yields a promise) vs a sync one (wrapped:
+        // each value is awaited).
+        let (iterator, is_async): (Option<Slot>, bool) = if is_async_iter {
+            match self.from_async_call(code, method_async, items, &[])? {
+                Ok(it) => (Some(it), true),
+                Err(e) => return self.from_async_reject(id, e),
+            }
+        } else if string_sync {
+            match items.value {
+                Payload::String(off) => {
+                    let bytes = self.str_content(off).to_vec();
+                    (Some(self.make_string_iterator(bytes)), false)
+                }
+                _ => (None, false),
+            }
+        } else if is_sync_iter {
+            match self.from_async_call(code, method_sync, items, &[])? {
+                Ok(it) => (Some(it), false),
+                Err(e) => return self.from_async_reject(id, e),
+            }
+        } else {
+            match items.value {
+                Payload::Reference(i) if self.arrays.contains_key(&i) => {
+                    (Some(self.make_array_iterator(i, 0)), false)
+                }
+                Payload::Reference(i) if self.collections.contains_key(&i) => {
+                    match self.collections[&i].kind {
+                        CollKind::Map => (Some(self.make_collection_iterator(i, 7)), false),
+                        CollKind::Set => (Some(self.make_collection_iterator(i, 6)), false),
+                        // Weak collections are not iterable → array-like (len 0).
+                        _ => (None, false),
+                    }
+                }
+                Payload::Reference(i) if self.generators.contains_key(&i) => (Some(items), false),
+                Payload::Reference(i) if self.async_generators.contains_key(&i) => {
+                    (Some(items), true)
+                }
+                // An intrinsic iterator object (e.g. the result of `.values()`):
+                // its `@@iterator` is the identity, so it is its own iterable.
+                Payload::Reference(i) if self.iterators.contains_key(&i) => (Some(items), false),
+                _ => (None, false),
+            }
+        };
+
+        if let Some(iterator) = iterator {
+            let iter_inst = match iterator.value {
+                Payload::Reference(r) if iterator.kind == Kind::Reference => r,
+                _ => {
+                    let e = self.build_error("TypeError", 0, 0);
+                    return self.from_async_reject(id, e);
+                }
+            };
+            let next_id = self.intern_key("next");
+            let next_method = {
+                let g = self.mop_get(code, iter_inst, next_id, iterator);
+                match self.from_async_try(g, sb, cd, jd)? {
+                    Ok(m) => m,
+                    Err(e) => return self.from_async_reject(id, e),
+                }
+            };
+            // 3.h.i: A = Construct(C) if IsConstructor(C), else ArrayCreate(0).
+            let target = match self.from_async_make_target(code, id, c, None)? {
+                Ok(t) => t,
+                Err(e) => return self.from_async_reject(id, e),
+            };
+            self.from_async[id].iterator = iterator;
+            self.from_async[id].next_method = next_method;
+            self.from_async[id].sync_wrapped = !is_async;
+            self.from_async[id].target = target;
+            self.from_async[id].target_is_array = self.arrays.contains_key(&target);
+            return self.from_async_drive(code, id);
+        }
+
+        // 3.k: array-like fallback. `arrayLike` is `ToObject(items)`: an object
+        // is used directly; a non-string primitive boxes to a wrapper chained to
+        // its prototype (so inherited `length`/index properties resolve).
+        let array_like = match items.value {
+            Payload::Reference(_) if items.kind == Kind::Reference => items,
+            _ => match self.from_async_box_primitive(items) {
+                Some(w) => Slot::of(Kind::Reference, Payload::Reference(w)),
+                None => items,
+            },
+        };
+        let len: u64 = if let Payload::Reference(inst) = array_like.value {
+            if array_like.kind == Kind::Reference {
+                let length_id = self.intern_key("length");
+                let g = self.mop_get(code, inst, length_id, array_like);
+                let raw = match self.from_async_try(g, sb, cd, jd)? {
+                    Ok(v) => v,
+                    Err(e) => return self.from_async_reject(id, e),
+                };
+                let coerced = self.to_length_value(code, raw);
+                match self.from_async_try(coerced, sb, cd, jd)? {
+                    Ok(n) => n,
+                    Err(e) => return self.from_async_reject(id, e),
+                }
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let target = match self
+            .from_async_make_target(code, id, c, Some(Slot::number(len as f64)))?
+        {
+            Ok(t) => t,
+            Err(e) => return self.from_async_reject(id, e),
+        };
+        self.from_async[id].array_like = array_like;
+        self.from_async[id].len = len;
+        self.from_async[id].target = target;
+        self.from_async[id].target_is_array = self.arrays.contains_key(&target);
+        self.from_async_drive(code, id)
+    }
+
+    /// Build the accumulator `A`: `Construct(C[, len])` when `C` is a
+    /// constructor, else an intrinsic `ArrayCreate(0)`. Returns the constructed
+    /// object slot index, or a thrown error to reject with.
+    fn from_async_make_target(
+        &mut self,
+        code: &[u8],
+        _id: usize,
+        c: Slot,
+        len_arg: Option<Slot>,
+    ) -> Result<Result<crate::value::SlotIndex, Slot>, Halt> {
+        if self.from_async_is_constructor(c) {
+            let sb = self.stack.len();
+            let cd = self.call_stack.len();
+            let jd = self.jumps.len();
+            let args: Vec<Slot> = match len_arg {
+                Some(l) => vec![l],
+                None => Vec::new(),
+            };
+            let r = self.construct_value(code, c, &args, c);
+            let obj = match self.from_async_try(r, sb, cd, jd)? {
+                Ok(o) => o,
+                Err(e) => return Ok(Err(e)),
+            };
+            match obj.value {
+                Payload::Reference(inst) if obj.kind == Kind::Reference => Ok(Ok(inst)),
+                _ => Ok(Err(self.build_error("TypeError", 0, 0))),
+            }
+        } else {
+            // ArrayCreate(len): the iterator path uses len 0; the array-like
+            // path validates `len` against the 2^32-1 array-length ceiling
+            // (RangeError otherwise) and preallocates that length.
+            let len = match len_arg {
+                Some(l) => to_number(&l),
+                None => 0.0,
+            };
+            if len > (u32::MAX as f64) {
+                return Ok(Err(self.build_error("RangeError", 0, 0)));
+            }
+            let arr = self.new_array();
+            if len > 0.0 {
+                self.array_set_length(arr, Slot::number(len));
+            }
+            Ok(Ok(arr))
+        }
+    }
+
+    /// `ToLength(Get(...))` for the array-like `length`, as a `u64` capped at
+    /// 2^53 - 1 (the spec integer-index ceiling).
+    fn to_length_value(&mut self, code: &[u8], value: Slot) -> Result<u64, Halt> {
+        let slot = self.to_number_value(code, value)?;
+        let n = to_number(&slot);
+        if n.is_nan() || n <= 0.0 {
+            return Ok(0);
+        }
+        let capped = n.trunc().min(9_007_199_254_740_991.0);
+        Ok(capped as u64)
+    }
+
+    /// Start or continue the fromAsync loop at the current `k`: on the iterator
+    /// path issue the next `next()` (async) / read the next sync step; on the
+    /// array-like path `Get` and `Await` the next element, or finish when `k`
+    /// reaches `len`.
+    fn from_async_drive(&mut self, code: &[u8], id: usize) -> Result<(), Halt> {
+        if self.from_async[id].settled {
+            return Ok(());
+        }
+        let sb = self.stack.len();
+        let cd = self.call_stack.len();
+        let jd = self.jumps.len();
+        let iterator = self.from_async[id].iterator;
+        if iterator.kind != Kind::Undefined {
+            let next_method = self.from_async[id].next_method;
+            let step = match self.from_async_call(code, next_method, iterator, &[])? {
+                Ok(v) => v,
+                Err(e) => return self.from_async_reject(id, e),
+            };
+            if !self.from_async[id].sync_wrapped {
+                // Async iterator: Await(nextResult) — a promise of {value,done}.
+                return self.schedule_native_await(step, ReactionKind::FromAsyncNext(id as u32));
+            }
+            // Sync iterator: the step is a plain {value,done}; read it now, then
+            // Await the value (unwrapping a thenable, close-on-rejection).
+            let step_inst = match step.value {
+                Payload::Reference(r) if step.kind == Kind::Reference => r,
+                _ => {
+                    let e = self.build_error("TypeError", 0, 0);
+                    return self.from_async_reject(id, e);
+                }
+            };
+            let done_id = self.intern_key("done");
+            let done = {
+                let g = self.mop_get(code, step_inst, done_id, step);
+                match self.from_async_try(g, sb, cd, jd)? {
+                    Ok(v) => v,
+                    Err(e) => return self.from_async_reject(id, e),
+                }
+            };
+            if self.truthy(&done) {
+                return self.from_async_finish(code, id);
+            }
+            let value_id = self.intern_key("value");
+            let value = {
+                let g = self.mop_get(code, step_inst, value_id, step);
+                match self.from_async_try(g, sb, cd, jd)? {
+                    Ok(v) => v,
+                    Err(e) => return self.from_async_reject(id, e),
+                }
+            };
+            self.schedule_native_await(value, ReactionKind::FromAsyncElem(id as u32))
+        } else {
+            let k = self.from_async[id].k;
+            let len = self.from_async[id].len;
+            if k >= len {
+                return self.from_async_finish(code, id);
+            }
+            let array_like = self.from_async[id].array_like;
+            let inst = match array_like.value {
+                Payload::Reference(r) => r,
+                _ => {
+                    let e = self.build_error("TypeError", 0, 0);
+                    return self.from_async_reject(id, e);
+                }
+            };
+            let key = self.intern_key(&k.to_string());
+            let kvalue = {
+                let g = self.mop_get(code, inst, key, array_like);
+                match self.from_async_try(g, sb, cd, jd)? {
+                    Ok(v) => v,
+                    Err(e) => return self.from_async_reject(id, e),
+                }
+            };
+            self.schedule_native_await(kvalue, ReactionKind::FromAsyncElem(id as u32))
+        }
+    }
+
+    /// Resume after `Await(nextResult)` on an async iterator's `next()` promise.
+    fn from_async_resume_next(
+        &mut self,
+        code: &[u8],
+        id: usize,
+        value: Slot,
+        rejected: bool,
+    ) -> Result<(), Halt> {
+        if self.from_async[id].settled {
+            return Ok(());
+        }
+        if rejected {
+            // `? Await(nextResult)` rejected: propagate (no iterator close).
+            return self.from_async_reject(id, value);
+        }
+        let sb = self.stack.len();
+        let cd = self.call_stack.len();
+        let jd = self.jumps.len();
+        // nextResult must be an Object (IteratorComplete/IteratorValue).
+        let step_inst = match value.value {
+            Payload::Reference(r) if value.kind == Kind::Reference => r,
+            _ => {
+                let e = self.build_error("TypeError", 0, 0);
+                return self.from_async_reject(id, e);
+            }
+        };
+        let done_id = self.intern_key("done");
+        let done = {
+            let g = self.mop_get(code, step_inst, done_id, value);
+            match self.from_async_try(g, sb, cd, jd)? {
+                Ok(v) => v,
+                Err(e) => return self.from_async_reject(id, e),
+            }
+        };
+        if self.truthy(&done) {
+            return self.from_async_finish(code, id);
+        }
+        let value_id = self.intern_key("value");
+        let next_value = {
+            let g = self.mop_get(code, step_inst, value_id, value);
+            match self.from_async_try(g, sb, cd, jd)? {
+                Ok(v) => v,
+                Err(e) => return self.from_async_reject(id, e),
+            }
+        };
+        self.from_async_process_value(code, id, next_value)
+    }
+
+    /// Resume after `Await`ing a per-element value (sync-iterator value unwrap
+    /// or array-like element `Get`).
+    fn from_async_resume_elem(
+        &mut self,
+        code: &[u8],
+        id: usize,
+        value: Slot,
+        rejected: bool,
+    ) -> Result<(), Halt> {
+        if self.from_async[id].settled {
+            return Ok(());
+        }
+        if rejected {
+            // A rejecting element thenable: close the sync iterator (if any),
+            // then reject; array-like has no iterator and just rejects.
+            return self.from_async_close_and_reject(code, id, value);
+        }
+        self.from_async_process_value(code, id, value)
+    }
+
+    /// Apply `mapfn` to the resolved element value (awaiting the result) or,
+    /// with no mapping, define it on `A` and advance.
+    fn from_async_process_value(
+        &mut self,
+        code: &[u8],
+        id: usize,
+        v: Slot,
+    ) -> Result<(), Halt> {
+        if self.from_async[id].mapping {
+            let mapfn = self.from_async[id].mapfn;
+            let this_arg = self.from_async[id].this_arg;
+            let k = self.from_async[id].k;
+            let kn = Slot::number(k as f64);
+            match self.from_async_call(code, mapfn, this_arg, &[v, kn])? {
+                Ok(mapped) => {
+                    self.schedule_native_await(mapped, ReactionKind::FromAsyncMap(id as u32))
+                }
+                Err(e) => self.from_async_close_and_reject(code, id, e),
+            }
+        } else {
+            self.from_async_append_and_advance(code, id, v)
+        }
+    }
+
+    /// Resume after `Await(mappedValue)` from `mapfn`.
+    fn from_async_resume_map(
+        &mut self,
+        code: &[u8],
+        id: usize,
+        value: Slot,
+        rejected: bool,
+    ) -> Result<(), Halt> {
+        if self.from_async[id].settled {
+            return Ok(());
+        }
+        if rejected {
+            return self.from_async_close_and_reject(code, id, value);
+        }
+        self.from_async_append_and_advance(code, id, value)
+    }
+
+    /// `CreateDataPropertyOrThrow(A, k, v)` then advance to the next element.
+    fn from_async_append_and_advance(
+        &mut self,
+        code: &[u8],
+        id: usize,
+        v: Slot,
+    ) -> Result<(), Halt> {
+        let sb = self.stack.len();
+        let cd = self.call_stack.len();
+        let jd = self.jumps.len();
+        let k = self.from_async[id].k;
+        let target = self.from_async[id].target;
+        if self.from_async[id].target_is_array {
+            self.array_set_dense(target, k as u32, v);
+        } else {
+            let key = self.intern_key(&k.to_string());
+            let desc = OrdinaryDescriptor {
+                value: Some(v),
+                writable: Some(true),
+                enumerable: Some(true),
+                configurable: Some(true),
+                ..OrdinaryDescriptor::default()
+            };
+            let r = self.mop_define_own_property(code, target, key, desc);
+            let ok = match self.from_async_try(r, sb, cd, jd)? {
+                Ok(b) => b,
+                Err(e) => return self.from_async_close_and_reject(code, id, e),
+            };
+            if !ok {
+                let e = self.build_error("TypeError", 0, 0);
+                return self.from_async_close_and_reject(code, id, e);
+            }
+        }
+        self.from_async[id].k = k + 1;
+        self.from_async_drive(code, id)
+    }
+
+    /// Set `A.length` and resolve the result promise with `A` (iterator done /
+    /// array-like exhausted).
+    fn from_async_finish(&mut self, code: &[u8], id: usize) -> Result<(), Halt> {
+        let sb = self.stack.len();
+        let cd = self.call_stack.len();
+        let jd = self.jumps.len();
+        let target = self.from_async[id].target;
+        let len_val = if self.from_async[id].iterator.kind != Kind::Undefined {
+            Slot::number(self.from_async[id].k as f64)
+        } else {
+            Slot::number(self.from_async[id].len as f64)
+        };
+        if self.from_async[id].target_is_array {
+            self.array_set_length(target, len_val);
+        } else {
+            let length_id = self.intern_key("length");
+            let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+            let r = self.mop_set(code, target, length_id, len_val, target_slot);
+            let ok = match self.from_async_try(r, sb, cd, jd)? {
+                Ok(b) => b,
+                Err(e) => return self.from_async_reject(id, e),
+            };
+            if !ok {
+                let e = self.build_error("TypeError", 0, 0);
+                return self.from_async_reject(id, e);
+            }
+        }
+        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        self.from_async_resolve(id, target_slot)
+    }
+
+    /// `AsyncIteratorClose` / `IteratorClose` on an abrupt (throw) completion:
+    /// call the iterator's `return` and reject with the original `err`. On the
+    /// async path a normal `return()` result is awaited first (its outcome is
+    /// discarded — the completion is a throw). Array-like has no iterator.
+    fn from_async_close_and_reject(
+        &mut self,
+        code: &[u8],
+        id: usize,
+        err: Slot,
+    ) -> Result<(), Halt> {
+        let iterator = self.from_async[id].iterator;
+        if iterator.kind == Kind::Undefined {
+            return self.from_async_reject(id, err);
+        }
+        let inst = match iterator.value {
+            Payload::Reference(r) => r,
+            _ => return self.from_async_reject(id, err),
+        };
+        let sb = self.stack.len();
+        let cd = self.call_stack.len();
+        let jd = self.jumps.len();
+        let return_id = self.intern_key("return");
+        let ret = {
+            let g = self.mop_get(code, inst, return_id, iterator);
+            match self.from_async_try(g, sb, cd, jd)? {
+                Ok(v) => v,
+                // GetMethod threw while closing: the completion is already a
+                // throw, so return the original error.
+                Err(_e) => return self.from_async_reject(id, err),
+            }
+        };
+        if ret.kind == Kind::Undefined || ret.kind == Kind::Null || !self.is_callable_value(ret) {
+            return self.from_async_reject(id, err);
+        }
+        let sync = self.from_async[id].sync_wrapped;
+        match self.from_async_call(code, ret, iterator, &[])? {
+            Ok(inner) => {
+                if sync {
+                    // IteratorClose (sync): the return result is not awaited.
+                    self.from_async_reject(id, err)
+                } else {
+                    self.from_async[id].close_error = err;
+                    self.schedule_native_await(inner, ReactionKind::FromAsyncClose(id as u32))
+                }
+            }
+            // A throwing `return()` on an abrupt completion is swallowed.
+            Err(_e) => self.from_async_reject(id, err),
+        }
+    }
+
+    /// Resume after awaiting an async iterator's `return()` result during
+    /// close: reject with the saved error regardless of the outcome.
+    fn from_async_resume_close(&mut self, id: usize) -> Result<(), Halt> {
+        if self.from_async[id].settled {
+            return Ok(());
+        }
+        let err = self.from_async[id].close_error;
+        self.from_async_reject(id, err)
+    }
+
+    /// Settle the result promise as fulfilled with `A` (idempotent).
+    fn from_async_resolve(&mut self, id: usize, value: Slot) -> Result<(), Halt> {
+        if self.from_async[id].settled {
+            return Ok(());
+        }
+        self.from_async[id].settled = true;
+        let resolve = self.from_async[id].resolve;
+        self.settle_via_function(resolve, value)
+    }
+
+    /// Settle the result promise as rejected with `err` (idempotent).
+    fn from_async_reject(&mut self, id: usize, err: Slot) -> Result<(), Halt> {
+        if self.from_async[id].settled {
+            return Ok(());
+        }
+        self.from_async[id].settled = true;
+        let reject = self.from_async[id].reject;
+        self.settle_via_function(reject, err)
     }
 
     /// Run a resolve-with-thenable job (XS's `fxOnThenable`): call
@@ -22657,10 +23663,7 @@ impl Interp {
                 let _ = (base, argc);
                 return Err(Halt::Unsupported("Array.from:iterator-protocol-metering"));
             }
-            NativeMethod::ArrayFromAsync => {
-                let _ = (base, argc);
-                return Err(Halt::Unsupported("Array.fromAsync:async-iteration"));
-            }
+            NativeMethod::ArrayFromAsync => self.array_from_async(code, base, argc)?,
             // `Array.isArray(v)`: whether `v` is an array exotic object.
             NativeMethod::ArrayIsArray => {
                 self.meter.tick_raw(ARRAY_ISARRAY_METERING);
