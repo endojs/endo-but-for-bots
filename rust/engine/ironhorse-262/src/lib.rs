@@ -374,7 +374,28 @@ pub fn dual_run_with(source: &str, compiler: Compiler) -> Option<DualRun> {
     // intrinsics by name — the XS compiler numbers those symbols
     // program-locally, so the id→name table is what makes `Boolean` mean the
     // native `Boolean` and not an undefined variable (design § fundamentals).
-    let ironhorse: RunOutcome = run_program_with_symbols(&bytecode, &symbols);
+    // A clean early-error rejection by ironhorse-compile (`Rejected`) means the
+    // source never runs: per the language, a program with an early SyntaxError
+    // throws that SyntaxError before any evaluation, exactly as XS represents a
+    // lexer-owned rejection with a small bytecode stub that throws. Running the
+    // *empty* bytecode `compile_for` returns for a rejection would instead decode
+    // past the end and surface a spurious `Halt::Decode` ("parse-or-decode"),
+    // masking a correct, oracle-agreeing rejection (e.g. a RegExp literal whose
+    // backreference is out of range). Present the rejection as the SyntaxError
+    // throw it is — the same bare `SyntaxError` the runtime `new RegExp(bad)`
+    // path already throws (`catchable_syntax_error`) — so the differential
+    // compares two rejections rather than a crash.
+    let ironhorse: RunOutcome = match &compile {
+        IronhorseCompile::Rejected(_) => RunOutcome {
+            completed: false,
+            result: String::new(),
+            computrons: 0,
+            dispatched: 0,
+            meter_raw: 0,
+            halt: ironhorse_vm::Halt::Throw("SyntaxError".to_string()),
+        },
+        _ => run_program_with_symbols(&bytecode, &symbols),
+    };
 
     Some(build_dual_run(source, oracle, ironhorse, compile, bytecode))
 }
