@@ -13111,11 +13111,12 @@ impl Interp {
                 }
                 let a = arg(0);
                 let byte_length: u32 = match a.kind {
-                    Kind::Undefined if argc == 0 => 0,
                     Kind::Undefined => 0,
                     Kind::Integer => match a.value {
                         Payload::Integer(i) if i >= 0 => i as u32,
-                        _ => return Err(Halt::Unsupported("native-call:ArrayBuffer:bad-length")),
+                        // A negative byteLength is a RangeError (`fxToIndex`),
+                        // caught by the `assert.throws(RangeError, …)` harness.
+                        _ => return Err(self.catchable_range_error()),
                     },
                     Kind::Number => match a.value {
                         Payload::Number(n) => {
@@ -13123,19 +13124,17 @@ impl Interp {
                             if t.is_nan() {
                                 0
                             } else if t < 0.0 || t > 0x7FFF_FFFF as f64 {
-                                return Err(Halt::Unsupported(
-                                    "native-call:ArrayBuffer:bad-length",
-                                ));
+                                return Err(self.catchable_range_error());
                             } else {
                                 t as u32
                             }
                         }
-                        _ => return Err(Halt::Unsupported("native-call:ArrayBuffer:bad-length")),
+                        _ => return Err(self.catchable_range_error()),
                     },
-                    // A boolean/string/etc. byteLength needs the general
-                    // ToNumber (with its own coercion metering) — a later
-                    // increment; honest skip.
-                    _ => return Err(Halt::Unsupported("native-call:ArrayBuffer:coerce-length")),
+                    // A boolean/string/object byteLength takes the general
+                    // ToIndex coercion (observing `valueOf`/`toString`); a
+                    // Symbol/BigInt argument throws a catchable TypeError.
+                    _ => self.to_index_arg(code, a)?,
                 };
                 self.meter.tick_raw(ARRAY_BUFFER_CTOR_FRAME_METERING);
                 let inst = self.alloc_array_buffer(byte_length);
@@ -13157,11 +13156,7 @@ impl Interp {
                     Kind::Undefined => 0,
                     Kind::Integer => match a.value {
                         Payload::Integer(i) if i >= 0 => i as u32,
-                        _ => {
-                            return Err(Halt::Unsupported(
-                                "native-call:SharedArrayBuffer:bad-length",
-                            ))
-                        }
+                        _ => return Err(self.catchable_range_error()),
                     },
                     Kind::Number => match a.value {
                         Payload::Number(n) => {
@@ -13169,24 +13164,14 @@ impl Interp {
                             if t.is_nan() {
                                 0
                             } else if t < 0.0 || t > 0x7FFF_FFFF as f64 {
-                                return Err(Halt::Unsupported(
-                                    "native-call:SharedArrayBuffer:bad-length",
-                                ));
+                                return Err(self.catchable_range_error());
                             } else {
                                 t as u32
                             }
                         }
-                        _ => {
-                            return Err(Halt::Unsupported(
-                                "native-call:SharedArrayBuffer:bad-length",
-                            ))
-                        }
+                        _ => return Err(self.catchable_range_error()),
                     },
-                    _ => {
-                        return Err(Halt::Unsupported(
-                            "native-call:SharedArrayBuffer:coerce-length",
-                        ))
-                    }
+                    _ => self.to_index_arg(code, a)?,
                 };
                 self.meter.tick_raw(ARRAY_BUFFER_CTOR_FRAME_METERING);
                 let inst = self.alloc_array_buffer(byte_length);
@@ -13531,6 +13516,13 @@ impl Interp {
                     String::from_utf8_lossy(&bytes).into_owned()
                 };
                 self.build_regexp(pattern, flags)?
+            }
+            // `ArrayBuffer(...)` / `SharedArrayBuffer(...)` called WITHOUT `new`
+            // (`has_target` false): a constructor-only intrinsic whose
+            // `fx_ArrayBuffer`/`fx_SharedArrayBuffer` throws a catchable TypeError
+            // when `mxTarget` is undefined (`if (mxIsUndefined(mxTarget)) mxTypeError`).
+            Native::ArrayBuffer | Native::SharedArrayBuffer => {
+                return Err(self.catchable_type_error());
             }
             // The remaining fundamentals constructors' call/coerce/construct
             // behaviors land incrementally; until then they self-name so the
@@ -25514,6 +25506,39 @@ impl Interp {
             },
             _ => None,
         }
+    }
+
+    /// `ToIndex(value)` (ECMA-262 7.1.22) for a buffer byte length that needs
+    /// the **general** coercion path (a boolean / string / object argument,
+    /// whose `valueOf`/`toString` must be observed). Distinct from the
+    /// integer/number fast paths the constructors keep inline (whose exact
+    /// metering the meter-exact corpus pins); this arm is reached only where the
+    /// old code self-named an honest `coerce-length` skip. Raises realm-local,
+    /// **catchable** errors exactly where XS does: a `Symbol`/`BigInt` argument
+    /// throws `TypeError` (its `ToNumber` step), and a negative or
+    /// over-`0x7FFFFFFF` result throws `RangeError` (XS's `fxToBigInt`/allocation
+    /// ceiling — a byte length above the max chunk size cannot be a backing
+    /// store). Returns the clamped `u32`, or a `Halt` (a `Resume` to the catch
+    /// target, or an escaping `Throw`) the caller propagates with `?`.
+    fn to_index_arg(&mut self, code: &[u8], value: Slot) -> Result<u32, Halt> {
+        // `ToNumber` of a Symbol or BigInt is a TypeError — a catchable throw.
+        if matches!(value.kind, Kind::Symbol | Kind::BigInt) {
+            return Err(self.catchable_type_error());
+        }
+        let number = self.to_number_value(code, value)?;
+        // A reference whose `valueOf`/`toString` yielded a BigInt still throws.
+        if number.kind == Kind::BigInt {
+            return Err(self.catchable_type_error());
+        }
+        let n = to_number(&number);
+        // ToIntegerOrInfinity: NaN → 0, truncate toward zero.
+        let t = if n.is_nan() { 0.0 } else { n.trunc() };
+        // ToIndex forbids a negative result; XS's backing store forbids one
+        // above the 0x7FFFFFFF chunk ceiling — both are RangeError.
+        if t < 0.0 || t > 0x7FFF_FFFFu32 as f64 {
+            return Err(self.catchable_range_error());
+        }
+        Ok(t as u32)
     }
 
     /// Allocate a fresh zero-filled `ArrayBuffer` of `byte_length` bytes
