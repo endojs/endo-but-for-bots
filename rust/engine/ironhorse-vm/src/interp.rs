@@ -12460,11 +12460,38 @@ impl Interp {
                     .tick_raw(BIND_CALL_METERING + total as u64 * BIND_CALL_PER_ARG);
                 let target = Slot::of(Kind::Reference, Payload::Reference(data.target));
                 (data.this_arg, target, combined)
-            } else {
-                let fi = &self.functions[&f];
-                if fi.native.is_some() || fi.method.is_some() {
-                    return Err(Halt::Unsupported("callback:non-user-function"));
+            } else if let Some(m) = self.method_of(f) {
+                // A **native-method** callback (`a.map(nf.format)` — the
+                // NumberFormat bound-format function; or any prototype method
+                // passed by reference). `run_callback` drives only bytecode
+                // bodies, so dispatch the native method through the same seam
+                // `invoke_getter` uses: build the [THIS, FUNCTION, RESULT, FRAME]
+                // frame + args and call `call_native_method`. A bound native
+                // (`nf.format`) recovers its owning instance from its side table,
+                // not from `this`, so the callback's `this` is irrelevant. On a
+                // throw `call_native_method` returns WITHOUT truncating, so the
+                // stack is restored to `base` before propagating.
+                let base = self.stack.len();
+                self.push(this);
+                self.push(func);
+                self.push(Slot::undefined());
+                self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                for a in args {
+                    self.push(*a);
                 }
+                return match self.call_native_method(m, base, args.len(), code) {
+                    Ok(()) => Ok(self.pop()),
+                    Err(h) => {
+                        self.stack.truncate(base);
+                        Err(h)
+                    }
+                };
+            } else if self.functions[&f].native.is_some() {
+                // A native *constructor/callable* (`parseInt`, …) reaches a
+                // different seam (`call_native`, not `call_native_method`); still
+                // outside the callback subset.
+                return Err(Halt::Unsupported("callback:non-user-function"));
+            } else {
                 (this, func, args.to_vec())
             };
         let argc = args_eff.len();
