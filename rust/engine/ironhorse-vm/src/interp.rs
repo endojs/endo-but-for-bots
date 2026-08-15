@@ -3087,6 +3087,18 @@ pub enum Native {
     /// objects and records a [`ProxyData`] in the [`Interp::proxies`] side
     /// table; the exotic behavior is the trap dispatch keyed off that table.
     Proxy,
+    /// `%GeneratorFunction%` — the (non-global) dynamic **generator** function
+    /// constructor, reachable as `(function*(){}).constructor`. Call and
+    /// construct both run CreateDynamicFunction with the `function*` grammar
+    /// through the runtime source bridge ([`Self::create_dynamic_function`]).
+    GeneratorFunction,
+    /// `%AsyncFunction%` — the (non-global) dynamic **async** function
+    /// constructor, reachable as `(async function(){}).constructor`.
+    AsyncFunction,
+    /// `%AsyncGeneratorFunction%` — the (non-global) dynamic **async
+    /// generator** function constructor, reachable as
+    /// `(async function*(){}).constructor`.
+    AsyncGeneratorFunction,
 }
 
 impl Native {
@@ -3134,6 +3146,9 @@ impl Native {
             Native::Promise => "Promise",
             Native::RegExp => "RegExp",
             Native::Proxy => "Proxy",
+            Native::GeneratorFunction => "GeneratorFunction",
+            Native::AsyncFunction => "AsyncFunction",
+            Native::AsyncGeneratorFunction => "AsyncGeneratorFunction",
         }
     }
 
@@ -3156,6 +3171,11 @@ impl Native {
             Native::DisposableStack | Native::AsyncDisposableStack => 0,
             Native::RegExp => 2,
             Native::Proxy => 2,
+            // `%GeneratorFunction%`/`%AsyncFunction%`/`%AsyncGeneratorFunction%`
+            // each have `length` 1 (their sole formal is `...args`).
+            Native::GeneratorFunction
+            | Native::AsyncFunction
+            | Native::AsyncGeneratorFunction => 1,
             Native::TypedArray(_) => 3,
             Native::DataView => 1,
             Native::Symbol | Native::Map | Native::Set | Native::WeakMap | Native::WeakSet => 0,
@@ -3846,6 +3866,14 @@ pub struct Interp {
     /// to it, so a generator instance resolves those methods by the ordinary
     /// prototype-chain walk.
     generator_proto: crate::value::SlotIndex,
+    /// The realm's `%GeneratorFunction.prototype%` (XS's
+    /// `mxGeneratorFunctionPrototype` — a plain object off `%Function.prototype%`
+    /// carrying a `constructor` back-link to `%GeneratorFunction%` and a
+    /// `prototype` forward-link to `%GeneratorPrototype%`). A generator
+    /// function's instance `[[Prototype]]` chains to it (see
+    /// [`Self::new_generator_function`]) so `(function*(){}).constructor`
+    /// resolves `%GeneratorFunction%`, not plain `Function`.
+    generator_function_proto: crate::value::SlotIndex,
     /// The stack of generators currently executing on a nested
     /// [`Self::resume_generator`] dispatch (its top is the innermost). The
     /// `YIELD` arm reads the top to snapshot the right instance.
@@ -4450,6 +4478,7 @@ impl Interp {
             promise_proto: crate::value::SlotIndex::NULL,
             generators: std::collections::HashMap::new(),
             generator_proto: crate::value::SlotIndex::NULL,
+            generator_function_proto: crate::value::SlotIndex::NULL,
             gen_run_stack: Vec::new(),
             async_instances: std::collections::HashMap::new(),
             async_function_proto: crate::value::SlotIndex::NULL,
@@ -4653,6 +4682,14 @@ impl Interp {
                 // iterated here — it has no `.prototype`. Unreachable in this loop.
                 Native::Proxy => unreachable!("Proxy is not a create_intrinsics loop entry"),
                 Native::Eval => unreachable!("eval is not a constructor-loop entry"),
+                // `%GeneratorFunction%` / `%AsyncFunction%` /
+                // `%AsyncGeneratorFunction%` are non-global and created
+                // separately (below), never yielded by `intrinsics()`.
+                Native::GeneratorFunction
+                | Native::AsyncFunction
+                | Native::AsyncGeneratorFunction => {
+                    unreachable!("dynamic-function-family constructors are registered separately")
+                }
             };
             self.ctor_prototype.insert(f, proto);
             // The two realm-local identity links required of every built-in
@@ -4950,6 +4987,74 @@ impl Interp {
         }
         self.async_iterator_identity = self.alloc_method(NativeMethod::AsyncIteratorIdentity);
         self.async_generator_function_proto = self.slots.alloc(Slot::instance(self.function_proto));
+        // `%GeneratorFunction.prototype%` (XS's `mxGeneratorFunctionPrototype`,
+        // `fxBuildFunction`): a plain object off `%Function.prototype%`. A
+        // generator function's instance `[[Prototype]]` chains here (see
+        // [`Self::new_generator_function`]) so `(function*(){}).constructor`
+        // resolves `%GeneratorFunction%` rather than plain `Function`.
+        let generator_function_proto = self.slots.alloc(Slot::instance(self.function_proto));
+        self.generator_function_proto = generator_function_proto;
+        // The three non-global dynamic-function constructors
+        // `%GeneratorFunction%` / `%AsyncFunction%` / `%AsyncGeneratorFunction%`.
+        // None is a global binding (they are reachable only through the
+        // `.constructor` of a generator/async/async-generator function
+        // instance), so they are created here rather than in the `intrinsics()`
+        // global loop. Each carries the two realm-local identity links every
+        // constructor has — `ctor.prototype` and `<proto>.constructor` — plus
+        // the `name`/`length` a `FuncInfo` supplies; call/construct dispatch
+        // runs CreateDynamicFunction ([`Self::create_dynamic_function`]).
+        //
+        // The `[[Prototype]]` of each constructor mirrors the pinned XS build
+        // exactly (which is *not* uniform): `Object.getPrototypeOf` is
+        // `%Function.prototype%` for `%GeneratorFunction%` and
+        // `%AsyncGeneratorFunction%`, but the `%Function%` constructor itself
+        // for `%AsyncFunction%`.
+        let function_ctor = self
+            .intrinsics
+            .get("Function")
+            .copied()
+            .unwrap_or(crate::value::SlotIndex::NULL);
+        for (native, ctor_proto, inst_proto) in [
+            (
+                Native::GeneratorFunction,
+                self.function_proto,
+                generator_function_proto,
+            ),
+            (Native::AsyncFunction, function_ctor, self.async_function_proto),
+            (
+                Native::AsyncGeneratorFunction,
+                self.function_proto,
+                self.async_generator_function_proto,
+            ),
+        ] {
+            let name = native.display_name();
+            let f = self.slots.alloc(Slot::instance(ctor_proto));
+            let name_chunk = self.alloc_str_text(name.as_bytes());
+            self.functions.insert(
+                f,
+                FuncInfo {
+                    native: Some(native),
+                    name: name.to_string(),
+                    name_chunk,
+                    arity: native.arity(),
+                    ..FuncInfo::default()
+                },
+            );
+            // `%X.prototype%` <-> `%X%` identity links (installed when the
+            // program names `constructor` / `prototype`, like every other boot
+            // link). `prototype` is a mandatory own property regardless.
+            //
+            // The `%X.prototype%` object deliberately carries NO own forward
+            // `prototype` -> `%[Async]GeneratorPrototype%` link. It is a
+            // niche observable (`GF.prototype.prototype`), and installing it
+            // non-writable — as XS's boot `prototype` slot is — makes it shadow
+            // a generator/async-generator function *instance's* own writable
+            // `.prototype` on the OrdinarySet chain walk, so a strict
+            // `g.prototype = x` would wrongly reject (regressing
+            // async-generator default-parameter cases). Omit it.
+            self.proto_methods.push((inst_proto, "constructor", f));
+            self.proto_methods.push((f, "prototype", inst_proto));
+        }
         // `Promise.*` statics — own methods of the `Promise` constructor
         // instance (not the prototype).
         if let Some(&promise_ctor) = self.intrinsics.get("Promise") {
@@ -6000,6 +6105,56 @@ impl Interp {
         }
     }
 
+    /// Fill any special-name id cache (`length_id`/`name_id`/… and the RegExp
+    /// clusters) that is still `None` from the current realm symbol table
+    /// ([`Self::symbol_ids`]). The caches are seeded positionally from the
+    /// **top-level** program's names ([`Self::bind_program_symbols`]); an
+    /// `eval` / dynamic-`Function` unit that introduces a well-known property
+    /// name the outer program never used (e.g. `length` in
+    /// `Function('...r', 'return r.length')`) interns it past that range, so the
+    /// exotic-property fast paths that gate on `Some(id) == self.length_id`
+    /// would otherwise miss it and read the ordinary (absent) own property.
+    /// Purely additive — a cache already `Some` is never changed, because the
+    /// relinker maps an eval unit's shared name back to the id it already holds
+    /// — so this cannot perturb top-level behavior. Called after the eval
+    /// bridge relinks a unit's symbols.
+    fn refresh_special_ids_from_symbols(&mut self) {
+        let id_of = |ids: &std::collections::HashMap<String, u16>, want: &str| {
+            ids.get(want).copied()
+        };
+        macro_rules! fill {
+            ($field:expr, $name:literal) => {
+                if $field.is_none() {
+                    $field = id_of(&self.symbol_ids, $name);
+                }
+            };
+        }
+        fill!(self.length_id, "length");
+        fill!(self.name_id, "name");
+        fill!(self.value_id, "value");
+        fill!(self.done_id, "done");
+        fill!(self.size_id, "size");
+        fill!(self.byte_length_id, "byteLength");
+        fill!(self.byte_offset_id, "byteOffset");
+        fill!(self.buffer_id, "buffer");
+        fill!(self.then_id, "then");
+        fill!(self.last_index_id, "lastIndex");
+        fill!(self.regexp_getter_ids.source, "source");
+        fill!(self.regexp_getter_ids.flags, "flags");
+        fill!(self.regexp_getter_ids.global, "global");
+        fill!(self.regexp_getter_ids.ignore_case, "ignoreCase");
+        fill!(self.regexp_getter_ids.multiline, "multiline");
+        fill!(self.regexp_getter_ids.dot_all, "dotAll");
+        fill!(self.regexp_getter_ids.sticky, "sticky");
+        fill!(self.regexp_getter_ids.unicode, "unicode");
+        fill!(self.regexp_getter_ids.has_indices, "hasIndices");
+        fill!(self.regexp_getter_ids.unicode_sets, "unicodeSets");
+        fill!(self.regexp_result_ids.index, "index");
+        fill!(self.regexp_result_ids.input, "input");
+        fill!(self.regexp_result_ids.groups, "groups");
+        fill!(self.regexp_result_ids.indices, "indices");
+    }
+
     /// Bind the intrinsic constructors this program references into the
     /// global object, keyed by the program-local symbol id the XS compiler
     /// assigned each name (`names[k]` is the name of id `k + 1`; see
@@ -6362,6 +6517,12 @@ impl Interp {
             None => return Err(Halt::Unsupported("eval:relink")),
         };
         self.install_intrinsic_bindings(&eval_names);
+        // The unit may reference a well-known property name (`length`, `name`,
+        // `then`, a RegExp getter, …) the outer program never used; its id is
+        // now in the realm table, so refresh the exotic-property id caches that
+        // gate on it, else e.g. `Function('...r', 'return r.length')` would read
+        // an absent own `length` instead of the array's exotic length.
+        self.refresh_special_ids_from_symbols();
 
         // Persist this unit's bytecode for the realm's lifetime and run it
         // under its own segment id, so a function it defines that escapes the
@@ -6451,6 +6612,64 @@ impl Interp {
             // nested unit hit: propagate as-is (honest, non-result outcome).
             other => Err(other),
         }
+    }
+
+    /// CreateDynamicFunction (ECMA-262 20.2.1.1.1) for the whole
+    /// dynamic-function constructor family. `native` selects the
+    /// function-head grammar (`function` / `function*` / `async function` /
+    /// `async function*`); the trailing argument is the body and the leading
+    /// arguments the formal parameter list, each `ToString`-coerced (a
+    /// `Symbol` argument throws a realm `TypeError`, any other non-string is
+    /// stringified). The assembled
+    /// `(<head> anonymous(<params>\n) {\n<body>\n})` source is compiled and run
+    /// through the same runtime source bridge as `eval` ([`Self::eval_source`]),
+    /// so the returned function persists in its own code segment and stays
+    /// callable after this native returns. A parse failure (a bad parameter
+    /// list, a `yield`/`await` outside the assembled grammar, a truncated body)
+    /// surfaces as a catchable realm `SyntaxError`, exactly as the spec's
+    /// early-error path throws. Call and construct are equivalent for the whole
+    /// family, so the `new`-ness of the caller is not consulted here.
+    fn create_dynamic_function(
+        &mut self,
+        native: Native,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        let mut params: Vec<String> = Vec::new();
+        let mut body = String::new();
+        for i in 0..argc {
+            let slot = self
+                .stack
+                .get(base + 4 + i)
+                .copied()
+                .unwrap_or_else(Slot::undefined);
+            // ToString each argument (the spec coerces every parameter chunk and
+            // the body). A `Symbol` throws a realm `TypeError` from here.
+            let piece = self.value_to_string(code, slot)?;
+            if i + 1 == argc {
+                body = piece;
+            } else {
+                params.push(piece);
+            }
+        }
+        // The function-head grammar per kind. The trailing `anonymous` is the
+        // spec's dynamic-function name; the `.name` the returned function
+        // reports comes from compiling this head.
+        let head = match native {
+            Native::Function => "function anonymous",
+            Native::GeneratorFunction => "function* anonymous",
+            Native::AsyncFunction => "async function anonymous",
+            Native::AsyncGeneratorFunction => "async function* anonymous",
+            _ => unreachable!("create_dynamic_function on a non-family native"),
+        };
+        // The parameters are joined with `,` and the body wrapped in a block;
+        // the whole is parenthesized so the Script's completion is the function
+        // expression. The `\n` before `)` and after `{` are the spec's exact
+        // separators (they defeat a trailing line comment in the parameter list
+        // or a `//`-terminated body from swallowing the closing punctuation).
+        let source = format!("({}({}\n) {{\n{}\n}})", head, params.join(","), body);
+        self.eval_source(&source, false)
     }
 
     /// The native identity of a function instance, if it is an intrinsic.
@@ -9487,6 +9706,23 @@ impl Interp {
                                 }
                                 pc = ret_pc;
                             }
+                            // An uncaught throw in the cross-segment callee
+                            // whose catch lives in THIS caller loop resumes at
+                            // the catch target here (the same handling the
+                            // `dispatch_result!` macro gives a throwing native);
+                            // a catch below this frame propagates the resume
+                            // outward. Without this, a throw from an
+                            // eval-/`Function`-defined callee returned straight
+                            // out of the caller, bypassing its `try`/`catch`.
+                            Err(Halt::Resume(target))
+                                if self.call_stack.len() < return_depth =>
+                            {
+                                return Halt::Resume(target);
+                            }
+                            Err(Halt::Resume(target)) => {
+                                pc = target;
+                                continue;
+                            }
                             Err(h) => return h,
                         }
                     } else {
@@ -11306,6 +11542,14 @@ impl Interp {
     /// `function` define is the calibrated [`GENERATOR_FUNCTION_EXTRA_METERING`].
     fn new_generator_function(&mut self, name: u16) -> crate::value::SlotIndex {
         let f = self.new_function(name);
+        // Re-chain the function instance's own `[[Prototype]]` to
+        // `%GeneratorFunction.prototype%` (XS's `mxGeneratorFunctionPrototype`)
+        // rather than `%Function.prototype%`, so `(function*(){}).constructor`
+        // resolves `%GeneratorFunction%` (and its `.name` is
+        // `"GeneratorFunction"`), matching XS. The intermediate prototype is a
+        // single boot object, so this is a slot re-point, not a per-instance
+        // allocation — no metering delta.
+        self.slots.get_mut(f).value = Payload::Reference(self.generator_function_proto);
         // Re-chain the default `.prototype` object to `%GeneratorPrototype%`
         // and account XS's extra generator-prototype allocation.
         self.meter.tick_raw(GENERATOR_FUNCTION_EXTRA_METERING);
@@ -11746,6 +11990,29 @@ impl Interp {
         }
     }
 
+    /// Select the bytecode buffer a suspended body (generator / async /
+    /// async-generator) must resume over. A body defined in an `eval` or
+    /// dynamic-`Function` code segment resumes over *that* segment's persisted
+    /// buffer, not the caller-supplied `code` — which is the segment the
+    /// `.next`/await driver happens to run in, and would decode wrong bytes at
+    /// the saved `resume_pc`. Returns the segment to install and an owned
+    /// buffer handle when a cross-segment switch is needed; a `None` buffer
+    /// keeps the caller's `code`. Mirrors the callback cross-segment routing in
+    /// [`Self::run_callback`]; for a top-level body (`func` not in
+    /// [`Self::func_segments`]) it is a no-op, so a program that never evals is
+    /// unaffected.
+    fn resume_segment_buffer(
+        &self,
+        func: crate::value::SlotIndex,
+    ) -> (Option<usize>, Option<std::rc::Rc<Vec<u8>>>) {
+        let callee_seg = self.callee_segment(func);
+        if callee_seg == self.active_segment {
+            (self.active_segment, None)
+        } else {
+            (callee_seg, self.segment_buffer(callee_seg))
+        }
+    }
+
     /// The persisted bytecode buffer for `segment` (`None` ⇒ the top-level
     /// program). Returns an owned [`std::rc::Rc`] handle so the caller can
     /// dispatch over it without holding a borrow of `&mut self`.
@@ -11870,10 +12137,22 @@ impl Interp {
     fn new_generator_result(&mut self, value: Slot, done: bool) -> Slot {
         self.meter.tick_raw(GENERATOR_RESULT_METERING);
         let result = self.slots.alloc(Slot::instance(self.object_proto));
-        if let Some(vid) = self.value_id {
+        // The `value`/`done` key ids are cached from the top-level program's
+        // symbols (`bind_program_symbols`). When the generator was defined in
+        // an `eval` / dynamic-`Function` unit that the *outer* program never
+        // named `value`/`done` for, those caches are `None` — but the eval
+        // unit's relink interned the names into the realm table, so fall back
+        // to that shared table before omitting the property (else a completed
+        // eval-generator's host-built `{value, done}` result would silently
+        // drop both keys, rendering `{}` where XS renders `{done:true}`).
+        let vid = self
+            .value_id
+            .or_else(|| self.symbol_ids.get("value").copied());
+        let did = self.done_id.or_else(|| self.symbol_ids.get("done").copied());
+        if let Some(vid) = vid {
             self.set_own_unmetered(result, vid, value);
         }
-        if let Some(did) = self.done_id {
+        if let Some(did) = did {
             self.set_own_unmetered(result, did, Slot::boolean(done));
         }
         Slot::of(Kind::Reference, Payload::Reference(result))
@@ -12004,7 +12283,20 @@ impl Interp {
             jumps_base,
             call_depth_base: return_depth,
         });
-        let outcome = self.dispatch_at(code, saved.resume_pc, return_depth);
+        // Resume over the generator function's own code segment (a dynamic
+        // `%GeneratorFunction%` / eval-defined body lives in a persisted
+        // segment, not the driver's `code`).
+        let (resume_seg, resume_buf) = self.resume_segment_buffer(self.cur_func);
+        let saved_segment = self.active_segment;
+        if resume_buf.is_some() {
+            self.active_segment = resume_seg;
+        }
+        let body_code: &[u8] = match &resume_buf {
+            Some(buf) => &buf[..],
+            None => code,
+        };
+        let outcome = self.dispatch_at(body_code, saved.resume_pc, return_depth);
+        self.active_segment = saved_segment;
         self.gen_run_stack.pop();
         self.resume_status = ResumeStatus::NoStatus;
         match outcome {
@@ -12237,7 +12529,20 @@ impl Interp {
             jumps_base,
             call_depth_base: return_depth,
         });
-        let outcome = self.dispatch_at(code, saved.resume_pc, return_depth);
+        // Resume over the async-generator function's own code segment (a
+        // dynamic `%AsyncGeneratorFunction%` / eval-defined body is persisted
+        // in its own segment).
+        let (resume_seg, resume_buf) = self.resume_segment_buffer(self.cur_func);
+        let saved_segment = self.active_segment;
+        if resume_buf.is_some() {
+            self.active_segment = resume_seg;
+        }
+        let body_code: &[u8] = match &resume_buf {
+            Some(buf) => &buf[..],
+            None => code,
+        };
+        let outcome = self.dispatch_at(body_code, saved.resume_pc, return_depth);
+        self.active_segment = saved_segment;
         self.async_gen_run_stack.pop();
         self.resume_status = ResumeStatus::NoStatus;
         match outcome {
@@ -12393,7 +12698,20 @@ impl Interp {
             jumps_base,
             call_depth_base: return_depth,
         });
-        let outcome = self.dispatch_at(code, saved.resume_pc, return_depth);
+        // Resume over the async function's own code segment (a dynamic
+        // `%AsyncFunction%` / eval-defined body is persisted in its own
+        // segment, not the await-driver's `code`).
+        let (resume_seg, resume_buf) = self.resume_segment_buffer(self.cur_func);
+        let saved_segment = self.active_segment;
+        if resume_buf.is_some() {
+            self.active_segment = resume_seg;
+        }
+        let body_code: &[u8] = match &resume_buf {
+            Some(buf) => &buf[..],
+            None => code,
+        };
+        let outcome = self.dispatch_at(body_code, saved.resume_pc, return_depth);
+        self.active_segment = saved_segment;
         self.async_run_stack.pop();
         // Any `BRANCH_STATUS` will have consumed the status; reset defensively.
         self.resume_status = ResumeStatus::NoStatus;
@@ -12589,41 +12907,19 @@ impl Interp {
                     source
                 }
             }
-            // The `Function` constructor (`Function(p0, …, pn, body)` and the
-            // identical `new Function(...)`): CreateDynamicFunction
-            // (ECMA-262 20.2.1.1.1) assembles the source
-            // `(function anonymous(<params>\n) {\n<body>\n})` and evaluates it
-            // in the realm; the program's completion is the new function. It
-            // rides the same source-execution bridge as `eval` — including the
-            // segment persistence that keeps the returned function callable
-            // after this native returns. String arguments only; a non-string
-            // argument would need `ToString` (identity for the common
-            // string-literal case), so it is an honest gap rather than a
-            // silently mis-coerced source.
-            Native::Function => {
-                let mut params: Vec<String> = Vec::new();
-                let mut body = String::new();
-                for i in 0..argc {
-                    let piece = match arg(i) {
-                        Slot {
-                            kind: Kind::String,
-                            value: Payload::String(off),
-                            ..
-                        } => self.str_text(off),
-                        _ => return Err(Halt::Unsupported("Function:non-string-arg")),
-                    };
-                    if i + 1 == argc {
-                        body = piece;
-                    } else {
-                        params.push(piece);
-                    }
-                }
-                let source = format!(
-                    "(function anonymous({}\n) {{\n{}\n}})",
-                    params.join(","),
-                    body
-                );
-                self.eval_source(&source, false)?
+            // The dynamic-function constructor family (`Function`,
+            // `%GeneratorFunction%`, `%AsyncFunction%`,
+            // `%AsyncGeneratorFunction%`): CreateDynamicFunction
+            // (ECMA-262 20.2.1.1.1) assembles the source from the args and
+            // evaluates it in the realm; the completion is the new function.
+            // Call and construct are equivalent (both create the function), so
+            // `has_target` is ignored. The whole family shares one helper that
+            // varies only the function-head grammar per kind.
+            Native::Function
+            | Native::GeneratorFunction
+            | Native::AsyncFunction
+            | Native::AsyncGeneratorFunction => {
+                self.create_dynamic_function(native, base, argc, code)?
             }
             Native::Locale => {
                 if !has_target {
@@ -32103,6 +32399,9 @@ fn native_unsupported_name(native: Native) -> &'static str {
         Native::Promise => "native-call:Promise",
         Native::RegExp => "native-call:RegExp",
         Native::Proxy => "native-call:Proxy",
+        Native::GeneratorFunction => "native-call:GeneratorFunction",
+        Native::AsyncFunction => "native-call:AsyncFunction",
+        Native::AsyncGeneratorFunction => "native-call:AsyncGeneratorFunction",
     }
 }
 
