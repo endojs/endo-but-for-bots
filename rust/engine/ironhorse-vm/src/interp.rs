@@ -13400,7 +13400,7 @@ impl Interp {
                         };
                         self.typed_arrays.insert(inst, ta);
                         for (i, v) in elements.into_iter().enumerate() {
-                            self.typed_array_element_set(ta, i as u32, v)?;
+                            self.typed_array_element_set(code, ta, i as u32, v)?;
                             self.meter
                                 .tick_raw(TYPED_ARRAY_FROM_SOURCE_ELEMENT_METERING);
                         }
@@ -25168,6 +25168,7 @@ impl Interp {
     /// out-of-bounds index is a silent no-op with no element metering).
     fn typed_array_element_set(
         &mut self,
+        code: &[u8],
         ta: TypedArrayData,
         index: u32,
         value: Slot,
@@ -25176,20 +25177,37 @@ impl Interp {
         let buf = self.array_buffers[&ta.buffer];
         let base = ta.offset as usize + index as usize * size;
         // A BigInt64/BigUint64 element (kinds 0/1): `ToBigInt(value)` then
-        // store the low 64 bits (two's complement). A non-BigInt value that
-        // needs general coercion self-names an honest skip.
+        // store the low 64 bits (two's complement).
         if ta.kind <= 1 {
-            let u = self
-                .slot_to_bigint_u64(value)
-                .ok_or(Halt::Unsupported("typed-array-set:bigint-coerce"))?;
+            let primitive = self.to_primitive(code, value, false)?;
+            let u = match primitive.value {
+                Payload::BigInt(_) | Payload::Boolean(_) => {
+                    self.slot_to_bigint_u64(primitive).unwrap()
+                }
+                Payload::String(off) => parse_bigint_string_u64(&self.str_text(off))
+                    .ok_or_else(|| self.catchable_syntax_error())?,
+                _ => return Err(self.catchable_type_error()),
+            };
             let le = u.to_le_bytes();
             let out = self.chunks.slice_mut(buf.data, base + 8);
             out[base..base + 8].copy_from_slice(&le);
             return Ok(());
         }
-        let n = self
-            .element_value_to_number(value)
-            .ok_or(Halt::Unsupported("typed-array-set:coerce"))?;
+        let primitive = self.to_primitive(code, value, false)?;
+        let number = match primitive.kind {
+            Kind::Integer | Kind::Number => primitive,
+            Kind::String => match primitive.value {
+                Payload::String(off) => Slot::number(string_to_number(
+                    self.str_text(off).as_bytes(),
+                    true,
+                )),
+                _ => unreachable!(),
+            },
+            Kind::Boolean | Kind::Null | Kind::Undefined => Slot::number(to_number(&primitive)),
+            Kind::BigInt | Kind::Symbol => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error()),
+        };
+        let n = numeric_of(&number).unwrap_or(f64::NAN);
         let le =
             encode_element_le(ta.kind, n).ok_or(Halt::Unsupported("typed-array-set:bigint"))?;
         let out = self.chunks.slice_mut(buf.data, base + size);
@@ -26336,7 +26354,8 @@ impl Interp {
                     // `fxStringToIndex` success two extra code units.
                     self.meter.tick_code_n(2);
                     Some(Slot::of(Kind::At, Payload::At(crate::value::XS_NO_ID, idx)))
-                } else if !self.symbol_ids.contains_key(&s)
+                } else if canonical_numeric_index_string(&s).is_none()
+                    && !self.symbol_ids.contains_key(&s)
                     && self.default_keys.contains(s.as_str())
                 {
                     // A boot default-key name that the *program* never named as
@@ -26391,6 +26410,34 @@ impl Interp {
                 id
             };
             return self.proxy_get(code, inst, key_id, obj);
+        }
+        if id != crate::value::XS_NO_ID {
+            if let Some(ta) = self.typed_arrays.get(&inst).copied() {
+                if let Some(n) = self
+                    .string_key_name(id)
+                    .as_deref()
+                    .and_then(canonical_numeric_index_string)
+                {
+                    if n == 0.0 && n.is_sign_negative()
+                        || !n.is_finite()
+                        || n < 0.0
+                        || n.fract() != 0.0
+                        || n > u32::MAX as f64
+                        || n as u32 >= ta.length
+                    {
+                        return Ok(Slot::undefined());
+                    }
+                    let index = n as u32;
+                    let value = if ta.kind <= 1 {
+                        self.typed_array_element_get_bigint(ta, index)
+                    } else {
+                        self.typed_array_element_get(ta, index)
+                            .ok_or(Halt::Unsupported("get_property_at:typed-array-bigint"))?
+                    };
+                    self.meter.tick_raw(TYPED_ARRAY_ELEMENT_METERING);
+                    return Ok(value);
+                }
+            }
         }
         if id == crate::value::XS_NO_ID {
             // An index key.
@@ -26480,6 +26527,28 @@ impl Interp {
             }
             return Ok(());
         }
+        if id != crate::value::XS_NO_ID {
+            if let Some(ta) = self.typed_arrays.get(&inst).copied() {
+                if let Some(n) = self
+                    .string_key_name(id)
+                    .as_deref()
+                    .and_then(canonical_numeric_index_string)
+                {
+                    if n == 0.0 && n.is_sign_negative()
+                        || !n.is_finite()
+                        || n < 0.0
+                        || n.fract() != 0.0
+                        || n > u32::MAX as f64
+                        || n as u32 >= ta.length
+                    {
+                        return Ok(());
+                    }
+                    self.typed_array_element_set(code, ta, n as u32, value)?;
+                    self.meter.tick_raw(TYPED_ARRAY_ELEMENT_METERING);
+                    return Ok(());
+                }
+            }
+        }
         if id == crate::value::XS_NO_ID {
             if self.arrays.contains_key(&inst) {
                 self.array_item_set(inst, index, value, define);
@@ -26494,7 +26563,7 @@ impl Interp {
                 if index >= ta.length {
                     Ok(())
                 } else {
-                    self.typed_array_element_set(ta, index, value)?;
+                    self.typed_array_element_set(code, ta, index, value)?;
                     self.meter.tick_raw(TYPED_ARRAY_ELEMENT_METERING);
                     Ok(())
                 }
@@ -27723,19 +27792,18 @@ impl Interp {
         // names, if any.
         let name = self.string_key_name(id);
         let index = name.as_deref().and_then(string_to_index);
-        // A TypedArray / ArrayBuffer / DataView carries integer-indexed (and
-        // buffer-length) own properties whose exact own-check + metering are the
-        // typed-array cluster's residual, not this seam's — an index-valued key
-        // on such a receiver honest-skips to that child. A non-index key names
-        // an ordinary expando slot (`length`/`byteLength`/… are inherited
-        // getters, not own), answered soundly by the ordinary probe.
-        if self.typed_arrays.contains_key(&o)
-            || self.array_buffers.contains_key(&o)
-            || self.data_views.contains_key(&o)
-        {
-            if index.is_some() {
-                return Err(Halt::Unsupported("hasOwnProperty:typed-array-index"));
+        if let Some(ta) = self.typed_arrays.get(&o).copied() {
+            if let Some(n) = name.as_deref().and_then(canonical_numeric_index_string) {
+                return Ok(!(n == 0.0 && n.is_sign_negative())
+                    && n.is_finite()
+                    && n >= 0.0
+                    && n.fract() == 0.0
+                    && n <= u32::MAX as f64
+                    && (n as u32) < ta.length);
             }
+            return Ok(self.find_property(o, id).is_some());
+        }
+        if self.array_buffers.contains_key(&o) || self.data_views.contains_key(&o) {
             return Ok(self.find_property(o, id).is_some());
         }
         // An Array's exotic own properties: the present integer indices (kept in
@@ -34090,4 +34158,54 @@ fn string_to_index(s: &str) -> Option<u32> {
     } else {
         None
     }
+}
+
+fn canonical_numeric_index_string(s: &str) -> Option<f64> {
+    if s == "-0" {
+        return Some(-0.0);
+    }
+    let number = string_to_number(s.as_bytes(), true);
+    if number_to_ecma_string(number) == s {
+        Some(number)
+    } else {
+        None
+    }
+}
+
+/// Parse the String branch of `ToBigInt`, retaining only the low 64 bits a
+/// BigInt64Array/BigUint64Array element store observes.
+fn parse_bigint_string_u64(source: &str) -> Option<u64> {
+    let mut s = source.trim();
+    if s.is_empty() {
+        return Some(0);
+    }
+    let mut negative = false;
+    if let Some(rest) = s.strip_prefix('-') {
+        negative = true;
+        s = rest;
+    } else if let Some(rest) = s.strip_prefix('+') {
+        s = rest;
+    }
+    let (radix, digits) = if !negative && !source.trim_start().starts_with('+') {
+        if let Some(rest) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+            (16, rest)
+        } else if let Some(rest) = s.strip_prefix("0o").or_else(|| s.strip_prefix("0O")) {
+            (8, rest)
+        } else if let Some(rest) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
+            (2, rest)
+        } else {
+            (10, s)
+        }
+    } else {
+        (10, s)
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    let mut value = 0u64;
+    for ch in digits.chars() {
+        let digit = ch.to_digit(radix)? as u64;
+        value = value.wrapping_mul(radix as u64).wrapping_add(digit);
+    }
+    Some(if negative { value.wrapping_neg() } else { value })
 }
