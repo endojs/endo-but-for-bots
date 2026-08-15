@@ -6657,8 +6657,22 @@ impl Interp {
             // its program-local id here is unmetered.
             let mid = if mname == "prototype" {
                 Some(self.intern_key(mname))
+            } else if let Some(&id) = self.symbol_ids.get(mname) {
+                Some(id)
+            } else if proto == self.intl_object && self.symbol_ids.contains_key("Intl") {
+                // The `Intl.*` constructor and namespace-method properties are
+                // reachable reflectively through a string key (e.g.
+                // `verifyProperty(Intl, 'NumberFormat', {...})`) with no static
+                // `.NumberFormat` access, so the member name carries no SYMB
+                // atom. Mirror the `proto_accessors` guard: once the program
+                // references `Intl` at all (which already aborts the Intl-less
+                // oracle), force-intern the member key **without** metering so
+                // `getOwnPropertyDescriptor(Intl, 'NumberFormat')` reveals the
+                // real own data property. Non-Intl programs never enter this
+                // branch, so their metering is untouched.
+                Some(self.intern_key_unmetered(mname))
             } else {
-                self.symbol_ids.get(mname).copied()
+                None
             };
             if let Some(mid) = mid {
                 let flag = if mname == "prototype" {
