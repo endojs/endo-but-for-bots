@@ -90,7 +90,7 @@ describe('sealComponent — trusted-in-untrusted', () => {
 
   it('the rendered petname never reaches the child as data (it only reaches the DOM)', () => {
     const Name = makeNameBadge();
-    let seen = [];
+    const seen = [];
     const Peeker = confineComponent(({ h: ch }, props) => {
       const vnode = ch(props.Name, { id: 'did:key:z6Mk…7f' });
       // walk everything the child can see about the vnode it just built

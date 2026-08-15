@@ -116,17 +116,17 @@ export const sealPetName = (nameOf, opts = {}) => {
           // marked, so untrusted CSS reaching this subtree could flatten a known name
           // toward the unknown presentation. Inline wins outright. (Belt for the
           // renderer's attribute filtering, not a replacement for it.)
-          style:
-            'display:inline;white-space:nowrap;padding:.05em .35em;border-radius:999px;' +
-            'unicode-bidi:isolate;' + // a name of unknown script must not reorder the prose around it
-            'font-size:inherit;' +
-            (nameable ? 'cursor:pointer;' : '') +
-            (known
+          // `unicode-bidi:isolate;` — a name of unknown script must not reorder the prose around it.
+          style: `display:inline;white-space:nowrap;padding:.05em .35em;border-radius:999px;unicode-bidi:isolate;font-size:inherit;${
+            nameable ? 'cursor:pointer;' : ''
+          }${
+            known
               ? 'font-weight:600;background-color:color-mix(in srgb, currentColor 12%, transparent);font-style:normal;'
               : mk
                 ? // consistently badged AND coloured, per party, even with no name yet
                   `font-weight:600;color:${mk.color};font-style:normal;`
-                : 'opacity:.75;font-weight:400;font-style:italic;background-color:transparent;'),
+                : 'opacity:.75;font-weight:400;font-style:italic;background-color:transparent;'
+          }`,
           // No `title` carrying the raw id: a tooltip is still disclosure, and the operator did not
           // ask to see identifiers.
         },

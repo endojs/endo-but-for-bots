@@ -36,7 +36,7 @@ const randomHex = (n = 16) => {
   // No CSPRNG: still per-boundary and non-enumerable, but say so rather than pretending.
   let s = '';
   while (s.length < n * 2)
-    s += Math.floor(Math.random() * 0xffffffff).toString(16);
+    s += Math.floor(Math.random() * 0xffff_ffff).toString(16);
   return s.slice(0, n * 2);
 };
 
@@ -86,10 +86,10 @@ export const partyForHandle = handle => byHandle.get(String(handle || ''));
  */
 export const markFor = party => {
   const { seed } = partyIdentity(party);
-  let hash = 0x811c9dc5;
+  let hash = 0x811c_9dc5;
   for (let i = 0; i < seed.length; i += 1) {
     hash ^= seed.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
+    hash = Math.imul(hash, 0x0100_0193) >>> 0;
   }
   // A WIDE alphabet: with 8 glyphs two parties collide constantly (observed), and the glyph is the
   // part a person recognises at a glance, so collisions there erode the affordance even when hue
@@ -165,7 +165,8 @@ export const markFor = party => {
     '#e11d48',
     '#db2777',
   ];
-  const ci = (Math.imul(hash ^ 0x9e3779b9, 0x85ebca6b) >>> 0) % PALETTE.length;
+  const ci =
+    (Math.imul(hash ^ 0x9e37_79b9, 0x85eb_ca6b) >>> 0) % PALETTE.length;
   return {
     glyph: GLYPHS[hash % GLYPHS.length],
     hue: ci * 11,

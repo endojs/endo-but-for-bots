@@ -87,11 +87,11 @@ const WORDS = [
 // to spread inputs evenly across the tables above. If the pattern ever becomes a value an attacker can
 // OBSERVE, the right fix is to stop showing it — not to make this stronger.
 const hash32 = (str, seed) => {
-  let hv = (2166136261 ^ seed) >>> 0;
+  let hv = (2_166_136_261 ^ seed) >>> 0;
   const s = String(str);
   for (let i = 0; i < s.length; i += 1) {
     hv ^= s.charCodeAt(i);
-    hv = Math.imul(hv, 16777619) >>> 0;
+    hv = Math.imul(hv, 16_777_619) >>> 0;
   }
   return hv >>> 0;
 };
