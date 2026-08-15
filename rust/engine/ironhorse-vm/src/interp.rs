@@ -4660,6 +4660,21 @@ impl Interp {
             // the corresponding key, like the rest of the boot surface.
             self.proto_methods.push((proto, "constructor", f));
             self.proto_methods.push((f, "prototype", proto));
+            // `<TypedArray>.BYTES_PER_ELEMENT` and its
+            // `<TypedArray>.prototype.BYTES_PER_ELEMENT` twin: the element
+            // size in bytes, a non-writable/non-enumerable/non-configurable
+            // data property on both the concrete constructor and its prototype
+            // (ECMA-262 23.2.6.2 / 23.2.7.2, XS's `fxBuildTypedArray` element
+            // constants). Bound lazily like the other boot data properties, so
+            // it stays invisible to programs that never name it. The harness's
+            // `TA.BYTES_PER_ELEMENT` buffer-size arithmetic depends on it.
+            if let Native::TypedArray(i) = native {
+                let size = TYPED_ARRAY_TYPES[i as usize].size as i32;
+                self.proto_value_data
+                    .push((f, "BYTES_PER_ELEMENT", Slot::integer(size)));
+                self.proto_value_data
+                    .push((proto, "BYTES_PER_ELEMENT", Slot::integer(size)));
+            }
         }
         // Remember `%Array.prototype%` — every array literal / `new Array`
         // instance chains to it so its methods resolve up the chain.
@@ -13263,61 +13278,64 @@ impl Interp {
                     .get(ty.name)
                     .and_then(|&c| self.ctor_prototype.get(&c).copied())
                     .unwrap_or(self.object_proto);
+                // Snapshot the arguments up front so the general-coercion path
+                // can take a `&mut self` borrow (`to_index_arg`) without keeping
+                // the `arg` closure's immutable borrow of `self.stack` alive.
                 let a = arg(0);
+                let a1 = arg(1);
+                let a2 = arg(2);
                 match a.value {
                     // View over an existing ArrayBuffer.
                     Payload::Reference(r) if self.array_buffers.contains_key(&r) => {
                         let buf_len = self.array_buffers[&r].length;
-                        // byteOffset (arg1): a non-negative integer, a multiple
-                        // of the element size.
+                        // byteOffset (arg1): `ToIndex` — a non-negative integer.
+                        // The integer/number fast paths stay inline (their exact
+                        // metering is pinned by the meter-exact corpus); a
+                        // boolean/string/object takes the general coercion
+                        // (`valueOf`/`toString`), and a Symbol/BigInt or a
+                        // negative/oversized value throws a catchable
+                        // TypeError/RangeError exactly as `fxToIndex` does.
                         let offset: u32 = match self.arg_to_byte_length(base, 1, 0) {
                             Some(o) => o,
-                            None => {
-                                return Err(Halt::Unsupported(
-                                    "native-call:TypedArray:coerce-offset",
-                                ))
-                            }
+                            None => self.to_index_arg(code, a1)?,
                         };
+                        // A byteOffset that is not a multiple of the element
+                        // size is a RangeError (`fxCheckTypedArrayIndex`).
                         if offset & ((1 << shift) - 1) != 0 {
-                            return Err(Halt::Unsupported("native-call:TypedArray:bad-offset"));
+                            return Err(self.catchable_range_error());
                         }
                         // length (arg2): explicit element count, or the
                         // remaining buffer (which must divide evenly).
                         let byte_size: u32;
-                        if argc >= 3 && arg(2).kind != Kind::Undefined {
+                        if argc >= 3 && a2.kind != Kind::Undefined {
+                            // length (arg2): `ToIndex` — explicit element count.
+                            // Integer/number inline (metering pinned); otherwise
+                            // the general coercion / catchable throw.
                             let len = match self.arg_to_byte_length(base, 2, 0) {
                                 Some(l) => l,
-                                None => {
-                                    return Err(Halt::Unsupported(
-                                        "native-call:TypedArray:coerce-length",
-                                    ))
-                                }
+                                None => self.to_index_arg(code, a2)?,
                             };
+                            // A length whose byte span overflows u32, runs past
+                            // the buffer, or (implicitly) exceeds the allocation
+                            // ceiling is a RangeError (`fxCheckTypedArrayLength`).
                             let delta = match len.checked_shl(shift) {
                                 Some(d) => d,
-                                None => {
-                                    return Err(Halt::Unsupported(
-                                        "native-call:TypedArray:bad-length",
-                                    ))
-                                }
+                                None => return Err(self.catchable_range_error()),
                             };
                             let end = match offset.checked_add(delta) {
                                 Some(e) => e,
-                                None => {
-                                    return Err(Halt::Unsupported(
-                                        "native-call:TypedArray:bad-length",
-                                    ))
-                                }
+                                None => return Err(self.catchable_range_error()),
                             };
                             if buf_len < end {
-                                return Err(Halt::Unsupported("native-call:TypedArray:bad-length"));
+                                return Err(self.catchable_range_error());
                             }
                             byte_size = delta;
                         } else {
+                            // Implicit length: the buffer must divide evenly by
+                            // the element size and contain the offset — else a
+                            // RangeError (`fxCheckTypedArrayLength`).
                             if offset > buf_len || (buf_len & ((1 << shift) - 1)) != 0 {
-                                return Err(Halt::Unsupported(
-                                    "native-call:TypedArray:bad-byteLength",
-                                ));
+                                return Err(self.catchable_range_error());
                             }
                             byte_size = buf_len - offset;
                         }
@@ -13388,24 +13406,25 @@ impl Interp {
                         }
                         Slot::of(Kind::Reference, Payload::Reference(inst))
                     }
-                    // Any other object source (an array-like without dense
+                    // Any other **object** source (an array-like without dense
                     // storage, a bare iterable, a Map/Set) → the general
-                    // from-object protocol; honest skip.
-                    Payload::Reference(_) => {
+                    // from-object protocol; honest skip. A Symbol/BigInt first
+                    // argument is a primitive, not an Object (its `Payload` is a
+                    // Reference to the interned symbol/bigint), so it falls
+                    // through to the length path below, where `ToNumber` throws a
+                    // catchable TypeError exactly as the spec's `ToIndex` does.
+                    Payload::Reference(_) if a.kind == Kind::Reference => {
                         return Err(Halt::Unsupported("native-call:TypedArray:from-object"))
                     }
-                    // Length form: `new TA(n)`.
+                    // Length form: `new TA(n)`. `n` is `ToIndex`-coerced.
                     _ => {
                         let length: u32 = match a.kind {
-                            Kind::Undefined if argc == 0 => 0,
                             Kind::Undefined => 0,
                             Kind::Integer => match a.value {
                                 Payload::Integer(i) if i >= 0 => i as u32,
-                                _ => {
-                                    return Err(Halt::Unsupported(
-                                        "native-call:TypedArray:bad-length",
-                                    ))
-                                }
+                                // A negative integer length is a RangeError
+                                // (`fxToIndex`), caught by `assert.throws`.
+                                _ => return Err(self.catchable_range_error()),
                             },
                             Kind::Number => match a.value {
                                 Payload::Number(n) => {
@@ -13413,29 +13432,26 @@ impl Interp {
                                     if t.is_nan() {
                                         0
                                     } else if t < 0.0 || t > (0x7FFF_FFFFu32 >> shift) as f64 {
-                                        return Err(Halt::Unsupported(
-                                            "native-call:TypedArray:bad-length",
-                                        ));
+                                        return Err(self.catchable_range_error());
                                     } else {
                                         t as u32
                                     }
                                 }
-                                _ => {
-                                    return Err(Halt::Unsupported(
-                                        "native-call:TypedArray:bad-length",
-                                    ))
-                                }
+                                _ => return Err(self.catchable_range_error()),
                             },
-                            // A boolean/string length needs the general ToNumber
-                            // coercion metering — honest skip.
+                            // A boolean/string/null length (and a Symbol/BigInt,
+                            // whose `ToNumber` throws a catchable TypeError) takes
+                            // the general `ToIndex` coercion path.
                             _ => {
-                                return Err(Halt::Unsupported(
-                                    "native-call:TypedArray:coerce-length",
-                                ))
+                                let n = self.to_index_arg(code, a)?;
+                                if n > (0x7FFF_FFFFu32 >> shift) {
+                                    return Err(self.catchable_range_error());
+                                }
+                                n
                             }
                         };
                         if length > (0x7FFF_FFFFu32 >> shift) {
-                            return Err(Halt::Unsupported("native-call:TypedArray:bad-length"));
+                            return Err(self.catchable_range_error());
                         }
                         let byte_length = length << shift;
                         self.meter.tick_raw(TYPED_ARRAY_LENGTH_CTOR_FRAME_METERING);
@@ -13588,6 +13604,14 @@ impl Interp {
             // `fx_ArrayBuffer`/`fx_SharedArrayBuffer` throws a catchable TypeError
             // when `mxTarget` is undefined (`if (mxIsUndefined(mxTarget)) mxTypeError`).
             Native::ArrayBuffer | Native::SharedArrayBuffer => {
+                return Err(self.catchable_type_error());
+            }
+            // A concrete `<TypedArray>(...)` called WITHOUT `new` (`has_target`
+            // false): every typed-array constructor is `[[Construct]]`-only. XS's
+            // `fx_TypedArray` throws a catchable TypeError when `mxTarget` is
+            // undefined (`if (mxIsUndefined(mxTarget)) mxTypeError(...)`), caught
+            // by the `assert.throws(TypeError, () => TA(0))` harness.
+            Native::TypedArray(_) => {
                 return Err(self.catchable_type_error());
             }
             // The remaining fundamentals constructors' call/coerce/construct
