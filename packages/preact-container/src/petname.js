@@ -31,7 +31,7 @@ import { handleFor, partyForHandle, markFor } from './party-identity.js';
  * Short, non-name rendering for an id the operator has never named. Deliberately looks like an
  * identifier fragment rather than a word, so it cannot be mistaken for a petname.
  *
- * @param {string} id
+ * @param {string} tag
  */
 const unknownLabel = tag => {
   const s = String(tag || '');
@@ -49,10 +49,14 @@ const partyIdentitySeedless = party => markFor(party).color.slice(1, 5);
  * strong reference. The lookup is captured here and is never reachable from the untrusted side —
  * that is what keeps the address book unreadable while its ANSWERS stay renderable.
  *
- * @param {(id: string) => (string | undefined)} lookup Host-side resolver: id → the operator's local
- *   name, or undefined if they have not named that party.
- * @param {{ marker?: string }} [opts] `marker`: glyph shown before the name.
- * @returns {Function} A sealed component. Untrusted callers may pass only `id`.
+ * @param {(party: object) => (string | undefined)} nameOf Host-side resolver: the party OBJECT →
+ *   the operator's local name for them, or undefined if they have not named that party.
+ * @param {{ marker?: string, onName?: (party: object) => void }} [opts] `marker`: glyph shown before
+ *   the name. `onName`: called with the party OBJECT when the operator activates an unnamed chip to
+ *   name it on the spot.
+ * @returns {{ PetName: Function, handleFor: (party: object) => string }} `PetName` is the sealed
+ *   component; untrusted callers may pass only `partyRef` (the opaque handle for the party they were
+ *   designated). `handleFor` mints/looks up that handle.
  */
 export const sealPetName = (nameOf, opts = {}) => {
   const marker = String(opts.marker == null ? '▧' : opts.marker);

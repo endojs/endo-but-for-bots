@@ -39,8 +39,9 @@ import { sealPatternBadge } from './security-pattern.js';
  * a party mark must not be mistakable for the operator's secret pattern, or the weaker signal borrows
  * the stronger one's authority.
  *
- * @param {string} party
- * @returns {{ glyph: string, hue: number }}
+ * @param {object} party The party OBJECT (see designs/designation-by-object-not-id.md) — never a
+ *   name or id; the mark derives from the party's stable seed, not from anything it is called.
+ * @returns {{ glyph: string, hue: number, color: string }}
  */
 // Marks derive from the party OBJECT's stable seed (party-identity.js), not from its name — so
 // naming or renaming a party never changes its mark, and an unnamed party is still consistently
