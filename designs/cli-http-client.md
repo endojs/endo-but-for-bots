@@ -628,6 +628,12 @@ tables and called out where they appear.
   `User-Agent` or auth header): natural extension once the
   controller has a stable identity, but out of scope for this
   revision.
+- Elaborating the flat Phase 3/4 knobs into a composable, pass-style
+  **adapter pipeline** (metering, fees, rate limiting, retries, circuit
+  breaking): see [http-adapter-pipeline](http-adapter-pipeline.md), the
+  follow-up to the PR #286 Phase 1 approval. That design re-expresses the
+  rate limiter, byte cap, and timeout of this document as the first
+  composed stages and reconciles the byte cap with payload metering.
 - Audit log of every `fetch` (URL, status, byte count) emitted by the
   controller as a notification stream: useful for monitoring guests
   but out of scope for this revision.

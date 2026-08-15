@@ -242,6 +242,10 @@ devDep SCC; follow-up to PR #121; Cuts 2-4 merged via PRs #209, #210,
 #211 with Cut 5 open as PR #247),
 [cli-http-client](cli-http-client.md) (added 2026-05-09; PR #144 design
 revision under `endo http` subcommand tree),
+[http-adapter-pipeline](http-adapter-pipeline.md) (added 2026-08-15;
+follow-up to the PR #286 `endo http mk` Phase 1 approval — elaborates the
+controller/client pair into a pass-style middleware pipeline staging
+metering, fees, rate limiting, retries, and circuit breaking),
 [retention-path-notation](retention-path-notation.md) (added 2026-05-10;
 PR #151 row-format unblocker; sibling of
 [daemon-retention-paths](daemon-retention-paths.md)),
@@ -406,6 +410,7 @@ LLM-agent stack).*
 | [ci-no-npm-lifecycle](ci-no-npm-lifecycle.md) | 2026-04-23 | 2026-05-18 | **Complete** |
 | [break-dev-dependency-cycles](break-dev-dependency-cycles.md) | 2026-05-11 | 2026-06-15 | **Complete** (on `llm`) |
 | [cli-http-client](cli-http-client.md) | 2026-05-09 | 2026-07-13 | Proposed (PR #144 design revision; formula packaging superseded in part by [endo-fetch](endo-fetch.md)) |
+| [http-adapter-pipeline](http-adapter-pipeline.md) | 2026-08-15 | 2026-08-15 | Proposed (PR #286 Phase 1 follow-up; pass-style metering/fees/rate/retry/breaker pipeline) |
 | [endor-bus-tui](endor-bus-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [endor-native-zip-xs](endor-native-zip-xs.md) | 2026-07-22 | 2026-07-22 | Proposed |
 | [endor-tui](endor-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
