@@ -2295,6 +2295,25 @@ pub enum NativeMethod {
     /// report whether present. A Map shrink may reallocate the address chunk
     /// (`fxResizeEntries`); a WeakMap unlink is allocation-free.
     MapDelete,
+    /// `Map.prototype.getOrInsert(key, value)` (upsert proposal): return the
+    /// existing value for `key`, or insert `value` under the canonicalized key
+    /// and return it. Requires a real `[[MapData]]` receiver.
+    MapGetOrInsert,
+    /// `Map.prototype.getOrInsertComputed(key, callbackfn)` (upsert proposal):
+    /// return the existing value for `key`; on absence call `callbackfn(key)`
+    /// exactly once (the canonicalized key, `this` undefined), then insert its
+    /// result under the key (overwriting any entry the callback itself added)
+    /// and return it. Re-entrant (drives a user callback).
+    MapGetOrInsertComputed,
+    /// `Map.groupBy(items, callbackfn)` (array-grouping proposal): a static on
+    /// the `Map` constructor. Iterate `items`, call `callbackfn(value, index)`
+    /// per element, bucket each value into an Array keyed by the callback result
+    /// under SameValueZero (`-0`→`+0`), and return a fresh `Map`. Re-entrant.
+    MapGroupBy,
+    /// `Object.groupBy(items, callbackfn)` (array-grouping proposal): like
+    /// `Map.groupBy` but buckets under `? ToPropertyKey(key)` into a fresh
+    /// null-prototype ordinary object whose values are Arrays. Re-entrant.
+    ObjectGroupBy,
     WeakMapSet,
     WeakMapGet,
     WeakMapHas,
@@ -5014,6 +5033,18 @@ impl Interp {
                 let mf = self.alloc_method(m);
                 self.proto_methods.push((proto, m_name, mf));
             }
+            // The two upsert-proposal methods on `Map.prototype` (cache == 0)
+            // carry a proper `.name`/`.length` (arity 2), so `verifyProperty`
+            // reads the spec descriptor. Bound only on `Map.prototype`.
+            if cache == 0 {
+                for (m_name, m) in [
+                    ("getOrInsert", NativeMethod::MapGetOrInsert),
+                    ("getOrInsertComputed", NativeMethod::MapGetOrInsertComputed),
+                ] {
+                    let mf = self.alloc_named_method(m, m_name, 2);
+                    self.proto_methods.push((proto, m_name, mf));
+                }
+            }
             // The seven ES2025 "new Set methods" carry a proper `.name`/`.length`
             // (arity 1), so `verifyProperty`/`propertyHelper` read the spec
             // descriptor. Bound only on `Set.prototype` (cache == 1).
@@ -5031,6 +5062,17 @@ impl Interp {
                     self.proto_methods.push((proto, m_name, mf));
                 }
             }
+        }
+        // `Map.groupBy` / `Object.groupBy` (array-grouping proposal) — statics
+        // bound as own properties of their constructor instance (not the
+        // prototype), each with a proper `.name`/`.length` (arity 2).
+        if let Some(&map_ctor) = self.intrinsics.get("Map") {
+            let mf = self.alloc_named_method(NativeMethod::MapGroupBy, "groupBy", 2);
+            self.proto_methods.push((map_ctor, "groupBy", mf));
+        }
+        if let Some(&object_ctor) = self.intrinsics.get("Object") {
+            let mf = self.alloc_named_method(NativeMethod::ObjectGroupBy, "groupBy", 2);
+            self.proto_methods.push((object_ctor, "groupBy", mf));
         }
         // `%ArrayBuffer.prototype%`: the `slice` method (a dense fast path)
         // plus the recognized-but-unimplemented methods bound so a reference
@@ -6490,6 +6532,23 @@ impl Interp {
             // so the result carried no `done` and the driver spun forever. Point
             // the caches at the just-interned ids (a no-op when the program did
             // spell them, so their compiled id already wins).
+            if self.value_id.is_none() {
+                self.value_id = Some(self.intern_key("value"));
+            }
+            if self.done_id.is_none() {
+                self.done_id = Some(self.intern_key("done"));
+            }
+        }
+        // `Map.groupBy` / `Object.groupBy` drive `GetIterator(items)` from Rust,
+        // reading the produced result object's `next`/`value`/`done` — even when
+        // the program never spells them (e.g. `Map.groupBy([1,2,3], fn)`). Mirror
+        // the set-methods widening: force-intern those boot default keys (charges
+        // no metering) and point the `value_id`/`done_id` caches at them so the
+        // iterator driver reads the reused result object's own properties.
+        if self.symbol_ids.contains_key("groupBy") {
+            for name in ["next", "done", "value"] {
+                self.intern_key(name);
+            }
             if self.value_id.is_none() {
                 self.value_id = Some(self.intern_key("value"));
             }
@@ -22724,6 +22783,17 @@ impl Interp {
             | NativeMethod::SetIsSubsetOf
             | NativeMethod::SetIsSupersetOf
             | NativeMethod::SetIsDisjointFrom => self.call_set_method(m, this, base, code)?,
+            // The upsert-proposal `Map.prototype` methods. `getOrInsert` is
+            // allocation-only; `getOrInsertComputed` drives a user callback, so
+            // both take the code buffer for the (possible) nested dispatch.
+            NativeMethod::MapGetOrInsert | NativeMethod::MapGetOrInsertComputed => {
+                self.call_map_get_or_insert(m, this, base, code)?
+            }
+            // The array-grouping-proposal statics — each iterates `items` and
+            // drives a user callback per element (re-entrant).
+            NativeMethod::MapGroupBy | NativeMethod::ObjectGroupBy => {
+                self.call_group_by(m, base, code)?
+            }
             // `entries`/`keys`/`values` → a Map/Set Iterator over the receiver.
             NativeMethod::CollEntries | NativeMethod::CollKeys | NativeMethod::CollValues => {
                 let inst = match self.collection_ref(this) {
@@ -26257,6 +26327,386 @@ impl Interp {
             }
             _ => Err(self.catchable_type_error()),
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Upsert proposal: `Map.prototype.getOrInsert` / `getOrInsertComputed`.
+    // Each requires a real `[[MapData]]` receiver (never a Set/WeakMap), reads
+    // its argument against the canonicalized key, and — on absence —
+    // inserts (three entry slots, the same metering `Map.prototype.set`
+    // charges). `getOrInsertComputed` calls the callback exactly once on
+    // absence with `this` undefined and the canonical key as its sole argument,
+    // then overwrites whatever entry the callback itself may have inserted.
+    // ------------------------------------------------------------------
+    fn call_map_get_or_insert(
+        &mut self,
+        m: NativeMethod,
+        this: Slot,
+        base: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        let inst = match self.collection_ref(this) {
+            Some(i) if self.collections[&i].kind == CollKind::Map => i,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let key_arg = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        match m {
+            NativeMethod::MapGetOrInsert => {
+                let value = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let key = self.normalize_coll_key(key_arg);
+                if let Some(p) = self.collection_find(inst, &key) {
+                    return Ok(self.collections[&inst].entries[p].unwrap().1);
+                }
+                self.charge_new_entry_slots(3);
+                self.collections
+                    .get_mut(&inst)
+                    .unwrap()
+                    .entries
+                    .push(Some((key, value)));
+                self.collection_table_resize(inst);
+                Ok(value)
+            }
+            NativeMethod::MapGetOrInsertComputed => {
+                let callbackfn = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                if !self.value_is_callable(callbackfn) {
+                    return Err(self.catchable_type_error());
+                }
+                let key = self.normalize_coll_key(key_arg);
+                if let Some(p) = self.collection_find(inst, &key) {
+                    return Ok(self.collections[&inst].entries[p].unwrap().1);
+                }
+                // `Call(callbackfn, undefined, « key »)`. The callback may mutate
+                // the map (including inserting `key` itself); the computed value
+                // then overwrites that entry.
+                let value = self.run_callback(code, callbackfn, Slot::undefined(), &[key])?;
+                match self.collection_find(inst, &key) {
+                    Some(p) => {
+                        self.collections.get_mut(&inst).unwrap().entries[p]
+                            .as_mut()
+                            .unwrap()
+                            .1 = value;
+                    }
+                    None => {
+                        self.charge_new_entry_slots(3);
+                        self.collections
+                            .get_mut(&inst)
+                            .unwrap()
+                            .entries
+                            .push(Some((key, value)));
+                        self.collection_table_resize(inst);
+                    }
+                }
+                Ok(value)
+            }
+            _ => Err(self.catchable_type_error()),
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Array-grouping proposal: `Map.groupBy` / `Object.groupBy`. Both share the
+    // `GroupBy(items, callbackfn, coercion)` skeleton — iterate `items`, call
+    // `callbackfn(value, 𝔽(index))` per element, and bucket the values by key.
+    // `Map.groupBy` uses `zero` coercion (SameValueZero, `-0`→`+0`) into a fresh
+    // `Map` whose values are Arrays; `Object.groupBy` uses `property` coercion
+    // (`? ToPropertyKey(key)`) into a fresh null-prototype object.
+    // ------------------------------------------------------------------
+
+    /// Read one member of an iterator result object's own `value`/`done`
+    /// (through the cached ids the group-by widening force-bound).
+    fn iter_result_member(
+        &mut self,
+        code: &[u8],
+        result: Slot,
+        done: bool,
+    ) -> Result<Slot, Halt> {
+        let inst = match result.value {
+            Payload::Reference(i) if result.kind == Kind::Reference => i,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let id = if done {
+            match self.done_id {
+                Some(v) => v,
+                None => self.intern_key("done"),
+            }
+        } else {
+            match self.value_id {
+                Some(v) => v,
+                None => self.intern_key("value"),
+            }
+        };
+        self.ordinary_get(code, inst, id, result)
+    }
+
+    fn call_group_by(&mut self, m: NativeMethod, base: usize, code: &[u8]) -> Result<Slot, Halt> {
+        let is_map = matches!(m, NativeMethod::MapGroupBy);
+        let items = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let callbackfn = self
+            .stack
+            .get(base + 5)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        if !self.value_is_callable(callbackfn) {
+            return Err(self.catchable_type_error());
+        }
+        // Buckets in first-insertion order: (canonical key slot, values). For
+        // the `property` coercion, `repr` is the SameValue-distinguishing key
+        // identity (symbol descriptor vs string text) used to match buckets.
+        let mut buckets: Vec<(Slot, Vec<Slot>)> = Vec::new();
+        let mut reprs: Vec<String> = Vec::new();
+        let mut index: i32 = 0;
+
+        // A closure would need `&mut self`, so record inline. `record` buckets
+        // one produced value under the callback's (coerced) result.
+        macro_rules! record {
+            ($value:expr) => {{
+                let value = $value;
+                let key = self.run_callback(code, callbackfn, Slot::undefined(), &[
+                    value,
+                    Slot::integer(index),
+                ])?;
+                if is_map {
+                    let key = self.normalize_coll_key(key);
+                    match buckets.iter().position(|(k, _)| self.same_value_zero(k, &key)) {
+                        Some(p) => buckets[p].1.push(value),
+                        None => buckets.push((key, vec![value])),
+                    }
+                } else {
+                    let key = self.to_property_key_slot(code, key)?;
+                    let repr = self.property_key_repr(key);
+                    match reprs.iter().position(|r| *r == repr) {
+                        Some(p) => buckets[p].1.push(value),
+                        None => {
+                            reprs.push(repr);
+                            buckets.push((key, vec![value]));
+                        }
+                    }
+                }
+                index += 1;
+            }};
+        }
+
+        // GetIterator(items) + the iterate/step loop, with the same intrinsic
+        // fast paths `for..of` uses (dense array, string), and the generic
+        // `@@iterator` protocol for everything else. Arrays/strings the tests
+        // never re-decorate iterate observationally identically to the real
+        // iterator; a plain object with a nullish/absent `@@iterator` throws.
+        match items.value {
+            Payload::Reference(i) if self.arrays.contains_key(&i) => {
+                let mut k = 0u32;
+                loop {
+                    let len = match self.arrays.get(&i) {
+                        Some(a) => a.length,
+                        None => break,
+                    };
+                    if k >= len {
+                        break;
+                    }
+                    let value = self
+                        .arrays
+                        .get(&i)
+                        .and_then(|a| a.items.get(&k))
+                        .copied()
+                        .unwrap_or_else(Slot::undefined);
+                    record!(value);
+                    k += 1;
+                }
+            }
+            Payload::String(off) if items.kind == Kind::String => {
+                let bytes = self.str_content(off).to_vec();
+                let it = self.make_string_iterator(bytes);
+                let iter_inst = match it.value {
+                    Payload::Reference(x) => x,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                loop {
+                    let result = self.string_iterator_next(iter_inst)?;
+                    let done = self.iter_result_member(code, result, true)?;
+                    if self.truthy(&done) {
+                        break;
+                    }
+                    let value = self.iter_result_member(code, result, false)?;
+                    record!(value);
+                }
+            }
+            Payload::Reference(obj) => {
+                // GetIterator(items, sync): `method = ? GetMethod(items,
+                // @@iterator)`; a nullish/absent method throws TypeError.
+                let iter_id = self
+                    .well_known_symbol_property_id("iterator")
+                    .unwrap_or(crate::value::XS_NO_ID);
+                let method = if iter_id == crate::value::XS_NO_ID {
+                    Slot::undefined()
+                } else {
+                    self.ordinary_get(code, obj, iter_id, items)?
+                };
+                if method.kind == Kind::Undefined || method.kind == Kind::Null {
+                    return Err(self.catchable_type_error());
+                }
+                let iterator = self.call_primitive_method(code, method, items, &[])?;
+                let iter_inst = match iterator.value {
+                    Payload::Reference(x) if iterator.kind == Kind::Reference => x,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let next_id = self.intern_key("next");
+                let next = self.ordinary_get(code, iter_inst, next_id, iterator)?;
+                // A defensive bound against a pathological non-terminating guest
+                // iterator; the tested iterables are short.
+                for _ in 0..1_000_000 {
+                    let step = self.call_primitive_method(code, next, iterator, &[])?;
+                    let done = self.iter_result_member(code, step, true)?;
+                    if self.truthy(&done) {
+                        break;
+                    }
+                    let value = self.iter_result_member(code, step, false)?;
+                    record!(value);
+                }
+            }
+            _ => return Err(self.catchable_type_error()),
+        }
+
+        if is_map {
+            Ok(self.new_map_from_buckets(buckets))
+        } else {
+            self.new_group_object_from_buckets(code, buckets)
+        }
+    }
+
+    /// `? ToPropertyKey(key)` reduced to the canonical property-key VALUE (a
+    /// Symbol slot, or a String slot) rather than an interned id, so the bucket
+    /// preserves the key for a later `CreateDataPropertyOrThrow`.
+    fn to_property_key_slot(&mut self, code: &[u8], key: Slot) -> Result<Slot, Halt> {
+        if key.kind == Kind::Symbol {
+            return Ok(key);
+        }
+        let prim = self.to_primitive(code, key, true)?;
+        if prim.kind == Kind::Symbol {
+            return Ok(prim);
+        }
+        Ok(self.to_string_slot_metered(prim))
+    }
+
+    /// A SameValue-distinguishing string identity for a property-key slot (a
+    /// Symbol or a String): symbols carry a `\0sym<id>` sentinel that no string
+    /// text can collide with; strings carry their own text.
+    fn property_key_repr(&mut self, key: Slot) -> String {
+        match key.kind {
+            Kind::Symbol => match key.value {
+                Payload::Reference(desc) => format!("\0sym{}", self.intern_symbol_key(desc)),
+                _ => "\0sym".to_string(),
+            },
+            Kind::String => match key.value {
+                Payload::String(off) => self.str_text(off),
+                _ => String::new(),
+            },
+            _ => String::new(),
+        }
+    }
+
+    /// Build a fresh `%Map.prototype%` Map whose entries are the group-by
+    /// buckets (each value an Array of that bucket's elements), charging the
+    /// same allocation metering the `new Map` constructor path charges.
+    fn new_map_from_buckets(&mut self, buckets: Vec<(Slot, Vec<Slot>)>) -> Slot {
+        self.meter.tick_raw(MAP_CTOR_FRAME_METERING);
+        self.meter.tick_slot_alloc(); // instance
+        self.meter.tick_slot_alloc(); // table
+        self.meter.tick_slot_alloc(); // list
+        self.meter.tick_slot_alloc(); // size
+        self.meter.tick_chunk_new(MAP_MIN_TABLE_LENGTH as u64 * 8);
+        let inst = self.slots.alloc(Slot::instance(self.map_proto));
+        self.collections.insert(
+            inst,
+            CollectionData {
+                kind: CollKind::Map,
+                entries: Vec::new(),
+                table_length: MAP_MIN_TABLE_LENGTH,
+            },
+        );
+        for (key, values) in buckets {
+            let array = self.group_array_from_values(values);
+            self.charge_new_entry_slots(3);
+            self.collections
+                .get_mut(&inst)
+                .unwrap()
+                .entries
+                .push(Some((key, array)));
+            self.collection_table_resize(inst);
+        }
+        Slot::of(Kind::Reference, Payload::Reference(inst))
+    }
+
+    /// Build the null-prototype ordinary object `Object.groupBy` returns: one
+    /// own enumerable data property per bucket (key from the coerced property
+    /// key, value the bucket's Array). Integer-index keys order ahead of string
+    /// keys per the engine's ordinary-object enumeration, matching XS.
+    fn new_group_object_from_buckets(
+        &mut self,
+        code: &[u8],
+        buckets: Vec<(Slot, Vec<Slot>)>,
+    ) -> Result<Slot, Halt> {
+        let obj = self.new_object();
+        // OrdinaryObjectCreate(null): a null prototype.
+        self.slots.get_mut(obj).value = Payload::Reference(crate::value::SlotIndex::NULL);
+        let obj_slot = Slot::of(Kind::Reference, Payload::Reference(obj));
+        for (key, values) in buckets {
+            let array = self.group_array_from_values(values);
+            let at = match key.kind {
+                Kind::Symbol => {
+                    let id = match key.value {
+                        Payload::Reference(desc) => self.intern_symbol_key(desc),
+                        _ => return Err(self.catchable_type_error()),
+                    };
+                    Slot::of(Kind::At, Payload::At(id, 0))
+                }
+                Kind::String => {
+                    let s = match key.value {
+                        Payload::String(off) => self.str_text(off),
+                        _ => return Err(self.catchable_type_error()),
+                    };
+                    if let Some(idx) = string_to_index(&s) {
+                        Slot::of(Kind::At, Payload::At(crate::value::XS_NO_ID, idx))
+                    } else {
+                        let id = self.intern_key(&s);
+                        Slot::of(Kind::At, Payload::At(id, 0))
+                    }
+                }
+                _ => return Err(self.catchable_type_error()),
+            };
+            // CreateDataPropertyOrThrow (enumerable/writable/configurable own).
+            self.property_at_set(code, obj_slot, at, array, true)?;
+        }
+        Ok(obj_slot)
+    }
+
+    /// A fresh dense `%Array.prototype%` Array holding a bucket's values,
+    /// charging the array-create metering the `[..]` literal path charges.
+    fn group_array_from_values(&mut self, values: Vec<Slot>) -> Slot {
+        let inst = self.new_array();
+        let n = values.len() as u32;
+        for (i, v) in values.into_iter().enumerate() {
+            self.meter.tick_raw(ARRAY_ITEM_DEFINE_STEP_METERING);
+            let mut v = v;
+            v.id = 0;
+            v.next = crate::value::SlotIndex::NULL;
+            self.arrays.get_mut(&inst).unwrap().items.insert(i as u32, v);
+        }
+        self.arrays.get_mut(&inst).unwrap().length = n;
+        Slot::of(Kind::Reference, Payload::Reference(inst))
     }
 
     /// `fx_String_prototype_iterator_next`: decode the next code point at the
