@@ -27,6 +27,7 @@ import {
 } from './src/config.js';
 import { makeAppsNameHub } from './src/vhost.js';
 import { makeGatewayBootstrap } from './src/bootstrap.js';
+import { makeGatewayAdmin } from './src/admin.js';
 
 export {
   DEFAULT_BIND_ADDRESS,
@@ -54,14 +55,19 @@ export {
   makeGatewayBootstrap,
 } from './src/bootstrap.js';
 
+export { makeGatewayAdmin } from './src/admin.js';
+
 export {
   resolveBootstrapSocketPath,
+  resolveAdminSocketPath,
   BOOTSTRAP_SOCKET_BASENAME,
+  ADMIN_SOCKET_BASENAME,
   SYSTEM_RUNTIME_DIR_LINUX,
   USER_RUNTIME_SUBDIR,
 } from './src/sock-paths.js';
 
 /** @import { GatewayConfig, BindAddress, GatewayPowers, Gateway } from './src/types.js' */
+/** @import { GatewayAdmin } from './src/admin.js' */
 
 const GatewayInterface = M.interface('Gateway', {
   start: M.call().returns(M.promise()),
@@ -70,6 +76,7 @@ const GatewayInterface = M.interface('Gateway', {
   getApps: M.call().returns(M.promise()),
   getConfig: M.call().returns(M.promise()),
   getBootstrap: M.call().returns(M.promise()),
+  getAdmin: M.call().returns(M.promise()),
 });
 
 /**
@@ -107,8 +114,23 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
   // are the platform-bound primitives. A toggle-on but no-powers
   // configuration is treated as a startup error because it would
   // otherwise silently behave like toggle-off.
+  //
+  // The admin facet (Feature 7) is wired in iff the adminDaemon
+  // toggle is on. The admin facet uses the bootstrap's
+  // registration table as its read source, so when both toggles
+  // are on it shares the bootstrap's in-process backplane; when
+  // only `adminDaemon` is on (`sockBootstrap` off), the admin
+  // facet wires against a self-contained empty backplane and
+  // serves the in-process accessor with a documented empty
+  // registration view. The admin's access channel is its own sock
+  // (`admin.sock`), not the bootstrap sock; the two have
+  // independent toggles so that a deployment can offer
+  // administrator access without exposing the bootstrap sock and
+  // vice versa.
   /** @type {ReturnType<typeof makeGatewayBootstrap> | undefined} */
   let bootstrapHandle;
+  /** @type {GatewayAdmin | undefined} */
+  let adminFacet;
   if (mergedConfig.enableFeatures.sockBootstrap) {
     if (powers.crypto === undefined) {
       throw makeError(
@@ -125,6 +147,31 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
       clock: powers.clock,
       apps,
       getBindAddress: renderBindAddress,
+    });
+  }
+  if (mergedConfig.enableFeatures.adminDaemon) {
+    // When the bootstrap is also on, the admin reads the same
+    // registration table. When the bootstrap is off, the admin
+    // facet still exists but sees an empty table; that path is
+    // useful for an embedder that wants admin reads of virtual
+    // hosts and the resource ledger without exposing the
+    // registration channel at all.
+    const backplane =
+      bootstrapHandle !== undefined
+        ? {
+            listRegisteredPeers: bootstrapHandle.listRegisteredPeers,
+            deregisterByPublicKey: bootstrapHandle.deregisterByPublicKey,
+            pendingNonces: bootstrapHandle.pendingNonces,
+          }
+        : {
+            listRegisteredPeers: () => harden([]),
+            deregisterByPublicKey: () => false,
+            pendingNonces: () => 0,
+          };
+    adminFacet = makeGatewayAdmin({
+      backplane,
+      apps,
+      resourceLedger: powers.resourceLedger,
     });
   }
 
@@ -174,6 +221,27 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
           );
         }
         return bootstrapHandle.bootstrap;
+      },
+      async getAdmin() {
+        // Per Feature 7: admin authority is reachable in-process
+        // and over the admin sock, never over the network and
+        // never through the bootstrap sock. The disabled error
+        // below preserves that contract by refusing to hand out
+        // the facet when the toggle is off; a refactor that
+        // quietly relaxed this would put admin authority on the
+        // public surface.
+        if (!mergedConfig.enableFeatures.adminDaemon) {
+          throw makeError(
+            X`Gateway admin is disabled (set enableFeatures.adminDaemon=true)`,
+          );
+        }
+        if (adminFacet === undefined) {
+          // Unreachable in normal use; the toggle is on yet
+          // construction did not produce a facet. We surface the
+          // wiring bug loudly rather than returning undefined.
+          throw makeError(X`Gateway admin facet is not wired`);
+        }
+        return adminFacet;
       },
     }),
   );

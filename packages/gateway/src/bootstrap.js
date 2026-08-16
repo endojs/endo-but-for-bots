@@ -272,6 +272,17 @@ const publicKeyToHex = bytes => {
 /**
  * @typedef {object} GatewayBootstrap CapTP-facing exo. Methods are
  *   `async` so they cross the wire as eventual sends.
+ *
+ * The bootstrap channel carries the registrar exo only: any local
+ * user daemon that can connect to the bootstrap sock may register
+ * itself, but **none** of these daemons have administrator
+ * authority. The `GatewayAdmin` exo (Feature 7) is **not**
+ * reachable through this bootstrap; it lives on a separate sock
+ * (`admin.sock`, see `sock-paths.js` and the gateway's
+ * `getAdmin` in-process accessor) gated by a stricter access
+ * control. The split keeps registration authority and admin
+ * authority on independent capability paths.
+ *
  * @property {() => Promise<ChallengePayload>} challenge
  * @property {(args: RegistrationArgs) => Promise<Registration>} register
  * @property {(args: RelayRegistrationArgs) => Promise<Registration>} registerRelay
@@ -310,6 +321,13 @@ const publicKeyToHex = bytes => {
  * nonce registry. The exo is the CapTP-reachable entry point a sock
  * listener serves as its bootstrap object.
  *
+ * The second return value (`listRegistrations`,
+ * `deregisterByPublicKey`, `pendingNonces`) is the **admin
+ * backplane**: the in-process surface the `GatewayAdmin` facet
+ * (Feature 7) reads through. Keeping it out of the bootstrap exo
+ * lets the gateway wire admin operations without leaking the
+ * private registration table across the CapTP boundary.
+ *
  * @param {BootstrapDeps} deps
  * @returns {{
  *   bootstrap: GatewayBootstrap,
@@ -319,6 +337,7 @@ const publicKeyToHex = bytes => {
  *     relayTarget?: unknown,
  *     daemon?: unknown,
  *   }>,
+ *   deregisterByPublicKey: (publicKey: ArrayBuffer | Uint8Array) => boolean,
  *   pendingNonces: () => number,
  * }}
  */
@@ -549,6 +568,33 @@ export const makeGatewayBootstrap = ({
     return harden(entries);
   };
 
+  /**
+   * Force-deregister the registration that owns `publicKey`, by
+   * looking the key up in the by-hex table. Returns `true` if a
+   * matching live entry was found and torn down. Same semantics as
+   * `Registration.deregister`: the entire registration tombstones,
+   * every weblet entry is removed, every public key is freed for
+   * re-registration. Used by the `GatewayAdmin` exo (Feature 7);
+   * not part of the CapTP bootstrap exo surface.
+   *
+   * @param {ArrayBuffer | Uint8Array} publicKey
+   * @returns {boolean}
+   */
+  const deregisterByPublicKey = publicKey => {
+    const hex = publicKeyToHex(publicKey);
+    const entry = registrationsByKey.get(hex);
+    if (entry === undefined || entry.deregistered) {
+      return false;
+    }
+    entry.deregistered = true;
+    for (const key of entry.publicKeys) {
+      registrationsByKey.delete(publicKeyToHex(key));
+    }
+    entry.weblets.clear();
+    allRegistrations.delete(entry);
+    return true;
+  };
+
   const bootstrapAsType = /** @type {GatewayBootstrap} */ (
     /** @type {unknown} */ (bootstrap)
   );
@@ -556,6 +602,7 @@ export const makeGatewayBootstrap = ({
   return harden({
     bootstrap: bootstrapAsType,
     listRegisteredPeers,
+    deregisterByPublicKey,
     pendingNonces: () => nonces.size(),
   });
 };

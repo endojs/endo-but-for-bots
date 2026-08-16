@@ -1,5 +1,6 @@
 import type { CryptoPowers, ClockPowers } from './proof-of-possession.js';
 import type { GatewayBootstrap } from './bootstrap.js';
+import type { GatewayAdmin, ResourceLedger } from './admin.js';
 
 export type BindAddress = {
   /**
@@ -86,6 +87,15 @@ export type GatewayPowers = {
    * consumes `now()` for TTL.
    */
   clock?: ClockPowers;
+  /**
+   * Optional Feature 1 resource ledger. When `adminDaemon` is on
+   * and a ledger is supplied, `GatewayAdmin.getResourceBalances`
+   * reads through this. When omitted, the admin facet still works
+   * but `getResourceBalances` returns an empty list. Feature 1's
+   * ledger implementation lands with the Chat-hosting phase; until
+   * then, embedders that want admin reads supply a stub.
+   */
+  resourceLedger?: ResourceLedger;
 };
 
 export type Gateway = {
@@ -107,6 +117,20 @@ export type Gateway = {
    * directly.
    */
   getBootstrap(): Promise<GatewayBootstrap>;
+  /**
+   * Returns the `GatewayAdmin` exo (Feature 7). Throws when the
+   * `adminDaemon` feature toggle is off. The admin facet is
+   * **never** served on the gateway's public HTTP / WS surface,
+   * and is **never** reached through the bootstrap sock; it is
+   * reachable only in-process (this method) and over a separate
+   * admin sock (`admin.sock`) whose listener lands in a follow-on
+   * PR alongside the bootstrap sock's listener. The two socks are
+   * distinct file paths and the admin sock's deployment is
+   * responsible for placing it under a non-world-traversable
+   * parent directory so only the administrator OS account can
+   * `connect(2)`.
+   */
+  getAdmin(): Promise<GatewayAdmin>;
 };
 
 export declare const DEFAULT_BIND_ADDRESS: string;
