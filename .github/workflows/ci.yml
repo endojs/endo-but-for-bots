@@ -163,7 +163,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22.x, 24.x]
+        # 24.x is pinned to 24.18.0 (last known good): node 24.19.0
+        # intermittently aborts AVA workers in RemoveEnvironmentCleanupHook
+        # ("Assertion failed: (env) != nullptr") as better-sqlite3 11.10.0
+        # native addons tear down. See nodejs/node#65195, fixed by
+        # nodejs/node#65196; lift the pin once a Node 24 patch carrying that
+        # fix ships.
+        node-version: [22.x, 24.18.0]
         platform: [ubuntu-latest, macos-15]
         # windows-latest exhibited flakey tests that are not yet worth the
         # trouble to investigate, and blocked us from upgrading yarn from 1 to
@@ -329,7 +335,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22.x, 24.x]
+        # 24.x is pinned to 24.18.0 (last known good): node 24.19.0
+        # intermittently aborts AVA workers in RemoveEnvironmentCleanupHook
+        # ("Assertion failed: (env) != nullptr") as better-sqlite3 11.10.0
+        # native addons tear down. See nodejs/node#65195, fixed by
+        # nodejs/node#65196; lift the pin once a Node 24 patch carrying that
+        # fix ships.
+        node-version: [22.x, 24.18.0]
         platform: [ubuntu-latest]
 
     steps:
@@ -371,7 +383,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22.x, 24.x]
+        # 24.x is pinned to 24.18.0 (last known good): node 24.19.0
+        # intermittently aborts AVA workers in RemoveEnvironmentCleanupHook
+        # ("Assertion failed: (env) != nullptr") as better-sqlite3 11.10.0
+        # native addons tear down. See nodejs/node#65195, fixed by
+        # nodejs/node#65196; lift the pin once a Node 24 patch carrying that
+        # fix ships.
+        node-version: [22.x, 24.18.0]
         platform: [ubuntu-latest]
 
     steps:
@@ -477,7 +495,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22.x, 24.x]
+        # 24.x is pinned to 24.18.0 (last known good): node 24.19.0
+        # intermittently aborts AVA workers in RemoveEnvironmentCleanupHook
+        # ("Assertion failed: (env) != nullptr") as better-sqlite3 11.10.0
+        # native addons tear down. See nodejs/node#65195, fixed by
+        # nodejs/node#65196; lift the pin once a Node 24 patch carrying that
+        # fix ships.
+        node-version: [22.x, 24.18.0]
         platform: [ubuntu-latest]
 
     steps:
