@@ -3,11 +3,15 @@
 *Layered on 2026-08-16: added [endo-claude](endo-claude.md) to M6 (MCP Bridge
 Hosting): `@endo/claude`, a hermetically-sandboxed `claude -p` that provides an
 Endo guest its LLM inference from a Claude subscription, confined so its only
-capability surface is that one guest facet's MCP projection (`--bare` plus a
-facet-derived `mcp__<server>__<tool>` allow-list, never `--resume`). The inverse
+capability surface is that one guest facet's MCP projection. The confinement is a
+**combination** of flags, not `--bare` alone — `--bare` plus `--strict-mcp-config`
+(MCP auto-discovery) plus `--setting-sources ""` (settings layers) plus `--tools ""`
++ `--disable-slash-commands` (built-ins and skills), then a membership-validated
+facet-derived `mcp__<server>__<tool>` allow-list and never `--resume` — run inside a
+required `@endo/claude-sandbox` OS slice for any guest-influenced prompt. The inverse
 direction of the two minion.town companion designs (mcp-endo-guest,
-mcp-daemon-guest-tools). Summary table, M6 constituent note, dependency graph,
-estimate, and totals synced.*
+mcp-daemon-guest-tools). Summary table, M6 constituent note, dependency graph
+(including the `endo-posix-sandbox` prerequisite edge), estimate, and totals synced.*
 
 *Layered on 2026-08-06: added
 [endor-registry-proxy-worker](endor-registry-proxy-worker.md) to M11, moving
@@ -552,6 +556,7 @@ flowchart TD
         eagentry --> ageval
         eat --> ageval
         eat --> eclaude
+        dsand --> eclaude
     end
 
     subgraph Familiar
@@ -1034,10 +1039,14 @@ fresh design effort.
 termination (P0 is gateway implementation, P2 AWS hosting, P3 Stripe, P4 OAuth).
 `@endo/claude` is the inverse: a confined `claude -p` that *is* an
 Endo guest's inference engine, reaching only that one guest's facet as its entire
-tool surface (`--bare` plus a facet-derived `mcp__<server>__<tool>` allow-list,
-never `--resume`). It consumes the same `@endo/agent-tools` MCP-adapter projection
-this milestone extracts (a prerequisite), so it belongs to M6's MCP-bridge cut
-even though it points the opposite way. Its own concrete minion.town-box
+tool surface. The confinement is a **combination** of Claude Code flags (`--bare`
+alone does not close MCP auto-discovery or settings layers): `--bare` +
+`--strict-mcp-config` + `--setting-sources ""` + `--tools ""` +
+`--disable-slash-commands`, a membership-validated facet-derived
+`mcp__<server>__<tool>` allow-list, never `--resume`, run inside a required
+`@endo/claude-sandbox` OS slice. It consumes the same `@endo/agent-tools` MCP-adapter
+projection this milestone extracts (a prerequisite), so it belongs to M6's MCP-bridge
+cut even though it points the opposite way. Its own concrete minion.town-box
 deployment is a named follow-on design that belongs in `kriscendobot/minion.town`,
 mirroring the two companion designs there.
 
@@ -1455,7 +1464,7 @@ have been remapped: 0 → 1, ½ → 2, 1 → 3, 2 → 4, 3 → 7, 4 → 9,
 | daemon-docker-selfhost | S-M | 3 days | 3 | Dockerfile, entrypoint, compose; PR #134 forwarded under bot, awaiting review |
 | daemon-agent-tools | M-L | 3-4 days | 3 | Re-swept 2026-07-08: Phase 1 file tools (#614), Phase 2a/2b Shell + `makeShellTool` (#615), and local mount-bridged git tools (#616) have landed, and the HTTP capability substrate landed via #566; remaining bulk is the `makeGitRemoteTool` push tier, the `makeHttpTool` binding (the `provideHttpClient` daemon wiring is superseded by [endo-fetch](endo-fetch.md)), the sandbox shell engine (gated on `endo-posix-sandbox`), and the Phase 4 worked loop — roughly S-M of the original M-L remains |
 | endo-agent-tools | M-L | 1.5-2 weeks | 3 | `@endo/agent-tools`: the canonical `ToolRecord` (`makeTool`, lifted from genie) plus hand-authored wire schemas pinned to the live guard by a divergence gate (the `Pattern → JSON Schema` deriver is tabled); `Filesystem`-targeted file tools over `@endo/platform/fs/extended` reading live worktree plus history uniformly. First tools landed (#523 FS read tool, git tools; #524 code-mode declaration renderer). Remaining bulk: the command-tool `Spawner` seam, the push tier, and across-turn cap persistence |
-| endo-claude | M | 1-1.5 weeks | 6 | `@endo/claude`: a hermetic `claude -p` (`--bare` + `--mcp-config` + `--strict-mcp-config` + `--setting-sources ""` + `--settings` apiKeyHelper + an explicit built-in deny set + a facet-derived `mcp__<server>__<tool>` allow-list, never `--resume`/`--continue`) whose only capability surface is one guest facet's MCP projection. Composes with the `@endo/agent-tools` MCP adapter (prerequisite) for the server side; reuses `@endo/claude-sandbox`'s `ClaudeCredentials` caplet for subscription pooling. Bulk is the allow-list generator, the mcp-config renderer, and the credential-pool allocator; the projection is not reinvented. Load-bearing residual: whether a subscription can be presented via apiKeyHelper under `--bare`, plus a live negative-confinement test |
+| endo-claude | M | 1-1.5 weeks | 6 | `@endo/claude`: a hermetic `claude -p` (`--bare` + `--mcp-config` + `--strict-mcp-config` + `--setting-sources ""` + `--settings` apiKeyHelper + `--tools ""` fail-closed built-in baseline + `--disable-slash-commands` + a facet-derived, membership-validated `mcp__<server>__<tool>` allow-list, never `--resume`/`--continue`), run inside a **required** `@endo/claude-sandbox` OS slice (a hard dependency on `endo-posix-sandbox`), whose only capability surface is one guest facet's MCP projection. Composes with the `@endo/agent-tools` MCP adapter (prerequisite) for the server side; **extends** `@endo/claude-sandbox`'s `ClaudeCredentials` caplet with a new subscription credential kind (its live kinds `apiKey`/`oauthToken` are both inadmissible under `--bare`, so this is work, not drop-in reuse) for pooling. Bulk is the allow-list generator, the mcp-config renderer, and the credential-pool allocator (allocator-owned occupancy); the projection is not reinvented. Load-bearing residuals: whether a subscription can be presented via apiKeyHelper under `--bare`, and a live negative-**and-positive** confinement test |
 | agentry-agent-builder | M | 4-5 days | 3 | `@endo/agentry` `defineAgent` builder: new module in #308's existing package. Composes selection/attenuation/wire-schemas/presets declaratively and binds the confined pi loop. Bulk is the config surface plus preset bundles plus the `prepareArguments` call site; the heavy lifting (tools, schemas) lives in `endo-agent-tools`. Depends on `endo-agent-tools` landing first |
 | agentry-git-verb-gaps | S-M | 2-3 days | 3 | Extend the local `Git` surface and generated code-mode declarations with the narrow history-editing verbs required by `stack-surgery`; no broad `reset` |
 | agentry-git-eval-scenarios | S-M | 2-3 days for `conflict-rebase`; stack-surgery fixture/scorer now, live row waits on verb-gaps | 3 | Canonical git code-mode eval set for `@endo/agentry`: `stage-and-commit`, `conflict-rebase` with current `Git` and workspace caps, and `stack-surgery` as the dense scenario whose live activation waits on cherry-pick, amend, reword, autosquash, and conflict-side selection. |

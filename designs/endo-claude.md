@@ -87,17 +87,26 @@ empties, they are closed by the dedicated `--disable-slash-commands` flag
 (*"Disable all skills"*, 2.1.232), with `--tools ""` as the built-in-set belt
 (§ *The tool baseline is fail-closed*). They are not assumed gone.
 
-The mechanics below were checked against `claude --help` and short live spawns on
-Claude Code 2.1.232 (2026-08-16), not inferred from general impression: the
-`--bare` suppression set and credential narrowing quoted above; that
+The mechanics below split into **measured** claims (checked against `claude
+--help` and short live spawns on Claude Code 2.1.232, 2026-08-16, not inferred from
+general impression) and **assumed** claims still awaiting a real spawn. Measured:
+the `--bare` suppression set and credential narrowing quoted above; that
 `--strict-mcp-config` takes no argument (the path belongs to `--mcp-config`, which
 is variadic, see § *Argv order is a confinement boundary*); that `--tools ""`
 disables every built-in tool (§ *The tool baseline is fail-closed*); and that no
 `--permission-mode` offers a deny-by-default baseline (the choices are
-`acceptEdits`, `auto`, `bypassPermissions`, `manual`, `dontAsk`, `plan`). Where a
-claim is still unverified against a real deployment (managed settings; a negative
-confinement test that no built-in tool survives) it is called out as such rather
-than asserted.
+`acceptEdits`, `auto`, `bypassPermissions`, `manual`, `dontAsk`, `plan`).
+**Assumed, not yet measured** (and so load-bearing gaps the live test below must
+close, not asserted here): that `--setting-sources ""` (empty string) actually
+drops every discovered settings layer — its `--help` does not document the
+empty-string value the way `--tools`'s documents `""`; that **MCP tools remain
+reachable** under `--tools ""` (the fail-closed baseline empties the *built-in*
+set, and the design *needs* the `mcp__<server>__<tool>` surface to survive it —
+the positive half of confinement, not just the negatives); and that a Max/Pro
+subscription can be presented through an `apiKeyHelper` at all (§ *Pooling
+subscriptions across concurrent guests*). Each is flagged here and re-checked by
+the live negative-**and-positive** confinement test (§ *Known Gaps and TODOs*),
+never treated as established.
 
 ## Architecture
 
@@ -115,25 +124,38 @@ flowchart LR
   P["ClaudeCredentials pool<br/>N subscriptions"] -.->|"credential emitted by the<br/>apiKeyHelper in --settings, per call"| proc
 ```
 
-One sentence: `@endo/claude` takes **one guest's formula id** (the 64-hex name the
-transport already routes on, the same designator throughout), **resolves it to
-the guest facet inside the harness**, stands up (or reuses) a facet-derived MCP
-bridge that projects exactly that facet's method set as MCP tools, asks that
-bridge for the guest's `tools/list` catalog and generates the exact
-`mcp__<server>__<tool>` allow-list from it, and spawns a fresh, `--bare`,
+One sentence: `@endo/claude` grants a guest's host a **per-guest inference
+capability**, minted by naming **one guest's formula id** once (the 64-hex name the
+transport routes on) at grant time; the granted exo **closes over the resolved
+facet** and its own `infer(prompt, {model, cancelled})` method carries **no
+designator at all** (see *Design Decision 4* and *Design Decision 8*, and the
+confused-deputy argument in § *Open questions*). Minting it **resolves the formula
+id to the guest facet inside the harness**, stands up (or reuses) a facet-derived
+MCP bridge that projects exactly that facet's method set as MCP tools, takes **one**
+`tools/list` snapshot, generates the exact `mcp__<server>__<tool>` allow-list from
+that snapshot, and each `infer` call spawns a fresh, `--bare`,
 subscription-authenticated `claude -p` whose only reachable capability is that one
-MCP endpoint. **The harness (not the confined process) holds the facet.** The
-confined process reaches the daemon only through a connection the harness has
-already attenuated to this one facet (an inherited socketpair fd handed to the
-stdio shim, or a per-guest loopback listener), and the unattenuated daemon socket
-(`ENDO_SOCK`) is **scrubbed from the child environment** so a leaked built-in
-cannot re-open it. In tool-surface terms the Claude process can load no project or
-user memory and can see no MCP server but the one guest's; it holds *only* the
-facet's method set. Broader OS-level guarantees (no host filesystem, no
-un-permitted network) are **not** properties of `@endo/claude` alone: they hold
-only when it is run inside the `@endo/claude-sandbox` slice (*Design
-Decision 6*), which is **required, not merely recommended, for any guest-influenced
-prompt**.
+MCP endpoint. **The harness (not the confined process) holds the facet**, and the
+bridge **dispatches only names in the pinned snapshot**, rejecting any `tools/call`
+outside it — so withholding a tool is *facet attenuation at the bridge*, never a
+client-side allow-list subtraction the bridge would still honor. The confined
+process reaches the daemon only through a connection a **harness-owned** shim has
+already attenuated to this one facet; the raw connected fd is held by that
+harness-owned shim, **not** inherited into the `claude`-spawned process tree, so a
+leaked built-in cannot speak raw CapTP on it. Scrubbing the daemon-socket
+environment variables is **defense-in-depth only, not the boundary**: `whereEndoSock`
+derives the socket path from `$XDG_RUNTIME_DIR` / `HOME` / `$TMPDIR` and ultimately
+from `os.tmpdir()`/`os.userInfo()` with an entirely empty env (`packages/where/index.js`),
+so unsetting `ENDO_SOCK` makes the live path the *default*, not absent. The actual
+structural boundary is the `@endo/claude-sandbox` slice (*Design Decision 6*), whose
+filesystem-namespace isolation is what puts the socket path out of reach; it is
+**required, not merely recommended, for any guest-influenced prompt**, and the child
+is spawned with a **constructed env allowlist** (§ *The child environment is a
+constructed allowlist*), not the inherited environment minus one variable. In
+tool-surface terms the Claude process can load no project or user memory and can see
+no MCP server but the one guest's; it holds *only* the facet's method set. Broader
+OS-level guarantees (no host filesystem, no un-permitted network) are **not**
+properties of `@endo/claude` alone: they hold only inside that DD6 slice.
 
 ### Relationship to `@endo/claude-sandbox`
 
@@ -162,8 +184,17 @@ reuse; the extension is named as a prerequisite in *Design Decision 5* and *Know
 Gaps and TODOs*, not assumed. The allocator this design adds also does not map to
 a nonexistent `release(issued)`: the live `M.interface()` is `issue(sessionTag)` /
 `revoke(sessionTag)` / `rotate(newApiKey)` with a **single-shot** `materialise()`,
-so `acquire` maps to `issue(sessionTag)` and the credential's return-to-pool maps
-to `revoke(sessionTag)` (§ *Pooling subscriptions across concurrent guests*).
+so `acquire` maps to `issue(sessionTag)`. But `revoke` is **not** the
+return-to-pool step on the happy path: `materialise()` deletes the handle from the
+caplet's `outstanding` set (`claude-credentials-factory.js:242`), so after a
+successful spawn (which materialises the key) a subsequent `revoke(sessionTag)`
+iterates an already-empty set and is a no-op. `revoke` is therefore the
+**invalidate-on-*failure*** path — it only bites a credential granted but not yet
+materialised (a spawn that aborts before the `apiKeyHelper` runs). The pool's
+occupancy accounting is **allocator-owned state in `credentials-pool.js`**, not a
+property read off the caplet; the pool marks a slot free in its own `finally`
+regardless of whether `revoke` had anything to cancel (§ *Pooling subscriptions
+across concurrent guests*).
 `@endo/claude` differs from the sibling in that its Claude has **no workspace and
 no built-in tools at all**, only the guest facet.
 
@@ -174,11 +205,11 @@ the others do not close.
 
 | Flag | Value | What it closes |
 | --- | --- | --- |
-| `--bare` | (present) | Per its 2.1.232 help text, skips hooks, LSP, plugin sync, attribution, auto-memory, background prefetches, keychain reads, and `CLAUDE.md` auto-discovery. It does **not** close settings layers or MCP auto-discovery. Those are the jobs of `--setting-sources ""` and `--strict-mcp-config` below; do not conflate them (a first reading, and this doc's own earlier draft, over-credited `--bare`). It is still the single most important flag for one reason beyond the above: **it narrows the credential surface.** Under `--bare`, Anthropic auth is strictly an `ANTHROPIC_API_KEY` or an `apiKeyHelper` named via `--settings`; the OAuth / keychain credentials `claude` normally reads (including `CLAUDE_CODE_OAUTH_TOKEN`) are **never** consulted. It also warns that Skills still resolve via `/skill-name`, so `Skill` / `SlashCommand` survive it (closed by `--disable-slash-commands`, with the `--tools ""` baseline emptying the built-in set, not by `--bare`). This shapes how the subscription reaches the process (see the `--settings` row and *Design Decision 5*). |
+| `--bare` | (present) | Per its 2.1.232 help text, skips hooks, LSP, plugin sync, attribution, auto-memory, background prefetches, keychain reads, and `CLAUDE.md` auto-discovery. It does **not** close settings layers or MCP auto-discovery. Those are the jobs of `--setting-sources ""` and `--strict-mcp-config` below; do not conflate them (a first reading over-credits `--bare`). It is still the single most important flag for one reason beyond the above: **it narrows the credential surface.** Under `--bare`, Anthropic auth is strictly an `ANTHROPIC_API_KEY` or an `apiKeyHelper` named via `--settings`; the OAuth / keychain credentials `claude` normally reads (including `CLAUDE_CODE_OAUTH_TOKEN`) are **never** consulted. It also warns that Skills still resolve via `/skill-name`, so `Skill` / `SlashCommand` survive it (closed by `--disable-slash-commands`, with the `--tools ""` baseline emptying the built-in set, not by `--bare`). This shapes how the subscription reaches the process (see the `--settings` row and *Design Decision 5*). |
 | `--mcp-config <configs...>` | path to a generated config naming only the Endo endpoint | **Variadic** (space-separated) and accepts a JSON **file path or a JSON string**. Carries the generated MCP config (the stdio shim command, or the loopback URL, plus the guest's bearer). The path belongs here, **not** on `--strict-mcp-config`. Because it accepts inline JSON *and* is variadic, it is the highest-value argv-injection target (§ *Argv order is a confinement boundary*): a positional that lands after it is read as another server definition. |
 | `--strict-mcp-config` | (present; takes **no** argument) | Boolean. Restricts the process to only the servers named in `--mcp-config`, ignoring all other MCP configuration (`.mcp.json`, `~/.claude/`). **This (not `--bare`) is the flag that closes MCP auto-discovery.** Without it, auto-discovery can add servers the design did not intend to expose. Writing a path after this flag is a silent error: it binds to the prompt positional and the process starts with **zero** MCP servers, so confinement "passes" by exposing nothing. |
 | `--setting-sources ""` | empty | Drops the discovered user / project / local `settings.json` layers. Composes with `--settings` below: `--setting-sources ""` removes everything *discovered*, and `--settings` injects exactly one *named* file, so the sole settings surface the process sees is that one generated file. **Open:** whether *managed* (enterprise-policy) settings can be suppressed at all is undocumented. `--safe-mode`'s help states admin-managed policy settings still apply even in that stronger mode, so this design assumes managed settings cannot be dropped until verified against a real managed-settings deployment, and a host that runs `@endo/claude` must not carry managed Claude settings that grant tools. |
-| `--settings <file>` | a generated file carrying only an `apiKeyHelper` | The one credential escape `--bare` honors (see *Design Decision 5*). The pool renders a minimal settings file whose **sole** key is an `apiKeyHelper` that emits the acquired credential; combined with `--setting-sources ""` it is the only settings the process reads. This is the deliberate, tightly-scoped re-admission of a settings file into a design that otherwise treats settings as a leak surface, accepted because `--bare` leaves no other authenticated path. The `apiKeyHelper` is itself an *executed* command outside the tool-permission system (§ *The `apiKeyHelper` is an execution grant, not a value*), so its argv must be harness-fixed and never prompt-influenceable. |
+| `--settings <file>` | a generated file carrying only an `apiKeyHelper` | The one credential escape `--bare` honors (see *Design Decision 5*). The pool renders a minimal settings file whose **sole** key is an `apiKeyHelper` that emits the acquired credential; combined with `--setting-sources ""` it is the only settings the process reads. This is the deliberate, tightly scoped re-admission of a settings file into a design that otherwise treats settings as a leak surface, accepted because `--bare` leaves no other authenticated path. The `apiKeyHelper` is itself an *executed* command outside the tool-permission system (§ *The `apiKeyHelper` is an execution grant, not a value*), so its argv must be harness-fixed and never prompt-influenceable. |
 | `--tools ""` | empty string (disable **all** built-ins) | **The fail-closed baseline.** `--tools` selects the available built-in set; `--tools ""` makes **zero** built-ins available (its help: *"Use `""` to disable all tools"*), so the deny is by construction rather than by enumerating an open-ended list. It empties the built-in set and does not depend on the harness keeping an exhaustive built-in name list current across CLI versions. It does **not** by itself close the `Skill` / `SlashCommand` surface `--bare` leaves resolving: `/skill-name` is parsed from prompt text, not selected from the built-in set, so `--disable-slash-commands` (next row) is what closes that path. MCP tools are unaffected: they arrive via `--mcp-config` + `--allowedTools`, not the built-in set. |
 | `--disable-slash-commands` | (present) | **Closes the `/skill-name` slash-command surface `--tools ""` cannot.** `--bare`'s help warns *"Skills still resolve via /skill-name"*, and this flag's help is *"Disable all skills"* (2.1.232), strong evidence `/skill-name` is parsed from conversation/prompt text rather than selected from the `--tools` built-in set. Since the prompt is the one guest-influenceable input (§ *Argv order is a confinement boundary*), a prompt containing `/some-skill` could otherwise resolve a surface outside the confined tool set (exactly *Design Decision 6*'s threat model). Load-bearing; the negative-confinement test asserts no `/skill-name` resolves (see *Known Gaps and TODOs*). |
 | `--disallowedTools` | an explicit deny of the known built-in names (`Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Task`, `NotebookEdit`) | **Redundant belt over `--tools ""`, not the primary mechanism.** Denies each named built-in for defense in depth; **not** `"*"` (deny outranks allow, so a `"*"` deny also cancels the `mcp__<server>__<tool>` allow entries and grants *nothing*). Because this list is measured against one CLI version and cannot be exhaustive across future ones, it is **not** trusted as the baseline. `--tools ""` is, being deny-by-construction. There is no "deny-by-default permission mode" to lean on either (`--permission-mode` offers only `acceptEdits`, `auto`, `bypassPermissions`, `manual`, `dontAsk`, `plan`, none a deny-all). Pin the CLI version and re-derive this list on upgrade; a live negative-confinement test must confirm no built-in survives (see *Known Gaps and TODOs*). |
@@ -187,8 +218,14 @@ the others do not close.
 
 ### Argv order is a confinement boundary, not a formatting detail
 
-The prompt is the **one attacker-controlled input** in the whole invocation (a
-guest may influence it; DD6). On 2.1.232 the prompt is a **bare positional**
+The prompt is the **first** attacker-controlled input in the invocation (a guest
+may influence it; DD6), and — for argv construction specifically — the only one
+that reaches argv. (It is not the *only* attacker-controlled input to the running
+inference: every `tools/call` **result** the facet returns re-enters the model's
+context and can steer later in-allow-list calls, which is why DD6's slice is
+required whenever any facet method returns externally authored bytes, not only when
+the prompt itself is guest-authored; see *Design Decision 6*.) On 2.1.232 the prompt
+is a **bare positional**
 (`claude [options] [prompt]`), and three of the flags above (`--mcp-config`,
 `--allowedTools`, `--disallowedTools`) are **variadic** (`<configs...>` /
 `<tools...>`, comma-**or**-space separated). A variadic flag greedily consumes
@@ -204,10 +241,22 @@ The harness must therefore treat argv construction as security-critical:
 - **Never pass the prompt as a trailing positional.** Deliver it on **stdin**
   (`claude -p` reads a piped prompt) or, if a positional is unavoidable, place it
   after a `--` end-of-options terminator, never adjacent to a variadic flag.
-- **Assert the spawned argv pre-exec**: the prompt bytes appear on stdin (or after
-  `--`) and **nowhere** in the flag vector; every variadic flag is immediately
-  followed by another `--`-prefixed flag or the terminator. Fail closed (refuse to
-  spawn) on any violation, rather than trusting the CLI to disambiguate.
+- **Assert the spawned argv pre-exec**, with an invariant a well-formed argv
+  actually satisfies. Note the naive form "every variadic flag is immediately
+  followed by another `--`-prefixed flag" is **unsatisfiable**: `--mcp-config
+  <path>` and `--allowedTools mcp__endo__writeText` are each followed by their own
+  value token, which is *not* `--`-prefixed, so a literal reading would refuse every
+  spawn. The correct invariant: **each variadic flag's value run consists only of
+  the exact tokens the harness supplied for it, and the run ends at the next
+  `--`-prefixed flag or the `--` terminator** — the harness knows those tokens
+  because it built them. And the prompt is delivered on **stdin** and the
+  argv vector element-wise **does not equal** the prompt string at any index (exact
+  argv-element equality, not substring containment — the empty prompt `""` is a
+  substring of every token and a one-character prompt matches inside
+  `mcp__endo__…`, so a substring test both false-fires and, worse, gives false
+  confidence). The empty-prompt case is spawned as an empty stdin, never as a
+  zero-length positional. Fail closed (refuse to spawn) on any violation, rather
+  than trusting the CLI to disambiguate.
 
 ### Working around the `mcp__*` wildcard trap, and validating every allow-list name
 
@@ -225,19 +274,40 @@ facet exposes `writeText`, `readText`, `list`, `remove` yields exactly
 `--allowedTools mcp__endo__writeText,mcp__endo__readText,mcp__endo__list,mcp__endo__remove`,
 computed at spawn time, never a static string.
 
-**Every method name is validated before it reaches `--allowedTools`; the generator
-fails closed on a violation.** The entries are comma/space-joined into one flag
-value, and anchored globs are honored, so an unconstrained method name is itself a
-capability-escalation vector: a name containing a comma or space **splits into
-extra allow entries**, and a name of `*` or `read*` becomes a **wildcard grant**
-after the literal `mcp__<server>__` prefix. The generator therefore requires each
-method name to match `/^[A-Za-z0-9_-]+$/` and **refuses to spawn** on any
-violation. It never relies on the downstream deny set to cancel an injected
-entry, because deny/allow disjointness (above) is only maintained if the allow
-side is well-formed in the first place. (A well-behaved Endo facet method set
-already satisfies this; the check defends against a malformed or adversarial
-catalog, and against a future capability-scoped surface whose names are less
-controlled.)
+**Every method name is validated by *membership*, not merely by shape, before it
+reaches `--allowedTools`; the generator fails closed on a violation.** The entries
+are comma/space-joined into one flag value, and anchored globs are honored, so an
+unconstrained method name is itself a capability-escalation vector: a name
+containing a comma or space **splits into extra allow entries**, and a name of `*`
+or `read*` becomes a **wildcard grant** after the literal `mcp__<server>__` prefix.
+A pure syntactic charset check (`/^[A-Za-z0-9_-]+$/`) is **not enough**: it admits
+dunder names (`__proto__`, `constructor`, `__getMethodNames__`) that an unguarded
+shim could dispatch into an inherited intrinsic (prototype pollution /
+intrinsic-shadow), and it admits the `__` sequence, so a method `foo__bar` renders
+`mcp__endo__foo__bar`, which parses ambiguously against the CLI's own
+`mcp__<server>__<tool>` grammar. The generator therefore:
+
+- **requires each name to be an own member of the facet's actual method set**
+  (`E(facet).__getMethodNames__()` — membership, not a shape match), so a name the
+  facet does not really export can never reach the flag,
+- **rejects any name containing `__` or matching a dunder / reserved-property name**
+  (`__proto__`, `constructor`, `prototype`, `__getMethodNames__`, …) even if the
+  facet claims to export it, and
+- **keys every catalog lookup through a null-prototype record or a `Map`**, never a
+  plain object, so a catalog entry named `__proto__`/`constructor` cannot corrupt
+  the lookup structure.
+
+Beyond those structural rules the harness carries a **fixed structural deny of code-
+evaluation method names** (`evaluate`, `eval`, `define`) that must never be
+allow-listed regardless of the facet or catalog — the v1 Lal static surface exposes
+an `evaluate` tool (§ *Which tool surface the catalog projects*), and
+`mcp__endo__evaluate` would hand the confined process arbitrary code execution
+against the guest, defeating the confinement. It never relies on the downstream deny
+set to cancel an injected entry, because deny/allow disjointness (above) holds only
+if the allow side is well-formed in the first place. (A well-behaved Endo facet
+method set already satisfies the membership and dunder rules; the checks defend
+against a malformed or adversarial catalog, and against a future capability-scoped
+surface whose names are less controlled.)
 
 ### Fresh process per call; memory is Endo's job
 
@@ -279,6 +349,30 @@ carries **no** prompt-derived or guest-derived bytes (so the one attacker-contro
 input cannot steer what executes), and the helper does nothing but emit the credential
 the pool acquired for this spawn. Naming it as an execution grant, rather than
 treating `--settings` as an inert file, is what keeps the re-admission honest.
+
+### The child environment is a constructed allowlist, not the inherited env minus one variable
+
+The child is spawned with a **constructed environment** (an explicit allowlist of
+named variables plus an otherwise-empty base), never the harness's inherited
+environment with a few names deleted. A denylist of one is unsafe here for two
+reasons the design must close:
+
+- Under `--bare`, `ANTHROPIC_API_KEY` is an **honored credential path**. An
+  inherited `ANTHROPIC_API_KEY` in the harness's environment would silently
+  authenticate the child *outside* the pool — bypassing `selectSubscription`, the
+  occupancy accounting, and the whole subscription-pooling story — and the harness
+  would not even observe the bypass. So the harness both starts from an empty base
+  *and* **asserts, per spawn, that the pooled `apiKeyHelper` was the credential the
+  process consumed** (no inherited key shadowed it).
+- An inherited `ANTHROPIC_BASE_URL` (or the various proxy variables) would redirect
+  inference off-target, to an endpoint the operator did not choose. Only variables
+  the harness explicitly sets — the `apiKeyHelper`'s fixed inputs, a locale, a
+  `PATH` scoped to the shim — appear in the child; the daemon-socket variables
+  (`ENDO_SOCK`, `XDG_RUNTIME_DIR` where it would re-derive the socket) are absent by
+  construction rather than scrubbed after the fact.
+
+The env allowlist is thus a peer of the argv invariant: both fail closed, and both
+are asserted before the child runs, not trusted to the inherited process state.
 
 ## The facet-to-MCP bridge (the local/remote question)
 
@@ -354,9 +448,18 @@ when it is built:
 
 - If it is built against the **static Lal surface**, every guest sees the same
   Lal tool namespace, and the `--allowedTools` list is that namespace minus
-  anything the deployment chooses to withhold. The bearer still scopes *which
-  guest's facet* the calls act on, but not *which subset of tools* that guest may
-  reach, because the static surface is uniform across guests.
+  anything the deployment chooses to withhold. **Withholding is done by attenuating
+  the facet at the bridge, not by subtracting a name from `--allowedTools`.**
+  `--allowedTools` is a *client-side* flag inside the confined process; the bridge
+  still projects and would still dispatch a withheld method, so a `tools/call` for a
+  withheld name (from a leaked path that ignores the client-side allow-list) would
+  reach the facet regardless. The bridge therefore **rejects any `tools/call` whose
+  name is not in the pinned snapshot it was stood up with** (§ *Design Decision 2*);
+  a withheld tool is a method the projected facet does not expose to *this* bridge
+  at all, enforced on the server side of the confinement boundary, with the
+  client-side `--allowedTools` as belt. The bearer still scopes *which guest's facet*
+  the calls act on, but not *which subset of tools* that guest may reach, because the
+  static surface is uniform across guests.
 - If genuine **per-guest, capability-scoped** tooling is what is wanted (each
   guest's `--allowedTools` reflecting only the capabilities its formula was
   granted), then [daemon-agent-tools](daemon-agent-tools.md) is a hard dependency,
@@ -374,56 +477,72 @@ when it is built:
 sequenceDiagram
   participant G as guest / operator
   participant H as endo/claude harness
-  participant M as MCP bridge (facet-derived)
+  participant M as harness-owned MCP bridge (facet-derived)
   participant P as claude -p (bare, fresh)
-  G->>H: infer(guestFormulaId, prompt, {model, cancelled})
-  H->>H: resolve formula id -> guest facet (harness holds it)
-  H->>M: stand up facet-derived bridge over an attenuated connection (this facet only)
-  H->>M: tools/list once; pin the returned catalog as this spawn's snapshot
+  Note over G,H: grant time (once per guest) makeGuestInference(guestFormulaId)
+  G->>H: makeGuestInference(guestFormulaId)
+  H->>H: assert 64-hex, resolve formula id -> guest facet (harness holds it)
+  H->>M: stand up harness-owned facet-derived bridge (this facet only)
+  H->>M: tools/list once, pin the returned catalog as this guest's snapshot
   M-->>H: catalog = facet methods
-  H->>H: validate names, catalog -> allow-list (same pinned snapshot)
-  H->>H: issue(sessionTag) a credential from the pool -> apiKeyHelper in --settings
-  H->>P: spawn (--bare, --mcp-config, --strict-mcp-config, --setting-sources empty, --settings, --tools empty, --allowedTools; prompt on stdin; ENDO_SOCK scrubbed; no resume)
+  H->>H: validate names by membership, catalog -> allow-list (same pinned snapshot)
+  H-->>G: per-guest inference exo (closes over the facet, no designator on infer)
+  Note over G,P: call time (per inference) infer(prompt, opts)
+  G->>H: infer(prompt, {model, cancelled})
+  H->>H: issue(unique sessionTag) from the pool -> apiKeyHelper in --settings
+  H->>P: spawn (constructed env allowlist, --bare + --mcp-config + --strict-mcp-config + --setting-sources empty + --settings + --tools empty + --disable-slash-commands + --allowedTools, prompt on stdin, fd held by harness-owned shim not inherited, no resume)
   P->>M: tools/list
   M-->>P: pinned snapshot (no re-read of the facet)
   P->>M: tools/call mcp__endo__writeText {...}
+  M->>M: reject if name not in pinned snapshot, abort-check before dispatch
   M->>G: E(guestFacet).writeText(...)
   G-->>M: result
   M-->>P: content
-  P-->>H: stream-json final result
+  P-->>H: stream-json final result -> hardened result record (DD8 taxonomy)
   P-->>H: process exits (no transcript retained)
-  H->>H: finally revoke(sessionTag), always, incl. crash/cancel path
-  H-->>G: inference result
+  H->>H: finally free pool slot always (revoke = invalidate-on-failure), kill child on cancel
+  H-->>G: hardened inference result record
 ```
 
 An Endo MCP server on the same host as the `claude -p` process, not reachable
 off-box. Two transports, in preference order:
 
-- **Preferred: a stdio MCP shim, handed an already-attenuated connection.** The
-  generated `--mcp-config` file names a **stdio** MCP server whose command is a thin
-  Endo CLI shim (the "local shim subprocess"
-  [endo-gateway-mcp](endo-gateway-mcp.md) already names). The critical point the
-  first draft got wrong: `claude -p` spawns the shim, so if the shim opened the
+- **Preferred: a stdio MCP shim, handed an already-attenuated connection held
+  outside the confined process tree.** The generated `--mcp-config` file names a
+  **stdio** MCP server whose command is a thin Endo CLI shim (the "local shim
+  subprocess" [endo-gateway-mcp](endo-gateway-mcp.md) already names). A subtlety the
+  design must get right: `claude -p` spawns the shim, so if the shim opened the
   daemon socket **itself** it would first hold the *full* daemon socket (the
-  many-guest `captp0` endpoint) and only *voluntarily* narrow to one facet: a
+  many-guest `captp0` endpoint) and only *voluntarily* narrow to one facet — a
   runtime choice by code running **inside** the confinement, not a structural
-  absence. A leaked built-in in the confined tree could then reach the whole
-  one-socket-many-guests surface, not just one facet. So the **harness**, not the
-  shim, resolves the formula id and holds the facet, and hands the shim a connection
-  **already attenuated to that one facet** (an inherited connected socketpair fd,
-  or a per-guest loopback listener the harness owns) while the unattenuated daemon
-  socket (whose path is **not** a hardcoded `/run/endo-daemon/endo.sock` but
-  `whereEndoSock(...)`: `ENDO_SOCK` -> `$XDG_RUNTIME_DIR/endo/captp0.sock` -> the
-  macOS path -> `$TMPDIR/endo-<user>/captp0.sock` -> a Windows named pipe;
-  `packages/where/index.js`) is **scrubbed from the child environment**. With that,
-  the confined process reaches only the shim, and the shim reaches only the
-  pre-attenuated facet: a structural boundary, not a courtesy. There is **no**
-  listening port and **no** HTTP surface for the local case, no shared endpoint, no
-  `Authorization` header; the formula id designates which facet the harness resolves,
-  not a bearer on a wire. This is the tightest local shape and the primary target.
-  **It still runs inside a `@endo/claude-sandbox` slice for any guest-influenced
-  prompt** (DD6), so even a leak past `--tools ""` cannot reach the scrubbed socket
-  path.
+  absence. Worse, an inherited connected socketpair fd sits in the confined
+  process's own descriptor table (the shim inherits it *through* `claude`), so a
+  leaked built-in could speak raw CapTP straight on the fd, bypassing every MCP
+  name check. So the **harness**, not the shim, resolves the formula id and holds
+  the facet, and the attenuated connection is held by a **harness-owned** shim
+  process whose fd is **not** inherited into the `claude`-spawned tree — passed
+  out-of-band (a harness-owned Unix socket the shim connects to, or an fd the
+  harness-owned shim holds and `claude` never does), so the confined process can
+  reach the facet only by speaking MCP to the shim, never by holding the raw
+  connection. The unattenuated daemon socket path (**not** a hardcoded
+  `/run/endo-daemon/endo.sock` but `whereEndoSock(...)`: `ENDO_SOCK` ->
+  `$XDG_RUNTIME_DIR/endo/captp0.sock` -> the macOS path ->
+  `$TMPDIR/endo-<user>/captp0.sock` -> a Windows named pipe;
+  `packages/where/index.js`) is additionally **scrubbed from the child environment
+  as defense-in-depth** — but that is *not* the boundary: `whereEndoSock` derives
+  the same default path from `$XDG_RUNTIME_DIR`/`HOME`/`$TMPDIR` and finally from
+  `os.tmpdir()`/`os.userInfo()` with an entirely empty env, so unsetting the
+  variable makes the live path the *default*, not absent. The boundary that
+  actually puts the socket path out of reach is the **`@endo/claude-sandbox` slice's
+  filesystem-namespace isolation** (DD6). With the fd held outside the confined tree
+  *and* the DD6 slice, the confined process reaches only the shim, and the shim
+  reaches only the pre-attenuated facet: a structural boundary, not a courtesy.
+  There is **no** listening port and **no** HTTP surface for the local case, no
+  shared endpoint, no `Authorization` header; the formula id designates which facet
+  the harness resolved at grant time, not a bearer on a wire. This is the tightest
+  local shape and the primary target. **It runs inside a `@endo/claude-sandbox`
+  slice for any guest-influenced prompt** (DD6, required), so even a leak past
+  `--tools ""` cannot reach the socket path the scrub alone cannot hide.
 - **Alternative: a loopback HTTP listener.** The same `@endo/agent-tools` MCP
   adapter mounted on a `127.0.0.1` listener (explicitly **not** `0.0.0.0`) on a
   port or a Unix domain socket, with `--mcp-config` naming that one URL and the
@@ -433,6 +552,21 @@ off-box. Two transports, in preference order:
   facet*, whose one-endpoint-many-guests model describes **this** transport, not
   the stdio one). Use it where the streamable-HTTP transport is wanted for parity
   with the remote case; it costs a loopback listener the stdio shim avoids.
+  **Prerequisite and tension to reconcile:** a DD6 slice with `network: private`
+  (which DD6 *requires* for a guest-influenced prompt) has **no reach to the host's
+  loopback**, so a listener the harness stands up outside the slice is unreachable
+  from inside it — reaching a host-loopback listener from a confined slice needs a
+  `host-loopback` egress profile plus `CAP_NET_ADMIN`, an operator-provisioned
+  capability, not something `@endo/claude` can assume. Worse, `network: private`
+  egress is an **intentionally deferred** item in `endo-posix-sandbox` (In Progress,
+  Phase 3), and `claude -p` needs Anthropic egress regardless, so this design is in
+  fact the *first consumer* of that unbuilt network profile. The stdio shim (the
+  preferred transport) sidesteps all of this — it carries the attenuated connection
+  as an fd across the slice boundary at spawn, needing no in-slice network — which
+  is a second reason it is preferred. The loopback HTTP transport is therefore gated
+  on the `endo-posix-sandbox` network profile landing and an operator granting the
+  `host-loopback` reach; until then it is available only for a *fully
+  operator-controlled* prompt that DD6 permits to run outside the slice.
 
 Either way the generated `--mcp-config` file names exactly one endpoint and the
 process is pinned to one guest: by a dedicated shim under stdio, by a bearer on a
@@ -495,9 +629,11 @@ Guest routing takes one of two shapes depending on the transport chosen in
 branded type thereafter.** It flows into a JSON `--mcp-config`, into the shim argv,
 and (HTTP transport) into an `Authorization: Bearer` line. So an unvalidated
 designator carrying a `"`, a newline, or a CR would break the JSON, split the argv,
-or inject a header. The harness asserts `/^[0-9a-f]{64}$/` on entry to `infer(...)`
-and refuses otherwise; downstream code consumes only the branded, validated value,
-never a caller-supplied string.
+or inject a header. The harness asserts `/^[0-9a-f]{64}$/` on entry to
+`makeGuestInference(guestFormulaId)` — the one place the designator is named, at
+grant time — and refuses otherwise; the per-guest `infer(prompt, opts)` exo it
+returns carries **no** designator at all (§ *Design Decision 4*), and downstream
+code consumes only the branded, validated value, never a caller-supplied string.
 
 ### Pooling subscriptions across concurrent guests
 
@@ -521,18 +657,29 @@ caplet's **actual** `M.interface()` rather than a nonexistent `release(issued)`:
 - `acquire(sessionTag, {cancelled})` returns an `IssuedCredential`, and is kept as
   **two separated seams** rather than one braided step: a **selection policy** that
   picks *which* subscription's exo to draw from, and the **issue/revoke mechanism**
-  that draws it. The policy is a swappable strategy object (`selectSubscription(pool,
-  sessionTag) -> exo`), so the default (least-recently-burned, or a weight the
-  operator sets the way that fleet sets its `gardeners: N`) can be replaced without
-  touching the allocator, and the still-unsettled accounting question (§ *Open
-  questions*: read burn from the subscription, or operator-set weights) resolves
-  behind that seam. The mechanism then calls the chosen exo's `issue(sessionTag)`. A
-  subscription hitting its weekly cap is marked cooling by the policy and skipped
-  until it resets, so no single account gates every guest.
-- **return-to-pool** calls the caplet's `revoke(sessionTag)` (there is no `release`
-  method; `revoke` keyed on the same `sessionTag` is the counterpart), after which
-  that session's `materialise()` throws, which is correct, since `materialise()` is
-  **single-shot** anyway (the `apiKeyHelper` reads the key exactly once per spawn).
+  that draws it. The `sessionTag` is **minted uniquely per spawn** (not per guest):
+  two concurrent `infer` calls against the same guest must carry *distinct*
+  sessionTags, or one call's `revoke(sessionTag)` in its `finally` would invalidate
+  the other's still-live credential. The policy is a swappable strategy object
+  (`selectSubscription(pool, sessionTag) -> exo`), so the default
+  (least-recently-burned, or a weight the operator sets the way that fleet sets its
+  `gardeners: N`) can be replaced without touching the allocator, and the
+  still-unsettled accounting question (§ *Open questions*: read burn from the
+  subscription, or operator-set weights) resolves behind that seam. The mechanism
+  then calls the chosen exo's `issue(sessionTag)`. A subscription hitting its weekly
+  cap is marked cooling by the policy and skipped until it resets, so no single
+  account gates every guest.
+- **return-to-pool is allocator-owned bookkeeping, not a caplet call that always
+  bites.** `credentials-pool.js` marks the selected subscription's slot free in its
+  own state on every exit path. It *also* calls the caplet's `revoke(sessionTag)`
+  (there is no `release` method), but `revoke` is only the **invalidate-on-failure**
+  path: on the happy path `materialise()` has already deleted the handle from the
+  caplet's `outstanding` set (`claude-credentials-factory.js:242`), so the later
+  `revoke` iterates an empty set and is a no-op. `revoke` therefore only cancels a
+  credential *granted but not yet materialised* (a spawn that aborted before the
+  `apiKeyHelper` ran). Occupancy — "is this subscription's slot in use?" — is
+  **allocator state the pool owns**, never a property read off the single-shot
+  caplet, precisely because the caplet drops its own bookkeeping at `materialise`.
 
 The credential does **not** reach the process as `CLAUDE_CODE_OAUTH_TOKEN`, because
 `--bare` never consults that variable (§ *The hermetic invocation*). Instead the
@@ -542,15 +689,25 @@ and `materialise` are eventual-sends, the pool can live on a remote peer that ho
 the long-lived subscription auth and mints short-lived per-session credentials, so
 the box running the guest never holds the durable secret.
 
-**Release is a `finally`, not an on-success step. One leak per failure exhausts
-the pool.** `revoke(sessionTag)` must run on **every** exit path of a spawn:
-clean success, a non-zero `claude -p` exit, a stream-parse failure, and the
-`{cancelled}` signal (whose settled/mid-stream/after-exit cases the failure taxonomy
-in *Open questions* enumerates). Skipping it on any failure path strands a
+**Return-to-pool is a `finally`, not an on-success step. One leak per failure
+exhausts the pool.** The allocator's occupancy release (and its `revoke(sessionTag)`
+invalidate-on-failure call) must run on **every** exit path of a spawn: clean
+success, a non-zero `claude -p` exit, a stream-parse failure, and the `{cancelled}`
+signal (whose settled/mid-stream/after-exit cases the failure taxonomy in *Design
+Decision 8* names). Skipping the occupancy release on any failure path strands a
 subscription per failed inference: a slow denial of service on the pool. The
-allocator therefore wraps the spawn in a `finally`-equivalent that revokes
-unconditionally, and the negative-confinement test asserts the pool returns to full
-occupancy after an induced crash.
+allocator therefore wraps the spawn in a `finally`-equivalent that frees the slot
+unconditionally, and the confinement test asserts the pool returns to full occupancy
+after an induced crash.
+
+**Cancellation must terminate the child, not merely revoke.** `revoke(sessionTag)`
+cannot stop an already-spawned `claude -p`: after cancel the child keeps issuing
+`tools/call` requests, mutating the facet past the abort point. So the `{cancelled}`
+signal (and any abort) must (1) be **checked before every `tools/call` dispatch** at
+the bridge — a dispatch after cancel is refused — and (2) **explicitly terminate the
+`claude -p` child process** (kill the process group), then run the `finally` that
+frees the slot. Revoking the credential is necessary but not sufficient; killing the
+child is what actually stops the guest-influenced mutations.
 
 **Load-bearing residual (see *Design Decision 5* and *Known Gaps and TODOs*).** Whether a
 Max/Pro *subscription* value can be presented through `apiKeyHelper` at all is
@@ -644,24 +801,52 @@ contingent on that credential verification for its **billing/credential** shape.
 
 ## Package shape and dependencies
 
+All modules but the entry point live under `src/`, so the package's public surface
+is exactly the `exports` map — the internals do **not** resolve as accidental
+public entry points (drawn at the package root, `harness.js` etc. would each
+resolve as `@endo/claude/harness.js` under the legacy directory walk that an
+`exports` map does not cover):
+
 ```text
 packages/claude/
-├── package.json            # @endo/claude (private until published; "exports" map; skel-templated)
-├── index.js                # entry module; exports the passable infer exo (makeExo remotable; see DD8)
-├── harness.js              # builds the infer exo; its guarded method takes (guestFormulaId, prompt, {model, cancelled}) -> hardened result record
-├── tool-permissions.js     # guest tools/list catalog -> validated mcp__server__method[] allow entries AND the built-in deny set / --tools "" baseline
-├── credentials-pool.js     # allocator: swappable selectSubscription policy + issue(sessionTag)/revoke(sessionTag) mechanism over a set of ClaudeCredentials; renders the apiKeyHelper --settings file
-├── mcp-config.js           # render the --mcp-config file (one endpoint, one bearer)
+├── package.json            # @endo/claude (private until published; skel-templated; the "exports" map below)
+├── index.js                # entry module; exports `make` (see below); no other public subpath
+├── src/
+│   ├── harness.js          # make(powers) -> inferenceProvider exo; makeGuestInference(guestFormulaId) -> per-guest infer exo (DD8)
+│   ├── tool-permissions.js # guest tools/list snapshot -> membership-validated mcp__server__method[] allow entries AND the built-in deny set / --tools "" baseline (DD2)
+│   ├── credentials-pool.js # allocator: swappable selectSubscription policy + issue(sessionTag) mechanism over a set of ClaudeCredentials; allocator-owned occupancy; renders the apiKeyHelper --settings file
+│   └── mcp-config.js        # render the --mcp-config file (one endpoint; a bearer only under HTTP)
 └── test/                   # dependency-injected + fast-check property tests (no live claude, no daemon)
 ```
 
+The intended `exports` map is exactly one public entry, skel-shaped:
+
+```json
+"exports": {
+  ".": {
+    "types": "./types.d.ts",
+    "default": "./index.js"
+  }
+}
+```
+
+`index.js`'s module-level export is the maker **`make(powers)`** (the `make*` key
+repo precedent — `packages/agent-tools/test/exports.test.js` deep-equals the
+`make*` key set, so the build PR has a named identifier to agree on): `powers`
+carries the daemon connection used to resolve a formula id to a facet and the
+`ClaudeCredentials` pool. `make(powers)` returns an `inferenceProvider` exo whose
+`makeGuestInference(guestFormulaId)` resolves and closes over one facet and returns
+the per-guest `infer(prompt, {model, cancelled})` exo (DD8; the confused-deputy
+resolution of § *Open questions*). The **v1 stdio shim**, spawned as the command a
+generated `--mcp-config` names, is a `bin` entry (`"bin": { "endo-claude-shim":
+"./src/shim.js" }`) so it resolves as an executable, not an import subpath.
+
 The package is templated on **`packages/skel`** (the project's new-package
-template, enforced by the `check-package-uniformity.mjs` CI gate), carries an
-explicit **`exports`** map, and is created **`private: true`** until it is ready to
-publish. Because it is a new package, it owes an **`add-endo-claude` changeset**
-(new package -> `major` -> `1.0.0`) if repo precedent requires one. The panel's
-changeset-auditor read this docs-only PR as owing none, but the *build* PR that
-lands `packages/claude/` will. Separately, implementing the prerequisite adapter at
+template, enforced by the `check-package-uniformity.mjs` CI gate) and is created
+**`private: true`** until it is ready to publish. Because it is a new package, it
+owes an **`add-endo-claude` changeset** (new package -> `major` -> `1.0.0`); the
+*build* PR that lands `packages/claude/` carries it (this docs-only PR owes none per
+repo precedent). Separately, implementing the prerequisite adapter at
 `packages/agent-tools/src/adapters/mcp.js` is **not** an internal fill-in: that path
 is an **already-published** entry point pinned empty by
 `packages/agent-tools/test/exports.test.js`, so landing it is a **`minor`** on
@@ -673,16 +858,18 @@ is an **already-published** entry point pinned empty by
 | [`@endo/agent-tools`](endo-agent-tools.md) MCP adapter | **Prerequisite**: projects a facet's method set to an MCP `tools/list` catalog and dispatches `tools/call` to `E(facet).<method>`. Designed in the merged [endo-gateway-mcp](endo-gateway-mcp.md) and present as a declared stub at `packages/agent-tools/src/adapters/mcp.js` ("Planned adapter shape only"); implementing it plus the stdio-shim / loopback hosting seam is tracked as `design-endo-claude-mcp-groundwork`. `@endo/claude` composes with it; it does not reinvent the projection. |
 | [`@endo/claude-sandbox`](../packages/claude-sandbox/README.md) | **Sibling / extend + reuse**: the `ClaudeCredentials` caplet supplies the pooled subscriptions. Its live surface is `issue(sessionTag)` / `revoke(sessionTag)` / `rotate(newApiKey)` returning an `IssuedCredential` with single-shot `materialise()`, over kinds `harden(['apiKey','oauthToken'])`. Neither kind is usable here (§ *Design Decision 5*), so this design **extends** the caplet with a subscription credential kind, then wraps `issue`/`revoke` in the `acquire`/return allocator. It does not replace the caplet's protocol. The podman slice is **required** for guest-influenced prompts (*Design Decision 6*), not merely optional. |
 | [`@endo/eventual-send`](../packages/eventual-send/README.md) | The bridge invokes the resolved facet with `E(facet).<method>(...)`; the credential caplet's methods are eventual-sends. |
+| [endo-posix-sandbox](endo-posix-sandbox.md) (`@endo/sandbox`) | **Prerequisite for the required DD6 slice** (In Progress, Phase 3; the sandbox that `@endo/claude-sandbox` slices are built on). DD6 makes the OS-level slice **required** for any guest-influenced prompt, and the `network: private` egress profile the loopback-HTTP transport and Anthropic egress both need is an intentionally-deferred item in this design (§ *Local deployment*, *Alternative*). So `@endo/claude`'s confinement boundary rests on this landing, not just on the tool-surface flags. |
 | [gateway-bearer-token-auth](gateway-bearer-token-auth.md) / [endo-gateway-mcp](endo-gateway-mcp.md) | The bearer-is-formula-id auth shape reused for the loopback **HTTP** bridge and the remote endpoint (the stdio shim carries no bearer; it resolves the facet from the formula id directly). |
 
 Naming: the maintainer's prompt (§ *Prompt*, below) names the package `@endo/claude`, matching the sibling
 `@endo/claude-sandbox`, which does not carry the `exo-` prefix despite exposing a
-passable `ClaudeClient` over CapTP. `@endo/claude`'s primary export is likewise a
-passable exo (the guarded `infer`, *Design Decision 8*), and the `exo-` prefix does
-not follow from a passable export on the project's own precedent, so the unprefixed
-name is consistent with the sibling and the project convention. (The export *shape*
-is settled as the passable exo in *Design Decision 8*; *Open questions* covers only
-the remaining, independent axis of who triggers an inference.)
+passable `ClaudeClient` over CapTP. `@endo/claude`'s primary export is the maker
+`make`, and the per-guest `infer` it ultimately yields is a passable exo (*Design
+Decision 8*); the `exo-` prefix does not follow from a passable export on the
+project's own precedent, so the unprefixed name is consistent with the sibling and
+the project convention. (The export *shape* is settled as the maker plus the
+per-guest passable exo in *Design Decision 8*; *Open questions* covers only the
+remaining, independent axis of who triggers an inference.)
 
 ## Design Decisions
 
@@ -694,27 +881,43 @@ the remaining, independent axis of who triggers an inference.)
    spawn unless all three appear in the argv, plus `--tools ""` for the built-in
    baseline and `--disable-slash-commands` for the `/skill-name` slash-command
    surface `--bare` leaves resolving and `--tools ""` does not reach (§ *The tool
-   baseline is fail-closed*). (An earlier draft over-credited `--bare` with the
-   other two flags' effects, and credited `--tools ""` with closing the
-   slash-command surface; corrected against the live `--help`.)
+   baseline is fail-closed*).
 2. **The allow-list is generated per guest from one pinned `tools/list` snapshot,
-   and every name is validated.** `mcp__*` is silently ignored as an allow rule;
-   only literal, well-formed `mcp__<server>__<tool>` entries grant, so each method
-   name must match `/^[A-Za-z0-9_-]+$/` or the generator fails closed. To make the
-   non-drift claim real, the harness takes **one** `tools/list` snapshot per spawn
-   and both the allow-list and the catalog the process reads are served from that
-   **same value**, not a shared *source* each side re-reads (which the local-
-   deployment sequence would otherwise show as two independent reads, and which
-   could diverge). `tool-permissions.js` derives the allow entries from the pinned
-   snapshot. Specify the empty-catalog / zero-tool boundary explicitly: a spawn
-   whose facet exposes no tools is a hard error, not a silent confinement pass.
+   and every name is validated by membership, and the bridge enforces the snapshot.**
+   `mcp__*` is silently ignored as an allow rule; only literal, well-formed
+   `mcp__<server>__<tool>` entries grant. A syntactic charset check is insufficient:
+   each method name must be an **own member of the facet's `__getMethodNames__()`
+   set**, must **not** contain `__` or be a dunder/reserved name, or the generator
+   fails closed (§ *Working around the `mcp__*` wildcard trap*); code-eval names
+   (`evaluate`/`eval`/`define`) are structurally denied regardless of the catalog.
+   To make the non-drift claim real, the harness takes **one** `tools/list` snapshot
+   per guest and both the allow-list and the catalog the process reads are served
+   from that **same value**, not a shared *source* each side re-reads (which the
+   local-deployment sequence would otherwise show as two independent reads, and which
+   could diverge). Catalog-keyed lookups use a null-prototype record or `Map`.
+   `tool-permissions.js` derives the allow entries from the pinned snapshot, and the
+   **harness-owned bridge rejects any `tools/call` whose name is not in that
+   snapshot** — the confinement is enforced server-side at the bridge, with the
+   client-side `--allowedTools` as belt, so a leak that ignores `--allowedTools`
+   still cannot reach a withheld method. Specify the empty-catalog / zero-tool
+   boundary explicitly: a spawn whose facet exposes no tools is a hard error, not a
+   silent confinement pass.
 3. **Fresh process per inference; never `--resume` / `--continue`.** Resuming
    restores the full unfiltered transcript across the confinement boundary.
    Continuity, where a guest needs it, is an Endo capability the facet exposes,
    not harness state.
-4. **The guest formula id is the single designator; isolation shape follows the
-   transport.** The formula id names the guest everywhere: the routing key, the
-   catalog lookup, and (in the HTTP transport) the bearer. Under the preferred
+4. **The formula id is named once at grant time, not on every call; the granted
+   `infer` carries no designator (no confused deputy).** A single central
+   `infer(guestFormulaId, ...)` would be **ambient authority over every resolvable
+   guest** — whoever holds it drives inference for any guest by naming its id, the
+   classic confused deputy. Instead, `makeGuestInference(guestFormulaId)` (the
+   privileged step the guest's host performs) validates the 64-hex id, resolves it to
+   the facet, and returns a per-guest exo whose `infer(prompt, {model, cancelled})`
+   **closes over that one facet and takes no designator**. "The guest thinks with
+   Claude" is then literally a capability the guest can hold and exercise, and no
+   holder can reach another guest. The formula id is still the routing key, the
+   catalog lookup, and (in the HTTP transport) the bearer, but it is consumed at
+   grant time, not accepted from a caller per call. Under the preferred
    stdio shim, isolation is per-process: each process spawns its own shim bound to
    its one facet, no shared endpoint, no bearer on a wire. Under the loopback HTTP
    transport, isolation is per-bearer on one shared endpoint, preserving the
@@ -734,9 +937,13 @@ the remaining, independent axis of who triggers an inference.)
    harness-fixed `apiKeyHelper`.** The caplet's live kinds (`apiKey`/`oauthToken`)
    are both inadmissible here (`--bare` ignores `CLAUDE_CODE_OAUTH_TOKEN`; `apiKey`
    is metered), so the caplet is **extended** with a subscription kind. This is
-   work, not drop-in reuse. The allocator maps `acquire -> issue(sessionTag)` and
-   return-to-pool `-> revoke(sessionTag)` (the caplet has no `release`), in a
-   `finally` so a failed spawn cannot strand a credential. The credential reaches
+   work, not drop-in reuse. The allocator maps `acquire -> issue(uniqueSessionTag)`
+   (a distinct tag per spawn, so concurrent same-guest calls do not revoke each
+   other), and **return-to-pool is allocator-owned occupancy bookkeeping** freed in a
+   `finally` on every exit path; `revoke(sessionTag)` is only the
+   invalidate-on-*failure* path (on success `materialise()` has already emptied the
+   caplet's `outstanding`, so `revoke` no-ops), not the thing that frees the slot
+   (the caplet has no `release`). The credential reaches
    the process **only** through a minimal generated `--settings` file whose sole key
    is an `apiKeyHelper` (the one credential path `--bare` honors), and the helper's
    argv is harness-fixed and never prompt-influenceable (§ *The `apiKeyHelper` is an
@@ -745,33 +952,53 @@ the remaining, independent axis of who triggers an inference.)
    across concurrent guests* and *Known Gaps and TODOs*; this decision keeps `--bare`
    primary and resolves the tension by verification, not assertion.
 6. **Tool-surface confinement composes with (and here *requires*) OS-level
-   confinement.** `@endo/claude` confines the tool surface; `@endo/claude-sandbox`
-   confines the process and OS. Running a bare `claude -p` inside a
-   `@endo/claude-sandbox` slice with `network: private` and no workspace mount gives
-   both: even if a future Claude Code change leaked a built-in tool past `--tools ""`
-   + `--disallowedTools`, the slice would still deny it host reach and the scrubbed
-   `ENDO_SOCK` would keep the daemon socket out of its environment. The slice is
-   **required, not merely recommended, for any prompt a guest can influence**. This
-   is the design's whole premise ("the guest thinks with Claude"). Only a fully
-   operator-controlled prompt may run without it.
+   confinement; the slice — not an env scrub — is the boundary.** `@endo/claude`
+   confines the tool surface; `@endo/claude-sandbox` confines the process and OS.
+   Running a bare `claude -p` inside a `@endo/claude-sandbox` slice with
+   `network: private` and no workspace mount gives both: even if a future Claude Code
+   change leaked a built-in tool past `--tools ""` + `--disallowedTools`, the slice's
+   filesystem-namespace isolation is what keeps the daemon socket path out of reach.
+   Scrubbing `ENDO_SOCK` (and the socket-deriving variables) from the child env is
+   **defense-in-depth only, not the boundary** — `whereEndoSock` re-derives the
+   default path from `os.tmpdir()`/`os.userInfo()` with an empty env
+   (`packages/where/index.js`), so the *absence* of the socket is a property of the
+   slice, not of the env. The slice is **required, not merely recommended, for any
+   prompt a guest can influence — and "influence" includes any facet method whose
+   `tools/call` result returns externally authored bytes** (a mail body, a
+   `readText` of an attacker-written file), because that result re-enters the model's
+   context and can steer subsequent in-allow-list calls. So the carve-out for a
+   "fully operator-controlled prompt" is narrow: it applies only when *both* the
+   prompt and every reachable tool result are operator-controlled. This is the
+   design's whole premise ("the guest thinks with Claude").
 7. **The credential/config files have a specified path, mode, and lifetime.** The
    `--mcp-config` file is a bearer token at rest (bearer = facet authority) and the
    `--settings` `apiKeyHelper` file emits a pooled subscription secret. Each is
    created **per spawn** with **exclusive creation at mode `0600`** under a private
-   per-process runtime directory (`$XDG_RUNTIME_DIR`-derived, owner-only), and
-   **unlinked on exit including the crash path** (the same `finally` that revokes the
-   credential), so a crash never leaves a live secret in plaintext and no other local
-   reader can acquire the facet.
-8. **`infer` is a guarded, hardened, passable exo, not a bare function.** Because
-   the intended shape is a capability a guest's host grants (§ *Open questions*), the
-   export crosses CapTP, so it is a `makeExo` remotable with an `M.interface()`
-   guard: `infer` takes the validated 64-hex formula id, the prompt, and an options
-   record (`{model, cancelled}`), and returns a **hardened result record** whose
-   shape is a named, load-bearing failure taxonomy (success payload;
-   rate-limited; MCP-bridge-down; facet-method-threw; `claude -p` non-zero exit;
-   stream-parse error; cancelled). Every value crossing the boundary is `harden`ed.
-   Property tests (below) exercise the guard as universally-quantified claims, not
-   spot checks.
+   per-process runtime directory resolved by **`whereEndoEphemeralState(...)`**
+   (`packages/where/index.js`: `$XDG_RUNTIME_DIR/endo` -> a Windows temp path ->
+   `$TMPDIR/endo-<user>`, owner-only), not a Linux-only hardcoded
+   `$XDG_RUNTIME_DIR`, and **unlinked on exit including the crash path** (the same
+   `finally` that frees the pool slot), so a crash never leaves a live secret in
+   plaintext and no other local reader can acquire the facet.
+8. **`infer` is a guarded, hardened, passable exo (and its return taxonomy is
+   normative here, not deferred).** Because the intended shape is a capability a
+   guest's host grants (§ *Open questions*), the export crosses CapTP, so the
+   per-guest exo `makeGuestInference` returns is a `makeExo` remotable with an
+   `M.interface()` guard. Its `infer` method takes the prompt and an options record
+   (`{model, cancelled}`) — **no formula-id argument** (DD4; the id was consumed at
+   grant time) — and, being async, its guard is `M.call(...).returns(M.promise())`.
+   The promise resolves to a **hardened, tagged result record** whose taxonomy is
+   **settled here, not left to the open question**: a `type` discriminant field with
+   these cases and payloads — `{type: 'ok', text, usage}`; `{type: 'rate-limited',
+   retryAfterMs?}`; `{type: 'bridge-down', detail}`; `{type: 'facet-threw', method,
+   error}`; `{type: 'nonzero-exit', code}`; `{type: 'parse-error', detail}`;
+   `{type: 'cancelled', at: 'before-spawn'|'mid-stream'|'after-exit'}`. (The `type`
+   field follows the sibling's `{type: 'end'}`/`{type: 'abort', reason}` precedent,
+   `packages/claude-sandbox/README.md`.) Every value crossing the boundary is
+   `harden`ed. The *Open questions* entry is reduced to the residual — the exact
+   payload of the rarer cases as the build measures them — not the existence of the
+   taxonomy. Property tests (below) exercise the guard as universally quantified
+   claims, not spot checks.
 
 ## Known Gaps and TODOs
 
@@ -786,18 +1013,28 @@ the remaining, independent axis of who triggers an inference.)
       be presented through an `apiKeyHelper`, or whether `--bare` forces a metered
       `ANTHROPIC_API_KEY` (or dropping `--bare`). This resolves the load-bearing
       tension in *Design Decision 5*.
-- [ ] Run a live negative-confinement test: spawn the real confined `claude -p` and
-      confirm no built-in tool (Bash, Read, Write, and the rest) executes, that a
-      prompt containing a `/skill-name` resolves **no** skill (asserting
+- [ ] Run a live negative-**and-positive** confinement test: spawn the real confined
+      `claude -p`. **Negative:** no built-in tool (Bash, Read, Write, and the rest)
+      executes; a prompt containing a `/skill-name` resolves **no** skill (asserting
       `--disable-slash-commands` closes the slash-command parse path `--tools ""`
-      does not), no MCP server but the one guest's is reachable, and the credential
-      pool returns to full occupancy after an induced crash. The dependency-injected
-      unit tests cannot catch a wrong-flag confinement gap.
+      does not); no MCP server but the one guest's is reachable; and the credential
+      pool returns to full occupancy after an induced crash. **Positive (so the test
+      cannot pass vacuously on a zero-tool config — the exact failure this design
+      names, "confinement passes by exposing nothing"):** the guest's MCP tools
+      **do** invoke (a `tools/call mcp__endo__…` reaches the facet and returns);
+      `--tools ""` leaves the MCP surface reachable (measure the assumed claim, do not
+      assert it); a planted user/project `settings.json` demonstrably has **no**
+      effect (measure that `--setting-sources ""` drops it); and the pooled
+      `apiKeyHelper` **is** the credential consumed (no inherited `ANTHROPIC_API_KEY`
+      shadows it). The dependency-injected unit tests cannot catch a wrong-flag
+      confinement gap, and negative-only assertions cannot catch a broken-positive one.
 - [ ] Derive **property tests** for the `forall` confinement claims rather than spot
       checks: `@endo/agentry` already depends on `fast-check ^4.9.0` for this domain,
-      so model the argv invariant (prompt never in the flag vector; every variadic
-      flag followed by a flag or `--`), the allow-list round-trip (validated names
-      in -> exactly those `mcp__...` entries out, malformed names -> fail closed), and
+      so model the argv invariant (no argv element equals the prompt string at any
+      index, including the empty and one-char prompt; each variadic flag's value run
+      is exactly the harness-supplied tokens, terminated by a flag or `--`), the
+      allow-list round-trip (facet-member names in -> exactly those `mcp__...` entries
+      out; non-member, dunder, `__`-bearing, or code-eval names -> fail closed), and
       the credential-pool lifecycle (an `fc.commands` model of acquire/return under
       induced failures that never strands a subscription).
 - [ ] Verify on a real managed-settings deployment whether `--setting-sources ""`
@@ -825,12 +1062,14 @@ is accepted, not written in this pass.
 
 - Which is the canonical trigger for a guest inference: does the guest itself
   `request` an inference of its host (Claude as a capability the guest holds), or
-  does an operator/scheduler outside the guest drive `infer(...)` on the guest's
-  behalf? The maintainer's prompt says "the guest thinks with Claude," which leans toward the
-  former, but the confined process holds only the facet, so the *decision to
-  infer* comes from outside the confined process either way. Recommend: expose
-  `infer(...)` as a capability the guest's host grants, so "the guest thinks" is
-  literally a capability the guest can hold and exercise.
+  does an operator/scheduler outside the guest drive it on the guest's behalf? This
+  is the sole remaining axis: the *shape* is already settled (DD4/DD8) as a per-guest
+  `infer(prompt, opts)` exo that `makeGuestInference(guestFormulaId)` mints closing
+  over one facet, precisely so no holder is a confused deputy over other guests.
+  Recommend: the guest's host grants that exo to the guest, so "the guest thinks" is
+  literally a capability the guest can hold and exercise; an operator driving it is
+  the same exo held by the operator instead. Either way the *decision to infer* comes
+  from outside the confined process, which holds only the facet.
 - Can *managed* (enterprise-policy) Claude settings be suppressed by
   `--setting-sources ""`? Undocumented; treat as "assume they cannot" until
   verified against a real managed-settings deployment, and keep `@endo/claude`
@@ -841,12 +1080,14 @@ is accepted, not written in this pass.
   `gardeners: N` today? Recommend: start with operator-set weights plus a
   cooling flag on a detected rate-limit response, and make burn-reading a later
   refinement if a signal exists.
-- What is the failure taxonomy at the harness boundary (subscription rate-limited,
-  MCP bridge down, guest facet method threw, `claude -p` non-zero exit, stream
-  parse error), and how does each surface back to the caller? The precedent is the
-  sibling `@endo/claude-sandbox`, whose reply reader terminates with a `{type:
-  'end'}` or `{type: 'abort', reason}` record (`packages/claude-sandbox/README.md`
-  § `ClaudeClient`); a similar small enumeration should land with the build.
+- The failure taxonomy's *shape* is settled in DD8 (a hardened, `type`-tagged result
+  record over `ok` / `rate-limited` / `bridge-down` / `facet-threw` / `nonzero-exit` /
+  `parse-error` / `cancelled`, following the sibling's `{type: ...}` precedent). The
+  residual open question is narrower: the exact payload fields of the rarer cases
+  (does a rate-limit response expose a `retryAfterMs`? what detail does a stream
+  parse error carry?) as the build measures them against the real `claude -p`
+  stream-json output — refinement within a settled record, not the record's
+  existence.
 
 ## Prompt
 
