@@ -163,9 +163,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Temporarily pin Node 24: Node 24.19 triggers the better-sqlite3@11.10.0
-        # legacy node::ObjectWrap cleanup abort; see
-        # https://github.com/nodejs/node/pull/65042.
+        # Node 24.x is pinned to 24.18.0: 24.19.0 regressed teardown with a
+        # use-after-free in CleanupHookThunkRun, crashing better-sqlite3 AVA
+        # workers in RemoveEnvironmentCleanupHook (Assertion failed:
+        # (env) != nullptr). Lift the pin once the Node fix ships.
+        # https://github.com/nodejs/node/issues/65195
+        # https://github.com/nodejs/node/pull/65196
         node-version: [22.x, 24.18.0]
         platform: [ubuntu-latest, macos-15]
         # windows-latest exhibited flakey tests that are not yet worth the
@@ -332,9 +335,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Temporarily pin Node 24: Node 24.19 triggers the better-sqlite3@11.10.0
-        # legacy node::ObjectWrap cleanup abort; see
-        # https://github.com/nodejs/node/pull/65042.
+        # Node 24.x is pinned to 24.18.0: 24.19.0 regressed teardown with a
+        # use-after-free in CleanupHookThunkRun, crashing better-sqlite3 AVA
+        # workers in RemoveEnvironmentCleanupHook (Assertion failed:
+        # (env) != nullptr). Lift the pin once the Node fix ships.
+        # https://github.com/nodejs/node/issues/65195
+        # https://github.com/nodejs/node/pull/65196
         node-version: [22.x, 24.18.0]
         platform: [ubuntu-latest]
 
@@ -377,9 +383,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Temporarily pin Node 24: Node 24.19 triggers the better-sqlite3@11.10.0
-        # legacy node::ObjectWrap cleanup abort; see
-        # https://github.com/nodejs/node/pull/65042.
+        # Node 24.x is pinned to 24.18.0: 24.19.0 regressed teardown with a
+        # use-after-free in CleanupHookThunkRun, crashing better-sqlite3 AVA
+        # workers in RemoveEnvironmentCleanupHook (Assertion failed:
+        # (env) != nullptr). Lift the pin once the Node fix ships.
+        # https://github.com/nodejs/node/issues/65195
+        # https://github.com/nodejs/node/pull/65196
         node-version: [22.x, 24.18.0]
         platform: [ubuntu-latest]
 
@@ -486,9 +495,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Temporarily pin Node 24: Node 24.19 triggers the better-sqlite3@11.10.0
-        # legacy node::ObjectWrap cleanup abort; see
-        # https://github.com/nodejs/node/pull/65042.
+        # Node 24.x is pinned to 24.18.0: 24.19.0 regressed teardown with a
+        # use-after-free in CleanupHookThunkRun, crashing better-sqlite3 AVA
+        # workers in RemoveEnvironmentCleanupHook (Assertion failed:
+        # (env) != nullptr). Lift the pin once the Node fix ships.
+        # https://github.com/nodejs/node/issues/65195
+        # https://github.com/nodejs/node/pull/65196
         node-version: [22.x, 24.18.0]
         platform: [ubuntu-latest]
 
