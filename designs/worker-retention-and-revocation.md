@@ -56,7 +56,7 @@ The mechanics already in the tree that this document builds on:
   implicit**: the peer drops the handle, its collector emits a `remove`, the
   next delta carries it, the edge is removed, and the formula joins the next
   mark-and-sweep.
-- **Disincarnation** (`cancelValue`, `daemon.js`): drop the in-memory exo and
+- **Disincarnation** (`cancelValue`, `manager.js`): drop the in-memory exo and
   abort ongoing work for an ID **without** removing the formula JSON; the next
   access reincarnates from disk. This is the *soft* form; the *hard* form is
   killing the worker whose heap holds a swept reference.
@@ -208,7 +208,7 @@ capability answer to the Lampson/Boebert confinement objection): the confined
 subject's state holds *"only data and no capabilities,"* which is exactly the
 property a leaked formula ID would break.
 
-### These are not in conflict — and the daemon already proves it
+### These are not in conflict — the trusted-side seam exists, but the guest-facing rule is a tightening, not an already-uniform invariant
 
 The resolution is that the value → formula-ID mapping is done **entirely on the
 daemon's trusted side**, keyed off an object identity the guest's representation
@@ -220,13 +220,31 @@ cannot serialize. The daemon already has exactly this seam:
   guest holds an opaque **slot number scoped to its own c-list** — never the
   formula ID. The daemon side holds the export-table entry, and from it can
   resolve to the formula record.
-- The daemon already resolves *"which formula is this presence"* internally:
-  `host.identify(...namePath)` → locator, `locate()` → formula, and
-  `listRetentionPaths(locator)` is **host-only, never on `EndoGuest` or the
-  CapTP gateway** ([daemon-retention-paths](daemon-retention-paths.md) §"Why
-  host-only"), precisely so a guest cannot enumerate host structure. The `endo
-  paths` CLI resolves a pet name to a locator on the *host* side before calling
-  the daemon; the locator string never crosses to a guest.
+- The daemon resolves *"which formula is this presence"* internally through the
+  name hub / directory: `identify(...petNamePath)` returns the **formula
+  identifier** (`packages/daemon/src/types.d.ts:943`; `packages/daemon/src/manager.js:2990`)
+  and `locate(...petNamePath)` returns the **locator** (`types.d.ts:944`).
+  `listRetentionPaths(locator)` *is* strictly **host-only, never on `EndoGuest`
+  or the CapTP gateway** (`packages/daemon/src/interfaces.js:526`,
+  `DiagnosticsInterface`; absent from `GuestInterface`;
+  [daemon-retention-paths](daemon-retention-paths.md) §"Why host-only"), so a
+  guest cannot enumerate host structure that way.
+
+**But be precise about what is *not* already withheld.** `identify` /
+`reverseIdentify` / `locate` are part of the shared `nameHubMethodGuards`
+(`packages/daemon/src/interfaces.js:99-101`) that `GuestInterface` spreads
+(`:160-163`) and `packages/daemon/src/guest.js:343` wires, so a **general guest
+already can call `identify` and receive a formula-identifier string**; only the
+*least-authority* guest disallows them (`packages/daemon/src/manager.js:4081-4096`).
+So "no formula ID is guest-reachable" is **not** an invariant the daemon
+uniformly proves today — it is a property the least-authority guest has and the
+general guest does not. The value-passing sugar must therefore be specified to
+keep formula IDs off *its* guest-reachable surface (the export table lookup stays
+daemon-side; the sugar returns only c-list slots), and Design Decision 2 states
+that as a **tightening the design commits to**, not a restatement of existing
+behavior. The `endo paths` CLI already respects this on the host side: it
+resolves a pet name to a locator on the *host* before calling the daemon, and the
+locator string never crosses to a guest.
 
 So the answer to *"is there a stable daemon-side identity for a live presence
 that daemon-internal code can key off, across the eventual-send boundary?"* is
@@ -383,8 +401,8 @@ constraint is the whole of this proposal.
 — the descriptor that already parameterizes how a worker is brought up — set at
 worker-request time, not negotiated per-message. A first-cut vocabulary:
 
-```
-WorkerDiscipline = {
+```ts
+type WorkerDiscipline = {
   // How state survives between deliveries and across restart.
   persistence: 'orthogonal'        // engine heap snapshot is ground truth (thixotrope XS)
              | 'explicit-durable'   // Hofman model: only named durable writes survive
@@ -395,9 +413,9 @@ WorkerDiscipline = {
          | 'succession',             // new vat + app-designed handoff + name rebind
 
   // Identity continuity for inbound references (mirrors named vs worker-import edges).
-  identity: 'eq-stable'              // direct link, EQ survives; no behavior swap
+  identity: 'worker-import'          // direct link, EQ survives; no behavior swap
           | 'named',                 // resolves through the name hub per delivery; upgradable
-}
+};
 ```
 
 The three fields are **not** independent — `upgrade: 'succession'` is only
@@ -406,8 +424,8 @@ succession (a `worker-import` link pins the origin `(workerId, slot)` forever an
 cannot be rerouted), and `persistence: 'orthogonal'` with `upgrade: 'succession'`
 is the thixotrope name-hub plan exactly. The daemon should **validate the
 combination** at request time and reject incoherent ones (e.g. `upgrade:
-'succession'` with every inbound edge `eq-stable`, which cannot actually reroute
-anything). This mirrors the petname/edge-name and named/worker-import choices the
+'succession'` with every inbound edge `worker-import`, which cannot actually
+reroute anything). This mirrors the petname/edge-name and named/worker-import choices the
 system already forces at grant time — it is not a new concept, it is the existing
 choice made **explicit and per-worker** instead of implicit and global.
 
@@ -487,20 +505,30 @@ field, `retention`, and `transient` labels in
 cluster while the question is open; resolution (`fulfill`/`break`) removes the
 edge; the next mark-and-sweep collects it if nothing durable claimed a name.
 
-Crucially, the daemon **already has this pattern at connection granularity** —
-the **captp-bounded transient pin** (`graph.js` `transientRoots`;
-`makeRetainedValue(spec) → { id, release }`). It lets a CapTP peer hold a
-formula alive without granting persistence; the pin is in-memory only, its
-*"lifetime bounded by the captp connection,"* and **the CapTP partition signal
-intrinsically releases it**. The `release` exo deliberately *"carries no
-reference to the target value, the target's worker, or the daemon's internal
-graph,"* and release ordering is *"disk before graph."* The batch-flush root is
-this exact mechanism **refined from whole-connection lifetime to single-question
-lifetime**: instead of "pinned until the peer disconnects," it is "pinned until
-this question resolves." Everything the pin already guarantees — no persistence,
-no confinement leak in the `release` handle, partition-triggered release —
-carries over unchanged; only the release *trigger* narrows from `op:abort` to
-`op:gc-answers`/resolution.
+Crucially, the daemon **already has the landed half of this pattern**: the
+in-memory **refcounted transient pin** (`graph.js` `transientRoots`, pinned and
+unpinned by `pinTransient(id)` / `unpinTransient(id)`,
+`packages/daemon/src/graph.js:629,645`). A pinned formula is held alive without
+granting persistence; the pin is in-memory only and keyed on a formula id, and
+every landed call site scopes it to a single in-flight operation released in a
+`finally` — there is today **no** connection-lifetime binding and **no**
+partition-triggered release built on it. The **connection-bounded ergonomic
+surface** over that pin — `makeRetainedValue(spec) → { id, release }`, whose
+`release` exo deliberately *"carries no reference to the target value, the
+target's worker, or the daemon's internal graph,"* with release ordering *"disk
+before graph"* — is **not yet in the tree**: it is *Proposed* API on `EndoHost` /
+`EndoGuest` in [chat-slot-slash-commands](chat-slot-slash-commands.md) (Status:
+Proposed), and the quoted `release`-exo guarantees are that proposal's text, not
+shipped code. So the honest delta is **two steps, not one**: the batch-flush root
+takes the landed refcounted pin and **refines it from a single-operation lifetime
+to a single-question lifetime** — giving the anonymous formula a
+`question`-labeled edge, union-find-pinned while the question is unsettled and
+unpinned when the question **resolves** — and it **inherits** the `{ id, release }`
+handle and its confinement guarantees from the Proposed `makeRetainedValue`
+surface, which this design depends on rather than assumes built. The no-persistence
+property the landed pin already has carries over unchanged; the connection-bounded
+lifetime, the `release` handle, and partition-triggered release do **not** carry
+over "unchanged" because they are not yet built.
 
 Now the four questions.
 
@@ -516,7 +544,7 @@ bound). **Do** scope it per-question, at the granularity CapTP already tracks:
   span: fan-out (one reply triggers several pipelined sends) is *several
   questions*, each independently rooting what it references; a chain (A's answer
   pipelines into B) is B's question rooting the intermediate that A's settlement
-  would otherwise have released, with the refcount handing off cleanly. Nothing
+  would otherwise have released. Nothing
   is collected while a *later hop of the same logical operation still holds a
   question against it*, because that hop's question is a live edge; nothing stays
   rooted once *no* question references it, however deep the original cone was.
@@ -524,6 +552,36 @@ bound). **Do** scope it per-question, at the granularity CapTP already tracks:
 This is the standard resolution: the "batch" is not a bounded time window, it is
 the **transitive closure of unsettled questions**, which closes exactly when the
 last one settles.
+
+**The refcount hand-off is not automatically clean — it has three zero-refcount
+windows that must be closed by an explicit rule, not asserted away:**
+
+- *Mint → first question edge.* An intermediate is minted before the question
+  that will root it is entered in the export table; a sweep landing in that gap
+  would collect a live intermediate. **Rule:** the mint and the first
+  `question`-edge insertion are a single graph mutation (the intermediate is
+  born already pinned by the question that mints it), so no sweep observes it
+  unrooted. This is the same atomicity the `pinTransient` refcount already
+  requires between allocation and first pin.
+- *Settle before the next hop's edge exists.* A client that awaits A's `fulfill`
+  and only then pipelines B briefly drops the intermediate's refcount to zero
+  between A's edge removal and B's edge insertion. Here collection is **correct**,
+  not a bug: at that instant nothing references the intermediate, and if B never
+  arrives it *should* be collected. The chain case where the doc claims a clean
+  hand-off is the one where B's question is already in flight *before* A settles;
+  there the two edges coexist and the refcount never reaches zero.
+- *Arrival after collection.* The remaining case is the adversarial/lagging one
+  saboteur names: A `fulfill`s, the `question` edge drops, the refcount hits zero,
+  the sweep collects the intermediate, and *then* an already-in-flight pipelined
+  send against `<desc:answer answer-pos>` for a further hop arrives. A settled
+  answer position is a spent wire fact — further pipelining against it is not
+  well-formed — but that is a sender obligation a hostile or merely-lagging peer
+  need not honor, so it cannot be the exporter's defense. **Rule:** a message
+  that arrives against an already-collected anonymous intermediate is rejected
+  **partition-shaped** (Thread 1) — the sender sees a broken reference, never a
+  silent rebind to a different value and never an exporter crash. This is the
+  same failure the per-root lease and session abort already produce, so it adds
+  no new failure class the program does not already tolerate.
 
 #### Q2 — The stuck-batch / non-flushing case (the resource-exhaustion vector)
 
@@ -557,11 +615,18 @@ in the tree:
    metering insight directly ([daemon-xs-worker-metering](daemon-xs-worker-metering.md):
    *"admission control eliminates embargo"*): cap the number and/or aggregate size
    of outstanding anonymous roots **per session**, and when the cap is hit,
-   **refuse further pipelining** (backpressure — buffer or reject the send) rather
-   than mint another unbounded root. A counterparty cannot force retention past
-   the cap because the daemon stops minting roots, exactly as the supervisor stops
-   delivering messages when budget is exhausted. This is the piece that makes the
-   root safe against a hostile peer rather than merely a crashed one.
+   **refuse further pipelining** (backpressure — reject the send) rather
+   than mint another unbounded root. The cap must be stated over the
+   **transitively pinned closure**, not the count of question edges: a
+   `question` edge is union-find-pinned, so one root pins its entire group, and
+   `N` roots under a naive per-edge cap can retain arbitrarily more than `N`
+   formulas. The bound is therefore on the aggregate size of the union-find
+   groups the outstanding roots pin, so a counterparty cannot inflate retention by
+   fanning a single root into a large cluster. A counterparty cannot force
+   retention past the cap because the daemon stops minting roots, exactly as the
+   supervisor stops delivering messages when budget is exhausted. This is the
+   piece that makes the root safe against a hostile peer rather than merely a
+   crashed one.
 
 With all three, the stuck-batch hazard is bounded by (1) session lifetime, (2) a
 per-root lease, and (3) a per-session admission cap — no single one is load-bearing
@@ -593,14 +658,21 @@ pipelined-question case is the degenerate (single-hop) instance.
 Two honest caveats here:
 
 - **Confinement note:** the 32-byte `gift-id` *is* observed by the Receiver
-  guest — but that is legitimate, and does **not** violate Thread 2. A `gift-id`
-  is a freshly-minted **unguessable swiss-number** handed over *as* an
-  introduction ("only connectivity begets connectivity"); it names no
-  pre-existing capability out of band. It is categorically different from a
-  daemon **formula identifier**, which designates an existing capability and
-  whose leak would be the ambient-authority channel Distributed Confinement
-  forbids. The design must keep formula IDs off the wire; it need not (and
-  cannot) keep swiss-number gift-ids off the wire.
+  guest — but that is legitimate, and does **not** violate Thread 2. The
+  discriminator is **not** "freshly-minted and unguessable" — a formula
+  identifier is *also* a freshly-minted, unguessable cryptographic designator,
+  and a deposited gift *is* a pre-existing capability (held at the Exporter), so
+  the "names no pre-existing capability out of band" gloss does not actually
+  separate the two. The real discriminator is **redemption-boundness**: the gift
+  is withdrawable **only** by the Receiver named in the signed
+  `desc:handoff-give` / `desc:handoff-receive` pair, is **single-use**, and is
+  **scoped to one handoff** — so possession of the `gift-id` alone confers no
+  authority (an eavesdropper cannot redeem it without being the certified
+  Receiver). A **formula identifier**, by contrast, *is* the authority: anyone
+  who can serialize it can reconstitute the capability without introduction —
+  the ambient-authority "fifth way" Distributed Confinement forbids. The design
+  must keep formula IDs off the wire *because they are bearer authority*; it need
+  not (and cannot) keep the redemption-bound `gift-id` off the wire.
 - **Dependency / gap:** the garden library documents the handoff's *descriptor*
   vocabulary but has **no CapTP promise-resolution / handoff *embargo* mechanism
   on record** — the classic "hold deliveries to a resolved promise until the
@@ -618,23 +690,38 @@ resolve/settle traffic that already exists on the wire, or does it require a new
 explicit boundary signal?**
 
 **For the two-party pipelined-question case: locally derivable — no OCapN change.**
-The relevant wire facts already exist. A promise resolves via **`fulfill`** (a
+The relevant wire fact already exists. A promise resolves via **`fulfill`** (a
 value) or **`break`** (an error) — note there is no separate "settle" verb; that
-is the resolution event. Reference counting rides two GC operations:
-**`op:gc-exports`** (an `export-pos-list` with per-ref `wire-delta`s that
-decrement the exporter's refcount; *"when a reference count reaches 0, the
-corresponding object can be garbage collected"*) and **`op:gc-answers`** (an
-`answer-pos-list`, needing *no* wire-delta because only the questioner references
-an answer-pos, so there is no concurrent in-flight reference the exporter is
-unaware of; emitted from the questioner's local finalizer when its question
-representation is collected). *"No outstanding question references this anonymous
-export"* is therefore an **answer-pos refcount reaching zero** — computable
-entirely from `fulfill`/`break` plus `op:gc-answers`/`op:gc-exports`, messages
-each peer already sends and receives. So the batch-flush root is a **bookkeeping
-detail inside one daemon's formula graph**, requiring nothing new from OCapN, and
-is *better understood as a specialization of the refcounted import/export drop
-protocol the kernel already runs* (`deliverDropExports`/`deliverRetireExports`)
-than as a new primitive.
+is the resolution event, and it is a **protocol-level fact**: every peer derives
+it identically from a message on the wire. **Resolution is therefore the
+authoritative trigger** that drops the `question` edge — the moment a question
+`fulfill`s or `break`s, the anonymous intermediate is no longer reachable through
+*that* question, the edge is removed, and the next sweep collects it unless a
+later hop's live question still references it (Q1).
+
+The reference-counting GC operations must **not** be promoted to the authoritative
+trigger, and here the design has to hold the Thread 3 line explicitly rather than
+assert it passes. **`op:gc-exports`** (an `export-pos-list` with per-ref
+`wire-delta`s) and **`op:gc-answers`** (an `answer-pos-list`, no wire-delta
+because only the questioner references an answer-pos) are both *"emitted from the
+questioner's local finalizer when its question representation is collected"* — so
+an "answer-pos refcount reaching zero" is a **local-timing artifact**, a function
+of the *remote peer's* `FinalizationRegistry`, not a wire fact every peer derives
+identically. Keying the root's release on it would let the laziest collector in
+the network set retention policy downstream — a large-heap or deliberately
+non-collecting peer whose finalizer never runs would hold the anonymous root open
+indefinitely, which is **precisely** the hazard Thread 3 forbids and the reason
+Design Decision 3 must reject it. `op:gc-answers` is therefore admitted **only as
+the sanctioned optimization hint** Thread 3 sanctions ("the questioner has
+provably dropped its reference, so it is safe to release *now* rather than wait
+for resolution"), never as the release fact. The residual cost is bounded: a peer
+that never fires `op:gc-answers` costs at most retention until the question
+**resolves** (`fulfill`/`break`) or the Q2 bounds fire (per-root lease,
+per-session abort) — all wire facts. So the batch-flush root is a **bookkeeping
+detail inside one daemon's formula graph**, keyed on resolution, requiring nothing
+new from OCapN, and is *better understood as a specialization of the refcounted
+import/export drop protocol the kernel already runs*
+(`deliverDropExports`/`deliverRetireExports`) than as a new primitive.
 
 **A documented gap to state plainly:** there is **no explicit *"nothing further
 is forthcoming on this pipeline"* wire message** in the OCapN CapTP spec — the
@@ -643,13 +730,16 @@ only GC/teardown signals are `op:gc-exports`, `op:gc-answers`, and `op:abort`
 would be proposing a genuine protocol addition. The claim here is the opposite:
 the marker is **not needed**, because the batch's flush is fully reconstructible
 from *(a)* resolution (`fulfill`/`break`, after which further pipelining against
-that promise is not well-formed), *(b)* the answer-pos refcount hitting zero via
-`op:gc-answers`, and *(c)* `op:abort` collapsing the whole session's roots. The
-burden of proof is on exhibiting a reachable pipeline state that is *neither*
-resolved *nor* GC-dropped *nor* session-aborted; absent such a state — and the
-spec surface suggests there is none — **no OCapN addition is warranted.** If one
-were ever found, it would be a per-implementation daemon signal, never an OCapN
-wire primitive (next paragraph).
+that promise is not well-formed — the **authoritative** trigger), *(b)* the
+per-root lease and per-session admission bounds for a question that never resolves
+(Q2), and *(c)* `op:abort` collapsing the whole session's roots. (`op:gc-answers`
+may release a root *earlier* than (a) as the optimization hint described above,
+but is never the release fact, because its emission is finalizer-driven and so
+fails the Thread 3 test.) The burden of proof is on exhibiting a reachable
+pipeline state that is *neither* resolved *nor* lease/abort-bounded *nor*
+session-aborted; absent such a state — and the spec surface suggests there is
+none — **no OCapN addition is warranted.** If one were ever found, it would be a
+per-implementation daemon signal, never an OCapN wire primitive (next paragraph).
 
 **And if it *were* Endo-formula-specific machinery, it should not go into OCapN.**
 OCapN aims to stay a minimal, general interop layer across CapTP implementations
@@ -693,16 +783,29 @@ worded.
    the preferred revocation path.** Where the daemon mediates introduction, a
    forwarder/`named`-edge revocation (holder sees partition, no collateral) is
    better; kill-the-worker is reserved for the one case a caretaker cannot reach
-   — a direct reference already in a worker's heap (Thread 1).
+   — a direct reference already in a worker's heap (Thread 1). **Fail-safe
+   default:** because the daemon cannot always decide whether a target is
+   reachable by a direct in-heap reference (the Thread 1-boundary open question),
+   *unknown provenance implies kill* — when the daemon cannot prove a revoked
+   capability is reachable **only** through host-mediated forwarders, it kills the
+   worker rather than risk leaving a revoked capability serviceable. Revocation
+   fails toward collateral, never toward silent under-revocation.
 
 2. **The value → formula-ID map is the CapTP export table, daemon-private.** No
    formula ID or derived locator may appear in any guest-reachable value, result,
-   or error. Value-passing sugar inherits the retention-paths design's host-only
-   rule (Thread 2).
+   or error reachable through the value-passing sugar. This is a **tightening the
+   design commits to**, not a property the daemon uniformly holds today: the
+   general `GuestInterface` already exposes `identify`/`locate` (only the
+   least-authority guest withholds them), so the sugar must be specified to keep
+   formula IDs off *its* surface, inheriting the retention-paths design's
+   host-only rule (Thread 2).
 
 3. **Liveness signals are protocol-level facts; `FinalizationRegistry` is a hint,
    never authority.** Every mechanism here is checked against the Thread 3 test;
-   the batch-flush root passes only because "question settled" is a wire fact
+   the batch-flush root passes only because its authoritative release trigger is
+   **resolution** (`fulfill`/`break`) — a wire fact — while `op:gc-answers`
+   (finalizer-emitted, hence a local-timing artifact) is admitted **only** as an
+   optimization hint that may release *earlier*, never as the release signal
    (Thread 3, Thread 5-Q4).
 
 4. **Worker discipline is an explicit per-worker constraint on the incarnation
@@ -716,9 +819,13 @@ worded.
    anonymous `.then` over transient heap is transient by construction (Thread 4).
 
 6. **The batch-flush root is a specialization of CapTP question/answer
-   refcounting, not a new primitive and not an OCapN change**, bounded by
-   session-subordinate abort + per-root lease + per-session admission cap
-   (Thread 5).
+   refcounting, not a new primitive and not an OCapN change**, released on
+   **resolution** (`fulfill`/`break`) and bounded by session-subordinate abort +
+   per-root lease + per-session admission cap over the transitively pinned
+   closure (Thread 5). It **inherits** the `{ id, release }` handle from the
+   *Proposed* `makeRetainedValue` surface ([chat-slot-slash-commands](chat-slot-slash-commands.md)),
+   refining the landed refcounted transient pin (`pinTransient`/`unpinTransient`)
+   from single-operation to single-question lifetime.
 
 ## Dependencies
 
@@ -728,6 +835,7 @@ worded.
 | [daemon-retention-paths](daemon-retention-paths.md) (In Progress) | Supplies the labeled-edge graph model, the `transient` root, and the host-only confinement rule this design extends with a `question` edge. |
 | [ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) (In Progress) | Supplies the name hub / `named` vs `worker-import` edges (Thread 1, Thread 4), the at-most-once abort + tombstone machinery (Thread 5-Q2), and the lease/expiry follow-up (Thread 5-Q2). |
 | [daemon-xs-worker-metering](daemon-xs-worker-metering.md) | Supplies the "admission control eliminates embargo" pattern the per-session root cap borrows (Thread 5-Q2). |
+| [chat-slot-slash-commands](chat-slot-slash-commands.md) (Proposed, Not Started) | Supplies the **not-yet-landed** `makeRetainedValue(spec) → { id, release }` surface and its `release` exo guarantees, from which the batch-flush root inherits the `{ id, release }` handle. The landed foundation is only the refcounted transient pin (`pinTransient`/`unpinTransient`); the connection-bounded ergonomic pin is a prerequisite, not extant machinery (Thread 5). |
 | `packages/captp` (`makeCapTPImportExportTables`) | The question/answer/import/export tables the batch-flush root refcounts over (Thread 2, Thread 5). |
 | `packages/ocapn` three-party handoff | **Blocking** for the multi-party scope of Thread 5 (Q3): the embargo lifetime must be an observable protocol state. |
 
@@ -778,11 +886,21 @@ worded.
   not library-backed facts (Thread 4).
 - **In-tree Endo mechanisms.** `daemon-cross-peer-gc` (retention set +
   `retention-accumulator`), `daemon-retention-paths` (labeled-edge graph,
-  `transient` root, host-only rule), the **captp-bounded-transient-pin**
-  (`graph.js` `transientRoots`, `makeRetainedValue`, connection-bounded lifetime),
+  `transient` root, host-only rule), the landed **refcounted transient pin**
+  (`graph.js` `transientRoots`, pinned/unpinned by `pinTransient` /
+  `unpinTransient`, `packages/daemon/src/graph.js:629,645`; scoped per-operation
+  at every landed call site — no connection-lifetime or partition-triggered
+  release built on it),
   `ocapn-orthogonal-persistence` (name hub, at-most-once abort, tombstone
   descriptors), `daemon-xs-worker-metering` (admission control, budget as
   pre-payment).
+- **Proposed (not yet landed) Endo mechanisms.** The connection-bounded
+  `makeRetainedValue(spec) → { id, release }` surface and its `release` exo
+  (*"carries no reference to the target value…"*, *"disk before graph"*) are
+  **Proposed** API on `EndoHost`/`EndoGuest` in
+  [chat-slot-slash-commands](chat-slot-slash-commands.md) (Status: Proposed;
+  README row: Not Started), **not** extant code; the batch-flush root inherits its
+  `{ id, release }` handle from that proposal rather than from shipped machinery.
 
 ## Open Questions
 
@@ -806,7 +924,10 @@ worded.
 - [ ] **Thread 1 boundary:** can the daemon detect, at revocation time, whether a
       target is reachable by a *direct* in-heap reference (needs kill-the-worker)
       vs. only through host-mediated forwarders (can revoke without collateral)?
-      If so, kill-the-worker fires only when genuinely necessary.
+      If so, kill-the-worker fires only when genuinely necessary. Until it can,
+      the fail-safe default in Design Decision 1 governs — unknown provenance
+      implies kill — so the open question is an optimization (avoid needless
+      collateral), never a soundness gap.
 
 ## Prompt
 
