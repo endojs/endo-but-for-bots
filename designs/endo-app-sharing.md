@@ -236,6 +236,23 @@ index lives in [app-sharing-milestone](app-sharing-milestone.md).
 - [ ] Update/versioning of a cloned app (pull a newer tree) — out of scope for
       the milestone; clones are point-in-time copies.
 
+### Outstanding from the streaming-clone implementation
+
+- [ ] **Re-clone into a non-empty destination requires `setStat`.** Overwrite
+      correctness (no stale trailing bytes when the new file is shorter) is
+      achieved with `create(name, { truncate: true })`, which needs the
+      backend's `setStat` capability. Backends without it cannot truncate and
+      so cannot correctly clobber a longer pre-existing file.
+- [ ] **`harvestTree` does an extra `lookup` per entry (N+1 round-trips).**
+      `list()` returns `{ name, qid }` but not child caps, so each entry —
+      directories included — costs an `E(dir).lookup(name)` to recurse or open.
+      Over a CapTP boundary this doubles per-node round-trips, partially
+      undercutting the "one stream, few round-trips" goal; reducing it needs a
+      batched walk or a cursor that carries the child cap.
+- [ ] **`writeTreeStream`'s `openFile` is loosely typed (`any`).** It could be
+      tightened to the `OpenFile` cap type once the bytes-writer iterator shape
+      is expressible without widening.
+
 ## Prompt (refinement)
 
 > rather than a pipelined approach, I think a stream of filename file content
