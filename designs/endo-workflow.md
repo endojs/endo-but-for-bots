@@ -5,7 +5,51 @@
 | **Created** | 2026-08-16 |
 | **Updated** | 2026-08-16 |
 | **Author** | kumavis (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
+
+## Status
+
+Phase 1 (the host-agnostic interpreter core) is implemented as
+`packages/workflow` (`@endo/workflow`, private):
+
+- `src/definition.js` — `validateDefinition` structured diagnostics
+  (dangling targets, unreachable states, undeclared participants,
+  unlisted attenuators, unmatched `when.as` correlations, define-time
+  expression parsing, the fanout-`all`-without-timeout and
+  unhandled-rejection warnings); `assertValidDefinition`,
+  `renderDiagnostics`.
+- `src/expression.js` — powerless-`Compartment` guard/reducer
+  compilation under the syntactic budget (length cap plus the
+  no-loops/no-functions/no-dynamic-evaluation denylist), hardened
+  evaluation, and `${context.x}` template substitution rendering values
+  as delimited JSON data.
+- `src/fold.js` — the pure, authority-free journal fold (`applyEvent`,
+  `foldRecords`); `transition.fired` carries the resulting context so
+  folding never re-evaluates expressions; run state is JSON-clean for
+  snapshot round-trips.
+- `src/interpret.js` — the decision layer (`makeInterpreter`):
+  `begin`/`handle` producing journal events, settlement-correlation
+  provenance (`event.unauthorized`), `onError` routing, implicit
+  fail-on-unhandled-rejection, `after` synthesized as `timeout`.
+- `src/simulate.js` — `simulateRun` with recorded effects,
+  `expectEffect`, and `priorRecords` replay (the fork-to-sandbox seam).
+- `src/journal.js` — `provideRunJournal` over `fs/extended` verbs:
+  write-then-move segments, hash-chained records (`canonicalJson`,
+  `hashRecord`, `findChainBreak`), chain verification on load, snapshot
+  round-trip, deterministic idempotency keys.
+- `test/` — 25 ava tests over an in-memory filesystem, including the
+  design's feature-change definition end to end (happy path,
+  changes-requested and red-CI loops, timeout abandonment, unauthorized
+  and duplicate settlements, fork-to-sandbox, journal reload/fold
+  equivalence, tamper detection).
+
+Deviations from the design so far: none of substance.
+Phase 1 scopes provenance to correlation (sender attribution is engine
+work in Phase 2), records fanout as a single pending effect (per-member
+tracking is Phase 3), and defers id redaction/aliasing to the Phase 4
+surface where observer facets exist.
+Phases 2-6 (daemon plugin, composition, sync/factories/CLI surface, the
+Chat space, the live worked example) are not started.
 
 ## What is the Problem Being Solved?
 

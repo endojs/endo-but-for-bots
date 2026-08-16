@@ -1,0 +1,70 @@
+{
+  "name": "@endo/workflow",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Durable, composable statechart workflow engine core for the Endo daemon. Host-agnostic Phase 1: definition validation with structured diagnostics, powerless-compartment guard and reducer expressions, the pure journal fold, a daemon-free simulator, and a hash-chained journal store over the platform virtual file system.",
+  "keywords": [
+    "endo",
+    "workflow",
+    "statechart",
+    "state-machine",
+    "event-sourcing",
+    "durable",
+    "audit-log"
+  ],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/workflow"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./src/definition.js": "./src/definition.js",
+    "./src/expression.js": "./src/expression.js",
+    "./src/fold.js": "./src/fold.js",
+    "./src/interpret.js": "./src/interpret.js",
+    "./src/simulate.js": "./src/simulate.js",
+    "./src/journal.js": "./src/journal.js",
+    "./src/types.js": "./src/types.d.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "test": "ava",
+    "lint": "yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix",
+    "lint:eslint": "eslint '**/*.js'"
+  },
+  "dependencies": {
+    "@endo/errors": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/harden": "workspace:^",
+    "@endo/hex": "workspace:^",
+    "@endo/sha256": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/pass-style": "workspace:^",
+    "@endo/platform": "workspace:^",
+    "@endo/ses-ava": "workspace:^",
+    "ava": "catalog:dev",
+    "eslint": "catalog:dev"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.js"
+    ],
+    "timeout": "120s"
+  },
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/internal"
+    ]
+  }
+}
