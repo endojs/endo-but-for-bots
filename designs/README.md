@@ -2,7 +2,7 @@
 
 *Layered on 2026-08-16: added
 [worker-retention-and-revocation](worker-retention-and-revocation.md) (Proposed)
-to M3 (Remote Access and Coding Capabilities) as a research / reassessment doc
+to M4 (Networking) as a research / reassessment doc
 sitting beside the retention/GC substrate (`daemon-cross-peer-gc`,
 `daemon-retention-paths`). It reassesses the daemon's kill-on-sweep revocation
 stance against SwingSet/`ocap-kernel`, E's collective-partition semantics, and
@@ -12,7 +12,7 @@ retention root** as a specialization of CapTP question/answer refcounting
 three-party-handoff embargo); positions worker discipline as an explicit
 per-worker constraint on the incarnation formula; and scopes (does not solve)
 durable pending-promises. No proposed path makes a formula identifier
-guest-observable. Summary table row and M3 milestone row synced; not placed on
+guest-observable. Summary table row and M4 milestone row synced; not placed on
 the Gantt/critical path (a reassessment, not a build target). Proposed +1. The
 authoritative count is the **Current totals** line below (which supersedes the
 historical **Totals** paragraph): 150 -> 151, Proposed 32 -> 33. The historical

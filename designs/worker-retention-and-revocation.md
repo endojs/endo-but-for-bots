@@ -382,9 +382,12 @@ When a passed live value becomes a static dependency of the new formula, the
 transient `question` edge that carried the value through the pipeline. Naming is
 not the mechanism (the point of the sugar is *not* minting a pet name); the
 static dependency edge is. The atomicity that matters: that dependency edge must
-be inserted **before** the `question` edge drops, or a fourth zero-refcount
-window opens (beside the three at Q1) in which the intermediate is momentarily
-rooted by neither. Thread 5's Q1 rule (mint-and-first-edge as one graph mutation)
+be inserted **before** the `question` edge drops, or a **dependency-hand-off
+zero-refcount window** opens in which the intermediate is momentarily rooted by
+neither. This is the same *shape* as Q1's two intra-process hand-off gaps
+(mint-to-first-edge and settle-before-next-hop), not the cross-peer window Q1 and
+Q4 reserve the ordinal "fourth" for; naming it avoids reusing that ordinal for a
+second, unrelated hazard. Thread 5's Q1 rule (mint-and-first-edge as one graph mutation)
 generalizes to this hand-off: the dependency-edge insertion and the question-edge
 removal are one graph mutation.
 
@@ -665,8 +668,18 @@ daemon-internal mechanism is buildable today over landed machinery: the in-memor
 **refcounted transient pin** (`graph.js` `transientRoots`, pinned and unpinned by
 `pinTransient(id)` / `unpinTransient(id)`, `packages/daemon/src/graph.js:629,645`).
 A pinned formula is held alive without granting persistence; the pin is in-memory
-only and keyed on a formula id, and every landed call site scopes it to a single
-in-flight operation released in a `finally`. The batch-flush root refines that pin
+only and keyed on a formula id. The claim that *every* landed call site scopes it
+to a single in-flight operation released in a `finally` does not hold: **some**
+do (`packages/daemon/src/directory.js:506-510` is the clean form), but the
+guest-handle pins at `host.js:2069`/`2090` and `manager.js:6737`/`6757` push the
+pin through a deferred task and `await unpinTransient` only after three
+intervening awaits (`formulateGuest`, `getFormulaForId`, `storeIdentifier`) with
+**no** `try`/`finally`, so a throw on that path leaks the pin permanently. The
+correct claim is "some, not every." So the substrate the batch-flush root
+inherits already leaks on the error path, and the per-root lease below covers
+only *question* roots, not these operation-scoped pins; closing that error-path
+leak is a separate precondition, not something the per-question refinement
+supplies. The batch-flush root refines that pin
 **from a single-operation lifetime to a single-question lifetime** by giving the
 anonymous formula a `question:<answer-pos>`-labeled edge, union-find-pinned while
 the question is unsettled and unpinned when the question **resolves**. Its release
@@ -737,34 +750,49 @@ away:**
   settles; there the two edges coexist and the refcount never reaches zero.
 - *Arrival after collection.* The remaining case is the adversarial or lagging
   one. A `fulfill`s, the `question` edge drops, the refcount hits zero, the sweep
-  collects the intermediate, and *then* an already-in-flight pipelined send
-  against `<desc:answer answer-pos>` for a further hop arrives. A settled answer
-  position is a spent wire fact (further pipelining against it is not
-  well-formed), but that is a sender obligation a hostile or merely lagging peer
-  need not honor, so it cannot be the exporter's defense. **Rule (desired
-  end-state):** a message that arrives against an already-collected anonymous
-  intermediate must fail **partition-shaped** (Thread 1) — the sender sees a
-  broken reference, never a silent rebind to a different value and never an
-  exporter crash — so that it is the same failure the per-root lease and session
-  abort already produce and adds no new failure class the program does not
-  already tolerate. **But this partition-shape is a concrete prerequisite the
-  mechanism must build, not a property today's code already provides.** Traced
-  against the landed CapTP: a delivery whose target slot is no longer exported
-  makes `convertSlotToVal` throw `` Unknown export ${slot} `` inside the message
-  handler (`packages/captp/src/captp.js:708`), *before* any `CTP_RETURN` is
-  constructed; the `dispatch` outer catch then calls
-  `quietReject(e, false, PROTOCOL_REJECTION)` (`:1021-1022`), and because
-  `returnIt` is `false`, `quietReject` reports the error only to the **local**
-  `onReject` handler and returns `Promise.resolve()` (`:320-336`) — **no reply
-  message is sent back to the sender.** So the caller's question promise never
+  collects the intermediate **at the formula-graph layer**, and *then* an
+  already-in-flight pipelined send against `<desc:answer answer-pos>` for a
+  further hop arrives. A settled answer position is a spent wire fact (further
+  pipelining against it is not well-formed), but that is a sender obligation a
+  hostile or merely lagging peer need not honor, so it cannot be the exporter's
+  defense. **Rule (desired end-state):** a message that arrives against an
+  already-collected anonymous intermediate must fail **partition-shaped**
+  (Thread 1) — the sender sees a broken reference, never a silent rebind to a
+  different value and never an exporter crash. **But this partition-shape is a
+  concrete prerequisite the mechanism must build, not a property today's code
+  already provides — and the first reason is that formula-graph collection does
+  not, by itself, free the answerer-side table entry the message actually
+  resolves against.** Traced against the landed CapTP, `CTP_CALL` resolves an
+  answer-position target from the module-local `answers` `Map` **first**
+  (`packages/captp/src/captp.js:773-781`), and `answers` is deleted only in the
+  last-reference branch of `CTP_DROP` (`:767`) — **never by resolution and never
+  by a formula-graph sweep**. So while that entry survives — which today is the
+  *normal* case, because `gcImports` defaults `false` (`:291`) and no daemon call
+  site enables it (`connection.js:166`), so the `CTP_DROP` that would delete it is
+  never emitted — a late pipelined send is serviced from the **retained handled
+  promise**: a **silent rebind to the resolved value**, not a hang and not
+  partition-shaped, exactly the cosmetic-deletion hazard Thread 1's discriminator
+  exists to forbid. Only once that `answers`/export-table entry is *also* gone
+  does `convertSlotToVal` throw `` Unknown export ${slot} `` (`:708`) inside the
+  handler, *before* any `CTP_RETURN` is constructed; the `dispatch` outer catch
+  then calls `quietReject(e, false, PROTOCOL_REJECTION)` (`:1021-1022`), and
+  because `returnIt` is `false`, `quietReject` reports the error only to the
+  **local** `onReject` handler and returns `Promise.resolve()` (`:320-336`) —
+  **no reply is sent back to the sender.** So the caller's question promise never
   settles: the observed failure is a **silent indefinite hang** (bounded only by
-  session abort or the per-root lease), *not* an immediate broken reference. The
-  batch-flush root therefore names, as an explicit prerequisite, that the
-  exporter **reply with a genuine rejection (a `CTP_RETURN` carrying a
-  protocol-level break) on `Unknown export`** for a collected anonymous
-  intermediate, rather than silently dropping the reply, so that the caller's
-  question actually breaks and the partition-shape above is real rather than
-  aspirational. Until that reply exists, the residual is the silent hang, and the
+  session abort or the per-root lease). The batch-flush root therefore names
+  **two** prerequisites, not one: **(a)** the exporter's own `answers`/export-table
+  entry for an anonymous intermediate is itself a retention root (a fifth root,
+  the embedding library's own table — see Q4 and Design Decision 6's third release
+  conjunct), so dropping it must be **part of the same graph mutation that drops
+  the `question` edge**; otherwise formula-graph collection is the cosmetic
+  deletion above and the late send silently rebinds against the retained handled
+  promise. **(b)** Once that entry is gone, the exporter must **reply with a
+  genuine rejection (a `CTP_RETURN` carrying a protocol-level break) on
+  `Unknown export`** rather than silently dropping the reply, so the caller's
+  question actually breaks and the partition-shape is real rather than
+  aspirational. Until both hold, the residual is a **silent rebind** (entry still
+  present, the common case today) or a **silent hang** (entry gone), and the
   per-root lease / session abort are the only bounds that fire (Q2).
 
 #### Q2: the stuck-batch / non-flushing case (the resource-exhaustion vector)
@@ -793,15 +821,20 @@ in the tree:
    ("lease/expiry policy on names"). A question-rooted anonymous formula carries a
    lease that bounds the **whole** retention interval, not merely the
    pre-resolution wait: (i) if the question never settles, on expiry the daemon
-   **rejects the question locally** (the holder sees a broken reference, so
-   partition-shaped failure, per Thread 1) and drops the `question` edge; (ii) if
+   **rejects the question locally** (the holder sees a broken reference; because
+   the thing rejected is an *unsettled question*, this is ordinary promise-level
+   partial failure the program already handles, not the novel single-sever class)
+   and drops the `question` edge; (ii) if
    the question *has* settled but a cross-peer import edge is still outstanding
    (Q4), the lease continues to run across resolution and, on expiry, **forcibly
    drops that cross-peer edge and collects the intermediate** (the withholding
-   peer observes it partition-shaped on next use). Either way the lease turns
+   peer observes a broken reference on next use). Either way the lease turns
    "permanently embargoed" (or "permanently pinned by a withheld drop") into
-   "bounded retention then partition," which is a failure class the program
-   already tolerates. Note (see Design Decision 3):
+   "bounded retention then partition." Case (i) is ordinary partial failure; case
+   (ii) severs a *settled* import and is Thread 1's row-3 single-sever class,
+   whose pervasive-defensiveness tax this design owns and confines to the
+   withholding peer (Q4's discriminator subsection: a cooperative peer never
+   triggers it). Note (see Design Decision 3):
    the lease is a **local policy bound**, not a wire fact. Its *expiry clock* is
    host-local; what it produces (a partition-shaped break) is the wire-visible
    event. It does not claim to be a protocol-level liveness fact, and it does not
@@ -815,7 +848,9 @@ in the tree:
    backpressure: backpressure names work that is withheld and *later admitted*
    (as the metering precedent withholds a delivery until the budget refills),
    whereas a refused send here is never later admitted; the caller sees the send
-   fail, partition-shaped (Thread 1). The cap must be stated over the
+   fail. What is refused is an *unsettled* pipelined send (a transient, not a
+   settled reference), so like the pre-resolution lease this is ordinary
+   promise-level partial failure, not Thread 1's row-3 single-sever class. The cap must be stated over the
    **transitively pinned closure**, not the count of question edges: a `question`
    edge is union-find-pinned, so one root pins its entire group, and `N` roots
    under a naive per-edge cap can retain arbitrarily more than `N` formulas. The
@@ -825,8 +860,8 @@ in the tree:
    transitively pinned closure makes admissibility depend on exporter-side
    union-find topology the peer **cannot predict**, so an honest deep-pipelining
    peer can have a send refused for reasons opaque to it. That is the price of
-   bounding a hostile peer, and the partition-shaped failure is one the program
-   already tolerates, but it is a real ergonomic edge, not free backpressure. A
+   bounding a hostile peer, and refusing an unsettled send is ordinary partial
+   failure, but it is a real ergonomic edge, not free backpressure. A
    counterparty cannot force retention past the cap because the daemon stops
    minting roots, exactly as the supervisor stops delivering messages when budget
    is exhausted. This is the piece that makes the root safe against a hostile peer
@@ -978,9 +1013,17 @@ finalizer drives them:
   counterparty's `op:gc-exports` (equivalently, a `remove` in the cross-peer
   retention set), which arrives asynchronously (a network round trip;
   `retention-accumulator.js` batches on `queueMicrotask` then streams). **So the
-  release condition is not resolution alone**: the intermediate collects only when
-  the `question` edge is dropped (resolution) **and** no cross-peer import edge
-  references it. Releasing on resolution alone would collect an intermediate a
+  release condition is not resolution alone**; it is a conjunction of **three**
+  facts: the intermediate collects only when **(i)** the `question` edge is
+  dropped (resolution), **(ii)** no cross-peer import edge references it, **and
+  (iii)** the exporter's own answerer-side `answers`/export-table entry for the
+  intermediate is dropped **in the same graph mutation that drops the `question`
+  edge** (Q1's third window: `answers` is cleared only by `CTP_DROP`, never by
+  resolution, so absent this coupling a late pipelined send is silently rebound
+  against the retained handled promise rather than collected). Conjunct (iii) is
+  the fifth retention root — the embedding CapTP library's own table — that a
+  release condition stated only over the daemon's formula graph would miss.
+  Releasing on resolution alone would collect an intermediate a
   counterparty still holds, exactly the "a working reference just went bad" class
   Thread 1 rules out.
   - **Adversarial-peer hole this fourth window opens, and how it is bounded.**
@@ -1002,12 +1045,34 @@ finalizer drives them:
     **post-resolution wait on the cross-peer import edge**. On expiry with the
     question already settled but a cross-peer edge still outstanding, the daemon
     **forcibly drops the cross-peer edge for this anonymous intermediate and
-    collects it**, which the still-importing peer then observes partition-shaped
-    on its next use (the same broken-reference failure Thread 1 already
-    tolerates), rather than retaining unboundedly. This keeps the cross-peer
-    correctness rule (never collect an intermediate a *cooperative* peer still
-    holds) while restoring the bound against a peer that *withholds* its
-    `op:gc-exports`. The honest residual: the lease's expiry clock is host-local
+    collects it**, which the still-importing peer then observes as a broken
+    reference on its next use, rather than retaining unboundedly. This keeps the
+    cross-peer correctness rule (never collect an intermediate a *cooperative*
+    peer still holds) while restoring the bound against a peer that *withholds* its
+    `op:gc-exports`.
+    - **What failure class this is, applying Thread 1's discriminator rather than
+      name-dropping it.** Thread 1's taxonomy (`:202-207`) is not
+      collective-versus-single alone; its operative axis is *what is severed*. A
+      forcible post-resolution drop severs a **settled import** the peer holds on
+      a still-live session with every sibling reference intact — that is Thread 1's
+      **row 3** (involuntary single-reference sever, the "a working reference just
+      went bad" novel class), **not** row 4 (kill-the-worker's collective break)
+      nor row 2 (E `partition`). This design does **not** claim the collective
+      distinction excuses it; it **owns the row-3 tax** and bounds *who pays it*:
+      the forcible drop fires only against a peer that has withheld `op:gc-exports`
+      past the whole-interval lease, so a **cooperative** peer (which emits
+      `op:gc-exports`, dropping the edge before the lease expires) never sees it,
+      and the pervasive-defensiveness tax is levied only on a peer already
+      misbehaving — never on an honest program's working references. That is the
+      justification, not "the program already tolerates it": it is a bounded
+      backstop that trades a single sever *of a misbehaving peer's* import for
+      unbounded retention, chosen with eyes open. The pre-resolution lease
+      rejection (mechanism (i) above) and the admission-cap refusal are a *weaker*
+      class still: they break or refuse an **unsettled question / pipeline
+      transient** — a promise, whose breaking or refusal is ordinary partial
+      failure the program already handles everywhere — so they never sever a
+      settled reference at all and do not incur the row-3 tax.
+    - The honest residual: the lease's expiry clock is host-local
     (Design Decision 3), so this is a bounded-retention-then-partition guarantee,
     not a zero-retention one; the alternative — dropping the unqualified "bounded"
     claim and scoping post-resolution cross-peer retention as inherited risk — is
@@ -1088,7 +1153,13 @@ per-root lease, per-session admission cap). This:
   `op:gc-exports` (Q4's fourth-window shape). Without that lease extension the
   "bounded against adversarial peers" claim is false for that one input shape; the
   design commits to the extension (Q2 mechanism 2, Q4), so the bound holds as a
-  bounded-retention-then-partition guarantee, not a zero-retention one.
+  bounded-retention-then-partition guarantee, not a zero-retention one. This bound
+  is **not** claimed to be free of Thread 1's single-sever tax: the
+  post-resolution forcible drop is a row-3 sever of a settled import, whose cost
+  this design owns and confines to the *withholding* peer (a cooperative peer,
+  which emits `op:gc-exports`, never triggers it — Q4's discriminator subsection);
+  the pre-resolution lease and admission cap act on unsettled transients and are
+  ordinary partial failure.
 
 **Decline** the novel-primitive framing (a bespoke embargo-specific "batch"
 concept) and **decline** any OCapN wire addition. **Defer** the multi-party scope
@@ -1166,9 +1237,16 @@ worded.
    anonymous `.then` over transient heap is transient by construction (Thread 4).
 
 6. **The batch-flush root is a specialization of CapTP question/answer
-   refcounting, not a new primitive and not an OCapN wire change**, released on
-   **resolution** (`fulfill` / `break`) *and* the absence of any cross-peer import
-   edge (a counterparty's `op:gc-exports` / retention `remove`), and bounded by
+   refcounting, not a new primitive and not an OCapN wire change**, released on a
+   conjunction of three facts — **resolution** (`fulfill` / `break`) *and* the
+   absence of any cross-peer import edge (a counterparty's `op:gc-exports` /
+   retention `remove`) *and* the drop of the exporter's own answerer-side
+   `answers`/export-table entry for the intermediate, performed in the **same
+   graph mutation** as the `question`-edge drop so that formula-graph collection
+   and answerer-side heap release coincide (Q1's third window; absent this
+   coupling a late pipelined send silently rebinds against the retained handled
+   promise, since `answers` is cleared only by `CTP_DROP`, never by resolution),
+   and bounded by
    session-subordinate abort plus a per-root lease that bounds the **whole**
    retention interval (both the pre-resolution wait *and* the post-resolution wait
    on an outstanding cross-peer import edge, closing Q4's adversarial fourth-window
