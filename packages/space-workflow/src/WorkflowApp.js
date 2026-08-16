@@ -155,7 +155,13 @@ export const WorkflowApp = ({ service }) => {
           ),
         ),
       ),
-      stale ? h('div', { class: 'wf-stale' }, 'reconnecting…') : null,
+      stale
+        ? h(
+            'div',
+            { class: 'wf-stale' },
+            'workflow service unreachable — provision @endo/workflow and name it in this space, then reopen',
+          )
+        : null,
     ]),
     h('main', { class: 'wf-main' }, [
       definition !== undefined && shownState !== undefined

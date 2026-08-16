@@ -61,6 +61,7 @@
   "devDependencies": {
     "@endo/pass-style": "workspace:^",
     "@endo/platform": "workspace:^",
+    "@endo/promise-kit": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "eslint": "catalog:dev"

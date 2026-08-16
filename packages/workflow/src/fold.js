@@ -64,11 +64,15 @@ export const applyEvent = (runState, record) => {
           [as]: harden({
             as,
             effect: /** @type {PendingEffect['effect']} */ (record.effect),
-            ...(record.to === undefined ? {} : { to: record.to }),
+            ...(record.to === undefined
+              ? {}
+              : { to: /** @type {string} */ (record.to) }),
             seq,
             ...(record.idempotencyKey === undefined
               ? {}
-              : { idempotencyKey: record.idempotencyKey }),
+              : {
+                  idempotencyKey: /** @type {string} */ (record.idempotencyKey),
+                }),
           }),
         },
       });

@@ -72,8 +72,8 @@ Phases 2-5 followed in the same package plus a new
   `followRuns()` with run trees, deterministic layered statechart SVG
   with active/ghost/busy overlays, virtualized-enough timeline with
   per-record expansion, and a time-travel scrubber over the client-side
-  fold. Registered in the browser-realm eslint roster; wiring into
-  `packages/chat`'s space registry remains.
+  fold. Registered in the browser-realm eslint roster and wired into
+  `packages/chat` (see below).
 - `test/engine.test.js` — nine integration tests: the feature-change
   loop end to end over a stub delivery seam, restart-mid-review
   resuming with only the missing reviewer re-asked, indeterminate-call
@@ -100,11 +100,25 @@ Deviations and remaining work, honestly stated:
 - The pause queue is in-memory; settlements arriving while paused
   across a restart are recovered by effect re-issue, not by queue
   replay.
-- `endo workflow` CLI verbs, chat-app registration of the space,
-  `probe()` (active liveness), and the `guard.evaluated` trace flag are
+- Per maintainer direction (2026-08-16) there is **no dedicated CLI**:
+  the service is an ordinary capability, so the generic `endo` verbs
+  (`make`, `eval`, `inspect`, `follow`) and the Space are the surfaces.
+  A package-owned runlet remains possible later without touching the
+  core CLI.
+- The Space is registered in Chat: `packages/chat/workflow-component.js`
+  bridges `WorkflowApp` through the confined renderer, the `workflow`
+  mode is wired through `spaces-gutter.js` (KNOWN_MODES, config
+  persistence, navigation payload) and `add-space-modal.js` (card, form
+  with an optional service pet-name path, submit), with the stylesheet
+  imported in `main.js`.
+- Phase 6's CI-runnable integration cut is `test/plugin.test.js`: the
+  unconfined plugin entry drives real `makeExo` participants end to end
+  through its delivery seam (`__getMethodNames__` discovery, a real
+  `readOnly()` attenuation call, eventual-send CI and merge calls). A
+  live-lal wiring needs a running daemon and an LLM key and remains
+  env-gated future work.
+- `probe()` (active liveness) and the `guard.evaluated` trace flag are
   not started.
-- The Phase 6 live-lal wiring behind an env gate remains; the engine
-  integration tests cover the same loop with deterministic stubs.
 
 ## What is the Problem Being Solved?
 
@@ -876,8 +890,8 @@ are fixed at start.
 the package export map).
 
 **Data flow.**
-A `makeWorkflowSyncClient(run)` helper (shipped by `@endo/workflow`, used
-by both the space and the CLI's `--watch` mode) implements the State
+A `makeWorkflowSyncClient(run)` helper (shipped by `@endo/workflow`, used by
+the space and by any terminal or agent consumer) implements the State
 Syncing contract: one `status()`, then `history(throughSeq + 1)` applied
 through the shared fold, with seq-resume on reconnect.
 Components subscribe to the client's store; there is no component-level
@@ -932,8 +946,10 @@ On disconnect the space shows a stale-since badge and resumes from
 `lastSeq + 1` on reconnect; nothing is lost and nothing reloads from
 scratch.
 
-The CLI grows matching verbs over the same surface:
-`endo workflow define|list|start|status|watch|log|graph|simulate|explain|signal|pause|resume|abort`.
+There is deliberately no dedicated CLI: the service is an ordinary
+capability, so the generic `endo` verbs (`make` to provision, `eval` to
+call methods, `inspect` and `follow` to observe) already cover terminal
+use, and the Space is the primary surface.
 
 ## Definition Developer Experience
 
@@ -941,9 +957,9 @@ Definitions are data, so the authoring loop is: write, validate,
 simulate, preview — all without a daemon.
 
 **Authoring.**
-A definition is a plain hardened JS module (or JSON document) —
-`endo workflow define feature-change ./feature-change.js` evaluates the
-module in a powerless compartment and registers the exported definition.
+A definition is a plain hardened JS module (or JSON document) evaluated
+in a powerless compartment and registered via
+`E(service).define('feature-change', definition)`.
 JS authoring gets constants, comments, and shared fragments for free
 without any new language.
 `WorkflowDefinition` TypeScript types ship in the package's `types.ts` so
@@ -986,15 +1002,15 @@ but the engine's own reducer under a scripted event source.
 Definition authors test in plain ava with no daemon, in milliseconds.
 
 **Preview.**
-`endo workflow graph <name>` emits Mermaid `stateDiagram-v2` from the
+`renderMermaid(definition)` emits Mermaid `stateDiagram-v2` from the
 same `renderDefinition` model the space uses, so a definition can be
 reviewed as a picture in any markdown surface (PRs, designs) before it
 ever runs.
 
 **Evolution.**
 `define` under an existing name appends a version (names.json maps name
-to an ordered hash list); `endo workflow diff <a> <b>` is a structural
-data diff of two definitions — no code archaeology to see what changed
+to an ordered hash list); diffing two versions is a structural data
+diff of two definitions — no code archaeology to see what changed
 between versions.
 A `defineWorkflow` builder DSL remains future work (Known Gaps).
 
@@ -1004,16 +1020,16 @@ The journal makes the engine explainable after the fact; these tools make
 it explainable while it runs.
 
 **Read the ground truth.**
-`endo workflow log <run> [--from seq] [--follow]` pretty-prints journal
-events (with `--json` for the raw records); `exportJournal(fromSeq)`
-serves the same bytes to programs.
+`exportJournal(fromSeq)` serves the journal records to any consumer;
+the space's timeline renders them, and `endo eval` reaches them from a
+terminal.
 Effect entries carry idempotency keys and issue/settle timestamps;
 `effect.rejected` records the marshalled error rendered via
 `passableAsJustin`, so remotable-bearing failures stay legible.
 
 **Time travel.**
-`stateAt(seq)` folds the journal prefix — `endo workflow status <run>
---at <seq>` and the space's scrubber both use it.
+`stateAt(seq)` folds the journal prefix — the space's scrubber uses it,
+and any holder of an observer facet can call it directly.
 Any historical claim about a run ("it was in `testing` when the daemon
 restarted") is checkable, because state *is* the fold.
 
@@ -1065,19 +1081,18 @@ discipline, gated by `ENDO_WORKFLOW_TRACE=1`, and never into the journal.
 
 Wiring the example with existing capabilities:
 
-1. **Provision**: `endo workflow define feature-change ./feature-change.js`
-   (validated and simulateable before it ever runs), then the host mints a
-   factory binding the sensitive slots:
-   `endo workflow make-factory feature-change feature-changes`
-   `--bind implementer=lal-coder --bind reviewers=sec-reviewer,style-reviewer`
-   `--bind ci=repo-ci --bind approver=SELF --bind repo=repo-writer`.
-   `repo-writer` is an `@endo/exo-git` writer facet scoped to the branch;
-   `repo-ci` is a small caplet wrapping a `Shell` capability that runs the
-   test command in a checkout.
-   Starting a run now needs only the factory and the input:
-   `endo workflow start feature-changes --input request='add dark mode',branch=feat/dark-mode`
-   — and because the factory is a grantable capability, that start could
-   equally come from an agent that holds none of the bound facets.
+1. **Provision**: the host provisions the plugin through the generic
+   pathway (`endo mkdir workflow-store`, then `endo make` with a guest
+   granting the store, pinned into `@pins`), registers the definition
+   with `E(service).define('feature-change', definition)` (validated and
+   simulateable before it ever runs), and mints a factory binding the
+   sensitive slots: implementer, reviewers, ci, approver, and `repo` —
+   an `@endo/exo-git` writer facet scoped to the branch, with `repo-ci`
+   a small caplet wrapping a `Shell` capability that runs the test
+   command in a checkout.
+   Starting a run now needs only the factory and the input — and because
+   the factory is a grantable capability, that start can come from an
+   agent that holds none of the bound facets.
 2. **Implementing**: lal receives an inbox request with the writer facet
    attached; it commits to the branch and resolves the request with the
    change-set reference (`filesystemAt(ref)` / a commit range).
@@ -1092,7 +1107,7 @@ Wiring the example with existing capabilities:
 6. **Merging**: the engine — sole holder of the writer facet during review
    — calls `merge`; `run.finished { final: 'succeeded' }` closes the
    journal.
-7. At any point, `endo workflow status` answers R4; a restart between any
+7. At any point, `status()` answers R4; a restart between any
    two steps resumes silently per R2; `exportJournal` yields the audit
    trail per R3.
 
@@ -1130,7 +1145,7 @@ Wiring the example with existing capabilities:
    define-time inlining (plus the initial `approval-gate` /
    `retry-with-backoff` / `review-fanout` fragment library), `after` via
    reminder (or the interim timer shim).
-4. **Surface: sync, factories, CLI.**
+4. **Surface: sync and factories.**
    The observer/controller/admin run kit, `WorkflowService`, and
    `WorkflowFactory` exo guards with `help()`; observer-boundary id
    redaction and the alias table; the State Syncing contract (`status` +
@@ -1138,8 +1153,8 @@ Wiring the example with existing capabilities:
    `makeWorkflowSyncClient`); `stateAt` / `explain` / `probe` / `pause` /
    `resume` / `forkSimulation`; `exportJournal` (redacted by default);
    factories with non-escalating `with()` derivation and cascading
-   revocation; the full `endo workflow` verb set
-   (`define|list|start|status|watch|log|graph|simulate|explain|signal|pause|resume|abort`).
+   revocation. No dedicated CLI: the generic `endo` verbs cover
+   terminal use (maintainer direction).
 5. **UI space.**
    `@endo/space-workflow`: runs rail with run trees, deterministic
    statechart layout with live effect/fanout overlays, virtualized
@@ -1185,7 +1200,7 @@ Wiring the example with existing capabilities:
     `WorkflowFactory` that closes over participant bindings, so callers
     start workflows without holding the underlying capabilities, and
     derivation (`with()`) is strictly non-escalating.
-11. **One sync primitive.** Every view — engine, CLI, space — is a fold
+11. **One sync primitive.** Every view — engine, terminal, space — is a fold
     over the seq-addressed journal; `status()` hands out the resume
     token, `history(fromSeq)` is gapless, reconnect is resume, and the
     fold module ships authority-free for client-side use.
@@ -1213,6 +1228,11 @@ Wiring the example with existing capabilities:
     definition hash, and gate settlements are accepted only with verified
     provenance from the bound participant — everything else journals as
     `event.unauthorized`.
+18. **No dedicated CLI.** The service is an ordinary capability; the
+    generic `endo` verbs and the Chat Space are the surfaces, keeping
+    the core CLI free of external-plugin protocol knowledge (maintainer
+    direction, 2026-08-16). A package-owned runlet can add terminal
+    ergonomics later without touching the core.
 
 ## Known Gaps and TODOs
 

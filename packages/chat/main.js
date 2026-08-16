@@ -38,6 +38,10 @@ import '@endo/space-peers/peers.css';
 // eslint-disable-next-line import/no-unresolved
 import '@endo/space-floot/floot.css';
 
+// The workflow space ('@endo/space-workflow') is likewise a pure confined
+// component package; its stylesheet ships via the package export map.
+import '@endo/space-workflow/workflow.css';
+
 // The channel space family (`@endo/space-channel`) ships its stylesheet via the
 // `./channel.css` package export (previously a `<link>` in index.html). Vite-only.
 // eslint-disable-next-line import/no-unresolved
