@@ -558,7 +558,6 @@ flowchart TD
         eagentry --> ageval
         eat --> ageval
         eat --> eclaude
-        dsand --> eclaude
     end
 
     subgraph Familiar
@@ -735,6 +734,12 @@ flowchart TD
         auihost --> aship
         fbund --> aship
     end
+
+    %% Cross-subgraph edge stated at top level, after both endpoints are
+    %% defined in their own subgraphs, so it does not relocate
+    %% endo-posix-sandbox (dsand, Capability System) into LLM Agents by
+    %% first-mention.
+    dsand --> eclaude
 ```
 
 ### Milestones
