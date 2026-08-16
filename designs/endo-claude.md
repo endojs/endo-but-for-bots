@@ -185,6 +185,47 @@ is still unimplemented when `@endo/claude` is built, the fallback is a minimal
 stdio MCP shim carried inside `@endo/claude` as a stopgap, explicitly marked for
 deletion once the `@endo/agent-tools` adapter lands (*Known gaps*).
 
+### Which tool surface the catalog projects (a carried-over limitation)
+
+The projection above covers exactly one surface today: **Lal's static tool
+schemas**. The catalog and the `executeTool(name, args)` dispatch that
+[endo-gateway-mcp](endo-gateway-mcp.md) projects are lifted straight out of
+`packages/lal/agent.js` (its OpenAI-function-calling tool array and its
+`executeTool` switch, extracted into `@endo/agent-tools`), so the enumeration
+`@endo/claude` derives its `--allowedTools` from is Lal's current fixed
+namespace / mail / evaluate tool set, one MCP entry per Lal tool name. That is a
+real answer to "compose the allow-list from the facet's method set" and it is not
+something `@endo/claude` invents a derivation for: it is the *same* projection the
+bridge already performs for `tools/list`.
+
+The limitation is the one [endo-gateway-mcp](endo-gateway-mcp.md) names in its
+Open Questions, item 1 (*Capability-scoped tools timing*): this static surface is
+**not** the capability-scoped tool surface of
+[daemon-agent-tools](daemon-agent-tools.md). That per-guest, capability-derived
+surface (whose tools reflect the actual capabilities granted to a specific guest,
+rather than Lal's fixed set) is a separate, still-maturing design that composes
+into the same catalog "via `extra`" only once it ships; endo-gateway-mcp leaves
+the catalog ordering, name-collision resolution, and absent-capability behavior
+open until the first capability-scoped tool lands. So `@endo/claude`'s
+guest-formula scoping is only as fine-grained as the surface that is actually live
+when it is built:
+
+- If it is built against the **static Lal surface**, every guest sees the same
+  Lal tool namespace, and the `--allowedTools` list is that namespace minus
+  anything the deployment chooses to withhold. The bearer still scopes *which
+  guest's facet* the calls act on, but not *which subset of tools* that guest may
+  reach, because the static surface is uniform across guests.
+- If genuine **per-guest, capability-scoped** tooling is what is wanted (each
+  guest's `--allowedTools` reflecting only the capabilities its formula was
+  granted), then [daemon-agent-tools](daemon-agent-tools.md) is a hard dependency,
+  named here explicitly: `@endo/claude` must derive its allow-list from that
+  capability-scoped catalog, not Lal's static one, and cannot do so until
+  daemon-agent-tools and the endo-gateway-mcp `extra`-composition it depends on
+  are both live. This design does not assume the capability-scoped surface is
+  ready; it targets whichever surface the MCP adapter actually exposes when the
+  build starts, and treats the capability-scoped surface as the upgrade that
+  tightens per-guest scoping once available.
+
 ### Local deployment
 
 ```mermaid
@@ -305,6 +346,61 @@ durable credential. The allocator is a small capability with three moves:
 burned, or a weight the operator sets the way the garden sets `gardeners: N`),
 and `release`. A subscription hitting its weekly cap is marked cooling and
 skipped until it resets, so no single account gates every guest.
+
+## Build sequencing against the MCP bridge
+
+Now that the dependency is named (the `@endo/agent-tools` MCP adapter, a
+declared stub, and, for the remote case, the [endo-gateway-mcp](endo-gateway-mcp.md)
+`/mcp` HTTP surface, designed with implementation not started), the sequencing that
+the local/remote discussion left open has a precise shape. Three options:
+
+- **(a) Wait on `endo-gateway-mcp` implementation.** `@endo/claude` ships only
+  once the gateway's `/mcp` streamable-HTTP endpoint and the `@endo/agent-tools`
+  adapter behind it are both live, then talks to that endpoint for local and
+  remote alike. Simplest dependency story, latest delivery: it blocks the entire
+  package on a gateway phase that is itself Not Started, and it pays for an HTTP
+  surface the local case does not need.
+- **(b) Implement the local CLI-shim path itself as a smaller first increment.**
+  `@endo/claude` carries a thin stdio shim that speaks CapTP over netstrings to
+  the daemon socket directly (the *Preferred: a stdio MCP shim* transport above)
+  and projects the facet method set to MCP in-process, needing **no** gateway
+  `/mcp` HTTP surface at all. It depends only on the daemon socket and the
+  facet-to-MCP projection (which it can carry as the stopgap already named in
+  *Known gaps* if the `@endo/agent-tools` adapter is not yet extracted). Earliest
+  delivery, tightest local confinement, but it does not by itself serve the
+  remote / pooled-across-hosts deployment.
+- **(c) Both, phased: shim as v1, gateway `/mcp` as v2.** Ship the local stdio
+  shim (option b) as v1 to unblock the minion.town-shaped single-host case, and
+  adopt the gateway `/mcp` endpoint (option a) as v2 for the remote / pooled
+  deployment once endo-gateway-mcp lands, without changing the harness's
+  confinement contract (both transports carry the same bearer-is-formula-id
+  scoping and the same generated `--allowedTools`).
+
+**Recommendation: (c), with (b) as the concrete v1.** The reasons: the local
+stdio shim is on the critical path anyway: it is the *Preferred* local transport
+regardless of what the remote path does, and its "no listening port, no HTTP
+surface" property is the tightest confinement this design can offer, so building
+it first delivers the best-confined shape earliest. It also has the shallowest
+dependency (the daemon socket, already live), so it does not block on the Not
+Started gateway `/mcp` phase, avoiding option (a)'s stall. And it leaves the
+harness contract stable across the two increments: v1 and v2 differ only in the
+`--strict-mcp-config` entry (a stdio command instead of an HTTPS URL with the same
+bearer), so promoting to the pooled remote deployment is a transport swap, not a
+redesign. Option (a) alone is rejected for coupling the whole package to a phase
+it does not need for its primary (local, minion.town-shaped) target; option (b)
+alone is rejected for leaving the pooled-across-hosts case permanently unaddressed
+when (c) reaches it at no extra harness cost.
+
+This ordering matches the roadmap sequencing recorded in the merged groom
+PR [#400](https://github.com/endojs/endo-but-for-bots/pull/400)
+(*rebucket roadmap for shortest-route MCP-bridge gateway*), whose Milestone B
+sequences the bridge as **P0 gateway-implementation completion, then P1 MCP
+termination, then P2 AWS hosting**. The gateway `/mcp` surface `@endo/claude`'s
+remote path depends on is P1, downstream of a P0 gateway phase that is mostly
+still open, so waiting on it (option a) would gate the whole package behind that
+chain. The local stdio shim needs neither P0 nor P1: it is the shortest route to a
+confined `@endo/claude`, which is the same shortest-route bias #400 applies to the
+bridge itself; the remote gateway path then rides P1 when it lands, as v2.
 
 ## Package shape and dependencies
 
