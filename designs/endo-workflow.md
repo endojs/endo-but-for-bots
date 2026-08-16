@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-16 |
+| **Updated** | 2026-08-16 |
 | **Author** | kumavis (prompted) |
 | **Status** | Proposed |
 
@@ -88,66 +89,29 @@ kingdom:
 | Chat spaces | `@endo/space-*` packages | The UI plug-in shape for `space-workflow`. |
 | JSONL transcripts | `@endo/jsonl-transcript` | Precedent for greppable on-disk append logs; the audit-log export format follows it. |
 
-## Implementation Options
+## Architecture
 
-Three architectures were considered for where the engine lives and what a
-workflow *is*, plus two cross-cutting choices (formalism and storage).
-
-### Option A: Engine in daemon core (new formula types)
-
-Add `workflow-definition` and `workflow-run` formula types.
-The manager incarnates runs, persists state in SQLite alongside formulas,
-and exposes host methods (`formulateWorkflow`, `provideWorkflowRun`).
-
-- **Pros:** first-class GC/retention integration; visible in the formula
-  inspector; single durability story (the formula graph); no separate
-  revival recipe.
-- **Cons:** grows the daemon core precisely when the project direction is
-  to shrink it (the reminder design explicitly rejected a new formula type;
-  [daemon-rename-to-manager](daemon-rename-to-manager.md) and `endor`
-  aim at a smaller core).
-  Every workflow schema evolution becomes a daemon schema migration.
-  Iteration is slow: engine bugs require daemon releases.
-  The Rust `endor` port would have to reimplement it.
-
-### Option B: Unconfined plugin, event-sourced statechart interpreter (recommended)
-
-`@endo/workflow` is an unconfined daemon plugin in the mold of
+`@endo/workflow` is an **unconfined daemon plugin** in the mold of
 `@endo/reminder`: provisioned with `makeUnconfined`, pinned via `@pins`,
 holding a virtual-file-system directory for durable state and a guest
 namespace for participant capabilities.
+No new formula type and no daemon-core change — the reminder design set
+this precedent and this engine follows it, so the daemon core stays small
+and engine iteration does not require daemon releases.
+
 Workflow **definitions are hardened data** (a conservative statechart
 subset); the engine is an **event-sourced interpreter**: an append-only
 journal of events is the source of truth, current state is a pure fold over
 the journal, and effects are executed at the boundary and re-enter as
 events.
-
-- **Pros:** matches the repo's plugin direction; the audit log falls out of
-  the architecture (the journal *is* the audit log, R3); restart recovery
-  is journal replay plus effect resumption (R2); definitions-as-data are
-  renderable as a graph (R12) and validatable with `@endo/patterns`;
-  daemon core is untouched.
-- **Cons:** retention is engine-owned (names in the engine guest's pet
-  store) rather than formula-graph-native; the declarative definition
-  language must be designed carefully to avoid becoming a bad programming
-  language (addressed below with powerless confined reducers).
-
-### Option C: Workflow-as-code caplet (durable execution)
-
-Each workflow is a confined caplet whose *code* is the process — the
-Temporal/Restate shape: deterministic code replayed against a journal of
-recorded effect results, `await`ing durable promises at each step.
-Endo is unusually well positioned for this (deterministic SES compartments,
-[ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) journal
-replay, XS heap snapshots).
-
-- **Pros:** arbitrary control flow with no definition language; maximal
-  composability (it is just code calling code).
-- **Cons:** the process is opaque — no data structure to render as a graph,
-  no uniform status surface (R4/R5/R12 need bespoke instrumentation per
-  workflow); code upgrade of long-lived runs is the hardest version of the
-  upgrade problem (replay divergence); determinism discipline is a
-  per-author burden the engine cannot check.
+The audit log falls out of the architecture (the journal *is* the audit
+log, R3); restart recovery is journal replay plus effect resumption (R2);
+definitions-as-data are renderable as a graph (R12) and validatable with
+`@endo/patterns`.
+The trade-offs accepted: retention is engine-owned (names in the engine
+guest's pet store) rather than formula-graph-native, and the declarative
+definition language must stay disciplined to avoid becoming a bad
+programming language (addressed below with powerless confined reducers).
 
 ### Formalism choice
 
@@ -156,7 +120,7 @@ replay, XS heap snapshots).
 | Flat FSM | poor (state explosion) | yes | yes | low |
 | Statechart subset (hierarchy + parallel regions + guards) | good | yes | yes | medium |
 | Petri net | excellent | yes, but unfamiliar | yes | high |
-| Deterministic code (Option C) | excellent | no | hard | low to write, high to operate |
+| Deterministic replayed code | excellent | no | hard | low to write, high to operate |
 
 A **conservative statechart subset** is chosen: atomic states, compound
 (hierarchical) states, parallel regions with join, guarded transitions,
@@ -166,6 +130,13 @@ be considered later against real definitions.
 Petri nets are strictly more expressive for join patterns but the
 statechart's parallel-region join covers R8, and statecharts render as the
 familiar boxes-and-arrows diagram Chat should draw.
+Workflow-as-replayed-code (the Temporal shape) is rejected as the engine
+model: the process is opaque — no data structure to render as a graph, no
+uniform status surface — and code upgrade of long-lived runs is the
+hardest version of the upgrade problem (replay divergence).
+Nothing prevents an agentry code-mode agent from *generating* definitions,
+and a later `defineWorkflow` builder could compile a restricted JS DSL to
+the data schema (see Known Gaps).
 
 ### The reducer problem: patterns for guards, powerless code for updates
 
@@ -186,14 +157,12 @@ participants.
 This preserves replay: reducers are pure functions of `(context, event)`,
 so folding the journal always reproduces the same state.
 
-### Storage choice
+### Storage
 
-| Backing | Pros | Cons |
-|---------|------|------|
-| Virtual-FS event-segment files + snapshot (recommended) | Backing-agnostic (host dir, mount, memory for tests); greppable; reminder-store atomicity precedent; no daemon schema change | One file per event until compaction |
-| Daemon SQLite | Transactions, queries | Couples the plugin to daemon internals; Option A by the back door |
-| Marshal formulas per event | Formula-graph GC | Thousands of formulas per run; wrong tool |
-
+The journal is backed by virtual-FS event-segment files plus a snapshot,
+over `@endo/platform/fs/extended` like the reminder store: backing-agnostic
+(host directory, mount, or in-memory tree for tests), greppable, and free
+of daemon schema changes.
 Layout under the engine's store root:
 
 ```
@@ -219,16 +188,9 @@ Compaction may fold acknowledged event files into the snapshot and delete
 them once an export/retention policy allows; the audit export
 (`exportJournal()`) streams the full event sequence as JSONL in the
 `@endo/jsonl-transcript` spirit before any deletion.
-
-### Recommendation
-
-**Option B**, with Option C acknowledged as a future *authoring layer*:
-nothing prevents an agentry code-mode agent from *generating* definitions,
-and a later `defineWorkflow` builder could compile a restricted JS DSL to
-the data schema.
-Option A is rejected for daemon-core footprint; if the engine proves
-load-bearing, promoting the journal into the manager database is a
-migration of the storage seam, not of the model.
+If the engine ever proves load-bearing enough to warrant it, promoting the
+journal into another backing is a migration of the storage seam, not of
+the model.
 
 ## Design
 
@@ -535,7 +497,6 @@ Wiring the example with existing capabilities:
 | [daemon-git-capability](daemon-git-capability.md) / `@endo/exo-git` | Landed capability trio — the worked example's repo participant |
 | [daemon-agent-tools](daemon-agent-tools.md), [agentry-agent-builder](agentry-agent-builder.md) | Parallel lane — supplies the implementer/reviewer agents; no hard dependency |
 | [daemon-commands-as-messages](daemon-commands-as-messages.md) | Sibling audit concern; workflow journals its own admin actions regardless |
-| [ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) | Reference for the rejected Option C replay shape |
 
 ## Phased Implementation
 
@@ -610,8 +571,8 @@ Wiring the example with existing capabilities:
       `exportJournal` guarantees.
 - [ ] Whether `WorkflowRunAdmin` should be grantable to non-host agents
       (a "workflow steward" role) and under what guard.
-- [ ] A `defineWorkflow` JS builder (Option C's ergonomics compiled to the
-      Option B schema) — future design.
+- [ ] A `defineWorkflow` JS builder — workflow-as-code ergonomics compiled
+      to the data schema — future design.
 
 ## Prompt
 
