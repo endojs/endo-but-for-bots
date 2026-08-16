@@ -10,10 +10,12 @@
 // The base64 codec is NOT reimplemented here: `@endo/base64` is the
 // single behavioral oracle for the byte<->string transform (its
 // alphabet, padding, and RFC 4648 error semantics), reached through
-// bundling. This module contributes only the thin WHATWG `atob`/`btoa`
-// adaptation layer that `@endo/base64` deliberately does not provide:
-// forgiving-base64 whitespace handling, optional trailing padding, and
-// the `InvalidCharacterError` name that browser code branches on.
+// bundling. `@endo/base64` also exports its own `atob`/`btoa` (and an
+// `@endo/base64/shim.js` that installs them on `globalThis`), but those
+// are the strict RFC 4648 flavor that throws a plain Error; this module
+// contributes the thin WHATWG adaptation layer they omit: forgiving-
+// base64 whitespace handling, optional trailing padding, and the
+// `InvalidCharacterError` name that browser code branches on.
 
 import { encodeBase64, decodeBase64 } from '@endo/base64';
 
@@ -21,13 +23,13 @@ const { fromCharCode } = String;
 
 // The XS runtime creates this host global before evaluating the bundle.
 // eslint-disable-next-line no-underscore-dangle
-const E = globalThis.__archiveEndowments;
+const endowments = globalThis.__archiveEndowments;
 
 // TextEncoder/TextDecoder: pass the machine's globals straight through
 // (native-backed where the XS runtime installed replacements, otherwise
 // the pure-JS polyfills). No new authority — a byte<->text transform.
-E.TextEncoder = globalThis.TextEncoder;
-E.TextDecoder = globalThis.TextDecoder;
+endowments.TextEncoder = globalThis.TextEncoder;
+endowments.TextDecoder = globalThis.TextDecoder;
 
 /**
  * @param {string} message
@@ -49,7 +51,7 @@ const throwInvalidCharacter = message => {
  * @param {string} data
  * @returns {string}
  */
-E.btoa = data => {
+endowments.btoa = data => {
   const s = String(data);
   const bytes = new Uint8Array(s.length);
   for (let i = 0; i < s.length; i += 1) {
@@ -72,7 +74,7 @@ E.btoa = data => {
  * @param {string} data
  * @returns {string}
  */
-E.atob = data => {
+endowments.atob = data => {
   const stripped = String(data).replace(/[\t\n\f\r ]+/g, '');
   if (stripped.length % 4 === 1) {
     // A single trailing base64 digit encodes no whole byte: rejected by
