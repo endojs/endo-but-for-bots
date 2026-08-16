@@ -3370,6 +3370,23 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/workflow@workspace:packages/workflow":
+  version: 0.0.0-use.local
+  resolution: "@endo/workflow@workspace:packages/workflow"
+  dependencies:
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/hex": "workspace:^"
+    "@endo/pass-style": "workspace:^"
+    "@endo/platform": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    "@endo/sha256": "workspace:^"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/x402@workspace:packages/x402":
   version: 0.0.0-use.local
   resolution: "@endo/x402@workspace:packages/x402"
