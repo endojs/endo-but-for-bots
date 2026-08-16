@@ -247,18 +247,24 @@ must name it first:
 
 ```js
 // Today: bind-to-a-pet-name-first, only to satisfy by-name construction.
-await E(host).write(['tmp-counter'], counter); // mint a throwaway name
+// `storeValue(value, petName)` is the host method that binds a live value to a
+// pet name (arguments in that order; `types.d.ts:1556`).
+await E(host).storeValue(counter, 'tmp-counter'); // mint a throwaway name
 const dashboard = await E(host).makeRetainedValue({
+  type: 'eval', // the RetainedValueSpec discriminant (chat-slot-slash-commands.md:242)
   source: dashboardSrc,
-  endowments: ['tmp-counter'], // reference the value by the name just minted
+  codeNames: ['counter'], // the eval body's binding name for the endowment
+  endowments: [['tmp-counter']], // a PetNamePath (`Name[]`), the name just minted
 });
-await E(host).remove(['tmp-counter']); // clean the throwaway name back up
+await E(host).remove('tmp-counter'); // NameHub.remove is variadic (types.d.ts:960)
 ```
 
 ```js
 // Wanted: pass the live value directly, no throwaway name.
 const dashboard = await E(host).makeRetainedValue({
+  type: 'eval',
   source: dashboardSrc,
+  codeNames: ['counter'],
   endowments: [counter], // the live presence stands for its formula dependency
 });
 ```
@@ -295,18 +301,21 @@ cannot serialize. The daemon already has exactly this seam:
   identifier** (`packages/daemon/src/types.d.ts:943`; `packages/daemon/src/manager.js:2990`)
   and `locate(...petNamePath)` returns the **locator** (`types.d.ts:944`).
   `listRetentionPaths(locator)` *is* strictly **host-only, never on `EndoGuest`
-  or the CapTP gateway** (`packages/daemon/src/interfaces.js:526`,
-  `DiagnosticsInterface`; absent from `GuestInterface`;
+  or the CapTP gateway** (`packages/daemon/src/interfaces.js:526`, inside
+  `HostInterface`, which spans `:262-529`; absent from `GuestInterface` and from
+  the separate `DiagnosticsInterface` at `:535-546`;
   [daemon-retention-paths](daemon-retention-paths.md) § *Why host-only*), so a
   guest cannot enumerate host structure that way.
 
 **But be precise about what is *not* already withheld, and it is worse than a
 softened invariant.** The general `GuestInterface` does not merely let a guest
-*observe* a formula identifier; it lets the guest *redeem* one. `identify` /
-`locate` are part of the shared `nameHubMethodGuards`
-(`packages/daemon/src/interfaces.js:99-101`) that `GuestInterface` spreads
-(`:160-163`) and `packages/daemon/src/guest.js:343` wires, so a general guest can
-call `identify` and receive a formula-identifier string. And on the redemption
+*observe* a formula identifier; it lets the guest *redeem* one. `identify`
+(`interfaces.js:101`) / `locate` (`:102`) are part of the shared
+`nameHubMethodGuards` that `GuestInterface` spreads (`:160-163`) and
+`packages/daemon/src/guest.js:343-364` wires (along with `reverseIdentify`,
+`reverseLocate`, `listIdentifiers`, `listLocators`, `lookupByLocator`,
+`storeLocator` — the full ten-method surface Q6 enumerates), so a general guest
+can call `identify` and receive a formula-identifier string. And on the redemption
 side, `lookupById` is `provide(id)` (`packages/daemon/src/guest.js:162`, guarded
 at `interfaces.js:177`) and `storeIdentifier` (`interfaces.js:109`) is likewise
 spread into `GuestInterface`, so a general guest can turn a formula-identifier
@@ -364,17 +373,54 @@ defect**, not merely an ergonomics wart.
 
 The sugar extends the *Proposed* `makeRetainedValue(spec)` surface
 ([chat-slot-slash-commands](chat-slot-slash-commands.md), on both `EndoHost` and
-`EndoGuest`), whose `spec.endowments` is today
-`(PetNamePath | FormulaIdentifier)[]`. The extension adds a **live-presence
-variant** beside `PetNamePath`, so a guest passes the value itself; the
-`FormulaIdentifier` arm stays **host-only** and is not admissible from a guest
-(the input-side half of the rule above). The sketched shape:
+`EndoGuest`), whose `spec.endowments` is today declared
+`(PetNamePath | FormulaIdentifier)[]` on **both** facets
+([chat-slot-slash-commands](chat-slot-slash-commands.md):246). The extension adds
+a **live-presence variant** beside `PetNamePath`, so a guest passes the value
+itself; the `FormulaIdentifier` arm becomes **host-only** and is not admissible
+from a guest (the input-side half of the rule above). The facet asymmetry must be
+carried **in the types, not a comment**: `FormulaIdentifier` is a branded string
+(`types.d.ts:44`), so the two facets' admissible arms are statically
+distinguishable, and Thread 4's own discipline ("invalid states should be
+unrepresentable, not validated") says to split the type rather than reject a
+formula-identifier string past a shared guard:
 
 ```ts
-// Extended endowment kinds. `LivePresence` is the new guest-usable arm; the bare
-// `FormulaIdentifier` arm is host-only and rejected from a guest facet.
-type Endowment = PetNamePath | LivePresence | /* host-only */ FormulaIdentifier;
+// The guest-usable arm set: a name path or a live presence, never a bearer
+// formula-identifier string.
+type GuestEndowment = PetNamePath | LivePresence;
+// The host facet additionally admits the bearer FormulaIdentifier arm.
+type HostEndowment = GuestEndowment | FormulaIdentifier;
 ```
+
+The guest facet's `makeRetainedValue` guard shapes the presence arm as
+`M.remotable()`, so a formula-identifier string is unrepresentable at the guard
+rather than rejected past it. This narrows the `endowments` arm the sibling
+*Proposed* design declares; that amendment to
+[chat-slot-slash-commands](chat-slot-slash-commands.md):246 (splitting its single
+`(PetNamePath | FormulaIdentifier)[]` union into the per-facet pair above) is
+recorded in the Dependencies table, so two Proposed docs do not carry two guest
+signatures for one method.
+
+**Two further boundary rules the split does not by itself settle.** First, the
+`LivePresence` arm must state *which* presences are admissible, or "no formula-ID
+string" is only half a rule. A guest can pass a guest-minted remotable (seated in
+the daemon's **import** table, an `o-N` slot), a presence imported from a third
+peer, an unsettled promise, or a plain passable with no slot. The confinement
+argument rests on the endowment resolving to a daemon **export-table** entry that
+maps to a formula record, and direction is cheap to check (encoded in the slot,
+`captp.js` `slot[1] === '+'`). **Rule:** admit only a slot **this daemon
+exported** whose export-table entry maps to a formula record; reject everything
+else with an error that carries **no identifier**. Second, the **return** side:
+the surface being extended is specified as
+`makeRetainedValue(spec) -> { id: FormulaIdentifier, release }` on `EndoGuest`
+([chat-slot-slash-commands](chat-slot-slash-commands.md):158, :235-236), so its
+declared return **hands a formula-identifier string back to the guest** — the very
+output-side leak Design Decision 2 forbids. So the sugar must **amend the guest
+arm's return** to a `release` capability / live presence, **not** an `id` string
+(the host arm may keep `{ id, release }`); this is the output-side complement of
+the input-side arm split, and it too is recorded as an amendment to the sibling
+design rather than left as two contradicting return shapes.
 
 The hand-off to Thread 5 is not merely "Thread 5 supplies a liveness interval."
 When a passed live value becomes a static dependency of the new formula, the
@@ -545,24 +591,36 @@ unrepresentable, not validated. The coherent worker disciplines are a small
 discriminated union, and the union makes the rejection function unnecessary:
 
 ```ts
-// The coherent worker disciplines, as a sum type. Invalid combinations are
-// unrepresentable, so there is no request-time "reject incoherent combos" step.
+// The coherent worker disciplines, as a sum type, declared and exported from the
+// daemon's canonical formula-type module (`packages/daemon/src/types.d.ts`,
+// alongside `WorkerFormula`). Invalid combinations are unrepresentable, so there
+// is no request-time "reject incoherent combos" step. The single tag is spelled
+// `discipline` (not `kind`) precisely because the exported `WorkerFormula`
+// already carries an unrelated `kind?: 'locked' | 'node'` (`types.d.ts:176-181`);
+// two `kind`s on one durably-persisted formula type would collide.
 type WorkerDiscipline =
   // Heap snapshot is ground truth; immortal code, disposable vat, no upgrade.
-  | { kind: 'orthogonal' }         // thixotrope XS default
+  | { discipline: 'orthogonal-persistence' } // thixotrope XS default
   // Hofman model: only named durable writes survive; new code succeeds old
   // durable state via an app-designed handoff at succession.
-  | { kind: 'durable-succession' }
+  | { discipline: 'durable-succession' }
   // Ephemeral: dies with the host, makes no durable claim.
-  | { kind: 'ephemeral' };
+  | { discipline: 'ephemeral' };
 ```
 
+`WorkerDiscipline` rides the exported `WorkerFormula` as a **new, optional** field
+`discipline?: WorkerDiscipline` with a documented default (absent means
+`'orthogonal-persistence'`, thixotrope's current behavior), so existing formula
+JSON stays readable and no migration is forced. The tag `'orthogonal-persistence'`
+names its noun rather than the bare adjective `'orthogonal'`, matching the
+complete sibling tags `'durable-succession'` / `'ephemeral'`.
+
 This reuses concepts the reader already has rather than minting a third
-persistence vocabulary: `orthogonal` is the heap-as-ground-truth stratum,
-`durable-succession` is the `@endo/exo` **durable** stratum carried in baggage to
-a successor, `ephemeral` is the **heap** stratum that *"dies with the process."*
-The concept is named **worker discipline** throughout (the type, the prose, and
-the README milestone row all use that one name).
+persistence vocabulary: `orthogonal-persistence` is the heap-as-ground-truth
+stratum, `durable-succession` is the `@endo/exo` **durable** stratum carried in
+baggage to a successor, `ephemeral` is the **heap** stratum that *"dies with the
+process."* The concept is named **worker discipline** throughout (the type, the
+prose, and the README milestone row all use that one name).
 
 **Identity is per-edge, not part of this descriptor.** Whether an inbound
 reference resolves through the name hub (`named`, reroutable, upgradable) or pins
@@ -574,7 +632,7 @@ design depends on. The coherence an earlier cut tried to validate ("succession
 needs `named` edges for the references that must survive it") is therefore a
 property checked **per-edge at succession time**, when the inbound edges actually
 exist, not a combination rejected at worker-request time (when no inbound edge
-exists yet). `{ kind: 'durable-succession' }` with an inbound `worker-import`
+exists yet). `{ discipline: 'durable-succession' }` with an inbound `worker-import`
 edge that cannot reroute is caught when that edge is asked to survive a
 succession, and it is caught against the concrete edge, not a hypothetical.
 
@@ -591,7 +649,7 @@ unsettled cross-session promises reject via tombstone descriptors on retirement)
 
 **Recommendation:** treat general durable pending-promises as **not solvable**,
 and instead **scope** what a durable pending-promise may represent under
-`{ kind: 'durable-succession' }`:
+`{ discipline: 'durable-succession' }`:
 
 - A durable promise may resolve **only** to a value the durable-data vocabulary
   can already represent (a passable, a named presence resolvable through the name
@@ -654,14 +712,27 @@ primitive; it is a **specialization of the reference-counted import/export drop
 protocol the kernel already runs at the c-list level** (SwingSet's
 `deliverDropExports` / `deliverRetireExports`; CapTP's `op:gc-exports` /
 `op:gc-answers`). The anonymous formula gets a graph edge from the question
-table (a new labeled edge kind, e.g. `question:<answer-pos>`, alongside the
+table (a new labeled edge kind, `question:<session>:<answer-pos>`, alongside the
 existing `pet:<name>`, field, `retention`, and `transient` labels in
 [daemon-retention-paths](daemon-retention-paths.md); the label carries the
 answer position so a host operator reading `listRetentionPaths` sees *which*
-question roots it, not N identical rows). Union-find pins its cluster while the
-question is open; resolution (`fulfill` / `break`) removes the edge; the next
-mark-and-sweep collects it if nothing durable claimed a name and no cross-peer
-import edge survives.
+question roots it, not N identical rows). **The `<session>` component is
+load-bearing, not cosmetic.** The answer position is a **peer-chosen, per-`makeCapTP`
+identifier**: `lastQuestionID` is module-local to each `makeCapTP` and starts at 0
+(`captp.js:482`, `:681`), instantiated once per connection
+(`connection.js:166`), while the formula graph is **daemon-global**. Without a
+session discriminator, two concurrent peers both mint answer-pos 3, the label
+`question:3` names one edge for two questions, and peer B's resolution drops peer
+A's root (and Q2 mechanism 1 cannot enumerate a single session's edges on
+`op:abort`). Keying the edge on (session, answer-pos) makes it unique by
+construction; the daemon must additionally **reject a duplicate answer-pos within
+a live session** (the position is peer-chosen with no uniqueness check at
+`answers.set`, `:852`, so a hostile questioner could otherwise reuse a live
+position to alias two `question` edges and collect an intermediate the second
+question still roots). Union-find pins its cluster while the question is open;
+resolution (`fulfill` / `break`) removes the edge; the next mark-and-sweep
+collects it if nothing durable claimed a name and no cross-peer import edge
+survives.
 
 **Two separable pieces; do not couple the buildable one to unlanded API.** The
 daemon-internal mechanism is buildable today over landed machinery: the in-memory
@@ -681,7 +752,7 @@ only *question* roots, not these operation-scoped pins; closing that error-path
 leak is a separate precondition, not something the per-question refinement
 supplies. The batch-flush root refines that pin
 **from a single-operation lifetime to a single-question lifetime** by giving the
-anonymous formula a `question:<answer-pos>`-labeled edge, union-find-pinned while
+anonymous formula a `question:<session>:<answer-pos>`-labeled edge, union-find-pinned while
 the question is unsettled and unpinned when the question **resolves**. Its release
 trigger is resolution (plus the cross-peer condition of Q4); it calls **no**
 `release` handle, so it does **not** depend on any unlanded guest-facing surface.
@@ -764,36 +835,61 @@ away:**
   not, by itself, free the answerer-side table entry the message actually
   resolves against.** Traced against the landed CapTP, `CTP_CALL` resolves an
   answer-position target from the module-local `answers` `Map` **first**
-  (`packages/captp/src/captp.js:773-781`), and `answers` is deleted only in the
-  last-reference branch of `CTP_DROP` (`:767`) — **never by resolution and never
-  by a formula-graph sweep**. So while that entry survives — which today is the
-  *normal* case, because `gcImports` defaults `false` (`:291`) and no daemon call
-  site enables it (`connection.js:166`), so the `CTP_DROP` that would delete it is
-  never emitted — a late pipelined send is serviced from the **retained handled
-  promise**: a **silent rebind to the resolved value**, not a hang and not
-  partition-shaped, exactly the cosmetic-deletion hazard Thread 1's discriminator
-  exists to forbid. Only once that `answers`/export-table entry is *also* gone
-  does `convertSlotToVal` throw `` Unknown export ${slot} `` (`:708`) inside the
-  handler, *before* any `CTP_RETURN` is constructed; the `dispatch` outer catch
-  then calls `quietReject(e, false, PROTOCOL_REJECTION)` (`:1021-1022`), and
-  because `returnIt` is `false`, `quietReject` reports the error only to the
-  **local** `onReject` handler and returns `Promise.resolve()` (`:320-336`) —
-  **no reply is sent back to the sender.** So the caller's question promise never
-  settles: the observed failure is a **silent indefinite hang** (bounded only by
-  session abort or the per-root lease). The batch-flush root therefore names
-  **two** prerequisites, not one: **(a)** the exporter's own `answers`/export-table
-  entry for an anonymous intermediate is itself a retention root (a fifth root,
-  the embedding library's own table — see Q4 and Design Decision 6's third release
-  conjunct), so dropping it must be **part of the same graph mutation that drops
-  the `question` edge**; otherwise formula-graph collection is the cosmetic
-  deletion above and the late send silently rebinds against the retained handled
-  promise. **(b)** Once that entry is gone, the exporter must **reply with a
-  genuine rejection (a `CTP_RETURN` carrying a protocol-level break) on
-  `Unknown export`** rather than silently dropping the reply, so the caller's
-  question actually breaks and the partition-shape is real rather than
-  aspirational. Until both hold, the residual is a **silent rebind** (entry still
-  present, the common case today) or a **silent hang** (entry gone), and the
-  per-root lease / session abort are the only bounds that fire (Q2).
+  (`packages/captp/src/captp.js:780-782`), and `answers` is written keyed by the
+  peer-minted **question id** — `answers.set(questionID, …)` (`:743`, `:852`; the
+  `:488` comment says "chosen by our peer"). The `answers` entry is **immortal for
+  an unconditional reason, not a contingent one.** `CTP_DROP` deletes it via
+  `answers.delete(reverseSlot(slotID))` (`:756-767`), guarded by
+  `slotID[1] === '-'` — i.e. the deletion key is always a **reversed export slot**
+  (`+`-direction), while every stored `answers` key is an **unreversed question
+  id** (`-`-direction). The two key spaces **never intersect**, so
+  `answers.delete` *can never match a stored answer entry* — the entry survives
+  **even with `gcImports: true`**, and **even against a peer that faithfully emits
+  `op:gc-answers`**. The earlier framing that attributed the survival to
+  "`gcImports` defaults `false` (`:291`) so the `CTP_DROP` that would delete it is
+  never emitted" named a *contingent* cause for an *unconditional* fact and is
+  corrected here: no `CTP_DROP` deletes this entry on any configuration. So a late
+  pipelined send is serviced from the **retained handled promise**: a **silent
+  rebind to the resolved value**, not a hang and not partition-shaped, exactly the
+  cosmetic-deletion hazard Thread 1's discriminator exists to forbid. Only once
+  that `answers`/export-table entry is *also* gone does `convertSlotToVal` throw
+  `` Unknown export ${slot} `` (`:710`) inside the handler, *before* any
+  `CTP_RETURN` is constructed; the `dispatch` outer catch then calls
+  `quietReject(e, false, PROTOCOL_REJECTION)` (`:1021-1022`), and because
+  `returnIt` is `false`, `quietReject` reports the error only to the **local**
+  `onReject` handler and returns `Promise.resolve()` (`:320-336`) — **no reply is
+  sent back to the sender.** So the caller's question promise never settles: the
+  observed failure is a **silent indefinite hang** (bounded only by session abort
+  or the per-root lease). The batch-flush root therefore names **two** `@endo/captp`
+  prerequisites, not one — and because no landed `CTP_DROP` path retires this
+  entry, the first is a *new mutation seam*, not a coupling into an existing one:
+  **(a)** the exporter's own `answers`/export-table entry for an anonymous
+  intermediate is itself a retention root (a fifth root, the embedding library's
+  own table — see Q4 and Design Decision 6's release conjunction), and because
+  `@endo/captp` exposes **no** call site that retires an `answers` entry on
+  anything but a namespace-mismatched `CTP_DROP`, the release condition needs a
+  **new, bounded answer-retirement authority on `makeCapTP`** (distinct from, and
+  in addition to, the question-*observation* seam) that the daemon invokes as part
+  of the same graph mutation that finally releases the intermediate; otherwise
+  formula-graph collection is the cosmetic deletion above and the late send
+  silently rebinds against the retained handled promise. This retirement authority
+  must be bounded: an unscoped `answers.delete` handed to an embedder reproduces
+  the very hang/rebind pair this conjunct exists to prevent. **(b)** Once that
+  entry is gone, the exporter must **reply with a genuine rejection (a `CTP_RETURN`
+  carrying a protocol-level break) on `Unknown export`** rather than silently
+  dropping the reply. Note the seam this needs: the throw originates in
+  `convertSlotToVal` (`:710`) via the bare `unserialize` in `CTP_CALL`
+  (`:783-789`), *outside* any local `try`; the only catch is `dispatch`'s
+  (`:1019-1024`), which has no `questionID` in scope and structurally cannot
+  construct a `CTP_RETURN`. So this prerequisite is specifically "wrap the
+  `answers`-miss target resolution inside `CTP_CALL` so the failure reaches
+  `processResult`", scoped to the `Unknown export` case (not a blanket change to
+  `dispatch`'s generic `PROTOCOL_REJECTION` path, which today replies to no
+  protocol rejection and whose contract is shared by all five `workspace:^`
+  `@endo/captp` dependents and every external embedder — see the scoping note in
+  Q4). Until both hold, the residual is a **silent rebind** (entry still present,
+  the common case on every configuration) or a **silent hang** (entry gone), and
+  the per-root lease / session abort are the only bounds that fire (Q2).
 
 #### Q2: the stuck-batch / non-flushing case (the resource-exhaustion vector)
 
@@ -838,7 +934,19 @@ in the tree:
    the lease is a **local policy bound**, not a wire fact. Its *expiry clock* is
    host-local; what it produces (a partition-shaped break) is the wire-visible
    event. It does not claim to be a protocol-level liveness fact, and it does not
-   need to; it is a bound that emits a break.
+   need to; it is a bound that emits a break. **The clock must be an injected
+   platform power, not ambient `setTimeout`.** The daemon has a non-Node target:
+   for the XS daemon, `packages/daemon/src/bus-xs-daemon-polyfills.js:54-60`
+   polyfills `setTimeout` by **discarding the delay** and firing on the next
+   microtask ("XS has no real event loop"), so a lease built over ambient
+   `setTimeout` in daemon core would expire **immediately** on XS — and the Q4
+   forcible cross-peer drop would then sever every anonymous intermediate's settled
+   import on the first turn, falsifying the "a cooperative peer never sees the
+   forcible drop" bound. So the lease timer is an **injected clock power supplied
+   per target** (the house precedent is `retention-accumulator.js:31`, "Defaults to
+   `queueMicrotask`. Injected for testing"; `manager-node-powers.js:545` supplies
+   the real Node timer). A Dependencies row records that the XS daemon needs a real
+   timer power before the Q2 bound holds there.
 
 3. **Admission control on root creation** for the *adversarial* case. Borrow the
    metering insight directly ([daemon-xs-worker-metering](daemon-xs-worker-metering.md):
@@ -861,11 +969,38 @@ in the tree:
    union-find topology the peer **cannot predict**, so an honest deep-pipelining
    peer can have a send refused for reasons opaque to it. That is the price of
    bounding a hostile peer, and refusing an unsettled send is ordinary partial
-   failure, but it is a real ergonomic edge, not free backpressure. A
-   counterparty cannot force retention past the cap because the daemon stops
-   minting roots, exactly as the supervisor stops delivering messages when budget
-   is exhausted. This is the piece that makes the root safe against a hostile peer
-   rather than merely a crashed one.
+   failure, but it is a real ergonomic edge, not free backpressure.
+   **A check-at-mint over a quantity that only grows afterward is not sufficient
+   on its own.** `union` merges but never splits (`graph.js`), so a root's pinned
+   closure is **non-decreasing** after admission: a peer can mint `N` roots each
+   just under the cap and *then* drive later edges/cycles that union their groups
+   into one oversized cluster, defeating the cap without ever tripping it at mint.
+   The check-and-mint atomicity rule (the fifth-window TOCTOU below) closes a
+   concurrent-admission race, **not** this monotonic-growth one. So the cap needs
+   one of two stated disciplines, and this design commits to the first: **(a)**
+   scope the cap's denominator to the **question-rooted pins only** (count each
+   outstanding `question:<session>:<answer-pos>` edge's *own* contribution, not the
+   whole merged group it happens to land in), so post-mint merges with unrelated
+   named roots do not retroactively push a session over cap; **(b)** *or*, if the
+   denominator must be the full closure, **re-evaluate the cap on every union that
+   grows a question-rooted group** and refuse/partition-shape the offending later
+   edge. Option (a) is preferred because it keeps the check local to the roots the
+   session actually minted; the closure-size framing of the "cannot fan a single
+   root into a large cluster" claim is corrected to hold **at and after** mint
+   under (a), not only pre-mint. A counterparty cannot force retention past the cap
+   because the daemon stops minting roots (and, under (a), a later merge cannot
+   inflate a session's counted total), exactly as the supervisor stops delivering
+   messages when budget is exhausted. This is the piece that makes the root safe
+   against a hostile peer rather than merely a crashed one.
+
+   Two further per-session/per-peer notes: the cap is stated **per session**, so a
+   peer opening `N` sessions gets `N` times the cap and `N` independent abort
+   scopes; a **per-peer aggregate** bound over a peer's live sessions is required
+   so session churn does not multiply the bound. And the degenerate cap values
+   (cap `0`; `<` vs `<=` at exactly-cap; a single send whose own closure already
+   exceeds the cap, which — since a refused send is "never later admitted" — wedges
+   that session rather than bounding it) are enumerated in the Test Plan's boundary
+   sweep.
 
 With all three, the stuck-batch hazard is bounded by (1) session lifetime, (2) a
 per-root lease, and (3) a per-session admission cap. No single one is
@@ -986,14 +1121,26 @@ earlier cut conflated:
   `Map` (`packages/captp/src/captp.js:486`, keyed by the question's slot) and its
   answers in a module-local `answers` `Map` (`:488`) inside `makeCapTP` — there is
   **no** `questions` `Map`; the settlement machinery is the `settlers` map. The
-  injectable `CapTPImportExportTables` seam (`captp.js:100-111`) exposes
-  import/export slots **only**, not question/answer settlement. So the daemon's formula graph cannot
-  refcount over question resolution until `@endo/captp` grows a **new extension
-  point** analogous to the landed `provideImport` seam, a question/answer
-  observation hook that lets the embedding daemon learn when a question settles.
-  That is an `@endo/captp` API addition, internal to the implementation, **not**
-  an OCapN wire addition, and the README "S / research doc" sizing rests on
-  building it. The Dependencies table records this prerequisite explicitly.
+  injectable `CapTPImportExportTables` seam (`captp.js:100-111`, whose default
+  binding is the exported `makeDefaultCapTPImportExportTables`, `captp.js:121`,
+  passed as the `makeCapTPImportExportTables` option to `makeCapTP`, `:292`)
+  exposes import/export slots **only**, not question/answer settlement. So the
+  daemon's formula graph cannot refcount over question resolution until
+  `@endo/captp` grows a **new `makeCapTP` option** — a question/answer observation
+  hook that lets the embedding daemon learn when a question settles, spelled
+  beside `makeCapTPImportExportTables` in the options bag (`@endo/captp`'s
+  `exports` map is a single `"."` re-exporting `./src/captp.js`, so the addition
+  is an option on the public `makeCapTP`, not a new module export). The precedent
+  for an additive, no-wire-change observation seam of this shape is the landed
+  **`provideImport`** hook — but that seam lives in **`@endo/ocapn`**
+  (`packages/ocapn/src/client/ocapn.js`, `client/index.js`; consumed by
+  `packages/thixotrope/src/daemon.js`), **not** in `@endo/captp`; it is an
+  import-*provisioning* hook of shape `({type, position}) => object`, cited here
+  only as the *precedent for additivity*, not as an in-package `@endo/captp`
+  identifier. That is an `@endo/captp` API addition, internal to the
+  implementation, **not** an OCapN wire addition, and the README "S / research
+  doc" sizing rests on building it. The Dependencies table records this
+  prerequisite explicitly.
 
 **The reference-counting GC operations must *not* be promoted to the
 authoritative trigger, and here the design holds the Thread 3 discriminator
@@ -1009,23 +1156,60 @@ finalizer drives them:
   resolution cannot tell you: whether a counterparty that *directly imported* the
   intermediate still holds it. This is the **fourth (cross-peer) window**: the
   intermediate can be reachable not only through your unsettled question but
-  through a counterparty's direct import, and *that* edge is dropped only by the
-  counterparty's `op:gc-exports` (equivalently, a `remove` in the cross-peer
-  retention set), which arrives asynchronously (a network round trip;
-  `retention-accumulator.js` batches on `queueMicrotask` then streams). **So the
-  release condition is not resolution alone**; it is a conjunction of **three**
-  facts: the intermediate collects only when **(i)** the `question` edge is
-  dropped (resolution), **(ii)** no cross-peer import edge references it, **and
-  (iii)** the exporter's own answerer-side `answers`/export-table entry for the
-  intermediate is dropped **in the same graph mutation that drops the `question`
-  edge** (Q1's third window: `answers` is cleared only by `CTP_DROP`, never by
-  resolution, so absent this coupling a late pipelined send is silently rebound
-  against the retained handled promise rather than collected). Conjunct (iii) is
-  the fifth retention root — the embedding CapTP library's own table — that a
-  release condition stated only over the daemon's formula graph would miss.
-  Releasing on resolution alone would collect an intermediate a
-  counterparty still holds, exactly the "a working reference just went bad" class
-  Thread 1 rules out.
+  through a counterparty's direct import, and *that* edge is dropped when the
+  counterparty's daemon collects its handle — signalled to us by a **`remove` in
+  the cross-peer retention set** (`accumulator.remove(...)`, `manager.js:1602`,
+  driven by the peer daemon's own graph-change stream), which arrives
+  asynchronously (a network round trip; `retention-accumulator.js` batches on
+  `queueMicrotask` then streams). **Name the signal precisely: the cross-peer
+  retention-set `remove`, not `op:gc-exports`.** The two are *not*
+  interchangeable. `op:gc-exports` is emitted only through captp's weak-import GC
+  (`releaseSlot`, reachable only when `gcImports: true`, `captp.js:135,291`), and
+  `gcImports` defaults `false` with **no** daemon call site enabling it; even
+  enabling it is engine-conditional (`finalize.js:56` silently falls back to a
+  strong `Map` when `WeakRef`/`FinalizationRegistry` are absent, and XS-shaped
+  workers reap only at forced points), so `op:gc-exports` is emitted nowhere in
+  the stock daemon. The retention-set `remove`, by contrast, is the daemon's own
+  graph-driven drop and is independent of `gcImports`. **So the release condition
+  is not resolution alone**; it is a conjunction: the intermediate collects only
+  when **(i)** the `question` edge is dropped (resolution), **and (ii)** no
+  cross-peer import edge references it (the retention-set `remove` has arrived, or
+  none was ever added — see the residual below), **and (iii)** the exporter's own
+  answerer-side `answers`/export-table entry is retired via the new bounded
+  `@endo/captp` answer-retirement authority (Q1's third window: no landed
+  `CTP_DROP` path retires this namespace-mismatched entry, so absent that
+  authority a late pipelined send silently rebinds against the retained handled
+  promise rather than collecting). **Conjunct (iii) is bound to the *final
+  release* mutation — the one that fires when (i) *and* (ii) both hold — not to
+  the `question`-edge drop at resolution.** Binding it to resolution would retire
+  the `answers`/export-table entry while conjunct (ii) is still false (a
+  cooperative peer still directly imports the intermediate); that is `CTP_DROP`'s
+  last-reference branch run early, and the peer's next direct use would then hit
+  `Unknown export` → the silent hang this very window forbids, inflicted on the
+  cooperative peer conjunct (ii) exists to protect. Conjunct (iii) is the fifth
+  retention root — the embedding CapTP library's own table — that a release
+  condition stated only over the daemon's formula graph would miss; it is lifted
+  out of the resolution mutation and into the final-release mutation. Releasing on
+  resolution alone would collect an intermediate a counterparty still holds,
+  exactly the "a working reference just went bad" class Thread 1 rules out.
+  - **Residual conjunct (ii) rests on, stated plainly.** The retention-set
+    `remove` is a live signal **only if the anonymous, never-named
+    question-rooted intermediate is published in the peer's retention set in the
+    first place.** The retention set is anchored on formula IDs
+    (`retentionEdges: Map<agentId, Set<formulaId>>`), and the anonymous
+    intermediate does have one, but whether a *directly imported anonymous
+    intermediate* joins the published set — versus only *named* retained formulas
+    doing so — is the load-bearing open point. If it does **not**, conjunct (ii)
+    has no live drop signal for such intermediates, every one of them falls
+    through to lease expiry, and the row-3 forcible drop below becomes the
+    **default release path against honest peers, not the adversarial exception**.
+    The design commits to the affirmative requirement: an anonymous intermediate a
+    peer directly imports **must** carry a cross-peer retention edge so its
+    `remove` is observable; the batch-flush root's "cooperative peers do not pay
+    the row-3 tax" claim is scoped to that requirement holding, and closing it is
+    listed in the Test Plan and Dependencies. Absent it, the honest reading is that
+    the whole-interval lease is the primary release path and the tax is universal —
+    which the design would then own rather than deny.
   - **Adversarial-peer hole this fourth window opens, and how it is bounded.**
     Making release depend on *both* resolution *and* absence of a cross-peer
     import edge means an adversarial but **non-disconnecting** peer can pin an
@@ -1051,8 +1235,9 @@ finalizer drives them:
     peer still holds) while restoring the bound against a peer that *withholds* its
     `op:gc-exports`.
     - **What failure class this is, applying Thread 1's discriminator rather than
-      name-dropping it.** Thread 1's taxonomy (`:202-207`) is not
-      collective-versus-single alone; its operative axis is *what is severed*. A
+      name-dropping it.** Thread 1's taxonomy table (§ *So the design axis is
+      sharper*, rows 3–4) is not collective-versus-single alone; its operative
+      axis is *what is severed*. A
       forcible post-resolution drop severs a **settled import** the peer holds on
       a still-live session with every sibling reference intact — that is Thread 1's
       **row 3** (involuntary single-reference sever, the "a working reference just
@@ -1130,7 +1315,7 @@ observation seam does), not to add a primitive to the wire.
 **Build it, but build the reframing, not the framing.** Recommend implementing
 the batch-flush retention root **as a specialization of CapTP question/answer
 reference-counting inside the daemon's formula graph** (a
-`question:<answer-pos>`-labeled transient edge, union-find-pinned while the
+`question:<session>:<answer-pos>`-labeled transient edge, union-find-pinned while the
 question is unsettled), released on **resolution** plus the cross-peer import
 condition of Q4, bounded by the three Q2 mechanisms (session-subordinate abort,
 per-root lease, per-session admission cap). This:
@@ -1207,9 +1392,12 @@ worded.
 
 3. **The authoritative liveness signal is a protocol-level fact; local bounds
    emit a break and are labeled as such.** The batch-flush root's authoritative
-   release trigger is **resolution** (`fulfill` / `break`, a wire fact) plus a
-   counterparty's `op:gc-exports` / retention `remove` for a direct import (also a
-   wire message); `op:gc-answers` and any local finalizer are admitted **only** as
+   release trigger is **resolution** (`fulfill` / `break`, a wire fact) plus the
+   cross-peer **retention-set `remove`** for a direct import (`manager.js:1602`,
+   the daemon-graph-driven drop; `op:gc-exports` would be admissible too but
+   requires `gcImports: true` and is emitted nowhere in the stock daemon, so the
+   retention `remove` is the operative signal); `op:gc-answers` and any local
+   finalizer are admitted **only** as
    an optimization hint that may release *earlier*, never as the release signal
    (Thread 3; Q4). The Q2 bounds (per-root lease, per-session admission cap) are
    **not** claimed to be protocol-level liveness facts: they are host-local
@@ -1221,32 +1409,42 @@ worded.
 4. **Worker discipline is an explicit per-worker constraint on the incarnation
    formula, modeled as a discriminated union so incoherent combinations are
    unrepresentable.** `WorkerDiscipline` is
-   `{ kind: 'orthogonal' } | { kind: 'durable-succession' } | { kind: 'ephemeral' }`,
+   `{ discipline: 'orthogonal-persistence' } | { discipline: 'durable-succession' } | { discipline: 'ephemeral' }`,
    reusing the `@endo/exo` heap/durable strata rather than a
    `persistence`/`upgrade`/`identity` product type with a request-time rejection
-   function. Per-edge `named` vs. `worker-import` identity is **not** part of this
-   descriptor; it stays a grant-time per-edge choice, so one worker can hold both
-   edge kinds. Coherence between a `durable-succession` worker and its inbound
+   function. It rides the exported `WorkerFormula`
+   (`packages/daemon/src/types.d.ts`) as a **new optional field
+   `discipline?: WorkerDiscipline`** — named `discipline`, not `kind`, because
+   `WorkerFormula` already carries an unrelated `kind?: 'locked' | 'node'`
+   (`types.d.ts:176-181`) — defaulting to `'orthogonal-persistence'` when absent
+   so existing durably-persisted formula JSON stays readable. Per-edge `named`
+   vs. `worker-import` identity is **not** part of this descriptor; it stays a
+   grant-time per-edge choice, so one worker can hold both edge kinds. Coherence between a `durable-succession` worker and its inbound
    edges is checked **per-edge at succession time** (when the edges exist), not at
    worker-request time (when they do not). Mirrors SwingSet vat managers and
    thixotrope's three engines (Thread 4).
 
 5. **Durable pending-promises are scoped, not solved.** Under
-   `{ kind: 'durable-succession' }` a durable promise resolves only to
+   `{ discipline: 'durable-succession' }` a durable promise resolves only to
    representable values and continues only through named durable handlers;
    anonymous `.then` over transient heap is transient by construction (Thread 4).
 
 6. **The batch-flush root is a specialization of CapTP question/answer
    refcounting, not a new primitive and not an OCapN wire change**, released on a
-   conjunction of three facts — **resolution** (`fulfill` / `break`) *and* the
-   absence of any cross-peer import edge (a counterparty's `op:gc-exports` /
-   retention `remove`) *and* the drop of the exporter's own answerer-side
-   `answers`/export-table entry for the intermediate, performed in the **same
-   graph mutation** as the `question`-edge drop so that formula-graph collection
-   and answerer-side heap release coincide (Q1's third window; absent this
-   coupling a late pipelined send silently rebinds against the retained handled
-   promise, since `answers` is cleared only by `CTP_DROP`, never by resolution),
-   and bounded by
+   conjunction of three facts — **(i) resolution** (`fulfill` / `break`) *and*
+   **(ii)** the absence of any cross-peer import edge (signalled by the cross-peer
+   retention-set `remove`, `manager.js:1602` — **not** `op:gc-exports`, which
+   requires `gcImports: true`, is engine-conditional, and fires nowhere in the
+   stock daemon) *and* **(iii)** the retirement of the exporter's own answerer-side
+   `answers`/export-table entry for the intermediate. Conjunct (iii) is bound to
+   the **final-release mutation** (when (i) *and* (ii) both hold), **not** to the
+   `question`-edge drop at resolution: `answers` is namespace-mismatched against
+   every landed `CTP_DROP` path (Q1's third window), so retiring it early — while a
+   cooperative peer still directly imports the intermediate — would run
+   `CTP_DROP`'s last-reference branch prematurely and hang that peer. Because no
+   landed `CTP_DROP` retires the entry on any configuration, conjunct (iii) needs a
+   **new, bounded answer-retirement authority on `makeCapTP`**, distinct from and
+   in addition to the question-*observation* seam. Bounded by
    session-subordinate abort plus a per-root lease that bounds the **whole**
    retention interval (both the pre-resolution wait *and* the post-resolution wait
    on an outstanding cross-peer import edge, closing Q4's adversarial fourth-window
@@ -1257,22 +1455,78 @@ worded.
    respectively. The daemon-internal mechanism
    is buildable today over the landed refcounted transient pin
    (`pinTransient` / `unpinTransient`), refined from single-operation to
-   single-question lifetime; it depends on a new `@endo/captp` question-observation
-   seam (Q4) but on **no** unlanded guest-facing API. The separate guest-facing
+   single-question lifetime; it depends on **two** new `@endo/captp` seams (a
+   question-observation hook and the bounded answer-retirement authority, Q4) but
+   on **no** unlanded guest-facing API. The separate guest-facing
    `{ id, release }` handle from the *Proposed* `makeRetainedValue` surface
    ([chat-slot-slash-commands](chat-slot-slash-commands.md)) is Thread 2's sugar,
    not a prerequisite of the mechanism.
+
+## Test Plan
+
+Each binding Design Decision and enumerated hazard window carries a verification
+obligation, so the doc's bar ("closed by an explicit rule, not asserted away") is
+checkable rather than asserted. Where the obligation is a universally-quantified
+rule or a race, it is stated as a **property** (`@fast-check/ava`; `@endo/daemon`
+would take the `fast-check` devDependency, already in the catalog as
+`catalog:dev`), because example-based cases pin only the shapes that exist today.
+
+1. **Partition-shape on arrival-after-collection (Q1 third window, DD6).** A
+   pipelined send against a settled-and-collected anonymous answer position must
+   fail **partition-shaped** — never a silent rebind to the resolved value, never
+   an exporter hang, never a crash. Three cases: (a) entry retired then message
+   arrives (expect a `CTP_RETURN` break); (b) message against a never-minted
+   answer position (same break); (c) two live anonymous intermediates are
+   distinguishable so a collected one is never serviced by its neighbour. This is
+   the test that would have caught the `answers` namespace mismatch: it reddens if
+   the bounded answer-retirement authority is absent or wrong.
+2. **Release conjunction ordering (DD6 conjunct iii).** Retiring the exporter's
+   `answers`/export-table entry must fire in the **final-release** mutation, not at
+   resolution: assert that with the question resolved but a cross-peer import edge
+   still present, the entry is **retained** and the peer's direct use still
+   succeeds; and that it is retired exactly when the last of (i)/(ii) completes.
+3. **Idempotent single-owner drop (Q2 fifth window, diamond/N-referrer).**
+   `fc.property(fc.array(fc.constantFrom('resolve','lease','gcExports','abort'), {minLength:1,maxLength:8}), triggers => { apply(triggers); return collectCount === 1 && deepEqual(state, applyOnce()); })`
+   — any permutation of release triggers yields one collection and the same
+   terminal graph. Covers the N-way simultaneous settle.
+4. **Admission-cap TOCTOU and monotonic growth (Q2 mechanism 3).**
+   `fc.asyncProperty(fc.scheduler(), fc.array(mintArb, {minLength:2,maxLength:10}), async (s, reqs) => { …; await s.waitAll(); return pinnedClosureSize() <= cap; })`
+   for the check-then-mint race (the scheduler shrinks to the exact interleaving),
+   plus a graph-shaped property that later unions of a question-rooted group do not
+   push a session over cap (the monotonic-growth hole). Boundary sweep: cap `0`,
+   `<` vs `<=` at exactly-cap, a single send whose own closure exceeds cap
+   (wedge-not-bound), per-session vs per-peer aggregate.
+5. **Session-unique question edge (Q1/Q2).** Two concurrent sessions both at
+   answer-pos 3 must produce **distinct** `question:<session>:<answer-pos>` edges;
+   peer B's resolution must not drop peer A's root; a duplicate answer-pos within
+   one live session is rejected.
+6. **Distributed Confinement, universally quantified (DD2).**
+   `fc.asyncProperty(fc.constantFrom(...guestMethodNames), fc.array(arbPassable), async (m, args) => { const out = await E(guest)[m](...args).catch(e => e); return !containsFormulaId(out); })`,
+   where `containsFormulaId` deep-walks the result **and** the rejection's
+   `message`/`details` for the 256-bit identifier shape (the doc names an error
+   message as a leak vector). The method-name arbitrary makes a *future* method's
+   leak fail on the day it is added.
+7. **Lease clock is injected (Q2 mechanism 2, transplanter).** A test-injected
+   clock drives lease expiry; an ambient-`setTimeout` lease on the XS target
+   (delay discarded) must **not** be reachable — a regression test that the timer
+   power is threaded, not ambient.
+8. **Boundary catalog (corner-prober).** Lease clock discontinuities
+   (suspend/resume expiring every lease at once); the release-trigger set is
+   `{resolution, lease, op:abort, forcible cross-peer drop}`, not two elements;
+   succession-time coherence-check failure behavior (abort vs. proceed vs. kill)
+   is exercised, not left unspecified.
 
 ## Dependencies
 
 | Design | Relationship |
 |---|---|
-| [daemon-cross-peer-gc](daemon-cross-peer-gc.md) (Complete) | Supplies the retention-set plus retention-edge substrate and the `retention-accumulator` batching primitive. The cross-peer `remove` delta is the authoritative signal that a counterparty dropped a *direct import* of an anonymous intermediate (Q4's fourth window). |
-| [daemon-retention-paths](daemon-retention-paths.md) (In Progress) | Supplies the labeled-edge graph model, the `transient` root, and the host-only confinement rule this design extends with a `question:<answer-pos>` edge. |
+| [daemon-cross-peer-gc](daemon-cross-peer-gc.md) (Complete) | Supplies the retention-set plus retention-edge substrate and the `retention-accumulator` batching primitive. The cross-peer `remove` delta (`accumulator.remove`, `manager.js:1602`) is the authoritative signal that a counterparty dropped a *direct import* of an anonymous intermediate (Q4's fourth window), driven by the peer daemon's own graph — **not** captp's `op:gc-exports`, which requires `gcImports: true` and fires nowhere in the stock daemon. |
+| [daemon-retention-paths](daemon-retention-paths.md) (In Progress) | Supplies the labeled-edge graph model, the `transient` root, and the host-only confinement rule this design extends with a `question:<session>:<answer-pos>` edge. |
 | [ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) (In Progress) | Supplies the name hub / `named` vs. `worker-import` edges (Thread 1, Thread 4), the at-most-once abort plus tombstone machinery (Thread 5-Q2), and the lease/expiry follow-up (Thread 5-Q2). |
 | [daemon-xs-worker-metering](daemon-xs-worker-metering.md) | Supplies the "admission control eliminates embargo" pattern the per-session root cap borrows (Thread 5-Q2). |
-| [chat-slot-slash-commands](chat-slot-slash-commands.md) (Proposed, Not Started) | Supplies the **not-yet-landed** `makeRetainedValue(spec) -> { id, release }` guest-facing surface (Thread 2's sugar). The daemon-internal batch-flush edge does **not** depend on it; it is buildable over the landed `pinTransient` / `unpinTransient` pin. |
-| `packages/captp` (`makeCapTPImportExportTables`) plus a **new** question-observation seam | The import/export tables the sugar's identity lookup keys off (Thread 2). **Prerequisite for Thread 5:** in-flight questions live in a module-local `settlers` `Map` (`captp.js:486`) and answers in a module-local `answers` `Map` (`:488`) inside `makeCapTP` (there is no `questions` `Map`), and the injectable `CapTPImportExportTables` seam exposes import/export slots only, so a **new `@endo/captp` extension point** (analogous to the landed `provideImport`) is required for the daemon to refcount over question resolution (Q4). This is an `@endo/captp` API addition, not an OCapN wire change. |
+| [chat-slot-slash-commands](chat-slot-slash-commands.md) (Proposed, Not Started) | Supplies the **not-yet-landed** `makeRetainedValue(spec)` guest-facing surface (Thread 2's sugar), whose `RetainedValueSpec` (`type: 'eval'`, `codeNames`, `endowments`) the worked example uses. The daemon-internal batch-flush edge does **not** depend on it; it is buildable over the landed `pinTransient` / `unpinTransient` pin. **Amendments this design requires of it (both recorded here so one method does not carry two signatures across two Proposed docs):** (1) split the `endowments` arm from `(PetNamePath \| FormulaIdentifier)[]` into per-facet `GuestEndowment` / `HostEndowment` (Thread 2 input side); (2) amend the **guest** arm's return from `{ id: FormulaIdentifier, release }` to a `release`/presence (no `id` string) so it does not leak a formula ID (Thread 2 output side). |
+| `packages/captp` — **two** new `makeCapTP` seams | The import/export tables (`makeCapTPImportExportTables`, default binding `makeDefaultCapTPImportExportTables`, `captp.js:121`) the sugar's identity lookup keys off (Thread 2). **Prerequisites for Thread 5, both `@endo/captp` API additions (not OCapN wire changes):** (1) a **question-observation** hook — in-flight questions live in a module-local `settlers` `Map` (`captp.js:486`) and answers in a module-local `answers` `Map` (`:488`) inside `makeCapTP` (no `questions` `Map`), and `CapTPImportExportTables` exposes import/export slots only, so the daemon cannot refcount over question resolution without it (Q4); (2) a **bounded answer-retirement authority** — `answers` is namespace-mismatched against every landed `CTP_DROP` path (Q1's third window), so *no* landed call site retires an anonymous intermediate's `answers` entry on any configuration; conjunct (iii) of the release condition needs a new bounded seam to retire it in the final-release mutation. The precedent for an additive, no-wire observation seam is the landed `provideImport` — which lives in **`@endo/ocapn`** (`packages/ocapn/src/client/`), not `@endo/captp`; cited for shape only. |
+| `packages/daemon` XS timer power | The per-root lease's expiry clock must be an **injected** timer power per target: the XS daemon's `setTimeout` polyfill discards its delay (`bus-xs-daemon-polyfills.js:54-60`), so an ambient-timer lease expires immediately on XS and falsifies the Q4 bound there. Precedent: `retention-accumulator.js:31` (injected clock), `manager-node-powers.js:545` (real Node timer). |
 | `packages/ocapn` three-party handoff | **Blocking** for the multi-party scope of Thread 5 (Q3): the embargo lifetime must be an observable protocol state. |
 
 ## Citations to prior art
@@ -1309,7 +1563,13 @@ worded.
   (`captp.js:486`) and answers in a module-local `answers` `Map` (`:488`) inside
   `makeCapTP` (there is no `questions` `Map`), and the injectable
   `CapTPImportExportTables` seam exposes import/export slots only, so observing
-  question resolution needs a new `@endo/captp` extension point (Q4).
+  question resolution needs a new `@endo/captp` `makeCapTP` option (Q4). A second
+  `@endo/captp` seam is also needed: `answers` is keyed by the peer's `q-N`
+  question id (`:743`, `:852`) while `CTP_DROP` deletes `answers.delete(reverseSlot(slotID))`
+  keyed to a `+`-direction export slot (`:756-767`), so the key spaces never
+  intersect and no landed path retires an anonymous intermediate's `answers` entry
+  on any configuration — the release condition needs a new bounded
+  answer-retirement authority, not a coupling into `CTP_DROP` (Q1, Q4, DD6).
 - **Distributed Confinement.** Miller & Shapiro, *Paradigm Regained* (2003), §5
   (the Cassie/Max `[Factory, factoryMaker]` example, *"only data and no
   capabilities"*); *Capability Myths Demolished* (2003), §5.2 (the Confinement
@@ -1330,9 +1590,12 @@ worded.
   `retention-accumulator`), `daemon-retention-paths` (labeled-edge graph,
   `transient` root, host-only rule), the landed **refcounted transient pin**
   (`graph.js` `transientRoots`, pinned/unpinned by `pinTransient` /
-  `unpinTransient`, `packages/daemon/src/graph.js:629,645`; scoped per-operation
-  at every landed call site, with no connection-lifetime or partition-triggered
-  release built on it), `ocapn-orthogonal-persistence` (name hub, at-most-once
+  `unpinTransient`, `packages/daemon/src/graph.js:629,645`; scoped per-operation at
+  **some, not every**, landed call site — the clean `try`/`finally` form at
+  `directory.js:506-510`, but leaking on throw at `host.js:2069`/`2090` and
+  `manager.js:6737`/`6757` (see Thread 5's "some, not every" correction) — with no
+  connection-lifetime or partition-triggered release built on it),
+  `ocapn-orthogonal-persistence` (name hub, at-most-once
   abort, tombstone descriptors), `daemon-xs-worker-metering` (admission control,
   budget as pre-payment).
 - **Proposed (not yet landed) Endo mechanisms.** The connection-bounded
@@ -1394,14 +1657,23 @@ worded.
       governs (unknown provenance implies kill), so this is an optimization (avoid
       needless collateral), never a soundness gap.
 - [ ] **Q6, pre-existing general-guest formula-ID exposure:** the general
-      `GuestInterface` exposes `identify` / `locate` (observe) and `lookupById` /
-      `storeIdentifier` (redeem), so a general guest can already reconstitute a
-      capability from a formula-identifier string, the ambient-authority "fifth
-      way." Is that intended (general guests are trusted more than least-authority
-      guests) or a live Distributed Confinement defect to close? This is
-      pre-existing surface, out of scope for the value-passing sugar (Design
-      Decision 2 commits only that the sugar adds no new leak), but it should be
-      adjudicated on its own.
+      `GuestInterface` wires **ten** formula-ID / locator methods, not the four an
+      earlier cut named. `packages/daemon/src/guest.js:343-364` wires `identify`,
+      `locate`, `lookupById`, `storeIdentifier` **plus** `reverseIdentify`,
+      `reverseLocate`, `listIdentifiers`, `listLocators`, `lookupByLocator`, and
+      `storeLocator`. Two of the six extras are strictly worse than the four:
+      `listIdentifiers` **bulk-enumerates** formula IDs, and `lookupByLocator` is
+      `provide(idFromLocator(locator))` (`guest.js:172`) — proving a locator is a
+      one-line conversion to the ID, so the locator family is not a lesser
+      exposure (and this doc's own input-side rule already forbids "no locator
+      derived from one"). So a general guest can already reconstitute a capability
+      from a formula-identifier **or locator** string, the ambient-authority "fifth
+      way," and a follow-up that closes only the four leaves the channel open
+      through the other six. Is that intended (general guests are trusted more than
+      least-authority guests) or a live Distributed Confinement defect to close?
+      This is pre-existing surface, out of scope for the value-passing sugar
+      (Design Decision 2 commits only that the sugar adds no new leak), but it must
+      be adjudicated on its own and over **all ten** methods.
 
 ## Prompt
 
