@@ -312,6 +312,49 @@ free-list length).
 The golden seal was re-pinned once more; the canonical blob hash has
 never moved.
 
+**Phase 10 underway (2026-08-16): the query-driven GC layer, measured
+first.**
+The full local toolchain came up in this environment (the `c/moddable`
+oracle submodule, nightly + `cargo-fuzz`; the `snapshot_decoder`
+target promptly earned a trophy — a corrupt blob's out-of-range free
+index panicked the arena's free-bitmap rebuild — fixed with
+range/duplicate/accounting gates at the decoder edge, locked by
+`heap_free_list_semantic_gates_fail_closed`).
+Landed as infrastructure and instruments:
+
+- The SQLite backend maintains `edge_pairs (target, page)` — a
+  normalized, DERIVED twin of the sealed summaries (never sealed,
+  rebuilt from `page_edges` at open when absent or stale; wiped-index
+  recovery locked by test) — in the same commit transaction as the
+  rows it mirrors.
+- `pages_referencing(target)` answers the reverse question no blob
+  encoding can (O(in-degree) by primary key), and
+  `reachable_pages_sql(roots)` runs reachability INSIDE SQLite as a
+  recursive CTE; dense/CTE parity is locked by test.
+- The store instrument (`store_bench.rs`; release, medians of 5,
+  this repo's dev container): dense reachability reads the whole
+  edge set and scales with the heap — 0.014 / 0.043 / 0.146 ms at
+  60 / 236 / 939 pages — while the CTE stays flat at ~0.02 ms:
+  transfer proportional to the ANSWER, the property the generational
+  mark needs. Incremental checkpoints: 0.9 / 1.2 / 2.0 ms end to end
+  under WAL + `synchronous=FULL`.
+- The GC instrument (`gc_bench.rs`, same provenance): steady-state
+  full mark scales linearly — 0.7 / 3.3 / 13.4 ms at 30k / 120k /
+  480k slots — and `partial_collect` costs 0.4 / 1.9 / 9.5 ms:
+  cheaper, but still O(live) through the side-table enumeration and
+  O(pages) through the dense edge read — exactly the two terms
+  phases 10-11 remove. Sweep runs ~24-29 ns/slot flat across
+  free-list sizes (the review wave's bitmap fix; the prior sweep was
+  quadratic in free-list length).
+- The attached-mode instrument (`attached_bench.rs`) closed the
+  deferred bar: a fully resident attached machine runs a hot crank
+  at x1.009 of detached; the same crank cold-faulting its whole
+  working set costs x1.075.
+
+Next in phase 10: per-page side-table-reference summaries at
+checkpoint, so the partial collector's root set becomes a store
+query.
+
 Preceding it, the collaborator-review follow-up wave landed:
 `compare_payloads` as the only sanctioned two-chunk read, SQLite
 EXCLUSIVE locking (second opener fails closed, locked by test) +
@@ -443,10 +486,12 @@ validation):**
    open-time error either. Decoding every record at open would defeat
    lazy resume; the panic path is the accepted trade.
 
-Remaining, mapped to the phases: cargo-fuzz promotion of the hardening
-arms (the `ironhorse-fuzz` crate links the XS oracle, absent in the
-build environment); the supervisor cadence policy and `endor` binary
-wiring (with the worker-envelope work); the attached-mode benchmark.
+Remaining, mapped to the phases: cargo-fuzz CI promotion of the
+hardening arms (the toolchain now runs locally — submodule + nightly
++ libFuzzer — and has already produced a trophy; a CI lane is the
+remaining step); the supervisor cadence policy and `endor` binary
+wiring (with the worker-envelope work). The attached-mode benchmark
+landed with phase 10's instruments.
 The phase 5-9 roadmap is LANDED (2026-08-11, see the phase blocks
 above): row-hash tree + wake-latency instrument (5), page-edge
 summaries + partial collect (6), incremental compaction dirt (7),
@@ -1048,7 +1093,38 @@ free list riding whole in small state.
    small-state bytes O(1) in heap size; slots microbench within the
    recorded envelope.
 
-*Future work beyond phase 9 (out of scope until a consumer demands
+Phases 10-12 (added 2026-08-16) continue the same goal into the
+collectors themselves — GC-shaped questions become indexed store
+queries, so collection cost tracks the mutation set, not the heap:
+
+10. **Query-driven reachability + stored root/side-table summaries.**
+    Normalize the page-edge summaries into an indexed `(target,
+    page)` pair table, derived and rebuildable, maintained in the
+    same commit transaction as the sealed rows; serve reverse-edge
+    lookups and reachability as store queries (a recursive CTE in
+    SQLite) instead of reifying the whole edge set. Then persist
+    per-page side-table-reference summaries at checkpoint, so the
+    partial collector's conservative root set is itself a store
+    query rather than an O(live) machine enumeration.
+    *Bar:* query/dense reachability parity locked; derived-index
+    rebuild locked; partial-collect decision cost sub-O(live) on the
+    wide fixture.
+11. **Summary-generational full mark.** Mark = pages dirtied since
+    the last full collect ∪ pages reachable from them through the
+    stored summaries, resolved through the phase-10 indexes (the
+    phase-6 roadmap's generational ambition, now with the reverse
+    index it actually needs); the full-heap trace becomes a periodic
+    verification pass, not the steady state.
+    *Bar:* steady-state collection cost sub-O(live heap) on the wide
+    fixture under small mutation sets; a generational metamorphic
+    arm agrees with the other seven ways; collection timing stays a
+    release-fixed pure function of store content.
+12. **Identity-keyed chunk rows; compaction as row moves** — the
+    phase-7 deferral, unchanged scope: per-chunk indexed updates
+    retire the whole-space slide and de-chain the dead sequential
+    runs the page summaries conservatively keep.
+
+*Future work beyond phase 12 (out of scope until a consumer demands
 it):* structural sharing of pages across forked workers; store
 compaction/vacuum policy.
 
