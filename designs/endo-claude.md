@@ -61,12 +61,12 @@ documentation for this design (2026-08-16), not inferred from general impression
 flowchart LR
   subgraph host["one host, loopback only"]
     D["endo daemon<br/>guest g-4f2a... granted facet"]
-    B["facet-to-MCP bridge<br/>(@endo/agent-tools MCP adapter)<br/>127.0.0.1:port or UDS<br/>tools = facet method set"]
+    B["facet-to-MCP bridge<br/>(@endo/agent-tools MCP adapter)<br/>stdio shim (preferred) or 127.0.0.1 loopback<br/>tools = facet method set"]
     subgraph proc["hermetic claude -p process<br/>(fresh per inference call)"]
       C["claude -p --bare<br/>--strict-mcp-config cfg.json<br/>--setting-sources ''<br/>--disallowedTools '*'<br/>--allowedTools mcp__endo__writeText,..."]
     end
     D ---|"CapTP over netstrings (UDS)"| B
-    C -->|"MCP streamable HTTP<br/>Bearer = guest formula id"| B
+    C -->|"MCP (stdio shim, or streamable HTTP<br/>Bearer = guest formula id)"| B
   end
   P["ClaudeCredentials pool<br/>N subscriptions"] -.->|"CLAUDE_CODE_OAUTH_TOKEN<br/>injected per call"| proc
 ```
@@ -143,39 +143,47 @@ stateless so the confinement holds identically on every call.
 
 `@endo/claude` is the MCP **client** side (the confined `claude -p` harness plus
 the allow-list generation). It needs an MCP **server** that projects one guest's
-facet. As both companion designs note in their "grounded against" sections, **no
-`@endo/mcp` package exists yet**; the guest-facing MCP tool server is today
-bespoke code in `kriscendobot/minion.town`'s `src/server.ts` / `src/http.ts`,
-talking CapTP over netstrings to the daemon over a Unix domain socket
-(`/run/endo-daemon/endo.sock`). Two facts change the sequencing question in this
-project's favor:
+facet. Unlike the minion.town companion designs (whose "grounded against"
+sections predate it and record "no `@endo/mcp` package exists yet"), **this
+project already has the MCP projection designed and stubbed**, so
+`@endo/claude` builds on it rather than inventing it:
 
 1. The projection logic (a facet's method set to an MCP `tools/list` catalog, and
-   an MCP `tools/call` to `E(facet).<method>(args)`) is already being extracted
-   into **`@endo/agent-tools`** as a planned MCP adapter (see
-   [`@endo/agent-tools`](endo-agent-tools.md), *Target package layout*:
-   `src/adapters/` with "MCP/Codex/Claude Code planned"), and the same
-   "translate the OpenAI-format tool schema to MCP's `Tool` shape" projection is
-   specified in [Endo Gateway: MCP Termination](endo-gateway-mcp.md), *Tool
-   catalog*.
+   an MCP `tools/call` to `E(facet).<method>(args)`) is specified in the
+   **merged** design [Endo Gateway: MCP Termination](endo-gateway-mcp.md)
+   (PR [#376](https://github.com/endojs/endo-but-for-bots/pull/376)), *Tool
+   catalog* (the "translate the tool schema to MCP's `Tool` shape" one-line
+   projection), and its home is **`@endo/agent-tools`**, where the adapter
+   already exists as a **declared stub** at
+   `packages/agent-tools/src/adapters/mcp.js` ("Planned adapter shape only": map a
+   `ToolRecord`'s `name` / `description` / `parameters` / `invoke` to an MCP tool
+   without adding MCP runtime dependencies). The projection is designed and
+   named, not yet implemented. `@endo/claude` composes with it; it does not
+   reinvent it.
 2. The bearer-auth shape for a machine MCP client is already decided by
    [gateway-bearer-token-auth](gateway-bearer-token-auth.md) and reused in
    [endo-gateway-mcp](endo-gateway-mcp.md): the bearer is the 64-hex formula id
    of the target agent, looked up in a bearer-token table. That is exactly the
    credential a non-human `claude -p` client needs (no OAuth browser dance, no
    human, no PKCE).
+3. [endo-gateway-mcp](endo-gateway-mcp.md) also names the **stdio local-shim**
+   pattern (*MCP Wire Shape and Transport*, and Design Decision 6): the gateway
+   terminates streamable HTTP only, and "clients that need stdio run a local shim
+   subprocess" that itself opens an OCapN connection or a `/mcp` HTTP connection.
+   That shim is the cleanest local transport for `@endo/claude` (see *Local
+   deployment*), so the pattern this design leans on is already the project's
+   stated one.
 
 So the answer to "does `@endo/claude` carry its own bridge or depend on a
 not-yet-built `@endo/mcp`?" is: **`@endo/claude` composes with the `@endo/agent-tools`
-MCP adapter to host the server, and does not reinvent the projection.** The
-adapter is a named prerequisite, not in scope of this design to build; the
-adapter's MCP-server-hosting seam (a minimal loopback HTTP listener that mounts
-the adapter) is the one small piece that must exist for the local case, and this
-design names it as a prerequisite dependency rather than carrying it. If the
-`@endo/agent-tools` MCP adapter is not ready when `@endo/claude` is built, the
-fallback is a minimal loopback-only MCP server carried inside `@endo/claude`
-itself as a stopgap, explicitly marked for deletion once the adapter lands
-(*Known gaps*).
+MCP adapter (a designed, stubbed surface) and does not reinvent the projection.**
+Implementing that adapter stub, plus the small MCP-server-hosting seam around it
+(a stdio shim command for the local case, or a loopback HTTP listener), is a
+named prerequisite rather than in scope of this design. The groundwork for it is
+tracked as the follow-up job `design-endo-claude-mcp-groundwork`. If the adapter
+is still unimplemented when `@endo/claude` is built, the fallback is a minimal
+stdio MCP shim carried inside `@endo/claude` as a stopgap, explicitly marked for
+deletion once the `@endo/agent-tools` adapter lands (*Known gaps*).
 
 ### Local deployment
 
@@ -202,11 +210,28 @@ sequenceDiagram
   H-->>G: inference result
 ```
 
-An Endo MCP server on the same host as the `claude -p` process, bound to
-loopback (`127.0.0.1`, explicitly **not** `0.0.0.0`) on a port, or a Unix domain
-socket. Either way it is not reachable off-box. This is the minion.town-shaped
-target and the primary case. The `--strict-mcp-config` file names exactly this
-one endpoint.
+An Endo MCP server on the same host as the `claude -p` process, not reachable
+off-box. Two transports, in preference order:
+
+- **Preferred: a stdio MCP shim.** `--strict-mcp-config` can name a **stdio**
+  MCP server whose command is a thin Endo CLI shim (the "local shim subprocess"
+  [endo-gateway-mcp](endo-gateway-mcp.md) already names) that speaks CapTP over
+  netstrings to the daemon on its Unix domain socket (`ENDO_SOCK`,
+  `/run/endo-daemon/endo.sock`). `claude -p` spawns the shim itself, so there is
+  **no listening port and no HTTP surface at all** for the local case: the only
+  thing the confined process can reach is the shim it spawns, and the shim can
+  reach only the one guest facet (the shim is handed exactly that facet's
+  reference, or the bearer that resolves to it). This is the tightest local
+  shape and the primary target.
+- **Alternative: a loopback HTTP listener.** The same `@endo/agent-tools` MCP
+  adapter mounted on a `127.0.0.1` listener (explicitly **not** `0.0.0.0`) on a
+  port or a Unix domain socket, with `--strict-mcp-config` naming that one URL
+  and the guest's bearer. Use this where the streamable-HTTP transport is wanted
+  for parity with the remote case; it costs a loopback listener the stdio shim
+  avoids.
+
+Either way the `--strict-mcp-config` file names exactly one endpoint, and the
+process is pinned to one guest. This is the minion.town-shaped target.
 
 ### Remote deployment
 
@@ -295,7 +320,7 @@ packages/claude/
 
 | Dependency | Relationship |
 | --- | --- |
-| [`@endo/agent-tools`](endo-agent-tools.md) MCP adapter | **Prerequisite** (to be filed if not yet built): projects a facet's method set to an MCP `tools/list` catalog and dispatches `tools/call` to `E(facet).<method>`. `@endo/claude` composes with it; it does not reinvent the projection. |
+| [`@endo/agent-tools`](endo-agent-tools.md) MCP adapter | **Prerequisite**: projects a facet's method set to an MCP `tools/list` catalog and dispatches `tools/call` to `E(facet).<method>`. Designed in the merged [endo-gateway-mcp](endo-gateway-mcp.md) and present as a declared stub at `packages/agent-tools/src/adapters/mcp.js` ("Planned adapter shape only"); implementing it plus the stdio-shim / loopback hosting seam is tracked as `design-endo-claude-mcp-groundwork`. `@endo/claude` composes with it; it does not reinvent the projection. |
 | [`@endo/claude-sandbox`](../packages/claude-sandbox/README.md) | **Sibling / reuse**: the `ClaudeCredentials` caplet (`kind: oauthToken` subscription tokens) is reused verbatim for the pool. Optionally the podman slice for defense-in-depth (Design Decisions #6). |
 | [`@endo/eventual-send`](../packages/eventual-send/README.md) | Facet references are `E(...)`-invoked. |
 | [gateway-bearer-token-auth](gateway-bearer-token-auth.md) / [endo-gateway-mcp](endo-gateway-mcp.md) | The bearer-is-formula-id auth shape reused for both the loopback bridge and the remote endpoint. |
@@ -340,12 +365,12 @@ questions* if the harness grows a passable `Inference` exo as its primary export
 
 ## Known Gaps and TODOs
 
-- [ ] The `@endo/agent-tools` MCP adapter's server-hosting seam (a loopback HTTP
-      listener mounting the adapter) must exist for the local case; file a
-      prerequisite job if it is not ready when `@endo/claude` is built.
-- [ ] Stopgap-only: a minimal loopback MCP server carried inside `@endo/claude`
-      if the adapter is not ready, explicitly marked for deletion once the adapter
-      lands.
+- [ ] Implement the `@endo/agent-tools` MCP adapter (today a declared stub at
+      `packages/agent-tools/src/adapters/mcp.js`) plus its server-hosting seam (a
+      stdio shim command for the local case, or a loopback HTTP listener). Tracked
+      as `design-endo-claude-mcp-groundwork`; a prerequisite for `@endo/claude`.
+- [ ] Stopgap-only: a minimal stdio MCP shim carried inside `@endo/claude` if the
+      adapter is not ready, explicitly marked for deletion once the adapter lands.
 - [ ] Verify on a real managed-settings deployment whether `--setting-sources ""`
       can suppress managed settings, or whether the host must be kept free of
       managed Claude settings that grant tools.
