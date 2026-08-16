@@ -1,5 +1,4 @@
 // @ts-check
-/* global Buffer */
 
 /**
  * @file Node-backed adapter for the `CryptoPowers` shape that the
@@ -19,7 +18,7 @@
  * `@endo/bytes` convention. The adapter accepts either an immutable
  * `ArrayBuffer` (wire shape) or a mutable `Uint8Array` (internal
  * use) on input; it converts to whatever shape `node:crypto`
- * expects (a Node `Buffer` view).
+ * expects (a `Uint8Array` view).
  */
 
 import crypto from 'node:crypto';
@@ -72,7 +71,11 @@ const publicKeyObjectFromRaw = rawPublicKey => {
   der.set(ED25519_SPKI_PREFIX, 0);
   der.set(rawPublicKey, ED25519_SPKI_PREFIX.length);
   return crypto.createPublicKey({
-    key: Buffer.from(der.buffer, der.byteOffset, der.byteLength),
+    // `node:crypto` accepts any `TypedArray` for a DER `key` at
+    // runtime, but `@types/node` still types the object-form field
+    // as `string | Buffer`; the cast passes our own `Uint8Array`
+    // through without an intermediate `Buffer` view.
+    key: /** @type {Buffer} */ (der),
     format: 'der',
     type: 'spki',
   });
@@ -93,7 +96,9 @@ export const privateKeyObjectFromRaw = rawPrivateKey => {
   der.set(ED25519_PKCS8_PREFIX, 0);
   der.set(rawPrivateKey, ED25519_PKCS8_PREFIX.length);
   return crypto.createPrivateKey({
-    key: Buffer.from(der.buffer, der.byteOffset, der.byteLength),
+    // See `publicKeyObjectFromRaw`: `@types/node` types the DER
+    // `key` field as `string | Buffer`, so cast our `Uint8Array`.
+    key: /** @type {Buffer} */ (der),
     format: 'der',
     type: 'pkcs8',
   });
