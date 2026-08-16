@@ -366,6 +366,77 @@ routes to the state's `onError`), and **exactly-once-observed** for
 durable daemon state (promise stores, message formulas, reminder store)
 rather than the engine's memory.
 
+### Composing workflows
+
+Composition happens at two times — authoring time (fragments) and run
+time (children) — plus a third, free mechanism: runs are capabilities.
+
+**Authoring-time: fragments.**
+A fragment is a definition of kind `fragment`: a named group of states
+with declared boundary events (how control enters and leaves), declared
+participant slots, and declared context reads/writes.
+A definition inlines one with `use`:
+
+```js
+review: {
+  use: {
+    fragment: 'review-fanout',        // resolved by name -> content hash
+    bind: { reviewers: 'reviewers', subject: 'changeSetId' },
+    on: { approved: { target: 'testing' },
+          'changes-requested': { target: 'implementing' } },
+  },
+},
+```
+
+Inlining happens at `define()` time: fragment states are namespaced under
+the using state (`review.collect`, `review.tally`), the bound slots are
+checked against the fragment's declared requirements, and the resulting
+flattened definition is what gets content-addressed — a run never knows
+fragments existed.
+Fragments are the standard-library seam: `approval-gate`,
+`retry-with-backoff`, `review-fanout` ship with the engine, and any agent
+can publish more; because inlining is by content hash, a fragment upgrade
+never mutates existing definitions.
+
+**Run-time: child runs (`spawn`).**
+
+- **Input mapping in**: `input` on the spawn effect is built from parent
+  context (template substitution or a reducer expression); the child
+  validates it against its own `input` shape.
+- **Participants are passed explicitly** by slot name, never inherited
+  ambiently; the parent may pass an attenuation (`repo:readOnly`) exactly
+  as with any effect.
+  The child's authority is therefore always a visible subset of the
+  parent's.
+- **Output mapping out**: a child's final state may declare
+  `output: '<expression over child context>'`; the marshalled result
+  arrives in the parent as
+  `child.finished { as, final, output }`.
+  Child failure is not special — it is the same event with
+  `final: 'failed'`, handled by parent transitions or `onError`.
+- **Cancellation cascades down, not up.**
+  Aborting a parent aborts its descendants (journaled on both sides);
+  a child's failure or abort never terminates the parent except through
+  an explicit parent transition.
+- **Many children**: `spawn` over a `many`-shaped array fans out child
+  runs and joins with the same `all` / `any` / `{ quorum: n }` policies
+  as `fanout` — reviewers who are themselves workflows cost no new
+  mechanism.
+- **Linkage is queryable**: `meta.json` records `parent`; `RunSummary`
+  carries it, so the UI renders run trees, and `exportJournal` of a
+  parent can optionally interleave child journals for a whole-tree audit.
+- **Limits**: engine config bounds spawn depth, children per run, and
+  total live runs; breaching a bound rejects the spawn effect (an
+  ordinary `effect.rejected`, visible in the journal).
+
+**Runs are capabilities.**
+A `WorkflowRun` (or its observer facet) can itself be a *participant* of
+another workflow: a monitoring workflow can `call` `status()` on the runs
+it watches, or `call` `signal()` to nudge a sibling — long-running
+processes coordinate through the same ocap discipline as everything else,
+with no engine-level "cross-workflow messaging" subsystem to design or
+secure.
+
 ### Participants, naming, and retention
 
 At `start()`, participant capabilities are stored under the engine guest's
@@ -378,6 +449,68 @@ When a run reaches a final state, participant names are released after the
 configured retention window; the journal (or its JSONL export) outlives
 the capabilities.
 
+### Configurations and factories
+
+`start()` demands a lot of its caller: the definition name, the full
+participant roster, and possession of every participant capability.
+That is the right primitive for the host, and the wrong everyday surface
+for everyone else — a guest that should be able to *request a feature
+change* must not thereby hold the repo writer facet.
+
+A **`WorkflowFactory`** is a durable capability that closes over a
+definition (by hash) plus a partial or total participant binding, input
+defaults, and start policy:
+
+```
+WorkflowService
+  makeFactory({ definition, participants?, input?, limits? })
+    -> { factory, factoryAdmin }
+
+WorkflowFactory
+  start(input?, participants?)  -> { run, observer }   # fills unbound slots only
+  describe()                    -> { definition, boundSlots, openSlots,
+                                     inputShape, limits }
+  with({ participants?, input? }) -> WorkflowFactory    # derived, narrower
+
+WorkflowFactoryAdmin
+  bind(slot, capability) / setLimits({ maxConcurrent, maxStartsPerDay })
+  runs() -> [RunSummary]        # every run this factory started
+  revoke()
+```
+
+Design properties:
+
+- **Factories are the attenuation unit.**
+  Granting a factory grants "start this workflow with these bindings" —
+  the bound capabilities (the git writer, the CI shell) never pass
+  through the caller.
+  By default `start` returns the run's **observer** facet; the admin facet
+  stays with the factory owner.
+- **Derivation is non-escalating.**
+  `with()` may fill open slots, narrow input defaults, or tighten limits;
+  it can never rebind a bound slot or loosen a limit.
+  This mirrors the `exo-git` `scope`/`readOnly` discipline: a chain of
+  `with()` calls only ever descends.
+- **Factories are durable and nameable.**
+  Each factory persists as `factories/<id>.json` in the engine store with
+  its bound participant ids held in the engine guest's namespace, revives
+  with the engine, and can be stored in any pet store, sent in a message,
+  or listed in inventory like any other capability.
+- **Start policy lives on the factory, not the definition.**
+  Concurrency caps, rate limits, and retention overrides are deployment
+  concerns; the same definition can back a tightly-limited guest-facing
+  factory and an unlimited host-facing one.
+- Every `factory.start` journals the factory id and the caller's handle in
+  `run.started`, so the audit log records *which grant* was exercised, not
+  merely that a run began.
+
+For the motivating use case: the host mints a
+`feature-change-on-endo-repo` factory binding `repo`, `ci`, `reviewers`,
+and `approver`, and grants it to lal.
+Lal starts runs supplying only `{ request, branch }` and observes
+progress; it never touches the writer facet, and the host can revoke or
+re-limit the factory without disturbing in-flight runs.
+
 ### Query and subscription surface
 
 The engine exposes exos with `M.interface` guards:
@@ -386,26 +519,77 @@ The engine exposes exos with `M.interface` guards:
 WorkflowService (host-facing)
   define(name, definition)            -> definitionHash
   definitions()                       -> [{ name, hash, version }]
-  start(name, { input, participants }) -> WorkflowRun
+  makeFactory({...})                  -> { factory, factoryAdmin }
+  start(name, { input, participants }) -> { run, observer, admin }
   run(runId) / runs({ status? })      -> WorkflowRun / [RunSummary]
   followRuns()                        -> Reader<RunSummary>       # lossless
 
-WorkflowRun
-  status()          -> { runId, definition, state, context, pending, since }
-  history(fromSeq?) -> Reader<Event>                # replay then live (R5)
+WorkflowRun (observer facet unless noted)
+  status()          -> { runId, definition, state, context, pending,
+                         throughSeq, updatedAt }
+  stateAt(seq)      -> same shape, folded through seq        # time travel
+  history(fromSeq?) -> Reader<Event>                # gapless replay + live
   followStatus()    -> Reader<Status>               # lossy latest topic
+  explain()         -> StuckReport                  # see Debuggability
   signal(name, payload)                             # declared external events
-  exportJournal()   -> EndoReadable (JSONL)         # audit export (R3)
+  exportJournal(fromSeq?) -> EndoReadable (JSONL)   # audit export (R3)
 
-WorkflowRunAdmin (attenuation of run; host-only by default)
+WorkflowRunAdmin (attenuation; host or factory owner)
+  pause() / resume()
   abort(reason) / retryEffect(as) / forceTransition(target) / injectEvent(e)
 ```
 
-`history` composes a replay of journaled events with a `makeChangeTopic`
-subscription; `followStatus` uses `makeLatestTopic`; both travel over
-`@endo/exo-stream`.
 Every admin method journals `admin.forced` with the caller's handle
 identity — overrides are audited, not hidden.
+
+### State syncing
+
+All observation reduces to **one sync primitive**: a run is a monotonic
+sequence of journal events, and every view is a pure fold over a prefix.
+
+- **Snapshot + resume token.**
+  `status()` carries `throughSeq`.
+  A client that wants live state calls `status()` once and then
+  `history(throughSeq + 1)`; applying events with the shared fold yields
+  exactly the engine's state at every step.
+  There is no separate "state channel" to drift out of sync with the
+  event channel.
+- **Gapless splice.**
+  `history(fromSeq)` is implemented as: subscribe the run's
+  `makeChangeTopic` spring *first*, then stream journal segments from
+  `fromSeq`, then drain the spring discarding events with
+  `seq <= ` the last replayed seq.
+  Because events are seq-keyed, the overlap dedupe is exact and the
+  reader observes each event exactly once, in order.
+- **Reconnect is resume.**
+  Exo-stream readers die with their connection.
+  The client remembers the last applied seq and re-calls
+  `history(lastSeq + 1)`; apply is idempotent by seq comparison, so
+  crash-looping clients converge.
+  This is the same shape as daemon restart recovery — the engine and its
+  observers use one protocol.
+- **Shared fold module.**
+  The pure fold (`applyEvent(state, event)`) ships as an authority-free
+  module in `@endo/workflow` importable in the browser.
+  The Chat space computes state locally from events rather than trusting
+  a second server-side projection; `followStatus()` (a `makeLatestTopic`)
+  remains for cheap dashboards that want one small object per change and
+  can tolerate loss.
+- **Run-set syncing.**
+  `followRuns()` emits `RunSummary` deltas keyed by `runId`
+  (`{ runId, definition, state, final?, throughSeq, updatedAt }`);
+  consumers dedupe by runId with last-writer-wins on `throughSeq`.
+  Creation and finish summaries are always published (lossless); interior
+  progress summaries are lossy.
+- **Backpressure falls out of pubsub.**
+  Springs hold per-subscriber cursors, so a slow subscriber costs itself,
+  not the engine; a very-behind subscriber is served from journal
+  segments on disk rather than from memory.
+- **Cross-peer mirroring (future).**
+  Because the journal is plain data, a run can be mirrored read-only to
+  another peer by shipping `exportJournal(fromSeq)` increments; the
+  daemon's synced-store machinery is a candidate carrier, deferred until
+  a concrete remote-dashboard need arrives.
 
 ### Restart recovery
 
@@ -440,33 +624,206 @@ migration — both audited.
 This sidesteps replay-divergence entirely: the fold semantics for a run
 are fixed at start.
 
-### UI space
+### Live UI: the workflow space
 
-`@endo/space-workflow` is a Chat space in the `space-*` pattern:
+`@endo/space-workflow` is a Chat space in the `space-*` pattern
+(pure confined Preact components like `space-floot`, styles shipped via
+the package export map).
 
-- Left: run list from `followRuns()` with status badges.
-- Center: the definition rendered as a statechart diagram (definitions are
-  data, so the renderer is a pure function; parallel regions as swim
-  lanes) with the current state highlighted from `followStatus()`.
-- Right: the event timeline from `history()`, each entry expandable to its
-  journal record; pending forms deep-link to the existing inbox form
-  rendering, so approval happens through the already-shipped form UI
-  (R6, R12).
+**Data flow.**
+A `makeWorkflowSyncClient(run)` helper (shipped by `@endo/workflow`, used
+by both the space and the CLI's `--watch` mode) implements the State
+Syncing contract: one `status()`, then `history(throughSeq + 1)` applied
+through the shared fold, with seq-resume on reconnect.
+Components subscribe to the client's store; there is no component-level
+polling and no second source of truth.
 
-The CLI grows `endo workflow define|start|status|watch|log|signal` verbs
-over the same surface.
+**Layout: three panes.**
+
+- **Runs rail (left).**
+  Dashboard fed by `followRuns()`: grouped by definition, deduped by
+  runId, live badges (`state`, age, pending-gate indicator), run trees
+  indented under their parents via the `parent` linkage.
+  Final states use one consistent color language (succeeded / failed /
+  abandoned / aborted) shared with the timeline.
+- **Statechart (center).**
+  The definition rendered by a **deterministic pure layout function**
+  (`renderDefinition(def) -> graph model`): compound states as nested
+  boxes, parallel regions as lanes, transitions as edges labeled with
+  their event types.
+  Definitions are small (tens of states), so a layered
+  longest-path-then-order layout in the space package suffices — no
+  external layout dependency.
+  Live overlays from the sync store: the active state configuration
+  highlighted; each in-flight effect drawn as a spinner on its state's
+  border with elapsed time and retry count; `fanout` progress as `3/5`
+  member counters; a `spawn` state deep-links to the child run's view.
+- **Timeline (right).**
+  Virtualized event list from the sync store, newest last, filterable by
+  event type and actor; each entry expands to its full journal record.
+  Pending gates render as actionable cards: a `form` gate embeds the
+  shipped inbox form component (submission flows through the ordinary
+  mail path — the space holds no special write authority, R6); a
+  `request` gate shows recipient and age.
+
+**Time travel.**
+A scrubber under the statechart binds to `stateAt(seq)` semantics —
+implemented client-side by re-folding the already-synced prefix, so
+scrubbing is instant and offline.
+Scrubbed-to state renders solid, live state as a ghost outline, and the
+timeline auto-scrolls to the scrub point; this doubles as the
+post-mortem review UI for finished runs.
+
+**Authority-scoped affordances.**
+The space renders what its capability can do: with an observer facet it
+is read-only; if granted the admin facet, `pause` / `resume` / `abort` /
+`retryEffect` appear, and every use round-trips through the journaled
+admin methods so UI actions are audited like any other.
+
+**Degradation.**
+On disconnect the space shows a stale-since badge and resumes from
+`lastSeq + 1` on reconnect; nothing is lost and nothing reloads from
+scratch.
+
+The CLI grows matching verbs over the same surface:
+`endo workflow define|list|start|status|watch|log|graph|simulate|explain|signal|pause|resume|abort`.
+
+## Definition Developer Experience
+
+Definitions are data, so the authoring loop is: write, validate,
+simulate, preview — all without a daemon.
+
+**Authoring.**
+A definition is a plain hardened JS module (or JSON document) —
+`endo workflow define feature-change ./feature-change.js` evaluates the
+module in a powerless compartment and registers the exported definition.
+JS authoring gets constants, comments, and shared fragments for free
+without any new language.
+`WorkflowDefinition` TypeScript types ship in the package's `types.ts` so
+editors check the shape as it is written.
+
+**Validation with diagnostics, not just verdicts.**
+`validateDefinition(def)` runs at `define()` time and returns structured
+diagnostics (path, severity, message), not a bare pattern failure:
+
+- dangling transition targets and unreachable states;
+- `to`/`attach` references to undeclared participants, and attenuator
+  suffixes (`repo:readOnly`) not in the attenuator table;
+- `when: { as }` correlations that no effect in scope issues;
+- events no state handles (warning) and final states with outgoing
+  transitions (error);
+- guard/reducer expressions **parsed in the compartment at define time**,
+  so syntax errors surface immediately rather than at first transition;
+- fragment `use` bindings checked against the fragment's declared slots
+  and context reads/writes.
+
+Shape mismatches render through
+[patterns-diagnostic-feedback](patterns-diagnostic-feedback.md)'s
+`explainMismatch` when it lands, giving line-per-mismatch output sized
+for both humans and coding agents.
+
+**Simulation is the unit-test surface.**
+`simulateRun(definition, script)` ships in the core package: effects are
+recorded, never executed; the script injects events and asserts on state,
+context, and issued effects.
+
+```js
+const sim = simulateRun(featureChange, { input, participants: stubs });
+sim.expectEffect('request', { to: 'implementer' });
+sim.inject('task.settled', { as: 'implementation', valueId: 'x' });
+t.is(sim.state, 'reviewing');
+```
+
+Because the fold is pure, simulation is exact — not a mock of the engine
+but the engine's own reducer under a scripted event source.
+Definition authors test in plain ava with no daemon, in milliseconds.
+
+**Preview.**
+`endo workflow graph <name>` emits Mermaid `stateDiagram-v2` from the
+same `renderDefinition` model the space uses, so a definition can be
+reviewed as a picture in any markdown surface (PRs, designs) before it
+ever runs.
+
+**Evolution.**
+`define` under an existing name appends a version (names.json maps name
+to an ordered hash list); `endo workflow diff <a> <b>` is a structural
+data diff of two definitions — no code archaeology to see what changed
+between versions.
+A `defineWorkflow` builder DSL remains future work (Known Gaps).
+
+## Debuggability
+
+The journal makes the engine explainable after the fact; these tools make
+it explainable while it runs.
+
+**Read the ground truth.**
+`endo workflow log <run> [--from seq] [--follow]` pretty-prints journal
+events (with `--json` for the raw records); `exportJournal(fromSeq)`
+serves the same bytes to programs.
+Effect entries carry idempotency keys and issue/settle timestamps;
+`effect.rejected` records the marshalled error rendered via
+`passableAsJustin`, so remotable-bearing failures stay legible.
+
+**Time travel.**
+`stateAt(seq)` folds the journal prefix — `endo workflow status <run>
+--at <seq>` and the space's scrubber both use it.
+Any historical claim about a run ("it was in `testing` when the daemon
+restarted") is checkable, because state *is* the fold.
+
+**Explain stuck runs.**
+`explain()` answers the operator's actual question — *why is nothing
+happening?* — with a `StuckReport`:
+
+- each pending effect with its age, retry count, and target participant
+  (including liveness of the target's formula where knowable);
+- the event types the current state configuration is waiting for;
+- for recent events that matched no transition: per-transition verdicts —
+  pattern mismatches explained via `explainMismatch`, expression guards
+  reported as their boolean or thrown error.
+
+With a per-run `trace: true` flag (set at start or toggled by admin),
+guard evaluations are journaled as `guard.evaluated` events — off by
+default to keep journals lean, priceless when a definition misbehaves.
+
+**Pause, poke, resume.**
+`pause()` stops effect issuance while events continue to journal and
+queue; `resume()` processes the queue.
+Paused runs are the safe context for `injectEvent` and `retryEffect`.
+All of it is journaled with actor identity — debugging leaves footprints
+in the same audit log it reads.
+
+**Fork to sandbox.**
+`forkSimulation(runId, { atSeq })` copies a journal prefix into a
+simulator: test a candidate fix — an injected event, a forced
+transition — against the run's real history without touching the live
+run.
+This is the debugging payoff of keeping the fold pure and the journal
+plain data.
+
+**The engine debugs itself.**
+Recovery appends a `recovery.completed` event recording what it resumed,
+re-issued, and marked indeterminate — restart behavior is audited, not
+folklore.
+Engine-internal diagnostics go to stderr per the repo's diagnostic
+discipline, gated by `ENDO_WORKFLOW_TRACE=1`, and never into the journal.
 
 ## The Motivating Use Case, End to End
 
 Wiring the example with existing capabilities:
 
-1. **Provision**: `endo workflow define feature-change ./feature-change.json`;
-   `endo workflow start feature-change --input request='add dark mode',branch=feat/dark-mode`
-   `--participant implementer=lal-coder --participant reviewers=sec-reviewer,style-reviewer`
-   `--participant ci=repo-ci --participant approver=SELF --participant repo=repo-writer`.
+1. **Provision**: `endo workflow define feature-change ./feature-change.js`
+   (validated and simulateable before it ever runs), then the host mints a
+   factory binding the sensitive slots:
+   `endo workflow make-factory feature-change feature-changes`
+   `--bind implementer=lal-coder --bind reviewers=sec-reviewer,style-reviewer`
+   `--bind ci=repo-ci --bind approver=SELF --bind repo=repo-writer`.
    `repo-writer` is an `@endo/exo-git` writer facet scoped to the branch;
    `repo-ci` is a small caplet wrapping a `Shell` capability that runs the
    test command in a checkout.
+   Starting a run now needs only the factory and the input:
+   `endo workflow start feature-changes --input request='add dark mode',branch=feat/dark-mode`
+   — and because the factory is a grantable capability, that start could
+   equally come from an agent that holds none of the bound facets.
 2. **Implementing**: lal receives an inbox request with the writer facet
    attached; it commits to the branch and resolves the request with the
    change-set reference (`filesystemAt(ref)` / a commit range).
@@ -500,30 +857,42 @@ Wiring the example with existing capabilities:
 
 ## Phased Implementation
 
-1. **Core interpreter (`@endo/workflow`, host-agnostic).**
-   Definition schema + pattern validation; powerless-compartment guard and
-   reducer evaluation; the pure fold; journal store over
+1. **Core interpreter and devex substrate (`@endo/workflow`, host-agnostic).**
+   Definition schema + `validateDefinition` structured diagnostics;
+   powerless-compartment guard and reducer evaluation (parse at define
+   time); the pure shared fold; `simulateRun`; journal store over
    `fs/extended` with write-then-move segments and snapshots; ava tests
    over an in-memory tree, no daemon.
+   The simulator ships first because every later phase tests through it.
 2. **Daemon integration.**
    Unconfined plugin `make(powers)`; participant binding via the guest
    namespace; `request`/`form`/`call` effects over mail and durable
-   promises; `@pins` recovery; serial-jobs discipline around journal
-   appends.
+   promises; `@pins` recovery with the `recovery.completed` journal
+   event; serial-jobs discipline around journal appends.
 3. **Composition.**
-   `fanout`/join, compound states, parallel regions, `spawn`
-   sub-workflows, `after` via reminder (or the interim timer shim).
-4. **Surface.**
-   `WorkflowService`/`WorkflowRun`/`WorkflowRunAdmin` exo guards;
-   `followStatus`/`history`/`followRuns` topics; `exportJournal`; `endo
-   workflow` CLI verbs.
+   `fanout`/join, compound states, parallel regions, `spawn` child runs
+   with input/output mapping and abort cascade, fragments with
+   define-time inlining (plus the initial `approval-gate` /
+   `retry-with-backoff` / `review-fanout` fragment library), `after` via
+   reminder (or the interim timer shim).
+4. **Surface: sync, factories, CLI.**
+   `WorkflowService`/`WorkflowRun`/`WorkflowRunAdmin`/`WorkflowFactory`
+   exo guards; the State Syncing contract (`status` + gapless
+   `history(fromSeq)` splice, `followStatus`, `followRuns`,
+   `makeWorkflowSyncClient`); `stateAt` / `explain` / `pause` / `resume`
+   / `forkSimulation`; `exportJournal`; factories with non-escalating
+   `with()` derivation; the full `endo workflow` verb set
+   (`define|list|start|status|watch|log|graph|simulate|explain|signal|pause|resume|abort`).
 5. **UI space.**
-   `@endo/space-workflow`: run list, statechart renderer, event timeline,
-   inline form gates.
+   `@endo/space-workflow`: runs rail with run trees, deterministic
+   statechart layout with live effect/fanout overlays, virtualized
+   timeline, time-travel scrubber over the client-side fold, inline form
+   gates, authority-scoped admin affordances.
 6. **Worked example as integration test.**
    The feature-change definition end to end with a scripted "agent"
    (deterministic stub) for CI, then a live lal wiring behind an
-   env-gated test, exercising restart-mid-review.
+   env-gated test, exercising restart-mid-review, factory-mediated
+   start, and a fork-to-sandbox debugging drill.
 
 ## Design Decisions
 
@@ -555,6 +924,25 @@ Wiring the example with existing capabilities:
 9. **Journal layout follows the reminder store's atomicity contract.**
    Write-then-move segments; the store backing is swappable
    (host dir, mount, memory).
+10. **Factories are the grant unit.** Routine starts go through a durable
+    `WorkflowFactory` that closes over participant bindings, so callers
+    start workflows without holding the underlying capabilities, and
+    derivation (`with()`) is strictly non-escalating.
+11. **One sync primitive.** Every view — engine, CLI, space — is a fold
+    over the seq-addressed journal; `status()` hands out the resume
+    token, `history(fromSeq)` is gapless, reconnect is resume, and the
+    fold module ships authority-free for client-side use.
+12. **Simulator-first devex.** The engine's own reducer runs under
+    scripted events with recorded effects; definitions are unit-tested
+    without a daemon, and `forkSimulation` reuses the same machinery for
+    live-run debugging.
+13. **Debugging leaves footprints.** Pause/resume, injected events,
+    forced transitions, trace toggles, and recovery itself are journal
+    events with actor identity; there is no unaudited side door.
+14. **Composition without new subsystems.** Fragments flatten at define
+    time; children are ordinary runs with explicit participant passing
+    and downward-only cancellation; cross-run coordination is just runs
+    holding each other's facets as participants.
 
 ## Known Gaps and TODOs
 
@@ -571,6 +959,16 @@ Wiring the example with existing capabilities:
       `exportJournal` guarantees.
 - [ ] Whether `WorkflowRunAdmin` should be grantable to non-host agents
       (a "workflow steward" role) and under what guard.
+- [ ] Fragment namespacing details: collision rules when a definition
+      `use`s the same fragment twice, and whether fragment-internal
+      events are hidden from the outer definition or prefixed.
+- [ ] The initial fragment library's exact contracts (`approval-gate`,
+      `retry-with-backoff`, `review-fanout` boundary events and slots).
+- [ ] Factory limit vocabulary (`maxConcurrent`, `maxStartsPerDay`, what
+      else) and where breaches surface (reject at `start` vs. queue).
+- [ ] `explain()` participant-liveness probing: how much the engine may
+      infer about a target formula without generating noisy CapTP calls
+      (respect the `__getMethodNames__` introspection convention).
 - [ ] A `defineWorkflow` JS builder — workflow-as-code ergonomics compiled
       to the data schema — future design.
 

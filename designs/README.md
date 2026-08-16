@@ -8,8 +8,16 @@ with human gates via forms, agent gates via durable promises, fan-out/join
 for specialist reviewers, sub-workflow composition, query/subscribe status
 topics over exo-stream, and a `space-workflow` Chat space; motivating use
 case is the agent feature-implementation/review/CI/approval/merge loop over
-the git capability trio. Summary, dependency graph, M9 row, estimate,
-totals, and timeline synced.*
+the git capability trio. Revised same day: settled on the unconfined-plugin
+architecture (alternative plans removed) and fleshed out the seq-addressed
+state-syncing contract with a shared client-side fold, durable
+`WorkflowFactory` grants with non-escalating `with()` derivation,
+definition devex (`validateDefinition` diagnostics, `simulateRun`, Mermaid
+graph preview), debuggability (`stateAt` time travel, `explain()` stuck
+reports, pause/poke/resume, `forkSimulation`), the live space's scrubber
+and authority-scoped affordances, and define-time fragment composition.
+Summary, dependency graph, M9 row, estimate, totals, and timeline
+synced.*
 
 *Layered on 2026-08-06: added
 [endor-registry-proxy-worker](endor-registry-proxy-worker.md) to M11, moving
@@ -39,7 +47,14 @@ the journal and re-providing settlement ids; guards prefer `@endo/patterns`
 with powerless-compartment pure expressions as the escape hatch; parallel
 fan-out/join, `spawn` sub-workflows, `WorkflowService`/`WorkflowRun`/
 `WorkflowRunAdmin` exo surface, JSONL audit export, `endo workflow` CLI
-verbs, and a `space-workflow` Chat space),
+verbs, and a `space-workflow` Chat space; revised 2026-08-16: settled on
+the unconfined-plugin architecture and fleshed out state syncing — one
+seq-addressed sync primitive with a gapless `history(fromSeq)` splice and
+an authority-free client-side fold — plus durable `WorkflowFactory`
+grants, definition devex via `validateDefinition` / `simulateRun` /
+Mermaid preview, debuggability via `stateAt` / `explain()` /
+pause-resume / `forkSimulation`, the space's time-travel scrubber, and
+define-time fragment composition),
 [endor-registry-proxy-worker](endor-registry-proxy-worker.md) (added
 2026-08-06; an XS-hosted JavaScript mapping phase over a virtual read-only CAS
 package graph, using compartment-mapper's shared package resolver to emit a
@@ -1164,7 +1179,7 @@ star.)
 | chat-edit-message-ui | Not Started | `/edit` slash command, `e` focus shortcut, hover pencil for editing previously sent messages; revision-history panel |
 | chat-inventory-create-menu | Not Started | `+` button at the top of the inventory; pop-over menu to create whole-cloth inventory items (mounts, scratch spaces, passable / structured values, agents); three-pane wizard for the new-agent flow (harness, inference source by name with Ollama-model discovery and download, endowments over the nine-row capability-bank roster); subsumes `endo-gateway-mcp`'s `+ Add agent` Chat-UI affordance; provisioning entry point migrates from the daemon into Chat via the root host agent pet store, the `@root` endowment, and a sibling encrypted-formula-store design |
 | lal-transcript-memory-management | Not Started | Durable transcript nodes outliving dismissed messages |
-| endo-workflow | Proposed | `@endo/workflow`: durable, composable statechart workflow engine as an unconfined plugin (reminder mold); event-sourced journal on the VFS is the audit log; human gates via forms, agent gates via durable promises, fan-out/join for specialist reviewers, `spawn` sub-workflows, timeouts via `@endo/reminder`; query/subscribe over exo-stream topics; `endo workflow` CLI verbs; `space-workflow` Chat space renders the definition graph, live state, and event timeline. Motivating use case: the agent feature-implementation → multi-reviewer → CI → user-approval → merge loop over the git capability trio |
+| endo-workflow | Proposed | `@endo/workflow`: durable, composable statechart workflow engine as an unconfined plugin (reminder mold); event-sourced journal on the VFS is the audit log; human gates via forms, agent gates via durable promises, fan-out/join for specialist reviewers, `spawn` sub-workflows and define-time fragments, timeouts via `@endo/reminder`; one seq-addressed sync primitive (gapless `history(fromSeq)` + shared client-side fold) over exo-stream topics; durable `WorkflowFactory` grants with non-escalating derivation; devex via `validateDefinition` diagnostics, `simulateRun`, and Mermaid preview; debugging via `stateAt` time travel, `explain()` stuck reports, pause/resume, and `forkSimulation`; `endo workflow` CLI verbs; `space-workflow` Chat space with live statechart overlays and a time-travel scrubber. Motivating use case: the agent feature-implementation → multi-reviewer → CI → user-approval → merge loop over the git capability trio |
 | patterns-diagnostic-feedback | Proposed | Opt-in `@endo/patterns/explain-mismatch.js` submodule; non-throwing `explainMismatch({ specimen, pattern, format? })` (mirrors `matches`'s boolean shape) returns a rendered diagnostic string or `undefined`; compact line-per-mismatch default (sized for AI-agent token economy) or opt-in Rust-compiler-style expanded form; zero cost to the production matcher path (submodule appears nowhere on its import graph) |
 | namehub-interface-unification | Proposed | Interface refactor so `EndoMount` and `NameHub` share a `ReadableNameHubInterface`; deferred companion to `filesystem-watchers` |
 
@@ -1528,7 +1543,7 @@ have been remapped: 0 → 1, ½ → 2, 1 → 3, 2 → 4, 3 → 7, 4 → 9,
 | formula-inspector | M | 4-5 days | 9 | Single Chat surface (Value modal back face, gear icon flip plus direct inventory-row entry, read-only at this stage); host-only `getFormula(identifier)` daemon method (removes `@info`); `endo inspect` CLI; promise-formula view with error-tracing integration |
 | workers-panel | M | 4-6 days | 9 | Metrics, sparklines |
 | daemon-retention-paths | M-L | 1.5 weeks | 9 | Snapshot + subscription daemon API, CLI verb, Chat paths panel; Phase 1 in PR #284 (open) |
-| endo-workflow | L-XL | 4-6 weeks | 9 | Six phases: core interpreter + journal store (M-L, host-agnostic, in-memory-tree tests); daemon integration (mail/durable-promise effects, `@pins` recovery; M); composition (fan-out/join, parallel regions, `spawn`, `after`; M); exo surface + topics + CLI verbs (S-M); `space-workflow` Chat space (M); worked feature-change example as restart-exercising integration test (M). L-XL because cross-cutting (new plugin package, CLI, Chat space) though each phase is individually M-or-smaller; timeouts degrade gracefully until `endo-reminder` lands |
+| endo-workflow | L-XL | 4-6 weeks | 9 | Six phases: core interpreter + `validateDefinition` + `simulateRun` + journal store (M-L, host-agnostic, in-memory-tree tests; simulator ships first because later phases test through it); daemon integration (mail/durable-promise effects, `@pins` recovery; M); composition (fan-out/join, parallel regions, `spawn` with abort cascade, define-time fragments; M); surface — seq-addressed sync contract, factories, `stateAt`/`explain`/pause/`forkSimulation`, CLI verbs (M); `space-workflow` Chat space with scrubber (M); worked feature-change example as restart-exercising integration test (M). L-XL because cross-cutting (new plugin package, CLI, Chat space) though each phase is individually M-or-smaller; timeouts degrade gracefully until `endo-reminder` lands |
 | retention-path-notation | — | — | 9 | Reference; notation + bulk-collection sketch captured for future reference |
 | ~~chat-view-edit-commands~~ | M | — | 9 | ✅ Complete (direct-to-`llm` commit `ae2b074ac` "Blob view and edit" + refinements; `/view` (alias `/cat`) and `/edit` shipped) |
 | chat-edit-message-ui | S-M | 3 days | 9 | `/edit` command, `e` focus shortcut, hover pencil; design merged (PR #88); daemon impl in PR #125 forwarded under bot |
