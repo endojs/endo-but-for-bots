@@ -21,7 +21,7 @@ MCP tools. See the two companion designs, both in `kriscendobot/minion.town` @
 - [Design: real daemon-guest-backed MCP tools (retiring the toy
   server)](https://github.com/kriscendobot/minion.town/blob/main/designs/mcp-daemon-guest-tools.md)
 
-`@endo/claude` runs in the **opposite direction of dependency**. Instead of an
+`@endo/claude` runs in the **opposite direction of control**. Instead of an
 external Claude reaching *in* to drive a guest, the guest (or an operator
 provisioning on its behalf) gets Claude as its **inference engine**: a
 `claude -p` process running *inside* a hermetic sandbox whose *only* capability
@@ -29,15 +29,17 @@ surface is the Model Context Protocol projection of one specified guest
 formula's granted facet, and nothing else. This is "the guest thinks with
 Claude," not "Claude drives a guest from outside." The distinction matters
 because it inverts trust: in the companion designs Claude is the ambient,
-fully-capable client and the guest facet is the attenuated thing it reaches; here
+fully capable client and the guest facet is the attenuated thing it reaches; here
 the guest facet is the *entire world* the Claude process can touch, and Claude
 is the thing that must be confined.
 
 The value is a Claude **subscription** (a Max or Pro plan reached through the
 Claude Code CLI's headless credentials, not a metered API key) becoming the
 inference substrate behind a confined guest, so that a fleet of concurrently
-running guests can share a small pool of subscriptions the way this garden today
-pools two Max plans across its worker fleet (see *Multiplexing and pooling*).
+running guests can share a small pool of subscriptions the way a Claude-backed
+agent fleet (a "garden" of workers, operational infrastructure separate from this
+Endo repo) today pools two Max plans across its workers (see *Multiplexing by
+guest identifier and pooling subscriptions*).
 
 ### Why "bare and only the Endo tool surface" is the whole design
 
@@ -52,8 +54,14 @@ invocation that omits `--bare` is not sandboxed no matter how restrictive its
 allow-list is. Getting the confinement right is the substance of this design, not
 a footnote to it.
 
-The mechanics below were verified against the current Claude Code CLI
-documentation for this design (2026-08-16), not inferred from general impression.
+The mechanics below were checked against `claude --help` and short live spawns on
+Claude Code 2.1.232 (2026-08-16), not inferred from general impression: in
+particular the credential surface under `--bare` (§ *The hermetic invocation*),
+that `--strict-mcp-config` takes no argument (the path belongs to `--mcp-config`),
+and that no `--permission-mode` offers a deny-by-default baseline. Where a claim
+is still unverified against a real deployment (managed settings; a negative
+confinement test that no built-in tool survives) it is called out as such rather
+than asserted.
 
 ## Architecture
 
@@ -63,20 +71,24 @@ flowchart LR
     D["endo daemon<br/>guest g-4f2a... granted facet"]
     B["facet-to-MCP bridge<br/>(@endo/agent-tools MCP adapter)<br/>stdio shim (preferred) or 127.0.0.1 loopback<br/>tools = facet method set"]
     subgraph proc["hermetic claude -p process<br/>(fresh per inference call)"]
-      C["claude -p --bare<br/>--strict-mcp-config cfg.json<br/>--setting-sources ''<br/>--disallowedTools '*'<br/>--allowedTools mcp__endo__writeText,..."]
+      C["claude -p --bare<br/>--mcp-config cfg.json --strict-mcp-config<br/>--setting-sources '' --settings creds.json<br/>--disallowedTools Bash,Read,Write,Edit,...<br/>--allowedTools mcp__endo__writeText,..."]
     end
     D ---|"CapTP over netstrings (UDS)"| B
     C -->|"MCP (stdio shim, or streamable HTTP<br/>Bearer = guest formula id)"| B
   end
-  P["ClaudeCredentials pool<br/>N subscriptions"] -.->|"CLAUDE_CODE_OAUTH_TOKEN<br/>injected per call"| proc
+  P["ClaudeCredentials pool<br/>N subscriptions"] -.->|"credential emitted by the<br/>apiKeyHelper in --settings, per call"| proc
 ```
 
-One sentence: `@endo/claude` takes a reference to one guest's granted facet,
-stands up (or reuses) a loopback-only MCP server that projects exactly that
-facet's method set as MCP tools, generates the exact `mcp__<server>__<tool>`
-allow-list from that same method set, and spawns a fresh, `--bare`,
+One sentence: `@endo/claude` takes **one guest's formula id** (the 64-hex name the
+transport already routes on — the same designator throughout, not a live facet
+reference the harness would have to name-resolve), stands up (or reuses) a
+loopback-only MCP server that projects exactly that guest facet's method set as
+MCP tools, asks that bridge for the guest's `tools/list` catalog and generates the
+exact `mcp__<server>__<tool>` allow-list from it, and spawns a fresh, `--bare`,
 subscription-authenticated `claude -p` whose only reachable capability is that
-one MCP endpoint. The Claude process cannot read the host filesystem, cannot
+one MCP endpoint. The harness never holds the facet reference directly: the bridge
+(via the daemon) resolves the formula id to the facet, so the one designator names
+both the routing bearer and the catalog source. The Claude process cannot read the host filesystem, cannot
 open a network connection the sandbox does not permit, cannot load any project
 or user memory, and cannot see any MCP server but the one guest's.
 
@@ -92,11 +104,13 @@ against that workspace, with network confined by the slice. Its confinement is
 **OS-level around the whole process, plus a workspace**. `@endo/claude`'s
 confinement is **tool-surface-level**: strip every built-in tool, and grant
 exactly the guest's MCP facet. The two are complementary, not competing, and
-they compose (see *Design Decisions*, #6): a bare `claude -p` can itself run
+they compose (see *Design Decision 6*): a bare `claude -p` can itself run
 inside a `@endo/claude-sandbox` slice for defense in depth. `@endo/claude`
-reuses `@endo/claude-sandbox`'s `ClaudeCredentials` caplet verbatim for the
-subscription-pooling story; it differs in that its Claude has **no workspace and
-no built-in tools at all**, only the guest facet.
+reuses `@endo/claude-sandbox`'s `ClaudeCredentials` caplet for the
+subscription-pooling story (wrapping it in an `acquire`/`release` allocator; see
+§ *Pooling subscriptions across concurrent guests*), presenting the credential through an `apiKeyHelper` because `--bare`
+reads no OAuth token (§ *The hermetic invocation*); it differs in that its Claude
+has **no workspace and no built-in tools at all**, only the guest facet.
 
 ## The hermetic invocation
 
@@ -105,14 +119,16 @@ the others do not close.
 
 | Flag | Value | What it closes |
 | --- | --- | --- |
-| `--bare` | (present) | Skips `CLAUDE.md` loading, hooks, `settings.json` auto-discovery, and MCP auto-discovery **in one shot**. These load unconditionally at startup, before the tool-permission system, so no `--allowedTools` / `--disallowedTools` combination substitutes for it. This is the single most important flag. |
-| `--strict-mcp-config` | path to a generated config naming only the Endo endpoint | Makes the injected Endo MCP endpoint the *only* MCP server the process can see. Without it, `.mcp.json` / `~/.claude/` auto-discovery can add servers the design did not intend to expose (belt-and-suspenders with `--bare`, and the explicit contract for *which* server is present). |
-| `--setting-sources ""` | empty | Drops the user / project / local `settings.json` layers. **Open:** whether *managed* (enterprise-policy) settings can be suppressed at all is undocumented; this design assumes they cannot until verified against a real managed-settings deployment, so a host that runs `@endo/claude` must not carry managed Claude settings that grant tools. |
-| `--disallowedTools "*"` | deny all built-ins | Denies every built-in tool. Paired with a deny-by-default permission mode so the baseline is "nothing," then the allow-list re-admits only the Endo tools. |
-| `--allowedTools` | `mcp__<server>__<toolA>,mcp__<server>__<toolB>,...` | The exact per-tool entries generated from the guest facet's method set. See the wildcard trap below. |
+| `--bare` | (present) | Skips `CLAUDE.md` loading, hooks, `settings.json` auto-discovery, and MCP auto-discovery **in one shot**. These load unconditionally at startup, before the tool-permission system, so no `--allowedTools` / `--disallowedTools` combination substitutes for it. This is the single most important flag. **It also narrows the credential surface:** under `--bare`, Anthropic auth is strictly an `ANTHROPIC_API_KEY` or an `apiKeyHelper` named via `--settings`; the OAuth / keychain credentials `claude` normally reads (including `CLAUDE_CODE_OAUTH_TOKEN`) are **never** consulted. This directly shapes how the subscription reaches the process — see the `--settings` row and *Design Decision 5*. |
+| `--mcp-config <file>` | path to a generated config naming only the Endo endpoint | Carries the *path* to the generated MCP config (the stdio shim command, or the loopback URL, plus the guest's bearer). This is the value-taking flag; the path belongs here, **not** on `--strict-mcp-config`. |
+| `--strict-mcp-config` | (present; takes **no** argument) | Boolean. Restricts the process to only the servers named in `--mcp-config`, ignoring all other MCP configuration (`.mcp.json`, `~/.claude/`). Without it, auto-discovery can add servers the design did not intend to expose (belt-and-suspenders with `--bare`, and the explicit contract that *only* the generated config is honored). Writing a path after this flag is a silent error: it binds to the prompt positional and the process starts with **zero** MCP servers, so confinement "passes" by exposing nothing. |
+| `--setting-sources ""` | empty | Drops the discovered user / project / local `settings.json` layers. Composes with `--settings` below: `--setting-sources ""` removes everything *discovered*, and `--settings` injects exactly one *named* file, so the sole settings surface the process sees is that one generated file. **Open:** whether *managed* (enterprise-policy) settings can be suppressed at all is undocumented; this design assumes they cannot until verified against a real managed-settings deployment, so a host that runs `@endo/claude` must not carry managed Claude settings that grant tools. |
+| `--settings <file>` | a generated file carrying only an `apiKeyHelper` | The one credential escape `--bare` honors (see *Design Decision 5*). The pool renders a minimal settings file whose **sole** key is an `apiKeyHelper` that emits the acquired credential; combined with `--setting-sources ""` it is the only settings the process reads. This is the deliberate, tightly-scoped re-admission of a settings file into a design that otherwise treats settings as a leak surface — accepted because `--bare` leaves no other authenticated path. |
+| `--disallowedTools` | the explicit set of built-in tool names (`Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Task`, `NotebookEdit`, …) | Denies each built-in by name. **Not** `"*"`: deny rules outrank allow rules, so a `"*"` deny would also match the `mcp__<server>__<tool>` allow entries and grant the process *nothing*. Because the deny set (built-in names) and the allow set (`mcp__…` names) are disjoint, precedence never cancels the allow-list. There is no "deny-by-default permission mode" to lean on — `--permission-mode` offers only `acceptEdits`, `auto`, `bypassPermissions`, `manual`, `dontAsk`, `plan`, none of them a deny-all — so the baseline is built from an explicit deny of the built-ins plus the allow-list below, and a live negative-confinement test must confirm no built-in survives (see *Known Gaps and TODOs*). |
+| `--allowedTools` | `mcp__<server>__<toolA>,mcp__<server>__<toolB>,...` | The exact per-tool entries generated from the guest facet's method set. In headless `-p` mode a tool absent from this list has no interactive prompt to approve it, so this list is also the positive half of the baseline. See the wildcard trap below. |
 | (never) `--resume` / `--continue` | omitted, always | Both restore the *full* prior transcript, including past tool calls and their results, with no documented filter, regardless of the new invocation's tool-permission flags. A sandboxed call must never resume. |
 
-### The `mcp__*` wildcard trap is an implementation requirement, not a caveat
+### Working around the `mcp__*` wildcard trap is an implementation requirement, not a caveat
 
 `mcp__*` **does not work as an allow-rule wildcard.** Allow rules require a
 literal `mcp__<server>__` prefix before any glob; an unanchored `mcp__*` allow
@@ -144,8 +160,8 @@ stateless so the confinement holds identically on every call.
 `@endo/claude` is the MCP **client** side (the confined `claude -p` harness plus
 the allow-list generation). It needs an MCP **server** that projects one guest's
 facet. Unlike the minion.town companion designs (whose "grounded against"
-sections predate it and record "no `@endo/mcp` package exists yet"), **this
-project already has the MCP projection designed and stubbed**, so
+sections predate the MCP projection work and record "no `@endo/mcp` package exists
+yet"), **this project already has the MCP projection designed and stubbed**, so
 `@endo/claude` builds on it rather than inventing it:
 
 1. The projection logic (a facet's method set to an MCP `tools/list` catalog, and
@@ -174,16 +190,17 @@ project already has the MCP projection designed and stubbed**, so
    deployment*), so the pattern this design leans on is already the project's
    stated one.
 
-So the answer to "does `@endo/claude` carry its own bridge or depend on a
-not-yet-built `@endo/mcp`?" is: **`@endo/claude` composes with the `@endo/agent-tools`
-MCP adapter (a designed, stubbed surface) and does not reinvent the projection.**
+So the answer to "does `@endo/claude` carry its own bridge, depend on a
+not-yet-built `@endo/mcp`, or compose with something already designed?" is the
+third: **`@endo/claude` composes with the `@endo/agent-tools` MCP adapter (a
+designed, stubbed surface) and does not reinvent the projection.**
 Implementing that adapter stub, plus the small MCP-server-hosting seam around it
 (a stdio shim command for the local case, or a loopback HTTP listener), is a
 named prerequisite rather than in scope of this design. The groundwork for it is
 tracked as the follow-up job `design-endo-claude-mcp-groundwork`. If the adapter
 is still unimplemented when `@endo/claude` is built, the fallback is a minimal
 stdio MCP shim carried inside `@endo/claude` as a stopgap, explicitly marked for
-deletion once the `@endo/agent-tools` adapter lands (*Known gaps*).
+deletion once the `@endo/agent-tools` adapter lands (*Known Gaps and TODOs*).
 
 ### Which tool surface the catalog projects (a carried-over limitation)
 
@@ -231,14 +248,16 @@ when it is built:
 ```mermaid
 sequenceDiagram
   participant G as guest / operator
-  participant H as "@endo/claude harness"
+  participant H as endo/claude harness
   participant M as MCP bridge (facet-derived)
-  participant P as "claude -p (bare, fresh)"
-  G->>H: infer(guestFacet, prompt, cancelled)
-  H->>H: enumerate facet method set -> allow-list
+  participant P as claude -p (bare, fresh)
+  G->>H: infer(guestFormulaId, prompt, {model, cancelled})
   H->>M: ensure loopback MCP server for this guest (Bearer = formula id)
-  H->>H: acquire a ClaudeCredentials from the pool -> CLAUDE_CODE_OAUTH_TOKEN
-  H->>P: spawn (--bare, --strict-mcp-config, --allowedTools, no resume)
+  H->>M: tools/list for this guest
+  M-->>H: catalog = facet methods
+  H->>H: catalog -> allow-list
+  H->>H: acquire a ClaudeCredentials from the pool -> apiKeyHelper in --settings
+  H->>P: spawn (--bare, --mcp-config, --strict-mcp-config, --settings, --allowedTools, no resume)
   P->>M: tools/list
   M-->>P: catalog = facet methods
   P->>M: tools/call mcp__endo__writeText {...} (Bearer)
@@ -254,25 +273,33 @@ sequenceDiagram
 An Endo MCP server on the same host as the `claude -p` process, not reachable
 off-box. Two transports, in preference order:
 
-- **Preferred: a stdio MCP shim.** `--strict-mcp-config` can name a **stdio**
-  MCP server whose command is a thin Endo CLI shim (the "local shim subprocess"
-  [endo-gateway-mcp](endo-gateway-mcp.md) already names) that speaks CapTP over
-  netstrings to the daemon on its Unix domain socket (`ENDO_SOCK`,
+- **Preferred: a stdio MCP shim.** The generated `--mcp-config` file names a
+  **stdio** MCP server whose command is a thin Endo CLI shim (the "local shim
+  subprocess" [endo-gateway-mcp](endo-gateway-mcp.md) already names) that speaks
+  CapTP over netstrings to the daemon on its Unix domain socket (`ENDO_SOCK`,
   `/run/endo-daemon/endo.sock`). `claude -p` spawns the shim itself, so there is
   **no listening port and no HTTP surface at all** for the local case: the only
   thing the confined process can reach is the shim it spawns, and the shim can
   reach only the one guest facet (the shim is handed exactly that facet's
-  reference, or the bearer that resolves to it). This is the tightest local
-  shape and the primary target.
+  reference, resolved from the guest formula id the harness passes it). Under
+  stdio each confined process gets its **own** shim bound to its **own** guest,
+  so per-process spawning *is* the isolation — there is no shared endpoint and no
+  `Authorization` header in play; the formula id designates which facet the shim
+  resolves, not a bearer on a wire. This is the tightest local shape and the
+  primary target.
 - **Alternative: a loopback HTTP listener.** The same `@endo/agent-tools` MCP
   adapter mounted on a `127.0.0.1` listener (explicitly **not** `0.0.0.0`) on a
-  port or a Unix domain socket, with `--strict-mcp-config` naming that one URL
-  and the guest's bearer. Use this where the streamable-HTTP transport is wanted
-  for parity with the remote case; it costs a loopback listener the stdio shim
-  avoids.
+  port or a Unix domain socket, with `--mcp-config` naming that one URL and the
+  guest's bearer and `--strict-mcp-config` pinning the process to it. This is the
+  shape that *does* carry `Authorization: Bearer` and shares **one** endpoint
+  across guests, discriminated by bearer (see *Routing a call to that guest's
+  facet*, whose one-endpoint-many-guests model describes **this** transport, not
+  the stdio one). Use it where the streamable-HTTP transport is wanted for parity
+  with the remote case; it costs a loopback listener the stdio shim avoids.
 
-Either way the `--strict-mcp-config` file names exactly one endpoint, and the
-process is pinned to one guest. This is the minion.town-shaped target.
+Either way the generated `--mcp-config` file names exactly one endpoint and the
+process is pinned to one guest — by a dedicated shim under stdio, by a bearer on a
+shared loopback listener under HTTP. This is the minion.town-shaped target.
 
 ### Remote deployment
 
@@ -300,52 +327,73 @@ subscriptions can be pooled across concurrently running guest agents.
 
 ### Routing a call to *that* guest's facet
 
-The existing daemon already speaks CapTP per-guest over **one shared socket**
-(`/run/endo-daemon/endo.sock`), and the gateway MCP design already routes by
-**bearer = formula id** on **one `/mcp` endpoint**. This design preserves the
-one-socket-many-guests / one-endpoint-many-agents shape rather than fanning out
-to a listener per guest:
+Guest routing takes one of two shapes depending on the transport chosen in
+*Local deployment*, and they are **not** the same topology:
 
-- **One loopback MCP endpoint per host, discriminated by bearer.** The
-  `claude -p` process for guest `g-4f2a...` carries that guest's formula id as
-  its `Authorization: Bearer`; the bridge resolves the bearer to that guest's
-  facet and no other's. The `--strict-mcp-config` file for the process pins the
-  server URL and that one bearer, so the process can only ever act as its own
-  guest. This is the [endo-gateway-mcp](endo-gateway-mcp.md) routing model reused
-  unchanged for the loopback case, and it means the guest identifier is the
-  bearer, not a port or a path segment.
-- Considered and rejected: a port-per-guest or socket-per-guest scheme. Reason:
-  it multiplies listeners, complicates the `--strict-mcp-config` generation, and
-  discards the daemon's already-proven one-socket-many-guests shape for no
-  isolation gain (the bearer already scopes each process to one facet, and the
-  `claude -p` process cannot forge a different guest's formula id because it never
-  sees one).
+- **Under the preferred stdio shim, isolation is per-process, not per-bearer.**
+  Each guest's `claude -p` spawns its own shim, and that shim is bound to that one
+  guest's facet (resolved from the formula id the harness hands it). There is no
+  shared endpoint and no `Authorization` header; the confined process can reach
+  only the shim it spawned, which can reach only its one facet. Multiplexing here
+  is just "many processes, each with its own shim," and the daemon's one shared
+  socket sits *behind* the shims, not in front of the confined processes.
+- **Under the alternative loopback HTTP listener, isolation is per-bearer on one
+  shared endpoint.** Here the existing daemon's one shared socket
+  (`/run/endo-daemon/endo.sock`) and the gateway MCP design's **bearer = formula
+  id** routing on **one `/mcp` endpoint** carry over directly: the `claude -p`
+  process for guest `g-4f2a...` carries that guest's formula id as its
+  `Authorization: Bearer`, the bridge resolves the bearer to that guest's facet
+  and no other's, and the generated `--mcp-config` file pins the server URL and
+  that one bearer so the process can only ever act as its own guest. This is the
+  [endo-gateway-mcp](endo-gateway-mcp.md) routing model reused unchanged for the
+  loopback case; the guest identifier is the bearer, not a port or a path segment.
+- Considered and rejected (for the HTTP case): a port-per-guest or
+  socket-per-guest scheme. Reason: it multiplies listeners, complicates the
+  `--mcp-config` generation, and discards the daemon's already-proven
+  one-socket-many-guests shape for no isolation gain (the bearer already scopes
+  each process to one facet, and the `claude -p` process cannot forge a different
+  guest's formula id because it never sees another's).
 
 ### Pooling subscriptions across concurrent guests
 
-This is the pooling problem, and this garden is a working existence proof of
-**that** problem (not the sandboxing one). The garden runs Claude-backed workers
-pooled across two Max plans on two hosts, with per-host worker counts declared in
-journal state (`hosts/<host>`, `gardeners: N`) and rebalanced by hand when one
-account's weekly-quota burn outpaces the other's. Borrow the **allocation
-pattern** ("N accounts, M concurrent consumers, keep utilization roughly level"),
-not the isolation model (the garden's workers run with full host tool access; a
-`@endo/claude` process runs with the Endo-only surface this design requires).
+This is the pooling problem, and the agent fleet that authored this design (a
+"garden" of Claude-backed workers, operational infrastructure separate from the
+Endo repo) is a working instance of it, not a proof about sandboxing. That fleet
+pools Claude across two Max plans on two hosts, with per-host worker counts held
+in its own operational state (a `gardeners: N` count per host) and rebalanced by
+hand when one account's weekly-quota burn outpaces the other's. Borrow the
+**allocation pattern** ("N accounts, M concurrent consumers, keep utilization
+roughly level"), not the isolation model (that fleet's workers run with full host
+tool access; a `@endo/claude` process runs with the Endo-only surface this design
+requires).
 
 Concretely, reuse `@endo/claude-sandbox`'s `ClaudeCredentials` caplet: a pool of
-`ClaudeCredentials` exos, one per subscription, each of `kind: oauthToken` (the
-short-lived token from `claude setup-token`, injected as
-`CLAUDE_CODE_OAUTH_TOKEN`; a subscription, not an `apiKey`). Each inference call
-**acquires** a credential from the pool, injects its token into the fresh
-`claude -p` process env, and **releases** it on process exit. Because
-`ClaudeCredentials.issue()` / `materialise()` are eventual-sends, the pool can
-live on a remote peer that holds the long-lived subscription auth and mints
-short-lived per-session tokens, so the box running the guest never holds the
-durable credential. The allocator is a small capability with three moves:
-`acquire(cancelled) -> IssuedCredential`, quota-aware selection (least-recently-
-burned, or a weight the operator sets the way the garden sets `gardeners: N`),
-and `release`. A subscription hitting its weekly cap is marked cooling and
-skipped until it resets, so no single account gates every guest.
+`ClaudeCredentials` exos, one per subscription. Each inference call **acquires** a
+credential from the pool and **releases** it on process exit. The credential does
+**not** reach the process as `CLAUDE_CODE_OAUTH_TOKEN`, because `--bare` never
+consults that variable (§ *The hermetic invocation*). Instead the harness renders
+the minimal `--settings` file whose sole `apiKeyHelper` emits the acquired
+credential — the only authenticated path `--bare` honors. Because
+`ClaudeCredentials.issue()` and the returned `IssuedCredential`'s `materialise()`
+are eventual-sends, the pool can live on a remote peer that holds the long-lived
+subscription auth and mints short-lived per-session credentials, so the box
+running the guest never holds the durable secret. The allocator is a small
+capability with two moves and a selection policy: `acquire({cancelled}) ->
+IssuedCredential` and `release(issued)`, with quota-aware selection
+(least-recently-burned, or a weight the operator sets the way that fleet sets its
+`gardeners: N`) applied inside `acquire`. A subscription hitting its weekly cap is
+marked cooling and skipped until it resets, so no single account gates every guest.
+
+**Load-bearing residual (see *Design Decision 5* and *Known Gaps and TODOs*).** Whether a
+Max/Pro *subscription* value can be presented through `apiKeyHelper` at all is
+unverified: `apiKeyHelper` output is consumed as an API key, and a subscription's
+auth is not an API key. If it cannot, `--bare` forces a metered `ANTHROPIC_API_KEY`
+(losing the "subscription, not metered" premise) or the subscription is reachable
+only by dropping `--bare` (losing the design's strongest confinement flag). The two
+load-bearing decisions — `--bare` confinement and subscription-not-metered billing
+— are in genuine tension; this design keeps `--bare` primary and names the
+credential-path verification as the decision that resolves the tension, rather than
+asserting a path measured not to work.
 
 ## Build sequencing against the MCP bridge
 
@@ -407,21 +455,22 @@ bridge itself; the remote gateway path then rides P1 when it lands, as v2.
 ```text
 packages/claude/
 ├── package.json            # @endo/claude
-├── harness.js              # infer(guestFacet, prompt, {model, cancelled}) -> result
-├── allow-list.js           # facet method set -> mcp__server__method[] + strict-mcp-config
-├── credentials-pool.js     # acquire/release over a set of ClaudeCredentials
-├── mcp-config.js           # render the --strict-mcp-config file (one endpoint, one bearer)
+├── index.js                # entry module; exports infer (the harness)
+├── harness.js              # infer(guestFormulaId, prompt, {model, cancelled}) -> result
+├── allow-list.js           # guest tools/list catalog -> mcp__server__method[] allow entries + built-in deny set
+├── credentials-pool.js     # acquire/release over a set of ClaudeCredentials; renders the apiKeyHelper --settings file
+├── mcp-config.js           # render the --mcp-config file (one endpoint, one bearer)
 └── test/                   # dependency-injected unit tests (no live claude, no daemon)
 ```
 
 | Dependency | Relationship |
 | --- | --- |
 | [`@endo/agent-tools`](endo-agent-tools.md) MCP adapter | **Prerequisite**: projects a facet's method set to an MCP `tools/list` catalog and dispatches `tools/call` to `E(facet).<method>`. Designed in the merged [endo-gateway-mcp](endo-gateway-mcp.md) and present as a declared stub at `packages/agent-tools/src/adapters/mcp.js` ("Planned adapter shape only"); implementing it plus the stdio-shim / loopback hosting seam is tracked as `design-endo-claude-mcp-groundwork`. `@endo/claude` composes with it; it does not reinvent the projection. |
-| [`@endo/claude-sandbox`](../packages/claude-sandbox/README.md) | **Sibling / reuse**: the `ClaudeCredentials` caplet (`kind: oauthToken` subscription tokens) is reused verbatim for the pool. Optionally the podman slice for defense-in-depth (Design Decisions #6). |
-| [`@endo/eventual-send`](../packages/eventual-send/README.md) | Facet references are `E(...)`-invoked. |
-| [gateway-bearer-token-auth](gateway-bearer-token-auth.md) / [endo-gateway-mcp](endo-gateway-mcp.md) | The bearer-is-formula-id auth shape reused for both the loopback bridge and the remote endpoint. |
+| [`@endo/claude-sandbox`](../packages/claude-sandbox/README.md) | **Sibling / reuse**: the `ClaudeCredentials` caplet supplies the pooled subscriptions. Its surface is `issue(sessionTag)` returning an `IssuedCredential` with single-shot `materialise()`; the `acquire`/`release` allocator this design names wraps that caplet rather than replacing its protocol. Optionally the podman slice for defense-in-depth (*Design Decision 6*). |
+| [`@endo/eventual-send`](../packages/eventual-send/README.md) | The bridge invokes the resolved facet with `E(facet).<method>(...)`; the credential caplet's methods are eventual-sends. |
+| [gateway-bearer-token-auth](gateway-bearer-token-auth.md) / [endo-gateway-mcp](endo-gateway-mcp.md) | The bearer-is-formula-id auth shape reused for the loopback **HTTP** bridge and the remote endpoint (the stdio shim carries no bearer; it resolves the facet from the formula id directly). |
 
-Naming: the mandate names the package `@endo/claude`, matching the sibling
+Naming: the maintainer's prompt (§ *Prompt*, below) names the package `@endo/claude`, matching the sibling
 `@endo/claude-sandbox`, which does not carry the `exo-` prefix despite exposing a
 `ClaudeClient` over CapTP. `@endo/claude`'s primary surface is a harness
 (`infer(...)`), not a passable interface exchanged over CapTP, so the unprefixed
@@ -434,23 +483,36 @@ questions* if the harness grows a passable `Inference` exo as its primary export
    loads `CLAUDE.md`, hooks, settings, and auto-discovered MCP servers before the
    tool-permission system runs, so the allow-list confines nothing. The harness
    refuses to spawn without `--bare` in the argv.
-2. **The allow-list is generated per guest from the facet method set.** `mcp__*`
-   is silently ignored as an allow rule; only literal `mcp__<server>__<tool>`
-   entries grant. The enumeration is shared with the MCP bridge's `tools/list`, so
-   the catalog Claude sees and the tools it is allowed to call derive from one
-   source and cannot drift apart.
+2. **The allow-list is generated per guest from the bridge's `tools/list`
+   catalog.** `mcp__*` is silently ignored as an allow rule; only literal
+   `mcp__<server>__<tool>` entries grant. Rather than re-walk the facet
+   independently, `allow-list.js` derives the allow entries from the very catalog
+   the bridge returns for `tools/list` — one value both consume, so the tools
+   Claude sees and the tools it is allowed to call cannot drift apart (deriving
+   from a shared *source* each side re-reads would still let them diverge).
 3. **Fresh process per inference; never `--resume` / `--continue`.** Resuming
    restores the full unfiltered transcript across the confinement boundary.
    Continuity, where a guest needs it, is an Endo capability the facet exposes,
    not harness state.
-4. **One loopback endpoint, discriminated by bearer = formula id.** Preserves the
+4. **The guest formula id is the single designator; isolation shape follows the
+   transport.** The formula id names the guest everywhere — the routing key, the
+   catalog lookup, and (in the HTTP transport) the bearer. Under the preferred
+   stdio shim, isolation is per-process: each process spawns its own shim bound to
+   its one facet, no shared endpoint, no bearer on a wire. Under the loopback HTTP
+   transport, isolation is per-bearer on one shared endpoint, preserving the
    daemon's one-socket-many-guests shape and the gateway's one-endpoint-many-agents
-   routing; the guest identifier is the bearer, and a process pinned by
-   `--strict-mcp-config` to its own bearer cannot act as another guest.
-5. **Subscriptions pool through `ClaudeCredentials`, allocated per call.** Reuse
-   the existing caplet; acquire on spawn, release on exit; quota-aware selection
-   keeps utilization level across accounts the way the garden balances
-   `gardeners: N` by hand, but as a capability rather than a manual edit.
+   routing; a process whose `--mcp-config` pins its own bearer cannot act as
+   another guest.
+5. **Subscriptions pool through `ClaudeCredentials`, presented via `apiKeyHelper`.**
+   Reuse the existing caplet; `acquire` before spawn, `release` on exit. The
+   credential reaches the process **only** through a minimal generated `--settings`
+   file whose sole key is an `apiKeyHelper` — the one credential path `--bare`
+   honors, since `--bare` never reads `CLAUDE_CODE_OAUTH_TOKEN`, OAuth, or the
+   keychain (measured on Claude Code 2.1.232). Quota-aware selection keeps
+   utilization level across accounts, as a capability rather than a manual edit.
+   Whether a *subscription* (not a metered key) can be presented this way is the
+   load-bearing residual named in § *Pooling subscriptions across concurrent guests* and *Known Gaps and TODOs*; this decision keeps
+   `--bare` primary and resolves the tension by verification, not assertion.
 6. **Tool-surface confinement composes with OS-level confinement.** `@endo/claude`
    confines the tool surface; `@endo/claude-sandbox` confines the process and OS.
    Running a bare `claude -p` inside a `@endo/claude-sandbox` slice with
@@ -465,12 +527,22 @@ questions* if the harness grows a passable `Inference` exo as its primary export
       `packages/agent-tools/src/adapters/mcp.js`) plus its server-hosting seam (a
       stdio shim command for the local case, or a loopback HTTP listener). Tracked
       as `design-endo-claude-mcp-groundwork`; a prerequisite for `@endo/claude`.
-- [ ] Stopgap-only: a minimal stdio MCP shim carried inside `@endo/claude` if the
-      adapter is not ready, explicitly marked for deletion once the adapter lands.
+- [ ] Carry a minimal stopgap stdio MCP shim inside `@endo/claude` if the adapter
+      is not ready, gated behind an explicit opt-in so the fallback cannot ship
+      silently, and marked for deletion once the adapter lands.
+- [ ] Verify the credential path under `--bare`: whether a Max/Pro subscription can
+      be presented through an `apiKeyHelper`, or whether `--bare` forces a metered
+      `ANTHROPIC_API_KEY` (or dropping `--bare`). This resolves the load-bearing
+      tension in *Design Decision 5*.
+- [ ] Run a live negative-confinement test: spawn the real confined `claude -p` and
+      confirm no built-in tool (Bash, Read, Write, …) executes and no MCP server
+      but the one guest's is reachable — the dependency-injected unit tests cannot
+      catch a wrong-flag confinement gap.
 - [ ] Verify on a real managed-settings deployment whether `--setting-sources ""`
       can suppress managed settings, or whether the host must be kept free of
       managed Claude settings that grant tools.
-- [ ] A minion.town-side deployment + configuration companion design (see below).
+- [ ] Write a minion.town-side deployment plus configuration companion design (see
+      below).
 
 ## Follow-on: a minion.town deployment companion
 
@@ -491,31 +563,36 @@ is accepted, not written in this pass.
 - Which is the canonical trigger for a guest inference: does the guest itself
   `request` an inference of its host (Claude as a capability the guest holds), or
   does an operator/scheduler outside the guest drive `infer(...)` on the guest's
-  behalf? The mandate says "the guest thinks with Claude," which leans toward the
+  behalf? The maintainer's prompt says "the guest thinks with Claude," which leans toward the
   former, but the confined process holds only the facet, so the *decision to
   infer* comes from outside the confined process either way. Recommend: expose
   `infer(...)` as a capability the guest's host grants, so "the guest thinks" is
   literally a capability the guest can hold and exercise.
 - Should the primary export be a harness function `infer(...)` or a passable
-  `Inference` exo that the guest holds as a capability? If the latter, the
-  `exo-` package-name convention would apply (`@endo/exo-claude`), diverging from
-  the unprefixed sibling `@endo/claude-sandbox`. Recommend: start unprefixed as
-  the mandate names it, and revisit if a passable exo becomes the primary surface.
+  `Inference` exo that the guest holds as a capability? These are two independent
+  axes; the `exo-` package-name prefix does not follow from a passable export. The
+  sibling `@endo/claude-sandbox` already exports a passable `ClaudeClient` over
+  CapTP and carries **no** `exo-` prefix, so a passable `Inference` export would
+  not, on the project's own precedent, force `@endo/exo-claude`. Recommend: keep
+  the unprefixed name the prompt gives regardless of which export shape wins, and
+  decide the export shape on its own merits (the sibling's answer is a passable
+  interface).
 - Can *managed* (enterprise-policy) Claude settings be suppressed by
   `--setting-sources ""`? Undocumented; treat as "assume they cannot" until
   verified against a real managed-settings deployment, and keep `@endo/claude`
   hosts free of managed settings that grant tools until then.
 - Does the pool allocator's quota accounting read burn from the subscription
   (is a weekly-cap signal observable through the Claude Code CLI or the token?),
-  or must the operator set weights manually the way the garden edits
+  or must the operator set weights manually the way that agent fleet edits its
   `gardeners: N` today? Recommend: start with operator-set weights plus a
   cooling flag on a detected rate-limit response, and make burn-reading a later
   refinement if a signal exists.
 - What is the failure taxonomy at the harness boundary (subscription rate-limited,
   MCP bridge down, guest facet method threw, `claude -p` non-zero exit, stream
-  parse error), and how does each surface back to the caller? The companion
-  design's impedance exercise X4 (error taxonomy) is the precedent; a similar
-  small enumeration should land with the build.
+  parse error), and how does each surface back to the caller? The precedent is the
+  sibling `@endo/claude-sandbox`, whose reply reader terminates with a `{type:
+  'end'}` or `{type: 'abort', reason}` record (`packages/claude-sandbox/README.md`
+  § `ClaudeClient`); a similar small enumeration should land with the build.
 
 ## Prompt
 
