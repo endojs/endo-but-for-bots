@@ -19,6 +19,14 @@ it),
 registry root, non-enumerable npm and scope lookup hubs, enumerable exact-version
 directories, and immutable package-content trees; specifies identical Node and
 Endor adapters over their existing mechanics and a readable-tree fixture seam),
+[worker-constraint-model](worker-constraint-model.md) (added 2026-08-16;
+Proposed — replaces the closed `kind: 'locked' | 'node'` worker-selection
+union with an open, multi-axis `WorkerConstraints` schema, runtime /
+persistence / version / platform, each independently optional and
+flexible-by-default; today's two kinds migrate onto the runtime axis with zero
+behavior change and zero formula-identity churn, and the durable/orthogonal
+persistence, version-pin, and platform/arch binary-fetch categories land as
+typed `Not Started` extension points naming the exact seam each plugs into),
 [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) (added
 2026-07-30; capability-secure npm development publishing: an agent-facing
 registry proxy whose entire accepted mutation vocabulary is dev-release-shaped
@@ -284,6 +292,7 @@ LLM-agent stack).*
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
 | [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |
+| [worker-constraint-model](worker-constraint-model.md) | 2026-08-16 | 2026-08-16 | Proposed |
 | [cap-std-watch](cap-std-watch.md) | 2026-07-18 | 2026-07-18 | Proposed |
 | [store-write-file](store-write-file.md) | 2026-07-15 | 2026-07-15 | Not Started |
 | [buffered-channel-exo-stream-consolidation](buffered-channel-exo-stream-consolidation.md) | 2026-07-06 | 2026-07-24 | **Complete** |
