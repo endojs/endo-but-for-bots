@@ -5104,9 +5104,8 @@ impl Interp {
                     ("delete", NativeMethod::SetDelete),
                     ("forEach", NativeMethod::CollForEach),
                     ("entries", NativeMethod::CollEntries),
-                    // Set's `keys` IS `values` (both iterate the values).
-                    ("keys", NativeMethod::CollValues),
-                    ("values", NativeMethod::CollValues),
+                    // Set's `keys`/`values` are bound after this loop as a
+                    // single shared function object (see below).
                     ("clear", NativeMethod::CollClear),
                 ],
                 2 => &[
@@ -5141,6 +5140,16 @@ impl Interp {
             // (arity 1), so `verifyProperty`/`propertyHelper` read the spec
             // descriptor. Bound only on `Set.prototype` (cache == 1).
             if cache == 1 {
+                // `Set.prototype.keys` is the SAME function object as
+                // `Set.prototype.values` (spec: the initial value of `keys` is
+                // the initial value of `values`), so a single allocation is
+                // bound under both keys — `built-ins/Set/prototype/keys/keys.js`
+                // asserts `Set.prototype.keys === Set.prototype.values`. The
+                // shared object carries the canonical `.name` (`"values"`) and
+                // arity 0.
+                let values = self.alloc_named_method(NativeMethod::CollValues, "values", 0);
+                self.proto_methods.push((proto, "values", values));
+                self.proto_methods.push((proto, "keys", values));
                 for (m_name, m) in [
                     ("union", NativeMethod::SetUnion),
                     ("intersection", NativeMethod::SetIntersection),
@@ -6225,8 +6234,6 @@ impl Interp {
             ("toUpperCase", StringToUpperCase),
             ("repeat", StringRepeat),
             ("trim", StringTrim),
-            ("trimStart", StringTrimStart),
-            ("trimEnd", StringTrimEnd),
             ("padStart", StringPadStart),
             ("padEnd", StringPadEnd),
             ("isWellFormed", StringIsWellFormed),
@@ -6241,6 +6248,23 @@ impl Interp {
         ] {
             let mf = self.alloc_method(m);
             self.proto_methods.push((p, name, mf));
+        }
+        // `trimStart`/`trimEnd` and their Annex-B references
+        // `trimLeft`/`trimRight` are the SAME function object per pair
+        // (`String.prototype.trimLeft` IS `String.prototype.trimStart`, and
+        // likewise for `trimRight`/`trimEnd`), so a single allocation is bound
+        // under both keys — `Set.prototype.keys`/`values`-style aliasing. The
+        // shared object carries the canonical `.name` (`"trimStart"`/`"trimEnd"`)
+        // and arity 0, so `String.prototype.trimLeft.name === "trimStart"`
+        // (annexB `.../trimLeft/name.js`) and the identity check
+        // (`.../trimLeft/reference-trimStart.js`) both hold.
+        for (canonical, alias, m) in [
+            ("trimStart", "trimLeft", StringTrimStart),
+            ("trimEnd", "trimRight", StringTrimEnd),
+        ] {
+            let mf = self.alloc_named_method(m, canonical, 0);
+            self.proto_methods.push((p, canonical, mf));
+            self.proto_methods.push((p, alias, mf));
         }
     }
 
