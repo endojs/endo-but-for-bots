@@ -1,5 +1,16 @@
 # Endo Design Documents
 
+*Layered on 2026-08-16: added [endo-workflow](endo-workflow.md) to M9 (UX &
+Tooling): a durable, composable workflow engine — `@endo/workflow`, an
+unconfined plugin in the reminder mold interpreting statechart-subset
+definitions over an event-sourced journal (the journal is the audit log),
+with human gates via forms, agent gates via durable promises, fan-out/join
+for specialist reviewers, sub-workflow composition, query/subscribe status
+topics over exo-stream, and a `space-workflow` Chat space; motivating use
+case is the agent feature-implementation/review/CI/approval/merge loop over
+the git capability trio. Summary, dependency graph, M9 row, estimate,
+totals, and timeline synced.*
+
 *Layered on 2026-08-06: added
 [endor-registry-proxy-worker](endor-registry-proxy-worker.md) to M11, moving
 Endor package mapping into a compartment-mapper-backed XS worker and defining a
@@ -18,6 +29,17 @@ totals, and timeline synced.*
 *Last updated: 2026-07-13 (added [ocapn-iroh-netlayer](ocapn-iroh-netlayer.md) to M4 (Networking) as **Complete**: an iroh 1.0 QUIC netlayer for `@endo/ocapn` shipped as `@endo/ocapn-iroh`; summary table, M4 rows, dependency graph, and totals synced. Layered on 2026-07-16 (added [ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) to M4 (Networking): a prototype distributed ocap machine, `@endo/thixotrope`, whose host daemon serves orthogonally persistent, sleepy CapTP workers as OCapN sturdy refs; the host persists its half of each worker session (slot counters, import descriptors, inbound-message journal) and resumes — not re-establishes — sessions across restarts via a new `@endo/captp` `provideImport` seam, with a deterministic journal-replay reference engine standing in for the `rust/endo/xsnap` snapshot engine; prototype, tests, and design landed together; summary table, M4 bucket, dependency graph, per-design estimate, and totals synced. Layered on the 2026-07-12 addition of [cbor-codec](cbor-codec.md) to M4 (Networking): a shared canonical-CBOR primitive codec package, `@endo/cbor`, extracted from the parallel head codecs in `packages/ocapn/src/cbor` and PR #124's `packages/slots/src/cbor.js` per kriskowal's follow-up request on the PR #124 review, with the daemon `envelope.js` codec as an optional later adopter and byte identity with `rust/endo/slots` enforced by shared golden vectors; summary table, M4 bucket and count, and per-design estimate synced. Layered on the 2026-07-10 acceptance and sequencing of the four-layer daemon-worker `importLocation` stack in M3: [registry-capability](registry-capability.md), [mvs-resolver](mvs-resolver.md), [snapshot-mapper](snapshot-mapper.md), and [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) flip Proposed to Not Started together, and the canonical dependency-ordered build plan now lives in [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) § *Phased Implementation* (Phases 1–4 are the serial critical path to `endo run <mount>`; Phase 5 Rust drop-in and Phase 6 XS hosting are parallel-lane follow-ups over the landed `EndoMount.snapshot()` and `makeFromTree` substrate, which gates nothing). Reconciliation deltas: workspace-root discovery assigned to the mapper layer, the workspace-member `RegistryResolution` entry shape pinned in registry-capability (bare-name key, `workspace: true`, no `integrity`), and Phase 2's readable-tree fixture stance vs Phase 4's live-mount snapshot made explicit; summary table, M3 rows, and totals synced. Layered on the 2026-07-09 revision of [agentry-git-eval-scenarios](agentry-git-eval-scenarios.md) in M3 (Remote Access and Coding Capabilities): trimmed the `@endo/agentry` git code-mode eval set to `stage-and-commit`, `conflict-rebase`, and `stack-surgery`, with `stack-surgery` fixture/scorer work landing behind a pending row while live activation depends on [agentry-git-verb-gaps](agentry-git-verb-gaps.md); summary table, M3 row, and per-design estimate synced. Layered on the 2026-07-08 addition of [agentry-git-eval-scenarios](agentry-git-eval-scenarios.md) to M3: a small canonical git code-mode eval set for `@endo/agentry`. Layered on the 2026-07-06 addition of [exo-google-sheets](exo-google-sheets.md) to M7 (Weblets and Integrations): a Google Sheets connector, `@endo/exo-google-sheets`, presenting a spreadsheet as passable read-only / read-write facets over CapTP, backed by a plain `@endo/google-sheets` client that takes a fetch power from the endoclaw-oauth credential capability so the agent never sees the token; summary table, M7 bucket and count, dependency graph, per-design estimate, and milestone totals synced. Layered on the 2026-06-15 targeted post-event M2 closure: M2 (Project Hygiene) flipped to Complete on `llm` since turborepo is in place (PR #121 merged), `break-dev-dependency-cycles` is dissolved on `llm` (all five `@endo/<pkg>-test` sibling packages exist; combined dep+devDep SCC count is 0; self-loop count is 0); the residual upstream-ferry work on PR #235 against master is M2-orthogonal — the cycle is broken on the project branch and the substrate noise it produced is gone. Layered on the 2026-06-03 milestone renumbering pass per maintainer directive on PR #400 review: resequence to integer numbers starting at 1, with no later milestone depending on an earlier one, prioritizing work entrained by the hosted-Gateway-service north star and deferring work that is not. Old → new mapping: M0 → M1 (Complete), M½ → M2 (Complete), M1 → M3 (Remote Access & Coding Capabilities, the gateway substrate), M2 → M4 (Networking), M7 → M5 (Public Hosting & Billing), Milestone B → M6 (MCP Bridge Hosting), M3 → M7 (Weblets & Integrations), Milestone A → M8 (Peer App Sharing), M4 → M9 (UX & Tooling), M5 → M10 (Confinement & Ecosystem), M6 → M11 (Rust Daemon `endor`). Layered on the 2026-06-02 compound pass: (a) MCP-bridge rebucket that added the **Milestone B: MCP Bridge Hosting** cross-cutting cut (since renumbered to M6) and the hosted-Gateway public-hosting bucket (M7, now M5), raised `endo-gateway-mcp` as a Strategic Early Item (now M6 in its own right), and named the gateway-package implementation stack PRs #343, #388–#397 (phases 1–9 landed) under what is now M3; and (b) daemon-worker-import-from-mount decomposed into a four-layer stack per kriskowal CHANGES_REQUESTED on `endojs/endo-but-for-bots#358` (the original 1164-line monolith repurposed as the integration layer; three new sibling designs land alongside as `registry-capability`, `mvs-resolver`, `snapshot-mapper`; existing slug preserved). On the 2026-06-01 pass that added the Peer App Sharing cut (`app-sharing-milestone` + `familiar-deep-link-invitations` + `endo-app-sharing` + `familiar-app-ui-hosting`; now M8). On the 2026-05-22 monolithic `daemon-worker-import-from-mount` landing (sibling of `daemon-make-archive` § Phase 7 that ties `compartment-mapper.importLocation` to a `package.json`-rooted `EndoMount` source and the Rust `endor-npm-registry-proxy` + Go-like MVS resolver exposed as an `EndoRegistry` / `@registry` daemon capability). On the 2026-05-20 mount and git capability plans (three new design docs revised per design-panel review: structured-result-shape migration deferred to Phase 7, `tree(ref)` and `readOnly()` both live on the `Git` cap, `NativeGitBackend` hardening envelope split off the essential `GitBackend` contract, `EndoMountBacking` pinned to a hidden Exo facet, credential-injection mechanism named, native git pinned to >=2.30, restart-mid-operation tests added, open-question debt reduced from 20 to 2; landed on top of the same-day forge-gap-analysis Reference design and the same-day full grooming pass that reconciled milestone-totals, added the 2026-05-20 calibration round, re-projected the Summary by Milestone and Gantt, and refreshed Progress-as-of). On the 2026-05-19 status-only sweep that reconciled Status fields with shipped state on `llm`, the project-hygiene milestone (now M2) extracted from the gateway substrate, endopi raft added, PR #302 consolidation absorbed, and patterns-diagnostic-feedback added)*
 
 *Recently added or revised:
+[endo-workflow](endo-workflow.md) (added 2026-08-16; a generic, durable,
+composable workflow engine for the daemon: `@endo/workflow` as an unconfined
+plugin interpreting hardened statechart-subset definitions over an
+append-only event journal on the virtual file system; effects settle through
+daemon-durable state — mail requests and forms, durable promise/resolver
+formulas, the reminder store — so runs resume across restarts by replaying
+the journal and re-providing settlement ids; guards prefer `@endo/patterns`
+with powerless-compartment pure expressions as the escape hatch; parallel
+fan-out/join, `spawn` sub-workflows, `WorkflowService`/`WorkflowRun`/
+`WorkflowRunAdmin` exo surface, JSONL audit export, `endo workflow` CLI
+verbs, and a `space-workflow` Chat space),
 [endor-registry-proxy-worker](endor-registry-proxy-worker.md) (added
 2026-08-06; an XS-hosted JavaScript mapping phase over a virtual read-only CAS
 package graph, using compartment-mapper's shared package resolver to emit a
@@ -263,6 +285,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
+| [endo-workflow](endo-workflow.md) | 2026-08-16 | 2026-08-16 | Proposed |
 | [cap-std-watch](cap-std-watch.md) | 2026-07-18 | 2026-07-18 | Proposed |
 | [store-write-file](store-write-file.md) | 2026-07-15 | 2026-07-15 | Not Started |
 | [buffered-channel-exo-stream-consolidation](buffered-channel-exo-stream-consolidation.md) | 2026-07-06 | 2026-07-24 | **Complete** |
@@ -583,12 +606,17 @@ flowchart TD
         eskill[endoclaw-skill-registry]
         evoice[endoclaw-voice]
         esheets[exo-google-sheets]
+        ewf[endo-workflow<br/><i>PROPOSED</i>]
         efetch --> cfetch
         cfetch --> eoauth
         ereminder --> eproactive
         eoauth --> ebridge
         eoauth --> eproactive
         eoauth --> esheets
+        ereminder --> ewf
+        dform --> ewf
+        dval --> ewf
+        dgit -.-> ewf
     end
 
     subgraph OCapN
@@ -1136,15 +1164,20 @@ star.)
 | chat-edit-message-ui | Not Started | `/edit` slash command, `e` focus shortcut, hover pencil for editing previously sent messages; revision-history panel |
 | chat-inventory-create-menu | Not Started | `+` button at the top of the inventory; pop-over menu to create whole-cloth inventory items (mounts, scratch spaces, passable / structured values, agents); three-pane wizard for the new-agent flow (harness, inference source by name with Ollama-model discovery and download, endowments over the nine-row capability-bank roster); subsumes `endo-gateway-mcp`'s `+ Add agent` Chat-UI affordance; provisioning entry point migrates from the daemon into Chat via the root host agent pet store, the `@root` endowment, and a sibling encrypted-formula-store design |
 | lal-transcript-memory-management | Not Started | Durable transcript nodes outliving dismissed messages |
+| endo-workflow | Proposed | `@endo/workflow`: durable, composable statechart workflow engine as an unconfined plugin (reminder mold); event-sourced journal on the VFS is the audit log; human gates via forms, agent gates via durable promises, fan-out/join for specialist reviewers, `spawn` sub-workflows, timeouts via `@endo/reminder`; query/subscribe over exo-stream topics; `endo workflow` CLI verbs; `space-workflow` Chat space renders the definition graph, live state, and event timeline. Motivating use case: the agent feature-implementation → multi-reviewer → CI → user-approval → merge loop over the git capability trio |
 | patterns-diagnostic-feedback | Proposed | Opt-in `@endo/patterns/explain-mismatch.js` submodule; non-throwing `explainMismatch({ specimen, pattern, format? })` (mirrors `matches`'s boolean shape) returns a rendered diagnostic string or `undefined`; compact line-per-mismatch default (sized for AI-agent token economy) or opt-in Rust-compiler-style expanded form; zero cost to the production matcher path (submodule appears nowhere on its import graph) |
 | namehub-interface-unification | Proposed | Interface refactor so `EndoMount` and `NameHub` share a `ReadableNameHubInterface`; deferred companion to `filesystem-watchers` |
 
 **Exit criterion:** Chat UI feature-complete for current design scope.
 Commands are non-blocking with visible pending state. Developer tools
 (inspector, workers panel) available. Inventory shows liveness with
-inline cancel. Agent transcript memory is bounded.
+inline cancel. Agent transcript memory is bounded. A durable workflow
+run can be defined, started, restarted mid-flight, queried, subscribed,
+and rendered in the workflow space with its audit log exportable.
 
-**Estimated duration (1 dev):** 5-7 weeks
+**Estimated duration (1 dev):** 9-13 weeks (was 5-7 before the
+2026-08-16 `endo-workflow` addition; the milestone-summary and timeline
+tables carry the reconciled with-review-carry totals)
 
 ---
 
@@ -1495,6 +1528,7 @@ have been remapped: 0 → 1, ½ → 2, 1 → 3, 2 → 4, 3 → 7, 4 → 9,
 | formula-inspector | M | 4-5 days | 9 | Single Chat surface (Value modal back face, gear icon flip plus direct inventory-row entry, read-only at this stage); host-only `getFormula(identifier)` daemon method (removes `@info`); `endo inspect` CLI; promise-formula view with error-tracing integration |
 | workers-panel | M | 4-6 days | 9 | Metrics, sparklines |
 | daemon-retention-paths | M-L | 1.5 weeks | 9 | Snapshot + subscription daemon API, CLI verb, Chat paths panel; Phase 1 in PR #284 (open) |
+| endo-workflow | L-XL | 4-6 weeks | 9 | Six phases: core interpreter + journal store (M-L, host-agnostic, in-memory-tree tests); daemon integration (mail/durable-promise effects, `@pins` recovery; M); composition (fan-out/join, parallel regions, `spawn`, `after`; M); exo surface + topics + CLI verbs (S-M); `space-workflow` Chat space (M); worked feature-change example as restart-exercising integration test (M). L-XL because cross-cutting (new plugin package, CLI, Chat space) though each phase is individually M-or-smaller; timeouts degrade gracefully until `endo-reminder` lands |
 | retention-path-notation | — | — | 9 | Reference; notation + bulk-collection sketch captured for future reference |
 | ~~chat-view-edit-commands~~ | M | — | 9 | ✅ Complete (direct-to-`llm` commit `ae2b074ac` "Blob view and edit" + refinements; `/view` (alias `/cat`) and `/edit` shipped) |
 | chat-edit-message-ui | S-M | 3 days | 9 | `/edit` command, `e` focus shortcut, hover pencil; design merged (PR #88); daemon impl in PR #125 forwarded under bot |
@@ -1549,10 +1583,10 @@ date of this pass.
 | M6: MCP Bridge Hosting (was Milestone B) | 1 net-new (`endo-gateway-mcp` impl); cross-milestone slices in M3 (P0) and M5 (P2/P3/P4 gaps) | ~2 weeks own work + ~6-9 weeks across P0-P4 | gated by M3 gateway-package phases 2/7/8 merge cadence |
 | M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
 | M8: Peer App Sharing (was Milestone A) | 3 net-new (`familiar-deep-link-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); existing constituents counted under M3/M4/M7 | 2-3 weeks | 3-5 weeks |
-| M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
+| M9: UX & Tooling (was M4) | 14 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`, `endo-workflow`) | 13-18 weeks | 15-20 weeks |
 | M10: Confinement & Ecosystem (was M5) | 6 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
 | M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
-| **Total remaining** | **62** + 7 M5 rows (4 in-flight + 3 design gaps) + 1 M6 own-work row | **~61-83 weeks** + M5 4-6 weeks + M6 ~2 weeks | **~73-99 weeks** |
+| **Total remaining** | **63** + 7 M5 rows (4 in-flight + 3 design gaps) + 1 M6 own-work row | **~65-89 weeks** + M5 4-6 weeks + M6 ~2 weeks | **~77-105 weeks** |
 
 The 2026-05-20 reconciliation corrects a counting gap in the prior
 snapshot's narrative: M1, M3, and M4 had absorbed new rows since the
@@ -1599,7 +1633,7 @@ gantt
     Peer App Sharing              :m8, after m7, 3w
 
     section Milestone 9
-    UX & Tooling                  :m9, after m8, 11w
+    UX & Tooling                  :m9, after m8, 15w
 
     section Milestone 10
     Confinement & Ecosystem       :m10, after m9, 20w
@@ -1630,9 +1664,9 @@ dates project from that anchor at the upper-bound effort.
 | M6: MCP Bridge Hosting (was Milestone B) | ~2 weeks own work | 19-24 weeks | Mid October to late November 2026 (gated by M3 gateway-package phases 2/7/8 merge cadence) |
 | M7: Weblets & Integrations (was M3) | 6-8 weeks | 25-32 weeks | Mid December 2026 to mid January 2027 |
 | M8: Peer App Sharing (was Milestone A) | 2-3 weeks | 27-35 weeks | Late December 2026 to early February 2027 |
-| M9: UX & Tooling (was M4) | 9-12 weeks | 36-47 weeks | Mid February to mid April 2027 |
-| M10: Confinement & Ecosystem (was M5) | 14-20 weeks | 50-67 weeks | Late May to early September 2027 |
-| M11: Rust Daemon (`endor`) (was M6) | 15-22 weeks | 65-89 weeks | Q3 to Q4 2027 (research-heavy; may run in parallel) |
+| M9: UX & Tooling (was M4) | 13-18 weeks | 40-53 weeks | Mid March to late May 2027 |
+| M10: Confinement & Ecosystem (was M5) | 14-20 weeks | 54-73 weeks | Late June to mid October 2027 |
+| M11: Rust Daemon (`endor`) (was M6) | 15-22 weeks | 69-95 weeks | Q4 2027 to Q1 2028 (research-heavy; may run in parallel) |
 
 *M3 and M7 (weblets) are less order-dependent and can be interleaved
 once their respective dependencies have landed; the M5/M6 hosted-Gateway
