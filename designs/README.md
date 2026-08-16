@@ -4,14 +4,16 @@
 Hosting): `@endo/claude`, a hermetically-sandboxed `claude -p` that provides an
 Endo guest its LLM inference from a Claude subscription, confined so its only
 capability surface is that one guest facet's MCP projection. The confinement is a
-**combination** of flags, not `--bare` alone — `--bare` plus `--strict-mcp-config`
-(MCP auto-discovery) plus `--setting-sources ""` (settings layers) plus `--tools ""`
-+ `--disable-slash-commands` (built-ins and skills), then a membership-validated
-facet-derived `mcp__<server>__<tool>` allow-list and never `--resume` — run inside a
-required `@endo/claude-sandbox` OS slice for any guest-influenced prompt. The inverse
-direction of the two minion.town companion designs (mcp-endo-guest,
-mcp-daemon-guest-tools). Summary table, M6 constituent note, dependency graph
-(including the `endo-posix-sandbox` prerequisite edge), estimate, and totals synced.*
+**combination** of flags, not `--bare` alone (`--bare` plus `--strict-mcp-config`
+for MCP auto-discovery, plus `--setting-sources ""` for settings layers, plus
+`--tools ""` plus `--disable-slash-commands` for built-ins and skills), then a
+membership-validated facet-derived `mcp__<server>__<tool>` allow-list and never
+`--resume`, run inside a required `@endo/claude-sandbox` OS slice for any
+guest-influenced prompt. The inverse direction of the two minion.town companion
+designs (mcp-endo-guest, mcp-daemon-guest-tools). Summary table, M6 constituent note,
+dependency graph (including the `endo-posix-sandbox` prerequisite edge), per-design
+estimate, and design-count totals synced; M6's own-work rollup now folds in
+endo-claude's ~1-1.5 weeks.*
 
 *Layered on 2026-08-06: added
 [endor-registry-proxy-worker](endor-registry-proxy-worker.md) to M11, moving
@@ -1024,8 +1026,9 @@ MCP client (Claude Desktop, etc.) with the agent's bearer token +
 the gateway's `/mcp` URL, and the MCP client successfully calls the
 agent's tools.
 
-**Estimated added effort (M6's own MCP-termination work):** ~2 weeks
-per phase plan in [endo-gateway-mcp](endo-gateway-mcp.md). The wider
+**Estimated added effort (M6's own MCP-termination work):** ~3-3.5 weeks
+(~2 weeks for `endo-gateway-mcp` per its phase plan, plus ~1-1.5 weeks for the
+constituent [endo-claude](endo-claude.md) design added 2026-08-16, below). The wider
 shortest-route cut spans ~6-9 weeks across M3's P0 remainder
 (gateway phases 10 and 11, ~2-3 weeks), M5's P3 Stripe adapter
 design + implementation (~1 week), and M5's P4 OAuth bonding + key
@@ -1581,13 +1584,13 @@ date of this pass.
 | M3: Remote Access & Tools (was M1) | 18 (`gateway-package`, `daemon-docker-selfhost`, `daemon-agent-tools`, `endo-agent-tools`, `agentry-agent-builder`, `agentry-git-verb-gaps`, `agentry-git-eval-scenarios`, `daemon-mount`, `daemon-worker-import-from-mount`, `registry-capability`, `mvs-resolver`, `snapshot-mapper`, `filesystem-watchers`, `daemon-locator-terminology`, `daemon-rename-to-manager`, `daemon-xs-worker-snapshot`, `endoclaw-timer`, `endoclaw-network-fetch`) | 9-13 weeks | 11-15 weeks |
 | M4: Networking (was M2) | 8 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrup-framing`, `cbors`, `cbor-codec`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`, `ocapn-orthogonal-persistence`) | 5-6 weeks | 6-8 weeks |
 | M5: Public Hosting & Billing (was M7) | 4 in-flight on PR #356 stack (`gateway-package` counted under M3; `gateway-packaging-ci`, `gateway-aws-deployment`, `gateway-aws-attuned` counted here) + 3 design gaps (`gateway-oauth-bonding`, `gateway-key-recovery`, `gateway-stripe-adapter`) | 4-6 weeks design + impl | merge cadence of PRs #343 and #356 |
-| M6: MCP Bridge Hosting (was Milestone B) | 1 net-new (`endo-gateway-mcp` impl); cross-milestone slices in M3 (P0) and M5 (P2/P3/P4 gaps) | ~2 weeks own work + ~6-9 weeks across P0-P4 | gated by M3 gateway-package phases 2/7/8 merge cadence |
+| M6: MCP Bridge Hosting (was Milestone B) | 2 net-new (`endo-gateway-mcp` impl, `endo-claude`); cross-milestone slices in M3 (P0) and M5 (P2/P3/P4 gaps) | ~3-3.5 weeks own work (endo-gateway-mcp ~2 weeks + endo-claude ~1-1.5 weeks) + ~6-9 weeks across P0-P4 | gated by M3 gateway-package phases 2/7/8 merge cadence |
 | M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
 | M8: Peer App Sharing (was Milestone A) | 3 net-new (`familiar-deep-link-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); existing constituents counted under M3/M4/M7 | 2-3 weeks | 3-5 weeks |
 | M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
 | M10: Confinement & Ecosystem (was M5) | 6 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
 | M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
-| **Total remaining** | **62** + 7 M5 rows (4 in-flight + 3 design gaps) + 1 M6 own-work row | **~61-83 weeks** + M5 4-6 weeks + M6 ~2 weeks | **~73-99 weeks** |
+| **Total remaining** | **63** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
 
 The 2026-05-20 reconciliation corrects a counting gap in the prior
 snapshot's narrative: M1, M3, and M4 had absorbed new rows since the
