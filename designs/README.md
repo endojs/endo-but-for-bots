@@ -24,11 +24,19 @@ model (definitions are programs, `define()` host-only, factory binding
 vouches per content hash); gate-settlement provenance verification with
 `event.unauthorized` journaling; cascading factory revocation; hash-chain
 tamper evidence; and an honest no-Node-metering stance for guard
-expressions. Implementation began the same day: Phase 1 (the
-host-agnostic interpreter core — validation diagnostics,
-powerless-compartment expressions, the pure fold, the simulator, and the
-hash-chained journal store, 25 ava tests over an in-memory filesystem)
-landed as `packages/workflow`, flipping the design to In Progress.
+expressions. Implementation began the same day and carried through phases 1-5:
+`packages/workflow` holds the host-agnostic interpreter core (validation
+diagnostics, powerless-compartment expressions, the pure fold, the
+simulator, the hash-chained journal store) plus the durable engine
+(effect execution over an injected delivery seam, fanout joins, spawn
+with abort cascade, define-time fragments, restart recovery with
+idempotent re-issue, the guarded observer/controller/admin exo kit,
+factories with cascading revocation, the seq-resume sync client, and the
+unconfined plugin entry), and `packages/space-workflow` holds the Chat
+space (runs rail, layered statechart SVG with live overlays, timeline,
+time-travel scrubber); 34 ava tests including restart-mid-review drills.
+CLI verbs, chat-app registration, and the live-lal Phase 6 wiring
+remain; the design is In Progress.
 Summary, dependency graph, M9 row, estimate, totals, and timeline
 synced.*
 
@@ -1196,7 +1204,7 @@ star.)
 | chat-edit-message-ui | Not Started | `/edit` slash command, `e` focus shortcut, hover pencil for editing previously sent messages; revision-history panel |
 | chat-inventory-create-menu | Not Started | `+` button at the top of the inventory; pop-over menu to create whole-cloth inventory items (mounts, scratch spaces, passable / structured values, agents); three-pane wizard for the new-agent flow (harness, inference source by name with Ollama-model discovery and download, endowments over the nine-row capability-bank roster); subsumes `endo-gateway-mcp`'s `+ Add agent` Chat-UI affordance; provisioning entry point migrates from the daemon into Chat via the root host agent pet store, the `@root` endowment, and a sibling encrypted-formula-store design |
 | lal-transcript-memory-management | Not Started | Durable transcript nodes outliving dismissed messages |
-| endo-workflow | In Progress | `@endo/workflow`: durable, composable statechart workflow engine as an unconfined plugin (reminder mold); event-sourced journal on the VFS is the audit log; human gates via forms, agent gates via durable promises, fan-out/join for specialist reviewers, `spawn` sub-workflows and define-time fragments, timeouts via `@endo/reminder`; one seq-addressed sync primitive (gapless `history(fromSeq)` + shared client-side fold) over exo-stream topics; durable `WorkflowFactory` grants with non-escalating derivation; devex via `validateDefinition` diagnostics, `simulateRun`, and Mermaid preview; debugging via `stateAt` time travel, `explain()` stuck reports, pause/resume, and `forkSimulation`; `endo workflow` CLI verbs; `space-workflow` Chat space with live statechart overlays and a time-travel scrubber. Motivating use case: the agent feature-implementation → multi-reviewer → CI → user-approval → merge loop over the git capability trio. Phase 1 (interpreter core: validation, expressions, fold, simulator, hash-chained journal) landed as `packages/workflow`; phases 2-6 remain |
+| endo-workflow | In Progress | `@endo/workflow`: durable, composable statechart workflow engine as an unconfined plugin (reminder mold); event-sourced journal on the VFS is the audit log; human gates via forms, agent gates via durable promises, fan-out/join for specialist reviewers, `spawn` sub-workflows and define-time fragments, timeouts via `@endo/reminder`; one seq-addressed sync primitive (gapless `history(fromSeq)` + shared client-side fold) over exo-stream topics; durable `WorkflowFactory` grants with non-escalating derivation; devex via `validateDefinition` diagnostics, `simulateRun`, and Mermaid preview; debugging via `stateAt` time travel, `explain()` stuck reports, pause/resume, and `forkSimulation`; `endo workflow` CLI verbs; `space-workflow` Chat space with live statechart overlays and a time-travel scrubber. Motivating use case: the agent feature-implementation → multi-reviewer → CI → user-approval → merge loop over the git capability trio. Phases 1-5 landed as `packages/workflow` (interpreter core + durable engine: effects over a delivery seam, fanout joins, spawn cascade, fragments, restart recovery, guarded run kit, factories, sync client, plugin entry) and `packages/space-workflow` (Chat space with live statechart and scrubber); CLI verbs, chat registration, and the live-agent Phase 6 wiring remain |
 | patterns-diagnostic-feedback | Proposed | Opt-in `@endo/patterns/explain-mismatch.js` submodule; non-throwing `explainMismatch({ specimen, pattern, format? })` (mirrors `matches`'s boolean shape) returns a rendered diagnostic string or `undefined`; compact line-per-mismatch default (sized for AI-agent token economy) or opt-in Rust-compiler-style expanded form; zero cost to the production matcher path (submodule appears nowhere on its import graph) |
 | namehub-interface-unification | Proposed | Interface refactor so `EndoMount` and `NameHub` share a `ReadableNameHubInterface`; deferred companion to `filesystem-watchers` |
 

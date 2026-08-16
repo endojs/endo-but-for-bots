@@ -187,6 +187,9 @@ export const validateDefinition = allegedDefinition => {
           'a final state may not declare entry, on, or after',
         );
       }
+      // A final state may declare an `output` expression over the run's
+      // context; a parent run receives its value in `child.finished`.
+      checkExpression(`${statePath}.output`, state.output);
       return;
     }
 
@@ -210,7 +213,24 @@ export const validateDefinition = allegedDefinition => {
       } else {
         issuedAs.add(effect.as);
       }
-      if (effect.effect !== 'emit') {
+      if (effect.effect === 'spawn') {
+        if (typeof effect.workflow !== 'string' || effect.workflow === '') {
+          report(
+            'error',
+            effectPath,
+            'spawn requires a workflow definition name',
+          );
+        }
+        for (const [childSlot, parentReference] of Object.entries(
+          effect.participants ?? {},
+        )) {
+          checkParticipantReference(
+            `${effectPath}.participants.${childSlot}`,
+            parentReference,
+          );
+        }
+        checkExpression(`${effectPath}.input`, effect.input);
+      } else if (effect.effect !== 'emit') {
         if (typeof effect.to !== 'string') {
           report('error', effectPath, 'effect requires a participant in to');
         } else {

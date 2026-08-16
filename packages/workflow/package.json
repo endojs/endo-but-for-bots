@@ -32,6 +32,12 @@
     "./src/interpret.js": "./src/interpret.js",
     "./src/simulate.js": "./src/simulate.js",
     "./src/journal.js": "./src/journal.js",
+    "./src/fragment.js": "./src/fragment.js",
+    "./src/engine.js": "./src/engine.js",
+    "./src/sync.js": "./src/sync.js",
+    "./src/graph.js": "./src/graph.js",
+    "./src/plugin.js": "./src/plugin.js",
+    "./src/interfaces.js": "./src/interfaces.js",
     "./src/types.js": "./src/types.d.ts",
     "./package.json": "./package.json"
   },
@@ -45,8 +51,11 @@
   "dependencies": {
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
+    "@endo/exo": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/hex": "workspace:^",
+    "@endo/patterns": "workspace:^",
+    "@endo/pubsub": "workspace:^",
     "@endo/sha256": "workspace:^"
   },
   "devDependencies": {

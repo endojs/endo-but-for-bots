@@ -43,13 +43,68 @@ Phase 1 (the host-agnostic interpreter core) is implemented as
   and duplicate settlements, fork-to-sandbox, journal reload/fold
   equivalence, tamper detection).
 
-Deviations from the design so far: none of substance.
-Phase 1 scopes provenance to correlation (sender attribution is engine
-work in Phase 2), records fanout as a single pending effect (per-member
-tracking is Phase 3), and defers id redaction/aliasing to the Phase 4
-surface where observer facets exist.
-Phases 2-6 (daemon plugin, composition, sync/factories/CLI surface, the
-Chat space, the live worked example) are not started.
+Phases 2-5 followed in the same package plus a new
+`packages/space-workflow`:
+
+- `src/engine.js` — the durable engine over the core: definition and
+  fragment registries (content-addressed, persisted, inlined at
+  `define()` time via `src/fragment.js`); effect execution through an
+  injected `deliver` seam (`request`, `form`, `call` with retry,
+  `fanout` with per-member `fanout.result` journaling and
+  `all`/`any`/quorum joins, `spawn` child runs with input/output mapping
+  and downward-only abort cascade, `emit`); per-run alias tables (a deep
+  data check aliases any value carrying a capability, so refs never
+  enter the journal); `after` timers re-armed from journaled entry
+  times; restart recovery (re-issue under original idempotency keys,
+  `indeterminate` routing for interrupted non-idempotent calls,
+  `recovery.completed`); the observer/controller/admin exo kit with
+  `M.interface` guards (`src/interfaces.js`) including passive
+  `explain()` and journaled admin overrides; factories with
+  non-escalating `with()` derivation and cascading revocation.
+- `src/sync.js` — `makeWorkflowSyncClient`: the seq-resume sync contract
+  over `history(fromSeq)` (gapless subscribe-first splice in the
+  engine), client-side fold, and `stateAt` scrubbing.
+- `src/graph.js` — `renderDefinition` graph model and `renderMermaid`.
+- `src/plugin.js` — the unconfined daemon entry (`make(powers)`,
+  reminder mold, `workflow-store` by name, worker timers until
+  endo-reminder).
+- `packages/space-workflow` — the Chat space: runs rail over
+  `followRuns()` with run trees, deterministic layered statechart SVG
+  with active/ghost/busy overlays, virtualized-enough timeline with
+  per-record expansion, and a time-travel scrubber over the client-side
+  fold. Registered in the browser-realm eslint roster; wiring into
+  `packages/chat`'s space registry remains.
+- `test/engine.test.js` — nine integration tests: the feature-change
+  loop end to end over a stub delivery seam, restart-mid-review
+  resuming with only the missing reviewer re-asked, indeterminate-call
+  handling after restart, factory limits/derivation/revocation-cascade,
+  spawn output and abort cascade, fake-clock timeouts with pause
+  deferral, sync-client folding and scrubbing, fragment inlining run
+  through the engine, and `explain()`.
+
+Deviations and remaining work, honestly stated:
+
+- Parallel regions are not implemented; `fanout` joins and `spawn`
+  children cover R8's fan-out/join in practice, and fragments provide
+  the namespacing the compound-state grammar was for. Revisit if a real
+  definition needs true orthogonal regions.
+- Provenance is correlation plus structural attribution (each
+  settlement arrives on its own effect's promise). Verifying mail-reply
+  sender identity against the bound participant is daemon-glue work in
+  the plugin's delivery seam.
+- Participant capabilities do not survive restart in the core engine;
+  the `rebindParticipants` recovery hook is the seam, and pet-store
+  binding in the plugin is follow-up. Factory bindings likewise live in
+  memory (factory metadata persistence needs the same capability-store
+  seam).
+- The pause queue is in-memory; settlements arriving while paused
+  across a restart are recovered by effect re-issue, not by queue
+  replay.
+- `endo workflow` CLI verbs, chat-app registration of the space,
+  `probe()` (active liveness), and the `guard.evaluated` trace flag are
+  not started.
+- The Phase 6 live-lal wiring behind an env gate remains; the engine
+  integration tests cover the same loop with deterministic stubs.
 
 ## What is the Problem Being Solved?
 

@@ -76,7 +76,8 @@ export const applyEvent = (runState, record) => {
     case 'effect.settled':
     case 'effect.rejected':
     case 'fanout.joined':
-    case 'form.value': {
+    case 'form.value':
+    case 'child.finished': {
       return advance({
         pending: withoutPending(/** @type {string} */ (record.as)),
       });
@@ -110,6 +111,7 @@ export const applyEvent = (runState, record) => {
     case 'signal.injected':
     case 'guard.evaluated':
     case 'recovery.completed':
+    case 'fanout.result':
     case 'emit':
     default: {
       return advance({});

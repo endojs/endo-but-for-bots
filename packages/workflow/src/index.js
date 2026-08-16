@@ -29,3 +29,7 @@ export {
   hashRecord,
   findChainBreak,
 } from './journal.js';
+export { inlineFragments } from './fragment.js';
+export { makeWorkflowEngine } from './engine.js';
+export { makeWorkflowSyncClient } from './sync.js';
+export { renderDefinition, renderMermaid } from './graph.js';

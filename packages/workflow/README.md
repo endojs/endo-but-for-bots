@@ -1,12 +1,54 @@
 # `@endo/workflow`
 
-Durable, composable statechart workflow engine core for the Endo daemon.
+Durable, composable statechart workflow engine for the Endo daemon.
 Design: [`designs/endo-workflow.md`](../../designs/endo-workflow.md).
 
-This package is **Phase 1** of the design: the host-agnostic interpreter
-core.
-It knows nothing about the daemon — no mail, no formulas, no timers — and
-everything in it runs under plain SES lockdown.
+The package layers a durable **engine** over a pure, host-agnostic
+**interpreter core**.
+The core knows nothing about the daemon — no mail, no formulas, no
+timers — and everything in it runs under plain SES lockdown; the engine
+takes its authority through an injected powers seam, so the daemon
+plugin and the tests drive the same code.
+
+## The engine (`src/engine.js`)
+
+`makeWorkflowEngine({ storeRoot, deliver, now, makeId, makeTimer?,
+rebindParticipants?, warn? })` provides:
+
+- **Definition and fragment registries** — content-addressed, persisted,
+  fragments inlined at `define()` time (`src/fragment.js`).
+- **Durable runs** — hash-chained journals under `runs/<runId>/`,
+  restart recovery that re-folds journals, re-issues pending
+  `request`/`form`/fanout deliveries under their original idempotency
+  keys, routes interrupted non-idempotent `call`s to `onError` as
+  `indeterminate`, re-arms `after` timers from journaled entry times,
+  and journals `recovery.completed`.
+- **The observer/controller/admin run kit** — cumulative exo facets with
+  `M.interface` guards (`src/interfaces.js`): observers are read-only
+  and see capability references only as `ref:n` aliases (the alias
+  table is engine-private); `signal` needs the controller; overrides
+  (`pause`/`resume`/`abort`/`retryEffect`/`forceTransition`/
+  `injectEvent`/`resolveRef`) need the admin and journal their actor.
+- **Effects** — `request`, `form`, `call` (with retry), `fanout` with
+  per-member results and `all`/`any`/quorum joins, `spawn` child runs
+  with input/output mapping and downward-only abort cascade, `emit`.
+- **Factories** — `makeFactory({ definition, participants, input,
+  limits })`: the attenuation unit for granting starts without the
+  underlying capabilities; non-escalating `with()` derivation;
+  revocation cascades down the derivation tree.
+- **Syncing** — `status()` carries `throughSeq`; `history(fromSeq)` is a
+  gapless subscribe-first splice of journal replay and the live topic;
+  `makeWorkflowSyncClient` (`src/sync.js`) folds it client-side and
+  resumes from `lastSeq + 1` on reconnect.
+- **Rendering** — `renderDefinition` (the graph model the
+  `@endo/space-workflow` Chat space lays out) and `renderMermaid`
+  (`stateDiagram-v2` for review in markdown).
+
+`src/plugin.js` is the unconfined daemon entry in the `@endo/reminder`
+mold (`make(powers)` resolving `workflow-store` by name, pinned via
+`@pins`).
+
+## The interpreter core
 
 - `validateDefinition(definition)` — structured diagnostics
   (`{ severity, path, message }`), not a bare verdict: dangling targets,

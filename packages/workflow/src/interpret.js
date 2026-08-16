@@ -31,6 +31,7 @@ const SETTLEMENT_TYPES = harden([
   'effect.rejected',
   'fanout.joined',
   'form.value',
+  'child.finished',
 ]);
 
 /**
@@ -52,10 +53,18 @@ const whenMatches = (when, event) => {
 export const makeInterpreter = allegedDefinition => {
   const definition = assertValidDefinition(allegedDefinition);
 
-  // Compile every guard and reducer once, at interpreter construction.
+  // Compile every guard, reducer, and spawn-input expression once, at
+  // interpreter construction.
   /** @type {Map<TransitionDeclaration, { guard?: (input: unknown) => unknown, assign?: (input: unknown) => unknown }>} */
   const compiled = new Map();
+  /** @type {Map<EffectDeclaration, (input: unknown) => unknown>} */
+  const compiledInputs = new Map();
   for (const state of Object.values(definition.states)) {
+    for (const effect of state.entry ?? []) {
+      if (effect.input !== undefined) {
+        compiledInputs.set(effect, compileExpression(effect.input));
+      }
+    }
     for (const [, candidates] of normalizeHandlers(state.on)) {
       for (const transition of candidates) {
         compiled.set(transition, {
@@ -72,6 +81,33 @@ export const makeInterpreter = allegedDefinition => {
     }
   }
 
+  // A call arg that is exactly one placeholder resolves to the raw
+  // context value; any other string is template-substituted (delimited
+  // JSON data); non-strings pass through.
+  const wholePlaceholder = /^\$\{context\.([\w.]+)\}$/u;
+  /**
+   * @param {unknown} arg
+   * @param {Record<string, unknown>} context
+   */
+  const resolveArg = (arg, context) => {
+    if (typeof arg !== 'string') {
+      return arg;
+    }
+    const match = wholePlaceholder.exec(arg);
+    if (match === null) {
+      return substituteTemplate(arg, context);
+    }
+    /** @type {unknown} */
+    let value = context;
+    for (const segment of match[1].split('.')) {
+      if (typeof value !== 'object' || value === null) {
+        return undefined;
+      }
+      value = /** @type {Record<string, unknown>} */ (value)[segment];
+    }
+    return value;
+  };
+
   /**
    * Entry events for a state: its `effect.issued` records, plus
    * `run.finished` when the state is final.
@@ -85,15 +121,52 @@ export const makeInterpreter = allegedDefinition => {
     /** @type {JournalEventInput[]} */
     const events = [];
     for (const effect of state.entry ?? []) {
+      if (effect.effect === 'emit') {
+        // Emit completes at issue: it is journaled and published, never
+        // pending.
+        events.push(
+          harden({
+            type: 'emit',
+            as: effect.as,
+            ...(effect.description === undefined
+              ? {}
+              : {
+                  description: substituteTemplate(effect.description, context),
+                }),
+          }),
+        );
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      const inputExpression = compiledInputs.get(effect);
       events.push(
         harden({
           type: 'effect.issued',
           as: effect.as,
           effect: effect.effect,
-          to: effect.to,
+          ...(effect.to === undefined ? {} : { to: effect.to }),
           ...(effect.method === undefined ? {} : { method: effect.method }),
+          ...(effect.args === undefined
+            ? {}
+            : { args: effect.args.map(arg => resolveArg(arg, context)) }),
           ...(effect.attach === undefined ? {} : { attach: effect.attach }),
           ...(effect.join === undefined ? {} : { join: effect.join }),
+          ...(effect.retry === undefined ? {} : { retry: effect.retry }),
+          ...(effect.idempotent === undefined
+            ? {}
+            : { idempotent: effect.idempotent }),
+          ...(effect.fields === undefined ? {} : { fields: effect.fields }),
+          ...(effect.workflow === undefined
+            ? {}
+            : { workflow: effect.workflow }),
+          ...(effect.participants === undefined
+            ? {}
+            : { participants: effect.participants }),
+          ...(inputExpression === undefined
+            ? {}
+            : {
+                childInput: evaluateExpression(inputExpression, { context }),
+              }),
           ...(effect.description === undefined
             ? {}
             : { description: substituteTemplate(effect.description, context) }),
@@ -265,6 +338,18 @@ export const makeInterpreter = allegedDefinition => {
     return harden([harden({ ...event })]);
   };
 
-  return harden({ begin, handle });
+  /** @type {WorkflowInterpreter['enter']} */
+  const enter = (stateName, context) => harden(enterState(stateName, context));
+
+  /** @type {WorkflowInterpreter['outputOf']} */
+  const outputOf = (stateName, context) => {
+    const state = definition.states[stateName];
+    if (state === undefined || state.output === undefined) {
+      return undefined;
+    }
+    return evaluateExpression(compileExpression(state.output), { context });
+  };
+
+  return harden({ begin, handle, enter, outputOf, definition });
 };
 harden(makeInterpreter);
