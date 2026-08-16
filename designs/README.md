@@ -16,8 +16,16 @@ definition devex (`validateDefinition` diagnostics, `simulateRun`, Mermaid
 graph preview), debuggability (`stateAt` time travel, `explain()` stuck
 reports, pause/poke/resume, `forkSimulation`), the live space's scrubber
 and authority-scoped affordances, and define-time fragment composition.
-Summary, dependency graph, M9 row, estimate, totals, and timeline
-synced.*
+Hardened same day per an ocap/security review: formula ids are redeemable
+bearer secrets, so journal events and exports are redacted to per-run
+opaque aliases at the observer boundary; runs become three-facet
+observer/controller/admin kits in the `exo-git` mold; an explicit trust
+model (definitions are programs, `define()` host-only, factory binding
+vouches per content hash); gate-settlement provenance verification with
+`event.unauthorized` journaling; cascading factory revocation; hash-chain
+tamper evidence; and an honest no-Node-metering stance for guard
+expressions. Summary, dependency graph, M9 row, estimate, totals, and
+timeline synced.*
 
 *Layered on 2026-08-06: added
 [endor-registry-proxy-worker](endor-registry-proxy-worker.md) to M11, moving
@@ -54,7 +62,11 @@ an authority-free client-side fold — plus durable `WorkflowFactory`
 grants, definition devex via `validateDefinition` / `simulateRun` /
 Mermaid preview, debuggability via `stateAt` / `explain()` /
 pause-resume / `forkSimulation`, the space's time-travel scrubber, and
-define-time fragment composition),
+define-time fragment composition; hardened per ocap review with
+observer-boundary id redaction — formula ids are redeemable bearer
+secrets — three-facet run kits, an explicit per-hash trust model,
+gate-provenance verification, cascading factory revocation, and
+hash-chained tamper-evident journals),
 [endor-registry-proxy-worker](endor-registry-proxy-worker.md) (added
 2026-08-06; an XS-hosted JavaScript mapping phase over a virtual read-only CAS
 package graph, using compartment-mapper's shared package resolver to emit a

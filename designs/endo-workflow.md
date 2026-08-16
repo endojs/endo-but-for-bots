@@ -113,6 +113,56 @@ guest's pet store) rather than formula-graph-native, and the declarative
 definition language must stay disciplined to avoid becoming a bad
 programming language (addressed below with powerless confined reducers).
 
+**Minimizing the unconfined surface.**
+Unlike the reminder scheduler, which holds almost nothing, this engine is
+an authority concentrator: every factory's bound capabilities and every
+run's participants — writer facets, CI shells — are reachable from it.
+An unconfined vault is an unacceptable audit burden, so the package is
+structured to keep the unconfined shell minimal: the interpreter core
+(the fold, guard/reducer evaluation, definition validation, the journal
+store over `fs/extended`) requires no Node authority and is written as
+confined, authority-free modules; the unconfined shell contributes only
+what SES removes — timers (which [endo-reminder](endo-reminder.md)
+eventually absorbs entirely) — plus provisioning glue.
+Auditing the engine's trusted computing base then means auditing a small
+shell, not the whole package, and a future fully-confined deployment (a
+confined caplet granted mail, promise formulation, and reminder powers)
+is a packaging change, not a redesign.
+
+### Trust model
+
+Naming what is trusted with what, before the mechanisms:
+
+- **A definition is a program, not inert data.**
+  Its effects wield whatever capabilities are bound to its participant
+  slots: `call` reaches any method on a bound capability, and the
+  attenuator table (`repo:readOnly`) is declared *by the definition*, so
+  it documents intent but constrains nothing against a hostile author.
+  Reviewing a definition (the graph preview and simulator are the review
+  tools) is therefore part of granting it authority.
+- **`define()` is host-only.**
+  Guests never register definitions; they receive factories.
+- **Binding is vouching.**
+  Creating a factory binds capabilities to one content-addressed
+  definition hash; that act asserts "I trust this exact program with
+  these capabilities."
+  A definition upgrade never silently inherits bindings — a new hash
+  needs a new factory (or an explicit re-bind), so trust is re-asserted
+  per version.
+- **Participant input is untrusted data all the way down.**
+  Context values may originate from factory callers (guests) and event
+  payloads from participants; guards and reducers treat them as data by
+  construction (hardened inputs, no authority).
+  Where such values are substituted into text delivered to other
+  participants — request and form descriptions read by humans and by LLM
+  agents — the engine renders them visibly delimited as quoted data, so
+  agent harnesses can distinguish workflow instructions from
+  participant-supplied content rather than ingesting an injection as
+  instruction.
+- **The engine's own overrides are inside the audit boundary.**
+  Admin methods exist, but every one journals its actor; there is no
+  unaudited path to move a run.
+
 ### Formalism choice
 
 | Formalism | Fan-out/join | Renderable | Upgrade-safe | Complexity |
@@ -156,6 +206,18 @@ touches the world is the closed effect vocabulary below, aimed at declared
 participants.
 This preserves replay: reducers are pure functions of `(context, event)`,
 so folding the journal always reproduces the same state.
+
+One limit is stated honestly rather than papered over: **SES on Node
+cannot meter evaluation**, so a `while (true)` guard would hang the
+engine turn.
+The primary control is the trust model — definitions come only from the
+host, and reviewing them is part of granting authority.
+Defense in depth comes from a **define-time syntactic budget**: expression
+length caps and a grammar subset with no loops, no recursion, and no
+`Function` — enforced by `validateDefinition` before a definition is ever
+runnable.
+True metering (XS) or per-evaluation worker isolation is future hardening,
+not something this design pretends to have on Node.
 
 ### Storage
 
@@ -225,12 +287,12 @@ const featureChange = harden({
         as: 'implementation',
       }],
       on: {
-        'task.settled': {
+        'effect.settled': {
           when: { as: 'implementation' },
-          assign: '({ context, event }) => ({ ...context, changeSetId: event.valueId })',
+          assign: '({ context, event }) => ({ ...context, changeSetId: event.ref })',
           target: 'reviewing',
         },
-        'task.rejected': { when: { as: 'implementation' }, target: 'failed' },
+        'effect.rejected': { when: { as: 'implementation' }, target: 'failed' },
       },
     },
     reviewing: {
@@ -262,8 +324,8 @@ const featureChange = harden({
                 args: ['${context.branch}'], as: 'ci-run',
                 retry: { max: 2, backoff: 'exponential' } }],
       on: {
-        'task.settled': { when: { as: 'ci-run' }, target: 'approving' },
-        'task.rejected': { when: { as: 'ci-run' }, target: 'implementing' },
+        'effect.settled': { when: { as: 'ci-run' }, target: 'approving' },
+        'effect.rejected': { when: { as: 'ci-run' }, target: 'implementing' },
       },
     },
     approving: {
@@ -288,8 +350,8 @@ const featureChange = harden({
       entry: [{ effect: 'call', to: 'repo', method: 'merge',
                 args: ['${context.branch}'], as: 'merge' }],
       on: {
-        'task.settled': { when: { as: 'merge' }, target: 'done' },
-        'task.rejected': { when: { as: 'merge' }, target: 'failed' },
+        'effect.settled': { when: { as: 'merge' }, target: 'done' },
+        'effect.rejected': { when: { as: 'merge' }, target: 'failed' },
       },
     },
     done: { final: 'succeeded' },
@@ -322,12 +384,13 @@ a `runId`, a `meta.json`, and the first journal event.
 Every change to a run is an event:
 
 ```
-{ seq, at, type, ...payload }
+{ seq, at, prev, type, ...payload }
 
-run.started        { input, participants: { name: locator... } }
+run.started        { input, participants: { name: ref... }, factory? }
 effect.issued      { as, effect, to, idempotencyKey }
-effect.settled     { as, valueId | value }
+effect.settled     { as, ref | value }
 effect.rejected    { as, reason }
+event.unauthorized { as?, type, from, reason }
 fanout.joined      { as, results }
 form.value         { as, values, from }
 transition.fired   { from, to, on, guardIndex }
@@ -340,6 +403,34 @@ The journal is the audit log (R3): `at` timestamps and actor identities are
 recorded at append time, and replay is a *fold*, never a re-execution —
 effects are only issued by live transition processing, never during
 recovery replay of already-journaled transitions.
+
+**Identifiers are redacted at the observer boundary.**
+Daemon formula identifiers are unguessable 256-bit secrets that *bear
+authority*: any agent that can arrange a promise/resolver pair can redeem
+a raw id into the live capability (`resolveWithId` accepts any valid id
+and the promise holder's `@result` path provides it —
+`packages/daemon/src/manager.js`).
+A journal that exposed raw ids would therefore make the observer facet
+transitively grant everything the run ever touched.
+So journal events carry **per-run opaque aliases** (`ref:1`, `ref:2`)
+wherever a capability is referenced; the alias-to-id table lives beside
+the journal (`refs.json`), engine-private.
+Observer-facing `history`/`followStatus`/`exportJournal` serve aliases
+only; resolving an alias to a raw id (or an unredacted export) is an
+admin-facet operation, itself journaled.
+
+**The journal is tamper-evident.**
+Each event's `prev` field is the SHA-256 of the preceding event's
+canonical bytes, so any export can be verified as an unbroken chain
+independent of the engine that produced it — audit-grade rather than
+merely append-shaped, at the cost of one hash per event.
+
+`seq` is a plain `number`: it is a per-run event counter whose real-world
+bound sits far below 2^32 (the eight-digit segment names deliberately cap
+a run at 10^8 events), so `number` is exact and honest for this domain.
+`RunId`, `Seq`, and `DefinitionHash` are branded types returned by their
+validators, so downstream engine code is check-free per the repo's
+type-assertion discipline.
 
 ### The effect vocabulary and durability protocol
 
@@ -358,13 +449,33 @@ execution.
 | `after` (timeout) | A reminder scheduled via `@endo/reminder` | Delivery injects a `timeout` event; reminder's catch-up policy covers downtime |
 | `emit` | Publish a custom event on the run's topic | For external observers; no settlement |
 
-Delivery semantics are **at-least-once** for `call` (documented; targets
-receive the idempotency key as a call context argument when they opt in via
-`idempotent: true`, otherwise recovery marks the effect `indeterminate` and
-routes to the state's `onError`), and **exactly-once-observed** for
-`request`/`form`/`spawn`/`after`, whose settlement is externalized into
-durable daemon state (promise stores, message formulas, reminder store)
-rather than the engine's memory.
+Delivery semantics are **at-least-once** for `call` (documented; a target
+that declares `idempotent: true` receives the idempotency key in a
+trailing options bag — a stable, additive convention rather than a
+mutation of the method's own signature — otherwise recovery marks the
+effect `indeterminate` and routes to the state's `onError`), and
+**exactly-once-observed** for `request`/`form`/`spawn`/`after`, whose
+settlement is externalized into durable daemon state (promise stores,
+message formulas, reminder store) rather than the engine's memory.
+
+**Gate provenance.**
+Correlation by `as` is necessary but not sufficient: the engine accepts a
+gate settlement only when it is *both* correlated to the issued effect
+*and* attributable to the bound participant — a `form.value` must arrive
+as a reply from the bound approver's handle, a fanout verdict from the
+member it was issued to.
+Anything else — wrong sender, unknown correlation, a declared `signal`
+from a holder the definition does not authorize — is journaled as
+`event.unauthorized` (full audit, no transition) rather than silently
+dropped or, worse, applied.
+Duplicate policy is explicit: first-wins for single gates, per-member
+first-wins for fanout, and late arrivals after a join are journaled inert.
+
+**Join availability.**
+An `all` join is hostage to its least responsive member.
+`validateDefinition` warns when a fanout `all` state has no `after`
+sibling, and `{ quorum: n }` is the documented default posture for review
+fanouts; the reviewer who never answers then costs latency, not liveness.
 
 ### Composing workflows
 
@@ -430,9 +541,10 @@ never mutates existing definitions.
   ordinary `effect.rejected`, visible in the journal).
 
 **Runs are capabilities.**
-A `WorkflowRun` (or its observer facet) can itself be a *participant* of
+A run's observer or controller facet can itself be a *participant* of
 another workflow: a monitoring workflow can `call` `status()` on the runs
-it watches, or `call` `signal()` to nudge a sibling — long-running
+it watches, or — holding a controller — `call` `signal()` to nudge a
+sibling — long-running
 processes coordinate through the same ocap discipline as everything else,
 with no engine-level "cross-workflow messaging" subsystem to design or
 secure.
@@ -467,15 +579,16 @@ WorkflowService
     -> { factory, factoryAdmin }
 
 WorkflowFactory
-  start(input?, participants?)  -> { run, observer }   # fills unbound slots only
-  describe()                    -> { definition, boundSlots, openSlots,
-                                     inputShape, limits }
+  help()
+  start(input?, participants?)  -> observer facet   # fills unbound slots only
+  describe()                    -> { definition, boundSlotNames,
+                                     openSlots, inputShape, limits }
   with({ participants?, input? }) -> WorkflowFactory    # derived, narrower
 
 WorkflowFactoryAdmin
   bind(slot, capability) / setLimits({ maxConcurrent, maxStartsPerDay })
   runs() -> [RunSummary]        # every run this factory started
-  revoke()
+  revoke()                      # cascades to every derived factory
 ```
 
 Design properties:
@@ -486,11 +599,18 @@ Design properties:
   through the caller.
   By default `start` returns the run's **observer** facet; the admin facet
   stays with the factory owner.
-- **Derivation is non-escalating.**
+- **Derivation is non-escalating, and revocation cascades down it.**
   `with()` may fill open slots, narrow input defaults, or tighten limits;
   it can never rebind a bound slot or loosen a limit.
   This mirrors the `exo-git` `scope`/`readOnly` discipline: a chain of
   `with()` calls only ever descends.
+  A derived factory lives and dies with its parent (the daemon's
+  `thisDiesIfThatDies` idiom): `revoke()` kills the whole derivation
+  subtree, so revoking a grant cannot leave narrower copies of it alive.
+  Runs already started are not killed by factory revocation — they were
+  authorized when started — but no new starts succeed.
+  `describe()` exposes bound slot *names* only, never the bound
+  capabilities.
 - **Factories are durable and nameable.**
   Each factory persists as `factories/<id>.json` in the engine store with
   its bound participant ids held in the engine guest's namespace, revives
@@ -513,34 +633,56 @@ re-limit the factory without disturbing in-flight runs.
 
 ### Query and subscription surface
 
-The engine exposes exos with `M.interface` guards:
+The engine exposes exos with `M.interface` guards; every capability
+carries the conventional `help()` method.
+A run is a **three-facet kit** in the `exo-git` mold — cumulative,
+strictly ordered, with no runtime posture flags: holding a facet *is* the
+authority.
 
 ```
 WorkflowService (host-facing)
+  help()
   define(name, definition)            -> definitionHash
   definitions()                       -> [{ name, hash, version }]
   makeFactory({...})                  -> { factory, factoryAdmin }
-  start(name, { input, participants }) -> { run, observer, admin }
-  run(runId) / runs({ status? })      -> WorkflowRun / [RunSummary]
+  start(name, { input, participants }) -> { observer, controller, admin }
+  run(runId) / runs({ status? })      -> observer facet / [RunSummary]
   followRuns()                        -> Reader<RunSummary>       # lossless
 
-WorkflowRun (observer facet unless noted)
+WorkflowRunObserver (strictly read-only; generates no CapTP traffic
+                     toward third parties)
+  help()
   status()          -> { runId, definition, state, context, pending,
                          throughSeq, updatedAt }
   stateAt(seq)      -> same shape, folded through seq        # time travel
-  history(fromSeq?) -> Reader<Event>                # gapless replay + live
+  history(fromSeq?) -> Reader<Event>            # gapless replay + live,
+                                                #   ids as opaque aliases
   followStatus()    -> Reader<Status>               # lossy latest topic
-  explain()         -> StuckReport                  # see Debuggability
-  signal(name, payload)                             # declared external events
-  exportJournal(fromSeq?) -> EndoReadable (JSONL)   # audit export (R3)
+  explain()         -> StuckReport      # passive: journal-derived only
+  exportJournal(fromSeq?) -> EndoReadable (JSONL)   # redacted (aliases)
 
-WorkflowRunAdmin (attenuation; host or factory owner)
+WorkflowRunController (observer +)
+  signal(name, payload)                 # declared external events, and
+                                        #   only from authorized holders
+
+WorkflowRunAdmin (controller +; held by host or factory owner)
   pause() / resume()
   abort(reason) / retryEffect(as) / forceTransition(target) / injectEvent(e)
+  probe()                 -> StuckReport with active participant liveness
+  resolveRef(alias)       -> raw formula id            # journaled
+  exportJournal({ redactIds: false })                  # journaled
 ```
 
-Every admin method journals `admin.forced` with the caller's handle
-identity — overrides are audited, not hidden.
+The observer facet is what factories return by default, what the space
+receives, and what may safely be handed to a dashboard: it cannot inject
+events, cannot reach participants, and sees capability references only as
+aliases.
+Active liveness probing lives on `probe()` (admin), not `explain()`,
+because an observer-triggered method must never generate CapTP calls
+toward third parties.
+Every admin method — including alias resolution and unredacted export —
+journals `admin.forced` with the caller's handle identity: overrides are
+audited, not hidden.
 
 ### State syncing
 
@@ -575,6 +717,10 @@ sequence of journal events, and every view is a pure fold over a prefix.
   a second server-side projection; `followStatus()` (a `makeLatestTopic`)
   remains for cheap dashboards that want one small object per change and
   can tolerate loss.
+  Observers fold the redacted event stream, so a client-side state
+  reproduces the engine's state exactly up to the alias substitution —
+  same shape, same transitions, opaque `ref:n` where the engine holds a
+  raw id.
 - **Run-set syncing.**
   `followRuns()` emits `RunSummary` deltas keyed by `runId`
   (`{ runId, definition, state, final?, throughSeq, updatedAt }`);
@@ -675,10 +821,12 @@ timeline auto-scrolls to the scrub point; this doubles as the
 post-mortem review UI for finished runs.
 
 **Authority-scoped affordances.**
-The space renders what its capability can do: with an observer facet it
-is read-only; if granted the admin facet, `pause` / `resume` / `abort` /
-`retryEffect` appear, and every use round-trips through the journaled
-admin methods so UI actions are audited like any other.
+The space renders what its facet can do: an observer facet is strictly
+read-only (capability references appear as opaque `ref:n` aliases); a
+controller facet adds the declared `signal` actions; the admin facet adds
+`pause` / `resume` / `abort` / `retryEffect` and alias resolution, and
+every use round-trips through the journaled admin methods so UI actions
+are audited like any other.
 
 **Degradation.**
 On disconnect the space shows a stale-since badge and resumes from
@@ -730,7 +878,7 @@ context, and issued effects.
 ```js
 const sim = simulateRun(featureChange, { input, participants: stubs });
 sim.expectEffect('request', { to: 'implementer' });
-sim.inject('task.settled', { as: 'implementation', valueId: 'x' });
+sim.inject('effect.settled', { as: 'implementation', ref: 'x' });
 t.is(sim.state, 'reviewing');
 ```
 
@@ -772,14 +920,21 @@ restarted") is checkable, because state *is* the fold.
 
 **Explain stuck runs.**
 `explain()` answers the operator's actual question — *why is nothing
-happening?* — with a `StuckReport`:
+happening?* — with a `StuckReport`, computed **passively from the journal
+alone** (it is an observer-facet method and must not generate CapTP
+traffic toward participants):
 
-- each pending effect with its age, retry count, and target participant
-  (including liveness of the target's formula where knowable);
+- each pending effect with its age, retry count, and target slot name;
 - the event types the current state configuration is waiting for;
-- for recent events that matched no transition: per-transition verdicts —
-  pattern mismatches explained via `explainMismatch`, expression guards
-  reported as their boolean or thrown error.
+- for recent events that matched no transition (including
+  `event.unauthorized` records): per-transition verdicts — pattern
+  mismatches explained via `explainMismatch`, expression guards reported
+  as their boolean or thrown error.
+
+The admin facet's `probe()` extends the same report with **active**
+participant liveness — one `__getMethodNames__` round-trip per pending
+target, per the CapTP introspection convention, rather than duck-typed
+method calls that would litter participants with failed sends.
 
 With a per-run `trace: true` flag (set at start or toggled by admin),
 guard evaluations are journaled as `guard.evaluated` events — off by
@@ -867,7 +1022,8 @@ Wiring the example with existing capabilities:
 2. **Daemon integration.**
    Unconfined plugin `make(powers)`; participant binding via the guest
    namespace; `request`/`form`/`call` effects over mail and durable
-   promises; `@pins` recovery with the `recovery.completed` journal
+   promises with gate-provenance verification and `event.unauthorized`
+   journaling; `@pins` recovery with the `recovery.completed` journal
    event; serial-jobs discipline around journal appends.
 3. **Composition.**
    `fanout`/join, compound states, parallel regions, `spawn` child runs
@@ -876,12 +1032,14 @@ Wiring the example with existing capabilities:
    `retry-with-backoff` / `review-fanout` fragment library), `after` via
    reminder (or the interim timer shim).
 4. **Surface: sync, factories, CLI.**
-   `WorkflowService`/`WorkflowRun`/`WorkflowRunAdmin`/`WorkflowFactory`
-   exo guards; the State Syncing contract (`status` + gapless
-   `history(fromSeq)` splice, `followStatus`, `followRuns`,
-   `makeWorkflowSyncClient`); `stateAt` / `explain` / `pause` / `resume`
-   / `forkSimulation`; `exportJournal`; factories with non-escalating
-   `with()` derivation; the full `endo workflow` verb set
+   The observer/controller/admin run kit, `WorkflowService`, and
+   `WorkflowFactory` exo guards with `help()`; observer-boundary id
+   redaction and the alias table; the State Syncing contract (`status` +
+   gapless `history(fromSeq)` splice, `followStatus`, `followRuns`,
+   `makeWorkflowSyncClient`); `stateAt` / `explain` / `probe` / `pause` /
+   `resume` / `forkSimulation`; `exportJournal` (redacted by default);
+   factories with non-escalating `with()` derivation and cascading
+   revocation; the full `endo workflow` verb set
    (`define|list|start|status|watch|log|graph|simulate|explain|signal|pause|resume|abort`).
 5. **UI space.**
    `@endo/space-workflow`: runs rail with run trees, deterministic
@@ -943,13 +1101,28 @@ Wiring the example with existing capabilities:
     time; children are ordinary runs with explicit participant passing
     and downward-only cancellation; cross-run coordination is just runs
     holding each other's facets as participants.
+15. **Identifiers are redacted at the observer boundary.** Formula ids
+    are redeemable bearer secrets, so observer-facing events and exports
+    carry per-run opaque aliases; raw ids are engine-private, resolvable
+    only through the journaled admin facet.
+16. **Runs are three-facet kits.** Observer (read-only, no CapTP traffic
+    toward third parties), controller (+`signal`), admin
+    (+overrides, probing, unredacted export) — cumulative and strictly
+    ordered, in the `exo-git` mold; possession is the posture.
+17. **Definitions are programs; trust is per-hash.** `define()` is
+    host-only, binding capabilities into a factory vouches for one exact
+    definition hash, and gate settlements are accepted only with verified
+    provenance from the bound participant — everything else journals as
+    `event.unauthorized`.
 
 ## Known Gaps and TODOs
 
 - [ ] Pin the exact definition-schema pattern (`WorkflowDefinitionShape`)
       including the compound/parallel grammar.
-- [ ] Decide the powerless-compartment expression budget (length caps,
-      evaluation metering) and its error diagnostics.
+- [ ] Pin the powerless-compartment expression grammar subset (no loops,
+      no recursion, no `Function`; length caps) and its error
+      diagnostics; XS metering or worker isolation as future hardening —
+      Node metering is explicitly out (see the reducer section).
 - [ ] Reviewer verdict shape for `fanout` joins (free object vs. a
       conventional `{ verdict, comments }` pattern).
 - [ ] Reminder-service integration details once
@@ -966,9 +1139,11 @@ Wiring the example with existing capabilities:
       `retry-with-backoff`, `review-fanout` boundary events and slots).
 - [ ] Factory limit vocabulary (`maxConcurrent`, `maxStartsPerDay`, what
       else) and where breaches surface (reject at `start` vs. queue).
-- [ ] `explain()` participant-liveness probing: how much the engine may
-      infer about a target formula without generating noisy CapTP calls
-      (respect the `__getMethodNames__` introspection convention).
+- [ ] `probe()` rate limiting and result caching, so repeated admin
+      probes do not hammer participants.
+- [ ] The alias table (`refs.json`) lifecycle under journal compaction
+      and run retention: aliases must stay resolvable (by admin) for as
+      long as any export referencing them is expected to be audited.
 - [ ] A `defineWorkflow` JS builder — workflow-as-code ergonomics compiled
       to the data schema — future design.
 
