@@ -35,7 +35,7 @@
     "globals": "^17.10.0",
     "js-yaml": "^5.2.3",
     "lerna": "^8.2.4",
-    "npm-packlist": "^10.0.4",
+    "npm-packlist": "^11.3.0",
     "prettier": "^3.9.6",
     "ses": "workspace:^",
     "source-map": "^0.8.0",

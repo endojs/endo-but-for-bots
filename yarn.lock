@@ -11476,6 +11476,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"ignore-walk@npm:^9.0.0":
+  version: 9.0.0
+  resolution: "ignore-walk@npm:9.0.0"
+  dependencies:
+    minimatch: "npm:^10.0.3"
+  checksum: 10c0/1ee9a0bc0c9057f61bebd46335b266dc4ab96ea73f25297710dae2691200db96d9512bc723a99935f4e33a065e27e8bc9f8d4b09befc7b0241050585d232f137
+  languageName: node
+  linkType: hard
+
 "ignore@npm:7.0.5, ignore@npm:^7.0.5":
   version: 7.0.5
   resolution: "ignore@npm:7.0.5"
@@ -13972,6 +13981,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"npm-packlist@npm:^11.3.0":
+  version: 11.3.0
+  resolution: "npm-packlist@npm:11.3.0"
+  dependencies:
+    glob: "npm:^13.0.6"
+    ignore-walk: "npm:^9.0.0"
+    proc-log: "npm:^7.0.0"
+  checksum: 10c0/abdeea53e1eddc33ae1707f368579db17ee3377a8e15e2e850aa048f5810b9b1043cf67df20f6a51c7afc257e7219a5843aaa36739bbf7f15ccdad520bfba060
+  languageName: node
+  linkType: hard
+
 "npm-pick-manifest@npm:^11.0.1":
   version: 11.0.3
   resolution: "npm-pick-manifest@npm:11.0.3"
@@ -15121,6 +15141,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"proc-log@npm:^7.0.0":
+  version: 7.0.0
+  resolution: "proc-log@npm:7.0.0"
+  checksum: 10c0/b89c2d862604f35fec795477b0c7e376feab3ba0d4f4d291c4e959567442697cf451ac557d0623c1cc38af45a78128b983410f397a10c5d3a67f76c33de4754b
+  languageName: node
+  linkType: hard
+
 "process-nextick-args@npm:~2.0.0":
   version: 2.0.1
   resolution: "process-nextick-args@npm:2.0.1"
@@ -15990,7 +16017,7 @@ __metadata:
     globals: "npm:^17.10.0"
     js-yaml: "npm:^5.2.3"
     lerna: "npm:^8.2.4"
-    npm-packlist: "npm:^10.0.4"
+    npm-packlist: "npm:^11.3.0"
     prettier: "npm:^3.9.6"
     ses: "workspace:^"
     source-map: "npm:^0.8.0"
