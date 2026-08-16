@@ -316,6 +316,25 @@ fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
     if p.len() - i < want {
         return Err(SnapshotError::Corrupt("HEAP records truncated"));
     }
+    // Semantic gates on the free list, matching the store path's
+    // (`validate_store`): every index in range, no duplicates. An
+    // out-of-range entry would panic the arena's free-bitmap rebuild
+    // at construction (the snapshot_decoder fuzz target found that
+    // panic within its first half-minute once the toolchain ran
+    // locally), and a duplicate aliases one record to two allocations
+    // after resume. Checked AFTER the records-truncation gate above,
+    // which bounds `slot_count` by the payload length, so the `seen`
+    // scratch cannot be attacker-sized.
+    let mut seen = vec![false; slot_count];
+    for &f in &free {
+        if (f as usize) >= slot_count || seen[f as usize] {
+            return Err(SnapshotError::Corrupt("HEAP free list entry"));
+        }
+        seen[f as usize] = true;
+    }
+    if free.len() as u64 + live as u64 != slot_count as u64 {
+        return Err(SnapshotError::Corrupt("HEAP live/free accounting"));
+    }
     let slots = decode_slots(&p[i..i + want]).map_err(|_| SnapshotError::Corrupt("HEAP slot record"))?;
     Ok((slots, free, live))
 }
@@ -709,6 +728,43 @@ mod tests {
             read_machine(&bytes, &sig()),
             Err(SnapshotError::Corrupt("HEAP free list"))
         );
+    }
+
+    #[test]
+    fn heap_free_list_semantic_gates_fail_closed() {
+        // Fuzz trophy (snapshot_decoder, first local run): an
+        // out-of-range free index panicked the arena's free-bitmap
+        // rebuild at construction. The decoder now refuses range,
+        // duplicate, and accounting violations — same gates as the
+        // store path.
+        let record = [0u8; SLOT_RECORD_BYTES]; // one Undefined record
+        let arm = |free: &[u32], live: u32, slot_count: u32, what: &'static str| {
+            let mut heap = Vec::new();
+            heap.extend_from_slice(&slot_count.to_be_bytes());
+            heap.extend_from_slice(&(free.len() as u32).to_be_bytes());
+            heap.extend_from_slice(&live.to_be_bytes());
+            for f in free {
+                heap.extend_from_slice(&f.to_be_bytes());
+            }
+            for _ in 0..slot_count {
+                heap.extend_from_slice(&record);
+            }
+            let mut w = AtomWriter::new();
+            w.atom(VERS, &Version::current().encode());
+            w.atom(SIGN, &sig().encode());
+            w.atom(HEAP, &heap);
+            assert_eq!(
+                read_machine(&w.finish(), &sig()),
+                Err(SnapshotError::Corrupt(what)),
+                "free={free:?} live={live} slot_count={slot_count}"
+            );
+        };
+        // Out of range.
+        arm(&[7], 0, 1, "HEAP free list entry");
+        // Duplicate.
+        arm(&[0, 0], 0, 2, "HEAP free list entry");
+        // Accounting: free + live != slot_count.
+        arm(&[], 5, 1, "HEAP live/free accounting");
     }
 
     #[test]
