@@ -465,10 +465,12 @@ versions, which orthogonal persistence (heap snapshot as ground truth) cannot
 give you.
 
 The library *does* ground the underlying claim. The Endo exo taxonomy (Miller,
-`@endo/exo` docs) already stratifies exactly this: **heap** state *"dies with the
-process,"* **virtual** state is externalized *"but does not survive upgrade,"*
-and only **durable** state *"can survive upgrade, and so can be passed in
-baggage to a successor vat-incarnation."* And the *"why not orthogonal
+`@endo/exo` docs) already stratifies exactly this: **heap** state lives in the
+JavaScript heap and occupies room in the vat's snapshot (so it dies with the
+process that is not snapshotted); **virtual** state is externalized outside the
+heap but, in the taxonomy's own words, virtual exos *"do not survive upgrade"*;
+and only **durable** state, again verbatim, *"can also survive upgrade, and so
+can be passed in baggage to a successor vat-incarnation."* And the *"why not orthogonal
 persistence"* material (Kris Kowal, endojs/endo#3121, draft) states the sharp
 edge directly: *"An upgrade may invalidate assumptions encoded in a heap
 snapshot; the program must reconstruct its working state from durable inputs
@@ -711,7 +713,10 @@ set-shaped picture and the refcount picture describe the same live edges; the
 refcount is the operative one because it is what the sweep reads.
 
 **The refcount hand-off is not automatically clean. The enumeration below is
-scoped to intra-process windows; a fourth, cross-peer window is enumerated in Q4.
+scoped to intra-process windows; a fourth, cross-peer window is enumerated in Q4,
+and a fifth class — the release-path races between the two independent release
+triggers (per-root lease expiry and question resolution) and the admission-cap
+check-then-mint TOCTOU — is enumerated in Q2 where those triggers are defined.
 The three intra-process windows must be closed by an explicit rule, not asserted
 away:**
 
@@ -736,12 +741,31 @@ away:**
   against `<desc:answer answer-pos>` for a further hop arrives. A settled answer
   position is a spent wire fact (further pipelining against it is not
   well-formed), but that is a sender obligation a hostile or merely lagging peer
-  need not honor, so it cannot be the exporter's defense. **Rule:** a message
-  that arrives against an already-collected anonymous intermediate is rejected
-  **partition-shaped** (Thread 1): the sender sees a broken reference, never a
-  silent rebind to a different value and never an exporter crash. This is the
-  same failure the per-root lease and session abort already produce, so it adds
-  no new failure class the program does not already tolerate.
+  need not honor, so it cannot be the exporter's defense. **Rule (desired
+  end-state):** a message that arrives against an already-collected anonymous
+  intermediate must fail **partition-shaped** (Thread 1) — the sender sees a
+  broken reference, never a silent rebind to a different value and never an
+  exporter crash — so that it is the same failure the per-root lease and session
+  abort already produce and adds no new failure class the program does not
+  already tolerate. **But this partition-shape is a concrete prerequisite the
+  mechanism must build, not a property today's code already provides.** Traced
+  against the landed CapTP: a delivery whose target slot is no longer exported
+  makes `convertSlotToVal` throw `` Unknown export ${slot} `` inside the message
+  handler (`packages/captp/src/captp.js:708`), *before* any `CTP_RETURN` is
+  constructed; the `dispatch` outer catch then calls
+  `quietReject(e, false, PROTOCOL_REJECTION)` (`:1021-1022`), and because
+  `returnIt` is `false`, `quietReject` reports the error only to the **local**
+  `onReject` handler and returns `Promise.resolve()` (`:320-336`) — **no reply
+  message is sent back to the sender.** So the caller's question promise never
+  settles: the observed failure is a **silent indefinite hang** (bounded only by
+  session abort or the per-root lease), *not* an immediate broken reference. The
+  batch-flush root therefore names, as an explicit prerequisite, that the
+  exporter **reply with a genuine rejection (a `CTP_RETURN` carrying a
+  protocol-level break) on `Unknown export`** for a collected anonymous
+  intermediate, rather than silently dropping the reply, so that the caller's
+  question actually breaks and the partition-shape above is real rather than
+  aspirational. Until that reply exists, the residual is the silent hang, and the
+  per-root lease / session abort are the only bounds that fire (Q2).
 
 #### Q2: the stuck-batch / non-flushing case (the resource-exhaustion vector)
 
@@ -763,13 +787,21 @@ in the tree:
    machinery that already exists: a dead session cannot hold a root open.
 
 2. **Lease / expiry on the root** for the *live-but-stalled* peer (connected,
-   but the question never settles). This is the **same follow-up thixotrope
-   already names** for edge staleness ("lease/expiry policy on names"). A
-   question-rooted anonymous formula carries a lease; on expiry the daemon
+   but the question never settles) **and for the live peer that withholds its
+   cross-peer drop after resolving** (Q4's adversarial fourth-window shape). This
+   is the **same follow-up thixotrope already names** for edge staleness
+   ("lease/expiry policy on names"). A question-rooted anonymous formula carries a
+   lease that bounds the **whole** retention interval, not merely the
+   pre-resolution wait: (i) if the question never settles, on expiry the daemon
    **rejects the question locally** (the holder sees a broken reference, so
-   partition-shaped failure, per Thread 1) and drops the edge. The lease turns
-   "permanently embargoed" into "bounded embargo then partition," which is a
-   failure class the program already tolerates. Note (see Design Decision 3):
+   partition-shaped failure, per Thread 1) and drops the `question` edge; (ii) if
+   the question *has* settled but a cross-peer import edge is still outstanding
+   (Q4), the lease continues to run across resolution and, on expiry, **forcibly
+   drops that cross-peer edge and collects the intermediate** (the withholding
+   peer observes it partition-shaped on next use). Either way the lease turns
+   "permanently embargoed" (or "permanently pinned by a withheld drop") into
+   "bounded retention then partition," which is a failure class the program
+   already tolerates. Note (see Design Decision 3):
    the lease is a **local policy bound**, not a wire fact. Its *expiry clock* is
    host-local; what it produces (a partition-shaped break) is the wire-visible
    event. It does not claim to be a protocol-level liveness fact, and it does not
@@ -804,6 +836,48 @@ With all three, the stuck-batch hazard is bounded by (1) session lifetime, (2) a
 per-root lease, and (3) a per-session admission cap. No single one is
 load-bearing alone, and none requires buffering outbound messages or rolling back
 effects.
+
+**The fifth window: release-path races (the two rules Q1 deferred here).**
+Introducing the lease (mechanism 2) alongside resolution-as-trigger (Q4) creates
+a **second, independent release path** for the very same question edge, and the
+admission cap (mechanism 3) introduces a check that must be atomic with the mint
+it guards. Both are same-resource races that Thread 5's own bar ("closed by an
+explicit rule, not asserted away") requires stating:
+
+- **Lease-expiry vs. resolution race.** The per-root lease and the resolution
+  trigger are two paths that both drop the *same* `question` edge; a lease timer
+  firing and a `fulfill` / `break` arriving in the same tick could otherwise both
+  attempt the drop (a double free, or a released-then-referenced edge). **Rule:**
+  the edge drop is **idempotent and single-owner** — the first of {lease expiry,
+  resolution} to run performs the one graph mutation that removes the edge and
+  marks the root released; the second observes the edge already gone and is a
+  no-op. Because both outcomes are the same released edge, *which* wins is
+  immaterial to the graph, but resolution is preferred to be observed as the
+  cause when both are pending in one tick (it is the authoritative wire fact;
+  the lease is a local bound, Design Decision 3), so the holder that sees a break
+  sees the resolution's value/reason rather than a lease-timeout reason whenever
+  the resolution is already in hand. The lease only *originates* the break when
+  resolution has not arrived.
+
+- **Admission-cap check-then-mint TOCTOU.** Mechanism 3's cap check ("is the
+  aggregate pinned closure under the per-session bound?") must not be a separate
+  step from the mint it authorizes: two concurrent pipelined sends could each
+  observe "under cap," then each mint, jointly overshooting the bound. **Rule:**
+  the cap check and the root mint (with its first `question` edge) are a **single
+  graph mutation** — the same atomicity Q1 requires for mint-and-first-edge —
+  evaluated against the live pinned-closure size at mint time, so two concurrent
+  admissions serialize through the one mutation and the second sees the first's
+  contribution already counted. A send that loses the race is refused
+  partition-shaped, exactly as an over-cap send is.
+
+Two further atomicity questions are real but narrower and are recorded as Open
+Questions rather than resolved here: (a) **diamond / N-referrer simultaneous
+settle** — when several questions reference one intermediate and their
+resolutions land in one tick, the refcount must reach zero exactly once
+(the same idempotent-drop discipline should cover it, but the N-way case wants
+its own statement); and (b) **gift-id replay / double-redemption** in the
+three-party case (Q3), where a redemption attempt racing a second attempt or a
+lease expiry needs a single-use guard. Both are enumerated under Open Questions.
 
 #### Q3: two-party vs. multi-party scope
 
@@ -873,10 +947,12 @@ earlier cut conflated:
   message on the wire. **Resolution is therefore the authoritative trigger** that
   drops the `question` edge.
 - **But the daemon cannot observe that fact today without a new `@endo/captp`
-  seam.** CapTP's `questions` / `answers` are module-local `Map`s inside
-  `makeCapTP` (`packages/captp/src/captp.js:488`); the injectable
-  `CapTPImportExportTables` seam (`captp.js:100-111`) exposes import/export slots
-  **only**, not question/answer settlement. So the daemon's formula graph cannot
+  seam.** CapTP tracks its in-flight questions in a module-local **`settlers`**
+  `Map` (`packages/captp/src/captp.js:486`, keyed by the question's slot) and its
+  answers in a module-local `answers` `Map` (`:488`) inside `makeCapTP` — there is
+  **no** `questions` `Map`; the settlement machinery is the `settlers` map. The
+  injectable `CapTPImportExportTables` seam (`captp.js:100-111`) exposes
+  import/export slots **only**, not question/answer settlement. So the daemon's formula graph cannot
   refcount over question resolution until `@endo/captp` grows a **new extension
   point** analogous to the landed `provideImport` seam, a question/answer
   observation hook that lets the embedding daemon learn when a question settles.
@@ -907,6 +983,35 @@ finalizer drives them:
   references it. Releasing on resolution alone would collect an intermediate a
   counterparty still holds, exactly the "a working reference just went bad" class
   Thread 1 rules out.
+  - **Adversarial-peer hole this fourth window opens, and how it is bounded.**
+    Making release depend on *both* resolution *and* absence of a cross-peer
+    import edge means an adversarial but **non-disconnecting** peer can pin an
+    anonymous intermediate indefinitely by a shape the Q2 bounds as originally
+    stated do **not** catch: it resolves its own question promptly (so the
+    `question` edge drops) yet simply **never emits `op:gc-exports`** for its
+    direct import (so the cross-peer edge never drops). Session-abort does not
+    fire (the peer stays connected); the **per-root lease as stated in Q2 does
+    not fire either** (its trigger was "the question never settles," and here the
+    question *did* settle — there is nothing left to reject); and the admission
+    cap bounds *new-root admission*, not the *release* of a root whose question
+    already settled. So the Q2 conclusion's unqualified "bounded against both
+    crashed and adversarial peers" is **falsified by this one input shape** unless
+    the lease is extended. **Rule (the extension this design commits to):** the
+    per-root lease bounds the **whole** retention interval, not merely the
+    pre-resolution wait — it continues to run across resolution and bounds the
+    **post-resolution wait on the cross-peer import edge**. On expiry with the
+    question already settled but a cross-peer edge still outstanding, the daemon
+    **forcibly drops the cross-peer edge for this anonymous intermediate and
+    collects it**, which the still-importing peer then observes partition-shaped
+    on its next use (the same broken-reference failure Thread 1 already
+    tolerates), rather than retaining unboundedly. This keeps the cross-peer
+    correctness rule (never collect an intermediate a *cooperative* peer still
+    holds) while restoring the bound against a peer that *withholds* its
+    `op:gc-exports`. The honest residual: the lease's expiry clock is host-local
+    (Design Decision 3), so this is a bounded-retention-then-partition guarantee,
+    not a zero-retention one; the alternative — dropping the unqualified "bounded"
+    claim and scoping post-resolution cross-peer retention as inherited risk — is
+    strictly weaker and is declined.
 - **`op:gc-answers`** (an `answer-pos-list`, no wire-delta because only the
   questioner references an answer-pos) is *"emitted from the questioner's local
   finalizer when its question representation is collected."* From *your* side, an
@@ -976,7 +1081,14 @@ per-root lease, per-session admission cap). This:
   as protocol facts;
 - needs **nothing from the OCapN wire** for the two-party case, though it does
   need a new `@endo/captp` observation seam (Q4);
-- is bounded against both crashed and adversarial peers (Q2).
+- is bounded against both crashed and adversarial peers **provided the per-root
+  lease bounds the whole retention interval** — including the post-resolution wait
+  on a cross-peer import edge that an adversarial but non-disconnecting peer can
+  otherwise pin indefinitely by resolving its question yet withholding its
+  `op:gc-exports` (Q4's fourth-window shape). Without that lease extension the
+  "bounded against adversarial peers" claim is false for that one input shape; the
+  design commits to the extension (Q2 mechanism 2, Q4), so the bound holds as a
+  bounded-retention-then-partition guarantee, not a zero-retention one.
 
 **Decline** the novel-primitive framing (a bespoke embargo-specific "batch"
 concept) and **decline** any OCapN wire addition. **Defer** the multi-party scope
@@ -1057,8 +1169,14 @@ worded.
    refcounting, not a new primitive and not an OCapN wire change**, released on
    **resolution** (`fulfill` / `break`) *and* the absence of any cross-peer import
    edge (a counterparty's `op:gc-exports` / retention `remove`), and bounded by
-   session-subordinate abort plus per-root lease plus per-session admission cap
-   over the transitively pinned closure (Thread 5). The daemon-internal mechanism
+   session-subordinate abort plus a per-root lease that bounds the **whole**
+   retention interval (both the pre-resolution wait *and* the post-resolution wait
+   on an outstanding cross-peer import edge, closing Q4's adversarial fourth-window
+   pin) plus a per-session admission cap over the transitively pinned closure whose
+   check is atomic with the mint it guards (Thread 5, Q2). The release-path races
+   (lease-expiry vs. resolution; admission check-then-mint) are closed by an
+   idempotent single-owner edge drop and a single-mutation check-and-mint
+   respectively. The daemon-internal mechanism
    is buildable today over the landed refcounted transient pin
    (`pinTransient` / `unpinTransient`), refined from single-operation to
    single-question lifetime; it depends on a new `@endo/captp` question-observation
@@ -1076,7 +1194,7 @@ worded.
 | [ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) (In Progress) | Supplies the name hub / `named` vs. `worker-import` edges (Thread 1, Thread 4), the at-most-once abort plus tombstone machinery (Thread 5-Q2), and the lease/expiry follow-up (Thread 5-Q2). |
 | [daemon-xs-worker-metering](daemon-xs-worker-metering.md) | Supplies the "admission control eliminates embargo" pattern the per-session root cap borrows (Thread 5-Q2). |
 | [chat-slot-slash-commands](chat-slot-slash-commands.md) (Proposed, Not Started) | Supplies the **not-yet-landed** `makeRetainedValue(spec) -> { id, release }` guest-facing surface (Thread 2's sugar). The daemon-internal batch-flush edge does **not** depend on it; it is buildable over the landed `pinTransient` / `unpinTransient` pin. |
-| `packages/captp` (`makeCapTPImportExportTables`) plus a **new** question-observation seam | The import/export tables the sugar's identity lookup keys off (Thread 2). **Prerequisite for Thread 5:** `questions` / `answers` are module-local `Map`s in `makeCapTP`, and the injectable `CapTPImportExportTables` seam exposes import/export slots only, so a **new `@endo/captp` extension point** (analogous to the landed `provideImport`) is required for the daemon to refcount over question resolution (Q4). This is an `@endo/captp` API addition, not an OCapN wire change. |
+| `packages/captp` (`makeCapTPImportExportTables`) plus a **new** question-observation seam | The import/export tables the sugar's identity lookup keys off (Thread 2). **Prerequisite for Thread 5:** in-flight questions live in a module-local `settlers` `Map` (`captp.js:486`) and answers in a module-local `answers` `Map` (`:488`) inside `makeCapTP` (there is no `questions` `Map`), and the injectable `CapTPImportExportTables` seam exposes import/export slots only, so a **new `@endo/captp` extension point** (analogous to the landed `provideImport`) is required for the daemon to refcount over question resolution (Q4). This is an `@endo/captp` API addition, not an OCapN wire change. |
 | `packages/ocapn` three-party handoff | **Blocking** for the multi-party scope of Thread 5 (Q3): the embargo lifetime must be an observable protocol state. |
 
 ## Citations to prior art
@@ -1109,9 +1227,11 @@ worded.
   `deposit-gift` / 32-byte `gift-id` / `desc:handoff-give` / `desc:handoff-receive`.
   **Gap:** the library documents no CapTP *embargo* mechanism and no explicit
   "nothing-further-forthcoming" wire message (Threads 3, 5). Note also that
-  CapTP's `questions` / `answers` are module-local `Map`s in `makeCapTP` and the
-  injectable `CapTPImportExportTables` seam exposes import/export slots only, so
-  observing question resolution needs a new `@endo/captp` extension point (Q4).
+  CapTP tracks in-flight questions in a module-local `settlers` `Map`
+  (`captp.js:486`) and answers in a module-local `answers` `Map` (`:488`) inside
+  `makeCapTP` (there is no `questions` `Map`), and the injectable
+  `CapTPImportExportTables` seam exposes import/export slots only, so observing
+  question resolution needs a new `@endo/captp` extension point (Q4).
 - **Distributed Confinement.** Miller & Shapiro, *Paradigm Regained* (2003), §5
   (the Cassie/Max `[Factory, factoryMaker]` example, *"only data and no
   capabilities"*); *Capability Myths Demolished* (2003), §5.2 (the Confinement
@@ -1161,7 +1281,24 @@ worded.
 - [ ] **Lease policy:** what is the default lease duration / size cap for
       question-rooted anonymous formulas, and is it per-root, per-session, or
       both? Needs a concrete number calibrated against real pipelining depth,
-      analogous to the metering hard-limit calibration.
+      analogous to the metering hard-limit calibration. (The lease now also bounds
+      the post-resolution cross-peer wait per Q4, so the calibration must cover
+      that interval too, not only the pre-resolution embargo.)
+- [ ] **Diamond / N-referrer simultaneous-settle atomicity:** when several
+      unsettled questions reference one anonymous intermediate and their
+      resolutions land in the same tick, the refcount must reach zero exactly once
+      and the edge drop must be a single graph mutation. Q2's idempotent
+      single-owner drop is stated for the two-path (lease-vs-resolution) case;
+      confirm it composes to the N-way case (N resolutions decrementing one
+      refcount) without a lost-decrement or double-collect, and state the rule if
+      the general case needs more than "each decrement is one mutation."
+- [ ] **Gift-id replay / double-redemption (Q3):** in the three-party handoff,
+      the deposited gift is single-use and Receiver-bound, but a redemption
+      attempt can race a second redemption attempt or a lease expiry. What is the
+      single-use guard that makes redemption atomic (redeem-and-consume as one
+      graph mutation), and how does it interact with the per-root lease firing
+      mid-redemption? Deferred with the rest of the multi-party scope, but named
+      here so it is not lost.
 - [ ] **Worker-discipline coherence checkpoint:** confirm that the per-edge
       succession-time coherence check (a `durable-succession` worker's inbound
       references that must survive succession are `named`, not `worker-import`) is
