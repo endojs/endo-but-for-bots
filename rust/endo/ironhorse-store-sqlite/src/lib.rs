@@ -213,10 +213,76 @@ impl SqliteHeapStore {
                key   BLOB NOT NULL,
                bytes BLOB NOT NULL,
                PRIMARY KEY (name, key)
-             );",
+             );
+             -- Normalized page-edge pairs (the query-driven GC layer,
+             -- store seam phase 10): one row per (target, page) edge,
+             -- DERIVED from page_edges — never sealed, rebuildable —
+             -- maintained in the same commit transaction. The primary
+             -- key answers \"which pages reference target?\" (the
+             -- reverse index no blob encoding can); the page index
+             -- answers forward adjacency, which is what lets
+             -- reachability run as a recursive CTE inside SQLite
+             -- instead of reifying the whole edge set into Rust.
+             CREATE TABLE IF NOT EXISTS edge_pairs (
+               target INTEGER NOT NULL,
+               page   INTEGER NOT NULL,
+               PRIMARY KEY (target, page)
+             ) WITHOUT ROWID;
+             CREATE INDEX IF NOT EXISTS edge_pairs_by_page
+               ON edge_pairs (page);",
         )
         .map_err(sql_err)?;
+        Self::rebuild_edge_pairs_if_stale(&conn)?;
         Ok(SqliteHeapStore { conn })
+    }
+
+    /// Bring `edge_pairs` in line with `page_edges` if they disagree —
+    /// the open-time backfill for stores committed before the derived
+    /// table existed (it is not sealed, so rebuilding is always
+    /// legitimate), and a self-heal if a crash ever desynced them
+    /// (single transaction, so that would take filesystem-level
+    /// interference — but the table is derived, so trust the sealed
+    /// source over the index).
+    fn rebuild_edge_pairs_if_stale(conn: &Connection) -> Result<(), StoreError> {
+        let derived: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(length(targets) / 4), 0) FROM page_edges",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(sql_err)?;
+        let indexed: i64 = conn
+            .query_row("SELECT COUNT(*) FROM edge_pairs", [], |r| r.get(0))
+            .map_err(sql_err)?;
+        if derived == indexed {
+            return Ok(());
+        }
+        let tx = conn.unchecked_transaction().map_err(sql_err)?;
+        tx.execute("DELETE FROM edge_pairs", []).map_err(sql_err)?;
+        {
+            let mut read = tx
+                .prepare("SELECT page, targets FROM page_edges")
+                .map_err(sql_err)?;
+            let mut insert = tx
+                .prepare("INSERT OR REPLACE INTO edge_pairs (target, page) VALUES (?1, ?2)")
+                .map_err(sql_err)?;
+            let rows = read
+                .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+                .map_err(sql_err)?;
+            for row in rows {
+                let (page, blob) = row.map_err(sql_err)?;
+                if blob.len() % 4 != 0 {
+                    return Err(StoreError::Io("sqlite: malformed page edges".to_string()));
+                }
+                for c in blob.chunks_exact(4) {
+                    let target = u32::from_be_bytes(c.try_into().unwrap());
+                    insert
+                        .execute(params![target as i64, page])
+                        .map_err(sql_err)?;
+                }
+            }
+        }
+        tx.commit().map_err(sql_err)
     }
 
     /// The full last-connection close of the shutdown-checkpoint
@@ -250,6 +316,83 @@ impl SqliteHeapStore {
             None => Ok(None),
             Some(b) => Ok(Some(StoreManifest::decode(&b)?)),
         }
+    }
+
+    // --- query-driven GC capabilities (store seam phase 10) ---
+    //
+    // Backend-specific, deliberately NOT on the `HeapStore` trait yet:
+    // the trait grows a query surface when the generational collector
+    // lands and every backend can serve it; until then these are the
+    // measured infrastructure the design's phase-10/11 bars build on.
+
+    /// The pages whose summaries reference `target` — the reverse
+    /// query the normalized pairs exist for: O(in-degree) by primary
+    /// key, no blob decode, no whole-edge-set reification. The
+    /// generational mark asks exactly this for each page a crank
+    /// dirtied.
+    pub fn pages_referencing(&self, target: u32) -> Result<Vec<u32>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT page FROM edge_pairs WHERE target = ?1 ORDER BY page")
+            .map_err(sql_err)?;
+        let rows = stmt
+            .query_map(params![target as i64], |r| r.get::<_, i64>(0))
+            .map_err(sql_err)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(sql_err)? as u32);
+        }
+        Ok(out)
+    }
+
+    /// Page reachability computed INSIDE SQLite as a recursive CTE
+    /// over the normalized pairs — the query-driven twin of
+    /// [`ironhorse_snapshot::store::reachable_pages`], which reads
+    /// the WHOLE edge set into Rust first (O(pages) transfer per
+    /// call, regardless of how much is reachable). Same answer by
+    /// construction — locked by a parity test — with transfer
+    /// proportional to the ANSWER; the store bench compares their
+    /// scaling. Roots ride a temp table, so root-set size never hits
+    /// SQL length limits.
+    pub fn reachable_pages_sql(
+        &self,
+        roots: &[u32],
+    ) -> Result<std::collections::BTreeSet<u32>, StoreError> {
+        self.conn
+            .execute_batch(
+                "CREATE TEMP TABLE IF NOT EXISTS reach_roots (p INTEGER PRIMARY KEY);
+                 DELETE FROM reach_roots;",
+            )
+            .map_err(sql_err)?;
+        {
+            let mut ins = self
+                .conn
+                .prepare("INSERT OR IGNORE INTO reach_roots (p) VALUES (?1)")
+                .map_err(sql_err)?;
+            for &r in roots {
+                ins.execute(params![r as i64]).map_err(sql_err)?;
+            }
+        }
+        let mut stmt = self
+            .conn
+            .prepare(
+                "WITH RECURSIVE reach(p) AS (
+                   SELECT p FROM reach_roots
+                   UNION
+                   SELECT e.target FROM edge_pairs e JOIN reach ON e.page = reach.p
+                 )
+                 SELECT p FROM reach",
+            )
+            .map_err(sql_err)?;
+        let rows = stmt.query_map([], |r| r.get::<_, i64>(0)).map_err(sql_err)?;
+        let mut out = std::collections::BTreeSet::new();
+        for r in rows {
+            out.insert(r.map_err(sql_err)? as u32);
+        }
+        self.conn
+            .execute("DELETE FROM reach_roots", [])
+            .map_err(sql_err)?;
+        Ok(out)
     }
 }
 
@@ -357,7 +500,7 @@ impl HeapStore for SqliteHeapStore {
         if Self::stored_manifest(&self.conn)?.is_none() {
             return Err(StoreError::Empty);
         }
-        let mut read = |kind: i64, what: &'static str| -> Result<Vec<[u8; 32]>, StoreError> {
+        let read = |kind: i64, what: &'static str| -> Result<Vec<[u8; 32]>, StoreError> {
             let mut stmt = self
                 .conn
                 .prepare("SELECT idx, hash FROM leaf_hashes WHERE kind = ?1 ORDER BY idx")
@@ -519,7 +662,7 @@ impl HeapStore for SqliteHeapStore {
             // leaves into the extent vector (masked only by resize
             // bounds), and no gap detection.
             {
-                let mut read_kind = |kind: i64, what: &'static str| -> Result<Vec<[u8; 32]>, StoreError> {
+                let read_kind = |kind: i64, what: &'static str| -> Result<Vec<[u8; 32]>, StoreError> {
                     let mut stmt = tx
                         .prepare("SELECT idx, hash FROM leaf_hashes WHERE kind = ?1 ORDER BY idx")
                         .map_err(sql_err)?;
@@ -636,13 +779,22 @@ impl HeapStore for SqliteHeapStore {
             // Page-edge summaries (phase 6): upsert the dirty pages'
             // summaries, drop those beyond the new geometry. Grown
             // pages are necessarily dirty, so every page in range has
-            // a row by induction.
+            // a row by induction. The normalized `edge_pairs` twin
+            // (phase 10) is maintained in the SAME transaction from
+            // the same batch rows, so the derived index can never
+            // drift from the sealed source across a commit.
             {
                 let mut upsert = tx
                     .prepare(
                         "INSERT INTO page_edges (page, targets) VALUES (?1, ?2)
                          ON CONFLICT(page) DO UPDATE SET targets = excluded.targets",
                     )
+                    .map_err(sql_err)?;
+                let mut clear_pairs = tx
+                    .prepare("DELETE FROM edge_pairs WHERE page = ?1")
+                    .map_err(sql_err)?;
+                let mut insert_pair = tx
+                    .prepare("INSERT OR REPLACE INTO edge_pairs (target, page) VALUES (?1, ?2)")
                     .map_err(sql_err)?;
                 for (page, targets) in &batch.page_edges {
                     let mut blob = Vec::with_capacity(targets.len() * 4);
@@ -652,10 +804,23 @@ impl HeapStore for SqliteHeapStore {
                     upsert
                         .execute(params![*page as i64, blob])
                         .map_err(sql_err)?;
+                    clear_pairs.execute(params![*page as i64]).map_err(sql_err)?;
+                    for t in targets {
+                        insert_pair
+                            .execute(params![*t as i64, *page as i64])
+                            .map_err(sql_err)?;
+                    }
                 }
                 drop(upsert);
+                drop(clear_pairs);
+                drop(insert_pair);
                 tx.execute("DELETE FROM page_edges WHERE page >= ?1", params![pages as i64])
                     .map_err(sql_err)?;
+                tx.execute(
+                    "DELETE FROM edge_pairs WHERE page >= ?1 OR target >= ?1",
+                    params![pages as i64],
+                )
+                .map_err(sql_err)?;
             }
 
             tx.execute(
