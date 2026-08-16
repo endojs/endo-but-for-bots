@@ -1642,6 +1642,7 @@ __metadata:
     "@endo/space-inventory-graph": "workspace:^"
     "@endo/space-peers": "workspace:^"
     "@endo/space-whylip": "workspace:^"
+    "@endo/space-workflow": "workspace:^"
     "@endo/spaces-util": "workspace:^"
     "@endo/where": "workspace:^"
     "@playwright/test": "npm:^1.40.0"
@@ -3211,7 +3212,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/space-workflow@workspace:packages/space-workflow":
+"@endo/space-workflow@workspace:^, @endo/space-workflow@workspace:packages/space-workflow":
   version: 0.0.0-use.local
   resolution: "@endo/space-workflow@workspace:packages/space-workflow"
   dependencies:
@@ -3394,6 +3395,7 @@ __metadata:
     "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/platform": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
     "@endo/pubsub": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/sha256": "workspace:^"
