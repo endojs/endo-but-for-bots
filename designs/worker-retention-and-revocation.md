@@ -91,6 +91,10 @@ The mechanics already in the tree that this document builds on:
   static dependencies and pet-store entries are labeled edges, and union-find
   **groups** cluster mutually reachable formulas so that a root pins an entire
   dependency cluster, not a leaf ([daemon-retention-paths](daemon-retention-paths.md)).
+  The load-bearing property for the retention arguments below is that union-find is
+  **merge-only**: a `union` folds two groups into one and is never afterward split, so
+  a group's membership — and therefore what any one root pins — is **non-decreasing**
+  over the life of the graph.
 - **Cross-peer retention edges** ([daemon-cross-peer-gc](daemon-cross-peer-gc.md),
   Complete): a one-way authoritative **retention set** per peer, streamed as
   microtask-consolidated `{ add, remove }` deltas
@@ -417,10 +421,22 @@ the surface being extended is specified as
 ([chat-slot-slash-commands](chat-slot-slash-commands.md):158, :235-236), so its
 declared return **hands a formula-identifier string back to the guest** — the very
 output-side leak Design Decision 2 forbids. So the sugar must **amend the guest
-arm's return** to a `release` capability / live presence, **not** an `id` string
-(the host arm may keep `{ id, release }`); this is the output-side complement of
-the input-side arm split, and it too is recorded as an amendment to the sibling
-design rather than left as two contradicting return shapes.
+arm's return** to drop the `id` field. **Keep the envelope, not the field:** the
+guest arm returns `{ release }` — the *same object shape* as the host arm's
+`{ id, release }` minus the confinement-forbidden `id` — **not** a bare `release`
+capability. Confinement forces dropping `id`; it does not force switching from an
+object envelope to a bare value, and a bare value is the avoidable divergence.
+With `{ release }`, both facets destructure identically (`const { release } = ...`),
+and a caller that mistakes which facet it holds and reaches for `.id` gets
+`undefined` rather than a wrong access pattern against a bare capability. This
+divergence is **statically enforced, not left to convention**: `EndoHost['makeRetainedValue']`
+is typed `(spec) => Promise<{ id: FormulaIdentifier, release: ReleaseCap }>` and
+`EndoGuest['makeRetainedValue']` `(spec) => Promise<{ release: ReleaseCap }>`, so a
+facet-polymorphic caller that reads `.id` off the guest result fails to type-check —
+per Thread 4's own "invalid states unrepresentable, not validated" discipline, the
+shape difference is expressed in the types rather than only documented. This is the
+output-side complement of the input-side arm split, and it too is recorded as an
+amendment to the sibling design rather than left as two contradicting return shapes.
 
 The hand-off to Thread 5 is not merely "Thread 5 supplies a liveness interval."
 When a passed live value becomes a static dependency of the new formula, the
@@ -800,7 +816,7 @@ refcount is the operative one because it is what the sweep reads.
 scoped to intra-process windows; a fourth, cross-peer window is enumerated in Q4,
 and a fifth class — the release-path races between the two independent release
 triggers (per-root lease expiry and question resolution) and the admission-cap
-check-then-mint TOCTOU — is enumerated in Q2 where those triggers are defined.
+check-then-mint TOCTOU (time-of-check-to-time-of-use) — is enumerated in Q2 where those triggers are defined.
 The three intra-process windows must be closed by an explicit rule, not asserted
 away:**
 
@@ -836,7 +852,7 @@ away:**
   resolves against.** Traced against the landed CapTP, `CTP_CALL` resolves an
   answer-position target from the module-local `answers` `Map` **first**
   (`packages/captp/src/captp.js:780-782`), and `answers` is written keyed by the
-  peer-minted **question id** — `answers.set(questionID, …)` (`:743`, `:852`; the
+  peer-minted **question id** — `answers.set(questionID, ...)` (`:743`, `:852`; the
   `:488` comment says "chosen by our peer"). The `answers` entry is **immortal for
   an unconditional reason, not a contingent one.** `CTP_DROP` deletes it via
   `answers.delete(reverseSlot(slotID))` (`:756-767`), guarded by
@@ -978,20 +994,67 @@ in the tree:
    The check-and-mint atomicity rule (the fifth-window TOCTOU below) closes a
    concurrent-admission race, **not** this monotonic-growth one. So the cap needs
    one of two stated disciplines, and this design commits to the first: **(a)**
-   scope the cap's denominator to the **question-rooted pins only** (count each
-   outstanding `question:<session>:<answer-pos>` edge's *own* contribution, not the
-   whole merged group it happens to land in), so post-mint merges with unrelated
+   scope the cap's denominator to the **question-rooted pins only** — count each
+   outstanding `question:<session>:<answer-pos>` edge's *own contribution*, not the
+   whole merged group it happens to land in — so post-mint merges with unrelated
    named roots do not retroactively push a session over cap; **(b)** *or*, if the
    denominator must be the full closure, **re-evaluate the cap on every union that
    grows a question-rooted group** and refuse/partition-shape the offending later
    edge. Option (a) is preferred because it keeps the check local to the roots the
-   session actually minted; the closure-size framing of the "cannot fan a single
-   root into a large cluster" claim is corrected to hold **at and after** mint
-   under (a), not only pre-mint. A counterparty cannot force retention past the cap
-   because the daemon stops minting roots (and, under (a), a later merge cannot
-   inflate a session's counted total), exactly as the supervisor stops delivering
-   messages when budget is exhausted. This is the piece that makes the root safe
-   against a hostile peer rather than merely a crashed one.
+   session actually minted.
+
+   **"Own contribution" is a live quantity fixed at mint, not a flat per-edge `1`.**
+   The naive per-edge cap the previous paragraph rejects counts each edge as `1`
+   regardless of what it pins; "own contribution" is instead the *size of the
+   formula closure the edge itself introduces into the retention set at the moment
+   it is minted*. Precisely, for a question edge `e` minted at time `t`, let
+   `reach(e, t)` be the set of formulas transitively reachable from `e`'s target in
+   the graph as it stands at `t`, and let `named(t)` be the set of formulas
+   reachable from some *named* root at `t`. Then
+
+   > `own(e) := | reach(e, t_mint(e)) \ named(t_mint(e)) |`
+
+   — the count of formulas the edge is *marginally responsible for retaining*: those
+   in its target's closure that are not already pinned by a name. `own(e)` is
+   computed once, at mint, and frozen; it is neither a flat `1` (which would ignore
+   fan-out, the vector the doc rejects) nor the live merged-group size (which is
+   option (b)). The session's **counted total** is the running sum
+   `C(session) := sum_{e outstanding in session} own(e)`, maintained incrementally
+   (add `own(e)` at mint, subtract it when the edge drops), and the cap is checked
+   against `C(session)` **at each mint** — so the denominator is the sum over the
+   session's own edges, never a single edge in isolation.
+
+   **Why this closes the N-roots-then-union attack.** The claim to discharge is that
+   the attacker who mints `N` roots each just under the cap and *then* unions their
+   groups cannot exceed the bound. Under (a) that attack cannot even reach its mint
+   step: because the cap is checked against the *sum* `C(session)`, the second mint
+   already sees `own(e1) + own(e2)` and is refused once the sum crosses the cap — the
+   peer never gets `N` under-cap roots in one session to begin with. The later union
+   then cannot inflate anything, and for a sharper reason than "the sum is frozen":
+   `C(session)` is a sound **upper bound** on the session's real marginal footprint.
+   When two of the session's own groups merge, the merged group's true distinct-formula
+   count is `<= own(e1) + own(e2)` — union double-counts any formulas the two closures
+   share into an *over*-estimate, never an under-estimate — so capping `C(session)`
+   caps the real footprint a fortiori. A merge with an *unrelated named* root adds
+   only formulas already in `named(t)`, which were excluded from every `own(e)` by
+   construction and are retained regardless of the session; such a merge correctly
+   does not increase `C(session)`. This is what makes the closure-size claim ("cannot
+   fan a single root into a large cluster") hold **at and after** mint under (a), not
+   only pre-mint.
+
+   Worked example (the exact attack, cap `= 10`): the target closures are disjoint,
+   `own(e1) = own(e2) = 6`. Mint of `e1` sets `C = 6 <= 10` — admitted. Mint of `e2`
+   would set `C = 12 > 10` — **refused, partition-shaped**, before either root pins
+   its group; the attacker is stopped at admission, not after the union. Had `e2` been
+   admitted (say `own(e2) = 3`, `C = 9`), a subsequent dependency edge unioning group 1
+   and group 2 into one 9-formula cluster leaves `C = 9 <= 10` unchanged and correct: the
+   real retained footprint (9 distinct formulas) equals the counted total, so no monotonic
+   growth escaped the bound. A counterparty therefore cannot force retention past the cap:
+   the daemon stops minting roots once `C(session)` would cross it (and a later merge cannot
+   inflate `C(session)`, since `own(e)` is frozen and is already an upper bound on the
+   merged size), exactly as the supervisor stops delivering messages when budget is
+   exhausted. This is the piece that makes the root safe against a hostile peer rather than
+   merely a crashed one.
 
    Two further per-session/per-peer notes: the cap is stated **per session**, so a
    peer opening `N` sessions gets `N` times the cap and `N` independent abort
@@ -1185,7 +1248,7 @@ finalizer drives them:
   the `answers`/export-table entry while conjunct (ii) is still false (a
   cooperative peer still directly imports the intermediate); that is `CTP_DROP`'s
   last-reference branch run early, and the peer's next direct use would then hit
-  `Unknown export` → the silent hang this very window forbids, inflicted on the
+  `Unknown export` -> the silent hang this very window forbids, inflicted on the
   cooperative peer conjunct (ii) exists to protect. Conjunct (iii) is the fifth
   retention root — the embedding CapTP library's own table — that a release
   condition stated only over the daemon's formula graph would miss; it is lifted
@@ -1490,10 +1553,18 @@ would take the `fast-check` devDependency, already in the catalog as
    — any permutation of release triggers yields one collection and the same
    terminal graph. Covers the N-way simultaneous settle.
 4. **Admission-cap TOCTOU and monotonic growth (Q2 mechanism 3).**
-   `fc.asyncProperty(fc.scheduler(), fc.array(mintArb, {minLength:2,maxLength:10}), async (s, reqs) => { …; await s.waitAll(); return pinnedClosureSize() <= cap; })`
+   `fc.asyncProperty(fc.scheduler(), fc.array(mintArb, {minLength:2,maxLength:10}), async (s, reqs) => { ...; await s.waitAll(); return pinnedClosureSize() <= cap; })`
    for the check-then-mint race (the scheduler shrinks to the exact interleaving),
-   plus a graph-shaped property that later unions of a question-rooted group do not
-   push a session over cap (the monotonic-growth hole). Boundary sweep: cap `0`,
+   plus two graph-shaped properties for discipline (a): (i) a *single heavy-fanout*
+   root is admitted iff its `own(e)` — the minted-time closure size excluding
+   named-reachable formulas — is `<= cap`, so the denominator is formula count, not
+   edge count (this is the property that catches "own contribution" collapsing to a
+   flat `1`); and (ii) the N-roots-then-union case: after any sequence of admitted
+   mints and later unions, `pinnedClosureSize(session) <= C(session) <= cap`, i.e. the
+   counted total stays a sound upper bound on the real footprint and later unions of a
+   question-rooted group never push a session over cap (the monotonic-growth hole).
+   The worked example under Q2 mechanism 3 (cap `10`, `own(e1)=own(e2)=6`, second mint
+   refused) is the concrete case (ii) reduces to. Boundary sweep: cap `0`,
    `<` vs `<=` at exactly-cap, a single send whose own closure exceeds cap
    (wedge-not-bound), per-session vs per-peer aggregate.
 5. **Session-unique question edge (Q1/Q2).** Two concurrent sessions both at
@@ -1524,7 +1595,7 @@ would take the `fast-check` devDependency, already in the catalog as
 | [daemon-retention-paths](daemon-retention-paths.md) (In Progress) | Supplies the labeled-edge graph model, the `transient` root, and the host-only confinement rule this design extends with a `question:<session>:<answer-pos>` edge. |
 | [ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) (In Progress) | Supplies the name hub / `named` vs. `worker-import` edges (Thread 1, Thread 4), the at-most-once abort plus tombstone machinery (Thread 5-Q2), and the lease/expiry follow-up (Thread 5-Q2). |
 | [daemon-xs-worker-metering](daemon-xs-worker-metering.md) | Supplies the "admission control eliminates embargo" pattern the per-session root cap borrows (Thread 5-Q2). |
-| [chat-slot-slash-commands](chat-slot-slash-commands.md) (Proposed, Not Started) | Supplies the **not-yet-landed** `makeRetainedValue(spec)` guest-facing surface (Thread 2's sugar), whose `RetainedValueSpec` (`type: 'eval'`, `codeNames`, `endowments`) the worked example uses. The daemon-internal batch-flush edge does **not** depend on it; it is buildable over the landed `pinTransient` / `unpinTransient` pin. **Amendments this design requires of it (both recorded here so one method does not carry two signatures across two Proposed docs):** (1) split the `endowments` arm from `(PetNamePath \| FormulaIdentifier)[]` into per-facet `GuestEndowment` / `HostEndowment` (Thread 2 input side); (2) amend the **guest** arm's return from `{ id: FormulaIdentifier, release }` to a `release`/presence (no `id` string) so it does not leak a formula ID (Thread 2 output side). |
+| [chat-slot-slash-commands](chat-slot-slash-commands.md) (Proposed, Not Started) | Supplies the **not-yet-landed** `makeRetainedValue(spec)` guest-facing surface (Thread 2's sugar), whose `RetainedValueSpec` (`type: 'eval'`, `codeNames`, `endowments`) the worked example uses. The daemon-internal batch-flush edge does **not** depend on it; it is buildable over the landed `pinTransient` / `unpinTransient` pin. **Amendments this design requires of it (both recorded here so one method does not carry two signatures across two Proposed docs):** (1) split the `endowments` arm from `(PetNamePath \| FormulaIdentifier)[]` into per-facet `GuestEndowment` / `HostEndowment` (Thread 2 input side); (2) amend the **guest** arm's return from `{ id: FormulaIdentifier, release }` to `{ release }` — the same object envelope minus the `id` string, **not** a bare capability — so both facets destructure identically and no formula ID leaks (Thread 2 output side); the two arms are typed distinctly (`Promise<{ id, release }>` host, `Promise<{ release }>` guest) so a `.id` read off the guest result fails to compile. |
 | `packages/captp` — **two** new `makeCapTP` seams | The import/export tables (`makeCapTPImportExportTables`, default binding `makeDefaultCapTPImportExportTables`, `captp.js:121`) the sugar's identity lookup keys off (Thread 2). **Prerequisites for Thread 5, both `@endo/captp` API additions (not OCapN wire changes):** (1) a **question-observation** hook — in-flight questions live in a module-local `settlers` `Map` (`captp.js:486`) and answers in a module-local `answers` `Map` (`:488`) inside `makeCapTP` (no `questions` `Map`), and `CapTPImportExportTables` exposes import/export slots only, so the daemon cannot refcount over question resolution without it (Q4); (2) a **bounded answer-retirement authority** — `answers` is namespace-mismatched against every landed `CTP_DROP` path (Q1's third window), so *no* landed call site retires an anonymous intermediate's `answers` entry on any configuration; conjunct (iii) of the release condition needs a new bounded seam to retire it in the final-release mutation. The precedent for an additive, no-wire observation seam is the landed `provideImport` — which lives in **`@endo/ocapn`** (`packages/ocapn/src/client/`), not `@endo/captp`; cited for shape only. |
 | `packages/daemon` XS timer power | The per-root lease's expiry clock must be an **injected** timer power per target: the XS daemon's `setTimeout` polyfill discards its delay (`bus-xs-daemon-polyfills.js:54-60`), so an ambient-timer lease expires immediately on XS and falsifies the Q4 bound there. Precedent: `retention-accumulator.js:31` (injected clock), `manager-node-powers.js:545` (real Node timer). |
 | `packages/ocapn` three-party handoff | **Blocking** for the multi-party scope of Thread 5 (Q3): the embargo lifetime must be an observable protocol state. |
