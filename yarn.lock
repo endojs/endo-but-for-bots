@@ -2957,7 +2957,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/pubsub@workspace:packages/pubsub":
+"@endo/pubsub@workspace:^, @endo/pubsub@workspace:packages/pubsub":
   version: 0.0.0-use.local
   resolution: "@endo/pubsub@workspace:packages/pubsub"
   dependencies:
@@ -3211,6 +3211,18 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/space-workflow@workspace:packages/space-workflow":
+  version: 0.0.0-use.local
+  resolution: "@endo/space-workflow@workspace:packages/space-workflow"
+  dependencies:
+    "@endo/eventual-send": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/workflow": "workspace:^"
+    eslint: "catalog:dev"
+    preact: "npm:^10.29.2"
+  languageName: unknown
+  linkType: soft
+
 "@endo/spaces-util@workspace:^, @endo/spaces-util@workspace:packages/spaces-util":
   version: 0.0.0-use.local
   resolution: "@endo/spaces-util@workspace:packages/spaces-util"
@@ -3370,16 +3382,19 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/workflow@workspace:packages/workflow":
+"@endo/workflow@workspace:^, @endo/workflow@workspace:packages/workflow":
   version: 0.0.0-use.local
   resolution: "@endo/workflow@workspace:packages/workflow"
   dependencies:
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/hex": "workspace:^"
     "@endo/pass-style": "workspace:^"
+    "@endo/patterns": "workspace:^"
     "@endo/platform": "workspace:^"
+    "@endo/pubsub": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/sha256": "workspace:^"
     ava: "catalog:dev"
