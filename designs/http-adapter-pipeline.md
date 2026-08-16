@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-15 |
-| **Updated** | 2026-08-15 |
+| **Updated** | 2026-08-16 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 | **Source** | PR [#286](https://github.com/endojs/endo-but-for-bots/pull/286#pullrequestreview-4943057191) review (approval of `endo http mk` Phase 1) |
@@ -49,7 +49,7 @@ concerns:
    fee-bearing client for an untrusted guest and a plain allowlisted
    client for a trusted one, from the same controller vocabulary.
 3. **They compose.** Each concern is independently testable and
-   independently insertable: the definition of middleware.
+   independently insertable: the definition of an adapter.
 4. **They carry state with different scopes.** Rate windows are
    per-client; circuit-breaker state is per-origin; the fee purse is
    per-controller. A flat struct cannot express these scopes.
@@ -59,7 +59,7 @@ concerns:
    reference and called with eventual-send (`E(ref).method(...)`), unlike
    a plain closure, which is bound to the vat that created it. The
    controller holds the policy and the guest merely exercises it, across
-   a CapTP boundary. In-process function middleware
+   a CapTP boundary. In-process function adapters
    (`(ctx, next) => ...`) cannot cross a vat boundary; the pipeline must
    be built from exo facets, not closures.
 
@@ -115,8 +115,11 @@ Out of scope:
 
 ## Prior art: HTTP adapter pipelines as pass-style facets
 
-Every mainstream HTTP client factors cross-cutting concerns into an
-ordered, composable middleware chain:
+This design calls our composable pipeline elements **adapters** (or
+**stages**, interchangeably, for their position in the chain); "middleware"
+is reserved for the in-process prior art below (Koa/Express and friends),
+never for our pass-style construct. Every mainstream HTTP client factors
+cross-cutting concerns into an ordered, composable adapter chain:
 
 - **Koa / Express**, the "onion": `async (ctx, next) => { /* before */
   await next(); /* after */ }`. Each layer wraps the next; control
@@ -133,9 +136,9 @@ not own. That downstream handle is the pass-style seam.
 
 The mapping onto Endo:
 
-| Middleware idiom | Pass-style expression |
+| Prior-art idiom | Pass-style expression |
 |---|---|
-| Koa `(ctx, next)` closure | An **exo facet** implementing `HttpStageInterface` whose `request` method calls `E(next).request(...)`. |
+| Koa `(ctx, next)` closure | An **exo adapter facet** implementing `HttpStageInterface` whose `request` method calls `E(next).request(...)`. |
 | `next` continuation | A **remotable** (`M.remotable('HttpStage')`) captured at composition time, not passed per-call. |
 | `ctx` mutable context | An **immutable `StageContext` record** threaded by value (`origin`, `requestId`, `attempt`, optional `deadline`). No stage mutates another's fields; each hop forwards a freshly hardened record. Effectful shared state (the meter's live reservation) stays in the originating stage's own closure, captured at composition like `next`: it is never threaded through the shared context. |
 | `app.use(mw)` ordering | The **controller** composes the chain inner-to-outer at configuration time; order is controller policy, not caller input. |
@@ -237,7 +240,11 @@ export const HttpClientInterface = M.interface('EndoHttpClient', {
   // Pure affordability probe: resolves to costMax, reserves nothing. It
   // bounds a SINGLE attempt's worst case, not the whole retried call (see
   // § 2), so it await-returns a guarded FiniteNonNegative -- the `help`
-  // case: a bare primitive with no downstream shape to guard it.
+  // case: a bare primitive with no downstream shape to guard it. The client
+  // is the sole CONSUMER of the specialized cost-quote contract: the
+  // composer wires this forwarder directly to the meter adapter's CostQuote
+  // facet (§ Specialized adapter-pair contracts), so the answer does not
+  // travel the request onion and no intervening adapter is involved.
   estimateCost: M.callWhen(RequestShape)
     .optional(CallerContextShape)
     .returns(FiniteNonNegative),
@@ -245,26 +252,45 @@ export const HttpClientInterface = M.interface('EndoHttpClient', {
 });
 harden(HttpClientInterface);
 
-// Every internal STAGE speaks this. It differs from the client boundary
-// in exactly one way: the third argument is the wider StageContextShape
-// (origin + attempt already synthesized), so a stage is substitutable for
-// the whole client to the stage above it.
+// Every internal ADAPTER speaks this UNIFORM interface. It differs from
+// the client boundary in exactly one way: the third argument is the wider
+// StageContextShape (origin + attempt already synthesized), so an adapter
+// is substitutable for the whole client to the adapter above it. Note what
+// is DELIBERATELY ABSENT: `estimateCost` is NOT a method here. Only the
+// meter adapter can answer a cost quote; threading `estimateCost` through
+// this uniform interface would force retry, breaker, and rate to each
+// implement a pass-through they have no stake in -- a cross-cutting concern
+// smeared across an interface that must stay `request`-only. Cost quoting
+// is instead a SPECIALIZED ADAPTER-PAIR CONTRACT (CostQuoteInterface below,
+// wired at composition between exactly the two constructors that share it;
+// see § Specialized adapter-pair contracts), the same shape `next` uses.
 export const HttpStageInterface = M.interface('EndoHttpStage', {
   request: M.call(RequestShape, M.promise())
     .optional(StageContextShape)
     .returns(M.promise()),
-  // The pure cost probe forwarded DOWN the onion: stages above the meter
-  // pass it straight through to `next`; the meter stage answers it from
-  // its private PriceSchedule and returns without reserving. This is how a
-  // thin-forwarder client reaches the interior price without a direct
-  // meter reference -- composition opacity holds, the guest never names a
-  // stage. A chain with no meter stage answers 0.
-  estimateCost: M.callWhen(RequestShape)
-    .optional(StageContextShape)
-    .returns(FiniteNonNegative),
   help: M.call().optional(M.string()).returns(M.string()),
 });
 harden(HttpStageInterface);
+
+// The SPECIALIZED cost-quote contract -- NOT part of the uniform adapter
+// interface above. Exactly one adapter (the meter) PROVIDES it; exactly one
+// party (the client's thin forwarder) CONSUMES it. The composer wires the
+// consumer directly to the provider's cost facet at construction (§
+// Specialized adapter-pair contracts), so no intervening adapter (retry,
+// breaker, rate) sees or forwards it. It answers `costMax` from the meter's
+// private PriceSchedule and reserves nothing -- the pure probe. A chain
+// composed with no meter has no provider, so the composer wires the
+// consumer to a null quote that answers 0 (the same "answers 0" behavior
+// the old forward-through-the-onion shape had, now a named composition
+// choice, not a silent fallthrough). It resolves to a bare `costMax`, so it
+// guards its own resolved value (the `help`/`estimateCost` guard rule
+// below), never an unguarded promise.
+export const CostQuoteInterface = M.interface('EndoHttpCostQuote', {
+  estimateCost: M.callWhen(RequestShape)
+    .optional(StageContextShape)
+    .returns(FiniteNonNegative),
+});
+harden(CostQuoteInterface);
 ```
 
 **The client-to-stage seam.** The client's thin forwarder is exactly
@@ -320,6 +346,76 @@ request: async (request, cancellation, context) => {
 
 The terminal stage's `next` is the injected `fetch` transport, not
 another `HttpStage`; it is the only stage that touches the platform.
+
+### Specialized adapter-pair contracts: `estimateCost` off the uniform interface
+
+`estimateCost` is deliberately **not** a method on `HttpStageInterface`. An
+earlier shape put it there and had every adapter forward it down the onion
+-- retry, breaker, and rate each passing a cost probe straight through to
+`next` until it reached the meter. That is a cross-cutting concern smeared
+across an interface that should stay `request`-only: three adapters carry a
+pass-through they have no stake in, purely so one pair at the ends of the
+chain can talk. And it would not be the last such need -- the next time one
+adapter must consult a *specific* downstream adapter (a breaker asking the
+meter whether a probe is free of charge, a future TOFU stage asking the
+transport for a pin fingerprint), the same pressure would push another
+method onto the uniform interface, and every non-participant adapter would
+grow another inert pass-through. An interface that accretes one method per
+inter-adapter conversation is not uniform for long.
+
+The alternative is a **specialized adapter-pair contract**: a bilateral
+interface wired at composition between exactly the two adapter *constructors*
+that share it, never a method on the interface every adapter implements. It
+is the same mechanism `next` already uses -- a far-ref captured at
+construction, not a per-call argument -- generalized from "the adapter
+directly beneath me" to "the specific downstream adapter I hold a named
+contract with."
+
+Concretely, cost quoting is `CostQuoteInterface` (§ The stage interface), a
+one-method facet the **meter adapter provides** and the **client's thin
+forwarder consumes**. The controller's composer -- which already builds the
+onion inner-to-outer and knows every adapter's identity -- does one extra
+wiring step: as it composes, it tracks each *provided* specialized facet,
+and when it reaches an adapter (or the client boundary) that *consumes* one,
+it endows that consumer with a far-ref to the nearest downstream provider's
+facet. For `estimateCost` the consumer is the client forwarder and the sole
+provider is the meter, so the composer wires the client's `estimateCost`
+**directly to the meter's `CostQuote` facet**; the retry, breaker, and rate
+adapters between them in the request onion are not parties to the contract
+and never see it. Their `HttpStageInterface` stays exactly `request` +
+`help`.
+
+This is what "a contract between two adapter constructors, not the adapter
+interface in general" buys:
+
+- **The uniform interface stays minimal.** Adding a specialized contract
+  never widens `HttpStageInterface`; a non-participant adapter is unchanged
+  and implements no method it does not answer.
+- **Participation is explicit and typed.** An adapter's constructor declares
+  which specialized facets it *provides* and which it *consumes*; the
+  composer matches each consumer to the nearest downstream provider and fails
+  composition when a consumer's contract has no provider, rather than leaving
+  a silent runtime pass-through to return a wrong default. The one sanctioned
+  "no provider" case is spelled explicitly: a chain composed without a meter
+  has no `CostQuote` provider, so the composer wires the client's
+  `estimateCost` to a **null quote that answers 0** -- the same "answers 0"
+  behavior the old forward-through-the-onion shape produced, now a named
+  composition choice rather than an interface-wide fallthrough.
+- **It preserves composition opacity.** The guest still holds only the
+  client and never names the meter: the cost-quote far-ref lives in the
+  client forwarder's own captured state (like `next`), so a guest reaches the
+  interior price through `estimateCost` without gaining a reference to any
+  adapter.
+- **It generalizes.** The next inter-adapter need is one more `M.interface`
+  plus one more provide/consume pair the composer wires the same way; it does
+  not touch the uniform interface or any adapter that is not a party to it.
+
+When a future contract has a *chain* of participants (adapter A quotes from
+B's quote which quotes from C's), the composer threads each participant to
+the *next participant's* facet -- an adapter calling forward to the next
+adapter's specialized method, skipping non-participants -- so the multi-party
+case is this same wiring rule applied transitively. The single-provider
+`estimateCost` case is that rule with exactly two parties.
 
 ### Composition authority stays on the controller
 
@@ -1141,6 +1237,15 @@ signal. The fixed admission-fee flag is likewise `--per-request` in full.
 endowed programmatically by the provisioning integration, not named on a
 shell line.)
 
+The meter adapter additionally **provides** the internal `CostQuote` facet
+(§ Specialized adapter-pair contracts) that answers the client's
+`estimateCost`. It is not a surface verb -- no controller mutator, no CLI
+verb -- but an intra-pipeline capability the composer wires from the meter
+to the client forwarder; it is invisible to both the shell and the guest,
+which reaches it only through the client's `estimateCost` probe. It is
+listed here so the surface inventory records why `estimateCost` needs no
+per-adapter method on `HttpStageInterface`.
+
 The "rejects a client-reachable ref" guarantee is **structural, not a
 provenance test**: passability alone does not encode where a capability has
 been (a `ChargeAccount` a guest already holds is exactly as passable as one
@@ -1213,7 +1318,7 @@ Nothing in the pipeline relaxes the Phase 1 defenses:
 
 ## Alternatives considered
 
-### Alt A: In-process function middleware (Koa closures) instead of exo stages
+### Alt A: In-process function adapters (Koa closures) instead of exo stages
 
 Compose the concerns as ordinary `(ctx, next) => ...` functions inside the
 daemon's http-client module.
@@ -1332,6 +1437,13 @@ suite unchanged through the refactored pipeline:
   real reservation would compute; for a retryable request the full-call
   worst case is `maxAttempts * estimateCost(request)` (assert the probe does
   **not** silently fold in `maxAttempts`).
+- **`estimateCost` is a wired adapter-pair contract, not a uniform-interface
+  method:** assert `HttpStageInterface` exposes **no** `estimateCost` method
+  (the uniform request onion stays `request` + `help`, and the retry,
+  breaker, and rate adapters implement no cost method); a client whose chain
+  includes a meter quotes the meter's `costMax` (the composer wired the
+  client forwarder to the meter's `CostQuote` facet), and a client whose
+  chain has **no** meter answers `0` through the composer's null quote.
 - **Byte-cap = reservation ceiling:** a response with a lying large
   `Content-Length` still bills at `bytesActuallyRead`, and
   `bytesActuallyRead <= maxResponseBytes` always.
