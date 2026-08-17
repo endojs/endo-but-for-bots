@@ -15,6 +15,9 @@ export type ReadOnlyGitWorktree = ReadableTree;
 /** @deprecated Use `WritableGitWorktree` or `ReadOnlyGitWorktree`. */
 export type GitWorktree = WritableGitWorktree | ReadOnlyGitWorktree;
 
+/** A path within a Git capability's worktree authority. */
+export type GitPathDesignator = PathEntry | string;
+
 export type GitRef = {
   name: string;
   kind: 'branch' | 'tag' | 'commit' | 'detached';
@@ -349,10 +352,13 @@ export type ReadOnlyEndoGit = {
 /** The ordinary read-write capability surface. */
 export type ReadWriteEndoGit = ReadOnlyEndoGit & {
   worktree: () => Promise<WritableGitWorktree>;
-  add: (entries: PathEntry[]) => Promise<void>;
-  restore: (entries: PathEntry[], options?: GitRestoreOptions) => Promise<void>;
+  add: (designators: GitPathDesignator[]) => Promise<void>;
+  restore: (
+    designators: GitPathDesignator[],
+    options?: GitRestoreOptions,
+  ) => Promise<void>;
   checkoutConflict: (
-    entries: PathEntry[],
+    designators: GitPathDesignator[],
     side: GitConflictSide,
   ) => Promise<void>;
   commit: (

@@ -248,6 +248,10 @@ prefixes or dedupes.
 `makeGitTool` derives its catalog from the facet named by its `facet` option.
 The default writer catalog exposes ordinary read/write operations but no
 history rewrite.
+It includes `add` and `checkoutConflict` with worktree-relative string paths;
+the Git capability resolves those paths through its own confined mount.
+`makeGitMountTools` retains `status` so that tool can default to collapsed
+untracked directories.
 A host that deliberately grants a rewriter capability selects
 `{ facet: 'rewriter' }` to add `commit` with `options.amend`, `reword`,
 `cherryPick`, and `rebase`.

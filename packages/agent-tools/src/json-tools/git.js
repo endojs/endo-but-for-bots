@@ -33,9 +33,9 @@ import {
 import { makeTool } from '../tool.js';
 
 /**
- * JSON Schemas for the Git methods exposed as agent tools. Methods that need
- * remotable arguments or return live capabilities are excluded; runtime arg
- * guards come from the corresponding facet interface.
+ * JSON Schemas for the Git methods exposed as agent tools. Methods that return
+ * live capabilities are excluded; runtime arg guards come from the
+ * corresponding facet interface.
  */
 
 const NO_ARGS = harden({
@@ -86,6 +86,26 @@ const COMMIT_OPTIONS_PROP = harden({
 const COMMIT_PROP = harden({
   type: 'string',
   description: 'The commit message.',
+});
+
+const PATHS_PROP = harden({
+  type: 'array',
+  items: { type: 'string' },
+  description:
+    'Worktree-relative paths. Each path is resolved by the Git capability ' +
+    'through its own confined mount; directory paths include everything ' +
+    'under that directory. The worktree root itself is not a path designator.',
+});
+
+const CONFLICT_SIDE_PROP = harden({
+  type: 'string',
+  enum: ['ours', 'theirs'],
+  description:
+    'The unmerged Git index stage to select for every path: "ours" is ' +
+    'stage 2 and "theirs" is stage 3. These names identify index stages, ' +
+    'not stable branch roles. During rebase, Git treats the upstream onto ' +
+    'which commits are replayed as ours and the commit being replayed as ' +
+    'theirs, inverted from intuitive current/incoming branch wording.',
 });
 
 const CHERRY_PICK_OPTIONS_PROP = harden({
@@ -179,8 +199,7 @@ const REBASE_DESCRIPTION =
 
 /**
  * This package intentionally exposes only a curated JSON-safe writable Git
- * slice for now. Methods that remotely accept capabilities need the
- * mount-bridge adapter and are kept out of this one-to-one slice.
+ * slice for now.
  *
  * Holds the schemas for every facet's tool at once; `gitToolMethodsByFacet`
  * below projects this onto the method names each facet actually advertises,
@@ -190,6 +209,17 @@ const REBASE_DESCRIPTION =
  * @type {Record<keyof GitToolRewriterCapability, { description: string, parameters: object }>}
  */
 const gitToolSchemas = harden({
+  add: {
+    description:
+      'Stage files or directories for the next commit by worktree-relative ' +
+      'path. Staging is additive and never discards working-tree changes.',
+    parameters: {
+      type: 'object',
+      properties: { paths: PATHS_PROP },
+      required: ['paths'],
+      additionalProperties: false,
+    },
+  },
   log: {
     description: 'List commit history, most recent first.',
     parameters: {
@@ -226,6 +256,25 @@ const gitToolSchemas = harden({
         options: COMMIT_OPTIONS_PROP,
       },
       required: ['message'],
+      additionalProperties: false,
+    },
+  },
+  checkoutConflict: {
+    description:
+      'Resolve conflicted paths by selecting Git index stage 2 ("ours") ' +
+      'or stage 3 ("theirs"), then stage the resolution. These are index ' +
+      'stages, not stable branch roles: during rebase, ours is the upstream ' +
+      'side and theirs is the commit being replayed, inverted from ' +
+      'intuitive current/incoming wording. Fails on a path whose selected ' +
+      'side has no version — a delete/modify conflict, where that side ' +
+      'deleted the file — or a path that is not actually unmerged; resolve ' +
+      'those by picking the surviving side or removing the path. Paths are ' +
+      'processed left to right, so on failure the earlier paths are already ' +
+      'staged and the error names the path that stopped it.',
+    parameters: {
+      type: 'object',
+      properties: { paths: PATHS_PROP, side: CONFLICT_SIDE_PROP },
+      required: ['paths', 'side'],
       additionalProperties: false,
     },
   },
@@ -379,8 +428,9 @@ const gitFacetMethodMembership = harden({
 /**
  * `gitToolMethods`, projected per facet: rewrite verbs (`reword`,
  * `cherryPick`, `rebase`) survive the filter only for `rewriter`; edit verbs
- * (`commit`, `createBranch`, `switchBranch`) survive only for `writer` and
- * `rewriter`. A reader facet's projection is read/navigation verbs only.
+ * (`add`, `checkoutConflict`, `commit`, `createBranch`, `switchBranch`) survive
+ * only for `writer` and `rewriter`. A reader facet's projection is
+ * read/navigation verbs only.
  *
  * @type {Record<GitToolFacet, (keyof GitToolRewriterCapability)[]>}
  */
@@ -516,7 +566,8 @@ const makeGitTools = (gitCap, methods, schemas, gitInterface) => {
  * capability, catalog derived from the granted facet: `facet: 'reader'`
  * advertises read/navigation verbs only, `'writer'` (the default, matching
  * the authority `provideGit` grants without `allowHistoryRewrite`) adds the
- * edit verbs (`commit`, `createBranch`, `switchBranch`), and `'rewriter'`
+ * edit verbs (`add`, `checkoutConflict`, `commit`, `createBranch`,
+ * `switchBranch`), and `'rewriter'`
  * additionally adds the history-rewrite verbs (`reword`, `cherryPick`,
  * `rebase`, and `commit`'s `amend` option). The runtime authority asserts in
  * `GitInterface` stay as defense in depth regardless of facet — a capability

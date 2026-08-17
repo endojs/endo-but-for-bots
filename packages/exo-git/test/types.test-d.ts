@@ -247,10 +247,8 @@ expectTypeOf<
 
 // `worktree()` returns a mutable `WritableGitWorktree` for read-write
 // postures and an immutable `ReadOnlyGitWorktree` for the read-only posture;
-// and the writable worktree issues lineage-bearing `PathEntry` values (the
-// property downstream mount-bridged tools, e.g. `GitMountToolCapability`,
-// depend on to stage files by entry rather than by trusting a bare path
-// string).
+// and the writable worktree issues lineage-bearing `PathEntry` values for
+// callers composing a designation across a trust boundary.
 expectTypeOf<
   Awaited<ReturnType<ReadWriteEndoGit['worktree']>>
 >().toEqualTypeOf<WritableGitWorktree>();
@@ -316,6 +314,10 @@ expectTypeOf<
 
 declare const ordinaryGit: ReadWriteEndoGit;
 declare const historyRewriteGit: HistoryRewriteEndoGit;
+
+ordinaryGit.add(['src/main.js']);
+ordinaryGit.restore(['src/main.js']);
+ordinaryGit.checkoutConflict(['src/main.js'], 'ours');
 
 // Call-site proof of the same commit/amend and history-rewrite-operation
 // contract pinned above by shape: an ordinary read-write Git must reject

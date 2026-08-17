@@ -26,9 +26,9 @@
 export const gitDeclarations = harden({
   git: {
     aux: `type WritableEndoGit = {
-  add: (entries: GitPathEntry[]) => Promise<void>;
+  add: (designators: GitPathDesignator[]) => Promise<void>;
   branches: () => Promise<GitRef[]>;
-  checkoutConflict: (entries: GitPathEntry[], side: GitConflictSide) => Promise<void>;
+  checkoutConflict: (designators: GitPathDesignator[], side: GitConflictSide) => Promise<void>;
   commit: (message: string) => Promise<GitCommit>;
   createBranch: (name: string, options?: GitCreateBranchOptions) => Promise<GitRef>;
   currentBranch: () => Promise<GitRef | undefined>;
@@ -40,7 +40,7 @@ export const gitDeclarations = harden({
   merge: (ref: GitRef | string, options?: GitMergeOptions) => Promise<string>;
   readOnly: () => GitReadOnlyEndoGit;
   renameBranch: (from: string, to: string) => Promise<void>;
-  restore: (entries: GitPathEntry[], options?: GitRestoreOptions) => Promise<void>;
+  restore: (designators: GitPathDesignator[], options?: GitRestoreOptions) => Promise<void>;
   revParse: (ref: GitRef | string) => Promise<GitRef>;
   scope: (name: 'reader' | 'writer') => GitReadOnlyEndoGit | WritableEndoGit;
   show: (ref: GitRef | string) => Promise<string>;
@@ -196,6 +196,7 @@ type GitMergeOptions = {
     fastForwardOnly?: boolean;
     noFastForward?: boolean;
 };
+type GitPathDesignator = GitPathEntry | string;
 type GitRef = {
     name: string;
     kind: 'branch' | 'tag' | 'commit' | 'detached';
