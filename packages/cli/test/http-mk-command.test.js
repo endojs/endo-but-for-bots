@@ -133,13 +133,15 @@ test('normalizeHttpClientOrigin is idempotent over accepted origins', async t =>
   );
 });
 
-// A non-empty, %-encoded segment that cannot itself carry a `/`, `?`, `#`, `@`,
-// or `:` delimiter, so each builder below produces exactly the suffix kind it
-// names rather than accidentally landing a different component.
+// A %-encoded segment led by a literal non-dot character. Encoding strips any
+// `/`, `?`, `#`, `@`, or `:` delimiter so each builder below produces exactly
+// the suffix kind it names; the leading `x` keeps a path segment from ever being
+// a lone `.`/`..` dot-segment, which `URL` path-normalization collapses back to
+// the bare-origin root (`http://h/..` -> `http://h`) — a correct acceptance,
+// not a reject case.
 const arbSuffixSegment = fc
   .string({ minLength: 1 })
-  .map(s => encodeURIComponent(s))
-  .filter(s => s.length > 0);
+  .map(s => `x${encodeURIComponent(s)}`);
 
 const arbRejectedOrigin = fc
   .record({
