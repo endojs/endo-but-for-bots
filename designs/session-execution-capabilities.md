@@ -14,9 +14,9 @@ Daemon-backed code mode is present on `llm`.
 It can retain a guest across daemon restarts and grant workspace and Git
 capabilities, but mediated network authority is not yet wired into its tools or
 globals.
-Package-manager capability and projection work is open, while the host backend,
-daemon formula, and safe-install provisioning do not yet have implementation
-pull requests.
+Portable package-manager capability work has landed and its projection remains
+open, while the host backend, daemon formula, and safe-install provisioning do
+not yet have implementation pull requests.
 
 This document is the plan of record for completing independently granted
 workspace, Git, package-manager, and Web capabilities for code-mode consumers.
@@ -70,18 +70,18 @@ separately and is outside whole-session confinement claims.
 ## Verified Current State
 
 This state was verified on 2026-08-16 against `llm` commit
-`ba504b5d6120c1463e0f3c286cfc93c7c82f10eb` and the live pull-request heads.
+`eb6da1602f8b1c04da5b8a32f5fc01070ad49ca2` and the live pull-request heads.
 Open implementation branches remain owned by their existing pull requests and
 must not be absorbed into this design branch.
 
 | Surface | State | Live evidence and remaining boundary |
 |---|---|---|
 | Daemon-backed code mode | **Landed on `llm`.** | [#905](https://github.com/endojs/endo-but-for-bots/pull/905) and [#907](https://github.com/endojs/endo-but-for-bots/pull/907) supply retained daemon guests, restart/reconnect behavior, and the endo-pi `evaluate` acceptance surface. They do not supply package-manager or mediated Web grants. |
-| Portable package manager | **Open draft on `llm`.** | [#948](https://github.com/endojs/endo-but-for-bots/pull/948), head `f0ea1bdda3a7f09fa44d8535f3243c5ede48b616`, defines structurally distinct cumulative reader, installer, and executor facets plus the injected backend protocol. |
-| Package-manager projection | **Open draft stacked on #948.** | [#950](https://github.com/endojs/endo-but-for-bots/pull/950), head `e2b0016fc6359110787ff43b3a92b5f0cd92c5cb`, projects metadata tools for a reader, adds `installDependencies` only for an installer, and adds `runPackageScript` only for an executor. Stack maintenance remains with those implementation pull requests. |
-| Named Git grants | **Open draft on `llm`.** | [#958](https://github.com/endojs/endo-but-for-bots/pull/958), head `e9e501d92139de3fb318dc4fd987579db0568c77`, adds named nested Git grants, named mount selection, canonical-root persistence, and retained reconstruction. |
+| Portable package manager | **Landed on `llm`.** | [#948](https://github.com/endojs/endo-but-for-bots/pull/948), merged at head `f0ea1bdda3a7f09fa44d8535f3243c5ede48b616`, defines structurally distinct cumulative reader, installer, and executor facets plus the injected backend protocol. |
+| Package-manager projection | **Open draft based on #948.** | [#950](https://github.com/endojs/endo-but-for-bots/pull/950), head `e2b0016fc6359110787ff43b3a92b5f0cd92c5cb`, projects metadata tools for a reader, adds `installDependencies` only for an installer, and adds `runPackageScript` only for an executor. Stack maintenance remains with that implementation pull request. |
+| Named Git grants | **Open draft on `llm`.** | [#958](https://github.com/endojs/endo-but-for-bots/pull/958), head `2c46751282daa7a55c20a18f6759f5f0b666c1ef`, adds named nested Git grants, named mount selection, canonical-root persistence, and retained reconstruction. |
 | Truthful generic grants | **Open draft stacked on #958.** | [#965](https://github.com/endojs/endo-but-for-bots/pull/965), head `14f2a15b6b26dfd3156f2a5f3dec8b33998fb393`, converges live endowments, checked declarations, prompts, and retained provisioning on locally trusted grant minters. Its recorded base snapshot is `b4b66062b7f234fd0963811c7645257f421bd920`; #958 has since advanced. |
-| Trusted host development backend and formula | **No implementation PR yet.** | `packages/package-manager` does not exist on `llm` or #948. The backend, registry broker, daemon formula, durable policy, cleanup, and trusted provisioning remain. This tier is for trusted workspaces, not the final hostile-workspace boundary. |
+| Trusted host development backend and formula | **No implementation PR yet.** | `packages/package-manager` does not exist on `llm`; #948 supplies only the portable facade and injected protocol. The backend, registry broker, daemon formula, durable policy, cleanup, and trusted provisioning remain. This tier is for trusted workspaces, not the final hostile-workspace boundary. |
 | Public-Web transport and `WebResearch` | **No implementation PR yet.** | [#566](https://github.com/endojs/endo-but-for-bots/pull/566) landed `@endo/http-confine` and `@endo/exo-http-client`. The retired Genie package remains historical reference material for `webFetch`, `webSearch`, and its parser at the [last pre-retirement tree](https://github.com/endojs/endo-but-for-bots/tree/a54c3adb/packages/genie). No reusable DNS-pinned public-Web transport, passable WebResearch capability, daemon formula, or code-mode `web` grant exists. |
 | Registry acquisition and CAS | **Landed on `llm`.** | [#671](https://github.com/endojs/endo-but-for-bots/pull/671) supplies `EndoRegistry`, injected acquisition, published-integrity verification, and CAS-backed package trees. It is a foundation for the package-manager broker, not that broker itself. |
 | Confined execution backend | **Design draft, with incomplete substrate guarantees.** | [#953](https://github.com/endojs/endo-but-for-bots/pull/953), head `cd766517a1d6f59f382d0cb0d0cb36f32fb2e51f`, defines sandbox-backed project-code execution. Current `@endo/sandbox` proves `network: 'none'`; bwrap private egress is not wired, Podman filtering remains operator-owned, and the bwrap default seccomp profile is not loaded. The design must not claim hostile-workspace conformance until driver-owned probes pass. |
@@ -605,16 +605,16 @@ linked pull request is unposted work, not implied follow-up.
 - [x] Graceful CapTP shutdown. Owner: `@endo/captp`. Tracking: #947. Done:
   deliberate disconnects settle through the graceful shutdown path. This does
   not complete crash recovery or effect reconciliation.
+- [x] Portable package-manager facets. Owner: `@endo/exo-package-manager`.
+  Tracking: #948. Done: reader, installer, and executor are non-escalating,
+  fixed-argv facets with operation-scoped cancellation, bounded protocol
+  inputs, and expected-snapshot handoff to the backend.
 
 ### Open pull requests
 
-- [ ] Land portable package-manager facets. Owner:
-  `@endo/exo-package-manager`. Tracking: #948. Dependency: landed mount seams.
-  Done when reader, installer, and executor remain non-escalating, fixed-argv,
-  bounded facets with operation-scoped cancellation and snapshot revalidation.
 - [ ] Land exact package-manager projection. Owner: `@endo/agent-tools`.
-  Tracking: #950, stacked on #948. Done when tool and code-mode surfaces expose
-  only the methods present on the received facet.
+  Tracking: #950, based on landed #948. Done when tool and code-mode surfaces
+  expose only the methods present on the received facet.
 - [ ] Land named Git grants and truthful generic provisioning. Owners:
   `@endo/agentry` and daemon. Tracking: #958 and #965. Dependency: existing Git
   facets. Done when capabilities, checked declarations, and prompt text all
