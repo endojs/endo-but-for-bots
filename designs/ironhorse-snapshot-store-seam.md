@@ -362,18 +362,34 @@ decision-side term), reachability query 0.13 ms (killed by the
 indexed path), and ~8.5 ms in `free_pages` — O(garbage reclaimed) at
 ~35-44 ns per freed slot, the pay-for-what-you-free term.
 
-Next in phase 10, in measured order of value:
-page-wholesale freeing (a dead page's records need no per-slot walk
-once the free list is paged — phase 9 interaction — attacking the
-dominant ~8.5 ms term), then incremental side-table ref-page counts
-behind counted accessors on the two bulk tables (arrays,
-collections; ~60 direct mutation sites make privacy-enforced
-accessors the only sound route — parity-locked against the
-enumeration), which retires the 3.6 ms term when attached machines
-carry large side tables. The stored-summary variant of that term
-belongs to the side-table LEDGER work (rows are not yet persisted;
-the quiescent contract keeps resumed machines arena-confined), so it
-lands there, not here.
+A framing correction the split forced: `free_pages` is O(garbage
+RECLAIMED), not O(heap) — every freed slot was once allocated, so its
+~30-44 ns is amortized O(1) per allocation, the collector analogue of
+paying for what you used. It is not a scaling defect and page-
+wholesale freeing is NOT queued (it would buy a constant on a term
+that already amortizes; if the paged free list ever makes it nearly
+free, take it then).
+
+The enumeration term then got its constant fixed the sound way: the
+side-table walk is now a single visitor body
+(`Interp::each_side_table_ref`) with two thin projections —
+`side_table_ref_slots` (index vector, tests and future summaries) and
+`side_table_ref_page_bits` (the bitmap the partial collector roots
+from) — so the projections cannot drift (also parity-locked by
+`side_table_page_bits_agree_with_slot_enumeration`). Measured: the
+480k-slot enumeration drops 3.6 ms → 1.06 ms and end-to-end partial
+12.4 ms → 8.4 ms, now free-dominated (the amortized term above).
+
+What remains of the decision-side O(live) is the 1.06 ms walk itself.
+Retiring it outright means incremental ref-page counts behind counted
+accessors on the two bulk tables (arrays, collections; ~60 direct
+mutation sites make privacy-enforced accessors the only sound route,
+parity-locked against the enumeration) — engine-invasive enough to be
+its own reviewed change, queued behind demand from attached machines
+that actually carry side-table state that wide. The stored-summary
+variant belongs to the side-table LEDGER work (rows are not yet
+persisted; the quiescent contract keeps resumed machines
+arena-confined), so it lands there, not here.
 
 Preceding it, the collaborator-review follow-up wave landed:
 `compare_payloads` as the only sanctioned two-chunk read, SQLite
@@ -506,12 +522,13 @@ validation):**
    open-time error either. Decoding every record at open would defeat
    lazy resume; the panic path is the accepted trade.
 
-Remaining, mapped to the phases: cargo-fuzz CI promotion of the
-hardening arms (the toolchain now runs locally — submodule + nightly
-+ libFuzzer — and has already produced a trophy; a CI lane is the
-remaining step); the supervisor cadence policy and `endor` binary
-wiring (with the worker-envelope work). The attached-mode benchmark
-landed with phase 10's instruments.
+Remaining, mapped to the phases: the supervisor cadence policy and
+`endor` binary wiring (with the worker-envelope work). The
+attached-mode benchmark landed with phase 10's instruments, and the
+cargo-fuzz CI lane landed as the `fuzz-ironhorse` smoke job (30 s per
+decode/round-trip target on every ironhorse-relevant change, corpus
+cached across runs, crash artifacts uploaded on failure; deep fuzzing
+stays a local/scheduled concern).
 The phase 5-9 roadmap is LANDED (2026-08-11, see the phase blocks
 above): row-hash tree + wake-latency instrument (5), page-edge
 summaries + partial collect (6), incremental compaction dirt (7),
