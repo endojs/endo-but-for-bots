@@ -584,6 +584,11 @@ deferred; see the Status section's deviation and fixture-parity notes.
    integration suite independently checks 32 compartment-mapper fixtures and
    accounts for every fixture through its drift guard.
 
+The static-import scanner this phase's `entry_walk` walker depends on
+(`scan_static_imports`) is being consolidated with `cjs_lexer.rs` onto a shared
+allocation-light cursor core; see
+[rust-module-lexer-consolidation](rust-module-lexer-consolidation.md).
+
 ## Design decisions
 
 1. **CAS as the universal backing store.**
