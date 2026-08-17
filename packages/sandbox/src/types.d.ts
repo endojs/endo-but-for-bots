@@ -335,6 +335,20 @@ export type SandboxHandle = FarRef<{
 }>;
 
 /**
+ * Termination signals the process supervisor supports for
+ * `ProcessHandle.kill()`. Every kill is terminal cancellation of the
+ * whole process tree, so nonterminating values (a `0` liveness probe,
+ * `SIGUSR1`, …) are rejected at the interface guard rather than being
+ * silently escalated to `SIGKILL`.
+ */
+export type TerminationSignal =
+  | 'SIGTERM'
+  | 'SIGINT'
+  | 'SIGHUP'
+  | 'SIGQUIT'
+  | 'SIGKILL';
+
+/**
  * A process running inside a slice. Stdio uses Endo's existing
  * `reader-ref` / `writer-ref` plumbing — there is no JSON transcoding of
  * process bytes.
@@ -351,8 +365,13 @@ export type ProcessHandle = FarRef<{
   stderr(): ReaderRef;
   /** Resolves when the process exits. */
   wait(): Promise<{ code: number | null; signal: string | null }>;
-  /** Send `signal` (or `SIGTERM`) to the process. */
-  kill(signal?: string | number): Promise<void>;
+  /**
+   * Begin terminal cancellation of the process tree: deliver `signal`
+   * (default `SIGTERM`), escalate to `SIGKILL` after a bounded grace
+   * period, and settle once the process is reaped. Use `wait()` to
+   * observe liveness rather than a `kill(0)` probe.
+   */
+  kill(signal?: TerminationSignal): Promise<void>;
 }>;
 
 /**
@@ -386,7 +405,13 @@ export type DriverProcess = {
   stdout?: AsyncIterable<Uint8Array> | null;
   stderr?: AsyncIterable<Uint8Array> | null;
   wait(): Promise<{ code: number | null; signal: string | null }>;
-  kill(signal?: string | number): Promise<void>;
+  /**
+   * Deliver one signal to the whole driver-owned process group or
+   * container. The supervisor owns the escalation ladder, so the same
+   * narrow set of terminal signals it can issue is all a driver has to
+   * accept.
+   */
+  kill(signal?: TerminationSignal): Promise<void>;
 };
 
 /**

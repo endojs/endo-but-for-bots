@@ -65,6 +65,20 @@ const SeccompPolicyShape = M.or(
 );
 harden(SeccompPolicyShape);
 
+// `kill()` always begins terminal cancellation of the whole process
+// tree, so only the termination signals the supervisor supports are
+// accepted. A nonterminating value such as `0` (liveness probe) or
+// `SIGUSR1` would still escalate to SIGKILL and destroy the process,
+// so it is rejected at the boundary instead.
+const TerminationSignalShape = M.or(
+  'SIGTERM',
+  'SIGINT',
+  'SIGHUP',
+  'SIGQUIT',
+  'SIGKILL',
+);
+harden(TerminationSignalShape);
+
 const ResourceLimitsShape = M.splitRecord(
   {},
   {
@@ -198,7 +212,7 @@ export const ProcessHandleInterface = M.interface('SandboxProcess', {
   stdout: M.call().returns(M.remotable('PassableBytesReader')),
   stderr: M.call().returns(M.remotable('PassableBytesReader')),
   wait: M.call().returns(M.promise()),
-  kill: M.call().optional(M.or(M.string(), M.number())).returns(M.promise()),
+  kill: M.call().optional(TerminationSignalShape).returns(M.promise()),
 });
 harden(ProcessHandleInterface);
 
@@ -233,4 +247,5 @@ export {
   SandboxMakeOptsShape,
   SeccompPolicyShape,
   SpawnOptsShape,
+  TerminationSignalShape,
 };
