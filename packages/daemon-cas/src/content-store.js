@@ -64,10 +64,8 @@ export const makeContentStore = (storageDirectoryPath, options) => {
       // Stream to temporary file and calculate hash.
       await filePowers.makePath(storageDirectoryPath);
       const fileWriter = filePowers.makeFileWriter(temporaryStoragePath);
-      // eslint-disable-next-line no-await-in-loop
       for await (const chunk of readable) {
         digester.update(chunk);
-        // eslint-disable-next-line no-await-in-loop
         await fileWriter.next(chunk);
       }
       await fileWriter.return(undefined);
