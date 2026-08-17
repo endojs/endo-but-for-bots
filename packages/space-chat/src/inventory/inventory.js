@@ -408,7 +408,10 @@ const InventoryItem = ({
         );
       } else if (
         methods.includes('kind')
-          ? (await E(targetRef).kind()) === 'directory'
+          ? // The explicit call is necessary here: a daemon file intentionally
+            // exposes a diagnostic list() stub, so method names alone cannot
+            // distinguish it from a directory.
+            (await E(targetRef).kind()) === 'directory'
           : methods.includes('list')
       ) {
         // Static tree (ReadableTree, etc.): populate from list().

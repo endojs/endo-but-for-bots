@@ -67,18 +67,35 @@ harden(drainBytes);
  * @param {string[]} pathSegments
  * @param {ZipWriter} writer
  * @param {{ date?: Date }} entryOptions
+ * @param {boolean | undefined} [kindProtocol]
  */
-const walkTree = async (node, pathSegments, writer, entryOptions) => {
-  // eslint-disable-next-line no-underscore-dangle
-  const methods = await E(/** @type {any} */ (node)).__getMethodNames__();
-  const isTree = methods.includes('kind')
+const walkTree = async (
+  node,
+  pathSegments,
+  writer,
+  entryOptions,
+  kindProtocol = undefined,
+) => {
+  let methods;
+  if (kindProtocol === undefined) {
+    // eslint-disable-next-line no-underscore-dangle
+    methods = await E(/** @type {any} */ (node)).__getMethodNames__();
+  }
+  const hasKind = kindProtocol ?? methods.includes('kind');
+  const isTree = hasKind
     ? (await E(/** @type {any} */ (node)).kind()) === 'directory'
     : methods.includes('list');
   if (isTree) {
     const names = await E(/** @type {any} */ (node)).list();
     for (const name of names) {
       const child = await E(/** @type {any} */ (node)).lookup(name);
-      await walkTree(child, [...pathSegments, name], writer, entryOptions);
+      await walkTree(
+        child,
+        [...pathSegments, name],
+        writer,
+        entryOptions,
+        hasKind ? true : undefined,
+      );
     }
     return;
   }
