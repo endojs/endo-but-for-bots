@@ -111,7 +111,9 @@ const agentBindingMessage = sessionPublicKey =>
  * @returns {string} the `host:port` authority, IPv6 host bracketed
  */
 export const formatHostPort = (host, port) => {
-  const authority = host.includes(':') ? `[${host}]:${port}` : `${host}:${port}`;
+  const authority = host.includes(':')
+    ? `[${host}]:${port}`
+    : `${host}:${port}`;
   // Round-trip through URL to validate. `tcp:` is an arbitrary parseable
   // scheme; only the authority is under test. Port 0 (an as-yet-unbound
   // ephemeral port) is the one legitimate value URL normalizes away
@@ -120,7 +122,7 @@ export const formatHostPort = (host, port) => {
   try {
     url = new URL(`tcp://${authority}`);
   } catch (cause) {
-    throw Error(
+    throw new Error(
       `Cannot format OCapN authority from host ${JSON.stringify(
         host,
       )} and port ${JSON.stringify(port)}: ${authority} is not a valid URL authority`,
@@ -133,14 +135,14 @@ export const formatHostPort = (host, port) => {
   // IPv6 brackets, which we strip from both sides.
   const bareHost = host.replace(/^\[|\]$/g, '');
   if (url.hostname.replace(/^\[|\]$/g, '') !== bareHost) {
-    throw Error(
+    throw new Error(
       `Cannot format OCapN authority: host ${JSON.stringify(
         host,
       )} did not survive URL round-trip (got ${JSON.stringify(url.hostname)})`,
     );
   }
   if (String(port) !== '0' && url.port !== String(port)) {
-    throw Error(
+    throw new Error(
       `Cannot format OCapN authority: port ${JSON.stringify(
         port,
       )} did not survive URL round-trip (got ${JSON.stringify(url.port)})`,
