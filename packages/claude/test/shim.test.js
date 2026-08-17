@@ -11,7 +11,11 @@ test('initialize returns protocol + tools capability without touching the broker
   const shim = mkShim(async () => {
     forwarded += 1;
   });
-  const res = await shim.handleMessage({ jsonrpc: '2.0', id: 1, method: 'initialize' });
+  const res = await shim.handleMessage({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+  });
   t.is(res.result.serverInfo.name, 'endo-claude-shim');
   t.deepEqual(res.result.capabilities, { tools: {} });
   t.is(forwarded, 0);
@@ -25,7 +29,11 @@ test('tools/list and tools/call forward to the broker', async t => {
     return { content: [{ type: 'text', text: 'ok' }] };
   });
 
-  const list = await shim.handleMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+  const list = await shim.handleMessage({
+    jsonrpc: '2.0',
+    id: 2,
+    method: 'tools/list',
+  });
   t.deepEqual(list.result.tools, [{ name: 'writeText' }]);
 
   const call = await shim.handleMessage({
@@ -35,30 +43,50 @@ test('tools/list and tools/call forward to the broker', async t => {
     params: { name: 'writeText', arguments: { path: 'a', text: 'b' } },
   });
   t.deepEqual(call.result.content, [{ type: 'text', text: 'ok' }]);
-  t.deepEqual(calls.map(c => c.method), ['tools/list', 'tools/call']);
+  t.deepEqual(
+    calls.map(c => c.method),
+    ['tools/list', 'tools/call'],
+  );
 });
 
 test('a broker error becomes a JSON-RPC error, not a thrown shim', async t => {
   const shim = mkShim(async () => {
     throw new Error('broker down');
   });
-  const res = await shim.handleMessage({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: {} });
+  const res = await shim.handleMessage({
+    jsonrpc: '2.0',
+    id: 4,
+    method: 'tools/call',
+    params: {},
+  });
   t.is(res.error.code, -32_000);
   t.is(res.error.message, 'broker down');
 });
 
 test('an unknown method is method-not-found; a notification yields no response', async t => {
   const shim = mkShim(async () => ({}));
-  const res = await shim.handleMessage({ jsonrpc: '2.0', id: 5, method: 'nope' });
+  const res = await shim.handleMessage({
+    jsonrpc: '2.0',
+    id: 5,
+    method: 'nope',
+  });
   t.is(res.error.code, -32_601);
-  const notif = await shim.handleMessage({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  const notif = await shim.handleMessage({
+    jsonrpc: '2.0',
+    method: 'notifications/initialized',
+  });
   t.is(notif, undefined);
 });
 
 test('handleLine parses newline-delimited JSON-RPC and serializes a response line', async t => {
   const shim = mkShim(async () => ({ tools: [] }));
-  const out = await shim.handleLine('{"jsonrpc":"2.0","id":9,"method":"tools/list"}');
-  t.is(out, `${JSON.stringify({ jsonrpc: '2.0', id: 9, result: { tools: [] } })}\n`);
+  const out = await shim.handleLine(
+    '{"jsonrpc":"2.0","id":9,"method":"tools/list"}',
+  );
+  t.is(
+    out,
+    `${JSON.stringify({ jsonrpc: '2.0', id: 9, result: { tools: [] } })}\n`,
+  );
   t.is(await shim.handleLine('   '), undefined); // blank line
   const bad = await shim.handleLine('{not json');
   t.regex(bad ?? '', /-32700/); // parse error

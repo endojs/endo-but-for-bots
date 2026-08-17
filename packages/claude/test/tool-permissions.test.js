@@ -18,7 +18,12 @@ test('pruneAndPinCatalog keeps well-formed names', t => {
   const pinned = pruneAndPinCatalog(
     descriptors(['writeText', 'readText', 'list', 'remove']),
   );
-  t.deepEqual(catalogToolNames(pinned), ['list', 'readText', 'remove', 'writeText']);
+  t.deepEqual(catalogToolNames(pinned), [
+    'list',
+    'readText',
+    'remove',
+    'writeText',
+  ]);
 });
 
 test('pruneAndPinCatalog prunes code-eval, dunder, __-bearing, and charset-violating names', t => {

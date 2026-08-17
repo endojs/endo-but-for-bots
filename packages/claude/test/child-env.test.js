@@ -11,7 +11,10 @@ import {
 } from '../src/child-env.js';
 
 test('buildChildEnv constructs from an allowlist, not the parent env', t => {
-  const env = buildChildEnv({ pathValue: '/opt/shim/bin', sessionTag: 'tag-1' });
+  const env = buildChildEnv({
+    pathValue: '/opt/shim/bin',
+    sessionTag: 'tag-1',
+  });
   t.deepEqual(Object.keys(env).sort(), [...ALLOWED_ENV_KEYS].sort());
   t.is(env.PATH, '/opt/shim/bin');
   t.is(env.ENDO_CLAUDE_SESSION_TAG, 'tag-1');

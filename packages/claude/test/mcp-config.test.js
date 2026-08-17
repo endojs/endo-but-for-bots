@@ -9,7 +9,11 @@ const HEX64 = 'a'.repeat(64);
 test('stdio transport renders one named server with no bearer on a wire', t => {
   const config = renderMcpConfig({
     serverName: 'endo',
-    transport: { kind: 'stdio', command: '/opt/endo-claude-shim', args: ['--x'] },
+    transport: {
+      kind: 'stdio',
+      command: '/opt/endo-claude-shim',
+      args: ['--x'],
+    },
   });
   t.deepEqual(config, {
     mcpServers: {
@@ -28,7 +32,11 @@ test('http transport carries a loopback URL and a formula-id bearer', t => {
   const config = /** @type {any} */ (
     renderMcpConfig({
       serverName: 'endo',
-      transport: { kind: 'http', url: 'http://127.0.0.1:8991/mcp', bearer: HEX64 },
+      transport: {
+        kind: 'http',
+        url: 'http://127.0.0.1:8991/mcp',
+        bearer: HEX64,
+      },
     })
   );
   t.deepEqual(config.mcpServers.endo, {
