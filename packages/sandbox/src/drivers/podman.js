@@ -1,6 +1,6 @@
 // @ts-check
 
-/* global Buffer, process */
+/* global Buffer, clearTimeout, process, setTimeout */
 
 import { makeError, q, X } from '@endo/errors';
 
@@ -47,6 +47,14 @@ harden(PODMAN_OPERATION_LABEL);
 const DEFAULT_STOP_GRACE_S = 5;
 
 /**
+ * Deadline applied to lifecycle-critical podman control commands
+ * (`create`, `kill`, `stop`, `rm`). A stalled control command must not
+ * be able to wedge admission, termination, or reaping; commands with
+ * legitimately unbounded duration (`pull`) are not subject to it.
+ */
+const CONTROL_COMMAND_TIMEOUT_MS = 30_000;
+
+/**
  * Parse `podman --version` output into a version string.
  *
  * @param {string} stdout
@@ -67,13 +75,23 @@ harden(parsePodmanVersion);
  * `--version` probes and short-lived control commands like `podman
  * pull` and `podman create`.
  *
+ * A `timeoutMs` deadline or an `AbortSignal` bounds control commands
+ * that must not stall the sandbox lifecycle: on expiry or abort the
+ * child is hard-killed and the promise rejects with a structured error.
+ *
  * @param {typeof import('child_process')} cpModule
  * @param {string} command
  * @param {string[]} args
+ * @param {{ timeoutMs?: number, signal?: AbortSignal }} [options]
  * @returns {Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string }>}
  */
-const spawnAndCollect = (cpModule, command, args) => {
+const spawnAndCollect = (cpModule, command, args, options = {}) => {
+  const { timeoutMs, signal: abortSignal } = options;
   return new Promise((resolve, reject) => {
+    if (abortSignal?.aborted) {
+      reject(makeError(X`${q(command)} control command aborted`));
+      return;
+    }
     let child;
     try {
       child = cpModule.spawn(command, args, { stdio: 'pipe' });
@@ -85,17 +103,56 @@ const spawnAndCollect = (cpModule, command, args) => {
     const stdoutChunks = [];
     /** @type {Buffer[]} */
     const stderrChunks = [];
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let deadline;
+    /** @type {(() => void) | undefined} */
+    let removeAbortListener;
+    /** @param {(value: any) => void} settle */
+    const makeSettler = settle => (/** @type {any} */ value) => {
+      if (deadline !== undefined) clearTimeout(deadline);
+      removeAbortListener?.();
+      settle(value);
+    };
+    const settleResolve = makeSettler(resolve);
+    const settleReject = makeSettler(reject);
+    const abandon = (/** @type {Error} */ failure) => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        // The control command may already have exited.
+      }
+      settleReject(failure);
+    };
     child.stdout?.on('data', chunk => stdoutChunks.push(chunk));
     child.stderr?.on('data', chunk => stderrChunks.push(chunk));
-    child.once('error', reject);
-    child.once('close', (code, signal) => {
-      resolve({
+    child.once('error', settleReject);
+    child.once('close', (code, exitSignal) => {
+      settleResolve({
         code,
-        signal,
+        signal: exitSignal,
         stdout: Buffer.concat(stdoutChunks).toString('utf8'),
         stderr: Buffer.concat(stderrChunks).toString('utf8'),
       });
     });
+    if (timeoutMs !== undefined) {
+      deadline = setTimeout(
+        () =>
+          abandon(
+            makeError(
+              X`${q(command)} control command timed out after ${q(timeoutMs)}ms`,
+            ),
+          ),
+        timeoutMs,
+      );
+      if (typeof deadline.unref === 'function') deadline.unref();
+    }
+    if (abortSignal !== undefined) {
+      const onAbort = () =>
+        abandon(makeError(X`${q(command)} control command aborted`));
+      abortSignal.addEventListener('abort', onAbort, { once: true });
+      removeAbortListener = () =>
+        abortSignal.removeEventListener('abort', onAbort);
+    }
   });
 };
 harden(spawnAndCollect);
@@ -1076,9 +1133,10 @@ export const makePodmanDriver = ({
    * @param {PodmanSliceContext} slice
    * @param {string[]} argv
    * @param {SpawnOpts} opts
+   * @param {import('../types.js').DriverSpawnControls} [controls]
    * @returns {Promise<DriverProcess>}
    */
-  const spawn = async (slice, argv, opts) => {
+  const spawn = async (slice, argv, opts, controls) => {
     if (argv.length === 0) {
       throw makeError(X`spawn argv must be non-empty`);
     }
@@ -1086,6 +1144,7 @@ export const makePodmanDriver = ({
     if (ownerId === undefined) {
       throw makeError(X`podman driver ownerId is not configured`);
     }
+    const admissionSignal = controls?.signal;
 
     const containerName = makeSliceName();
     // Names include pid, time, and a counter, so the operation label remains
@@ -1111,11 +1170,37 @@ export const makePodmanDriver = ({
       slice.ref,
       ...argv,
     ]);
-    const created = await spawnAndCollect(cp, 'podman', createArgv);
+    // Bounded removal of the exact named operation this spawn minted.
+    // Used on every abandonment path so an aborted or failed admission
+    // cannot leak the container.
+    const removeOperation = () =>
+      spawnAndCollect(
+        cp,
+        'podman',
+        podmanArgs(slice.runtime, ['rm', '-f', containerName]),
+        { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
+      ).catch(() => undefined);
+
+    let created;
+    try {
+      created = await spawnAndCollect(cp, 'podman', createArgv, {
+        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+        signal: admissionSignal,
+      });
+    } catch (e) {
+      // The stalled or aborted create may have registered the name
+      // before dying; remove it so nothing outlives the admission.
+      await removeOperation();
+      throw e;
+    }
     if (created.code !== 0) {
       throw makeError(
         X`podman operation create failed: ${q(created.stderr.trim() || created.stdout.trim())}`,
       );
+    }
+    if (admissionSignal?.aborted) {
+      await removeOperation();
+      throw makeError(X`podman operation admission aborted`);
     }
 
     const startArgv = podmanArgs(slice.runtime, [
@@ -1137,11 +1222,7 @@ export const makePodmanDriver = ({
         env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
       });
     } catch (e) {
-      await spawnAndCollect(
-        cp,
-        'podman',
-        podmanArgs(slice.runtime, ['rm', '-f', containerName]),
-      ).catch(() => undefined);
+      await removeOperation();
       throw makeError(
         X`failed to attach podman operation: ${q(/** @type {Error} */ (e).message)}`,
       );
@@ -1173,6 +1254,7 @@ export const makePodmanDriver = ({
         cp,
         'podman',
         podmanArgs(slice.runtime, ['rm', '-f', containerName]),
+        { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
       );
       if (entry !== undefined) slice.live.delete(entry);
       if (removed.code !== 0) {
@@ -1210,6 +1292,7 @@ export const makePodmanDriver = ({
             String(signal ?? 'SIGTERM'),
             containerName,
           ]),
+          { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
         );
         if (
           result.code !== 0 &&
@@ -1257,6 +1340,7 @@ export const makePodmanDriver = ({
             String(DEFAULT_STOP_GRACE_S),
             entry.name,
           ]),
+          { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
         ).catch(() => undefined),
       ),
     );
@@ -1267,6 +1351,7 @@ export const makePodmanDriver = ({
           cp,
           'podman',
           podmanArgs(slice.runtime, ['rm', '-f', entry.name]),
+          { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
         ).catch(() => undefined),
       ),
     );

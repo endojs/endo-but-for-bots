@@ -98,6 +98,7 @@ const makeDriverFixture = (options = {}) => {
   let spawnCalls = 0;
   let prepareCalls = 0;
   let teardownCalls = 0;
+  let admissionAborts = 0;
   let exited = false;
 
   const driver = harden({
@@ -111,9 +112,18 @@ const makeDriverFixture = (options = {}) => {
       prepareCalls += 1;
       return harden({});
     },
-    spawn: async () => {
+    /**
+     * @param {unknown} _slice
+     * @param {string[]} _argv
+     * @param {object} _opts
+     * @param {{ signal?: AbortSignal }} [controls]
+     */
+    spawn: async (_slice, _argv, _opts, controls) => {
       await null;
       spawnCalls += 1;
+      controls?.signal?.addEventListener('abort', () => {
+        admissionAborts += 1;
+      });
       if (options.spawnGate !== undefined) await options.spawnGate;
       return harden({
         pid: 1234,
@@ -159,6 +169,8 @@ const makeDriverFixture = (options = {}) => {
       }
     },
     counts: () => harden({ spawnCalls, prepareCalls, teardownCalls }),
+    admissionAborts: () => admissionAborts,
+    exitStatus: () => exit.promise,
   });
 };
 
@@ -180,22 +192,58 @@ const collectReader = async reader => {
   return harden({ chunks: harden(chunks), error });
 };
 
-test('spawn admitted before dispose is registered and reaped', async t => {
+test('dispose cancels a pending admission and reaps a late arrival', async t => {
+  t.timeout(2000);
   const gate = makePromiseKit();
   const fixture = makeDriverFixture({ spawnGate: gate.promise });
   const handle = await makeHandle(fixture);
 
   const spawned = E(handle).spawn(harden(['/bin/true']));
+  spawned.catch(() => undefined);
   await null;
-  const disposed = E(handle).dispose();
-  gate.resolve();
-
-  const proc = await spawned;
-  await disposed;
-  t.deepEqual(fixture.signals(), ['SIGTERM']);
+  // Disposal must settle while the driver admission is still pending;
+  // it cancels the admission instead of awaiting it.
+  await E(handle).dispose();
   t.is(fixture.counts().spawnCalls, 1);
   t.is(fixture.counts().teardownCalls, 1);
-  await t.throwsAsync(() => E(proc).wait(), { message: /disposed/ });
+  t.is(fixture.admissionAborts(), 1);
+  await t.throwsAsync(() => spawned, { message: /disposed/ });
+
+  // A driver that ignored the cancellation and produces the process
+  // late must see it terminated and reaped, not leaked.
+  gate.resolve();
+  const status = await fixture.exitStatus();
+  t.deepEqual(status, { code: null, signal: 'SIGKILL' });
+  t.deepEqual(fixture.signals(), ['SIGKILL']);
+});
+
+test('a never-resolving driver admission cannot hold up disposal', async t => {
+  t.timeout(2000);
+  const never = new Promise(() => undefined);
+  const fixture = makeDriverFixture({ spawnGate: never });
+  const handle = await makeHandle(fixture);
+
+  const spawned = E(handle).spawn(harden(['/bin/true']));
+  spawned.catch(() => undefined);
+  await null;
+  await E(handle).dispose();
+  t.is(fixture.admissionAborts(), 1);
+  await t.throwsAsync(() => spawned, { message: /disposed/ });
+  t.deepEqual(fixture.signals(), []);
+});
+
+test('a never-resolving driver admission still honours the timeout', async t => {
+  t.timeout(2000);
+  const never = new Promise(() => undefined);
+  const fixture = makeDriverFixture({ spawnGate: never });
+  const handle = await makeHandle(fixture);
+  t.teardown(() => E(handle).dispose());
+
+  await t.throwsAsync(
+    () => E(handle).spawn(harden(['/bin/true']), harden({ timeoutMs: 25 })),
+    { message: /timed out/ },
+  );
+  t.is(fixture.admissionAborts(), 1);
 });
 
 test('dispose admitted before spawn prevents the driver call', async t => {

@@ -101,6 +101,30 @@ const listOwnedContainers = async ownerId => {
 };
 
 /**
+ * Poll until no containers carry the owner label. A cancelled admission
+ * removes its named operation asynchronously (bounded by the driver's
+ * control-command deadline), so a containment assertion that races it
+ * must wait rather than sample once.
+ *
+ * @param {string} ownerId
+ * @param {number} [timeoutMs]
+ */
+const waitForNoOwnedContainers = async (ownerId, timeoutMs = 10_000) => {
+  const deadline = Date.now() + timeoutMs;
+  await null;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const names = await listOwnedContainers(ownerId);
+    if (names.length === 0) return;
+    if (Date.now() > deadline) {
+      throw new Error(`containers still present: ${names.join(', ')}`);
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+};
+
+/**
  * @typedef {object} PodmanAvailability
  * @property {boolean} available    Whether the suite can exercise podman.
  * @property {string} [version]     Podman version string when present.
@@ -814,10 +838,25 @@ test.serial(
       harden({ captureStdout: false, captureStderr: false }),
     );
     const disposed = E(spawnFirst).dispose();
-    const proc = await spawned;
+    // Disposal cancels a still-pending admission, so the spawn either
+    // rejects as disposed or yields a handle whose wait() reports the
+    // disposal; either way no labelled container may survive.
+    /** @type {Awaited<typeof spawned> | undefined} */
+    let proc;
+    /** @type {Error | undefined} */
+    let admissionError;
+    try {
+      proc = await spawned;
+    } catch (e) {
+      admissionError = /** @type {Error} */ (e);
+    }
     await disposed;
-    await t.throwsAsync(() => E(proc).wait(), { message: /disposed/ });
-    t.deepEqual(await listOwnedContainers(ownerId), []);
+    if (proc !== undefined) {
+      await t.throwsAsync(() => E(proc).wait(), { message: /disposed/ });
+    } else {
+      t.regex(/** @type {Error} */ (admissionError).message, /disposed/);
+    }
+    await t.notThrowsAsync(() => waitForNoOwnedContainers(ownerId));
     await E(spawnFirst).dispose();
 
     const disposeFirst = await E(factory).make(
