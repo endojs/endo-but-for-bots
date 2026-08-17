@@ -350,14 +350,21 @@ system Git library at runtime.
 | [Minion Town Git remote, section 5](https://github.com/kriscendobot/minion.town/blob/609fdd5251a0297ce15355acc8d902f973c99a18/designs/git-remote-capability.md#5--research--how-much-of-gits-wire-protocol-and-the-prior-art) | Supplies pluggable-ODB and server-half prior art; consumes the shared Rust crate and fixtures. |
 | [Review comment that requested this revision](https://github.com/kriscendobot/minion.town/pull/41#discussion_r3785717342) | Requires libgit2, Zig cross-compilation, and shared experience between the two projects. |
 
-## Open questions
+## Resolved decisions
 
-- **Windows ABI target after the first release?** Is the GNU ABI sufficient for
-  the standalone binary, or must release engineering add native MSVC artifacts?
-- **Supported glibc floor?** The release owner must choose and test an explicit
-  minimum before the GNU/Linux artifacts are public.
-- **Shared crate publication?** Should Minion Town keep a commit-pinned Cargo Git
-  dependency, or should `endor-git` be published after its API stabilizes?
+The review of 2026-08-17 closed the prior open questions:
+
+- **Windows ABI target: deferred past the first release.** The GNU/Linux ABI is
+  good enough at first pass; the standalone binary does not require native MSVC
+  artifacts to ship. Windows support is a follow-up, tracked separately rather
+  than blocking this design.
+- **Supported glibc floor: an explicit, tested minimum is required.** Before the
+  GNU/Linux artifacts are public, the release owner must choose and test an
+  explicit minimum glibc version — this is a release-engineering requirement, not
+  an open question.
+- **Shared crate publication: not published.** `endor-git` stays a local,
+  commit-pinned Cargo Git dependency shared between Endor and Minion Town. It is
+  not published to a registry; revisit only if an external consumer appears.
 
 ## Prompt
 
