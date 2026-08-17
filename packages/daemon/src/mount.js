@@ -898,8 +898,10 @@ const makeMountExo = ctx => {
       segments = segmentsFromPathArg(pathArg);
     } catch (error) {
       if (typeof pathArg === 'string' && pathArg.includes('/')) {
+        const cause = /** @type {Error} */ (error);
         throw new Error(
-          `${/** @type {Error} */ (error).message}; use an array of path segments or entry() for a slash-joined path`,
+          `${cause.message}; use an array of path segments or entry() for a slash-joined path`,
+          { cause: error },
         );
       }
       throw error;
@@ -1567,7 +1569,9 @@ const makeMountFileExo = (
 
     // Keep the common cross-type mistake useful without adding directory
     // authority to a file capability.
-    list() {
+    async list() {
+      await null;
+      assertLive();
       throw new Error('list() is not available on a file; use text()');
     },
 
