@@ -23,22 +23,32 @@ of baking one daemon mode into the implementation.
 
 ## Status
 
-This is the **phase-3 slice**, building on phase 2's sock bootstrap
-registrar (Feature 4) and the phase-1 skeleton's package shape.
-Phase 3 adds Feature 7 (admin daemon: the `GatewayAdmin` exo).
-The admin facet is reachable only via the in-process accessor
-(`gateway.getAdmin()`) and a separate local sock (`admin.sock`,
-distinct from the bootstrap sock); it is **never** exposed on the
-public HTTP / WS surface, and is **never** reached through the
-bootstrap sock. The split keeps registration authority (anyone with
-the bootstrap sock) and admin authority (only the OS account that
-owns the admin sock) on independent capability paths.
+This is the **phase-4 slice**, building on phase 3's admin daemon,
+phase 2's sock bootstrap registrar (Feature 4), and the phase-1
+skeleton's package shape. Phase 3 split the admin facet onto a
+separate local sock (`admin.sock`) so that registration authority
+(any local user daemon with the bootstrap sock) and admin authority
+(only the OS account that owns the admin sock) live on independent
+capability paths; the admin facet remains reachable in-process via
+`gateway.getAdmin()`, is **never** exposed on the public HTTP / WS
+surface, and is **never** reached through the bootstrap sock. Phase
+4 adds Feature 8 (the `OcapnWebSocketHandler` semantic core for
+`/ocapn-cbor-np` WebSocket termination). The handler is reachable
+in-process via `gateway.getOcapnHandler()`; an embedder that owns
+an HTTP server feeds it upgraded WebSocket connections, and the
+handler looks up the intended-responder public key in the
+bootstrap's registration table and hands the byte stream off to
+the registered daemon's `handleOcapnSession`. The gateway does
+**not** terminate Noise itself; Noise's encryption and peer
+authentication run end-to-end between the dialing peer and the
+registered daemon.
 
 Implemented:
 
 - `makeGateway({ config, powers })` factory returning a hardened
   gateway exo with `start`, `stop`, `getBindAddress`, `getApps`,
-  `getConfig`, `getBootstrap`, and (phase-3) `getAdmin`.
+  `getConfig`, `getBootstrap`, `getAdmin`, and (phase-4)
+  `getOcapnHandler`.
 - `ENDO_HTTP_ADDR` parsing with the OS-assigned-port (`:0`)
   convention; defaults to `0.0.0.0:8920`, preserving the existing
   daemon HTTP port and reserving `3469` for a future CBOR-frame
@@ -58,6 +68,18 @@ Implemented:
   daemon's toggle is independent of `sockBootstrap`; a deployment
   may offer admin reads without exposing the bootstrap sock and
   vice versa.
+- `OcapnWebSocketHandler` exo (phase 4, Feature 8) with
+  `handleConnection({ reader, writer })`. The handler reads the
+  first WebSocket binary frame, extracts the 32-byte
+  intended-responder Ed25519 public key from the prefixed-SYN's
+  cleartext prefix, looks up the registration that owns the key,
+  and hands the stream pair off to the registered daemon's
+  `handleOcapnSession`. The gateway pumps no bytes itself after the
+  handoff; Noise's confidentiality and authentication run
+  end-to-end. Path constants (`OCAPN_WEBSOCKET_PATH`,
+  `OCAPN_WEBSOCKET_LEGACY_PATH`) and a path matcher
+  (`isOcapnWebSocketPath`) ship alongside the handler for
+  embedders to use in their HTTP-server upgrade routing.
 - Proof-of-possession nonce registry with domain-separated
   challenge hashing (`endo-gateway:registrar:nonce`), 30-second
   TTL, single-use semantics, constant-time signature comparison
@@ -88,9 +110,14 @@ Deferred to follow-on PRs:
   incoming connections.
 - Feature 5 (Familiar-bundled fallback).
 - Feature 6 (public CapTP relay).
-- Feature 8 (`/ocapn-cbor-np` WebSocket; the network surface lands
-  once `@endo/ocapn-noise` exposes the netlayer the gateway
-  embeds).
+- Feature 8 follow-on: the actual HTTP listener that performs the
+  WebSocket upgrade on `/ocapn-cbor-np` and feeds the per-connection
+  byte-stream pair into the handler. The Node-bound listener
+  (`http.createServer` + `WebSocketServer.handleUpgrade`) lands in
+  the same follow-on PR as the Feature 4 sock listener; until then,
+  embedders that already own an HTTP server (the daemon's
+  `ws-gateway.js`, a future `@endo/gateway-daemon` wrapper) feed
+  the handler directly.
 - Feature 9 (HTTPS-terminating-proxy `X-Forwarded-*` parser).
 - Feature 10 (OS packaging: rpm / deb / PKGBUILD / Dockerfile).
 
@@ -177,7 +204,7 @@ See `designs/gateway-package.md` § Capability Surface for the full
 inventory. The phase-1 through phase-3 slices expose:
 
 - `Gateway`: `start`, `stop`, `getBindAddress`, `getApps`,
-  `getConfig`, `getBootstrap`, `getAdmin`.
+  `getConfig`, `getBootstrap`, `getAdmin`, `getOcapnHandler`.
 - `AppsNameHub`: `bind`, `unbind`, `list`, `lookup`, `has`.
 - `GatewayBootstrap`: `challenge`, `register`, `registerRelay`,
   `getBindAddress`, `getApps`. The bootstrap channel carries the
@@ -190,6 +217,14 @@ inventory. The phase-1 through phase-3 slices expose:
   in-process and over the admin sock (`admin.sock`); the public
   HTTP / WS surface does not expose it, and the bootstrap sock
   does not expose it.
+- `OcapnWebSocketHandler`: `handleConnection`. The handler accepts
+  an upgraded `/ocapn-cbor-np` WebSocket as a `{ reader, writer }`
+  pair, routes by the first frame's intended-responder Ed25519
+  public key prefix, and hands the stream pair off to the
+  registered daemon's `handleOcapnSession` exo. Refused when the
+  `ocapnWebSocket` feature toggle is off; depends on
+  `sockBootstrap` for the registration table the handler routes
+  through.
 
 ### Bootstrap challenge-response
 

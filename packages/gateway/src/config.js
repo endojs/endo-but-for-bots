@@ -179,6 +179,11 @@ const validateFeatureDependencies = features => {
       X`captpRelay depends on sockBootstrap for registration; both must be enabled`,
     );
   }
+  if (features.ocapnWebSocket && !features.sockBootstrap) {
+    throw makeError(
+      X`ocapnWebSocket depends on sockBootstrap for the registration table the handler routes through; both must be enabled`,
+    );
+  }
   if (features.chatHosting && !features.virtualHosting) {
     throw makeError(
       X`chatHosting depends on virtualHosting for the Chat weblet's bind; both must be enabled`,

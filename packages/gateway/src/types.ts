@@ -1,6 +1,7 @@
 import type { CryptoPowers, ClockPowers } from './proof-of-possession.js';
 import type { GatewayBootstrap } from './bootstrap.js';
 import type { GatewayAdmin, ResourceLedger } from './admin.js';
+import type { OcapnWebSocketHandler } from './ocapn-ws.js';
 
 export type BindAddress = {
   /**
@@ -131,6 +132,21 @@ export type Gateway = {
    * `connect(2)`.
    */
   getAdmin(): Promise<GatewayAdmin>;
+  /**
+   * Returns the `OcapnWebSocketHandler` exo (Feature 8) that an
+   * embedder feeds upgraded `/ocapn-cbor-np` WebSocket connections
+   * to. The exo's `handleConnection({ reader, writer })` reads the
+   * first frame's intended-responder prefix, looks up the
+   * registration that owns the key (via the bootstrap registrar's
+   * table), and hands the stream pair off to the registered
+   * daemon's `handleOcapnSession`. Throws when the `ocapnWebSocket`
+   * feature toggle is off, or when `sockBootstrap` is off (the
+   * handler depends on the registration table the bootstrap owns;
+   * without it there is no daemon to forward to). The HTTP listener
+   * that performs the WS upgrade is the embedder's, not the
+   * gateway's; see `src/ocapn-ws.js` for the contract.
+   */
+  getOcapnHandler(): Promise<OcapnWebSocketHandler>;
 };
 
 export declare const DEFAULT_BIND_ADDRESS: string;

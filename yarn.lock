@@ -2314,6 +2314,7 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/promise-kit": "workspace:^"
+    "@endo/stream": "workspace:^"
     "@types/node": "npm:^25.2.3"
     ava: "catalog:dev"
     c8: "catalog:dev"

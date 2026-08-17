@@ -28,6 +28,7 @@ import {
 import { makeAppsNameHub } from './src/vhost.js';
 import { makeGatewayBootstrap } from './src/bootstrap.js';
 import { makeGatewayAdmin } from './src/admin.js';
+import { makeOcapnWebSocketHandler } from './src/ocapn-ws.js';
 
 export {
   DEFAULT_BIND_ADDRESS,
@@ -58,6 +59,14 @@ export {
 export { makeGatewayAdmin } from './src/admin.js';
 
 export {
+  OCAPN_WEBSOCKET_PATH,
+  OCAPN_WEBSOCKET_LEGACY_PATH,
+  OCAPN_INTENDED_RESPONDER_PREFIX_LENGTH,
+  isOcapnWebSocketPath,
+  makeOcapnWebSocketHandler,
+} from './src/ocapn-ws.js';
+
+export {
   resolveBootstrapSocketPath,
   resolveAdminSocketPath,
   BOOTSTRAP_SOCKET_BASENAME,
@@ -68,6 +77,7 @@ export {
 
 /** @import { GatewayConfig, BindAddress, GatewayPowers, Gateway } from './src/types.js' */
 /** @import { GatewayAdmin } from './src/admin.js' */
+/** @import { OcapnWebSocketHandler } from './src/ocapn-ws.js' */
 
 const GatewayInterface = M.interface('Gateway', {
   start: M.call().returns(M.promise()),
@@ -77,6 +87,7 @@ const GatewayInterface = M.interface('Gateway', {
   getConfig: M.call().returns(M.promise()),
   getBootstrap: M.call().returns(M.promise()),
   getAdmin: M.call().returns(M.promise()),
+  getOcapnHandler: M.call().returns(M.promise()),
 });
 
 /**
@@ -131,6 +142,8 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
   let bootstrapHandle;
   /** @type {GatewayAdmin | undefined} */
   let adminFacet;
+  /** @type {OcapnWebSocketHandler | undefined} */
+  let ocapnHandler;
   if (mergedConfig.enableFeatures.sockBootstrap) {
     if (powers.crypto === undefined) {
       throw makeError(
@@ -148,6 +161,18 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
       apps,
       getBindAddress: renderBindAddress,
     });
+    // The OCapN-WS handler (Feature 8) reads from the same
+    // registration table the bootstrap owns. The config validator
+    // already rejects `ocapnWebSocket=true` with
+    // `sockBootstrap=false`, so we only reach this branch with both
+    // toggles on. The handler is total over the lookup function;
+    // wiring is just plumbing.
+    if (mergedConfig.enableFeatures.ocapnWebSocket) {
+      ocapnHandler = makeOcapnWebSocketHandler({
+        lookupRegistrationByPublicKey:
+          bootstrapHandle.lookupRegistrationByPublicKey,
+      });
+    }
   }
   if (mergedConfig.enableFeatures.adminDaemon) {
     // When the bootstrap is also on, the admin reads the same
@@ -242,6 +267,28 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
           throw makeError(X`Gateway admin facet is not wired`);
         }
         return adminFacet;
+      },
+      async getOcapnHandler() {
+        // Symmetric with getAdmin: the handler is reachable only
+        // when both toggles are on. Either off is a clear error
+        // (rather than a silent no-op) so an embedder wiring up an
+        // HTTP server discovers the configuration gap immediately.
+        if (!mergedConfig.enableFeatures.ocapnWebSocket) {
+          throw makeError(
+            X`OCapN WebSocket handler is disabled (set enableFeatures.ocapnWebSocket=true)`,
+          );
+        }
+        if (!mergedConfig.enableFeatures.sockBootstrap) {
+          // The config validator rejects this combination; the
+          // local check is defense-in-depth.
+          throw makeError(
+            X`OCapN WebSocket handler requires sockBootstrap; set enableFeatures.sockBootstrap=true`,
+          );
+        }
+        if (ocapnHandler === undefined) {
+          throw makeError(X`OCapN WebSocket handler is not wired`);
+        }
+        return ocapnHandler;
       },
     }),
   );
