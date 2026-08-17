@@ -56,7 +56,10 @@ test('cancelled validates the phase', t => {
 
 test('poolExhausted omits retryAfterMs when unset', t => {
   t.deepEqual({ ...poolExhausted() }, { type: 'pool-exhausted' });
-  t.deepEqual({ ...poolExhausted(500) }, { type: 'pool-exhausted', retryAfterMs: 500 });
+  t.deepEqual(
+    { ...poolExhausted(500) },
+    { type: 'pool-exhausted', retryAfterMs: 500 },
+  );
 });
 
 test('the taxonomy enumerates all nine cases', t => {

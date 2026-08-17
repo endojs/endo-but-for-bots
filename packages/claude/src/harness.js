@@ -41,12 +41,7 @@ import { cancelled as cancelledResult, poolExhausted } from './results.js';
 
 const InferInterface = M.interface('GuestInference', {
   infer: M.call(M.string())
-    .optional(
-      M.splitRecord(
-        {},
-        { model: M.string(), cancelled: M.promise() },
-      ),
-    )
+    .optional(M.splitRecord({}, { model: M.string(), cancelled: M.promise() }))
     .returns(M.promise()),
 });
 
@@ -64,7 +59,10 @@ const ProviderInterface = M.interface('ClaudeInferenceProvider', {
  */
 const makeOneShotCancel = cancelledP => {
   let fired = false;
-  if (cancelledP && typeof (/** @type {any} */ (cancelledP).then) === 'function') {
+  if (
+    cancelledP &&
+    typeof (/** @type {any} */ (cancelledP).then) === 'function'
+  ) {
     const settle = () => {
       fired = true;
     };
@@ -165,7 +163,12 @@ export const make = (powers, _context, options) => {
       X`make: defaultModel ${q(resolvedDefaultModel)} is not in pinnedModels`,
     );
   }
-  for (const seam of [getClaudeVersion, mintSessionTag, prepareSpawnFiles, launch]) {
+  for (const seam of [
+    getClaudeVersion,
+    mintSessionTag,
+    prepareSpawnFiles,
+    launch,
+  ]) {
     if (typeof seam !== 'function') {
       throw makeError(X`make: a required harness seam is missing`);
     }
