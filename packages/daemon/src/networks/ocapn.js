@@ -191,7 +191,11 @@ export const make = async (powers, context) => {
       await E(powers).lookup(LISTEN_ADDR_NAME)
     );
     const listenUrl = new URL(`tcp://${configuredHostPort}`);
-    host = listenUrl.hostname;
+    // `URL.hostname` returns an IPv6 literal *bracketed* (`[::1]`);
+    // strip the brackets so `host` is the bare address that
+    // `formatHostPort` expects (it re-brackets), rather than a
+    // double-bracketed `[[::1]]`.
+    host = listenUrl.hostname.replace(/^\[|\]$/g, '');
     port = listenUrl.port !== '' ? Number(listenUrl.port) : 0;
   } catch {
     // No stored listen address; fall back to an ephemeral local port.
@@ -291,7 +295,9 @@ export const make = async (powers, context) => {
   // informational — it keeps the address a well-formed URL so the
   // daemon's `new URL(address)` and `.protocol` checks in `makePeer`
   // continue to work.
-  const hintHost = localHints['tcp:host'] || host;
+  // Strip any IPv6 brackets the transport hint may carry, for the same
+  // reason as the listen host above: `formatHostPort` expects a bare host.
+  const hintHost = (localHints['tcp:host'] || host).replace(/^\[|\]$/g, '');
   const encodedNode = encodeURIComponent(String(localNodeId));
   const encodedLocation = encodeURIComponent(JSON.stringify(localLocation));
   const address = `${protocol}://${formatHostPort(hintHost, boundPort)}/?node=${encodedNode}&loc=${encodedLocation}`;
