@@ -1,5 +1,7 @@
 // @ts-check
 
+import harden from '@endo/harden';
+
 /**
  * Pure policy helpers for `endo http mk`, factored out of the command action so
  * the flag-to-policy assembly is unit-testable without a live daemon and so the
@@ -8,12 +10,17 @@
  * a daemon round trip.
  */
 
-const HTTP_ORIGIN_SCHEMES = ['http:', 'https:'];
+const HTTP_ORIGIN_SCHEMES = harden(['http:', 'https:']);
 
 /**
  * Normalize one `--origin` flag value to its exact WHATWG origin serialization
- * — the shape the daemon's `assertHttpClientOrigin` compares against verbatim
- * (`new URL(o).origin === o`). This accepts the loss-less forms a user is most
+ * — `URL.prototype.origin` (https://url.spec.whatwg.org/#dom-url-origin), which
+ * yields the *ASCII serialisation of an origin*
+ * (https://html.spec.whatwg.org/multipage/browsers.html#ascii-serialisation-of-an-origin):
+ * the `scheme://host[:port]` form with default ports elided, not the bare
+ * host-serializer output. This is the shape the daemon's
+ * `assertHttpClientOrigin` compares against verbatim (`new URL(o).origin === o`).
+ * This accepts the loss-less forms a user is most
  * likely to paste from a browser (a trailing slash, an explicit default port, a
  * mixed-case host) and canonicalizes them into the bare `scheme://host[:port]`
  * origin. It deliberately does NOT silently drop a path, query, fragment, or
@@ -39,12 +46,13 @@ export const normalizeHttpClientOrigin = raw => {
       `--origin ${JSON.stringify(raw)} must use the http: or https: scheme`,
     );
   }
-  // An origin is scheme://host[:port] only. A path (beyond the bare `/` a
-  // browser appends), query, fragment, or userinfo would be dropped by
-  // `parsed.origin`; refusing it here keeps the allowlist entry meaning exactly
-  // what the user typed rather than silently reaching every path on the host.
+  // An origin is scheme://host[:port] only. A path (beyond the bare `/` the
+  // WHATWG serializer always yields for the http:/https: special schemes),
+  // query, fragment, or userinfo would be dropped by `parsed.origin`; refusing
+  // it here keeps the allowlist entry meaning exactly what the user typed rather
+  // than silently reaching every path on the host.
   if (
-    (parsed.pathname !== '/' && parsed.pathname !== '') ||
+    parsed.pathname !== '/' ||
     parsed.search !== '' ||
     parsed.hash !== '' ||
     parsed.username !== '' ||
@@ -98,7 +106,7 @@ export const parsePositiveIntegerFlag = flag => value => {
 export const collectHttpOrigin = (value, previous) =>
   Array.isArray(previous) ? [...previous, value] : [value];
 
-const HTTP_POLICY_MODES = ['strict', 'tofu-auto'];
+const HTTP_POLICY_MODES = harden(['strict', 'tofu-auto']);
 
 /**
  * Commander `--policy-mode` coercer: accept only an admissible mode, reporting
@@ -184,10 +192,13 @@ export const makeHttpClientPolicy = ({
     );
   }
   const normalizedOrigins = allowedOrigins.map(normalizeHttpClientOrigin);
-  return {
+  // Harden the record before it crosses `E(agent).provideHttpClient`: today it
+  // relies on CapTP's callee-side freeze, but the in-package precedent
+  // (`commands/form.js`) hardens at the mint site rather than trusting the wire.
+  return harden({
     allowedOrigins: normalizedOrigins,
     ...(maxRequestsPerMinute !== undefined ? { maxRequestsPerMinute } : {}),
     ...(maxResponseBytes !== undefined ? { maxResponseBytes } : {}),
     ...(policyMode !== undefined ? { policyMode } : {}),
-  };
+  });
 };
