@@ -6,6 +6,27 @@ import { useState } from 'preact/hooks';
 
 /** @import { VNode } from 'preact' */
 
+/**
+ * Serialize a journal record for display. A record can carry any
+ * passable value folded from participant replies — including a bigint,
+ * which `JSON.stringify` throws on — so coerce bigints to a tagged
+ * string rather than crash the expanded view.
+ *
+ * @param {any} record
+ * @returns {string}
+ */
+const stringifyRecord = record => {
+  try {
+    return JSON.stringify(
+      record,
+      (_key, value) => (typeof value === 'bigint' ? `${value}n` : value),
+      2,
+    );
+  } catch (error) {
+    return `<unrenderable record: ${/** @type {Error} */ (error).message}>`;
+  }
+};
+
 const EVENT_ICONS = harden({
   'run.started': '▶',
   'effect.issued': '↗',
@@ -42,7 +63,10 @@ export const TimelineView = ({ records, scrubSeq, onScrub, filter }) => {
     /** @type {number | undefined} */ (undefined),
   );
   const shown = filter
-    ? records.filter(record => record.type.includes(filter))
+    ? records.filter(
+        record =>
+          typeof record.type === 'string' && record.type.includes(filter),
+      )
     : records;
   return h(
     'ol',
@@ -85,11 +109,7 @@ export const TimelineView = ({ records, scrubSeq, onScrub, filter }) => {
             ],
           ),
           record.seq === expandedSeq
-            ? h(
-                'pre',
-                { class: 'wf-timeline-record' },
-                JSON.stringify(record, null, 2),
-              )
+            ? h('pre', { class: 'wf-timeline-record' }, stringifyRecord(record))
             : null,
         ],
       ),

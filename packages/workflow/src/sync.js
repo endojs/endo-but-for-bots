@@ -28,12 +28,32 @@ import { applyEvent } from './fold.js';
  * @param {(runState: RunState, record: JournalRecord) => void} [options.onEvent]
  * @param {(error: Error) => void} [options.onError]
  */
+// After this many consecutive `history()` failures with no intervening
+// success the client gives up rather than retrying forever. The retries
+// are timer-free (this module stays authority-free / browser-portable),
+// so an unbounded loop would spin the microtask queue; a bounded count
+// absorbs a transient hiccup and then surfaces the failure via onError.
+const MAX_CONSECUTIVE_ERRORS = 10;
+
+// Sentinel a stop-signal race resolves to, distinct from any reader
+// result, so a parked `next()` can be preempted by `stop()`.
+const STOPPED = harden({ stopped: true });
+
 export const makeWorkflowSyncClient = (observer, options = {}) => {
   const { onEvent, onError } = options;
   /** @type {RunState | undefined} */
   let runState;
   let lastSeq = 0;
   let stopped = false;
+  /** @type {((value?: unknown) => void) | undefined} */
+  let signalStop;
+  // Resolves when `stop()` is called; racing every await against it makes
+  // stop preemptive even when the reader is parked on an idle/finished
+  // run that will never emit another record.
+  const stopSignal = new Promise(resolve => {
+    signalStop = resolve;
+  });
+  const stopRace = stopSignal.then(() => STOPPED);
   /** @type {JournalRecord[]} */
   const records = [];
 
@@ -52,26 +72,53 @@ export const makeWorkflowSyncClient = (observer, options = {}) => {
 
   const run = (async () => {
     await null;
+    let consecutiveErrors = 0;
     while (!stopped) {
+      /** @type {any} */
+      let reader;
       try {
+        // Racing history() against the stop signal means a stop during
+        // connection setup exits promptly too.
         // eslint-disable-next-line no-await-in-loop
-        const reader = await E(observer).history(lastSeq + 1);
-        // eslint-disable-next-line no-await-in-loop
-        for await (const record of reader) {
-          if (stopped) {
-            await reader.return?.(undefined);
-            break;
-          }
-          apply(/** @type {JournalRecord} */ (record));
+        reader = await Promise.race([
+          E(observer).history(lastSeq + 1),
+          stopRace,
+        ]);
+      } catch (error) {
+        if (onError !== undefined) {
+          onError(/** @type {Error} */ (error));
         }
-        if (!stopped) {
-          return; // reader completed cleanly
+        consecutiveErrors += 1;
+        if (stopped || consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+          return;
+        }
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      if (reader === STOPPED) {
+        return;
+      }
+      try {
+        for (;;) {
+          // eslint-disable-next-line no-await-in-loop
+          const result = await Promise.race([reader.next(), stopRace]);
+          if (result === STOPPED || stopped) {
+            // eslint-disable-next-line no-await-in-loop
+            await reader.return?.(undefined);
+            return;
+          }
+          if (result.done) {
+            return; // reader completed cleanly
+          }
+          apply(/** @type {JournalRecord} */ (result.value));
+          consecutiveErrors = 0; // progress resets the failure budget
         }
       } catch (error) {
         if (onError !== undefined) {
           onError(/** @type {Error} */ (error));
         }
-        if (stopped) {
+        consecutiveErrors += 1;
+        if (stopped || consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
           return;
         }
         // Resume from the last applied seq on the next iteration.
@@ -108,6 +155,9 @@ export const makeWorkflowSyncClient = (observer, options = {}) => {
     },
     stop: () => {
       stopped = true;
+      // Wake a parked next()/history() so `done` settles promptly and
+      // the underlying reader is returned rather than leaked.
+      signalStop?.();
     },
     done: run,
   });

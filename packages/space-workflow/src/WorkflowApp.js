@@ -2,7 +2,7 @@
 
 import harden from '@endo/harden';
 import { h } from 'preact';
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useErrorBoundary, useMemo, useState } from 'preact/hooks';
 import { E } from '@endo/eventual-send';
 import { makeWorkflowSyncClient } from '@endo/workflow/src/sync.js';
 
@@ -36,6 +36,10 @@ export const WorkflowApp = ({ service }) => {
   );
   const [filter, setFilter] = useState('');
   const [stale, setStale] = useState(false);
+  // A malformed definition body or an exotic (e.g. bigint) value in a
+  // record must not blank the whole space; catch render throws in the
+  // center/timeline subtree and show a recoverable notice instead.
+  const [renderError, resetRenderError] = useErrorBoundary();
 
   // Runs rail: dedupe followRuns() summaries by runId,
   // last-writer-wins on throughSeq.
@@ -48,6 +52,12 @@ export const WorkflowApp = ({ service }) => {
       if (disposed) return;
       setSummaries(initial);
       reader = await E(service).followRuns();
+      // Cleanup may have run while followRuns() was in flight; close the
+      // reader we just received rather than parking on it forever.
+      if (disposed) {
+        await reader.return?.(undefined);
+        return;
+      }
       for await (const summary of reader) {
         if (disposed) break;
         setSummaries(previous => {
@@ -89,6 +99,11 @@ export const WorkflowApp = ({ service }) => {
       const definitions = await E(service)
         .definitionBody?.(status.definition)
         .catch(() => undefined);
+      // Re-check after every await: the user may have switched runs while
+      // these eventual-sends were in flight. Continuing would leak an
+      // unmanaged sync client and tear the render (definition from the
+      // old run, state from the new).
+      if (disposed) return;
       setDefinition(definitions);
       syncClient = makeWorkflowSyncClient(observer, {
         onEvent: () => {
@@ -163,56 +178,76 @@ export const WorkflowApp = ({ service }) => {
           )
         : null,
     ]),
-    h('main', { class: 'wf-main' }, [
-      definition !== undefined && shownState !== undefined
-        ? h(StatechartView, {
-            definition,
-            activeState: shownState.state,
-            liveState: liveState?.state,
-            pending: shownState.pending ?? {},
-          })
-        : h(
-            'div',
-            { class: 'wf-placeholder' },
-            selectedRunId === undefined
-              ? 'Select a run'
-              : 'No definition body available to draw',
-          ),
-      client !== undefined
-        ? h('div', { class: 'wf-scrubber' }, [
-            h('input', {
-              type: 'range',
-              min: 1,
-              max: client.lastSeq,
-              value: scrubSeq ?? client.lastSeq,
-              onInput: (/** @type {any} */ event) => {
-                const seq = Number(event.currentTarget.value);
-                setScrubSeq(seq >= Number(client.lastSeq) ? undefined : seq);
-              },
-            }),
+    renderError
+      ? h('main', { class: 'wf-main' }, [
+          h('div', { class: 'wf-placeholder' }, [
+            h('p', null, 'This run could not be rendered.'),
             h(
-              'span',
-              { class: 'wf-scrubber-label' },
-              scrubSeq === undefined ? 'live' : `#${scrubSeq}`,
+              'button',
+              {
+                onClick: () => {
+                  resetRenderError();
+                  setScrubSeq(undefined);
+                },
+              },
+              'Retry',
             ),
-          ])
-        : null,
-    ]),
-    h('aside', { class: 'wf-side' }, [
-      h('input', {
-        class: 'wf-filter',
-        placeholder: 'filter events…',
-        value: filter,
-        onInput: (/** @type {any} */ event) =>
-          setFilter(event.currentTarget.value),
-      }),
-      h(TimelineView, {
-        records,
-        scrubSeq,
-        onScrub: setScrubSeq,
-        filter,
-      }),
-    ]),
+          ]),
+        ])
+      : h('main', { class: 'wf-main' }, [
+          definition !== undefined && shownState !== undefined
+            ? h(StatechartView, {
+                definition,
+                activeState: shownState.state,
+                liveState: liveState?.state,
+                pending: shownState.pending ?? {},
+              })
+            : h(
+                'div',
+                { class: 'wf-placeholder' },
+                selectedRunId === undefined
+                  ? 'Select a run'
+                  : 'No definition body available to draw',
+              ),
+          client !== undefined
+            ? h('div', { class: 'wf-scrubber' }, [
+                h('input', {
+                  type: 'range',
+                  min: 1,
+                  max: client.lastSeq,
+                  value: scrubSeq ?? client.lastSeq,
+                  onInput: (/** @type {any} */ event) => {
+                    const seq = Number(event.currentTarget.value);
+                    setScrubSeq(
+                      seq >= Number(client.lastSeq) ? undefined : seq,
+                    );
+                  },
+                }),
+                h(
+                  'span',
+                  { class: 'wf-scrubber-label' },
+                  scrubSeq === undefined ? 'live' : `#${scrubSeq}`,
+                ),
+              ])
+            : null,
+        ]),
+    renderError
+      ? null
+      : h('aside', { class: 'wf-side' }, [
+          h('input', {
+            class: 'wf-filter',
+            placeholder: 'filter events…',
+            value: filter,
+            onInput: (/** @type {any} */ event) =>
+              setFilter(event.currentTarget.value),
+          }),
+          h(TimelineView, {
+            records,
+            scrubSeq,
+            onScrub: setScrubSeq,
+            filter,
+          }),
+        ]),
   ]);
 };
 harden(WorkflowApp);

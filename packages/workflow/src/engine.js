@@ -739,6 +739,12 @@ export const makeWorkflowEngine = async powers => {
         deliverChildFinished(parentRun, run);
       }
     }
+    // A finished run emits nothing more; terminate its event topic so
+    // current and future history subscribers complete cleanly (done)
+    // instead of parking forever on a run that will never publish again.
+    Promise.resolve(run.eventsTopic.publisher.return(undefined)).catch(
+      () => {},
+    );
   };
 
   /**
@@ -804,7 +810,11 @@ export const makeWorkflowEngine = async powers => {
       },
       /** @param {unknown} value */
       async return(value) {
-        await subscription.return?.(undefined);
+        // Best-effort cleanup: a change-topic subscriber's return()
+        // awaits the next published value, which never arrives on an
+        // idle run — so fire it without blocking the caller's teardown,
+        // or `done`/`stop()` would hang.
+        Promise.resolve(subscription.return?.(undefined)).catch(() => {});
         return harden({ value, done: true });
       },
       [Symbol.asyncIterator]: () => reader,
