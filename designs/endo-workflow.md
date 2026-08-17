@@ -120,6 +120,48 @@ Deviations and remaining work, honestly stated:
 - `probe()` (active liveness) and the `guard.evaluated` trace flag are
   not started.
 
+### Adversarial review pass (2026-08-16)
+
+Six adversarial reviewers audited the engine, interpreter, ocap
+boundary, sync layer, UI, and Chat integration. Confirmed defects were
+fixed with regression tests (workflow package now at 46 tests); the
+`redaction`, `wedge`, and `sync` suites and the spawn-recovery case
+were added for this pass:
+
+- **Fail loud, never wedge.** A settlement matching no transition, and a
+  guard/reducer that throws, now drive the run to `failed` with a
+  journaled reason (or route to `onError`) instead of clearing the
+  pending effect and hanging silently — the engine no longer swallows an
+  interpreter throw into a warning. A failed child against a
+  success-only parent handler now fails the parent.
+- **Capability redaction holes.** `form.value` and `signal` payloads now
+  pass through the alias table like every other settlement, and
+  `isJournalableData` rejects symbol-keyed objects (which both the data
+  check and canonical JSON silently dropped) — closing two traceless
+  capability-into-journal channels.
+- **Fragment escalation.** Fragment inlining now rebinds a `spawn`
+  effect's `participants` map through the fragment `bind` interface, so
+  a fragment can no longer reach an outer participant slot it was not
+  granted.
+- **Double-spawn on recovery.** Recovery no longer re-issues a pending
+  `spawn` when a child already exists for that correlation; a child that
+  finished pre-crash without notifying its parent is delivered on
+  recovery.
+- **Sync lifecycle.** `stop()` is preemptive (races the parked reader),
+  so stopping a client on an idle/finished run settles rather than
+  hanging and leaking; a finished run terminates its event topic; the
+  retry loop is bounded.
+- **UI crash-safety.** An error boundary around the statechart/timeline,
+  a `disposed` re-check after the definition await, a bigint-safe
+  timeline serializer, and the corrected multi-segment service-path
+  lookup.
+
+Still-open review findings, deferred as larger work: snapshot-backed
+recovery (recovery currently folds the full journal, `readSnapshot` is
+unused), per-run `refs` persistence (a pre-restart alias is not
+resolvable after recovery), durable pause queue, and the shared
+`runsTopic` firehose cap.
+
 ## What is the Problem Being Solved?
 
 Endo agents can already do long-running collaborative work, but every

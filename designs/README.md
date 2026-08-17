@@ -34,13 +34,17 @@ idempotent re-issue, the guarded observer/controller/admin exo kit,
 factories with cascading revocation, the seq-resume sync client, and the
 unconfined plugin entry), and `packages/space-workflow` holds the Chat
 space (runs rail, layered statechart SVG with live overlays, timeline,
-time-travel scrubber); 35 ava tests including restart-mid-review drills
+time-travel scrubber); 46 ava tests including restart-mid-review drills
 and a plugin-boundary Phase 6 cut driving real makeExo participants.
 The Space is registered in Chat (workflow-component bridge, gutter mode,
 add-space card and form); per maintainer direction there is no dedicated
 CLI — the service is an ordinary capability, so the generic endo verbs
-and the Space are the surfaces. The live-lal env-gated wiring remains;
-the design is In Progress.
+and the Space are the surfaces. A six-agent adversarial review then
+hardened it: fail-loud-never-wedge on unhandled/throwing settlements,
+closed capability-redaction holes (form/signal payloads, symbol keys),
+fixed fragment spawn escalation and double-spawn-on-recovery, and made
+the sync-client stop preemptive with UI crash-safety. The live-lal
+env-gated wiring remains; the design is In Progress.
 Summary, dependency graph, M9 row, estimate, totals, and timeline
 synced.*
 
