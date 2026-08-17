@@ -623,7 +623,9 @@ test('lookup results expose a kind discriminator and targeted cross-type errors'
   const file = await E(mount).lookup(['dir', 'value.txt']);
   t.is(await E(directory).kind(), 'directory');
   t.is(await E(file).kind(), 'file');
-  await t.throwsAsync(() => E(file).list(), {
+  const listing = file.list();
+  t.true(listing instanceof Promise);
+  await t.throwsAsync(() => listing, {
     message: 'list() is not available on a file; use text()',
   });
 });
@@ -633,9 +635,10 @@ test('lookup explains the array and entry forms for slash-joined strings', async
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   fs.mkdirSync(path.join(rootPath, 'dir'));
 
-  await t.throwsAsync(() => E(mount).lookup('dir/value.txt'), {
+  const error = await t.throwsAsync(() => E(mount).lookup('dir/value.txt'), {
     message: /array of path segments or entry\(\)/,
   });
+  t.regex(/** @type {Error} */ (error.cause).message, /slash|segment/i);
 });
 
 test('EndoMountFile.append extends the file content', async t => {
