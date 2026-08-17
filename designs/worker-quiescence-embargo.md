@@ -50,23 +50,36 @@ guarantee). It also makes replay and snapshot-resume nondeterministic, since the
 outbound effect of a delivery is a function of wire timing rather than of worker
 state alone.
 
-### Relationship to the metering "output embargo" (which was rejected)
+### Relationship to the metering "output embargo"
 
-`daemon-xs-worker-metering.md` (Status: Complete) already considered, and
-**rejected**, an "output embargo." That embargo buffered outbound so it could be
-**discarded on a metering abort** (a rollback), and admission control removed the
-need for it: reserve a full hard-limit crank of budget before delivery, so any
-normally-completing crank is fully paid for and never needs its output rolled
-back.
+`daemon-xs-worker-metering.md` (Status: Complete) already considered an "output
+embargo" whose sole job was to buffer outbound so it could be **discarded on a
+metering abort** (a rollback). Admission control removed the need for **that
+rollback-discard mechanism**: reserve a full hard-limit crank of budget before
+delivery, so any normally-completing crank is fully paid for and never needs its
+output rolled back.
 
-The quiescence embargo proposed here is a **different** buffer with a **different
-purpose**. It buffers outbound so the batch can be **released atomically at
-quiescence in emission order**, and it **never discards** on a normally
-completing crank. It therefore does not reintroduce the rollback complexity the
-metering design turned down (crank-boundary delimiters, reasoning about partial
-effects). The two compose: admission control gates **inbound** on budget; the
-quiescence embargo gates **outbound** on quiescence and enforces one delivery per
-crank.
+Admission control does **not**, however, remove the need for an outbound message
+embargo. Admission control eliminates the problem of doing *unbudgeted* work; it
+does not make a crank's outbound side effects atomic. An outbound embargo is
+still required so that the **partial side effects of a failed delivery do not
+escape**: if a crank aborts (a fault, a metering hard-stop, a supervisor crash
+mid-flush), the next attempt to run that crank must not begin in a world already
+partially modified by the previous failed attempt. Holding outbound until
+quiescence gives the crank all-or-nothing outbound semantics — the batch is
+released only once the crank has settled cleanly, so a failed attempt leaves no
+observable outbound trace for a retry to race.
+
+The quiescence embargo proposed here therefore serves **two** ends that
+admission control does not: it **releases the outbound batch atomically at
+quiescence in emission order** (the cross-supervisor parity property below), and
+it **withholds the partial side effects of a delivery until that delivery has
+completed** (the failure-atomicity property just described). It **never
+discards** on a normally completing crank, so it does not reintroduce the
+rollback complexity the metering design turned down (crank-boundary delimiters
+purely for discard). The two mechanisms compose: admission control gates
+**inbound** on budget; the quiescence embargo gates **outbound** on quiescence,
+enforces one delivery per crank, and confines a failed crank's effects.
 
 ### Prior art
 
@@ -168,10 +181,13 @@ Because slot-machine frames are canonical CBOR pinned byte-for-byte on both side
 (PR 124's `@endo/slots` and `@endo/cbor` fixtures), batch equality is checkable
 at the byte level, in the same spirit as `sqlite-parity.test.js`.
 
-The embargo must apply to the **CapTP path and the slot-machine path alike**. A
-flag that enabled it for only one path would let the two wire protocols diverge,
-which is the opposite of the goal. See Open questions on whether to gate it on
-`ENDO_USE_SLOT_MACHINE` at all.
+The embargo behaves **identically across the CapTP path and the slot-machine
+path**. Review resolved that it ships as a **configuration flag present in every
+CapTP variant** (OCapN, slot machine, legacy CapTP) rather than a per-path
+`ENDO_USE_SLOT_MACHINE` gate: a flag that enabled it for only one path would let
+the two wire protocols diverge, which is the opposite of the goal, whereas one
+uniform flag lets an operator trade the embargo's delay against timely emission
+without breaking parity. See "Resolved in review", flag gating.
 
 ## Test / verification strategy
 
@@ -209,41 +225,77 @@ which is the opposite of the goal. See Open questions on whether to gate it on
    observable only at the worker.
 2. **Release at quiescence, never discard.** This is what distinguishes the
    quiescence embargo from the metering rollback-embargo, and what keeps it
-   compatible with admission control.
+   compatible with admission control. It is still needed *alongside* admission
+   control: admission control eliminates unbudgeted work but not partial-effect
+   escape, so the embargo confines the outbound side effects of a **failed**
+   crank until a clean attempt settles (see "Relationship to the metering
+   embargo").
 3. **Exactly one envelope per crank.** Restores the crank contract
    `daemon-xs-worker-metering.md` already states; removes the mid-crank inbound
    folding in the XS pump and the crank-free dispatch loop on Node.
 4. **Quiescence is bounded to due-now jobs and timers.** Future-scheduled timers
    do not hold the embargo open.
+5. **Synchronous messages are exempt from the embargo discipline.** A
+   synchronous message may only call an **ancestor in the process hierarchy**,
+   and the ancestor (parent) sees the call as **asynchronous** and applies the
+   embargo protocol to it normally. Because the exemption is confined to the
+   ancestor direction, it cannot form the cross-worker cycle that would deadlock
+   the one-envelope-per-crank gate (see the resolved sync-call question below).
+6. **Node emulates XS job draining with `setImmediate`.** The Node quiescence
+   barrier targets XS's "drain all pending jobs" semantics; a `setImmediate`
+   turn is the established emulation of that boundary on Node and is the state of
+   the art we adopt (or at least a sufficient approximation), rather than a bare
+   microtask-empty fence.
+7. **The embargo is a configuration flag, not always-on, and lives in every
+   CapTP variant.** The delay the embargo introduces is not universally better
+   than timely emission, so it is a per-slot-machine configuration option. The
+   option must exist across **all** CapTP variants — OCapN, the slot machine, and
+   the legacy CapTP — so the choice is uniform rather than a per-path divergence:
+   parity is preserved by the flag meaning the same thing everywhere, not by
+   forcing every path always-on.
+8. **Debug outbound is a side channel, not embargoed.** `flush_debug_outbound`
+   (breakpoint hits, step responses) is diagnostics, not protocol traffic, so it
+   is exempt from the embargoed batch.
 
-## Open Questions
+## Resolved in review
 
-- **Synchronous-call deadlock.** Does strict one-envelope-per-crank break the
-  supervisor-mediated synchronous calls tracked in `pending_syncs`
-  (`rust/endo/src/supervisor.rs`), where a caller cannot quiesce until it admits
-  the **response** to its outstanding question? The `try_recv` non-blocking drain
-  the current pump uses exists precisely to avoid this deadlock (`worker_io.rs`
-  notes it). Proposed resolution to validate: admit a **response to an
-  outstanding sync question** as a within-crank continuation (part of the same
-  logical turn), while keeping **fresh deliveries** embargoed. Confirm against the
+The maintainer review of this design (kriskowal, PR 989) settled the questions
+this section previously left open. They are recorded here with the residual
+validation each still carries into the build.
+
+- **Synchronous-call deadlock — resolved: sync messages are special-cased out of
+  the discipline.** Synchronous messages are **not** subject to the embargo. A
+  synchronous message may only call an **ancestor in the process hierarchy**; the
+  parent receiving it treats it as an **asynchronous** message and respects the
+  embargo protocol. This is stronger and simpler than the earlier
+  "within-crank continuation" carve-out: the ancestor-only restriction is what
+  keeps the exemption from creating a cross-worker cycle, so strict
+  one-envelope-per-crank does not deadlock on `pending_syncs`
+  (`rust/endo/src/supervisor.rs`). *Residual validation:* confirm the child→ancestor
+  synchronous path and the parent's asynchronous/embargoed view of it against the
   four-verb slot-machine model (`deliver`/`resolve`/`drop`/`abort`) and CapTP's
-  question/answer pairing before building.
-- **Node quiescence primitive.** Is a microtask-empty barrier (a `queueMicrotask`
-  fence, or a `setImmediate` turn) sufficient to match XS's
-  `fxMachineHasPendingJobs` semantics exactly, or is an explicit reaction count
-  needed? `HandledPromise` reactions versus native microtasks may drain in a
-  different order.
-- **Flag gating.** Should the embargo ship behind `ENDO_USE_SLOT_MACHINE`, or
-  apply to the CapTP path from the start? Parity requires both paths to behave
-  identically, so a per-path flag risks the very divergence this design removes.
-- **Debug outbound.** Is `flush_debug_outbound` (breakpoint hits, step responses
-  in the XS pump) part of the embargoed protocol batch or a side channel?
-  Proposed: side channel, not embargoed, since it is diagnostics rather than
-  protocol traffic.
-- **Follow-up shape.** Given the synchronous-call deadlock risk, a **probe**
-  (gap-revealing build) that attempts strict one-envelope-per-crank on the XS
-  pump first, reporting where sync round-trips deadlock, is likely the safer next
-  step than a direct build. To be filed once this design is reviewed.
+  question/answer pairing during the build. (Design Decision 5.)
+- **Node quiescence primitive — resolved: `setImmediate`.** The target is XS's
+  "drain all pending jobs" semantics; `setImmediate` is the emulation we have
+  used for that boundary on Node and is the accepted state of the art (or a
+  sufficient approximation), preferred over a bare microtask-empty fence.
+  *Residual validation:* verify that `HandledPromise` reactions and native
+  microtasks both settle before the `setImmediate` turn fires, since they may
+  drain in a different order. (Design Decision 6.)
+- **Flag gating — resolved: a configuration flag in every CapTP variant.** The
+  embargo ships as a **configuration flag on the slot machine**, not always-on,
+  because the delay it introduces is not universally preferable to timely
+  emission. The option must exist across **all** CapTP variants — OCapN, the slot
+  machine, and the legacy CapTP — so it is a uniform knob rather than the
+  per-path `ENDO_USE_SLOT_MACHINE` split feared earlier: parity is preserved by
+  the flag meaning the same thing on every path. (Design Decision 7.)
+- **Debug outbound — resolved: side channel.** `flush_debug_outbound` is
+  diagnostics, not protocol traffic, so it is **not** part of the embargoed batch.
+  (Design Decision 8.)
+- **Follow-up shape — resolved: probe first.** A **probe** (gap-revealing build)
+  that attempts strict one-envelope-per-crank on the XS pump first, reporting
+  where sync round-trips deadlock, is the agreed next step over a direct build,
+  to be filed once this design lands.
 
 ## Prompt
 
