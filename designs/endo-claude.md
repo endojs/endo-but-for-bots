@@ -423,8 +423,48 @@ Each guest-inference call is a fresh `claude -p` process. Turn-to-turn memory is
 which would leak past tool results across a confinement boundary the fresh flags
 were chosen to enforce. If a guest needs continuity across inferences, that is
 Endo's job: the guest's own durable state (its pet-name directory, its mailbox),
-or a memory capability the facet itself exposes as a tool. The harness stays
-stateless so the confinement holds identically on every call.
+or a memory capability the facet itself exposes as a tool (the threaded-session
+extension below is one such capability). The harness stays stateless so the
+confinement holds identically on every call.
+
+### An optional threaded session models follow-up — as an Endo capability, not `--resume`
+
+The stateless default is not the only mode a guest may want. Sometimes a guest needs
+to *deliberately* continue a prior line of thought — to ask a follow-up that builds on
+what a previous inference concluded, rather than restating the whole context from its
+own durable state each time. The design models this as an **optional, capability-gated
+extension** that preserves every confinement invariant above: the harness stays
+stateless per call by default, and continuity, when wanted, is an **Endo-side
+capability the facet exposes as a tool**, never harness-owned `--resume` / `--continue`
+transcript replay.
+
+Concretely, the facet may expose a **threaded-session (follow-up) method** alongside
+its one-shot inference method. Invoking it does not change the spawn model — each turn
+is still a fresh `claude -p` process with the same fail-closed tool baseline (`--tools
+""` plus `--disable-slash-commands`), constructed-allowlist environment, and pooled
+credential. What the follow-up method adds is a **session handle**: an opaque, host-held
+continuation the guest names to resume. The harness projects that handle into the next
+spawn by re-supplying the prior turns **the guest itself authored** — its prompts and
+the model's text replies — so the guest picks up its own line of thought. The guest
+never receives, and cannot forge, the underlying transcript; it holds only the handle.
+
+What the handle deliberately does **not** carry forward is the raw prior **tool
+results**. `--resume` / `--continue` restore the entire transcript with no filter,
+including every tool result an earlier turn obtained under whatever capability surface
+was attenuated for it; splicing that verbatim into a later turn — which may run under a
+different or narrower facet grant — would leak results across the confinement boundary
+the fresh flags were chosen to enforce. This is exactly why the harness does not build
+follow-up on the CLI's resume flags. The threaded capability instead threads only the
+conversational content, and lets any capability the later turn *still holds* re-derive
+tool results freshly under its own current grant. Continuity of **thought** is
+preserved; continuity of **authority** is not smuggled across calls.
+
+Because the handle is itself a capability, its confinement properties follow the same
+ocap rules the rest of this design relies on: it is unforgeable, it is only as powerful
+as the facet that minted it, and revoking that facet revokes the ability to resume. A
+guest never granted the follow-up method sees exactly the stateless default; a guest
+granted it opts in explicitly, per thread — the harness never turns threading on
+implicitly, and a threaded turn is confined identically to a fresh one.
 
 ### The tool baseline is fail-closed
 
