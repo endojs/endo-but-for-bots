@@ -85,6 +85,31 @@ typically as a blockquote or fenced block at the end of the document under
 a `## Prompt` heading. This preserves the intent and context behind the
 design for future readers.
 
+### Tree-grounded citations
+
+When a design cites in-tree code as evidence — "already in the tree",
+"the landed X seam", `file:line` anchors, or a claim about a call site's
+behavior — the citation must hold against the tree at the design's base:
+
+- **Name identifiers that exist at the cited path.** An "already in the tree"
+  or "the landed X" citation must name an identifier that actually exists at
+  that path (verify with `grep`), and name the **package that exports it**
+  before an in-tree line reference is used as justification. A precedent cited
+  from the wrong package (e.g. attributing an `@endo/ocapn` seam to
+  `@endo/captp`) is a load-bearing error, not a nit.
+- **Verify a claimed behavior against the code path, not just the line.** A
+  citation can be line-accurate and still describe a path that never fires:
+  check the key namespace on both the write and the delete, the default of any
+  flag the claim rests on, and whether every call site the claim quantifies
+  over ("released in a `finally` at every call site") actually does so.
+- **Prefer a symbol name over a bare line number.** Bare `file:line` anchors
+  rot on the next edit; pair each with the symbol name (and, for a design's
+  load-bearing traces, the base commit SHA) so a citation that drifts is
+  detectable.
+
+These are the recurring corrections design-review panels raise; landing them
+here so a future author applies them before review, not after a round.
+
 ## Progress Tracking
 
 Progress is tracked at two levels:
