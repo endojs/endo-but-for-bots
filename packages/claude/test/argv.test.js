@@ -42,7 +42,10 @@ test('buildArgv delivers the prompt at NO index (stdin only)', t => {
   t.true(argv.includes('--allowedTools'));
   // The only occurrences of the allow-list token are as the value of
   // --allowedTools, never as a trailing positional.
-  t.is(argv.indexOf('mcp__endo__writeText,mcp__endo__list'), argv.indexOf('--allowedTools') + 1);
+  t.is(
+    argv.indexOf('mcp__endo__writeText,mcp__endo__list'),
+    argv.indexOf('--allowedTools') + 1,
+  );
 });
 
 test('buildArgv joins variadic values into single comma tokens (no swallowable run)', t => {

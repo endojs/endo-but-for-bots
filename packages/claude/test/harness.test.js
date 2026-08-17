@@ -40,9 +40,11 @@ const makeHarness = (overrides = {}) => {
       return harden({
         type: 'acquired',
         subscriptionId: 'sub-0',
-        issued: { async materialise() {
-          return 'key';
-        } },
+        issued: {
+          async materialise() {
+            return 'key';
+          },
+        },
         async release() {
           observed.released += 1;
         },
@@ -70,19 +72,27 @@ const makeHarness = (overrides = {}) => {
       overrides.launch ??
       (async spec => {
         observed.launched = spec;
-        return ok('hello from claude', { model: spec.argv[spec.argv.indexOf('--model') + 1] });
+        return ok('hello from claude', {
+          model: spec.argv[spec.argv.indexOf('--model') + 1],
+        });
       }),
     limits: { wallClockMs: 1000, outputByteCap: 1024, maxTurns: 8 },
   };
 
-  const provider = make({ connectBroker: async () => broker, pool }, undefined, options);
+  const provider = make(
+    { connectBroker: async () => broker, pool },
+    undefined,
+    options,
+  );
   return { provider, observed };
 };
 
 test('happy path: infer builds a confined argv, an allowlisted env, prompt on stdin', async t => {
   const { provider, observed } = makeHarness();
   const infer = await provider.makeGuestInference(HEX64);
-  const result = await infer.infer('think about X', { model: 'claude-opus-4-8' });
+  const result = await infer.infer('think about X', {
+    model: 'claude-opus-4-8',
+  });
 
   t.is(result.type, 'ok');
   if (result.type !== 'ok') return;
@@ -93,10 +103,15 @@ test('happy path: infer builds a confined argv, an allowlisted env, prompt on st
   t.true(observed.launched.argv.includes('--allowedTools'));
   // deriveAllowList emits names sorted for determinism.
   t.is(
-    observed.launched.argv[observed.launched.argv.indexOf('--allowedTools') + 1],
+    observed.launched.argv[
+      observed.launched.argv.indexOf('--allowedTools') + 1
+    ],
     'mcp__endo__list,mcp__endo__writeText',
   );
-  t.is(observed.launched.argv[observed.launched.argv.indexOf('--model') + 1], 'claude-opus-4-8');
+  t.is(
+    observed.launched.argv[observed.launched.argv.indexOf('--model') + 1],
+    'claude-opus-4-8',
+  );
 
   // The env carries only allowlisted keys.
   for (const key of Object.keys(observed.launched.env)) {
@@ -116,7 +131,10 @@ test('infer defaults the model to the first pinned model', async t => {
   const { provider, observed } = makeHarness();
   const infer = await provider.makeGuestInference(HEX64);
   await infer.infer('hi');
-  t.is(observed.launched.argv[observed.launched.argv.indexOf('--model') + 1], 'claude-opus-4-8');
+  t.is(
+    observed.launched.argv[observed.launched.argv.indexOf('--model') + 1],
+    'claude-opus-4-8',
+  );
 });
 
 test('a model outside the pinned set fails closed (throws, no spawn)', async t => {
@@ -130,9 +148,11 @@ test('a model outside the pinned set fails closed (throws, no spawn)', async t =
 
 test('pool exhaustion returns a tagged record and never launches', async t => {
   const { provider, observed } = makeHarness({
-    pool: { async acquire() {
-      return harden({ type: 'pool-exhausted', retryAfterMs: 250 });
-    } },
+    pool: {
+      async acquire() {
+        return harden({ type: 'pool-exhausted', retryAfterMs: 250 });
+      },
+    },
   });
   const infer = await provider.makeGuestInference(HEX64);
   const r = await infer.infer('hi');
@@ -160,7 +180,9 @@ test('a version mismatch fails closed (throws) but still releases the slot', asy
 });
 
 test('an empty post-prune catalog is a grant-time hard error (throws)', async t => {
-  const { provider } = makeHarness({ catalog: [{ name: 'evaluate' }, { name: '__proto__' }] });
+  const { provider } = makeHarness({
+    catalog: [{ name: 'evaluate' }, { name: '__proto__' }],
+  });
   await t.throwsAsync(() => provider.makeGuestInference(HEX64), {
     message: /empty post-prune tool catalog/,
   });
