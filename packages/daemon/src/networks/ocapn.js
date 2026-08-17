@@ -8,6 +8,8 @@ import { cborCodec } from '@endo/ocapn/cbor';
 import { makeCryptography } from '@endo/ocapn/cryptography';
 import { makeOcapnNoiseNetwork } from '@endo/ocapn-noise';
 import { makeTcpTransport } from '@endo/ocapn-noise/transport/tcp';
+import { bytesFromText } from '@endo/bytes/from-string.js';
+import { concatBytes } from '@endo/bytes/concat.js';
 import { fromHex, toHex } from '../hex.js';
 
 /**
@@ -20,13 +22,31 @@ import { fromHex, toHex } from '../hex.js';
  * daemon-to-worker, daemon-to-CLI, and the browser web gateway — per
  * `designs/daemon-ocapn-external-connectivity.md`.
  *
- * Each daemon registers one bootstrap object — an `EndoOcapnBootstrap`
- * exo — in its OCapN locator under a well-known swissnum. A dialing
- * peer fetches a sturdyref for `(peer location, bootstrap swissnum)`
- * to obtain it. The bootstrap is the single entry point of the peer
- * protocol: it reports the daemon's node identity and hands back the
- * `EndoGreeter` that runs the `hello` handshake. The peer application
- * protocol — `EndoGreeter.hello`, `EndoGateway.provide`,
+ * OCapN's own bootstrap is the implicit first export of a session
+ * (export position 0), reached with no swissnum via
+ * `session.getBootstrap()`; the spec provides no swissnum for it. In
+ * `@endo/ocapn` that position-0 object is a protocol-fixed surface
+ * exposing `fetch(swissnum)` and the three-party-handoff gift methods
+ * (`makeBootstrapObject`, `packages/ocapn/src/client/ocapn.js`), not an
+ * application object we control. Application capabilities are therefore
+ * reached *through* the bootstrap by a swissnum: `bootstrap.fetch(sn)`
+ * resolves `sn` against the peer's locator, which is exactly what
+ * `makeSturdyRef(location, sn)` + `enlivenSturdyRef` wrap.
+ *
+ * So each daemon publishes one peer entry-point capability — an
+ * `EndoPeerEntry` exo — in its OCapN locator under a single well-known
+ * swissnum, and a dialing peer fetches a sturdyref for
+ * `(peer location, entry swissnum)` to obtain it. This entry object is
+ * *not* the OCapN bootstrap; it is an ordinary capability we reach
+ * through the bootstrap's `fetch`. Its extra methods relative to the
+ * conventional CapTP daemon bootstrap (which is the `EndoGreeter`
+ * itself — see `tcp-netstring.js`, where `getBootstrap()` returns the
+ * greeter and `hello` is called on it directly) exist to carry the
+ * layered agent-binding attestation described below: it reports the
+ * daemon's persistent node identity, exposes the signed binding that
+ * ties this session's ephemeral OCapN key to that identity, and hands
+ * back the `EndoGreeter` that runs the `hello` handshake. The peer
+ * application protocol — `EndoGreeter.hello`, `EndoGateway.provide`,
  * `EndoGateway.followRetentionSet` — rides on top of the OCapN session
  * unchanged, exactly as it rode on CapTP before. This module conforms
  * to the existing `EndoNetwork` interface (`addresses`, `supports`,
@@ -34,12 +54,15 @@ import { fromHex, toHex } from '../hex.js';
  * `@nets`.
  */
 
-// The well-known OCapN swissnum under which a daemon registers its
-// bootstrap object. The bootstrap is the deliberately public entry
-// point of the peer protocol, so a fixed name is appropriate;
-// everything sensitive is reached only through the gateway the
-// greeter hands back from `hello`.
-const BOOTSTRAP_SWISSNUM = 'endo-bootstrap';
+// The well-known OCapN swissnum under which a daemon publishes its peer
+// entry-point capability in its locator. This is *not* the OCapN
+// bootstrap (which is the implicit position-0 export, reached with no
+// swissnum); it is an ordinary capability a dialing peer fetches through
+// that bootstrap via `bootstrap.fetch(PEER_ENTRY_SWISSNUM)`. The entry
+// point is deliberately public, so a fixed name is appropriate;
+// everything sensitive is reached only through the gateway the greeter
+// hands back from `hello`.
+const PEER_ENTRY_SWISSNUM = 'endo-peer-entry';
 
 // Address protocol for OCapN-Noise-over-TCP connection hints.
 const protocol = 'ocapn+noise+tcp';
@@ -56,28 +79,94 @@ const LISTEN_ADDR_NAME = 'ocapn-listen-addr';
 // against any extension that prepends data.
 const AGENT_BINDING_DOMAIN = 'endo-agent-binding\0';
 
-const textEncoder = new TextEncoder();
-const concatBytes = (a, b) => {
-  const out = new Uint8Array(a.byteLength + b.byteLength);
-  out.set(a, 0);
-  out.set(b, a.byteLength);
-  return out;
-};
 const agentBindingMessage = sessionPublicKey =>
-  concatBytes(textEncoder.encode(AGENT_BINDING_DOMAIN), sessionPublicKey);
+  concatBytes([bytesFromText(AGENT_BINDING_DOMAIN), sessionPublicKey]);
 
-// Format an authority component. IPv6 literals contain colons and must
-// be wrapped in brackets so `new URL('proto://[::1]:8080')` and a stored
-// `[::1]:8080` listen address both round-trip through URL parsing.
-// IPv4 addresses and DNS names have no colons and pass through unchanged.
+// Format an authority (`host:port`) component. IPv6 literals contain
+// colons and must be wrapped in brackets so `new URL('proto://[::1]:8080')`
+// and a stored `[::1]:8080` listen address both round-trip through URL
+// parsing. IPv4 addresses and DNS names have no colons and pass through
+// unchanged.
+//
+// We cannot *construct* the authority through the `URL` interface, even
+// though that would be the natural way to gain its validation: the
+// `URL`/`URLSearchParams` API has no host-formatting entry point, and
+// its `hostname` setter silently *rejects* a bare IPv6 literal rather
+// than bracketing it — `(u => { u.hostname = '::1'; return u.host })` on
+// a fresh `new URL('null://x')` leaves the placeholder host untouched
+// (a colon is not a valid opaque-host character in the WHATWG URL spec,
+// so the setter is a no-op; verified on Node 22), so a URL-built
+// authority would silently drop every IPv6 address. Bracketing therefore
+// stays a manual string operation.
+//
+// We still drive *validation* through `URL` to gain the confidence and
+// the meaningful errors the reviewer asked for: after bracketing we
+// parse the result back and assert the host and port survive the round
+// trip, so an invalid host or an out-of-range port fails loudly here
+// with a specific message instead of producing a malformed address that
+// only breaks later at the dialing peer.
 /**
  * @param {string} host
  * @param {string | number} port
+ * @returns {string} the `host:port` authority, IPv6 host bracketed
  */
-const formatHostPort = (host, port) =>
-  host.includes(':') ? `[${host}]:${port}` : `${host}:${port}`;
+export const formatHostPort = (host, port) => {
+  const authority = host.includes(':') ? `[${host}]:${port}` : `${host}:${port}`;
+  // Round-trip through URL to validate. `tcp:` is an arbitrary parseable
+  // scheme; only the authority is under test. Port 0 (an as-yet-unbound
+  // ephemeral port) is the one legitimate value URL normalizes away
+  // (`.port === ''`), so it is exempt from the port round-trip check.
+  let url;
+  try {
+    url = new URL(`tcp://${authority}`);
+  } catch (cause) {
+    throw Error(
+      `Cannot format OCapN authority from host ${JSON.stringify(
+        host,
+      )} and port ${JSON.stringify(port)}: ${authority} is not a valid URL authority`,
+      { cause },
+    );
+  }
+  // Compare the parsed host against the bracket-free host the caller
+  // supplied. `tcp:` is a non-special scheme, so URL preserves the host
+  // verbatim (no lowercasing/IDNA); the only normalization to undo is the
+  // IPv6 brackets, which we strip from both sides.
+  const bareHost = host.replace(/^\[|\]$/g, '');
+  if (url.hostname.replace(/^\[|\]$/g, '') !== bareHost) {
+    throw Error(
+      `Cannot format OCapN authority: host ${JSON.stringify(
+        host,
+      )} did not survive URL round-trip (got ${JSON.stringify(url.hostname)})`,
+    );
+  }
+  if (String(port) !== '0' && url.port !== String(port)) {
+    throw Error(
+      `Cannot format OCapN authority: port ${JSON.stringify(
+        port,
+      )} did not survive URL round-trip (got ${JSON.stringify(url.port)})`,
+    );
+  }
+  return authority;
+};
 
-const EndoOcapnBootstrapInterface = M.interface('EndoOcapnBootstrap', {
+// Whether this network can dial the given address (or bare protocol
+// string). Captures no lexical state — it reads only the module-level
+// `protocol` constant — so it lives at module scope rather than being
+// reallocated inside every `make()` call.
+/** @param {string} addressOrProtocol */
+const supports = addressOrProtocol => {
+  try {
+    return new URL(addressOrProtocol).protocol === `${protocol}:`;
+  } catch {
+    // The caller may pass just the protocol string (e.g.
+    // "ocapn+noise+tcp:") rather than a full address.
+    return (
+      addressOrProtocol === `${protocol}:` || addressOrProtocol === protocol
+    );
+  }
+};
+
+const EndoPeerEntryInterface = M.interface('EndoPeerEntry', {
   getNodeId: M.call().returns(M.string()),
   getAgentBinding: M.call().returns(M.promise()),
   getGreeter: M.call().returns(M.any()),
@@ -116,7 +205,7 @@ export const make = async (powers, context) => {
   // is *not* baked into the Noise handshake — the agent keypair is
   // confined inside the daemon and never leaves the host (per the
   // `@keypair` capability discipline). Persistent identity is instead
-  // layered on top of the session: the bootstrap exo carries a signed
+  // layered on top of the session: the peer entry-point exo carries a signed
   // attestation (`getAgentBinding`) that endorses this session's
   // ephemeral public key with the agent's persistent key, and the
   // dialing peer verifies that signature against the agent public key
@@ -141,26 +230,28 @@ export const make = async (powers, context) => {
     signature: bindingSignature,
   });
 
-  // The daemon's bootstrap object: the single entry point a remote
-  // peer reaches over an OCapN session. It reports this daemon's node
-  // identity, hands back the greeter that runs the handshake, and
-  // exposes the agent-binding attestation that ties this session's
-  // ephemeral OCapN key to the agent's persistent identity.
-  const bootstrap = makeExo('EndoOcapnBootstrap', EndoOcapnBootstrapInterface, {
+  // The daemon's peer entry-point capability: the single object a remote
+  // peer reaches over an OCapN session by fetching PEER_ENTRY_SWISSNUM
+  // through the peer's bootstrap. It reports this daemon's node identity,
+  // hands back the greeter that runs the handshake, and exposes the
+  // agent-binding attestation that ties this session's ephemeral OCapN
+  // key to the agent's persistent identity.
+  const peerEntry = makeExo('EndoPeerEntry', EndoPeerEntryInterface, {
     getNodeId: () => localNodeId,
     getAgentBinding: async () => agentBinding,
     getGreeter: () => localGreeter,
     help: () =>
-      `Endo OCapN bootstrap object. getNodeId() reports this daemon's node number; getAgentBinding() returns the signed attestation that ties this session's OCapN key to the agent; getGreeter() returns the EndoGreeter that runs the peer handshake.`,
+      `Endo OCapN peer entry-point object (fetched through the OCapN bootstrap by a well-known swissnum; not itself the OCapN bootstrap). getNodeId() reports this daemon's node number; getAgentBinding() returns the signed attestation that ties this session's OCapN key to the agent; getGreeter() returns the EndoGreeter that runs the peer handshake.`,
   });
 
   // The OCapN locator (a "nonce locator"): the table of local
-  // capabilities a remote peer may fetch by swissnum. The bootstrap
-  // is the sole published entry; every other value is reached through
-  // the gateway that the greeter hands back from `hello`.
+  // capabilities a remote peer may fetch by swissnum through the OCapN
+  // bootstrap's `fetch`. The peer entry point is the sole published
+  // entry; every other value is reached through the gateway that the
+  // greeter hands back from `hello`.
   /** @type {Map<string, unknown>} */
   const locator = new Map();
-  locator.set(BOOTSTRAP_SWISSNUM, bootstrap);
+  locator.set(PEER_ENTRY_SWISSNUM, peerEntry);
 
   const tcpTransport = makeTcpTransport({ host, port });
   await network.addTransport(tcpTransport);
@@ -248,13 +339,14 @@ export const make = async (powers, context) => {
     });
     await Promise.race([sessionReady, connectionCancelled]);
 
-    // Fetch the remote daemon's bootstrap object by its well-known
-    // swissnum. `enlivenSturdyRef` reuses the active session we just
-    // established; subsequent CapTP operations naturally fail-fast if
-    // cancellation aborts that session out from under them.
-    const sturdyRef = client.makeSturdyRef(remoteLocation, BOOTSTRAP_SWISSNUM);
-    const remoteBootstrap = await client.enlivenSturdyRef(sturdyRef);
-    const remoteGreeterP = E(remoteBootstrap).getGreeter();
+    // Fetch the remote daemon's peer entry-point capability by its
+    // well-known swissnum (through the peer's OCapN bootstrap).
+    // `enlivenSturdyRef` reuses the active session we just established;
+    // subsequent CapTP operations naturally fail-fast if cancellation
+    // aborts that session out from under them.
+    const sturdyRef = client.makeSturdyRef(remoteLocation, PEER_ENTRY_SWISSNUM);
+    const remotePeerEntry = await client.enlivenSturdyRef(sturdyRef);
+    const remoteGreeterP = E(remotePeerEntry).getGreeter();
 
     // Verify the layered agent-binding attestation: the OCapN session
     // is authenticated as the *ephemeral* designator from
@@ -264,7 +356,7 @@ export const make = async (powers, context) => {
     // opened is in fact this agent's session — without ever having
     // pulled the agent's private key out of the daemon.
     const binding = /** @type {{agentPublicKey: string, signature: string}} */ (
-      await E(remoteBootstrap).getAgentBinding()
+      await E(remotePeerEntry).getAgentBinding()
     );
     if (expectedNodeId !== null && binding.agentPublicKey !== expectedNodeId) {
       throw new Error(
@@ -318,16 +410,7 @@ export const make = async (powers, context) => {
 
   return Far('OcapnNoiseService', {
     addresses: () => harden([address]),
-    /** @param {string} addressOrProtocol */
-    supports: addressOrProtocol => {
-      try {
-        return new URL(addressOrProtocol).protocol === `${protocol}:`;
-      } catch {
-        return (
-          addressOrProtocol === `${protocol}:` || addressOrProtocol === protocol
-        );
-      }
-    },
+    supports,
     connect,
   });
 };

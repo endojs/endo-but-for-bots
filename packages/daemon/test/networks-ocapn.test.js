@@ -9,14 +9,17 @@ import crypto from 'crypto';
 import { E, Far } from '@endo/far';
 import { makePromiseKit } from '@endo/promise-kit';
 
-import { make as makeOcapnNetwork } from '../src/networks/ocapn.js';
+import {
+  make as makeOcapnNetwork,
+  formatHostPort,
+} from '../src/networks/ocapn.js';
 
 /**
  * Generate a raw 32-byte Ed25519 keypair via Node's `crypto`, mirroring
  * `makeCryptoPowers.generateEd25519Keypair` in the daemon. The mock
  * `sign` method below uses it to back the agent's persistent signing
  * surface — the same one the layered agent-binding attestation
- * exposes via the OCapN bootstrap exo.
+ * exposes via the OCapN peer entry-point exo.
  */
 const toHex = bytes =>
   Array.from(bytes)
@@ -130,6 +133,51 @@ const makeMockPowers = (label, keypair = generateEd25519Keypair()) => {
   };
 };
 
+test('formatHostPort brackets IPv6, passes IPv4/DNS through, and round-trips through URL', t => {
+  // IPv4 and DNS names have no colons and pass through unchanged.
+  t.is(formatHostPort('127.0.0.1', '8080'), '127.0.0.1:8080');
+  t.is(formatHostPort('example.com', '80'), 'example.com:80');
+  // Mixed-case DNS survives: `tcp:` is a non-special scheme, so URL
+  // preserves the host verbatim (no lowercasing/IDNA).
+  t.is(formatHostPort('ExAmple.COM', '443'), 'ExAmple.COM:443');
+  // IPv6 literals contain colons and are bracketed so the result parses
+  // as a URL authority.
+  t.is(formatHostPort('::1', '8080'), '[::1]:8080');
+  t.is(formatHostPort('2001:db8::1', '443'), '[2001:db8::1]:443');
+  // The bracketed IPv6 authority actually round-trips through `new URL`.
+  t.is(new URL(`tcp://${formatHostPort('::1', '8080')}`).hostname, '[::1]');
+  // Port 0 (an as-yet-unbound ephemeral port) is exempt from the port
+  // round-trip check — URL normalizes it away — but still formats.
+  t.is(formatHostPort('127.0.0.1', '0'), '127.0.0.1:0');
+  t.is(formatHostPort('::1', 0), '[::1]:0');
+});
+
+test('formatHostPort rejects invalid host/port combinations with a meaningful error', t => {
+  // Driving validation through `URL` turns malformed input into a loud,
+  // specific failure here rather than a bad address that only breaks at
+  // the dialing peer. Each of these is invalid as a URL authority.
+  t.throws(() => formatHostPort('', '8080'), {
+    message: /Cannot format OCapN authority/,
+  });
+  t.throws(() => formatHostPort('host with spaces', '80'), {
+    message: /Cannot format OCapN authority/,
+  });
+  t.throws(() => formatHostPort('1.2.3.4', '99999'), {
+    message: /Cannot format OCapN authority/,
+  });
+  t.throws(() => formatHostPort('1.2.3.4', '-1'), {
+    message: /Cannot format OCapN authority/,
+  });
+  t.throws(() => formatHostPort('1.2.3.4', 'not-a-port'), {
+    message: /Cannot format OCapN authority/,
+  });
+  // An already-bracketed IPv6 host would be double-bracketed; that is
+  // malformed and is caught rather than silently mangled.
+  t.throws(() => formatHostPort('[::1]', '8080'), {
+    message: /Cannot format OCapN authority/,
+  });
+});
+
 test('OCapN-Noise transport conforms to the EndoNetwork interface', async t => {
   t.timeout(60_000);
   const context = makeMockContext();
@@ -147,7 +195,7 @@ test('OCapN-Noise transport conforms to the EndoNetwork interface', async t => {
   const url = new URL(address);
   t.is(url.protocol, 'ocapn+noise+tcp:');
   // The address carries the daemon node id so a dialing peer can
-  // cross-check the identity reported by the bootstrap object.
+  // cross-check the identity reported by the peer entry-point object.
   t.is(url.searchParams.get('node'), nodeId);
 
   // The resolved OS-assigned listen address is persisted so the port
@@ -179,7 +227,8 @@ test('OCapN-Noise transport carries a peer connection end to end', async t => {
   const [addressB] = await E(serviceB).addresses();
 
   // A dials B: this opens an OCapN-Noise session, fetches B's
-  // bootstrap object by swissnum, cross-checks B's reported node id,
+  // peer entry-point object by swissnum (through B's OCapN
+  // bootstrap), cross-checks B's reported node id,
   // and runs the `hello` handshake — the same handshake
   // `tcp-netstring.js` ran over CapTP.
   const connectionContext = makeMockContext();
@@ -209,7 +258,7 @@ test('OCapN-Noise transport rejects a peer whose identity does not match the add
 
   const [addressB] = await E(serviceB).addresses();
   // Rewrite the connection hint so it names a node other than the one
-  // B's bootstrap binding attests to.
+  // B's peer entry-point binding attests to.
   const tampered = new URL(addressB);
   tampered.searchParams.set('node', toHex(generateEd25519Keypair().publicKey));
 
@@ -351,7 +400,7 @@ test('agent identity persists across transport restart, even though OCapN sessio
   // does not bake its persistent agent identity into the Noise
   // handshake; the `@keypair` capability discipline keeps the agent
   // private key inside the daemon. Persistent identity is layered on
-  // top via the bootstrap's signed `getAgentBinding` attestation, so
+  // top via the peer entry-point's signed `getAgentBinding` attestation, so
   // restart-stability is asserted on:
   //
   //   1. the `node=` parameter of the connection-hint URL, which the
