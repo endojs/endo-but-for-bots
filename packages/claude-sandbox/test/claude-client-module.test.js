@@ -222,6 +222,32 @@ test('an oauthToken credential lands in CLAUDE_CODE_OAUTH_TOKEN', async t => {
   t.is(env.ANTHROPIC_API_KEY, undefined);
 });
 
+test('a subscription-kind credential is explicitly refused by the env-var slice', async t => {
+  const credCap = {
+    async kind() {
+      return 'subscription';
+    },
+    async issue() {
+      return {
+        async materialise() {
+          return 'sub-value';
+        },
+      };
+    },
+  };
+  const host = makeMockHost({ credCap });
+  const client = make(host.powers, undefined, { env: baseEnv() });
+  // The refusal surfaces as an abort (the provisioning throw), not a leak into
+  // an env var — a subscription is settings-file-shaped for @endo/claude's
+  // apiKeyHelper, not env-var-shaped for the ClaudeClient slice.
+  const events = await drain(await client.send('hello'));
+  const last = events[events.length - 1];
+  t.is(last.type, 'abort');
+  t.regex(last.reason, /settings-file-shaped/);
+  // No slice was ever stood up (so no env carrying the secret).
+  t.is(host.sliceFactoryCalls.length, 0);
+});
+
 test('a slice-mint failure unmounts the workspace and aborts the turn', async t => {
   const host = makeMockHost({ sliceBehavior: 'throw' });
   const client = make(host.powers, undefined, { env: baseEnv() });

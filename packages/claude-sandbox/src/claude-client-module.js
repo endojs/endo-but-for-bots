@@ -217,6 +217,20 @@ export const make = (powers, context, contextWrapper = {}) => {
         } catch {
           // No kind() method — treat as a raw API key.
         }
+        // A `subscription` credential is a real, known kind, but it is
+        // settings-file-shaped (consumed by `@endo/claude`'s `apiKeyHelper`),
+        // NOT env-var-shaped. This env-var-routed slice must explicitly REFUSE
+        // it rather than mis-route a subscription secret into an env var — the
+        // design's third-site requirement. (Extending only the factory/module
+        // without this refusal would otherwise fall through to the generic
+        // "unknown kind" below, a misleading error for a known kind.)
+        if (kind === 'subscription') {
+          throw makeError(
+            X`credential kind ${q(
+              kind,
+            )} is settings-file-shaped and not usable by the env-var-routed ClaudeClient slice; use @endo/claude's apiKeyHelper path instead`,
+          );
+        }
         // `Object.hasOwn` guard so a hostile `kind()` returning an inherited
         // key (e.g. `"__proto__"`) can't resolve to a truthy prototype value
         // and mis-route the secret under a coerced env key.
