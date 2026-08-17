@@ -37,6 +37,7 @@
     "./src/sock-paths.js": "./src/sock-paths.js",
     "./src/node-crypto-powers.js": "./src/node-crypto-powers.js",
     "./src/ocapn-ws.js": "./src/ocapn-ws.js",
+    "./src/relay-policy.js": "./src/relay-policy.js",
     "./package.json": "./package.json"
   },
   "scripts": {

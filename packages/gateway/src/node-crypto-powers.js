@@ -14,19 +14,15 @@
  * imports `node:crypto`; an Endor or browser embedder ships its
  * own powers adapter and the bootstrap remains portable.
  *
- * Byte shape: every output is an immutable `ArrayBuffer` per the
- * `@endo/bytes` convention. The adapter accepts either an immutable
- * `ArrayBuffer` (wire shape) or a mutable `Uint8Array` (internal
- * use) on input; it converts to whatever shape `node:crypto`
- * expects (a `Uint8Array` view).
+ * Byte shape: every input and output is a `Uint8Array` per the
+ * kriskowal directive on PR #393. The adapter converts between
+ * Node's `Buffer` view and `Uint8Array` at the `node:crypto`
+ * boundary.
  */
 
 import crypto from 'node:crypto';
 
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
-
-/** @import { CryptoPowers } from './proof-of-possession.js' */
+/** @import { CryptoPowers } from './types.js' */
 
 /**
  * The PKCS#8 DER prefix Node expects on a raw 32-byte Ed25519
@@ -45,19 +41,6 @@ const ED25519_PKCS8_PREFIX = new Uint8Array([
 const ED25519_SPKI_PREFIX = new Uint8Array([
   0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
 ]);
-
-/**
- * Coerce any byte-shaped input to a Node-friendly `Uint8Array`.
- *
- * @param {ArrayBuffer | Uint8Array} input
- * @returns {Uint8Array}
- */
-const asNodeBytes = input => {
-  if (input instanceof Uint8Array) {
-    return input;
-  }
-  return bytesFromImmutable(input);
-};
 
 /**
  * Wrap a raw 32-byte Ed25519 public key as a Node `KeyObject` so
@@ -106,12 +89,23 @@ export const privateKeyObjectFromRaw = rawPrivateKey => {
 harden(privateKeyObjectFromRaw);
 
 /**
+ * Copy a Node `Buffer` view into a fresh standalone `Uint8Array`.
+ * `Buffer` is a subclass of `Uint8Array`, but views can share
+ * underlying allocator pools, so callers that hold the returned
+ * value past the immediate call need an independent copy.
+ *
+ * @param {Buffer} buf
+ * @returns {Uint8Array}
+ */
+const bufferToUint8Array = buf =>
+  new Uint8Array(
+    buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+  );
+
+/**
  * Make a `CryptoPowers` adapter backed by Node's `node:crypto`.
  * The adapter is plain (not an exo); callers pass it into
  * `makeNonceRegistry` or `makeGateway`.
- *
- * Outputs are immutable `ArrayBuffer` per the gateway's wire shape
- * (see `proof-of-possession.js` § Wire shape).
  *
  * @returns {CryptoPowers}
  */
@@ -119,38 +113,23 @@ export const makeNodeCryptoPowers = () => {
   return harden({
     /** @param {number} byteLength */
     randomBytes(byteLength) {
-      const buf = crypto.randomBytes(byteLength);
-      return bytesToImmutable(
-        new Uint8Array(
-          buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
-        ),
-      );
+      return bufferToUint8Array(crypto.randomBytes(byteLength));
     },
-    /** @param {ArrayBuffer | Uint8Array} input */
+    /** @param {Uint8Array} input */
     sha256(input) {
-      const view = asNodeBytes(input);
-      const hash = crypto.createHash('sha256').update(view).digest();
-      return bytesToImmutable(
-        new Uint8Array(
-          hash.buffer.slice(hash.byteOffset, hash.byteOffset + hash.byteLength),
-        ),
-      );
+      const hash = crypto.createHash('sha256').update(input).digest();
+      return bufferToUint8Array(hash);
     },
     /**
      * @param {object} args
-     * @param {ArrayBuffer | Uint8Array} args.publicKey
-     * @param {ArrayBuffer | Uint8Array} args.message
-     * @param {ArrayBuffer | Uint8Array} args.signature
+     * @param {Uint8Array} args.publicKey
+     * @param {Uint8Array} args.message
+     * @param {Uint8Array} args.signature
      */
     verifyEd25519({ publicKey, message, signature }) {
       try {
-        const keyObject = publicKeyObjectFromRaw(asNodeBytes(publicKey));
-        return crypto.verify(
-          null,
-          asNodeBytes(message),
-          keyObject,
-          asNodeBytes(signature),
-        );
+        const keyObject = publicKeyObjectFromRaw(publicKey);
+        return crypto.verify(null, message, keyObject, signature);
       } catch (_err) {
         // The bare catch covers every emissible class, including
         // RangeError (which `crypto.verify` can raise at any time
@@ -168,15 +147,14 @@ harden(makeNodeCryptoPowers);
 
 /**
  * Generate an Ed25519 keypair for tests and turnkey-Node bootstrap.
- * Returned as immutable `ArrayBuffer`s for the wire-passable shape,
- * plus a `sign(message)` callback. `message` may be either an
- * immutable `ArrayBuffer` (wire shape) or a `Uint8Array`; the
- * returned signature is always an immutable `ArrayBuffer`.
+ * Returned as `Uint8Array`s for the wire-passable shape, plus a
+ * `sign(message)` callback. The returned signature is always a
+ * `Uint8Array`.
  *
  * @returns {Promise<{
- *   publicKey: ArrayBuffer,
- *   privateKey: ArrayBuffer,
- *   sign: (message: ArrayBuffer | Uint8Array) => ArrayBuffer,
+ *   publicKey: Uint8Array,
+ *   privateKey: Uint8Array,
+ *   sign: (message: Uint8Array) => Uint8Array,
  * }>}
  */
 export const generateNodeEd25519Keypair = () =>
@@ -198,22 +176,22 @@ export const generateNodeEd25519Keypair = () =>
           format: 'der',
         });
         // Raw 32-byte windows of each DER payload.
-        const rawPublic = new Uint8Array(
+        const publicKey = new Uint8Array(
           publicDer.subarray(publicDer.length - 32),
         );
-        const rawPrivate = new Uint8Array(
+        const privateKey = new Uint8Array(
           privateDer.subarray(privateDer.length - 32),
         );
-        const publicKey = bytesToImmutable(rawPublic);
-        const privateKey = bytesToImmutable(rawPrivate);
         const sign = message => {
-          const messageBytes = asNodeBytes(message);
+          if (!(message instanceof Uint8Array)) {
+            throw new Error('sign: message must be a Uint8Array');
+          }
           const signature = crypto.sign(
             null,
-            messageBytes,
-            privateKeyObjectFromRaw(rawPrivate),
+            message,
+            privateKeyObjectFromRaw(privateKey),
           );
-          return bytesToImmutable(new Uint8Array(signature));
+          return bufferToUint8Array(signature);
         };
         resolve(harden({ publicKey, privateKey, sign }));
       },

@@ -67,6 +67,18 @@ export {
 } from './src/ocapn-ws.js';
 
 export {
+  DEFAULT_RELAY_POLICY,
+  RELAY_POLICIES,
+  checkRelayPolicy,
+  isInboundSessionAllowed,
+  makeRelayPolicyEntry,
+  addCallerPublicKey,
+  removeCallerPublicKey,
+  listCallerAllowlist,
+  setRelayPolicy,
+} from './src/relay-policy.js';
+
+export {
   resolveBootstrapSocketPath,
   resolveAdminSocketPath,
   BOOTSTRAP_SOCKET_BASENAME,
@@ -75,9 +87,20 @@ export {
   USER_RUNTIME_SUBDIR,
 } from './src/sock-paths.js';
 
-/** @import { GatewayConfig, BindAddress, GatewayPowers, Gateway } from './src/types.js' */
-/** @import { GatewayAdmin } from './src/admin.js' */
-/** @import { OcapnWebSocketHandler } from './src/ocapn-ws.js' */
+/** @import {
+ *   GatewayConfig,
+ *   FeatureToggles,
+ *   BindAddress,
+ *   AppsNameHub,
+ *   GatewayBootstrap,
+ *   GatewayAdmin,
+ *   ResourceLedger,
+ *   OcapnWebSocketHandler,
+ *   CryptoPowers,
+ *   ClockPowers,
+ *   GatewayPowers,
+ *   Gateway,
+ * } from './src/types.js' */
 
 const GatewayInterface = M.interface('Gateway', {
   start: M.call().returns(M.promise()),
@@ -89,6 +112,7 @@ const GatewayInterface = M.interface('Gateway', {
   getAdmin: M.call().returns(M.promise()),
   getOcapnHandler: M.call().returns(M.promise()),
 });
+harden(GatewayInterface);
 
 /**
  * Create a hardened gateway exo. See `designs/gateway-package.md`
@@ -186,11 +210,24 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
         ? {
             listRegisteredPeers: bootstrapHandle.listRegisteredPeers,
             deregisterByPublicKey: bootstrapHandle.deregisterByPublicKey,
+            setRelayPolicyByPublicKey:
+              bootstrapHandle.setRelayPolicyByPublicKey,
+            addRelayCallerByPublicKey:
+              bootstrapHandle.addRelayCallerByPublicKey,
+            removeRelayCallerByPublicKey:
+              bootstrapHandle.removeRelayCallerByPublicKey,
             pendingNonces: bootstrapHandle.pendingNonces,
           }
         : {
+            // When the bootstrap is off, the relay-policy admin
+            // methods have no registration to act on; the empty
+            // backplane returns `undefined` for the "key not found"
+            // case, matching the populated backplane's contract.
             listRegisteredPeers: () => harden([]),
             deregisterByPublicKey: () => false,
+            setRelayPolicyByPublicKey: () => undefined,
+            addRelayCallerByPublicKey: () => undefined,
+            removeRelayCallerByPublicKey: () => undefined,
             pendingNonces: () => 0,
           };
     adminFacet = makeGatewayAdmin({

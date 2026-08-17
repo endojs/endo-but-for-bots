@@ -36,131 +36,38 @@
  * the bootstrap sock; the two are independent features with their
  * own toggles and their own access channels.
  *
- * Wire shape: byte fields (public keys) follow the `@endo/bytes`
- * convention: immutable `ArrayBuffer` on the wire, `Uint8Array`
- * accepted on in-realm calls.
+ * Byte fields use `Uint8Array` as the sole unit of transmission per
+ * the kriskowal directive on PR #393. Byte arguments use `M.raw()`
+ * in the interface guard so the exo accepts `Uint8Array` inputs
+ * without invoking `@endo/marshal`'s passable-style check.
  */
 
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 
 import { ED25519_PUBLIC_KEY_LENGTH } from './bootstrap.js';
+import { checkRelayPolicy } from './relay-policy.js';
 
-/** @import { AppsNameHub } from './types.js' */
-/** @import { WebletDescriptor } from './bootstrap.js' */
+/** @import {
+ *   AppsNameHub,
+ *   GatewayAdmin,
+ *   AdminBackplane,
+ *   ResourceLedger,
+ *   RelayPolicy,
+ * } from './types.js' */
 
 const GatewayAdminInterface = M.interface('GatewayAdmin', {
   listRegistrations: M.call().returns(M.promise()),
-  deregisterRelay: M.call(M.any()).returns(M.promise()),
+  deregisterRelay: M.call(M.raw()).returns(M.promise()),
   listVirtualHosts: M.call().returns(M.promise()),
   getResourceBalances: M.call().returns(M.promise()),
   getCounters: M.call().returns(M.promise()),
+  setRelayPolicy: M.call(M.raw(), M.string()).returns(M.promise()),
+  addRelayCaller: M.call(M.raw(), M.raw()).returns(M.promise()),
+  removeRelayCaller: M.call(M.raw(), M.raw()).returns(M.promise()),
 });
 harden(GatewayAdminInterface);
-
-/**
- * @typedef {object} RegistrationSummary The shape `listRegistrations`
- *   returns per entry. Byte fields are returned as the same shape
- *   they were registered with; the caller can hex-render them with
- *   the same helper the bootstrap uses internally.
- * @property {ReadonlyArray<ArrayBuffer | Uint8Array>} publicKeys
- *   Every public key bound to this registration. The first key is
- *   the one passed to `register` / `registerRelay`; subsequent keys
- *   come from `addPublicKey`.
- * @property {ReadonlyArray<WebletDescriptor>} weblets All weblets
- *   the registration has published and not unpublished.
- * @property {unknown} [relayTarget] Present when the registration
- *   came in through `registerRelay`; the relay target exo for
- *   Feature 6.
- * @property {unknown} [daemon] Present when the registration came
- *   in through `register`; the user-daemon callback exo for the
- *   HTTP / WS surface (Feature 4 follow-on).
- */
-
-/**
- * @typedef {object} VirtualHostSummary The shape `listVirtualHosts`
- *   returns per entry.
- * @property {string} name The lowercased virtual-host name.
- * @property {string} webletFormulaId The bound weblet formula
- *   identifier.
- */
-
-/**
- * @typedef {object} ResourceBalance The shape
- *   `getResourceBalances` returns per account.
- * @property {string} account Account identifier (per-user-daemon
- *   handle, opaque to the gateway today).
- * @property {number} compute Compute-time tokens (suggested unit:
- *   seconds).
- * @property {number} storage Storage tokens (suggested unit: bytes).
- * @property {number} network Network tokens (suggested unit: bytes).
- */
-
-/**
- * @typedef {object} ResourceLedger The Feature 1 surface the
- *   administrator queries. Phase 3 ships the admin facet that
- *   *calls* into the ledger; the ledger implementation itself
- *   lands with the Chat-hosting feature. Until then, embedders
- *   that want admin reads of resource balances supply a stub.
- * @property {() => Promise<ReadonlyArray<ResourceBalance>>} listBalances
- */
-
-/**
- * @typedef {object} CountersSnapshot Per-registration counters the
- *   administrator dumps for diagnostics. The shape is intentionally
- *   open: future phases extend it with HTTP / WS / OCapN counters
- *   without changing the call site. The current slice surfaces
- *   what Phase 2 actually counts: the size of the registration
- *   table and the number of outstanding nonces.
- * @property {number} totalRegistrations
- * @property {number} totalWeblets Aggregate count across every
- *   registration.
- * @property {number} pendingNonces Outstanding (issued, not yet
- *   consumed or expired) challenges.
- */
-
-/**
- * @typedef {object} GatewayAdmin CapTP-facing exo. All methods are
- *   async so they cross the wire as eventual sends.
- * @property {() => Promise<ReadonlyArray<RegistrationSummary>>} listRegistrations
- *   Returns every non-deregistered entry in the registration table.
- * @property {(publicKey: ArrayBuffer | Uint8Array) => Promise<boolean>} deregisterRelay
- *   Force-deregister the registration that owns the supplied public
- *   key. Returns `true` if a matching registration was found and
- *   torn down, `false` if no registration claimed the key. A
- *   registration is identified by *any* of its public keys; the
- *   whole registration tombstones.
- * @property {() => Promise<ReadonlyArray<VirtualHostSummary>>} listVirtualHosts
- *   Snapshot the `@apps` NameHub. Reads only; admin does not
- *   override the routing policy from this method.
- * @property {() => Promise<ReadonlyArray<ResourceBalance>>} getResourceBalances
- *   Snapshot the resource ledger. Returns an empty list when no
- *   `ResourceLedger` is wired (Phase 3 ships this stubbed; Feature
- *   1 wires the ledger in).
- * @property {() => Promise<CountersSnapshot>} getCounters Diagnostic
- *   counter dump.
- */
-
-/**
- * @typedef {object} AdminBackplane The in-process interface the
- *   bootstrap exposes to the admin facet. Keeps the admin exo
- *   loosely coupled to the bootstrap's internal representation;
- *   the bootstrap returns this shape from `makeGatewayBootstrap`'s
- *   second return value, and `makeGatewayAdmin` consumes it.
- * @property {() => ReadonlyArray<RegistrationSummary>} listRegisteredPeers
- *   In-process snapshot of every live registration. The bootstrap
- *   handle exports this under the same name; the admin facet's
- *   CapTP method is `listRegistrations` (per the design's named
- *   admin operation), but the backplane plumbing uses the
- *   bootstrap's vocabulary.
- * @property {(publicKey: ArrayBuffer | Uint8Array) => boolean} deregisterByPublicKey
- *   Synchronous force-deregister hook. Returns `true` if a matching
- *   registration was torn down.
- * @property {() => number} pendingNonces Count of outstanding
- *   challenges.
- */
 
 /**
  * @typedef {object} AdminDeps Args to `makeGatewayAdmin`.
@@ -183,45 +90,19 @@ harden(GatewayAdminInterface);
  * private checker).
  *
  * @param {unknown} candidate
- * @returns {ArrayBuffer | Uint8Array}
+ * @returns {Uint8Array}
  */
 const checkPublicKey = candidate => {
-  if (
-    !(candidate instanceof ArrayBuffer) &&
-    !(candidate instanceof Uint8Array)
-  ) {
-    throw makeError(
-      X`publicKey must be an immutable ArrayBuffer or Uint8Array`,
-    );
+  if (!(candidate instanceof Uint8Array)) {
+    throw makeError(X`publicKey must be a Uint8Array`);
   }
-  const length =
-    candidate instanceof Uint8Array ? candidate.length : candidate.byteLength;
-  if (length !== ED25519_PUBLIC_KEY_LENGTH) {
+  if (candidate.length !== ED25519_PUBLIC_KEY_LENGTH) {
     throw makeError(
-      X`publicKey must be ${q(ED25519_PUBLIC_KEY_LENGTH)} bytes, got ${q(length)}`,
+      X`publicKey must be ${q(ED25519_PUBLIC_KEY_LENGTH)} bytes, got ${q(candidate.length)}`,
     );
   }
   return candidate;
 };
-
-/**
- * Hex-render a byte view. Used only for diagnostic counters; the
- * admin facet does not key anything by hex itself.
- *
- * @param {ArrayBuffer | Uint8Array} bytes
- * @returns {string}
- */
-const publicKeyToHex = bytes => {
-  const view = bytes instanceof Uint8Array ? bytes : bytesFromImmutable(bytes);
-  let hex = '';
-  for (let i = 0; i < view.length; i += 1) {
-    hex += view[i].toString(16).padStart(2, '0');
-  }
-  return hex;
-};
-// Silences "unused" warnings while keeping the helper available
-// for the inevitable per-entry hex dump in a future counter.
-void publicKeyToHex;
 
 /**
  * Create the `GatewayAdmin` exo. The factory is total: it returns
@@ -247,7 +128,7 @@ export const makeGatewayAdmin = ({ backplane, apps, resourceLedger }) => {
       async listRegistrations() {
         return backplane.listRegisteredPeers();
       },
-      /** @param {ArrayBuffer | Uint8Array} publicKey */
+      /** @param {Uint8Array} publicKey */
       async deregisterRelay(publicKey) {
         const key = checkPublicKey(publicKey);
         return backplane.deregisterByPublicKey(key);
@@ -289,6 +170,51 @@ export const makeGatewayAdmin = ({ backplane, apps, resourceLedger }) => {
           totalWeblets,
           pendingNonces: backplane.pendingNonces(),
         });
+      },
+      /**
+       * @param {Uint8Array} publicKey
+       * @param {RelayPolicy} policy
+       */
+      async setRelayPolicy(publicKey, policy) {
+        const key = checkPublicKey(publicKey);
+        const next = checkRelayPolicy(policy);
+        const prev = backplane.setRelayPolicyByPublicKey(key, next);
+        if (prev === undefined) {
+          throw makeError(
+            X`setRelayPolicy: no registration claims the supplied public key`,
+          );
+        }
+        return prev;
+      },
+      /**
+       * @param {Uint8Array} publicKey
+       * @param {Uint8Array} callerPublicKey
+       */
+      async addRelayCaller(publicKey, callerPublicKey) {
+        const key = checkPublicKey(publicKey);
+        const callerKey = checkPublicKey(callerPublicKey);
+        const result = backplane.addRelayCallerByPublicKey(key, callerKey);
+        if (result === undefined) {
+          throw makeError(
+            X`addRelayCaller: no registration claims the supplied public key`,
+          );
+        }
+        return result;
+      },
+      /**
+       * @param {Uint8Array} publicKey
+       * @param {Uint8Array} callerPublicKey
+       */
+      async removeRelayCaller(publicKey, callerPublicKey) {
+        const key = checkPublicKey(publicKey);
+        const callerKey = checkPublicKey(callerPublicKey);
+        const result = backplane.removeRelayCallerByPublicKey(key, callerKey);
+        if (result === undefined) {
+          throw makeError(
+            X`removeRelayCaller: no registration claims the supplied public key`,
+          );
+        }
+        return result;
       },
     }),
   );
