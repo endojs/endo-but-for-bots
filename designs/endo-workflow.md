@@ -3,8 +3,76 @@
 | | |
 |---|---|
 | **Created** | 2026-08-17 |
+| **Updated** | 2026-08-17 |
 | **Author** | kumavis (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
+
+## Status
+
+Phases 1–4 are implemented as `packages/workflow` (`@endo/workflow`),
+with Phase 5's status feeds and a fake-daemon realization of Phase 6's
+acceptance flow; 39 tests pass and package lint is clean.
+
+- **Phase 1 (kernel)** — `src/machine.js` (`assertChart`, `initialStep`,
+  `transition`, `exitEffects`, `activePaths`), `src/template.js` (total
+  substitution + string interpolation), `src/journal.js` (entry shapes,
+  `applyEntry`, `foldJournal`, `effectRecordsFor`). Pure and synchronous;
+  importable standalone via `@endo/workflow/machine.js`.
+- **Phase 2 (service plugin)** — `src/service.js` + `src/index.js`
+  (`make(powers, context, { env })`): runs journal as numbered marshal
+  entries under `workflow/runs/<runId>/` in the powers agent's pet store,
+  with `invoke` / `emit` / `after` effects, snapshots every 64 entries,
+  recovery-by-refold, and the `@pins` revival recipe in the package
+  README.
+- **Phase 3 (mail)** — the `ask` effect over `request` / `form` with
+  `responseName` correlation, recovery-time answer adoption via
+  `maybeLookup` and `@mail/<n>/@result`, a `followMessages` watcher for
+  form replies, chart-declared `ports` with `mustMatch` guards, and
+  structural `by` attribution throughout the journal.
+- **Phase 4 (composition)** — compound states, parallel regions with
+  `counts`/`outcomes` join envelopes, `$eachParam` expansion, `spawn` /
+  child settlement with cancel cascade, and endowment subsetting by name.
+- **Phase 5 (partial)** — `status()`, seq-cursored `follow({ since })`,
+  `journal({ from, to })`, `list()`, and `followRuns()` ship as far
+  readers over `@endo/exo-stream`; the `space-workflow` UI and CLI verbs
+  remain unbuilt.
+- **Phase 6 (acceptance, fake substrate)** —
+  `test/feature-change.test.js` drives the motivating chart end to end
+  over an in-memory fake of the daemon's agent surface
+  (`test/fake-agent.js`, faithful to the durable/ephemeral split): two
+  review rounds with feedback, a mid-CI daemon restart with idempotent
+  re-dispatch, operator form approval, merge, and audit assertions.
+  The live-substrate flow (agentry implementer, real git, sandboxed CI)
+  remains open.
+
+Deviations from the design as first written, adopted during the build:
+
+1. **The `event` and `fired` journal entries are coalesced** into one
+   `event` entry with an optional `fired` payload. The kernel is
+   synchronous, so the step is computed before the append and both halves
+   commit in a single write — closing the crash window the two-entry
+   shape would have had. `child-settled` is likewise folded into
+   `effect-settled` on the parent's spawn effect (`spawned` remains).
+2. **Effect-outcome events are path-routed.** An envelope carrying the
+   owner effect's state path is delivered only along that path (bubbling
+   innermost-out over the still-active prefix), so the outcome of one
+   region's ask cannot fire its identical sibling regions. Pathless
+   envelopes broadcast as designed.
+3. **Regions carry their own `params`/`context` inside the configuration
+   tree**, and the `$eachParam` form gains an `input` template
+   (substituted against the entering scope) so context values — the
+   submitted head ref — can flow into region params.
+4. **Ask idempotency rides a description marker.** Each ask's description
+   carries `[workflow <runId> <effectId>]`; dispatch scans the service's
+   own mailbox for the marker before sending, making re-dispatch after a
+   crash send-free. `form()` is fire-and-forget in the daemon, so this
+   marker is also how form correlation ids are recovered.
+5. **`followRuns()` is a lossless change topic in v1** rather than the
+   conflating latest-topic the design named; the conflating upgrade
+   awaits a consumer that needs it.
+6. Nested compound states raise a `state-done` internal event when their
+   child reaches a final state — a small addition the design did not
+   enumerate.
 
 ## What is the Problem Being Solved?
 
