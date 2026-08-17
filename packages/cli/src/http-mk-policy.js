@@ -76,13 +76,13 @@ export const parsePositiveIntegerFlag = flag => value => {
       `${flag} must be a positive integer, got ${JSON.stringify(value)}`,
     );
   }
-  const n = Number(trimmed);
-  if (!Number.isSafeInteger(n)) {
+  const parsedInteger = Number(trimmed);
+  if (!Number.isSafeInteger(parsedInteger)) {
     throw new Error(
       `${flag} must be a safe integer, got ${JSON.stringify(value)}`,
     );
   }
-  return n;
+  return parsedInteger;
 };
 
 /**
@@ -130,23 +130,26 @@ export const parsePolicyModeFlag = value => {
  *   maxRequestsPerMinute?: number,
  *   maxResponseBytes?: number,
  *   policyMode?: 'strict' | 'tofu-auto',
- * }} opts - `cmd.opts()` from the commander action.
+ *   acknowledgeUnbounded?: boolean,
+ * }} options - `cmd.opts()` from the commander action.
  * @returns {{
  *   name: string,
  *   allowedOrigins: string[] | undefined,
  *   maxRequestsPerMinute?: number,
  *   maxResponseBytes?: number,
  *   policyMode?: 'strict' | 'tofu-auto',
+ *   acknowledgeUnbounded?: boolean,
  *   agentNames?: string,
  * }}
  */
-export const httpMkArgsFromOpts = (name, opts) => ({
+export const httpMkArgumentsFromOptions = (name, options) => ({
   name,
-  allowedOrigins: opts.origin,
-  maxRequestsPerMinute: opts.maxRequestsPerMinute,
-  maxResponseBytes: opts.maxResponseBytes,
-  policyMode: opts.policyMode,
-  agentNames: opts.as,
+  allowedOrigins: options.origin,
+  maxRequestsPerMinute: options.maxRequestsPerMinute,
+  maxResponseBytes: options.maxResponseBytes,
+  policyMode: options.policyMode,
+  acknowledgeUnbounded: options.acknowledgeUnbounded,
+  agentNames: options.as,
 });
 
 /**

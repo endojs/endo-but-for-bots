@@ -18,7 +18,7 @@ import {
 } from './denied-segments.js';
 import {
   collectHttpOrigin,
-  httpMkArgsFromOpts,
+  httpMkArgumentsFromOptions,
   parsePolicyModeFlag,
   parsePositiveIntegerFlag,
 } from './http-mk-policy.js';
@@ -837,9 +837,14 @@ export const main = async rawArgs => {
         'stops bounding outbound reach',
       parsePolicyModeFlag,
     )
+    .option(
+      '--acknowledge-unbounded',
+      'required with --policy-mode tofu-auto: confirm you accept an unbounded ' +
+        'outbound capability that Phase 1 ships no verb to inspect or revoke',
+    )
     .action(async (name, cmd) => {
       const { httpMk } = await import('./commands/http-mk.js');
-      return httpMk(httpMkArgsFromOpts(name, cmd.opts()));
+      return httpMk(httpMkArgumentsFromOptions(name, cmd.opts()));
     });
 
   const where = program
