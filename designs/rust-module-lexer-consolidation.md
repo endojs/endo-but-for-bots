@@ -68,7 +68,7 @@ exact bytecode the XS compiler emits," its opcode enum is generated from XS's
 `XS_CODE_*` ISA, and the crate carries no lexer, parser, or AST type (verified
 against `origin/llm`: `ironhorse-vm/src/` holds `interp.rs`, `opcode.rs`,
 `value.rs`, `gc.rs`, and siblings, none a front-end). It does not parse source at
-all — it consumes an already-compiled bytecode program. Reusing it would therefore
+all; it consumes an already-compiled bytecode program. Reusing it would therefore
 (i) require a full compile-and-execute front-end the walker does not have (the
 parsing half lives in `ironhorse-compile`, surveyed separately as (a2)) and (ii)
 sit at the wrong layer: the walker needs *specifiers*, not a compiled, evaluable
@@ -84,7 +84,7 @@ the `ironhorse-vm` interpreter of (a1)), and `rust/endo/Cargo.toml`
 **already lists it as a dependency**. Per the actual manifest, `ironhorse-compile`
 and `ironhorse-vm` are gated by the *same* `default = ['ironhorse-engine']`
 feature (`ironhorse-engine = ['ironhorse-vm', 'ironhorse-compile']`), so the whole
-engine — both crates — is already linked into every default `endor` build; reusing
+engine (both crates) is already linked into every default `endor` build; reusing
 the compile lexer therefore pulls **no new crate**, it is already present. Its
 pull `next()` API does not allocate a parse tree, matching the review's allocation
 constraint. This is the "lexer from IronHorse"
@@ -144,70 +144,113 @@ is Node's `cjs-module-lexer` shape):
    substitute for the submodule.) The submodule holds two tiers, kept distinct
    because they have different signatures and different testability:
 
-   - **Stateless cursor advancers.** The infallible skips are pure
-     `fn(src: &str, pos: usize) -> usize` position functions that cannot allocate
-     or retain any walk state: `skip_whitespace`, `skip_line_comment`,
-     `skip_block_comment`, `skip_string`, and `skip_template`. Alongside them sits
-     one *fallible* advance, `match_keyword(src: &str, pos: usize, kw: &str) ->
-     Option<usize>`, returning `Some(pos_past_keyword)` on a match and `None` when
-     the cursor is not at `kw`. Making the matcher fallible in the type keeps
-     "matched or not" distinct from an infallible skip's "moved or not", so a bare
-     unmoved `usize` never doubles as the failure signal (the reason it is not
-     spelled `skip_keyword -> usize` alongside its siblings). Their `&str`-in /
-     position-out signatures make the allocation invariant (§ Honoring the
-     allocation constraint) *inexpressible*: there is no owned `String` in the
-     type, so the `Vec<Token>` regression will not compile.
-   - **Ambiguity resolution.** `resolve_regex_or_divide` and
-     `fold_nesting_depth` resolve fixed *structural* facts, not pure advance, and
-     both are expressed as state-as-value signatures so neither retains a
-     whole-file token vector. Both carry state as a returned `Copy` value; both put
-     that state operand **first**, mirroring Rust's `fold(acc, item)` idiom, which
-     is why this tier's argument order deliberately departs from the stateless
-     advancers' state-free `(src, pos, ...)` shape — the carried `Copy` accumulator
-     leads, then the source and cursor:
-     - `resolve_regex_or_divide(prev: PrevToken, src: &str, pos: usize) ->
-       RegexOrDivide` decides whether a `/` at `pos` begins a regex literal or is
-       a division operator. The carried state it needs is the **preceding
-       significant token**, passed as a small `Copy` value `PrevToken` (an enum of
-       just the token *kinds* that disambiguate `/`: identifier, keyword, `)`,
-       `]`, numeric/string literal, other-punctuator), never a retained `&[Token]`
-       slice. `@endo/cjs-module-analyzer` reads source backward from its
-       `lastTokenPos` to make this call; the `PrevToken` value is the minimal
-       replacement for that backtracking, the one piece of cross-token state a
-       consumer must thread.
-     - `fold_nesting_depth(depth: NestingDepth, src: &str, pos: usize) ->
-       NestingDepth` folds the brace/paren/bracket **nesting depth** forward as a
-       returned `Copy` value rather than mutating a place. This is the oracle's own
-       gate mechanism, not an ASI heuristic: `@endo/cjs-module-analyzer` gates
-       `import`/`export` recognition on `openTokenDepth === 0` (structural nesting
-       depth, verified in this worktree's `packages/cjs-module-analyzer/index.js`,
-       `throwIfImportStatement` fires only under `openTokenDepth === 0`), *not* on
-       newline/semicolon statement starts. `cjs_lexer.rs::detect_esm_syntax` (llm
-       HEAD) already matches the oracle, gating on a nesting `depth`. This primitive
-       therefore **replaces** `entry_walk.rs`'s weaker, ad hoc `at_stmt_start`
-       heuristic (newline/`;`/`}`-triggered) with the oracle's depth-based gate:
-       `import`/`export` are reserved words that cannot appear as identifiers, so a
-       recognizer needs only to know it is at structural top level (depth 0), not to
-       reconstruct ASI. Nesting depth is a fixed structural fact of the grammar, not
-       a variable policy — like `resolve_regex_or_divide`, there is nothing for a
-       consumer to configure; the returned value only threads *where the fold
-       starts*, never *what rule it applies*. It is named `fold_*`, not `advance_*`
-       (reserved for the position-returning stateless tier) and not `track_*` (which
-       would imply an in-place, side-effecting monitor), because the signature folds
-       state as a returned value.
-     **Neither tier retains a whole-file token vector**; the only cross-token state
-     is these two `Copy` values.
+   - **The advancer tier (stateless cursor advancers).** The infallible skips are
+     pure `fn(src: &str, pos: usize) -> usize` position functions that cannot
+     allocate or retain any walk state: `skip_whitespace`, `skip_line_comment`,
+     `skip_block_comment`, and `skip_string` (a complete string literal, which
+     carries no interpolation). A template literal is deliberately **not** in this
+     tier: because the oracle scans a `${...}` interpolation's contents as ordinary
+     source (template handling, below), template scanning must interleave with the
+     main loop and therefore lives in the recognizer tier, not as a wholesale
+     `skip_template`. Alongside the skips sits one *fallible* advance,
+     `match_keyword(src: &str, pos: usize, kw: &str) -> Option<usize>`, returning
+     `Some(pos_past_keyword)` on a match and `None` when the cursor is not at `kw`.
+     The match carries the oracle's trailing **word-boundary** obligation
+     (`index.js:1355-1357`), so `import` never matches the `import` prefix of
+     `important`/`importScripts`; the parity corpus pins that boundary. Making the
+     matcher fallible in the type keeps "matched or not" distinct from an infallible
+     skip's "moved or not", so a bare unmoved `usize` never doubles as the failure
+     signal (the reason it is not spelled `skip_keyword -> usize` alongside its
+     siblings). Their `&str`-in / position-out signatures make the allocation
+     invariant (§ Honoring the allocation constraint) *inexpressible*: there is no
+     owned `String` in the type, so the `Vec<Token>` regression will not compile.
+   - **The recognizer tier (ambiguity resolution).** `resolve_regex_or_divide` and
+     `fold_nesting_depth` resolve fixed *structural* facts, not pure advance. Each
+     reads a small **cross-token scan state**, threaded by value and folded forward,
+     so no whole-file token vector is retained. That state is one `ScanState` value,
+     carried through the tier and advanced by a single producer,
+     `advance(state: ScanState, src: &str, pos: usize) -> ScanState`, called once per
+     recognized significant token. The resolvers *read* `ScanState`; `advance`
+     *produces* the next one; no consumer reimplements the fold. (An earlier draft
+     threaded a bare `PrevToken` that had a reader, `resolve_regex_or_divide`, but no
+     producer, so each of the two consumers would have rolled its own
+     "what-token-did-I-just-pass" classifier, precisely the duplicated recognizer
+     logic the consolidation exists to delete.) The resolvers take the state operand
+     **first**, mirroring Rust's `fold(acc, item)` idiom, which is why this tier's
+     argument order departs from the advancer tier's state-free `(src, pos, ...)`
+     shape: the carried state leads, then the source and cursor. `ScanState` holds
+     only what the oracle's own single-pass scan carries, and none of it is an owned
+     `String` or an O(source) token vector:
+     - `prev: PrevToken`, the **preceding significant token kind** (an enum of just
+       the kinds that disambiguate `/`: identifier, keyword, `)`, `]`,
+       numeric/string literal, other-punctuator).
+     - `depth: NestingDepth`, the brace/paren/bracket **nesting depth**.
+     - `open_token_pos: Vec<usize>`, a per-depth stack of the **source position of
+       the token before each matching open paren/brace** (the oracle's
+       `openTokenPosStack`/`openClassPosStack`, `index.js:262-276`). These are
+       `usize` offsets, not owned strings, and the stack's length is bounded by
+       nesting depth, not source size, so it does not reintroduce the O(source)
+       retention the allocation constraint forbids.
+     - `template: Vec<u32>`, the template-interpolation depth stack (template
+       handling, below), likewise bounded by nesting depth, not source size.
 
-     **Why two values, not one merged `LexerState`.** `PrevToken` (regex-vs-divide)
-     and `NestingDepth` (top-level gate) answer independent questions, and a
-     consumer may need one, both, or neither, so they are threaded as two `Copy`
-     values rather than folded into a single `LexerState` a caller must carry whole.
-     Both are recomputed at the same point (each recognized significant token), so a
-     consumer threading both advances them together in one recognition step and
-     cannot desync them. If a later consumer must thread both through every
-     primitive, merging them into one `LexerState` advanced by a single
-     `advance(state, src, pos)` call is a mechanical follow-up; the two-value split
-     is chosen now to keep each consumer's threaded state minimal.
+     `resolve_regex_or_divide(state: ScanState, src: &str, pos: usize) ->
+     RegexOrDivide` decides whether a `/` at `pos` begins a regex literal or is a
+     division operator. `PrevToken` alone is insufficient: `if (x) /re/.test(y)` and
+     `(a + b) / c` both present `prev = CloseParen` yet resolve oppositely, because
+     the oracle consults the token *before the matching open paren* (from
+     `open_token_pos`), a `last_slash_was_division` bit, and specific-keyword tests
+     (`index.js:262-276`), not just the previous token's kind. All of that is read
+     from `ScanState`, never reconstructed by backtracking over a retained `&[Token]`
+     slice. `@endo/cjs-module-analyzer` reads source backward from its `lastTokenPos`
+     to make this call; the folded `ScanState` is the allocation-light replacement
+     for that backtracking.
+
+     `fold_nesting_depth(depth: NestingDepth, src: &str, pos: usize) ->
+     NestingDepth` folds the brace/paren/bracket **nesting depth** forward as a
+     returned `Copy` value rather than mutating a place (it is the `depth` field's
+     fold, which `advance` calls). This is the oracle's own gate mechanism, not an
+     ASI heuristic: `@endo/cjs-module-analyzer` gates `import`/`export` *statement*
+     recognition on `openTokenDepth === 0` (structural nesting depth, verified in
+     this worktree's `packages/cjs-module-analyzer/index.js`, `throwIfImportStatement`
+     fires only under `openTokenDepth === 0`), *not* on newline/semicolon statement
+     starts. `cjs_lexer.rs::detect_esm_syntax` (llm HEAD) already matches the oracle,
+     gating on a nesting `depth`. This primitive therefore **replaces**
+     `entry_walk.rs`'s weaker, improvised `at_stmt_start` heuristic
+     (newline/`;`/`}`-triggered) with the oracle's depth-based gate. Depth 0 is
+     necessary but **not sufficient**, and this design does not claim it is: the
+     oracle's `throwIfImportStatement` (`index.js:1342-1370`) first inspects the next
+     significant character after the keyword (`(` means a dynamic `import(...)`, not
+     a static import; `.` means `import.meta`, not a static import; and no
+     space/quote means the run is not the keyword at all), and only then applies the
+     depth-0 gate. The consolidated recognizer carries that same post-keyword
+     discrimination, so top-level `import("./x.js")` and top-level `import.meta.url`
+     are correctly *not* recognized as static-import specifiers (both pinned by
+     corpus cases, § Test parity). The gate's scope is also narrower than
+     "recognition": only `import`/`export` **statement** detection is depth-gated;
+     `require`, `module.exports`, and `exports.x` are recognized at any depth
+     (`index.js:172-200`), so the depth gate must not suppress a `require` inside a
+     function body. Nesting depth is a fixed structural fact of the grammar, not a
+     variable policy. Like `resolve_regex_or_divide`, there is nothing for a consumer
+     to configure; the returned value only threads *where the fold starts*, never
+     *what rule it applies*. It is named `fold_*`, not `advance_*` (the whole-state
+     producer above) and not `track_*` (which would imply an in-place, side-effecting
+     monitor), because the signature folds one field as a returned value.
+
+     **The tier retains no whole-file token vector.** `ScanState` carries only the
+     preceding-token kind, the nesting depth, and two stacks whose length is bounded
+     by nesting depth: exactly the state the oracle's own scan carries, and none of
+     it O(source).
+
+     **Why threaded values, not a hidden mutable lexer.** `ScanState` is threaded and
+     folded, never mutated in place, so a consumer that needs only a subset (the ESM
+     `scan_static_imports` reads `depth` and `prev` but not the full CJS export
+     machinery) still advances the one value and cannot let its fields drift apart.
+     But note this is a **call-site discipline** the single `advance` step enforces,
+     not an invariant the types prove: a consumer that folded `depth` without folding
+     `prev` would compile. Routing every fold through `advance` (rather than exposing
+     the per-field folds as the primary interface) is what keeps the discipline from
+     becoming a convention each consumer must remember.
 
    Primitive names are spelled `snake_case`, as they will be typed in Rust, and
    take `&str` (matching `cjs_lexer.rs` and the JS fork's cursor-over-string
@@ -220,16 +263,34 @@ is Node's `cjs-module-lexer` shape):
    an implementation obligation on the primitives called out here because the
    signatures fix byte positions into a `&str`.
 
-   `skip_template` **must** track nested `${...}` interpolations with a depth
-   *stack*, adopting `cjs_lexer.rs::tokenize`'s current `depth: Vec<u32>`
-   behavior (which already matches `@endo/cjs-module-analyzer`'s
-   `templateStack`/`templateStackDepth`), **not** `entry_walk.rs`'s
-   single-counter approach, whose own comment concedes "templates inside
-   templates would slip through." The two existing scanners diverge on exactly
-   this axis; the shared primitive resolves it toward the JS-fork-correct stack
-   behavior. The parity corpus (§ Test parity, Phase 2) must include a
-   nested-backtick-inside-interpolation case so the Phase 3 `cjs_lexer` port
-   cannot silently regress toward the weaker single-counter semantics.
+   **Template handling** is the **first** of three flagged behavior changes in this
+   consolidation, and the axis the two existing scanners get wrong in opposite
+   directions. The oracle does **not** skip a template literal wholesale:
+   `@endo/cjs-module-analyzer`'s `templateString()`
+   (`packages/cjs-module-analyzer/index.js:1401-1407`) stops at `${`, pushes the
+   interpolation depth onto its `templateStack`, and **returns to the main scan
+   loop**, so the interpolation's contents are scanned as ordinary source; the
+   matching `}` resumes template text and the closing backtick pops the stack. So
+   `` const a = `${require('b')}`; `` yields `requires: ['b']` from the oracle,
+   whereas a wholesale skip yields nothing. `cjs_lexer.rs::tokenize`
+   (`rust/endo/src/cjs_lexer.rs:137-166`) skips the template **wholesale** (its own
+   comment says so), so its `depth: Vec<u32>` does **not** match the oracle's
+   `templateStack` despite both being stacks; adopting its behavior into the
+   canonical `scan` copy would cement the wrong semantics into the layer both
+   consumers depend on, leaving Phase 3's "match the JS fork" contract unreachable
+   there. The consolidated recognizer instead follows the oracle's shape: template
+   scanning is a recognizer-tier concern that advances to the next `${` or the
+   closing backtick, threading the `ScanState.template` interpolation-depth stack,
+   and hands `${...}` contents back to the main loop (this is why template handling
+   is not a stateless `skip_template` advancer, above). `entry_walk.rs`'s
+   single-counter approach, whose own comment concedes "templates inside templates
+   would slip through," is likewise replaced. The parity corpus (§ Test parity,
+   Phase 2) must include a **nested-backtick-inside-interpolation** case
+   (`` `${`${x}`}` ``), which pins the stack depth, and a **require-inside-
+   interpolation** case (a `cjs-module-analyzer`-oracle case whose `requires` the
+   Rust side asserts once that field lands in Phase 4), which pins that interpolation
+   contents are scanned rather than skipped, so the Phase 3 `cjs_lexer` port cannot
+   silently regress toward either the wholesale-skip or the single-counter semantics.
 
    A **second** flagged behavior change hides in the same consolidation, on the
    ESM side. `entry_walk.rs::scan_static_imports` today has **no regex-literal
@@ -249,12 +310,12 @@ is Node's `cjs-module-lexer` shape):
    change guarded.
 
    A **third** flagged change is the recognition gate itself. `entry_walk.rs`
-   decides where a specifier scan is eligible with its ad hoc `at_stmt_start`
+   decides where a specifier scan is eligible with its improvised `at_stmt_start`
    heuristic (newline/`;`/`}`-triggered); the shared `fold_nesting_depth` primitive
    replaces it with the oracle's structural top-level gate (`openTokenDepth === 0`,
    § Recommendation step 1). The two answer differently for an `import` substring
    nested inside a call's parens or an object body, so this too is a deliberate
-   behavior change the corpus must guard — the **nested-`import`-token** case in
+   behavior change the corpus must guard; the **nested-`import`-token** case in
    § Test parity pins it.
 2. Re-express `scan_static_imports` (ESM specifiers) on those primitives,
    deleting entry_walk's duplicate skip logic.
@@ -271,9 +332,14 @@ is Node's `cjs-module-lexer` shape):
 The cost the constraint avoids is **peak memory proportional to source size,
 paid per module across a whole dependency-graph walk**: a `Vec<Token>` of owned
 `String`s for every file the walker visits, held for the duration of that file's
-scan, whereas the walker keeps only a handful of specifier strings from each. That
-is the criterion that rejects (a1), demotes (a2), and shapes the whole `scan`
-submodule. The consolidated core instead walks a cursor and allocates **only**
+scan, whereas the walker keeps only a handful of specifier strings from each. This
+is the constraint the review named, and it shapes the whole `scan` submodule. It is
+not, however, the ground on which the survey set (a1) and (a2) aside: (a1) loses on
+**layer** grounds (a bytecode VM consumes a compiled program, not module source, and
+`ironhorse-vm` carries no lexer, parser, or AST at all, per § (a1)), and (a2) *satisfies*
+this allocation constraint yet loses on **reconciliation surface** (a token model
+divorced from the parity target, per § Why not (a2)). The consolidated core
+instead walks a cursor and allocates **only**
 the results a caller retains (specifier strings for the walker; export-name
 strings for the facade). No full-file `Vec<Token>` is materialized. The current
 `cjs_lexer.rs::tokenize` **violates** this invariant and its removal is in scope
@@ -287,7 +353,7 @@ corpus case. The corpus therefore does **not** guard the allocation claim; two
 distinct mechanisms do, at two different layers:
 
 1. **An allocation-counting `#[test]` (primary, runtime, at the recognizer
-   layer).** The regression the review named lived in the *recognizer* tier
+   tier).** The regression the review named lived in the *recognizer* tier
    (`cjs_lexer.rs::tokenize` materialized a `Vec<Token>`), and a signature cannot
    bound retention there: a recognizer can accumulate a `Vec<(&str, usize)>` of
    borrowed slices over the whole file: O(N) retention that compiles fine, and that
@@ -299,13 +365,13 @@ distinct mechanisms do, at two different layers:
    a **dedicated, single-threaded integration binary**
    (`rust/endo/tests/scan_alloc.rs`) with a thread-local counter, isolated from
    the unit-test binary's parallel tokio/rusqlite tests.
-2. **Signatures (secondary, compile-time, at the advancer layer).** The stateless
+2. **Signatures (secondary, compile-time, at the advancer tier).** The stateless
    cursor advancers take `&str` and return `usize` positions or borrowed `&str`
    slices into the source, never an owned `String` or a `Vec<Token>`
    (§ Recommendation step 1). This makes the whole-file-token-vector regression
    *inexpressible at the advancer tier*: it does not compile there, so no test or
    reviewer has to catch it. It binds only the advancers, though: it is the
-   recognizer tier above (finding 1) where retention can still be expressed, which
+   recognizer tier (mechanism 1 above) where retention can still be expressed, which
    is why the runtime check, not this one, is primary. `cjs_lexer.rs`'s
    `Ident(String)` / `Str(String)` token shape is exactly the signature that let
    scanner 2 drift into retention, and the consolidated primitives must not
@@ -323,8 +389,8 @@ Establish a **shared, language-neutral corpus** consumed by both the JS `ava`
 suite and Rust `#[test]`s, at two levels:
 
 1. **Lexer-unit parity.** A fixture table (JSON) of cases, each tagged with the
-   **oracle** — the existing JS implementation whose output a fixture's expected
-   result is checked against — because the JS side is *two* analyzers, not one,
+   **oracle** (the existing JS implementation whose output a fixture's expected
+   result is checked against), because the JS side is *two* analyzers, not one,
    and they disagree on both output shape and failure mode:
 
    - `@endo/cjs-module-analyzer` (`analyzeCommonJS`) recognizes **CJS** and
@@ -416,21 +482,44 @@ suite and Rust `#[test]`s, at two levels:
    Seed the corpus by extracting the CJS exports/reexports snippets inline in
    `packages/cjs-module-analyzer/test/cjs-module-analyzer.test.js` (tagged
    `cjs-module-analyzer`) and the ESM-import cases inline in `entry_walk.rs`'s
-   `scan_static_imports` tests (tagged `module-source`), plus a
-   **nested-backtick-inside-interpolation** case (`` `${`${x}`}` ``) that pins the
-   `skip_template` stack behavior chosen above, a **regex-literal-before-import**
-   case (a leading regex literal on its own line followed by an `import` statement,
-   tagged `module-source`) that pins the regex-vs-divide behavior change the ESM
-   side newly gains (above), and a **nested-`import`-token** case (a bare `import`
-   substring inside a call's parens or an object body, e.g. `f(import.meta.url)` /
-   `{ import: 1 }`, tagged `module-source`) that pins the `fold_nesting_depth`
-   top-level gate that replaces entry_walk's `at_stmt_start` heuristic (§ Recommendation
-   step 1): the depth-gated recognizer must **not** treat such a non-top-level
-   `import` as a static-import specifier, and the existing `scan_static_imports`
-   tests do not exercise this gate change. A **drift guard** fails if a case
-   is present in one runner's manifest but absent from the other's (respecting the
-   `excluded` list), the same safeguard shape already used at the end-to-end
-   level (below).
+   `scan_static_imports` tests (tagged `module-source`), plus these cases that pin
+   the behavior changes above, each with a `source` chosen so the tagged oracle
+   accepts it rather than throwing:
+
+   - a **nested-backtick-inside-interpolation** case (`` `${`${x}`}` ``) that pins
+     the template interpolation-depth stack, and a **require-inside-interpolation**
+     case (`` const a = `${require('b')}`; ``, tagged `cjs-module-analyzer`, its
+     `requires: ['b']` asserted Rust-side once that field lands in Phase 4) that
+     pins that interpolation contents are scanned, not skipped;
+   - a **regex-literal-before-import** case (a leading regex literal on its own line
+     followed by an `import` statement, tagged `module-source`) that pins the
+     regex-vs-divide behavior change the ESM side newly gains (above);
+   - a **nested-`import`-token** case: a bare `import` substring below top level,
+     `const o = { import: 1 };` (an object-property key, tagged `module-source`;
+     note `{ import: 1 }` at statement position is a *block*, not an object literal,
+     and makes `@endo/module-source` throw, so the `const o =` prefix is required)
+     and `f(import.meta.url)` (an argument position). The depth-gated recognizer must
+     **not** treat either non-top-level `import` as a static-import specifier;
+   - two **top-level post-keyword** cases that pin the discrimination the depth gate
+     alone cannot make (§ Recommendation step 1, `fold_nesting_depth`): a top-level
+     dynamic import `import("./x.js")` and a top-level `import.meta.url` are both at
+     depth 0 yet are **not** static imports (`new ModuleSource(...).imports` is `[]`
+     for both), so a depth-0-only gate would misfire on them;
+   - a **keyword-boundary** case (a top-level `importScripts('x')` call, tagged
+     `module-source`) that pins `match_keyword`'s trailing word boundary, so the
+     `import` prefix of `importScripts` is not recognized as a static import.
+
+   The existing `scan_static_imports` tests exercise none of these gate, boundary,
+   or interpolation changes. A **drift guard** ties the one shared corpus to the two
+   Rust-side manifests: it fails if any record in the corpus JSON array
+   (`packages/cjs-module-analyzer/test/corpus/`) is neither named in the per-phase
+   capability manifest (asserted on the Rust side) nor in the `excluded` manifest
+   (deliberately skipped with a reason), since such a record would be silently
+   dropped, and, symmetrically, if either manifest names a record absent from the
+   corpus. Every
+   corpus record is always run against its tagged JS oracle, so the guard's job is
+   to keep the Rust side from silently ignoring a case the corpus adds; it is the
+   same safeguard shape already used at the end-to-end level (below).
 
    The seed corpus is **hand-curated** from the two existing inline test sites,
    so it only covers patterns those authors happened to write; drift on a shape
@@ -446,7 +535,7 @@ suite and Rust `#[test]`s, at two levels:
    the walker runs against `@endo/compartment-mapper`'s own fixtures and asserts
    compartment counts, with a `no_unaccounted_fixture_drift` safeguard. **This
    file lives only on #282's head branch, not on `llm`** (`git ls-tree origin/llm
-   rust/endo/tests/` lists only `iroh_supervisor.rs`) — the same branch caveat the
+   rust/endo/tests/` lists only `iroh_supervisor.rs`): the same branch caveat the
    Motivation section raised for `entry_walk.rs`. So Phases 2-3, which land on `llm` and
    deliberately do not gate on #282, cannot cite it as existing coverage on their
    own branch; it is the end-to-end record on #282's branch, and the new unit
@@ -524,12 +613,13 @@ These phases **operationalize the § Recommendation steps**, in ship order:
      `scan_static_imports` on the shared primitives and delete entry_walk's
      duplicate skip logic. #282 **consumes** `scan`; it does not fork a second
      copy. This is a **deliberate behavior fix**, not a pure refactor, on three axes:
-     adopting the shared depth-stack `skip_template` corrects entry_walk's known
+     adopting the shared recognizer-tier template handling (interpolation-depth
+     stack, contents scanned in the main loop) corrects entry_walk's known
      single-counter nested-template gap (its own comment concedes "templates
      inside templates would slip through"), adopting the shared
      `resolve_regex_or_divide` primitive newly makes it skip regex-literal bodies it
      previously walked byte-by-byte, and adopting `fold_nesting_depth` replaces its
-     ad hoc `at_stmt_start` gate with the oracle's structural top-level check
+     improvised `at_stmt_start` gate with the oracle's structural top-level check
      (§ Test parity names all three changes). The nested-template, regex-vs-divide,
      and nested-`import`-token cases must therefore be *added* (Phase 2's corpus),
      since the existing `scan_static_imports` tests cannot catch any of them.
@@ -567,10 +657,11 @@ the second Rust scanner; Phase 4 is deferred follow-up.
 ## Design decisions
 
 1. **The IronHorse surfaces are surveyed but not chosen.** The VM interpreter is
-   the wrong layer and allocates a full AST; the `ironhorse-compile` pull lexer
-   fits the allocation constraint but carries full-JS-lexing weight and a token
-   model divorced from the parity target, so it loses to the JS-fork-aligned
-   core on reconciliation surface.
+   the wrong layer: it consumes already-compiled bytecode, not module source, and
+   `ironhorse-vm` carries no lexer, parser, or AST at all (§ (a1)). The
+   `ironhorse-compile` pull lexer fits the allocation constraint but carries
+   full-JS-lexing weight and a token model divorced from the parity target, so it
+   loses to the JS-fork-aligned core on reconciliation surface.
 2. **Bespoke-but-shared beats a token-retaining port.** The review's allocation
    grant plus the JS fork's own cursor shape make a cursor-driven core the
    faithful port, not a regression.
@@ -585,12 +676,16 @@ the second Rust scanner; Phase 4 is deferred follow-up.
    both recognizers; renaming `cjs_lexer.rs` -> `module_lexer.rs` is an
    orthogonal naming question (§ Open questions), adopted or not independently of
    the decomposition.
-5. **The primitive layer holds no ambiguity-resolution default.** Stateless
-   cursor advancers sit below; regex-vs-divide takes preceding-token context and
-   the top-level gate takes nesting depth, each threaded as a value parameter, so
-   no consumer inherits cross-token state it did not pass (§ Recommendation
-   step 1). Both are fixed structural facts of the grammar, not configurable
-   policy: the threaded value sets where a fold starts, never what rule it applies.
+5. **The primitive layer holds no ambiguity-resolution default.** The advancer
+   tier (stateless cursor advancers) sits below; the recognizer tier reads a single
+   threaded `ScanState` (preceding-token kind, nesting depth, and two
+   nesting-depth-bounded stacks for regex-vs-divide and template interpolation),
+   advanced by one `advance` producer so no consumer reimplements the fold or
+   inherits cross-token state it did not pass (§ Recommendation step 1). `ScanState`
+   carries fixed structural facts of the grammar, not configurable policy: the
+   threaded value sets where a fold starts, never what rule it applies. Keeping the
+   fields consistent is a call-site discipline the single `advance` step enforces,
+   not an invariant the types prove.
 6. **The lexer corpus is co-located under
    `packages/cjs-module-analyzer/test/corpus/`** and read by both the `ava` suite
    and a Rust test, so a single edit updates both languages (§ Test parity,
