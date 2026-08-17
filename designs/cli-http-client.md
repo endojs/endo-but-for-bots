@@ -79,15 +79,20 @@ distinct, narrower mechanism from the trust-on-first-bind addendum further down,
 which pins an IP/TLS identity rather than converting the allowlist into a
 write-once log of origins.) Because Phase 1
 ships no `inspect`/`revoke` verb, an operator using `tofu-auto` cannot yet see
-what got auto-pinned or undo it. The `mk` help text names this widening on the
-`--policy-mode` line itself, not only here.
+what got auto-pinned or undo it. Because that grant is unbounded and unrevocable
+in Phase 1, `mk` refuses `--policy-mode tofu-auto` unless the operator also
+passes `--acknowledge-unbounded`; the widening is named on the `--policy-mode`
+help line itself, not only here.
 
 **Re-`mk` on an existing name rebinds it.** `provideHttpClient` always
 formulates and stores under the name, so `mk` on a name that already denotes a
-client rebinds it to the new client and does not revoke the previous one (its
-control facet is reached only through the now-overwritten name). This matches the
-sibling `provide*` mints; the phase-2 mutate/revoke verbs are the intended way to
-retire a client. Until then, prefer a fresh name.
+client rebinds it to the new client. The rebind drops the old name's reference;
+the daemon's `storeIdentifier` then calls `removeEdgeIfUnreferenced` on the
+prior formula, so the previous client is *collected* — not silently retained —
+unless another edge still holds it (for example it was granted to a guest under
+another name), in which case it survives that rebind and the phase-2
+mutate/revoke verbs are the intended way to retire it. This matches the sibling
+`provide*` mints.
 
 **On the verb spelling.** `mk` is the frozen Phase-1 spelling for this verb — an
 `mk`-family sibling of `mkhost` / `mkguest` / `mkdir` / `mktmp`. The

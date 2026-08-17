@@ -86,9 +86,11 @@ The `-a`/`--as` flag on any command means "pose as named agent"
 
 ## Network
 
-- `endo http mk <name> --origin <origin> [--origin <origin>...]
-  [--max-requests-per-minute <n>] [--max-response-bytes <n>]
-  [--policy-mode strict|tofu-auto]` — Mint a confined outbound-HTTP
-  client under an origin-allowlist policy and register it under a pet
-  name. `strict` (default) confines the client to the listed origins;
-  `tofu-auto` auto-allows any first-seen origin.
+- `endo http mk <name> --origin <origin>` — Mint a confined outbound-HTTP
+  client under an origin-allowlist policy and register it under a pet name.
+  `--origin` is required and repeatable. Host-only: `--as` must name a host, not
+  a guest. Optional `--max-requests-per-minute <n>` and `--max-response-bytes <n>`
+  cap the client. `--policy-mode strict` (default) confines the client to the
+  listed origins; `--policy-mode tofu-auto` auto-allows any first-seen origin, so
+  the allowlist stops bounding outbound reach and it must be confirmed with
+  `--acknowledge-unbounded`.
