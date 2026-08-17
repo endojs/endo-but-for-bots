@@ -47,7 +47,7 @@ provision time by the daemon's `normalizeHttpClientPolicy`.
 The landed verb is therefore a **policy front-end** over that one call:
 
 ```
-endo http mk <name> --origin <url> [--origin <url>...]
+endo http mk <name> --origin <origin> [--origin <origin>...]
   [--max-requests-per-minute <n>] [--max-response-bytes <n>]
   [--policy-mode strict|tofu-auto] [--as <agent>]
 ```
@@ -74,8 +74,10 @@ allowlist is the confinement bound: only the listed origins are reachable. Under
 `tofu-auto` the exo auto-allows any first-seen origin
 (`packages/exo-http-client/src/http-client.js` `decide()` returns `allow` for an
 unlisted target), so `--origin` becomes a pre-seed rather than a bound and the
-allowlist no longer confines outbound reach — the mode this design elsewhere
-describes as converting the allowlist into a write-once log. Because Phase 1
+allowlist no longer confines outbound reach. (This Phase-1 `tofu-auto` is a
+distinct, narrower mechanism from the trust-on-first-bind addendum further down,
+which pins an IP/TLS identity rather than converting the allowlist into a
+write-once log of origins.) Because Phase 1
 ships no `inspect`/`revoke` verb, an operator using `tofu-auto` cannot yet see
 what got auto-pinned or undo it. The `mk` help text names this widening on the
 `--policy-mode` line itself, not only here.
@@ -91,7 +93,13 @@ retire a client. Until then, prefer a fresh name.
 `mk`-family sibling of `mkhost` / `mkguest` / `mkdir` / `mktmp`. The
 placeholder-pending-namer caveats elsewhere in this document predate this
 landing; the namer dispatch may still rename the later `allow`/`deny`/`revoke`/
-`inspect` verbs, but `endo http mk` is what shipped.
+`inspect` verbs, but `endo http mk` is what shipped. The separate
+metering/fees/rate-limiting/retry/circuit-breaking follow-up that PR #286's
+approval directed is out of scope here and tracked on its own design track (the
+HTTP adapter pipeline,
+[endojs/endo-but-for-bots#992](https://github.com/endojs/endo-but-for-bots/pull/992));
+the guard knobs `mk` exposes (`--max-requests-per-minute`, `--max-response-bytes`)
+are the confinement floor, not that metering surface.
 
 **Deferred, not carried: the #286 `http-confine` inert-response-snapshot fix.**
 PR #286 also changed `packages/http-confine/src/http-confine.js` to return an

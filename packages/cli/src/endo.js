@@ -16,7 +16,12 @@ import {
   collectDeniedSegment,
   resolveDeniedSegments,
 } from './denied-segments.js';
-import { parsePositiveIntegerFlag } from './http-mk-policy.js';
+import {
+  collectHttpOrigin,
+  httpMkArgsFromOpts,
+  parsePolicyModeFlag,
+  parsePositiveIntegerFlag,
+} from './http-mk-policy.js';
 
 const packageDescriptorPath = url.fileURLToPath(
   new URL('../package.json', import.meta.url),
@@ -813,8 +818,7 @@ export const main = async rawArgs => {
     .option(
       '--origin <origin>',
       'Allowed origin (scheme://host[:port]; http: or https:); repeat for more',
-      (value, previous) =>
-        Array.isArray(previous) ? [...previous, value] : [value],
+      collectHttpOrigin,
     )
     .option(
       '--max-requests-per-minute <n>',
@@ -831,34 +835,11 @@ export const main = async rawArgs => {
       'strict (default) confines to --origin; tofu-auto AUTO-ALLOWS any ' +
         'first-seen origin, so --origin only pre-seeds and the allowlist ' +
         'stops bounding outbound reach',
-      value => {
-        if (value !== 'strict' && value !== 'tofu-auto') {
-          throw new Error(
-            `--policy-mode must be strict or tofu-auto, got ${JSON.stringify(
-              value,
-            )}`,
-          );
-        }
-        return value;
-      },
+      parsePolicyModeFlag,
     )
     .action(async (name, cmd) => {
-      const {
-        as: agentNames,
-        origin: allowedOrigins,
-        maxRequestsPerMinute,
-        maxResponseBytes,
-        policyMode,
-      } = cmd.opts();
       const { httpMk } = await import('./commands/http-mk.js');
-      return httpMk({
-        name,
-        allowedOrigins,
-        maxRequestsPerMinute,
-        maxResponseBytes,
-        policyMode,
-        agentNames,
-      });
+      return httpMk(httpMkArgsFromOpts(name, cmd.opts()));
     });
 
   const where = program

@@ -86,6 +86,70 @@ export const parsePositiveIntegerFlag = flag => value => {
 };
 
 /**
+ * Commander `--origin` coercer: accumulate each repeated flag into an array in
+ * flag order. Extracted so the accumulation is unit-testable — a last-wins
+ * regression (returning `[value]` instead of appending) would silently keep
+ * only the final `--origin`, collapsing a multi-origin allowlist to one.
+ *
+ * @param {string} value - The current `--origin` token.
+ * @param {string[] | undefined} previous - Origins collected so far.
+ * @returns {string[]}
+ */
+export const collectHttpOrigin = (value, previous) =>
+  Array.isArray(previous) ? [...previous, value] : [value];
+
+const HTTP_POLICY_MODES = ['strict', 'tofu-auto'];
+
+/**
+ * Commander `--policy-mode` coercer: accept only an admissible mode, reporting
+ * by flag name locally before anything crosses CapTP.
+ *
+ * @param {string} value
+ * @returns {'strict' | 'tofu-auto'}
+ */
+export const parsePolicyModeFlag = value => {
+  if (!HTTP_POLICY_MODES.includes(value)) {
+    throw new Error(
+      `--policy-mode must be strict or tofu-auto, got ${JSON.stringify(value)}`,
+    );
+  }
+  return /** @type {'strict' | 'tofu-auto'} */ (value);
+};
+
+/**
+ * Map the parsed commander options for `endo http mk <name>` onto the `httpMk`
+ * argument record. Extracted so the option-key routing is unit-testable: a
+ * swapped destructure (e.g. binding `maxResponseBytes` to `maxRequestsPerMinute`)
+ * would otherwise sail through every daemon-driven test that only checks the
+ * echoed pet name.
+ *
+ * @param {string} name - The `<name>` positional.
+ * @param {{
+ *   as?: string,
+ *   origin?: string[],
+ *   maxRequestsPerMinute?: number,
+ *   maxResponseBytes?: number,
+ *   policyMode?: 'strict' | 'tofu-auto',
+ * }} opts - `cmd.opts()` from the commander action.
+ * @returns {{
+ *   name: string,
+ *   allowedOrigins: string[] | undefined,
+ *   maxRequestsPerMinute?: number,
+ *   maxResponseBytes?: number,
+ *   policyMode?: 'strict' | 'tofu-auto',
+ *   agentNames?: string,
+ * }}
+ */
+export const httpMkArgsFromOpts = (name, opts) => ({
+  name,
+  allowedOrigins: opts.origin,
+  maxRequestsPerMinute: opts.maxRequestsPerMinute,
+  maxResponseBytes: opts.maxResponseBytes,
+  policyMode: opts.policyMode,
+  agentNames: opts.as,
+});
+
+/**
  * Assemble the daemon HTTP-client policy record from the parsed `mk` flags.
  * Each origin is normalized to its canonical serialization; the guard knobs are
  * omitted from the record when unset so the daemon's normalizer applies its own
@@ -93,7 +157,8 @@ export const parsePositiveIntegerFlag = flag => value => {
  * explicit value here.
  *
  * @param {object} args
- * @param {string[]} args.allowedOrigins - Raw `--origin` values, in order.
+ * @param {string[] | undefined} args.allowedOrigins - Raw `--origin` values, in
+ *   order; `undefined` when the flag was omitted (rejected here, by flag name).
  * @param {number} [args.maxRequestsPerMinute]
  * @param {number} [args.maxResponseBytes]
  * @param {'strict' | 'tofu-auto'} [args.policyMode]

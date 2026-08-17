@@ -5,10 +5,14 @@ import path from 'path';
 import test from 'ava';
 import url from 'url';
 import { execa } from 'execa';
+import { fc } from '@fast-check/ava';
 
 import {
+  collectHttpOrigin,
+  httpMkArgsFromOpts,
   makeHttpClientPolicy,
   normalizeHttpClientOrigin,
+  parsePolicyModeFlag,
   parsePositiveIntegerFlag,
 } from '../src/http-mk-policy.js';
 
@@ -102,6 +106,76 @@ test('normalizeHttpClientOrigin refuses a path/query/fragment/userinfo origin', 
   }
 });
 
+// The docstring makes a canonical-form/idempotence claim
+// (`normalize(normalize(x)) === normalize(x)`); pin it over the whole accepted
+// origin space rather than the three hand-picked examples above.
+const arbAcceptedOrigin = fc
+  .record({
+    scheme: fc.constantFrom('http', 'https'),
+    host: fc.domain(),
+    port: fc.option(fc.integer({ min: 1, max: 65_535 }), { nil: undefined }),
+    trailingSlash: fc.boolean(),
+  })
+  .map(
+    ({ scheme, host, port, trailingSlash }) =>
+      `${scheme}://${host}${port === undefined ? '' : `:${port}`}${
+        trailingSlash ? '/' : ''
+      }`,
+  );
+
+test('normalizeHttpClientOrigin is idempotent over accepted origins', async t => {
+  await fc.assert(
+    fc.property(arbAcceptedOrigin, raw => {
+      const once = normalizeHttpClientOrigin(raw);
+      // A second pass over the already-canonical form is a fixed point.
+      t.is(normalizeHttpClientOrigin(once), once);
+    }),
+  );
+});
+
+// A non-empty, %-encoded segment that cannot itself carry a `/`, `?`, `#`, `@`,
+// or `:` delimiter, so each builder below produces exactly the suffix kind it
+// names rather than accidentally landing a different component.
+const arbSuffixSegment = fc
+  .string({ minLength: 1 })
+  .map(s => encodeURIComponent(s))
+  .filter(s => s.length > 0);
+
+const arbRejectedOrigin = fc
+  .record({
+    scheme: fc.constantFrom('http', 'https'),
+    host: fc.domain(),
+    seg: arbSuffixSegment,
+    kind: fc.constantFrom('path', 'query', 'fragment', 'userinfo'),
+  })
+  .map(({ scheme, host, seg, kind }) => {
+    switch (kind) {
+      case 'path':
+        return `${scheme}://${host}/${seg}`;
+      case 'query':
+        return `${scheme}://${host}?${seg}`;
+      case 'fragment':
+        return `${scheme}://${host}#${seg}`;
+      case 'userinfo':
+        return `${scheme}://${seg}@${host}`;
+      default:
+        throw new Error(`unreachable: ${kind}`);
+    }
+  });
+
+test('normalizeHttpClientOrigin refuses any path/query/fragment/userinfo suffix', async t => {
+  // The refusal branch is the security boundary the docstring calls out —
+  // silently widening a suffixed origin to the whole host would teach a false
+  // confinement — so pin that no suffixed input slips through as a bare origin.
+  await fc.assert(
+    fc.property(arbRejectedOrigin, raw => {
+      t.throws(() => normalizeHttpClientOrigin(raw), {
+        message: /must be a bare origin/,
+      });
+    }),
+  );
+});
+
 test('makeHttpClientPolicy rejects an empty origin allowlist', t => {
   t.throws(() => makeHttpClientPolicy({ allowedOrigins: [] }), {
     message: /at least one --origin/,
@@ -130,6 +204,62 @@ test('parsePositiveIntegerFlag accepts a positive integer, names the flag on rej
       `rejects ${JSON.stringify(bad)}`,
     );
   }
+});
+
+// --- Flag wiring (commander coercers and opt routing) ----------------------
+
+test('collectHttpOrigin accumulates repeated --origin values in flag order', t => {
+  // Commander threads the previous accumulator as the second argument; a
+  // last-wins regression (returning [value]) would collapse a multi-origin
+  // allowlist to only the final --origin.
+  let acc = collectHttpOrigin('https://a.example', undefined);
+  acc = collectHttpOrigin('https://b.example', acc);
+  acc = collectHttpOrigin('https://c.example', acc);
+  t.deepEqual(acc, [
+    'https://a.example',
+    'https://b.example',
+    'https://c.example',
+  ]);
+});
+
+test('parsePolicyModeFlag accepts admissible modes and names the flag on reject', t => {
+  t.is(parsePolicyModeFlag('strict'), 'strict');
+  t.is(parsePolicyModeFlag('tofu-auto'), 'tofu-auto');
+  t.throws(() => parsePolicyModeFlag('tofu-prompt'), {
+    message: /--policy-mode must be strict or tofu-auto/,
+  });
+});
+
+test('httpMkArgsFromOpts routes each commander opt to the matching httpMk arg', t => {
+  // Pins the opt-key routing: a swapped destructure (e.g. binding the byte cap
+  // to the request cap) would sail through the daemon-driven test, which only
+  // checks the echoed pet name.
+  t.deepEqual(
+    httpMkArgsFromOpts('my-http', {
+      as: 'host-a',
+      origin: ['https://a.example', 'https://b.example'],
+      maxRequestsPerMinute: 30,
+      maxResponseBytes: 2048,
+      policyMode: 'tofu-auto',
+    }),
+    {
+      name: 'my-http',
+      allowedOrigins: ['https://a.example', 'https://b.example'],
+      maxRequestsPerMinute: 30,
+      maxResponseBytes: 2048,
+      policyMode: 'tofu-auto',
+      agentNames: 'host-a',
+    },
+  );
+});
+
+test('httpMkArgsFromOpts leaves unset knobs undefined', t => {
+  const args = httpMkArgsFromOpts('x', { origin: ['https://a.example'] });
+  t.deepEqual(args.allowedOrigins, ['https://a.example']);
+  t.is(args.maxRequestsPerMinute, undefined);
+  t.is(args.maxResponseBytes, undefined);
+  t.is(args.policyMode, undefined);
+  t.is(args.agentNames, undefined);
 });
 
 // --- Help surface ----------------------------------------------------------

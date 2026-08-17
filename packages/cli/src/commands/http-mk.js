@@ -20,7 +20,8 @@ import { makeHttpClientPolicy } from '../http-mk-policy.js';
  *
  * @param {object} args
  * @param {string} args.name - Pet name for the minted HTTP client.
- * @param {string[]} args.allowedOrigins - Allowed origins (http:/https:).
+ * @param {string[] | undefined} args.allowedOrigins - Allowed origins
+ *   (http:/https:); `undefined` when `--origin` was omitted (rejected below).
  * @param {number} [args.maxRequestsPerMinute] - Sliding-window rate cap.
  * @param {number} [args.maxResponseBytes] - Per-response byte cap.
  * @param {'strict' | 'tofu-auto'} [args.policyMode] - `strict` (default) or
