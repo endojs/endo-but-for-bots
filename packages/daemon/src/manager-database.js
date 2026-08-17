@@ -43,6 +43,12 @@ import { q } from '@endo/errors';
  * @property {(storeNumber: string) => void} deleteSyncedMeta
  */
 
+// Node's ObjectWrap cleanup hook can be removed during GC without a current
+// Environment, making RemoveEnvironmentCleanupHook assert (Node.js issue
+// #63923, fixed by #63985: https://github.com/nodejs/node/pull/63985).
+// Retain wrappers until process teardown, when an Environment is available.
+const retainedForProcessLifetime = new Set();
+
 const SCHEMA_VERSION = 2;
 
 const SCHEMA_SQL = `
@@ -128,118 +134,127 @@ export const makeDaemonDatabase = (config, options) => {
   }
   const dbPath = `${config.statePath}/endo.sqlite`;
   const db = new Database(dbPath);
+  retainedForProcessLifetime.add(db);
+
+  /** @param {string} sql */
+  const prepare = sql => {
+    const statement = db.prepare(sql);
+    retainedForProcessLifetime.add(statement);
+    return statement;
+  };
 
   // Enable WAL mode for better concurrent read performance.
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  // Use exec rather than the pragma method: better-sqlite3's pragma
+  // helper prepares a transient Statement wrapper internally, which
+  // would evade the retention discipline described above.
+  db.exec('PRAGMA journal_mode = WAL;');
+  db.exec('PRAGMA foreign_keys = ON;');
 
   // Create schema if needed.
   db.exec(SCHEMA_SQL);
 
   // Check/set schema version.
-  const versionRow = db
-    .prepare('SELECT version FROM schema_version LIMIT 1')
-    .get();
+  const versionRow = prepare(
+    'SELECT version FROM schema_version LIMIT 1',
+  ).get();
   if (versionRow === undefined) {
-    db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(
+    prepare('INSERT INTO schema_version (version) VALUES (?)').run(
       SCHEMA_VERSION,
     );
   }
 
   // -- Prepared statements --
 
-  const stmtWriteFormula = db.prepare(
+  const stmtWriteFormula = prepare(
     'INSERT OR REPLACE INTO formula (number, node, type, body) VALUES (?, ?, ?, ?)',
   );
-  const stmtReadFormula = db.prepare(
+  const stmtReadFormula = prepare(
     'SELECT node, body FROM formula WHERE number = ?',
   );
-  const stmtHasFormula = db.prepare('SELECT 1 FROM formula WHERE number = ?');
-  const stmtDeleteFormula = db.prepare('DELETE FROM formula WHERE number = ?');
-  const stmtListFormulas = db.prepare('SELECT number, node FROM formula');
-  const stmtListFormulaNumbersByNode = db.prepare(
+  const stmtHasFormula = prepare('SELECT 1 FROM formula WHERE number = ?');
+  const stmtDeleteFormula = prepare('DELETE FROM formula WHERE number = ?');
+  const stmtListFormulas = prepare('SELECT number, node FROM formula');
+  const stmtListFormulaNumbersByNode = prepare(
     'SELECT number FROM formula WHERE node = ?',
   );
 
-  const stmtGetState = db.prepare(
-    'SELECT value FROM daemon_state WHERE key = ?',
-  );
-  const stmtSetState = db.prepare(
+  const stmtGetState = prepare('SELECT value FROM daemon_state WHERE key = ?');
+  const stmtSetState = prepare(
     'INSERT OR REPLACE INTO daemon_state (key, value) VALUES (?, ?)',
   );
 
-  const stmtWriteAgentKey = db.prepare(
+  const stmtWriteAgentKey = prepare(
     'INSERT OR REPLACE INTO agent_key (public_key, private_key, agent_id) VALUES (?, ?, ?)',
   );
-  const stmtGetAgentKey = db.prepare(
+  const stmtGetAgentKey = prepare(
     'SELECT public_key AS publicKey, private_key AS privateKey, agent_id AS agentId FROM agent_key WHERE public_key = ?',
   );
-  const stmtHasAgentKey = db.prepare(
+  const stmtHasAgentKey = prepare(
     'SELECT 1 FROM agent_key WHERE public_key = ?',
   );
-  const stmtListAgentKeys = db.prepare(
+  const stmtListAgentKeys = prepare(
     'SELECT public_key AS publicKey, private_key AS privateKey, agent_id AS agentId FROM agent_key',
   );
-  const stmtDeleteAgentKey = db.prepare(
+  const stmtDeleteAgentKey = prepare(
     'DELETE FROM agent_key WHERE public_key = ?',
   );
 
-  const stmtWriteRemoteAgentKey = db.prepare(
+  const stmtWriteRemoteAgentKey = prepare(
     'INSERT OR REPLACE INTO remote_agent_key (public_key, daemon_node) VALUES (?, ?)',
   );
-  const stmtGetRemoteAgentKey = db.prepare(
+  const stmtGetRemoteAgentKey = prepare(
     'SELECT daemon_node AS daemonNode FROM remote_agent_key WHERE public_key = ?',
   );
 
-  const stmtWritePetEntry = db.prepare(
+  const stmtWritePetEntry = prepare(
     'INSERT OR REPLACE INTO pet_store_entry (store_number, store_type, name, formula_id) VALUES (?, ?, ?, ?)',
   );
-  const stmtDeletePetEntry = db.prepare(
+  const stmtDeletePetEntry = prepare(
     'DELETE FROM pet_store_entry WHERE store_number = ? AND store_type = ? AND name = ?',
   );
-  const stmtRenamePetEntry = db.prepare(
+  const stmtRenamePetEntry = prepare(
     'UPDATE pet_store_entry SET name = ? WHERE store_number = ? AND store_type = ? AND name = ?',
   );
-  const stmtListPetEntries = db.prepare(
+  const stmtListPetEntries = prepare(
     'SELECT name, formula_id AS formulaId FROM pet_store_entry WHERE store_number = ? AND store_type = ?',
   );
-  const stmtDeleteAllPetEntries = db.prepare(
+  const stmtDeleteAllPetEntries = prepare(
     'DELETE FROM pet_store_entry WHERE store_number = ? AND store_type = ?',
   );
 
-  const stmtWriteRetention = db.prepare(
+  const stmtWriteRetention = prepare(
     'INSERT OR IGNORE INTO retention (guest_public_key, retained_formula_number) VALUES (?, ?)',
   );
-  const stmtDeleteRetention = db.prepare(
+  const stmtDeleteRetention = prepare(
     'DELETE FROM retention WHERE guest_public_key = ? AND retained_formula_number = ?',
   );
-  const stmtListRetention = db.prepare(
+  const stmtListRetention = prepare(
     'SELECT retained_formula_number AS formulaNumber FROM retention WHERE guest_public_key = ?',
   );
-  const stmtDeleteAllRetention = db.prepare(
+  const stmtDeleteAllRetention = prepare(
     'DELETE FROM retention WHERE guest_public_key = ?',
   );
 
-  const stmtWriteSyncedEntry = db.prepare(
+  const stmtWriteSyncedEntry = prepare(
     'INSERT OR REPLACE INTO synced_store_entry (store_number, name, locator, timestamp, writer) VALUES (?, ?, ?, ?, ?)',
   );
-  const stmtDeleteSyncedEntry = db.prepare(
+  const stmtDeleteSyncedEntry = prepare(
     'DELETE FROM synced_store_entry WHERE store_number = ? AND name = ?',
   );
-  const stmtListSyncedEntries = db.prepare(
+  const stmtListSyncedEntries = prepare(
     'SELECT name, locator, timestamp, writer FROM synced_store_entry WHERE store_number = ?',
   );
-  const stmtDeleteAllSyncedEntries = db.prepare(
+  const stmtDeleteAllSyncedEntries = prepare(
     'DELETE FROM synced_store_entry WHERE store_number = ?',
   );
 
-  const stmtGetSyncedMeta = db.prepare(
+  const stmtGetSyncedMeta = prepare(
     'SELECT local_clock AS localClock, remote_acked_clock AS remoteAckedClock FROM synced_store_meta WHERE store_number = ?',
   );
-  const stmtSetSyncedMeta = db.prepare(
+  const stmtSetSyncedMeta = prepare(
     'INSERT OR REPLACE INTO synced_store_meta (store_number, local_clock, remote_acked_clock) VALUES (?, ?, ?)',
   );
-  const stmtDeleteSyncedMeta = db.prepare(
+  const stmtDeleteSyncedMeta = prepare(
     'DELETE FROM synced_store_meta WHERE store_number = ?',
   );
 
