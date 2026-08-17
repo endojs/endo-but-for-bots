@@ -48,8 +48,8 @@
 | [daemon-mount-capabilities](daemon-mount-capabilities.md) | 2026-05-18 | 2026-05-27 | **Complete** |
 | [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-06-02 | Not Started |
 | [registry-capability](registry-capability.md) | 2026-06-02 | 2026-06-02 | In Progress |
-| [mvs-resolver](mvs-resolver.md) | 2026-06-02 | 2026-06-02 | Not Started |
-| [snapshot-mapper](snapshot-mapper.md) | 2026-06-02 | 2026-06-02 | Not Started |
+| [mvs-resolver](mvs-resolver.md) | 2026-06-02 | 2026-06-02 | Implemented |
+| [snapshot-mapper](snapshot-mapper.md) | 2026-06-02 | 2026-06-02 | Implemented |
 | [filesystem-watchers](filesystem-watchers.md) | 2026-05-07 | 2026-05-07 | Not Started |
 | [platform-fs](platform-fs.md) | 2026-03-18 | 2026-05-19 | **Complete** |
 | [fs-interface-reconciliation](fs-interface-reconciliation.md) | 2026-06-18 | 2026-06-19 | In Progress |
@@ -190,7 +190,7 @@
 | [familiar-app-ui-hosting](familiar-app-ui-hosting.md) | 2026-06-01 | 2026-06-01 | Proposed |
 | [ses-import-attributes](ses-import-attributes.md) | 2026-05-14 | 2026-05-15 | Draft |
 
-**Totals (recounted 2026-08-17 by tallying the summary table's Status column):** 56 Complete/Implemented, 46 In Progress, 35 Not Started, 26 Proposed, 2 Active, 13 Reference, 2 Deprecated, 4 Superseded, 1 Draft (**185 designs**). This supersedes every count in the historical grooming summaries (now relocated to the [Changelog](#changelog) at the foot of this document), which had drifted badly: the last prose total claimed 151 designs while the table had already grown to 185 rows, and ~34 rows this pass verified against real merged/open-PR and `llm`-git state were understated — landed or in-flight work (e.g. `http-confine`, `exo-zip-package`, `inventory-drag-and-drop`/`-grouping-by-type`, `endoclaw-browser`, `endopi-edit-tool`/`-jsonl-transcript-format`, the `daemon-git-*` trio, `endo-reminder`, `endo-fetch`, `inter`/`intra-package-plain-re-exports`, `notifier-pubsub-migration`) was still marked Not Started or Proposed. See the Roadmap's **Verification drift (2026-08-17)** note for the row-by-row list. Design docs whose *own* metadata is also stale are listed there as a scoped follow-up, not silently rewritten in this pass.
+**Totals (recounted 2026-08-17 by tallying the summary table's Status column; each row is bucketed by the leading word of its Status cell):** 56 Complete/Implemented, 47 In Progress, 33 Not Started, 26 Proposed, 13 Reference, 4 Superseded, 2 Deprecated, 2 Active, 1 Draft, plus 1 row (`cbor-codec`, whose Status cell reads "Phase 1 implemented") outside the closed status vocabulary and listed here rather than absorbed into a bucket (**185 designs**). Milestone 1's designs are archived to [ARCHIVE.md](ARCHIVE.md) (their summary rows are retained here per [AGENTS.md](AGENTS.md) § *Archiving Completed Milestones*). This supersedes every count in the historical grooming summaries (now relocated to the [Changelog](#changelog) at the foot of this document), which had drifted badly: the last prose total claimed 151 designs while the table had already grown to 185 rows, and ~34 rows this pass verified against real merged/open-PR and `llm`-git state were understated — landed or in-flight work (e.g. `http-confine`, `exo-zip-package`, `inventory-drag-and-drop`/`-grouping-by-type`, `endoclaw-browser`, `endopi-edit-tool`/`-jsonl-transcript-format`, the `daemon-git-*` trio, `endo-reminder`, `endo-fetch`, `inter`/`intra-package-plain-re-exports`, `notifier-pubsub-migration`) was still marked Not Started or Proposed. See the Roadmap's **Verification drift (2026-08-17)** note for the row-by-row list. Design docs whose *own* metadata is also stale are listed there as a scoped follow-up, not silently rewritten in this pass.
 
 ## Roadmap
 
@@ -198,7 +198,7 @@
 > subsections immediately below (verification drift, expected landing order,
 > planned-vs-actual, and the velocity calibration note) are the product of that
 > pass and are the honest current picture. The milestone sections further down
-> retain their canonical **M1–M11 dependency numbering** — that numbering
+> retain their canonical **M1-M11 dependency numbering** — that numbering
 > encodes the invariant "every milestone's dependencies live in earlier
 > milestones" and is *not* a prediction of landing order. Where the two diverge,
 > the divergence is called out rather than papered over.
@@ -209,7 +209,7 @@ This pass cross-checked every summary-table row against real merged/open-PR
 state on `endojs/endo-but-for-bots` and the `llm` git log (fanned out across the
 whole corpus). The table had drifted heavily and almost always in one
 direction: **the README understated reality.** Rows corrected this pass
-(claimed → verified, with evidence):
+(claimed -> verified, with evidence):
 
 | Design | Was | Now | Evidence |
 |--------|-----|-----|----------|
@@ -244,13 +244,14 @@ direction: **the README understated reality.** Rows corrected this pass
 | ironhorse-debugger-recovery-and-uncaught | Proposed | In Progress | native break-on-uncaught PR #975 merged 2026-08-14 |
 | ocapn-tcp-syrup-framing | Not Started | In Progress | `@endo/syrup-frame` landed (endojs/endo#3256); ocapn opt-in on `llm` |
 | familiar-deep-link-invitations | Proposed | In Progress | `endo://` deep-link impl PR #399 open |
-| registry-capability siblings (mvs-resolver, snapshot-mapper, daemon-worker-import-from-mount) | Proposed | Not Started | accepted-but-unbuilt per the 2026-07-10 flip and each doc's own metadata; the summary table had never taken the flip |
+| mvs-resolver, snapshot-mapper | Proposed | Implemented | layers 2-3 of the registry-capability stack shipped in `@endo/exo-npm` (renamed from `@endo/registry-capability`): exports `./mvs-resolver.js` (`makeMvsResolveHook`, `satisfiesRange`) and `./snapshot-mapper.js` (`mapSnapshot`, `makeMountReadPowers`, `buildCompartmentMap`) |
+| daemon-worker-import-from-mount | Proposed | Not Started | layer 4 (`makeFromPackage`/`makeFromMount` daemon-worker entry) not yet built under `packages/daemon/src` |
 
-**Stale design docs — scoped follow-up, not touched this job.** Per the scope
-guard, this pass did not rewrite individual design docs. Verification found the
-following docs whose *own* metadata table now disagrees with reality; they want
-a separate sweep (a follow-on `groom-endo-stale-design-docs` job is the right
-home): `registry-capability` (doc Not Started, impl landed), `http-confine`
+**Stale design docs — scoped follow-up, not touched this pass.** This pass
+reconciled the summary table only and did not rewrite individual design docs.
+Verification found the following docs whose *own* metadata table now disagrees
+with reality; they want a separate stale-design-doc sweep:
+`registry-capability` (doc Not Started, impl landed), `http-confine`
 (doc Proposed, landed), `exo-zip-package` (doc Proposed, landed), `endoclaw-browser`
 (doc status is a non-vocabulary string), `endopi-edit-tool` / `endopi-jsonl-transcript-format`
 (docs Proposed, landed), `endo-reminder` / `endo-fetch` (docs Not Started, in flight),
@@ -318,7 +319,7 @@ milestone's Gantt slot is the signal.
 The pattern: **landing order correlates weakly with milestone number.** Late
 milestones (M10/M11) are landing early because they are independent parallel
 lanes (Rust port, self-contained exos like the Playwright browser); the
-critical-path gateway milestones (M3→M5→M6) are the ones actually gating and
+critical-path gateway milestones (M3->M5->M6) are the ones actually gating and
 slipping. A dependency-ordered plan and a velocity-ordered forecast are
 different artifacts, and this document had been conflating them.
 
@@ -349,29 +350,27 @@ read as **superseded by the confidence-tier view above.** Prefer the tiers.
 ### Velocity and timing basis (2026-08-17 calibration note)
 
 The "Size and Time Estimates" section further down calibrates a **one-developer,
-LOC-per-day** model (S/M/L/XL → days) against PR-merge velocity through
+LOC-per-day** model (S/M/L/XL -> days) against PR-merge velocity through
 2026-05-20. That discipline is preserved below unchanged. This note extends it
 with the regime change that the older rounds could not see:
 
 1. **Development is now fleet-driven, not single-developer.** Implementation
-   lands as autonomous jobs, not one person's commits. Observed from the garden
-   fleet's own usage stamps (`jobs/tada/*.md` `## Cost` sections): a
-   design/build job on this repo runs at a **median ≈ $1–3 and ≈ 6–20 minutes
-   of wall-clock** each (the endo-but-for-bots job stream, n≈460, medians ≈$1.0
-   / ≈9 min; design-labelled jobs ≈$2.4 / ≈10 min). Machine time per design is
+   lands as autonomous jobs, not one person's commits. Measured per-job cost
+   telemetry from that automated fleet (external to this repo, so the figures
+   are cited here as externally sourced rather than reproducible from the tree)
+   puts a design or build job at a low single-digit-dollar and single-digit-to-
+   low-tens-of-minutes wall-clock median each. Machine time per design is
    therefore **cheap and no longer the binding constraint** — the per-size
    "days of developer effort" figures below overstate the wall-clock a single
    design now takes to *produce*.
 2. **The binding constraint is human review latency.** Human review dominates
-   total delivery cost by roughly **50–190× the machine cost at the median**, and
-   the review-queue backlog (already flagged as "the binding constraint" in the
-   2026-05 rounds) is what actually paces merges. A design can be *built* in
-   minutes and still wait weeks for review. Forecast to review throughput, not
-   build throughput.
-3. **Token-budget admission now bounds backlog drain.** The garden landed live
-   budget / token-bucket admission at dispatch (garden-repo designs
-   `live-budget-admission`, `budgeted-campaign-dispatch`). Campaigns are now
-   bounded by token budget *at dispatch*, so the fleet does not drain an
+   total delivery cost by one-to-two orders of magnitude over the machine cost
+   at the median, and the review-queue backlog (already flagged as "the binding
+   constraint" in the 2026-05 rounds) is what actually paces merges. A design
+   can be *built* in minutes and still wait weeks for review. Forecast to review
+   throughput, not build throughput.
+3. **Budgeted admission now bounds backlog drain.** The automated fleet admits
+   work against a live token/cost budget at dispatch, so it does not drain an
    unbounded backlog at machine speed; it drains at a **budgeted rate**. This
    caps how fast even review-approved work can be fanned out, and is a real
    input to any "weeks remaining" figure.
@@ -661,30 +660,35 @@ formerly "Milestone A"; MCP Bridge Hosting, formerly "Milestone B")
 are now numbered as ordinary milestones (M8 and M6 respectively).
 
 > **Status cells below may lag.** The 2026-08-17 verification pass
-> reconciled the **summary table** (the authoritative index per
-> [AGENTS.md](AGENTS.md) § *Progress Tracking*) and captured every
-> corrected status in the Roadmap's **Verification drift (2026-08-17)**
-> table above. It did **not** rewrite the per-milestone inline Status
-> cells in the tables below, whose varied column shapes make a mass edit
-> error-prone for low marginal value. Where a cell below disagrees with
-> the summary table or the drift table, the summary/drift table wins.
-> Sweeping these inline cells (and the stale design docs listed in the
-> drift note) is the scoped follow-on `groom-endo-stale-design-docs` job.
+> reconciled the **summary table** — the whole-corpus index, cross-checked
+> this pass against real merged/open-PR and `llm`-git state — and captured
+> every corrected status in the Roadmap's **Verification drift
+> (2026-08-17)** table above. It did **not** rewrite the per-milestone
+> inline Status cells in the tables below, whose varied column shapes make
+> a mass edit error-prone for low marginal value. Where a cell below
+> disagrees with the summary table or the drift table, treat the
+> summary/drift table as current: it is the surface this pass verified,
+> and per [AGENTS.md](AGENTS.md) § *Progress Tracking* the inline cells
+> must eventually be synchronized to match it. Sweeping these inline cells
+> (and the stale design docs listed in the drift note) is left to a
+> separate stale-design-doc sweep.
 >
-> **Milestone 2 (Project Hygiene) is the next archive candidate.** Its six
-> designs are all Complete/Implemented on `llm` and its exit criterion is
-> met (it is already labelled Complete). It qualifies under the new
-> archive convention; it was left in place this pass only to keep the
-> reorganization reviewable one milestone at a time. Archiving it to
-> [ARCHIVE.md](ARCHIVE.md) is a clean next step — flagged here rather than
-> done unasked.
+> **Milestone 2 (Project Hygiene) is a likely next archive candidate — but
+> does not yet qualify.** Its milestone-section designs are Complete, but
+> the *Unattended design routing* table above also routes
+> `inter-package-plain-re-exports` and `intra-package-plain-re-exports`
+> to M2, and this pass flipped both to **In Progress**. The archive
+> convention forbids archiving a milestone with any In Progress design
+> open, so M2 stays in the README until those two land (or milestone
+> membership is revised to exclude them). Flagged here as the probable
+> next archival once its membership is all-terminal, not done unasked.
 
 #### Milestone 1: Downloadable AI Agent Experience — **Complete**; archived to [ARCHIVE.md](ARCHIVE.md).
 
 (Was **Milestone 0** before the 2026-06-03 renumbering pass.) All 7
 designs `Complete`, exit criterion met, closed since March 2026. Full
 detail — goal, design table, exit criterion, actual duration — moved to
-[designs/ARCHIVE.md](ARCHIVE.md) on 2026-08-17 per [AGENTS.md](AGENTS.md)
+[ARCHIVE.md](ARCHIVE.md) on 2026-08-17 per [AGENTS.md](AGENTS.md)
 § *Archiving Completed Milestones*.
 
 ---
@@ -757,9 +761,9 @@ capabilities available to agents.
 | daemon-mount | In Progress | Phases 1-3, 5 on `llm` (commit `e22f71327`); symlink confinement, 20 integration tests; Phase 4 (sub-mounts, snapshot) in PR #135 open, mount extensions in PR #127 open, `followNameChanges` in PR #277 open |
 | daemon-mount-capabilities | Proposed | Complete `EndoMount`: snapshot bridge, mount-scoped descriptors, `makeFile` sibling, entry overloads on `has`/`stat`/`lookup`, trusted backing provenance |
 | daemon-worker-import-from-mount | Proposed | **Integration layer** of a four-layer stack (decomposed 2026-06-02 per kriskowal CHANGES_REQUESTED on #358). `makeFromPackage(mountName)` daemon-worker entry that runs a `package.json`-rooted `EndoMount` through `compartment-mapper.importLocation`; this layer carries `makeFromMount` dispatcher, worker dispatch body, CLI shape, XS bridging, architecture diagram. Sibling of `daemon-make-archive` § Phase 7 (`makeFromTree` for `compartment-map.json`-rooted trees) |
-| registry-capability | Proposed | Layer 1 of 4. `EndoRegistry` capability shape, `@registry` host special name, snapshot-vs-live-read contract, two-backend roadmap (JS reference impl ships first, Rust drop-in deferred to Phase 5). Required `registry` slot on `HostFormula` with one-shot upgrade pass for already-formulated hosts (the `@node` migration precedent) |
-| mvs-resolver | Proposed | Layer 2 of 4. JS reference implementation of Go-like Minimum Version Selection adapted to npm versioning (greatest mentioned minor per major; major-version coexistence admitted). Eager single-pass resolution shape (no per-import bus roundtrips). Lockfile honoring deferred as a follow-up constraint pass |
-| snapshot-mapper | Proposed | Layer 3 of 4. `mapSnapshot` lane in `packages/daemon/` that translates `(RegistryResolution, EndoMount)` into a `CompartmentMap` via `compartment-mapper`'s package-descriptor walker (one new extension point in `compartment-mapper`). `makeMountReadPowers` and the compartment-mapper archive-precedent layout (top-level `compartment-map.json` plus peer directories named by package; `<name>@<version>/` for registry-resolved entries, bare `<name>/` for workspace members) |
+| registry-capability | In Progress | Layer 1 of 4, shipped as `@endo/exo-npm` (renamed from `@endo/registry-capability`; CAS surface split to `@endo/mem-cas` / `@endo/daemon-cas`). `EndoRegistry` capability shape, `@registry` host special name, snapshot-vs-live-read contract, two-backend roadmap (JS reference impl ships first, Rust drop-in deferred to Phase 5). Required `registry` slot on `HostFormula` with one-shot upgrade pass for already-formulated hosts (the `@node` migration precedent) |
+| mvs-resolver | Implemented | Layer 2 of 4, shipped in `@endo/exo-npm` (`./mvs-resolver.js`). JS reference implementation of Go-like Minimum Version Selection adapted to npm versioning (greatest mentioned minor per major; major-version coexistence admitted). Eager single-pass resolution shape (no per-import bus roundtrips). Lockfile honoring deferred as a follow-up constraint pass |
+| snapshot-mapper | Implemented | Layer 3 of 4, shipped in `@endo/exo-npm` (`./snapshot-mapper.js`). `mapSnapshot` lane in `packages/daemon/` that translates `(RegistryResolution, EndoMount)` into a `CompartmentMap` via `compartment-mapper`'s package-descriptor walker (one new extension point in `compartment-mapper`). `makeMountReadPowers` and the compartment-mapper archive-precedent layout (top-level `compartment-map.json` plus peer directories named by package; `<name>@<version>/` for registry-resolved entries, bare `<name>/` for workspace members) |
 | daemon-git-capability | Proposed | Revised git design over `EndoMount` / `EndoMountEntry`; `tree(ref)` and `readOnly()` both live on the `Git` cap |
 | daemon-git-remotes | Proposed | MVP remote-git companion: fetch / pull / push composed from local `Git`, bounded HTTPS transport, endpoint policy, and credential caps |
 | daemon-git-next-steps | Proposed | The version-controlled filesystem loop milestone over the canonical trio: north-star agent loop (provide workspace → read/list/edit → status/diff → commit → pull/push → inspect history via `filesystemAt(ref)`) and the content/versioning/network/historical-read/bulk-storage layer split. Open `- [ ]` work: worked bot-fork reference flow, `provideGitClone` + identity boundary (→ `daemon-git-clone.md`), `tree(ref)`/`filesystemAt(ref)` reconciliation. Agent-tools layer deferred to #416 |
@@ -1757,7 +1761,7 @@ from the top of the document on 2026-08-17 (it previously sat between the
 title and the Summary table). Individual entries are preserved verbatim;
 new passes add a dated entry to the top of this log.
 
-*Groomed 2026-08-17 (verify / reorganize / archive / illuminate pass): ran a full status re-verification of the summary table and milestone rows against real merged/open PR state and the `llm` git log (fan-out across the corpus), and reconciled the drifted totals. Relocated this entire changelog chain from the head of the document to the bottom as `## Changelog` (no entry rewritten). Archived **Milestone 1** (Downloadable AI Agent Experience — all 7 designs Complete, exit criterion met since March) to the new [designs/ARCHIVE.md](ARCHIVE.md), leaving a one-line pointer where its section was, and added the standing archive convention to [AGENTS.md](AGENTS.md) § *Archiving Completed Milestones* so future passes archive completed milestones without being told. Added an **Expected landing order** view and **planned-vs-actual landing** / **estimate-vs-actual date** discrepancy sections to the Roadmap, and a 2026-08-17 calibration note grounding timing in observed fleet velocity (development is now fleet-driven, not the historical single-developer model; the binding constraint is human review latency, and token-budget admission now bounds backlog drain at dispatch). Flagged Milestone 2 as the next archive candidate and listed stale individual design docs as follow-ups rather than revising docs this job was not scoped to touch.*
+*Groomed 2026-08-17 (verify / reorganize / archive / illuminate pass): ran a full status re-verification of the summary table and milestone rows against real merged/open PR state and the `llm` git log (fan-out across the corpus), and reconciled the drifted totals. Relocated this entire changelog chain from the head of the document to the bottom as `## Changelog` (no entry rewritten). Archived **Milestone 1** (Downloadable AI Agent Experience — all 7 designs Complete, exit criterion met since March) to the new [ARCHIVE.md](ARCHIVE.md), leaving a short pointer block where its section was, and added the standing archive convention to [AGENTS.md](AGENTS.md) § *Archiving Completed Milestones* so future passes archive completed milestones without being told. Added an **Expected landing order** view and **planned-vs-actual landing** / **estimate-vs-actual date** discrepancy sections to the Roadmap, and a 2026-08-17 calibration note grounding timing in observed fleet velocity (development is now fleet-driven, not the historical single-developer model; the binding constraint is human review latency, and token-budget admission now bounds backlog drain at dispatch). Flagged Milestone 2 as a likely next archive candidate (noting it does not yet qualify, since two In-Progress re-export designs route to it) and listed stale individual design docs as follow-ups rather than revising docs out of scope for this pass.*
 
 *Layered on 2026-08-16: added [endo-claude](endo-claude.md) to M6 (MCP Bridge
 Hosting): `@endo/claude`, a hermetically-sandboxed `claude -p` that provides an
