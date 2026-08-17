@@ -67,20 +67,15 @@ export const makeContextMaker = ({
 
       const dispose = (async () => {
         await null;
-        const results = await Promise.all(
-          hooks.map(async hook => {
-            try {
-              await hook();
-              return undefined;
-            } catch (failure) {
-              return { failure };
-            }
-          }),
-        );
         /** @type {unknown[]} */
         const failures = [];
-        for (const result of results) {
-          if (result !== undefined) failures.push(result.failure);
+        for (const hook of hooks.reverse()) {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            await hook();
+          } catch (failure) {
+            failures.push(failure);
+          }
         }
         if (failures.length > 0) {
           throw new AggregateError(

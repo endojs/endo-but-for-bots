@@ -179,11 +179,11 @@ test('synchronously throwing onCancel hook does not wedge disposal', async t => 
     instanceOf: AggregateError,
     message: 'Cancellation hooks failed for a:node',
   });
-  t.deepEqual(results, ['first', 'throwing', 'last']);
+  t.deepEqual(results, ['last', 'throwing', 'first']);
   t.deepEqual(aggregate.errors, [failure]);
 });
 
-test('onCancel hooks run all async hooks and settle all failures', async t => {
+test('onCancel hooks run in LIFO order and settle all failures', async t => {
   const { createContext } = setupContextMaker();
   const ctx = createContext(id('a:node'));
 
@@ -209,10 +209,11 @@ test('onCancel hooks run all async hooks and settle all failures', async t => {
     message: 'Cancellation hooks failed for a:node',
   });
   t.deepEqual(results, [
-    'first start',
+    'last',
     'second start',
-    'first end',
     'second end',
+    'first start',
+    'first end',
   ]);
-  t.deepEqual(aggregate.errors, [firstFailure, secondFailure]);
+  t.deepEqual(aggregate.errors, [secondFailure, firstFailure]);
 });
