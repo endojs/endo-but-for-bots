@@ -266,6 +266,43 @@ export const makeInterpreter = allegedDefinition => {
 
     const state = definition.states[runState.state];
     const candidates = candidatesFor(state, type);
+
+    /**
+     * Fire a transition to `target` with the given resulting context.
+     *
+     * @param {string} target
+     * @param {number} guardIndex
+     * @param {Record<string, unknown>} context
+     */
+    const fire = (target, guardIndex, context) =>
+      harden([
+        harden({ ...event }),
+        harden({
+          type: 'transition.fired',
+          from: runState.state,
+          to: target,
+          on: type,
+          guardIndex,
+          context,
+        }),
+        ...enterState(target, context),
+      ]);
+
+    /**
+     * Drive the run to the implicit `failed` final state, journaling the
+     * triggering event and a reason. Returning failure events (rather
+     * than throwing out of `handle`) is essential: a throw would be
+     * swallowed by the engine's serial-queue error handler, leaving the
+     * settlement un-journaled and the run wedged.
+     *
+     * @param {string} reason
+     */
+    const fail = reason =>
+      harden([
+        harden({ ...event }),
+        harden({ type: 'run.finished', final: 'failed', reason }),
+      ]);
+
     for (const [guardIndex, transition] of candidates.entries()) {
       if (!whenMatches(transition.when, event)) {
         // eslint-disable-next-line no-continue
@@ -275,64 +312,56 @@ export const makeInterpreter = allegedDefinition => {
         /** @type {NonNullable<ReturnType<typeof compiled.get>>} */ (
           compiled.get(transition) ?? {}
         );
-      if (guard !== undefined) {
-        const verdict = evaluateExpression(guard, {
-          context: runState.context,
-          event,
-        });
-        if (verdict !== true) {
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-      }
       let context = runState.context;
-      if (assign !== undefined) {
-        const next = evaluateExpression(assign, {
-          context: runState.context,
-          event,
-        });
-        if (typeof next !== 'object' || next === null) {
-          throw makeError(
-            X`assign for ${q(runState.state)} on ${q(type)} must return an object`,
-          );
+      try {
+        if (guard !== undefined) {
+          const verdict = evaluateExpression(guard, {
+            context: runState.context,
+            event,
+          });
+          if (verdict !== true) {
+            // eslint-disable-next-line no-continue
+            continue;
+          }
         }
-        context = /** @type {Record<string, unknown>} */ (next);
+        if (assign !== undefined) {
+          const next = evaluateExpression(assign, {
+            context: runState.context,
+            event,
+          });
+          if (typeof next !== 'object' || next === null) {
+            return fail(
+              `assign for state ${runState.state} on ${type} returned a non-object`,
+            );
+          }
+          context = /** @type {Record<string, unknown>} */ (next);
+        }
+      } catch (error) {
+        // A guard or reducer that throws is a definition bug; fail the
+        // run with a diagnostic rather than skipping the candidate and
+        // wedging (or throwing and being swallowed).
+        return fail(
+          `expression error in state ${runState.state} on ${type}: ${
+            /** @type {Error} */ (error).message
+          }`,
+        );
       }
-      return harden([
-        harden({ ...event }),
-        harden({
-          type: 'transition.fired',
-          from: runState.state,
-          to: transition.target,
-          on: type,
-          guardIndex,
-          context,
-        }),
-        ...enterState(transition.target, context),
-      ]);
+      return fire(transition.target, guardIndex, context);
     }
 
-    // No transition matched.
-    if (type === 'effect.rejected') {
+    // No transition matched. A settlement clears its pending effect in
+    // the fold, so leaving the run here would strand it with no pending
+    // effect, no transition, and no timer — a silent wedge. Route to
+    // onError if declared, else fail the run. (Non-settlement events —
+    // signals, injected audit events — are genuinely inert.)
+    if (SETTLEMENT_TYPES.includes(type)) {
       if (state.onError !== undefined) {
-        return harden([
-          harden({ ...event }),
-          harden({
-            type: 'transition.fired',
-            from: runState.state,
-            to: state.onError,
-            on: type,
-            guardIndex: -1,
-            context: runState.context,
-          }),
-          ...enterState(state.onError, runState.context),
-        ]);
+        return fire(state.onError, -1, runState.context);
       }
-      // An unhandled rejection fails the run.
-      return harden([
-        harden({ ...event }),
-        harden({ type: 'run.finished', final: 'failed' }),
-      ]);
+      const asSuffix = typeof event.as === 'string' ? ` for ${event.as}` : '';
+      return fail(
+        `no transition handles ${type}${asSuffix} in state ${runState.state}`,
+      );
     }
     // Inert: journaled for the audit log, no state change.
     return harden([harden({ ...event })]);

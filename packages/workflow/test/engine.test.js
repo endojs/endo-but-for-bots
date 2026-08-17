@@ -92,7 +92,7 @@ const flush = async (rounds = 20) => {
   }
 };
 
-const makeHarness = async (storeRoot = undefined) => {
+const makeHarness = async (storeRoot = undefined, rebind = undefined) => {
   await null;
   const fs = makeInMemoryFilesystem();
   const root =
@@ -114,7 +114,7 @@ const makeHarness = async (storeRoot = undefined) => {
       return String(idCounter);
     },
     makeTimer: fake.makeTimer,
-    rebindParticipants: async () => featureChangeParticipants,
+    rebindParticipants: rebind ?? (async () => featureChangeParticipants),
     warn: () => {},
   });
   return { engine, stub, fake, root };
@@ -411,6 +411,95 @@ test('spawned children report output to the parent and abort cascades down', asy
     summary => summary.runId === /** @type {any} */ (liveChild).runId,
   );
   t.is(/** @type {any} */ (childAfter).final, 'aborted');
+});
+
+const spawnChild = harden({
+  name: 'spawn-child',
+  version: 1,
+  participants: { worker: { description: 'w' } },
+  initial: 'asking',
+  states: {
+    asking: {
+      entry: [{ effect: 'request', to: 'worker', as: 'answer' }],
+      onError: 'broken',
+      on: {
+        'effect.settled': {
+          when: { as: 'answer' },
+          assign: '({ context, event }) => ({ ...context, a: event.value })',
+          target: 'done',
+        },
+      },
+    },
+    done: { final: 'succeeded', output: '({ context }) => context.a' },
+    broken: { final: 'failed' },
+  },
+});
+const spawnParent = harden({
+  name: 'spawn-parent',
+  version: 1,
+  participants: { worker: { description: 'w' } },
+  initial: 'delegating',
+  states: {
+    delegating: {
+      entry: [
+        {
+          effect: 'spawn',
+          workflow: 'spawn-child',
+          participants: { worker: 'worker' },
+          input: '({ context }) => ({})',
+          as: 'sub',
+        },
+      ],
+      onError: 'failed',
+      on: {
+        'child.finished': [
+          {
+            when: { as: 'sub', final: 'succeeded' },
+            assign:
+              '({ context, event }) => ({ ...context, got: event.output })',
+            target: 'done',
+          },
+          { when: { as: 'sub' }, target: 'failed' },
+        ],
+      },
+    },
+    done: { final: 'succeeded' },
+    failed: { final: 'failed' },
+  },
+});
+
+test('a restart with a pending spawn resumes the one child, never double-spawns', async t => {
+  const rebind = async () => harden({ worker: 'the-worker' });
+  const first = await makeHarness(undefined, rebind);
+  await E(first.engine.service).define('spawn-child', spawnChild);
+  await E(first.engine.service).define('spawn-parent', spawnParent);
+  const { runId } = await E(first.engine.service).start('spawn-parent', {
+    participants: { worker: 'the-worker' },
+  });
+  await flush();
+  // One child exists, one worker request outstanding.
+  t.is(first.stub.inbox.filter(e => e.kind === 'request').length, 1);
+
+  // Restart while the child's request is still pending.
+  const second = await makeHarness(first.root, rebind);
+  await flush();
+
+  // Exactly one child run for the parent, and exactly one worker request
+  // was re-issued — not two. (Pre-fix, recovery re-issued the parent's
+  // pending spawn and started a second child.)
+  const allRuns = await E(second.engine.service).runs();
+  const children = allRuns.filter(s => s.parent === runId);
+  t.is(children.length, 1);
+  t.is(second.stub.inbox.filter(e => e.kind === 'request').length, 1);
+
+  // Settling the one request drives the recovered child to done, which
+  // notifies the recovered parent exactly once.
+  second.stub.take(e => e.kind === 'request').resolve(7);
+  await flush();
+  const parentObserver = await E(second.engine.service).run(runId);
+  const status = await E(parentObserver).status();
+  t.is(status.state, 'done');
+  t.is(status.context.got, 7);
 });
 
 test('after timers fire through the fake clock and admin pause defers events', async t => {

@@ -74,6 +74,14 @@ const isJournalableData = value => {
     if (proto !== Object.prototype && proto !== null) {
       return false;
     }
+    // Symbol-keyed properties can carry capabilities, and both this
+    // check (`Object.values`) and `canonicalJson` (`Object.entries`)
+    // ignore them — so a value bearing any symbol key cannot be
+    // faithfully journaled and must be aliased, or a capability would
+    // ride a symbol key into the run untraced.
+    if (Object.getOwnPropertySymbols(value).length > 0) {
+      return false;
+    }
     return Object.values(value).every(isJournalableData);
   }
   return false;
@@ -295,6 +303,23 @@ export const makeWorkflowEngine = async powers => {
     const alias = `ref:${run.refs.size + 1}`;
     run.refs.set(alias, value);
     return { ref: alias };
+  };
+
+  /**
+   * Journalable form/signal payload that preserves the reducer contract
+   * (`event.values.field`) in the common case: a data record passes
+   * through unchanged, but a payload carrying a capability is replaced
+   * by its opaque alias string (the reducer then reads `undefined` for
+   * its fields and a guard fails closed — a form reply must never smuggle
+   * a live capability into the journal or an observer's `status()`).
+   *
+   * @param {LiveRun} run
+   * @param {unknown} value
+   * @returns {unknown}
+   */
+  const journalablePayload = (run, value) => {
+    const aliased = aliasValue(run, value);
+    return 'value' in aliased ? aliased.value : aliased.ref;
   };
 
   /**
@@ -532,7 +557,11 @@ export const makeWorkflowEngine = async powers => {
         values =>
           dispatch(
             run,
-            harden({ type: 'form.value', as, values: harden(values) }),
+            harden({
+              type: 'form.value',
+              as,
+              values: journalablePayload(run, values),
+            }),
           ),
         rejected,
       );
@@ -651,7 +680,44 @@ export const makeWorkflowEngine = async powers => {
     }
   };
 
-  onFinished = (run, final) => {
+  /**
+   * Deliver a finished child's outcome to its parent as a
+   * `child.finished` event. Used both live (`onFinished`) and during
+   * recovery (for a child that finished before a crash without its
+   * completion reaching the parent's journal).
+   *
+   * @param {LiveRun} parentRun
+   * @param {LiveRun} child
+   */
+  const deliverChildFinished = (parentRun, child) => {
+    if (child.parent === undefined) {
+      return;
+    }
+    const final = /** @type {WorkflowFinal} */ (child.runState.final);
+    const output =
+      final === 'succeeded'
+        ? child.interpreter.outputOf(
+            child.runState.state,
+            child.runState.context,
+          )
+        : undefined;
+    const journaled = output === undefined ? {} : aliasValue(parentRun, output);
+    dispatch(
+      parentRun,
+      harden({
+        type: 'child.finished',
+        as: child.parent.as,
+        final,
+        ...('ref' in journaled
+          ? { ref: journaled.ref }
+          : 'value' in journaled
+            ? { output: journaled.value }
+            : {}),
+      }),
+    );
+  };
+
+  onFinished = (run, _final) => {
     if (run.cancelTimer !== undefined) {
       run.cancelTimer();
       run.cancelTimer = undefined;
@@ -670,25 +736,7 @@ export const makeWorkflowEngine = async powers => {
       const parentRun = runs.get(run.parent.parentRunId);
       if (parentRun !== undefined) {
         parentRun.children.delete(run.runId);
-        const output =
-          final === 'succeeded'
-            ? run.interpreter.outputOf(run.runState.state, run.runState.context)
-            : undefined;
-        const journaled =
-          output === undefined ? {} : aliasValue(parentRun, output);
-        dispatch(
-          parentRun,
-          harden({
-            type: 'child.finished',
-            as: run.parent.as,
-            final,
-            ...('ref' in journaled
-              ? { ref: journaled.ref }
-              : 'value' in journaled
-                ? { output: journaled.value }
-                : {}),
-          }),
-        );
+        deliverChildFinished(parentRun, run);
       }
     }
   };
@@ -823,7 +871,16 @@ export const makeWorkflowEngine = async powers => {
        * @param {Record<string, unknown>} [payload]
        */
       signal: (name, payload = {}) => {
-        dispatch(run, harden({ type: `signal.${name}`, payload }));
+        // Alias any capability in the payload: a controller must not use
+        // signals to plant a live cap for a lower-privilege observer to
+        // read back out of the journal or `status()`.
+        dispatch(
+          run,
+          harden({
+            type: `signal.${name}`,
+            payload: journalablePayload(run, payload),
+          }),
+        );
         return undefined;
       },
     };
@@ -1178,8 +1235,6 @@ export const makeWorkflowEngine = async powers => {
   // #region Recovery
 
   const recover = async () => {
-    /** @type {{ resumed: number, reissued: number, indeterminate: number }} */
-    const tally = { resumed: 0, reissued: 0, indeterminate: 0 };
     // Reload registries.
     {
       const names = await readJson(definitionsDirectory, NAMES_FILE);
@@ -1274,12 +1329,14 @@ export const makeWorkflowEngine = async powers => {
       };
       run.facets = makeRunFacets(run);
       runs.set(name, run);
-      tally.resumed += 1;
     }
     // Wire children and re-issue pending effects.
+    /** @type {Map<string, LiveRun>} (parentRunId, spawn-as) -> child run */
+    const childByParentAs = new Map();
     for (const run of runs.values()) {
       if (run.parent !== undefined) {
         runs.get(run.parent.parentRunId)?.children.add(run.runId);
+        childByParentAs.set(`${run.parent.parentRunId}\n${run.parent.as}`, run);
       }
     }
     for (const run of runs.values()) {
@@ -1315,30 +1372,47 @@ export const makeWorkflowEngine = async powers => {
           .filter(record => record.type === 'effect.issued')
           .map(record => [record.as, record]),
       );
+      // Per-run counts so each run's `recovery.completed` reflects its
+      // own resumption, not the engine-wide aggregate.
+      let reissued = 0;
+      let indeterminate = 0;
       for (const pending of Object.values(run.runState.pending)) {
         const issued = issuedByAs.get(pending.as);
         if (issued === undefined) {
           // eslint-disable-next-line no-continue
           continue;
         }
+        if (pending.effect === 'spawn') {
+          // Re-issuing a spawn would start a SECOND child. Only re-spawn
+          // when no child exists for this correlation (the spawn never
+          // completed before the crash). If the child exists and already
+          // finished without its completion reaching us, deliver it now;
+          // if it is still live, its own completion will notify us.
+          const child = childByParentAs.get(`${run.runId}\n${pending.as}`);
+          if (child === undefined) {
+            reissued += 1;
+            executeEffect(run, issued, true);
+          } else if (child.runState.final !== undefined) {
+            deliverChildFinished(run, child);
+          }
+          // eslint-disable-next-line no-continue
+          continue;
+        }
         if (pending.effect === 'call' && issued.idempotent !== true) {
-          tally.indeterminate += 1;
+          indeterminate += 1;
         } else {
-          tally.reissued += 1;
+          reissued += 1;
         }
         executeEffect(run, issued, true);
       }
       armTimer(run);
       enqueue(run, async () => {
         await commit(run, [
-          harden({ type: 'recovery.completed', ...tallySnapshot(tally) }),
+          harden({ type: 'recovery.completed', reissued, indeterminate }),
         ]);
       });
     }
   };
-
-  /** @param {{ resumed: number, reissued: number, indeterminate: number }} tally */
-  const tallySnapshot = tally => harden({ ...tally });
 
   // #endregion
 

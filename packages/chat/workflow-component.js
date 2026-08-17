@@ -40,9 +40,10 @@ export const workflowComponent = (
   for (const name of profilePath) {
     resolvedPowers = E(/** @type {any} */ (resolvedPowers)).lookup(name);
   }
-  const service = E(/** @type {any} */ (resolvedPowers)).lookup(
-    ...workflowPath,
-  );
+  // `lookup` takes a single name-or-path argument (its guard rejects
+  // extra positionals), so a multi-segment path must be passed as one
+  // array, not spread — spreading silently broke every slash path.
+  const service = E(/** @type {any} */ (resolvedPowers)).lookup(workflowPath);
 
   // Dedicated mount child so teardown removes exactly what we added.
   const $mount = $parent.ownerDocument.createElement('div');

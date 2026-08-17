@@ -138,26 +138,34 @@ export const inlineFragments = (definition, fragmentsByName) => {
       /** @type {StateDeclaration} */
       const inlined = { ...state };
       if (state.entry !== undefined) {
+        const where = `${use.fragment}.${stateName}`;
         inlined.entry = state.entry.map(effect =>
           harden({
             ...effect,
             ...(effect.to === undefined
               ? {}
-              : {
-                  to: rebindReference(
-                    effect.to,
-                    bind,
-                    `${use.fragment}.${stateName}`,
-                  ),
-                }),
+              : { to: rebindReference(effect.to, bind, where) }),
             ...(effect.attach === undefined
               ? {}
               : {
                   attach: effect.attach.map(reference =>
-                    rebindReference(
-                      reference,
-                      bind,
-                      `${use.fragment}.${stateName}`,
+                    rebindReference(reference, bind, where),
+                  ),
+                }),
+            // A `spawn` effect carries participant references in its
+            // `participants` map; these must be rebound through the
+            // fragment's `bind` interface too, or a fragment could reach
+            // an outer slot it was never granted (authority escalation
+            // across the fragment boundary).
+            ...(effect.participants === undefined
+              ? {}
+              : {
+                  participants: Object.fromEntries(
+                    Object.entries(effect.participants).map(
+                      ([childSlot, parentReference]) => [
+                        childSlot,
+                        rebindReference(parentReference, bind, where),
+                      ],
                     ),
                   ),
                 }),
