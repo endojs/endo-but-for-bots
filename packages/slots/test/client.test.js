@@ -200,6 +200,25 @@ test('object delivery whose leading arg is not a selector rejects', async t => {
   await t.throwsAsync(() => replyP, { message: /must be a symbol/ });
 });
 
+test('object delivery whose leading selector is a reserved symbol rejects on receipt', async t => {
+  const { a, b } = makeLoopback();
+
+  const target = Far('target', { greet: () => 'hi' });
+  const targetDesc = b.clist.exportLocal(target, Kind.Object);
+  const presence = a.client.makePresence({
+    ...targetDesc,
+    direction: Direction.Remote,
+  });
+
+  // A well-behaved sender never mints a reserved (`@@`, well-known)
+  // selector, but the receiver does not trust the wire: it validates
+  // the leading selector independently.  Send a raw vector whose
+  // leading element is a well-known symbol and assert receipt rejects
+  // it rather than dispatching.
+  const replyP = a.client.deliver(presence, [Symbol.asyncIterator]);
+  await t.throwsAsync(() => replyP, { message: /reserved for well-known/ });
+});
+
 test('symbol-named methods are rejected before send', async t => {
   const { a, b } = makeLoopback();
 

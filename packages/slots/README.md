@@ -82,32 +82,44 @@ mirroring `@endo/ocapn`'s client (`packages/ocapn/src/client/ocapn.js`,
   no wire selector, so slot-machine rejects it at the sender rather
   than delivering it.
 
-On receipt the target's own shape decides dispatch, exactly as
+The convention is **enforced independently on receipt** — the receiver
+does not rely on the wire (or a well-behaved sender) to have honoured
+it.  On receipt the target's own shape decides dispatch, exactly as
 `@endo/ocapn`'s `invokeDeliver` does:
 
 - a **function** Exo receives the complete argument vector through
   `applyFunction`;
 - an **object** Exo validates and decodes the leading selector to a
-  string method name and dispatches through `applyMethod`.  A
-  malformed or non-selector leading argument is rejected.
+  string method name and dispatches through `applyMethod`.  A leading
+  argument that is not a passable symbol, that decodes to no registered
+  name, or whose name is reserved (`@@`, the well-known symbols) is
+  rejected by `getSelectorName` regardless of what the peer sent.
 
 There is no `__call__` sentinel and no `[method, args]` body shape —
 both are retired in favour of the flat vector above.
 
-**Property access (`__get__`) stays a private slot-machine
-convention.**  `E(p).prop` resolves through a `deliver` of a
-conventional `__get__` string method carrying the property name as its
-sole argument (so, like any method call, its selector is prepended).
-This is deliberately **not** promoted to a distinct OCapN operation:
-OCapN models field access with dedicated `op:get` / `op:index` opcodes
-against `Struct` / `List` targets, but slot-machine's body is a single
-opaque marshalled vector with no separate get/index verbs, and a
-distinct verb would have to be mirrored in the Rust supervisor's verb
-set (`rust/endo/slots/src/wire`). Carrying get-as-call keeps the
-four-verb bus (`deliver` / `resolve` / `drop` / `abort`) intact and
-the property name private to the two peers. Promoting it to a first-
-class OCapN operation is left as future work should slot-machine ever
-need to interoperate with an OCapN peer that distinguishes them.
+**Property access (`op:get`) today rides on `deliver`; the separate
+OCapN lanes are the target shape.**  OCapN provides `op:get`,
+`op:index`, and `op:untag` as lanes distinct from message delivery
+(field access, positional indexing, and tag stripping against
+`Struct` / `List` / tagged targets).  Slot-machine's intent is to
+**emulate those lanes too**.  What is modelled *today* is only
+`op:get`, and only because it is the single such lane that JavaScript
+eventual-send exposes: `E(p).prop` is the sole non-delivery operation
+`HandledPromise`/`E` can express (`HandledPromise.get`), so it is the
+only one there is a JS surface to carry.  It currently resolves through
+a `deliver` of a conventional `__get__` string method carrying the
+property name as its sole argument (so, like any method call, its
+selector is prepended), which keeps the four-verb bus (`deliver` /
+`resolve` / `drop` / `abort`) intact.
+
+`op:index` and `op:untag` have **no eventual-send surface** to invoke
+them from JavaScript yet, so they are not modelled; and promoting even
+`op:get` to a first-class wire operation (rather than the `__get__`
+call it is carried as today) would have to be mirrored in the Rust
+supervisor's verb set (`rust/endo/slots/src/wire`).  Designing the
+distinct-lane emulation — including any eventual-send extension needed
+to express `op:index` / `op:untag` — is tracked as follow-up work.
 
 ## Daemon integration
 
