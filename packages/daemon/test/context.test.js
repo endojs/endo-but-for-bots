@@ -1,7 +1,6 @@
 // @ts-nocheck
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { setTimeout } from 'node:timers';
 import { makeContextMaker } from '../src/context.js';
 
 /** @typedef {import('../src/types.js').FormulaIdentifier} FormulaIdentifier */
@@ -121,22 +120,30 @@ test('onCancel after cancel is a no-op', async t => {
   t.false(lateHookRan, 'hook registered after cancel should not run');
 });
 
-test('thatDiesIfThisDies after cancel is a no-op', async t => {
+test('thatDiesIfThisDies after cancel cancels the dependent', async t => {
   const { createContext } = setupContextMaker();
   const parent = createContext(id('parent:node'));
   const child = createContext(id('child:node'));
 
-  await parent.cancel(new Error('already done'));
+  const reason = new Error('already done');
+  const hookFailure = new Error('late dependent hook failure');
+  child.onCancel(() => {
+    throw hookFailure;
+  });
+  await parent.cancel(reason);
 
-  // Registering a dependent after cancel should not throw.
-  parent.thatDiesIfThisDies(id('child:node'));
-  // Child should NOT have been cancelled (parent was already done).
-  // We verify by checking that child.cancelled has not been rejected.
-  const raceResult = await Promise.race([
-    child.cancelled.then(() => 'resolved').catch(() => 'rejected'),
-    new Promise(resolve => setTimeout(() => resolve('pending'), 50)),
-  ]);
-  t.is(raceResult, 'pending', 'child should remain uncancelled');
+  let childCancellationReason;
+  child.cancelled.catch(error => {
+    childCancellationReason = error;
+  });
+  t.notThrows(() => parent.thatDiesIfThisDies(id('child:node')));
+  await null;
+  t.is(childCancellationReason, reason);
+  const aggregate = await t.throwsAsync(() => child.disposed, {
+    instanceOf: AggregateError,
+    message: 'Cancellation hooks failed for child:node',
+  });
+  t.deepEqual(aggregate.errors, [hookFailure]);
 });
 
 test('cancel removes controller from map', async t => {
