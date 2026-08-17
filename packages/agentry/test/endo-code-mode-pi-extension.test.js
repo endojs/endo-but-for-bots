@@ -8,7 +8,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import fc from 'fast-check';
 
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execPath } from 'node:process';
@@ -590,6 +590,43 @@ test('new and fork create distinct retained namespaces; fork inherits policy', a
     [],
     ['read', 'write', 'edit', 'bash', 'evaluate'],
   ]);
+});
+
+test('resume and fork use pinned Git roots after a selector is retargeted', async t => {
+  const cwd = await makeWorkspace(t);
+  const nested = join(cwd, 'nested-repo');
+  const replacement = join(cwd, 'replacement-repo');
+  const selector = join(cwd, 'nested-link');
+  await mkdir(nested);
+  await mkdir(replacement);
+  await symlink(nested, selector, 'dir');
+  const stored = await normalizeEndoProvisionSpec(
+    {
+      fs: 'readOnly',
+      gits: { nested: { path: ['nested-link'], mode: 'readOnly' } },
+    },
+    { harness: 'pi', sessionId: 'retained-session', cwd },
+  );
+  await rm(selector, { force: true });
+  await symlink(replacement, selector, 'dir');
+
+  for (const reason of ['resume', 'fork']) {
+    const harness = makeHarness({
+      cwd,
+      mode: 'json',
+      sessionId: reason === 'resume' ? 'retained-session' : 'fork-session',
+      entries: [persistenceEntry(stored)],
+    });
+    // The two lifecycle modes intentionally run serially against the same
+    // retargeted selector fixture.
+    // eslint-disable-next-line no-await-in-loop
+    await harness.emit('session_start', {
+      type: 'session_start',
+      reason,
+    });
+    t.is(harness.reconstructions.length, 1);
+    t.deepEqual(harness.reconstructions[0].policy, stored.policy);
+  }
 });
 
 test('resume rejects a conflicting CLI policy with fork/new guidance', async t => {

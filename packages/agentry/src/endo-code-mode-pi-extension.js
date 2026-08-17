@@ -10,6 +10,7 @@ import { makeDaemonEvaluate } from '@endo/agent-tools/code-mode/daemon.js';
 import { makeEvaluateTool } from '@endo/agent-tools/code-mode/evaluate-tool.js';
 import { start } from '@endo/daemon';
 
+import { relative, sep } from 'node:path';
 import { exit, stderr } from 'node:process';
 
 import { makeCodeModeSystemPrompt } from './code-mode.js';
@@ -107,6 +108,52 @@ const hasSameAuthority = (left, right) =>
   samePlainData(left.policy, right.policy);
 
 /**
+ * Compare authority after ignoring the lexical spelling of Git selectors.
+ * Their canonical roots are the authority-bearing fields, and are checked by
+ * the normalizer against the pinned roots before this comparison.
+ *
+ * @param {EndoProvisionPersistence} persistence
+ * @returns {{ workspacePath: string, policy: EndoProvisionPersistence['policy'] }}
+ */
+const canonicalAuthority = persistence =>
+  harden({
+    workspacePath: persistence.workspacePath,
+    policy: harden({
+      ...persistence.policy,
+      ...(persistence.policy.gits === undefined
+        ? {}
+        : {
+            gits: Object.fromEntries(
+              Object.entries(persistence.policy.gits).map(([name, grant]) => [
+                name,
+                { ...grant, path: [] },
+              ]),
+            ),
+          }),
+    }),
+  });
+
+/**
+ * @param {EndoProvisionPersistence} left
+ * @param {EndoProvisionPersistence} right
+ * @returns {boolean}
+ */
+const hasSameCanonicalAuthority = (left, right) =>
+  samePlainData(canonicalAuthority(left), canonicalAuthority(right));
+
+/**
+ * Rebuild a Git selector from the pinned canonical roots in persistence.
+ *
+ * @param {string} mountRoot
+ * @param {string} grantRoot
+ * @returns {string[]}
+ */
+const canonicalGitPath = (mountRoot, grantRoot) => {
+  const path = relative(mountRoot, grantRoot);
+  return path === '' ? [] : path.split(sep);
+};
+
+/**
  * Recreate inert input from validated persistence. This is used for forked
  * sessions so the new Pi session id selects a new retained guest namespace
  * while authority remains byte-for-byte equivalent after normalization.
@@ -161,7 +208,14 @@ const persistenceToSpec = persistence =>
               .filter(([name]) => name !== 'git')
               .map(([name, grant]) => [
                 name,
-                { mount: grant.mount, path: grant.path, mode: grant.mode },
+                {
+                  mount: grant.mount,
+                  path: canonicalGitPath(
+                    persistence.policy.mounts[grant.mount].root,
+                    grant.root,
+                  ),
+                  mode: grant.mode,
+                },
               ]),
           ),
         }),
@@ -569,13 +623,16 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
               }
             }
 
-            let derived;
+            let normalizedDerived;
             try {
-              derived = await normalizeProvision(persistenceToSpec(stored), {
-                harness: 'pi',
-                sessionId,
-                cwd: stored.workspacePath,
-              });
+              normalizedDerived = await normalizeProvision(
+                persistenceToSpec(stored),
+                {
+                  harness: 'pi',
+                  sessionId,
+                  cwd: stored.workspacePath,
+                },
+              );
             } catch {
               throw new EndoPiLifecycleError(
                 'ENDO_PROVISION_SESSION_INVALID',
@@ -583,13 +640,20 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
                 'Start a new session from a valid inert provision policy.',
               );
             }
-            if (!hasSameAuthority(derived, stored)) {
+            if (!hasSameCanonicalAuthority(normalizedDerived, stored)) {
               throw new EndoPiLifecycleError(
                 'ENDO_PROVISION_SESSION_INVALID',
                 'This session authority does not normalize to its persisted policy.',
                 'Start a new session; authority is never widened during recovery.',
               );
             }
+            // Keep the persisted selector spelling after validating its
+            // canonical root, so resume and fork retain the same authority
+            // record rather than rewriting its inert representation.
+            const derived = harden({
+              ...normalizedDerived,
+              policy: stored.policy,
+            });
 
             if (event.reason === 'fork') {
               desired = derived;
