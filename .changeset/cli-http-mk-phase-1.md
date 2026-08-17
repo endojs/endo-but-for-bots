@@ -42,3 +42,11 @@ still retains it (for example it was granted to a guest under another name).
 Revocation of a still-referenced client lands with a later verb.
 
 Policy mutation and revocation are not yet exposed on the CLI.
+
+Known Phase-1 limitation: the minted client registers and is inspectable, but
+cannot yet complete a real outbound request on the `llm` code path. Under the
+daemon's SES lockdown, `@endo/http-confine` hardens the live platform `Response`
+before `@endo/exo-http-client` reads its headers, and undici's `Headers`
+iterator throws on a frozen instance. Completing a live request depends on the
+`http-confine` inert-response-snapshot fix (PR #286), which is not carried here;
+see `designs/cli-http-client.md` for the durable analysis.

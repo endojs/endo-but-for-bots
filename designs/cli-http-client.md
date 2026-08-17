@@ -49,7 +49,7 @@ The landed verb is therefore a **policy front-end** over that one call:
 ```
 endo http mk <name> --origin <origin> [--origin <origin>...]
   [--max-requests-per-minute <n>] [--max-response-bytes <n>]
-  [--policy-mode strict|tofu-auto] [--as <agent>]
+  [--policy-mode strict|tofu-auto [--acknowledge-unbounded]] [--as <agent>]
 ```
 
 `mk` assembles the policy record from its flags (`--origin` is required and
@@ -106,21 +106,36 @@ HTTP adapter pipeline,
 the guard knobs `mk` exposes (`--max-requests-per-minute`, `--max-response-bytes`)
 are the confinement floor, not that metering surface.
 
-**Deferred, not carried: the #286 `http-confine` inert-response-snapshot fix.**
-PR #286 also changed `packages/http-confine/src/http-confine.js` to return an
-inert response snapshot instead of the live platform `Response`, dodging a
-Node-22 undici `Cannot assign to read only property 'Symbol(headers map
-sorted)'` when `harden()` freezes the live `Headers`. That change is not on
-`llm`, its relevance to the `llm` code path (where `@endo/exo-http-client`
-already snapshots headers via `headersToRecord` and never sends the live
-`Response` across CapTP) is unverified, and no test in this PR issues a request
-through the confined client — the new tests mint a client but never dial out —
-so the `harden(Headers)` crash path is never reached here regardless of Node
-version. (CI matrixes Node 22.x and 24.18.0, and `packages/cli` supports
-`^20.17.0 || >=22.9.0`, so Node 22 is exercised; the crash simply is not on any
-path this PR's tests take.) It is a plausible independent Node-22 parity fix and
-should land separately on its own merits with a Node-22 reproduction; this note
-is its durable record outside the superseding PR's description.
+**Known limitation: the Phase-1 client cannot yet complete a real request; the
+#286 `http-confine` inert-response-snapshot fix is not carried here.**
+PR #286 changed `packages/http-confine/src/http-confine.js` to return an inert
+response snapshot instead of the live platform `Response`, dodging an undici
+`Cannot assign to read only property 'Symbol(headers map sorted)'` that fires
+when `harden()` freezes the live `Headers`. That change is **not** on `llm`, and
+this PR does not carry it — so on `llm`, a real dial-out through the minted
+client still crashes. Contrary to an earlier draft of this note, the crash is
+**not** avoided by `@endo/exo-http-client` snapshotting headers: under the
+daemon's SES lockdown, `http-confine`'s `request()` returns
+`freeze({ response, ... })` where `freeze` is `harden` (`http-confine.js` binds
+`freeze = typeof harden === 'function' ? harden : Object.freeze`), so it
+**deep-hardens the live undici `Response`** before anything reads it —
+independent of CapTP, which never enters that object. `exo-http-client`'s
+`headersToRecord` (`src/http-client.js`) then iterates the now-frozen `Headers`
+and throws, because undici's `Headers` iterator mutates an internal sorted-map
+cache on read. So Phase 1's client can mint and register, but cannot complete an
+outbound request against a real platform `fetch` until #286's inert
+header-snapshot (or an equivalent snapshot before `freeze`) lands.
+
+Every existing suite is green only because each test injects a **stub** `fetch`
+whose `headers` is a plain record — no test ever hardens a platform `Response`,
+and none of the new `endo http mk` tests dial out (they mint a client but never
+issue a request), so the crash path is exercised by no test here. That is a
+coverage gap, not a refutation: the crash is real on the live path. The
+inert-response-snapshot fix is a Node/undici parity fix that should land
+separately on its own merits with a reproduction; this note is its durable
+record, and the changeset states the Phase-1 limitation for release readers.
+(CI matrixes Node 22.x and 24.18.0, and `packages/cli` supports
+`^20.17.0 || >=22.9.0`.)
 
 Consequences for the rest of this document: the **controller/client facet split
 and method placement remain the normative model** for where policy-mutation vs

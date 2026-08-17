@@ -91,6 +91,8 @@ The `-a`/`--as` flag on any command means "pose as named agent"
   `--origin` is required and repeatable. Host-only: `--as` must name a host, not
   a guest. Optional `--max-requests-per-minute <n>` and `--max-response-bytes <n>`
   cap the client. `--policy-mode strict` (default) confines the client to the
-  listed origins; `--policy-mode tofu-auto` auto-allows any first-seen origin, so
-  the allowlist stops bounding outbound reach and it must be confirmed with
-  `--acknowledge-unbounded`.
+  listed origins. A separate `tofu-auto` mode auto-allows any first-seen origin —
+  it removes the allowlist's outbound bound, so it is an unbounded grant that
+  needs the operator's own judgment and an explicit confirmation; run
+  `endo http mk --help` for its exact flag spelling rather than using it
+  unprompted.
