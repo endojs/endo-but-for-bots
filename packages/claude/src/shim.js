@@ -37,18 +37,18 @@ export const makeMcpShim = ({ forward }) => {
    * Handle one parsed JSON-RPC request object. Returns the response object, or
    * `undefined` for a notification (no id).
    *
-   * @param {any} msg
+   * @param {any} message
    * @returns {Promise<object | undefined>}
    */
-  const handleMessage = async msg => {
-    if (!msg || typeof msg !== 'object' || msg.jsonrpc !== '2.0') {
+  const handleMessage = async message => {
+    if (!message || typeof message !== 'object' || message.jsonrpc !== '2.0') {
       return {
         jsonrpc: '2.0',
-        id: msg && msg.id !== undefined ? msg.id : null,
+        id: message && message.id !== undefined ? message.id : null,
         error: { code: -32_600, message: 'Invalid Request' },
       };
     }
-    const { id, method, params } = msg;
+    const { id, method, params } = message;
     const isNotification = id === undefined || id === null;
 
     await null; // await-separator: keep the first (forward) await unnested.
@@ -85,9 +85,9 @@ export const makeMcpShim = ({ forward }) => {
           };
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const detail = err instanceof Error ? err.message : String(err);
       if (isNotification) return undefined;
-      return { jsonrpc: '2.0', id, error: { code: -32_000, message } };
+      return { jsonrpc: '2.0', id, error: { code: -32_000, message: detail } };
     }
   };
 
@@ -101,9 +101,9 @@ export const makeMcpShim = ({ forward }) => {
   const handleLine = async line => {
     const trimmed = line.trim();
     if (trimmed.length === 0) return undefined;
-    let msg;
+    let message;
     try {
-      msg = JSON.parse(trimmed);
+      message = JSON.parse(trimmed);
     } catch {
       return `${JSON.stringify({
         jsonrpc: '2.0',
@@ -111,7 +111,7 @@ export const makeMcpShim = ({ forward }) => {
         error: { code: -32_700, message: 'Parse error' },
       })}\n`;
     }
-    const response = await handleMessage(msg);
+    const response = await handleMessage(message);
     if (response === undefined) return undefined;
     return `${JSON.stringify(response)}\n`;
   };
