@@ -80,10 +80,15 @@ fn gc_cost_across_heap_sizes() {
 
         // partial_collect at a clean boundary, store-backed. (One
         // machine per round: partial collection mutates the free
-        // list.)
+        // list.) The split rounds replicate the collector's three
+        // phases — root enumeration (the O(live) side-table walk),
+        // the store decision query, the page free — so the numbers
+        // say WHICH term dominates at each size.
         let mut partial_ms = Vec::new();
+        let mut enum_ms = Vec::new();
+        let mut query_ms = Vec::new();
         let mut freed_last = 0;
-        for _ in 0..5 {
+        for round in 0..5 {
             let mut store = MemoryStore::new();
             let mut m = Interp::new();
             m.link_intrinsics(&names);
@@ -91,6 +96,30 @@ fn gc_cost_across_heap_sizes() {
             let mut session = begin_store_session(m, &sig(), &mut store)
                 .map_err(|(_, e)| e)
                 .unwrap();
+            if round == 0 {
+                // Phase split, measured on the round whose end-to-end
+                // time is discarded (the split itself perturbs it).
+                let interp = session.machine();
+                let t0 = Instant::now();
+                let mut roots: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+                for r in interp.gc_roots() {
+                    if !r.is_null() {
+                        roots.insert(r.0 / ironhorse_vm::SLOTS_PER_PAGE);
+                    }
+                }
+                for r in interp.side_table_ref_slots() {
+                    if !r.is_null() {
+                        roots.insert(r.0 / ironhorse_vm::SLOTS_PER_PAGE);
+                    }
+                }
+                enum_ms.push(t0.elapsed().as_secs_f64() * 1e3);
+                let roots: Vec<u32> = roots.into_iter().collect();
+                let t1 = Instant::now();
+                let reached = store.reachable_page_set(&roots).unwrap();
+                query_ms.push(t1.elapsed().as_secs_f64() * 1e3);
+                assert!(!reached.is_empty());
+                continue;
+            }
             let t0 = Instant::now();
             freed_last = partial_collect(&mut session, &store).unwrap();
             partial_ms.push(t0.elapsed().as_secs_f64() * 1e3);
@@ -110,13 +139,16 @@ fn gc_cost_across_heap_sizes() {
 
         println!(
             "slots={:>7} pages={:>5} | full-first {:>8.3} ms | full-steady {:>8.3} ms | \
-             partial {:>7.3} ms (freed {}) | free-list {:>7} | collect/slot {:>6.1} ns",
+             partial {:>7.3} ms (freed {}; enum {:.3} ms, query {:.3} ms) | \
+             free-list {:>7} | collect/slot {:>6.1} ns",
             slots_total,
             slot_page_count(slots_total),
             median(first_ms),
             median(steady_ms),
             median(partial_ms),
             freed_last,
+            enum_ms[0],
+            query_ms[0],
             free_len,
             sweep_ns_per_slot,
         );

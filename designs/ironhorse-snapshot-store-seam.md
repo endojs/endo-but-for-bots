@@ -351,9 +351,29 @@ Landed as infrastructure and instruments:
   at x1.009 of detached; the same crank cold-faulting its whole
   working set costs x1.075.
 
-Next in phase 10: per-page side-table-reference summaries at
-checkpoint, so the partial collector's root set becomes a store
-query.
+The partial collector's decision queries now run through the trait
+(`HeapStore::summary_page_count` / `reachable_page_set`, dense
+defaults preserved; the SQLite backend overrides them with `COUNT(*)`
+and the CTE — backend equivalence locked by
+`partial_collect_equivalent_across_backends`), and the GC instrument
+splits the partial's phases. The split at 480k slots / 160k
+side-table entries: enumeration 3.6 ms (O(live), the remaining
+decision-side term), reachability query 0.13 ms (killed by the
+indexed path), and ~8.5 ms in `free_pages` — O(garbage reclaimed) at
+~35-44 ns per freed slot, the pay-for-what-you-free term.
+
+Next in phase 10, in measured order of value:
+page-wholesale freeing (a dead page's records need no per-slot walk
+once the free list is paged — phase 9 interaction — attacking the
+dominant ~8.5 ms term), then incremental side-table ref-page counts
+behind counted accessors on the two bulk tables (arrays,
+collections; ~60 direct mutation sites make privacy-enforced
+accessors the only sound route — parity-locked against the
+enumeration), which retires the 3.6 ms term when attached machines
+carry large side tables. The stored-summary variant of that term
+belongs to the side-table LEDGER work (rows are not yet persisted;
+the quiescent contract keeps resumed machines arena-confined), so it
+lands there, not here.
 
 Preceding it, the collaborator-review follow-up wave landed:
 `compare_payloads` as the only sanctioned two-chunk read, SQLite

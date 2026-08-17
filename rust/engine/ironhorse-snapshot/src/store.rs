@@ -434,7 +434,17 @@ pub fn reachable_pages(
     store: &dyn HeapStore,
     roots: impl IntoIterator<Item = u32>,
 ) -> Result<std::collections::BTreeSet<u32>, StoreError> {
-    let edges = store.page_edges()?;
+    Ok(bfs_pages(&store.page_edges()?, roots))
+}
+
+/// The dense in-Rust BFS both [`reachable_pages`] and the
+/// [`HeapStore::reachable_page_set`] default body share: roots are in
+/// the result even when out of range (edgeless), matching the SQLite
+/// backend's CTE semantics (parity-locked there).
+pub(crate) fn bfs_pages(
+    edges: &[Vec<u32>],
+    roots: impl IntoIterator<Item = u32>,
+) -> std::collections::BTreeSet<u32> {
     let mut seen = std::collections::BTreeSet::new();
     let mut work: Vec<u32> = roots.into_iter().collect();
     while let Some(p) = work.pop() {
@@ -449,7 +459,7 @@ pub fn reachable_pages(
             }
         }
     }
-    Ok(seen)
+    seen
 }
 
 /// Recompute a batch's seal after direct surgery on its contents —
@@ -874,6 +884,30 @@ pub trait HeapStore {
     /// discipline via [`check_epoch`] and drop rows beyond the new
     /// geometry.
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError>;
+    /// How many page-edge summaries the store holds — the geometry
+    /// gate the partial collector checks before deciding anything
+    /// from the summaries (a truncated store must fail closed, not
+    /// read as maximal garbage). Provided: counts the dense read;
+    /// backends answer from metadata (the SQLite backend's
+    /// `COUNT(*)`).
+    fn summary_page_count(&self) -> Result<u32, StoreError> {
+        Ok(self.page_edges()?.len() as u32)
+    }
+    /// Page reachability from `roots` over the stored summaries — the
+    /// decision query of summary-driven partial collection. Provided:
+    /// reads the whole edge set and BFSes in Rust (O(pages) transfer
+    /// however small the answer). Backends with an indexed edge
+    /// representation override it with a query whose transfer is
+    /// proportional to the ANSWER — the SQLite backend serves it as a
+    /// recursive CTE over its normalized pairs (phase 10), with
+    /// dense/CTE parity locked by test. Roots appear in the result
+    /// even when out of range (they are edgeless), on both paths.
+    fn reachable_page_set(
+        &self,
+        roots: &[u32],
+    ) -> Result<std::collections::BTreeSet<u32>, StoreError> {
+        Ok(bfs_pages(&self.page_edges()?, roots.iter().copied()))
+    }
 }
 
 /// The epoch discipline every [`HeapStore::commit`] enforces: the first
