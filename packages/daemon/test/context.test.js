@@ -151,15 +151,61 @@ test('cancel removes controller from map', async t => {
   t.pass('cancel completes without error');
 });
 
-test('multiple onCancel hooks all run', async t => {
+test('synchronously throwing onCancel hook does not wedge disposal', async t => {
   const { createContext } = setupContextMaker();
   const ctx = createContext(id('a:node'));
 
+  const failure = new Error('synchronous hook failure');
   const results = [];
-  ctx.onCancel(() => results.push('hook1'));
-  ctx.onCancel(() => results.push('hook2'));
-  ctx.onCancel(() => results.push('hook3'));
+  ctx.onCancel(() => results.push('first'));
+  ctx.onCancel(() => {
+    results.push('throwing');
+    throw failure;
+  });
+  ctx.onCancel(() => results.push('last'));
 
-  await ctx.cancel(new Error('done'));
-  t.deepEqual(results, ['hook1', 'hook2', 'hook3']);
+  let disposed;
+  t.notThrows(() => {
+    disposed = ctx.cancel(new Error('done'));
+  });
+  const aggregate = await t.throwsAsync(() => disposed, {
+    instanceOf: AggregateError,
+    message: 'Cancellation hooks failed for a:node',
+  });
+  t.deepEqual(results, ['first', 'throwing', 'last']);
+  t.deepEqual(aggregate.errors, [failure]);
+});
+
+test('onCancel hooks run all async hooks and settle all failures', async t => {
+  const { createContext } = setupContextMaker();
+  const ctx = createContext(id('a:node'));
+
+  const firstFailure = new Error('first hook failure');
+  const secondFailure = new Error('second hook failure');
+  const results = [];
+  ctx.onCancel(async () => {
+    results.push('first start');
+    await null;
+    results.push('first end');
+    throw firstFailure;
+  });
+  ctx.onCancel(async () => {
+    results.push('second start');
+    await null;
+    results.push('second end');
+    throw secondFailure;
+  });
+  ctx.onCancel(() => results.push('last'));
+
+  const aggregate = await t.throwsAsync(() => ctx.cancel(new Error('done')), {
+    instanceOf: AggregateError,
+    message: 'Cancellation hooks failed for a:node',
+  });
+  t.deepEqual(results, [
+    'first start',
+    'second start',
+    'first end',
+    'second end',
+  ]);
+  t.deepEqual(aggregate.errors, [firstFailure, secondFailure]);
 });

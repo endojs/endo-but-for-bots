@@ -38,7 +38,7 @@ export const makeContextMaker = ({
 
     /** @type {Map<FormulaIdentifier, Context>} */
     const dependents = new Map();
-    /** @type {Array<() => void>} */
+    /** @type {Array<() => void | Promise<void>>} */
     const hooks = [];
 
     /**
@@ -62,8 +62,32 @@ export const makeContextMaker = ({
       }
       dependents.clear();
 
-      // Execute all cancellation hooks and resolve a single `undefined` for them.
-      resolveDisposed(Promise.all(hooks.map(hook => hook())).then(() => {}));
+      const dispose = (async () => {
+        await null;
+        const results = await Promise.all(
+          hooks.map(async hook => {
+            try {
+              await hook();
+              return undefined;
+            } catch (failure) {
+              return { failure };
+            }
+          }),
+        );
+        /** @type {unknown[]} */
+        const failures = [];
+        for (const result of results) {
+          if (result !== undefined) failures.push(result.failure);
+        }
+        if (failures.length > 0) {
+          throw new AggregateError(
+            failures,
+            `Cancellation hooks failed for ${id}`,
+          );
+        }
+      })();
+
+      resolveDisposed(dispose);
 
       return disposed;
     };
@@ -98,7 +122,7 @@ export const makeContextMaker = ({
     /**
      * Registers a function to be called when this context is cancelled.
      *
-     * @param {() => void} hook - A function with no parameters to execute during disposal.
+     * @param {() => void | Promise<void>} hook - A function with no parameters to execute during disposal.
      */
     const onCancel = hook => {
       if (done) {
