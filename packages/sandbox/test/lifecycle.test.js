@@ -402,6 +402,28 @@ test('reader rejection uses the same kill-and-reap path', async t => {
   t.deepEqual(fixture.signals(), ['SIGTERM']);
 });
 
+test('kill rejects nonterminating signals without touching the process', async t => {
+  const fixture = makeDriverFixture();
+  const handle = await makeHandle(fixture);
+  t.teardown(() => E(handle).dispose());
+  const proc = await E(handle).spawn(harden(['/bin/fake']));
+
+  // kill() is terminal cancellation, so a liveness probe or a
+  // user-defined signal must be rejected at the guard rather than
+  // silently escalated to SIGKILL against a live process.
+  await t.throwsAsync(() => E(proc).kill(/** @type {any} */ (0)), {
+    message: /kill/,
+  });
+  await t.throwsAsync(() => E(proc).kill(/** @type {any} */ ('SIGUSR1')), {
+    message: /kill/,
+  });
+  t.deepEqual(fixture.signals(), []);
+
+  // A supported termination signal still drives the terminal path.
+  await E(proc).kill('SIGINT');
+  t.deepEqual(fixture.signals(), ['SIGINT']);
+});
+
 test('persistent signal failure surfaces a bounded cleanup error', async t => {
   t.timeout(10_000);
   // Both signal attempts reject and wait() never settles: cleanup must

@@ -22,7 +22,7 @@ const AsyncWriterInterface = M.interface('SandboxWriter', {
   throw: M.call().optional(M.any()).returns(M.promise()),
 });
 
-/** @import { MakeSandboxFactoryInput, SandboxFactory, SandboxMakeOpts, SandboxDriver, BackendProbe, MountSpec, SliceSpec, MountCap, MountMode, SandboxHandle, ProcessHandle, MountHandle, SpawnOpts, DriverProcess, RootfsSpec } from './types.js' */
+/** @import { MakeSandboxFactoryInput, SandboxFactory, SandboxMakeOpts, SandboxDriver, BackendProbe, MountSpec, SliceSpec, MountCap, MountMode, SandboxHandle, ProcessHandle, MountHandle, SpawnOpts, DriverProcess, RootfsSpec, TerminationSignal } from './types.js' */
 
 const FACTORY_HELP = `\
 SandboxFactory — root capability of the @endo/sandbox plugin.
@@ -169,7 +169,9 @@ Methods:
   pid()               Pid as observed inside the slice.
   stdin/stdout/stderr Stdio refs (when captured).
   wait()              Resolves with { code, signal }.
-  kill(signal?)       Forward a signal to the process.
+  kill(signal?)       Terminate the process tree: deliver the
+                      termination signal (SIGTERM by default), escalate
+                      to SIGKILL, and reap.
 `;
 
 const MOUNT_HELP = `\
@@ -722,7 +724,7 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
       sliceSpec,
     );
 
-    /** @type {Set<{ killAndReap: (reason: Error, initialSignal?: string | number) => Promise<void> }>} */
+    /** @type {Set<{ killAndReap: (reason: Error, initialSignal?: TerminationSignal) => Promise<void> }>} */
     const liveProcesses = new Set();
     // Cleanup errors for processes whose containment could not be proven.
     // Their leases have already settled, so dispose() must re-surface
@@ -856,7 +858,7 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
        * settle until the driver reports the child reaped.
        *
        * @param {Error} reason
-       * @param {string | number} [initialSignal]
+       * @param {TerminationSignal} [initialSignal]
        */
       const killAndReap = (reason, initialSignal = 'SIGTERM') => {
         terminalError ??= reason;
@@ -900,8 +902,7 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
                 exited = true;
               },
             );
-            const hardFirst =
-              initialSignal === 'SIGKILL' || initialSignal === 9;
+            const hardFirst = initialSignal === 'SIGKILL';
             /** @type {Error[]} */
             const signalFailures = [];
             let hardKillDelivered = false;
@@ -1117,11 +1118,11 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
           stdout: () => stdoutControl.reader,
           stderr: () => stderrControl.reader,
           wait: () => completion,
+          // The interface guard narrows `signal` to a TerminationSignal
+          // and `killAndReap` supplies the default, so this forwards
+          // verbatim rather than re-defaulting.
           kill: async signal => {
-            await killAndReap(
-              makeError(X`sandbox process cancelled`),
-              signal ?? 'SIGTERM',
-            );
+            await killAndReap(makeError(X`sandbox process cancelled`), signal);
           },
         })
       );
