@@ -165,6 +165,35 @@ test('Git remote dictionaries retain an own __proto__ binding', async t => {
   t.true(Object.hasOwn(persistence.policy.gitRemotes ?? {}, '__proto__'));
 });
 
+test('mount and Git dictionaries retain own __proto__ bindings', async t => {
+  const { root, child } = await makeWorkspace(t);
+  const mounts = JSON.parse(`{
+    "__proto__": {
+      "path": ${JSON.stringify(root)},
+      "mode": "readOnly"
+    }
+  }`);
+  const mountPersistence = await normalizeEndoProvisionSpec(
+    { mounts },
+    { harness: 'test', sessionId: 'proto-mount', cwd: root },
+  );
+  t.deepEqual(Object.keys(mountPersistence.policy.mounts), ['__proto__']);
+  t.true(Object.hasOwn(mountPersistence.policy.mounts, '__proto__'));
+
+  const gits = JSON.parse(`{
+    "__proto__": {
+      "path": ["${child.slice(root.length + 1)}"],
+      "mode": "readOnly"
+    }
+  }`);
+  const gitPersistence = await normalizeEndoProvisionSpec(
+    { fs: 'readOnly', gits },
+    { harness: 'test', sessionId: 'proto-git', cwd: root },
+  );
+  t.deepEqual(Object.keys(gitPersistence.policy.gits ?? {}), ['__proto__']);
+  t.true(Object.hasOwn(gitPersistence.policy.gits ?? {}, '__proto__'));
+});
+
 test('Git grants normalize mount-relative paths and modes', async t => {
   const { root, child } = await makeWorkspace(t);
   const persistence = await normalizeEndoProvisionSpec(
