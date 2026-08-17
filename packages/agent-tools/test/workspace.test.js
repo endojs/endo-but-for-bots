@@ -33,13 +33,15 @@ test('no grants compose an empty catalog', t => {
   t.deepEqual(makeWorkspaceTools({}), []);
 });
 
-test('a git grant composes the versioning + mount-bridged tools, and nothing else', t => {
+test('a git grant composes versioning plus agent-facing status, and nothing else', t => {
   const names = nameSet(makeWorkspaceTools({ git: grant('Git') }));
   // The JSON-safe git slice…
   for (const method of [
     'log',
     'diff',
     'show',
+    'add',
+    'checkoutConflict',
     'commit',
     'branches',
     'createBranch',
@@ -49,9 +51,8 @@ test('a git grant composes the versioning + mount-bridged tools, and nothing els
   ]) {
     t.true(names.has(method), `git tool "${method}" present`);
   }
-  // …plus the mount-bridged staging half.
+  // …plus status's agent-facing untracked-file default.
   t.true(names.has('status'));
-  t.true(names.has('add'));
   // No other layer's tools are present when only git is granted.
   for (const absent of ['mountReadText', 'push', 'fetch', 'exec']) {
     t.false(names.has(absent), `"${absent}" absent without its grant`);

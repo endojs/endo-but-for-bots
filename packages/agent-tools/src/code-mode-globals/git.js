@@ -43,7 +43,7 @@ export const makeGitGlobal = ({
       : historyRewrite
         ? 'History-rewrite @endo/exo-git Git capability for amend, reword, cherry-pick, and rebase. Rebase supports start, continue, abort, and skip; if start or continue stops for conflicts, resolve and stage them (checkoutConflict selects Git index stage 2 for ours or stage 3 for theirs, with branch roles inverted during rebase), then continue, skip, or abort.'
         : 'Read/write @endo/exo-git Git capability for repository changes. ' +
-          'In code mode, use status({ untracked: "normal" }) by default to collapse untracked directories; pass { untracked: "all" } when every untracked file is needed.',
+          'In code mode, use status({ untracked: "normal" }) by default to collapse untracked directories; pass { untracked: "all" } when every untracked file is needed. Stage a reported path with add([row.path]).',
     declaration: readOnly
       ? gitDeclarations.gitReadOnly
       : historyRewrite

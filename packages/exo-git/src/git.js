@@ -42,6 +42,7 @@ import {
  *   GitRemoteCredential,
  *   RemoteOperationResult,
  *   PathEntry,
+ *   GitPathDesignator,
  *   ReadableTree,
  *   GitRestoreOptions,
  *   GitStashPushOptions,
@@ -359,6 +360,64 @@ const entriesToRepoPaths = async (state, entries) => {
 };
 
 /**
+ * Split a worktree-relative path string into the segment list `mount.entry()`
+ * accepts.  Empty components — from a leading, doubled, or trailing separator
+ * — and explicit `.` steps collapse to no-ops, so `a/b`, `a//b`, `./a/b`, and
+ * `a/b/` all designate the same path.  This is spelling normalization only,
+ * and deliberately not a second authority model: a `..` segment is left intact
+ * for the mount to contain (clamped at the worktree root), and a denied
+ * segment is left for the mount to refuse.  A designator built solely from
+ * dropped components (`''`, `.`, `./`, `/`, `//`) yields the empty segment
+ * list, which denotes the worktree root; `designatorsToRepoPaths` rejects that
+ * below rather than handing git an empty pathspec.
+ *
+ * @param {string} designator
+ * @returns {string[]}
+ */
+const designatorToSegments = designator =>
+  designator.split('/').filter(segment => segment !== '' && segment !== '.');
+
+/**
+ * Resolve strings through this Git's own worktree mount, then translate every
+ * resulting entry through the same lineage-checking path used for caller-
+ * supplied `PathEntry` values.  The mount owns confinement, denied segments,
+ * and `..` resolution: this layer only normalizes the spelling of a path
+ * string into the mount's segment form.
+ *
+ * @param {GitState} state
+ * @param {readonly GitPathDesignator[]} designators
+ * @returns {Promise<string[]>}
+ */
+const designatorsToRepoPaths = async (state, designators) => {
+  await null;
+  if (!Array.isArray(designators) || designators.length === 0) {
+    throw new Error('path designators must be a non-empty array');
+  }
+  const entries = await Promise.all(
+    designators.map(async designator => {
+      if (typeof designator !== 'string') {
+        return designator;
+      }
+      return E(state.mount).entry(harden(designatorToSegments(designator)));
+    }),
+  );
+  const paths = await entriesToRepoPaths(state, entries);
+  // A designator that normalizes to no segments — a root alias such as `.`,
+  // `/`, or `//`, a `..` chain clamped at the root, or a caller-supplied root
+  // `PathEntry` — would reach the backend as an empty pathspec, which git
+  // reads as "everything".  Reject it here, before any backend mutation.
+  const rootIndex = paths.indexOf('');
+  if (rootIndex >= 0) {
+    const designator = designators[rootIndex];
+    const spelling = typeof designator === 'string' ? `: ${q(designator)}` : '';
+    throw new Error(
+      `path designator must not resolve to the Git worktree root${spelling}`,
+    );
+  }
+  return paths;
+};
+
+/**
  * @param {unknown} ref
  * @returns {string}
  */
@@ -502,34 +561,34 @@ async function revParse(ref) {
 }
 
 /**
- * @param {readonly object[]} entries
+ * @param {readonly GitPathDesignator[]} designators
  * @this {GitMethodThis}
  */
-async function add(entries) {
+async function add(designators) {
   const { state } = this;
-  const paths = await entriesToRepoPaths(state, entries);
+  const paths = await designatorsToRepoPaths(state, designators);
   return state.backend.add(paths);
 }
 
 /**
- * @param {readonly object[]} entries
+ * @param {readonly GitPathDesignator[]} designators
  * @param {GitRestoreOptions} options
  * @this {GitMethodThis}
  */
-async function restore(entries, options = {}) {
+async function restore(designators, options = {}) {
   const { state } = this;
-  const paths = await entriesToRepoPaths(state, entries);
+  const paths = await designatorsToRepoPaths(state, designators);
   return state.backend.restore(paths, options);
 }
 
 /**
- * @param {readonly object[]} entries
+ * @param {readonly GitPathDesignator[]} designators
  * @param {GitConflictSide} side
  * @this {GitMethodThis}
  */
-async function checkoutConflict(entries, side) {
+async function checkoutConflict(designators, side) {
   const { state } = this;
-  const paths = await entriesToRepoPaths(state, entries);
+  const paths = await designatorsToRepoPaths(state, designators);
   return state.backend.checkoutConflict(paths, side);
 }
 

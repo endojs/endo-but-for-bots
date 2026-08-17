@@ -68,6 +68,15 @@ test('history Git global explains rebase control and conflict recovery', t => {
   t.false(declaration.body.includes('status:'));
 });
 
+test('read/write Git global teaches status-path staging', t => {
+  const { description } = makeGitGlobal({ name: 'git' });
+  if (description === undefined) {
+    throw new Error('read/write Git global must include a description');
+  }
+  t.true(description.includes('status({ untracked: "normal" })'));
+  t.true(description.includes('add([row.path])'));
+});
+
 test('a compartment can evaluate code against fake capability globals', async t => {
   // Build the descriptors with the real factories under test, so this test
   // fails (rather than passing unaffected) if a factory is deleted, renamed,

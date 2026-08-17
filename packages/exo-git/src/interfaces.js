@@ -241,10 +241,12 @@ const GitRewriterScopeNameShape = M.or('reader', 'writer', 'rewriter');
  * has exactly one guard shared by every facet that carries it.
  */
 export const GIT_METHOD_GUARDS = harden({
-  add: M.callWhen(M.arrayOf(M.remotable())).returns(M.undefined()),
+  add: M.callWhen(M.arrayOf(M.or(M.remotable(), M.string()))).returns(
+    M.undefined(),
+  ),
   branches: M.callWhen().returns(M.arrayOf(GitRefShape)),
   checkoutConflict: M.callWhen(
-    M.arrayOf(M.remotable()),
+    M.arrayOf(M.or(M.remotable(), M.string())),
     GitConflictSideShape,
   ).returns(M.undefined()),
   cherryPick: M.callWhen(RefArgShape)
@@ -277,7 +279,7 @@ export const GIT_METHOD_GUARDS = harden({
   rebase: M.callWhen(GitRebaseInputShape).returns(M.string()),
   readOnly: M.call().returns(M.remotable('Git')),
   renameBranch: M.callWhen(M.string(), M.string()).returns(M.undefined()),
-  restore: M.callWhen(M.arrayOf(M.remotable()))
+  restore: M.callWhen(M.arrayOf(M.or(M.remotable(), M.string())))
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.undefined()),
   reword: M.callWhen(RefArgShape, M.string()).returns(GitCommitShape),

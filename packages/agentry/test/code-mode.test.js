@@ -428,9 +428,9 @@ test('git-loop preset edits the workspace, commits, and reads HEAD~1 over a real
   if (row === undefined) {
     throw new Error('note.txt did not appear in git status');
   }
+  await E(git).add([row.path]);
   const worktree = await E(git).worktree();
   const entry = await E(worktree).entry(row.path);
-  await E(git).add([entry]);
   const stagedDiff = await E(git).diff({ cached: true, entries: [entry] });
   const commit = await E(git).commit('agent edit');
 

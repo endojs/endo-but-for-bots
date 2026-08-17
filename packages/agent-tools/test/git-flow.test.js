@@ -29,10 +29,9 @@ import { makeGitMountTools } from '../src/json-tools/git-mount.js';
  * a real on-disk repository: the records `invoke` correctly, the named→positional
  * marshal reaches the capability, and the capability's results flow back.
  *
- * `add` and `status` — whose native signatures traffic in mount-entry
- * remotables — are driven through the mount-bridged `makeGitMountTools` records
- * (Phase 3: path strings in, JSON-safe rows out), while the in-slice JSON-safe
- * methods (`commit`, `log`, the branch operations) go through `makeGitTool`.
+ * `status` is driven through `makeGitMountTools` for its agent-facing untracked
+ * default, while `add` and the other JSON-safe methods (`commit`, `log`, the
+ * branch operations) go through `makeGitTool`.
  * Only `filesystemAt` (it returns a live `Filesystem` remotable) is still driven
  * through the raw cap, awaiting the result serialization of a later PR.
  */
@@ -139,14 +138,13 @@ test('git tools drive a real Git cap: stage → status → commit → log → fi
   const byName = byNameOf(makeGitTool(git));
   const byMountName = byNameOf(makeGitMountTools(git));
 
-  // Write and stage a file entirely through the mount-bridged `add` tool: it
-  // takes a path string, resolves it to a mount entry, and reaches the cap.
+  // Write and stage a file through the guard-mapped `add` tool.
   await fs.promises.writeFile(
     path.join(repoRoot, 'greeting.txt'),
     'hello tools',
   );
-  const added = await byMountName('add').invoke({ paths: ['greeting.txt'] });
-  t.is(added, 'Staged 1 path.');
+  const added = await byName('add').invoke({ paths: ['greeting.txt'] });
+  t.is(added, undefined);
 
   // `status` (mount-bridged tool) reports the staged file as JSON-safe rows,
   // with no remotables on the wire.
@@ -233,8 +231,7 @@ test('makeGitTool derives the rewriter-facet catalog against a real Git cap', as
   );
 
   // `reword`, `cherryPick`, and `rebase` are absent from the default (writer)
-  // facet catalog (proved by 'add/restore/checkoutConflict stay out of
-  // makeGitTool' below) but present here, driven against a real
+  // facet catalog but present here, driven against a real
   // history-rewrite-authorized cap.
   await fs.promises.writeFile(path.join(repoRoot, 'greeting.txt'), 'hello');
   await execFileAsync('git', ['add', 'greeting.txt'], { cwd: repoRoot });
@@ -316,18 +313,15 @@ test('the runtime guard rejects a bad arg before reaching the live cap', async t
   await t.throwsAsync(() => byName('commit').invoke({ bogus: 'x' }));
 });
 
-test('add/restore/checkoutConflict stay out of makeGitTool', t => {
+test('path-string mutators join makeGitTool while restore stays out', t => {
   // The cap is only touched at invoke time, so an empty object suffices to
   // inspect the record names.
   const tools = makeGitTool(
     /** @type {import('../src/types.js').GitToolCapability} */ (harden({})),
   );
   const names = new Set(tools.map(tool => tool.name));
-  // These methods take `M.arrayOf(M.remotable())`, so they cannot sit in the
-  // one-to-one guard-mapped slice. `add` and `checkoutConflict` are served by
-  // the mount-bridged `makeGitMountTools`; `restore` remains deferred entirely.
-  t.false(names.has('add'));
-  t.false(names.has('checkoutConflict'));
+  t.true(names.has('add'));
+  t.true(names.has('checkoutConflict'));
   t.false(names.has('restore'));
   t.false(names.has('status'));
 
@@ -338,8 +332,8 @@ test('add/restore/checkoutConflict stay out of makeGitTool', t => {
       ),
     ).map(tool => tool.name),
   );
-  t.true(mountToolNames.has('add'));
-  t.true(mountToolNames.has('checkoutConflict'));
+  t.false(mountToolNames.has('add'));
+  t.false(mountToolNames.has('checkoutConflict'));
   t.true(mountToolNames.has('status'));
   t.false(mountToolNames.has('restore'));
 });
@@ -363,6 +357,7 @@ test('a "../" escape in an add path is contained by the mount, clamped at the wo
   await fs.promises.mkdir(repoRoot);
 
   const { git } = await provisionGit(t, repoRoot);
+  const byName = byNameOf(makeGitTool(git));
   const byMountName = byNameOf(makeGitMountTools(git));
 
   await fs.promises.writeFile(
@@ -370,14 +365,14 @@ test('a "../" escape in an add path is contained by the mount, clamped at the wo
     'inside the worktree',
   );
 
-  // Drive `add` with a `../`-bearing path through the real tool → mount → Git →
+  // Drive `add` with a `../`-bearing path through the real tool → Git → mount →
   // git-binary stack. The `..` pops but is clamped at the worktree root, so the
   // path resolves to `contained.txt` at the root: staging SUCCEEDS and stays
   // inside the repo rather than escaping upward.
-  const added = await byMountName('add').invoke({
+  const added = await byName('add').invoke({
     paths: ['../contained.txt'],
   });
-  t.is(added, 'Staged 1 path.');
+  t.is(added, undefined);
 
   // `status` reports the file at its root-relative path — no leading `..`, no
   // outer path — proving the segment was clamped, not preserved as an escape.

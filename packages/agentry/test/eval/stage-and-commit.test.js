@@ -111,9 +111,7 @@ const stageWrongContentAndCommitSource = (filePath, wrongContent, message) => `\
   if (row === undefined) {
     throw new Error('target path not found in git status');
   }
-  const worktree = await E(git).worktree();
-  const entry = await E(worktree).entry(row.path);
-  await E(git).add([entry]);
+  await E(git).add([row.path]);
   const commit = await E(git).commit(${JSON.stringify(message)});
   return commit.summary;
 })()`;
