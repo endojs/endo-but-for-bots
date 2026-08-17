@@ -588,7 +588,11 @@ const normalizePolicy = async (spec, cwd, pinnedGitRoots = undefined) => {
       ? undefined
       : requirePlainRecord(root.mounts, 'EndoProvisionSpec.mounts');
   /** @type {Record<string, NormalizedMountGrant>} */
-  const mounts = {};
+  const mounts = /** @type {Record<string, NormalizedMountGrant>} */ (
+    /** @type {unknown} */ ({
+      __proto__: null,
+    })
+  );
   for (const name of Object.keys(mountsRecord ?? {}).sort()) {
     // eslint-disable-next-line no-await-in-loop
     mounts[name] = await normalizeMount(
@@ -853,7 +857,11 @@ export const validateEndoProvisionPersistence = async value => {
         );
 
   /** @type {Record<string, MountGrant>} */
-  const mounts = {};
+  const mounts = /** @type {Record<string, MountGrant>} */ (
+    /** @type {unknown} */ ({
+      __proto__: null,
+    })
+  );
   /** @type {{ path: string, deniedSegments: string[] } | undefined} */
   let workspaceMount;
   /** @type {'readOnly' | 'readWrite' | undefined} */
@@ -861,7 +869,11 @@ export const validateEndoProvisionPersistence = async value => {
   /** @type {'readOnly' | 'readWrite' | 'historyRewrite' | undefined} */
   let rootGitMode;
   /** @type {Record<string, string>} */
-  const pinnedGitRoots = {};
+  const pinnedGitRoots = /** @type {Record<string, string>} */ (
+    /** @type {unknown} */ ({
+      __proto__: null,
+    })
+  );
   for (const name of Object.keys(persistedMounts).sort()) {
     const label = `Endo provision persistence.policy.mounts.${name}`;
     const mount = requirePlainRecord(
@@ -903,7 +915,11 @@ export const validateEndoProvisionPersistence = async value => {
   }
 
   /** @type {Record<string, GitGrant>} */
-  const gits = {};
+  const gits = /** @type {Record<string, GitGrant>} */ (
+    /** @type {unknown} */ ({
+      __proto__: null,
+    })
+  );
   for (const name of Object.keys(persistedGits ?? {}).sort()) {
     const label = `Endo provision persistence.policy.gits.${name}`;
     const grant = requirePlainRecord(

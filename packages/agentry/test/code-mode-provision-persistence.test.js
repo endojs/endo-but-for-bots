@@ -88,6 +88,41 @@ test('Git grants reconstruct from persistence without the original spec', async 
   });
 });
 
+test('persistence reconstruction retains own __proto__ mount and Git grants', async t => {
+  const root = await makeWorkspace(t);
+  const nested = join(root, 'nested-repo');
+  await mkdir(nested);
+  const mounts = JSON.parse(`{
+    "__proto__": {
+      "path": ${JSON.stringify(nested)},
+      "mode": "readOnly"
+    }
+  }`);
+  const mounted = await normalizeEndoProvisionSpec(
+    {
+      mounts,
+      gits: { nested: { mount: '__proto__', path: [], mode: 'readOnly' } },
+    },
+    { harness: 'test', sessionId: 'persist-proto-mount', cwd: root },
+  );
+  const mountedReconstructed = await validateEndoProvisionPersistence(
+    JSON.parse(JSON.stringify(mounted)),
+  );
+  t.true(Object.hasOwn(mountedReconstructed.policy.mounts, '__proto__'));
+
+  const gits = JSON.parse(`{
+    "__proto__": { "path": [], "mode": "readOnly" }
+  }`);
+  const granted = await normalizeEndoProvisionSpec(
+    { fs: 'readOnly', gits },
+    { harness: 'test', sessionId: 'persist-proto-git', cwd: root },
+  );
+  const grantedReconstructed = await validateEndoProvisionPersistence(
+    JSON.parse(JSON.stringify(granted)),
+  );
+  t.true(Object.hasOwn(grantedReconstructed.policy.gits ?? {}, '__proto__'));
+});
+
 test('missing Git directories reject the whole persisted authority', async t => {
   const root = await makeWorkspace(t);
   const nestedPath = join(root, 'nested-repo');
