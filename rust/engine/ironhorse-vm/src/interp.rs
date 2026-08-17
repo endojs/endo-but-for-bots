@@ -7043,6 +7043,14 @@ impl Interp {
                     }
                     let resume_pc = pc + size as usize;
                     let yielded = self.pop();
+                    // Hostile bytecode can pop below the recorded run base
+                    // before suspending; splitting there is not a frame
+                    // snapshot, it is a panic (the fuzz lane's first CI
+                    // finding, on the `await` twin below). Fail closed like
+                    // the other malformed suspend shapes.
+                    if stack_base > self.stack.len() {
+                        return Halt::Unsupported("yield:stack-underflow");
+                    }
                     let stack_slice = self.stack.split_off(stack_base);
                     // XS's `YIELD` copies the activation into the instance's
                     // `XS_STACK_KIND` chunk (`fxNewChunk`/`fxRenewChunk`) — a
@@ -7130,6 +7138,14 @@ impl Interp {
                     }
                     let resume_pc = pc + size as usize;
                     let awaited = self.pop();
+                    // Same malformed-suspend guard as `YIELD` above: the
+                    // 7-byte fuzz reproducer entered an async run, popped
+                    // below its recorded base, then awaited — `split_off`
+                    // past the stack end panics where a named refusal is
+                    // owed.
+                    if stack_base > self.stack.len() {
+                        return Halt::Unsupported("await:stack-underflow");
+                    }
                     let stack_slice = self.stack.split_off(stack_base);
                     self.meter.tick_raw(GENERATOR_YIELD_METERING);
                     let frame = SavedFrame {
@@ -18400,6 +18416,20 @@ mod tests {
         assert!(out.completed);
         assert_eq!(out.result, "2", "the shared closure cell mutates across the two f() calls");
         assert_eq!(out.computrons, 87, "bit-exact computrons vs XS");
+    }
+
+    #[test]
+    fn hostile_suspend_below_run_base_fails_closed() {
+        // The fuzz-ironhorse CI lane's first trophy (its first run, on
+        // this seven-byte input): hostile bytecode enters an async
+        // run, pops below the run's recorded stack base, then
+        // suspends — the frame snapshot's `split_off` past the stack
+        // end panicked where a named refusal is owed. Both suspend
+        // twins (YIELD/AWAIT) now guard the underflow. Runs through
+        // the same bounded entry the fuzz harness uses.
+        let bytes = [192u8, 193, 10, 193, 35, 193, 139];
+        let out = crate::run_program_bounded(&bytes, 100_000);
+        assert_eq!(out.halt, Halt::Unsupported("await:stack-underflow"));
     }
 
     #[test]
