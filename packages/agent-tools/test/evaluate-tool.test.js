@@ -54,10 +54,12 @@ test('outer evaluate completion carries policy while internal values stay exact'
   const tool = makeEvaluateTool(evaluate, [], storeValue, {
     resultPolicy: { maxBytes: 64 },
   });
-  const raw = /** @type {{ answer: number, text: string }} */ (await tool.invoke({
-    source: "({ answer: answer + 1, text: 'x'.repeat(200) })",
-    resultName: 'answer',
-  }));
+  const raw = /** @type {{ answer: number, text: string }} */ (
+    await tool.invoke({
+      source: "({ answer: answer + 1, text: 'x'.repeat(200) })",
+      resultName: 'answer',
+    })
+  );
   t.is(raw.answer, 42);
   t.is(raw.text.length, 200);
   t.deepEqual(values.get('answer'), raw);
