@@ -99,8 +99,8 @@ const buildSource = async () => {
   const big = 'abcdefghij'.repeat(5000); // 50 KiB
   const open = await E(deep).create('nested.txt', {});
   const writer = iterateBytesWriter(await E(open).write(0n));
-  await writer.next(utf8(big.slice(0, 20000)));
-  await writer.next(utf8(big.slice(20000)));
+  await writer.next(utf8(big.slice(0, 20_000)));
+  await writer.next(utf8(big.slice(20_000)));
   await writer.return();
   await E(open).close();
   return { fs, root, big };
