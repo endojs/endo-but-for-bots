@@ -66,10 +66,15 @@ export const httpMk = async ({
   await withEndoAgent(agentNames, { os, process }, async ({ agent }) => {
     await E(agent).provideHttpClient(parsedName, policy);
     console.log(name);
-    // Echo the effective bound the operator actually minted: the daemon-verbatim
-    // origin allowlist (canonicalized here — IDN punycode, case-fold, default-port
-    // strip — so it can differ from what was typed) and the policy mode, since
-    // Phase 1 has no inspect verb to reveal it after the fact.
+    // Echo the effective bound the operator actually minted: the CLI's own
+    // locally-normalized origin allowlist (canonicalized here — IDN punycode,
+    // case-fold, default-port strip — so it can differ from what was typed) and
+    // the policy mode, since Phase 1 has no inspect verb to reveal it after the
+    // fact. This is the shape `mk` sent, not a daemon read-back: `provideHttpClient`
+    // returns the minted client capability (discarded here), not the stored policy,
+    // so there is no daemon-verbatim policy to echo. The daemon re-normalizes the
+    // same origins through `normalizeHttpClientPolicy`, which agrees with this
+    // serialization for every accepted origin.
     process.stderr.write(
       `minted ${policy.policyMode ?? 'strict'} HTTP client "${name}" over ` +
         `${policy.allowedOrigins.join(', ')}\n`,

@@ -89,6 +89,54 @@ test('normalizeHttpClientOrigin canonicalizes browser-copied origin forms', t =>
   );
 });
 
+test('normalizeHttpClientOrigin punycodes a non-ASCII (IDN) host', t => {
+  // The call-site comment and design doc claim IDN-punycode canonicalization,
+  // but every other origin test feeds ASCII-only hosts (fc.domain() included),
+  // so the punycode path was pinned nowhere. A Unicode host and its already-
+  // punycoded form must both land on the same canonical ASCII serialization,
+  // and the case-fold must survive the transcription.
+  t.is(
+    normalizeHttpClientOrigin('https://exämple.com'),
+    'https://xn--exmple-cua.com',
+  );
+  t.is(
+    normalizeHttpClientOrigin('https://EXÄMPLE.com/'),
+    'https://xn--exmple-cua.com',
+  );
+  t.is(
+    normalizeHttpClientOrigin('https://xn--exmple-cua.com'),
+    'https://xn--exmple-cua.com',
+  );
+});
+
+test('normalizeHttpClientOrigin canonicalizes an IPv6 literal host', t => {
+  // An IPv6 literal keeps its brackets and strips only the scheme's default
+  // port, exactly as a named host does; a non-default port is retained.
+  t.is(normalizeHttpClientOrigin('https://[::1]:8080'), 'https://[::1]:8080');
+  t.is(normalizeHttpClientOrigin('https://[::1]:443'), 'https://[::1]');
+  t.is(
+    normalizeHttpClientOrigin('https://[2001:db8::1]/'),
+    'https://[2001:db8::1]',
+  );
+});
+
+test('normalizeHttpClientOrigin handles the port boundaries', t => {
+  // Port 0 is a distinct, valid port the WHATWG parser preserves (it is not the
+  // https default, so it is not stripped); the top of the range is retained;
+  // one past the range is not a valid URL and is refused by flag name.
+  t.is(
+    normalizeHttpClientOrigin('https://example.com:0'),
+    'https://example.com:0',
+  );
+  t.is(
+    normalizeHttpClientOrigin('https://example.com:65535'),
+    'https://example.com:65535',
+  );
+  t.throws(() => normalizeHttpClientOrigin('https://example.com:65536'), {
+    message: /not a valid http\(s\) origin/,
+  });
+});
+
 test('makeHttpClientPolicy normalizes each origin through the assembler', t => {
   // Pin the load-bearing seam a user actually reaches (mk -> makeHttpClientPolicy
   // -> provideHttpClient): the assembler must apply normalizeHttpClientOrigin to
@@ -451,6 +499,44 @@ test.serial(
         .split('\n')
         .filter(line => /\bfeed\b/.test(line));
       t.is(feedLines.length, 1, 'the name should denote a single client');
+    } finally {
+      await endo('purge', '-f');
+    }
+  },
+);
+
+test.serial(
+  'endo http mk rebind leaves an old client that another name still holds',
+  async t => {
+    // The survives-when-granted branch of the rebind claim
+    // (designs/cli-http-client.md: the previous client is collected UNLESS
+    // another edge still holds it). `copy` gives the first-minted client a
+    // second name (the CLI-observable stand-in for "granted to a guest under
+    // another name"); after `feed` is rebound to a fresh client, the copied
+    // name must still denote the original — the rebind drops only `feed`'s
+    // reference, not the surviving edge. (The collected-when-unreferenced
+    // branch is daemon-internal — storeIdentifier -> removeEdgeIfUnreferenced —
+    // and Phase 1 exposes no CLI verb to observe an orphan formula, so it is
+    // covered by the daemon's own store tests, not from the CLI.)
+    await endo('purge', '-f');
+    await endo('start');
+    try {
+      await endo('http', 'mk', 'feed', '--origin', 'https://a.example');
+      // A second edge to the first-minted client.
+      await endo('copy', 'feed', 'pinned');
+      // Rebind `feed` to a brand-new client under a different policy.
+      await endo('http', 'mk', 'feed', '--origin', 'https://b.example');
+
+      const list = await endo('list');
+      const names = list.stdout.split('\n').filter(Boolean);
+      t.true(
+        names.some(line => /\bfeed\b/.test(line)),
+        'the rebound name should still resolve',
+      );
+      t.true(
+        names.some(line => /\bpinned\b/.test(line)),
+        'the copied name should survive the rebind of the other edge',
+      );
     } finally {
       await endo('purge', '-f');
     }

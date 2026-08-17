@@ -113,8 +113,12 @@ Node-22 undici `Cannot assign to read only property 'Symbol(headers map
 sorted)'` when `harden()` freezes the live `Headers`. That change is not on
 `llm`, its relevance to the `llm` code path (where `@endo/exo-http-client`
 already snapshots headers via `headersToRecord` and never sends the live
-`Response` across CapTP) is unverified, and CI here is pinned to Node 24 where
-the slot is not tripped. It is a plausible independent Node-22 parity fix and
+`Response` across CapTP) is unverified, and no test in this PR issues a request
+through the confined client — the new tests mint a client but never dial out —
+so the `harden(Headers)` crash path is never reached here regardless of Node
+version. (CI matrixes Node 22.x and 24.18.0, and `packages/cli` supports
+`^20.17.0 || >=22.9.0`, so Node 22 is exercised; the crash simply is not on any
+path this PR's tests take.) It is a plausible independent Node-22 parity fix and
 should land separately on its own merits with a Node-22 reproduction; this note
 is its durable record outside the superseding PR's description.
 

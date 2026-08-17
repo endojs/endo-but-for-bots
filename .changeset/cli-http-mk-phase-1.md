@@ -32,8 +32,8 @@ grant, `tofu-auto` additionally requires `--acknowledge-unbounded`; prefer
 mint one.
 
 On a successful mint the verb echoes the canonical origin allowlist and the
-policy mode on stderr (the daemon-verbatim form, which can differ from what was
-typed), so the confinement is legible without an inspect verb.
+policy mode on stderr (the CLI's own locally-normalized form, which can differ
+from what was typed), so the confinement is legible without an inspect verb.
 
 Re-running `mk` on a name that already denotes a client rebinds the name to the
 newly minted client under the new policy; the previous client's name reference
