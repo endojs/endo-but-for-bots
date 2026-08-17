@@ -22,7 +22,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
 
-use ironhorse_snapshot::machine::{begin_store_session, checkpoint_to_store, resume_from_store_lazy};
+use ironhorse_snapshot::machine::{
+    begin_store_session, checkpoint_to_store, partial_collect, resume_from_store_lazy,
+};
 use ironhorse_snapshot::store::{reachable_pages, slot_page_count, HeapStore};
 use ironhorse_snapshot::Signature;
 use ironhorse_store_sqlite::SqliteHeapStore;
@@ -108,15 +110,30 @@ fn store_query_cost_across_heap_sizes() {
             })
             .collect();
 
+        // End-to-end partial_collect on this backend — its decision
+        // queries run as the COUNT/CTE overrides. Resumed machines
+        // are arena-confined (empty side tables), so this prices the
+        // gate + query + free path, not the O(live) enumeration the
+        // gc_bench engine instrument isolates.
+        let partial_ms: Vec<f64> = (0..5)
+            .map(|_| {
+                let mut s2 = resume_from_store_lazy(store.clone(), &sig()).unwrap();
+                let t0 = Instant::now();
+                let _ = partial_collect(&mut s2, &*store.borrow()).unwrap();
+                t0.elapsed().as_secs_f64() * 1e3
+            })
+            .collect();
+
         println!(
             "slots={:>7} pages={:>5} | checkpoint {:>7.3} ms | reach-dense {:>7.3} ms | \
-             reach-cte {:>7.3} ms | rev-edge {:>7.1} us",
+             reach-cte {:>7.3} ms | rev-edge {:>7.1} us | partial(cte) {:>7.3} ms",
             manifest.slot_count,
             pages,
             median(commit_ms),
             median(dense_ms),
             median(cte_ms),
             median(rev_us),
+            median(partial_ms),
         );
         Rc::try_unwrap(store)
             .ok()

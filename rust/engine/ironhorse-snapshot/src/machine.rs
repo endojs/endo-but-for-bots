@@ -1005,11 +1005,13 @@ pub fn partial_collect(
         });
     }
     let total = slot_page_count(manifest.slot_count);
-    // Refuse a summary vector that disagrees with the geometry BEFORE
-    // deciding anything from it: `reachable_pages` treats an absent
-    // entry as "no outgoing edges", so a truncated store would read
-    // as maximal garbage and free live pages.
-    let found = store.page_edges()?.len() as u32;
+    // Refuse a summary count that disagrees with the geometry BEFORE
+    // deciding anything from the summaries: reachability treats an
+    // absent entry as "no outgoing edges", so a truncated store would
+    // read as maximal garbage and free live pages. Metadata-scale via
+    // the trait (the dense default counts the full read; indexed
+    // backends answer with a COUNT).
+    let found = store.summary_page_count()?;
     if found != total {
         return Err(StoreError::SummaryCount {
             expected: total,
@@ -1027,7 +1029,11 @@ pub fn partial_collect(
             root_pages.insert(r.0 / crate::store::SLOTS_PER_PAGE);
         }
     }
-    let reached = crate::store::reachable_pages(store, root_pages)?;
+    // The decision query goes through the trait so an indexed backend
+    // answers it with transfer proportional to the ANSWER (the SQLite
+    // recursive CTE) instead of the dense whole-edge-set read.
+    let roots: Vec<u32> = root_pages.into_iter().collect();
+    let reached = store.reachable_page_set(&roots)?;
     let dead: Vec<u32> = (0..total).filter(|p| !reached.contains(p)).collect();
     Ok(session.machine_mut().free_pages(&dead))
 }

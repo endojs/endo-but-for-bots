@@ -320,10 +320,12 @@ impl SqliteHeapStore {
 
     // --- query-driven GC capabilities (store seam phase 10) ---
     //
-    // Backend-specific, deliberately NOT on the `HeapStore` trait yet:
-    // the trait grows a query surface when the generational collector
-    // lands and every backend can serve it; until then these are the
-    // measured infrastructure the design's phase-10/11 bars build on.
+    // `pages_referencing` is backend-specific (the trait grows a
+    // reverse-edge surface when the generational collector needs it
+    // from every backend); reachability and the summary count are
+    // ALSO served through the `HeapStore` trait overrides below, so
+    // the summary-driven partial collector's decision query runs as
+    // the CTE on this backend with no caller change.
 
     /// The pages whose summaries reference `target` — the reverse
     /// query the normalized pairs exist for: O(in-degree) by primary
@@ -399,6 +401,27 @@ impl SqliteHeapStore {
 impl HeapStore for SqliteHeapStore {
     fn manifest(&self) -> Result<StoreManifest, StoreError> {
         Self::stored_manifest(&self.conn)?.ok_or(StoreError::Empty)
+    }
+
+    // Trait-level query overrides (store seam phase 10): the partial
+    // collector's decision queries run indexed on this backend — the
+    // summary-count gate as a COUNT(*), reachability as the recursive
+    // CTE — with the dense defaults' exact semantics (dense/CTE parity
+    // and MemoryStore equivalence locked in tests/query_gc.rs).
+
+    fn summary_page_count(&self) -> Result<u32, StoreError> {
+        let n: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM page_edges", [], |r| r.get(0))
+            .map_err(sql_err)?;
+        Ok(n as u32)
+    }
+
+    fn reachable_page_set(
+        &self,
+        roots: &[u32],
+    ) -> Result<std::collections::BTreeSet<u32>, StoreError> {
+        self.reachable_pages_sql(roots)
     }
 
     fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {

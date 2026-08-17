@@ -8,8 +8,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use ironhorse_snapshot::machine::{begin_store_session, checkpoint_to_store, resume_from_store_lazy};
-use ironhorse_snapshot::store::{reachable_pages, slot_page_count, HeapStore};
+use ironhorse_snapshot::machine::{
+    begin_store_session, checkpoint_to_store, partial_collect, resume_from_store_lazy,
+};
+use ironhorse_snapshot::store::{reachable_pages, slot_page_count, HeapStore, MemoryStore};
 use ironhorse_snapshot::Signature;
 use ironhorse_store_sqlite::SqliteHeapStore;
 use ironhorse_vm::{parse_symbols, Interp};
@@ -92,6 +94,46 @@ fn edge_pairs_agree_with_dense_reachability() {
     build_store(store.clone());
     assert_parity(&store.borrow());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn partial_collect_equivalent_across_backends() {
+    // The partial collector's decision queries go through the trait:
+    // the dense defaults on MemoryStore, the COUNT/CTE overrides
+    // here. Machines are deterministic, so the same build must free
+    // the same count and leave the same free-list length on both
+    // backends — the collector's outcome is a pure function of store
+    // content, not of which backend answered the queries.
+    let build = "var arr = []; var g = 0; var i = 0; \
+                 for (i = 0; i < 3000; i = i + 1) { arr[i] = { v: i, w: i }; } \
+                 for (i = 0; i < 1500; i = i + 1) { g = { v: i, w: i }; } \
+                 g = 0;";
+    let (b, names) = compile(build);
+
+    let run = |store: &mut dyn HeapStore| -> (u32, usize) {
+        let mut m = Interp::new();
+        m.link_intrinsics(&names);
+        assert!(m.run(&b).completed);
+        let mut session = begin_store_session(m, &sig(), store)
+            .map_err(|(_, e)| e)
+            .expect("begin");
+        let freed = partial_collect(&mut session, store).expect("partial collect");
+        (freed, session.machine().slots.free_list().len())
+    };
+
+    let mut mem = MemoryStore::new();
+    let (freed_mem, free_len_mem) = run(&mut mem);
+
+    let dir = std::env::temp_dir().join(format!("ironhorse-query-gc-eq-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut sq = SqliteHeapStore::open(dir.join("heap.sqlite")).unwrap();
+    let (freed_sq, free_len_sq) = run(&mut sq);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(freed_mem > 1500, "reclaims the dropped chain: {freed_mem}");
+    assert_eq!(freed_mem, freed_sq, "freed count backend-independent");
+    assert_eq!(free_len_mem, free_len_sq, "free list backend-independent");
 }
 
 #[test]
