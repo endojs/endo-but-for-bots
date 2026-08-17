@@ -662,6 +662,7 @@ flowchart TD
         dsqli[daemon-endor-sqlite-iterate-streaming<br/><i>PROPOSED</i>]
         egitcas[endor-git-bindings<br/><i>PROPOSED</i>]
         errun[endor-run-expanded<br/><i>IN PROGRESS</i>]
+        rmlex[rust-module-lexer-consolidation<br/><i>NOT STARTED</i>]
         pfs --> dfs
         pfs --> dmount
         dmount --> dmcap
@@ -695,6 +696,7 @@ flowchart TD
         errun --> erworker
         dmkar --> erworker
         errun -.-> dwimp
+        errun --> rmlex
         ercas --> dwicap
         ercas --> egitcas
         dsql --> dsqli
@@ -1230,6 +1232,7 @@ user interface move to Rust.
 | ironhorse-engine | Approved | Stage-1 design of the supervised `port-xs-to-rust-memory-safe-engine` program: feasibility, architecture, and a staged roadmap for porting the ~75 KLOC XS engine to a Rust crate the `endor` daemon embeds in-process, replacing the C engine behind the `Machine` API while preserving metering, the debugger protocol, and heap snapshots. Implementation accretes onto the same branch/PR (#600); all ten open questions resolved. The parent design that `ironhorse-snapshot-store-seam`, `ironhorse-meter-opcode-cost-instrumentation`, `ironhorse-test262-convergence`, and `ironhorse-debugger-recovery-and-uncaught` extend. |
 | ironhorse-meter-opcode-cost-instrumentation | Not Started | Sibling plan to `ironhorse-engine` § Metering: the opcode/builtin-step cost-calibration instrumentation that measures per-opcode real cost on a named reference platform, supplying the frozen integer weights for Ironhorse's release-versioned deterministic meter (accuracy-over-parity doctrine; determinism per release, recalibration across releases). |
 | ironhorse-test262-convergence | In Progress | Completion-phase milestone (per kriskowal's PR #600 directive): converge the bespoke per-stage corpus into test262-style cases and the dual-run harness into an `xst` analogue (`ironhorse-xst`). The bounded, resumable whole-tree reporting instrument has landed; language-surface convergence remains gated on the remaining `ironhorse-engine` build stages and promotes nothing ahead of them. |
+| rust-module-lexer-consolidation | Not Started | Consolidate `entry_walk`'s bespoke ESM static-import scanner and `cjs_lexer.rs` onto one allocation-light, cursor-driven `scan` submodule modeled on `@endo/cjs-module-analyzer`, sheds the `cjs_lexer` `Vec<Token>` retention, and establishes a shared cross-language (JS `ava` + Rust) fixture corpus with a drift guard. Answers the #282 review asking `entry_walk` reuse an existing lexer, honor the allocation constraint, and share tests with the cjs-module-lexer fork. The shared `scan` primitives land on `llm` first as the canonical copy; #282 rebases to consume them. |
 
 **Exit criterion:** `endor` runs as a second-seat daemon against the same
 state directory as the Node daemon, exposes a fully functional Chat TUI
@@ -1547,6 +1550,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | endor-tui | XL | 5-8 weeks | 11 | Rust TUI: ratatui/crossterm, concept-map of every Chat component, XS `mxDebug` debugger integration (XL bumped 1.3x) |
 | endor-bus-tui | XL | 4-7 weeks | 11 | Bus-verb spec, XS handle API, Exo/CapTP wrapper; cross-worker layout composition (XL bumped 1.3x) |
 | endor-native-zip-xs | S-M | 2-3 days | 11 | Pure-Rust raw-DEFLATE host functions, `@endo/zip` `xs` conditional exports, bounded inflation, and XS snapshot callback-table migration |
+| rust-module-lexer-consolidation | S-M | 3-4 days | 11 | Shared `scan` cursor-primitive submodule (advancers + regex/ASI policy), re-express `entry_walk` scanner + shed `cjs_lexer` `Vec<Token>`, cross-language `ava`/Rust fixture corpus with drift guard and an allocation-counting integration test. Design-only PR; implementation phases span #282's branch and `llm`. Not on the M11 critical path (endor-tui/bus-tui dominate). |
 | endopi | Reference | — | — | Comparative analysis of the pi agent harness against endo; spins out the endopi-* gap-closing designs below |
 | endopi-edit-tool | S-M | 3 days | 3 | LLM-friendly oldText/newText edit primitive on `File` capability; reuses [cli-edit-verb](cli-edit-verb.md)'s diff helpers |
 | endopi-jsonl-transcript-format | S-M | 3 days | 3 | On-disk JSONL projection of the Lal transcript graph; satisfies endoclaw § *Persistence and Memory*'s "Pi-compatible jsonl files" directive |
@@ -1583,8 +1587,8 @@ date of this pass.
 | M8: Peer App Sharing (was Milestone A) | 3 net-new (`familiar-deep-link-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); existing constituents counted under M3/M4/M7 | 2-3 weeks | 3-5 weeks |
 | M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
 | M10: Confinement & Ecosystem (was M5) | 6 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
-| M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
-| **Total remaining** | **63** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
+| M11: Rust Daemon (`endor`) (was M6) | 7 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`, `rust-module-lexer-consolidation`) | 15-22 weeks | 17-24 weeks |
+| **Total remaining** | **64** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
 
 The 2026-05-20 reconciliation corrects a counting gap in the prior
 snapshot's narrative: M1, M3, and M4 had absorbed new rows since the
