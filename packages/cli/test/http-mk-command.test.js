@@ -227,7 +227,7 @@ test('parsePositiveIntegerFlag pins the safe-integer boundary and the trim path'
   // MAX_SAFE_INTEGER is admissible; every bad value above rejects at the regex,
   // so without these the Number.isSafeInteger guard is dead coverage — a
   // syntactically valid numeral that Number() silently rounds must still reject.
-  t.is(parse('9007199254740991'), 9007199254740991);
+  t.is(parse('9007199254740991'), Number.MAX_SAFE_INTEGER);
   t.throws(() => parse('9007199254740993'), {
     message: /must be a safe integer/,
   });
