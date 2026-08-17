@@ -187,6 +187,10 @@ const DRAIN_GRACE_MS = 250;
 const DEFAULT_STDOUT_BYTE_LIMIT = 16n * 1024n * 1024n;
 const DEFAULT_STDERR_BYTE_LIMIT = 16n * 1024n * 1024n;
 const STREAM_BUFFER = 64;
+// Captured output is coalesced into blocks of this size so the retained
+// structure is bounded by the byte limit alone: at the 16 MiB default the
+// queue holds at most 256 blocks, however small the source's chunks are.
+const CAPTURE_BLOCK_SIZE = 64 * 1024;
 
 /**
  * Resolve after a bounded delay without keeping the daemon alive solely for
@@ -219,6 +223,43 @@ harden(delay);
 const makeEagerReader = (iterable, { label, byteLimit, onFailure }) => {
   /** @type {Uint8Array[]} */
   const queue = [];
+  // Incoming bytes are copied into fixed-size blocks rather than queued
+  // one entry per source chunk: the byte limit alone would not bound the
+  // queue's per-chunk metadata or allocation overhead against a source
+  // that streams one byte at a time.
+  /** @type {Uint8Array | undefined} */
+  let pendingBlock;
+  let pendingLength = 0;
+  /** @param {Uint8Array} bytes */
+  const enqueueBytes = bytes => {
+    let offset = 0;
+    while (offset < bytes.length) {
+      if (pendingBlock === undefined) {
+        pendingBlock = new Uint8Array(CAPTURE_BLOCK_SIZE);
+        pendingLength = 0;
+      }
+      const take = Math.min(
+        CAPTURE_BLOCK_SIZE - pendingLength,
+        bytes.length - offset,
+      );
+      pendingBlock.set(bytes.subarray(offset, offset + take), pendingLength);
+      pendingLength += take;
+      offset += take;
+      if (pendingLength === CAPTURE_BLOCK_SIZE) {
+        queue.push(pendingBlock);
+        pendingBlock = undefined;
+      }
+    }
+  };
+  // Copy out a partially-filled block when a consumer catches up with
+  // the queue, so consumption latency stays chunk-level while unconsumed
+  // output still coalesces.
+  const flushPendingBlock = () => {
+    if (pendingBlock !== undefined && pendingLength > 0) {
+      queue.push(pendingBlock.slice(0, pendingLength));
+      pendingLength = 0;
+    }
+  };
   let byteCount = 0n;
   let ended = iterable === undefined || iterable === null;
   let closed = false;
@@ -285,7 +326,7 @@ const makeEagerReader = (iterable, { label, byteLimit, onFailure }) => {
               BigInt(bytes.length) <= remaining
                 ? bytes
                 : bytes.subarray(0, Number(remaining));
-            queue.push(new Uint8Array(captured));
+            enqueueBytes(captured);
             byteCount += BigInt(captured.length);
             wake();
           }
@@ -323,6 +364,7 @@ const makeEagerReader = (iterable, { label, byteLimit, onFailure }) => {
       await null;
       try {
         for (;;) {
+          if (queue.length === 0) flushPendingBlock();
           if (queue.length > 0) {
             return harden({
               done: false,

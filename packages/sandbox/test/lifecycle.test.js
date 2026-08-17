@@ -319,6 +319,46 @@ test('stdout and stderr stay separate and preserve split UTF-8', async t => {
   t.deepEqual(status, { code: 0, signal: null });
 });
 
+test('unconsumed tiny-chunk output coalesces into bounded blocks', async t => {
+  t.timeout(10_000);
+  const fixture = makeDriverFixture();
+  const handle = await makeHandle(fixture);
+  t.teardown(() => E(handle).dispose());
+  const proc = await E(handle).spawn(harden(['/bin/fake']));
+
+  // Adversarial source: one byte per chunk, nobody consuming. The eager
+  // pump must coalesce rather than retain one queue entry per chunk.
+  const total = 10_000;
+  for (let i = 0; i < total; i += 1) {
+    fixture.stdout.push(new Uint8Array([i % 256]));
+  }
+  fixture.stdout.end();
+  fixture.stderr.end();
+  fixture.finish();
+
+  // Waiting first lets the pump drain the source before any consumer
+  // attaches, so the chunk count below observes the retained queue.
+  t.deepEqual(await E(proc).wait(), { code: 0, signal: null });
+  const stdout = await collectReader(await E(proc).stdout());
+  const blockSize = 64 * 1024;
+  t.is(
+    stdout.chunks.reduce((sum, chunk) => sum + chunk.length, 0),
+    total,
+  );
+  t.true(
+    stdout.chunks.length <= Math.ceil(total / blockSize) + 1,
+    `retained structure must stay bounded; got ${stdout.chunks.length} chunks`,
+  );
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of stdout.chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  t.is(bytes[0], 0);
+  t.is(bytes[total - 1], (total - 1) % 256);
+});
+
 test('reaching one output cap kills and reaps before settlement', async t => {
   t.timeout(5000);
   const fixture = makeDriverFixture({ softRefuse: true });
