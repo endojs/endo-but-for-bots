@@ -528,7 +528,13 @@ attached-mode benchmark landed with phase 10's instruments, and the
 cargo-fuzz CI lane landed as the `fuzz-ironhorse` smoke job (30 s per
 decode/round-trip target on every ironhorse-relevant change, corpus
 cached across runs, crash artifacts uploaded on failure; deep fuzzing
-stays a local/scheduled concern).
+stays a local/scheduled concern). The lane's FIRST run earned trophy
+#2: hostile bytecode that enters an async run, pops below the run's
+recorded stack base, then suspends — the frame snapshot's `split_off`
+panicked past the stack end. Both suspend twins (`YIELD`/`AWAIT`) now
+refuse the malformed shape with named halts, locked by
+`hostile_suspend_below_run_base_fails_closed` on the seven-byte
+reproducer.
 The phase 5-9 roadmap is LANDED (2026-08-11, see the phase blocks
 above): row-hash tree + wake-latency instrument (5), page-edge
 summaries + partial collect (6), incremental compaction dirt (7),
