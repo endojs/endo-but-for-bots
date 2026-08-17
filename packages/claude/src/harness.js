@@ -34,6 +34,11 @@ import { renderMcpConfig, serializeMcpConfig } from './mcp-config.js';
 import { renderApiKeyHelperSettings } from './credentials-pool.js';
 import { cancelled as cancelledResult, poolExhausted } from './results.js';
 
+/** @import { McpToolDescriptor } from './tool-permissions.js' */
+/** @import { McpTransport } from './mcp-config.js' */
+/** @import { InferResult } from './results.js' */
+/** @import { AcquireResult } from './credentials-pool.js' */
+
 const InferInterface = M.interface('GuestInference', {
   infer: M.call(M.string())
     .optional(
@@ -78,9 +83,9 @@ const makeOneShotCancel = cancelledP => {
  *   The harness-owned facet broker for ONE guest. It resolved the formula id and
  *   holds the attenuated facet connection; the raw fd is never inherited into the
  *   claude-spawned tree.
- * @property {() => Promise<import('./tool-permissions.js').McpToolDescriptor[]>} toolsList
+ * @property {() => Promise<McpToolDescriptor[]>} toolsList
  *   Take the one `tools/list` snapshot (raw, pre-prune).
- * @property {() => Promise<import('./mcp-config.js').McpTransport>} transport
+ * @property {() => Promise<McpTransport>} transport
  *   How the confined child reaches this broker's adapter (stdio command / http url).
  * @property {() => Promise<void>} [close]
  */
@@ -104,7 +109,7 @@ const makeOneShotCancel = cancelledP => {
  * @property {() => Promise<string>} getClaudeVersion  Reads `claude --version`.
  * @property {() => string} mintSessionTag    Unique per spawn (NOT per guest).
  * @property {(args: { sessionTag: string, mcpConfigJson: string, settingsJson: string }) => Promise<SpawnFiles>} prepareSpawnFiles
- * @property {(spec: LaunchSpec) => Promise<import('./results.js').InferResult>} launch
+ * @property {(spec: LaunchSpec) => Promise<InferResult>} launch
  * @property {{ wallClockMs: number, outputByteCap: number, maxTurns: number }} [limits]
  */
 
@@ -126,7 +131,7 @@ const DEFAULT_LIMITS = harden({
 /**
  * @param {object} powers
  * @param {(formulaId: string) => Promise<Broker>} powers.connectBroker
- * @param {{ acquire: (sessionTag: string) => Promise<import('./credentials-pool.js').AcquireResult> }} powers.pool
+ * @param {{ acquire: (sessionTag: string) => Promise<AcquireResult> }} powers.pool
  * @param {unknown} _context
  * @param {HarnessOptions} options
  */
@@ -206,7 +211,7 @@ export const make = (powers, _context, options) => {
       /**
        * @param {string} prompt
        * @param {{ model?: string, cancelled?: unknown }} [opts]
-       * @returns {Promise<import('./results.js').InferResult>}
+       * @returns {Promise<InferResult>}
        */
       async infer(prompt, opts = {}) {
         const { model, cancelled } = opts;
