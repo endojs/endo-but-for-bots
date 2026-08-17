@@ -185,12 +185,18 @@ const arbAcceptedOrigin = fc
       }`,
   );
 
-test('normalizeHttpClientOrigin is idempotent over accepted origins', async t => {
+test('normalizeHttpClientOrigin agrees with the daemon origin oracle over accepted origins', async t => {
   await fc.assert(
     fc.property(arbAcceptedOrigin, raw => {
       const once = normalizeHttpClientOrigin(raw);
       // A second pass over the already-canonical form is a fixed point.
       t.is(normalizeHttpClientOrigin(once), once);
+      // The load-bearing claim is stronger than self-idempotence: the output
+      // must be a fixed point of `new URL(o).origin` — the exact predicate the
+      // daemon's `assertHttpClientOrigin` applies (`new URL(o).origin === o`).
+      // Self-idempotence alone would hold for any deterministic function; this
+      // oracle pins agreement with the daemon.
+      t.is(new URL(once).origin, once);
     }),
   );
 });
@@ -440,7 +446,10 @@ test.serial(
     await endo('start');
     try {
       // A literal origin suffices — normalizeHttpClientPolicy only validates the
-      // origin's shape and never dials it, so no listening server is needed.
+      // origin's shape and never dials it, so no listening server is needed. The
+      // second origin is fed in a NON-canonical form (uppercase host, explicit
+      // default port, trailing slash) so the stderr echo assertion below pins
+      // canonicalization, not merely echoing back what was typed.
       const result = await endo(
         'http',
         'mk',
@@ -448,7 +457,7 @@ test.serial(
         '--origin',
         'http://127.0.0.1:8080',
         '--origin',
-        'https://api.example.com',
+        'https://API.example.com:443/',
       );
       const lines = result.stdout.split('\n').filter(Boolean);
       t.deepEqual(
@@ -456,6 +465,15 @@ test.serial(
         ['my-http'],
         'mk should print the pet name it registered',
       );
+
+      // The effective-bound echo on stderr is an advertised legibility
+      // affordance (Phase 1 has no inspect verb); deleting the process.stderr
+      // block must redden a test. Pin both the minted-policy echo and that it
+      // carries the CANONICAL origin (lowercased host, default port stripped,
+      // slash dropped), not the non-canonical form typed above.
+      t.regex(result.stderr, /minted strict HTTP client "my-http" over/);
+      t.regex(result.stderr, /https:\/\/api\.example\.com(?![:/])/);
+      t.notRegex(result.stderr, /API\.example\.com/);
 
       // The name is reachable via endo list.
       const list = await endo('list');
@@ -536,6 +554,77 @@ test.serial(
       t.true(
         names.some(line => /\bpinned\b/.test(line)),
         'the copied name should survive the rebind of the other edge',
+      );
+    } finally {
+      await endo('purge', '-f');
+    }
+  },
+);
+
+test.serial(
+  'endo http mk tofu-auto echoes the unbounded-grant warning on a real mint',
+  async t => {
+    // The tofu-auto warning is an advertised legibility affordance for a grant
+    // that voids the allowlist bound; deleting the second process.stderr block
+    // must redden a test. The local `refuses tofu-auto without
+    // --acknowledge-unbounded` test only exercises the REFUSAL — the accepted,
+    // acknowledged mint's warning path was pinned nowhere.
+    await endo('purge', '-f');
+    await endo('start');
+    try {
+      const result = await endo(
+        'http',
+        'mk',
+        'wild',
+        '--origin',
+        'https://seed.example',
+        '--policy-mode',
+        'tofu-auto',
+        '--acknowledge-unbounded',
+      );
+      t.deepEqual(
+        result.stdout.split('\n').filter(Boolean),
+        ['wild'],
+        'the acknowledged tofu-auto mint should register the name',
+      );
+      t.regex(result.stderr, /minted tofu-auto HTTP client "wild" over/);
+      t.regex(result.stderr, /warning:.*tofu-auto/);
+      t.regex(result.stderr, /does not bound outbound reach/);
+    } finally {
+      await endo('purge', '-f');
+    }
+  },
+);
+
+test.serial(
+  'endo http mk is host-only: a guest cannot mint a client',
+  async t => {
+    // The confinement claim "provideHttpClient is a host-only method, so a guest
+    // name fails at the interface guard" is stated in http-mk.js, the changeset,
+    // and the design doc, yet pinned by no test. Minting `--as` a guest must be
+    // refused, and the name must not appear afterward.
+    await endo('purge', '-f');
+    await endo('start');
+    try {
+      await endo('mkguest', 'g');
+      await t.throwsAsync(
+        endo(
+          'http',
+          'mk',
+          'sneaky',
+          '--origin',
+          'https://a.example',
+          '--as',
+          'g',
+        ),
+        undefined,
+        'a guest must not be able to mint an HTTP client',
+      );
+      const list = await endo('list');
+      t.notRegex(
+        list.stdout,
+        /\bsneaky\b/,
+        'the rejected mint must leave no registered name',
       );
     } finally {
       await endo('purge', '-f');
