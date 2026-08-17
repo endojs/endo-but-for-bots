@@ -323,10 +323,18 @@ range/duplicate/accounting gates at the decoder edge, locked by
 Landed as infrastructure and instruments:
 
 - The SQLite backend maintains `edge_pairs (target, page)` — a
-  normalized, DERIVED twin of the sealed summaries (never sealed,
-  rebuilt from `page_edges` at open when absent or stale; wiped-index
-  recovery locked by test) — in the same commit transaction as the
-  rows it mirrors.
+  normalized, DERIVED twin of the sealed summaries — in the same
+  commit transaction as the rows it mirrors, and rebuilds it from
+  `page_edges` UNCONDITIONALLY at every open: the second review wave
+  showed a cardinality-only staleness gate trusts any count-preserving
+  at-rest edit forever (a moved pair silently shrinks the CTE's
+  reachability), so open never trusts the derived index at all —
+  wiped-index and moved-pair recovery are both locked by test, and
+  the geometry delete mirrors the sealed rows' normalization verbatim
+  (the divergent `OR target >=` disjunct is gone). The
+  `summary_page_count` override checks contiguity, not just COUNT
+  (gap + phantom row fails closed, locked), and both overrides report
+  `Empty` on an uncommitted store exactly like the dense defaults.
 - `pages_referencing(target)` answers the reverse question no blob
   encoding can (O(in-degree) by primary key), and
   `reachable_pages_sql(roots)` runs reachability INSIDE SQLite as a

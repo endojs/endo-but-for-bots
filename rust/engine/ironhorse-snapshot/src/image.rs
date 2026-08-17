@@ -312,7 +312,15 @@ fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
         free.push(u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]));
         i += 4;
     }
-    let want = slot_count * SLOT_RECORD_BYTES;
+    // checked_mul, not `*`: on a 32-bit usize the product can wrap,
+    // and a wrapped `want` would satisfy the truncation gate below
+    // while `slot_count` stays attacker-sized — falsifying the bound
+    // the `seen` scratch depends on (review finding; latent until a
+    // 32-bit/wasm port, but the comment below claims the bound on
+    // every target, so make it true on every target).
+    let want = slot_count
+        .checked_mul(SLOT_RECORD_BYTES)
+        .ok_or(SnapshotError::Corrupt("HEAP record count"))?;
     if p.len() - i < want {
         return Err(SnapshotError::Corrupt("HEAP records truncated"));
     }
