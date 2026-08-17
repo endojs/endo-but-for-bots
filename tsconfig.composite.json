@@ -96,6 +96,9 @@
       "path": "packages/exo-http-client/tsconfig.composite.json"
     },
     {
+      "path": "packages/exo-package-manager/tsconfig.composite.json"
+    },
+    {
       "path": "packages/exo-playwright/tsconfig.composite.json"
     },
     {
