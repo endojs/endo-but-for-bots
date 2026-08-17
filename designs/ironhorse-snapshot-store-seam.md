@@ -348,7 +348,10 @@ Landed as infrastructure and instruments:
   under WAL + `synchronous=FULL`.
 - The GC instrument (`gc_bench.rs`, same provenance): steady-state
   full mark scales linearly — 0.7 / 3.3 / 13.4 ms at 30k / 120k /
-  480k slots — and `partial_collect` costs 0.4 / 1.9 / 9.5 ms:
+  480k slots — and `partial_collect` costs 0.4 / 1.9 / 9.5 ms
+  (that session; end-to-end partial timings vary ~±30% between
+  sessions on this container — cross-figure comparisons below quote
+  same-session pairs):
   cheaper, but still O(live) through the side-table enumeration and
   O(pages) through the dense edge read — exactly the two terms
   phases 10-11 remove. Sweep runs ~24-29 ns/slot flat across
@@ -364,11 +367,12 @@ The partial collector's decision queries now run through the trait
 defaults preserved; the SQLite backend overrides them with `COUNT(*)`
 and the CTE — backend equivalence locked by
 `partial_collect_equivalent_across_backends`), and the GC instrument
-splits the partial's phases. The split at 480k slots / 160k
-side-table entries: enumeration 3.6 ms (O(live), the remaining
+splits the partial's phases. The split at 480k slots / ~80k
+side-table references (measured from the fixture: one 80,000-item
+array; the review's recount corrected an earlier 160k here): enumeration 3.6 ms (O(live), the remaining
 decision-side term), reachability query 0.13 ms (killed by the
 indexed path), and ~8.5 ms in `free_pages` — O(garbage reclaimed) at
-~35-44 ns per freed slot, the pay-for-what-you-free term.
+~30-44 ns per freed slot, the pay-for-what-you-free term.
 
 A framing correction the split forced: `free_pages` is O(garbage
 RECLAIMED), not O(heap) — every freed slot was once allocated, so its
@@ -1152,9 +1156,11 @@ queries, so collection cost tracks the mutation set, not the heap:
     LANDED (first half): the page-edge summaries normalized into an
     indexed `(target, page)` pair table, derived and rebuildable,
     maintained in the same commit transaction as the sealed rows;
-    reverse-edge lookups and reachability served as store queries (a
-    recursive CTE in SQLite) through provided `HeapStore` methods
-    whose defaults preserve the dense semantics.
+    reachability and the summary-count gate served through provided
+    `HeapStore` methods whose defaults preserve the dense semantics
+    (a recursive CTE on SQLite); reverse-edge lookups stay a
+    backend-specific `SqliteHeapStore` method until the generational
+    collector needs them from every backend.
     RE-SCOPED (second half): the original "stored side-table summary
     rows" idea assumed side tables persist — they do not yet (the
     quiescent contract; the ledger is the workstream that changes
@@ -1184,7 +1190,7 @@ queries, so collection cost tracks the mutation set, not the heap:
 
 Goal: retire the last decision-side O(live) term in
 `partial_collect` — the visitor walk over every side-table entry
-(1.06 ms at 480k slots / 160k entries after the bitmap projection) —
+(1.06 ms at 480k slots / ~80k entries after the bitmap projection) —
 by maintaining per-page reference counts incrementally at side-table
 mutation time, so the collector's root projection reads a standing
 map in O(pages-with-refs).
@@ -1195,8 +1201,10 @@ Design:
   side-table-held references (`page -> u32`), plus the nonzero page
   set the collector reads.
 - The two BULK tables move behind counting accessors: `ArrayData
-  .items` and the collections' `entries` become private to their
-  module; the only mutation route is methods that apply symmetric
+  .items` and the collections' `entries` move behind a NEW submodule
+  boundary (they are module-private today, but `interp.rs` is one
+  module, so today's privacy isolates nothing — the boundary is the
+  point); the only mutation route is methods that apply symmetric
   deltas — increment the refs of stored values, decrement the refs
   of displaced/removed values — using the same `Slot::each_ref_slot`
   projection the visitor uses today.
@@ -1210,15 +1218,20 @@ Design:
   iterators, typed arrays, generators, async instances, …) keeps the
   visitor walk — it is O(small), and partial collection roots from
   counted pages (bulk) ∪ visitor pages (tail).
-- Bulk-removal paths participate: the GC retain sweeps
-  (`free_slot_indices`, `collect_garbage`) decrement per dropped
-  entry (O(dropped), amortized like the sweep itself); restore and
-  any whole-table clear rebuild the counts from what they rebuild.
+- Bulk-removal paths participate: the GC sweeps decrement per
+  dropped entry (O(dropped), amortized like the sweep itself) — the
+  retain-based page sweep lives in `Interp::free_pages` and the full
+  collector's per-table removes in `collect_garbage`'s sweep helper
+  (an earlier draft named a nonexistent `free_slot_indices`; the
+  review's recount fixed the symbols). Restore and any whole-table
+  clear rebuild the counts from what they rebuild.
 
-Inventory (measured on this branch, all in
-`ironhorse-vm/src/interp.rs`): 39 direct `.items` mutation sites, 4
-`.entries` sites, 17 table-level insert/remove sites, plus the GC
-retain sweep and the restore path.
+Inventory (strict call-site grep at the time of writing, all in
+`ironhorse-vm/src/interp.rs`, counting adjacent calls individually):
+44 direct `.items` mutation sites, 4 `.entries` sites, 11 table-level
+inserts for the two bulk tables, plus the two GC sweep paths and the
+restore path — ~60 in total. Recount before executing; the file
+moves.
 
 Soundness protocol:
 
