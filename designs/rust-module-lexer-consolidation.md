@@ -18,14 +18,16 @@ The dependency walker at the center of this design,
 `rust/endo/src/entry_walk.rs`, does not yet live on `llm` (this repository's
 trunk branch): it is on PR #282's head branch `feat/endor-run-entry-point-deps`,
 so the scanner-inventory table below (its row 3) and every file a later phase
-edits on that branch are read there, not on the base branch.
+edits on that branch are read there, not on the base branch. This branch split
+is what constrains the phase ordering in § Phased implementation.
 
 `entry_walk.rs::scan_static_imports` is a bespoke byte-scanner that recognizes
 ES-module static `import`/`export ... from` specifiers. In the CHANGES_REQUESTED
 review of `endojs/endo-but-for-bots#282`
 ([discussion r3796110862](https://github.com/endojs/endo-but-for-bots/pull/282#discussion_r3796110862)),
 kriskowal flagged it as "a partial implementation of a JS lexer" and asked
-that we reuse a lexer we already have, honor an allocation constraint, and
+that we reuse a lexer we already have, honor an allocation constraint (defined
+precisely in § Honoring the allocation constraint), and
 establish test parity with endo's fork of `cjs-module-lexer`. This design surveys
 the reuse options, recommends one, and decomposes the work into build jobs.
 
@@ -84,8 +86,8 @@ be reconciled against the JS fork's (the same drift risk the parity corpus
 below exists to close), now spread across two token models instead of one. Its
 allocation shape is pull-based,
 **no retained token vector** (so it satisfies the review's allocation constraint
-as well as scanners 1 and 3), but full-JS-lexing weight and a token model
-divorced from `@endo/cjs-module-analyzer`. **Preferred over (a1), but still not chosen over
+as well as scanners 1 and 3), but it carries full-JS-lexing weight and a token
+model divorced from `@endo/cjs-module-analyzer`. **Preferred over (a1), but still not chosen over
 (b)/(c)**, which converge directly on the JS fork's own cursor algorithm and
 token model, minimizing the reconciliation surface. This is a taste call, not a
 correctness bar; re-run it if the compile lexer later grows a specifier-oriented
@@ -139,7 +141,7 @@ is Node's `cjs-module-lexer` shape):
      allocation constraint) *unexpressible*: there is no owned `String` in the
      type, so the `Vec<Token>` regression will not compile.
    - **Ambiguity resolution.** `resolve_regex_or_divide` and
-     `track_statement_boundary` are recognizer *policy*, not pure advance, and
+     `advance_statement_boundary` are recognizer *policy*, not pure advance, and
      both are expressed as state-as-value signatures so neither retains a
      whole-file token vector:
      - `resolve_regex_or_divide(prev: PrevToken, src: &str, pos: usize) ->
@@ -152,17 +154,38 @@ is Node's `cjs-module-lexer` shape):
        `lastTokenPos` to make this call; the `PrevToken` value is the minimal
        replacement for that backtracking, the one piece of cross-token state a
        consumer must thread.
-     - `track_statement_boundary(state: BoundaryState, src: &str, pos: usize) ->
+     - `advance_statement_boundary(state: BoundaryState, src: &str, pos: usize) ->
        BoundaryState` folds the automatic-semicolon-insertion (ASI) boundary state
        forward as a returned `Copy` value rather than mutating a place, so a
        consumer that needs a different ASI policy threads its own `BoundaryState`
-       rather than inheriting a hardcoded default.
+       rather than inheriting a hardcoded default. It is named for the fold it
+       computes (like `resolve_regex_or_divide`), not `track_*`, so the name does
+       not imply an in-place, side-effecting monitor when the signature threads
+       state as a returned value.
      **Neither tier retains a whole-file token vector**; the only cross-token state
      is these two `Copy` values.
 
+     **Why two values, not one merged `LexerState`.** `PrevToken` (regex-vs-divide)
+     and `BoundaryState` (ASI) answer independent questions, and a consumer may need
+     one, both, or neither, so they are threaded as two `Copy` values rather than
+     folded into a single `LexerState` a caller must carry whole. Both are
+     recomputed at the same point (each recognized significant token), so a consumer
+     threading both advances them together in one recognition step and cannot desync
+     them. If a later consumer must thread both through every primitive, merging them
+     into one `LexerState` advanced by a single `advance(state, src, pos)` call is a
+     mechanical follow-up; the two-value split is chosen now to keep each consumer's
+     threaded state minimal.
+
    Primitive names are spelled `snake_case`, as they will be typed in Rust, and
    take `&str` (matching `cjs_lexer.rs` and the JS fork's cursor-over-string
-   algorithm), not `&[u8]`.
+   algorithm), not `&[u8]`. The `usize` positions are **byte** offsets into the
+   `&str`, so every advance must land on a UTF-8 char boundary: JS source carries
+   multi-byte code points in identifiers and string/template/regex bodies, and
+   slicing a `&str` at a non-boundary byte panics. The advancers therefore step by
+   `char_indices()` (or `str::char_at`-style boundary-aware reads), never by raw
+   byte increments, so a returned position is always a valid slice point. This is
+   an implementation obligation on the primitives called out here because the
+   signatures fix byte positions into a `&str`.
 
    `skip_template` **must** track nested `${...}` interpolations with a depth
    *stack*, adopting `cjs_lexer.rs::tokenize`'s current `depth: Vec<u32>`
@@ -174,6 +197,23 @@ is Node's `cjs-module-lexer` shape):
    behavior. The parity corpus (§ Test parity, Phase 2) must include a
    nested-backtick-inside-interpolation case so the Phase 3 `cjs_lexer` port
    cannot silently regress toward the weaker single-counter semantics.
+
+   A **second** flagged behavior change hides in the same consolidation, on the
+   ESM side. `entry_walk.rs::scan_static_imports` today has **no regex-literal
+   handling at all**: a bare `/` that is neither `//` nor `/*` falls through as an
+   ordinary byte. `cjs_lexer.rs::tokenize`, by contrast, already disambiguates
+   regex-from-divide and carries three dedicated tests for it
+   (`skips_regex_literals`, `division_is_not_regex`,
+   `regex_after_throw_or_yield_is_not_division`). Re-expressing
+   `scan_static_imports` through the shared `resolve_regex_or_divide` primitive
+   (Phase 1's #282 sub-step) therefore newly makes it **skip regex-literal bodies
+   it previously scanned byte-by-byte**, the same shape of deliberate behavior fix,
+   not pure refactor, that the template change is. Because the existing
+   `scan_static_imports` tests cannot catch it, the parity corpus (§ Test parity,
+   Phase 2) must include a **regex-vs-divide** case on the ESM side (a leading
+   regex literal on its own line immediately before an import-eligible statement
+   start, so the `/` sits where a specifier scan would otherwise trip) to ship this
+   change guarded.
 2. Re-express `scan_static_imports` (ESM specifiers) on those primitives,
    deleting entry_walk's duplicate skip logic.
 3. Re-express `cjs_lexer`'s `detect_esm_syntax` and `detect_named_exports` on
@@ -188,7 +228,7 @@ is Node's `cjs-module-lexer` shape):
 The cost the constraint avoids is **peak memory proportional to source size,
 paid per module across a whole dependency-graph walk**: a `Vec<Token>` of owned
 `String`s for every file the walker visits, held for the duration of that file's
-scan, when the walker keeps only a handful of specifier strings from each. That
+scan, whereas the walker keeps only a handful of specifier strings from each. That
 is the criterion that rejects (a1), demotes (a2), and shapes the whole `scan`
 submodule. The consolidated core instead walks a cursor and allocates **only**
 the results a caller retains (specifier strings for the walker; export-name
@@ -207,8 +247,8 @@ distinct mechanisms do, at two different layers:
    layer).** The regression the review named lived in the *recognizer* tier
    (`cjs_lexer.rs::tokenize` materialized a `Vec<Token>`), and a signature cannot
    bound retention there: a recognizer can accumulate a `Vec<(&str, usize)>` of
-   borrowed slices over the whole file: O(N) retention that compiles fine and no
-   signature forbids. So the runtime check is primary, sitting where the risk
+   borrowed slices over the whole file: O(N) retention that compiles fine, and that
+   no signature forbids. So the runtime check is primary, sitting where the risk
    actually lives. A counting global allocator asserts that scanning an N-token
    source allocates O(kept results), not O(N). Because `#[global_allocator]` is
    process-wide and cargo runs `#[test]`s concurrently in one binary, a naive
@@ -240,8 +280,9 @@ Establish a **shared, language-neutral corpus** consumed by both the JS `ava`
 suite and Rust `#[test]`s, at two levels:
 
 1. **Lexer-unit parity.** A fixture table (JSON) of cases, each tagged with the
-   **oracle** it is a claim against, because the JS side is *two* analyzers, not
-   one, and they disagree on both output shape and failure mode:
+   **oracle** (the existing JS implementation whose output a fixture's expected
+   result is checked against) it is a claim against, because the JS side is *two*
+   analyzers, not one, and they disagree on both output shape and failure mode:
 
    - `@endo/cjs-module-analyzer` (`analyzeCommonJS`) recognizes **CJS** and
      returns `{ requires, exports, reexports }`; the CJS-import key is `requires`,
@@ -265,9 +306,9 @@ suite and Rust `#[test]`s, at two levels:
    `excluded` manifest and the drift guard, so a failure reports a case name
    rather than a whitespace-sensitive source snippet), a discriminant, and a
    per-oracle expected shape, rather than one schema standing for both contracts.
-   Each record holds **only oracle-derived facts** (`name`, `source`, `oracle`,
-   `expect`, and (where the oracle throws) `expectError` with the Rust-side
-   classification stated explicitly, never derived from the JS failure). *Which*
+   Each record holds oracle-derived facts (`name`, `source`, `oracle`, `expect`)
+   plus, where the oracle throws, an `expectError` flag and an `expectRust`
+   classification stated explicitly, never derived from the JS failure. *Which*
    fields the Rust side asserts at the current phase does **not** live per-record;
    it lives in one per-phase capability manifest beside the Rust runner (below),
    so advancing a phase is one edit, not a sweep over every record:
@@ -283,11 +324,11 @@ suite and Rust `#[test]`s, at two levels:
      { "name": "esm-in-cjs-throws",
        "oracle": "cjs-module-analyzer",
        "expectError": true,
-       "rust": { "detect_esm_syntax": true } },
+       "expectRust": { "esm": true } },
      { "name": "cjs-unterminated-string-throws",
        "oracle": "cjs-module-analyzer",
        "expectError": true,
-       "rust": { "detect_esm_syntax": false } }
+       "expectRust": { "esm": false } }
    ]
    ```
 
@@ -295,9 +336,10 @@ suite and Rust `#[test]`s, at two levels:
    - **Oracle selects the JS runner.** A `cjs-module-analyzer` case runs
      `analyzeCommonJS`; a `module-source` case runs `new ModuleSource(src)`. No
      case is fed to an analyzer that throws on it.
-   - **Per-phase capability manifest.** A single manifest beside the Rust runner
-     names which `expect` fields (and which records) the Rust side is claimed on
-     at the current phase; the rest of `expect` is recorded from the oracle for
+   - **Per-phase capability manifest.** A single file beside the Rust runner (a
+     separate file from the `excluded` manifest below, not two sections of one)
+     names which `expect` fields (and which records) the Rust side asserts at the
+     current phase; the rest of `expect` is recorded from the oracle for
      the Phase 4 target but not yet asserted against the Rust output. Through
      Phase 3 the consolidated lexer recognizes named `exports` (from
      `detect_named_exports`) and the ESM specifier set; `requires` and `reexports`
@@ -308,15 +350,19 @@ suite and Rust `#[test]`s, at two levels:
    - **Failure mode is stated, never inferred.** `analyzeCommonJS` throws on ESM
      source (`import x from 'y'` raises "Unexpected import statement in CJS
      module") *and* on malformed CJS (`Unterminated string.`), so `expectError`
-     alone does not tell the Rust runner whether `detect_esm_syntax` should be
-     `true` or `false`. Every `expectError` record therefore carries an explicit
-     `rust` expectation (the two examples above show both signs), because the Rust
-     recognizers are infallible (`detect_named_exports -> BTreeSet<String>`,
-     `detect_esm_syntax -> bool`) and cannot reproduce the throw. `detect_esm_syntax`
-     has no positive JS boolean oracle (neither analyzer emits an ESM-vs-CJS flag),
-     so its claim is anchored on the discriminating fact that one analyzer parses
-     the source and the other throws; the `rust` field records that decision
-     directly. A failure case with no meaningful Rust counterpart goes on an
+     alone does not tell the Rust runner whether the source is ESM or malformed
+     CJS. Every `expectError` record therefore carries an explicit `expectRust`
+     expectation (the two examples above show both signs of its `esm` field),
+     because the Rust recognizers are infallible
+     (`detect_named_exports -> BTreeSet<String>`, `detect_esm_syntax -> bool`) and
+     cannot reproduce the throw. The `esm` key is spelled for the corpus reader's
+     mental model, not the implementor's; the per-phase capability manifest maps it
+     to whichever Rust function currently answers it (today `detect_esm_syntax`),
+     the same indirection that keeps the `expect` fields decoupled from Rust
+     function names. `detect_esm_syntax` has no positive JS boolean oracle (neither
+     analyzer emits an ESM-vs-CJS flag), so the `esm` claim is anchored on the
+     discriminating fact that one analyzer parses the source and the other throws;
+     `expectRust` records that decision directly. A failure case with no meaningful Rust counterpart goes on an
      explicit `excluded` manifest (keyed on `name`) with a one-line reason, so the
      drift guard does not silently drop it.
 
@@ -325,7 +371,10 @@ suite and Rust `#[test]`s, at two levels:
    `cjs-module-analyzer`) and the ESM-import cases inline in `entry_walk.rs`'s
    `scan_static_imports` tests (tagged `module-source`), plus a
    **nested-backtick-inside-interpolation** case (`` `${`${x}`}` ``) that pins the
-   `skip_template` stack behavior chosen above. A **drift guard** fails if a case
+   `skip_template` stack behavior chosen above, and a **regex-literal-before-import**
+   case (a leading regex literal on its own line followed by an `import` statement,
+   tagged `module-source`) that pins the regex-vs-divide behavior change the ESM
+   side newly gains (above). A **drift guard** fails if a case
    is present in one runner's manifest but absent from the other's (respecting the
    `excluded` list), the same safeguard shape already used at the end-to-end
    level (below).
@@ -345,7 +394,7 @@ suite and Rust `#[test]`s, at two levels:
    compartment counts, with a `no_unaccounted_fixture_drift` safeguard. **This
    file lives only on #282's head branch, not on `llm`** (`git ls-tree origin/llm
    rust/endo/tests/` lists only `iroh_supervisor.rs`); the same branch caveat the
-   Motivation applies to `entry_walk.rs`. So Phases 2-3, which land on `llm` and
+   Motivation section raised for `entry_walk.rs`. So Phases 2-3, which land on `llm` and
    deliberately do not gate on #282, cannot cite it as existing coverage on their
    own branch; it is the end-to-end record on #282's branch, and the new unit
    corpus is the fine-grained record Phases 2-3 carry independently. Keep and
@@ -395,8 +444,8 @@ contract is therefore:
 The work is larger than a single review-fix commit and is decomposed into build
 jobs posted separately. The phases do **not** all target one branch, because they
 edit files resident on different branches. The load-bearing ordering fact is that
-the shared `scan` submodule is **all-new files with no dependency on either
-consumer**, so it lands on `llm` **first** as the single canonical copy both
+the shared `scan` submodule **consists entirely of new files with no dependency
+on either consumer**, so it lands on `llm` **first** as the single canonical copy both
 consumers reach. It is *not* created on #282's branch and re-created on `llm`:
 authoring the same file paths twice on two unmerged branches would leave no named
 canonical source and a merge conflict at #282's eventual landing. Instead, `llm`
@@ -411,17 +460,28 @@ These phases **operationalize the § Recommendation steps**, in ship order:
    - *On `llm`:* land the cursor primitives (§ Recommendation step 1) as a new
      private `scan` submodule in the `endo` crate. This is the **canonical copy**;
      no later phase re-creates it. Because `scan` is all-new files depending on
-     neither `entry_walk` nor `cjs_lexer`, it does not gate on #282.
+     neither `entry_walk` nor `cjs_lexer`, it does not gate on #282. Until Phase 1's
+     #282 sub-step and Phase 3 land their consumers, the primitives have **no
+     production caller**; this interim uncalled state is expected, not an oversight.
+     `rust/endo` sets no `#![deny(warnings)]` / `-D warnings` (checked in its
+     `Cargo.toml` and `.github/workflows/ci.yml`), so the interim is at most a stray
+     dead-code warning, never a build break.
    - *On #282's branch (`feat/endor-run-entry-point-deps`):* rebase #282 onto
      `llm` so it picks up the canonical `scan`, then re-express `entry_walk`'s
      `scan_static_imports` on the shared primitives and delete entry_walk's
      duplicate skip logic. #282 **consumes** `scan`; it does not fork a second
-     copy. This is a **deliberate behavior fix**, not a pure refactor: adopting
-     the shared depth-stack `skip_template` corrects entry_walk's known
+     copy. This is a **deliberate behavior fix**, not a pure refactor, on two axes:
+     adopting the shared depth-stack `skip_template` corrects entry_walk's known
      single-counter nested-template gap (its own comment concedes "templates
-     inside templates would slip through"), so the nested case must be *added*
-     (Phase 2's corpus), and the existing `scan_static_imports` tests cannot catch
-     the change. The prior "no behavior change" framing is dropped.
+     inside templates would slip through"), and adopting the shared
+     `resolve_regex_or_divide` primitive newly makes it skip regex-literal bodies it
+     previously walked byte-by-byte (§ Test parity names the second change). Both the
+     nested-template and the regex-vs-divide cases must therefore be *added* (Phase
+     2's corpus), since the existing `scan_static_imports` tests cannot catch either
+     change. The prior "no behavior change" framing is dropped. If #282 is closed or
+     superseded before this sub-step lands, the re-expression rides whatever branch
+     next carries `entry_walk` onto `llm`; the canonical `scan` on `llm` (the first
+     sub-step) is independent of #282 and unaffected.
 2. **Build the shared cross-language corpus** (oracle-tagged, § Test parity) on
    `llm`; wire the `ava` suite and Rust tests to it; add the drift guard. Seed
    from the two existing test sites. This builds the parity corpus that makes
