@@ -145,9 +145,10 @@ const projectResponse = async response => {
  * means the group is simply absent from the catalog.
  *
  * @param {ERef<HttpToolCapability>} httpCap
+ * @param {{ resultPolicy?: import('../types.js').ToolResultPolicy }} [options]
  * @returns {ToolRecord[]}
  */
-export const makeHttpTool = httpCap => {
+export const makeHttpTool = (httpCap, { resultPolicy } = {}) => {
   const records = httpToolMethods.map(method => {
     const schema = httpToolSchemas[method];
     const argGuards = positionalArgGuards(method);
@@ -160,6 +161,7 @@ export const makeHttpTool = httpCap => {
       name: method,
       description: schema.description,
       parameters: schema.parameters,
+      resultPolicy,
       argGuards,
       execute: async argsRecord => {
         await null;
