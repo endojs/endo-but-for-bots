@@ -144,6 +144,160 @@ test('maxChars: 0 disables the limit and returns full contents', async t => {
   t.false(result.includes('truncated'));
 });
 
+test('bounded reads return numbered line windows and a line continuation', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.writeFileSync(
+    path.join(rootPath, 'large.txt'),
+    Array.from({ length: 300 }, (_, index) => `line ${index + 1}`).join('\n'),
+  );
+  const filesystem = readOnly(makeNodeFilesystem({ rootPath }));
+  const tool = makeMountReadTool(filesystem);
+
+  const first = /** @type {any} */ (
+    await tool.invoke({ path: 'large.txt', maxLines: 3 })
+  );
+  t.is(first.outcome, 'truncated');
+  t.is(first.truncatedBy, 'lines');
+  t.deepEqual(first.lines, [{ number: 1 }, { number: 2 }, { number: 3 }]);
+  t.is(first.text, 'line 1\nline 2\nline 3\n');
+  t.deepEqual(first.continuation, { startLine: 4 });
+
+  const second = /** @type {any} */ (
+    await tool.invoke({
+      path: 'large.txt',
+      startLine: first.continuation.startLine,
+      maxLines: 2,
+    })
+  );
+  t.is(second.startLine, 4);
+  t.deepEqual(second.lines, [{ number: 4 }, { number: 5 }]);
+});
+
+test('bounded reads cap a wide line without splitting UTF-8 and continue by byte', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.writeFileSync(path.join(rootPath, 'wide.txt'), `${'😀'.repeat(20)}\nnext`);
+  const filesystem = readOnly(makeNodeFilesystem({ rootPath }));
+  const tool = makeMountReadTool(filesystem);
+
+  const first = /** @type {any} */ (
+    await tool.invoke({
+      path: 'wide.txt',
+      maxLines: 2,
+      maxBytes: 100,
+      maxLineBytes: 10,
+    })
+  );
+  t.is(first.text, '😀😀');
+  t.deepEqual(first.lines, [{ number: 1 }]);
+  t.is(first.outcome, 'truncated');
+  t.is(first.truncatedBy, 'line');
+  t.deepEqual(first.continuation, { startByte: '8' });
+  t.false(first.text.includes('\ufffd'));
+
+  const rest = /** @type {any} */ (
+    await tool.invoke({
+      path: 'wide.txt',
+      startByte: first.continuation.startByte,
+      maxLines: 2,
+      maxLineBytes: 100,
+    })
+  );
+  t.is(rest.startLine, 1);
+  t.is(rest.text.split('\n')[0], '😀'.repeat(18));
+  t.true(rest.text.endsWith('\nnext'));
+});
+
+test('bounded reads cap total bytes across many lines and continue at the next byte', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.writeFileSync(path.join(rootPath, 'many.txt'), 'a\nb\nc\nd\ne\n');
+  const filesystem = readOnly(makeNodeFilesystem({ rootPath }));
+  const tool = makeMountReadTool(filesystem);
+
+  const first = /** @type {any} */ (
+    await tool.invoke({
+      path: 'many.txt',
+      maxLines: 20,
+      maxBytes: 5,
+      maxLineBytes: 20,
+    })
+  );
+  t.is(first.text, 'a\nb\nc');
+  t.is(new TextEncoder().encode(first.text).length, 5);
+  t.is(first.truncatedBy, 'bytes');
+  t.deepEqual(first.continuation, { startByte: '6' });
+
+  const rest = /** @type {any} */ (
+    await tool.invoke({
+      path: 'many.txt',
+      startByte: first.continuation.startByte,
+      maxLines: 20,
+      maxBytes: 20,
+    })
+  );
+  t.is(rest.startLine, 4);
+  t.is(rest.text, 'd\ne\n');
+});
+
+test('bounded reads distinguish empty files and EOF', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.writeFileSync(path.join(rootPath, 'empty.txt'), '');
+  fs.writeFileSync(path.join(rootPath, 'short.txt'), 'one\ntwo');
+  const filesystem = readOnly(makeNodeFilesystem({ rootPath }));
+  const tool = makeMountReadTool(filesystem);
+
+  const empty = /** @type {any} */ (
+    await tool.invoke({ path: 'empty.txt', maxLines: 2 })
+  );
+  t.is(empty.outcome, 'empty');
+  t.deepEqual(empty.lines, []);
+
+  const eof = /** @type {any} */ (
+    await tool.invoke({ path: 'short.txt', startLine: 3, maxLines: 2 })
+  );
+  t.is(eof.outcome, 'eof');
+  t.deepEqual(eof.lines, []);
+
+  const byteEof = /** @type {any} */ (
+    await tool.invoke({ path: 'short.txt', startByte: '7', maxLines: 2 })
+  );
+  t.is(byteEof.outcome, 'eof');
+  t.deepEqual(byteEof.lines, []);
+});
+
+test('bounded calls reject zero limits instead of exposing an unlimited read', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.writeFileSync(path.join(rootPath, 'file.txt'), 'content');
+  const filesystem = readOnly(makeNodeFilesystem({ rootPath }));
+  const tool = makeMountReadTool(filesystem);
+
+  await t.throwsAsync(() => tool.invoke({ path: 'file.txt', maxBytes: 0 }), {
+    message: /maxBytes must be a positive safe integer/,
+  });
+  await t.throwsAsync(
+    () => tool.invoke({ path: 'file.txt', maxLineBytes: 0 }),
+    { message: /maxLineBytes must be a positive safe integer/ },
+  );
+});
+
+test('bounded byte caps preserve multibyte code points', async t => {
+  const rootPath = makeTempRoot(t);
+  fs.writeFileSync(path.join(rootPath, 'utf8.txt'), 'αβγ\n終わり');
+  const filesystem = readOnly(makeNodeFilesystem({ rootPath }));
+  const tool = makeMountReadTool(filesystem);
+
+  const first = /** @type {any} */ (
+    await tool.invoke({
+      path: 'utf8.txt',
+      maxLines: 4,
+      maxBytes: 3,
+      maxLineBytes: 20,
+    })
+  );
+  t.is(first.text, 'α');
+  t.is(first.continuation.startByte, '2');
+  t.false(first.text.includes('\ufffd'));
+});
+
 test('normalizes leading, trailing, and doubled slashes to "." no-op steps', async t => {
   const rootPath = makeTempRoot(t);
   fs.mkdirSync(path.join(rootPath, 'sub'));
