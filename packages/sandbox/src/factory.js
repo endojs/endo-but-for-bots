@@ -1,6 +1,6 @@
 // @ts-check
 
-/* global clearTimeout, setTimeout */
+/* global AbortController, clearTimeout, setTimeout */
 
 import { E } from '@endo/eventual-send';
 import { makeError, q, X } from '@endo/errors';
@@ -714,6 +714,53 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
       });
       driverProcessPromise.catch(() => undefined);
 
+      // Admission cancellation. The driver receives the signal so it can
+      // abort its in-flight control command and remove the exact named
+      // operation; the factory additionally treats a pending admission as
+      // abandonable, so a driver that stalls (or ignores the signal) can
+      // never hold up timeout, disposal, or owner cancellation.
+      const admission = new AbortController();
+      /** @type {Promise<never>} */
+      const admissionAborted = new Promise((_resolve, reject) => {
+        admission.signal.addEventListener(
+          'abort',
+          () => reject(admission.signal.reason),
+          { once: true },
+        );
+      });
+      admissionAborted.catch(() => undefined);
+      // `harden` would freeze the AbortSignal's own abort bookkeeping, so
+      // hand the driver a hardened accessor rather than the frozen value.
+      const spawnControls = harden({
+        get signal() {
+          return admission.signal;
+        },
+      });
+      let admissionAbandoned = false;
+      /** @type {DriverProcess | undefined} */
+      let admittedProc;
+      // Record the admitted process, and reap a process a driver produces
+      // only after the lease has been abandoned so the operation cannot
+      // outlive its owner. Whichever of this reaction and an abandoning
+      // path runs last observes the other's state, so exactly one of
+      // them terminates a late arrival.
+      driverProcessPromise.then(
+        proc => {
+          admittedProc = proc;
+          if (!admissionAbandoned) return;
+          void (async () => {
+            await null;
+            try {
+              await proc.kill('SIGKILL');
+            } catch {
+              // The late process may already be gone.
+            }
+            await proc.wait().catch(() => undefined);
+          })();
+        },
+        () => undefined,
+      );
+
       /** @type {Error | undefined} */
       let terminalError;
       /** @type {Promise<void> | undefined} */
@@ -744,9 +791,12 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
 
       /**
        * The sole termination path. It is safe to call before the driver has
-       * finished spawning: the registered lease waits for that boundary,
-       * signals the whole driver-owned process group/container, escalates,
-       * and does not settle until the driver reports the child reaped.
+       * finished spawning: a pending admission is cancelled and abandoned
+       * rather than awaited, so a stalled driver call cannot delay
+       * settlement, and a process that arrives after abandonment is still
+       * terminated and reaped. Once a process is admitted this signals the
+       * whole driver-owned process group/container, escalates, and does not
+       * settle until the driver reports the child reaped.
        *
        * @param {Error} reason
        * @param {string | number} [initialSignal]
@@ -756,11 +806,32 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
         if (killPromise === undefined) {
           killPromise = (async () => {
             await null;
+            // Cancel a still-pending admission first so this settles even
+            // when the driver call never does.
+            admission.abort(reason);
+            /** @type {DriverProcess} */
             let driverProc;
-            try {
-              driverProc = await driverProcessPromise;
-            } catch {
-              return;
+            const alreadyAdmitted = admittedProc;
+            if (alreadyAdmitted !== undefined) {
+              driverProc = alreadyAdmitted;
+            } else {
+              try {
+                driverProc = await Promise.race([
+                  driverProcessPromise,
+                  admissionAborted,
+                ]);
+              } catch {
+                const landed = admittedProc;
+                if (landed === undefined) {
+                  // No controllable process exists yet. A late arrival is
+                  // reaped by the abandoned-admission reaction above.
+                  admissionAbandoned = true;
+                  return;
+                }
+                // The admission landed while the race was settling; fall
+                // through and terminate it here.
+                driverProc = landed;
+              }
             }
             const waitPromise = driverProc.wait();
             waitPromise.catch(() => undefined);
@@ -808,7 +879,9 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
 
       // Cross the driver boundary only after the lease is observable.
       Promise.resolve()
-        .then(() => driver.spawn(driverSlice, [...argv], spawnOpts))
+        .then(() =>
+          driver.spawn(driverSlice, [...argv], spawnOpts, spawnControls),
+        )
         .then(resolveDriverProcess, rejectDriverProcess);
 
       /** @type {ReturnType<typeof setTimeout> | undefined} */
@@ -826,9 +899,15 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
 
       let driverProc;
       try {
+        // Waiting on admission races the cancellation so a stalled driver
+        // call rejects the caller instead of hanging the spawn.
         // eslint-disable-next-line @jessie.js/safe-await-separator
-        driverProc = await driverProcessPromise;
+        driverProc = await Promise.race([
+          driverProcessPromise,
+          admissionAborted,
+        ]);
       } catch (e) {
+        admissionAbandoned = true;
         if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
         markStreamsReady();
         liveProcesses.delete(lease);

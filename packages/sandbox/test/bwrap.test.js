@@ -936,11 +936,26 @@ test.serial('bwrap serializes spawn and dispose in both orderings', async t => {
     harden({ captureStdout: false, captureStderr: false }),
   );
   const disposed = E(spawnFirst).dispose();
-  const proc = await spawned;
-  const pid = await E(proc).pid();
+  // Disposal cancels a still-pending admission, so the spawn either
+  // rejects as disposed or yields a handle whose wait() reports the
+  // disposal; either way the process group must be gone afterwards.
+  /** @type {Awaited<typeof spawned> | undefined} */
+  let proc;
+  /** @type {Error | undefined} */
+  let admissionError;
+  try {
+    proc = await spawned;
+  } catch (e) {
+    admissionError = /** @type {Error} */ (e);
+  }
   await disposed;
-  await t.throwsAsync(() => E(proc).wait(), { message: /disposed/ });
-  await waitForProcessGroupGone(pid);
+  if (proc !== undefined) {
+    const pid = await E(proc).pid();
+    await t.throwsAsync(() => E(proc).wait(), { message: /disposed/ });
+    await waitForProcessGroupGone(pid);
+  } else {
+    t.regex(/** @type {Error} */ (admissionError).message, /disposed/);
+  }
   await E(spawnFirst).dispose();
 
   const disposeFirst = await E(factory).make(
