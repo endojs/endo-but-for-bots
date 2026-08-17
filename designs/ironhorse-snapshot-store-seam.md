@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
-| **Updated** | 2026-08-11 |
+| **Updated** | 2026-08-17 |
 | **Author** | Aaron Kumavis (prompted) |
 | **Status** | In Progress |
 | **Builds on** | designs/ironhorse-engine.md (§ Snapshots, requirement 1c) |
@@ -402,6 +402,120 @@ that actually carry side-table state that wide. The stored-summary
 variant belongs to the side-table LEDGER work (rows are not yet
 persisted; the quiescent contract keeps resumed machines
 arena-confined), so it lands there, not here.
+
+**Review wave 2 (2026-08-17): seven adversarial reviewers over the
+post-draft delta.** Findings are recorded here in full; the fixed set
+landed in this wave's commits, the open set is recorded for a later
+reviewed pass (not yet actioned), and the cleared set is kept so the
+negatives are on the record too.
+
+*Fixed and pushed (this wave):*
+
+- **Derived-index trust hole** (raised independently by three
+  reviewers, highest severity). `edge_pairs` is the SQLite
+  collector's only reachability input yet sits outside the sealed
+  root, and the open-time staleness gate compared cardinalities
+  only — so a count-preserving at-rest edit (a moved pair) was
+  trusted forever and silently shrank reachability, the class the v5
+  sealing exists to refuse. Fixed: open rebuilds `edge_pairs` from
+  the sealed rows unconditionally; locked by
+  `edge_pairs_rebuilt_after_count_preserving_desync`.
+- **Geometry-delete normalization divergence**: the commit-side
+  `DELETE … OR target >= ?1` disjunct differed from the rebuild's
+  normalization (dead code on honest histories; a crafted shrink
+  made it oscillate). Removed — pairs mirror the sealed rows
+  verbatim.
+- **SummaryCount weakened to bare `COUNT(*)`**: accepted a gapped
+  `page_edges` (interior gap + phantom beyond-geometry row) the
+  dense default refuses. Fixed: contiguity check
+  (`COUNT == MAX(page)+1`); locked by
+  `summary_page_count_refuses_gapped_page_edges`.
+- **Empty-store parity**: both trait overrides now return `Empty` on
+  an uncommitted store like the dense defaults; read-back page/target
+  columns are range-checked into `u32`, not `as`-truncated.
+- **32-bit decoder wrap**: `slot_count * SLOT_RECORD_BYTES` uses
+  `checked_mul`, so the truncation gate's payload bound (and the
+  `seen`-scratch safety argument) holds on every target, not only
+  64-bit.
+- **CI fuzz lane** (five defects): floating nightly pinned; the
+  corpus cache re-saves every run (run-unique key — the old exact
+  key never re-saved); the change probe covers the oracle inputs the
+  fuzz build links (`c/moddable`, `.gitmodules`, xsnap platform); the
+  submodule fetch retries and fails loud; a lockfile-freshness gate
+  fails a stale `fuzz/Cargo.lock`; the smoke loop surfaces every
+  crashing target.
+- **Docs numerics** (four): "160k side-table entries" corrected to
+  the measured ~80k; a phantom function name in the counted-accessor
+  plan fixed; two unreconciled partial-collect baselines reconciled
+  with a variance note; roadmap item 10 no longer overstates the
+  trait surface.
+
+*Open — recorded, not yet actioned (a later reviewed instrument pass):*
+
+- **Instrument labels vs. what they measure** (the bench reviewer;
+  the numbers are real, the framing is not). The store-seam
+  instruments' fixtures use array-held (side-table) graphs invisible
+  to the arena summaries, so on a cold resume: `store_bench`'s
+  `partial(cte)` arm mass-frees ~92% of the heap and reads as
+  O(heap) rather than pricing the decision path; its reachability
+  arms only ever exercise a constant ~6-page answer, so they cannot
+  exhibit the "transfer ∝ answer" claim. Fix direction: an
+  arena-visible chain fixture (`head = { next: head }`) that survives
+  cold resume, plus a big-answer/small-answer reachability pair.
+- **`attached_bench` faulting arm** starts its timer before
+  `resume_from_store_lazy`, so ~75–80% of the reported "faulting tax"
+  is the wake `wake_latency_bench` already isolates. Fix: start the
+  clock after the resume.
+- **`checkpoint` arm mislabel**: it is labeled O(dirty) but grows
+  O(pages) because every commit re-reads the leaf hashes and
+  recombines the root; relabel (the number is honest end to end).
+- **`gc_bench` phase split** times the gate/enum/query phases but
+  leaves the dominant page-free to subtraction, and prints cold
+  first-round enum/query samples beside warm partial medians; time
+  all four phases in one warm round.
+- **`YIELD` stack-underflow guard has no regression test** (the
+  `AWAIT` twin does). The guard is confirmed sound by inspection
+  (structural twin of the tested one; `pop()` is total) and the fuzz
+  lane explores the generator path. A byte-patch reproducer was
+  attempted and abandoned as too fragile: a compiled generator's own
+  stack starts empty at resume, so a balanced-then-patched body does
+  not underflow; a genuine reproducer needs hand-assembled hostile
+  bytecode that drives a generator resume with a nonzero base.
+- **Cross-crank bench fixtures** rely on the positional-symbol
+  convention with only `.completed` asserted (all four are correctly
+  aligned today); pin the results so a future edit that misaligns a
+  redeclaration fails loudly.
+- **FileStore has no `partial_collect` coverage**: the
+  backend-equivalence test covers Memory vs SQLite only. The non-DB
+  reviewer's probe showed current equivalence (freed 2919 == 2919,
+  byte-exact round-trips), but the durable non-DB backend's
+  edge-section decode and post-commit reload feeding the new trait
+  methods are untested. Fix: extend the equivalence test to a
+  three-way Memory/File/SQLite check.
+- **Temp-dir cleanup** in the bench/query tests runs only on success
+  (pid-keyed start-of-test cleanup mitigates leakage; a repo-wide
+  convention gap, low severity).
+
+*Cleared on inspection or by empirical probe (no defect):*
+
+- The side-table visitor refactor is set-identical to the old
+  enumeration (entry-by-entry diff), and the bitmap projection loses
+  no page — `capacity == manifest.slot_count` at every clean
+  boundary (the slot arena has no shrink path), proven and
+  test-locked.
+- Both suspend guards are correctly placed (`pop()` is total), and a
+  full dispatch-loop sweep found no other `split_off`/index/truncate
+  on a recorded base reachable below it from hostile bytecode.
+- The `decode_heap` accounting gate (`free + live == slot_count`)
+  holds for every legitimate producer — fresh, post-full-GC,
+  post-`partial_collect`, lazily-attached, and round-tripped
+  machines — verified empirically against a throwaway probe; it can
+  brick no valid snapshot.
+- The provided-default reroute is bit-identical for the
+  non-overriding backends (MemoryStore, FileStore) including
+  error-propagation order, verified old-binary vs new-binary; the two
+  new trait methods are provided-with-default, so external
+  implementors and object-safety are unaffected.
 
 Preceding it, the collaborator-review follow-up wave landed:
 `compare_payloads` as the only sanctioned two-chunk read, SQLite
