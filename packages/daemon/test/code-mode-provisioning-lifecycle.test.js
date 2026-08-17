@@ -339,7 +339,7 @@ test.serial(
     const nestedGit = /** @type {ReadOnlyEndoGit} */ (
       await E(guest).lookup('nested')
     );
-    const rows = await E(nestedGit).status();
+    const { entries: rows } = await E(nestedGit).status();
     t.deepEqual(
       rows.map(({ path }) => path),
       ['inside.txt'],
@@ -358,7 +358,7 @@ test.serial(
     const recoveredGit = /** @type {ReadOnlyEndoGit} */ (
       await E(recovered.powers).lookup('nested')
     );
-    const recoveredRows = await E(recoveredGit).status();
+    const { entries: recoveredRows } = await E(recoveredGit).status();
     t.deepEqual(
       recoveredRows.map(({ path }) => path),
       ['inside.txt'],
