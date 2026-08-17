@@ -1140,18 +1140,23 @@ Phases 10-12 (added 2026-08-16) continue the same goal into the
 collectors themselves — GC-shaped questions become indexed store
 queries, so collection cost tracks the mutation set, not the heap:
 
-10. **Query-driven reachability + stored root/side-table summaries.**
-    Normalize the page-edge summaries into an indexed `(target,
-    page)` pair table, derived and rebuildable, maintained in the
-    same commit transaction as the sealed rows; serve reverse-edge
-    lookups and reachability as store queries (a recursive CTE in
-    SQLite) instead of reifying the whole edge set. Then persist
-    per-page side-table-reference summaries at checkpoint, so the
-    partial collector's conservative root set is itself a store
-    query rather than an O(live) machine enumeration.
-    *Bar:* query/dense reachability parity locked; derived-index
-    rebuild locked; partial-collect decision cost sub-O(live) on the
-    wide fixture.
+10. **Query-driven reachability + counted side-table roots.**
+    LANDED (first half): the page-edge summaries normalized into an
+    indexed `(target, page)` pair table, derived and rebuildable,
+    maintained in the same commit transaction as the sealed rows;
+    reverse-edge lookups and reachability served as store queries (a
+    recursive CTE in SQLite) through provided `HeapStore` methods
+    whose defaults preserve the dense semantics.
+    RE-SCOPED (second half): the original "stored side-table summary
+    rows" idea assumed side tables persist — they do not yet (the
+    quiescent contract; the ledger is the workstream that changes
+    that), so the store cannot summarize state it does not hold. The
+    root set instead becomes a standing in-machine count maintained
+    at mutation time — the counted-accessor plan below, its own
+    reviewed PR.
+    *Bar (landed half, met):* query/dense reachability parity locked;
+    derived-index rebuild locked; backend-equivalent partial collect
+    locked. *Bar (plan):* see the plan's own bars.
 11. **Summary-generational full mark.** Mark = pages dirtied since
     the last full collect ∪ pages reachable from them through the
     stored summaries, resolved through the phase-10 indexes (the
@@ -1166,6 +1171,89 @@ queries, so collection cost tracks the mutation set, not the heap:
     phase-7 deferral, unchanged scope: per-chunk indexed updates
     retire the whole-space slide and de-chain the dead sequential
     runs the page summaries conservatively keep.
+
+### Plan: counted side-table ref-page accessors (phase 10 remainder, its own PR)
+
+Goal: retire the last decision-side O(live) term in
+`partial_collect` — the visitor walk over every side-table entry
+(1.06 ms at 480k slots / 160k entries after the bitmap projection) —
+by maintaining per-page reference counts incrementally at side-table
+mutation time, so the collector's root projection reads a standing
+map in O(pages-with-refs).
+
+Design:
+
+- New machine state beside the tables: per-page refcounts for
+  side-table-held references (`page -> u32`), plus the nonzero page
+  set the collector reads.
+- The two BULK tables move behind counting accessors: `ArrayData
+  .items` and the collections' `entries` become private to their
+  module; the only mutation route is methods that apply symmetric
+  deltas — increment the refs of stored values, decrement the refs
+  of displaced/removed values — using the same `Slot::each_ref_slot`
+  projection the visitor uses today.
+- **Privacy is the soundness mechanism.** With the fields private,
+  the compiler forces every current and future mutation site through
+  the counted path; a missed site is a compile error, not a silent
+  leak (missed decrement = permanent root) or corruption (missed
+  increment = freeing a live page). Hook-by-convention was rejected
+  for exactly this reason.
+- The small-table tail (functions, bound functions, promises,
+  iterators, typed arrays, generators, async instances, …) keeps the
+  visitor walk — it is O(small), and partial collection roots from
+  counted pages (bulk) ∪ visitor pages (tail).
+- Bulk-removal paths participate: the GC retain sweeps
+  (`free_slot_indices`, `collect_garbage`) decrement per dropped
+  entry (O(dropped), amortized like the sweep itself); restore and
+  any whole-table clear rebuild the counts from what they rebuild.
+
+Inventory (measured on this branch, all in
+`ironhorse-vm/src/interp.rs`): 39 direct `.items` mutation sites, 4
+`.entries` sites, 17 table-level insert/remove sites, plus the GC
+retain sweep and the restore path.
+
+Soundness protocol:
+
+- Debug-build parity assertion in `partial_collect`: recompute the
+  bulk tables' page set via the visitor and assert equality with the
+  counted map before rooting (compiled out in release).
+- The projection parity lock gains a counts arm; the metamorphic
+  suite gains a collect-under-churn arm (mutate arrays/maps across
+  cranks, partial collect at each clean boundary, compare against an
+  enumeration-rooted twin).
+- Staged landing: arrays first (39 sites), collections second, each
+  stage green through the full suites before the next.
+
+Bars: partial-collect decision cost sub-O(live) on the wide fixture
+(enum column ≈ O(pages-with-refs); target < 0.1 ms at the 480k
+fixture); `dispatch_bench` and `attached_bench` within their recorded
+envelopes (one map delta beside an existing map operation is the
+expected noise floor — the gate decides); zero public-surface change
+outside `ironhorse-vm`; the store seam untouched.
+
+Why its own PR: ~60 mutation sites in the interpreter core with a
+freeing-live-pages failure class is the highest-regression-risk
+change in this arc; it deserves focused review, not a ride on an
+already-wide branch.
+
+### Seam footprint, phases 5-10
+
+The `HeapStore` seam introduced with the SQLite backend has not
+moved: same pull-based row/metadata reads plus one atomic batch
+commit, same crate layout (backend outside the engine workspace),
+same dependency direction (sqlite → snapshot → vm), engine crates
+still `forbid(unsafe_code)`/zero-C. It WIDENED, additively: phases
+5/6/9 added four required metadata methods (`leaf_hashes`,
+`page_edges`, `read_free_seg`, `free_leaf_hashes` — each with the
+store format that carries it), and phase 10 added two PROVIDED query
+methods (`summary_page_count`, `reachable_page_set`) whose defaults
+reproduce the dense semantics exactly, so third-party backends
+compile unchanged and inherit correct behavior. Engine-core changes
+across the branch are additive subsystems (GC wiring, the snapshot/
+enumeration surface, arena bitmaps) plus two named-refusal guards in
+the dispatch loop's suspend arms; hot-path neutrality is held by the
+recorded benchmark gates (detached dispatch unchanged; attached
+×1.009).
 
 *Future work beyond phase 12 (out of scope until a consumer demands
 it):* structural sharing of pages across forked workers; store
