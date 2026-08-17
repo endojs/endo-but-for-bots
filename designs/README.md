@@ -14,18 +14,19 @@ designs (mcp-endo-guest, mcp-daemon-guest-tools). Summary table, M6 constituent 
 dependency graph (including the `endo-posix-sandbox` prerequisite edge), per-design
 estimate, and design-count totals synced; M6's own-work rollup now folds in
 endo-claude's ~1-1.5 weeks.*
-*Refreshed on 2026-08-08:
+*Refreshed on 2026-08-16:
 [session-execution-capabilities](session-execution-capabilities.md) is the
 current daemon-backed code-mode capability roadmap.
-It distinguishes landed code mode from the open package-manager and trusted
-grant stacks and the still-unimplemented host safe-installer and Web transport.
-The remaining work has concrete owners for shared address semantics, a
-DNS-pinned HTTP dialer, transport-neutral HTTP policy, passable Web research,
-daemon composition, generic grant exposure, safe installation, Git remotes,
-restart, and acceptance; endo-pi is one consumer and the optional sandbox is
-tracked separately in
-[PR #953](https://github.com/endojs/endo-but-for-bots/pull/953).
-Summary, M3 row, estimate, and design metadata remain synchronized.*
+It scopes zero-grant and confinement claims to strict harness posture,
+distinguishes portable Exo guarantees from trusted host development and
+conformance-qualified sandbox backends, and makes `@endo/sandbox` the planned
+production boundary for native processes over untrusted workspaces. The work
+ledger now uses landed, open, and unposted checklists, including durable effect
+reconciliation and workload-specific broker-only networking. Daemon-owned Web
+uses confined HTTP, package installation uses an `EndoRegistry`/CAS broker, and
+Git HTTPS uses a narrower exact-origin CONNECT broker. Retired Genie code is
+salvage or reference material. Summary, M3 row, estimate, totals, and timeline
+are synchronized.*
 
 *Layered on 2026-08-06: added
 [session-execution-capabilities](session-execution-capabilities.md) to M3,
@@ -55,10 +56,11 @@ totals, and timeline synced.*
 
 *Recently added or revised:
 [session-execution-capabilities](session-execution-capabilities.md) (added
-2026-08-06, revised 2026-08-08; the current daemon-backed code-mode roadmap
-separates landed, open, and unimplemented work and assigns reusable network,
-WebResearch, safe-installer, Git, durable provisioning, and acceptance work to
-concrete packages and dependency-ordered pull requests),
+2026-08-06, revised 2026-08-16; the current daemon-backed code-mode roadmap
+scopes strict versus preserved harness claims, defines portable, trusted-host,
+and confined assurance levels, and tracks every landed, open, and unposted Web,
+package, Git, operation-recovery, sandbox, and acceptance item with an explicit
+checkbox),
 [endor-registry-proxy-worker](endor-registry-proxy-worker.md) (added
 2026-08-06; an XS-hosted JavaScript mapping phase over a virtual read-only CAS
 package graph, using compartment-mapper's shared package resolver to emit a
@@ -385,10 +387,10 @@ LLM-agent stack).*
 | [endopi](endopi.md) | 2026-05-15 | 2026-06-25 | Reference |
 | [endopi-edit-tool](endopi-edit-tool.md) | 2026-05-15 | 2026-05-15 | Proposed |
 | [endopi-jsonl-transcript-format](endopi-jsonl-transcript-format.md) | 2026-05-15 | 2026-05-15 | Proposed |
-| [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md) | 2026-05-15 | 2026-05-15 | Proposed (partially satisfied by `packages/genie`) |
+| [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md) | 2026-05-15 | 2026-05-15 | Proposed (historically informed by the retired `packages/genie`) |
 | [endopi-skills-markdown-format](endopi-skills-markdown-format.md) | 2026-05-15 | 2026-05-15 | Proposed |
 | [endopi-prompt-templates](endopi-prompt-templates.md) | 2026-05-15 | 2026-05-15 | Proposed |
-| [endopi-iterative-compaction](endopi-iterative-compaction.md) | 2026-05-15 | 2026-05-15 | Proposed (partially satisfied by `packages/genie`) |
+| [endopi-iterative-compaction](endopi-iterative-compaction.md) | 2026-05-15 | 2026-05-15 | Proposed (historically informed by the retired `packages/genie`) |
 | [endopi-stdio-rpc-bridge](endopi-stdio-rpc-bridge.md) | 2026-05-15 | 2026-05-15 | Proposed |
 | [endopi-extension-package-manifest](endopi-extension-package-manifest.md) | 2026-05-15 | 2026-05-15 | Proposed |
 | [endoclaw-browser](endoclaw-browser.md) | 2026-03-03 | 2026-03-03 | Not Started |
@@ -406,7 +408,7 @@ LLM-agent stack).*
 | [daemon-locator-terminology](daemon-locator-terminology.md) | 2026-02-24 | 2026-02-24 | Not Started |
 | [daemon-os-sandbox-plugin](daemon-os-sandbox-plugin.md) | 2026-02-15 | 2026-03-19 | Superseded by [endo-posix-sandbox](endo-posix-sandbox.md) |
 | [endo-posix-sandbox](endo-posix-sandbox.md) | 2026-05-07 | 2026-05-07 | In Progress (Phase 3) |
-| [session-execution-capabilities](session-execution-capabilities.md) | 2026-08-06 | 2026-08-08 | Proposed |
+| [session-execution-capabilities](session-execution-capabilities.md) | 2026-08-06 | 2026-08-16 | Proposed |
 | [daemon-value-message](daemon-value-message.md) | 2026-03-02 | 2026-03-03 | **Complete** |
 | [daemon-web-gateway](daemon-web-gateway.md) | 2026-03-11 | 2026-03-11 | **Complete** |
 | [daemon-weblet-application](daemon-weblet-application.md) | 2026-02-24 | 2026-02-25 | Not Started |
@@ -500,7 +502,6 @@ LLM-agent stack).*
 Superseded (166 designs). This corrects the preceding historical snapshot
 after filing the 17 unattended documents and recording the merged
 `editMessage` successor as Complete.
-
 ## Roadmap
 
 ### Execution lead: Minion Town federation experiment
@@ -875,7 +876,7 @@ capabilities available to agents.
 | daemon-agent-tools | In Progress | Capability-layer map and build sequence for the M3 "Claw-like coding capabilities" pillar, reconciled 2026-07-06 against the landed mount/git trio and re-swept 2026-08-06 for package management. Filesystem, Shell, local-git, and remote-git tool groups shipped: file tools list/edit/stat (#614, Phase 1), the `Shell` capability + `makeShellTool` (#615, Phase 2a/2b), mount-bridged git `status`/`add` (#616), and the `makeGitRemoteTool` push tier (#705), on top of `@endo/agent-tools` #523/#524. The **Network (HTTP)** tier maps the landed `HttpClient`/`HttpClientControl` capability from `@endo/exo-http-client` over `@endo/http-confine` (#566). The **Package management** tier maps portable reader, safe-installer, and project-executor facets (#948), the daemon-backed base-session design (#949), the grant-sensitive agent-tools projection (#950), and the optional backend design (#953). Remaining phased work: the sandbox shell engine (Phase 2c, gated on `endo-posix-sandbox`), the `makeHttpTool` binding and plugin provisioning (Phase 3.6), and the Phase 4 worked loop. |
 | endo-agent-tools | In Progress | `@endo/agent-tools`: method-guard tools over a confined workspace. The canonical `ToolRecord` (`makeTool`), the confinement axis plus attenuation levers, the git authority tiers (read / write / push), and capability args as camelCase petnames resolved against the guest petstore via `E(powers).lookup`, bound host-side with `storeIdentifier` / `storeValue` (no opaque handle, no bespoke registry). `Filesystem`-targeted file tools over `@endo/platform/fs/extended` read the live worktree and history through one cap; #523 reconciled the FS read tool onto the canonical `ToolRecord`. One petstore is the system of record at two granularities (per-call tool mode, per-session code mode); petname-for-caps plus SmallCaps-for-data are complementary. Wire schemas are hand-authored and pinned to the live guard by a divergence gate; #524 shipped the code-mode TypeScript declaration renderer (build-time codegen, two paths, gated against the guards). Realizes the package `endo-gateway-mcp` named; supersedes [agent-tools-mount-fs-tools](agent-tools-mount-fs-tools.md). Sibling of `@endo/agentry`'s `defineAgent` builder ([agentry-agent-builder](agentry-agent-builder.md)) |
 | agentry-agent-builder | In Progress | `@endo/agentry` `defineAgent`: the agent builder that lets someone build their own lal (dogfooded by reconstructing lal itself). Core landed in #517: a single-call `defineAgent(config)` returning a maker function (the powerless definition is the maker's closure; calling the maker with a powers handle is the powered stage), a module in #308's optimizer and eval package, keeping the exo `define*`/`make*` spirit (no separate `makeAgent(template, powers)` export). Primary interaction mode is code-mode `evaluate` over petname-bound endowments (not a multi-interface cli/sdk/web export); discrete `arg0`-style tools are kept as a distinct second mode. Code-mode result rendering uses the real SmallCaps marshaller (`@endo/marshal`), not `JSON.stringify`. #902 adds generated declarations for daemon mount, Git, and Git-remote globals; the Pi-independent `code-mode-provisioning` subpath maps plain session policy to a retained daemon guest and selects those matching declarations, with versioned non-secret reconstruction data. Shipped config is `{ model, instructions, tools, endow }`: `model` folds in the provider (profile string / `provider/modelId` / concrete pi-ai `Model`), `instructions` is the system prompt, and the credential key resolves through a `Credentials` seam (`makeEnvCredentials`) plus the `endow` hook. No `harness` abstraction (one pi loop via `@earendil-works/pi-agent-core` v0.79.0; code-mode guest code is confined in a fresh Endo Compartment per #297). #517 ships the two code-mode presets `makeCodeModeAgent` / `makeCodeModeGitLoopAgent` (`@endo/agentry/code-mode`), each wrapping `defineAgent({ model, instructions, tools: [toPiAgentTool(...)] })`. The SmallCaps renderer lives in `@endo/agent-tools/adapters/smallcaps.js`. Aspirational (not in #517): declarative tool selection plus attenuation (functions-of-cap), define-time wire-schema derivation (`Tool.parameters` plus MCP `inputSchema`), a `compaction` selector (pi-default or genie's observer/reflector pair), `prompts.steering`, a `discovery` axis, and per-harness `define(Lal\|Genie)Agent` preset bundles (fae deprioritized, keeps its own loop). Capped at the eval-vs-optimize distinction the git code-mode eval harness draws. Drives the #404 wizard's Submit (which calls the maker); wires the `Filesystem` plus Git capabilities into the #370 loop |
-| session-execution-capabilities | Proposed | Current plan for daemon-backed code-mode grants, generic to consumers with endo-pi as one acceptance surface. Daemon code mode has landed; #948/#950 and #958/#965 are open stacks; the host safe-installer, shared public-address semantics, DNS-pinned HTTP transport, passable WebResearch formula, projections, and remote brokers remain. Workspace, Git, package-manager, and Web grants stay independent, durable policy reconstructs without replay, and the optional sandbox backend is tracked separately. |
+| session-execution-capabilities | Proposed | Current plan for daemon-backed code-mode grants, generic to consumers with endo-pi as one strict acceptance surface. Portable Exo guarantees, trusted host development, and conformance-qualified sandbox claims are distinct. The landed/open/unposted checklist tracks Web, package, Git, workload brokers, durable effect reconciliation, `broker-only` sandbox work, and acceptance. `piTools: 'preserve'` is a developer escape hatch outside whole-session confinement claims. |
 | agentry-git-verb-gaps | Proposed | Narrow local-git history-editing verb set for the agentry `stack-surgery` eval lane: `cherryPick`, `commit({ amend })`, `reword`, `rebase({ autosquash })`, and `checkoutConflict`. Depends on `daemon-git-capability`; the downstream `agentry-git-eval-scenarios` `stack-surgery` edge lands with that design's README node. |
 | agentry-git-eval-scenarios | Not Started | Small canonical git code-mode eval set for `@endo/agentry`: trim to `stage-and-commit`, `conflict-rebase`, and `stack-surgery`; rework PR #526 in place as the buildable conflict leg; rework PR #626 in place so its fixture and scorer land behind a pending live row, with live activation depending on agentry-git-verb-gaps for cherry-pick, amend, reword, autosquash, and conflict-side selection; name ReadableBlob `fetch`, `rangeRead`, and `rangeReadText` as the sed-like filesystem/blob path; retain rendered Git output bounds and remote exo propagation as follow-ups; and score outcomes by final state and authority boundary, never command sequence. |
 | ~~platform-fs~~ | **Complete** | `@endo/platform/fs` — shared types, content store, tree adapters; landed on `llm` (initial commit `e0dda06fb` + PR #122 review cycle fixups) |
@@ -1508,7 +1509,7 @@ have been remapped: 0 → 1, ½ → 2, 1 → 3, 2 → 4, 3 → 7, 4 → 9,
 | endo-agent-tools | M-L | 1.5-2 weeks | 3 | `@endo/agent-tools`: the canonical `ToolRecord` (`makeTool`, lifted from genie) plus hand-authored wire schemas pinned to the live guard by a divergence gate (the `Pattern → JSON Schema` deriver is tabled); `Filesystem`-targeted file tools over `@endo/platform/fs/extended` reading live worktree plus history uniformly. First tools landed (#523 FS read tool, git tools; #524 code-mode declaration renderer). Remaining bulk: the command-tool `Spawner` seam, the push tier, and across-turn cap persistence |
 | endo-claude | M | 1-1.5 weeks | 6 | `@endo/claude`: a hermetic `claude -p` (`--bare` + `--mcp-config` + `--strict-mcp-config` + `--setting-sources ""` + `--settings` apiKeyHelper + `--tools ""` fail-closed built-in baseline + `--disable-slash-commands` + a facet-derived, membership-validated `mcp__<server>__<tool>` allow-list, never `--resume`/`--continue`), run inside a **required** `@endo/claude-sandbox` OS slice (a hard dependency on `endo-posix-sandbox`), whose only capability surface is one guest facet's MCP projection. Composes with the `@endo/agent-tools` MCP adapter (prerequisite) for the server side; **extends** `@endo/claude-sandbox`'s `ClaudeCredentials` caplet with a new subscription credential kind (its live kinds `apiKey`/`oauthToken` are both inadmissible under `--bare`, so this is work, not drop-in reuse) for pooling. Bulk is the allow-list generator, the mcp-config renderer, and the credential-pool allocator (allocator-owned occupancy); the projection is not reinvented. Load-bearing residuals: whether a subscription can be presented via apiKeyHelper under `--bare`, and a live negative-**and-positive** confinement test |
 | agentry-agent-builder | M | 4-5 days | 3 | `@endo/agentry` `defineAgent` builder: new module in #308's existing package. Composes selection/attenuation/wire-schemas/presets declaratively and binds the confined pi loop. Bulk is the config surface plus preset bundles plus the `prepareArguments` call site; the heavy lifting (tools, schemas) lives in `endo-agent-tools`. Depends on `endo-agent-tools` landing first |
-| session-execution-capabilities | L | 3-5 weeks | 3 | Land the open portable package-manager and trusted-grant stacks, then complete a four-PR Web stack (shared address semantics, DNS-pinned Undici transport, HTTP/WebResearch formula, product and grant exposure), the host safe-installer plus registry broker, HTTPS Git brokers, and generic code-mode acceptance. Endo-pi is one consumer; the optional sandbox backend is separate. |
+| session-execution-capabilities | XL | 8-12 weeks across parallel lanes | 3 | Land the open portable package-manager and trusted-grant stacks; complete the four-pull-request Web stack; add trusted host development plus `EndoRegistry`/CAS package brokering; add exact-origin Git CONNECT brokering; add durable write-ahead operation receipts and effect reconciliation; qualify sandbox `broker-only` networking for untrusted native processes; and run strict consumer-independent acceptance. |
 | agentry-git-verb-gaps | S-M | 2-3 days | 3 | Extend the local `Git` surface and generated code-mode declarations with the narrow history-editing verbs required by `stack-surgery`; no broad `reset` |
 | agentry-git-eval-scenarios | S-M | 2-3 days for `conflict-rebase`; stack-surgery fixture/scorer now, live row waits on verb-gaps | 3 | Canonical git code-mode eval set for `@endo/agentry`: `stage-and-commit`, `conflict-rebase` with current `Git` and workspace caps, and `stack-surgery` as the dense scenario whose live activation waits on cherry-pick, amend, reword, autosquash, and conflict-side selection. |
 | ~~platform-fs~~ | S-M | — | 3 | ✅ Complete; `@endo/platform` package landed on `llm` (commit `e0dda06fb`); PR #122 carried review-cycle fixups |
@@ -1596,8 +1597,8 @@ have been remapped: 0 → 1, ½ → 2, 1 → 3, 2 → 4, 3 → 7, 4 → 9,
 | endopi | Reference | — | — | Comparative analysis of the pi agent harness against endo; spins out the endopi-* gap-closing designs below |
 | endopi-edit-tool | S-M | 3 days | 3 | LLM-friendly oldText/newText edit primitive on `File` capability; reuses [cli-edit-verb](cli-edit-verb.md)'s diff helpers |
 | endopi-jsonl-transcript-format | S-M | 3 days | 3 | On-disk JSONL projection of the Lal transcript graph; satisfies endoclaw § *Persistence and Memory*'s "Pi-compatible jsonl files" directive |
-| endopi-provider-registry-and-oauth | M | 4-5 days | 3 | Registry shape for LLM providers; subscription OAuth (Claude Pro, ChatGPT Plus, Copilot); cross-provider handoff. Partially satisfied today: `packages/genie` ships `pi-ai`'s full registry plus an ollama adaptor; remaining scope is OAuth + cross-provider handoff + Lal-vs-Genie consolidation. |
-| endopi-iterative-compaction | S-M | 3 days | 9 | Auto-compaction algorithm matching Pi's released shape; substrate for [lal-transcript-memory-management](lal-transcript-memory-management.md). Partially satisfied today: `packages/genie`'s observer/reflector subagent pair is a working iterative compactor. |
+| endopi-provider-registry-and-oauth | M | 4-5 days | 3 | Registry shape for LLM providers; subscription OAuth (Claude Pro, ChatGPT Plus, Copilot); cross-provider handoff. The retired `packages/genie` provider registry remains historical reference material; the remaining scope is OAuth, cross-provider handoff, and Lal consolidation. |
+| endopi-iterative-compaction | S-M | 3 days | 9 | Auto-compaction algorithm matching Pi's released shape; substrate for [lal-transcript-memory-management](lal-transcript-memory-management.md). The retired Genie's observer/reflector pair remains historical reference material for a future implementation. |
 | endopi-skills-markdown-format | S-M | 3 days | 10 | On-disk SKILL.md format (agentskills.io); paired with [endoclaw-skill-registry](endoclaw-skill-registry.md) |
 | endopi-prompt-templates | S | 1-2 days | 9 | Reusable user-prompt scaffolds with `{{var}}` expansion; shares skills' discovery walker |
 | endopi-stdio-rpc-bridge | M | 4-5 days | 3 | LF-delimited JSONL RPC for embedding the Lal/Fae agent in another process; short-term shape before `endor-bus-tui` |
@@ -1621,7 +1622,7 @@ date of this pass.
 |-----------|-----------------|-----------------|----------------------------------|
 | M1: AI Agent Experience (was M0) | 0 | **Complete** | — |
 | M2: Project Hygiene (was M½) | 0 | **Complete** | — |
-| M3: Remote Access & Tools (was M1) | 19 (`gateway-package`, `daemon-docker-selfhost`, `daemon-agent-tools`, `endo-agent-tools`, `agentry-agent-builder`, `session-execution-capabilities`, `agentry-git-verb-gaps`, `agentry-git-eval-scenarios`, `daemon-mount`, `daemon-worker-import-from-mount`, `registry-capability`, `mvs-resolver`, `snapshot-mapper`, `filesystem-watchers`, `daemon-locator-terminology`, `daemon-rename-to-manager`, `daemon-xs-worker-snapshot`, `endoclaw-timer`, `endoclaw-network-fetch`) | 13-19 weeks | 15-21 weeks |
+| M3: Remote Access & Tools (was M1) | 19 (`gateway-package`, `daemon-docker-selfhost`, `daemon-agent-tools`, `endo-agent-tools`, `agentry-agent-builder`, `session-execution-capabilities`, `agentry-git-verb-gaps`, `agentry-git-eval-scenarios`, `daemon-mount`, `daemon-worker-import-from-mount`, `registry-capability`, `mvs-resolver`, `snapshot-mapper`, `filesystem-watchers`, `daemon-locator-terminology`, `daemon-rename-to-manager`, `daemon-xs-worker-snapshot`, `endoclaw-timer`, `endoclaw-network-fetch`) | 17-25 weeks | 19-27 weeks |
 | M4: Networking (was M2) | 8 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrup-framing`, `cbors`, `cbor-codec`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`, `ocapn-orthogonal-persistence`) | 5-6 weeks | 6-8 weeks |
 | M5: Public Hosting & Billing (was M7) | 4 in-flight on PR #356 stack (`gateway-package` counted under M3; `gateway-packaging-ci`, `gateway-aws-deployment`, `gateway-aws-attuned` counted here) + 3 design gaps (`gateway-oauth-bonding`, `gateway-key-recovery`, `gateway-stripe-adapter`) | 4-6 weeks design + impl | merge cadence of PRs #343 and #356 |
 | M6: MCP Bridge Hosting (was Milestone B) | 2 net-new (`endo-gateway-mcp` impl, `endo-claude`); cross-milestone slices in M3 (P0) and M5 (P2/P3/P4 gaps) | ~3-3.5 weeks own work (endo-gateway-mcp ~2 weeks + endo-claude ~1-1.5 weeks) + ~6-9 weeks across P0-P4 | gated by M3 gateway-package phases 2/7/8 merge cadence |
@@ -1630,7 +1631,7 @@ date of this pass.
 | M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
 | M10: Confinement & Ecosystem (was M5) | 6 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
 | M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
-| **Total remaining** | **64** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~65-89 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~78-107 weeks** |
+| **Total remaining** | **64** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~69-95 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~81-111 weeks** |
 
 The 2026-05-20 reconciliation corrects a counting gap in the prior
 snapshot's narrative: M1, M3, and M4 had absorbed new rows since the
@@ -1702,15 +1703,15 @@ dates project from that anchor at the upper-bound effort.
 |-----------|----------|------------|-------------|
 | M1: AI Agent Experience (was M0) | 18 days (actual) | **Complete** | March 5, 2026 |
 | M2: Project Hygiene (was M½) | **Complete** | — | 2026-06-15 |
-| M3: Remote Access & Tools (was M1) | 8-10 weeks | 8-10 weeks | Late July to early August 2026 |
-| M4: Networking (was M2) | 5-6 weeks | 13-16 weeks | Late August to mid September 2026 |
-| M5: Public Hosting & Billing (was M7) | 4-6 weeks (designs + impl) + AWS-stack merge cadence | 17-22 weeks | Late September to mid November 2026 (gated by M3 gateway-package merge cadence and PRs #343 / #356) |
-| M6: MCP Bridge Hosting (was Milestone B) | ~2 weeks own work | 19-24 weeks | Mid October to late November 2026 (gated by M3 gateway-package phases 2/7/8 merge cadence) |
-| M7: Weblets & Integrations (was M3) | 6-8 weeks | 25-32 weeks | Mid December 2026 to mid January 2027 |
-| M8: Peer App Sharing (was Milestone A) | 2-3 weeks | 27-35 weeks | Late December 2026 to early February 2027 |
-| M9: UX & Tooling (was M4) | 9-12 weeks | 36-47 weeks | Mid February to mid April 2027 |
-| M10: Confinement & Ecosystem (was M5) | 14-20 weeks | 50-67 weeks | Late May to early September 2027 |
-| M11: Rust Daemon (`endor`) (was M6) | 15-22 weeks | 65-89 weeks | Q3 to Q4 2027 (research-heavy; may run in parallel) |
+| M3: Remote Access & Tools (was M1) | 17-25 weeks | 17-25 weeks | Mid September to mid November 2026 |
+| M4: Networking (was M2) | 5-6 weeks | 22-31 weeks | Late October to late December 2026 |
+| M5: Public Hosting & Billing (was M7) | 4-6 weeks (designs + impl) + AWS-stack merge cadence | 26-37 weeks | Mid November 2026 to early February 2027 (gated by M3 gateway-package merge cadence and PRs #343 / #356) |
+| M6: MCP Bridge Hosting (was Milestone B) | ~2 weeks own work | 28-39 weeks | Early December 2026 to mid February 2027 (gated by M3 gateway-package phases 2/7/8 merge cadence) |
+| M7: Weblets & Integrations (was M3) | 6-8 weeks | 34-47 weeks | Mid January to mid April 2027 |
+| M8: Peer App Sharing (was Milestone A) | 2-3 weeks | 36-50 weeks | Late January to early May 2027 |
+| M9: UX & Tooling (was M4) | 9-12 weeks | 45-62 weeks | Late March to late July 2027 |
+| M10: Confinement & Ecosystem (was M5) | 14-20 weeks | 59-82 weeks | Early July to mid December 2027 |
+| M11: Rust Daemon (`endor`) (was M6) | 15-22 weeks | 74-104 weeks | Q4 2027 to Q2 2028 (research-heavy; may run in parallel) |
 
 *M3 and M7 (weblets) are less order-dependent and can be interleaved
 once their respective dependencies have landed; the M5/M6 hosted-Gateway

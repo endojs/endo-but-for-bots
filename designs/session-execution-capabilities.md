@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
-| **Updated** | 2026-08-08 |
+| **Updated** | 2026-08-16 |
 | **Author** | 0xpatrickdev (prompted) |
 | **Status** | Proposed |
 | **Builds on** | [daemon-mount-capabilities](daemon-mount-capabilities.md), [daemon-git-capability](daemon-git-capability.md), [daemon-git-remotes](daemon-git-remotes.md), [endo-agent-tools](endo-agent-tools.md), and [endo-fetch](endo-fetch.md) |
@@ -24,18 +24,24 @@ The durable product is a daemon-owned formula graph and trusted grant path, not
 an endo-pi controller or any other harness-specific launcher.
 Endo-pi remains one consumer and one end-to-end acceptance surface.
 
-The two largest missing product surfaces are safe dependency hydration and
-mediated Web research.
+The two largest missing product surfaces are dependency hydration and mediated
+Web research.
 The network work begins with reusable public-address semantics and a DNS-pinned
 Node HTTP transport, then composes those into transport-neutral HTTP policy and
 a passable `WebResearch` capability.
-The package-manager work composes only the safe-installer facet from the open
-portable capability stack and never exposes the executor facet on the host.
+The package-manager work composes only the installer facet from the open
+portable capability stack and never exposes the executor facet in a strict
+session. Calling that facet a safe installer describes its authority relative
+to the executor facet. It is not a claim that every backend confines a hostile
+workspace.
 
 Workspace, Git, package-manager, and Web authority remain separate grants.
-Every effect is bounded and cancellable, durable policy contains no secrets or
-live handles, restart reconstructs capabilities but never replays interrupted
-work, and out-of-band daemon-store purge remains explicitly destructive.
+Every effect carries bounded and cancellable protocol contracts at the portable
+facade, and its backend is responsible for enforcing them. Strong path, process,
+and network containment additionally requires a conformance-qualified confined
+backend. Durable policy contains no secrets or live handles, restart
+reconstructs capabilities but never automatically replays interrupted work,
+and out-of-band daemon-store purge remains explicitly destructive.
 
 ## Scope
 
@@ -43,7 +49,8 @@ This design covers:
 
 - the generic trusted-grant and durable-reconstruction contract for code mode;
 - independently provisioned workspace, Git, package-manager, and Web grants;
-- safe frozen dependency hydration with no host execution of project code;
+- safe-installer authority for frozen dependency hydration, with backend
+  assurance stated separately;
 - reusable public-address classification and DNS-pinned HTTP transport;
 - mediated Web fetch and search with the existing `webFetch` and `webSearch`
   product names;
@@ -56,23 +63,29 @@ It does not add runtime code in this pull request, grant a raw shell, expose a
 package-manager executor on the host, combine registry access with arbitrary
 Web authority, or make one UI's policy record the general capability identity.
 
+The strict posture also does not preserve ambient harness tools. The
+development-only `piTools: 'preserve'` compatibility posture is documented
+separately and is outside whole-session confinement claims.
+
 ## Verified Current State
 
-This state was verified on 2026-08-08 against `llm` commit
-`5f9ccdea246d1c0d7c68b1a00bc1ed9ff349fdc8` and the live pull-request heads.
+This state was verified on 2026-08-16 against `llm` commit
+`ba504b5d6120c1463e0f3c286cfc93c7c82f10eb` and the live pull-request heads.
 Open implementation branches remain owned by their existing pull requests and
 must not be absorbed into this design branch.
 
 | Surface | State | Live evidence and remaining boundary |
 |---|---|---|
-| Daemon-backed code mode | **Landed on `llm`.** | [#907](https://github.com/endojs/endo-but-for-bots/pull/907) merged as `be3dca21c024b29b93432e9e6d4bb462294706d1`. It supplies retained daemon guests, restart/reconnect behavior, and the endo-pi `evaluate` acceptance surface. It does not supply package-manager or mediated Web grants. |
-| Portable package manager | **Open draft on `llm`.** | [#948](https://github.com/endojs/endo-but-for-bots/pull/948), head `20374e0ca81abaff5758b72dc41ba3df6bc65534`, defines structurally distinct cumulative reader, safe-installer, and executor facets plus the injected backend protocol. |
-| Package-manager projection | **Open draft stacked on #948.** | [#950](https://github.com/endojs/endo-but-for-bots/pull/950), head `1c6638047d6891dbb47ea2d0ff5dc2e3610b4341`, projects metadata tools for a reader, adds `installDependencies` only for an installer, and adds `runPackageScript` only for an executor. Its recorded base snapshot is `b9301c6d6ba416e5164e713f70a290745ee693c7`; #948 has since advanced, so stack maintenance remains with those implementation PRs. |
-| Named Git grants | **Open draft on `llm`.** | [#958](https://github.com/endojs/endo-but-for-bots/pull/958), head `026ec9b864559694403d1a21ddefea7a3d8fe776`, adds named nested Git grants, named mount selection, canonical-root persistence, and retained reconstruction. |
+| Daemon-backed code mode | **Landed on `llm`.** | [#905](https://github.com/endojs/endo-but-for-bots/pull/905) and [#907](https://github.com/endojs/endo-but-for-bots/pull/907) supply retained daemon guests, restart/reconnect behavior, and the endo-pi `evaluate` acceptance surface. They do not supply package-manager or mediated Web grants. |
+| Portable package manager | **Open draft on `llm`.** | [#948](https://github.com/endojs/endo-but-for-bots/pull/948), head `f0ea1bdda3a7f09fa44d8535f3243c5ede48b616`, defines structurally distinct cumulative reader, installer, and executor facets plus the injected backend protocol. |
+| Package-manager projection | **Open draft stacked on #948.** | [#950](https://github.com/endojs/endo-but-for-bots/pull/950), head `e2b0016fc6359110787ff43b3a92b5f0cd92c5cb`, projects metadata tools for a reader, adds `installDependencies` only for an installer, and adds `runPackageScript` only for an executor. Stack maintenance remains with those implementation pull requests. |
+| Named Git grants | **Open draft on `llm`.** | [#958](https://github.com/endojs/endo-but-for-bots/pull/958), head `e9e501d92139de3fb318dc4fd987579db0568c77`, adds named nested Git grants, named mount selection, canonical-root persistence, and retained reconstruction. |
 | Truthful generic grants | **Open draft stacked on #958.** | [#965](https://github.com/endojs/endo-but-for-bots/pull/965), head `14f2a15b6b26dfd3156f2a5f3dec8b33998fb393`, converges live endowments, checked declarations, prompts, and retained provisioning on locally trusted grant minters. Its recorded base snapshot is `b4b66062b7f234fd0963811c7645257f421bd920`; #958 has since advanced. |
-| Host safe-install backend and formula | **No implementation PR yet.** | `packages/package-manager` does not exist on `llm` or #948. The backend, registry broker, daemon formula, durable policy, cleanup, and trusted provisioning remain. |
-| Public-Web transport and `WebResearch` | **No implementation PR yet.** | `@endo/http-confine` and `@endo/exo-http-client` provide bounded exact-origin HTTP, while Genie has ambient-fetch `webFetch` and `webSearch` implementations. No reusable DNS-pinned public-Web transport, passable WebResearch capability, daemon formula, or code-mode `web` grant exists. |
-| Optional confined execution backend | **Optional later work in a stacked draft.** | [#953](https://github.com/endojs/endo-but-for-bots/pull/953) defines sandbox-backed project-code execution and defense in depth. It is not required by the safe installer or Web stack. |
+| Trusted host development backend and formula | **No implementation PR yet.** | `packages/package-manager` does not exist on `llm` or #948. The backend, registry broker, daemon formula, durable policy, cleanup, and trusted provisioning remain. This tier is for trusted workspaces, not the final hostile-workspace boundary. |
+| Public-Web transport and `WebResearch` | **No implementation PR yet.** | [#566](https://github.com/endojs/endo-but-for-bots/pull/566) landed `@endo/http-confine` and `@endo/exo-http-client`. The retired Genie package remains historical reference material for `webFetch`, `webSearch`, and its parser at the [last pre-retirement tree](https://github.com/endojs/endo-but-for-bots/tree/a54c3adb/packages/genie). No reusable DNS-pinned public-Web transport, passable WebResearch capability, daemon formula, or code-mode `web` grant exists. |
+| Registry acquisition and CAS | **Landed on `llm`.** | [#671](https://github.com/endojs/endo-but-for-bots/pull/671) supplies `EndoRegistry`, injected acquisition, published-integrity verification, and CAS-backed package trees. It is a foundation for the package-manager broker, not that broker itself. |
+| Confined execution backend | **Design draft, with incomplete substrate guarantees.** | [#953](https://github.com/endojs/endo-but-for-bots/pull/953), head `cd766517a1d6f59f382d0cb0d0cb36f32fb2e51f`, defines sandbox-backed project-code execution. Current `@endo/sandbox` proves `network: 'none'`; bwrap private egress is not wired, Podman filtering remains operator-owned, and the bwrap default seccomp profile is not loaded. The design must not claim hostile-workspace conformance until driver-owned probes pass. |
+| Context cancellation cleanup | **Open draft on `llm`.** | [#1010](https://github.com/endojs/endo-but-for-bots/pull/1010), head `4ee6c83dc58b7d40c8d0985b49e12eb2362792cd`, settles daemon context cancellation hooks. It improves graceful cleanup but does not add the durable operation journal or effect reconciliation required below. |
 
 ## Durable Grant Contract
 
@@ -113,16 +126,46 @@ pending promise, proxy address, credential material, or other ephemeral handle.
 
 After a daemon restart, each formula reconstructs its ephemeral implementation
 from durable policy.
-Every operation journal entry left in `running` becomes `interrupted` with
-reason `daemon-restart` before the capability accepts new work.
-The disconnected caller receives a rejection and must explicitly retry; Git,
-install, fetch, and search operations are never replayed automatically.
+The operation journal records liveness separately from effect outcome. An entry
+whose former process was live becomes `interrupted` with reason
+`daemon-restart`, but its outcome is classified independently as `no-effect`,
+`completed`, or `indeterminate` after effect-specific reconciliation.
+A Git push can be locally interrupted while the remote ref outcome is
+indeterminate. An install can leave a partially changed dependency tree.
+Neither case is safe to describe as though no effect occurred.
+
+The disconnected caller receives the recorded receipt and reconciliation
+status and must explicitly decide whether to retry. Git, install, fetch, and
+search operations are never replayed automatically. Retention is bounded, and
+the durable record contains non-secret operation kind, policy and formula
+identifiers, timestamps, liveness, outcome, and reconciliation metadata. It
+never stores credentials, response bodies, process handles, or sockets.
 
 Purging the daemon store out of band can remove the controller, formulas,
 aliases, policies, and daemon-owned caches.
 Externally backed workspace bytes may remain, but they do not silently recreate
 the session or its grants.
 The caller must explicitly reprovision and revalidate them.
+
+## Harness Postures and Claim Scope
+
+Strict code mode removes Pi's standard and extension tools before activating
+`evaluate`. In that posture, omission grants nothing and the zero-grant claim
+means that `evaluate` is the only active tool. Capability absence, revocation,
+and confinement acceptance tests in this document use strict posture.
+
+`piTools: 'preserve'` is a development-only compatibility escape hatch for
+improving the harness while capabilities are still under development. It keeps
+the tools that Pi already activated and appends the code-mode prompt. Those
+retained tools can carry ambient filesystem, shell, network, or extension
+authority outside the Endo grant graph. Preservation therefore invalidates
+whole-session claims such as "zero grants means no filesystem or network
+authority" even though Endo itself minted no such grant.
+
+Provisioning output, declarations, and prompt text must state which posture is
+active. Strict acceptance runs leave preservation off. A separate compatibility
+test proves that preservation adds no Endo grants beyond the retained harness
+tools and never represents those tools as daemon-minted capabilities.
 
 ## Package Ownership
 
@@ -131,15 +174,14 @@ The caller must explicitly reprovision and revalidate them.
 | `@endo/net-address` in `packages/net-address` | Portable strict IPv4 and IPv6 normalization, CIDR parsing and matching, IPv4-mapped IPv6 handling, the shared special-purpose address registry, classification, and `isPublicAddress`. |
 | `@endo/http-dialer` in `packages/http-dialer` | Node-specific DNS resolution and direct Undici dependency, a normal Undici `Agent` with a custom connector, pinned numeric-address connection, peer verification, Fetch-compatible injection, and close/destroy lifecycle. |
 | `@endo/http-confine` | Transport-neutral method and header policy, URL authorization, manual redirects, timeouts, request-rate and response-byte limits, cancellation, and revocation. It does not import the Node dialer. |
-| `@endo/exo-web-research` in `packages/exo-web-research` | Passable `WebResearch.fetch` and `WebResearch.search` interfaces, bounded copy result shapes, injected provider and transport seams, and the initial DuckDuckGo adapter moved out of Genie. It has no ambient fetch or Undici dependency. |
+| `@endo/exo-web-research` in `packages/exo-web-research` | Passable `WebResearch.fetch` and `WebResearch.search` interfaces, bounded copy result shapes, injected provider and transport seams, and an initial DuckDuckGo adapter salvaged from or informed by the retired Genie implementation. It has no ambient fetch or Undici dependency. |
 | `packages/daemon` | Formula and lifecycle composition, serializable provider and policy selection, trusted grant reconstruction, ephemeral transport recreation after restart, operation interruption, and transport disposal on shutdown. |
-| `packages/genie` | The existing `webFetch` and `webSearch` product names as adapters over an injected `WebResearch` capability. |
 | `@endo/agent-tools` | JSON-tool and code-mode projection plus the independent `web` grant group. It owns neither provider logic nor network transport. |
 | `@endo/agentry` | Generic trusted grant minting, declarations, prompt construction, and consumer-independent code-mode provisioning. |
 | `@endo/exo-http-client` | An exact-origin `HttpClient` capability over an injected transport. Its origin authority does not silently widen into arbitrary public-Web authority. |
 | `@endo/fetch` | A durable unconfined plugin intentionally configurable for explicit origins, including private origins. It is not the public-Web dialer. |
 | `@endo/exo-package-manager` | The portable reader, safe-installer, and executor facets, manager detection, fixed argv, snapshot contract, cancellation scoping, and backend protocol from #948. |
-| `packages/package-manager` | The host-only safe-install backend, trusted manager spawn, workspace and configuration revalidation, exact-origin registry broker integration, output/process bounds, and orphan cleanup. |
+| `packages/package-manager` | The trusted host development backend, pinned manager spawn, workspace and configuration revalidation, loopback `EndoRegistry`/CAS broker integration, output/process bounds, and cooperative cleanup. It does not own hostile-workspace confinement claims. |
 | `@endo/exo-git`, `packages/git`, and `packages/daemon` | Existing Git capability and native backend policy, plus the remaining public HTTPS broker, credential-free public fetch, bounded process lifecycle, and daemon provisioning. |
 
 ### Shared address semantics
@@ -255,16 +297,17 @@ authority to it.
 A later fetch of that URL starts a new fully authorized operation.
 
 The package injects a Fetch-like transport and a search-provider adapter.
-The initial DuckDuckGo HTML adapter and parser move from Genie into this package
-and receive no ambient fetch.
+The initial DuckDuckGo HTML adapter and parser are salvaged from, or use as a
+reference, the retired Genie's last pre-retirement implementation. The new
+package receives no ambient fetch.
 Provider selection is durable policy, while DNS, Agent, connection pool, socket,
 and cancellation state are recreated by the daemon formula after restart.
 Formula cancellation and daemon shutdown close or destroy the transport.
 
-Genie retains the `webFetch` and `webSearch` names but delegates to a supplied
-`WebResearch` capability.
-Agent-tools projects the same capability into JSON tools and a code-mode `web`
-global only when the independent `web` grant is present.
+Agent-tools retains the `webFetch` and `webSearch` product names as adapters
+over the supplied `WebResearch` capability. It projects the same capability
+into JSON tools and a code-mode `web` global only when the independent `web`
+grant is present.
 Agentry and daemon provisioning bind it through the trusted generic grant path
 used by other capabilities.
 
@@ -290,15 +333,97 @@ The Web feature is delivered as four reviewable pull requests in this order:
    formula over injected transport.
    Stop when bounded fetch/search work through a reconstructed formula and all
    initial and redirect URLs cross both the authorizer and dialer.
-4. **Product adapters and trusted grant exposure.** Adapt Genie, add
-   agent-tools JSON/code-mode projection, and extend agentry and daemon generic
-   provisioning with the independent `web` grant.
+4. **Product adapters and trusted grant exposure.** Add agent-tools
+   JSON/code-mode adapters, salvaging or consulting the retired Genie
+   implementation, and extend agentry and daemon generic provisioning with the
+   independent `web` grant.
    Stop when a code-mode consumer receives exactly the granted Web operations,
    declarations stay truthful, and absence or revocation removes the surface.
 
 The first two pull requests are the missing reusable transport substrate.
 All four are required for usable code-mode Web research.
-None depends on the optional sandbox backend.
+Daemon-owned Web research does not depend on the sandbox backend because the
+guest never receives a network process or socket.
+
+## Assurance Levels
+
+The architecture has three distinct assurance levels. Claims in this document
+name the level they require.
+
+1. **Portable capability guarantees.** The Exo facade is the authority
+   boundary independent of backend. In #948 it mints non-escalating reader,
+   installer, and executor facets; guards passable inputs; verifies mount
+   lineage and path segments; constructs fixed manager argv; defaults installs
+   to frozen lockfile posture while allowing host policy to deny updates;
+   accepts no shell string or opaque installer arguments; clamps time policy;
+   scopes cancellation by operation; and passes output bounds plus the expected
+   workspace snapshot through the backend protocol. These checks materially
+   prevent authority widening through the public API. Actual output
+   enforcement and snapshot revalidation remain backend obligations.
+2. **Trusted host development backend.** A host backend may be useful for
+   trusted workspaces with pinned package managers and generated
+   configuration. Its fixed argv, hook denials, sanitized environment,
+   process-group cleanup, and broker configuration are defense in depth. This
+   level does not claim kernel-enforced path containment, broker-only egress,
+   symlink race safety, or orphan prevention against a hostile workspace or
+   compromised manager.
+3. **Conformance-qualified confined backend.** Production use with untrusted
+   workspaces requires a backend whose sandbox driver proves the applicable
+   filesystem, process, secret, and network profiles with driver-owned probes
+   and adversarial tests. Only this level may make hostile-workspace path,
+   broker-bypass, child-process, and cleanup claims.
+
+The portable facade delegates actual filesystem access, symlink resolution,
+process creation, network enforcement, atomic revalidation, termination, and
+reaping to its backend. An Exo guard can reject a malformed path record or an
+ungranted method, but it cannot prove what a native process does after spawn.
+The facade is therefore necessary at every level and is not a substitute for a
+confined backend at level 3.
+
+`@endo/sandbox` is the planned level-3 substrate, not a present blanket
+guarantee. Its `network: 'none'` profile is implemented. Its current bwrap
+`private` profile does not wire the documented pasta and nftables path, Podman
+private filtering remains operator responsibility, and bwrap does not load the
+default seccomp profile. The stacked
+[session-sandbox-backend design](https://github.com/endojs/endo-but-for-bots/pull/953)
+must keep these limitations explicit and define the probes that graduate a
+driver and profile to conformance.
+
+## Network Mediation by Workload
+
+The strongest practical plan keeps native Git and package-manager semantics
+but places their sockets behind kernel-enforced broker-only egress. A generic
+CONNECT proxy by itself is only the shortest implementation path. It is not the
+security boundary because an unconstrained process can ignore proxy settings.
+
+- **Web research** remains daemon-owned HTTP. `@endo/http-confine` applies
+  method, header, redirect, decompression, body, deadline, and rate policy over
+  `@endo/http-dialer` sockets. No guest or native child receives those sockets.
+- **Package installation** uses a loopback registry and tarball broker backed
+  by the landed `EndoRegistry`, integrity verification, and CAS. The manager
+  retains lockfile and installation semantics, while the broker sees HTTP
+  requests and can enforce registry, tarball, integrity, and byte policy. A
+  conformance-qualified sandbox permits the manager to reach only this broker.
+- **Git HTTPS** uses an exact-origin CONNECT broker because Git must retain the
+  end-to-end TLS connection needed for its native protocol and certificate
+  checks. The broker validates the CONNECT origin, every DNS answer, and the
+  numeric connected peer, then bounds the raw tunnel and its lifetime. Git
+  retains hostname and certificate verification. Because the TLS stream is
+  opaque to the broker, `@endo/http-confine` method, header, redirect, body,
+  and decompression rules do not apply inside the tunnel.
+
+The sandbox therefore needs a `broker-only` network posture, implemented as a
+dedicated handle/profile or a future per-spawn network contract. The current
+`SandboxHandle` selects networking per handle, not per spawn. Conformance
+requires that the child can reach its named loopback or sidecar broker and
+nothing else: no direct public socket, private or metadata address, host
+service, alternate proxy, or DNS escape.
+
+Reimplementing complete Git and package-manager network protocols inside the
+daemon would provide a smaller child network surface in theory, but it would
+also duplicate mature client semantics and create a much larger security code
+surface. Broker-only egress with workload-specific mediators is the stronger
+practical plan.
 
 ## Daemon-Backed Safe Installation
 
@@ -312,15 +437,19 @@ None depends on the optional sandbox backend.
 
 #950 projects exactly those facets as `detectPackageManager` and
 `listPackageScripts`, then `installDependencies`, then `runPackageScript`.
-The daemon-backed milestone mints, retains, and exposes only the safe-installer
-facet.
+The daemon-backed milestone mints, retains, and exposes only the installer
+facet, conventionally named the safe-installer facet because it cannot invoke
+named scripts or the executor surface.
 It does not simulate an executor, expose `runPackageScript`, or retain an
 executor internally where a guest could recover it through attenuation.
 
 Project-code execution, lifecycle execution, package binaries, and the executor
-facet belong only to the optional confined backend in
-[PR #953](https://github.com/endojs/endo-but-for-bots/pull/953).
-They are not prerequisites for safe frozen installation.
+facet belong only to a conformance-qualified confined backend in
+[the stacked sandbox design](https://github.com/endojs/endo-but-for-bots/pull/953).
+They are not prerequisites for frozen installation in a trusted development
+workspace. A hostile workspace still requires the confined backend even when
+only the installer facet is exposed, because manager parsing, filesystem
+access, and network activity occur below the portable facade.
 
 ### Portable argv and backend enforcement
 
@@ -370,13 +499,14 @@ This split matches the authoritative manager documentation:
   settings in its
   [configuration reference](https://yarnpkg.com/configuration/yarnrc).
 
-The host backend in `packages/package-manager` implements #948's injected
-backend protocol and directly spawns only trusted, pinned npm, pnpm, or Yarn
-executables with fixed argv.
+The trusted host development backend in `packages/package-manager` implements
+#948's injected backend protocol and directly spawns only trusted, pinned npm,
+pnpm, or Yarn executables with fixed argv.
 Host-shell and exo-shell are not the engine.
-The first posture permits only frozen dependency hydration and has no lifecycle,
-project plugin/hook, package-script, package-binary, `exec`, `npx`, or `dlx`
-surface.
+Its public surface permits only frozen dependency hydration and has no
+lifecycle, project plugin/hook, package-script, package-binary, `exec`, `npx`,
+or `dlx` method. Those restrictions narrow authority, but the unconfined child
+still makes this a trusted-workspace posture.
 
 Immediately before spawn, the backend atomically revalidates:
 
@@ -396,20 +526,21 @@ Output overflow, cancellation, deadline, daemon shutdown, and backend error all
 follow one terminate, hard-kill-after-grace, bounded-drain, reap, and orphan
 cleanup path.
 
-Registry and tarball HTTPS pass through an exact-origin broker.
-The broker reuses `@endo/net-address`, `@endo/http-dialer`, and the bounded HTTP
-policy, but it grants only the normalized registry and lockfile-selected tarball
-origins.
-The package-manager process receives only a daemon-selected loopback proxy and
-trusted configuration with proxy bypass disabled.
-The proxy endpoint and arbitrary Web capability are never guest bindings, and
-conformance proves the pinned manager cannot connect around the broker.
+Registry metadata and tarballs pass through a daemon-selected loopback broker
+backed by `EndoRegistry`, published-integrity checks, and the CAS.
+The package-manager process receives trusted configuration naming only that
+broker, with proxy bypass disabled.
+At the trusted host development level this is cooperative defense in depth. At
+the confined level, the `broker-only` sandbox profile enforces that the manager
+cannot connect around the broker. The broker endpoint and arbitrary Web
+capability are never guest bindings.
 
 Cache contents and policy are durable but non-secret.
 The daemon formula records cache identifiers, supported manager identity,
 registry policy, limits, and reconstruction version.
 Live manager processes, proxy listeners, pipes, temporary credentials, and
-in-flight operations are explicitly non-durable and are interrupted on restart.
+in-flight operations are explicitly non-durable. Restart interrupts former
+process liveness, then reconciles and records the effect outcome separately.
 
 ## Git Completion Work
 
@@ -424,9 +555,13 @@ two missing remote behaviors.
 First, allow credential-free public HTTPS endpoints for clone and fetch without
 weakening the rule that a supplied credential is daemon-minted and audience
 bound.
-Route Git HTTPS through an exact-origin broker that reuses the shared address
-classifier and DNS-pinned transport, disables proxy bypass, and permits only the
-policy origin and authorized redirects.
+Route Git HTTPS through an exact-origin CONNECT broker that reuses the shared
+address classifier, resolves and validates every answer, dials a selected
+numeric peer, and bounds the opaque tunnel.
+The Git client preserves TLS hostname and certificate verification.
+Because CONNECT cannot inspect HTTPS redirects, Git must reject any redirect or
+follow only a destination independently authorized by Git policy and a fresh
+broker tunnel.
 Continue using the policy URL rather than repository configuration and deny
 HTTP, SSH, scp syntax, `git:`, `ext`, local file production transport, helpers,
 URL rewriting, submodule recursion, and executable configuration.
@@ -443,44 +578,156 @@ Clone destinations and repository roots remain confined to a daemon-minted
 workspace lineage.
 Git output, deadlines, cancellation, process groups, shutdown interruption, and
 orphan cleanup use the same bounded runner discipline as package installation.
+For untrusted repositories, the confined runner's `broker-only` network profile
+must make direct sockets impossible. Proxy configuration alone is not a
+confinement boundary.
 
 ## Dependency-Ordered Work
 
-| Order | Work item and owner | Dependency | Stop condition |
-|---|---|---|---|
-| 1 | Land the portable package-manager capability in #948 and maintain the #950 projection stack. Owners: `@endo/exo-package-manager` and `@endo/agent-tools`. | Existing open stack. | Reader, safe-installer, and executor remain structurally distinct; #950 exposes only tools supported by the exact facet. |
-| 2 | Land or compose with #958 and #965. Owner: `@endo/agentry` and daemon provisioning. | Existing open Git/grant stack. | Named capabilities are rebound from durable policy and all live capabilities, declarations, and prompt text come from trusted minters rather than caller assertions. |
-| 3 | Deliver Web stack PRs 1 and 2. Owners: `@endo/net-address`, daemon/sandbox consumers, and `@endo/http-dialer`. | None of #948, #950, #958, #965, or #953. | Shared address truth and a DNS-pinned, peer-verified, disposable public HTTP transport pass adversarial tests. |
-| 4 | Deliver Web stack PRs 3 and 4. Owners: `@endo/http-confine`, `@endo/exo-web-research`, daemon, Genie, agent-tools, and agentry. | Order 2 for final generic grant exposure; order 3 for transport. | Bounded Web fetch/search is reconstructed by the daemon and appears only under the independent trusted `web` grant. |
-| 5 | Add the host-only safe-install backend. Owner: `packages/package-manager`. | #948 contract; shared address and HTTP transport for online registry use. | Frozen npm, pnpm, Yarn 1, and supported Yarn 2+ fixtures hydrate with no lifecycle/plugin/script/binary canary, path escape, ambient secret, direct network, output-cap, cancellation, or orphan escape. |
-| 6 | Add the package-manager formula and generic provisioning. Owners: daemon, agentry, and agent-tools. | Orders 1, 2, and 5. | Restart reconstructs only the safe-installer posture and its policy; code mode exposes metadata plus `installDependencies`, never `runPackageScript`. |
-| 7 | Complete public and authenticated HTTPS Git brokers. Owners: `@endo/exo-git`, `packages/git`, and daemon. | Order 3 transport and #958/#965 grant infrastructure. | Public clone/fetch works without credentials, authenticated fetch/push requires the exact credential, and protocol, destination, proxy, configuration, output, cancellation, and restart escapes fail closed. |
-| 8 | Run consumer-independent acceptance, with endo-pi as one example. Owners: agentry and daemon integration tests. | Orders 4, 6, and 7. | A code-mode session receives only selected grants, survives restart without replay, completes research/clone/edit/install/commit/fetch and conditional push, and reports purge or interruption truthfully. |
+The checklist is the work ledger for this design. An unchecked item without a
+linked pull request is unposted work, not implied follow-up.
 
-Orders 3 and the host-only parts of order 5 can proceed in parallel.
-Final projection in orders 4 and 6 composes with #965's trusted grant path
-rather than racing it with a second policy model.
-The optional sandbox backend is a separate order after the safe-installer
-milestone whenever project-code execution is desired.
+### Landed foundations
+
+- [x] Retained code-mode reconstruction and Pi integration. Owners:
+  `@endo/agentry` and daemon. Tracking: #905 and #907. Done: durable non-secret
+  session policy reconstructs the guest and the Pi acceptance surface.
+- [x] Attenuated Git facets and fixed native backend seams. Owners:
+  `@endo/exo-git`, `packages/git`, and daemon. Tracking: #906 and prior Git
+  capability work. Done: reader, writer, and rewriter authority is distinct and
+  the backend receives normalized policy.
+- [x] Exact-origin HTTP confinement and Exo client. Owners:
+  `@endo/http-confine` and `@endo/exo-http-client`. Tracking: #566. Done:
+  bounded transport-neutral HTTP policy can receive an injected transport.
+- [x] Registry acquisition, published-integrity verification, and CAS package
+  trees. Owner: daemon `EndoRegistry`. Tracking: #671. Done: the daemon can
+  acquire and verify package bytes through an injected fetch perimeter.
+- [x] Graceful CapTP shutdown. Owner: `@endo/captp`. Tracking: #947. Done:
+  deliberate disconnects settle through the graceful shutdown path. This does
+  not complete crash recovery or effect reconciliation.
+
+### Open pull requests
+
+- [ ] Land portable package-manager facets. Owner:
+  `@endo/exo-package-manager`. Tracking: #948. Dependency: landed mount seams.
+  Done when reader, installer, and executor remain non-escalating, fixed-argv,
+  bounded facets with operation-scoped cancellation and snapshot revalidation.
+- [ ] Land exact package-manager projection. Owner: `@endo/agent-tools`.
+  Tracking: #950, stacked on #948. Done when tool and code-mode surfaces expose
+  only the methods present on the received facet.
+- [ ] Land named Git grants and truthful generic provisioning. Owners:
+  `@endo/agentry` and daemon. Tracking: #958 and #965. Dependency: existing Git
+  facets. Done when capabilities, checked declarations, and prompt text all
+  derive from trusted live minters and reconstruct from normalized policy.
+- [ ] Settle daemon context cancellation hooks. Owner: daemon. Tracking: #1010.
+  Done when graceful cancellation cannot strand a cleanup hook. This item does
+  not substitute for the durable operation work below.
+- [ ] Amend the stacked sandbox design to use the same liveness and outcome
+  vocabulary, assurance levels, and `broker-only` requirement. Owner:
+  [session-sandbox-backend](https://github.com/endojs/endo-but-for-bots/pull/953).
+  Tracking: #953.
+  Dependency: this design revision. Done when it no longer treats every
+  interrupted operation as a known no-effect outcome or current sandbox
+  profiles as already conforming.
+
+### Unposted implementation work
+
+- [ ] Add shared public-address semantics. Owner: new `@endo/net-address`, with
+  daemon and sandbox consumers. Dependency: none of the open stacks. Done when
+  strict IPv4, IPv6, mapped-address, CIDR, and special-purpose registry tests
+  pass without moving policy ownership into the leaf package.
+- [ ] Add the DNS-pinned daemon HTTP transport. Owner: new
+  `@endo/http-dialer`. Dependency: shared address semantics. Done when every
+  socket validates the full answer set and numeric peer while preserving TLS
+  hostname verification and explicit disposal.
+- [ ] Add `WebResearch` and its daemon formula. Owners: `@endo/http-confine`,
+  new `@endo/exo-web-research`, and daemon. Dependency: the HTTP dialer. Done
+  when bounded fetch and search reconstruct without ambient fetch; retired
+  Genie code is salvaged or used only as reference.
+- [ ] Add Web product adapters and the independent trusted `web` grant. Owners:
+  `@endo/agent-tools`, `@endo/agentry`, and daemon. Dependencies: WebResearch
+  plus #965. Done when only selected fetch or search operations appear in
+  checked declarations, prompts, and globals.
+- [ ] Add the trusted host development package-manager backend. Owner:
+  `packages/package-manager`. Dependency: #948. Done when pinned managers,
+  generated configuration, fixed argv, bounds, cancellation, and reaping pass
+  trusted-workspace fixtures, with no hostile-workspace confinement claim.
+- [ ] Add the loopback registry and tarball broker. Owners:
+  `packages/package-manager` and daemon `EndoRegistry`. Dependencies: #671 and
+  the host backend. Done when lockfile-selected acquisition uses verified CAS
+  bytes and broker policy rejects arbitrary registry, tarball, and byte flows.
+- [ ] Implement and qualify sandbox `broker-only` networking. Owner:
+  `@endo/sandbox` plus the session sandbox backend. Dependencies: #953 design
+  amendment and workload brokers. Done when bwrap and each supported Podman
+  profile enforce broker reachability with no direct socket, host, private,
+  metadata, DNS, or alternate-proxy escape through driver-owned probes.
+- [ ] Add the package-manager formula and trusted grant exposure. Owners:
+  daemon, `@endo/agentry`, and `@endo/agent-tools`. Dependencies: #948, #950,
+  #965, and a selected backend. Done when restart reconstructs exactly the
+  installer posture and code mode never exposes `runPackageScript` without an
+  executor grant.
+- [ ] Add exact-origin Git CONNECT brokering for public clone/fetch and
+  credentialed fetch/push. Owners: `@endo/exo-git`, `packages/git`, and daemon.
+  Dependencies: shared address semantics, #958, and #965. Done when origin,
+  DNS answers, numeric peer, tunnel bounds, TLS validation, direction,
+  refspec, and operation credential are enforced. Host use is development
+  defense in depth; untrusted use additionally depends on `broker-only`.
+- [ ] Define the durable bounded operation-record schema. Owner: daemon.
+  Dependency: existing operation IDs. Done when the record separates liveness
+  from `no-effect`, `completed`, and `indeterminate` outcomes and contains only
+  versioned non-secret identifiers, timestamps, policy, and reconciliation
+  metadata.
+- [ ] Add write-ahead operation recording, receipt/status inspection, and
+  bounded retention. Owner: daemon. Dependency: the operation schema. Done when
+  callers can inspect a stable receipt after reconnect and retention limits do
+  not erase still-live reconciliation obligations.
+- [ ] Integrate Git, install, fetch, and search with the operation journal.
+  Owners: their backends and daemon formulas. Dependency: write-ahead records.
+  Done when dispatch cannot occur before the durable running record and final
+  settlement cannot occur before the effect-specific outcome record.
+- [ ] Add effect-specific reconciliation. Owners: Git, package-manager, Web,
+  and daemon. Dependency: journal integration. Done when Git compares remote
+  refs, installation examines the workspace and dependency tree, read-only Web
+  operations settle conservatively, and retry guidance never assumes
+  idempotence.
+- [ ] Add crash-point recovery tests. Owner: daemon integration tests.
+  Dependency: reconciliation. Done when tests cover crash before dispatch,
+  during execution, after external completion, and before journal settlement
+  for every effect family.
+- [ ] Run consumer-independent strict acceptance, with endo-pi as one example.
+  Owners: agentry and daemon integration tests. Dependencies: Web, package,
+  Git, journal, and required confined-backend items above. Done when selected
+  grants alone survive restart without replay, complete the end-to-end flow,
+  and report purge, interruption, and indeterminate outcomes truthfully.
+
+Address semantics, the host development backend, and the operation schema can
+proceed in parallel. Final Web and package projection composes with #965's
+trusted grant path rather than introducing a second policy model. Untrusted
+native-process acceptance waits for a conformance-qualified confined backend;
+daemon-owned Web acceptance does not.
 
 ## Acceptance and Security Tests
 
-The capability roadmap is complete only when tests prove all of the following.
+The capability roadmap is complete only when tests prove all of the following
+at the assurance level named by each claim.
 
 ### Grant and durability contract
 
-- zero grants yields only `evaluate`, and every combination of workspace, root
+- in strict posture, zero grants yields only `evaluate`, and every combination of workspace, root
   or named Git, package-manager, Web fetch, and Web search omits ungranted
   siblings;
+- in development preservation posture, retained Pi tools are identified as
+  ambient harness authority and do not appear as Endo grants;
 - declarations and prompt text match the exact trusted live posture, including
   reader versus safe-installer and absence of the executor;
 - one canonical mount lineage backs every related capability before and after
   restart, while sibling grants remain independent;
 - restart preserves durable identities, workspace bytes, formula policy,
-  non-secret caches, and grant selection but never a process, connection,
-  credential material, or in-flight operation;
-- interrupted effects require explicit retry and are never automatically
-  replayed; and
+  non-secret caches, grant selection, and bounded operation receipts but never
+  a live process, connection, credential, or in-flight handle;
+- interrupted operations expose separately reconciled `no-effect`, `completed`,
+  or `indeterminate` outcomes, require an explicit caller decision, and are
+  never automatically replayed; and
 - out-of-band daemon-store purge is reported and tested as destructive.
 
 ### Network and Web contract
@@ -497,13 +744,19 @@ The capability roadmap is complete only when tests prove all of the following.
   verification while the socket connects only to the validated number;
 - redirects re-run URL authorization, resolution, and address checks, including
   redirect-to-private and redirect-loop cases;
-- ambient proxies, proxy environment variables, `NO_PROXY`, and global
-  dispatcher mutation cannot intercept or bypass the transport;
+- for daemon-owned Web, ambient proxies, proxy environment variables,
+  `NO_PROXY`, and global dispatcher mutation cannot intercept or bypass the
+  transport;
 - oversized plain or compressed bodies, decompression expansion, result-field
   sizes, redirect counts, rates, deadlines, cancellation, and revocation are
   bounded; and
 - graceful close and forceful destroy dispose every Agent, origin pool, socket,
   body, and pending request.
+
+Web HTTP tests apply the complete `@endo/http-confine` contract. Git CONNECT
+tests instead prove exact-origin, DNS-answer, numeric-peer, TLS, tunnel-byte,
+deadline, and disposal bounds because HTTP methods, headers, redirects, and
+bodies are opaque inside the tunnel.
 
 ### Package-manager and Git contract
 
@@ -513,9 +766,14 @@ The capability roadmap is complete only when tests prove all of the following.
 - snapshots, manager selection, workspace lineage, configuration, registries,
   cache/scratch paths, and executable identity are revalidated immediately
   before spawn;
-- only frozen hydration occurs, neither manifests nor lockfiles change, no
-  process writes outside the workspace and explicit cache/scratch paths, and no
-  process reaches a non-granted origin or bypasses its broker;
+- only frozen hydration occurs and neither manifests nor lockfiles change at
+  every backend level;
+- trusted host development tests prove fixed configuration, output,
+  cancellation, and process cleanup for trusted fixtures without representing
+  them as hostile-workspace confinement tests;
+- conformance-qualified confined tests prove no process writes outside the
+  workspace and explicit cache/scratch paths, and no process reaches a
+  non-granted origin or bypasses its broker;
 - stdout/stderr overflow, deadlines, cancellation, daemon restart, and child
   pipes that remain open all terminate and reap the complete process group;
 - public HTTPS Git clone/fetch works without credentials while authenticated
@@ -523,24 +781,32 @@ The capability roadmap is complete only when tests prove all of the following.
   and refspec; and
 - Git rejects configuration rewriting, remote helpers, protocols, symlink/path
   escapes, broker bypass, credential disclosure, rotation races, cancellation,
-  and restart continuation.
+  and restart continuation, with path and broker-bypass claims reserved for the
+  conformance-qualified confined tier.
 
 An endo-pi scenario may supply the final UI acceptance: start with selected
 grants, research a public page, clone or open a repository, inspect and edit the
 workspace, hydrate frozen dependencies, commit, fetch, and conditionally push.
+The strict scenario runs with `piTools: 'preserve'` absent.
 The same capability composition must be usable by a non-Pi code-mode consumer
 without importing an endo-pi controller or launcher.
 
-## Relationship to the Optional Sandbox Backend
+## Relationship to the Confined Sandbox Backend
 
-[PR #953](https://github.com/endojs/endo-but-for-bots/pull/953) defines the
-optional Session Sandbox Execution Backend and defense-in-depth layer for
-project-code execution.
+The
+[session-sandbox-backend design](https://github.com/endojs/endo-but-for-bots/pull/953)
+defines the Session Sandbox Execution Backend.
 It may implement the same backend-independent capabilities and is the only
 planned posture for lifecycle scripts, package binaries, named scripts, and
-broader project execution.
-The safe-installer and four-PR Web stack above neither depend on it nor change
-their public grant identities when it is later selected.
+broader project execution. It is also the planned production boundary for
+native package-manager or Git processes that consume untrusted workspace
+content.
+
+The portable facade, trusted host development backend, and four-pull-request
+daemon-owned Web stack can progress before it. Their public grant identities do
+not change when a confined backend is selected. Hostile-workspace path,
+process, broker-bypass, and orphan claims remain disabled until the selected
+sandbox driver and profile pass the conformance tests in this document.
 
 ## Alternatives Rejected
 
@@ -549,8 +815,9 @@ their public grant identities when it is later selected.
 - **Turning `@endo/exo-http-client` or `@endo/fetch` into the public dialer:** an
   exact-origin grant and an intentionally unconfined durable plugin have useful
   meanings that should not silently change.
-- **Leaving transport in Genie:** ambient fetch is not a reusable safe
-  arbitrary-public-Web transport and would duplicate daemon policy.
+- **Recreating the retired Genie transport as the authority boundary:** its
+  ambient-fetch implementation is useful reference material, not a reusable
+  safe arbitrary-public-Web transport.
 - **A custom Undici Dispatcher:** a normal Agent already accepts the per-socket
   connector and explicit fetch dispatcher seams required by this design.
 - **Raw caller grant records or Pi-only policy:** either lets declarations
@@ -568,6 +835,9 @@ versions rather than treating #948's portable version branches as support
 claims.
 Provider choice beyond the initial DuckDuckGo adapter and deployment-specific
 registry origin sets remain explicit daemon policy.
+The confined implementation must decide whether `broker-only` becomes a new
+`SandboxHandle` network profile or a separate backend incarnation before code
+depends on per-spawn attenuation that the current interface cannot express.
 
 ## Prompt
 
@@ -582,3 +852,14 @@ registry origin sets remain explicit daemon policy.
 > composition, safe-install enforcement, restart, bounds, credentials, and
 > acceptance concrete package owners and stop conditions.
 > Keep the sandbox as the optional backend described separately in #953.
+
+## Revision Prompt (2026-08-16)
+
+> Scope zero-grant and confinement claims so `piTools: 'preserve'` remains a
+> developer-only harness aid. State which guarantees come from the Exo facade,
+> which rely on a trusted host development backend, and which require a
+> conformance-qualified `@endo/sandbox` backend. Track landed, open, and
+> unposted implementation work with checked and unchecked items. Separate
+> interrupted process liveness from external effect outcome. Choose the
+> strongest practical network plan rather than CONNECT alone, and retain the
+> retired Genie implementation only as salvage or reference material.
