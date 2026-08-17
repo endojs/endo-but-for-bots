@@ -993,12 +993,27 @@ test.serial(
       cleanupTmpdirs(tmpdirs);
     });
 
-    const timed = await E(handle).spawn(
-      harden(['/bin/sh', '-c', 'trap "" TERM; while :; do sleep 60; done']),
-      harden({ timeoutMs: 25, captureStdout: false, captureStderr: false }),
-    );
-    await t.throwsAsync(() => E(timed).wait(), { message: /timed out/ });
-    t.deepEqual(await listOwnedContainers(ownerId), []);
+    // A 25 ms timeout usually fires while `podman create` is still
+    // running, in which case the cancelled admission rejects the spawn
+    // itself; when the container wins the race, wait() reports the
+    // timeout instead. Either way nothing labelled may survive.
+    /** @type {Error | undefined} */
+    let admissionError;
+    const timed = await E(handle)
+      .spawn(
+        harden(['/bin/sh', '-c', 'trap "" TERM; while :; do sleep 60; done']),
+        harden({ timeoutMs: 25, captureStdout: false, captureStderr: false }),
+      )
+      .catch(e => {
+        admissionError = /** @type {Error} */ (e);
+        return undefined;
+      });
+    if (timed !== undefined) {
+      await t.throwsAsync(() => E(timed).wait(), { message: /timed out/ });
+    } else {
+      t.regex(/** @type {Error} */ (admissionError).message, /timed out/);
+    }
+    await t.notThrowsAsync(() => waitForNoOwnedContainers(ownerId));
 
     const cancelled = await E(handle).spawn(
       harden(['/bin/sleep', '300']),
@@ -1006,7 +1021,7 @@ test.serial(
     );
     await Promise.all([E(cancelled).kill(), E(cancelled).kill()]);
     await t.throwsAsync(() => E(cancelled).wait(), { message: /cancelled/ });
-    t.deepEqual(await listOwnedContainers(ownerId), []);
+    await t.notThrowsAsync(() => waitForNoOwnedContainers(ownerId));
   },
 );
 

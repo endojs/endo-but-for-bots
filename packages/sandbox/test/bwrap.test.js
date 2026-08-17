@@ -1062,13 +1062,28 @@ test.serial(
         nodeFs.rmSync(dir, { recursive: true, force: true });
     });
 
-    const timed = await E(handle).spawn(
-      harden(['/bin/sh', '-c', 'trap "" TERM; while :; do sleep 60; done']),
-      harden({ timeoutMs: 25, captureStdout: false, captureStderr: false }),
-    );
-    const timedPid = await E(timed).pid();
-    await t.throwsAsync(() => E(timed).wait(), { message: /timed out/ });
-    await waitForProcessGroupGone(timedPid);
+    // A 25 ms timeout can fire while the driver admission is still in
+    // flight, in which case the cancelled admission rejects the spawn
+    // itself; when the process wins the race, wait() reports the
+    // timeout and the group check applies.
+    /** @type {Error | undefined} */
+    let admissionError;
+    const timed = await E(handle)
+      .spawn(
+        harden(['/bin/sh', '-c', 'trap "" TERM; while :; do sleep 60; done']),
+        harden({ timeoutMs: 25, captureStdout: false, captureStderr: false }),
+      )
+      .catch(e => {
+        admissionError = /** @type {Error} */ (e);
+        return undefined;
+      });
+    if (timed !== undefined) {
+      const timedPid = await E(timed).pid();
+      await t.throwsAsync(() => E(timed).wait(), { message: /timed out/ });
+      await waitForProcessGroupGone(timedPid);
+    } else {
+      t.regex(/** @type {Error} */ (admissionError).message, /timed out/);
+    }
 
     const cancelled = await E(handle).spawn(
       harden(['/bin/sleep', '300']),
