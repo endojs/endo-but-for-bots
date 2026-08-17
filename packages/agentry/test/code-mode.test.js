@@ -19,6 +19,7 @@ import { makeGit } from '@endo/exo-git';
 import { makeNativeGitBackend } from '@endo/git';
 import { makeMount, lineageOf } from '@endo/daemon/src/mount.js';
 import { makeFilePowers } from '@endo/daemon/src/manager-node-powers.js';
+import { makeNodeFilesystem } from '@endo/platform/fs/extended';
 
 import { makeEvaluateTool } from '@endo/agent-tools/code-mode/evaluate-tool.js';
 import { makeCompartmentEvaluate } from '@endo/agent-tools/code-mode/compartment.js';
@@ -290,6 +291,20 @@ test('makeCodeModeAgent injects typed git + workspace declarations from powers',
   t.true(systemPrompt.includes('declare const git: WritableEndoGit;'));
   t.true(systemPrompt.includes('declare const workspace: DaemonMount;'));
   t.true(systemPrompt.includes('type WritableEndoGit = {'));
+});
+
+test('makeCodeModeAgent selects the matching standalone Filesystem declaration', t => {
+  const workspace = makeNodeFilesystem({ rootPath: process.cwd() });
+  const { globals, systemPrompt } = makeCodeModeAgent({
+    model: fauxModel(t, []),
+    powers: { workspace, workspaceSurface: 'filesystem' },
+  });
+  t.deepEqual(
+    globals.map(global => global.declaration?.body),
+    ['Filesystem'],
+  );
+  t.true(systemPrompt.includes('declare const workspace: Filesystem;'));
+  t.false(systemPrompt.includes('declare const workspace: DaemonMount;'));
 });
 
 test('makeEnvCredentials is the single env reader and reads through .get', t => {

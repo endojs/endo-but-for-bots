@@ -19,6 +19,12 @@ import type {
 export interface CodeModePowers {
   workspace?: CodeModePower;
   workspacePetName?: string;
+  /**
+   * Declaration surface for `workspace`.
+   * Defaults to the daemon mount surface used by production provisioning.
+   * Select `filesystem` only when `workspace` is an extended Filesystem.
+   */
+  workspaceSurface?: 'mount' | 'filesystem';
   git?: CodeModePower;
   gitPetName?: string;
   gitMode?: 'readOnly' | 'readWrite' | 'historyRewrite';

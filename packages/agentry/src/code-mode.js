@@ -15,7 +15,10 @@ import {
   formatGlobalDeclarations,
   normalizeGlobals,
 } from '@endo/agent-tools/code-mode/declarations.js';
-import { makeWorkspaceGlobal } from '@endo/agent-tools/code-mode-globals/fs.js';
+import {
+  makeFilesystemGlobal,
+  makeWorkspaceGlobal,
+} from '@endo/agent-tools/code-mode-globals/fs.js';
 import { makeGitGlobal } from '@endo/agent-tools/code-mode-globals/git.js';
 import { toPiAgentTool } from '@endo/agent-tools/adapters/pi.js';
 import { toolResultToSmallcaps } from '@endo/agent-tools/adapters/smallcaps.js';
@@ -105,6 +108,9 @@ const lookupRequiredPower = (powers, petName, label) => {
  * the per-exo specifics (descriptions, generated declarations, the read-only
  * member policy) live in `git.js` and `fs.js`, which this delegates to. The
  * `gitMode` selects the one configured Git capability's prompt surface.
+ * `workspaceSurface` must match the capability supplied as `workspace`:
+ * `mount` is the default daemon provision, while `filesystem` is for an
+ * extended Filesystem from a standalone local seam.
  * Runtime authority remains with that capability; `namedPowers` stay name-only
  * unless the caller attached its own `declaration`.
  *
@@ -116,8 +122,12 @@ const makeCodeModeGlobals = (powers = {}) => {
   const globals = [];
   if (powers.workspace !== undefined || powers.workspacePetName !== undefined) {
     const workspacePetName = powers.workspacePetName ?? 'workspace';
+    const makeWorkspaceDescriptor =
+      powers.workspaceSurface === 'filesystem'
+        ? makeFilesystemGlobal
+        : makeWorkspaceGlobal;
     globals.push(
-      makeWorkspaceGlobal({
+      makeWorkspaceDescriptor({
         name: petNameToBindingName(workspacePetName, 'workspace'),
         petName: workspacePetName,
       }),

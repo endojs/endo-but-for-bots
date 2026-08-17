@@ -139,6 +139,9 @@ backings.
 The host must pair each backing with its matching descriptor: a raw daemon
 mount uses `makeWorkspaceGlobal`, while an extended Filesystem uses
 `makeFilesystemGlobal`.
+When using `makeCodeModeAgent` directly, set `powers.workspaceSurface` to
+`'filesystem'` for the latter; the default `'mount'` surface is reserved for a
+daemon mount.
 
 | Deployment | Backing | Who mints it | Who binds it |
 | --- | --- | --- | --- |
