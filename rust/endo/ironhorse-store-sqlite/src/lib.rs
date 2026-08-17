@@ -48,6 +48,14 @@ fn sql_err(e: rusqlite::Error) -> StoreError {
     StoreError::Io(format!("sqlite: {e}"))
 }
 
+/// A page/target column read back from the database, range-checked
+/// into u32 instead of `as`-truncated: an external writer's negative
+/// or oversized value fails closed like a malformed blob would, never
+/// wraps into a plausible page number (review nit).
+fn page_col(v: i64) -> Result<u32, StoreError> {
+    u32::try_from(v).map_err(|_| StoreError::Io(format!("sqlite: page column out of range ({v})")))
+}
+
 /// The `meta` key holding the encoded [`StoreManifest`].
 const META_MANIFEST: &str = "manifest";
 /// The `small_state` row name holding the encoded small state.
@@ -232,31 +240,24 @@ impl SqliteHeapStore {
                ON edge_pairs (page);",
         )
         .map_err(sql_err)?;
-        Self::rebuild_edge_pairs_if_stale(&conn)?;
+        Self::rebuild_edge_pairs(&conn)?;
         Ok(SqliteHeapStore { conn })
     }
 
-    /// Bring `edge_pairs` in line with `page_edges` if they disagree —
-    /// the open-time backfill for stores committed before the derived
-    /// table existed (it is not sealed, so rebuilding is always
-    /// legitimate), and a self-heal if a crash ever desynced them
-    /// (single transaction, so that would take filesystem-level
-    /// interference — but the table is derived, so trust the sealed
-    /// source over the index).
-    fn rebuild_edge_pairs_if_stale(conn: &Connection) -> Result<(), StoreError> {
-        let derived: i64 = conn
-            .query_row(
-                "SELECT COALESCE(SUM(length(targets) / 4), 0) FROM page_edges",
-                [],
-                |r| r.get(0),
-            )
-            .map_err(sql_err)?;
-        let indexed: i64 = conn
-            .query_row("SELECT COUNT(*) FROM edge_pairs", [], |r| r.get(0))
-            .map_err(sql_err)?;
-        if derived == indexed {
-            return Ok(());
-        }
+    /// Rebuild `edge_pairs` from the sealed `page_edges` rows,
+    /// UNCONDITIONALLY, at every open. The derived index is
+    /// decision-critical (the CTE collector reads only it) yet sits
+    /// outside the integrity root by design, so open never TRUSTS it:
+    /// any at-rest divergence — a store from before the table existed,
+    /// a wiped index, or a count-preserving content edit no cheap gate
+    /// can see (the review's finding: an earlier version rebuilt only
+    /// when cardinalities disagreed, which a moved pair defeats) — is
+    /// erased here, and between opens the EXCLUSIVE locking mode keeps
+    /// other writers out while our own commits maintain the index
+    /// transactionally. Cost is one pass over metadata-scale rows,
+    /// the same order as the dense summary read `validate_store`
+    /// already performs at resume.
+    fn rebuild_edge_pairs(conn: &Connection) -> Result<(), StoreError> {
         let tx = conn.unchecked_transaction().map_err(sql_err)?;
         tx.execute("DELETE FROM edge_pairs", []).map_err(sql_err)?;
         {
@@ -342,7 +343,7 @@ impl SqliteHeapStore {
             .map_err(sql_err)?;
         let mut out = Vec::new();
         for r in rows {
-            out.push(r.map_err(sql_err)? as u32);
+            out.push(page_col(r.map_err(sql_err)?)?);
         }
         Ok(out)
     }
@@ -389,7 +390,7 @@ impl SqliteHeapStore {
         let rows = stmt.query_map([], |r| r.get::<_, i64>(0)).map_err(sql_err)?;
         let mut out = std::collections::BTreeSet::new();
         for r in rows {
-            out.insert(r.map_err(sql_err)? as u32);
+            out.insert(page_col(r.map_err(sql_err)?)?);
         }
         self.conn
             .execute("DELETE FROM reach_roots", [])
@@ -410,17 +411,39 @@ impl HeapStore for SqliteHeapStore {
     // and MemoryStore equivalence locked in tests/query_gc.rs).
 
     fn summary_page_count(&self) -> Result<u32, StoreError> {
-        let n: i64 = self
+        // Empty-store parity with the dense default (which fails with
+        // `Empty` through `page_edges`), and contiguity, not just
+        // cardinality: `{0,1,3,4,X}` has the right COUNT while page 2
+        // is missing — the dense default fails closed on that gap, so
+        // this override must too (review finding).
+        if Self::stored_manifest(&self.conn)?.is_none() {
+            return Err(StoreError::Empty);
+        }
+        let (count, extent): (i64, i64) = self
             .conn
-            .query_row("SELECT COUNT(*) FROM page_edges", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*), COALESCE(MAX(page) + 1, 0) FROM page_edges",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .map_err(sql_err)?;
-        Ok(n as u32)
+        if count != extent {
+            return Err(StoreError::Io(format!(
+                "sqlite: page_edges not contiguous ({count} rows, extent {extent})"
+            )));
+        }
+        Ok(count as u32)
     }
 
     fn reachable_page_set(
         &self,
         roots: &[u32],
     ) -> Result<std::collections::BTreeSet<u32>, StoreError> {
+        // Same empty-store parity as above; the dense default errors
+        // before BFS on any backend without a committed epoch.
+        if Self::stored_manifest(&self.conn)?.is_none() {
+            return Err(StoreError::Empty);
+        }
         self.reachable_pages_sql(roots)
     }
 
@@ -839,8 +862,15 @@ impl HeapStore for SqliteHeapStore {
                 drop(insert_pair);
                 tx.execute("DELETE FROM page_edges WHERE page >= ?1", params![pages as i64])
                     .map_err(sql_err)?;
+                // Mirror the page_edges normalization VERBATIM: pairs
+                // are dropped exactly when their page's row is dropped.
+                // (An earlier `OR target >= ?1` disjunct implemented a
+                // different normalization than the open-time rebuild —
+                // dead code on honest histories, and on a crafted
+                // shrink it manufactured a commit/rebuild oscillation;
+                // the review killed it.)
                 tx.execute(
-                    "DELETE FROM edge_pairs WHERE page >= ?1 OR target >= ?1",
+                    "DELETE FROM edge_pairs WHERE page >= ?1",
                     params![pages as i64],
                 )
                 .map_err(sql_err)?;

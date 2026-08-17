@@ -58,7 +58,9 @@ fn assert_parity(store: &SqliteHeapStore) {
     let dense = store.page_edges().unwrap();
 
     // Reverse edges: for every target, the pairs answer equals the
-    // dense edges inverted.
+    // dense edges inverted. Because this sweeps EVERY target, it is
+    // also the content-mirror check: a stale, missing, or moved pair
+    // (not just a miscounted one) fails here.
     for target in 0..pages {
         let expect: Vec<u32> = (0..pages)
             .filter(|&p| dense[p as usize].contains(&target))
@@ -71,10 +73,10 @@ fn assert_parity(store: &SqliteHeapStore) {
     }
 
     // Reachability: the recursive CTE agrees with the dense Rust BFS
-    // for several root shapes, including an out-of-range root (both
-    // sides treat it as edgeless).
+    // for several root shapes, including the empty set and an
+    // out-of-range root (both sides treat the latter as edgeless).
     let all: Vec<u32> = (0..pages).collect();
-    for roots in [vec![0u32], vec![0, pages / 2], all, vec![pages + 7]] {
+    for roots in [vec![], vec![0u32], vec![0, pages / 2], all, vec![pages + 7]] {
         assert_eq!(
             store.reachable_pages_sql(&roots).unwrap(),
             reachable_pages(store, roots.iter().copied()).unwrap(),
@@ -134,6 +136,106 @@ fn partial_collect_equivalent_across_backends() {
     assert!(freed_mem > 1500, "reclaims the dropped chain: {freed_mem}");
     assert_eq!(freed_mem, freed_sq, "freed count backend-independent");
     assert_eq!(free_len_mem, free_len_sq, "free list backend-independent");
+}
+
+#[test]
+fn edge_pairs_rebuilt_after_count_preserving_desync() {
+    // The adversarial twin of the wipe test (both review agents'
+    // top finding): an at-rest edit that MOVES one pair — count
+    // unchanged — which a cardinality-only staleness gate trusts
+    // forever, silently shrinking the CTE's reachability. Open now
+    // rebuilds the derived index unconditionally, so parity must
+    // hold again after reopen; this arm bites if anyone reintroduces
+    // a "skip rebuild when counts agree" fast path.
+    let dir = std::env::temp_dir().join(format!("ironhorse-query-gc-move-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("heap.sqlite");
+    let store = Rc::new(RefCell::new(SqliteHeapStore::open(&path).unwrap()));
+    build_store(store.clone());
+    Rc::try_unwrap(store)
+        .ok()
+        .expect("sole owner")
+        .into_inner()
+        .close()
+        .unwrap();
+
+    {
+        let raw = rusqlite::Connection::open(&path).unwrap();
+        let (target, page): (i64, i64) = raw
+            .query_row(
+                "SELECT target, page FROM edge_pairs LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("fixture has at least one edge pair");
+        // Move it to a page value no legitimate pair occupies (pages
+        // are < the geometry), so the primary key cannot collide and
+        // the edit is purely count-preserving.
+        raw.execute(
+            "UPDATE edge_pairs SET page = 1000000 WHERE target = ?1 AND page = ?2",
+            rusqlite::params![target, page],
+        )
+        .unwrap();
+        raw.close().unwrap();
+    }
+
+    let store = SqliteHeapStore::open(&path).unwrap();
+    assert_parity(&store);
+    store.close().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn summary_page_count_refuses_gapped_page_edges() {
+    // The SummaryCount gate must stay STRUCTURAL on this backend
+    // (review finding): a gapped page_edges table with a spurious
+    // beyond-geometry row has the right COUNT(*) while an interior
+    // page is missing — the dense default fails closed on that shape
+    // (MissingRow), so the COUNT override must refuse it too.
+    let dir = std::env::temp_dir().join(format!("ironhorse-query-gc-gap-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("heap.sqlite");
+    let store = Rc::new(RefCell::new(SqliteHeapStore::open(&path).unwrap()));
+    build_store(store.clone());
+    let pages = {
+        let s = store.borrow();
+        let m = s.manifest().unwrap();
+        slot_page_count(m.slot_count)
+    };
+    assert_eq!(
+        store.borrow().summary_page_count().unwrap(),
+        pages,
+        "healthy store reports its geometry"
+    );
+    Rc::try_unwrap(store)
+        .ok()
+        .expect("sole owner")
+        .into_inner()
+        .close()
+        .unwrap();
+
+    {
+        let raw = rusqlite::Connection::open(&path).unwrap();
+        raw.execute("DELETE FROM page_edges WHERE page = 1", [])
+            .unwrap();
+        raw.execute(
+            "INSERT INTO page_edges (page, targets) VALUES (?1, x'00000000')",
+            rusqlite::params![(pages + 5) as i64],
+        )
+        .unwrap();
+        raw.close().unwrap();
+    }
+
+    let store = SqliteHeapStore::open(&path).unwrap();
+    let err = store.summary_page_count().unwrap_err();
+    assert!(
+        format!("{err:?}").contains("not contiguous"),
+        "gap + phantom row fails closed, got {err:?}"
+    );
+    store.close().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
