@@ -2073,6 +2073,27 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/exo-package-manager@workspace:packages/exo-package-manager":
+  version: 0.0.0-use.local
+  resolution: "@endo/exo-package-manager@workspace:packages/exo-package-manager"
+  dependencies:
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/far": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/pass-style": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    "@fast-check/ava": "catalog:dev"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
+    expect-type: "npm:^1.4.0"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/exo-playwright@workspace:packages/exo-playwright":
   version: 0.0.0-use.local
   resolution: "@endo/exo-playwright@workspace:packages/exo-playwright"
