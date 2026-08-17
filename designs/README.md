@@ -250,6 +250,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
+| [rust-module-lexer-consolidation](rust-module-lexer-consolidation.md) | 2026-08-17 | 2026-08-17 | Not Started |
 | [cap-std-watch](cap-std-watch.md) | 2026-07-18 | 2026-07-18 | Proposed |
 | [store-write-file](store-write-file.md) | 2026-07-15 | 2026-07-15 | Not Started |
 | [buffered-channel-exo-stream-consolidation](buffered-channel-exo-stream-consolidation.md) | 2026-07-06 | 2026-07-24 | **Complete** |
