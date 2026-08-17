@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-09 |
-| **Updated** | 2026-07-15 |
+| **Updated** | 2026-08-17 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+| **Status** | Phase 1 (`endo http mk`) landed on the policy client |
 | **Source** | PR #144 review id 4256844646 (`CHANGES_REQUESTED`) |
 | **Supersedes (in part)** | [endoclaw-network-fetch](endoclaw-network-fetch.md) |
 | **Superseded (in part) by** | [endo-fetch](endo-fetch.md) |
@@ -21,6 +21,55 @@
 > `cancellation: Promise<never>` analysis remain normative, and the
 > `endo http` verb tree survives as the eventual user surface sketched in
 > [endo-fetch](endo-fetch.md).
+
+## Landed CLI surface (Phase 1)
+
+The first `endo http` verb, `mk`, has landed on top of the HTTP client that
+now lives on the daemon, **not** on the controller/client formula pair this
+document originally proposed. That pair — `http-controller` +
+`http-client` formulas, `formulateHttpClient(allowedOrigins, ...)`, and a host
+`makeHttpClient(controllerName, clientName, allowedOrigins)` mint returning two
+named facets — no longer exists. The superseding implementation
+(`@endo/exo-http-client`'s `makeHttpClientAndControl` over `@endo/http-confine`,
+plus the daemon's policy-based `http-client` formula) mints **one** client from
+a single policy and retains its control facet host-side in a WeakMap, reachable
+through `getHttpClientControl(client)` rather than through a separately named
+controller capability. The host method is:
+
+```
+provideHttpClient(name, policy) -> HttpClient
+```
+
+where `policy` is a plain record — `{ allowedOrigins, maxRequestsPerMinute?,
+maxResponseBytes?, policyMode? }` — validated and frozen into the formula at
+provision time by the daemon's `normalizeHttpClientPolicy`.
+
+The landed verb is therefore a **policy front-end** over that one call:
+
+```
+endo http mk <name> --origin <url> [--origin <url>...]
+  [--max-requests-per-minute <n>] [--max-response-bytes <n>]
+  [--policy-mode strict|tofu-auto] [--as <agent>]
+```
+
+`mk` assembles the policy record from its flags (`--origin` is required and
+repeatable; the guard knobs are omitted from the record when unset so the daemon
+applies its own defaults), calls `provideHttpClient(name, policy)`, and prints
+the single pet name it registered. The origin allowlist the design carries over
+from PR #144 is expressed directly by `--origin`; the SSRF and flooding defenses
+(`redirect: 'manual'`, the per-response byte cap, the sliding-window rate limit)
+are enforced by the confinement layer the client is built on, so they need no
+separate CLI plumbing at this phase.
+
+Consequences for the rest of this document: the **controller/client facet split
+and method placement remain the normative model** for where policy-mutation vs
+use-the-policy authority sits, but the concrete surface differs from the
+placeholder tables below — there is one addressable client name (not a
+controller name plus a client name), and the mutate/revoke authority is the
+WeakMap-held control facet reached via `getHttpClientControl`, which the later
+`allow` / `deny` / `revoke` / `inspect` verbs will drive. The mint signature,
+formula-type, and `makeHttpClient` sketches further down are retained only as
+historical design context.
 
 ## What is the Problem Being Solved?
 

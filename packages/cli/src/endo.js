@@ -796,6 +796,66 @@ export const main = async rawArgs => {
       return cancelCommand({ name, agentNames, reason });
     });
 
+  // `endo http <verb>` subcommand tree per designs/cli-http-client.md.
+  // Phase 1 lands `mk` only, riding the daemon HTTP client that already
+  // landed (`provideHttpClient(name, policy)` over @endo/exo-http-client /
+  // @endo/http-confine).  Policy mutation and revocation through the retained
+  // control facet, and `allow`/`deny`/`revoke`/`inspect` verbs, follow.
+  const http = program
+    .command('http')
+    .description(
+      'HTTP client capabilities (confined outbound fetch under a policy)\n' +
+        'Phase 1: mk only. allow/deny/revoke/inspect land in later phases.',
+    );
+
+  http
+    .command('mk <name>')
+    .description(
+      'mint a confined HTTP client capability under an origin-allowlist policy',
+    )
+    .option(...commonOptions.as)
+    .option(
+      '--origin <url>',
+      'Allowed origin URL (http: or https:); repeat for multiple',
+      (val, acc) => {
+        acc.push(val);
+        return acc;
+      },
+      [],
+    )
+    .option(
+      '--max-requests-per-minute <n>',
+      'Cap the client to at most <n> requests per minute',
+      val => Number(val),
+    )
+    .option(
+      '--max-response-bytes <n>',
+      'Cap each response body at <n> bytes',
+      val => Number(val),
+    )
+    .option(
+      '--policy-mode <mode>',
+      'Policy mode: strict (default) or tofu-auto',
+    )
+    .action(async (name, cmd) => {
+      const {
+        as: agentNames,
+        origin: allowedOrigins,
+        maxRequestsPerMinute,
+        maxResponseBytes,
+        policyMode,
+      } = cmd.opts();
+      const { httpMk } = await import('./commands/http-mk.js');
+      return httpMk({
+        name,
+        allowedOrigins,
+        maxRequestsPerMinute,
+        maxResponseBytes,
+        policyMode,
+        agentNames,
+      });
+    });
+
   const where = program
     .command('where')
     .option('-j,--json', 'Output as JOSN rather than simple text')
@@ -1045,6 +1105,11 @@ export const main = async rawArgs => {
     {
       title: 'Agents',
       commands: ['mkhost', 'mkguest', 'invite', 'accept'],
+    },
+
+    {
+      title: 'Network',
+      commands: ['http'],
     },
 
     {

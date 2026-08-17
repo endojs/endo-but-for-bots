@@ -400,7 +400,7 @@ LLM-agent stack).*
 | [hardener-indexed-cardinality](hardener-indexed-cardinality.md) | 2026-08-24 | 2026-08-25 | Proposed |
 | [ci-no-npm-lifecycle](ci-no-npm-lifecycle.md) | 2026-04-23 | 2026-05-18 | **Complete** |
 | [break-dev-dependency-cycles](break-dev-dependency-cycles.md) | 2026-05-11 | 2026-06-15 | **Complete** (on `llm`) |
-| [cli-http-client](cli-http-client.md) | 2026-05-09 | 2026-07-13 | Proposed (PR #144 design revision; formula packaging superseded in part by [endo-fetch](endo-fetch.md)) |
+| [cli-http-client](cli-http-client.md) | 2026-05-09 | 2026-08-17 | Phase 1 landed (`endo http mk` on the policy-based `provideHttpClient` client; formula packaging superseded in part by [endo-fetch](endo-fetch.md)) |
 | [endor-bus-tui](endor-bus-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [endor-native-zip-xs](endor-native-zip-xs.md) | 2026-07-22 | 2026-07-22 | Proposed |
 | [endor-tui](endor-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
