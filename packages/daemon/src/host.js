@@ -1565,19 +1565,31 @@ export const makeHostMaker = ({
      * @param {string[]} [pathSegments]
      */
     const materializeTree = async (src, dst, pathSegments = []) => {
+      // A daemon mount carries `kind()` on every lookup result. Discover that
+      // protocol once; older readable trees keep the per-child fallback.
+      // eslint-disable-next-line no-underscore-dangle
+      const sourceMethods = await E(src).__getMethodNames__();
+      const kindProtocol = sourceMethods.includes('kind');
       const names = await E(src).list(...pathSegments);
       for (const name of names) {
         assertValidTreeEntryName(name);
         const subPath = [...pathSegments, name];
         // eslint-disable-next-line no-await-in-loop
         const child = await E(src).lookup(subPath);
-        const methodNames =
-          // eslint-disable-next-line no-await-in-loop, no-underscore-dangle
-          await E(child).__getMethodNames__();
-        const kind = methodNames.includes('kind')
-          ? // eslint-disable-next-line no-await-in-loop
-            await E(child).kind()
-          : undefined;
+        let methodNames = [];
+        let kind;
+        if (kindProtocol) {
+          // eslint-disable-next-line no-await-in-loop
+          kind = await E(child).kind();
+        } else {
+          methodNames =
+            // eslint-disable-next-line no-await-in-loop, no-underscore-dangle
+            await E(child).__getMethodNames__();
+          if (methodNames.includes('kind')) {
+            // eslint-disable-next-line no-await-in-loop
+            kind = await E(child).kind();
+          }
+        }
         const looksLikeBlob =
           kind === undefined
             ? methodNames.includes('streamBase64')
