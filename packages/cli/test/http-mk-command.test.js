@@ -9,7 +9,7 @@ import { fc } from '@fast-check/ava';
 
 import {
   collectHttpOrigin,
-  httpMkArgsFromOpts,
+  httpMkArgumentsFromOptions,
   makeHttpClientPolicy,
   normalizeHttpClientOrigin,
   parsePolicyModeFlag,
@@ -72,7 +72,7 @@ test('makeHttpClientPolicy preserves origin order and arity', t => {
   t.deepEqual(allowedOrigins, origins);
 });
 
-test('makeHttpClientPolicy normalizes browser-copied origin forms', t => {
+test('normalizeHttpClientOrigin canonicalizes browser-copied origin forms', t => {
   // Trailing slash, explicit default port, and mixed-case host all canonicalize
   // to the exact serialization the daemon compares against verbatim.
   t.is(
@@ -87,6 +87,20 @@ test('makeHttpClientPolicy normalizes browser-copied origin forms', t => {
     normalizeHttpClientOrigin('http://example.com:80'),
     'http://example.com',
   );
+});
+
+test('makeHttpClientPolicy normalizes each origin through the assembler', t => {
+  // Pin the load-bearing seam a user actually reaches (mk -> makeHttpClientPolicy
+  // -> provideHttpClient): the assembler must apply normalizeHttpClientOrigin to
+  // every entry, not merely accept already-canonical origins. Removing the
+  // `.map(normalizeHttpClientOrigin)` in makeHttpClientPolicy reddens this — the
+  // three tests that feed already-canonical origins do not.
+  const policy = makeHttpClientPolicy({
+    allowedOrigins: ['https://Example.com/', 'https://api.example.com:443'],
+  });
+  t.deepEqual(policy, {
+    allowedOrigins: ['https://example.com', 'https://api.example.com'],
+  });
 });
 
 test('normalizeHttpClientOrigin refuses a path/query/fragment/userinfo origin', t => {
@@ -141,25 +155,25 @@ test('normalizeHttpClientOrigin is idempotent over accepted origins', async t =>
 // not a reject case.
 const arbSuffixSegment = fc
   .string({ minLength: 1 })
-  .map(s => `x${encodeURIComponent(s)}`);
+  .map(suffix => `x${encodeURIComponent(suffix)}`);
 
 const arbRejectedOrigin = fc
   .record({
     scheme: fc.constantFrom('http', 'https'),
     host: fc.domain(),
-    seg: arbSuffixSegment,
+    segment: arbSuffixSegment,
     kind: fc.constantFrom('path', 'query', 'fragment', 'userinfo'),
   })
-  .map(({ scheme, host, seg, kind }) => {
+  .map(({ scheme, host, segment, kind }) => {
     switch (kind) {
       case 'path':
-        return `${scheme}://${host}/${seg}`;
+        return `${scheme}://${host}/${segment}`;
       case 'query':
-        return `${scheme}://${host}?${seg}`;
+        return `${scheme}://${host}?${segment}`;
       case 'fragment':
-        return `${scheme}://${host}#${seg}`;
+        return `${scheme}://${host}#${segment}`;
       case 'userinfo':
-        return `${scheme}://${seg}@${host}`;
+        return `${scheme}://${segment}@${host}`;
       default:
         throw new Error(`unreachable: ${kind}`);
     }
@@ -208,16 +222,30 @@ test('parsePositiveIntegerFlag accepts a positive integer, names the flag on rej
   }
 });
 
+test('parsePositiveIntegerFlag pins the safe-integer boundary and the trim path', t => {
+  const parse = parsePositiveIntegerFlag('--max-response-bytes');
+  // MAX_SAFE_INTEGER is admissible; every bad value above rejects at the regex,
+  // so without these the Number.isSafeInteger guard is dead coverage — a
+  // syntactically valid numeral that Number() silently rounds must still reject.
+  t.is(parse('9007199254740991'), 9007199254740991);
+  t.throws(() => parse('9007199254740993'), {
+    message: /must be a safe integer/,
+  });
+  t.throws(() => parse('1'.repeat(400)), { message: /must be a safe integer/ });
+  // The trim() branch: surrounding whitespace is accepted.
+  t.is(parse('  1024  '), 1024);
+});
+
 // --- Flag wiring (commander coercers and opt routing) ----------------------
 
 test('collectHttpOrigin accumulates repeated --origin values in flag order', t => {
   // Commander threads the previous accumulator as the second argument; a
   // last-wins regression (returning [value]) would collapse a multi-origin
   // allowlist to only the final --origin.
-  let acc = collectHttpOrigin('https://a.example', undefined);
-  acc = collectHttpOrigin('https://b.example', acc);
-  acc = collectHttpOrigin('https://c.example', acc);
-  t.deepEqual(acc, [
+  let collectedOrigins = collectHttpOrigin('https://a.example', undefined);
+  collectedOrigins = collectHttpOrigin('https://b.example', collectedOrigins);
+  collectedOrigins = collectHttpOrigin('https://c.example', collectedOrigins);
+  t.deepEqual(collectedOrigins, [
     'https://a.example',
     'https://b.example',
     'https://c.example',
@@ -232,17 +260,18 @@ test('parsePolicyModeFlag accepts admissible modes and names the flag on reject'
   });
 });
 
-test('httpMkArgsFromOpts routes each commander opt to the matching httpMk arg', t => {
-  // Pins the opt-key routing: a swapped destructure (e.g. binding the byte cap
-  // to the request cap) would sail through the daemon-driven test, which only
-  // checks the echoed pet name.
+test('httpMkArgumentsFromOptions routes each commander option to the matching httpMk arg', t => {
+  // Pins the option-key routing: a swapped destructure (e.g. binding the byte
+  // cap to the request cap) would sail through the daemon-driven test, which
+  // only checks the echoed pet name.
   t.deepEqual(
-    httpMkArgsFromOpts('my-http', {
+    httpMkArgumentsFromOptions('my-http', {
       as: 'host-a',
       origin: ['https://a.example', 'https://b.example'],
       maxRequestsPerMinute: 30,
       maxResponseBytes: 2048,
       policyMode: 'tofu-auto',
+      acknowledgeUnbounded: true,
     }),
     {
       name: 'my-http',
@@ -250,18 +279,22 @@ test('httpMkArgsFromOpts routes each commander opt to the matching httpMk arg', 
       maxRequestsPerMinute: 30,
       maxResponseBytes: 2048,
       policyMode: 'tofu-auto',
+      acknowledgeUnbounded: true,
       agentNames: 'host-a',
     },
   );
 });
 
-test('httpMkArgsFromOpts leaves unset knobs undefined', t => {
-  const args = httpMkArgsFromOpts('x', { origin: ['https://a.example'] });
-  t.deepEqual(args.allowedOrigins, ['https://a.example']);
-  t.is(args.maxRequestsPerMinute, undefined);
-  t.is(args.maxResponseBytes, undefined);
-  t.is(args.policyMode, undefined);
-  t.is(args.agentNames, undefined);
+test('httpMkArgumentsFromOptions leaves unset knobs undefined', t => {
+  const mkArguments = httpMkArgumentsFromOptions('x', {
+    origin: ['https://a.example'],
+  });
+  t.deepEqual(mkArguments.allowedOrigins, ['https://a.example']);
+  t.is(mkArguments.maxRequestsPerMinute, undefined);
+  t.is(mkArguments.maxResponseBytes, undefined);
+  t.is(mkArguments.policyMode, undefined);
+  t.is(mkArguments.acknowledgeUnbounded, undefined);
+  t.is(mkArguments.agentNames, undefined);
 });
 
 // --- Help surface ----------------------------------------------------------
@@ -327,6 +360,24 @@ test('endo http mk rejects an unknown --policy-mode locally', async t => {
   t.regex(error.stderr, /--policy-mode must be strict or tofu-auto/);
 });
 
+test('endo http mk refuses tofu-auto without --acknowledge-unbounded locally', async t => {
+  // The unbounded, unrevocable grant must be gated by an explicit flag, not by
+  // help prose alone; the refusal is local, before any daemon connect.
+  const error = await t.throwsAsync(
+    execa(process.execPath, [
+      endoBin,
+      'http',
+      'mk',
+      'x',
+      '--origin',
+      'https://a.example',
+      '--policy-mode',
+      'tofu-auto',
+    ]),
+  );
+  t.regex(error.stderr, /--acknowledge-unbounded/);
+});
+
 // --- Daemon-driven registration -------------------------------------------
 
 // Invoke the CLI under test via an absolute path derived from import.meta.url
@@ -372,3 +423,36 @@ test.serial('endo http mk rejects an empty origin allowlist', async t => {
   const error = await t.throwsAsync(endo('http', 'mk', 'no-origins'));
   t.regex(error.stderr, /at least one --origin/);
 });
+
+test.serial(
+  'endo http mk rebinds an occupied name to the new client',
+  async t => {
+    // The rebind claim (a second mk on the same name repoints it, dropping the
+    // old client's reference) is security-relevant and was pinned nowhere.
+    await endo('purge', '-f');
+    await endo('start');
+    try {
+      await endo('http', 'mk', 'feed', '--origin', 'https://a.example');
+      const rebind = await endo(
+        'http',
+        'mk',
+        'feed',
+        '--origin',
+        'https://b.example',
+      );
+      t.deepEqual(
+        rebind.stdout.split('\n').filter(Boolean),
+        ['feed'],
+        'the rebind should echo the same pet name',
+      );
+      // The name resolves to exactly one client entry after the rebind.
+      const list = await endo('list');
+      const feedLines = list.stdout
+        .split('\n')
+        .filter(line => /\bfeed\b/.test(line));
+      t.is(feedLines.length, 1, 'the name should denote a single client');
+    } finally {
+      await endo('purge', '-f');
+    }
+  },
+);
