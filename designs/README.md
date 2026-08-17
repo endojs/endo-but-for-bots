@@ -14,19 +14,22 @@ designs (mcp-endo-guest, mcp-daemon-guest-tools). Summary table, M6 constituent 
 dependency graph (including the `endo-posix-sandbox` prerequisite edge), per-design
 estimate, and design-count totals synced; M6's own-work rollup now folds in
 endo-claude's ~1-1.5 weeks.*
-*Refreshed on 2026-08-16:
+*Refreshed on 2026-08-17:
 [session-execution-capabilities](session-execution-capabilities.md) is the
 current daemon-backed code-mode capability roadmap.
 It scopes zero-grant and confinement claims to strict harness posture,
 distinguishes portable Exo guarantees from trusted host development and
 conformance-qualified sandbox backends, and makes `@endo/sandbox` the planned
-production boundary for native processes over untrusted workspaces. The work
-ledger now uses landed, open, and unposted checklists, including durable effect
-reconciliation and workload-specific broker-only networking. Daemon-owned Web
-uses confined HTTP, package installation uses an `EndoRegistry`/CAS broker, and
-Git HTTPS uses a narrower exact-origin CONNECT broker. Retired Genie code is
-salvage or reference material. Summary, M3 row, estimate, totals, and timeline
-are synchronized.*
+production boundary for native processes over untrusted workspaces. The durable
+session is one authority graph with multiple named mount and Git grants, while
+lazy sandbox incarnations receive only the exact selected mount set and network
+posture. The work ledger now includes active mount, sandbox-lifecycle, and Git
+stacks, reserves durable write-ahead records for mutating effects, distinguishes
+grant identity from backing-resource identity, and makes backend migration
+explicit. Daemon-owned Web uses confined HTTP, package installation uses an
+`EndoRegistry`/CAS broker, and Git HTTPS uses a narrower exact-origin CONNECT
+broker. Retired Genie code is salvage or reference material. Summary, M3 row,
+estimate, totals, and timeline are synchronized.*
 
 *Layered on 2026-08-06: added
 [session-execution-capabilities](session-execution-capabilities.md) to M3,
@@ -56,7 +59,7 @@ totals, and timeline synced.*
 
 *Recently added or revised:
 [session-execution-capabilities](session-execution-capabilities.md) (added
-2026-08-06, revised 2026-08-16; the current daemon-backed code-mode roadmap
+2026-08-06, revised 2026-08-17; the current daemon-backed code-mode roadmap
 scopes strict versus preserved harness claims, defines portable, trusted-host,
 and confined assurance levels, and tracks every landed, open, and unposted Web,
 package, Git, operation-recovery, sandbox, and acceptance item with an explicit

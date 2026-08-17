@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
-| **Updated** | 2026-08-16 |
+| **Updated** | 2026-08-17 |
 | **Author** | 0xpatrickdev (prompted) |
 | **Status** | Proposed |
 | **Builds on** | [daemon-mount-capabilities](daemon-mount-capabilities.md), [daemon-git-capability](daemon-git-capability.md), [daemon-git-remotes](daemon-git-remotes.md), [endo-agent-tools](endo-agent-tools.md), and [endo-fetch](endo-fetch.md) |
@@ -15,7 +15,7 @@ It can retain a guest across daemon restarts and grant workspace and Git
 capabilities, but mediated network authority is not yet wired into its tools or
 globals.
 Portable package-manager capability work has landed and its projection remains
-open, while the host backend, daemon formula, and safe-install provisioning do
+open, while the host backend, daemon formula, and frozen-install provisioning do
 not yet have implementation pull requests.
 
 This document is the plan of record for completing independently granted
@@ -31,9 +31,10 @@ Node HTTP transport, then composes those into transport-neutral HTTP policy and
 a passable `WebResearch` capability.
 The package-manager work composes only the installer facet from the open
 portable capability stack and never exposes the executor facet in a strict
-session. Calling that facet a safe installer describes its authority relative
-to the executor facet. It is not a claim that every backend confines a hostile
-workspace.
+session. The installer facet is narrower than the executor facet, but its name
+is not an assurance claim. A trusted-host implementation is suitable only for
+trusted workspaces; hostile workspace content requires a conformance-qualified
+confined backend.
 
 Workspace, Git, package-manager, and Web authority remain separate grants.
 Every effect carries bounded and cancellable protocol contracts at the portable
@@ -49,7 +50,7 @@ This design covers:
 
 - the generic trusted-grant and durable-reconstruction contract for code mode;
 - independently provisioned workspace, Git, package-manager, and Web grants;
-- safe-installer authority for frozen dependency hydration, with backend
+- installer authority for frozen dependency hydration, with backend
   assurance stated separately;
 - reusable public-address classification and DNS-pinned HTTP transport;
 - mediated Web fetch and search with the existing `webFetch` and `webSearch`
@@ -69,7 +70,7 @@ separately and is outside whole-session confinement claims.
 
 ## Verified Current State
 
-This state was verified on 2026-08-16 against `llm` commit
+This state was refreshed on 2026-08-17 against `llm` commit
 `eb6da1602f8b1c04da5b8a32f5fc01070ad49ca2` and the live pull-request heads.
 Open implementation branches remain owned by their existing pull requests and
 must not be absorbed into this design branch.
@@ -84,28 +85,41 @@ must not be absorbed into this design branch.
 | Trusted host development backend and formula | **No implementation PR yet.** | `packages/package-manager` does not exist on `llm`; #948 supplies only the portable facade and injected protocol. The backend, registry broker, daemon formula, durable policy, cleanup, and trusted provisioning remain. This tier is for trusted workspaces, not the final hostile-workspace boundary. |
 | Public-Web transport and `WebResearch` | **No implementation PR yet.** | [#566](https://github.com/endojs/endo-but-for-bots/pull/566) landed `@endo/http-confine` and `@endo/exo-http-client`. The retired Genie package remains historical reference material for `webFetch`, `webSearch`, and its parser at the [last pre-retirement tree](https://github.com/endojs/endo-but-for-bots/tree/a54c3adb/packages/genie). No reusable DNS-pinned public-Web transport, passable WebResearch capability, daemon formula, or code-mode `web` grant exists. |
 | Registry acquisition and CAS | **Landed on `llm`.** | [#671](https://github.com/endojs/endo-but-for-bots/pull/671) supplies `EndoRegistry`, injected acquisition, published-integrity verification, and CAS-backed package trees. It is a foundation for the package-manager broker, not that broker itself. |
-| Confined execution backend | **Design draft, with incomplete substrate guarantees.** | [#953](https://github.com/endojs/endo-but-for-bots/pull/953), head `cd766517a1d6f59f382d0cb0d0cb36f32fb2e51f`, defines sandbox-backed project-code execution. Current `@endo/sandbox` proves `network: 'none'`; bwrap private egress is not wired, Podman filtering remains operator-owned, and the bwrap default seccomp profile is not loaded. The design must not claim hostile-workspace conformance until driver-owned probes pass. |
-| Context cancellation cleanup | **Open draft on `llm`.** | [#1010](https://github.com/endojs/endo-but-for-bots/pull/1010), head `4ee6c83dc58b7d40c8d0985b49e12eb2362792cd`, settles daemon context cancellation hooks. It improves graceful cleanup but does not add the durable operation journal or effect reconciliation required below. |
+| Sandbox lifecycle | **Open draft on `llm`.** | [#954](https://github.com/endojs/endo-but-for-bots/pull/954), head `6d4ce0723c921c1b3009358a0d8a2ea094a92405`, serializes spawn and dispose, bounds captured output, labels operation containers, and reconciles owned orphans. It is the first lifecycle cut, not a complete confined session backend. |
+| Code-mode workspace surface | **Open reconciliation on `llm`.** | [#961](https://github.com/endojs/endo-but-for-bots/pull/961), head `f0b5eaf23f2b2fe33dce25591674fe7c7ac3b9d7`, aligns code-mode workspace bindings with the daemon `EndoMount` and keeps the extended `Filesystem` surface as a separate local seam. It overlaps #958's named-mount projection and must be reconciled before either surface becomes the plan of record. |
+| Mount containment hardening | **Open on `llm`.** | [#897](https://github.com/endojs/endo-but-for-bots/pull/897), head `dc6834e475cfa2e75c15581a491d8255e828c1db`, includes symlink-deny and mid-walk revocation fixes. Until it or equivalent fixes land, portable mount facades must not be described as complete path containment. |
+| Git capability evolution | **Several open stacks.** | [#960](https://github.com/endojs/endo-but-for-bots/pull/960) adds linked-worktree operations; [#962](https://github.com/endojs/endo-but-for-bots/pull/962), head `b5daae168a0b3c3a694cb7d33d04f562bc24ef11`, makes status bounded copy data and adds tracking; [#974](https://github.com/endojs/endo-but-for-bots/pull/974), stacked on #962, adds worktree-relative path designators; and [#973](https://github.com/endojs/endo-but-for-bots/pull/973), head `9b36df5387bab785dfc40927e85e3dc8abb960d1`, bounds network-sourced `GitRemote` results and audit fields. A sandbox Git backend must implement or explicitly exclude every public method that lands. |
+| Confined execution backend | **Design draft, with incomplete substrate guarantees.** | [#953](https://github.com/endojs/endo-but-for-bots/pull/953), head `cd766517a1d6f59f382d0cb0d0cb36f32fb2e51f`, defines sandbox-backed project-code execution. Current `@endo/sandbox` proves `network: 'none'`; bwrap private egress is not wired, Podman filtering remains operator-owned, and the bwrap default seccomp profile is not loaded. [#971](https://github.com/endojs/endo-but-for-bots/pull/971) supplies adjacent capability-first 9P mount projection on the `feat/hosted-endo-management` stack, not on `llm`; the backend design should evaluate reuse rather than assume a new bridge. |
+| Context cancellation cleanup | **Open draft on `llm`.** | [#1010](https://github.com/endojs/endo-but-for-bots/pull/1010), head `4ee6c83dc58b7d40c8d0985b49e12eb2362792cd`, settles daemon context cancellation hooks. It improves graceful cleanup but does not add the durable mutating-effect records or reconciliation planned below. |
 
 ## Durable Grant Contract
 
-The normalized code-mode policy and retained controller record these grants
-independently:
+The durable session is one authority graph, not one workspace. Its normalized
+policy and retained controller may record these grants independently:
 
-- `workspace`: a read-only or read-write filesystem or mount view;
-- root and named Git grants: read-only, read-write, or history-rewrite facets;
-- named `GitRemote` capabilities with endpoint, direction, refspec, and optional
-  credential policy;
-- `packageManager`: reader metadata plus the safe-installer posture; and
+- compatibility `workspace` plus zero or more named mount grants, each with its
+  own read-only or read-write mode and canonical mount lineage;
+- zero or more named Git grants, each selecting one mount and a validated
+  mount-relative repository path, with read-only, read-write, or
+  history-rewrite authority;
+- named `GitRemote` capabilities with endpoint, direction, refspec, optional
+  credential policy, and an explicit selected Git grant;
+- `packageManager`: reader metadata plus an installer or executor facet bound
+  to an explicit mount and mount-relative project directory; and
 - `web`: independently selected `fetch` and `search` operations on a
   `WebResearch` capability.
 
-No grant implies a sibling.
-A package-manager grant does not expose Git or a workspace global, a registry
-broker does not grant arbitrary Web access, and a Web grant does not grant Git
-or registry transport.
-When capabilities share a workspace, their mount entries must come from the
-same validated lineage even if the workspace itself is not guest-visible.
+No grant implies a sibling. Multiple mount and Git grants may coexist, and no
+sandbox incarnation automatically receives all of them. A package-manager
+grant does not expose Git or a mount global, a registry broker does not grant
+arbitrary Web access, and a Web grant does not grant Git or registry transport.
+
+Grant identity and backing-resource identity are different. Pet names and
+formula IDs identify durable grants. Mutation coordination and effect
+reconciliation use the canonical backing mount lineage plus the selected
+relative root, so aliases or overlapping grants cannot evade serialization.
+Every capability that shares bytes derives from that canonical resource
+lineage even when its mount is not guest-visible.
 
 Once #958 and #965 land, package-manager and Web provisioning extend their
 normalized policy, trusted grant minter, formula lookup, declaration, and prompt
@@ -118,34 +132,61 @@ normalized posture.
 
 The durable record contains only versioned, non-secret policy and formula
 identifiers.
-It retains workspace lineage, Git and remote policy, package-manager bounds,
+It retains mount lineages, Git and remote policy, package-manager bounds,
 registry origins, cache identifiers, Web provider selection, URL policy, and
 effect limits.
 It never contains a live process, socket, DNS result, Undici Agent, stream,
 pending promise, proxy address, credential material, or other ephemeral handle.
 
 After a daemon restart, each formula reconstructs its ephemeral implementation
-from durable policy.
-The operation journal records liveness separately from effect outcome. An entry
-whose former process was live becomes `interrupted` with reason
-`daemon-restart`, but its outcome is classified independently as `no-effect`,
-`completed`, or `indeterminate` after effect-specific reconciliation.
-A Git push can be locally interrupted while the remote ref outcome is
-indeterminate. An install can leave a partially changed dependency tree.
-Neither case is safe to describe as though no effect occurred.
+from durable policy. Reconstructing a pinned backend under the same versioned
+policy may preserve public grant identity. Changing driver, rootfs, enforcement
+policy, or another assurance-relevant input is an explicit migration. It mints
+a new grant identity unless conformance establishes behaviorally equivalent
+authority and the migration records that proof.
 
-The disconnected caller receives the recorded receipt and reconciliation
-status and must explicitly decide whether to retry. Git, install, fetch, and
-search operations are never replayed automatically. Retention is bounded, and
-the durable record contains non-secret operation kind, policy and formula
-identifiers, timestamps, liveness, outcome, and reconciliation metadata. It
-never stores credentials, response bodies, process handles, or sockets.
+The planned operation records separate process liveness from effect outcome.
+An entry whose former process was live becomes `interrupted` with reason
+`daemon-restart`, while a durable mutating operation may later reconcile to
+`no-effect`, `completed`, or `indeterminate`. A Git push can be locally
+interrupted while its remote-ref outcome remains indeterminate. An install or
+project script can leave partially changed workspace bytes and may have no
+sound reconciliation stronger than `indeterminate`.
+
+Durable write-ahead recording is required for operations that may mutate
+durable workspace or external state. Read-only fetch, search, and Git
+inspection use bounded operation receipts and cancellation, but need not turn
+every call into a durable transaction. After restart they reject as
+interrupted unless a consumer separately requested durable receipt retention.
+No operation is automatically replayed.
+
+The disconnected caller receives any retained receipt and reconciliation
+status and must explicitly decide whether to retry. Retention is bounded. A
+durable record contains only non-secret operation kind, policy and formula
+identifiers, canonical resource identity, timestamps, liveness, outcome, and
+reconciliation metadata. It never stores credentials, response bodies,
+process handles, or sockets.
 
 Purging the daemon store out of band can remove the controller, formulas,
 aliases, policies, and daemon-owned caches.
 Externally backed workspace bytes may remain, but they do not silently recreate
 the session or its grants.
 The caller must explicitly reprovision and revalidate them.
+
+### Ephemeral backend selection
+
+A confined backend owner may coordinate a lazy pool of ephemeral sandbox
+incarnations. Each incarnation is keyed by its exact selected mount grants and
+modes, rootfs or toolchain profile, network posture, limits, and policy version.
+It receives only the authority needed for the admitted operation. Pool reuse
+and eviction are private optimizations, not durable identity, and the design
+does not pre-create every possible grant combination.
+
+The owner serializes spawn and disposal for each incarnation while coordinating
+mutations across incarnations by canonical backing-resource identity. The
+current `SandboxHandle` chooses networking per handle, so `none`, workload
+broker-only, and broad public project networking require distinct incarnations
+until a proven per-spawn attenuation contract exists.
 
 ## Harness Postures and Claim Scope
 
@@ -180,7 +221,7 @@ tools and never represents those tools as daemon-minted capabilities.
 | `@endo/agentry` | Generic trusted grant minting, declarations, prompt construction, and consumer-independent code-mode provisioning. |
 | `@endo/exo-http-client` | An exact-origin `HttpClient` capability over an injected transport. Its origin authority does not silently widen into arbitrary public-Web authority. |
 | `@endo/fetch` | A durable unconfined plugin intentionally configurable for explicit origins, including private origins. It is not the public-Web dialer. |
-| `@endo/exo-package-manager` | The portable reader, safe-installer, and executor facets, manager detection, fixed argv, snapshot contract, cancellation scoping, and backend protocol from #948. |
+| `@endo/exo-package-manager` | The portable reader, installer, and executor facets, manager detection, fixed argv, snapshot contract, cancellation scoping, and backend protocol from #948. The installer name denotes narrower authority, not backend assurance. |
 | `packages/package-manager` | The trusted host development backend, pinned manager spawn, workspace and configuration revalidation, loopback `EndoRegistry`/CAS broker integration, output/process bounds, and cooperative cleanup. It does not own hostile-workspace confinement claims. |
 | `@endo/exo-git`, `packages/git`, and `packages/daemon` | Existing Git capability and native backend policy, plus the remaining public HTTPS broker, credential-free public fetch, bounded process lifecycle, and daemon provisioning. |
 
@@ -378,7 +419,9 @@ process creation, network enforcement, atomic revalidation, termination, and
 reaping to its backend. An Exo guard can reject a malformed path record or an
 ungranted method, but it cannot prove what a native process does after spawn.
 The facade is therefore necessary at every level and is not a substitute for a
-confined backend at level 3.
+confined backend at level 3. #897's still-open symlink-deny and mid-walk
+revocation fixes are concrete evidence that the portable mount containment
+surface is still being hardened.
 
 `@endo/sandbox` is the planned level-3 substrate, not a present blanket
 guarantee. Its `network: 'none'` profile is implemented. Its current bwrap
@@ -425,21 +468,22 @@ also duplicate mature client semantics and create a much larger security code
 surface. Broker-only egress with workload-specific mediators is the stronger
 practical plan.
 
-## Daemon-Backed Safe Installation
+## Daemon-Backed Frozen Installation
 
 ### Authority posture
 
 #948 defines three cumulative but structurally distinct capabilities:
 
 - a reader with `detect` and `scripts` metadata;
-- a safe installer that adds `install` and operation-scoped `cancel`; and
+- an installer that adds `install` and operation-scoped `cancel`; and
 - an executor that additionally adds named-script `run`.
 
 #950 projects exactly those facets as `detectPackageManager` and
 `listPackageScripts`, then `installDependencies`, then `runPackageScript`.
 The daemon-backed milestone mints, retains, and exposes only the installer
-facet, conventionally named the safe-installer facet because it cannot invoke
-named scripts or the executor surface.
+facet. It cannot invoke named scripts or the executor surface, but that
+structural attenuation is not a promise that the selected backend safely
+processes hostile package-manager configuration.
 It does not simulate an executor, expose `runPackageScript`, or retain an
 executor internally where a guest could recover it through attenuation.
 
@@ -574,8 +618,8 @@ records, or model context.
 Rotation, revocation, cancellation, timeout, and restart invalidate the
 operation, close the descriptor, and kill and reap the process.
 
-Clone destinations and repository roots remain confined to a daemon-minted
-workspace lineage.
+Clone destinations and repository roots remain confined to the canonical
+lineage of their selected daemon-minted mount grant.
 Git output, deadlines, cancellation, process groups, shutdown interruption, and
 orphan cleanup use the same bounded runner discipline as package installation.
 For untrusted repositories, the confined runner's `broker-only` network profile
@@ -609,16 +653,44 @@ linked pull request is unposted work, not implied follow-up.
   Tracking: #948. Done: reader, installer, and executor are non-escalating,
   fixed-argv facets with operation-scoped cancellation, bounded protocol
   inputs, and expected-snapshot handoff to the backend.
+- [x] Fail-closed Git and filesystem foundations. Owners: daemon,
+  `@endo/exo-git`, and `@endo/platform`. Tracking: #920, #929, #941, and #959.
+  Done: writable Git rejects read-only mounts, remote policy is normalized,
+  extended filesystem guards use typed records, and large status output is
+  streamed. #962 remains the bounded-copy-data follow-up.
+- [x] Development-only Pi tool preservation. Owner: `@endo/agentry`.
+  Tracking: #957. Done: `piTools: 'preserve'` is an explicit compatibility
+  posture and does not become a strict-session authority claim.
 
 ### Open pull requests
 
 - [ ] Land exact package-manager projection. Owner: `@endo/agent-tools`.
   Tracking: #950, based on landed #948. Done when tool and code-mode surfaces
   expose only the methods present on the received facet.
-- [ ] Land named Git grants and truthful generic provisioning. Owners:
-  `@endo/agentry` and daemon. Tracking: #958 and #965. Dependency: existing Git
-  facets. Done when capabilities, checked declarations, and prompt text all
-  derive from trusted live minters and reconstruct from normalized policy.
+- [ ] Land the named mount and Git authority graph, then truthful generic
+  provisioning. Owners: `@endo/agentry` and daemon. Tracking: #958 and #965.
+  Dependency: existing mount and Git facets. Done when multiple named mounts
+  coexist, each Git grant selects one mount plus a relative path, and checked
+  declarations and prompts derive from trusted live minters. #965 must refresh
+  onto the final #958 head.
+- [ ] Reconcile the code-mode mount surface. Owners: `@endo/agent-tools`,
+  `@endo/agentry`, and daemon. Tracking: #961 with #958. Done when guest-visible
+  workspace and named-mount declarations expose the actual daemon `EndoMount`
+  contract, while the extended `Filesystem` remains an explicitly derived
+  local seam rather than a conflicting public type.
+- [ ] Close portable mount containment gaps. Owner: daemon mount. Tracking:
+  #897. Done when symlink-deny and mid-walk revocation behavior are covered by
+  adversarial tests and the remaining level-1 claims are accurate.
+- [ ] Land bounded sandbox lifecycle ownership. Owner: `@endo/sandbox`.
+  Tracking: #954. Done when spawn/dispose ordering, capture caps, exact-label
+  orphan cleanup, and operation-container cleanup land without claiming the
+  later mount or network profiles.
+- [ ] Reconcile the evolving Git public surface with backend obligations.
+  Owners: `@endo/exo-git`, `packages/git`, and sandbox Git adapters. Tracking:
+  #960, #962, #973, and stacked #974. Done when linked worktrees, bounded
+  status/tracking, worktree-relative designators, and bounded remote results
+  are either implemented by each selected backend or explicitly unsupported
+  before that backend is advertised.
 - [ ] Settle daemon context cancellation hooks. Owner: daemon. Tracking: #1010.
   Done when graceful cancellation cannot strand a cleanup hook. This item does
   not substitute for the durable operation work below.
@@ -658,9 +730,11 @@ linked pull request is unposted work, not implied follow-up.
   bytes and broker policy rejects arbitrary registry, tarball, and byte flows.
 - [ ] Implement and qualify sandbox `broker-only` networking. Owner:
   `@endo/sandbox` plus the session sandbox backend. Dependencies: #953 design
-  amendment and workload brokers. Done when bwrap and each supported Podman
-  profile enforce broker reachability with no direct socket, host, private,
-  metadata, DNS, or alternate-proxy escape through driver-owned probes.
+  amendment and workload brokers. Done for the first production cut when one
+  reference driver enforces broker reachability with no direct socket, host,
+  private, metadata, DNS, or alternate-proxy escape through driver-owned
+  probes. Every additional advertised driver must pass the same profile before
+  it is enabled; parity does not block the first qualified backend.
 - [ ] Add the package-manager formula and trusted grant exposure. Owners:
   daemon, `@endo/agentry`, and `@endo/agent-tools`. Dependencies: #948, #950,
   #965, and a selected backend. Done when restart reconstructs exactly the
@@ -672,24 +746,31 @@ linked pull request is unposted work, not implied follow-up.
   DNS answers, numeric peer, tunnel bounds, TLS validation, direction,
   refspec, and operation credential are enforced. Host use is development
   defense in depth; untrusted use additionally depends on `broker-only`.
+- [ ] Let every named Git remote select a named Git grant. Owners:
+  `@endo/agentry`, daemon, and `@endo/exo-git`. Dependency: #958. Done when each
+  remote records an explicit Git-grant selector and no compatibility-root
+  `git` binding is required when only named Git grants exist.
 - [ ] Define the durable bounded operation-record schema. Owner: daemon.
-  Dependency: existing operation IDs. Done when the record separates liveness
-  from `no-effect`, `completed`, and `indeterminate` outcomes and contains only
-  versioned non-secret identifiers, timestamps, policy, and reconciliation
-  metadata.
+  Dependency: existing operation IDs. Done when the record is limited to
+  operations that can mutate durable workspace or external state, separates
+  liveness from `no-effect`, `completed`, and `indeterminate`, keys mutation
+  obligations by canonical resource identity, and contains only versioned
+  non-secret metadata.
 - [ ] Add write-ahead operation recording, receipt/status inspection, and
   bounded retention. Owner: daemon. Dependency: the operation schema. Done when
   callers can inspect a stable receipt after reconnect and retention limits do
   not erase still-live reconciliation obligations.
-- [ ] Integrate Git, install, fetch, and search with the operation journal.
-  Owners: their backends and daemon formulas. Dependency: write-ahead records.
-  Done when dispatch cannot occur before the durable running record and final
-  settlement cannot occur before the effect-specific outcome record.
-- [ ] Add effect-specific reconciliation. Owners: Git, package-manager, Web,
-  and daemon. Dependency: journal integration. Done when Git compares remote
-  refs, installation examines the workspace and dependency tree, read-only Web
-  operations settle conservatively, and retry guidance never assumes
-  idempotence.
+- [ ] Integrate mutating Git, install, and project execution with durable
+  operation records. Owners: their backends and daemon formulas. Dependency:
+  write-ahead records. Done when mutation dispatch cannot occur before the
+  durable running record and final settlement cannot occur before the
+  effect-specific outcome record. Read-only calls retain bounded receipts only
+  when requested and are never promoted into transactions by default.
+- [ ] Add effect-specific reconciliation. Owners: Git, package-manager,
+  project-execution, and daemon. Dependency: journal integration. Done when Git
+  compares remote refs, installation examines workspace and dependency state,
+  arbitrary project execution remains conservatively `indeterminate`, and
+  retry guidance never assumes idempotence.
 - [ ] Add crash-point recovery tests. Owner: daemon integration tests.
   Dependency: reconciliation. Done when tests cover crash before dispatch,
   during execution, after external completion, and before journal settlement
@@ -713,21 +794,22 @@ at the assurance level named by each claim.
 
 ### Grant and durability contract
 
-- in strict posture, zero grants yields only `evaluate`, and every combination of workspace, root
-  or named Git, package-manager, Web fetch, and Web search omits ungranted
-  siblings;
+- in strict posture, zero grants yields only `evaluate`, and every combination
+  of compatibility workspace, named mounts, named Git, package-manager, Web
+  fetch, and Web search omits ungranted siblings;
 - in development preservation posture, retained Pi tools are identified as
   ambient harness authority and do not appear as Endo grants;
 - declarations and prompt text match the exact trusted live posture, including
-  reader versus safe-installer and absence of the executor;
-- one canonical mount lineage backs every related capability before and after
-  restart, while sibling grants remain independent;
+  reader versus installer and absence of the executor;
+- each related capability derives from its selected mount grant's canonical
+  lineage before and after restart, multiple sibling mount grants coexist, and
+  aliases to one backing resource share mutation coordination;
 - restart preserves durable identities, workspace bytes, formula policy,
   non-secret caches, grant selection, and bounded operation receipts but never
   a live process, connection, credential, or in-flight handle;
-- interrupted operations expose separately reconciled `no-effect`, `completed`,
-  or `indeterminate` outcomes, require an explicit caller decision, and are
-  never automatically replayed; and
+- interrupted mutating operations expose separately reconciled `no-effect`,
+  `completed`, or `indeterminate` outcomes, read-only operations reject without
+  automatic replay, and every retry requires an explicit caller decision; and
 - out-of-band daemon-store purge is reported and tested as destructive.
 
 ### Network and Web contract
@@ -763,7 +845,7 @@ bodies are opaque inside the tunnel.
 - every supported pinned manager version is tested with root and dependency
   lifecycle canaries, pnpm hooks, Yarn plugins and configuration, package
   binaries, explicit scripts, and manager download requests;
-- snapshots, manager selection, workspace lineage, configuration, registries,
+- snapshots, manager selection, selected mount lineage, configuration, registries,
   cache/scratch paths, and executable identity are revalidated immediately
   before spawn;
 - only frozen hydration occurs and neither manifests nor lockfiles change at
@@ -803,8 +885,10 @@ native package-manager or Git processes that consume untrusted workspace
 content.
 
 The portable facade, trusted host development backend, and four-pull-request
-daemon-owned Web stack can progress before it. Their public grant identities do
-not change when a confined backend is selected. Hostile-workspace path,
+daemon-owned Web stack can progress before it. Selecting a backend for a new
+grant does not change the public interface. Migrating an existing grant across
+driver, rootfs, or enforcement policy is versioned and explicit, and preserves
+identity only after equivalence is established. Hostile-workspace path,
 process, broker-bypass, and orphan claims remain disabled until the selected
 sandbox driver and profile pass the conformance tests in this document.
 
@@ -823,7 +907,14 @@ sandbox driver and profile pass the conformance tests in this document.
 - **Raw caller grant records or Pi-only policy:** either lets declarations
   self-assert authority or couples the capability system to one consumer.
 - **Host package-manager executor:** explicit `run`, lifecycle, package binary,
-  and project-code authority exceed the safe-installer posture.
+  and project-code authority exceed the frozen-installer posture.
+- **A durable transaction for every read-only call:** cancellation and bounded
+  receipts are sufficient for ordinary fetch, search, and Git inspection;
+  durable write-ahead state is reserved for effects that may mutate durable or
+  external state.
+- **One permanent sandbox or every possible grant combination:** either widens
+  ambient authority or creates a combinatorial pool. Lazy exact-authority
+  incarnations preserve least authority without making pooling public policy.
 - **Automatic replay after restart:** install, Git, and network effects are not
   generally idempotent and require a live caller decision.
 
@@ -835,9 +926,12 @@ versions rather than treating #948's portable version branches as support
 claims.
 Provider choice beyond the initial DuckDuckGo adapter and deployment-specific
 registry origin sets remain explicit daemon policy.
-The confined implementation must decide whether `broker-only` becomes a new
-`SandboxHandle` network profile or a separate backend incarnation before code
-depends on per-spawn attenuation that the current interface cannot express.
+The confined implementation must encode `broker-only` in the immutable handle
+specification, creating a separate lazy incarnation from `none` and broad
+public project networking until the current interface gains proven per-spawn
+attenuation. It must also decide whether to reuse the #971 9P projection for
+foreign filesystem grants or directly mount daemon `EndoMount` capabilities;
+it must not commit to a new filesystem protocol before that comparison.
 
 ## Prompt
 
@@ -863,3 +957,15 @@ depends on per-spawn attenuation that the current interface cannot express.
 > interrupted process liveness from external effect outcome. Choose the
 > strongest practical network plan rather than CONNECT alone, and retain the
 > retired Genie implementation only as salvage or reference material.
+
+## Revision Prompt (2026-08-17)
+
+> Reconcile the plan with the live named-mount and Git authority graph in #958,
+> the `EndoMount` workspace correction in #961, sandbox lifecycle work in #954,
+> mount hardening in #897, and the evolving Git stacks in #960, #962, #973,
+> and #974. Separate grant identity from canonical backing-resource identity.
+> Use lazy exact-authority sandbox incarnations rather than one ambient handle
+> or every possible grant combination. Reserve durable write-ahead recording
+> for mutating effects, make backend migration explicit, qualify one reference
+> driver before requiring parity, and evaluate reuse of #971's 9P projection
+> before inventing another filesystem bridge.
