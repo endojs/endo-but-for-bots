@@ -1024,9 +1024,12 @@ pub fn partial_collect(
             root_pages.insert(r.0 / crate::store::SLOTS_PER_PAGE);
         }
     }
-    for r in interp.side_table_ref_slots() {
-        if !r.is_null() {
-            root_pages.insert(r.0 / crate::store::SLOTS_PER_PAGE);
+    // The side-table roots come as the page-bit projection: the same
+    // single-body enumeration as `side_table_ref_slots` (parity-locked),
+    // without materializing the O(live) index vector.
+    for (p, hit) in interp.side_table_ref_page_bits().into_iter().enumerate() {
+        if hit {
+            root_pages.insert(p as u32);
         }
     }
     // The decision query goes through the trait so an indexed backend

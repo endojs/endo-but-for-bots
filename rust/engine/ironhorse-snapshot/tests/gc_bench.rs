@@ -107,9 +107,9 @@ fn gc_cost_across_heap_sizes() {
                         roots.insert(r.0 / ironhorse_vm::SLOTS_PER_PAGE);
                     }
                 }
-                for r in interp.side_table_ref_slots() {
-                    if !r.is_null() {
-                        roots.insert(r.0 / ironhorse_vm::SLOTS_PER_PAGE);
+                for (p, hit) in interp.side_table_ref_page_bits().into_iter().enumerate() {
+                    if hit {
+                        roots.insert(p as u32);
                     }
                 }
                 enum_ms.push(t0.elapsed().as_secs_f64() * 1e3);

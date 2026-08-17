@@ -404,3 +404,40 @@ fn lifo_churn_rewrites_only_the_tail_free_segment() {
         "LIFO churn ships exactly the tail segment"
     );
 }
+
+#[test]
+fn side_table_page_bits_agree_with_slot_enumeration() {
+    // The two projections of the single side-table enumeration body
+    // must name the same page set — the partial collector roots from
+    // the bits, the tests and any future stored summary derive from
+    // the slots, and drift between them is the unsoundness class the
+    // enumeration refactor exists to prevent. The fixture populates
+    // the bulk tables (an array's items, a Map's entries) and the
+    // small ones (closures via a captured function, a promise chain
+    // would need the event loop — the tables it does hit suffice to
+    // catch a projection-level break).
+    let build = "var arr = []; var m = new Map(); var f = 0; var i = 0; \
+                 for (i = 0; i < 900; i = i + 1) { arr[i] = { v: i }; } \
+                 for (i = 0; i < 300; i = i + 1) { m.set({ k: i }, { v: i }); } \
+                 f = function (x) { return arr[x]; }; f(1).v";
+    let (b, names) = compile(build);
+    let mut m = Interp::new();
+    m.link_intrinsics(&names);
+    let o = m.run(&b);
+    assert!(o.completed, "fixture halted: {:?}", o.halt);
+
+    let from_slots: std::collections::BTreeSet<u32> = m
+        .side_table_ref_slots()
+        .iter()
+        .filter(|r| !r.is_null())
+        .map(|r| r.0 / ironhorse_vm::SLOTS_PER_PAGE)
+        .collect();
+    let from_bits: std::collections::BTreeSet<u32> = m
+        .side_table_ref_page_bits()
+        .into_iter()
+        .enumerate()
+        .filter_map(|(p, hit)| hit.then_some(p as u32))
+        .collect();
+    assert!(!from_bits.is_empty(), "fixture produced side-table refs");
+    assert_eq!(from_bits, from_slots, "page-bit and slot projections agree");
+}

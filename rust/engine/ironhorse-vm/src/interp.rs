@@ -19968,75 +19968,114 @@ impl Interp {
     /// keeps its values' pages one partial collection longer; the
     /// full [`Self::collect_garbage`] reclaims exactly.
     pub fn side_table_ref_slots(&self) -> Vec<crate::value::SlotIndex> {
+        let mut out: Vec<crate::value::SlotIndex> = Vec::new();
+        self.each_side_table_ref(&mut |r| out.push(r));
+        out.sort_unstable_by_key(|r| r.0);
+        out.dedup();
+        out
+    }
+
+    /// One flag per [`crate::value::SLOTS_PER_PAGE`]-slot page of the
+    /// arena: whether any side-table value references a slot on it —
+    /// the page-granular projection the summary-driven partial
+    /// collector roots from. Same enumeration as
+    /// [`Self::side_table_ref_slots`] (both are thin projections of
+    /// [`Self::each_side_table_ref`], so they cannot drift; parity is
+    /// also locked by test), but a bitmap store per reference instead
+    /// of an index-vector build plus per-entry set inserts — same
+    /// O(live entries) walk, roughly an order of magnitude less
+    /// constant on wide heaps. Out-of-arena indices (including the
+    /// null sentinel) fall outside the bitmap and are skipped.
+    pub fn side_table_ref_page_bits(&self) -> Vec<bool> {
+        let pages = self
+            .slots
+            .capacity()
+            .div_ceil(crate::value::SLOTS_PER_PAGE) as usize;
+        let mut bits = vec![false; pages];
+        self.each_side_table_ref(&mut |r| {
+            if !r.is_null() {
+                if let Some(b) = bits.get_mut((r.0 / crate::value::SLOTS_PER_PAGE) as usize) {
+                    *b = true;
+                }
+            }
+        });
+        bits
+    }
+
+    /// Visit every slot index held in a side-table VALUE — the single
+    /// enumeration body behind [`Self::side_table_ref_slots`] and
+    /// [`Self::side_table_ref_page_bits`]. Keeping one body is the
+    /// no-drift discipline: a new side table gets added here once and
+    /// every projection sees it.
+    fn each_side_table_ref(&self, visit: &mut dyn FnMut(crate::value::SlotIndex)) {
         use crate::value::SlotIndex;
-        let mut out: Vec<SlotIndex> = Vec::new();
-        fn slot_refs(s: &Slot, out: &mut Vec<SlotIndex>) {
-            s.each_ref_slot(|e| out.push(e));
+        fn slot_refs(s: &Slot, visit: &mut dyn FnMut(SlotIndex)) {
+            s.each_ref_slot(|e| visit(e));
         }
-        fn frame_refs(f: &SavedFrame, out: &mut Vec<SlotIndex>) {
+        fn frame_refs(f: &SavedFrame, visit: &mut dyn FnMut(SlotIndex)) {
             for s in &f.locals {
-                slot_refs(s, out);
+                slot_refs(s, visit);
             }
             for s in &f.args {
-                slot_refs(s, out);
+                slot_refs(s, visit);
             }
             for s in &f.stack_slice {
-                slot_refs(s, out);
+                slot_refs(s, visit);
             }
-            slot_refs(&f.this_val, out);
-            slot_refs(&f.result, out);
-            out.push(f.cur_func);
+            slot_refs(&f.this_val, visit);
+            slot_refs(&f.result, visit);
+            visit(f.cur_func);
         }
         for f in self.functions.values() {
-            out.push(f.closures);
+            visit(f.closures);
         }
         for b in self.bound_functions.values() {
-            out.push(b.target);
-            slot_refs(&b.this_arg, &mut out);
+            visit(b.target);
+            slot_refs(&b.this_arg, visit);
             for s in &b.args {
-                slot_refs(s, &mut out);
+                slot_refs(s, visit);
             }
         }
         for p in self.ctor_prototype.values() {
-            out.push(*p);
+            visit(*p);
         }
         for s in self.wrapper_data.values() {
-            slot_refs(s, &mut out);
+            slot_refs(s, visit);
         }
         for a in self.arrays.values() {
             for s in a.items.values() {
-                slot_refs(s, &mut out);
+                slot_refs(s, visit);
             }
         }
         for c in self.collections.values() {
             for (k, v) in &c.entries {
-                slot_refs(k, &mut out);
-                slot_refs(v, &mut out);
+                slot_refs(k, visit);
+                slot_refs(v, visit);
             }
         }
         for t in self.typed_arrays.values() {
-            out.push(t.buffer);
+            visit(t.buffer);
         }
         for d in self.data_views.values() {
-            out.push(d.buffer);
+            visit(d.buffer);
         }
         for i in self.iterators.values() {
-            out.push(i.iterable);
-            out.push(i.result);
+            visit(i.iterable);
+            visit(i.result);
         }
         for p in self.promises.values() {
-            slot_refs(&p.result, &mut out);
+            slot_refs(&p.result, visit);
             for r in &p.reactions {
-                slot_refs(&r.on_fulfilled, &mut out);
-                slot_refs(&r.on_rejected, &mut out);
-                slot_refs(&r.resolve, &mut out);
-                slot_refs(&r.reject, &mut out);
+                slot_refs(&r.on_fulfilled, visit);
+                slot_refs(&r.on_rejected, visit);
+                slot_refs(&r.resolve, visit);
+                slot_refs(&r.reject, visit);
                 match r.kind {
-                    ReactionKind::AsyncAwait(inst) => out.push(inst),
+                    ReactionKind::AsyncAwait(inst) => visit(inst),
                     ReactionKind::Combine(ci, _) => {
                         if let Some(c) = self.combinators.get(ci as usize) {
-                            out.push(c.derived);
-                            out.push(c.results);
+                            visit(c.derived);
+                            visit(c.results);
                         }
                     }
                     ReactionKind::User | ReactionKind::FinallyReturn => {}
@@ -20045,22 +20084,19 @@ impl Interp {
         }
         for g in self.generators.values() {
             if let Some(f) = &g.frame {
-                frame_refs(f, &mut out);
+                frame_refs(f, visit);
             }
         }
         for a in self.async_instances.values() {
-            out.push(a.result_promise);
-            slot_refs(&a.resolve_fn, &mut out);
-            slot_refs(&a.reject_fn, &mut out);
+            visit(a.result_promise);
+            slot_refs(&a.resolve_fn, visit);
+            slot_refs(&a.reject_fn, visit);
             if let Some(f) = &a.frame {
-                frame_refs(f, &mut out);
+                frame_refs(f, visit);
             }
         }
         for p in self.promise_functions.values() {
-            out.push(p.promise);
+            visit(p.promise);
         }
-        out.sort_unstable_by_key(|r| r.0);
-        out.dedup();
-        out
     }
 }
