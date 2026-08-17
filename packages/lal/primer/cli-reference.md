@@ -83,3 +83,12 @@ The `-a`/`--as` flag on any command means "pose as named agent"
 - `endo mkguest <handle-name> [agent-name]` — Create a guest
 - `endo invite <guest>` — Create an invitation
 - `endo accept <guest-name>` — Accept an invitation
+
+## Network
+
+- `endo http mk <name> --origin <origin> [--origin <origin>...]
+  [--max-requests-per-minute <n>] [--max-response-bytes <n>]
+  [--policy-mode strict|tofu-auto]` — Mint a confined outbound-HTTP
+  client under an origin-allowlist policy and register it under a pet
+  name. `strict` (default) confines the client to the listed origins;
+  `tofu-auto` auto-allows any first-seen origin.

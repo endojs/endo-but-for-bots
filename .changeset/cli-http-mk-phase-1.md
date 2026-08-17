@@ -2,27 +2,33 @@
 '@endo/cli': minor
 ---
 
-Add `endo http mk` (Phase 1 of `designs/cli-http-client.md`).
-
-The verb mints a confined outbound-HTTP client capability under a host-curated
-policy and registers it under a single pet name:
+Add `endo http mk`, which mints a confined outbound-HTTP client capability under
+a host-curated policy and registers it under a single pet name:
 
 ```
-endo http mk <name> --origin <url> [--origin <url>...]
+endo http mk <name> --origin <origin> [--origin <origin>...]
   [--max-requests-per-minute <n>] [--max-response-bytes <n>]
-  [--policy-mode strict|tofu-auto] [--as <agent>]
+  [--policy-mode strict|tofu-auto] [--as <host>]
 ```
 
-It rides the HTTP client that already landed on the daemon rather than
-introducing a new formula: the host method is
-`provideHttpClient(name, policy)` (backed by `@endo/exo-http-client` over
-`@endo/http-confine`), which returns one client with its control facet held
-host-side (reachable via `getHttpClientControl`). Accordingly the verb takes a
-*policy* — an origin allowlist plus optional rate / size / mode guards — not the
-controller/client formula pair the original design assumed. The daemon's policy
-normalizer is the authority on validity, so a malformed origin or guard surfaces
-as its structured error on the CLI invocation.
+`--origin` is required and repeatable; each value is an origin
+(`scheme://host[:port]`, http: or https:) and is normalized to its canonical
+serialization, so a browser-copied form with a trailing slash or an explicit
+default port is accepted. The guard knobs are optional and default to 60
+requests/minute and a 1 MiB response cap when unset; `--policy-mode` defaults to
+`strict`.
 
-This is CLI-only; no `@endo/daemon` change is needed. Policy mutation and
-revocation through the retained control facet, and the `allow`/`deny`/`revoke`/
-`inspect` verbs, follow in later phases.
+Under `--policy-mode strict` the client can reach only the listed origins. Under
+`--policy-mode tofu-auto` it auto-allows any first-seen origin, so `--origin`
+becomes a pre-seed rather than a bound — the allowlist no longer confines
+outbound reach. Prefer `strict` until the policy-inspection and revocation verbs
+land.
+
+`--as` names a host; the underlying capability is host-only, so a guest cannot
+mint one.
+
+Re-running `mk` on a name that already denotes a client rebinds the name to the
+newly minted client under the new policy; the previously bound client is not
+revoked (revocation lands with a later verb), so prefer a fresh name for now.
+
+Policy mutation and revocation are not yet exposed on the CLI.

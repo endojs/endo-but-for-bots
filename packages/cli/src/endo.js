@@ -16,6 +16,7 @@ import {
   collectDeniedSegment,
   resolveDeniedSegments,
 } from './denied-segments.js';
+import { parsePositiveIntegerFlag } from './http-mk-policy.js';
 
 const packageDescriptorPath = url.fileURLToPath(
   new URL('../package.json', import.meta.url),
@@ -796,17 +797,12 @@ export const main = async rawArgs => {
       return cancelCommand({ name, agentNames, reason });
     });
 
-  // `endo http <verb>` subcommand tree per designs/cli-http-client.md.
-  // Phase 1 lands `mk` only, riding the daemon HTTP client that already
-  // landed (`provideHttpClient(name, policy)` over @endo/exo-http-client /
-  // @endo/http-confine).  Policy mutation and revocation through the retained
-  // control facet, and `allow`/`deny`/`revoke`/`inspect` verbs, follow.
+  // `endo http <verb>` subcommand tree per designs/cli-http-client.md, riding
+  // the daemon HTTP client (`provideHttpClient(name, policy)` over
+  // @endo/exo-http-client / @endo/http-confine).
   const http = program
     .command('http')
-    .description(
-      'HTTP client capabilities (confined outbound fetch under a policy)\n' +
-        'Phase 1: mk only. allow/deny/revoke/inspect land in later phases.',
-    );
+    .description('HTTP client capabilities (confined outbound fetch)');
 
   http
     .command('mk <name>')
@@ -815,27 +811,36 @@ export const main = async rawArgs => {
     )
     .option(...commonOptions.as)
     .option(
-      '--origin <url>',
-      'Allowed origin URL (http: or https:); repeat for multiple',
-      (val, acc) => {
-        acc.push(val);
-        return acc;
-      },
-      [],
+      '--origin <origin>',
+      'Allowed origin (scheme://host[:port]; http: or https:); repeat for more',
+      (value, previous) =>
+        Array.isArray(previous) ? [...previous, value] : [value],
     )
     .option(
       '--max-requests-per-minute <n>',
       'Cap the client to at most <n> requests per minute',
-      val => Number(val),
+      parsePositiveIntegerFlag('--max-requests-per-minute'),
     )
     .option(
       '--max-response-bytes <n>',
       'Cap each response body at <n> bytes',
-      val => Number(val),
+      parsePositiveIntegerFlag('--max-response-bytes'),
     )
     .option(
       '--policy-mode <mode>',
-      'Policy mode: strict (default) or tofu-auto',
+      'strict (default) confines to --origin; tofu-auto AUTO-ALLOWS any ' +
+        'first-seen origin, so --origin only pre-seeds and the allowlist ' +
+        'stops bounding outbound reach',
+      value => {
+        if (value !== 'strict' && value !== 'tofu-auto') {
+          throw new Error(
+            `--policy-mode must be strict or tofu-auto, got ${JSON.stringify(
+              value,
+            )}`,
+          );
+        }
+        return value;
+      },
     )
     .action(async (name, cmd) => {
       const {

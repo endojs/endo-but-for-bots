@@ -55,11 +55,55 @@ endo http mk <name> --origin <url> [--origin <url>...]
 `mk` assembles the policy record from its flags (`--origin` is required and
 repeatable; the guard knobs are omitted from the record when unset so the daemon
 applies its own defaults), calls `provideHttpClient(name, policy)`, and prints
-the single pet name it registered. The origin allowlist the design carries over
-from PR #144 is expressed directly by `--origin`; the SSRF and flooding defenses
-(`redirect: 'manual'`, the per-response byte cap, the sliding-window rate limit)
-are enforced by the confinement layer the client is built on, so they need no
-separate CLI plumbing at this phase.
+the single pet name it registered. It validates each flag's lexical shape
+locally and reports by flag name — origins are normalized to their canonical
+serialization (so a browser-copied trailing slash, explicit default port, or
+mixed-case host is accepted, while a path, query, fragment, or userinfo is
+refused rather than silently widened to the whole host), the numeric guards must
+be positive integers, and `--policy-mode` must be one of the admissible modes —
+while the daemon's
+`normalizeHttpClientPolicy` stays the authority on policy *semantics*. The origin
+allowlist the design carries over from PR #144 is expressed directly by
+`--origin`; the SSRF and flooding defenses (`redirect: 'manual'`, the
+per-response byte cap, the sliding-window rate limit) are enforced by the
+confinement layer the client is built on, so they need no separate CLI plumbing
+at this phase.
+
+**`--policy-mode strict` vs `tofu-auto`.** Under `strict` (the default) the
+allowlist is the confinement bound: only the listed origins are reachable. Under
+`tofu-auto` the exo auto-allows any first-seen origin
+(`packages/exo-http-client/src/http-client.js` `decide()` returns `allow` for an
+unlisted target), so `--origin` becomes a pre-seed rather than a bound and the
+allowlist no longer confines outbound reach — the mode this design elsewhere
+describes as converting the allowlist into a write-once log. Because Phase 1
+ships no `inspect`/`revoke` verb, an operator using `tofu-auto` cannot yet see
+what got auto-pinned or undo it. The `mk` help text names this widening on the
+`--policy-mode` line itself, not only here.
+
+**Re-`mk` on an existing name rebinds it.** `provideHttpClient` always
+formulates and stores under the name, so `mk` on a name that already denotes a
+client rebinds it to the new client and does not revoke the previous one (its
+control facet is reached only through the now-overwritten name). This matches the
+sibling `provide*` mints; the phase-2 mutate/revoke verbs are the intended way to
+retire a client. Until then, prefer a fresh name.
+
+**On the verb spelling.** `mk` is the frozen Phase-1 spelling for this verb — an
+`mk`-family sibling of `mkhost` / `mkguest` / `mkdir` / `mktmp`. The
+placeholder-pending-namer caveats elsewhere in this document predate this
+landing; the namer dispatch may still rename the later `allow`/`deny`/`revoke`/
+`inspect` verbs, but `endo http mk` is what shipped.
+
+**Deferred, not carried: the #286 `http-confine` inert-response-snapshot fix.**
+PR #286 also changed `packages/http-confine/src/http-confine.js` to return an
+inert response snapshot instead of the live platform `Response`, dodging a
+Node-22 undici `Cannot assign to read only property 'Symbol(headers map
+sorted)'` when `harden()` freezes the live `Headers`. That change is not on
+`llm`, its relevance to the `llm` code path (where `@endo/exo-http-client`
+already snapshots headers via `headersToRecord` and never sends the live
+`Response` across CapTP) is unverified, and CI here is pinned to Node 24 where
+the slot is not tripped. It is a plausible independent Node-22 parity fix and
+should land separately on its own merits with a Node-22 reproduction; this note
+is its durable record outside the superseding PR's description.
 
 Consequences for the rest of this document: the **controller/client facet split
 and method placement remain the normative model** for where policy-mutation vs
