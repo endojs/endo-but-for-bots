@@ -2,7 +2,11 @@
 
 import harden from '@endo/harden';
 import { makeError, q, X } from '@endo/errors';
-import { nameForPassableSymbol, passableSymbolForName } from '@endo/pass-style';
+import {
+  nameForPassableSymbol,
+  passableSymbolForName,
+  passStyleOf,
+} from '@endo/pass-style';
 
 /**
  * Slot-machine method selectors mirror `@endo/ocapn`'s
@@ -41,13 +45,17 @@ harden(makeSelector);
  * passable symbol — the guard behind "malformed or non-selector
  * object calls are rejected".
  *
- * @param {unknown} selector
+ * @param {any} selector
  * @returns {string}
  */
 export const getSelectorName = selector => {
-  if (typeof selector !== 'symbol') {
+  // Sense the pass-style rather than the JavaScript `typeof`: a selector
+  // is a *passable* symbol, and routing the check through pass-style keeps
+  // this guard correct should the wire representation of a selector ever
+  // migrate to another passable shape.
+  if (passStyleOf(selector) !== 'symbol') {
     throw makeError(
-      X`method selector must be a symbol, got ${q(typeof selector)}`,
+      X`method selector must be a symbol, got ${q(selector)}`,
     );
   }
   const name = nameForPassableSymbol(selector);

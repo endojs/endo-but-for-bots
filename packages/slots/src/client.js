@@ -247,13 +247,14 @@ export const makeSlotClient = ({
         deliverSendOnly(p, [...args]);
       },
       /**
-       * Property access via `E(p).prop` resolves to a deliver of the
-       * conventional `__get__` method with the property name as its
-       * only argument.  This get-as-call shape is a slot-machine
-       * *private* convention (it is not an OCapN operation) carried
-       * as an ordinary string-named method — so, like every method
-       * call, its selector is prepended.  See the README for why it
-       * stays private rather than adopting a distinct OCapN opcode.
+       * Property access via `E(p).prop` is OCapN's `op:get` — the one
+       * non-delivery lane JavaScript eventual-send can express
+       * (`HandledPromise.get`).  Today it is carried as a `deliver` of
+       * the conventional `__get__` method with the property name as its
+       * only argument (so, like every method call, its selector is
+       * prepended), rather than a first-class wire op.  See the README
+       * (§ Calling convention) for the plan to emulate OCapN's separate
+       * `op:get` / `op:index` / `op:untag` lanes.
        *
        * @param {unknown} p
        * @param {string | symbol} prop
