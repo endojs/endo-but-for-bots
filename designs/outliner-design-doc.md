@@ -1,5 +1,12 @@
 # Outliner: Design Document
 
+| | |
+|---|---|
+| **Created** | 2026-03-17 |
+| **Updated** | 2026-08-17 |
+| **Author** | Kris Kowal (prompted) |
+| **Status** | In Progress |
+
 ## Endo Petdaemon — Type 3 Chat System
 
 ### Summary

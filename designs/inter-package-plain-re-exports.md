@@ -3,8 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-06-27 |
+| **Updated** | 2026-08-17 |
 | **Author** | Mark S. Miller (prompted) |
-| **Status** | Not Started |
+| **Status** | In Progress |
 | **Source** | endojs/endo-but-for-bots#543 |
 
 ## Summary

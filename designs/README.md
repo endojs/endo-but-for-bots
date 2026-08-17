@@ -164,7 +164,7 @@
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | In Progress |
 | [pass-style-promise](pass-style-promise.md) | 2026-05-10 | 2026-05-10 | In Progress |
-| [namehub-interface-unification](namehub-interface-unification.md) | 2026-05-07 | 2026-05-07 | Proposed |
+| [namehub-interface-unification](namehub-interface-unification.md) | 2026-05-07 | 2026-08-17 | **Complete** |
 | [forge-gap-analysis](forge-gap-analysis.md) | 2026-05-20 | 2026-05-20 | Reference (exploratory) |
 | [captp-error-identification](captp-error-identification.md) | 2026-07-02 | 2026-07-02 | Proposed |
 | [daemon-engo-supervisor](daemon-engo-supervisor.md) | 2026-02-25 | 2026-02-25 | Not Started |
@@ -190,7 +190,7 @@
 | [familiar-app-ui-hosting](familiar-app-ui-hosting.md) | 2026-06-01 | 2026-06-01 | Proposed |
 | [ses-import-attributes](ses-import-attributes.md) | 2026-05-14 | 2026-05-15 | Draft |
 
-**Totals (recounted 2026-08-17 by tallying the summary table's Status column):** 56 Complete/Implemented, 46 In Progress, 35 Not Started, 26 Proposed, 2 Active, 13 Reference, 2 Deprecated, 4 Superseded, 1 Draft (**185 designs**). This supersedes every count in the historical grooming summaries (now relocated to the [Changelog](#changelog) at the foot of this document), which had drifted badly: the last prose total claimed 151 designs while the table had already grown to 185 rows, and ~34 rows this pass verified against real merged/open-PR and `llm`-git state were understated — landed or in-flight work (e.g. `http-confine`, `exo-zip-package`, `inventory-drag-and-drop`/`-grouping-by-type`, `endoclaw-browser`, `endopi-edit-tool`/`-jsonl-transcript-format`, the `daemon-git-*` trio, `endo-reminder`, `endo-fetch`, `inter`/`intra-package-plain-re-exports`, `notifier-pubsub-migration`) was still marked Not Started or Proposed. See the Roadmap's **Verification drift (2026-08-17)** note for the row-by-row list. Design docs whose *own* metadata is also stale are listed there as a scoped follow-up, not silently rewritten in this pass.
+**Totals (recounted 2026-08-17 by tallying the summary table's Status column):** 57 Complete/Implemented, 46 In Progress, 35 Not Started, 25 Proposed, 2 Active, 13 Reference, 2 Deprecated, 4 Superseded, 1 Draft (**185 designs**). This supersedes every count in the historical grooming summaries (now relocated to the [Changelog](#changelog) at the foot of this document), which had drifted badly: the last prose total claimed 151 designs while the table had already grown to 185 rows, and ~34 rows this pass verified against real merged/open-PR and `llm`-git state were understated — landed or in-flight work (e.g. `http-confine`, `exo-zip-package`, `inventory-drag-and-drop`/`-grouping-by-type`, `endoclaw-browser`, `endopi-edit-tool`/`-jsonl-transcript-format`, the `daemon-git-*` trio, `endo-reminder`, `endo-fetch`, `inter`/`intra-package-plain-re-exports`, `notifier-pubsub-migration`) was still marked Not Started or Proposed. See the Roadmap's **Verification drift (2026-08-17)** note for the row-by-row list. Design docs whose *own* metadata is also stale are listed there as a scoped follow-up, not silently rewritten in this pass.
 
 ## Roadmap
 
@@ -246,11 +246,10 @@ direction: **the README understated reality.** Rows corrected this pass
 | familiar-deep-link-invitations | Proposed | In Progress | `endo://` deep-link impl PR #399 open |
 | registry-capability siblings (mvs-resolver, snapshot-mapper, daemon-worker-import-from-mount) | Proposed | Not Started | accepted-but-unbuilt per the 2026-07-10 flip and each doc's own metadata; the summary table had never taken the flip |
 
-**Stale design docs — scoped follow-up, not touched this job.** Per the scope
-guard, this pass did not rewrite individual design docs. Verification found the
-following docs whose *own* metadata table now disagrees with reality; they want
-a separate sweep (a follow-on `groom-endo-stale-design-docs` job is the right
-home): `registry-capability` (doc Not Started, impl landed), `http-confine`
+**Stale design docs — swept in the stacked `groom-endo-stale-design-docs` follow-on (this PR).** Per the scope
+guard, the README pass did not rewrite individual design docs. Verification found the
+following docs whose *own* metadata table disagreed with reality; each was
+brought into line with the summary table in the stacked follow-on: `registry-capability` (doc Not Started, impl landed), `http-confine`
 (doc Proposed, landed), `exo-zip-package` (doc Proposed, landed), `endoclaw-browser`
 (doc status is a non-vocabulary string), `endopi-edit-tool` / `endopi-jsonl-transcript-format`
 (docs Proposed, landed), `endo-reminder` / `endo-fetch` (docs Not Started, in flight),
@@ -261,8 +260,10 @@ home): `registry-capability` (doc Not Started, impl landed), `http-confine`
 `#339` EndoMount unification — needs confirmation), `captp-error-identification`,
 `unredacted-stack-sanctioned-ses-api` (docs say "Draft", README says Proposed),
 `daemon-locator-reference` (doc "Current" vs Reference), and `outliner-design-doc`
-(no metadata table at all). `namehub-interface-unification` in particular is
-left at Proposed in the summary because the evidence is mixed; confirm before flipping.
+(no metadata table at all). `namehub-interface-unification` was confirmed landed —
+the daemon's `ReadableNameHubInterface` (`packages/daemon/src/interfaces.js`) implements
+the design's Decision 3, and PR #339 "complete EndoMount and specialize as Directory"
+merged 2026-05-27 — so it is flipped to **Complete** in the doc, the summary table, and M9.
 
 ### Expected landing order (2026-08-17)
 
@@ -689,43 +690,13 @@ detail — goal, design table, exit criterion, actual duration — moved to
 
 ---
 
-#### Milestone 2: Project Hygiene
+#### Milestone 2: Project Hygiene — **Complete**; archived to [ARCHIVE.md](ARCHIVE.md).
 
-(Was **Milestone ½** before the 2026-06-03 renumbering pass.)
-
-**Goal:** Build-system and shared-library hygiene that does not deliver
-user-facing capability on its own but unblocks (or cleans the substrate
-for) the capability work in Milestone 3 (formerly M1). Extracted from
-M1 (now M3) on 2026-05-14 once it became clear that several rows in
-that table satisfied the two-question criterion: (a) not user-facing
-capability, and (b) prereq or substrate-cleanup for the next milestone's
-capability work. Surfacing them as a separate bucket lets M3's "Remote
-Access and Coding Capabilities" exit-criterion remain readable as a
-capability list rather than a capability-plus-hygiene mix.
-
-| Design | Status | Notes |
-|--------|--------|-------|
-| ~~endo-bytes~~ | **Implemented** | New `@endo/bytes` package for portable `Uint8Array` helpers (`concatBytes`, `bytesEqual`, `bytesFromText`, `bytesToText`); retires duplicates in `cli`, `ocapn`, and `daemon` (PR #142); follow-up `bytesToImmutable`/`bytesFromImmutable` in 94ffbd401; ocapn refactor in PR #223; buffer-utils inlining in PR #227 |
-| ~~chat-playwright-smoke~~ | **Complete** | Build-and-load smoke for the Chat bundle in the `browser-tests` job; PRs #91 (design), #94 (impl), #95+#104 (harden/import fixes) |
-| ~~hex-package~~ | **Complete** | `@endo/hex` ponyfill shipped; consumer migration landed via `kriskowal-hex` follow-ups; synthetic `@endo/hex-test` lands Cut 2 of break-dev-dependency-cycles (PR #211) |
-| ~~break-dev-dependency-cycles~~ | **Complete** (on `llm`) | Synthetic test-package factoring retires the workspace devDep SCC on `llm`: Cut 2 (`@endo/hex-test`, PR #211), Cut 3 (`@endo/zip` devDep delete, PR #209), Cut 4 (`@endo/harden-test`, PR #210), Cut 5 (`@endo/eventual-send-test`, PR #247), and Cut 1 (`@endo/ses-test`, PR #261) have all landed on `llm`. Verified 2026-06-15: combined dep+devDep SCC count is 0; self-loop count is 0; `scripts/check-dependency-cycles.sh 0` passes. The upstream-ferry mirror PR #235 against master is the master-side mirror of the same cuts and is M2-orthogonal — the cycle is broken on the project branch and the substrate noise is gone |
-| ~~ci-no-npm-lifecycle~~ | **Complete** | `.yarnrc.yml` pins `enableScripts: false` and CI installs with `yarn install --immutable`; PR #126 merged 2026-05-15 (master-base mirror staged as PR #250) |
-| ~~base64-native-fallthrough~~ | **Complete** | `@endo/base64` dispatches to `Uint8Array.fromBase64` / `toBase64` when available; landed on `llm` via `actual/master` merge (commit `7325bbe15`, from `endojs/endo#3216`) |
-
-**Exit criterion:** The shared byte/encoding/test-helper libraries are
-factored out of per-package duplicates (`@endo/bytes`, `@endo/hex` fully
-migrated, `@endo/base64` native fast paths). The workspace devDep cycle
-is dissolved so turbo's `^build` form prints no cycle warning. The CI
-posture is hardened against npm lifecycle scripts. The Chat bundle has
-a build-and-load smoke gate. None of these are user-visible features
-on their own; together they remove substrate noise that otherwise
-accompanies every M3 capability commit.
-
-**Status:** **Complete** on `llm` as of 2026-06-15. All six rows above
-are Complete or Implemented on the project branch. The remaining
-upstream-ferry effort (PR #235 mirroring the cuts to master) is
-tracked separately and is not a blocker for M2's exit criterion on
-`llm`.
+(Was **Milestone ½** before the 2026-06-03 renumbering pass.) All six
+designs Complete/Implemented on `llm`, exit criterion met, closed since
+2026-06-15. Full detail — goal, design table, exit criterion, and status
+— moved to [designs/ARCHIVE.md](ARCHIVE.md) on 2026-08-17 per
+[AGENTS.md](AGENTS.md) § *Archiving Completed Milestones*.
 
 ---
 
@@ -756,10 +727,10 @@ capabilities available to agents.
 | ~~daemon-content-store-gc~~ | **Complete** | Content-store pruning and scratch-mount directory cleanup at GC time; landed in PR #99 |
 | daemon-mount | In Progress | Phases 1-3, 5 on `llm` (commit `e22f71327`); symlink confinement, 20 integration tests; Phase 4 (sub-mounts, snapshot) in PR #135 open, mount extensions in PR #127 open, `followNameChanges` in PR #277 open |
 | daemon-mount-capabilities | Proposed | Complete `EndoMount`: snapshot bridge, mount-scoped descriptors, `makeFile` sibling, entry overloads on `has`/`stat`/`lookup`, trusted backing provenance |
-| daemon-worker-import-from-mount | Proposed | **Integration layer** of a four-layer stack (decomposed 2026-06-02 per kriskowal CHANGES_REQUESTED on #358). `makeFromPackage(mountName)` daemon-worker entry that runs a `package.json`-rooted `EndoMount` through `compartment-mapper.importLocation`; this layer carries `makeFromMount` dispatcher, worker dispatch body, CLI shape, XS bridging, architecture diagram. Sibling of `daemon-make-archive` § Phase 7 (`makeFromTree` for `compartment-map.json`-rooted trees) |
-| registry-capability | Proposed | Layer 1 of 4. `EndoRegistry` capability shape, `@registry` host special name, snapshot-vs-live-read contract, two-backend roadmap (JS reference impl ships first, Rust drop-in deferred to Phase 5). Required `registry` slot on `HostFormula` with one-shot upgrade pass for already-formulated hosts (the `@node` migration precedent) |
-| mvs-resolver | Proposed | Layer 2 of 4. JS reference implementation of Go-like Minimum Version Selection adapted to npm versioning (greatest mentioned minor per major; major-version coexistence admitted). Eager single-pass resolution shape (no per-import bus roundtrips). Lockfile honoring deferred as a follow-up constraint pass |
-| snapshot-mapper | Proposed | Layer 3 of 4. `mapSnapshot` lane in `packages/daemon/` that translates `(RegistryResolution, EndoMount)` into a `CompartmentMap` via `compartment-mapper`'s package-descriptor walker (one new extension point in `compartment-mapper`). `makeMountReadPowers` and the compartment-mapper archive-precedent layout (top-level `compartment-map.json` plus peer directories named by package; `<name>@<version>/` for registry-resolved entries, bare `<name>/` for workspace members) |
+| daemon-worker-import-from-mount | Not Started | **Integration layer** of a four-layer stack (decomposed 2026-06-02 per kriskowal CHANGES_REQUESTED on #358). `makeFromPackage(mountName)` daemon-worker entry that runs a `package.json`-rooted `EndoMount` through `compartment-mapper.importLocation`; this layer carries `makeFromMount` dispatcher, worker dispatch body, CLI shape, XS bridging, architecture diagram. Sibling of `daemon-make-archive` § Phase 7 (`makeFromTree` for `compartment-map.json`-rooted trees) |
+| registry-capability | In Progress | Layer 1 of 4. `EndoRegistry` capability shape, `@registry` host special name, snapshot-vs-live-read contract, two-backend roadmap (JS reference impl ships first, Rust drop-in deferred to Phase 5). Required `registry` slot on `HostFormula` with one-shot upgrade pass for already-formulated hosts (the `@node` migration precedent) |
+| mvs-resolver | Not Started | Layer 2 of 4. JS reference implementation of Go-like Minimum Version Selection adapted to npm versioning (greatest mentioned minor per major; major-version coexistence admitted). Eager single-pass resolution shape (no per-import bus roundtrips). Lockfile honoring deferred as a follow-up constraint pass |
+| snapshot-mapper | Not Started | Layer 3 of 4. `mapSnapshot` lane in `packages/daemon/` that translates `(RegistryResolution, EndoMount)` into a `CompartmentMap` via `compartment-mapper`'s package-descriptor walker (one new extension point in `compartment-mapper`). `makeMountReadPowers` and the compartment-mapper archive-precedent layout (top-level `compartment-map.json` plus peer directories named by package; `<name>@<version>/` for registry-resolved entries, bare `<name>/` for workspace members) |
 | daemon-git-capability | Proposed | Revised git design over `EndoMount` / `EndoMountEntry`; `tree(ref)` and `readOnly()` both live on the `Git` cap |
 | daemon-git-remotes | Proposed | MVP remote-git companion: fetch / pull / push composed from local `Git`, bounded HTTPS transport, endpoint policy, and credential caps |
 | daemon-git-next-steps | Proposed | The version-controlled filesystem loop milestone over the canonical trio: north-star agent loop (provide workspace → read/list/edit → status/diff → commit → pull/push → inspect history via `filesystemAt(ref)`) and the content/versioning/network/historical-read/bulk-storage layer split. Open `- [ ]` work: worked bot-fork reference flow, `provideGitClone` + identity boundary (→ `daemon-git-clone.md`), `tree(ref)`/`filesystemAt(ref)` reconciliation. Agent-tools layer deferred to #416 |
@@ -767,8 +738,8 @@ capabilities available to agents.
 | daemon-locator-terminology | Not Started | Clean locator API; unblocked |
 | daemon-rename-to-manager | Not Started | Rename `daemon.js`/`Daemon`/`MignonicPowers` to `manager.js`/`Manager`/`WorkerPowers` to align JS with Rust `endor` nomenclature |
 | daemon-xs-worker-snapshot | In Progress | XS heap snapshot/restore; Phases 1-2 implemented — streaming CAS write/read, suspend/resume supervisor integration, CBOR control verbs; 12 passing tests; Phase 2 integration test and ephemeral GC roots remaining |
-| endo-reminder (supersedes endoclaw-timer) | Not Started | **Strategic:** Core capability concern — SES removes `setTimeout`/`setInterval`; the message scheduler is the only way agents get scheduled execution. Prerequisite for proactive behavior. Redrafted per PR #609 review as the unconfined plugin `@endo/reminder` over the virtual file system. |
-| endo-fetch (supersedes endoclaw-network-fetch) | Not Started | **Strategic:** `HttpClient` with origin allowlist. Self-hosted agents need outbound HTTP; foundation for OAuth and all external integrations. The landed capability is `@endo/exo-http-client` over `@endo/http-confine` (#566). Provisioning uses an unfettered `@endo/fetch` base, endowed with a state directory to `@endo/confined-fetch`, which exposes the policy-bound client ([endo-fetch](endo-fetch.md)); `makeHttpTool` follows in [`daemon-agent-tools`](daemon-agent-tools.md) Phase 3.6. |
+| endo-reminder (supersedes endoclaw-timer) | In Progress | **Strategic:** Core capability concern — SES removes `setTimeout`/`setInterval`; the message scheduler is the only way agents get scheduled execution. Prerequisite for proactive behavior. Redrafted per PR #609 review as the unconfined plugin `@endo/reminder` over the virtual file system. |
+| endo-fetch (supersedes endoclaw-network-fetch) | In Progress | **Strategic:** `HttpClient` with origin allowlist. Self-hosted agents need outbound HTTP; foundation for OAuth and all external integrations. The landed capability is `@endo/exo-http-client` over `@endo/http-confine` (#566). Provisioning uses an unfettered `@endo/fetch` base, endowed with a state directory to `@endo/confined-fetch`, which exposes the policy-bound client ([endo-fetch](endo-fetch.md)); `makeHttpTool` follows in [`daemon-agent-tools`](daemon-agent-tools.md) Phase 3.6. |
 | ~~daemon-cross-peer-gc~~ | **Complete** | Replaced the proposed CRDT-of-pet-stores with a one-way retention-set sync per peer connection (`retention-accumulator.js`, `EndoGateway.followRetentionSet`, SQLite `retention` table). Solves the GC gap; bidirectional shared namespace deferred as YAGNI. |
 | ~~daemon-guest-eval-simplification~~ | **Implemented** | Eval-proposal handshake removed; guest eval delegates directly to `formulateEval`. Type-system cleanup and regression test in PR #92. |
 
@@ -989,7 +960,7 @@ automation.
 | cli-store-verb-text-modes | Proposed | Reshape blocker for PR #128: unify `endo store` flag scheme across source/sink/representation axes; subsume `write-text`/`read-text` |
 | cli-edit-verb | Proposed | `endo edit` with hashline patches for AI agents; sibling of `cli-store-verb-text-modes` (PR #153) |
 | daemon-weblet-application | Not Started | Readable trees, zip archives |
-| exo-zip-package | Proposed | `@endo/exo-unzip` (`unzip(bytes) -> ReadableTree`) and `@endo/exo-zip` (`zip(tree) -> bytes`); PR #128 reshape blocker |
+| exo-zip-package | Implemented | `@endo/exo-unzip` (`unzip(bytes) -> ReadableTree`) and `@endo/exo-zip` (`zip(tree) -> bytes`); PR #128 reshape blocker |
 | endoclaw-oauth | Not Started | Credential capability — agent uses service without seeing token |
 | exo-google-sheets | Proposed | `@endo/exo-google-sheets` Spreadsheet exo facets over a plain `@endo/google-sheets` client riding endoclaw-oauth; first concrete OAuth-integration instance |
 | endoclaw-proactive-messages | Not Started | Composes Timer + data caps + send() for briefings/reminders |
@@ -1040,7 +1011,7 @@ deep-link → P2 app + sandboxed UI → P3 clone).
 | `familiar-release.md` (MVR plan) | Proposed | 1 — distributable | **Owns Pillar 1.** PR [#231](https://github.com/endojs/endo-but-for-bots/pull/231) (issue #229): G1-G16, **macOS-arm64-first**; P0 adopts it rather than running a competing plan. G-item PRs: [#318](https://github.com/endojs/endo-but-for-bots/pull/318) [#321](https://github.com/endojs/endo-but-for-bots/pull/321) [#319](https://github.com/endojs/endo-but-for-bots/pull/319) [#316](https://github.com/endojs/endo-but-for-bots/pull/316) [#320](https://github.com/endojs/endo-but-for-bots/pull/320) [#323](https://github.com/endojs/endo-but-for-bots/pull/323) [#324](https://github.com/endojs/endo-but-for-bots/pull/324) [#322](https://github.com/endojs/endo-but-for-bots/pull/322) [#317](https://github.com/endojs/endo-but-for-bots/pull/317) [#360](https://github.com/endojs/endo-but-for-bots/pull/360) |
 | ~~ocapn-noise-network~~ | **Complete** | 2 — connect peers | Secure transport peers connect over (counted under M4); daemon-to-daemon [#340](https://github.com/endojs/endo-but-for-bots/pull/340) |
 | daemon-agent-network-identity | Not Started | 2 — connect peers | Per-agent keypairs behind the locator node key; soft prereq (counted under M4). In-flight as `ocapn-daemon-integration` [#138](https://github.com/endojs/endo-but-for-bots/pull/138)/[#262](https://github.com/endojs/endo-but-for-bots/pull/262); locator v2 [#178](https://github.com/endojs/endo-but-for-bots/pull/178) |
-| exo-zip-package | Proposed | 3 — make & share apps | Durable zip backing for clones; in-flight as exo-zip/exo-unzip [#160](https://github.com/endojs/endo-but-for-bots/pull/160) (counted under M7) |
+| exo-zip-package | Implemented | 3 — make & share apps | Durable zip backing for clones; in-flight as exo-zip/exo-unzip [#160](https://github.com/endojs/endo-but-for-bots/pull/160) (counted under M7) |
 | ~~daemon-checkin-checkout~~ | **Complete** | 3 — make & share apps | Local serialisation the clone generalises (counted under M7) |
 | familiar-unified-weblet-server | In Progress | 3 — sandboxed UI | Virtual-host serving for app UIs (counted under M7) |
 | familiar-chat-weblet-hosting | Not Started | 3 — sandboxed UI | In-Chat iframe pane + chrome/guest barrier (counted under M7) |
@@ -1074,9 +1045,9 @@ star.)
 | chat-pending-commands | **Complete** | Pending commands region, unlocked command bar; PR #133 merged to `llm` 2026-07-13 (re-opened from #43) |
 | chat-slot-slash-commands | Not Started | Slash commands (e.g. `/js`) inside slot inputs; daemon-side transient pinning until retained by the outer formula |
 | daemon-commands-as-messages | Not Started | Commands as self-addressed messages with reply results; subsumes pending region |
-| inventory-cancel-and-liveness | Not Started | Cancel button with liveness indicator, coalesced watcher protocol |
-| inventory-grouping-by-type | In Progress | UI grouping, collapsible sections |
-| inventory-drag-and-drop | Not Started | HTML5 DnD handlers |
+| inventory-cancel-and-liveness | In Progress | Cancel button with liveness indicator, coalesced watcher protocol |
+| inventory-grouping-by-type | **Complete** | UI grouping, collapsible sections |
+| inventory-drag-and-drop | **Complete** | HTML5 DnD handlers |
 | formula-inspector | In Progress | Single Chat surface: a Value modal back face reached via `F` key, modal-header gear icon, or directly from inventory-row gear icon; back face is read-only at this stage. Host-only `getFormula(identifier)` daemon method (replaces `@info` name hub); `endo inspect` CLI; promise-formula view subscribes and integrates with error-tracing. Consolidates the earlier `chat-value-modal-formula-view` proposal. Daemon and CLI cuts shipping in `endojs/endo-but-for-bots#440`; chat-side cut deferred (chat-package shape impasse). |
 | workers-panel | Not Started | Metrics, sparklines (retention-paths section factored out into `daemon-retention-paths`) |
 | daemon-retention-paths | In Progress | Host-only `listRetentionPaths` / `followRetentionPaths`, `endo paths` CLI, Chat paths panel; Phase 1 forwarded as PR #284 (open) |
@@ -1086,7 +1057,7 @@ star.)
 | chat-inventory-create-menu | Not Started | `+` button at the top of the inventory; pop-over menu to create whole-cloth inventory items (mounts, scratch spaces, passable / structured values, agents); three-pane wizard for the new-agent flow (harness, inference source by name with Ollama-model discovery and download, endowments over the nine-row capability-bank roster); subsumes `endo-gateway-mcp`'s `+ Add agent` Chat-UI affordance; provisioning entry point migrates from the daemon into Chat via the root host agent pet store, the `@root` endowment, and a sibling encrypted-formula-store design |
 | lal-transcript-memory-management | Not Started | Durable transcript nodes outliving dismissed messages |
 | patterns-diagnostic-feedback | Proposed | Opt-in `@endo/patterns/explain-mismatch.js` submodule; non-throwing `explainMismatch({ specimen, pattern, format? })` (mirrors `matches`'s boolean shape) returns a rendered diagnostic string or `undefined`; compact line-per-mismatch default (sized for AI-agent token economy) or opt-in Rust-compiler-style expanded form; zero cost to the production matcher path (submodule appears nowhere on its import graph) |
-| namehub-interface-unification | Proposed | Interface refactor so `EndoMount` and `NameHub` share a `ReadableNameHubInterface`; deferred companion to `filesystem-watchers` |
+| namehub-interface-unification | **Complete** | Interface refactor so `EndoMount` and `NameHub` share a `ReadableNameHubInterface`; deferred companion to `filesystem-watchers` |
 
 **Exit criterion:** Chat UI feature-complete for current design scope.
 Commands are non-blocking with visible pending state. Developer tools
@@ -1114,7 +1085,7 @@ ecosystem.
 | endo-posix-sandbox | In Progress | Phases 0-1 shipped, Phases 2 + 3 in flight on `bots-ssh/jcorbin-sandbox-paths`; Phase 4 (macOS via lima + Apple Containerization) and Phase 6 (Windows via WSL2) compose the same in-guest backend pattern |
 | daemon-capability-persona | Not Started | Epithets and delegation |
 | daemon-capability-bank | Not Started | Integrates all capability categories |
-| endoclaw-browser | Not Started | Playwright-backed `Browser` exo with origin allowlist |
+| endoclaw-browser | Implemented | Playwright-backed `Browser` exo with origin allowlist |
 | endoclaw-channel-bridges | Not Started | `chat` SDK (Vercel) adapters for Slack, Telegram, Discord, etc. |
 | endoclaw-skill-registry | Not Started | Skills directory — capability-aware plugin index |
 

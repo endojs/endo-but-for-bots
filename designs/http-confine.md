@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-07-08 |
-| **Updated** | 2026-07-08 |
+| **Updated** | 2026-08-17 |
 | **Author** | Codex |
-| **Status** | Proposed |
+| **Status** | Implemented |
 | **Used by** | [endoclaw-network-fetch](endoclaw-network-fetch.md), [cli-http-client](cli-http-client.md) |
 
 ## Summary

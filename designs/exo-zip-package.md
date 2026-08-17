@@ -3,8 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-08 |
+| **Updated** | 2026-08-17 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed (split into two packages on PR #160) |
+| **Status** | Implemented |
 | **Source** | PR #128 inline review comment ([discussion_r3205653903](https://github.com/endojs/endo-but-for-bots/pull/128#discussion_r3205653903)) |
 
 ## Amendment 2026-05-10: package split

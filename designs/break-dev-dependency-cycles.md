@@ -3,15 +3,16 @@
 | | |
 |---|---|
 | **Created** | 2026-05-11 |
-| **Updated** | 2026-05-18 |
+| **Updated** | 2026-08-17 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+| **Status** | **Complete** |
 | **Refs** | [PR #121](https://github.com/endojs/endo-but-for-bots/pull/121), [Issue #116](https://github.com/endojs/endo-but-for-bots/issues/116) |
 
 ## Status
 
-**In Progress** (design merged 2026-05-10 via PR #206; Cuts 2-5
-shipped 2026-05-11 → 2026-05-14; Cut 1 open as PR #261).
+**Complete** on `llm` (design merged 2026-05-10 via PR #206; Cuts 2-5
+shipped 2026-05-11 → 2026-05-14; Cut 1 landed as PR #261). Verified
+2026-06-15: combined dep+devDep SCC count is 0.
 
 Design merged via PR
 [#206](https://github.com/endojs/endo-but-for-bots/pull/206). The

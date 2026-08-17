@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-03-03 |
-| **Updated** | 2026-03-03 |
+| **Updated** | 2026-08-17 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | PR #106 (`@endo/exo-playwright`) |
+| **Status** | Implemented |
 | **Parent** | [endoclaw](endoclaw.md) |
 
 ## Summary
