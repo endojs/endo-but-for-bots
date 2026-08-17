@@ -87,7 +87,7 @@ const makeByteSource = () => {
 };
 
 /**
- * @param {{ spawnGate?: Promise<unknown>, softRefuse?: boolean, lifecycle?: boolean, context?: any }} [options]
+ * @param {{ spawnGate?: Promise<unknown>, softRefuse?: boolean, brokenSignals?: boolean, lifecycle?: boolean, context?: any }} [options]
  */
 const makeDriverFixture = (options = {}) => {
   const stdout = makeByteSource();
@@ -134,6 +134,9 @@ const makeDriverFixture = (options = {}) => {
         kill: async signal => {
           const actual = signal ?? 'SIGTERM';
           signals.push(actual);
+          if (options.brokenSignals === true) {
+            throw new Error(`synthetic backend signal failure (${actual})`);
+          }
           if (
             !exited &&
             (actual === 'SIGKILL' ||
@@ -397,6 +400,31 @@ test('reader rejection uses the same kill-and-reap path', async t => {
     message: /synthetic pipe failure/,
   });
   t.deepEqual(fixture.signals(), ['SIGTERM']);
+});
+
+test('persistent signal failure surfaces a bounded cleanup error', async t => {
+  t.timeout(10_000);
+  // Both signal attempts reject and wait() never settles: cleanup must
+  // invoke the backend force-teardown path and surface a containment
+  // error within a bounded time instead of waiting forever.
+  const fixture = makeDriverFixture({ brokenSignals: true });
+  const handle = await makeHandle(fixture);
+  const proc = await E(handle).spawn(harden(['/bin/fake']));
+
+  await t.throwsAsync(() => E(proc).kill(), {
+    message: /could not prove containment.*synthetic backend signal failure/,
+  });
+  t.deepEqual(fixture.signals(), ['SIGTERM', 'SIGKILL']);
+  t.true(
+    fixture.counts().teardownCalls >= 1,
+    'backend force-teardown must have been invoked',
+  );
+  await t.throwsAsync(() => E(proc).wait(), {
+    message: /could not prove containment/,
+  });
+  await t.throwsAsync(() => E(handle).dispose(), {
+    message: /dispose could not prove containment/,
+  });
 });
 
 test('timeout escalates a soft-kill refusal and reaps', async t => {
