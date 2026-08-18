@@ -129,6 +129,7 @@ export default defineConfig(
       'packages/chat/**',
       'packages/monaco-wrapper/**',
       'packages/preact-container/**',
+      'packages/preact-social/**',
       'packages/space-channel/**',
       'packages/space-chat/**',
       'packages/space-file-explorer/**',
@@ -194,7 +195,7 @@ export default defineConfig(
     },
   },
   {
-    files: ['packages/preact-container/**'],
+    files: ['packages/preact-container/**', 'packages/preact-social/**'],
     rules: {
       'no-underscore-dangle': 'off',
       'no-bitwise': 'off',
@@ -234,6 +235,8 @@ export default defineConfig(
     files: [
       'packages/preact-container/test/**/*.js',
       'packages/preact-container/vitest.config.mjs',
+      'packages/preact-social/test/**/*.js',
+      'packages/preact-social/vitest.config.mjs',
     ],
     languageOptions: {
       globals: {
