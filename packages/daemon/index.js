@@ -20,6 +20,7 @@ import {
   whereEndoCache,
 } from '@endo/where';
 import { makeEndoClient } from './src/client.js';
+import { socketLockPath } from './src/socket-lock.js';
 
 // Reexports:
 export { makeEndoClient } from './src/client.js';
@@ -755,6 +756,9 @@ export const clean = async (config = defaultConfig) => {
   await null;
   if (process.platform !== 'win32') {
     await removePath(config.sockPath).catch(enoentOk);
+    // The marker sits beside the socket, outside the directories `purge`
+    // removes.
+    await removePath(socketLockPath(config.sockPath)).catch(enoentOk);
   }
   const pidPath = path.join(config.ephemeralStatePath, 'endo.pid');
   await fs.promises.rm(pidPath, { force: true }).catch(enoentOk);
