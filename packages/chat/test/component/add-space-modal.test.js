@@ -68,7 +68,7 @@ test.afterEach(() => {
   testDocument.body.innerHTML = '';
 });
 
-test.serial('choose screen lists all ten space types', async t => {
+test.serial('choose screen lists all eleven space types', async t => {
   const { $container } = await setup();
   const modes = [...$container.querySelectorAll('.space-type-card')].map(c =>
     c.getAttribute('data-mode'),

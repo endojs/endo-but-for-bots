@@ -1,5 +1,21 @@
 # Endo Design Documents
 
+*Layered on 2026-08-18 (review pass):
+[floot-admin-deploy-workflows](floot-admin-deploy-workflows.md) hardened by
+a five-reviewer adversarial round (merge integrity, invoke-key change,
+caplet loop-hunt, chart semantics against the live kernel, doc-vs-code
+fact-check); all confirmed findings fixed and regression-tested the same
+day: run-qualified cancel-compensation keys and a runId-stripping start
+facet in `@endo/workflow` (83 tests); tri-state reads, the status-echo
+in-flight check, slot-busy foreign requests, synchronous queue
+reservation (de-flaking the serialization test), id-verified outcome
+records, and `stageRev('')` un-pinning in the deploy caplet (29 tests,
+six consecutive clean runs); truthful chart terminals — provenance-split
+attention with operator attestation forms, a phase-tightened verify, and
+`compensation-attention` — closing the reviewed false-`done` paths (15
+simulator tests); the whole-deploy-serialization claim retracted to Known
+Gaps. The doc records the round in its Status section.*
+
 *Layered on 2026-08-18 (implementation pass):
 [floot-admin-deploy-workflows](floot-admin-deploy-workflows.md) flips
 Proposed to **In Progress** with phases 0–2 landing the same day:

@@ -25,8 +25,8 @@ Implementation landed the same day (phases 0–2; the same pass hardened
 the design against restart loops, § "Why the loop cannot happen"):
 
 - **Phase 0 (done).** The staging merge and the run-qualified invoke key,
-  with a two-runs-one-endowment regression test (`@endo/workflow`, 82
-  tests).
+  with a two-runs-one-endowment regression test (`@endo/workflow`, 83
+  tests after the review round below).
 - **Phase 1, in-repo half (done).** `packages/workflow/setup.js`
   (idempotent pinned-service provisioning with a dedicated powers guest
   and a re-pin that heals). `packages/space-nixos-admin/caplet.js`
@@ -40,13 +40,16 @@ the design against restart loops, § "Why the loop cannot happen"):
   → loud error); in-process serialization of the single-slot spool;
   `stageRev`/`stageFiles`/`revertFiles` with captured previous contents;
   rewritten `help()`; and the machine-admin prompt's nixos section
-  updated in the same commit (the no-drift rule). 22 tests, including
-  the re-dispatch-without-resubmit loop killer.
+  updated in the same commit (the no-drift rule).
+  29 tests after the review round, including the
+  re-dispatch-without-resubmit loop killer.
   **Open:** the endo-host applier id-echo counterpart
   (`modules/endo-nixos-admin.nix`), out of this repo's reach.
-- **Phase 2 (done).** `packages/floot/deploy-charts.js` (`endo-release`,
-  `nixos-config-change`) with 11 simulator tests, including the
-  single-guarded-entry-to-`apply` graph property and timeout-prunes-
+- **Phase 2 (done, except the forked-daemon restart test named in the
+  phase plan, which remains open).** `packages/floot/deploy-charts.js`
+  (`endo-release`, `nixos-config-change`) with 15 simulator tests,
+  including the single-guarded-entry-to-`apply` and
+  compensation-attention-exit graph properties and timeout-prunes-
   pending; `grantDeployFactories` in `floot-factory-setup.js` (installs
   charts each boot, mints factories binding `performer` +
   `operator: @self`, names each grant durably as an eval formula
@@ -57,6 +60,27 @@ the design against restart loops, § "Why the loop cannot happen"):
   and the machine-admin prompt does not yet teach starting runs; deploys
   still run conversationally against the reshaped caplet until then.
   Phases 4–5 unstarted.
+
+A five-reviewer adversarial round (2026-08-18: merge integrity, the
+invoke-key change, a caplet loop-hunt, chart semantics against the live
+kernel, and doc-vs-code fact-checking) then hardened the result.
+Confirmed findings, all fixed and regression-tested the same day: the
+engine's cancel-compensation invokes carried a constant `'cancel'` key
+(now run-qualified and pinned) and the service facet forwarded a
+caller-supplied `runId` (now stripped); the caplet converted read errors
+to absence at submit decisions (the one found loop path — now tri-state
+reads that refuse), lacked the status-echo in-flight check (a consuming
+applier looked like an empty slot), clobbered a previous incarnation's
+pending request, raced its own queue reservation (the ~15%-flaky
+serialization test), and settled from colliding sanitized outcome names
+(now id-verified); the charts could terminate a declined release as
+`done {rev}` through the shared needs-attention resume (deterministic on
+first-pin hosts, where `stageRev('')` was unexpressible) and complete a
+declined nixos change off an uncorrelated global status phase — replaced
+by provenance-split attention with operator attestation, a
+phase-tightened verify, and `compensation-attention` (see § "Why the
+loop cannot happen").
+The doc's whole-deploy-serialization claim was retracted to Known Gaps.
 
 ## Summary
 
@@ -97,8 +121,9 @@ merge, each hold half of this design:
 - **`feat/hosted-endo-management`** (this staging branch's own line) forked
   from `llm` and carries the hosted-Endo stack: `packages/space-nixos-admin`
   (the `NixosAdmin` caplet: a file spool to the root `endo-nixos-apply`
-  service, with `writeFile`/`setEndoRev` staging, `build` dry-runs,
-  health-checked `apply` with auto-rollback, and poll-only `status`),
+  service — originally `writeFile`/`setEndoRev` staging, `build` dry-runs,
+  health-checked `apply` with auto-rollback, and poll-only `status`;
+  reshaped by this design's phase 1, below),
   `packages/space-endo-mgmt` (the branch-deploy spool), the Forgejo publish
   credential, and Floot's admin presets — `full-control` and `machine-admin` —
   in `packages/floot/agent.js`.
@@ -136,14 +161,14 @@ Mechanics of each side that this design leans on, stated once:
   derives narrower factories; `revoke()` cascades and cancels live runs.
   Control (signals, cancel, ports, `resolveRef`) stays with the service
   holder.
-- The `NixosAdmin` caplet's methods today return immediately (they write a
-  spool-request file with an internally minted nonce); completion is observed
-  only by polling `status()`, and its exact-arity guards
-  (`apply: M.call(M.string())`) would reject a workflow `invoke`'s trailing
-  key argument.
+- The `NixosAdmin` caplet's methods originally returned immediately (a
+  spool-request file with an internally minted nonce); completion was
+  observed only by polling `status()`, and its exact-arity guards
+  (`apply: M.call(M.string())`) would have rejected a workflow `invoke`'s
+  trailing key argument.
   Per the owner's direction, this API **may change freely — there is no
-  backwards-compatibility constraint** — so this design reshapes the caplet
-  itself rather than wrapping it.
+  backwards-compatibility constraint** — so this design reshaped the caplet
+  itself rather than wrapping it (landed; see Status).
 - The applier commits and mirrors the config on apply, health-checks the
   gateway, and auto-rolls-back the generation — including `endo.rev` — when
   the daemon does not come back healthy.
@@ -289,18 +314,22 @@ workflow-native verb surface:
    params threading in charts.
 
 ```js
-NixosAdmin (reshaped; guards take .optional(M.string()) for the key): {
+NixosAdmin (reshaped; every verb takes .optional(M.string()) for the key): {
   listFiles / readFile / getConfig / getEndoRev        // reads, unchanged
-  stageRev(rev, key?)         → { rev, previous }      // 40-hex validated
+  stageRev(rev, key?)         → { path, rev, previous } // 40-hex, or '' to un-pin
   stageFiles(files, key?)     → { paths, previous }    // [{ path, text }] whole-file writes
   revertFiles(previous, key?) → { paths }              // compensation for abandon
-  build(note, key?)           → { ok, log }            // request + await terminal
-  apply(message, key?)        → { ok, generation?, log }
-  rollback(key?)              → { ok, log }
-  verify(rev, key?)           → { ok, runningRev }     // pin + gateway readback
-  status() / getLog(n)                                 // observation, unchanged
+  build(note?, key?)          → { ...outcome, ok, log? on failure }
+  apply(message, key?)        → { ...outcome, ok, log? on failure }
+  rollback(key?)              → { ...outcome, ok, log? on failure }
+  verify(rev, key?)           → { ok, runningRev, phase? } // pin readback, pure read
+  status(key?) / getLog(n)                             // observation
 }
 ```
+
+`stageRev('')` removes the pin file entirely (the "no pin, track the
+branch" state), so restaging a captured `previous` of `''` restores a
+first-pin host exactly — the compensation vocabulary is total.
 
 (`writeFile` may remain as the single-file transitional form of
 `stageFiles`; the fire-and-poll `build`/`apply` shapes are simply gone, and
@@ -317,14 +346,16 @@ optional trailing key dedupes retries), so the three places that describe
 the caplet — guards, `help()`, and the machine-admin system prompt —
 change in the same commit and cannot drift.
 
-The caplet serializes spool submissions internally (the spool has one
-request slot; `@endo/workflow`'s own `serial-jobs` is the in-tree precedent
-for the queue).
-Whole-deploy interleaving — two runs staging different edits into one
-checkout — is serialized the same way: `stage*` acquires the queue slot and
-the terminal settlement of `apply`/`revertFiles` (or run abandonment)
-releases it, which also gives "one deployment at a time" as an explicit,
-journal-visible property rather than a hope.
+The caplet serializes SPOOL SUBMISSIONS: queue positions are reserved
+synchronously at the call (call order is queue order), each submission
+holds the queue until its terminal outcome, and across a restart a foreign
+pending request with no outcome is treated as slot-busy — a new operation
+waits for it rather than clobbering it.
+Whole-DEPLOY serialization — one lease from `stage*` through
+`apply`/`revertFiles`, so two runs cannot interleave staged edits into one
+checkout — is NOT yet implemented; the caplet cannot currently observe a
+run's abandonment to release such a lease, so the design is deferred to
+Known Gaps rather than promised here.
 
 Host-side counterpart (endo-host repo): the applier records the request's id
 in `apply-status.json`.
@@ -343,16 +374,43 @@ string reads as quoted data in the operator's inbox, never as instruction.
 ```js
 import { M } from '@endo/patterns';
 
-const HEX40 = M.string(); // performer re-validates /^[0-9a-f]{40}$/ at its boundary
+// Performer re-validates /^[0-9a-f]{40}$/ at its boundary; the chart's
+// params pattern keeps the shape check cheap and early.
+const HEX40 = M.string();
 
+const okValue = M.splitRecord({ value: M.splitRecord({ ok: M.eq(true) }) });
+// Post-apply readback: the pin must match AND the applier must report a
+// settled 'ok' phase — a rebuild still in flight (phase 'switching') or a
+// never-executed apply behind a stale status must not read as verified.
+const verifiedOk = M.splitRecord({
+  value: M.splitRecord({ ok: M.eq(true), phase: M.eq('ok') }),
+});
+const approvedValue = M.splitRecord({
+  value: M.splitRecord({ approved: M.eq(true) }),
+});
+const attestedLanded = M.splitRecord({
+  value: M.splitRecord({ landed: M.eq(true) }),
+});
+
+// Performer re-validates /^[0-9a-f]{40}$/ at its boundary; the chart's
+// params pattern keeps the shape check cheap and early.
+const HEX40 = M.string();
+
+/**
+ * Deploy a pushed Endo revision: pin, build (dry-run), operator approval,
+ * apply (health-checked, auto-rolling-back), verify the pin readback.
+ * Params are capability-free data; `rev` must already be pushed to the
+ * host's forge (push-before-pin is structural: the run never sees an
+ * unpushed commit as anything but a failed fetch at build/apply time).
+ */
 export const endoReleaseChart = harden({
   name: 'endo-release',
   version: 1,
   params: M.splitRecord(
     {
-      title: M.string(),   // commit-message-grade, becomes the apply message
+      title: M.string(), // commit-message-grade, becomes the apply message
       summary: M.string(), // what changed and why, for the operator form
-      rev: HEX40,          // the pushed commit to run
+      rev: HEX40, // the pushed commit to run
     },
     { branch: M.string() }, // provenance: where the rev was pushed
   ),
@@ -372,7 +430,10 @@ export const endoReleaseChart = harden({
       ],
       on: {
         staged: [
-          { target: 'build', assign: { previous: { $event: 'value.previous' } } },
+          {
+            target: 'build',
+            assign: { previous: { $event: 'value.previous' } },
+          },
         ],
         'stage-failed': [{ target: 'failed' }],
       },
@@ -387,14 +448,11 @@ export const endoReleaseChart = harden({
           outcome: 'built',
           failure: 'build-failed',
         },
-        { kind: 'after', ms: 3_600_000, emit: { type: 'build-timed-out' } },
+        { kind: 'after', ms: HOUR_MS, emit: { type: 'build-timed-out' } },
       ],
       on: {
         built: [
-          {
-            when: M.splitRecord({ value: M.splitRecord({ ok: M.eq(true) }) }),
-            target: 'await-approval',
-          },
+          { when: okValue, target: 'await-approval' },
           { target: 'unpinning', assign: { reason: 'build-rejected' } },
         ],
         'build-failed': [
@@ -412,24 +470,25 @@ export const endoReleaseChart = harden({
           to: 'operator',
           form: {
             description:
-              'Deploy Endo {$params.rev} — {$params.title}. Summary: {$params.summary}. ' +
-              'The build dry-run passed. Applying restarts the daemon; a failed ' +
-              'health check auto-rolls-back.',
+              'Deploy Endo {$params.rev} — {$params.title}. Summary: ' +
+              '{$params.summary}. The build dry-run passed. Applying ' +
+              'restarts the daemon; a failed health check auto-rolls-back.',
             fields: [
-              { name: 'approved', label: 'Apply this release?', pattern: M.boolean() },
+              {
+                name: 'approved',
+                label: 'Apply this release?',
+                pattern: M.boolean(),
+              },
               { name: 'note', label: 'Note', pattern: M.string(), default: '' },
             ],
           },
           outcome: 'operator-decided',
         },
-        { kind: 'after', ms: 604_800_000, emit: { type: 'approval-expired' } },
+        { kind: 'after', ms: WEEK_MS, emit: { type: 'approval-expired' } },
       ],
       on: {
         'operator-decided': [
-          {
-            when: M.splitRecord({ value: M.splitRecord({ approved: M.eq(true) }) }),
-            target: 'apply',
-          },
+          { when: approvedValue, target: 'apply' },
           { target: 'unpinning', assign: { reason: 'declined' } },
         ],
         'approval-expired': [
@@ -447,15 +506,19 @@ export const endoReleaseChart = harden({
           outcome: 'applied',
           failure: 'apply-failed',
         },
-        { kind: 'after', ms: 1_800_000, emit: { type: 'apply-timed-out' } },
+        {
+          kind: 'after',
+          ms: HALF_HOUR_MS,
+          emit: { type: 'apply-timed-out' },
+        },
       ],
       on: {
         applied: [
+          { when: okValue, target: 'verify' },
           {
-            when: M.splitRecord({ value: M.splitRecord({ ok: M.eq(true) }) }),
-            target: 'verify',
+            target: 'auto-rolled-back',
+            assign: { report: { $event: 'value' } },
           },
-          { target: 'auto-rolled-back', assign: { report: { $event: 'value' } } },
         ],
         'apply-failed': [{ target: 'needs-attention' }],
         'apply-timed-out': [{ target: 'needs-attention' }],
@@ -474,10 +537,7 @@ export const endoReleaseChart = harden({
       ],
       on: {
         verified: [
-          {
-            when: M.splitRecord({ value: M.splitRecord({ ok: M.eq(true) }) }),
-            target: 'done',
-          },
+          { when: verifiedOk, target: 'done' },
           { target: 'needs-attention' },
         ],
         'verify-failed': [{ target: 'needs-attention' }],
@@ -499,26 +559,68 @@ export const endoReleaseChart = harden({
       ],
       on: {
         unpinned: [{ target: 'abandoned' }],
-        'unpin-failed': [{ target: 'needs-attention' }],
+        'unpin-failed': [{ target: 'compensation-attention' }],
       },
     },
+    // Post-apply problems only (apply failed or timed out, or the readback
+    // disagreed). The operator investigates and ATTESTS the outcome; a
+    // "landed" answer still re-verifies mechanically before `done`, and a
+    // "not landed" answer abandons through compensation. No pre-apply path
+    // enters here, so this state cannot launder a declined release into a
+    // completed one.
     'needs-attention': {
+      entry: [
+        {
+          kind: 'ask',
+          to: 'operator',
+          form: {
+            description:
+              'Release {$params.rev} ({$params.title}) needs attention; ' +
+              'see the run log. Investigate, then report whether the ' +
+              'release ended up applied.',
+            fields: [
+              {
+                name: 'landed',
+                label: 'Did the release end up applied?',
+                pattern: M.boolean(),
+              },
+              { name: 'note', label: 'Note', pattern: M.string(), default: '' },
+            ],
+          },
+          outcome: 'operator-attested',
+        },
+      ],
+      on: {
+        'operator-attested': [
+          { when: attestedLanded, target: 'verify' },
+          {
+            target: 'unpinning',
+            assign: { reason: 'operator-reported-not-landed' },
+          },
+        ],
+      },
+    },
+    // Compensation failed (the un-pin itself). The only exit retries the
+    // compensation — this state can never reach `verify` or `done`, so an
+    // abandoned release cannot terminate as deployed.
+    'compensation-attention': {
       entry: [
         {
           kind: 'ask',
           to: 'operator',
           what: {
             description:
-              'Release {$params.rev} ({$params.title}) needs attention; see the run log.',
+              'Un-pinning after abandoning {$params.rev} ' +
+              '({$params.title}) failed; see the run log. Reply to retry.',
           },
           outcome: 'operator-resumed',
         },
       ],
-      on: { 'operator-resumed': [{ target: 'verify' }] },
+      on: { 'operator-resumed': [{ target: 'unpinning' }] },
     },
     done: { final: true, output: { rev: { $params: 'rev' } } },
     'auto-rolled-back': { final: true, output: { report: { $ctx: 'report' } } },
-    failed: { final: true }, // stage-failed only: nothing was written
+    failed: { final: true, output: { reason: 'stage-failed' } },
     abandoned: { final: true, output: { reason: { $ctx: 'reason' } } },
   },
 });
@@ -529,7 +631,14 @@ export const endoReleaseChart = harden({
 edit as capability-free data, so **the journal carries the change itself**);
 `pin`/`unpinning` become `stage` (invoke `stageFiles`, capturing `previous`)
 and `reverting` (invoke `revertFiles(previous)`); the operator form lists the
-touched paths; `verify` checks daemon health only.
+touched paths; and a healthy apply completes the run directly — there is no
+mechanical readback for a config change, so the post-apply
+`needs-attention` attestation asks the operator whether the change landed
+and records the answer as the run's truth (a status probe was considered
+and rejected: the applier's global phase is uncorrelated with any one run).
+Both charts split attention by provenance the same way: post-apply problems
+go to the attestation form; compensation failures go to
+`compensation-attention`, whose only exit retries the compensation.
 `chartDiagnostics` gates both at install time — every `failure`/`outcome`
 above is handled on its path, and the deaf-timer warning keeps the `after`
 deadlines honest.
@@ -540,7 +649,7 @@ deadlines honest.
 
 | Endowment | Capability | Attenuation |
 |---|---|---|
-| `performer` | the reshaped `NixosAdmin` caplet | spool-scoped: stage/build/apply/verify only; serializes deploys; dedupes on the engine's run-qualified key; validates rev shape and path confinement at its boundary; no shell, no git, no host powers |
+| `performer` | the reshaped `NixosAdmin` caplet, whole | spool- and checkout-scoped: staging, settlement-shaped build/apply/rollback, verify/status/log reads; serializes spool submissions; dedupes on the engine's run-qualified key; validates rev shape and path confinement at its boundary; no shell, no git, no host powers (a per-method facet is future attenuation work) |
 | `operator` | the owner host's `@self` handle | asks arrive as ordinary inbox requests/forms; the daemon's existing sender verification attributes the answer |
 
 That is the whole table, and its brevity is the point: the run that can
@@ -592,7 +701,8 @@ The sequence that today orphans the flow, replayed under this design:
 3. The performer reads `apply-status.json`, finds its key — terminal and
    healthy — and returns the recorded outcome; the settlement and the
    transition to `verify` commit as one journal entry; `verify` confirms
-   `getEndoRev` matches and the gateway answers.
+   the pin readback matches and the applier's phase is settled `ok` (the
+   caplet answering at all is the daemon-came-back evidence).
 4. Had the health check failed instead, the applier has already rolled the
    generation (and `endo.rev`) back; the settlement's `ok: false` routes to
    `auto-rolled-back`, a terminal state whose output carries the report —
@@ -606,23 +716,36 @@ shows the run live throughout.
 
 The failure this design must never produce is a **restart loop**: the
 re-dispatched apply re-submitting, re-switching, and restarting the daemon
-again, forever. Three independent layers each break it, and each is tested:
+again, forever.
+Three independent layers each break it, and each is pinned by tests:
 
-1. **The caplet never resubmits on ambiguity.** A re-dispatched verb finds
-   its recorded outcome (or its still-pending request) by id and returns
-   or attaches; a status file without ids gets a bounded grace and then a
-   loud contract error; a superseded request fails loud. There is no code
-   path from "I cannot tell what happened" to "submit again".
-2. **The chart admits at most one apply per run.** `apply`'s only inbound
-   edge is the guarded operator approval; every failure and timeout path
-   leads to compensation, a terminal state, or a `needs-attention` ask —
-   a human gate — never back toward `apply`. Deploying again means a new
-   run through a new approval.
-3. **The engine keeps terminal and exited work inert.** Terminal runs do
-   not re-dispatch at boot; a timer exit prunes the pending invoke, so a
-   late settlement is dropped rather than routed; recovery re-dispatches
-   an unsettled invoke once per boot, not in a loop, and an unhandled
-   settlement fails the run loudly instead of wedging or retrying.
+1. **The caplet never resubmits on ambiguity.**
+   A re-dispatched verb finds its recorded outcome (verified against the
+   embedded raw id), its still-pending request, or the status echo of a
+   consuming applier, and returns or attaches; only a true ENOENT counts
+   as absence (an unreadable file at a submit decision refuses after
+   bounded retries); an id-less status gets a bounded grace and then a
+   loud contract error; a superseded request fails loud; a foreign
+   pending request is slot-busy, not clobbered.
+   There is no code path from "I cannot tell what happened" to "submit
+   again" — and the test fake fails any test that sees a physical
+   re-submission of a seen id.
+2. **The chart admits at most one apply per run, and terminals tell the
+   truth.**
+   `apply`'s only inbound edge is the guarded operator approval; every
+   failure and timeout path leads to compensation, a terminal state, or a
+   human gate, never back toward `apply`; post-apply attention is an
+   operator attestation whose "landed" answer still re-verifies (pin
+   match AND settled applier phase) before `done`, and compensation
+   failures loop through `compensation-attention`, which cannot reach
+   `done` at all.
+   Deploying again means a new run through a new approval.
+3. **The engine keeps terminal and exited work inert.**
+   Terminal runs do not re-dispatch at boot; a timer exit prunes the
+   pending invoke, so a late settlement is dropped rather than routed
+   (pinned at the simulator level); recovery re-dispatches an unsettled
+   invoke once per boot, not in a loop, and an unhandled settlement fails
+   the run loudly instead of wedging or retrying.
 The one restart-scarred piece of today's prompt that remains true — the
 Forgejo credential re-mint invalidating a session's `GitRemote` — stays
 outside the run on purpose: pushing happens in the session *before* `start`,
@@ -650,7 +773,7 @@ with a Floot mail-wake bridge as its own small follow-up design.
 |---|---|
 | [endo-workflow](endo-workflow.md) (`@endo/workflow`, `@endo/space-workflow`) | The engine, factories, journal, and run UI; merged into this staging branch 2026-08-18, with the run-qualified invoke key (deviation 7) landed for this design. This design is its first production chart set. |
 | [hosted-endo-self-update-loop](hosted-endo-self-update-loop.md) | **Complete** substrate: revision pinning, per-revision releases, health-checked apply with auto-rollback, Forgejo mirror + credential. This design realizes its phases 5–6. |
-| `packages/space-nixos-admin` | The `NixosAdmin` caplet the performer wraps; its setup.js precedent (idempotency, `current`-symlink formula stability) is reused for the service and performer. |
+| `packages/space-nixos-admin` | The `NixosAdmin` caplet, reshaped into the performer by phase 1; its setup.js precedent (idempotency, `current`-symlink formula stability) is reused for the workflow service. |
 | `packages/floot` | Preset catalog, `provisionPresetObjects`, `floot-factory-setup.js` grant plumbing; system-prompt rewrites. |
 | [daemon-form-request](daemon-form-request.md), [chat-spaces-inbox](chat-spaces-inbox.md) | Complete. The operator approval surface: validated forms in the existing inbox, chat and CLI alike. |
 | `packages/space-endo-mgmt` | Adjacent: the branch-deploy spool already writes the pin rather than bypassing it; converting branch deploys into `endo-release` runs is a natural later unification, out of scope here. |
@@ -736,10 +859,14 @@ bridge is specified separately.
    `unpinning`/`reverting` are explicit states with `invoke` effects and
    their own failure routing, per the engine's "exit effects may not ask"
    rule and its fail-loud posture.
-7. **One deployment at a time, enforced in the performer.**
-   The spool has one slot; serializing whole deploys in the performer makes
-   the constraint real and observable instead of a race, without inventing
-   run-level locks in the engine.
+7. **One spool operation at a time, enforced in the performer.**
+   The spool has one slot; the caplet reserves queue positions
+   synchronously, holds the queue to each operation's terminal outcome,
+   and treats a previous incarnation's outcome-less pending request as
+   slot-busy.
+   Whole-deploy leasing (stage-through-apply exclusivity) needs a way to
+   observe run abandonment and is deferred to Known Gaps rather than
+   claimed.
 8. **Approval is the owner's inbox, not the session's transcript.**
    The ask goes to `@self`; the daemon's sender verification attributes the
    answer; delimited interpolation keeps participant text data-shaped.
@@ -774,6 +901,32 @@ bridge is specified separately.
 - [ ] Voice UX: which run transitions the session narrates unprompted (it
       must poll or follow on its next turn today; a wake on terminal states
       would ride the same bridge as the ask wake).
+- [ ] Whole-deploy leasing: one lease from `stage*` through
+      `apply`/`revertFiles` so two runs cannot interleave staged edits in
+      one checkout.
+      Needs an owner identity (the run-id prefix of the engine key is a
+      candidate) and a way to observe run abandonment (TTL, or an operator
+      release verb) before the caplet can hold a lease safely.
+- [ ] No cancellation channel from the engine to a queued submission: a
+      chart timeout prunes its pending invoke, but a caplet-queued job for
+      it still submits when the queue drains — a root-equivalent action
+      after the run moved on (human-gated aftermath, but late).
+      A caller-supplied deadline or an engine-to-performer abort channel
+      would close it.
+- [ ] A crash between `makeFactory` and the eval-formula grant (or the
+      deliberate version-bump re-mint) orphans an un-revoked factory
+      record durably holding `performer` + `operator`; reachable only by
+      fid, but they accumulate with no reaper.
+- [ ] Editing a chart's body without bumping `version` re-installs the
+      chart but never reaches existing factories (they snapshot at mint)
+      — the drift gate keys on (name, version) only.
+- [ ] `outcomes/<id>.json` records accumulate one per operation forever;
+      define a retention sweep alongside the run-retention story.
+- [ ] Fresh-host legacy hole: with no status file at all, a non-echoing
+      applier is undetectable until after the first submission — one
+      operation can escape (fail-loud afterward, never re-submitted);
+      the applier migration SHOULD write a contract-shaped status file at
+      install to close even that.
 
 ## Prompt
 
