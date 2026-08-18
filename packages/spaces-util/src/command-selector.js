@@ -65,6 +65,9 @@ import { filterCommands } from './command-registry.js';
  *
  * @typedef {object} CommandSelectorController
  * @property {(s: CommandMenuState | null) => void} [setState]
+ * @property {CommandMenuState | null} [pendingState] - Last state the host
+ *   pushed, buffered so a push that happens before the Root's effect has wired
+ *   `setState` is applied on mount instead of being silently dropped.
  * @property {(index: number) => void} [onHover]
  * @property {(index: number) => void} [onPick]
  */
@@ -166,10 +169,20 @@ const CommandSelectorRoot = ({ controller }) => {
 
   useEffect(() => {
     controller.setState = setState;
+    // Apply any state the host pushed before this effect wired `setState`,
+    // so the first render is not silently dropped on slow flushes.
+    if (controller.pendingState !== undefined) {
+      setState(controller.pendingState);
+    }
     return () => {
       if (controller.setState === setState) delete controller.setState;
     };
-  }, [controller]);
+    // Mount-only: `controller` is a stable per-instance bridge. Keying on it
+    // re-runs this effect every render under confinement (the sanitizer
+    // reissues the prop identity), and re-applying `setState(pendingState)`
+    // — itself reissued — defeats Preact's Object.is bail into a slow
+    // render/effect feedback loop that never settles on a slow runner.
+  }, []);
 
   if (!state) {
     return null;
@@ -222,14 +235,16 @@ export const commandSelectorComponent = ({
    * outside the vnode tree; no DOM node is ever handed to a confined vnode.
    */
   const render = () => {
+    const state = harden({
+      commands: filteredCommands,
+      selectedIndex,
+      hasFilter: currentFilter !== '',
+    });
+    // Buffer the state so the Root's effect can apply it if it has not yet
+    // wired `setState` (the effect flush is deferred through rAF).
+    controller.pendingState = state;
     if (controller.setState) {
-      controller.setState(
-        harden({
-          commands: filteredCommands,
-          selectedIndex,
-          hasFilter: currentFilter !== '',
-        }),
-      );
+      controller.setState(state);
     }
     // Keep the selected item in view when navigating with arrow keys. Preact
     // flushes the render synchronously here, but guard with optional chaining
@@ -255,6 +270,7 @@ export const commandSelectorComponent = ({
     $menu.classList.remove('visible');
     currentFilter = '';
     selectedIndex = 0;
+    controller.pendingState = null;
     if (controller.setState) {
       controller.setState(null);
     }

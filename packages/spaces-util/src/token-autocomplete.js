@@ -70,6 +70,9 @@ import { lookupPath } from './name-hub.js';
  *
  * @typedef {object} TokenMenuController
  * @property {(s: TokenMenuState | null) => void} [setState]
+ * @property {TokenMenuState | null} [pendingState] - Last state the host
+ *   pushed, buffered so a push that happens before the Root's effect has wired
+ *   `setState` is applied on mount instead of being silently dropped.
  * @property {(index: number) => void} [onHover]
  * @property {(name: string) => void} [onPick]
  */
@@ -173,10 +176,20 @@ const TokenAutocompleteRoot = ({ controller }) => {
 
   useEffect(() => {
     controller.setState = setState;
+    // Apply any state the host pushed before this effect wired `setState`,
+    // so the first render is not silently dropped on slow flushes.
+    if (controller.pendingState !== undefined) {
+      setState(controller.pendingState);
+    }
     return () => {
       if (controller.setState === setState) delete controller.setState;
     };
-  }, [controller]);
+    // Mount-only: `controller` is a stable per-instance bridge. Keying on it
+    // re-runs this effect every render under confinement (the sanitizer
+    // reissues the prop identity), and re-applying `setState(pendingState)`
+    // — itself reissued — defeats Preact's Object.is bail into a slow
+    // render/effect feedback loop that never settles on a slow runner.
+  }, []);
 
   if (!state) {
     return null;
@@ -280,6 +293,7 @@ export const tokenAutocompleteComponent = (
     pendingToken = null;
     pathPrefix = [];
     directoryNames = null;
+    controller.pendingState = null;
     if (controller.setState) {
       controller.setState(null);
     }
@@ -319,14 +333,16 @@ export const tokenAutocompleteComponent = (
    * @param {string} filterText
    */
   const render = filterText => {
+    const state = harden({
+      names: [...filteredNames],
+      selectedIndex,
+      filterText,
+    });
+    // Buffer the state so the Root's effect can apply it if it has not yet
+    // wired `setState` (the effect flush is deferred through rAF).
+    controller.pendingState = state;
     if (controller.setState) {
-      controller.setState(
-        harden({
-          names: [...filteredNames],
-          selectedIndex,
-          filterText,
-        }),
-      );
+      controller.setState(state);
     }
     const $selected = $menu.querySelector('.token-menu-item.selected');
     if ($selected) {

@@ -309,3 +309,37 @@ test.serial(
     t.teardown(() => selector.hide());
   },
 );
+
+test.serial(
+  'show immediately after mount survives the deferred effect flush',
+  async t => {
+    // Regression for a lost first render: `show()` probes
+    // `controller.setState` and the Root wires that setter in a mount effect
+    // that Preact flushes on a deferred schedule (rAF), so a `show()` issued
+    // before the flush found no setter. The push was dropped with nothing to
+    // replay it — a menu with the `.visible` class but no rows, which no
+    // later flush repairs — surfacing in CI as a `waitFor` timeout on
+    // `.token-menu-item` whenever a loaded runner outpaced the settle tick.
+    // The host now buffers every push on `controller.pendingState` and the
+    // mount effect replays it, so a show that races the mount must render.
+    // No settle tick before `show()` here — that gap is the regression.
+    const $menu = testDocument.createElement('div');
+    $menu.className = 'token-menu';
+    testDocument.body.appendChild($menu);
+
+    const selector = commandSelectorComponent({
+      $menu,
+      onSelect: () => {},
+      onCancel: () => {},
+      getContext: () => 'inbox',
+    });
+    t.teardown(() => selector.hide());
+
+    selector.show();
+    await waitFor(() => $menu.querySelectorAll('.token-menu-item').length > 0);
+    t.true(
+      $menu.querySelectorAll('.token-menu-item').length > 0,
+      'rows render even when show precedes the mount-effect flush',
+    );
+  },
+);
