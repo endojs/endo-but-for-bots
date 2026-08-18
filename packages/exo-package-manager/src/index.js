@@ -19,6 +19,8 @@ export {
 
 export { buildInstallArgv, buildRunArgv } from './argv.js';
 
+export { makePackageManagerBackendCoordinator } from './backend-coordinator.js';
+
 export {
   PackageManagerReaderInterface,
   PackageManagerInstallerInterface,

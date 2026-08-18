@@ -81,15 +81,28 @@ export const buildInstallArgv = input => {
     lockfileMode = 'frozen',
     offline = false,
     production = false,
+    workspaceSelector,
     yarnMajorVersion,
     yarnMinorVersion,
   } = input;
 
   assertChoice(manager, MANAGERS, 'manager');
   assertChoice(lockfileMode, LOCKFILE_MODES, 'lockfileMode');
+  if (
+    workspaceSelector !== undefined &&
+    (typeof workspaceSelector !== 'string' || workspaceSelector.length === 0)
+  ) {
+    throw makeError(X`workspaceSelector must be a non-empty string`);
+  }
 
   /** @type {string[]} */
   const argv = [manager];
+
+  if (manager === 'pnpm' && workspaceSelector !== undefined) {
+    argv.push(`--filter=${workspaceSelector}`);
+  } else if (manager === 'yarn' && workspaceSelector !== undefined) {
+    argv.push('workspace', workspaceSelector);
+  }
 
   if (manager === 'npm') {
     argv.push(lockfileMode === 'frozen' ? 'ci' : 'install');
@@ -99,6 +112,9 @@ export const buildInstallArgv = input => {
     }
     if (production) {
       argv.push('--omit=dev');
+    }
+    if (workspaceSelector !== undefined) {
+      argv.push(`--workspace=${workspaceSelector}`);
     }
     return harden(argv);
   }
