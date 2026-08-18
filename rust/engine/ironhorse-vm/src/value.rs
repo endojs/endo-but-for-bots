@@ -1263,10 +1263,16 @@ impl ChunkArena {
                     .expect("chunk offset below header (corrupt heap)");
                 assert!(h + CHUNK_HEADER <= total, "chunk header out of range (corrupt heap)");
                 let len = self.len_of(old);
-                assert!(
-                    old.0 as usize + len <= total,
-                    "chunk payload out of range (corrupt heap)"
-                );
+                // checked_add, not `+`: on a 32-bit usize a corrupt
+                // u32 length can wrap the sum past the guard, and the
+                // later slice would then panic AFTER the byte space
+                // was taken — exactly the state-loss this validation
+                // pass exists to prevent (review finding). Panicking
+                // HERE is fine: nothing has been taken yet.
+                let end = (old.0 as usize)
+                    .checked_add(len)
+                    .expect("chunk payload length overflows (corrupt heap)");
+                assert!(end <= total, "chunk payload out of range (corrupt heap)");
             }
         }
 

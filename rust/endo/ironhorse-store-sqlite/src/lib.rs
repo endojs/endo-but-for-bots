@@ -766,6 +766,7 @@ impl HeapStore for SqliteHeapStore {
                     &mut prior_exts,
                     &mut prior_frees,
                     &mut prior_edges,
+                    stored.as_ref(),
                     batch,
                 )?;
                 let mut upsert_leaf = tx

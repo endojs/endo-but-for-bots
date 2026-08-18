@@ -52,6 +52,13 @@ pub mod engine {
         /// resume, collect, or close). Store errors are fail-closed by
         /// design; the message carries the store's own taxonomy.
         Store(String),
+        /// A later crank compiled to a different symbol table than
+        /// the one the machine linked and persisted. Running it would
+        /// silently read and mutate the WRONG globals and properties
+        /// (ids are table positions), so it is refused before it
+        /// runs. The side-table ledger workstream lifts this by
+        /// relinking per crank.
+        SymbolMismatch(String),
     }
 
     impl std::fmt::Display for MachineError {
@@ -63,6 +70,9 @@ pub mod engine {
                     write!(f, "not built yet on the Ironhorse engine: {what}")
                 }
                 MachineError::Store(e) => write!(f, "heap store error: {e}"),
+                MachineError::SymbolMismatch(e) => {
+                    write!(f, "crank symbol table mismatch: {e}")
+                }
             }
         }
     }
@@ -248,7 +258,11 @@ pub mod engine {
     /// supervisor owns either way. Cranks after the first must
     /// reference the SAME NAME SET as the linked crank (the compiled
     /// symbol table is a deterministic function of the crank's name
-    /// set — the store suites' convention).
+    /// set — the store suites' convention), and this is ENFORCED, not
+    /// merely documented: a crank whose compiled table differs from
+    /// the persisted one is refused with
+    /// [`MachineError::SymbolMismatch`] before it runs, because its
+    /// ids would silently bind the wrong globals (review finding).
     pub struct PersistentMachine {
         store: std::rc::Rc<std::cell::RefCell<ironhorse_store_sqlite::SqliteHeapStore>>,
         session: Option<ironhorse_snapshot::machine::StoreSession>,
@@ -337,14 +351,39 @@ pub mod engine {
 
             let (bytecode, symbols) = compile_atoms_with(source, false)
                 .map_err(|e| MachineError::Compile(e.to_string()))?;
+            let names = ironhorse_vm::parse_symbols(&symbols);
             let (outcome, checkpointed) = {
                 let session = self.session.as_mut().ok_or_else(|| {
                     MachineError::Store("machine has no session (a rewind failed)".to_string())
                 })?;
                 if !self.linked {
-                    let names = ironhorse_vm::parse_symbols(&symbols);
                     session.machine_mut().link_intrinsics(&names);
                     self.linked = true;
+                } else {
+                    // Refused BEFORE the crank runs unless this
+                    // crank's compiled table EQUALS the persisted
+                    // one: ids are table positions, so any position
+                    // whose name differs would read and mutate the
+                    // wrong global silently. The table is a
+                    // deterministic function of the crank's name set,
+                    // so the authorable contract is "reference the
+                    // same name set" — subsets are refused too,
+                    // because the coder's internal ordering is not a
+                    // documented surface and a subset's table aligns
+                    // only by luck. Nothing ran on refusal, so no
+                    // rewind is needed and the epoch stands.
+                    let persisted = session.machine().program_symbol_names();
+                    let aligned = persisted == names.as_slice();
+                    if !aligned {
+                        return Err(MachineError::SymbolMismatch(format!(
+                            "this crank's compiled table ({} names) differs from the \
+                             machine's persisted table ({} names) — later cranks must \
+                             reference the linked crank's exact name set (the side-table \
+                             ledger workstream lifts this)",
+                            names.len(),
+                            persisted.len(),
+                        )));
+                    }
                 }
                 let outcome = session.machine_mut().run(&bytecode);
                 if outcome.completed {

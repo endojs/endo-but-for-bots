@@ -610,6 +610,7 @@ pub fn apply_batch(
     exts: &mut Vec<[u8; 32]>,
     frees: &mut Vec<[u8; 32]>,
     edges: &mut Vec<Vec<u32>>,
+    prior: Option<&StoreManifest>,
     batch: &CheckpointBatch,
 ) -> Result<String, StoreError> {
     let n_pages = slot_page_count(batch.manifest.slot_count) as usize;
@@ -636,6 +637,70 @@ pub fn apply_batch(
         if !batch_frees.contains(&seg) {
             return Err(StoreError::MissingRow("free segment", seg));
         }
+    }
+
+    // Boundary rows (the second review pass's finding): the growth
+    // checks above cover indexes the new geometry ADDS, but a total
+    // (`slot_count`/`chunk_len`/`free_len`) that changes WITHIN an
+    // existing row changes that row's geometry-derived length without
+    // adding any index — a crafted batch could omit the affected tail
+    // row and land a store whose retained row disagrees with its new
+    // manifest (caught only at the next open). Require the prior tail
+    // and the new tail of each class to travel whenever their
+    // expected length changes between the prior and the new manifest.
+    // Every legitimate producer already satisfies this: growth writes
+    // the tail page, compaction rewrites the tail extent, free churn
+    // ships the changed segments.
+    if let Some(prev) = prior {
+        fn require_boundaries(
+            kind: &'static str,
+            count0: u32,
+            count1: u32,
+            len0: impl Fn(u32) -> usize,
+            len1: impl Fn(u32) -> usize,
+            traveling: &std::collections::HashSet<u32>,
+        ) -> Result<(), StoreError> {
+            let check = |idx: u32| -> Result<(), StoreError> {
+                if len0(idx) != len1(idx) && !traveling.contains(&idx) {
+                    return Err(StoreError::MissingRow(kind, idx));
+                }
+                Ok(())
+            };
+            // The prior tail, when retained under the new geometry.
+            if count0 > 0 && count0 - 1 < count1 {
+                check(count0 - 1)?;
+            }
+            // The new tail, when it already existed under the prior
+            // geometry (distinct from the prior tail).
+            if count1 > 0 && count1 - 1 < count0 && count1 != count0 {
+                check(count1 - 1)?;
+            }
+            Ok(())
+        }
+        require_boundaries(
+            "slot page",
+            slot_page_count(prev.slot_count),
+            n_pages as u32,
+            |i| slot_page_len(prev.slot_count, i),
+            |i| slot_page_len(batch.manifest.slot_count, i),
+            &batch_pages,
+        )?;
+        require_boundaries(
+            "chunk extent",
+            chunk_extent_count(prev.chunk_len),
+            n_exts as u32,
+            |e| chunk_extent_len(prev.chunk_len, e),
+            |e| chunk_extent_len(batch.manifest.chunk_len, e),
+            &batch_exts,
+        )?;
+        require_boundaries(
+            "free segment",
+            free_seg_count(prev.free_len),
+            n_frees as u32,
+            |s| free_seg_len(prev.free_len, s),
+            |s| free_seg_len(batch.manifest.free_len, s),
+            &batch_frees,
+        )?;
     }
 
     for (i, bytes) in &batch.slot_pages {
@@ -1607,7 +1672,7 @@ impl HeapStore for MemoryStore {
         let mut leaf_exts = self.leaf_exts.clone();
         let mut leaf_frees = self.leaf_frees.clone();
         let mut edges = self.edges.clone();
-        apply_batch(&mut leaf_pages, &mut leaf_exts, &mut leaf_frees, &mut edges, batch)?;
+        apply_batch(&mut leaf_pages, &mut leaf_exts, &mut leaf_frees, &mut edges, self.manifest.as_ref(), batch)?;
         for (page, bytes) in &batch.slot_pages {
             self.slot_pages.insert(*page, bytes.clone());
         }
@@ -1983,4 +2048,56 @@ mod tests {
             assert_eq!(back, free, "order-exact reassembly at n={n}");
         }
     }
+
+    #[test]
+    fn commit_refuses_a_geometry_change_that_omits_the_affected_tail_row() {
+        // The second review pass's finding: the grown-region check
+        // covers indexes the new geometry ADDS, but a total that
+        // changes WITHIN the existing tail row changes that row's
+        // geometry-derived length without adding any index. A crafted
+        // batch that shrinks `chunk_len` inside the same extent,
+        // omits that extent, and seals correctly over the retained
+        // prior leaf must be refused at COMMIT — not discovered at
+        // the next open as a length mismatch.
+        let mut m = Interp::new();
+        assert!(m.run(&PROG_A).completed);
+        let image1 = m.snapshot_image(&sig());
+        let mut store = MemoryStore::new();
+        store.commit(&image_to_batch(&image1, 1, "")).unwrap();
+        let prev = store.manifest().unwrap();
+
+        let mut image2 = image1.clone();
+        assert!(
+            image2.chunks.len() >= 8,
+            "fixture carries chunk bytes to shrink within the tail extent"
+        );
+        image2.chunks.truncate(image2.chunks.len() - 4);
+        let tail_ext = chunk_extent_count(image2.chunks.len() as u64) - 1;
+
+        // A well-formed batch for the shrunk image commits fine (the
+        // tail extent travels with its new length)…
+        let good = image_to_batch(&image2, 2, &prev.seal);
+        assert!(
+            good.chunk_extents.iter().any(|(e, _)| *e == tail_ext),
+            "image_to_batch ships the affected tail extent"
+        );
+        {
+            let mut s2 = MemoryStore::new();
+            s2.commit(&image_to_batch(&image1, 1, "")).unwrap();
+            s2.commit(&image_to_batch(&image2, 2, &prev.seal)).unwrap();
+        }
+
+        // …but the same batch with the tail extent OMITTED (and the
+        // seal recomputed, so succession passes) is refused with the
+        // precise missing-row error.
+        let mut crafted = image_to_batch(&image2, 2, &prev.seal);
+        crafted.chunk_extents.retain(|(e, _)| *e != tail_ext);
+        reseal_batch(&mut crafted);
+        assert_eq!(
+            store.commit(&crafted),
+            Err(StoreError::MissingRow("chunk extent", tail_ext)),
+            "the boundary row must travel when its expected length changes"
+        );
+    }
+
 }
