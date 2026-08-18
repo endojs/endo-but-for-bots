@@ -441,3 +441,77 @@ fn side_table_page_bits_agree_with_slot_enumeration() {
     assert!(!from_bits.is_empty(), "fixture produced side-table refs");
     assert_eq!(from_bits, from_slots, "page-bit and slot projections agree");
 }
+
+#[test]
+fn weak_collection_entries_are_retained_conservatively() {
+    // PINS today's deliberate conservatism (the PR review's weak-
+    // collection finding): the mark loop treats WeakMap entries as
+    // strong edges, so entries whose keys are dead are RETAINED, not
+    // reclaimed. Retention-only — never frees a live object. When
+    // ephemeron marking lands, this test flips: the weak-held slots
+    // join the reclaimed count and the bound below moves.
+    //
+    // Fixture: 300 WeakMap entries whose keys AND values are held
+    // only by the map (dead by ephemeron semantics, retained today),
+    // plus 300 plain dropped objects (real garbage either way). The
+    // weak side is ~1200 slots (2-slot key + 2-slot value each); the
+    // plain side is ~900 (3-slot objects).
+    let build = "var wm = new WeakMap(); var g = 0; var i = 0; \
+                 for (i = 0; i < 300; i = i + 1) { wm.set({ k: i }, { v: i }); } \
+                 for (i = 0; i < 300; i = i + 1) { g = { v: i, w: i }; } \
+                 g = 0;";
+    let (b, names) = compile(build);
+    let mut m = Interp::new();
+    m.link_intrinsics(&names);
+    let o = m.run(&b);
+    assert!(o.completed, "fixture halted: {:?}", o.halt);
+    let stats = m.collect_garbage();
+    assert!(
+        stats.slots_reclaimed >= 800,
+        "the plain garbage is reclaimed: {stats:?}"
+    );
+    assert!(
+        stats.slots_reclaimed < 1200,
+        "weak-held entries are conservatively retained (ephemerons not yet landed): {stats:?}"
+    );
+}
+
+#[test]
+fn symbol_key_descriptor_survives_collection() {
+    // The PR review's symbol-key finding: a symbol used only as a
+    // property key is held BY ID in the property record — no arena
+    // reference reaches its descriptor slot, and `symbol_key_ids` is
+    // the only descriptor→id link. Before the fix, collection swept
+    // the descriptor and dropped the mapping, after which the
+    // string-key enumerations misclassified the still-live symbol
+    // property. The descriptors are now GC roots: after a full
+    // collect, `Object.keys` still partitions the symbol key out.
+    // The cross-crank symbol table is a deterministic function of the
+    // crank's name SET (not first-appearance order), so crank 2
+    // references exactly crank 1's names — the vars, the property
+    // names (`a` via a read, `v`/`w` via reads), and the intrinsics
+    // (`Symbol` via a reference) — to get the identical table.
+    let cranks = [
+        "var o = 0; var g = 0; var i = 0; var sym = 0; \
+         o = { a: 1 }; sym = Symbol('key'); o[sym] = 42; sym = 0; \
+         for (i = 0; i < 200; i = i + 1) { g = { v: i, w: i }; } g = 0; \
+         Object.keys(o).length",
+        "var o; var g; var i; var sym; \
+         g = o.a; g = o.v; g = o.w; sym = Symbol; sym = 0; g = 0; \
+         Object.keys(o).length",
+    ];
+    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let mut m = Interp::new();
+    m.link_intrinsics(&compiled[0].1);
+    let o1 = m.run(&compiled[0].0);
+    assert!(o1.completed, "crank 1 halted: {:?}", o1.halt);
+    assert_eq!(o1.result, "1", "the symbol key is partitioned out before GC");
+    let stats = m.collect_garbage();
+    assert!(stats.slots_reclaimed > 0, "the plain garbage was real: {stats:?}");
+    let o2 = m.run(&compiled[1].0);
+    assert!(o2.completed, "crank 2 halted: {:?}", o2.halt);
+    assert_eq!(
+        o2.result, "1",
+        "the symbol-key descriptor survived collection, so enumeration still partitions it"
+    );
+}

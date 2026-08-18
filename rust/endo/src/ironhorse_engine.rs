@@ -246,8 +246,9 @@ pub mod engine {
     /// The SES boot bundle and the worker envelope protocol remain the
     /// named gaps they were; this type is the heap-persistence half the
     /// supervisor owns either way. Cranks after the first must
-    /// redeclare their globals in declaration order (program symbol
-    /// ids are positional — the store suites' convention).
+    /// reference the SAME NAME SET as the linked crank (the compiled
+    /// symbol table is a deterministic function of the crank's name
+    /// set — the store suites' convention).
     pub struct PersistentMachine {
         store: std::rc::Rc<std::cell::RefCell<ironhorse_store_sqlite::SqliteHeapStore>>,
         session: Option<ironhorse_snapshot::machine::StoreSession>,
@@ -306,6 +307,20 @@ pub mod engine {
             }
         }
 
+        /// Discard the in-memory machine and resume from the store's
+        /// last committed epoch — the crashed-crank/failed-checkpoint
+        /// discipline. The store's commit is atomic, so a failed
+        /// checkpoint left it at the prior epoch.
+        fn rewind_to_last_checkpoint(&mut self) -> Result<(), MachineError> {
+            use ironhorse_snapshot::machine::resume_from_store_lazy;
+            self.session = None;
+            let fresh = resume_from_store_lazy(self.store.clone(), &self.signature)
+                .map_err(store_err)?;
+            self.linked = !fresh.machine().program_symbol_names().is_empty();
+            self.session = Some(fresh);
+            Ok(())
+        }
+
         /// Compile and run one crank against the persistent heap.
         ///
         /// A completed crank checkpoints before returning its outcome
@@ -313,47 +328,80 @@ pub mod engine {
         /// that halts without completing returns its halt AFTER the
         /// machine has been rewound to the last checkpoint — the
         /// partial crank's effects are gone from memory and were never
-        /// in the database.
+        /// in the database. A completed crank whose CHECKPOINT fails
+        /// is rewound the same way before the error is reported: a
+        /// mutated machine whose outcome was never durably recorded
+        /// must not seed a later crank (review finding).
         pub fn eval(&mut self, source: &str) -> Result<EvalOutcome, MachineError> {
-            use ironhorse_snapshot::machine::{checkpoint_to_store, resume_from_store_lazy};
+            use ironhorse_snapshot::machine::checkpoint_to_store;
 
             let (bytecode, symbols) = compile_atoms_with(source, false)
                 .map_err(|e| MachineError::Compile(e.to_string()))?;
-            let session = self.session.as_mut().expect("machine is open");
-            if !self.linked {
-                let names = ironhorse_vm::parse_symbols(&symbols);
-                session.machine_mut().link_intrinsics(&names);
-                self.linked = true;
-            }
-            let outcome = session.machine_mut().run(&bytecode);
-            if outcome.completed {
-                checkpoint_to_store(session, &self.signature, &mut *self.store.borrow_mut())
-                    .map_err(store_err)?;
-                Ok(outcome.into())
-            } else {
-                // Crashed crank: discard the machine, resume from the
-                // last checkpoint. The session is replaced before the
-                // halt is reported so the machine stays usable.
-                let halt = outcome.halt;
-                self.session = None;
-                let fresh = resume_from_store_lazy(self.store.clone(), &self.signature)
-                    .map_err(store_err)?;
-                self.linked = !fresh.machine().program_symbol_names().is_empty();
-                self.session = Some(fresh);
-                Err(MachineError::Halt(halt))
+            let (outcome, checkpointed) = {
+                let session = self.session.as_mut().ok_or_else(|| {
+                    MachineError::Store("machine has no session (a rewind failed)".to_string())
+                })?;
+                if !self.linked {
+                    let names = ironhorse_vm::parse_symbols(&symbols);
+                    session.machine_mut().link_intrinsics(&names);
+                    self.linked = true;
+                }
+                let outcome = session.machine_mut().run(&bytecode);
+                if outcome.completed {
+                    let r = checkpoint_to_store(
+                        session,
+                        &self.signature,
+                        &mut *self.store.borrow_mut(),
+                    );
+                    (outcome, Some(r))
+                } else {
+                    (outcome, None)
+                }
+            };
+            match checkpointed {
+                Some(Ok(_epoch)) => Ok(outcome.into()),
+                Some(Err(e)) => {
+                    self.rewind_to_last_checkpoint()?;
+                    Err(store_err(e))
+                }
+                None => {
+                    let halt = outcome.halt;
+                    self.rewind_to_last_checkpoint()?;
+                    Err(MachineError::Halt(halt))
+                }
             }
         }
 
         /// Summary-driven partial collection at the current crank
         /// boundary (the machine is always clean here — `eval` either
-        /// checkpointed or rewound). Returns the number of slots
-        /// freed. The supervisor owns the cadence: call it as often or
-        /// as rarely as policy dictates; the schedule is
-        /// replica-visible, like the full collector's.
+        /// checkpointed or rewound), made DURABLE before it returns:
+        /// collection rewrites the free list, and free-list order
+        /// feeds subsequent allocation, so an unrecorded collection
+        /// would be silently discarded by `close()` and replayed
+        /// differently after reopen (review finding). The checkpoint
+        /// advances the epoch; a failed checkpoint rewinds, so the
+        /// collection either persists or never happened. Returns the
+        /// number of slots freed. The supervisor owns the cadence;
+        /// the schedule is replica-visible, like the full collector's.
         pub fn collect(&mut self) -> Result<u32, MachineError> {
-            use ironhorse_snapshot::machine::partial_collect;
-            let session = self.session.as_mut().expect("machine is open");
-            partial_collect(session, &*self.store.borrow()).map_err(store_err)
+            use ironhorse_snapshot::machine::{checkpoint_to_store, partial_collect};
+            let (freed, checkpointed) = {
+                let session = self.session.as_mut().ok_or_else(|| {
+                    MachineError::Store("machine has no session (a rewind failed)".to_string())
+                })?;
+                let freed =
+                    partial_collect(session, &*self.store.borrow()).map_err(store_err)?;
+                let r =
+                    checkpoint_to_store(session, &self.signature, &mut *self.store.borrow_mut());
+                (freed, r)
+            };
+            match checkpointed {
+                Ok(_epoch) => Ok(freed),
+                Err(e) => {
+                    self.rewind_to_last_checkpoint()?;
+                    Err(store_err(e))
+                }
+            }
         }
 
         /// The store's committed epoch (advances by one per
