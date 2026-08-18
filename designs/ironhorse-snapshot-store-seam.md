@@ -712,11 +712,27 @@ rewind → partial collection → supervisor suspend record → close (WAL
 folded) → reopen from the record with state and epoch chain intact →
 the signature gate refusing a foreign host surface.
 
-Remaining, mapped to the phases: the worker ENVELOPE protocol for
-Ironhorse (`endor worker -e ironhorse` — needs the host-function
-surface and the SES boot bundle; the heap-persistence half above is
-wired) and any richer checkpoint/collect cadence policy beyond the
-stated per-crank minimum. The
+Remaining, in one place (each item's plan or bar lives in its own
+section):
+
+- The Ironhorse worker ENVELOPE protocol (`endor worker -e
+  ironhorse`): needs the host-function surface and the SES boot
+  bundle. The heap-persistence half of the supervisor wiring is
+  landed above; the envelope is the named gap that remains.
+- Any checkpoint/collect cadence policy richer than the stated
+  per-crank minimum (a supervisor policy decision; the schedule is
+  replica-visible).
+- Counted-accessor side-table ref-page counts — retires the last
+  decision-side O(live) term; full plan in "Plan: counted side-table
+  ref-page accessors"; its own reviewed PR by design.
+- Phase 11, the summary-generational full mark (roadmap item 11).
+- Phase 12, identity-keyed chunk rows and compaction as row moves
+  (roadmap item 12).
+- The side-table LEDGER (its own workstream): side tables do not yet
+  persist — the quiescent contract keeps resumed machines
+  arena-confined, and `KEYS`/`SYMB` travel empty until it lands.
+
+Landed context for the items above: the
 attached-mode benchmark landed with phase 10's instruments, and the
 cargo-fuzz CI lane landed as the `fuzz-ironhorse` smoke job (30 s per
 decode/round-trip target on every ironhorse-relevant change, corpus
