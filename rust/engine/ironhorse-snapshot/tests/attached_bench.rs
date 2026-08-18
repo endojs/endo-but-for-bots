@@ -115,11 +115,17 @@ fn attached_vs_detached_hot_crank() {
         .collect();
 
     // Arm 3: attached-faulting — a FRESH cold lazy resume per round,
-    // faults interleaved with the crank's own dispatch.
+    // faults interleaved with the crank's own dispatch. The clock starts
+    // AFTER `resume_from_store_lazy` returns: the resume's attach/validate
+    // cost is the wake latency `wake_latency_bench` already isolates, so
+    // timing it here too would fold that whole tax into the "faulting"
+    // number (it dominated the old measurement). What remains under the
+    // clock is exactly the first-crank tax — the page/extent faults that
+    // interleave with this crank's own dispatch.
     let faulting_ms: Vec<f64> = (0..ROUNDS)
         .map(|_| {
-            let t0 = Instant::now();
             let mut s2 = resume_from_store_lazy(store.clone(), &sig()).unwrap();
+            let t0 = Instant::now();
             let o = s2.machine_mut().run(&b_hot);
             assert_eq!(o.result, "60000");
             t0.elapsed().as_secs_f64() * 1e3

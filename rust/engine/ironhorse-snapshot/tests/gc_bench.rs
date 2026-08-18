@@ -9,9 +9,13 @@
 //!   compact (reclaim + mark of the live graph) — the O(heap) mark.
 //! - **full-steady**: an immediately following collect (mark-dominated,
 //!   nothing to reclaim) — the floor the generational design must beat.
-//! - **partial**: `partial_collect` at a clean checkpoint boundary —
-//!   the summary-driven collector's metadata-scale query (page edges +
-//!   BFS + side-table roots), no row-content reads.
+//! - **partial**: `partial_collect` at a clean checkpoint boundary, split
+//!   into its four phases — the summary-count gate, root enumeration (the
+//!   O(live) side-table walk), the store decision query (page edges + BFS,
+//!   no row-content reads), and the page free (O(garbage reclaimed)). All
+//!   four are timed in one warm round, so the free term is measured rather
+//!   than left to subtraction, and no cold sample is printed beside a warm
+//!   median.
 //! - **sweep/slot**: steady-state sweep cost per record with a LARGE
 //!   free list resident — linear since the free-membership bitmap
 //!   (the review fix; the prior `Vec::contains` sweep was quadratic in
@@ -80,15 +84,17 @@ fn gc_cost_across_heap_sizes() {
 
         // partial_collect at a clean boundary, store-backed. (One
         // machine per round: partial collection mutates the free
-        // list.) The split rounds replicate the collector's three
-        // phases — root enumeration (the O(live) side-table walk),
-        // the store decision query, the page free — so the numbers
-        // say WHICH term dominates at each size.
-        let mut partial_ms = Vec::new();
-        let mut enum_ms = Vec::new();
-        let mut query_ms = Vec::new();
-        let mut freed_last = 0;
-        for round in 0..5 {
+        // list.) Every round runs the SAME four phases `partial_collect`
+        // runs — the summary-count gate, root enumeration (the O(live)
+        // side-table walk), the store decision query, and the page free
+        // (the O(garbage reclaimed) term) — timing all four in ONE round
+        // so the terms are comparable and the dominant free term is
+        // MEASURED, not left to subtraction. Round 0 is a discarded
+        // warmup (first-touch faults/caches); the medians are over the
+        // warm rounds only, so no cold sample is printed beside a warm
+        // one. `ref_freed` locks the inline replication to the public
+        // collector's result.
+        let ref_freed = {
             let mut store = MemoryStore::new();
             let mut m = Interp::new();
             m.link_intrinsics(&names);
@@ -96,33 +102,70 @@ fn gc_cost_across_heap_sizes() {
             let mut session = begin_store_session(m, &sig(), &mut store)
                 .map_err(|(_, e)| e)
                 .unwrap();
-            if round == 0 {
-                // Phase split, measured on the round whose end-to-end
-                // time is discarded (the split itself perturbs it).
-                let interp = session.machine();
-                let t0 = Instant::now();
-                let mut roots: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
-                for r in interp.gc_roots() {
-                    if !r.is_null() {
-                        roots.insert(r.0 / ironhorse_vm::SLOTS_PER_PAGE);
-                    }
-                }
-                for (p, hit) in interp.side_table_ref_page_bits().into_iter().enumerate() {
-                    if hit {
-                        roots.insert(p as u32);
-                    }
-                }
-                enum_ms.push(t0.elapsed().as_secs_f64() * 1e3);
-                let roots: Vec<u32> = roots.into_iter().collect();
-                let t1 = Instant::now();
-                let reached = store.reachable_page_set(&roots).unwrap();
-                query_ms.push(t1.elapsed().as_secs_f64() * 1e3);
-                assert!(!reached.is_empty());
-                continue;
-            }
+            partial_collect(&mut session, &store).unwrap()
+        };
+        let mut gate_ms = Vec::new();
+        let mut enum_ms = Vec::new();
+        let mut query_ms = Vec::new();
+        let mut free_ms = Vec::new();
+        let mut partial_ms = Vec::new();
+        for round in 0..6 {
+            let mut store = MemoryStore::new();
+            let mut m = Interp::new();
+            m.link_intrinsics(&names);
+            assert!(m.run(&b).completed);
+            let mut session = begin_store_session(m, &sig(), &mut store)
+                .map_err(|(_, e)| e)
+                .unwrap();
+            let total = slot_page_count(store.manifest().unwrap().slot_count);
+
+            // Phase 1 — the summary-count gate.
             let t0 = Instant::now();
-            freed_last = partial_collect(&mut session, &store).unwrap();
-            partial_ms.push(t0.elapsed().as_secs_f64() * 1e3);
+            let found = store.summary_page_count().unwrap();
+            let gate = t0.elapsed().as_secs_f64() * 1e3;
+            assert_eq!(found, total, "gate agrees with geometry");
+
+            // Phase 2 — root enumeration (gc roots + side-table ref pages).
+            let t1 = Instant::now();
+            let mut roots: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+            for r in session.machine().gc_roots() {
+                if !r.is_null() {
+                    roots.insert(r.0 / ironhorse_vm::SLOTS_PER_PAGE);
+                }
+            }
+            for (p, hit) in session
+                .machine()
+                .side_table_ref_page_bits()
+                .into_iter()
+                .enumerate()
+            {
+                if hit {
+                    roots.insert(p as u32);
+                }
+            }
+            let roots: Vec<u32> = roots.into_iter().collect();
+            let enum_p = t1.elapsed().as_secs_f64() * 1e3;
+
+            // Phase 3 — the store reachability query.
+            let t2 = Instant::now();
+            let reached = store.reachable_page_set(&roots).unwrap();
+            let query = t2.elapsed().as_secs_f64() * 1e3;
+
+            // Phase 4 — the page free (the dominant, O(garbage) term).
+            let dead: Vec<u32> = (0..total).filter(|p| !reached.contains(p)).collect();
+            let t3 = Instant::now();
+            let freed = session.machine_mut().free_pages(&dead);
+            let free_p = t3.elapsed().as_secs_f64() * 1e3;
+            assert_eq!(freed, ref_freed, "inline phases match partial_collect");
+
+            if round == 0 {
+                continue; // warmup
+            }
+            gate_ms.push(gate);
+            enum_ms.push(enum_p);
+            query_ms.push(query);
+            free_ms.push(free_p);
+            partial_ms.push(gate + enum_p + query + free_p);
         }
 
         // Steady-state sweep with a large resident free list: after
@@ -139,16 +182,18 @@ fn gc_cost_across_heap_sizes() {
 
         println!(
             "slots={:>7} pages={:>5} | full-first {:>8.3} ms | full-steady {:>8.3} ms | \
-             partial {:>7.3} ms (freed {}; enum {:.3} ms, query {:.3} ms) | \
+             partial {:>7.3} ms (freed {}; gate {:.3}, enum {:.3}, query {:.3}, free {:.3} ms) | \
              free-list {:>7} | collect/slot {:>6.1} ns",
             slots_total,
             slot_page_count(slots_total),
             median(first_ms),
             median(steady_ms),
             median(partial_ms),
-            freed_last,
-            enum_ms[0],
-            query_ms[0],
+            ref_freed,
+            median(gate_ms),
+            median(enum_ms),
+            median(query_ms),
+            median(free_ms),
             free_len,
             sweep_ns_per_slot,
         );

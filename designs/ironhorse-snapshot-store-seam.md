@@ -405,9 +405,10 @@ arena-confined), so it lands there, not here.
 
 **Review wave 2 (2026-08-17): seven adversarial reviewers over the
 post-draft delta.** Findings are recorded here in full; the fixed set
-landed in this wave's commits, the open set is recorded for a later
-reviewed pass (not yet actioned), and the cleared set is kept so the
-negatives are on the record too.
+landed in this wave's commits, the open set was actioned in the
+reviewed passes that followed (2026-08-18 — the coverage subset first,
+then the instrument mislabelings; see the two closed notes below), and
+the cleared set is kept so the negatives are on the record too.
 
 *Fixed and pushed (this wave):*
 
@@ -450,32 +451,47 @@ negatives are on the record too.
   with a variance note; roadmap item 10 no longer overstates the
   trait surface.
 
-*Open — recorded, not yet actioned (a later reviewed instrument pass):*
+*Instrument mislabelings, closed 2026-08-18 (the reviewed instrument
+pass):* the remaining open items — the numbers were real, the framing
+was not — are now actioned.
 
-- **Instrument labels vs. what they measure** (the bench reviewer;
-  the numbers are real, the framing is not). The store-seam
-  instruments' fixtures use array-held (side-table) graphs invisible
-  to the arena summaries, so on a cold resume: `store_bench`'s
-  `partial(cte)` arm mass-frees ~92% of the heap and reads as
-  O(heap) rather than pricing the decision path; its reachability
-  arms only ever exercise a constant ~6-page answer, so they cannot
-  exhibit the "transfer ∝ answer" claim. Fix direction: an
-  arena-visible chain fixture (`head = { next: head }`) that survives
-  cold resume, plus a big-answer/small-answer reachability pair.
-- **`attached_bench` faulting arm** starts its timer before
-  `resume_from_store_lazy`, so ~75–80% of the reported "faulting tax"
-  is the wake `wake_latency_bench` already isolates. Fix: start the
-  clock after the resume.
-- **`checkpoint` arm mislabel**: it is labeled O(dirty) but grows
-  O(pages) because every commit re-reads the leaf hashes and
-  recombines the root; relabel (the number is honest end to end).
-- **`gc_bench` phase split** times the gate/enum/query phases but
-  leaves the dominant page-free to subtraction, and prints cold
-  first-round enum/query samples beside warm partial medians; time
-  all four phases in one warm round.
-- **Temp-dir cleanup** in the bench/query tests runs only on success
-  (pid-keyed start-of-test cleanup mitigates leakage; a repo-wide
-  convention gap, low severity).
+- **Instrument labels vs. what they measure.** `store_bench` now builds
+  an ARENA-VISIBLE object chain (`t.next = { v: i }`, appended at the
+  tail so the head sits on a low page) instead of the array-held graph
+  the arena summaries could not see. The `partial(cte)` arm frees
+  ~nothing on a cold resume and so prices the DECISION path (gate +
+  enumeration + query + the empty free), not an O(heap) mass-free; and
+  the reachability arms are now a big-answer/small-answer pair — the
+  full-graph root `[0]` reaches every page and scales with the heap
+  (dense and CTE agree, so the CTE has no free lunch when the answer
+  *is* the graph), while a bounded edgeless root returns O(answer) rows
+  so the CTE stays flat as the dense path still marshals the whole edge
+  set (transfer ∝ answer). Answer sizes are printed. (A small NONZERO
+  page-answer from a live root is unreachable here — 256-slot pages plus
+  prototype back-edges make the arena graph strongly connected — so the
+  small half uses the edgeless bounded root, exactly the transfer
+  isolation the generational mark needs.)
+- **`attached_bench` faulting arm** now starts its clock AFTER
+  `resume_from_store_lazy` returns, so the wake latency
+  `wake_latency_bench` already isolates is no longer folded into the
+  faulting tax; what remains under the clock is the first-crank faults
+  interleaving with dispatch (~x1.08 of detached, close to the resident
+  arm).
+- **`checkpoint` arm relabeled O(pages)**: the seal re-reads every leaf
+  hash and recombines the root, so the metadata work is O(pages) even
+  though only the dirtied rows are written.
+- **`gc_bench` four-phase warm split**: the summary-count gate, root
+  enumeration, the store query, and the page free are all timed in ONE
+  warm round (round 0 discarded as a warmup), so the dominant free term
+  is measured rather than left to subtraction and no cold sample sits
+  beside a warm median; a `ref_freed` from the public `partial_collect`
+  locks the inline phase replication to the real collector.
+- **Temp-dir cleanup**: `store_bench` replaces its manual start/end
+  `remove_dir_all` with an RAII `TempDir` guard that removes the
+  directory on drop, so a failing assertion (an unwinding panic) cleans
+  up too; the pid-keyed pre-clean still recovers a prior hard-aborted
+  run. (The query-suite's manual cleanup is unchanged — the broader
+  repo-wide convention gap stays low-severity.)
 
 *Coverage gaps from the open list, closed 2026-08-18:*
 
