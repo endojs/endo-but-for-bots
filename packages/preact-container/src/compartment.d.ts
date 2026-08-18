@@ -45,9 +45,30 @@ export interface ConfineOptions {
 }
 
 /**
- * Wrap an attacker-supplied component function so it can be mounted in
- * a normal Preact tree. Place the result inside a `renderConfined` tree
- * to get full sanitization on top.
+ * Wrap a component function so it can be mounted in a normal Preact
+ * tree. Place the result inside a `renderConfined` tree to get full
+ * sanitization on top.
+ *
+ * Works in both trust directions, because a confined wrapper is a
+ * mutual-suspicion component boundary:
+ *
+ * - **Confining untrusted code** (the usual case): `fn` is
+ *   attacker-supplied; its output is coerced and sanitized so it cannot
+ *   reach the DOM or inject HTML.
+ * - **Carrying trusted content into an untrusted peer**: the host wraps
+ *   its own `fn` (e.g. one that renders a reader's private petname for a
+ *   party) and hands the wrapper to a confined guest as a prop. The
+ *   guest may PLACE it (`h(props.PetName, { party })`) but cannot read
+ *   it: a direct call returns `null` (the diff-invocation gate), the
+ *   rendered output reaches only the DOM, and the wrapper is
+ *   identity-checked so it cannot be forged. Designate by reference —
+ *   pass the party OBJECT and resolve it through a `WeakMap` the host
+ *   holds — rather than a guessable id.
+ *
+ * Either way `fn` receives `(endowments, props)`; `props` is
+ * attacker-provided and `fn` validates its own inputs. `fn`'s output is
+ * always sanitized (unlike a `HostPassthrough` island); if trusted
+ * content genuinely needs un-sanitized output, use `HostPassthrough`.
  */
 export function confineComponent<P extends object = {}>(
   fn: (endowments: CompartmentEndowments, props: ConfinedProps<P>) => unknown,

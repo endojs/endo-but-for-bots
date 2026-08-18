@@ -129,24 +129,51 @@ const endowments = Object.freeze({
  * output and obtain a reference to `HostPassthrough` they could re-use to
  * smuggle other content into trusted-exit mode.
  *
- * SECURITY: a token (`opaqueChildInvocationToken`) is set from
- * `options[OPT_RENDER]` immediately before Preact calls this component
- * and CONSUMED on first read here. If the attacker stashes the
- * `OpaqueChild` function and a slot (both reachable via
+ * SECURITY: guarded by the single-flight diff-invocation gate below
+ * (`pendingDiffProps`). If the attacker stashes the `OpaqueChild`
+ * function and a slot (both reachable via
  * `props.children[i].{type, props._slot}`) and calls `OpaqueChild`
- * synchronously inside their render, the token is `null` (only set
- * for diff-driven calls) and we return `null`. Without this guard
+ * synchronously inside their render, the gate is unarmed (it is armed
+ * only for diff-driven calls) and we return `null`. Without this guard
  * the attacker could exfil the host vnode object as a JS value and
  * walk its tree / invoke host component functions to escalate to
  * host-authority code execution.
  */
-let opaqueChildInvocationToken = null;
+
+// ── Single-flight diff-invocation gate ──────────────────────────────
+// Shared by `OpaqueChild` below and every `Confined` wrapper. Both are
+// reachable from confined code — each is the `.type` of some vnode a
+// child holds — and both yield content that must not be handed back to
+// the caller as a value: `OpaqueChild` yields a host child vnode, and a
+// `Confined` wrapper yields its component's rendered output (which, when
+// the wrapper carries host-trusted content the child was given to place,
+// is exactly what the child must not read — a petname, a confirmation).
+//
+// The gate distinguishes "Preact's diff is invoking this component
+// right now" from "some code is calling this function". Our
+// `options[OPT_RENDER]` hook fires synchronously immediately before
+// Preact invokes a component, and nothing else runs in between. The
+// hook stores the exact props object Preact is about to pass; the
+// component body admits the call only when its `props` argument IS
+// that stored object (identity comparison), and clears the slot so the
+// admission is single-use. A direct call from child code can never win
+// the comparison: either nothing is pending (`null`), or the pending
+// bag belongs to the diff-driven invocation the child cannot see. It is
+// a provenance check, not a secret — knowing how it works does not help
+// forge it. One variable serves both types because the arm/consume pair
+// is immediate and nothing can interleave between the hook and the
+// component body.
+let pendingDiffProps = null;
+
 function OpaqueChild(props) {
-  if (opaqueChildInvocationToken !== props) return null;
-  opaqueChildInvocationToken = null;
+  if (pendingDiffProps !== props) return null;
+  pendingDiffProps = null;
   const real = currentSlotMap && currentSlotMap.get(props._slot);
   return real == null ? null : real;
 }
+// Reachable from confined code as a sentinel vnode's `.type`; frozen
+// below (after `deepFreeze` is defined) so it cannot serve as a
+// writable channel between mutually-suspicious parties.
 
 // Hard cap on coercion recursion depth. A confined component controls
 // the SHAPE of its return value and can hand back a pathologically deep
@@ -264,6 +291,13 @@ function coerceType(type) {
     // OpaqueChild's render output; SecureBoundary is module-private
     // to secure). Trusted-exit semantics arrive through `OpaqueChild`
     // itself, which is registered with secure as a trusted-exit type.
+    //
+    // A confined component admitted here may be UNTRUSTED (another
+    // guest widget) or TRUSTED content the host handed the child to
+    // place — e.g. a petname the child must not read (see the README's
+    // "Trusted content" section). Either way the child is only allowed
+    // to PLACE it; the diff-invocation gate on the `Confined` wrapper
+    // is what stops the child calling it to read its output.
     if (confinedComponents.has(type) || type === OpaqueChild) {
       return type;
     }
@@ -450,6 +484,11 @@ function sesAppearsActive() {
 const deepFreeze = value =>
   sesAppearsActive() ? globalThis.harden(value) : Object.freeze(value);
 
+// See the note at its definition: `OpaqueChild` is reachable from
+// confined code, so an unfrozen function object there would be a
+// writable dropbox shared by every tenant (`type.__x = secret`).
+deepFreeze(OpaqueChild);
+
 let warnedNoSes = false;
 function warnIfNoSes() {
   if (warnedNoSes || sesAppearsActive()) return;
@@ -499,15 +538,13 @@ function install() {
       vnode._slotMapBracketed = true;
       pushSlotMap();
     }
-    // Token-set for `OpaqueChild`: only diff-driven calls to the
-    // component get to resolve their slot. Set to the SAME `props`
-    // object Preact is about to pass — `OpaqueChild` confirms it
-    // received that exact bag and consumes the token. Without this,
-    // an attacker who stashed `OpaqueChild` + a slot could call
-    // `OpaqueChild({_slot})` directly and exfil the host vnode as
-    // a JS return value.
-    if (vnode.type === OpaqueChild) {
-      opaqueChildInvocationToken = vnode.props;
+    // Arm the single-flight diff-invocation gate (see `pendingDiffProps`)
+    // for `OpaqueChild` and every `Confined` wrapper: only diff-driven
+    // calls get to yield their content. Set to the SAME `props` object
+    // Preact is about to pass — the component body confirms it received
+    // that exact bag and consumes the admission.
+    if (vnode.type === OpaqueChild || confinedComponents.has(vnode.type)) {
+      pendingDiffProps = vnode.props;
     }
     if (previousRender) previousRender(vnode);
   };
@@ -533,6 +570,54 @@ function install() {
     }
     throw error;
   };
+}
+
+// Preact tags every vnode with an own `constructor: undefined` slot
+// (see `coerceToSafeVNode`); require `type` and `props` alongside it so
+// a host's null-prototype data bag is not mistaken for a vnode.
+function looksLikeHostVNode(value) {
+  if (value === null || typeof value !== 'object') return false;
+  let ctor;
+  try {
+    ctor = value.constructor;
+  } catch (_) {
+    return false;
+  }
+  if (ctor !== undefined) return false;
+  return 'type' in value && 'props' in value;
+}
+
+// Only `children` is transcluded opaquely (`wrapOpaqueChildren`); every
+// other prop is passed to the guest AS-IS. A vnode in one of those
+// props therefore reaches the guest raw: `props.header.type` is a live
+// host component function the guest can CALL with arguments of its
+// choosing — host-authority invocation, handed over by an idiom
+// (`h(Confined, { header: h(HostHeader) })`) that looks like ordinary
+// Preact. Fail fast at the seam, like the renderer's
+// mounted-outside-renderConfined throw, rather than let the mistake
+// degrade quietly. The check is a TRIPWIRE for the common idiom
+// (top-level prop values and one level of array), not a boundary: a
+// vnode buried deeper still cannot be RENDERED with host authority
+// (the coercer's identity gate turns its type into a Fragment) — the
+// hazard is only ever the guest calling what the host handed it, which
+// is the same hazard as any deliberately passed callback.
+function assertNoRawVNodeProps(props) {
+  for (const key of Object.keys(props)) {
+    const value = props[key];
+    if (
+      looksLikeHostVNode(value) ||
+      (Array.isArray(value) && value.some(looksLikeHostVNode))
+    ) {
+      throw new TypeError(
+        `confineComponent: prop ${JSON.stringify(key)} carries a raw ` +
+          'vnode. Only `children` crosses as opaque, uninspectable ' +
+          'sentinels; a vnode in any other prop would hand the guest ' +
+          'live host component references (`vnode.type` is directly ' +
+          'callable). Pass host content as children, or as a ' +
+          'confineComponent wrapper the child places.',
+      );
+    }
+  }
 }
 
 /**
@@ -561,6 +646,17 @@ export function confineComponent(fn, opts) {
     opts && typeof opts.onError === 'function' ? opts.onError : null;
 
   function Confined(rawProps) {
+    // Single-flight diff-invocation gate (see `pendingDiffProps`). A
+    // confined wrapper is reachable from any code that holds it — the
+    // host, or a peer guest the host handed it to as placeable trusted
+    // content. Only Preact's own diff may run the component and get its
+    // output; a direct call (the exfiltration move — call it, read the
+    // rendered result as a value) finds the gate unarmed and returns
+    // null. The wrapper's output otherwise reaches only the DOM, never
+    // the caller. Nothing legitimately direct-calls a confined
+    // component, so this never rejects a real render.
+    if (pendingDiffProps !== rawProps) return null;
+    pendingDiffProps = null;
     // Fail-fast for the "mounted outside renderConfined" case lives
     // in `@endo/preact-container/renderer`'s `_render` hook: the reentry branch
     // walks `vnode._parent` for a `SecureBoundary` ancestor and
@@ -570,6 +666,9 @@ export function confineComponent(fn, opts) {
     // walk is unforgeable because `SecureBoundary` is module-
     // private to `@endo/preact-container/renderer`).
     const { children: rawChildren, ...rest } = rawProps;
+    // Host mistake, not guest attack: raw vnodes in non-children props
+    // would hand the guest callable host component functions.
+    assertNoRawVNodeProps(rest);
     const opaqueChildren = wrapOpaqueChildren(rawChildren);
     const sanitizedProps = Object.freeze({
       ...rest,
@@ -602,7 +701,10 @@ export function confineComponent(fn, opts) {
   // Without this, `<HostPassthrough><Confined/></HostPassthrough>` would let the
   // attacker render `<script>` and arbitrary JS.
   _registerSecureReentryType(Confined);
-  return Confined;
+  // Frozen for the same reason as `OpaqueChild`: a wrapper handed to a
+  // peer guest as a prop is reachable as a vnode `.type` and must not be
+  // a writable channel between mutually-suspicious parties.
+  return deepFreeze(Confined);
 }
 deepFreeze(confineComponent);
 
