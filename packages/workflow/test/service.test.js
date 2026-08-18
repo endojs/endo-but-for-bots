@@ -84,7 +84,7 @@ test('start journals, invokes with effectId, and completes on the outcome', asyn
   const engine = engines.get(runId);
   await until(() => engine.fold.done, 'run completion');
   t.deepEqual(calls, [
-    { method: 'perform', args: ['payload'], effectId: '0-0' },
+    { method: 'perform', args: ['payload'], effectId: `${runId}:0-0` },
   ]);
   const status = await E(run).status();
   t.is(status.outcome, 'completed');
@@ -103,6 +103,52 @@ test('start journals, invokes with effectId, and completes on the outcome', asyn
   t.is(settlementEntry.settles.status, 'fulfilled');
   t.truthy(settlementEntry.fired);
   t.is(settlementEntry.terminal.outcome, 'completed');
+});
+
+test('runs sharing an endowment hand it distinct idempotency keys', async t => {
+  // Effect ids are `${seq}-${index}`, unique within one run only, so two
+  // runs' first invokes both journal as '0-0'. The key on the wire must
+  // still tell them apart: a target deduping on it (the invoke contract)
+  // would otherwise swallow the second run's effect as a duplicate of
+  // the first.
+  const { service, engines, stop } = await makeHarness();
+  t.teardown(stop);
+  const { target, calls } = makeRecordingTarget(['answer-1', 'answer-2']);
+  const chart = harden({
+    name: 'shared-invoker',
+    version: 1,
+    initial: 'call',
+    states: {
+      call: {
+        entry: [
+          {
+            kind: 'invoke',
+            target: 'worker',
+            method: 'perform',
+            args: [],
+            outcome: 'done-call',
+            failure: 'failed-call',
+          },
+        ],
+        on: {
+          'done-call': [{ target: 'ok' }],
+          'failed-call': [{ target: 'sad' }],
+        },
+      },
+      ok: { final: true },
+      sad: { final: true },
+    },
+  });
+  const endowments = harden({ worker: target });
+  const { runId: runA } = await E(service).start(chart, { endowments });
+  const { runId: runB } = await E(service).start(chart, { endowments });
+  await until(
+    () => engines.get(runA).fold.done && engines.get(runB).fold.done,
+    'both runs complete',
+  );
+  const keys = calls.map(call => call.effectId);
+  t.deepEqual([...new Set(keys)].sort(), [...keys].sort());
+  t.deepEqual(keys.sort(), [`${runA}:0-0`, `${runB}:0-0`].sort());
 });
 
 test('invoke failures route to the declared failure event', async t => {
