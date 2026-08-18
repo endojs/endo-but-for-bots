@@ -125,6 +125,11 @@ api-docs
 !packages/platform/src/fs/extended/backend-types-index.d.ts
 !packages/preact-container/src/renderer.d.ts
 !packages/preact-container/src/compartment.d.ts
+!packages/preact-social/src/modifiers.d.ts
+!packages/preact-social/src/party-mark.d.ts
+!packages/preact-social/src/petname.d.ts
+!packages/preact-social/src/pattern-badge.d.ts
+!packages/preact-social/src/composition.d.ts
 !packages/reminder/src/types.d.ts
 !packages/sandbox/src/types.d.ts
 !packages/ses/src/reporting-types.d.ts
