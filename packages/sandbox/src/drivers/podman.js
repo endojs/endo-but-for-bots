@@ -47,9 +47,13 @@ harden(PODMAN_OPERATION_LABEL);
 
 /**
  * Deadline applied to lifecycle-critical podman control commands
- * (`create`, `kill`, `rm`). A stalled control command must not be able
- * to wedge admission, termination, or reaping; commands with
- * legitimately unbounded duration (`pull`) are not subject to it.
+ * (`create`, `kill`, `rm`) and to every command on the probe path
+ * (`--version`, `info`, the orphan sweep's `ps`). A stalled control
+ * command must not be able to wedge admission, termination, or
+ * reaping, and a stalled probe must not be able to wedge backend
+ * selection — and therefore `make()` — indefinitely, which is why the
+ * bwrap driver bounds its probes with the same 30s budget. Commands
+ * with legitimately unbounded duration (`pull`) are not subject to it.
  */
 const CONTROL_COMMAND_TIMEOUT_MS = 30_000;
 
@@ -276,7 +280,9 @@ const probeRootlessNetBackend = async cp => {
     let result;
     try {
       // eslint-disable-next-line no-await-in-loop
-      result = await spawnAndCollect(cp, candidate, ['--version']);
+      result = await spawnAndCollect(cp, candidate, ['--version'], {
+        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+      });
     } catch (e) {
       const cause = /** @type {Error & { code?: string }} */ (e);
       // eslint-disable-next-line no-continue
@@ -593,11 +599,12 @@ export const makePodmanDriver = ({
     if (resolvedRuntime !== null) return resolvedRuntime;
     let info;
     try {
-      info = await spawnAndCollect(cp, 'podman', [
-        'info',
-        '--format',
-        '{{.Host.OCIRuntime.Name}}',
-      ]);
+      info = await spawnAndCollect(
+        cp,
+        'podman',
+        ['info', '--format', '{{.Host.OCIRuntime.Name}}'],
+        { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
+      );
     } catch {
       resolvedRuntime = '';
       return resolvedRuntime;
@@ -617,9 +624,9 @@ export const makePodmanDriver = ({
     // with its own error message.
     for (const candidate of EXEC_CAPABLE_RUNTIMES) {
       // eslint-disable-next-line no-await-in-loop
-      const v = await spawnAndCollect(cp, candidate, ['--version']).catch(
-        () => null,
-      );
+      const v = await spawnAndCollect(cp, candidate, ['--version'], {
+        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+      }).catch(() => null);
       if (v !== null && v.code === 0) {
         resolvedRuntime = candidate;
         return resolvedRuntime;
@@ -677,6 +684,7 @@ export const makePodmanDriver = ({
         '--format',
         '{{.Names}}',
       ]),
+      { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
     );
     if (listing.code !== 0) {
       throw makeError(
@@ -758,7 +766,9 @@ export const makePodmanDriver = ({
 
     let versionResult;
     try {
-      versionResult = await spawnAndCollect(cp, 'podman', ['--version']);
+      versionResult = await spawnAndCollect(cp, 'podman', ['--version'], {
+        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+      });
     } catch (e) {
       const cause = /** @type {Error & { code?: string }} */ (e);
       const reason =
@@ -786,11 +796,12 @@ export const makePodmanDriver = ({
     // could not initialise its storage; that is fatal for the driver.
     let rootlessResult;
     try {
-      rootlessResult = await spawnAndCollect(cp, 'podman', [
-        'info',
-        '--format',
-        '{{.Host.Security.Rootless}}',
-      ]);
+      rootlessResult = await spawnAndCollect(
+        cp,
+        'podman',
+        ['info', '--format', '{{.Host.Security.Rootless}}'],
+        { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
+      );
     } catch (e) {
       const cause = /** @type {Error} */ (e);
       return harden({
