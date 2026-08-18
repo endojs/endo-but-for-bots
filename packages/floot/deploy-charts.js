@@ -12,14 +12,20 @@
 //     engine's run-qualified trailing invoke key.
 //   operator  — the owner host's `@self` handle; asks land in their inbox.
 //
-// ANTI-RESTART-LOOP INVARIANTS (see the design doc § "The restart in the
-// middle"): `apply` is entered exactly once per run — its only inbound
-// transition is the operator's explicit approval, and every failure or
-// timeout path leads to compensation, a terminal state, or a
-// needs-attention ASK (a human gate), never back toward `apply`. Timer
-// exits prune the pending invoke, so a late settlement is dropped rather
-// than re-routed. The test suite asserts the single-entry property from
-// the rendered graph.
+// ANTI-RESTART-LOOP AND TRUTHFUL-TERMINAL INVARIANTS (see the design doc
+// § "The restart in the middle"): `apply` is entered exactly once per run
+// — its only inbound transition is the operator's explicit approval, and
+// every failure or timeout path leads to compensation, a terminal state,
+// or a human gate, never back toward `apply`. Attention is split by
+// provenance: POST-APPLY problems go to `needs-attention`, an operator
+// ATTESTATION form ("did it end up applied?") whose only path toward
+// `done` re-verifies mechanically (endo-release) or carries the
+// operator's journaled word (nixos-config-change); COMPENSATION failures
+// go to `compensation-attention`, whose only exit retries the
+// compensation — no pre-apply path can reach `done`. Timer exits prune
+// the pending invoke, so a late settlement is dropped rather than
+// re-routed. The test suite asserts the single-entry-to-apply and
+// compensation-attention-exit properties from the rendered graph.
 
 import { M } from '@endo/patterns';
 
@@ -28,8 +34,17 @@ const HALF_HOUR_MS = 1_800_000;
 const WEEK_MS = 604_800_000;
 
 const okValue = M.splitRecord({ value: M.splitRecord({ ok: M.eq(true) }) });
+// Post-apply readback: the pin must match AND the applier must report a
+// settled 'ok' phase — a rebuild still in flight (phase 'switching') or a
+// never-executed apply behind a stale status must not read as verified.
+const verifiedOk = M.splitRecord({
+  value: M.splitRecord({ ok: M.eq(true), phase: M.eq('ok') }),
+});
 const approvedValue = M.splitRecord({
   value: M.splitRecord({ approved: M.eq(true) }),
+});
+const attestedLanded = M.splitRecord({
+  value: M.splitRecord({ landed: M.eq(true) }),
 });
 
 // Performer re-validates /^[0-9a-f]{40}$/ at its boundary; the chart's
@@ -177,7 +192,7 @@ export const endoReleaseChart = harden({
       ],
       on: {
         verified: [
-          { when: okValue, target: 'done' },
+          { when: verifiedOk, target: 'done' },
           { target: 'needs-attention' },
         ],
         'verify-failed': [{ target: 'needs-attention' }],
@@ -199,27 +214,68 @@ export const endoReleaseChart = harden({
       ],
       on: {
         unpinned: [{ target: 'abandoned' }],
-        'unpin-failed': [{ target: 'needs-attention' }],
+        'unpin-failed': [{ target: 'compensation-attention' }],
       },
     },
+    // Post-apply problems only (apply failed or timed out, or the readback
+    // disagreed). The operator investigates and ATTESTS the outcome; a
+    // "landed" answer still re-verifies mechanically before `done`, and a
+    // "not landed" answer abandons through compensation. No pre-apply path
+    // enters here, so this state cannot launder a declined release into a
+    // completed one.
     'needs-attention': {
+      entry: [
+        {
+          kind: 'ask',
+          to: 'operator',
+          form: {
+            description:
+              'Release {$params.rev} ({$params.title}) needs attention; ' +
+              'see the run log. Investigate, then report whether the ' +
+              'release ended up applied.',
+            fields: [
+              {
+                name: 'landed',
+                label: 'Did the release end up applied?',
+                pattern: M.boolean(),
+              },
+              { name: 'note', label: 'Note', pattern: M.string(), default: '' },
+            ],
+          },
+          outcome: 'operator-attested',
+        },
+      ],
+      on: {
+        'operator-attested': [
+          { when: attestedLanded, target: 'verify' },
+          {
+            target: 'unpinning',
+            assign: { reason: 'operator-reported-not-landed' },
+          },
+        ],
+      },
+    },
+    // Compensation failed (the un-pin itself). The only exit retries the
+    // compensation — this state can never reach `verify` or `done`, so an
+    // abandoned release cannot terminate as deployed.
+    'compensation-attention': {
       entry: [
         {
           kind: 'ask',
           to: 'operator',
           what: {
             description:
-              'Release {$params.rev} ({$params.title}) needs attention; ' +
-              'see the run log.',
+              'Un-pinning after abandoning {$params.rev} ' +
+              '({$params.title}) failed; see the run log. Reply to retry.',
           },
           outcome: 'operator-resumed',
         },
       ],
-      on: { 'operator-resumed': [{ target: 'verify' }] },
+      on: { 'operator-resumed': [{ target: 'unpinning' }] },
     },
     done: { final: true, output: { rev: { $params: 'rev' } } },
     'auto-rolled-back': { final: true, output: { report: { $ctx: 'report' } } },
-    failed: { final: true }, // stage-failed only: nothing was written
+    failed: { final: true, output: { reason: 'stage-failed' } },
     abandoned: { final: true, output: { reason: { $ctx: 'reason' } } },
   },
 });
@@ -370,52 +426,69 @@ export const nixosConfigChangeChart = harden({
       ],
       on: {
         reverted: [{ target: 'abandoned' }],
-        'revert-failed': [{ target: 'needs-attention' }],
+        'revert-failed': [{ target: 'compensation-attention' }],
       },
     },
+    // Post-apply problems only (apply failed or timed out). There is no
+    // mechanical readback for a config change, so the operator's ATTESTED
+    // answer is the truth the run records: "landed" completes the run on
+    // the operator's journaled, attributed word; "not landed" abandons
+    // through compensation. A status probe was deliberately rejected here —
+    // the applier's global phase is uncorrelated with THIS run and could
+    // launder a declined change into a completed one.
     'needs-attention': {
+      entry: [
+        {
+          kind: 'ask',
+          to: 'operator',
+          form: {
+            description:
+              'NixOS change {$params.title} needs attention; see the run ' +
+              'log. Investigate, then report whether the change ended up ' +
+              'applied.',
+            fields: [
+              {
+                name: 'landed',
+                label: 'Did the change end up applied?',
+                pattern: M.boolean(),
+              },
+              { name: 'note', label: 'Note', pattern: M.string(), default: '' },
+            ],
+          },
+          outcome: 'operator-attested',
+        },
+      ],
+      on: {
+        'operator-attested': [
+          { when: attestedLanded, target: 'done' },
+          {
+            target: 'reverting',
+            assign: { reason: 'operator-reported-not-landed' },
+          },
+        ],
+      },
+    },
+    // Compensation failed (the revert itself). The only exit retries the
+    // compensation — this state can never reach `done`, so an abandoned
+    // change cannot terminate as applied while its files sit un-reverted.
+    'compensation-attention': {
       entry: [
         {
           kind: 'ask',
           to: 'operator',
           what: {
             description:
-              'NixOS change {$params.title} needs attention; see the run log.',
+              'Reverting the abandoned NixOS change {$params.title} ' +
+              'failed; see the run log. Reply to retry.',
           },
           outcome: 'operator-resumed',
         },
       ],
-      on: { 'operator-resumed': [{ target: 'probe' }] },
-    },
-    probe: {
-      entry: [
-        {
-          kind: 'invoke',
-          target: 'performer',
-          method: 'status',
-          args: [],
-          outcome: 'probed',
-          failure: 'probe-failed',
-        },
-      ],
-      on: {
-        probed: [
-          {
-            when: M.splitRecord({
-              value: M.splitRecord({
-                status: M.splitRecord({ phase: M.eq('ok') }),
-              }),
-            }),
-            target: 'done',
-          },
-          { target: 'needs-attention' },
-        ],
-        'probe-failed': [{ target: 'needs-attention' }],
-      },
+      on: { 'operator-resumed': [{ target: 'reverting' }] },
     },
     done: { final: true },
     'auto-rolled-back': { final: true, output: { report: { $ctx: 'report' } } },
-    failed: { final: true }, // stage-failed only: nothing was written
+    failed: { final: true, output: { reason: 'stage-failed' } },
     abandoned: { final: true, output: { reason: { $ctx: 'reason' } } },
   },
 });

@@ -58,6 +58,23 @@ test('apply is entered exactly once, only by operator approval', t => {
   }
 });
 
+test('compensation-attention can only retry compensation, never complete', t => {
+  // The truthful-terminal guard: a failed compensation loops through a
+  // human gate back to the compensation — it has no path to `done` or
+  // `verify`, so an abandoned change cannot terminate as deployed.
+  for (const chart of deployCharts) {
+    const graph = renderGraph(chart);
+    const exits = graph.edges.filter(
+      edge => edge.from === 'compensation-attention',
+    );
+    t.is(exits.length, 1, `${chart.name} compensation-attention exits`);
+    t.true(
+      ['unpinning', 'reverting'].includes(exits[0].to),
+      `${chart.name} compensation-attention exits only to compensation`,
+    );
+  }
+});
+
 test('endo-release walks pin, build, approval, apply, verify to done', t => {
   const sim = makeSimulator(endoReleaseChart, { params: releaseParams });
 
@@ -87,7 +104,7 @@ test('endo-release walks pin, build, approval, apply, verify to done', t => {
   const done = sim.settle(
     verify.effectId,
     'fulfilled',
-    harden({ ok: true, runningRev: REV }),
+    harden({ ok: true, runningRev: REV, phase: 'ok' }),
   );
   t.true(done.done);
   t.is(done.outcome, 'completed');
@@ -197,7 +214,7 @@ test('an unhealthy apply reports the auto-rollback and terminates', t => {
   t.deepEqual(final.output, { report });
 });
 
-test('an apply error goes to the operator, and resume re-verifies', t => {
+test('an apply error goes to the operator; attesting landed re-verifies', t => {
   const sim = makeSimulator(endoReleaseChart, { params: releaseParams });
   sim.settle(
     pendingOf(sim, 'invoke', 'stageRev').effectId,
@@ -221,16 +238,126 @@ test('an apply error goes to the operator, and resume re-verifies', t => {
   );
 
   t.is(sim.status().state, 'needs-attention');
-  sim.settle(pendingOf(sim, 'ask').effectId, 'fulfilled', 'looking into it');
+  const attestation = pendingOf(sim, 'ask');
+  t.regex(attestation.effect.form.description, /ended up applied/);
+  sim.settle(
+    attestation.effectId,
+    'fulfilled',
+    harden({ landed: true, note: 'it switched before the spool died' }),
+  );
 
+  // The operator's word alone does not complete the run: the pin readback
+  // must also agree, with the applier settled.
   t.is(sim.status().state, 'verify');
   const final = sim.settle(
     pendingOf(sim, 'invoke', 'verify').effectId,
     'fulfilled',
-    harden({ ok: true, runningRev: REV }),
+    harden({ ok: true, runningRev: REV, phase: 'ok' }),
   );
   t.true(final.done);
   t.is(final.outcome, 'completed');
+});
+
+test('attesting not-landed abandons through compensation, never done', async t => {
+  const sim = makeSimulator(endoReleaseChart, { params: releaseParams });
+  sim.settle(
+    pendingOf(sim, 'invoke', 'stageRev').effectId,
+    'fulfilled',
+    harden({ rev: REV, previous: PREVIOUS }),
+  );
+  sim.settle(
+    pendingOf(sim, 'invoke', 'build').effectId,
+    'fulfilled',
+    harden({ ok: true }),
+  );
+  sim.settle(
+    pendingOf(sim, 'ask').effectId,
+    'fulfilled',
+    harden({ approved: true, note: '' }),
+  );
+  sim.settle(
+    pendingOf(sim, 'invoke', 'apply').effectId,
+    'failed',
+    'spool unreachable',
+  );
+  t.is(sim.status().state, 'needs-attention');
+  sim.settle(
+    pendingOf(sim, 'ask').effectId,
+    'fulfilled',
+    harden({ landed: false, note: 'nothing switched' }),
+  );
+  t.is(sim.status().state, 'unpinning');
+  const final = sim.settle(
+    pendingOf(sim, 'invoke', 'stageRev').effectId,
+    'fulfilled',
+    harden({ rev: PREVIOUS, previous: REV }),
+  );
+  t.true(final.done);
+  t.deepEqual(final.output, { reason: 'operator-reported-not-landed' });
+});
+
+test('a first-pin decline un-pins to the empty previous and abandons', async t => {
+  // The review blocker's worst case: on a host whose first-ever pin this
+  // run staged, `previous` is '' — the compensation must be expressible
+  // (stageRev('') removes the pin) so the decline path reaches
+  // `abandoned` instead of wedging with the declined rev still staged.
+  const sim = makeSimulator(endoReleaseChart, { params: releaseParams });
+  sim.settle(
+    pendingOf(sim, 'invoke', 'stageRev').effectId,
+    'fulfilled',
+    harden({ rev: REV, previous: '' }),
+  );
+  sim.settle(
+    pendingOf(sim, 'invoke', 'build').effectId,
+    'fulfilled',
+    harden({ ok: true }),
+  );
+  sim.settle(
+    pendingOf(sim, 'ask').effectId,
+    'fulfilled',
+    harden({ approved: false, note: '' }),
+  );
+  t.is(sim.status().state, 'unpinning');
+  const unpin = pendingOf(sim, 'invoke', 'stageRev');
+  t.deepEqual(unpin.effect.args, ['']);
+  const final = sim.settle(
+    unpin.effectId,
+    'fulfilled',
+    harden({ rev: '', previous: REV }),
+  );
+  t.true(final.done);
+  t.deepEqual(final.output, { reason: 'declined' });
+});
+
+test('a failed un-pin loops through compensation-attention until it lands', async t => {
+  const sim = makeSimulator(endoReleaseChart, { params: releaseParams });
+  sim.settle(
+    pendingOf(sim, 'invoke', 'stageRev').effectId,
+    'fulfilled',
+    harden({ rev: REV, previous: PREVIOUS }),
+  );
+  sim.settle(
+    pendingOf(sim, 'invoke', 'build').effectId,
+    'fulfilled',
+    harden({ ok: false, phase: 'error' }),
+  );
+  t.is(sim.status().state, 'unpinning');
+  sim.settle(
+    pendingOf(sim, 'invoke', 'stageRev').effectId,
+    'failed',
+    'disk full',
+  );
+  t.is(sim.status().state, 'compensation-attention');
+  sim.settle(pendingOf(sim, 'ask').effectId, 'fulfilled', 'retrying');
+  t.is(sim.status().state, 'unpinning');
+  const final = sim.settle(
+    pendingOf(sim, 'invoke', 'stageRev').effectId,
+    'fulfilled',
+    harden({ rev: PREVIOUS, previous: REV }),
+  );
+  t.true(final.done);
+  t.is(final.state, 'abandoned');
+  t.deepEqual(final.output, { reason: 'build-rejected' });
 });
 
 test('nixos-config-change stages, gets approval, applies to done', t => {
@@ -301,47 +428,73 @@ test('a declined nixos change reverts the captured previous contents', t => {
   t.deepEqual(final.output, { reason: 'declined' });
 });
 
-test('a nixos-change apply failure resumes through the status probe', t => {
-  const sim = makeSimulator(nixosConfigChangeChart, { params: changeParams });
-  sim.settle(
-    pendingOf(sim, 'invoke', 'stageFiles').effectId,
+test('a nixos-change apply failure resolves only by operator attestation', t => {
+  const walkToApplyFailure = () => {
+    const sim = makeSimulator(nixosConfigChangeChart, {
+      params: changeParams,
+    });
+    sim.settle(
+      pendingOf(sim, 'invoke', 'stageFiles').effectId,
+      'fulfilled',
+      harden({
+        paths: ['modules/firewall.nix'],
+        previous: [{ path: 'modules/firewall.nix', text: null }],
+      }),
+    );
+    sim.settle(
+      pendingOf(sim, 'invoke', 'build').effectId,
+      'fulfilled',
+      harden({ ok: true }),
+    );
+    sim.settle(
+      pendingOf(sim, 'ask').effectId,
+      'fulfilled',
+      harden({ approved: true, note: '' }),
+    );
+    sim.settle(
+      pendingOf(sim, 'invoke', 'apply').effectId,
+      'failed',
+      'spool unreachable',
+    );
+    return sim;
+  };
+
+  // "It landed": the run completes on the operator's journaled word — the
+  // config chart has no mechanical readback, and the applier's global
+  // status phase was deliberately rejected as uncorrelated evidence.
+  const landedSim = walkToApplyFailure();
+  t.is(landedSim.status().state, 'needs-attention');
+  const landedFinal = landedSim.settle(
+    pendingOf(landedSim, 'ask').effectId,
     'fulfilled',
-    harden({ paths: ['modules/firewall.nix'], previous: [] }),
+    harden({ landed: true, note: 'switched before the spool died' }),
   );
-  sim.settle(
-    pendingOf(sim, 'invoke', 'build').effectId,
+  t.true(landedFinal.done);
+  t.is(landedFinal.outcome, 'completed');
+
+  // "It did not land": abandon through compensation; a failed revert loops
+  // through compensation-attention rather than completing.
+  const lostSim = walkToApplyFailure();
+  lostSim.settle(
+    pendingOf(lostSim, 'ask').effectId,
     'fulfilled',
-    harden({ ok: true }),
+    harden({ landed: false, note: '' }),
   );
-  sim.settle(
-    pendingOf(sim, 'ask').effectId,
-    'fulfilled',
-    harden({ approved: true, note: '' }),
-  );
-  sim.settle(
-    pendingOf(sim, 'invoke', 'apply').effectId,
+  t.is(lostSim.status().state, 'reverting');
+  lostSim.settle(
+    pendingOf(lostSim, 'invoke', 'revertFiles').effectId,
     'failed',
-    'spool unreachable',
+    'disk full',
   );
-
-  t.is(sim.status().state, 'needs-attention');
-  sim.settle(pendingOf(sim, 'ask').effectId, 'fulfilled', 'checking');
-
-  t.is(sim.status().state, 'probe');
-  // An inconclusive probe returns to the operator rather than guessing.
-  sim.settle(
-    pendingOf(sim, 'invoke', 'status').effectId,
+  t.is(lostSim.status().state, 'compensation-attention');
+  lostSim.settle(pendingOf(lostSim, 'ask').effectId, 'fulfilled', 'retrying');
+  t.is(lostSim.status().state, 'reverting');
+  const lostFinal = lostSim.settle(
+    pendingOf(lostSim, 'invoke', 'revertFiles').effectId,
     'fulfilled',
-    harden({ config: {}, status: null }),
+    harden({ paths: ['modules/firewall.nix'] }),
   );
-  t.is(sim.status().state, 'needs-attention');
-
-  sim.settle(pendingOf(sim, 'ask').effectId, 'fulfilled', 'fixed it');
-  const final = sim.settle(
-    pendingOf(sim, 'invoke', 'status').effectId,
-    'fulfilled',
-    harden({ config: {}, status: { id: 'x', phase: 'ok' } }),
-  );
-  t.true(final.done);
-  t.is(final.outcome, 'completed');
+  t.true(lostFinal.done);
+  t.is(lostFinal.state, 'abandoned');
+  t.deepEqual(lostFinal.output, { reason: 'operator-reported-not-landed' });
 });
