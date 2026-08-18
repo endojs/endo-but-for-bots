@@ -761,10 +761,10 @@ export const makeWorkflowService = async ({
     const settleEffect = (effectId, status, value) =>
       jobs.enqueue(async () => {
         await null;
-        if (stopped || fold.done || !fold.pending.has(effectId)) {
+        const record = fold.pending.get(effectId);
+        if (stopped || fold.done || record === undefined) {
           return;
         }
-        const record = fold.pending.get(effectId);
         let effectiveStatus = status;
         let redacted;
         try {

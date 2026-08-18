@@ -71,7 +71,8 @@ harden(makeFakeClock);
 
 export const makeFakeAgent = () => {
   // #region durable state
-  /** @type {Map<string, any>} tree node: Map name -> { dir } | { value } */
+  // Tree node: Map name -> { dir } | { value }.
+  /** @returns {Map<string, any>} */
   const makeNode = () => new Map();
   const root = makeNode();
   /** @type {any[]} */
