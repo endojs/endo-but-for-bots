@@ -4,6 +4,8 @@ import { renderConfined, unmount } from '@endo/preact-container/renderer';
 import { confineComponent } from '@endo/preact-container/compartment';
 import { makeAgentOutputExample } from '../examples/agent-output-petnames.js';
 import { makeGrantCardExample } from '../examples/grant-card.js';
+import { makeThreadExample } from '../examples/multi-party-thread.js';
+import { derivePattern } from '../src/pattern-badge.js';
 import { setupScratch, teardown } from './_util/helpers.js';
 
 describe('examples', () => {
@@ -41,5 +43,17 @@ describe('examples', () => {
     expect(button).to.not.equal(null);
     button.click();
     expect(confirmed).to.deep.equal(['10 USD']);
+  });
+
+  it('multi-party-thread composes two attributed regions under a frame badge', () => {
+    const secret = 'thread-secret';
+    const { tree } = makeThreadExample({ secret });
+    renderConfined(tree, scratch);
+    expect(scratch.textContent).to.contain('Alexa');
+    expect(scratch.textContent).to.contain('Bram');
+    expect(scratch.textContent).to.contain('Shall we ship Friday?');
+    expect(scratch.textContent).to.contain('Agreed — after CI is green.');
+    expect(scratch.textContent).to.contain(derivePattern(secret).phrase);
+    expect(scratch.querySelectorAll('.party-region')).to.have.length(2);
   });
 });

@@ -32,6 +32,10 @@
       "types": "./src/party-mark.d.ts",
       "default": "./src/party-mark.js"
     },
+    "./composition": {
+      "types": "./src/composition.d.ts",
+      "default": "./src/composition.js"
+    },
     "./petname": {
       "types": "./src/petname.d.ts",
       "default": "./src/petname.js"

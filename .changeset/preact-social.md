@@ -21,7 +21,11 @@ WeakMap-keyed OBJECT, never a forgeable id):
   authenticate); deterministic, so no flaky collisions.
 - `@endo/preact-social/modifiers` — `withPrimitiveParams` and `withLimitedCss`,
   composable input disciplines you layer over the function you confine.
+- `@endo/preact-social/composition` — `composeRegions`: render several parties'
+  confined content inline, each attributed by the trusted frame, with sibling
+  opacity inherited from `confineComponent` and non-confined region content
+  visibly refused.
 
 Ships `PATTERNS.md` (the coding discipline for building trusted-in-untrusted UI
 on `@endo/preact-container`), worked `examples/`, and attack-shaped browser
-tests. Multi-party inline composition is a planned follow-up.
+tests.
