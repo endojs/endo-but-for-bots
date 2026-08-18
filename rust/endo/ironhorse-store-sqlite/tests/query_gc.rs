@@ -12,7 +12,7 @@ use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, partial_collect, resume_from_store_lazy,
 };
 use ironhorse_snapshot::store::{reachable_pages, slot_page_count, HeapStore, MemoryStore};
-use ironhorse_snapshot::Signature;
+use ironhorse_snapshot::{FileStore, Signature};
 use ironhorse_store_sqlite::SqliteHeapStore;
 use ironhorse_vm::{parse_symbols, Interp};
 
@@ -49,6 +49,10 @@ fn build_store(store: Rc<RefCell<SqliteHeapStore>>) {
     let mut session = resume_from_store_lazy(store.clone(), &sig()).expect("lazy resume");
     let o = session.machine_mut().run(&compiled[1].0);
     assert!(o.completed, "halt: {:?}", o.halt);
+    // Pin the positional symbol binding, not just completion: a
+    // misaligned redeclaration in crank 2 would still complete while
+    // silently changing the graph this suite builds (review finding).
+    assert_eq!(o.result, "8", "crank-2 symbol binding pinned");
     checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
 }
 
@@ -101,11 +105,15 @@ fn edge_pairs_agree_with_dense_reachability() {
 #[test]
 fn partial_collect_equivalent_across_backends() {
     // The partial collector's decision queries go through the trait:
-    // the dense defaults on MemoryStore, the COUNT/CTE overrides
-    // here. Machines are deterministic, so the same build must free
-    // the same count and leave the same free-list length on both
-    // backends — the collector's outcome is a pure function of store
-    // content, not of which backend answered the queries.
+    // the dense defaults on MemoryStore AND FileStore, the COUNT/CTE
+    // overrides here. FileStore is the durable non-DB backend the
+    // review found had NO partial_collect coverage anywhere — its
+    // edge-section decode and post-commit reload feed the same
+    // decision queries, so it joins the equivalence. Machines are
+    // deterministic, so the same build must free the same count and
+    // leave the same free-list length on all three backends — the
+    // collector's outcome is a pure function of store content, not of
+    // which backend answered the queries.
     let build = "var arr = []; var g = 0; var i = 0; \
                  for (i = 0; i < 3000; i = i + 1) { arr[i] = { v: i, w: i }; } \
                  for (i = 0; i < 1500; i = i + 1) { g = { v: i, w: i }; } \
@@ -129,13 +137,17 @@ fn partial_collect_equivalent_across_backends() {
     let dir = std::env::temp_dir().join(format!("ironhorse-query-gc-eq-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
+    let mut file = FileStore::open(dir.join("heap.ihstore")).unwrap();
+    let (freed_file, free_len_file) = run(&mut file);
     let mut sq = SqliteHeapStore::open(dir.join("heap.sqlite")).unwrap();
     let (freed_sq, free_len_sq) = run(&mut sq);
     let _ = std::fs::remove_dir_all(&dir);
 
     assert!(freed_mem > 1500, "reclaims the dropped chain: {freed_mem}");
-    assert_eq!(freed_mem, freed_sq, "freed count backend-independent");
-    assert_eq!(free_len_mem, free_len_sq, "free list backend-independent");
+    assert_eq!(freed_mem, freed_file, "freed count: memory vs file");
+    assert_eq!(freed_mem, freed_sq, "freed count: memory vs sqlite");
+    assert_eq!(free_len_mem, free_len_file, "free list: memory vs file");
+    assert_eq!(free_len_mem, free_len_sq, "free list: memory vs sqlite");
 }
 
 #[test]
