@@ -53,6 +53,7 @@ import {
   movePathToPath,
   toSegments,
 } from './shared/helpers.js';
+import { filesystemPostureOf, makeFilesystem } from './posture.js';
 
 /** @import { Qid } from './types.js' */
 
@@ -68,6 +69,24 @@ import {
 const tagSets = new WeakMap();
 
 const fresh = () => Symbol('endo-fs:tag');
+
+/**
+ * @param {object} methods
+ * @param {object[]} participants
+ */
+const makeCombinedFilesystem = (methods, participants) => {
+  const postures = participants.map(filesystemPostureOf);
+  if (postures.some(posture => posture === undefined)) {
+    return makeExo('Filesystem', FilesystemInterface, methods);
+  }
+  return makeFilesystem(
+    methods,
+    postures.some(posture => posture === 'readWrite')
+      ? 'readWrite'
+      : 'readOnly',
+  );
+};
+harden(makeCombinedFilesystem);
 
 // Resolve trailing path segments by chaining one-segment `lookup`s.
 // Used by the composed Directory exos to implement the catalog's
@@ -465,30 +484,33 @@ export const emptyFilesystem = () => {
 
   const emptyBrands = harden([mintBrand()]);
 
-  const fs = makeExo('Filesystem', FilesystemInterface, {
-    async root() {
-      return root();
+  const fs = makeFilesystem(
+    {
+      async root() {
+        return root();
+      },
+      async named(viewName) {
+        throw makeError(
+          X`ENOTSUP: emptyFilesystem has a single root, not ${q(viewName)}`,
+        );
+      },
+      async brands() {
+        return emptyBrands;
+      },
+      async statfs() {
+        return harden({
+          totalBytes: 0n,
+          freeBytes: 0n,
+          availableBytes: 0n,
+        });
+      },
+      help: method =>
+        method === undefined
+          ? 'emptyFilesystem (DESIGN.md §8.6).'
+          : `No documentation for method "${method}".`,
     },
-    async named(viewName) {
-      throw makeError(
-        X`ENOTSUP: emptyFilesystem has a single root, not ${q(viewName)}`,
-      );
-    },
-    async brands() {
-      return emptyBrands;
-    },
-    async statfs() {
-      return harden({
-        totalBytes: 0n,
-        freeBytes: 0n,
-        availableBytes: 0n,
-      });
-    },
-    help: method =>
-      method === undefined
-        ? 'emptyFilesystem (DESIGN.md §8.6).'
-        : `No documentation for method "${method}".`,
-  });
+    'readOnly',
+  );
   registerTags(fs, new Set([tag]));
   return fs;
 };
@@ -521,7 +543,7 @@ export const chroot = (fs, subPath) => {
   }
 
   const tag = fresh();
-  const inner = makeExo('Filesystem', FilesystemInterface, {
+  const methods = {
     async root() {
       let cur = await E(fs).root();
       for (const seg of subPath) {
@@ -548,7 +570,12 @@ export const chroot = (fs, subPath) => {
       method === undefined
         ? `Filesystem (chrooted to /${subPath.join('/')}).`
         : `No documentation for method "${method}".`,
-  });
+  };
+  const posture = filesystemPostureOf(fs);
+  const inner =
+    posture === undefined
+      ? makeExo('Filesystem', FilesystemInterface, methods)
+      : makeFilesystem(methods, posture);
   registerTags(inner, new Set([tag, ...tagsOf(fs)]));
   return inner;
 };
@@ -733,7 +760,7 @@ export const bind = (host, mountPath, guest) => {
   // `await brandsP` inside the methods below.
   brandsP.catch(() => {});
 
-  const fs = makeExo('Filesystem', FilesystemInterface, {
+  const methods = {
     async root() {
       await brandsP;
       const r = await E(host).root();
@@ -754,7 +781,8 @@ export const bind = (host, mountPath, guest) => {
       method === undefined
         ? `Filesystem (bind: guest grafted at /${mountPath.join('/')}).`
         : `No documentation for method "${method}".`,
-  });
+  };
+  const fs = makeCombinedFilesystem(methods, [host, guest]);
   registerTags(fs, new Set([tag, ...tagsOf(host), ...tagsOf(guest)]));
   return fs;
 };
@@ -1057,7 +1085,7 @@ export const namespace = mounts => {
   const brandsP = computeBrands('namespace', participants);
   brandsP.catch(() => {});
 
-  const fs = makeExo('Filesystem', FilesystemInterface, {
+  const methods = {
     async root() {
       await brandsP;
       return makeNamespaceRoot();
@@ -1079,7 +1107,8 @@ export const namespace = mounts => {
       method === undefined
         ? `Filesystem (namespace with mounts: ${names.join(', ')}).`
         : `No documentation for method "${method}".`,
-  });
+  };
+  const fs = makeCombinedFilesystem(methods, participants);
 
   const allTags = new Set([tag]);
   for (const m of participants) {
@@ -1894,7 +1923,7 @@ export const compose = (layer, backing, _opts = {}) => {
   const brandsP = computeBrands('compose', [layer, backing]);
   brandsP.catch(() => {});
 
-  const fs = makeExo('Filesystem', FilesystemInterface, {
+  const methods = {
     async root() {
       await brandsP;
       const layerRoot = await E(layer).root();
@@ -1918,7 +1947,12 @@ export const compose = (layer, backing, _opts = {}) => {
       method === undefined
         ? 'Filesystem (compose: layer over backing, CoW union).'
         : `No documentation for method "${method}".`,
-  });
+  };
+  const posture = filesystemPostureOf(layer);
+  const fs =
+    posture === undefined
+      ? makeExo('Filesystem', FilesystemInterface, methods)
+      : makeFilesystem(methods, posture);
   registerTags(fs, new Set([tag, ...tagsOf(layer), ...tagsOf(backing)]));
   return fs;
 };

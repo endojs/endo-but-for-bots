@@ -56,6 +56,7 @@ import {
   FileInterface,
   OpenFileInterface,
 } from './type-guards.js';
+import { filesystemPostureOf, makeFilesystem } from './posture.js';
 import {
   EMPTY_BYTES,
   makeBytesReaderFromBytes,
@@ -166,7 +167,7 @@ const makeCachingFilesystem = (
   populateInBackground,
   wrapperToInner,
 ) => {
-  return makeExo('Filesystem', FilesystemInterface, {
+  const methods = {
     async root() {
       const { node, qid } = await resolveNodeWithQid(E(inner).root());
       return makeCachingDirectory(
@@ -199,7 +200,11 @@ const makeCachingFilesystem = (
       }
       return `No documentation for method ${q(method)}.`;
     },
-  });
+  };
+  const posture = filesystemPostureOf(inner);
+  return posture === undefined
+    ? makeExo('Filesystem', FilesystemInterface, methods)
+    : makeFilesystem(methods, posture);
 };
 
 /**
