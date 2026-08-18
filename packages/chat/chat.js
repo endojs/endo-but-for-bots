@@ -34,7 +34,12 @@ import { outlinerComponent } from './outliner-component.js';
 import { inboxComponent } from './inbox-component.js';
 import { inventoryComponent } from './inventory-component.js';
 import { channelListComponent } from './channel-list.js';
-import { createSpacesGutter, readBootDefaultSpace } from './spaces-gutter.js';
+import {
+  createSpacesGutter,
+  readBootDefaultSpace,
+  readGutterVisible,
+  writeGutterVisible,
+} from './spaces-gutter.js';
 import { inventoryGraphComponent } from './inventory-graph-component.js';
 import { whylipComponent } from './whylip-component.js';
 import { peersComponent } from './peers-component.js';
@@ -48,8 +53,6 @@ import {
 } from './chat-chrome.js';
 
 const template = `
-<div id="spaces-gutter"></div>
-
 <div id="pets">
   <div class="inventory-header">
     <span class="inventory-title">Inventory</span>
@@ -127,7 +130,6 @@ const template = `
 <div id="blob-viewer-container"></div>
 
 <div id="help-modal-container"></div>
-<div id="add-space-modal-container"></div>
 <div id="share-modal-container"></div>
 
 <div id="debugger-panel-backdrop"></div>
@@ -198,6 +200,9 @@ const resizeHandleComponent = $parent => {
  * @param {ConversationState | null} activeConversation
  * @param {(newPath: string[], spaceInfo?: ActiveSpaceInfo) => void} onProfileChange
  * @param {(conversation: ConversationState | null) => void} onConversationChange
+ * @param {ReturnType<typeof createSpacesGutter>} spacesGutterAPI The shell's
+ *   long-lived spaces gutter. Built once outside every space, so the whole-page
+ *   spaces below reach it too; the chat body only drives it.
  * @param {ActiveSpaceInfo} [activeSpaceInfo]
  * @returns {(() => void) | null} cleanup function, if any
  */
@@ -208,6 +213,7 @@ const bodyComponent = (
   activeConversation,
   onProfileChange,
   onConversationChange,
+  spacesGutterAPI,
   activeSpaceInfo,
 ) => {
   if (activeSpaceInfo && activeSpaceInfo.mode === 'whylip') {
@@ -285,12 +291,6 @@ const bodyComponent = (
   const $groupByTypeToggle = /** @type {HTMLButtonElement} */ (
     $parent.querySelector('#group-by-type-toggle')
   );
-  const $spacesGutter = /** @type {HTMLElement} */ (
-    $parent.querySelector('#spaces-gutter')
-  );
-  const $addSpaceModal = /** @type {HTMLElement} */ (
-    $parent.querySelector('#add-space-modal-container')
-  );
   const $conversationHeader = /** @type {HTMLElement} */ (
     $parent.querySelector('#conversation-header')
   );
@@ -359,17 +359,6 @@ const bodyComponent = (
 
   // Set up resizable sidebar
   resizeHandleComponent($parent);
-
-  // Set up spaces gutter for quick navigation
-  const spacesGutterAPI = createSpacesGutter({
-    $container: $spacesGutter,
-    $modalContainer: $addSpaceModal,
-    powers: /** @type {ERef<EndoHost>} */ (rootPowers),
-    currentProfilePath: profilePath,
-    onNavigate: (newPath, spaceInfo) => {
-      onProfileChange(newPath, spaceInfo);
-    },
-  });
 
   // Set up share modal
   const $shareModalContainer = /** @type {HTMLElement} */ (
@@ -1712,21 +1701,58 @@ export const make = async powers => {
   /** @type {(() => void) | null} */
   let activeCleanup = null;
 
-  // Two layers, built once. The header bar is the same wherever the user is;
-  // the space root below it belongs to whichever space is open. Navigation
-  // empties only the space root, so the header outlives every space change.
-  // It used to be part of the chat body's own template, which meant every
-  // space that takes the whole page for itself — floot, whylip, files, peers,
-  // graph, management — replaced the header along with everything else and
-  // simply never built it back.
+  // Three layers, built once: the header bar, the spaces gutter, and the space
+  // root that whichever space is open owns. Navigation empties only the space
+  // root, so the other two outlive every space change. Both used to live in the
+  // chat body's own template, which meant every space that takes the whole page
+  // for itself — floot, whylip, files, peers, graph, management — returned from
+  // `bodyComponent` before that template was written and simply had no header
+  // and no gutter at all. Out here the gutter is reachable from every space, and
+  // the header's toggle is what shows and hides it.
+  //
+  // The add-space modal host comes along because the gutter owns it: left in the
+  // body it would be torn out from under a gutter that outlived it.
   document.body.innerHTML =
-    '<div id="app-header"></div><div id="space-root"></div>';
+    '<div id="app-header"></div>' +
+    '<div id="spaces-gutter"></div>' +
+    '<div id="space-root"></div>' +
+    '<div id="add-space-modal-container"></div>';
   const $appHeader = /** @type {HTMLElement} */ (
     document.body.querySelector('#app-header')
+  );
+  const $spacesGutter = /** @type {HTMLElement} */ (
+    document.body.querySelector('#spaces-gutter')
   );
   const $spaceRoot = /** @type {HTMLElement} */ (
     document.body.querySelector('#space-root')
   );
+  const $addSpaceModal = /** @type {HTMLElement} */ (
+    document.body.querySelector('#add-space-modal-container')
+  );
+
+  // Whether the gutter is showing is a per-device preference, like the default
+  // space: it says how this browser wants to see every space, not anything
+  // about the spaces themselves. Applied before the first paint so a hidden
+  // gutter does not flash in and back out.
+  let gutterVisible = readGutterVisible();
+  const applyGutterVisible = () => {
+    document.body.classList.toggle('gutter-hidden', !gutterVisible);
+  };
+  applyGutterVisible();
+
+  // One gutter for the life of the page. It used to be rebuilt on every
+  // navigation, which re-read the pet store, started a second watcher, and
+  // added another set of ⌘1-9 key handlers that the previous instance never
+  // removed — so the shortcuts fired once per space visited this session.
+  const spacesGutterAPI = createSpacesGutter({
+    $container: $spacesGutter,
+    $modalContainer: $addSpaceModal,
+    powers: /** @type {ERef<EndoHost>} */ (powers),
+    currentProfilePath,
+    onNavigate: (newPath, spaceInfo) => {
+      onProfileChange(newPath, spaceInfo);
+    },
+  });
 
   const rebuild = () => {
     if (activeCleanup) {
@@ -1741,6 +1767,7 @@ export const make = async powers => {
       activeConversation,
       onProfileChange,
       onConversationChange,
+      spacesGutterAPI,
       activeSpaceInfo,
     );
   };
@@ -1757,6 +1784,9 @@ export const make = async powers => {
     } else {
       activeSpaceInfo = { mode: 'inbox' };
     }
+    // The gutter is no longer rebuilt with the new path, so tell it: this is
+    // also the path a deep link or the header's home control arrives on.
+    spacesGutterAPI.setActivePath(newPath);
     rebuild();
   };
 
@@ -1773,13 +1803,23 @@ export const make = async powers => {
     rebuild();
   };
 
-  // Home, from a header that outlives the gutter. The gutter's own
-  // `selectSpace('home')` is not reachable from out here — it is built inside
-  // the chat body, and the whole point of the header is that it also works in
-  // the spaces that have no gutter — but the destination is the same one it
-  // navigates to: the empty profile path with no space info. The gutter
-  // applies Home's color scheme as it mounts there.
-  renderAppHeader($appHeader, () => onProfileChange([], undefined));
+  // The header holds no state of its own, so the shell re-renders it whenever a
+  // control's state changes. Home goes through the gutter, which is the same
+  // path its own home icon takes: it applies Home's color scheme and moves the
+  // highlight, neither of which navigating directly would do.
+  const renderHeader = () => {
+    renderAppHeader($appHeader, {
+      onHome: () => spacesGutterAPI.selectSpace('home'),
+      gutterVisible,
+      onToggleGutter: () => {
+        gutterVisible = !gutterVisible;
+        writeGutterVisible(gutterVisible);
+        applyGutterVisible();
+        renderHeader();
+      },
+    });
+  };
+  renderHeader();
 
   rebuild();
 };

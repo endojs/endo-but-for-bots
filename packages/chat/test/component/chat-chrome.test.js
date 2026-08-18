@@ -47,9 +47,16 @@ const makeMount = () => {
 // AppHeader
 // ---------------------------------------------------------------------------
 
+const headerControls = (overrides = {}) => ({
+  onHome: () => {},
+  gutterVisible: true,
+  onToggleGutter: () => {},
+  ...overrides,
+});
+
 test.serial('AppHeader renders the Familiar mark and wordmark', async t => {
   const $header = makeMount();
-  renderAppHeader($header, () => {});
+  renderAppHeader($header, headerControls());
   await waitFor(() => !!$header.querySelector('.app-header-home'));
 
   t.truthy($header.querySelector('.app-header-logo'));
@@ -59,15 +66,55 @@ test.serial('AppHeader renders the Familiar mark and wordmark', async t => {
 test.serial('AppHeader logo click goes home', async t => {
   const $header = makeMount();
   let homes = 0;
-  renderAppHeader($header, () => {
-    homes += 1;
-  });
+  renderAppHeader(
+    $header,
+    headerControls({
+      onHome: () => {
+        homes += 1;
+      },
+    }),
+  );
   await waitFor(() => !!$header.querySelector('.app-header-home'));
 
   $header
     .querySelector('.app-header-home')
     .dispatchEvent(new testWindow.Event('click', { bubbles: true }));
   t.is(homes, 1);
+});
+
+test.serial('AppHeader gutter toggle reports each click', async t => {
+  const $header = makeMount();
+  let toggles = 0;
+  renderAppHeader(
+    $header,
+    headerControls({
+      onToggleGutter: () => {
+        toggles += 1;
+      },
+    }),
+  );
+  const $toggle = await waitFor(() =>
+    $header.querySelector('.app-header-gutter-toggle'),
+  );
+
+  t.is($toggle.getAttribute('aria-pressed'), 'true');
+  t.is($toggle.getAttribute('title'), 'Hide the spaces bar');
+  $toggle.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+  t.is(toggles, 1);
+});
+
+// The header carries no state of its own — the shell re-renders it — so a
+// hidden gutter has to be legible in the markup the shell asks for.
+test.serial('AppHeader gutter toggle shows a hidden gutter', async t => {
+  const $header = makeMount();
+  renderAppHeader($header, headerControls({ gutterVisible: false }));
+  const $toggle = await waitFor(() =>
+    $header.querySelector('.app-header-gutter-toggle'),
+  );
+
+  t.is($toggle.getAttribute('aria-pressed'), 'false');
+  t.is($toggle.getAttribute('title'), 'Show the spaces bar');
+  t.false($toggle.className.includes('showing'));
 });
 
 // ---------------------------------------------------------------------------

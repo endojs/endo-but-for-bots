@@ -26,10 +26,16 @@ import {
 
 /**
  * The one header bar every space shares, at the root of the UI above the
- * spaces gutter, the sidebar, and the main pane. Its only control today is the
- * Familiar mark at the far left, which returns to the Home space from wherever
+ * spaces gutter, the sidebar, and the main pane. It holds the two controls
+ * that belong to the app rather than to any space: a toggle for the spaces
+ * gutter, and the Familiar mark, which returns to the Home space from wherever
  * you are — the same destination as the gutter's home icon, but in a spot that
  * never moves as spaces are added, renamed, or reordered.
+ *
+ * The toggle sits leftmost, over the column it controls. It carries its state
+ * in a class as well as in `aria-pressed` so the styling does not depend on an
+ * ARIA attribute surviving the sanitizing renderer, and its icon is drawn in
+ * CSS (`.app-header-gutter-icon`) rather than set as an image or a glyph.
  *
  * The mark itself is an empty span the stylesheet fills with the Familiar art
  * (`.app-header-logo`), so nothing here carries a URL: the sanitizing renderer
@@ -38,29 +44,56 @@ import {
  *
  * @param {object} props
  * @param {() => void} props.onHome
+ * @param {boolean} props.gutterVisible Whether the spaces gutter is showing.
+ * @param {() => void} props.onToggleGutter
  */
-const AppHeader = ({ onHome }) =>
+const AppHeader = ({ onHome, gutterVisible, onToggleGutter }) =>
   h(
-    'button',
-    {
-      type: 'button',
-      class: 'app-header-home',
-      title: 'Familiar — back to Home',
-      onClick: onHome,
-    },
-    h('span', { class: 'app-header-logo', 'aria-hidden': 'true' }),
-    h('span', { class: 'app-header-wordmark' }, 'Familiar'),
+    Fragment,
+    null,
+    h(
+      'button',
+      {
+        type: 'button',
+        class: gutterVisible
+          ? 'app-header-gutter-toggle showing'
+          : 'app-header-gutter-toggle',
+        title: gutterVisible ? 'Hide the spaces bar' : 'Show the spaces bar',
+        'aria-label': gutterVisible
+          ? 'Hide the spaces bar'
+          : 'Show the spaces bar',
+        'aria-pressed': gutterVisible ? 'true' : 'false',
+        onClick: onToggleGutter,
+      },
+      h('span', { class: 'app-header-gutter-icon', 'aria-hidden': 'true' }),
+    ),
+    h(
+      'button',
+      {
+        type: 'button',
+        class: 'app-header-home',
+        title: 'Familiar — back to Home',
+        onClick: onHome,
+      },
+      h('span', { class: 'app-header-logo', 'aria-hidden': 'true' }),
+      h('span', { class: 'app-header-wordmark' }, 'Familiar'),
+    ),
   );
 harden(AppHeader);
 
 /**
- * Mount (or reconcile) the app header into its dedicated host element.
+ * Mount (or reconcile) the app header into its dedicated host element. Called
+ * again whenever a control's state changes, since the header is a confined
+ * tree with no state of its own — the shell owns it.
  *
  * @param {HTMLElement} $appHeader
- * @param {() => void} onHome Navigate back to the Home space.
+ * @param {object} controls
+ * @param {() => void} controls.onHome Navigate back to the Home space.
+ * @param {boolean} controls.gutterVisible
+ * @param {() => void} controls.onToggleGutter
  */
-export const renderAppHeader = ($appHeader, onHome) => {
-  renderConfined(h(AppHeader, { onHome }), $appHeader);
+export const renderAppHeader = ($appHeader, controls) => {
+  renderConfined(h(AppHeader, controls), $appHeader);
 };
 harden(renderAppHeader);
 
