@@ -22,6 +22,7 @@ import {
   PODMAN_OWNER_LABEL,
   reportsContainerGone,
   reportsContainerNotRunning,
+  seccompSecurityOpt,
 } from '../src/drivers/podman.js';
 import { DEFAULT_PATH } from '../src/drivers/path.js';
 import { makeSandboxFactory } from '../src/factory.js';
@@ -1424,3 +1425,37 @@ test('reportsContainerNotRunning keeps live backend failures distinguishable', t
   );
 });
 
+test('seccompSecurityOpt fails closed on an unmaterialised caller profile', t => {
+  t.throws(
+    () =>
+      seccompSecurityOpt(harden({ profile: '{"defaultAction":"..."}' }), null),
+    { message: /caller-supplied seccomp profile/ },
+    'a requested profile with no path must not silently become the default',
+  );
+  t.is(
+    seccompSecurityOpt(harden({ profile: '{}' }), '/tmp/endo/profile.json'),
+    'seccomp=/tmp/endo/profile.json',
+  );
+});
+
+test('seccompSecurityOpt leaves the built-in policies unchanged', t => {
+  t.is(seccompSecurityOpt('default', null), undefined);
+  t.is(seccompSecurityOpt('unconfined', null), 'seccomp=unconfined');
+  // `unconfined` is explicit, so a stray materialised path cannot
+  // upgrade or downgrade it.
+  t.is(
+    seccompSecurityOpt('unconfined', '/tmp/endo/profile.json'),
+    'seccomp=unconfined',
+  );
+});
+
+/**
+ * Build a `child_process` stub that answers the podman probe path
+ * (`--version`, `info`, the orphan sweep's `ps` / `rm -f`).
+ *
+ * @param {object} [options]
+ * @param {string[]} [options.containers]  Names the orphan listing reports.
+ * @param {(name: string) => { code: number, stderr: string }} [options.rm]
+ *   Outcome for `podman rm -f <name>`; defaults to success.
+ * @returns {{ childProcess: any, calls: Array<{ command: string, args: string[] }> }}
+ */
