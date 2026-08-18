@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
-| **Updated** | 2026-08-17 |
+| **Updated** | 2026-08-18 |
 | **Author** | 0xpatrickdev (prompted) |
 | **Status** | Proposed |
 | **Builds on** | [daemon-mount-capabilities](daemon-mount-capabilities.md), [daemon-git-capability](daemon-git-capability.md), [daemon-git-remotes](daemon-git-remotes.md), [endo-agent-tools](endo-agent-tools.md), and [endo-fetch](endo-fetch.md) |
@@ -15,8 +15,10 @@ It can retain a guest across daemon restarts and grant workspace and Git
 capabilities, but mediated network authority is not yet wired into its tools or
 globals.
 Portable package-manager capability work has landed and its projection remains
-open, while the host backend, daemon formula, and frozen-install provisioning do
-not yet have implementation pull requests.
+open.
+The reusable coordinator is now the scope of [#1011](https://github.com/endojs/endo-but-for-bots/pull/1011),
+while the registry convergence, loopback broker, confined backend, daemon
+formula, and frozen-install provisioning remain to be integrated.
 
 This document is the plan of record for completing independently granted
 workspace, Git, package-manager, and Web capabilities for code-mode consumers.
@@ -29,12 +31,13 @@ Web research.
 The network work begins with reusable public-address semantics and a DNS-pinned
 Node HTTP transport, then composes those into transport-neutral HTTP policy and
 a passable `WebResearch` capability.
-The package-manager work composes only the installer facet from the open
-portable capability stack and never exposes the executor facet in a strict
-session. The installer facet is narrower than the executor facet, but its name
-is not an assurance claim. A trusted-host implementation is suitable only for
-trusted workspaces; hostile workspace content requires a conformance-qualified
-confined backend.
+The package-manager work composes only the installer facet from the portable
+capability stack and never exposes the executor facet in a strict session.
+The installer facet is narrower than the executor facet, but its name is not an
+assurance claim.
+The portable facade and reusable coordinator are useful at any assurance level;
+the planned `@endo/package-manager` backend is broker-configured and
+conformance-qualified rather than a host-ambient default.
 
 Workspace, Git, package-manager, and Web authority remain separate grants.
 Every effect carries bounded and cancellable protocol contracts at the portable
@@ -70,7 +73,7 @@ separately and is outside whole-session confinement claims.
 
 ## Verified Current State
 
-This state was refreshed on 2026-08-17 against `llm` commit
+This state was refreshed on 2026-08-18 against `llm` commit
 `eb6da1602f8b1c04da5b8a32f5fc01070ad49ca2` and the live pull-request heads.
 Open implementation branches remain owned by their existing pull requests and
 must not be absorbed into this design branch.
@@ -79,12 +82,14 @@ must not be absorbed into this design branch.
 |---|---|---|
 | Daemon-backed code mode | **Landed on `llm`.** | [#905](https://github.com/endojs/endo-but-for-bots/pull/905) and [#907](https://github.com/endojs/endo-but-for-bots/pull/907) supply retained daemon guests, restart/reconnect behavior, and the endo-pi `evaluate` acceptance surface. They do not supply package-manager or mediated Web grants. |
 | Portable package manager | **Landed on `llm`.** | [#948](https://github.com/endojs/endo-but-for-bots/pull/948), merged at head `f0ea1bdda3a7f09fa44d8535f3243c5ede48b616`, defines structurally distinct cumulative reader, installer, and executor facets plus the injected backend protocol. |
+| Package-manager coordinator | **Open draft, coordinator only.** | [#1011](https://github.com/endojs/endo-but-for-bots/pull/1011) is at head `3da9d6cd53b4d6ec6785b3f8928f9456ac189b8c` and adds the reusable coordinator to `@endo/exo-package-manager`: fixed argv, snapshot revalidation, generated configuration, bounds, cancellation, exact-version evidence, and structured results. It adds no ambient backend package or host authority. |
 | Package-manager projection | **Open draft based on #948.** | [#950](https://github.com/endojs/endo-but-for-bots/pull/950), head `e2b0016fc6359110787ff43b3a92b5f0cd92c5cb`, projects metadata tools for a reader, adds `installDependencies` only for an installer, and adds `runPackageScript` only for an executor. Stack maintenance remains with that implementation pull request. |
 | Named Git grants | **Open draft on `llm`.** | [#958](https://github.com/endojs/endo-but-for-bots/pull/958), head `2c46751282daa7a55c20a18f6759f5f0b666c1ef`, adds named nested Git grants, named mount selection, canonical-root persistence, and retained reconstruction. |
 | Truthful generic grants | **Open draft stacked on #958.** | [#965](https://github.com/endojs/endo-but-for-bots/pull/965), head `14f2a15b6b26dfd3156f2a5f3dec8b33998fb393`, converges live endowments, checked declarations, prompts, and retained provisioning on locally trusted grant minters. Its recorded base snapshot is `b4b66062b7f234fd0963811c7645257f421bd920`; #958 has since advanced. |
-| Trusted host development backend and formula | **No implementation PR yet.** | `packages/package-manager` does not exist on `llm`; #948 supplies only the portable facade and injected protocol. The backend, registry broker, daemon formula, durable policy, cleanup, and trusted provisioning remain. This tier is for trusted workspaces, not the final hostile-workspace boundary. |
+| Registry convergence | **Open alignment issue.** | [#1027](https://github.com/endojs/endo-but-for-bots/issues/1027) records the overlap between portable [#403](https://github.com/endojs/endo-but-for-bots/pull/403) and daemon-local [#671](https://github.com/endojs/endo-but-for-bots/pull/671). The proposed canonical package is `@endo/exo-npm-registry`; the daemon keeps authority-bearing adapters and formula integration. |
+| Package-manager backend and formula | **No implementation PR yet.** | The planned `@endo/package-manager` is a broker-configured confined backend composed from the `@endo/exo-package-manager` coordinator. No host-ambient backend is a default or a future package assignment. The loopback broker, daemon formula, durable policy, cleanup, and grant provisioning remain. |
 | Public-Web transport and `WebResearch` | **No implementation PR yet.** | [#566](https://github.com/endojs/endo-but-for-bots/pull/566) landed `@endo/http-confine` and `@endo/exo-http-client`. The retired Genie package remains historical reference material for `webFetch`, `webSearch`, and its parser at the [last pre-retirement tree](https://github.com/endojs/endo-but-for-bots/tree/a54c3adb/packages/genie). No reusable DNS-pinned public-Web transport, passable WebResearch capability, daemon formula, or code-mode `web` grant exists. |
-| Registry acquisition and CAS | **Landed on `llm`.** | [#671](https://github.com/endojs/endo-but-for-bots/pull/671) supplies `EndoRegistry`, injected acquisition, published-integrity verification, and CAS-backed package trees. It is a foundation for the package-manager broker, not that broker itself. |
+| Registry acquisition and package artifacts | **Landed foundations with convergence open.** | Portable [#403](https://github.com/endojs/endo-but-for-bots/pull/403) and daemon-local [#671](https://github.com/endojs/endo-but-for-bots/pull/671) supply overlapping `EndoRegistry` interfaces and resolvers. The daemon path supplies HTTP acquisition, explicit SRI verification, persistent CAS/cache, `@registry`, and formula powers; [#1027](https://github.com/endojs/endo-but-for-bots/issues/1027) tracks convergence on `@endo/exo-npm-registry`. |
 | Sandbox lifecycle | **Open draft on `llm`.** | [#954](https://github.com/endojs/endo-but-for-bots/pull/954), head `6d4ce0723c921c1b3009358a0d8a2ea094a92405`, serializes spawn and dispose, bounds captured output, labels operation containers, and reconciles owned orphans. It is the first lifecycle cut, not a complete confined session backend. |
 | Code-mode workspace surface | **Open reconciliation on `llm`.** | [#961](https://github.com/endojs/endo-but-for-bots/pull/961), head `f0b5eaf23f2b2fe33dce25591674fe7c7ac3b9d7`, aligns code-mode workspace bindings with the daemon `EndoMount` and keeps the extended `Filesystem` surface as a separate local seam. It overlaps #958's named-mount projection and must be reconciled before either surface becomes the plan of record. |
 | Mount containment hardening | **Open on `llm`.** | [#897](https://github.com/endojs/endo-but-for-bots/pull/897), head `dc6834e475cfa2e75c15581a491d8255e828c1db`, includes symlink-deny and mid-walk revocation fixes. Until it or equivalent fixes land, portable mount facades must not be described as complete path containment. |
@@ -208,6 +213,37 @@ active. Strict acceptance runs leave preservation off. A separate compatibility
 test proves that preservation adds no Endo grants beyond the retained harness
 tools and never represents those tools as daemon-minted capabilities.
 
+## Registry convergence and broker boundary
+
+Merged [#403](https://github.com/endojs/endo-but-for-bots/pull/403) and
+[#671](https://github.com/endojs/endo-but-for-bots/pull/671) are overlapping
+implementations of the registry contract.
+The portable PR added the `@endo/exo-npm` interface, resolver, injected cache
+and CAS seams, while the daemon PR added daemon-local interface and resolver code plus
+the daemon's HTTP acquisition, cryptographic verification, persistent
+CAS/cache, `@registry`, and formula powers.
+The convergence issue [#1027](https://github.com/endojs/endo-but-for-bots/issues/1027)
+requests alignment: the proposed clearer name is `@endo/exo-npm-registry`,
+which should own the canonical portable interface and resolution logic, while
+the daemon instantiates it with its authority-bearing adapters.
+
+The issue is an alignment request and an implementation dependency for the
+broker, not a formal explicit-Kris-approval gate for ordinary implementation
+work.
+If the portable-canonical interpretation or package rename is wrong, the issue
+should be corrected before the convergence lands, but implementation can
+proceed against the stated contracts.
+
+The daemon's HTTP, cryptographic, persistent CAS/cache, `@registry`, and formula
+adapters produce verified package-artifact records.
+`@endo/npm-registry-broker` owns only the loopback protocol projection consumed
+by a package manager and accepts those records as input; it does not own the
+CAS substrate.
+The artifact representation, lockfile planning, direct materialization, and
+build-cache strategy remain in the
+[CAS package substrate architecture](https://github.com/0xpatrickdev/garden/blob/d402e0e496/designs/draft/cas-git-package-substrate.md),
+not in this capability roadmap.
+
 ## Package Ownership
 
 | Package | Durable ownership |
@@ -216,13 +252,15 @@ tools and never represents those tools as daemon-minted capabilities.
 | `@endo/http-dialer` in `packages/http-dialer` | Node-specific DNS resolution and direct Undici dependency, a normal Undici `Agent` with a custom connector, pinned numeric-address connection, peer verification, Fetch-compatible injection, and close/destroy lifecycle. |
 | `@endo/http-confine` | Transport-neutral method and header policy, URL authorization, manual redirects, timeouts, request-rate and response-byte limits, cancellation, and revocation. It does not import the Node dialer. |
 | `@endo/exo-web-research` in `packages/exo-web-research` | Passable `WebResearch.fetch` and `WebResearch.search` interfaces, bounded copy result shapes, injected provider and transport seams, and an initial DuckDuckGo adapter salvaged from or informed by the retired Genie implementation. It has no ambient fetch or Undici dependency. |
-| `packages/daemon` | Formula and lifecycle composition, serializable provider and policy selection, trusted grant reconstruction, ephemeral transport recreation after restart, operation interruption, and transport disposal on shutdown. |
+| `packages/daemon` | Formula and lifecycle composition, serializable provider and policy selection, trusted grant reconstruction, `@endo/exo-npm-registry` daemon adapters, `@endo/npm-registry-broker` projection, ephemeral transport recreation after restart, operation interruption, and transport disposal on shutdown. |
 | `@endo/agent-tools` | JSON-tool and code-mode projection plus the independent `web` grant group. It owns neither provider logic nor network transport. |
 | `@endo/agentry` | Generic trusted grant minting, declarations, prompt construction, and consumer-independent code-mode provisioning. |
 | `@endo/exo-http-client` | An exact-origin `HttpClient` capability over an injected transport. Its origin authority does not silently widen into arbitrary public-Web authority. |
 | `@endo/fetch` | A durable unconfined plugin intentionally configurable for explicit origins, including private origins. It is not the public-Web dialer. |
-| `@endo/exo-package-manager` | The portable reader, installer, and executor facets, manager detection, fixed argv, snapshot contract, cancellation scoping, and backend protocol from #948. The installer name denotes narrower authority, not backend assurance. |
-| `packages/package-manager` | The trusted host development backend, pinned manager spawn, workspace and configuration revalidation, loopback `EndoRegistry`/CAS broker integration, output/process bounds, and cooperative cleanup. It does not own hostile-workspace confinement claims. |
+| `@endo/exo-package-manager` | The portable reader, installer, and executor facets plus the reusable backend coordinator from [#1011](https://github.com/endojs/endo-but-for-bots/pull/1011): manager detection, fixed argv, snapshot revalidation, generated configuration handoff, exact-version evidence, cancellation scoping, bounds, structured results, and the injected backend protocol. It owns no execution authority; the installer name denotes narrower authority, not backend assurance. |
+| `@endo/exo-npm-registry` (proposed rename of `@endo/exo-npm`) | The portable canonical registry interface and resolution logic. It accepts injected daemon adapters for HTTP acquisition, cryptographic verification, persistent CAS/cache access, `@registry` integration, and formula lifecycle; its package-artifact records are the broker's verified input. |
+| `@endo/npm-registry-broker` | The loopback protocol projection for package-manager processes. It consumes verified package-artifact records from `@endo/exo-npm-registry`, applies registry and tarball policy, and does not own CAS storage, extraction, lockfile planning, or direct materialization. |
+| `@endo/package-manager` | The broker-configured confined backend that composes the #1011 coordinator with the loopback broker, pinned manager execution, workspace and configuration revalidation, output/process bounds, and cleanup. It is not a host-ambient default and may claim hostile-workspace containment only after the selected sandbox profile passes conformance. |
 | `@endo/exo-git`, `packages/git`, and `packages/daemon` | Existing Git capability and native backend policy, plus the remaining public HTTPS broker, credential-free public fetch, bounded process lifecycle, and daemon provisioning. |
 
 ### Shared address semantics
@@ -401,27 +439,29 @@ name the level they require.
    workspace snapshot through the backend protocol. These checks materially
    prevent authority widening through the public API. Actual output
    enforcement and snapshot revalidation remain backend obligations.
-2. **Trusted host development backend.** A host backend may be useful for
-   trusted workspaces with pinned package managers and generated
-   configuration. Its fixed argv, hook denials, sanitized environment,
-   process-group cleanup, and broker configuration are defense in depth. This
-   level does not claim kernel-enforced path containment, broker-only egress,
-   symlink race safety, or orphan prevention against a hostile workspace or
-   compromised manager.
+2. **Broker-configured integration.** The coordinator and registry broker may
+   be exercised with a trusted host adapter while the confined implementation
+   is developed, but this is defense in depth and not a host-ambient default,
+   package ownership commitment, or hostile-workspace claim. Fixed argv, hook
+   denials, sanitized environment, process-group cleanup, and broker
+   configuration remain required integration behavior.
 3. **Conformance-qualified confined backend.** Production use with untrusted
-   workspaces requires a backend whose sandbox driver proves the applicable
-   filesystem, process, secret, and network profiles with driver-owned probes
-   and adversarial tests. Only this level may make hostile-workspace path,
-   broker-bypass, child-process, and cleanup claims.
+   workspaces requires `@endo/package-manager` and its selected sandbox driver
+   to prove the applicable filesystem, process, secret, and network profiles
+   with driver-owned probes and adversarial tests. Only this level may make
+   hostile-workspace path, broker-bypass, child-process, and cleanup claims.
 
-The portable facade delegates actual filesystem access, symlink resolution,
-process creation, network enforcement, atomic revalidation, termination, and
-reaping to its backend. An Exo guard can reject a malformed path record or an
-ungranted method, but it cannot prove what a native process does after spawn.
-The facade is therefore necessary at every level and is not a substitute for a
-confined backend at level 3. #897's still-open symlink-deny and mid-walk
-revocation fixes are concrete evidence that the portable mount containment
-surface is still being hardened.
+The portable facade and #1011 coordinator delegate actual filesystem access,
+symlink resolution, process creation, network enforcement, atomic
+revalidation, termination, and reaping to their backend.
+An Exo guard can reject a malformed path record or an ungranted method, but it
+cannot prove what a native process does after spawn.
+The portable layer is therefore necessary at every level and is not a
+substitute for a confined backend at level 3.
+There is no planned host-ambient package-manager backend; a host adapter is a
+development aid only.
+#897's still-open symlink-deny and mid-walk revocation fixes are concrete
+evidence that the portable mount containment surface is still being hardened.
 
 `@endo/sandbox` is the planned level-3 substrate, not a present blanket
 guarantee. Its `network: 'none'` profile is implemented. Its current bwrap
@@ -443,10 +483,11 @@ security boundary because an unconstrained process can ignore proxy settings.
   method, header, redirect, decompression, body, deadline, and rate policy over
   `@endo/http-dialer` sockets. No guest or native child receives those sockets.
 - **Package installation** uses a loopback registry and tarball broker backed
-  by the landed `EndoRegistry`, integrity verification, and CAS. The manager
-  retains lockfile and installation semantics, while the broker sees HTTP
-  requests and can enforce registry, tarball, integrity, and byte policy. A
-  conformance-qualified sandbox permits the manager to reach only this broker.
+  by the converged `@endo/exo-npm-registry` and verified package-artifact
+  records. The manager retains lockfile and installation semantics, while the
+  broker sees only bounded package-artifact projections and enforces registry,
+  tarball, integrity, and byte policy. A conformance-qualified sandbox permits
+  the manager to reach only this broker.
 - **Git HTTPS** uses an exact-origin CONNECT broker because Git must retain the
   end-to-end TLS connection needed for its native protocol and certificate
   checks. The broker validates the CONNECT origin, every DNS answer, and the
@@ -543,14 +584,17 @@ This split matches the authoritative manager documentation:
   settings in its
   [configuration reference](https://yarnpkg.com/configuration/yarnrc).
 
-The trusted host development backend in `packages/package-manager` implements
-#948's injected backend protocol and directly spawns only trusted, pinned npm,
-pnpm, or Yarn executables with fixed argv.
+The reusable coordinator in `@endo/exo-package-manager` implements #1011's
+injected backend protocol and directly supplies only trusted, pinned npm, pnpm,
+or Yarn command data with fixed argv.
 Host-shell and exo-shell are not the engine.
+The planned `@endo/package-manager` backend composes that coordinator with the
+broker and a conformance-qualified process runner.
 Its public surface permits only frozen dependency hydration and has no
 lifecycle, project plugin/hook, package-script, package-binary, `exec`, `npx`,
-or `dlx` method. Those restrictions narrow authority, but the unconfined child
-still makes this a trusted-workspace posture.
+or `dlx` method.
+Those restrictions narrow authority, but portable checks alone do not make an
+unconfined child safe for hostile workspaces.
 
 Immediately before spawn, the backend atomically revalidates:
 
@@ -571,13 +615,15 @@ follow one terminate, hard-kill-after-grace, bounded-drain, reap, and orphan
 cleanup path.
 
 Registry metadata and tarballs pass through a daemon-selected loopback broker
-backed by `EndoRegistry`, published-integrity checks, and the CAS.
+backed by `@endo/exo-npm-registry` package-artifact records, published-integrity
+checks, and daemon-provided persistence.
 The package-manager process receives trusted configuration naming only that
 broker, with proxy bypass disabled.
-At the trusted host development level this is cooperative defense in depth. At
-the confined level, the `broker-only` sandbox profile enforces that the manager
-cannot connect around the broker. The broker endpoint and arbitrary Web
-capability are never guest bindings.
+During development a host adapter may exercise this cooperatively, but it is
+not the plan's default backend.
+At the confined level, the `broker-only` sandbox profile enforces that the
+manager cannot connect around the broker.
+The broker endpoint and arbitrary Web capability are never guest bindings.
 
 Cache contents and policy are durable but non-secret.
 The daemon formula records cache identifiers, supported manager identity,
@@ -643,9 +689,12 @@ linked pull request is unposted work, not implied follow-up.
 - [x] Exact-origin HTTP confinement and Exo client. Owners:
   `@endo/http-confine` and `@endo/exo-http-client`. Tracking: #566. Done:
   bounded transport-neutral HTTP policy can receive an injected transport.
-- [x] Registry acquisition, published-integrity verification, and CAS package
-  trees. Owner: daemon `EndoRegistry`. Tracking: #671. Done: the daemon can
-  acquire and verify package bytes through an injected fetch perimeter.
+- [x] Registry acquisition, published-integrity verification, and package
+  records. Owners: portable `@endo/exo-npm` from [#403](https://github.com/endojs/endo-but-for-bots/pull/403)
+  and daemon-local `EndoRegistry` from [#671](https://github.com/endojs/endo-but-for-bots/pull/671).
+  Done: both implementations can acquire and verify package bytes through
+  injected fetch and persistence seams; convergence remains tracked by
+  [#1027](https://github.com/endojs/endo-but-for-bots/issues/1027).
 - [x] Graceful CapTP shutdown. Owner: `@endo/captp`. Tracking: #947. Done:
   deliberate disconnects settle through the graceful shutdown path. This does
   not complete crash recovery or effect reconciliation.
@@ -720,14 +769,31 @@ linked pull request is unposted work, not implied follow-up.
   `@endo/agent-tools`, `@endo/agentry`, and daemon. Dependencies: WebResearch
   plus #965. Done when only selected fetch or search operations appear in
   checked declarations, prompts, and globals.
-- [ ] Add the trusted host development package-manager backend. Owner:
-  `packages/package-manager`. Dependency: #948. Done when pinned managers,
-  generated configuration, fixed argv, bounds, cancellation, and reaping pass
-  trusted-workspace fixtures, with no hostile-workspace confinement claim.
-- [ ] Add the loopback registry and tarball broker. Owners:
-  `packages/package-manager` and daemon `EndoRegistry`. Dependencies: #671 and
-  the host backend. Done when lockfile-selected acquisition uses verified CAS
-  bytes and broker policy rejects arbitrary registry, tarball, and byte flows.
+- [ ] Land the reusable package-manager coordinator. Owner:
+  `@endo/exo-package-manager`. Tracking: [#1011](https://github.com/endojs/endo-but-for-bots/pull/1011),
+  head `3da9d6cd53b4d6ec6785b3f8928f9456ac189b8c`. Done when fixed argv,
+  configuration injection, snapshot revalidation, bounds, cancellation,
+  exact-version evidence, and structured results remain backend-independent.
+- [ ] Converge the portable and daemon registry implementations. Owners:
+  `@endo/exo-npm-registry` and daemon. Tracking: [#1027](https://github.com/endojs/endo-but-for-bots/issues/1027),
+  with [#403](https://github.com/endojs/endo-but-for-bots/pull/403) and
+  [#671](https://github.com/endojs/endo-but-for-bots/pull/671). Done when the
+  portable package owns the canonical interface and resolution logic, daemon
+  HTTP, cryptographic, persistent CAS/cache, `@registry`, and formula adapters
+  preserve verified package-artifact provenance, and duplicate daemon-local
+  contracts are retired.
+- [ ] Add the loopback registry and tarball broker. Owner:
+  `@endo/npm-registry-broker`. Dependencies: [#1027](https://github.com/endojs/endo-but-for-bots/issues/1027),
+  converged `@endo/exo-npm-registry`, and [#1011](https://github.com/endojs/endo-but-for-bots/pull/1011).
+  Done when lockfile-selected acquisition consumes verified package-artifact
+  records and broker policy rejects arbitrary registry, tarball, and byte
+  flows without owning the CAS substrate.
+- [ ] Add the broker-configured confined package-manager backend. Owner:
+  `@endo/package-manager`. Dependencies: [#1011](https://github.com/endojs/endo-but-for-bots/pull/1011),
+  [#1027](https://github.com/endojs/endo-but-for-bots/issues/1027), [#953](https://github.com/endojs/endo-but-for-bots/pull/953),
+  and the broker. Done when pinned managers, generated configuration, fixed
+  argv, bounds, cancellation, revalidation, and reaping pass the selected
+  sandbox conformance profile; no host-ambient backend is required or exposed.
 - [ ] Implement and qualify sandbox `broker-only` networking. Owner:
   `@endo/sandbox` plus the session sandbox backend. Dependencies: #953 design
   amendment and workload brokers. Done for the first production cut when one
@@ -735,11 +801,12 @@ linked pull request is unposted work, not implied follow-up.
   private, metadata, DNS, or alternate-proxy escape through driver-owned
   probes. Every additional advertised driver must pass the same profile before
   it is enabled; parity does not block the first qualified backend.
-- [ ] Add the package-manager formula and trusted grant exposure. Owners:
-  daemon, `@endo/agentry`, and `@endo/agent-tools`. Dependencies: #948, #950,
-  #965, and a selected backend. Done when restart reconstructs exactly the
-  installer posture and code mode never exposes `runPackageScript` without an
-  executor grant.
+- [ ] Add the package-manager formula and grant exposure. Owners: daemon,
+  `@endo/agentry`, and `@endo/agent-tools`. Dependencies: #948, #950, #965,
+  #1011, the converged registry, the broker, and `@endo/package-manager`.
+  Done when restart reconstructs exactly the broker-configured installer
+  posture and code mode never exposes `runPackageScript` without an executor
+  grant.
 - [ ] Add exact-origin Git CONNECT brokering for public clone/fetch and
   credentialed fetch/push. Owners: `@endo/exo-git`, `packages/git`, and daemon.
   Dependencies: shared address semantics, #958, and #965. Done when origin,
@@ -781,11 +848,13 @@ linked pull request is unposted work, not implied follow-up.
   grants alone survive restart without replay, complete the end-to-end flow,
   and report purge, interruption, and indeterminate outcomes truthfully.
 
-Address semantics, the host development backend, and the operation schema can
-proceed in parallel. Final Web and package projection composes with #965's
-trusted grant path rather than introducing a second policy model. Untrusted
-native-process acceptance waits for a conformance-qualified confined backend;
-daemon-owned Web acceptance does not.
+Address semantics, the broker-configured package backend, and the operation
+schema can proceed in parallel after the coordinator and registry contracts are
+aligned.
+Final Web and package projection composes with #965's trusted grant path rather
+than introducing a second policy model.
+Untrusted native-process acceptance waits for a conformance-qualified confined
+backend; daemon-owned Web acceptance does not.
 
 ## Acceptance and Security Tests
 
@@ -850,12 +919,19 @@ bodies are opaque inside the tunnel.
   before spawn;
 - only frozen hydration occurs and neither manifests nor lockfiles change at
   every backend level;
-- trusted host development tests prove fixed configuration, output,
-  cancellation, and process cleanup for trusted fixtures without representing
-  them as hostile-workspace confinement tests;
+- coordinator and broker integration tests prove fixed configuration, output,
+  cancellation, verified package-artifact handling, and process cleanup for
+  trusted fixtures without representing them as hostile-workspace confinement
+  tests;
 - conformance-qualified confined tests prove no process writes outside the
   workspace and explicit cache/scratch paths, and no process reaches a
   non-granted origin or bypasses its broker;
+- registry convergence tests prove the shared interface and resolver contract,
+  explicit published SRI verification, and the verified link from original
+  tarball bytes to the extracted readable tree;
+- broker conformance tests prove that only verified package-artifact records are
+  projected over loopback and that arbitrary registry, tarball, byte, proxy,
+  and direct-network requests fail closed;
 - stdout/stderr overflow, deadlines, cancellation, daemon restart, and child
   pipes that remain open all terminate and reap the complete process group;
 - public HTTPS Git clone/fetch works without credentials while authenticated
@@ -884,13 +960,15 @@ broader project execution. It is also the planned production boundary for
 native package-manager or Git processes that consume untrusted workspace
 content.
 
-The portable facade, trusted host development backend, and four-pull-request
-daemon-owned Web stack can progress before it. Selecting a backend for a new
-grant does not change the public interface. Migrating an existing grant across
-driver, rootfs, or enforcement policy is versioned and explicit, and preserves
-identity only after equivalence is established. Hostile-workspace path,
-process, broker-bypass, and orphan claims remain disabled until the selected
-sandbox driver and profile pass the conformance tests in this document.
+The portable facade, broker integration, and four-pull-request daemon-owned
+Web stack can progress before it.
+Selecting a backend for a new grant does not change the public interface.
+Migrating an existing grant across driver, rootfs, or enforcement policy is
+versioned and explicit, and preserves identity only after equivalence is
+established.
+Hostile-workspace path, process, broker-bypass, and orphan claims remain
+disabled until the selected sandbox driver and profile pass the conformance
+tests in this document.
 
 ## Alternatives Rejected
 
@@ -920,10 +998,13 @@ sandbox driver and profile pass the conformance tests in this document.
 
 ## Open Questions
 
-No package-ownership or sequencing question blocks the stack.
-The host backend pull request must select and test exact npm, pnpm, and Yarn
-versions rather than treating #948's portable version branches as support
-claims.
+The registry convergence issue [#1027](https://github.com/endojs/endo-but-for-bots/issues/1027)
+is the alignment point for the package rename, shared contracts, and adapter
+ownership.
+It is not a formal explicit-Kris-approval gate for ordinary implementation
+work.
+The confined backend must select and test exact npm, pnpm, and Yarn versions
+rather than treating #948's portable version branches as support claims.
 Provider choice beyond the initial DuckDuckGo adapter and deployment-specific
 registry origin sets remain explicit daemon policy.
 The confined implementation must encode `broker-only` in the immutable handle
@@ -969,3 +1050,19 @@ it must not commit to a new filesystem protocol before that comparison.
 > for mutating effects, make backend migration explicit, qualify one reference
 > driver before requiring parity, and evaluate reuse of #971's 9P projection
 > before inventing another filesystem bridge.
+
+## Revision Prompt (2026-08-18)
+
+> Make this design the package-manager plan of record while the CAS package
+> substrate remains the storage and data strategy.
+> Reconcile portable PR #403 and daemon-local PR #671 through issue #1027,
+> propose `@endo/exo-npm-registry` as the canonical registry package, and
+> separate the `@endo/npm-registry-broker` loopback projection from verified
+> package-artifact storage.
+> Record PR #1011 as the coordinator-only `@endo/exo-package-manager` change,
+> remove the host-ambient backend plan, and make `@endo/package-manager` the
+> broker-configured confined backend.
+> Preserve the exact manager argv, configuration denials, frozen-install,
+> capability-facet, daemon-grant, lifecycle, and acceptance analysis.
+> State that issue #1027 requests alignment but is not an explicit-Kris-approval
+> gate for ordinary implementation work.
