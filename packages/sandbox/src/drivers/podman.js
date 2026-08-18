@@ -557,8 +557,18 @@ export const makePodmanDriver = ({
   // the container's, so we do not surface it on this driver.
   const cgroup2Probe = makeCgroup2Probe();
 
-  /** @type {boolean} */
-  let orphanSweepDone = false;
+  /**
+   * Memo for the boot-time orphan sweep. A promise rather than a
+   * boolean: `probe()` now runs on every `make()` and `listBackends()`,
+   * so a flag checked and set across an `await` lets a second probe
+   * start a second sweep while the first is still listing — and that
+   * second sweep can remove a container a concurrently admitted
+   * operation has already spawned. Memoizing the promise makes every
+   * caller await the one sweep instead.
+   *
+   * @type {Promise<void> | null}
+   */
+  let orphanSweep = null;
 
   /**
    * Cached OCI-runtime selection.  `null` until the first probe / slice
@@ -699,7 +709,13 @@ export const makePodmanDriver = ({
       names.map(async name => {
         await null;
         const result = await removeContainer(cp, runtime, name);
-        if (result.code === 0) return undefined;
+        // Removal is a goal, not a command: a container that another
+        // sweep, another daemon incarnation, or the operation's own
+        // reaper already removed between the listing above and this
+        // call is in exactly the state we wanted.
+        if (result.code === 0 || reportsContainerGone(result)) {
+          return undefined;
+        }
         return `${name}: ${result.stderr.trim() || result.stdout.trim()}`;
       }),
     );
@@ -709,6 +725,29 @@ export const makePodmanDriver = ({
         X`podman exact-label orphan removal failed: ${q(failures.join('; '))}`,
       );
     }
+  };
+
+  /**
+   * Run the exact-label orphan sweep at most once per driver, and hand
+   * every subsequent caller the same settled promise.
+   *
+   * A failed sweep clears the memo: reconciliation is the crash-cleanup
+   * proof, and a transient listing failure should make this probe report
+   * unavailable rather than condemn the driver for its whole lifetime.
+   *
+   * @param {typeof import('child_process')} cp
+   * @returns {Promise<void>}
+   */
+  const ensureOrphanSweep = cp => {
+    if (orphanSweep === null) {
+      /** @type {Promise<void>} */
+      const attempt = sweepOrphans(cp).catch(e => {
+        if (orphanSweep === attempt) orphanSweep = null;
+        throw e;
+      });
+      orphanSweep = attempt;
+    }
+    return orphanSweep;
   };
 
   /**
@@ -850,17 +889,14 @@ export const makePodmanDriver = ({
     // Boot-time orphan reap. Reconciliation is the crash-cleanup proof,
     // so a failure here makes the driver unavailable rather than
     // degrading it.
-    if (!orphanSweepDone) {
-      try {
-        await sweepOrphans(cp);
-        orphanSweepDone = true;
-      } catch (e) {
-        return crashCleanupUnavailable(
-          /** @type {Error} */ (e).message,
-          'exact-label orphan reconciliation failed',
-          harden({ version, details: harden({ rootless }) }),
-        );
-      }
+    try {
+      await ensureOrphanSweep(cp);
+    } catch (e) {
+      return crashCleanupUnavailable(
+        /** @type {Error} */ (e).message,
+        'exact-label orphan reconciliation failed',
+        harden({ version, details: harden({ rootless }) }),
+      );
     }
 
     const cgroup2 = await cgroup2Probe.probe();
