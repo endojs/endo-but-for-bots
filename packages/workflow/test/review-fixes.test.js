@@ -327,6 +327,7 @@ test('a depth-bomb settlement fails the effect loudly instead of wedging', async
     makeId: makeIdCounter(),
   });
   t.teardown(stop);
+  /** @type {any} */
   let bomb = harden({ leaf: true });
   for (let i = 0; i < 200; i += 1) {
     bomb = harden({ deeper: bomb });
