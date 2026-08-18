@@ -45,5 +45,10 @@ harden(buildHttpIR);
  * @returns {{ http: { aux: string, body: string } }}
  */
 export const buildHttpTypeDeclarations = () =>
-  harden({ http: renderDeclaration(buildHttpIR(), { auxPrefix: 'Http' }) });
+  harden({
+    http: renderDeclaration(buildHttpIR(), {
+      globalName: 'http',
+      auxPrefix: 'Http',
+    }),
+  });
 harden(buildHttpTypeDeclarations);

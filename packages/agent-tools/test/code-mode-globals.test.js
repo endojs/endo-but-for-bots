@@ -18,24 +18,55 @@ test('capability global factories preserve custom lexical names and pet paths', 
     makeHttpGlobal({ name: 'network', petName: 'http-client' }),
     makeGitRemoteGlobal({ name: 'upstream', petName: ['repo', 'origin'] }),
   ];
+  const [shellGlobal, httpGlobal, remoteGlobal] = globals;
+  if (
+    shellGlobal === undefined ||
+    httpGlobal === undefined ||
+    remoteGlobal === undefined
+  ) {
+    throw new Error('expected all capability globals');
+  }
+  const shellDeclaration = shellGlobal.declaration;
+  const httpDeclaration = httpGlobal.declaration;
+  const remoteDeclaration = remoteGlobal.declaration;
+  if (
+    shellDeclaration === undefined ||
+    httpDeclaration === undefined ||
+    remoteDeclaration === undefined
+  ) {
+    throw new Error('expected all capability global declarations');
+  }
 
-  t.like(globals[0], {
-    name: 'builderShell',
-    declaration: { body: 'EndoShell' },
-  });
-  t.like(globals[1], {
-    name: 'network',
-    declaration: { body: 'HttpClient' },
-  });
-  t.like(globals[2], {
-    name: 'upstream',
-    declaration: { body: 'GitRemote' },
-  });
+  t.like(shellGlobal, { name: 'builderShell' });
+  t.like(httpGlobal, { name: 'network' });
+  t.like(remoteGlobal, { name: 'upstream' });
+  t.true(shellDeclaration.body.includes('exec:'));
+  t.true(httpDeclaration.body.includes('fetch:'));
+  t.true(remoteDeclaration.body.includes('push:'));
+  t.true(httpDeclaration.aux?.includes('type HttpResponse =') ?? false);
+  t.true(
+    remoteDeclaration.aux?.includes('type RemoteOperationResult =') ?? false,
+  );
 
   const prompt = formatGlobalDeclarations(globals);
-  t.true(prompt.includes('declare const builderShell: EndoShell;'));
-  t.true(prompt.includes('declare const network: HttpClient;'));
-  t.true(prompt.includes('declare const upstream: GitRemote;'));
+  t.true(prompt.includes('declare const builderShell: {'));
+  t.true(prompt.includes('declare const network: {'));
+  t.true(prompt.includes('declare const upstream: {'));
+});
+
+test('custom Git names rewrite recursive declaration references', t => {
+  const global = makeGitGlobal({ name: 'repoGit' });
+  const { declaration } = global;
+  if (declaration === undefined) {
+    throw new Error('expected Git global declaration');
+  }
+
+  t.true(declaration.body.includes('typeof repoGit'));
+  t.false(declaration.body.includes('typeof git'));
+
+  const prompt = formatGlobalDeclarations([global]);
+  t.true(prompt.includes('declare const repoGit: {'));
+  t.true(prompt.includes('typeof repoGit'));
 });
 
 test('history Git global explains rebase control and conflict recovery', t => {
@@ -87,9 +118,9 @@ test('a compartment can evaluate code against fake capability globals', async t 
   const globals = [shellGlobal, httpGlobal, remoteGlobal];
 
   const prompt = formatGlobalDeclarations(globals);
-  t.true(prompt.includes('declare const shell: EndoShell;'));
-  t.true(prompt.includes('declare const http: HttpClient;'));
-  t.true(prompt.includes('declare const remote: GitRemote;'));
+  t.true(prompt.includes('declare const shell: {'));
+  t.true(prompt.includes('declare const http: {'));
+  t.true(prompt.includes('declare const remote: {'));
 
   const shell = Far('FakeShell', {
     exec: async (command, args) =>

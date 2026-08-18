@@ -41,6 +41,7 @@ harden(buildGitRemoteIR);
 export const buildGitRemoteTypeDeclarations = () =>
   harden({
     gitRemote: renderDeclaration(buildGitRemoteIR(), {
+      globalName: 'gitRemote',
       auxPrefix: 'Remote',
     }),
   });

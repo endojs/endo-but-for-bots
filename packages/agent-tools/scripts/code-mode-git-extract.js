@@ -173,9 +173,15 @@ export const buildGitTypeDeclarations = () => {
     // Prefix its supporting aliases so its generated block can compose with
     // workspace declaration, which has its own Directory, File, and
     // Filesystem shapes.
-    git: renderDeclaration(irs.git, { auxPrefix: 'Git' }),
-    gitHistory: renderDeclaration(irs.gitHistory, { auxPrefix: 'Git' }),
-    gitReadOnly: renderDeclaration(irs.gitReadOnly, { auxPrefix: 'Git' }),
+    git: renderDeclaration(irs.git, { globalName: 'git', auxPrefix: 'Git' }),
+    gitHistory: renderDeclaration(irs.gitHistory, {
+      globalName: 'gitHistory',
+      auxPrefix: 'Git',
+    }),
+    gitReadOnly: renderDeclaration(irs.gitReadOnly, {
+      globalName: 'gitReadOnly',
+      auxPrefix: 'Git',
+    }),
   });
 };
 harden(buildGitTypeDeclarations);
