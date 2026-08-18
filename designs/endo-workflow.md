@@ -123,6 +123,42 @@ an idea from the other branch:
    `externalEventTypes`, and `makeRunSyncClient` (client-side fold
    mirror with `stateAt` time travel and chain verification).
 
+A second hardening round followed, from six parallel adversarial review
+subagents (engine durability, kernel semantics, ocap boundaries,
+journal/fold, space integration, conventions/coverage), whose confirmed
+findings were all fixed and regression-tested (81 tests):
+
+1. **Atomic composite entries.** A settlement and the transition it
+   fires, and a step and its terminal outcome, commit as one journal
+   write (`settles` / `terminal` on the `event` entry); internal events
+   and `emit`s are journaled as id'd delivery obligations
+   (`fired.internals`, `delivers`) that recovery re-dispatches — closing
+   the settle/step, step/complete, and lost-cascade crash windows.
+2. **Recovery robustness.** Per-run isolation at init (one corrupt
+   journal no longer bricks the service), aborted-mint directories
+   skipped (no phantom runs from rejected starts), deterministic child
+   run ids so spawn re-dispatch adopts instead of duplicating, queued
+   events drained after a crash mid-resume, and replay stops at a
+   terminal outcome (a completed run can no longer flip to failed).
+3. **Ocap tightening.** Charts asserted capability-free (an embedded
+   remotable would have leaked through the shareable run facet's
+   `chart()`); ports refuse engine-producible event types (no forged
+   `state-done` / quorum joins / other participants' settlements);
+   factory start/revoke and derive/revoke races closed by durable
+   re-checks; depth caps on redaction/encoding with unencodable
+   settlement values converted to loud effect failures.
+4. **Kernel completeness.** An immediately-final compound child now
+   raises `state-done` at entry (was a silent wedge); region final
+   states named `pending` are rejected (reserved join-count key);
+   diagnostics warn on unhandled `state-done` symmetrically with
+   `regions-settled`.
+5. **Space correctness.** The confined renderer's tag allowlist admits
+   the statechart's SVG (it previously flattened to text); reader
+   disposal goes through the local iterator (exo readers have no
+   `return`); `$eachParam` overlay ids normalize onto the drawn
+   representative region; plus error-boundary, stale-banner, key, and
+   timeline fixes, and integrity/chain-verification affordances.
+
 ## What is the Problem Being Solved?
 
 The daemon can now host every *ingredient* of a long-running, multi-party
