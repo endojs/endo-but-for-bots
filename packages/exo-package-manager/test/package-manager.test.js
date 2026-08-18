@@ -54,6 +54,7 @@ const makeFakeBackend = (snapshot = {}) => {
   const ops = new Map();
 
   const defaultSnapshot = {
+    snapshotDigest: 'fixture-digest',
     packageManagerField: undefined,
     markers: { 'package-lock.json': true },
     scriptNames: ['lint', 'test'],

@@ -13,6 +13,7 @@ export {
   selectManager,
   buildInstallArgv,
   buildRunArgv,
+  makePackageManagerBackendCoordinator,
   PackageManagerReaderInterface,
   PackageManagerInstallerInterface,
   PackageManagerExecutorInterface,

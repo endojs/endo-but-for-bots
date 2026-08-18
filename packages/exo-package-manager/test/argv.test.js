@@ -65,6 +65,37 @@ test('buildInstallArgv yarn uses version-appropriate frozen flags', t => {
   );
 });
 
+test('buildInstallArgv maps workspace selectors per manager', t => {
+  t.deepEqual(
+    buildInstallArgv({
+      manager: 'npm',
+      workspaceSelector: '@scope/pkg',
+    }),
+    ['npm', 'ci', '--ignore-scripts', '--workspace=@scope/pkg'],
+  );
+  t.deepEqual(
+    buildInstallArgv({
+      manager: 'pnpm',
+      workspaceSelector: 'pkg',
+    }),
+    [
+      'pnpm',
+      '--filter=pkg',
+      'install',
+      '--frozen-lockfile',
+      '--ignore-scripts',
+    ],
+  );
+  t.deepEqual(
+    buildInstallArgv({
+      manager: 'yarn',
+      yarnMajorVersion: 4,
+      workspaceSelector: 'pkg',
+    }),
+    ['yarn', 'workspace', 'pkg', 'install', '--immutable', '--mode=skip-build'],
+  );
+});
+
 test('buildInstallArgv fails closed for unsupported or unknown Yarn 2 versions', t => {
   for (const input of [
     { manager: 'yarn' },

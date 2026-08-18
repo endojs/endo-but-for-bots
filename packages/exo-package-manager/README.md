@@ -55,3 +55,16 @@ inspection snapshot, and an instance-scoped operation identifier.
 It must atomically revalidate the snapshot before an install or run side effect
 so manager, lockfile, and declared-script authorization cannot go stale.
 Concrete execution and revalidation mechanisms remain outside this package.
+
+`makePackageManagerBackendCoordinator` composes a workspace adapter with a
+runner for those mechanisms.
+The workspace adapter supplies an opaque target and a content token, and must
+revalidate the selected workspace immediately before execution.
+The runner receives only the selected manager, fixed argv, opaque target,
+bounded output/deadline policy, cancellation, and structured generated
+manager configuration.
+It never receives a shell string, caller-selected executable, ambient host
+path, or opaque extra arguments.
+Configuration is limited to generated manager-specific `.npmrc` or
+`.yarnrc.yml` material so a later registry/CAS broker can compose through the
+same coordinator without changing the portable Exo capability.
