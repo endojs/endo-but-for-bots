@@ -194,7 +194,11 @@ The `EndoProvisionSpec` fields are optional grants:
 - `piTools`: `'preserve'` keeps Pi's currently active standard and extension
   tools active alongside `evaluate`;
 - `fs`: `'readOnly'` or `'readWrite'`;
-- `git`: `'readOnly'`, `'readWrite'`, or `'historyRewrite'`; and
+- `git`: `'readOnly'`, `'readWrite'`, or `'historyRewrite'`;
+- `mounts`: named filesystem roots, each `{ path, mode, deniedSegments? }`
+  with a `'readOnly'` or `'readWrite'` mode;
+- `gits`: named Git grants, each `{ mount?, path, mode }` selecting a non-bare
+  Git worktree by mount-relative path segments; and
 - `gitRemotes`: remote policies normalized by `@endo/exo-git`, plus an optional
   host-side credential pet name.
 
@@ -218,6 +222,48 @@ fetch refspec. When omitted, an unqualified pull uses the first declared
 concrete fetch refspec, so declaration order is preserved.
 A remote credential is only a host-side pet name; tokens, passwords, embedded
 URL credentials, and secret-shaped fields are rejected.
+
+Named mounts and Git grants extend the same spec to a session that spans more
+than one filesystem root.
+A common shape is a primary clone beside a linked worktree created by
+`git worktree add`:
+
+```
+~/src/
+  endo/          # primary clone
+  endo-pr-958/   # git -C endo worktree add ../endo-pr-958
+```
+
+One mount over the shared parent keeps the primary clone's `.git` directory
+inside the granted root, so Git can resolve the linked worktree's gitdir, and
+each Git grant selects its checkout by mount-relative path with its own
+authority mode:
+
+```js
+const session = await provisionEndoCodeMode({
+  harness: 'example',
+  sessionId: conversationId,
+  cwd: '/home/user/src',
+  spec: {
+    mounts: {
+      src: { path: '.', mode: 'readWrite' },
+    },
+    gits: {
+      trunk: { mount: 'src', path: ['endo'], mode: 'readOnly' },
+      feature: { mount: 'src', path: ['endo-pr-958'], mode: 'readWrite' },
+    },
+  },
+});
+```
+
+The compartment then carries a writable `src` filesystem capability plus a
+read-only `trunk` and a writable `feature` Git capability, each named after
+its grant.
+A Git grant's authority is capped by its selected mount: writable or
+history-rewrite Git requires a writable, guest-bound mount, so a read-only
+mount never leaks write authority through Git.
+The compatibility `workspace`, `fs`, and root `git` fields normalize into this
+same named authority graph, so the two styles compose in one spec.
 
 Provisioning derives deterministic controller aliases and retained guest handle
 and agent paths from `sessionId`.
@@ -281,6 +327,20 @@ endo-pi --endo-provision='{"git":"historyRewrite"}'
 
 # Keep Pi's standard tools active alongside evaluate.
 endo-pi --endo-provision='{"piTools":"preserve","fs":"readOnly"}'
+```
+
+Named mounts and Git grants use the same JSON spec.
+Run from the parent directory of sibling checkouts, this grants a read-only
+view of the primary clone and a writable linked worktree:
+
+```sh
+endo-pi --endo-provision='{
+  "mounts":{"src":{"path":".","mode":"readWrite"}},
+  "gits":{
+    "trunk":{"mount":"src","path":["endo"],"mode":"readOnly"},
+    "feature":{"mount":"src","path":["endo-pr-958"],"mode":"readWrite"}
+  }
+}'
 ```
 
 By default, the extension strips all built-in Pi tools, leaving only `evaluate`,
