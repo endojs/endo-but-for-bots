@@ -5,7 +5,7 @@
 | **Created** | 2026-08-18 |
 | **Updated** | 2026-08-18 |
 | **Author** | kumavis (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
 
 ## Status
 
@@ -20,7 +20,43 @@ freely** (no backwards-compatibility constraint).
 The revision folds the formerly separate `deploy-performer` adapter into
 a reshaped `NixosAdmin` and deletes the `opId`-threading workaround the
 engine fix obsoleted.
-Everything else remains proposal.
+
+Implementation landed the same day (phases 0–2; the same pass hardened
+the design against restart loops, § "Why the loop cannot happen"):
+
+- **Phase 0 (done).** The staging merge and the run-qualified invoke key,
+  with a two-runs-one-endowment regression test (`@endo/workflow`, 82
+  tests).
+- **Phase 1, in-repo half (done).** `packages/workflow/setup.js`
+  (idempotent pinned-service provisioning with a dedicated powers guest
+  and a re-pin that heals). `packages/space-nixos-admin/caplet.js`
+  reshaped: settlement-shaped `build`/`apply`/`rollback` that watch the
+  spool to the terminal outcome of their own id; the optional trailing
+  key (engine's run-qualified invoke key, or minted) as the spool request
+  id, echoed by the applier in `apply-status.json` and recorded under
+  `outcomes/<sanitized id>.json`; a never-resubmit decision tree
+  (recorded outcome → return it; pending own request → attach;
+  id-less status → bounded grace, then a loud contract error; superseded
+  → loud error); in-process serialization of the single-slot spool;
+  `stageRev`/`stageFiles`/`revertFiles` with captured previous contents;
+  rewritten `help()`; and the machine-admin prompt's nixos section
+  updated in the same commit (the no-drift rule). 22 tests, including
+  the re-dispatch-without-resubmit loop killer.
+  **Open:** the endo-host applier id-echo counterpart
+  (`modules/endo-nixos-admin.nix`), out of this repo's reach.
+- **Phase 2 (done).** `packages/floot/deploy-charts.js` (`endo-release`,
+  `nixos-config-change`) with 11 simulator tests, including the
+  single-guarded-entry-to-`apply` graph property and timeout-prunes-
+  pending; `grantDeployFactories` in `floot-factory-setup.js` (installs
+  charts each boot, mints factories binding `performer` +
+  `operator: @self`, names each grant durably as an eval formula
+  `E(svc).factory(fid)`, re-mints on chart-version drift without
+  revoking the old factory); and the `workflow-factory` preset object
+  kind in `agent.js` with graceful skip.
+- **Phase 3 (open).** Admin presets do not yet list the factory objects,
+  and the machine-admin prompt does not yet teach starting runs; deploys
+  still run conversationally against the reshaped caplet until then.
+  Phases 4–5 unstarted.
 
 ## Summary
 
@@ -565,6 +601,28 @@ The sequence that today orphans the flow, replayed under this design:
 No session context is involved at any step; the session that started the run
 re-reads `status()` whenever the user next speaks to it, and `space-workflow`
 shows the run live throughout.
+
+#### Why the loop cannot happen
+
+The failure this design must never produce is a **restart loop**: the
+re-dispatched apply re-submitting, re-switching, and restarting the daemon
+again, forever. Three independent layers each break it, and each is tested:
+
+1. **The caplet never resubmits on ambiguity.** A re-dispatched verb finds
+   its recorded outcome (or its still-pending request) by id and returns
+   or attaches; a status file without ids gets a bounded grace and then a
+   loud contract error; a superseded request fails loud. There is no code
+   path from "I cannot tell what happened" to "submit again".
+2. **The chart admits at most one apply per run.** `apply`'s only inbound
+   edge is the guarded operator approval; every failure and timeout path
+   leads to compensation, a terminal state, or a `needs-attention` ask —
+   a human gate — never back toward `apply`. Deploying again means a new
+   run through a new approval.
+3. **The engine keeps terminal and exited work inert.** Terminal runs do
+   not re-dispatch at boot; a timer exit prunes the pending invoke, so a
+   late settlement is dropped rather than routed; recovery re-dispatches
+   an unsettled invoke once per boot, not in a loop, and an unhandled
+   settlement fails the run loudly instead of wedging or retrying.
 The one restart-scarred piece of today's prompt that remains true — the
 Forgejo credential re-mint invalidating a session's `GitRemote` — stays
 outside the run on purpose: pushing happens in the session *before* `start`,
