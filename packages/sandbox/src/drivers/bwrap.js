@@ -3,6 +3,7 @@
 /* global clearTimeout, process, setTimeout */
 
 import { makeError, q, X } from '@endo/errors';
+import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeLandlockProbe } from '../landlock.js';
 import {
@@ -863,17 +864,19 @@ export const makeBwrapDriver = ({
 
     slice.live.add(child);
 
-    /** @type {Promise<{ code: number | null; signal: string | null }>} */
-    const exited = new Promise((resolve, reject) => {
-      child.once('error', err => {
-        slice.live.delete(child);
-        reject(err);
-      });
-      child.once('exit', (code, signal) => {
-        resolve({ code, signal });
-      });
-      child.once('close', () => slice.live.delete(child));
+    const {
+      promise: exited,
+      resolve: resolveExit,
+      reject: rejectExit,
+    } = /** @type {import('@endo/promise-kit').PromiseKit<{ code: number | null, signal: string | null }>} */ (
+      makePromiseKit()
+    );
+    child.once('error', err => {
+      slice.live.delete(child);
+      rejectExit(err);
     });
+    child.once('exit', (code, signal) => resolveExit({ code, signal }));
+    child.once('close', () => slice.live.delete(child));
 
     // The DriverProcess surface exposes async-iterables for stdout
     // and stderr, plus closures that the factory wires into a

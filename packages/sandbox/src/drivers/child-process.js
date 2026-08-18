@@ -19,20 +19,21 @@ import { makeError, q, X } from '@endo/errors';
 /**
  * Spawn a child process and collect its stdout / stderr.
  *
- * A `timeoutMs` deadline or an `AbortSignal` bounds control commands
- * that must not stall the sandbox lifecycle: on expiry or abort the
- * child is hard-killed and the promise rejects with a structured error.
+ * A `timeoutMs` deadline or a `cancelled` token bounds control commands
+ * that must not stall the sandbox lifecycle: on expiry or cancellation
+ * the child is hard-killed and the promise rejects with a structured
+ * error.
  *
  * @param {typeof import('child_process')} cpModule
  * @param {string} command
  * @param {string[]} args
- * @param {{ timeoutMs?: number, signal?: AbortSignal }} [options]
+ * @param {{ timeoutMs?: number, cancelled?: import('@endo/cancel').Cancelled, isCancelled?: import('@endo/cancel').IsCancelled }} [options]
  * @returns {Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string }>}
  */
 export const spawnAndCollect = (cpModule, command, args, options = {}) => {
-  const { timeoutMs, signal: abortSignal } = options;
+  const { timeoutMs, cancelled, isCancelled } = options;
   return new Promise((resolve, reject) => {
-    if (abortSignal?.aborted) {
+    if (isCancelled?.()) {
       reject(makeError(X`${q(command)} control command aborted`));
       return;
     }
@@ -49,16 +50,19 @@ export const spawnAndCollect = (cpModule, command, args, options = {}) => {
     const stderrChunks = [];
     /** @type {ReturnType<typeof setTimeout> | undefined} */
     let deadline;
-    /** @type {(() => void) | undefined} */
-    let removeAbortListener;
-    // Release the deadline timer and the abort listener on whichever
-    // outcome lands first, so a settled command leaves nothing behind.
+    // Release the deadline timer on whichever outcome lands first. The
+    // cancellation reaction, unlike an abort listener, cannot be
+    // detached from a still-pending token, so it is guarded by
+    // `settled` instead: a late cancellation of an already-settled
+    // command must not signal the exited child.
+    let settled = false;
     const release = () => {
+      settled = true;
       if (deadline !== undefined) clearTimeout(deadline);
-      removeAbortListener?.();
     };
     /** @param {Error} failure */
     const abandon = failure => {
+      if (settled) return;
       try {
         child.kill('SIGKILL');
       } catch {
@@ -94,12 +98,10 @@ export const spawnAndCollect = (cpModule, command, args, options = {}) => {
       );
       if (typeof deadline.unref === 'function') deadline.unref();
     }
-    if (abortSignal !== undefined) {
-      const onAbort = () =>
-        abandon(makeError(X`${q(command)} control command aborted`));
-      abortSignal.addEventListener('abort', onAbort, { once: true });
-      removeAbortListener = () =>
-        abortSignal.removeEventListener('abort', onAbort);
+    if (cancelled !== undefined) {
+      cancelled.catch(() =>
+        abandon(makeError(X`${q(command)} control command aborted`)),
+      );
     }
   });
 };

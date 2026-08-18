@@ -1,9 +1,11 @@
 // @ts-check
 
-/* global AbortController, clearTimeout, setTimeout */
+/* global clearTimeout, setTimeout */
 
+import { makeCancelKit } from '@endo/cancel';
 import { E } from '@endo/eventual-send';
 import { Fail, makeError, q, X } from '@endo/errors';
+import { makePromiseKit } from '@endo/promise-kit';
 import { makeExo } from '@endo/exo';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { M } from '@endo/patterns';
@@ -312,11 +314,10 @@ const makeEagerReader = (iterable, { label, byteLimit, onFailure }) => {
   // this today — `bytesReaderFromIterator` serializes its own pulls —
   // so it is a tripwire on the contract, not a live failure path.
   let nextInFlight = false;
-  /** @type {() => void} */
-  let finish;
-  const finished = new Promise(resolve => {
-    finish = () => resolve(undefined);
-  });
+  const { promise: finished, resolve: finish } =
+    /** @type {import('@endo/promise-kit').PromiseKit<void>} */ (
+      makePromiseKit()
+    );
 
   const wake = () => {
     const waiter = wakeWaiter;
@@ -800,27 +801,19 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
       /** @type {Promise<DriverProcess>} */
       let driverProcessPromise;
 
-      // Admission cancellation. The driver receives the signal so it can
+      // Admission cancellation. The driver receives the token so it can
       // abort its in-flight control command and remove the exact named
       // operation; the factory additionally treats a pending admission as
-      // abandonable, so a driver that stalls (or ignores the signal) can
+      // abandonable, so a driver that stalls (or ignores the token) can
       // never hold up timeout, disposal, or owner cancellation.
-      const admission = new AbortController();
-      /** @type {Promise<never>} */
-      const admissionAborted = new Promise((_resolve, reject) => {
-        admission.signal.addEventListener(
-          'abort',
-          () => reject(admission.signal.reason),
-          { once: true },
-        );
-      });
-      admissionAborted.catch(() => undefined);
-      // `harden` would freeze the AbortSignal's own abort bookkeeping, so
-      // hand the driver a hardened accessor rather than the frozen value.
+      const {
+        cancelled: admissionCancelled,
+        cancel: cancelAdmission,
+        isCancelled: isAdmissionCancelled,
+      } = makeCancelKit();
       const spawnControls = harden({
-        get signal() {
-          return admission.signal;
-        },
+        cancelled: admissionCancelled,
+        isCancelled: isAdmissionCancelled,
       });
       let admissionAbandoned = false;
       /** @type {DriverProcess | undefined} */
@@ -847,16 +840,11 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
 
       /** @type {Error | undefined} */
       let terminalError;
-      /** @type {(reason: Error) => void} */
-      let signalContainmentFailure = () => undefined;
       // Rejects if cleanup cannot prove containment, so wait() settles
       // with the cleanup error instead of hanging on the driver's reap
       // primitive.
-      /** @type {Promise<never>} */
-      const containmentFailed = new Promise((_resolve, reject) => {
-        signalContainmentFailure = reject;
-      });
-      containmentFailed.catch(() => undefined);
+      const { cancelled: containmentFailed, cancel: signalContainmentFailure } =
+        makeCancelKit();
       /** @type {Promise<void> | undefined} */
       let killPromise;
       // The capture readers cannot be built until admission returns the
@@ -864,12 +852,10 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
       // that. One promise of the controls carries the "not yet attached"
       // state, so no early-exit path has to remember to trip a separate
       // latch as well as publish the (possibly empty) array.
-      /** @type {(controls: Array<{ finished: Promise<void>, close: () => void }>) => void} */
-      let publishStreamControls = () => undefined;
-      /** @type {Promise<Array<{ finished: Promise<void>, close: () => void }>>} */
-      const streamControls = new Promise(resolve => {
-        publishStreamControls = resolve;
-      });
+      const { promise: streamControls, resolve: publishStreamControls } =
+        /** @type {import('@endo/promise-kit').PromiseKit<Array<{ finished: Promise<void>, close: () => void }>>} */ (
+          makePromiseKit()
+        );
       /** @type {Promise<void> | undefined} */
       let drainPromise;
 
@@ -906,14 +892,14 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
             await null;
             // Cancel a still-pending admission first so this settles even
             // when the driver call never does.
-            admission.abort(reason);
+            cancelAdmission(reason);
             // The cancellation loses the race only when the admission
             // never landed; a process that landed while the race was
             // settling is still visible in `admittedProc`, and is
             // terminated here rather than by the abandonment reaction.
             const driverProc = await Promise.race([
               driverProcessPromise,
-              admissionAborted,
+              admissionCancelled,
             ]).catch(() => admittedProc);
             if (driverProc === undefined) {
               // No controllable process exists yet. A late arrival is
@@ -1060,7 +1046,7 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
         // eslint-disable-next-line @jessie.js/safe-await-separator
         driverProc = await Promise.race([
           driverProcessPromise,
-          admissionAborted,
+          admissionCancelled,
         ]);
       } catch (e) {
         admissionAbandoned = true;

@@ -3,6 +3,7 @@
 /* global Buffer, process */
 
 import { makeError, q, X } from '@endo/errors';
+import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeCgroup2Probe } from '../limits.js';
 import { readableToAsyncIterable, spawnAndCollect } from './child-process.js';
@@ -1141,7 +1142,8 @@ export const makePodmanDriver = ({
     if (ownerId === undefined) {
       throw makeError(X`podman driver ownerId is not configured`);
     }
-    const admissionSignal = controls?.signal;
+    const admissionCancelled = controls?.cancelled;
+    const isAdmissionCancelled = controls?.isCancelled;
 
     const containerName = makeOperationName();
     // Names include pid, time, and a counter, so the operation label remains
@@ -1177,7 +1179,8 @@ export const makePodmanDriver = ({
     try {
       created = await spawnAndCollect(cp, 'podman', createArgv, {
         timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
-        signal: admissionSignal,
+        cancelled: admissionCancelled,
+        isCancelled: isAdmissionCancelled,
       });
     } catch (e) {
       // The stalled or aborted create may have registered the name
@@ -1190,7 +1193,7 @@ export const makePodmanDriver = ({
         X`podman operation create failed: ${q(created.stderr.trim() || created.stdout.trim())}`,
       );
     }
-    if (admissionSignal?.aborted) {
+    if (isAdmissionCancelled?.()) {
       await removeOperation();
       throw makeError(X`podman operation admission aborted`);
     }
@@ -1220,15 +1223,15 @@ export const makePodmanDriver = ({
       );
     }
 
-    /** @type {Promise<{ code: number | null; signal: string | null }>} */
-    const proxyExited = new Promise((resolve, reject) => {
-      child.once('error', err => {
-        reject(err);
-      });
-      child.once('exit', (code, signal) => {
-        resolve({ code, signal });
-      });
-    });
+    const {
+      promise: proxyExited,
+      resolve: resolveProxy,
+      reject: rejectProxy,
+    } = /** @type {import('@endo/promise-kit').PromiseKit<{ code: number | null, signal: string | null }>} */ (
+      makePromiseKit()
+    );
+    child.once('error', rejectProxy);
+    child.once('exit', (code, signal) => resolveProxy({ code, signal }));
     proxyExited.catch(() => undefined);
 
     const exited = (async () => {
