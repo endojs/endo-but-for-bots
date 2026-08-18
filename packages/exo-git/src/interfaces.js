@@ -2,6 +2,12 @@
 
 import { M } from '@endo/patterns';
 
+import {
+  DEFAULT_REMOTE_REF_STRING_LIMIT,
+  DEFAULT_REMOTE_TEXT_LIMIT,
+  DEFAULT_REMOTE_UPDATED_REFS_LIMIT,
+} from './result-bounds.js';
+
 // #region Shape primitives
 
 const GitDirectionShape = M.or(M.eq('fetch'), M.eq('push'));
@@ -72,10 +78,14 @@ const GitRefKindShape = M.or('branch', 'commit', 'detached', 'tag');
 const GitRefShape = M.splitRecord(
   {
     kind: GitRefKindShape,
-    name: M.string(),
+    name: M.string(
+      harden({ stringLengthLimit: DEFAULT_REMOTE_REF_STRING_LIMIT }),
+    ),
   },
   {
-    oid: M.string(),
+    oid: M.string(
+      harden({ stringLengthLimit: DEFAULT_REMOTE_REF_STRING_LIMIT }),
+    ),
   },
 );
 const RefArgShape = M.or(M.string(), GitRefShape);
@@ -137,19 +147,32 @@ const GitRefUpdateResultShape = M.or(
 
 const RemoteRefUpdateShape = M.splitRecord(
   {
-    remote: M.string(),
+    remote: M.string(
+      harden({ stringLengthLimit: DEFAULT_REMOTE_REF_STRING_LIMIT }),
+    ),
     result: GitRefUpdateResultShape,
   },
   { local: GitRefShape },
   harden({}),
 );
 
+// `updatedRefs` and `text` are network-sourced: a fetch/push result
+// originates from the remote (see `native-git-backend.js`'s `remoteFetch` /
+// `remotePush`), and `git-remote.js` retains the result in `GitRemote`'s
+// durable audit log.  The bounds below are the hard structural ceiling; a
+// malformed or oversized result is rejected here regardless of which backend
+// produced it.  `makeGitRemote`'s `resultLimits` option transparently
+// truncates a legitimately large result to fit under this ceiling before it
+// ever reaches this guard (see `result-bounds.js`).
 const RemoteOperationResultShape = M.splitRecord(
   {
-    updatedRefs: M.arrayOf(RemoteRefUpdateShape),
-    text: M.string(),
+    updatedRefs: M.arrayOf(
+      RemoteRefUpdateShape,
+      harden({ arrayLengthLimit: DEFAULT_REMOTE_UPDATED_REFS_LIMIT }),
+    ),
+    text: M.string(harden({ stringLengthLimit: DEFAULT_REMOTE_TEXT_LIMIT })),
   },
-  {},
+  { droppedUpdatedRefsCount: M.number() },
   harden({}),
 );
 

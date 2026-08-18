@@ -42,6 +42,14 @@ export type RemoteRefUpdate = {
 export type RemoteOperationResult = {
   updatedRefs: RemoteRefUpdate[];
   text: string;
+  /**
+   * Present only when the remote's `updatedRefs` exceeded the configured
+   * cardinality bound; the value is the count of entries dropped to fit
+   * under it. The count accumulates across layers: a backend that already
+   * bounded its own result contributes the count it reports, plus whatever
+   * the exo layer drops on top. See `result-bounds.js`.
+   */
+  droppedUpdatedRefsCount?: number;
 };
 
 export type RemotePullResult = {
@@ -244,6 +252,7 @@ export type GitRemoteOperationSuccessAuditEvent = GitRemoteAuditEventBase & {
   type: 'fetch' | 'pull' | 'push';
   outcome: 'ok';
   updatedRefs?: RemoteRefUpdate[];
+  droppedUpdatedRefsCount?: number;
   integration?: 'up-to-date' | 'fast-forward' | 'merge' | 'rebase';
   head?: GitRef;
 };
