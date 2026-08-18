@@ -3001,6 +3001,24 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/preact-social@workspace:packages/preact-social":
+  version: 0.0.0-use.local
+  resolution: "@endo/preact-social@workspace:packages/preact-social"
+  dependencies:
+    "@endo/preact-container": "workspace:^"
+    "@vitest/browser": "npm:^4.1.9"
+    "@vitest/browser-playwright": "npm:^4.1.9"
+    eslint: "catalog:dev"
+    playwright: "npm:^1.60.0"
+    preact: "npm:^10.29.2"
+    ses: "workspace:^"
+    vite: "npm:^8.0.16"
+    vitest: "npm:^4.1.9"
+  peerDependencies:
+    preact: ^10.0.0 || ^11.0.0
+  languageName: unknown
+  linkType: soft
+
 "@endo/promise-kit@workspace:^, @endo/promise-kit@workspace:packages/promise-kit":
   version: 0.0.0-use.local
   resolution: "@endo/promise-kit@workspace:packages/promise-kit"
