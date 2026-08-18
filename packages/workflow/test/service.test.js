@@ -524,10 +524,13 @@ test('the service start facet ignores a caller-supplied runId', async t => {
     initial: 'done',
     states: { done: { final: true } },
   });
-  const { runId } = await E(service).start(chart, {
-    params: harden({}),
-    runId: 'r-chosen',
-  });
+  // The literal deliberately smuggles the internal `runId` parameter;
+  // the cast keeps the excess-property check from rejecting what the
+  // runtime must be shown to drop.
+  const options = /** @type {any} */ (
+    harden({ params: harden({}), runId: 'r-chosen' })
+  );
+  const { runId } = await E(service).start(chart, options);
   t.not(runId, 'r-chosen');
   t.true(engines.has(runId));
   t.false(engines.has('r-chosen'));
@@ -613,7 +616,9 @@ test('follow replays from a seq cursor then tails live entries', async t => {
   const seen = [];
   const reader = await E(run).follow({ since: 1n });
   const consumed = (async () => {
-    for await (const entry of iterateReader(reader)) {
+    for await (const entry of /** @type {AsyncIterable<any>} */ (
+      iterateReader(reader)
+    )) {
       seen.push(`${entry.seq}:${entry.kind}`);
     }
   })();
