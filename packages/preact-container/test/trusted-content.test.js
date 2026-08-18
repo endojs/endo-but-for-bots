@@ -15,9 +15,12 @@
 // in what a hostile guest CANNOT do.
 import { h } from 'preact';
 import { useState } from 'preact/hooks';
+import { Suspense } from 'preact/compat';
 import { renderConfined, unmount } from '../src/renderer.js';
 import { confineComponent, isConfinedComponent } from '../src/compartment.js';
 import { setupScratch, teardown } from './_util/helpers.js';
+
+const tick = (ms = 0) => new Promise(r => setTimeout(r, ms));
 
 describe('confineComponent as trusted content', () => {
   /** @type {HTMLDivElement} */
@@ -250,5 +253,179 @@ describe('confineComponent as trusted content', () => {
     renderConfined(h(Guest, { Plain, author: ALICE }), scratch);
     // Plain never ran; only its children survive (as a Fragment), so no 'Alexa'.
     expect(scratch.querySelector('.out').textContent).to.not.contain('Alexa');
+  });
+});
+
+// The point of a mutual-suspicion boundary is that BOTH directions hold at
+// once: in a single render, the guest's own output is confined (host is
+// protected) AND the trusted content it places is unreadable to it (the
+// trusted party is protected). These tests exercise both simultaneously.
+describe('confineComponent — both directions in one render', () => {
+  /** @type {HTMLDivElement} */
+  let scratch;
+  beforeEach(() => {
+    scratch = setupScratch();
+  });
+  afterEach(() => {
+    unmount(scratch);
+    teardown(scratch);
+  });
+
+  it('confines the guest AND carries unreadable trusted content, together', () => {
+    const ALICE = Object.freeze({});
+    const names = new WeakMap();
+    names.set(ALICE, 'Alexa');
+    const PetName = confineComponent(({ h: ch }, { party }) =>
+      ch('span', { class: 'pet' }, names.get(party) || 'unknown'),
+    );
+
+    let peeked = 'none';
+    const Guest = confineComponent(({ h: ch }, props) => {
+      // protect-the-trusted-party direction: place the badge, try to read it
+      const badge = ch(props.PetName, { party: props.author });
+      try {
+        peeked = JSON.stringify(badge.props || {});
+      } catch (e) {
+        peeked = `threw:${e && e.message}`;
+      }
+      // protect-the-host direction: attempt injections that must be neutralized
+      return ch(
+        'div',
+        { class: 'guest' },
+        badge,
+        ch(
+          'a',
+          { class: 'evil', href: 'javascript:globalThis.pwned = 1' },
+          'x',
+        ),
+        ch('script', null, 'globalThis.pwned = 1'),
+      );
+    });
+
+    delete globalThis.pwned;
+    renderConfined(h(Guest, { PetName, author: ALICE }), scratch);
+
+    // trusted content rendered for the user…
+    expect(scratch.querySelector('.pet').textContent).to.equal('Alexa');
+    // …but the guest never saw the name (only the opaque party ref it passed)
+    expect(peeked).to.not.contain('Alexa');
+    // guest injections neutralized: javascript: href dropped, <script> gone
+    const a = scratch.querySelector('a.evil');
+    expect(a).to.not.equal(null);
+    expect(a.getAttribute('href')).to.equal(null);
+    expect(scratch.querySelector('script')).to.equal(null);
+    expect(globalThis.pwned).to.equal(undefined);
+    delete globalThis.pwned;
+  });
+
+  it('a guest cannot read a trusted component even while its own output is being sanitized', () => {
+    // The guest wraps the trusted badge in a disallowed tag (dropped to a
+    // Fragment) — the sanitizer rewrites the guest subtree, yet the trusted
+    // petname still renders and still never reaches the guest as data.
+    const BOB = Object.freeze({});
+    const names = new WeakMap();
+    names.set(BOB, 'Bobby');
+    const PetName = confineComponent(({ h: ch }, { party }) =>
+      ch('span', { class: 'pet2' }, names.get(party) || 'unknown'),
+    );
+    let stolen = 'none';
+    const Guest = confineComponent(({ h: ch }, props) => {
+      try {
+        // direct-call exfiltration attempt, mixed with a sanitized wrapper
+        stolen = JSON.stringify(props.PetName({ party: props.author }));
+      } catch (e) {
+        stolen = `threw:${e && e.message}`;
+      }
+      return ch(
+        'marquee', // disallowed tag → Fragment
+        { class: 'evil2' },
+        ch(props.PetName, { party: props.author }),
+      );
+    });
+    renderConfined(h(Guest, { PetName, author: BOB }), scratch);
+    expect(scratch.querySelector('.pet2').textContent).to.equal('Bobby');
+    expect(scratch.querySelector('marquee')).to.equal(null); // wrapper dropped
+    expect(String(stolen)).to.not.contain('Bobby'); // direct call yielded nothing
+  });
+});
+
+// Suspense regression: the gate re-arms via Preact's __r hook before every
+// component invocation, including re-invocations driven by a Suspense resume.
+// This pins that a confined component is not spuriously nulled across a
+// suspend/resume cycle. See the investigation in PR #1031.
+describe('confineComponent — under Suspense', () => {
+  /** @type {HTMLDivElement} */
+  let scratch;
+  beforeEach(() => {
+    scratch = setupScratch();
+  });
+  afterEach(() => {
+    unmount(scratch);
+    teardown(scratch);
+  });
+
+  it('a confined component survives a sibling suspend/resume', async () => {
+    const Confined = confineComponent(({ h: ch }) =>
+      ch('div', { class: 'confined' }, 'confined-content'),
+    );
+    let resolve;
+    const promise = new Promise(r => (resolve = r));
+    let done = false;
+    const Lazy = () => {
+      if (!done) throw promise;
+      return h('span', { class: 'lazy' }, 'lazy-loaded');
+    };
+    renderConfined(
+      h(
+        Suspense,
+        { fallback: h('span', { class: 'fb' }, 'loading') },
+        h(Confined, null),
+        h(Lazy, null),
+      ),
+      scratch,
+    );
+    await tick();
+    expect(scratch.querySelector('.fb')).to.not.equal(null); // suspended
+
+    done = true;
+    resolve();
+    await tick(20);
+    await tick(20);
+    const el = scratch.querySelector('.confined');
+    expect(el).to.not.equal(null);
+    expect(el.textContent).to.equal('confined-content');
+    expect(scratch.querySelector('.lazy').textContent).to.equal('lazy-loaded');
+  });
+
+  it('a confined component re-renders via setState after a Suspense resume', async () => {
+    let bump;
+    const Confined = confineComponent(({ h: ch }) => {
+      const [n, setN] = useState(0);
+      bump = () => setN(v => v + 1);
+      return ch('div', { class: 'confined2' }, `n=${n}`);
+    });
+    let resolve;
+    const promise = new Promise(r => (resolve = r));
+    let done = false;
+    const Lazy = () => {
+      if (!done) throw promise;
+      return h('span', null, 'ok');
+    };
+    renderConfined(
+      h(
+        Suspense,
+        { fallback: h('span', null, 'loading') },
+        h(Confined, null),
+        h(Lazy, null),
+      ),
+      scratch,
+    );
+    await tick();
+    done = true;
+    resolve();
+    await tick(20);
+    bump();
+    await tick(20);
+    expect(scratch.querySelector('.confined2').textContent).to.equal('n=1');
   });
 });
