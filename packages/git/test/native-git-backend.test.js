@@ -8,9 +8,14 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { promisify } from 'node:util';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
-import { gitClone, makeNativeGitBackend } from '../src/index.js';
+import {
+  gitClone,
+  internalHelpers,
+  makeNativeGitBackend,
+} from '../src/index.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -150,6 +155,64 @@ test('NativeGitBackend.status filters untracked files according to options', asy
   await t.throwsAsync(
     backend.status(/** @type {any} */ ({ untracked: 'invalid' })),
     { message: /status\.untracked/ },
+  );
+});
+
+test('remoteFetch keeps above-ceiling transport output within TOOL_OUTPUT_LIMIT', async t => {
+  t.timeout(120_000);
+  const { TOOL_OUTPUT_LIMIT } = internalHelpers;
+
+  const sourceRoot = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'native-git-remote-source-'),
+  );
+  t.teardown(() =>
+    fs.promises.rm(sourceRoot, { recursive: true, force: true }),
+  );
+  await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: sourceRoot });
+  await fs.promises.writeFile(path.join(sourceRoot, 'seed.txt'), 'seed\n');
+  await execFileAsync('git', ['add', 'seed.txt'], { cwd: sourceRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-q', '-m', 'seed'],
+    { cwd: sourceRoot },
+  );
+  const { stdout: revParseOut } = await execFileAsync(
+    'git',
+    ['rev-parse', 'HEAD'],
+    { cwd: sourceRoot },
+  );
+  const oid = revParseOut.trim();
+  // Enough long-named branches that fetch's per-ref summary (one
+  // ` * [new branch] <name> -> origin/<name>` line each, naming the branch
+  // twice) comfortably exceeds TOOL_OUTPUT_LIMIT on its own.
+  const branchCount = 400;
+  const branchPad = 'x'.repeat(120);
+  execFileSync('git', ['update-ref', '--stdin'], {
+    cwd: sourceRoot,
+    input: Array.from(
+      { length: branchCount },
+      (_, i) => `create refs/heads/branch-${i}-${branchPad} ${oid}\n`,
+    ).join(''),
+  });
+
+  const { backend } = await provisionRepo(t);
+  const result = await backend.remoteFetch({
+    url: pathToFileURL(sourceRoot).href,
+    refspecs: ['+refs/heads/*:refs/remotes/origin/*'],
+  });
+  // The long-named branches plus the seed `main` branch.
+  t.is(result.updatedRefs.length, branchCount + 1);
+  // The bounded text, marker included, fits under TOOL_OUTPUT_LIMIT — the
+  // same 50,000-character ceiling `@endo/exo-git` enforces structurally on
+  // `GitRemote` results — so the exo layer passes it through untouched
+  // instead of re-truncating and replacing the total below with the length
+  // of an intermediate already-truncated string.
+  t.true(result.text.length <= TOOL_OUTPUT_LIMIT);
+  const marker = /\.\.\. \(truncated, (\d+) chars total\)$/.exec(result.text);
+  t.truthy(marker);
+  // The reported total sizes the original transport output.
+  t.true(
+    Number(/** @type {RegExpExecArray} */ (marker)[1]) > TOOL_OUTPUT_LIMIT,
   );
 });
 

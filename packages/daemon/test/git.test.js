@@ -1976,12 +1976,15 @@ test('NativeGitBackend.truncateOutput surfaces the visibility marker', t => {
   t.is(truncateOutput(short), short);
   t.notRegex(truncateOutput(short), /truncated|chars total/);
 
-  // Output that exceeds the budget is truncated to the budget and a
-  // visibility marker that names the original length is appended, so a
-  // caller (or an LLM reading the log line) can tell the diff was cut.
+  // Output that exceeds the budget is truncated and a visibility marker
+  // that names the original length is appended, so a caller (or an LLM
+  // reading the log line) can tell the diff was cut.  The marker fits
+  // WITHIN the budget: `@endo/exo-git` bounds remote result text to the
+  // same 50,000-character ceiling, and a marker appended past the limit
+  // would be re-truncated there, losing the original total.
   const oversized = 'a'.repeat(TOOL_OUTPUT_LIMIT + 1234);
   const result = truncateOutput(oversized);
-  t.true(result.length > TOOL_OUTPUT_LIMIT);
+  t.true(result.length <= TOOL_OUTPUT_LIMIT);
   t.regex(result, /\.\.\. \(truncated, \d+ chars total\)$/);
   // The reported total is the pre-truncation length, not the truncated
   // length, so a reader can size the gap.
