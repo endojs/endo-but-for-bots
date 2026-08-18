@@ -81,7 +81,12 @@ harden(buildWorkspaceIR);
  */
 export const buildFsTypeDeclarations = () =>
   harden({
-    filesystem: renderDeclaration(buildFilesystemIR()),
-    workspace: renderDeclaration(buildWorkspaceIR(), { auxPrefix: 'Mount' }),
+    filesystem: renderDeclaration(buildFilesystemIR(), {
+      globalName: 'filesystem',
+    }),
+    workspace: renderDeclaration(buildWorkspaceIR(), {
+      globalName: 'workspace',
+      auxPrefix: 'Mount',
+    }),
   });
 harden(buildFsTypeDeclarations);

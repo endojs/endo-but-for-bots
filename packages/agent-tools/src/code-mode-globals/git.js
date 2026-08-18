@@ -14,6 +14,28 @@ import { gitDeclarations } from '../../generated/code-mode-globals/git-declarati
 export { gitDeclarations };
 
 /**
+ * Rewrite recursive `typeof <global>` references when a consumer chooses a
+ * custom lexical name for the capability.
+ *
+ * @param {{ aux: string, body: string }} declaration
+ * @param {string} canonicalName
+ * @param {string} name
+ * @returns {{ aux: string, body: string }}
+ */
+const renameDeclarationSelf = (declaration, canonicalName, name) => {
+  if (name === canonicalName) {
+    return declaration;
+  }
+  const replace = text =>
+    text.replaceAll(`typeof ${canonicalName}`, `typeof ${name}`);
+  return harden({
+    aux: replace(declaration.aux),
+    body: replace(declaration.body),
+  });
+};
+harden(renameDeclarationSelf);
+
+/**
  * Build the code-mode global descriptor for an `@endo/exo-git` Git capability.
  * The read-only vs read-write split is a prompt-surface choice: `readOnly`
  * selects the `gitReadOnly` declaration (inspection verbs only) and the
@@ -34,8 +56,13 @@ export const makeGitGlobal = ({
   petName = name,
   readOnly = false,
   historyRewrite = false,
-}) =>
-  harden({
+}) => {
+  const [canonicalName, declaration] = readOnly
+    ? ['gitReadOnly', gitDeclarations.gitReadOnly]
+    : historyRewrite
+      ? ['gitHistory', gitDeclarations.gitHistory]
+      : ['git', gitDeclarations.git];
+  return harden({
     name,
     petName,
     description: readOnly
@@ -44,10 +71,7 @@ export const makeGitGlobal = ({
         ? 'History-rewrite @endo/exo-git Git capability for amend, reword, cherry-pick, and rebase. Rebase supports start, continue, abort, and skip; if start or continue stops for conflicts, resolve and stage them (checkoutConflict selects Git index stage 2 for ours or stage 3 for theirs, with branch roles inverted during rebase), then continue, skip, or abort.'
         : 'Read/write @endo/exo-git Git capability for repository changes. ' +
           'In code mode, use status({ untracked: "normal" }) by default to collapse untracked directories; pass { untracked: "all" } when every untracked file is needed. Stage a reported path with add([row.path]).',
-    declaration: readOnly
-      ? gitDeclarations.gitReadOnly
-      : historyRewrite
-        ? gitDeclarations.gitHistory
-        : gitDeclarations.git,
+    declaration: renameDeclarationSelf(declaration, canonicalName, name),
   });
+};
 harden(makeGitGlobal);
