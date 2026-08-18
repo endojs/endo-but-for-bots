@@ -115,7 +115,7 @@ test.serial(
     const readOnlyGit = /** @type {ReadOnlyEndoGit} */ (
       await E(readOnlySession.powers).lookup('git')
     );
-    t.true(Array.isArray(await E(readOnlyGit).status()));
+    t.true(Array.isArray((await E(readOnlyGit).status()).entries));
     // eslint-disable-next-line no-underscore-dangle
     const readOnlyMethods = await E(
       /** @type {any} */ (readOnlyGit),

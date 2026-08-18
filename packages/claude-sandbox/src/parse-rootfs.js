@@ -4,12 +4,12 @@
  * Form-side parse of the `rootfs` field into a `RootfsSpec` keyword
  * arm the `@endo/sandbox` factory accepts.
  *
- * Mirrors the shape of genie's `parseRootfsValue`
- * (`packages/genie/src/sandbox/slice.js`) but defaults to an OCI
+ * Mirrors the shape of the prior agent framework's `parseRootfsValue`
+ * but defaults to an OCI
  * image because a Claude sandbox needs `node` + the `claude` CLI in
  * its userland, which neither `host-bind` nor `minimal` guarantees.
  *
- * The pet-name (`MountCap`) rootfs arm that genie supports is
+ * The pet-name (`MountCap`) rootfs arm is
  * deliberately omitted here: the Claude sandbox always backs its
  * rootfs with an OCI image (or, for advanced callers, the host/minimal
  * keywords), and the only Mount cap in play is the *workspace*, which

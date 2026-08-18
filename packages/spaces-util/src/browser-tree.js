@@ -197,8 +197,9 @@ export const checkoutToDirectory = async (tree, rootHandle, options = {}) => {
   /**
    * @param {unknown} node
    * @param {FileSystemDirectoryHandle} parentHandle
+   * @param {boolean} kindProtocol
    */
-  const walk = async (node, parentHandle) => {
+  const walk = async (node, parentHandle, kindProtocol) => {
     const treeNode =
       /** @type {{ list: () => Promise<readonly string[]>, lookup: (name: string) => Promise<unknown> }} */ (
         node
@@ -206,18 +207,27 @@ export const checkoutToDirectory = async (tree, rootHandle, options = {}) => {
     const names = await E(treeNode).list();
     for (const name of names) {
       const child = await E(treeNode).lookup(name);
-      // Use __getMethodNames__ to detect the node type without calling
-      // a method that may not exist (which causes CapTP error logging).
-      // eslint-disable-next-line no-underscore-dangle
-      const methods = await E(
-        /** @type {{ __getMethodNames__: () => Promise<string[]> }} */ (child),
-      ).__getMethodNames__();
-      const isTree = methods.includes('list');
+      let isTree;
+      if (kindProtocol) {
+        isTree = (await E(/** @type {any} */ (child)).kind()) === 'directory';
+      } else {
+        // Older ReadableTree / ReadableBlob capabilities need introspection
+        // to avoid a noisy missing-method send.
+        // eslint-disable-next-line no-underscore-dangle
+        const methods = await E(
+          /** @type {{ __getMethodNames__: () => Promise<string[]> }} */ (
+            child
+          ),
+        ).__getMethodNames__();
+        isTree = methods.includes('kind')
+          ? (await E(/** @type {any} */ (child)).kind()) === 'directory'
+          : methods.includes('list');
+      }
       if (isTree) {
         const childDir = await parentHandle.getDirectoryHandle(name, {
           create: true,
         });
-        await walk(child, childDir);
+        await walk(child, childDir, kindProtocol);
       } else {
         // It's a readable-blob. Stream its content via iterateBytesReader.
         const fileHandle = await parentHandle.getFileHandle(name, {
@@ -238,6 +248,12 @@ export const checkoutToDirectory = async (tree, rootHandle, options = {}) => {
     }
   };
 
-  await walk(tree, rootHandle);
+  // Discover the mount protocol once; all descendants of an EndoMount carry
+  // the same discriminator. Older trees use the per-child fallback above.
+  // eslint-disable-next-line no-underscore-dangle
+  const rootMethods = await E(
+    /** @type {{ __getMethodNames__: () => Promise<string[]> }} */ (tree),
+  ).__getMethodNames__();
+  await walk(tree, rootHandle, rootMethods.includes('kind'));
 };
 harden(checkoutToDirectory);

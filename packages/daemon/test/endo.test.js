@@ -5007,7 +5007,7 @@ testNeedsNodeWorker(
       { readOnly: true },
     );
     const status = await E(gitCap).status();
-    t.true(Array.isArray(status));
+    t.true(Array.isArray(status.entries));
     // `commit` is absent from the reader facet entirely (facet
     // membership, not a runtime-rejected method call), so a read-only
     // Git fails the CapTP method lookup rather than a bespoke authority
@@ -5768,6 +5768,176 @@ test('mount dot-dot navigation clamped at root', async t => {
   t.deepEqual(entries, ['inside.txt']);
 });
 
+test('provideSubMount read-only attenuation confines writes', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'submount-ro');
+  await createMountFixture(mountPath, {
+    'src/main.js': 'export default 1;\n',
+  });
+
+  // Parent mount is read-WRITE; the sub-mount asks for read-only, so
+  // attenuation is an independent per-formula property, not inherited.
+  await E(host).provideMount(mountPath, 'submount-ro-parent');
+  await E(host).provideSubMount(
+    'submount-ro-parent',
+    ['src'],
+    'submount-ro-child',
+    { readOnly: true },
+  );
+  const child = await E(host).lookup(['submount-ro-child']);
+
+  // Reading through the sub-mount works and is rooted at src/.
+  t.deepEqual(await E(child).list(), ['main.js']);
+  t.true(await E(child).has('main.js'));
+  const file = await E(child).lookup('main.js');
+  t.is(await E(file).text(), 'export default 1;\n');
+
+  // Every mutation is rejected.
+  await t.throwsAsync(E(child).writeText(['added.js'], 'nope'), {
+    message: /read-only/,
+  });
+  await t.throwsAsync(E(child).remove(['main.js']), {
+    message: /read-only/,
+  });
+  await t.throwsAsync(E(child).makeDirectory(['nested']), {
+    message: /read-only/,
+  });
+
+  // Cross-reference: the backing directory is untouched on disk.
+  const actual = await fs.promises.readdir(path.join(mountPath, 'src'));
+  t.deepEqual(actual, ['main.js']);
+});
+
+test('provideSubMount isolates the child from parent siblings', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'submount-iso');
+  // The canonical isolation case from the design: a sub-mount at
+  // `/project/src` must not be able to reach `/project/secret.txt` via `..`.
+  // (The sibling is a plain filename, not `.env`, so this exercises the `..`
+  // confinement clamp rather than the independent denied-segment guardrail
+  // that would reject `.env` on every mount before the clamp is reached.)
+  await createMountFixture(mountPath, {
+    'src/main.js': 'export default 1;\n',
+    'secret.txt': 'SECRET=xyz\n',
+  });
+
+  await E(host).provideMount(mountPath, 'submount-iso-parent');
+  await E(host).provideSubMount(
+    'submount-iso-parent',
+    ['src'],
+    'submount-iso-child',
+  );
+
+  const parent = await E(host).lookup(['submount-iso-parent']);
+  const child = await E(host).lookup(['submount-iso-child']);
+
+  // The parent can see the secret; the child, rooted at src/, cannot.
+  t.true(await E(parent).has('secret.txt'));
+  t.deepEqual(await E(child).list(), ['main.js']);
+  t.false(await E(child).has('secret.txt'));
+
+  // `..` from the child root is clamped at src/, so the sibling secret
+  // stays invisible both to has() and to list().
+  t.false(await E(child).has('..', 'secret.txt'));
+  t.deepEqual(await E(child).list('..'), ['main.js']);
+});
+
+test('provideSubMount clamps a .. subpath at the parent root', async t => {
+  const { host, config } = await prepareHost(t);
+
+  // Nest the parent mount one level deep so there is a real directory
+  // above it to try to escape into.
+  const rootPath = path.join(config.statePath, '..', 'submount-clamp');
+  await createMountFixture(rootPath, {
+    'topsecret.txt': 'do not leak\n',
+    'proj/app.js': 'run();\n',
+  });
+
+  // Mount only the nested `proj` directory as the parent.
+  await E(host).provideMount(path.join(rootPath, 'proj'), 'clamp-parent');
+
+  // A `..` subpath would lexically point at `submount-clamp` (which holds
+  // topsecret.txt), but formulateSubMount clamps it at the parent root,
+  // so the child is rooted back at `proj` and cannot reach the secret.
+  await E(host).provideSubMount('clamp-parent', ['..'], 'clamp-child');
+  const child = await E(host).lookup(['clamp-child']);
+
+  t.true(await E(child).has('app.js'));
+  t.false(await E(child).has('topsecret.txt'));
+  t.deepEqual(await E(child).list(), ['app.js']);
+});
+
+test('provideSubMount cannot widen a read-only parent to read-write', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'submount-monotonic');
+  await createMountFixture(mountPath, {
+    'src/main.js': 'export default 1;\n',
+  });
+
+  // Parent mount is READ-ONLY.  A sub-mount that omits (or sets false)
+  // `readOnly` must NOT regain write authority the parent was attenuated
+  // out of: attenuation is monotonic, so a read-only parent yields a
+  // read-only child regardless of the requested flag.  (Design
+  // daemon-mount.md § Read-only attenuation: a read-only mount "cannot be
+  // upgraded to read-write through any API path".)
+  await E(host).provideMount(mountPath, 'monotonic-parent', {
+    readOnly: true,
+  });
+  await E(host).provideSubMount(
+    'monotonic-parent',
+    ['src'],
+    'monotonic-child',
+    { readOnly: false },
+  );
+  const child = await E(host).lookup(['monotonic-child']);
+
+  // Reading still works and is rooted at src/.
+  t.deepEqual(await E(child).list(), ['main.js']);
+
+  // Writes are rejected even though the child asked for read-write: the
+  // clamp forced the child read-only because the parent is read-only.
+  await t.throwsAsync(E(child).writeText(['added.js'], 'nope'), {
+    message: /read-only/,
+  });
+  await t.throwsAsync(E(child).remove(['main.js']), {
+    message: /read-only/,
+  });
+
+  // Cross-reference: the backing directory is untouched on disk.
+  const actual = await fs.promises.readdir(path.join(mountPath, 'src'));
+  t.deepEqual(actual, ['main.js']);
+});
+
+test('provideSubMount rejects a symlinked subpath that escapes the parent', async t => {
+  const { host, config } = await prepareHost(t);
+
+  // Lay down a secret OUTSIDE the parent mount, then a symlink inside the
+  // parent that points at it.  The lexical `..` clamp cannot catch this
+  // (the subpath has no `..`); the realpath containment check must.
+  const rootPath = path.join(config.statePath, '..', 'submount-symlink');
+  await createMountFixture(rootPath, {
+    'outside/secret.txt': 'do not leak\n',
+    'proj/app.js': 'run();\n',
+  });
+  await fs.promises.symlink(
+    path.join(rootPath, 'outside'),
+    path.join(rootPath, 'proj', 'escape'),
+    'dir',
+  );
+
+  await E(host).provideMount(path.join(rootPath, 'proj'), 'symlink-parent');
+
+  // A sub-mount rooted at the symlink would resolve (via realpath) to
+  // `outside/`, escaping the parent — formulateSubMount must throw.
+  await t.throwsAsync(
+    E(host).provideSubMount('symlink-parent', ['escape'], 'symlink-child'),
+    { message: /escapes parent mount root/ },
+  );
+});
+
 test('scratch mount - create and use', async t => {
   const { host, config } = await prepareHost(t);
 
@@ -6175,9 +6345,8 @@ test('provideHostPath is an EndoHost-only capability not reachable through an En
   );
 });
 
-test('provideHostPath rejects a spoof that passes the genie shape gate', async t => {
-  // Pins the layering documented in `@endo/genie`'s `assertIsMountCap`
-  // (see `packages/genie/src/sandbox/slice.js`):
+test('provideHostPath rejects a spoof that passes the MountCap shape gate', async t => {
+  // Pins the layering documented in the agent host's `assertIsMountCap`:
   //
   //   - `assertIsMountCap` (in `spawnAgent`'s workspace / rootfs
   //     pet-name branches) is a **shape** gate.  It probes
@@ -6190,7 +6359,7 @@ test('provideHostPath rejects a spoof that passes the genie shape gate', async t
   //     anything not minted via `provideMount` / `provideScratchMount`
   //     with `not a daemon-minted mount`.
   //
-  // Saboteur finding 3 in TODO/60 flagged that the shape gate is the
+  // A saboteur finding flagged that the shape gate is the
   // *only* authentication on a pet-name Mount cap; this test pins the
   // identity gate's downstream rejection so a spoofed exo with the
   // right method names cannot widen the slice's bind set.  If a
@@ -6207,7 +6376,7 @@ test('provideHostPath rejects a spoof that passes the genie shape gate', async t
   const realMount = await E(host).lookup(['shape-gate-mount']);
   t.is(await E(host).provideHostPath(realMount), mountPath);
 
-  // Hand-roll a `makeExo` with the exact method set the genie's shape
+  // Hand-roll a `makeExo` with the exact method set the shape
   // gate probes for.  This is the canonical "minted by `Far(...)`
   // rather than `formulateMount`" spoof — `__getMethodNames__()`
   // returns the required surface, so the shape gate would happily
@@ -6237,11 +6406,10 @@ test('provideHostPath rejects a spoof that passes the genie shape gate', async t
     },
   });
 
-  // Inline the genie's shape-gate probe (we can't import
-  // `assertIsMountCap` from `@endo/genie` here because
-  // `@endo/daemon` is a dependency of genie, not the other way
-  // around — the genie test in
-  // `packages/genie/test/local-sandbox-powers.test.js` exercises
+  // Inline the agent host's shape-gate probe (we can't import
+  // `assertIsMountCap` from the agent host here because
+  // `@endo/daemon` is a dependency of the agent host, not the other way
+  // around — the agent host's own test exercises
   // the helper directly against the dev-repl's local powers).  The
   // probe matches the helper verbatim so the assertion still pins
   // the saboteur-3 layering: the spoof passes the shape probe but

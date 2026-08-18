@@ -732,6 +732,11 @@ accessible. The set can be replaced when the mount is created.
 
 Get documentation for this interface or a specific method.
 
+## kind() -> "directory"
+
+Return the structural kind of this lookup result.
+Use this before choosing directory-only or file-only methods.
+
 ## has(...pathSegments | entry) -> Promise<boolean>
 
 Check if a path exists within the mount.
@@ -747,7 +752,9 @@ Entries with symlinks escaping the mount root are excluded.
 ## lookup(path) -> Promise<EndoMount | EndoMountFile>
 
 Resolve a path within the mount.
-path: string | string[] — Name or path segments.
+path: string | string[] | EndoMountEntry — A string is one segment; an array
+is a sequence of segments. For a slash-joined nested path, use
+lookup(entry("dir/file.txt")) or pass lookup(["dir", "file.txt"]).
 Returns EndoMount for directories, EndoMountFile for files.
 
 ## readText(path) -> Promise<string>
@@ -832,11 +839,21 @@ Capture current state as an immutable readable-tree.
 A live, host-backed file. Read it with text() / json() / streamBase64(),
 inspect and range-read it with getInfo() / fetch(), write it with
 writeText() / append() / writeBytes(), or snapshot() it into the content
-store. stat() returns the bigint-nanosecond metadata record.
+store. kind() returns "file" and stat() returns the bigint-nanosecond metadata
+record.
 
 ## help(methodName?) -> string
 
 Get documentation for this interface or a specific method.
+
+## kind() -> "file"
+
+Return the structural kind of this lookup result.
+
+## list() -> never
+
+Not available on a file.
+Use text() to read its contents.
 
 ## getInfo() -> Promise<{ algorithm, hash, size }>
 

@@ -55,6 +55,14 @@
   capability (ReadableTree, WritableTree, etc.)
 - `writeText(petNameOrPath, fileName, content)` — Write text
   content to a capability (WritableTree, etc.)
+- `editText(petNameOrPath, fileName, edits)` — Apply unique-match text
+  replacements and return a unified diff
+- `glob(petNameOrPath, pattern)` — Find paths recursively within a
+  search-capable filesystem capability (`*` is segment-local and `**`
+  crosses segments; `?` is literal)
+- `grep(petNameOrPath, pattern, glob?, maxResults?)` — Search file contents
+  with a flagless ECMAScript regular expression, optionally restricting the
+  file set with a glob
 
 ## Code Evaluation
 
@@ -75,6 +83,8 @@ IMPORTANT: Always prefer direct tool calls over `evaluate()` or
   capability
 - Use `writeText("capName", "file.txt", content)` to write text
   to a capability
+- Use `glob("capName", "src/**/*.js")` and
+  `grep("capName", "TODO", "src/**/*.js")` to search a mounted workspace
 - Use `lookup()` to inspect values
 - Use `has()` to check existence
 - Use `inspect()` to discover a capability's methods and

@@ -1,7 +1,7 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { GitRemoteCredential, HistoryRewriteEndoGit, PathEntry } from '@endo/exo-git' */
+/** @import { GitRemoteCredential, GitStatusEntry, HistoryRewriteEndoGit, PathEntry } from '@endo/exo-git' */
 /** @import { EndoMountFile } from '../src/types.js' */
 
 import test from '@endo/ses-ava/prepare-endo.js';
@@ -235,9 +235,9 @@ test('Git.readOnly() attenuates mutating operations but preserves reads', async 
   // "no such method" TypeError.
   const runtimeReadOnlyGit = /** @type {HistoryRewriteEndoGit} */ (readOnlyGit);
 
-  const entries = await E(readOnlyGit).status();
-  t.is(entries.length, 1);
-  t.is(entries[0].path, 'new.txt');
+  const status = await E(readOnlyGit).status();
+  t.is(status.entries.length, 1);
+  t.is(status.entries[0].path, 'new.txt');
 
   const entry = await E(mount).entry(['new.txt']);
   await t.throwsAsync(E(runtimeReadOnlyGit).add([entry]), {
@@ -276,12 +276,9 @@ test('Git.readOnly() attenuates mutating operations but preserves reads', async 
   t.is(await E(readOnlyGit).readOnly(), readOnlyGit);
 });
 
-test('Git.readOnly() worktree and status nodes carry no write authority', async t => {
-  // Regression for the read-only attenuation leak (Codex P1a): a
-  // read-only Git reused the writable mount, so `worktree()` and the
-  // `node`s minted by `status()` still exposed `writeText` / `remove` /
-  // `makeFile`.  A read-only cap must surface a read-only worktree view
-  // whose nodes reject writes.
+test('Git.readOnly() worktree and status carry no write authority', async t => {
+  // A read-only Git must surface a read-only worktree view. Status rows are
+  // copy data and deliberately carry no live node or entry authority.
   const repoRoot = await provisionGitWorktree(t);
   await fs.promises.writeFile(path.join(repoRoot, 'tracked.txt'), 'before');
   const filePowers = makeFilePowers({ fs, path });
@@ -306,22 +303,14 @@ test('Git.readOnly() worktree and status nodes carry no write authority', async 
     );
   }
 
-  // Each status row's `node` is minted through the read-only worktree,
-  // so it likewise rejects mutation.  Before the fix the node was a
-  // writable EndoMountFile and this write would succeed.
-  const rows = await E(readOnlyGit).status();
-  const trackedRow = rows.find(row => row.path === 'tracked.txt');
+  const status = await E(readOnlyGit).status();
+  const trackedRow = status.entries.find(row => row.path === 'tracked.txt');
   t.truthy(trackedRow, 'status should report the tracked file');
-  t.truthy(trackedRow && trackedRow.node, 'status row should carry a node');
-  if (trackedRow === undefined || trackedRow.node === undefined) {
+  if (trackedRow === undefined) {
     return;
   }
-  await t.throwsAsync(
-    E(/** @type {any} */ (trackedRow.node)).writeText('after'),
-    {
-      message: /read-only|not a function|no method/i,
-    },
-  );
+  t.false('entry' in trackedRow);
+  t.false('node' in trackedRow);
   // The on-disk content is untouched by the rejected write.
   t.is(
     await fs.promises.readFile(path.join(repoRoot, 'tracked.txt'), 'utf8'),
@@ -338,7 +327,7 @@ test('makeGit can be constructed directly as read-only', async t => {
   const git = makeGit({ mount, backend, lineageOf }, { readOnly: true });
   const runtimeReadOnlyGit = /** @type {HistoryRewriteEndoGit} */ (git);
 
-  t.is((await E(git).status()).length, 1);
+  t.is((await E(git).status()).entries.length, 1);
   const entry = await E(mount).entry(['blocked.txt']);
   await t.throwsAsync(E(runtimeReadOnlyGit).add([entry]), {
     message: /has no method "add"/,
@@ -1349,7 +1338,7 @@ test('Git.cherryPick noCommit applies without creating a commit', async t => {
 
   t.is((await E(git).revParse('HEAD')).oid, initialHead);
   const status = await E(git).status();
-  const pending = status.find(row => row.path === 'pending.txt');
+  const pending = status.entries.find(row => row.path === 'pending.txt');
   t.truthy(pending);
   t.is(pending && pending.index, 'added');
 });
@@ -1639,6 +1628,114 @@ test('NativeGitBackend.currentBranch returns the symbolic ref name', async t => 
   const backend = makeNativeGitBackend({ repoRoot });
   const head = await backend.currentBranch();
   t.deepEqual(head, { name: 'main', kind: 'branch' });
+});
+
+test('NativeGitBackend.trackingStatus reports upstream divergence and detached HEAD', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  const base = (
+    await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })
+  ).stdout.trim();
+  await execFileAsync('git', ['update-ref', 'refs/remotes/origin/main', base], {
+    cwd: repoRoot,
+  });
+  await execFileAsync('git', ['config', 'branch.main.remote', 'origin'], {
+    cwd: repoRoot,
+  });
+  await execFileAsync(
+    'git',
+    ['config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'],
+    { cwd: repoRoot },
+  );
+  await execFileAsync(
+    'git',
+    ['config', 'branch.main.merge', 'refs/heads/main'],
+    {
+      cwd: repoRoot,
+    },
+  );
+  const backend = makeNativeGitBackend({ repoRoot });
+
+  t.deepEqual(await backend.trackingStatus(), {
+    branch: 'main',
+    upstream: 'origin/main',
+    ahead: 0,
+    behind: 0,
+    detached: false,
+  });
+  await execFileAsync(
+    'git',
+    [
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '--allow-empty',
+      '-m',
+      'ahead',
+    ],
+    { cwd: repoRoot },
+  );
+  t.deepEqual(await backend.trackingStatus(), {
+    branch: 'main',
+    upstream: 'origin/main',
+    ahead: 1,
+    behind: 0,
+    detached: false,
+  });
+
+  await execFileAsync('git', ['switch', '-c', 'remote-only', base], {
+    cwd: repoRoot,
+  });
+  await execFileAsync(
+    'git',
+    [
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '--allow-empty',
+      '-m',
+      'behind',
+    ],
+    { cwd: repoRoot },
+  );
+  const remoteHead = (
+    await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })
+  ).stdout.trim();
+  await execFileAsync('git', ['switch', 'main'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['update-ref', 'refs/remotes/origin/main', remoteHead],
+    { cwd: repoRoot },
+  );
+  t.deepEqual(await backend.trackingStatus(), {
+    branch: 'main',
+    upstream: 'origin/main',
+    ahead: 1,
+    behind: 1,
+    detached: false,
+  });
+
+  await backend.detach('HEAD');
+  t.deepEqual(await backend.trackingStatus(), {
+    ahead: 0,
+    behind: 0,
+    detached: true,
+  });
+});
+
+test('NativeGitBackend.trackingStatus handles a branch without an upstream', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  const backend = makeNativeGitBackend({ repoRoot });
+
+  t.deepEqual(await backend.trackingStatus(), {
+    branch: 'main',
+    ahead: 0,
+    behind: 0,
+    detached: false,
+  });
 });
 
 test('NativeGitBackend.branches lists the local branches', async t => {
@@ -3092,7 +3189,31 @@ test('NativeGitBackend.status: classifies untracked, modified, added, deleted', 
   t.is(byPath['doomed.txt'].worktree, 'deleted');
 });
 
-test('Git.status reports merge conflicts with mount entries', async t => {
+test('NativeGitBackend.status honors untracked mode and maxCount', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  await fs.promises.mkdir(path.join(repoRoot, 'tree', 'deeper'), {
+    recursive: true,
+  });
+  await fs.promises.writeFile(path.join(repoRoot, 'tree', 'deeper', 'a'), 'a');
+  await fs.promises.writeFile(path.join(repoRoot, 'one'), 'one');
+  const backend = makeNativeGitBackend({ repoRoot });
+
+  t.deepEqual((await backend.status()).map(entry => entry.path).sort(), [
+    'one',
+    'tree/deeper/a',
+  ]);
+  t.deepEqual(
+    (await backend.status({ untracked: 'normal' })).map(entry => entry.path),
+    ['one', 'tree/'],
+  );
+  t.deepEqual(await backend.status({ untracked: 'no' }), []);
+  t.is((await backend.status({ maxCount: 1 })).length, 1);
+  await t.throwsAsync(backend.status({ maxCount: 0 }), {
+    message: /status\.maxCount must be a positive integer/,
+  });
+});
+
+test('Git.status reports merge conflicts as copy data', async t => {
   const repoRoot = await provisionGitWorktree(t);
   await fs.promises.writeFile(path.join(repoRoot, 'conflict.txt'), 'base\n');
   await execFileAsync('git', ['add', 'conflict.txt'], { cwd: repoRoot });
@@ -3142,21 +3263,18 @@ test('Git.status reports merge conflicts with mount entries', async t => {
   await t.throwsAsync(E(git).merge('feature'), {
     message: /CONFLICT|Automatic merge failed/,
   });
-  const entries = await E(git).status();
-  const row = entries.find(entry => entry.path === 'conflict.txt');
+  const status = await E(git).status();
+  const row = status.entries.find(entry => entry.path === 'conflict.txt');
   if (row === undefined) {
     throw t.fail('expected a status row for conflict.txt');
   }
   t.is(row.index, 'conflicted');
   t.is(row.worktree, 'conflicted');
-  const entry = /** @type {PathEntry} */ (row.entry);
-  t.deepEqual(await E(entry).segments(), ['conflict.txt']);
-  // The conflicted entry is a file, so its live node exposes `text()`.
-  const node = /** @type {EndoMountFile} */ (/** @type {unknown} */ (row.node));
-  t.regex(await E(node).text(), /<<<<<<< HEAD/);
+  t.false('entry' in row);
+  t.false('node' in row);
 });
 
-test('Git.status wraps backend rows into GitStatusEntry with mount entries', async t => {
+test('Git.status returns hardened copy-data GitStatusEntry rows', async t => {
   const repoRoot = await provisionGitWorktree(t);
   await fs.promises.mkdir(path.join(repoRoot, 'src'), { recursive: true });
   await fs.promises.writeFile(
@@ -3164,32 +3282,59 @@ test('Git.status wraps backend rows into GitStatusEntry with mount entries', asy
     'export default 1',
   );
 
-  // Construct the public Git exo over a real mount so status() can mint
-  // PathEntry values.
-  // This is the only test in this file that exercises the exo + backend wired
-  // together.
+  // Construct the public Git exo over a real mount. This exercises the exo +
+  // backend wired together without minting per-row capabilities.
   const filePowers = makeFilePowers({ fs, path });
   const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
   const backend = makeNativeGitBackend({ repoRoot });
   const git = makeGit({ mount, backend, lineageOf });
 
-  const entries = await E(git).status();
-  t.is(entries.length, 1);
-  const [row] = entries;
+  const status = await E(git).status();
+  t.is(status.entries.length, 1);
+  t.false(status.truncated);
+  const [row] = status.entries;
   if (row === undefined) {
     throw t.fail('expected at least one status row');
   }
   t.is(row.path, 'src/new.js');
   t.is(row.index, 'clean');
   t.is(row.worktree, 'untracked');
-  // The entry is a PathEntry minted on the bound mount.
-  // Its segments reflect the repo-relative path split by `/`.
-  const entry = /** @type {PathEntry} */ (row.entry);
-  t.deepEqual(await E(entry).segments(), ['src', 'new.js']);
-  t.true(await E(mount).has(entry));
-  // `src/new.js` resolves to an EndoMountFile.
-  const node = /** @type {EndoMountFile} */ (/** @type {unknown} */ (row.node));
-  t.is(await E(node).text(), 'export default 1');
+  t.deepEqual(row, {
+    path: 'src/new.js',
+    index: 'clean',
+    worktree: 'untracked',
+  });
+  t.false('entry' in row);
+  t.false('node' in row);
+});
+
+test('Git.status applies maxCount and marks a truncated copy-data result', async t => {
+  const mount = await provisionMount(t);
+  /** @type {unknown[]} */
+  const optionsSeen = [];
+  const backend = harden({
+    ...makeNotYetImplementedBackend(),
+    status: async options => {
+      optionsSeen.push(options);
+      return harden(
+        /** @type {GitStatusEntry[]} */ ([
+          { path: 'a', index: 'clean', worktree: 'untracked' },
+          { path: 'b', index: 'clean', worktree: 'untracked' },
+        ]),
+      );
+    },
+  });
+  const git = makeGit({ mount, backend, lineageOf });
+
+  const result = await E(git).status({ maxCount: 1, untracked: 'normal' });
+  t.deepEqual(result, {
+    entries: [{ path: 'a', index: 'clean', worktree: 'untracked' }],
+    truncated: true,
+  });
+  t.deepEqual(optionsSeen, [{ untracked: 'normal' }]);
+  await t.throwsAsync(E(git).status({ maxCount: 0 }), {
+    message: /status\.maxCount must be a positive integer/,
+  });
 });
 
 test('Git.status interface guard rejects backend rows with invalid enum values', async t => {
@@ -3229,35 +3374,6 @@ test('Git.status interface guard rejects backend rows with invalid enum values',
     // field; either the field name or the enum-mismatch surface is
     // enough to pin the diagnostic.
     message: /index|bogus-status|status/,
-  });
-});
-
-test('Git.status accepts and guards untracked-file options', async t => {
-  const mount = await provisionMount(t);
-  /** @type {unknown[]} */
-  const statusOptions = [];
-  const backend = harden({
-    ...makeNotYetImplementedBackend(),
-    status: async options => {
-      statusOptions.push(options);
-      return harden([]);
-    },
-  });
-  const git = makeGit({ mount, backend, lineageOf });
-
-  await E(git).status({ untracked: 'no' });
-  await E(git).status({ untracked: 'normal' });
-  t.deepEqual(statusOptions, [{ untracked: 'no' }, { untracked: 'normal' }]);
-
-  const invokeStatus = options => E(/** @type {any} */ (git)).status(options);
-  await t.throwsAsync(invokeStatus({ untracked: 'invalid' }), {
-    message: /status|untracked|record/i,
-  });
-  await t.throwsAsync(invokeStatus({ untracked: 'no', extra: true }), {
-    message: /status|untracked|record/i,
-  });
-  await t.throwsAsync(invokeStatus(null), {
-    message: /status|untracked|record/i,
   });
 });
 

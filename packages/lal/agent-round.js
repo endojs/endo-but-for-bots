@@ -6,11 +6,10 @@
  * This module vendors the subset of the agent harness that lal exercises:
  * the streaming bridge from a PiAgent's internal event stream onto a
  * narrower `ChatEvent` shape that `agent.js` switches on. It was previously
- * imported from `@endo/genie`'s public surface (`runAgentRound`); per
- * The various agent-harness experiments (lal, genie, fae) should not
+ * imported from another agent harness's public surface (`runAgentRound`); per
+ * The various agent-harness experiments (lal, fae) should not
  * inter-depend as they evolve in parallel,
- * so the few functions we use are copied here verbatim. The corresponding
- * upstream definitions live at `packages/genie/src/agent/index.js`.
+ * so the few functions we use are copied here verbatim.
  *
  * Powered by `@earendil-works/pi-agent-core` for LLM interaction and tool
  * dispatch.

@@ -385,7 +385,7 @@ const runInSlice = async (t, handle, argv) => {
 
     // Retries exhausted — skip rather than fail.  This is an
     // environment limitation (concurrent userns contention), not a
-    // regression in the sandbox code under test.  See TODO/17.
+    // regression in the sandbox code under test.
     const m = result.stderr.match(BWRAP_DIAGNOSTIC_RE);
     t.pass(
       `SKIP: ${argv}: persistent transient bwrap failure after ${transientRetries} attempts (${m ? m[0] : result.stderr.trim()})`,
@@ -587,7 +587,7 @@ test.serial(
     }
     // Phase 1 accepts `network: 'private'` for slice construction;
     // the egress filter is documented in src/net/private-egress.nft.
-    // Full wiring (pasta + nft) lands alongside the genie integration.
+    // Full wiring (pasta + nft) lands alongside the first consumer.
     const driver = makeBwrapDriver({ env: {} });
     const { powers, tmpdirs } = makeStubScratchProvider();
     const factory = makeSandboxFactory({
@@ -898,8 +898,8 @@ test.serial('fork() throws notImplemented before Phase 3', async t => {
 //
 // These exercise `assembleSliceArgv` directly without spawning bwrap so
 // they run on every host (including non-Linux CI matrix entries).  They
-// assert the `--setenv PATH …` argv slot reflects the rules in
-// `TADA/22_sandbox_bwrap_path_refinements.md` for each rootfs shape.
+// assert the `--setenv PATH …` argv slot reflects the `$PATH` synthesis
+// rules (see § "$PATH semantics" in the README) for each rootfs shape.
 
 /**
  * Pull the `--setenv PATH …` value out of an argv produced by

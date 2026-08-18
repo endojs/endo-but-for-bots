@@ -189,8 +189,7 @@ harden(readableToAsyncIterable);
  * Assemble the bwrap argv prefix from a `SliceSpec`.  Returns the
  * arguments that go BEFORE the `--` separator and the user's argv.
  *
- * The assembly order mirrors the TODO checklist in
- * `TODO/13_endo_posix_sandbox_phase1_bwrap.md`:
+ * The assembly order is:
  *   1. Namespace flags (`--unshare-all`, optional `--share-net`).
  *   2. Lifecycle (`--die-with-parent`).
  *   3. Capability drop (`--cap-drop ALL`).
@@ -390,8 +389,7 @@ export const assembleSliceArgv = async (spec, extras) => {
     argv.push(flag, mount.hostPath, mount.innerPath);
     // Caller-mount bin-dirs land **after** rootfs-derived defaults so
     // a hostile mount cannot shadow `/usr/bin` with `bin/foo` of its
-    // own.  See `TADA/22_sandbox_bwrap_path_refinements.md` for the
-    // threat model.
+    // own.
     for (const innerPath of detectMountBinPaths(mount, {
       exists: extras.exists,
     })) {
@@ -400,8 +398,8 @@ export const assembleSliceArgv = async (spec, extras) => {
   }
 
   // 7. Writable scratch upper layer.  Mounted as `/scratch` so it is
-  //    visible without conflicting with any rootfs bind.  The genie
-  //    workspace integration points `GENIE_WORKSPACE` here.
+  //    visible without conflicting with any rootfs bind.  A caller's
+  //    workspace integration can point its own env var here.
   if (spec.scratchHostPath !== '') {
     argv.push('--bind', spec.scratchHostPath, '/scratch');
   }
@@ -740,8 +738,7 @@ export const makeBwrapDriver = ({
     // must be told to use pasta's netns via `--unshare-net` plus a
     // userns-block-fd handshake.  Phase 1 leaves the pasta subprocess
     // as a teardown placeholder; full integration lands alongside the
-    // genie workspace work that needs `private` networking.  See
-    // PLAN/endo_posix_sandbox.md § "Network policy" for the design.
+    // first consumer that needs `private` networking.
     if (spec.network === 'private') {
       // Documented but not yet wired end-to-end.  We still record
       // what would happen so teardown is correct if a future code

@@ -26,7 +26,8 @@ type GitToolReadMethodNames =
   | 'diff'
   | 'show'
   | 'branches'
-  | 'currentBranch';
+  | 'currentBranch'
+  | 'trackingStatus';
 
 /**
  * Adds the ordinary edit verbs a writer facet (and above) carries: `commit`
@@ -81,10 +82,11 @@ export type GitToolReaderCapability = Pick<
  * This slice holds only the JSON-transparent methods whose hand-authored tool
  * schemas map one-to-one onto their `GitInterface` guards (the divergence gate
  * pins that parity). The methods whose native signatures traffic in live
- * capabilities — `status` (rows bearing mount-entry remotables), `add`, and
- * `checkoutConflict` (arrays of mount-entry remotables) — are served instead
- * by {@link GitMountToolCapability} / `makeGitMountTools`, which bridge path
- * strings to entries through the worktree mount.
+ * capabilities — `add` and `checkoutConflict` (arrays of mount-entry
+ * remotables) — are served instead by {@link GitMountToolCapability} /
+ * `makeGitMountTools`, which bridge path strings to entries through the
+ * worktree mount. `status` remains in that bridge so its agent-facing default
+ * can select collapsed untracked directories.
  */
 export type GitToolWriterCapability = Pick<
   ReadWriteEndoGit,
@@ -126,15 +128,13 @@ export type GitHistoryToolCapability = Pick<
 >;
 
 /**
- * The mount-bridged slice of `ReadWriteEndoGit` behind `makeGitMountTools`: `status` and
- * `add`, plus `worktree` (the mount the bridge mints `PathEntry` values
- * from). These two methods cannot live in {@link GitToolCapability} because
- * their native signatures carry live capabilities — `status()` returns rows
- * with `PathEntry` / node remotables and `add()` takes an array of
- * `PathEntry` remotables — so their tool wire (JSON-safe rows out, path
- * strings in) diverges from the raw `GitInterface` guard by design. `add` is the
- * additive staging half of the commit loop; `checkoutConflict` selects and
- * stages one side of existing unmerged entries.
+ * The mount-bridged slice of `ReadWriteEndoGit` behind `makeGitMountTools`:
+ * `status`, `add`, plus `worktree` (the mount the bridge mints `PathEntry`
+ * values from). `add` and `checkoutConflict` take arrays of `PathEntry`
+ * remotables, while `status` is kept here to apply the agent-facing
+ * `untracked: 'normal'` default. `add` is the additive staging half of the
+ * commit loop; `checkoutConflict` selects and stages one side of existing
+ * unmerged entries.
  */
 export type GitMountToolCapability = Pick<
   ReadWriteEndoGit,
@@ -264,10 +264,10 @@ export declare function makeGitRemoteTool(
  */
 export type ShellToolCapability = Pick<EndoShell, 'exec' | 'inspect'>;
 
-/** A command-string reject pattern; ported from genie's command-tool policy. */
+/** A command-string reject pattern; ported from the prior agent framework's command-tool policy. */
 export type RejectPatternEntry = RegExp | { pattern: RegExp; reason?: string };
 
-/** A forbidden-flag entry; ported from genie's command-tool policy. */
+/** A forbidden-flag entry; ported from the prior agent framework's command-tool policy. */
 export type RejectFlagEntry = string | { flag: string; reason?: string };
 
 export interface ShellToolOptions {

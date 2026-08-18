@@ -293,6 +293,13 @@ export type MountFormula = {
   // Restricted-segment set replacing the mount's default; present only when
   // overridden at creation, so a default mount keeps its historical shape.
   deniedSegments?: string[];
+  /**
+   * Parent mount formula, present only for sub-mounts minted by
+   * `provideSubMount`.  Recorded for dependency tracking so the parent
+   * mount stays reachable while the child references it, and the child is
+   * cancelled together with the parent.
+   */
+  parent?: FormulaIdentifier;
 };
 
 export type ScratchMountFormula = {
@@ -1305,6 +1312,12 @@ export interface EndoGitTree {
  * additive; `readOnly()` narrows to a structural `ReadableBlob` view.
  */
 export interface EndoMountFile {
+  kind(): 'file';
+  /**
+   * Diagnostic-only directory-method stub.
+   * Calling it rejects with guidance to use `text()` instead.
+   */
+  list(): Promise<never>;
   text(): Promise<string>;
   streamBase64(
     synPromise: ERef<StreamNode<Passable, Passable>>,
@@ -1331,6 +1344,7 @@ export interface EndoMountFile {
  * view.
  */
 export interface EndoMount extends PathEntryIssuer {
+  kind(): 'directory';
   has(...pathSegments: string[]): Promise<boolean>;
   has(entry: EndoMountEntry): Promise<boolean>;
   list(...pathSegments: string[]): Promise<string[]>;
@@ -1571,6 +1585,25 @@ export interface EndoHost extends EndoAgent {
   provideScratchMount(
     petName: string | string[],
     opts?: { readOnly?: boolean; deniedSegments?: string[] },
+  ): Promise<EndoMount>;
+  /**
+   * Mint a sub-mount rooted at a subdirectory of an existing mount and
+   * store it under `newName`.  The child gets its own confinement root,
+   * so a sub-mount at `/project/src` cannot reach `/project/.env` via
+   * `..`; the `subpath` itself is clamped at the parent root, so it can
+   * never escape the parent.  The parent is recorded in the child
+   * formula for dependency tracking.
+   *
+   * Read-only attenuation is monotonic: a sub-mount of a read-only parent
+   * is read-only even when `opts.readOnly` is `false` or omitted, so
+   * read-only access can never be widened by re-mounting a subtree.  A
+   * read-write parent may still be narrowed to a read-only child.
+   */
+  provideSubMount(
+    mountName: string | string[],
+    subpath: string[],
+    newName: string | string[],
+    opts?: { readOnly?: boolean },
   ): Promise<EndoMount>;
   provideGit(
     mountCap: EndoMount,
@@ -2362,6 +2395,20 @@ export type DaemonicControlPowers = {
   detachDebugger?: (workerHandle: number) => void;
 };
 
+/**
+ * The capabilities the daemon core implements by spawning a host
+ * process. Injected rather than imported, so that `manager.js` and
+ * `host.js` carry no static import of `@endo/git` or
+ * `@endo/host-spawner` and therefore none of their `node:` builtins,
+ * which the SES/XS bundler cannot resolve. See
+ * `designs/platform-neutral-hash.md`.
+ */
+export type HostToolPowers = {
+  gitClone: typeof import('@endo/git').gitClone;
+  makeNativeGitBackend: typeof import('@endo/git').makeNativeGitBackend;
+  makeHostSpawner: typeof import('@endo/host-spawner').makeHostSpawner;
+};
+
 export type DaemonicPowers = {
   crypto: CryptoPowers;
   petStore: PetStorePowers;
@@ -2379,6 +2426,11 @@ export type DaemonicPowers = {
       registryUrl: string;
     }) => any;
   };
+  /**
+   * Absent on a supervisor that cannot spawn host processes (the XS
+   * one). `git` and `shell` formulas then refuse with a diagnosis.
+   */
+  hostTools?: Partial<HostToolPowers>;
 };
 
 export type FormulateResult<T> = Promise<{
@@ -2651,6 +2703,13 @@ export interface DaemonCore {
     readOnly: boolean,
     deferredTasks: DeferredTasks<ScratchMountDeferredTaskParams>,
     deniedSegments?: string[],
+  ) => FormulateResult<EndoMount>;
+
+  formulateSubMount: (
+    parentMountId: FormulaIdentifier,
+    subpath: string[],
+    readOnly: boolean,
+    deferredTasks: DeferredTasks<MountDeferredTaskParams>,
   ) => FormulateResult<EndoMount>;
 
   formulateGit: (

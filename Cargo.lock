@@ -2051,6 +2051,24 @@ name = "ironhorse-regexp"
 version = "0.0.1"
 
 [[package]]
+name = "ironhorse-snapshot"
+version = "0.0.1"
+dependencies = [
+ "ironhorse-compile",
+ "ironhorse-vm",
+]
+
+[[package]]
+name = "ironhorse-store-sqlite"
+version = "0.1.0"
+dependencies = [
+ "ironhorse-compile",
+ "ironhorse-snapshot",
+ "ironhorse-vm",
+ "rusqlite",
+]
+
+[[package]]
 name = "ironhorse-vm"
 version = "0.0.1"
 dependencies = [
@@ -5055,6 +5073,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "url",
  "zip",
 ]
 

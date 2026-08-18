@@ -10,7 +10,7 @@
  *   2. The egress regression test
  *      (`test/blocked-ranges.test.js`) verifies the documented list
  *      matches the one compiled into `src/net/private-egress.nft`.
- *   3. Documentation in `README.md` and `TODO/14_*.md` references a
+ *   3. Documentation in `README.md` references a
  *      single source of truth.
  *
  * Each entry pairs a CIDR with the RFC / scope it describes so
@@ -56,8 +56,7 @@ harden(HOST_LOOPBACK_ALLOWED_RANGES);
 /**
  * Ranges that `host-lan` permits in addition to loopback.  The
  * profile drops public Internet but allows local-network traffic,
- * matching the "offline LAN build" use case in
- * `PLAN/endo_posix_sandbox.md` § "Network policy".
+ * matching the "offline LAN build" use case.
  *
  * @type {readonly BlockedRange[]}
  */

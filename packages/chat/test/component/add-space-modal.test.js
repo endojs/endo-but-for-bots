@@ -84,6 +84,7 @@ test.serial('choose screen lists all ten space types', async t => {
     'files',
     'floot',
     'management',
+    'workflow',
   ]);
 });
 
@@ -101,7 +102,7 @@ test.serial(
 
     $container.querySelector('.add-space-back').click();
     await waitFor(() => !!$container.querySelector('.add-space-choose'));
-    t.is($container.querySelectorAll('.space-type-card').length, 10);
+    t.is($container.querySelectorAll('.space-type-card').length, 11);
   },
 );
 

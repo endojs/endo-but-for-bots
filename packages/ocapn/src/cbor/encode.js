@@ -6,20 +6,37 @@
  * Implements the OCapN CBOR encoding specification with canonical output
  * suitable for signature verification.
  *
+ * The RFC 8949 head grammar, byte/text strings, arrays, maps, tags, floats,
+ * simple values, and bignums are the shared canonical subset now provided by
+ * `@endo/cbor` (see designs/cbor-codec.md); this module retains only the
+ * OCapN-specific policy layer: the `CborWriter` class implementing the
+ * `OcapnWriter` interface (structure tracking, record labels), selector tag
+ * 280, record tag 27, and the self-described tag 55799.
+ *
  * See docs/cbor-encoding.md for the specification.
  */
 
-import { isWellFormedString } from '@endo/pass-style';
-
-import { BufferWriter } from '../syrup/buffer-writer.js';
+import {
+  makeCborWriter as makeCborWriterState,
+  cborWriterBytes,
+  writeArrayHeader,
+  writeBignum,
+  writeBoolean,
+  writeByteString,
+  writeFloat64,
+  writeMapHeader,
+  writeNull,
+  writeTag,
+  writeTextString,
+  writeUndefined,
+} from '@endo/cbor';
 
 /**
  * @import { OcapnWriter } from '../codec-interface.js'
+ * @import { CborWriter as CborWriterState } from '@endo/cbor'
  */
 
-const textEncoder = new TextEncoder();
-
-// CBOR Major Types (3 most significant bits)
+// CBOR Major Types (3 most significant bits), re-exported for the codec layer.
 const MAJOR_UNSIGNED = 0; // 0b000
 const MAJOR_NEGATIVE = 1; // 0b001
 const MAJOR_BYTESTRING = 2; // 0b010
@@ -29,201 +46,37 @@ const MAJOR_MAP = 5; // 0b101
 const MAJOR_TAG = 6; // 0b110
 const MAJOR_FLOAT_SIMPLE = 7; // 0b111
 
-// CBOR Additional Info values
-const AI_1BYTE = 24;
-const AI_2BYTE = 25;
-const AI_4BYTE = 26;
-const AI_8BYTE = 27;
-
-// CBOR Simple Values (Major 7)
-const SIMPLE_FALSE = 20;
-const SIMPLE_TRUE = 21;
-const SIMPLE_NULL = 22;
-const SIMPLE_UNDEFINED = 23;
-
-// CBOR Tags used in OCapN
+// CBOR Tags used in OCapN. Kept as bigints for the cross-module contract with
+// the codec layer, which compares against these exact values.
 const TAG_UNSIGNED_BIGNUM = 2n;
 const TAG_NEGATIVE_BIGNUM = 3n;
 const TAG_RECORD = 27n; // Generic record/structure
 const TAG_SYMBOL = 280n; // OCapN symbol (selector)
 const TAG_TAGGED_VALUE = 55_799n; // Self-described CBOR / OCapN tagged
 
-// Canonical NaN representation (IEEE 754 quiet NaN)
-const CANONICAL_NAN = new Uint8Array([0x7f, 0xf8, 0, 0, 0, 0, 0, 0]);
-
-const quote = JSON.stringify;
-
 /**
- * Write CBOR type byte (major type + additional info)
- * @param {BufferWriter} writer
- * @param {number} major - Major type (0-7)
- * @param {number} info - Additional info (0-31)
- */
-function writeTypeByte(writer, major, info) {
-  // eslint-disable-next-line no-bitwise
-  writer.writeByte((major << 5) | info);
-}
-
-/**
- * Write CBOR length/value encoding for a number.
- * Uses minimal encoding per CBOR canonicalization rules.
+ * Write a byte string, accepting either a Uint8Array or an (immutable)
+ * ArrayBuffer. `@endo/cbor`'s `writeByteString` requires a Uint8Array, so the
+ * ArrayBuffer coercion stays here at the OCapN boundary.
  *
- * @param {BufferWriter} writer
- * @param {number} major - Major type
- * @param {number | bigint} value - Non-negative value to encode
- */
-function writeTypeAndLength(writer, major, value) {
-  const n = typeof value === 'bigint' ? value : BigInt(value);
-  if (n < 0n) {
-    throw new Error(`CBOR length must be non-negative, got ${n}`);
-  }
-  if (n < 24n) {
-    writeTypeByte(writer, major, Number(n));
-  } else if (n < 256n) {
-    writeTypeByte(writer, major, AI_1BYTE);
-    writer.writeUint8(Number(n));
-  } else if (n < 65_536n) {
-    writeTypeByte(writer, major, AI_2BYTE);
-    writer.writeUint16(Number(n), false); // big-endian
-  } else if (n < 4_294_967_296n) {
-    writeTypeByte(writer, major, AI_4BYTE);
-    writer.writeUint32(Number(n), false); // big-endian
-  } else {
-    // For lengths > 32 bits, we'd need 8-byte encoding
-    // This exceeds our 65535 message size limit anyway
-    throw new Error(`CBOR length ${n} exceeds supported range`);
-  }
-}
-
-/**
- * Write a CBOR tag
- * @param {BufferWriter} writer
- * @param {bigint} tagNumber
- */
-function writeTag(writer, tagNumber) {
-  writeTypeAndLength(writer, MAJOR_TAG, tagNumber);
-}
-
-/**
- * Convert a bigint to minimal big-endian byte representation.
- * Returns empty array for zero.
- *
- * @param {bigint} value - Non-negative value
- * @returns {Uint8Array}
- */
-function bigintToMinimalBytes(value) {
-  if (value < 0n) {
-    throw new Error('bigintToMinimalBytes requires non-negative value');
-  }
-  if (value === 0n) {
-    return new Uint8Array(0);
-  }
-
-  // Convert to hex, pad to even length, then to bytes
-  let hex = value.toString(16);
-  if (hex.length % 2 !== 0) {
-    hex = `0${hex}`;
-  }
-
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i += 1) {
-    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return bytes;
-}
-
-/**
- * Write a byte string
- * @param {BufferWriter} writer
+ * @param {CborWriterState} writer
  * @param {Uint8Array | ArrayBufferLike} value
  */
 function writeBytestring(writer, value) {
-  // Handle both Uint8Array and ArrayBuffer
   const bytes =
     value instanceof Uint8Array ? value : new Uint8Array(value.slice());
-  writeTypeAndLength(writer, MAJOR_BYTESTRING, bytes.length);
-  writer.write(bytes);
+  writeByteString(writer, bytes);
 }
 
 /**
- * Write a text string, validating it can be encoded as UTF-8.
- * Unpaired surrogates (U+D800-U+DFFF) are not valid Unicode scalar values
- * and cannot be represented in UTF-8.
+ * Write a selector (symbol) as Tag 280 + text string.
  *
- * @param {BufferWriter} writer
- * @param {string} value
- */
-function writeString(writer, value) {
-  // Reject strings with unpaired surrogates - these can't be encoded in UTF-8.
-  // isWellFormedString checks typeof and returns false for lone surrogates.
-  if (!isWellFormedString(value)) {
-    throw new Error(
-      `writeString: Expected well-formed string, got ${quote(value)}`,
-    );
-  }
-
-  const bytes = textEncoder.encode(value);
-  writeTypeAndLength(writer, MAJOR_TEXTSTRING, bytes.length);
-  writer.write(bytes);
-}
-
-/**
- * Write a boolean value
- * @param {BufferWriter} writer
- * @param {boolean} value
- */
-function writeBoolean(writer, value) {
-  writeTypeByte(writer, MAJOR_FLOAT_SIMPLE, value ? SIMPLE_TRUE : SIMPLE_FALSE);
-}
-
-/**
- * Write an integer as CBOR bignum (Tag 2 or 3).
- * OCapN always uses bignum encoding for integers.
- *
- * @param {BufferWriter} writer
- * @param {bigint} value
- */
-function writeInteger(writer, value) {
-  if (typeof value !== 'bigint') {
-    throw new Error(`writeInteger: Expected bigint, got ${typeof value}`);
-  }
-
-  if (value >= 0n) {
-    // Positive: Tag 2 + byte string of value
-    writeTag(writer, TAG_UNSIGNED_BIGNUM);
-    const bytes = bigintToMinimalBytes(value);
-    writeBytestring(writer, bytes);
-  } else {
-    // Negative: Tag 3 + byte string of (-1 - value)
-    writeTag(writer, TAG_NEGATIVE_BIGNUM);
-    const magnitude = -1n - value;
-    const bytes = bigintToMinimalBytes(magnitude);
-    writeBytestring(writer, bytes);
-  }
-}
-
-/**
- * Write a float64 value with canonical NaN
- * @param {BufferWriter} writer
- * @param {number} value
- */
-function writeFloat64(writer, value) {
-  writeTypeByte(writer, MAJOR_FLOAT_SIMPLE, AI_8BYTE);
-  if (Number.isNaN(value)) {
-    writer.write(CANONICAL_NAN);
-  } else {
-    writer.writeFloat64(value, false); // big-endian
-  }
-}
-
-/**
- * Write a selector (symbol) as Tag 280 + text string
- * @param {BufferWriter} writer
+ * @param {CborWriterState} writer
  * @param {string} value - The symbol name
  */
 function writeSelectorFromString(writer, value) {
-  writeTag(writer, TAG_SYMBOL);
-  writeString(writer, value);
+  writeTag(writer, Number(TAG_SYMBOL));
+  writeTextString(writer, value);
 }
 
 const defaultCapacity = 256;
@@ -234,8 +87,8 @@ const defaultCapacity = 256;
  * @implements {OcapnWriter}
  */
 export class CborWriter {
-  /** @type {BufferWriter} */
-  #bufferWriter;
+  /** @type {CborWriterState} */
+  #writer;
 
   /** @type {string} */
   name;
@@ -256,31 +109,31 @@ export class CborWriter {
 
   /**
    * Deferred length positions for structures.
-   * Maps stack depth to the position where length was written.
-   * @type {Map<number, {startIndex: number, countIndex: number, count: number}>}
+   * Maps stack depth to the running element count.
+   * @type {Map<number, {count: number}>}
    */
   #structureInfo = new Map();
 
   /**
-   * @param {BufferWriter} bufferWriter
+   * @param {CborWriterState} writer
    * @param {object} options
    * @param {string} [options.name]
    */
-  constructor(bufferWriter, options = {}) {
+  constructor(writer, options = {}) {
     const { name = '<unknown>' } = options;
     this.name = name;
-    this.#bufferWriter = bufferWriter;
+    this.#writer = writer;
   }
 
   get index() {
-    return this.#bufferWriter.index;
+    return this.#writer.length;
   }
 
   /**
    * @param {string} value
    */
   writeSelectorFromString(value) {
-    writeSelectorFromString(this.#bufferWriter, value);
+    writeSelectorFromString(this.#writer, value);
     this.#incrementCount();
   }
 
@@ -288,7 +141,7 @@ export class CborWriter {
    * @param {string} value
    */
   writeString(value) {
-    writeString(this.#bufferWriter, value);
+    writeTextString(this.#writer, value);
     this.#incrementCount();
   }
 
@@ -296,10 +149,7 @@ export class CborWriter {
    * @param {ArrayBufferLike} value
    */
   writeBytestring(value) {
-    // Convert to Uint8Array for internal operations
-    // Immutable ArrayBuffers need to be sliced first
-    const bytes = new Uint8Array(value.slice());
-    writeBytestring(this.#bufferWriter, bytes);
+    writeBytestring(this.#writer, value);
     this.#incrementCount();
   }
 
@@ -307,7 +157,7 @@ export class CborWriter {
    * @param {boolean} value
    */
   writeBoolean(value) {
-    writeBoolean(this.#bufferWriter, value);
+    writeBoolean(this.#writer, value);
     this.#incrementCount();
   }
 
@@ -315,7 +165,7 @@ export class CborWriter {
    * @param {bigint} value
    */
   writeInteger(value) {
-    writeInteger(this.#bufferWriter, value);
+    writeBignum(this.#writer, value);
     this.#incrementCount();
   }
 
@@ -323,7 +173,7 @@ export class CborWriter {
    * @param {number} value
    */
   writeFloat64(value) {
-    writeFloat64(this.#bufferWriter, value);
+    writeFloat64(this.#writer, value);
     this.#incrementCount();
   }
 
@@ -331,7 +181,7 @@ export class CborWriter {
    * Write undefined
    */
   writeUndefined() {
-    writeTypeByte(this.#bufferWriter, MAJOR_FLOAT_SIMPLE, SIMPLE_UNDEFINED);
+    writeUndefined(this.#writer);
     this.#incrementCount();
   }
 
@@ -339,7 +189,7 @@ export class CborWriter {
    * Write null
    */
   writeNull() {
-    writeTypeByte(this.#bufferWriter, MAJOR_FLOAT_SIMPLE, SIMPLE_NULL);
+    writeNull(this.#writer);
     this.#incrementCount();
   }
 
@@ -362,8 +212,6 @@ export class CborWriter {
   #beginStructure(type) {
     this.#stack.push(type);
     this.#structureInfo.set(this.#stack.length - 1, {
-      startIndex: this.#bufferWriter.index,
-      countIndex: this.#bufferWriter.index,
       count: 0,
     });
   }
@@ -400,8 +248,8 @@ export class CborWriter {
    * @param {number} elementCount - Total elements including the label
    */
   enterRecord(elementCount) {
-    writeTag(this.#bufferWriter, TAG_RECORD);
-    writeTypeAndLength(this.#bufferWriter, MAJOR_ARRAY, elementCount);
+    writeTag(this.#writer, Number(TAG_RECORD));
+    writeArrayHeader(this.#writer, elementCount);
     this.#beginStructure('record');
   }
 
@@ -414,7 +262,7 @@ export class CborWriter {
    * @param {number} elementCount - Number of elements in the list
    */
   enterList(elementCount) {
-    writeTypeAndLength(this.#bufferWriter, MAJOR_ARRAY, elementCount);
+    writeArrayHeader(this.#writer, elementCount);
     this.#beginStructure('list');
   }
 
@@ -427,7 +275,7 @@ export class CborWriter {
    * @param {number} pairCount - Number of key-value pairs
    */
   enterDictionary(pairCount) {
-    writeTypeAndLength(this.#bufferWriter, MAJOR_MAP, pairCount);
+    writeMapHeader(this.#writer, pairCount);
     this.#beginStructure('dictionary');
   }
 
@@ -441,7 +289,7 @@ export class CborWriter {
    */
   enterSet(elementCount) {
     // Sets are encoded as arrays in CBOR
-    writeTypeAndLength(this.#bufferWriter, MAJOR_ARRAY, elementCount);
+    writeArrayHeader(this.#writer, elementCount);
     this.#beginStructure('set');
   }
 
@@ -450,7 +298,7 @@ export class CborWriter {
   }
 
   getBytes() {
-    return this.#bufferWriter.subarray(0, this.#bufferWriter.index);
+    return cborWriterBytes(this.#writer);
   }
 }
 
@@ -472,18 +320,18 @@ export class CborWriter {
  */
 export function makeCborWriter(options = {}) {
   const { length: capacity = defaultCapacity, ...writerOptions } = options;
-  const bufferWriter = new BufferWriter(capacity);
+  const writerState = makeCborWriterState({ capacity });
   const writer = /** @type {any} */ (
-    new CborWriter(bufferWriter, writerOptions)
+    new CborWriter(writerState, writerOptions)
   );
 
   // Add convenience methods for definite-length structures
   writer.writeArrayHeader = (/** @type {number} */ length) => {
-    writeTypeAndLength(bufferWriter, MAJOR_ARRAY, length);
+    writeArrayHeader(writerState, length);
   };
 
   writer.writeMapHeader = (/** @type {number} */ pairs) => {
-    writeTypeAndLength(bufferWriter, MAJOR_MAP, pairs);
+    writeMapHeader(writerState, pairs);
   };
 
   // Helper for OCapN Tagged values (Tag 55799)
@@ -491,9 +339,9 @@ export function makeCborWriter(options = {}) {
     /** @type {string} */ tagName,
     /** @type {() => void} */ writePayload,
   ) => {
-    writeTag(bufferWriter, TAG_TAGGED_VALUE);
-    writeTypeAndLength(bufferWriter, MAJOR_ARRAY, 2);
-    writeString(bufferWriter, tagName);
+    writeTag(writerState, Number(TAG_TAGGED_VALUE));
+    writeArrayHeader(writerState, 2);
+    writeTextString(writerState, tagName);
     writePayload();
   };
 

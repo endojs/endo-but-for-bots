@@ -1,8 +1,8 @@
 /**
  * Type definitions for the `@endo/sandbox` plugin.
  *
- * These mirror the capability surface and backend driver interface
- * described in `PLAN/endo_posix_sandbox.md`. They are the typed contract
+ * These describe the capability surface and backend driver interface.
+ * They are the typed contract
  * Phase 1+ implementations will fill in. No runtime code lives here —
  * the runtime guards live in `./interfaces.js`.
  */

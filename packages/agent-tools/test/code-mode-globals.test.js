@@ -39,10 +39,11 @@ test('capability global factories preserve custom lexical names and pet paths', 
 });
 
 test('history Git global explains rebase control and conflict recovery', t => {
-  const { description } = makeGitGlobal({
+  const global = makeGitGlobal({
     name: 'git',
     historyRewrite: true,
   });
+  const { description } = global;
   if (description === undefined) {
     throw new Error('history Git global must include a description');
   }
@@ -58,6 +59,13 @@ test('history Git global explains rebase control and conflict recovery', t => {
   ]) {
     t.true(description.includes(phrase));
   }
+  const { declaration } = global;
+  if (declaration === undefined) {
+    throw new Error('history Git global must include a declaration');
+  }
+  t.false(description.includes('status('));
+  t.false(declaration.aux?.includes('status:') ?? false);
+  t.false(declaration.body.includes('status:'));
 });
 
 test('a compartment can evaluate code against fake capability globals', async t => {

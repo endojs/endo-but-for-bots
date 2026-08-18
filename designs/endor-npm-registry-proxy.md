@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-04-17 |
-| **Updated** | 2026-07-20 |
+| **Updated** | 2026-07-28 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
@@ -117,7 +117,15 @@ non-Node branch, and the event-emitter surface (`on`, `once`,
 listener grants no authority. The rest of Node's `process`
 surface (`stdout`, `exit`, signals, `hrtime`) stays absent;
 packages touching it fail with the same clean undefined read
-as before.
+as before. Ambiguous `.js` files —
+no `"type"` field in the package manifest, the shape of every
+quick-start entry — get Node-style **module-syntax detection**
+(`rust/endo/src/cjs_lexer.rs` `detect_esm_syntax`): a top-level
+`import`/`export` declaration classifies the file as ESM, so an
+`import`-bearing entry runs instead of dying in the CJS wrapper
+with `SyntaxError: invalid import`; dynamic `import()` and
+keyword mentions in strings/comments/nested scopes do not flip a
+real CJS file.
 
 ## What is the Problem Being Solved?
 
@@ -556,6 +564,15 @@ The tree's children are the package's files, stored as blobs.
       back through the compartment's link map. Proven on
       chalk@5.6.2 (`#ansi-styles`, conditional
       `#supports-color`), which fetches, caches, and executes.
+- [x] Web-platform `URL`/`URLSearchParams` globals: endowed to
+      archive compartments as a veneer over the host's
+      spec-faithful WHATWG parser (rust-url's `quirks` surface,
+      the same implementation the fetch layer already links)
+      through `hostUrlParse`/`hostUrlSet`/`hostFormUrlDecode`/
+      `hostFormUrlEncode` — packages like `normalize-url` that
+      construct and normalize URLs execute. Remaining web-global
+      gaps: `crypto.subtle`, streaming/`fatal` `TextDecoder`
+      fidelity, `encodeInto`.
 - [x] Top-level `await` in the entry module (or any module in
       the graph): the standalone runners now import the entry
       through the asynchronous `Compartment.prototype.import`

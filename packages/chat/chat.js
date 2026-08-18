@@ -40,6 +40,7 @@ import { whylipComponent } from './whylip-component.js';
 import { peersComponent } from './peers-component.js';
 import { flootComponent } from './floot-component.js';
 import { managementComponent } from './management-component.js';
+import { workflowComponent } from './workflow-component.js';
 import {
   renderProfileBar,
   mountMentionNotifyArea,
@@ -252,6 +253,16 @@ const bodyComponent = (
       onProfileChange,
       activeSpaceInfo.audioPath,
       activeSpaceInfo.ttsPath,
+    );
+  }
+
+  if (activeSpaceInfo && activeSpaceInfo.mode === 'workflow') {
+    return workflowComponent(
+      $parent,
+      rootPowers,
+      profilePath,
+      onProfileChange,
+      activeSpaceInfo.workflowPath,
     );
   }
 
@@ -1669,7 +1680,7 @@ const bodyComponent = (
 
 /**
  * @typedef {object} ActiveSpaceInfo
- * @property {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'management'} mode
+ * @property {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'management' | 'workflow'} mode
  * @property {string} [channelPetName]
  * @property {string} [proposedName]
  * @property {string} [whylipSystemPrompt]
@@ -1678,6 +1689,7 @@ const bodyComponent = (
  * @property {Array<{key: string, channelPetName: string, label: string}>} [bookmarks] - bookmarked threads
  * @property {string[]} [audioPath] - pet-name path to an audio object (floot mic input)
  * @property {string[]} [ttsPath] - pet-name path to a text-to-speech object (floot spoken replies)
+ * @property {string[]} [workflowPath] - pet-name path to a workflow service (workflow space)
  */
 
 /**

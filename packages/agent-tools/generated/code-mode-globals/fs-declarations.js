@@ -7,11 +7,13 @@
  * Regenerate with: yarn workspace @endo/agent-tools gen:code-mode-types
  *
  * Source of truth:
- *   - workspace: packages/platform/src/fs/extended/types.ts (the
+ *   - workspace: packages/daemon/src/types.d.ts (the `EndoMount` interface),
+ *     reached through the re-export in
+ *     packages/agent-tools/src/code-mode-globals/daemon-mount-types.ts and
+ *     printed by the TypeScript compiler API.
+ *   - filesystem: packages/platform/src/fs/extended/types.ts (the local
  *     `Filesystem` type alias and the capability types it reaches), printed
- *     by the TypeScript compiler API, with `PassableReader`,
- *     `PassableBytesReader`, `PassableBytesWriter`, and the stream nodes
- *     they reach followed into packages/exo-stream/types.d.ts.
+ *     by the TypeScript compiler API.
  *
  * The generic extraction and rendering live in
  * scripts/code-mode-type-extract.js; this exo's source configuration lives in
@@ -25,7 +27,7 @@
  */
 
 export const fsDeclarations = harden({
-  workspace: {
+  filesystem: {
     aux: `type Filesystem = {
   brands: () => Promise<ReadonlySet<bigint> | readonly bigint[]>;
   help: (method?: string) => string;
@@ -176,17 +178,17 @@ type OpenFileOptions = {
     append?: boolean;
 };
 type PassableBytesReader<TReadReturn = undefined> = {
-    streamBase64(synPromise: ERef<StreamNode<unknown, TReadReturn>>): Promise<StreamNode<string, TReadReturn>>;
-    readReturnPattern(): unknown | undefined;
+    streamBase64: (synPromise: ERef<StreamNode<unknown, TReadReturn>>) => Promise<StreamNode<string, TReadReturn>>;
+    readReturnPattern: () => unknown | undefined;
 };
 type PassableBytesWriter<TWriteReturn = undefined> = {
-    streamBase64(synPromise: ERef<StreamNode<string, TWriteReturn>>): Promise<StreamNode<undefined, TWriteReturn>>;
-    writeReturnPattern(): unknown | undefined;
+    streamBase64: (synPromise: ERef<StreamNode<string, TWriteReturn>>) => Promise<StreamNode<undefined, TWriteReturn>>;
+    writeReturnPattern: () => unknown | undefined;
 };
 type PassableReader<TRead = unknown, TReadReturn = unknown> = {
-    stream(synPromise: ERef<StreamNode<undefined, TReadReturn>>): Promise<StreamNode<TRead, TReadReturn>>;
-    readPattern(): unknown | undefined;
-    readReturnPattern(): unknown | undefined;
+    stream: (synPromise: ERef<StreamNode<undefined, TReadReturn>>) => Promise<StreamNode<TRead, TReadReturn>>;
+    readPattern: () => unknown | undefined;
+    readReturnPattern: () => unknown | undefined;
 };
 type Qid<K = NodeKind> = {
     type: K;
@@ -221,6 +223,148 @@ type Xattrs = {
     help: (method?: string) => string;
 };`,
     body: `Filesystem`,
+  },
+  workspace: {
+    aux: `type DaemonMount = {
+  copy: (from: string | string[] | MountEndoMountEntry, to: string | string[] | MountEndoMountEntry) => Promise<void>;
+  entry: (path: string | string[]) => MountEndoMountEntry;
+  followNameChanges: (...pathSegments: string[]) => MountPassableReader<MountNameChange, undefined>;
+  glob: (pattern: string) => Promise<string[]>;
+  glorp: (globPattern: string, grepPattern: string, options?: {
+    maxResults?: number;
+}) => Promise<Array<MountGrepMatch>>;
+  grep: (pattern: string, paths?: string[] | Promise<string[]>, options?: {
+    maxResults?: number;
+}) => Promise<Array<MountGrepMatch>>;
+  has: {
+    (...pathSegments: string[]): Promise<boolean>;
+    (entry: MountEndoMountEntry): Promise<boolean>;
+};
+  help: (method?: string) => string;
+  kind: () => 'directory';
+  list: (...pathSegments: string[]) => Promise<string[]>;
+  lookup: (path: string | readonly string[] | MountEndoMountEntry) => Promise<DaemonMount | MountEndoMountFile>;
+  makeDirectory: (path: string | string[] | MountEndoMountEntry) => Promise<DaemonMount>;
+  makeFile: (path: string | string[] | MountEndoMountEntry, content?: string) => Promise<void>;
+  maybeLookup: (path: string | string[] | MountEndoMountEntry) => Promise<DaemonMount | MountEndoMountFile | undefined>;
+  maybeReadText: (path: string | string[] | MountEndoMountEntry) => Promise<string | undefined>;
+  move: (from: string | string[] | MountEndoMountEntry, to: string | string[] | MountEndoMountEntry) => Promise<void>;
+  readOnly: () => MountReadableTreeView;
+  readText: (path: string | string[] | MountEndoMountEntry) => Promise<string>;
+  remove: (path: string | string[] | MountEndoMountEntry) => Promise<void>;
+  snapshot: () => Promise<MountSnapshotTree>;
+  stat: (path: string | string[] | MountEndoMountEntry) => Promise<MountEndoMountStat | undefined>;
+  subView: (path: string | string[] | MountEndoMountEntry) => Promise<DaemonMount>;
+  write: (path: string | string[] | MountEndoMountEntry, value: MountDirectoryWriteSource) => Promise<void>;
+  writeText: (path: string | string[] | MountEndoMountEntry, content: string) => Promise<void>;
+};
+type MountBlobInfo = {
+    algorithm: string;
+    hash: string;
+    size: bigint;
+};
+type MountDirectoryWriteSource = MountReadableBlobSource | MountReadableTree;
+type MountERef<T> = T | Promise<T>;
+type MountEndoMountEntry = MountPathEntry;
+type MountEndoMountFile = {
+    kind: () => 'file';
+    list: () => Promise<never>;
+    text: () => Promise<string>;
+    streamBase64: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<string, undefined>>;
+    json: () => Promise<unknown>;
+    getInfo: () => Promise<MountBlobInfo>;
+    fetch: (offset: bigint, length: bigint) => Promise<MountPassableBytesReader>;
+    writeText: (content: string) => Promise<void>;
+    append: (content: string) => Promise<void>;
+    writeBytes: (readableRef: MountERef<MountPassableBytesReader>) => Promise<void>;
+    stat: () => Promise<MountEndoMountStat>;
+    snapshot: () => Promise<unknown>;
+    readOnly: () => MountReadableBlobView;
+    help: (method?: string) => string;
+};
+type MountEndoMountStat = {
+    kind: 'file' | 'directory' | 'symlink';
+    size: bigint;
+    mtime: bigint;
+    atime: bigint;
+};
+type MountGrepMatch = {
+    file: string;
+    line: number;
+    text: string;
+};
+type MountLiteBlobInfo = {
+    algorithm: string;
+    hash: string;
+    size: bigint;
+};
+type MountNameChange = {
+    add: string;
+    type: 'file' | 'directory';
+} | {
+    remove: string;
+};
+type MountPassableBytesReader<TReadReturn = undefined> = {
+    streamBase64: (synPromise: MountERef<MountStreamNode<unknown, TReadReturn>>) => Promise<MountStreamNode<string, TReadReturn>>;
+    readReturnPattern: () => unknown | undefined;
+};
+type MountPassableReader<TRead = unknown, TReadReturn = unknown> = {
+    stream: (synPromise: MountERef<MountStreamNode<undefined, TReadReturn>>) => Promise<MountStreamNode<TRead, TReadReturn>>;
+    readPattern: () => unknown | undefined;
+    readReturnPattern: () => unknown | undefined;
+};
+type MountPathEntry = {
+    segments: () => string[];
+    displayPath: () => string;
+    child: (name: string) => MountPathEntry;
+    help: (method?: string) => string;
+};
+type MountReadableBlobSource = {
+    streamBase64: (...args: any[]) => PromiseLike<unknown>;
+};
+type MountReadableBlobView = {
+    streamBase64: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<string, undefined>>;
+    text: () => Promise<string>;
+    json: () => Promise<unknown>;
+    getInfo: () => Promise<MountBlobInfo>;
+    fetch: (offset: bigint, length: bigint) => Promise<MountPassableBytesReader>;
+    help: (method?: string) => string;
+};
+type MountReadableTree = {
+    has: (...petNamePath: string[]) => Promise<boolean>;
+    list: (...petNamePath: string[]) => Promise<readonly string[]>;
+    lookup: (petNamePath: string | readonly string[]) => Promise<unknown>;
+    listTree?: (petNamePath: string | readonly string[], options?: {
+        ignore?: readonly string[];
+    }) => Promise<MountTreeEntry[]>;
+};
+type MountReadableTreeView = {
+    has: (...pathSegments: string[]) => Promise<boolean>;
+    list: (...pathSegments: string[]) => Promise<readonly string[]>;
+    listTree: (petNamePath: string | readonly string[], options?: {
+        ignore?: readonly string[];
+    }) => Promise<MountTreeEntry[]>;
+    lookup: (path: string | readonly string[]) => Promise<MountReadableTreeView | MountReadableBlobView>;
+    help: (method?: string) => string;
+};
+type MountSnapshotTree = MountReadableTree & {
+    sha256: () => string;
+    getInfo: () => Promise<MountLiteBlobInfo>;
+};
+type MountStreamNode<Y = undefined, R = undefined> = MountStreamYieldNode<Y, R> | MountStreamReturnNode<R>;
+type MountStreamReturnNode<R = undefined> = {
+    value: R;
+    promise: null;
+};
+type MountStreamYieldNode<Y = unknown, R = undefined> = {
+    value: Y;
+    promise: Promise<MountStreamNode<Y, R>>;
+};
+type MountTreeEntry = {
+    path: string[];
+    type: 'file' | 'directory';
+};`,
+    body: `DaemonMount`,
   },
 });
 harden(fsDeclarations);

@@ -60,8 +60,12 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use crate::format::{Signature, SnapshotError};
-use crate::image::{read_machine, write_machine, MachineImage};
+use crate::image::{read_machine, write_machine, MachineImage, MeterImage};
 use crate::sha256::{hex, Sha256};
+use crate::store::{
+    chunk_extent_count, image_to_batch, seal_commit, store_to_image, validate_store,
+    CheckpointBatch, HeapStore, SmallState, StoreError, StoreManifest, STORE_SCHEMA_VERSION,
+};
 use ironhorse_vm::Interp;
 
 /// An error from the file/CAS snapshot surface: either an I/O failure or a
@@ -152,6 +156,10 @@ pub trait MachineSnapshot {
         let hash = self.write_snapshot_to_file(signature, file)?;
         let final_path = cas_dir.join(&hash);
         std::fs::rename(&tmp_path, &final_path)?;
+        // Durable publish: the rename is final only once the CAS
+        // directory itself is synced (same discipline as the file
+        // store's commit).
+        File::open(cas_dir)?.sync_all()?;
         Ok(hash)
     }
 }
@@ -221,6 +229,432 @@ pub fn resume_from_cas(
     let path = cas_dir.join(sha256);
     let file = File::open(&path)?;
     from_snapshot_file(file, expected_sig)
+}
+
+// --- the store-backed checkpoint surface (store seam design, phase 2)
+//
+// The blob verbs above serialize the whole heap every time; these
+// verbs pair a machine with a `HeapStore` so that after one full
+// write, every later checkpoint commits only the pages and extents the
+// machine actually dirtied since the previous one. Same suspend-point
+// contract as the blob path: a checkpoint is taken at machine
+// quiescence between cranks, never mid-dispatch.
+
+/// A machine's binding to one store: the session **owns the machine**,
+/// so a dirty set can only ever be committed by the session that
+/// watched it accumulate — the machine/session mispairing and the
+/// dirty-bit theft the adversarial review demonstrated (a second
+/// session over the same machine consuming bits another store still
+/// needed) are unrepresentable, not merely guarded. The session also
+/// records the store's commit seal, and every checkpoint verifies the
+/// stored (epoch, seal) pair before committing: an equal-epoch fork,
+/// copy, or foreign store fails closed with
+/// [`StoreError::BaselineMismatch`].
+///
+/// Obtained from [`begin_store_session`] (full first write into an
+/// empty store) or [`resume_from_store`]/[`resume_from_store_lazy`]
+/// (adopting a store's content). [`StoreSession::into_machine`]
+/// unbinds — after which the machine's dirty bits no longer describe
+/// any store baseline, and the only safe re-binding is a fresh full
+/// write or a resume.
+/// The live (epoch, seal) pin a lazily resumed machine's page source
+/// checks on every fault. Shared between the session (which advances
+/// it on its own successful checkpoints) and the [`StorePageSource`]
+/// (which refuses to fault once the store no longer matches it — a
+/// store advanced by anyone ELSE means torn reads, and the machine
+/// must die deterministically rather than mix epochs).
+struct LazyPin {
+    epoch: std::cell::Cell<u64>,
+    seal: std::cell::RefCell<String>,
+    /// Address of the pinned store's data (the `S` inside the
+    /// `Rc<RefCell<S>>` the page source reads through). The session
+    /// advances the pin after a commit only when the committed store
+    /// IS the pinned store — a commit into a byte-identical twin store
+    /// passes succession, but advancing the pin would wedge the next
+    /// fault (the PR-review finding). Compared by address rather than
+    /// by re-reading the manifest because during a same-store commit
+    /// the caller necessarily holds the `RefCell`'s mutable borrow to
+    /// pass `&mut dyn HeapStore`, so any probe through the `RefCell`
+    /// would re-enter it. The `Rc` held by the page source keeps the
+    /// allocation alive for the pin's whole lifetime, so the address
+    /// cannot be recycled. A caller that commits through a forwarding
+    /// wrapper around the pinned store fails the comparison and the
+    /// pin stays put; the next fault then fails closed (deterministic
+    /// named panic) rather than reading across epochs.
+    store_addr: *const (),
+}
+
+pub struct StoreSession {
+    interp: Interp,
+    epoch: u64,
+    seal: String,
+    /// Present on lazily resumed sessions: advancing it on checkpoint
+    /// is what lets the machine keep faulting after its own commits
+    /// (its non-dirty rows are unchanged by its own checkpoint).
+    pin: Option<std::rc::Rc<LazyPin>>,
+}
+
+impl std::fmt::Debug for StoreSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoreSession")
+            .field("epoch", &self.epoch)
+            .field("seal", &self.seal)
+            .finish_non_exhaustive()
+    }
+}
+
+impl StoreSession {
+    /// The store epoch this session last committed or adopted.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// The bound machine.
+    pub fn machine(&self) -> &Interp {
+        &self.interp
+    }
+
+    /// The bound machine, mutably (run cranks through this).
+    pub fn machine_mut(&mut self) -> &mut Interp {
+        &mut self.interp
+    }
+
+    /// Unbind, discarding the store baseline. The returned machine's
+    /// dirty bits are meaningless as an incremental baseline.
+    pub fn into_machine(self) -> Interp {
+        self.interp
+    }
+}
+
+/// The manifest of the machine's current arenas at `epoch`. The field
+/// formulas are exactly [`MachineImage::from_arenas`]'s, so a store
+/// checkpointed incrementally exports byte-identically to a blob
+/// written by [`MachineSnapshot::write_snapshot`].
+fn manifest_of(interp: &Interp, signature: &Signature, epoch: u64) -> StoreManifest {
+    StoreManifest {
+        version: crate::format::Version::current(),
+        store_schema: STORE_SCHEMA_VERSION,
+        signature: signature.clone(),
+        creation: crate::image::CreationParams {
+            initial_slot_count: interp.slots.capacity(),
+            initial_chunk_bytes: interp.chunks.byte_size() as u32,
+        },
+        slot_count: interp.slots.capacity(),
+        slot_live: interp.slots.live_count(),
+        chunk_len: interp.chunks.byte_size() as u64,
+        epoch,
+        seal: String::new(),
+    }
+}
+
+/// The machine's small state, mirroring [`MachineSnapshot::snapshot_image`]
+/// exactly (keys and well-known-symbol identities travel empty per the
+/// current side-table coverage).
+fn small_state_of(interp: &Interp) -> SmallState {
+    SmallState {
+        stack: interp.stack_slots().to_vec(),
+        slot_free: interp.slots.free_list().to_vec(),
+        keys: Vec::new(),
+        names: interp.program_symbol_names().to_vec(),
+        symbols: Vec::new(),
+        meter: MeterImage::of(interp.meter_state()),
+    }
+}
+
+/// Bind a machine to an **empty** store with a full epoch-1 write and
+/// return the session for later incremental checkpoints. A store that
+/// already holds an epoch is refused ([`StoreError::NotEmpty`]) —
+/// adopting existing content is [`resume_from_store`]'s job.
+pub fn begin_store_session(
+    mut interp: Interp,
+    signature: &Signature,
+    store: &mut dyn HeapStore,
+) -> Result<StoreSession, (Interp, StoreError)> {
+    match store.manifest() {
+        Err(StoreError::Empty) => {}
+        Ok(m) => return Err((interp, StoreError::NotEmpty { epoch: m.epoch })),
+        Err(e) => return Err((interp, e)),
+    }
+    let batch = image_to_batch(&interp.snapshot_image(signature), 1, "");
+    if let Err(e) = store.commit(&batch) {
+        // A failed commit hands the machine back with its dirt intact.
+        return Err((interp, e));
+    }
+    // Only a successful commit clears the bitmaps: a failed commit
+    // forgets nothing and the next attempt re-offers the same dirt.
+    interp.slots.clear_dirty();
+    interp.chunks.clear_dirty();
+    let seal = batch.manifest.seal;
+    Ok(StoreSession {
+        interp,
+        epoch: 1,
+        seal,
+        pin: None,
+    })
+}
+
+/// Commit the machine's state since the session's last checkpoint:
+/// the dirty slot pages and chunk extents, plus the whole (small)
+/// manifest and small state. Returns the new epoch.
+///
+/// The session/store pairing is verified first — a store whose epoch
+/// is not the session's fails closed with
+/// [`StoreError::EpochMismatch`] rather than absorbing a dirty set
+/// computed against some other baseline (the missed-page corruption
+/// this seam must make unrepresentable).
+pub fn checkpoint_to_store(
+    session: &mut StoreSession,
+    signature: &Signature,
+    store: &mut dyn HeapStore,
+) -> Result<u64, StoreError> {
+    let stored = store.manifest()?;
+    if stored.epoch != session.epoch {
+        return Err(StoreError::EpochMismatch {
+            expected: session.epoch,
+            found: stored.epoch,
+        });
+    }
+    if stored.seal != session.seal {
+        // Equal height, different lineage: a fork, copy, or foreign
+        // store — the case a bare epoch counter cannot see.
+        return Err(StoreError::BaselineMismatch {
+            expected: session.seal.clone(),
+            found: stored.seal,
+        });
+    }
+    let epoch = session.epoch.checked_add(1).ok_or(StoreError::Snapshot(
+        crate::format::SnapshotError::Corrupt("store epoch exhausted"),
+    ))?;
+    let interp = &mut session.interp;
+    let mut manifest = manifest_of(interp, signature, epoch);
+
+    // Dirty rows only — never the whole heap. `page_records`/
+    // `extent_bytes` copy one page/extent out of the arena (dirty rows
+    // are resident by construction, lazy or not), and the encoding is
+    // the same canonical record codec the full path uses.
+    let slot_pages: Vec<(u32, Vec<u8>)> = interp
+        .slots
+        .dirty_pages()
+        .into_iter()
+        .map(|page| {
+            let records = interp.slots.page_records(page);
+            let mut bytes = Vec::with_capacity(records.len() * crate::slot_codec::SLOT_RECORD_BYTES);
+            for slot in &records {
+                crate::slot_codec::encode_slot(slot, &mut bytes);
+            }
+            (page, bytes)
+        })
+        .collect();
+    // The chunk bitmap tracks the current geometry (compaction resizes
+    // it), so every dirty extent is in range by construction; the
+    // guard is belt-and-braces against a future bitmap bug.
+    let ext_count = chunk_extent_count(manifest.chunk_len);
+    let chunk_extents: Vec<(u32, Vec<u8>)> = interp
+        .chunks
+        .dirty_extents()
+        .into_iter()
+        .filter(|&e| e < ext_count)
+        .map(|e| (e, interp.chunks.extent_bytes(e)))
+        .collect();
+
+    let small = small_state_of(interp).encode();
+    manifest.seal = seal_commit(&session.seal, &manifest, &small, &slot_pages, &chunk_extents);
+    let seal = manifest.seal.clone();
+    let batch = CheckpointBatch {
+        prev_seal: session.seal.clone(),
+        manifest,
+        small,
+        slot_pages,
+        chunk_extents,
+    };
+    store.commit(&batch)?;
+    session.interp.slots.clear_dirty();
+    session.interp.chunks.clear_dirty();
+    session.epoch = epoch;
+    session.seal = seal.clone();
+    if let Some(pin) = &session.pin {
+        // Advance only if this commit landed in the PINNED store,
+        // decided by address identity (borrow-free — see [`LazyPin`]);
+        // a commit into an identical twin leaves the pin — and the
+        // pinned store's content — exactly where the machine's faults
+        // need them.
+        let committed: *const dyn HeapStore = &*store;
+        if committed.cast::<()>() == pin.store_addr {
+            pin.epoch.set(epoch);
+            *pin.seal.borrow_mut() = seal;
+        }
+    }
+    Ok(epoch)
+}
+
+/// Rebuild a machine from a store (eager reification: every page and
+/// extent is read now; [`resume_from_store_lazy`] is the on-demand
+/// mode) and return it with the session bound at the store's epoch.
+/// Runs the full open-time validation — gates, accounting, row
+/// inventory — before touching any content, so a resumed machine can
+/// only be the machine that was checkpointed.
+pub fn resume_from_store(
+    store: &dyn HeapStore,
+    expected_sig: &Signature,
+) -> Result<StoreSession, StoreError> {
+    let (manifest, _small) = validate_store(store, expected_sig)?;
+    let image = store_to_image(store)?;
+    // Re-check the manifest after the row reads: the reads above are
+    // not one atomic snapshot on every backend, so a concurrent commit
+    // could otherwise hand us a chimera of two epochs (the SQLite
+    // review's torn-read finding). Same-seal after the reads proves the
+    // rows all belonged to one epoch.
+    let after = store.manifest()?;
+    if after.epoch != manifest.epoch || after.seal != manifest.seal {
+        return Err(StoreError::BaselineMismatch {
+            expected: manifest.seal,
+            found: after.seal,
+        });
+    }
+    Ok(StoreSession {
+        interp: image_to_interp(image),
+        epoch: manifest.epoch,
+        seal: manifest.seal,
+        pin: None,
+    })
+}
+
+/// The [`ironhorse_vm::PageSource`] adapter over a shared [`HeapStore`]
+/// (store seam design, phase 3). Reads go through the `RefCell` so the
+/// same store object also serves `commit` at checkpoint time (`&mut`
+/// via `borrow_mut`); faults happen only mid-crank and commits only
+/// between cranks, so the borrows never overlap.
+///
+/// The store was validated exhaustively before this adapter is
+/// constructed, so a read failure here is genuine I/O trouble; per the
+/// [`ironhorse_vm::PageSource`] contract it panics with a named
+/// message — the deterministic crashed-crank path.
+struct StorePageSource<S: HeapStore> {
+    store: std::rc::Rc<std::cell::RefCell<S>>,
+    /// The (epoch, seal) the machine's session currently stands at.
+    /// Every fault re-verifies it, so a store advanced by anyone else
+    /// turns torn reads into a deterministic named crashed crank
+    /// instead of a chimera heap (the review's two-lazy-machines
+    /// finding); the session advances the pin on its own commits.
+    pin: std::rc::Rc<LazyPin>,
+}
+
+impl<S: HeapStore> StorePageSource<S> {
+    fn check_pin(&self, what: &str) {
+        let m = self
+            .store
+            .borrow()
+            .manifest()
+            .unwrap_or_else(|e| panic!("lazy heap fault: manifest re-read ({what}): {e:?}"));
+        if m.epoch != self.pin.epoch.get() || m.seal != *self.pin.seal.borrow() {
+            panic!(
+                "lazy heap fault: store advanced under this machine \
+                 (pinned epoch {}, store epoch {}) — torn read refused",
+                self.pin.epoch.get(),
+                m.epoch,
+            );
+        }
+    }
+}
+
+impl<S: HeapStore> ironhorse_vm::PageSource for StorePageSource<S> {
+    fn slot_page(&self, page: u32) -> Vec<ironhorse_vm::Slot> {
+        self.check_pin("slot page");
+        let bytes = self
+            .store
+            .borrow()
+            .read_slot_page(page)
+            .unwrap_or_else(|e| panic!("lazy heap fault: slot page {page}: {e:?}"));
+        // The pin check and the row read are separate store operations,
+        // so on a shared backend a foreign commit can land between them
+        // and the read return a NEW-epoch row the pre-check could not
+        // see. Epochs only advance, so a matching pin AFTER the read
+        // proves the row belonged to the pinned commit.
+        self.check_pin("slot page post-read");
+        crate::slot_codec::decode_slots(&bytes)
+            .unwrap_or_else(|e| panic!("lazy heap fault: slot page {page} decode: {e:?}"))
+    }
+
+    fn chunk_extent(&self, ext: u32) -> Vec<u8> {
+        self.check_pin("chunk extent");
+        let bytes = self
+            .store
+            .borrow()
+            .read_chunk_extent(ext)
+            .unwrap_or_else(|e| panic!("lazy heap fault: chunk extent {ext}: {e:?}"));
+        // Same post-read verification as `slot_page` — see there.
+        self.check_pin("chunk extent post-read");
+        bytes
+    }
+}
+
+/// Rebuild a machine from a store with **lazy reification** (store
+/// seam design, phase 3): the same exhaustive validation and the same
+/// small state up front, but the arenas are attached over a
+/// [`ironhorse_vm::PageSource`] and fault slot pages / chunk extents
+/// in on first touch, so wake latency is proportional to the wake
+/// crank's working set, not the heap.
+///
+/// Residency is grow-only; content is identical to an eager resume by
+/// construction (a fault installs exactly the bytes the store holds),
+/// which the metamorphic determinism suite locks. The store rides in
+/// an `Rc<RefCell<…>>` so the returned machine's fault path and the
+/// caller's later [`checkpoint_to_store`] (`&mut *store.borrow_mut()`)
+/// share it.
+pub fn resume_from_store_lazy<S: HeapStore + 'static>(
+    store: std::rc::Rc<std::cell::RefCell<S>>,
+    expected_sig: &Signature,
+) -> Result<StoreSession, StoreError> {
+    let (manifest, small) = validate_store(&*store.borrow(), expected_sig)?;
+    // Re-check the manifest after validation's separate reads, exactly
+    // as eager resume does after its row reads: the manifest / small /
+    // inventory reads are not one atomic snapshot on every backend, so
+    // a concurrent commit (a second SQLite connection) could otherwise
+    // seed the session and its pin from mixed epochs. Epochs only
+    // advance, so same (epoch, seal) after the reads proves every read
+    // saw the one pinned commit.
+    {
+        let after = store.borrow().manifest()?;
+        if after.epoch != manifest.epoch || after.seal != manifest.seal {
+            return Err(StoreError::BaselineMismatch {
+                expected: manifest.seal,
+                found: after.seal,
+            });
+        }
+    }
+    let pin = std::rc::Rc::new(LazyPin {
+        epoch: std::cell::Cell::new(manifest.epoch),
+        seal: std::cell::RefCell::new(manifest.seal.clone()),
+        // `RefCell::as_ptr` addresses the `S` itself — the same address
+        // a later `&mut *store.borrow_mut()` coerced to
+        // `&mut dyn HeapStore` carries into [`checkpoint_to_store`].
+        store_addr: store.as_ptr().cast::<()>().cast_const(),
+    });
+    let source = std::rc::Rc::new(StorePageSource {
+        store: store.clone(),
+        pin: pin.clone(),
+    });
+    let slots = ironhorse_vm::SlotArena::lazy_from_parts(
+        manifest.slot_count,
+        small.slot_free.clone(),
+        manifest.slot_live,
+        source.clone(),
+    );
+    let chunks = ironhorse_vm::ChunkArena::lazy_from_parts(manifest.chunk_len as usize, source);
+    let mut interp = Interp::new();
+    interp.restore_snapshot_state(
+        slots,
+        chunks,
+        small.stack.clone(),
+        small.names.clone(),
+        small.meter.to_state(),
+    );
+    Ok(StoreSession {
+        interp,
+        epoch: manifest.epoch,
+        seal: manifest.seal,
+        pin: Some(pin),
+    })
 }
 
 #[cfg(test)]

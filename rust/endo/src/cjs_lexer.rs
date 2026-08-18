@@ -23,6 +23,12 @@
 //! yields a name. Re-export shapes (`module.exports = require(…)`,
 //! `__exportStar(require(…), exports)`) are NOT chased across
 //! modules; that remains a recorded design gap.
+//!
+//! The same tokenizer also backs [`detect_esm_syntax`], the
+//! module-syntax detection that classifies an ambiguous `.js` file
+//! (no `"type"` field in its package manifest) as ESM when it
+//! contains a top-level `import`/`export` declaration, as Node does
+//! for such files.
 
 use std::collections::BTreeSet;
 
@@ -347,6 +353,65 @@ fn skip_value(tokens: &[Token], i: usize) -> usize {
     j
 }
 
+/// True when `source` contains unambiguous ESM module syntax — a
+/// top-level `import` or `export` declaration, or `import.meta` — in
+/// the spirit of Node's module-syntax detection for ambiguous `.js`
+/// files (unflagged since Node 22.7). Dynamic `import(…)` is legal in
+/// CommonJS and is not a marker; neither is `import`/`export` as a
+/// member name (`foo.import`), inside a nested scope, or inside a
+/// comment, string, template, or regex (the tokenizer already skips
+/// those). A valid CommonJS source can never place these declaration
+/// forms at brace-depth zero — they are reserved words there — so a
+/// hit is decisive, and a miss simply leaves the ambiguous file on
+/// the CommonJS path it is on today.
+pub fn detect_esm_syntax(source: &str) -> bool {
+    let tokens = tokenize(source);
+    let mut depth = 0i64;
+    for (i, tok) in tokens.iter().enumerate() {
+        match tok {
+            Token::Punct('{') | Token::Punct('(') | Token::Punct('[') => depth += 1,
+            Token::Punct('}') | Token::Punct(')') | Token::Punct(']') => depth -= 1,
+            Token::Ident(w) if depth == 0 => {
+                // A member access (`foo.import`) is not a declaration.
+                if i > 0 && matches!(tokens.get(i - 1), Some(Token::Punct('.'))) {
+                    continue;
+                }
+                if w == "import" {
+                    // Every continuation except a call — a binding,
+                    // `{`, `*`, a string specifier, `.meta` — is
+                    // ESM-only syntax.
+                    if !matches!(tokens.get(i + 1), Some(Token::Punct('('))) {
+                        return true;
+                    }
+                }
+                if w == "export" {
+                    // Only a declaration continuation proves ESM.
+                    match tokens.get(i + 1) {
+                        Some(Token::Punct('{')) | Some(Token::Punct('*')) => return true,
+                        Some(Token::Ident(k))
+                            if matches!(
+                                k.as_str(),
+                                "default"
+                                    | "const"
+                                    | "let"
+                                    | "var"
+                                    | "function"
+                                    | "class"
+                                    | "async"
+                            ) =>
+                        {
+                            return true
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Scan a CommonJS source for the names its `module.exports` is
 /// statically seen to receive, in `cjs-module-lexer` spirit.
 /// Returns a deterministic sorted set.
@@ -587,5 +652,49 @@ mod tests {
     fn regex_after_throw_or_yield_is_not_division() {
         assert!(detect("function f() { throw /exports.x = 1/; }\n").is_empty());
         assert!(detect("function* g() { yield /exports.y = 1/; }\n").is_empty());
+    }
+
+    #[test]
+    fn esm_syntax_import_declarations() {
+        assert!(detect_esm_syntax("import x from 'y';\n"));
+        assert!(detect_esm_syntax("import { a, b } from 'y';\n"));
+        assert!(detect_esm_syntax("import * as ns from 'y';\n"));
+        assert!(detect_esm_syntax("import 'side-effect';\n"));
+        assert!(detect_esm_syntax("const u = import.meta.url;\n"));
+    }
+
+    #[test]
+    fn esm_syntax_export_declarations() {
+        assert!(detect_esm_syntax("export default 1;\n"));
+        assert!(detect_esm_syntax("export const a = 1;\n"));
+        assert!(detect_esm_syntax("export function f() {}\n"));
+        assert!(detect_esm_syntax("export async function g() {}\n"));
+        assert!(detect_esm_syntax("export class C {}\n"));
+        assert!(detect_esm_syntax("export { a, b };\n"));
+        assert!(detect_esm_syntax("export * from 'y';\n"));
+    }
+
+    /// CommonJS sources — including ones that use dynamic `import()`,
+    /// name a property `import`/`export`, or mention the keywords in
+    /// comments and strings — are not misdetected as ESM.
+    #[test]
+    fn esm_syntax_not_detected_in_cjs() {
+        assert!(!detect_esm_syntax("module.exports = { a: 1 };\n"));
+        assert!(!detect_esm_syntax("const m = require('m');\nexports.f = () => m;\n"));
+        assert!(!detect_esm_syntax("import('lazy').then(ns => ns.go());\n"));
+        assert!(!detect_esm_syntax("const module = import('lazy');\n"));
+        assert!(!detect_esm_syntax("foo.import = 1;\nbar.export = 2;\n"));
+        assert!(!detect_esm_syntax("var o = { import: 1, export: 2 };\n"));
+        assert!(!detect_esm_syntax("// import x from 'y';\n/* export default 1; */\n"));
+        assert!(!detect_esm_syntax("var s = \"import x from 'y'\";\nvar t = `export const a = 1`;\n"));
+        assert!(!detect_esm_syntax("function f() { return exports; }\n"));
+    }
+
+    /// `import`/`export` words nested inside braces are not top-level
+    /// declarations (they cannot be — reserved words — so a depth-0
+    /// hit is decisive and a nested mention proves nothing).
+    #[test]
+    fn esm_syntax_ignores_nested_mentions() {
+        assert!(!detect_esm_syntax("register({ import: spec => load(spec) });\n"));
     }
 }

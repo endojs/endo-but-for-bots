@@ -439,10 +439,12 @@ capability. Use it via exec:
 - \`const wt = await E(workspace).worktree()\` gives the working tree, a mount you
   can write to: \`E(wt).makeFile(path, text)\`, \`E(wt).writeText(path, text)\`,
   \`E(wt).remove(path)\`, \`E(wt).move(from, to)\`.
-- \`E(workspace).status()\` returns entries shaped \`{ entry, path, worktree }\`;
-  \`E(workspace).diff()\` inspects changes.
-- To stage, pass the \`entry\` capabilities (NOT path strings) from status to
-  \`add\`: \`const st = await E(workspace).status(); await E(workspace).add(st.map(s => s.entry))\`.
+- \`E(workspace).status()\` returns \`{ entries, truncated }\`; each entry is
+  copy data with \`path\`, \`index\`, and \`worktree\` fields, and \`truncated\`
+  tells you whether the result was limited. \`E(workspace).diff()\` inspects
+  changes.
+- To stage one desired row, resolve its path through the worktree to acquire an
+  entry capability (NOT a path string): \`const result = await E(workspace).status(); const row = result.entries.find(({ path }) => path === "src/main.js"); if (!row) throw new Error("row not found"); const wt = await E(workspace).worktree(); const entry = await E(wt).entry(row.path); await E(workspace).add([entry])\`.
   Then \`E(workspace).commit(message)\` records them.
 Build what the user asks for in the workspace, committing as you reach working
 states. Speak short, plain summaries of what you did — never read code aloud.

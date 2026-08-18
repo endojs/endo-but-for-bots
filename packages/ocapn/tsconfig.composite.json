@@ -9,6 +9,9 @@
       "path": "../bytes/tsconfig.composite.json"
     },
     {
+      "path": "../cbor/tsconfig.composite.json"
+    },
+    {
       "path": "../eventual-send/tsconfig.composite.json"
     },
     {

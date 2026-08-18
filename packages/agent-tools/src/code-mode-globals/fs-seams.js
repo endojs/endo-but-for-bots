@@ -10,7 +10,7 @@ import {
   wrapBackend,
 } from '@endo/platform/fs/extended';
 
-import { makeWorkspaceGlobal } from './fs.js';
+import { makeFilesystemGlobal } from './fs.js';
 
 /**
  * Workspace seam setup: mint a workspace backing and the code-mode global
@@ -23,9 +23,9 @@ import { makeWorkspaceGlobal } from './fs.js';
  * this package imports no daemon implementation. See the README section
  * "Choosing a workspace backing" for that recipe and for the read-only case.
  *
- * The guest-facing binding is `workspace` in every seam, and the descriptor is
- * identical across them: which backing is underneath is the host's business,
- * not the guest's.
+ * The guest-facing binding is `workspace` in every seam, while each returned
+ * descriptor names the exact surface of its backing. The daemon mount seam is
+ * intentionally assembled by the provisioning host rather than here.
  *
  * @typedef {object} WorkspaceSeam
  * @property {Filesystem} workspace The capability to endow under `workspace`.
@@ -44,7 +44,7 @@ export const makeInMemoryWorkspaceSeam = () =>
     workspace: wrapBackend(makeInMemoryBackend(), {
       description: 'in-memory workspace',
     }),
-    global: makeWorkspaceGlobal({ name: 'workspace' }),
+    global: makeFilesystemGlobal({ name: 'workspace' }),
   });
 harden(makeInMemoryWorkspaceSeam);
 
@@ -64,6 +64,6 @@ export const makeNodeWorkspaceSeam = ({ rootPath }) =>
     workspace: wrapBackend(makeNodeFsBackend({ rootPath }), {
       description: 'node:fs workspace',
     }),
-    global: makeWorkspaceGlobal({ name: 'workspace' }),
+    global: makeFilesystemGlobal({ name: 'workspace' }),
   });
 harden(makeNodeWorkspaceSeam);

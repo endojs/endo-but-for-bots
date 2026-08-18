@@ -3,7 +3,6 @@
 
 import { Buffer } from 'node:buffer';
 import { execFile, spawn } from 'node:child_process';
-import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import process from 'node:process';
 import { setTimeout, clearTimeout } from 'node:timers';
@@ -12,10 +11,13 @@ import path from 'node:path';
 import { URL, fileURLToPath } from 'node:url';
 
 import { encodeBase64 } from '@endo/base64';
+import { bytesFromText } from '@endo/bytes/from-string.js';
 import { q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
+import { encodeHex } from '@endo/hex';
+import { sha256 } from '@endo/sha256';
 import { mapReader } from '@endo/stream';
 // `GitBlob` exposes the whole-value read surface plus the richer `BlobRef`
 // range-I/O surface (`getInfo` / `fetch`), so a remote reader of a git tree can
@@ -46,6 +48,7 @@ const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
  *   GitDeleteBranchOptions,
  *   GitMergeOptions,
  *   GitRemoteCredential,
+ *   GitStatusOptions,
  *   RemoteRefUpdate,
  *   GitRefUpdateResult,
  *   GitRebaseInput,
@@ -55,7 +58,6 @@ const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
  * } from '@endo/exo-git'
  * @import {
  *   GitTreeEntry,
- *   NativeGitStatusOptions,
  *   RawStatusEntry,
  *   RemoteRefspec,
  *   RepositoryIdentity,
@@ -960,10 +962,7 @@ const hashIdentityConfig = configText => {
         !/^\s*\[branch /u.test(line) &&
         !/^\s*(url|pushurl|remote|merge)\s*=/u.test(line),
     );
-  return crypto
-    .createHash('sha256')
-    .update(stableLines.join('\n'))
-    .digest('hex');
+  return encodeHex(sha256(bytesFromText(stableLines.join('\n'))));
 };
 harden(hashIdentityConfig);
 
@@ -1916,9 +1915,7 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
       // sha1 OID.
       async getInfo() {
         const bytes = await readBlobBytes(blobOid);
-        const hash = encodeBase64(
-          crypto.createHash('sha256').update(bytes).digest(),
-        );
+        const hash = encodeBase64(sha256(bytes));
         return harden({
           algorithm: 'sha256',
           hash,
@@ -2081,12 +2078,11 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
      * verbatim) and rename/copy records embed the source-path field
      * inline rather than escaping it.
      *
-     * Returns the raw structural list.  The public Git exo wraps each
-     * entry into a `GitStatusEntry` by minting a `PathEntry` on
-     * the bound mount — the backend has no mount cap to mint with.
+     * Returns the raw structural list.  The public Git exo projects each row
+     * into copy data.
      *
      * @returns {Promise<RawStatusEntry[]>}
-     * @param {NativeGitStatusOptions} [options]
+     * @param {GitStatusOptions} [options]
      */
     status: async (options = {}) => {
       const untracked = options.untracked ?? 'all';
@@ -2095,8 +2091,14 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
           "status.untracked must be one of 'all', 'normal', or 'no'",
         );
       }
-      // Use the streaming reader: porcelain=v1 records start with a column-
-      // sensitive XY code (e.g. ' D' for a worktree-only deletion);
+      if (
+        options.maxCount !== undefined &&
+        (!Number.isInteger(options.maxCount) || options.maxCount <= 0)
+      ) {
+        throw new Error('status.maxCount must be a positive integer');
+      }
+      // Use the streaming reader: porcelain=v1 records start with a
+      // column-sensitive XY code (e.g. ' D' for a worktree-only deletion);
       // trimming would strip a leading space and shift the path.
       const out = await readGitText([
         'status',
@@ -2149,7 +2151,11 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
           }
         }
       }
-      return harden(entries);
+      return harden(
+        options.maxCount === undefined
+          ? entries
+          : entries.slice(0, options.maxCount),
+      );
     },
 
     /**
@@ -2587,6 +2593,67 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
         }
         throw err;
       }
+    },
+
+    /**
+     * Report the checked-out branch and its configured upstream divergence.
+     * A detached HEAD has no branch or upstream, and a branch without an
+     * upstream reports zero divergence rather than failing the inspection.
+     *
+     * @returns {Promise<{ branch?: string, upstream?: string, ahead: number, behind: number, detached: boolean }>}
+     */
+    trackingStatus: async () => {
+      let branch;
+      try {
+        branch = (await runGitRaw(['symbolic-ref', '--short', 'HEAD'])).trim();
+      } catch (err) {
+        const message = /** @type {Error} */ (err).message || '';
+        if (/not a symbolic ref|HEAD is not a symbolic/u.test(message)) {
+          return harden({ ahead: 0, behind: 0, detached: true });
+        }
+        throw err;
+      }
+      if (branch === '') {
+        return harden({ ahead: 0, behind: 0, detached: true });
+      }
+
+      let upstream;
+      try {
+        upstream = (
+          await runGitRaw([
+            'rev-parse',
+            '--abbrev-ref',
+            '--symbolic-full-name',
+            '@{u}',
+          ])
+        ).trim();
+      } catch (err) {
+        const message = /** @type {Error} */ (err).message || '';
+        if (
+          /no upstream|no such ref|unknown revision|ambiguous argument|not stored as a remote-tracking branch/u.test(
+            message,
+          )
+        ) {
+          return harden({ branch, ahead: 0, behind: 0, detached: false });
+        }
+        throw err;
+      }
+      if (upstream === '') {
+        return harden({ branch, ahead: 0, behind: 0, detached: false });
+      }
+
+      const counts = (
+        await runGitRaw(['rev-list', '--left-right', '--count', '@{u}...HEAD'])
+      ).trim();
+      const [behindText, aheadText] = counts.split(/\s+/u);
+      const behind = Number(behindText);
+      const ahead = Number(aheadText);
+      if (!Number.isInteger(behind) || !Number.isInteger(ahead)) {
+        throw new Error(
+          `git rev-list returned invalid tracking counts: ${counts}`,
+        );
+      }
+      return harden({ branch, upstream, ahead, behind, detached: false });
     },
 
     /**

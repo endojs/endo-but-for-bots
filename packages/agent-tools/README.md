@@ -121,8 +121,9 @@ The Pi packages remain optional peer dependencies.
 Importing the root or a non-Pi module does not opt a consumer into Pi.
 
 Code-mode global factories describe capabilities already granted by a host.
-`makeWorkspaceGlobal` describes the local `@endo/platform/fs/extended`
-adapter.
+`makeWorkspaceGlobal` describes the raw daemon mount provisioned for the
+repository workspace, while `makeFilesystemGlobal` describes the local
+`@endo/platform/fs/extended` adapter used by the standalone seams.
 The Shell, HTTP, Git, and GitRemote factories likewise carry no provisioning,
 attenuation, credential, or controller authority.
 
@@ -135,10 +136,12 @@ provider bridges over the same tool records.
 
 The `workspace` global is one guest-facing name over several host-side
 backings.
-The backend is invisible to the guest: authority is configured by which
-capability the host binds under `workspace`, not by a runtime flag on the tool.
-The declaration the model reads is the same `Filesystem` surface in every row
-below, so guest code written against one seam runs unchanged against another.
+The host must pair each backing with its matching descriptor: a raw daemon
+mount uses `makeWorkspaceGlobal`, while an extended Filesystem uses
+`makeFilesystemGlobal`.
+When using `makeCodeModeAgent` directly, set `powers.workspaceSurface` to
+`'filesystem'` for the latter; the default `'mount'` surface is reserved for a
+daemon mount.
 
 | Deployment | Backing | Who mints it | Who binds it |
 | --- | --- | --- | --- |
@@ -167,17 +170,15 @@ nothing above it.
 
 There is deliberately no daemon seam helper here: this package imports no
 daemon implementation.
-The daemon recipe is to provision a mount, adapt it, and bind it under the
-guest's `workspace` pet name:
+The daemon recipe is to provision a mount and bind it under the guest's
+`workspace` pet name:
 
 ```js
 const mount = await E(host).provideMount(hostPath, petName);
-const workspace = mountAsFilesystem(mount);
+const workspace = mount;
 ```
 
-`mountAsFilesystem` comes from `@endo/platform/fs/extended`; the descriptor is
-`makeWorkspaceGlobal({ name: 'workspace' })`, the same one the seam helpers
-return.
+The descriptor is `makeWorkspaceGlobal({ name: 'workspace' })`.
 The executable form of this recipe belongs to provisioning policy, not to this
 package: which host path, which pet name, and which guest may ask for it are
 policy decisions `@endo/agent-tools` does not make.
@@ -186,9 +187,10 @@ Read-only historical views arrive pre-attenuated and need no separate seam.
 `E(git).filesystemAt(ref)` yields a `Filesystem` over a commit's tree, and
 `readOnly(fs)` attenuates any `Filesystem` so its mutating methods reject with
 `EACCES`.
-Bind either one under `workspace` with `makeWorkspaceGlobal` and the guest sees
-the same declaration; the verbs it cannot use fail at the capability, which is
-where authority is enforced.
+Bind an extended Filesystem under `workspace` with
+`makeFilesystemGlobal({ name: 'workspace' })`.
+The verbs it cannot use fail at the capability, which is where authority is
+enforced.
 
 ## Parked JSON wrappers
 

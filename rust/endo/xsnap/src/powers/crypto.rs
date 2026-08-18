@@ -4,6 +4,7 @@
 //!
 //! JS calling convention:
 //!   sha256(data) -> string (hex)
+//!   sha256Bytes(data) -> ArrayBuffer (32 raw bytes)
 //!   randomHex256() -> string (64-char hex, 256 bits)
 //!   ed25519Keygen() -> string (JSON: {publicKey, privateKey} as hex)
 //!   ed25519Sign(privateKeyHex, messageHex) -> string (signature hex)
@@ -37,6 +38,24 @@ pub unsafe extern "C" fn host_sha256(the: *mut XsMachine) {
     let data = arg_str(the, 0);
     let hash = Sha256::digest(data.as_bytes());
     set_result_string(the, &hex::encode(hash));
+}
+
+/// `sha256Bytes(uint8Array) -> ArrayBuffer`
+///
+/// Computes SHA-256 over binary input and returns the 32 raw digest bytes.
+pub unsafe extern "C" fn host_sha256_bytes(the: *mut XsMachine) {
+    let data_slot = (*the).frame.sub(1);
+    let data = crate::worker_io::read_typed_array_bytes(the, data_slot).unwrap_or_default();
+    let hash = Sha256::digest(&data);
+    let len = hash.len() as i32;
+    fxArrayBuffer(
+        the,
+        &mut (*the).scratch,
+        hash.as_ptr() as *mut std::os::raw::c_void,
+        len,
+        len,
+    );
+    *(*the).frame.add(1) = (*the).scratch;
 }
 
 /// `randomHex256() -> string`
@@ -171,6 +190,8 @@ pub const CALLBACKS: &[crate::ffi::XsCallback] = &[
     host_sha256_update,
     host_sha256_update_bytes,
     host_sha256_finish,
+    // Append only: snapshot callback table indices are persistent.
+    host_sha256_bytes,
 ];
 
 /// Register all crypto host functions on the machine.
@@ -183,4 +204,5 @@ pub unsafe fn register(machine: &crate::Machine) {
     machine.define_function("sha256Update", host_sha256_update, 2);
     machine.define_function("sha256UpdateBytes", host_sha256_update_bytes, 2);
     machine.define_function("sha256Finish", host_sha256_finish, 1);
+    machine.define_function("sha256Bytes", host_sha256_bytes, 1);
 }

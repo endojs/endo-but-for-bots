@@ -875,6 +875,12 @@ impl Drop for Machine {
 /// bundles so that module-level destructuring of `assert` works.
 pub const POLYFILLS: &str = include_str!("polyfills.js");
 
+/// WHATWG `URL`/`URLSearchParams` veneer over the host's rust-url
+/// parser (`hostUrlParse`/`hostUrlSet`/`hostFormUrlDecode`/
+/// `hostFormUrlEncode`). Evaluated in machines that install npm
+/// archives; guarded so an engine-provided URL is never displaced.
+pub const URL_GLOBALS_JS: &str = include_str!("url_globals.js");
+
 /// Creates `globalThis.host<Name>` aliases for the unprefixed
 /// host functions registered in Rust so that bundled code which
 /// expects `hostReadFile`, `hostSendRawFrame`, etc. resolves to
@@ -1676,6 +1682,14 @@ pub fn run_xs_program(
             XsProgram::Archive(bytes) => {
                 // Provide globals visible inside archive Compartments.
                 machine.eval(ARCHIVE_ENDOWMENTS_JS);
+                // URL/URLSearchParams ride the host's WHATWG parser;
+                // a separate statement to keep the endowments blob's
+                // conflict surface small.
+                machine.eval(URL_GLOBALS_JS);
+                machine.eval(
+                    "__archiveEndowments.URL = globalThis.URL; \
+                     __archiveEndowments.URLSearchParams = globalThis.URLSearchParams;",
+                );
                 let cursor = std::io::Cursor::new(bytes);
                 let archive = archive::load_archive(cursor)
                     .map_err(|e| XsnapError::Archive(format!("cannot read archive: {e}")))?;
@@ -1921,6 +1935,13 @@ pub fn run_xs_archive_loaded(loaded: &archive::LoadedArchive) -> Result<(), Xsna
 
     // Provide archive endowments (shared with the supervised path).
     machine.eval(ARCHIVE_ENDOWMENTS_JS);
+    // URL/URLSearchParams ride the host's WHATWG parser; a separate
+    // statement to keep the endowments blob's conflict surface small.
+    machine.eval(URL_GLOBALS_JS);
+    machine.eval(
+        "__archiveEndowments.URL = globalThis.URL; \
+         __archiveEndowments.URLSearchParams = globalThis.URLSearchParams;",
+    );
 
     if !archive::install_archive_async(&machine, loaded) {
         return Err(XsnapError::Archive(
@@ -2020,6 +2041,71 @@ mod tests {
         match machine.eval("__r") {
             Some(JsValue::String(s)) => assert_eq!(s, "ok:8"),
             other => panic!("expected result string, got {:?}", other.map(|v| js_value_debug(&v))),
+        }
+    }
+
+    /// The WHATWG URL veneer end to end: parsing/normalization,
+    /// relative resolution, setter semantics (silent-ignore for
+    /// component setters, throw for `href`), and the two-way
+    /// URL <-> URLSearchParams linkage, all through the
+    /// rust-url-backed host functions.
+    #[test]
+    fn url_globals_provide_whatwg_url_and_search_params() {
+        let machine = new_machine();
+        machine.define_function("hostUrlParse", worker_io::host_url_parse, 2);
+        machine.define_function("hostUrlSet", worker_io::host_url_set, 3);
+        machine.define_function("hostFormUrlDecode", worker_io::host_form_urlencoded_decode, 1);
+        machine.define_function("hostFormUrlEncode", worker_io::host_form_urlencoded_encode, 1);
+        machine.eval(URL_GLOBALS_JS).expect("url globals eval failed");
+        let probe = r#"(function () {
+            var out = [];
+            var u = new URL('HTTPS://User:Pw@ExAmPle.com:8443/a/b/../c?x=1&y=2#frag');
+            out.push(u.href);
+            out.push([u.protocol, u.hostname, u.port, u.pathname, u.search, u.hash, u.origin].join('|'));
+            out.push(new URL('../up?q=1', 'https://example.com/a/b/c').href);
+            var d = new URL('https://example.com:443/x');
+            out.push(d.href + '|' + d.port);
+            d.port = 'nonsense';
+            d.protocol = 'not a scheme';
+            d.hash = 'h2';
+            d.pathname = 'y';
+            out.push(d.href);
+            var threw = 'no';
+            try { d.href = 'http://['; } catch (e) { threw = e.constructor.name; }
+            out.push(threw + ':' + URL.canParse('http://[') + ':' + URL.canParse('/p', 'https://e.com'));
+            var s = new URL('https://example.com/p?b=2&a=1&a=3');
+            var sp = s.searchParams;
+            out.push(sp.get('b') + '|' + sp.getAll('a').join(',') + '|' + sp.size);
+            sp.append('c', 'sp ce');
+            sp.sort();
+            out.push(s.search);
+            sp.delete('a', '3');
+            sp.set('b', '9');
+            out.push(s.href);
+            s.search = '?fresh=1';
+            out.push(sp.get('fresh') + '|' + sp.has('a') + '|' + sp.toString());
+            var solo = new URLSearchParams('a=%C3%A9&b=1+2');
+            out.push(solo.get('a') + '|' + solo.get('b') + '|' + solo.toString());
+            var it = [];
+            for (var pair of solo) it.push(pair[0] + '=' + pair[1]);
+            out.push(it.join('&'));
+            return out.join('\n');
+        })()"#;
+        let expected = "https://User:Pw@example.com:8443/a/c?x=1&y=2#frag\n\
+            https:|example.com|8443|/a/c|?x=1&y=2|#frag|https://example.com:8443\n\
+            https://example.com/a/up?q=1\n\
+            https://example.com/x|\n\
+            https://example.com/y#h2\n\
+            TypeError:false:true\n\
+            2|1,3|3\n\
+            ?a=1&a=3&b=2&c=sp+ce\n\
+            https://example.com/p?a=1&b=9&c=sp+ce\n\
+            1|false|fresh=1\n\
+            \u{e9}|1 2|a=%C3%A9&b=1+2\n\
+            a=\u{e9}&b=1 2";
+        match machine.eval(probe) {
+            Some(JsValue::String(s)) => assert_eq!(s, expected),
+            other => panic!("url probe failed: {:?}", other.map(|v| js_value_debug(&v))),
         }
     }
 
@@ -2342,6 +2428,41 @@ mod tests {
                 "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
             ),
             other => panic!("expected hash string, got {:?}", js_value_debug(&other)),
+        }
+
+        // The binary one-shot path preserves bytes above ASCII and returns
+        // the digest as a fresh ArrayBuffer rather than a hex string.
+        match machine
+            .eval(
+                "(function () { \
+                    var digest = sha256Bytes(new Uint8Array([0, 127, 128, 255])); \
+                    return (digest instanceof ArrayBuffer) + ':' + \
+                      Array.from(new Uint8Array(digest), function (byte) { \
+                        return byte.toString(16).padStart(2, '0'); \
+                      }).join(''); \
+                })()",
+            )
+            .unwrap()
+        {
+            JsValue::String(s) => assert_eq!(
+                s,
+                "true:89273d2f70b93285bb7ddb4bcee86a5347ca7159352e3cbdd20c23e9d1e507d3"
+            ),
+            other => panic!("expected binary hash result, got {:?}", js_value_debug(&other)),
+        }
+
+        match machine
+            .eval("new Uint8Array(sha256Bytes(new Uint8Array())).length")
+            .unwrap()
+        {
+            JsValue::Integer(n) => assert_eq!(n, 32),
+            other => panic!("expected 32-byte hash, got {:?}", js_value_debug(&other)),
+        }
+
+        machine.eval(HOST_ALIASES).unwrap();
+        match machine.eval("hostSha256Bytes === sha256Bytes").unwrap() {
+            JsValue::Boolean(equal) => assert!(equal),
+            other => panic!("expected host alias comparison, got {:?}", js_value_debug(&other)),
         }
     }
 

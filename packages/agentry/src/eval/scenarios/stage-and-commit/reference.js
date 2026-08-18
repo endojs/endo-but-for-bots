@@ -19,12 +19,14 @@
  */
 export const stageAndCommitSource = (filePath, message) => `\
 (async () => {
-  const rows = await E(git).status();
-  const row = rows.find(candidate => candidate.path === ${JSON.stringify(filePath)});
+  const status = await E(git).status();
+  const row = status.entries.find(candidate => candidate.path === ${JSON.stringify(filePath)});
   if (row === undefined) {
     throw new Error('target path not found in git status');
   }
-  await E(git).add([row.entry]);
+  const worktree = await E(git).worktree();
+  const entry = await E(worktree).entry(row.path);
+  await E(git).add([entry]);
   const commit = await E(git).commit(${JSON.stringify(message)});
   return commit.summary;
 })()`;

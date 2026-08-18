@@ -15,6 +15,15 @@ path = "src/lib.rs"
 # surfaces are used (design § Snapshots: the writer is a serializer over
 # the index arenas, not a relocator).
 ironhorse-vm = { path = "../ironhorse-vm" }
+# Compiles the store-suite fixtures (real JS) when the suite is enabled;
+# never part of a plain library build.
+ironhorse-compile = { path = "../ironhorse-compile", optional = true }
+
+[features]
+# The backend-parameterized store acceptance suite (`store_suite`
+# module): test support for backend crates (e.g. the daemon-side
+# SQLite store), kept out of production builds.
+store-suite = ["dep:ironhorse-compile"]
 
 [dev-dependencies]
 # The integration test crate (`tests/supervisor_suspend_resume.rs`) drives
@@ -27,3 +36,6 @@ ironhorse-vm = { path = "../ironhorse-vm" }
 # machine reads genuine runtime-materialized globals across a snapshot —
 # the pure-Rust compiler pipeline (no oracle needed) that `dual_run` rides.
 ironhorse-compile = { path = "../ironhorse-compile" }
+# Activates the store-suite feature for this crate's own integration
+# tests (a self dev-dependency only unifies features; it adds no code).
+ironhorse-snapshot = { path = ".", features = ["store-suite"] }

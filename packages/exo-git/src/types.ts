@@ -14,7 +14,6 @@ export type WritableGitWorktree = Directory & PathEntryIssuer;
 export type ReadOnlyGitWorktree = ReadableTree;
 /** @deprecated Use `WritableGitWorktree` or `ReadOnlyGitWorktree`. */
 export type GitWorktree = WritableGitWorktree | ReadOnlyGitWorktree;
-export type GitStatusNode = Directory | File | ReadableTree | ReadableBlob;
 
 export type GitRef = {
   name: string;
@@ -73,17 +72,29 @@ export type GitWorktreeStatus =
   | 'conflicted';
 
 export type GitStatusEntry = {
-  entry: PathEntry;
   path: string;
   index: GitIndexStatus;
   worktree: GitWorktreeStatus;
-  node?: GitStatusNode;
   renamedFrom?: string;
 };
 
 export type GitStatusOptions = {
   /** Include all untracked files, collapse them to directories, or omit them. */
   untracked?: 'all' | 'normal' | 'no';
+  maxCount?: number;
+};
+
+export type GitStatusResult = {
+  entries: GitStatusEntry[];
+  truncated: boolean;
+};
+
+export type GitTrackingStatus = {
+  branch?: string;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+  detached: boolean;
 };
 
 export type GitDiffOptions = {
@@ -310,7 +321,8 @@ export type GitRemoteKit = {
 /** The read-only capability surface returned by `readOnly()`. */
 export type ReadOnlyEndoGit = {
   worktree: () => Promise<ReadOnlyGitWorktree>;
-  status: (options?: GitStatusOptions) => Promise<GitStatusEntry[]>;
+  status: (options?: GitStatusOptions) => Promise<GitStatusResult>;
+  trackingStatus: () => Promise<GitTrackingStatus>;
   diff: (options?: GitDiffOptions) => Promise<string>;
   log: (options?: GitLogOptions) => Promise<GitCommit[]>;
   show: (ref: GitRef | string) => Promise<string>;

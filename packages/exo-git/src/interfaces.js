@@ -25,23 +25,46 @@ const GitWorktreeStatusShape = M.or(
   'untracked',
 );
 
-const GitStatusOptionsShape = M.splitRecord(
-  {},
-  { untracked: M.or('all', 'normal', 'no') },
-  harden({}),
-);
-
 const GitStatusEntryShape = M.splitRecord(
   {
-    entry: M.remotable(),
     index: GitIndexStatusShape,
     path: M.string(),
     worktree: GitWorktreeStatusShape,
   },
   {
-    node: M.remotable(),
     renamedFrom: M.string(),
   },
+);
+
+const GitStatusOptionsShape = M.splitRecord(
+  {},
+  {
+    maxCount: M.number(),
+    untracked: M.or('all', 'normal', 'no'),
+  },
+  harden({}),
+);
+
+const GitStatusResultShape = M.splitRecord(
+  {
+    entries: M.arrayOf(GitStatusEntryShape),
+    truncated: M.boolean(),
+  },
+  {},
+  harden({}),
+);
+
+const GitTrackingStatusShape = M.splitRecord(
+  {
+    ahead: M.number(),
+    behind: M.number(),
+    detached: M.boolean(),
+  },
+  {
+    branch: M.string(),
+    upstream: M.string(),
+  },
+  harden({}),
 );
 
 const GitRefKindShape = M.or('branch', 'commit', 'detached', 'tag');
@@ -273,10 +296,11 @@ export const GIT_METHOD_GUARDS = harden({
   stashShow: M.callWhen().optional(M.number()).returns(M.string()),
   status: M.callWhen()
     .optional(GitStatusOptionsShape)
-    .returns(M.arrayOf(GitStatusEntryShape)),
+    .returns(GitStatusResultShape),
   switch: M.callWhen(RefArgShape).returns(M.undefined()),
   switchBranch: M.callWhen(M.string()).returns(M.undefined()),
   tree: M.callWhen(RefArgShape).returns(M.remotable()),
+  trackingStatus: M.callWhen().returns(GitTrackingStatusShape),
   // `callWhen` so a read-only Git may resolve its worktree authority
   // through `mount.readOnly()` (which yields a promise of the
   // structural read-only view) before the return shape is matched; a
@@ -303,6 +327,7 @@ export const GIT_READER_METHODS = harden([
   'stashList',
   'stashShow',
   'status',
+  'trackingStatus',
   'tree',
   'worktree',
 ]);

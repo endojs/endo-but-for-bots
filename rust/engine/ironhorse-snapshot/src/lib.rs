@@ -56,6 +56,13 @@ pub mod machine;
 pub mod sha256;
 pub mod sidetable;
 pub mod slot_codec;
+pub mod store;
+pub mod store_file;
+// Backend-parameterized acceptance suites (metamorphic determinism,
+// checkpoint locks) for OTHER crates' backends to instantiate; test
+// support only, hence feature-gated.
+#[cfg(feature = "store-suite")]
+pub mod store_suite;
 
 pub use atom::{Atom, AtomError, AtomReader, AtomWriter};
 pub use format::{
@@ -69,3 +76,10 @@ pub use machine::{
 };
 pub use sidetable::{Coverage, Descriptor, SideTable};
 pub use slot_codec::{decode_slot, decode_slots, encode_slot, encode_slots, SLOT_RECORD_BYTES};
+pub use store::{
+    check_epoch, chunk_extent_count, chunk_extent_len, export_to_container, image_to_batch,
+    import_from_container, slot_page_count, slot_page_len, store_to_image, validate_store,
+    CheckpointBatch, CommitStats, HeapStore, MemoryStore, SmallState, StoreError, StoreManifest,
+    CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE, STORE_SCHEMA_VERSION,
+};
+pub use store_file::{FileStore, FILE_MAGIC};

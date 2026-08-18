@@ -42,7 +42,15 @@ const EXCLUDED_PACKAGES = new Set([
   // never executes at runtime — it only needs to be elided from
   // the bundle's compartment graph.
   'better-sqlite3',
-
+  // @endo/git shells out to `git` and @endo/host-spawner spawns
+  // commands, so both statically import node:child_process (and git
+  // eight more node: builtins) that XS cannot resolve, and neither
+  // could run under XS anyway.  bus-manager-rust-xs.js supplies no
+  // `hostTools` power, so manager.js/host.js reach refusing stand-ins
+  // instead of these imports and the packages only need eliding from
+  // the compartment graph.
+  '@endo/git',
+  '@endo/host-spawner',
   'ses',
   'ws',
 ]);
@@ -53,6 +61,21 @@ const daemonUrl = url.pathToFileURL(
 ).href;
 
 const daemonBundle = await makeBundle(readPowers, daemonUrl, {
+  // This Endor bundle currently runs on XS, so resolve the `xs` arm of
+  // every conditional export. `@endo/sha256` routes that condition to
+  // its engine-independent Endor host contract; without it the bundle
+  // would silently take the package's `default` arm, a pure-JS digest.
+  // The compartment mapper adds `import`, `default`, and `endo` to
+  // whatever is passed here.
+  //
+  // The sibling generators (bundle-bus-worker-xs.mjs and
+  // bundle-bus-worker-xs-ses-boot.mjs) do not pass it, because nothing
+  // their entry points reach has an `xs` arm to select: only the
+  // daemon graph carries `@endo/sha256` today.  Add it there too the
+  // moment a worker-graph package grows a condition-dependent
+  // implementation, since the failure mode is a silently wrong arm
+  // rather than an error.
+  conditions: new Set(['xs']),
   packageDependenciesHook: ({ canonicalName, dependencies }) => {
     const filtered = new Set(
       [...dependencies].filter(dep => !EXCLUDED_PACKAGES.has(dep)),
