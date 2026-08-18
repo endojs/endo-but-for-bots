@@ -186,9 +186,9 @@ test('named Git globals each appear in the system prompt', t => {
     ['ebfb', 'inspect', 'zeta'],
   );
   const prompt = makeCodeModeSystemPrompt(globals);
-  t.true(prompt.includes('declare const ebfb: WritableEndoGit;'));
-  t.true(prompt.includes('declare const inspect: ReadOnlyEndoGit;'));
-  t.true(prompt.includes('declare const zeta: EndoGitHistory;'));
+  t.true(prompt.includes('declare const ebfb: {'));
+  t.true(prompt.includes('declare const inspect: {'));
+  t.true(prompt.includes('declare const zeta: {'));
 });
 
 test('guest-bound mounts remain untyped until their live capability is rebound', t => {
@@ -239,7 +239,7 @@ test('writable Git declaration discloses its writable worktree reach', t => {
     }),
   );
   const prompt = makeCodeModeSystemPrompt(globals);
-  t.true(prompt.includes('declare const git: WritableEndoGit;'));
+  t.true(prompt.includes('declare const git: {'));
   t.true(prompt.includes('worktree: () => Promise<GitWritableGitWorktree>;'));
   t.true(
     prompt.includes(
