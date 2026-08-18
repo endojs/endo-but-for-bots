@@ -27,7 +27,7 @@
   "main": "./src/index.js",
   "exports": {
     ".": "./src/index.js",
-    "./machine.js": "./src/machine.js",
+    "./machine.js": "./machine.js",
     "./src/machine.js": "./src/machine.js",
     "./src/template.js": "./src/template.js",
     "./src/journal.js": "./src/journal.js",
