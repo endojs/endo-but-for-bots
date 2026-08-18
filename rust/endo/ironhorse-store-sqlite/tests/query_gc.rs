@@ -26,9 +26,16 @@ fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
 }
 
 /// Build a store with an interesting page graph: array-held 3-slot
-/// objects (side-table references, page-aligned isolation), a dropped
+/// objects (crank 1's loop index is a VARIABLE, so the writes go
+/// through the dynamic element path and populate the items map —
+/// real side-table references, page-aligned isolation), a dropped
 /// chain, and a second incremental checkpoint so `edge_pairs`
-/// maintenance runs on both the full and the dirty paths.
+/// maintenance runs on both the full and the dirty paths. Crank 2's
+/// `arr[3] = {...}` uses a LITERAL index, which this engine binds as
+/// an id-keyed ordinary property — literal-index access does not
+/// consult the items map (wave-3 finding) — so the second checkpoint
+/// exercises dirty pages and edge maintenance through the property
+/// graph, not the array-element path.
 fn build_store(store: Rc<RefCell<SqliteHeapStore>>) {
     let cranks = [
         "var arr = []; var g = 0; var t = 0; var i = 0; \

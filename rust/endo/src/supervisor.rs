@@ -359,10 +359,17 @@ fn route_message(sup: &Arc<Supervisor>, msg: Message, callbacks: &RoutingCallbac
     if sup.is_suspended(msg.to) {
         if let Some(suspended) = sup.take_suspended(msg.to) {
             if is_debug() {
-                eprintln!(
-                    "endor: resuming suspended worker {} (sha256={})",
-                    msg.to, suspended.sha256
-                );
+                // A store-backed record has no CAS key; name its heap
+                // database instead of printing an empty sha256.
+                let identity = if suspended.sha256.is_empty() {
+                    match suspended.heap_store.as_deref() {
+                        Some(p) => format!("heap_store={}", p.display()),
+                        None => "no snapshot identity".to_string(),
+                    }
+                } else {
+                    format!("sha256={}", suspended.sha256)
+                };
+                eprintln!("endor: resuming suspended worker {} ({identity})", msg.to);
             }
             (callbacks.on_resume)(sup, msg.to, suspended, msg);
             return;

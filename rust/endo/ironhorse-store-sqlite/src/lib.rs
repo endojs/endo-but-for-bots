@@ -666,47 +666,22 @@ impl HeapStore for SqliteHeapStore {
             let pages = slot_page_count(batch.manifest.slot_count);
             let exts = chunk_extent_count(batch.manifest.chunk_len);
 
-            let mut upsert_page = tx
-                .prepare(
-                    "INSERT INTO slot_pages (page, bytes) VALUES (?1, ?2)
-                     ON CONFLICT(page) DO UPDATE SET bytes = excluded.bytes",
-                )
-                .map_err(sql_err)?;
-            for (page, bytes) in &batch.slot_pages {
-                upsert_page
-                    .execute(params![*page as i64, bytes])
-                    .map_err(sql_err)?;
-            }
-            let mut upsert_ext = tx
-                .prepare(
-                    "INSERT INTO chunk_exts (ext, bytes) VALUES (?1, ?2)
-                     ON CONFLICT(ext) DO UPDATE SET bytes = excluded.bytes",
-                )
-                .map_err(sql_err)?;
-            for (ext, bytes) in &batch.chunk_extents {
-                upsert_ext
-                    .execute(params![*ext as i64, bytes])
-                    .map_err(sql_err)?;
-            }
-
-            // Drop rows beyond the new geometry (the commit contract:
-            // a shrink across a GC compaction must not leave stale
-            // extents for a later, larger geometry to resurrect).
-            tx.execute("DELETE FROM slot_pages WHERE page >= ?1", params![pages as i64])
-                .map_err(sql_err)?;
-            tx.execute("DELETE FROM chunk_exts WHERE ext >= ?1", params![exts as i64])
-                .map_err(sql_err)?;
-
             // The shared per-commit verification (grown-region
-            // presence for all three row dimensions, row lengths,
-            // summary coupling, root recombination) against the prior
-            // leaves and summaries — all read inside this transaction,
-            // the same snapshot the succession check read. The prior
-            // leaves are read PER KIND with contiguity enforced, like
-            // the trait readers: the review found an unfiltered
-            // `ORDER BY kind, idx` here silently folding kind-2 free
-            // leaves into the extent vector (masked only by resize
-            // bounds), and no gap detection.
+            // presence for all three row dimensions, boundary rows
+            // against the prior manifest, row lengths, summary
+            // coupling, root recombination) against the prior leaves
+            // and summaries — all read inside this transaction, the
+            // same snapshot the succession check read, and all BEFORE
+            // any table mutation (wave-3 reorder: a refused batch now
+            // leaves the tables untouched by construction, so the
+            // transaction rollback is the backstop for I/O failures
+            // in the mutation stage below, not the mechanism a
+            // refusal depends on). The prior leaves are read PER KIND
+            // with contiguity enforced, like the trait readers: the
+            // review found an unfiltered `ORDER BY kind, idx` here
+            // silently folding kind-2 free leaves into the extent
+            // vector (masked only by resize bounds), and no gap
+            // detection.
             {
                 let read_kind = |kind: i64, what: &'static str| -> Result<Vec<[u8; 32]>, StoreError> {
                     let mut stmt = tx
@@ -769,6 +744,40 @@ impl HeapStore for SqliteHeapStore {
                     stored.as_ref(),
                     batch,
                 )?;
+            }
+
+            let mut upsert_page = tx
+                .prepare(
+                    "INSERT INTO slot_pages (page, bytes) VALUES (?1, ?2)
+                     ON CONFLICT(page) DO UPDATE SET bytes = excluded.bytes",
+                )
+                .map_err(sql_err)?;
+            for (page, bytes) in &batch.slot_pages {
+                upsert_page
+                    .execute(params![*page as i64, bytes])
+                    .map_err(sql_err)?;
+            }
+            let mut upsert_ext = tx
+                .prepare(
+                    "INSERT INTO chunk_exts (ext, bytes) VALUES (?1, ?2)
+                     ON CONFLICT(ext) DO UPDATE SET bytes = excluded.bytes",
+                )
+                .map_err(sql_err)?;
+            for (ext, bytes) in &batch.chunk_extents {
+                upsert_ext
+                    .execute(params![*ext as i64, bytes])
+                    .map_err(sql_err)?;
+            }
+
+            // Drop rows beyond the new geometry (the commit contract:
+            // a shrink across a GC compaction must not leave stale
+            // extents for a later, larger geometry to resurrect).
+            tx.execute("DELETE FROM slot_pages WHERE page >= ?1", params![pages as i64])
+                .map_err(sql_err)?;
+            tx.execute("DELETE FROM chunk_exts WHERE ext >= ?1", params![exts as i64])
+                .map_err(sql_err)?;
+
+            {
                 let mut upsert_leaf = tx
                     .prepare(
                         "INSERT INTO leaf_hashes (kind, idx, hash) VALUES (?1, ?2, ?3)
@@ -901,8 +910,8 @@ mod tests {
         begin_store_session, checkpoint_to_store, resume_from_store, MachineSnapshot,
     };
     use ironhorse_snapshot::store::{
-        export_to_container, image_to_batch, import_from_container, store_to_image,
-        validate_store,
+        export_to_container, image_to_batch, import_from_container, reseal_batch,
+        store_to_image, validate_store,
     };
     use ironhorse_snapshot::Signature;
     use ironhorse_vm::Interp;
@@ -931,6 +940,45 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn refused_commit_leaves_the_store_untouched() {
+        // wave-3 reorder lock: every commit verification (succession,
+        // grown region, boundary rows, lengths, summaries, root) now
+        // runs BEFORE the first table mutation, so a refused batch
+        // leaves the store at its prior epoch by construction — the
+        // transaction rollback is the backstop for I/O failures, not
+        // the mechanism a refusal depends on.
+        let mut m = Interp::new();
+        assert!(m.run(&PROG_A).completed);
+        let image1 = m.snapshot_image(&sig());
+        let mut store = SqliteHeapStore::open_in_memory().unwrap();
+        store.commit(&image_to_batch(&image1, 1, "")).unwrap();
+        let prev = store.manifest().unwrap();
+
+        // The engine suite's crafted omit-the-tail batch: shrink
+        // chunk_len within the tail extent, drop that extent, reseal.
+        let mut image2 = image1.clone();
+        assert!(image2.chunks.len() >= 8, "fixture carries chunk bytes");
+        image2.chunks.truncate(image2.chunks.len() - 4);
+        let tail_ext = chunk_extent_count(image2.chunks.len() as u64) - 1;
+        let mut crafted = image_to_batch(&image2, 2, &prev.seal);
+        crafted.chunk_extents.retain(|(e, _)| *e != tail_ext);
+        reseal_batch(&mut crafted);
+        assert_eq!(
+            store.commit(&crafted),
+            Err(StoreError::MissingRow("chunk extent", tail_ext))
+        );
+
+        let after = store.manifest().unwrap();
+        assert_eq!(after.epoch, prev.epoch, "prior epoch intact after the refusal");
+        assert_eq!(after.seal, prev.seal, "prior seal intact after the refusal");
+        validate_store(&store, &sig()).expect("the refused commit left a valid store");
+        store
+            .commit(&image_to_batch(&image2, 2, &prev.seal))
+            .expect("the well-formed twin still commits");
+        assert_eq!(store.manifest().unwrap().epoch, 2);
     }
 
     #[test]

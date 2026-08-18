@@ -40,10 +40,12 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
     assert_eq!(machine.epoch().expect("epoch"), 2);
 
     // Crank 2 continues the SAME heap (globals persist; later cranks
-    // must reference the EXACT same name set — the compiled symbol
-    // table is a deterministic function of the crank's name set, and
-    // eval refuses a divergent table; the live `probe` object lets a
-    // crank reference the property names v/w without allocating).
+    // must compile to the SAME symbol table — the same name set,
+    // referenced in the same order where names collide in the
+    // coder's hash buckets (wave 3 falsified the earlier "same name
+    // set suffices" claim), and eval refuses a divergent table; the
+    // live `probe` object lets a crank reference the property names
+    // v/w without allocating).
     let outcome = machine
         .eval("var n; var junk; var i; var probe; i = probe.v + probe.w; n = n + 1")
         .expect("crank 2");
@@ -139,4 +141,42 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
         Ok(_) => panic!("a foreign signature must be refused"),
         Err(other) => panic!("expected a store refusal, got {other}"),
     }
+}
+
+#[test]
+fn an_empty_first_crank_does_not_link_the_table() {
+    // wave-3 finding: a live machine that "linked" an EMPTY symbol
+    // table refused a later named crank, while the same store
+    // REOPENED accepted it (`open` derives linked-ness from the
+    // persisted name count). An empty table constrains nothing —
+    // there are no ids to misalign — so eval now leaves the machine
+    // unlinked and the live machine and its reopened twin accept the
+    // same next crank.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let options = HeapStoreOptions {
+        path: dir.path().join("worker-heap.sqlite"),
+        signature: "endor-ironhorse-worker-v1".to_string(),
+    };
+    let mut machine = PersistentMachine::open(&options).expect("fresh open");
+    let outcome = machine.eval("1 + 2").expect("literal crank");
+    assert_eq!(outcome.result, "3");
+    assert_eq!(machine.epoch().expect("epoch"), 2, "the literal crank checkpointed");
+
+    // LIVE: the first NAMED crank links now (before the fix this arm
+    // refused with SymbolMismatch while the reopened path accepted).
+    let outcome = machine.eval("var q = 0; q = 7; q").expect("named crank, live");
+    assert_eq!(outcome.result, "7");
+    assert_eq!(machine.epoch().expect("epoch"), 3);
+    machine.close().expect("close");
+
+    // REOPENED: the linked table is enforced as usual from here on.
+    let mut machine = PersistentMachine::open(&options).expect("reopen");
+    let outcome = machine.eval("var q; q").expect("named crank after reopen");
+    assert_eq!(outcome.result, "7", "the named state persisted");
+    assert_eq!(machine.epoch().expect("epoch"), 4);
+    match machine.eval("var zzz = 1; zzz") {
+        Err(MachineError::SymbolMismatch(_)) => {}
+        other => panic!("a divergent table stays refused, got {other:?}"),
+    }
+    machine.close().expect("close");
 }

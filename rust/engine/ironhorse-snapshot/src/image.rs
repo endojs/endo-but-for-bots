@@ -238,13 +238,21 @@ pub(crate) fn decode_strings(p: &[u8]) -> Result<Vec<String>, SnapshotError> {
         }
         let len = u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]) as usize;
         i += 4;
-        if i + len > p.len() {
+        // checked_add: `len` is attacker-sized (a full u32), so on a
+        // 32-bit usize `i + len` can wrap past the gate and panic at
+        // the slice below instead of returning the structured error
+        // (wave-3 finding; the `i + 4` advances elsewhere cannot wrap
+        // because `i` never exceeds `p.len()`).
+        let end = i
+            .checked_add(len)
+            .ok_or(SnapshotError::Corrupt("string list entry body"))?;
+        if end > p.len() {
             return Err(SnapshotError::Corrupt("string list entry body"));
         }
-        let s = std::str::from_utf8(&p[i..i + len])
+        let s = std::str::from_utf8(&p[i..end])
             .map_err(|_| SnapshotError::Corrupt("string list entry not utf8"))?;
         out.push(s.to_string());
-        i += len;
+        i = end;
     }
     Ok(out)
 }
@@ -360,7 +368,14 @@ pub(crate) fn decode_stack(p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
         return Err(SnapshotError::Corrupt("STAC header"));
     }
     let count = u32::from_be_bytes([p[0], p[1], p[2], p[3]]) as usize;
-    let want = count * SLOT_RECORD_BYTES;
+    // checked_mul for the same reason as `decode_heap`'s twin gate: on
+    // a 32-bit usize the product can wrap to a small `want` that
+    // satisfies the truncation gate below, silently short-decoding the
+    // stack (wave-3 finding — the decode_heap fix was not mirrored
+    // here; latent until a 32-bit/wasm port, closed on every target).
+    let want = count
+        .checked_mul(SLOT_RECORD_BYTES)
+        .ok_or(SnapshotError::Corrupt("STAC record count"))?;
     if p.len() - 4 < want {
         return Err(SnapshotError::Corrupt("STAC records truncated"));
     }

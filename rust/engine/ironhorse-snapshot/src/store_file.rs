@@ -594,7 +594,15 @@ impl HeapStore for FileStore {
             let _ = std::fs::remove_file(&tmp_path);
             return Err(e);
         }
-        std::fs::rename(&tmp_path, &self.path).map_err(io_err)?;
+        if let Err(e) = std::fs::rename(&tmp_path, &self.path) {
+            // A failed RENAME must clean up like a failed write does:
+            // the tmp file is inert litter (opens ignore it) but
+            // unbounded across retries (wave-3 finding — the cleanup
+            // wrapped only the write stage while the comment above it
+            // promised "any failure").
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(io_err(e));
+        }
         // The rename is the commit point, and it is durable only once
         // the containing directory is synced (the review's power-loss
         // finding: an acked checkpoint must not roll back on crash).
@@ -651,6 +659,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn failed_rename_removes_the_temp_file() {
+        // wave-3: the cleanup used to wrap only the WRITE stage, so a
+        // failed rename leaked its .tmp file — inert litter (opens
+        // ignore it) but unbounded across retries. Parking a
+        // non-empty directory at the store path makes the rename fail
+        // deterministically (EISDIR/ENOTEMPTY), which works under
+        // root too, where permission-bit tricks do not.
+        let dir = tmp_dir("failed-rename-cleanup");
+        let target = dir.join("heap.ihstore");
+        let mut store = FileStore::open(&target).unwrap();
+        std::fs::create_dir_all(target.join("occupier")).unwrap();
+        let image = ran_image();
+        assert!(
+            store.commit(&image_to_batch(&image, 1, "")).is_err(),
+            "renaming a file onto a non-empty directory fails"
+        );
+        let leftovers: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp-"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no temp litter after a failed rename: {leftovers:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
