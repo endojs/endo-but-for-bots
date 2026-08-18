@@ -603,16 +603,25 @@ harden(gitClone);
 
 /**
  * Limits the bytes one tool call's output can balloon to, so a runaway
- * `git log` cannot fill the worker's CapTP buffer.
+ * `git log` cannot fill the worker's CapTP buffer.  The result, marker
+ * included, is always at most `TOOL_OUTPUT_LIMIT` characters.
  *
  * @param {string} output
  * @returns {string}
  */
 const truncateOutput = output => {
-  if (output.length > TOOL_OUTPUT_LIMIT) {
-    return `${output.slice(0, TOOL_OUTPUT_LIMIT)}\n\n... (truncated, ${output.length} chars total)`;
+  if (output.length <= TOOL_OUTPUT_LIMIT) {
+    return output;
   }
-  return output;
+  // Reserve the actual marker length rather than a guessed overhead, so the
+  // original total remains visible even for unusually large lengths whose
+  // decimal representation needs more digits than the usual marker.
+  const marker = `\n\n... (truncated, ${output.length} chars total)`;
+  const sliceLength = Math.max(0, TOOL_OUTPUT_LIMIT - marker.length);
+  const truncated = `${output.slice(0, sliceLength)}${marker}`;
+  return truncated.length <= TOOL_OUTPUT_LIMIT
+    ? truncated
+    : truncated.slice(0, TOOL_OUTPUT_LIMIT);
 };
 
 /**
@@ -2961,6 +2970,11 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
       const credentialBytes = credentialBytesFor(opts.credential);
       let text;
       if (credentialBytes === undefined) {
+        // `runGit` already applies `truncateOutput` to its return value, so
+        // this plain (no-credential) path is bounded the same as the
+        // askpass path below; the exo-git guard bounds it again
+        // structurally regardless, since a different or hostile backend
+        // could skip this helper entirely.
         text = await runGit(args, undefined, opts.signal);
       } else {
         const { stdout, stderr } = await runGitWithAskpass(
