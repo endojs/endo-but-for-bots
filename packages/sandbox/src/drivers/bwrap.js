@@ -605,8 +605,6 @@ export const makeBwrapDriver = ({
         details: harden({
           lifecycle: harden({
             available: false,
-            processGroups: false,
-            crashCleanup: false,
             reason: 'required bwrap lifecycle flags unavailable',
           }),
         }),
@@ -624,8 +622,6 @@ export const makeBwrapDriver = ({
     const details = harden({
       lifecycle: harden({
         available: true,
-        processGroups: true,
-        crashCleanup: true,
       }),
       landlock: harden({
         available: landlock.available,

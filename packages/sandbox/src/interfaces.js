@@ -132,11 +132,7 @@ const BackendProbeDetailsShape = M.splitRecord(
   {},
   {
     lifecycle: M.splitRecord(
-      {
-        available: M.boolean(),
-        processGroups: M.boolean(),
-        crashCleanup: M.boolean(),
-      },
+      { available: M.boolean() },
       { reason: M.string() },
     ),
     landlock: M.splitRecord({ available: M.boolean() }, { reason: M.string() }),

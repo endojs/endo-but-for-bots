@@ -549,12 +549,7 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
    */
   const normalizeProbe = (driver, probe) => {
     const lifecycle = probe.details?.lifecycle;
-    if (
-      probe.available &&
-      (lifecycle?.available !== true ||
-        lifecycle.processGroups !== true ||
-        lifecycle.crashCleanup !== true)
-    ) {
+    if (probe.available && lifecycle?.available !== true) {
       return harden({
         name: driver.name,
         available: false,

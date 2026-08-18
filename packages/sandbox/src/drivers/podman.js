@@ -777,8 +777,6 @@ export const makePodmanDriver = ({
       details: harden({
         lifecycle: harden({
           available: false,
-          processGroups: true,
-          crashCleanup: false,
           reason: lifecycleReason,
         }),
         ...extra.details,
@@ -905,8 +903,6 @@ export const makePodmanDriver = ({
     const details = harden({
       lifecycle: harden({
         available: true,
-        processGroups: true,
-        crashCleanup: true,
       }),
       cgroup2: harden({
         available: cgroup2.available,
