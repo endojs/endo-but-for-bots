@@ -20,6 +20,8 @@ import { fileURLToPath } from 'node:url';
 
 import { E } from '@endo/eventual-send';
 
+import { endoReleaseChart, nixosConfigChangeChart } from './deploy-charts.js';
+
 const flootFactorySpecifier = new URL('agent.js', import.meta.url).href;
 
 // Absolute host path to the Endo codebase, mounted read-only into full-control
@@ -72,6 +74,115 @@ const grantNixosAdmin = async (agent, factoryProfilePath) => {
   } catch (err) {
     console.warn(
       `Floot: could not grant nixos-admin to the factory: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+};
+
+/**
+ * Grant durable deploy-workflow factories to the factory host so admin
+ * session presets can copy them into session guests (object kind
+ * 'workflow-factory' in agent.js), per
+ * designs/floot-admin-deploy-workflows.md.
+ *
+ * Requires the pinned workflow service (packages/workflow/setup.js) and the
+ * NixOS controller (packages/space-nixos-admin/setup.js), both listed in
+ * ENDO_EXTRA ahead of this script; a quiet no-op when either is absent.
+ *
+ * For each chart: install it, mint a factory binding the `performer`
+ * (controller-for-nixos-admin) and `operator` (the root host's `@self`
+ * handle — asks land in the owner's own inbox) endowments, and NAME the
+ * grant durably. The factory facet is re-derivable rather than durable, so
+ * the durable name is an EVAL FORMULA `E(svc).factory(fid)` over the
+ * service: formula-backed, revived by re-derivation at boot, and copyable
+ * into session guest petstores.
+ *
+ * Factories snapshot their chart at mint, so a chart VERSION BUMP re-mints
+ * the factory and re-binds the grant name; sessions provisioned earlier
+ * keep their old grant (and old chart) until re-provisioned, and the old
+ * factory is deliberately left un-revoked — revocation would cancel its
+ * live runs, possibly mid-deployment.
+ *
+ * Best-effort and idempotent across boots; never fails factory setup.
+ *
+ * @param {import('@endo/eventual-send').ERef<any>} agent
+ * @param {string[]} factoryProfilePath - pet-name path of the factory profile
+ */
+const grantDeployFactories = async (agent, factoryProfilePath) => {
+  await null;
+  try {
+    if (!(await E(agent).has('workflow-service'))) {
+      return;
+    }
+    if (!(await E(agent).has('controller-for-nixos-admin'))) {
+      return;
+    }
+    const service = await E(agent).lookup('workflow-service');
+    const factoryAgent = await E(agent).lookup(factoryProfilePath);
+    const grants = [
+      { chart: endoReleaseChart, grantName: 'deploy-endo-factory' },
+      { chart: nixosConfigChangeChart, grantName: 'change-nixos-factory' },
+    ];
+    for (const { chart, grantName } of grants) {
+      // Keep the installed chart fresh with the release. Install validates
+      // (diagnostics gate) and overwrites idempotently; existing runs and
+      // factories hold their own snapshots and are unaffected.
+      // eslint-disable-next-line no-await-in-loop
+      const chartKey = await E(service).install(chart);
+      let needMint = true;
+      // eslint-disable-next-line no-await-in-loop
+      if (await E(agent).has(grantName)) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const record = await E(E(agent).lookup(grantName)).describe();
+          if (
+            record.chartName === chart.name &&
+            record.chartVersion === chart.version &&
+            record.revoked !== true
+          ) {
+            needMint = false;
+          }
+        } catch {
+          // A dangling or unreadable grant re-mints below.
+        }
+        if (needMint) {
+          // eslint-disable-next-line no-await-in-loop
+          await E(agent).remove(grantName);
+        }
+      }
+      if (needMint) {
+        // eslint-disable-next-line no-await-in-loop
+        const { fid } = await E(service).makeFactory({
+          chart: chartKey,
+          endowments: harden({
+            // eslint-disable-next-line no-await-in-loop
+            performer: await E(agent).lookup('controller-for-nixos-admin'),
+            // eslint-disable-next-line no-await-in-loop
+            operator: await E(agent).lookup('@self'),
+          }),
+        });
+        // eslint-disable-next-line no-await-in-loop
+        await E(agent).evaluate(
+          undefined,
+          `E(svc).factory(${JSON.stringify(fid)})`,
+          ['svc'],
+          ['workflow-service'],
+          grantName,
+        );
+        console.log(`Floot: minted ${grantName} (${chartKey}).`);
+      }
+      // Refresh the factory-profile locator every boot, healing loss the
+      // same way grantNixosAdmin does.
+      // eslint-disable-next-line no-await-in-loop
+      const locator = await E(agent).locate(grantName);
+      // eslint-disable-next-line no-await-in-loop
+      await E(factoryAgent).storeLocator(grantName, locator);
+    }
+    console.log('Granted deploy-workflow factories to the Floot factory.');
+  } catch (err) {
+    console.warn(
+      `Floot: could not grant deploy factories: ${
         err instanceof Error ? err.message : String(err)
       }`,
     );
@@ -136,6 +247,9 @@ export const main = async agent => {
     // Re-grant machine-admin every boot: keeps existing factories (created
     // before this feature, or before the controller existed) up to date.
     await grantNixosAdmin(agent, controllerProfilePath);
+    // Re-grant (and chart-version-refresh) the deploy-workflow factories
+    // every boot, for the same reason.
+    await grantDeployFactories(agent, controllerProfilePath);
     console.log(
       `Floot factory re-bound to the current release at "${dir}/controller" (sessions preserved).`,
     );
@@ -208,6 +322,9 @@ export const main = async agent => {
   // 5b. Grant the NixOS machine-admin caplet to the factory (if present) so the
   // "machine-admin" preset can hand it to sessions.
   await grantNixosAdmin(agent, controllerProfilePath);
+  // 5c. Grant the deploy-workflow factories (if the workflow service and the
+  // NixOS controller are present) so admin presets can hand them to sessions.
+  await grantDeployFactories(agent, controllerProfilePath);
   console.log(`Floot factory created at "${dir}/controller" and pinned.`);
 
   // 6. Seed a default session if this is a fresh factory.

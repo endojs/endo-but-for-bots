@@ -774,7 +774,7 @@ const modelOf = entry =>
  * @param {string} agentName - petname (in the host) of the session's guest agent
  * @param {any} sessionGuest - the resolved guest facet (for `has` checks)
  * @param {string} id - session id (used to namespace temporary host petnames)
- * @param {Array<{ kind: string, petName: string }>} objects
+ * @param {Array<{ kind: string, petName: string, grantName?: string }>} objects
  * @param {string} [codePath] - absolute host path to the Endo codebase, for the
  *   `code-mount` object kind (read-only). Absent when the daemon host has no
  *   source on disk; such objects are then skipped.
@@ -853,6 +853,24 @@ const provisionPresetObjects = async (
       } else {
         console.warn(
           `[floot-factory] nixos-admin caplet unavailable on this daemon; skipping "${obj.petName}" for session ${id}`,
+        );
+      }
+    } else if (obj.kind === 'workflow-factory') {
+      // Copy a durable deploy-workflow factory grant into the guest's
+      // petstore. The grant (minted by floot-factory-setup's
+      // grantDeployFactories) is an eval formula that re-derives the
+      // factory facet from the pinned workflow service, so the copied name
+      // survives daemon restarts. `factory.start({ params })` returns the
+      // run OBSERVER facet only: the session proposes and watches a
+      // deployment; approval lands in the operator's own inbox, and
+      // control stays host-side. Skip gracefully when the grant is absent
+      // (no workflow service or no NixOS controller on this daemon).
+      const grantName = obj.grantName || obj.petName;
+      if (await E(host).has(grantName)) {
+        await E(host).copy([grantName], [agentName, obj.petName]);
+      } else {
+        console.warn(
+          `[floot-factory] workflow factory grant "${grantName}" unavailable on this daemon; skipping "${obj.petName}" for session ${id}`,
         );
       }
     } else {
