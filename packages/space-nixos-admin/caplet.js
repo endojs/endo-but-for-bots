@@ -456,7 +456,9 @@ export const make = async (_powers, _context, options = {}) => {
         }
       }
       if (Date.now() > deadline) {
-        throw new Error(`Request ${id} saw no outcome within the watch limit; giving up.`);
+        throw new Error(
+          `Request ${id} saw no outcome within the watch limit; giving up.`,
+        );
       }
       // eslint-disable-next-line no-await-in-loop
       await delay(pollMs);
@@ -877,7 +879,8 @@ export const make = async (_powers, _context, options = {}) => {
       const status = statusPath ? await readJsonFile(statusPath) : undefined;
       return harden({
         config,
-        status: status !== undefined && status.state === 'ok' ? status.value : null,
+        status:
+          status !== undefined && status.state === 'ok' ? status.value : null,
       });
     },
 

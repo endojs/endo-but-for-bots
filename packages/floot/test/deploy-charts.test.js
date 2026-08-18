@@ -83,7 +83,11 @@ test('endo-release walks pin, build, approval, apply, verify to done', t => {
   // Entry substitution already resolved the template: the performer will
   // receive the actual revision.
   t.deepEqual(pin.effect.args, [REV]);
-  sim.settle(pin.effectId, 'fulfilled', harden({ rev: REV, previous: PREVIOUS }));
+  sim.settle(
+    pin.effectId,
+    'fulfilled',
+    harden({ rev: REV, previous: PREVIOUS }),
+  );
 
   t.is(sim.status().state, 'build');
   const build = pendingOf(sim, 'invoke', 'build');

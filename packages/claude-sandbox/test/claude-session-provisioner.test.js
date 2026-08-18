@@ -23,7 +23,9 @@ const lookupKeyFor = (...args) => {
   }
   const [nameOrPath] = args;
   return keyFor(
-    Array.isArray(nameOrPath) ? nameOrPath : [/** @type {string} */ (nameOrPath)],
+    Array.isArray(nameOrPath)
+      ? nameOrPath
+      : [/** @type {string} */ (nameOrPath)],
   );
 };
 
@@ -349,7 +351,9 @@ const makeBridgeHarness = (options = {}) => {
       async provisionSession() {
         throw Error('unused in bridge tests');
       },
-      ...(resolveFsMounterByName ? {} : { getFsMounter: async () => fsMounter }),
+      ...(resolveFsMounterByName
+        ? {}
+        : { getFsMounter: async () => fsMounter }),
     },
   );
   return {

@@ -248,10 +248,7 @@ test('stageFiles captures previous contents and revertFiles restores them', asyn
     { path: 'modules/new.nix', text: null },
   ]);
   t.is(await readFile(join(configDir, 'existing.nix'), 'utf8'), 'after\n');
-  t.is(
-    await readFile(join(configDir, 'modules/new.nix'), 'utf8'),
-    'created\n',
-  );
+  t.is(await readFile(join(configDir, 'modules/new.nix'), 'utf8'), 'created\n');
 
   await admin.revertFiles(staged.previous, 'r-6:1-0');
   t.is(await readFile(join(configDir, 'existing.nix'), 'utf8'), 'before\n');
@@ -307,7 +304,12 @@ test('a foreign pending request is slot-busy, not clobbered', async t => {
   await mkdir(spoolDir, { recursive: true });
   await writeFile(
     join(spoolDir, 'apply-request.json'),
-    JSON.stringify({ action: 'switch', message: 'earlier', id: 'earlier-op', nonce: 'x1' }),
+    JSON.stringify({
+      action: 'switch',
+      message: 'earlier',
+      id: 'earlier-op',
+      nonce: 'x1',
+    }),
     'utf8',
   );
   const settled = admin.build('mine', 'r-8:0-0');
