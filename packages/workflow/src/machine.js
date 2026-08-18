@@ -37,7 +37,12 @@
 
 import { matches, mustMatch, assertPattern } from '@endo/patterns';
 import { Fail, q } from '@endo/errors';
-import { substitute, applyAssign, getPath } from './template.js';
+import {
+  substitute,
+  substituteDelimited,
+  applyAssign,
+  getPath,
+} from './template.js';
 
 const { entries, keys, values } = Object;
 const { isArray } = Array;
@@ -253,6 +258,151 @@ export const assertChart = chart => {
 };
 harden(assertChart);
 
+/**
+ * Static diagnostics beyond structural validity, mirroring the engine's
+ * runtime policy:
+ *
+ * - **error** — an `ask` / `invoke` / `spawn` effect whose `outcome` (or
+ *   explicit `failure`) event type is handled by no state along the
+ *   effect's owner path. The engine fails a run whose settlement fires
+ *   no transition, so this is a guaranteed runtime failure.
+ * - **warning** — a state unreachable from its level's `initial` via
+ *   sibling transition targets; an `after` / `emit` event type with no
+ *   handler on its path; a parallel state whose `regions-settled` join
+ *   event no state on the path handles.
+ *
+ * The handling check is structural (a type appears in some `on` along
+ * the owner chain); guard totality remains a runtime concern, which the
+ * engine's fail-loud settlement covers. Event types containing `{` are
+ * dynamic (interpolated) and are skipped. Exit effects are compensation
+ * and are not checked.
+ *
+ * @param {any} chart
+ * @returns {{ errors: string[], warnings: string[] }}
+ */
+export const chartDiagnostics = chart => {
+  assertChart(chart);
+  /** @type {string[]} */
+  const errors = [];
+  /** @type {string[]} */
+  const warnings = [];
+
+  /**
+   * @param {Set<string>[]} chain - handled-type sets, outermost first
+   * @param {string} type
+   */
+  const handled = (chain, type) =>
+    type.includes('{') || chain.some(set => set.has(type));
+
+  const checkEffect = (effect, chain, where) => {
+    const { kind } = effect;
+    if (kind === 'ask' || kind === 'invoke' || kind === 'spawn') {
+      if (!handled(chain, effect.outcome)) {
+        errors.push(
+          `${where}: ${kind} outcome '${effect.outcome}' is handled by no state on its path`,
+        );
+      }
+      if (effect.failure !== undefined && !handled(chain, effect.failure)) {
+        errors.push(
+          `${where}: ${kind} failure '${effect.failure}' is handled by no state on its path`,
+        );
+      }
+    } else if (kind === 'after') {
+      if (!handled(chain, effect.emit.type)) {
+        warnings.push(
+          `${where}: after emits '${effect.emit.type}', handled by no state on its path`,
+        );
+      }
+    } else if (kind === 'emit') {
+      if (!handled(chain, effect.event.type)) {
+        warnings.push(
+          `${where}: emit '${effect.event.type}' is handled by no state on its path`,
+        );
+      }
+    }
+  };
+
+  /**
+   * @param {Record<string, any>} states
+   * @param {string} initial
+   * @param {Set<string>[]} chain
+   * @param {string} where
+   */
+  const walkStates = (states, initial, chain, where) => {
+    const reachable = new Set([initial]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const name of [...reachable]) {
+        for (const candidates of values(states[name].on ?? {})) {
+          for (const t of candidates) {
+            if (t.target !== undefined && !reachable.has(t.target)) {
+              reachable.add(t.target);
+              grew = true;
+            }
+          }
+        }
+      }
+    }
+    for (const name of keys(states)) {
+      if (!reachable.has(name)) {
+        warnings.push(
+          `${where}.${name}: unreachable from initial '${initial}'`,
+        );
+      }
+    }
+    for (const [name, def] of entries(states)) {
+      const at = `${where}.${name}`;
+      const own = new Set(keys(def.on ?? {}));
+      const selfChain = [...chain, own];
+      (def.entry ?? []).forEach((effect, i) =>
+        checkEffect(effect, selfChain, `${at}.entry[${i}]`),
+      );
+      for (const [type, candidates] of entries(def.on ?? {})) {
+        candidates.forEach((t, i) => {
+          const effectChain =
+            t.target === undefined
+              ? selfChain
+              : [...chain, new Set(keys(states[t.target].on ?? {}))];
+          (t.effects ?? []).forEach((effect, j) =>
+            checkEffect(effect, effectChain, `${at}.on.${type}[${i}][${j}]`),
+          );
+        });
+      }
+      if (def.states !== undefined) {
+        walkStates(def.states, def.initial, selfChain, at);
+      } else if (def.regions !== undefined) {
+        if (!handled(selfChain, REGIONS_SETTLED)) {
+          warnings.push(
+            `${at}: parallel state's '${REGIONS_SETTLED}' join is handled by no state on its path`,
+          );
+        }
+        if (isArray(def.regions)) {
+          def.regions.forEach((regionChart, i) =>
+            walkStates(
+              regionChart.states,
+              regionChart.initial,
+              selfChain,
+              `${at}#${i}`,
+            ),
+          );
+        } else {
+          walkStates(
+            def.regions.chart.states,
+            def.regions.chart.initial,
+            selfChain,
+            `${at}#each`,
+          );
+        }
+      }
+    }
+  };
+
+  walkStates(chart.states, chart.initial, [], chart.name);
+  return harden({ errors: harden(errors), warnings: harden(warnings) });
+};
+harden(chartDiagnostics);
+
 // #endregion
 
 // #region effect substitution
@@ -264,6 +414,12 @@ harden(assertChart);
  * is substituted at declaration time, so the event it eventually fires
  * carries the context as of arming, not of firing.
  *
+ * An ask's `what` / `form` are participant-facing text, so their string
+ * interpolations render delimited: substituted content reads as quoted
+ * data to the human or LLM agent receiving the ask, and cannot
+ * masquerade as workflow instruction. The `to` endowment name uses plain
+ * interpolation (it names a slot, not prose).
+ *
  * @param {any} effect
  * @param {import('./template.js').TemplateScope} scope
  */
@@ -274,10 +430,10 @@ const substituteEffect = (effect, scope) => {
       ...effect,
       to: substitute(effect.to, scope),
       ...(effect.what !== undefined
-        ? { what: substitute(effect.what, scope) }
+        ? { what: substituteDelimited(effect.what, scope) }
         : {}),
       ...(effect.form !== undefined
-        ? { form: substitute(effect.form, scope) }
+        ? { form: substituteDelimited(effect.form, scope) }
         : {}),
     });
   }
@@ -519,9 +675,13 @@ const fire = (states, config, found, frame, envelope, path, out) => {
         ? scope
         : { params: node.frame.params, ctx: node.frame.ctx, event: envelope };
     for (const effect of node.def.exit ?? []) {
+      // Exit effects are compensation at a path that is dead by the time
+      // they settle; the `exit` mark tells the engine their settlements
+      // are allowed to fall on deaf ears.
       out.effects.push(
         harden({
           path: node.path,
+          exit: true,
           effect: substituteEffect(effect, nodeScope),
         }),
       );
@@ -589,11 +749,13 @@ const stepLevel = (states, config, frame, envelope, basePath, route, out) => {
 
   if (descend && config.regions !== undefined) {
     const targetIndex =
-      routed && innerRoute[0].startsWith('#')
+      innerRoute !== undefined && innerRoute[0].startsWith('#')
         ? Number(innerRoute[0].slice(1))
         : undefined;
     const regionRoute =
-      targetIndex !== undefined ? innerRoute.slice(1) : undefined;
+      innerRoute !== undefined && targetIndex !== undefined
+        ? innerRoute.slice(1)
+        : undefined;
     const before = config.regions;
     let regionsChanged = false;
     const nextRegions = before.map((region, i) => {
@@ -622,7 +784,8 @@ const stepLevel = (states, config, frame, envelope, basePath, route, out) => {
         context: regionFrame.ctx,
         config: result.config,
         done,
-        ...(done && result.enteredFinal.output !== undefined
+        ...(result.enteredFinal !== undefined &&
+        result.enteredFinal.output !== undefined
           ? { output: result.enteredFinal.output }
           : {}),
       });
@@ -805,7 +968,11 @@ export const exitEffects = (chart, state) => {
     const scope = { params: frame.params, ctx: frame.ctx, event: undefined };
     for (const effect of node.def.exit ?? []) {
       effects.push(
-        harden({ path: node.path, effect: substituteEffect(effect, scope) }),
+        harden({
+          path: node.path,
+          exit: true,
+          effect: substituteEffect(effect, scope),
+        }),
       );
     }
   }

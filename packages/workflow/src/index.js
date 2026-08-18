@@ -40,6 +40,7 @@ import { makeWorkflowService } from './service.js';
 
 export {
   assertChart,
+  chartDiagnostics,
   initialStep,
   transition,
   exitEffects,
@@ -49,10 +50,13 @@ export {
 } from './machine.js';
 export {
   substitute,
+  substituteDelimited,
   interpolate,
+  interpolateDelimited,
   applyAssign,
   getPath,
   renderValue,
+  renderDelimited,
 } from './template.js';
 export {
   foldJournal,
@@ -60,14 +64,22 @@ export {
   initialFoldState,
   effectRecordsFor,
   isPathPrefix,
+  canonicalStringify,
+  hashEntry,
+  verifyJournalChain,
+  GENESIS_HASH,
   JOURNAL_KINDS,
 } from './journal.js';
 export { makeWorkflowService, resolveChartRefs } from './service.js';
+export { makeSimulator } from './simulate.js';
+export { renderGraph, renderMermaid, externalEventTypes } from './graph.js';
+export { makeRunSyncClient } from './sync.js';
 export {
   WorkflowServiceInterface,
   WorkflowRunInterface,
   WorkflowControlInterface,
   WorkflowPortInterface,
+  WorkflowFactoryInterface,
 } from './interfaces.js';
 
 /**

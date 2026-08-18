@@ -141,6 +141,66 @@ export const interpolate = (text, scope) =>
   });
 harden(interpolate);
 
+/**
+ * Render a substituted value as visibly delimited data — strings quoted,
+ * structures in JSON style — for text that reaches humans and LLM
+ * agents. Participant-supplied content must read as quoted data, never
+ * as instruction, so an injection cannot masquerade as workflow text.
+ *
+ * @param {any} value
+ * @returns {string}
+ */
+export const renderDelimited = value => {
+  if (value === undefined) {
+    return '<undefined>';
+  }
+  if (value === null) {
+    return 'null';
+  }
+  if (typeof value === 'string') {
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (typeof value === 'bigint') {
+    return `${value}`;
+  }
+  const style = passStyleOf(value);
+  if (style === 'copyArray') {
+    return `[${value.map(renderDelimited).join(', ')}]`;
+  }
+  if (style === 'copyRecord') {
+    const inner = entries(value)
+      .map(
+        ([name, member]) =>
+          `${JSON.stringify(name)}: ${renderDelimited(member)}`,
+      )
+      .join(', ');
+    return `{ ${inner} }`;
+  }
+  if (style === 'error') {
+    return JSON.stringify(`error: ${value.message}`);
+  }
+  return `<${style}>`;
+};
+harden(renderDelimited);
+
+/**
+ * Interpolation for participant-facing text (ask descriptions, form
+ * labels): substituted values render delimited, per `renderDelimited`.
+ *
+ * @param {string} text
+ * @param {TemplateScope} scope
+ * @returns {string}
+ */
+export const interpolateDelimited = (text, scope) =>
+  text.replace(INTERPOLATION_PATTERN, (_all, root, dottedTail) => {
+    const path = dottedTail.startsWith('.') ? dottedTail.slice(1) : '';
+    return renderDelimited(getPath(scope[root], path));
+  });
+harden(interpolateDelimited);
+
 const SUBSTITUTION_KEYS = harden(['$params', '$ctx', '$event']);
 
 /**
@@ -173,24 +233,23 @@ const substitutionForm = record => {
 };
 
 /**
- * Substitute a template against a scope. Records and arrays recurse;
- * strings interpolate; substitution records replace; everything else
- * (numbers, bigints, patterns, remotables, promises) passes through.
- *
  * @param {any} template
  * @param {TemplateScope} scope
+ * @param {(text: string, scope: TemplateScope) => string} interpolator
  * @returns {any}
  */
-export const substitute = (template, scope) => {
+const substituteWith = (template, scope, interpolator) => {
   if (typeof template === 'string') {
-    return interpolate(template, scope);
+    return interpolator(template, scope);
   }
   if (template === null || typeof template !== 'object') {
     return template;
   }
   const style = passStyleOf(template);
   if (style === 'copyArray') {
-    return harden(template.map(member => substitute(member, scope)));
+    return harden(
+      template.map(member => substituteWith(member, scope, interpolator)),
+    );
   }
   if (style === 'copyRecord') {
     const form = substitutionForm(template);
@@ -202,14 +261,39 @@ export const substitute = (template, scope) => {
       fromEntries(
         entries(template).map(([name, member]) => [
           name,
-          substitute(member, scope),
+          substituteWith(member, scope, interpolator),
         ]),
       ),
     );
   }
   return template;
 };
+
+/**
+ * Substitute a template against a scope. Records and arrays recurse;
+ * strings interpolate; substitution records replace; everything else
+ * (numbers, bigints, patterns, remotables, promises) passes through.
+ *
+ * @param {any} template
+ * @param {TemplateScope} scope
+ * @returns {any}
+ */
+export const substitute = (template, scope) =>
+  substituteWith(template, scope, interpolate);
 harden(substitute);
+
+/**
+ * Like `substitute`, but strings interpolate with `interpolateDelimited`
+ * — for participant-facing templates (ask descriptions and forms) where
+ * substituted content must read as quoted data.
+ *
+ * @param {any} template
+ * @param {TemplateScope} scope
+ * @returns {any}
+ */
+export const substituteDelimited = (template, scope) =>
+  substituteWith(template, scope, interpolateDelimited);
+harden(substituteDelimited);
 
 /**
  * Apply a transition's `assign` record to a context, producing the patch
