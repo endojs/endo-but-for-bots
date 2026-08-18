@@ -1459,3 +1459,136 @@ test('seccompSecurityOpt leaves the built-in policies unchanged', t => {
  *   Outcome for `podman rm -f <name>`; defaults to success.
  * @returns {{ childProcess: any, calls: Array<{ command: string, args: string[] }> }}
  */
+const makeProbeStub = ({
+  containers = [],
+  rm = () => ({ code: 0, stderr: '' }),
+} = {}) => {
+  /** @type {Array<{ command: string, args: string[] }>} */
+  const calls = [];
+  const childProcess = {
+    /**
+     * @param {string} command
+     * @param {string[]} args
+     */
+    spawn(command, args) {
+      calls.push({ command, args: [...args] });
+      let code = 0;
+      let stdout = '';
+      let stderr = '';
+      if (command !== 'podman') {
+        code = 1;
+      } else if (args.includes('--version')) {
+        stdout = 'podman version 5.8.0\n';
+      } else if (args.includes('{{.Host.Security.Rootless}}')) {
+        stdout = 'true\n';
+      } else if (args.includes('{{.Host.OCIRuntime.Name}}')) {
+        stdout = 'crun\n';
+      } else if (args.includes('ps')) {
+        stdout = containers.map(name => `${name}\n`).join('');
+      } else if (args.includes('rm')) {
+        ({ code, stderr } = rm(String(args.at(-1))));
+      }
+
+      const child = new EventEmitter();
+      const stdoutStream = new PassThrough();
+      const stderrStream = new PassThrough();
+      Object.assign(child, { stdout: stdoutStream, stderr: stderrStream });
+      void Promise.resolve().then(() => {
+        stdoutStream.end(stdout);
+        stderrStream.end(stderr);
+        child.emit('close', code, null);
+      });
+      return child;
+    },
+  };
+  return { childProcess, calls };
+};
+
+test('orphan sweep tolerates a container another sweep already removed', async t => {
+  // Two probes race; the loser's `rm -f` finds the container gone. That is
+  // the desired state, not a reason to report the backend unavailable.
+  const { childProcess } = makeProbeStub({
+    containers: ['owned-operation'],
+    rm: name => ({
+      code: 1,
+      stderr: `Error: no such container ${name}\n`,
+    }),
+  });
+  const driver = makePodmanDriver({
+    childProcess,
+    env: {},
+    ownerId: 'formula-exact-owner',
+  });
+  const probe = await driver.probe();
+  t.true(probe.available, probe.reason);
+});
+
+test('orphan sweep still fails closed on a live removal failure', async t => {
+  const { childProcess } = makeProbeStub({
+    containers: ['owned-operation'],
+    rm: () => ({
+      code: 1,
+      stderr: 'Error: unlinking layer: permission denied\n',
+    }),
+  });
+  const driver = makePodmanDriver({
+    childProcess,
+    env: {},
+    ownerId: 'formula-exact-owner',
+  });
+  const probe = await driver.probe();
+  t.false(probe.available);
+  t.regex(probe.reason ?? '', /orphan removal failed/);
+  t.false(probe.details?.lifecycle?.crashCleanup ?? true);
+});
+
+test('concurrent probes share one orphan sweep', async t => {
+  const { childProcess, calls } = makeProbeStub({
+    containers: ['owned-operation'],
+  });
+  const driver = makePodmanDriver({
+    childProcess,
+    env: {},
+    ownerId: 'formula-exact-owner',
+  });
+  const [first, second] = await Promise.all([driver.probe(), driver.probe()]);
+  t.true(first.available, first.reason);
+  t.true(second.available, second.reason);
+  const sweeps = calls.filter(call => call.args[0] === 'ps');
+  // A second sweep could list and remove a container that a concurrently
+  // admitted operation already spawned, so the memo must hold across the
+  // whole listing, not just up to the first await.
+  t.is(sweeps.length, 1);
+  const removals = calls.filter(call => call.args[0] === 'rm');
+  t.is(removals.length, 1);
+
+  // The memo survives later probes too.
+  const third = await driver.probe();
+  t.true(third.available, third.reason);
+  t.is(calls.filter(call => call.args[0] === 'ps').length, 1);
+});
+
+test('a failed orphan sweep is retried by the next probe', async t => {
+  let attempt = 0;
+  const { childProcess, calls } = makeProbeStub({
+    containers: ['owned-operation'],
+    rm: () => {
+      attempt += 1;
+      return attempt === 1
+        ? { code: 1, stderr: 'Error: unlinking layer: permission denied\n' }
+        : { code: 0, stderr: '' };
+    },
+  });
+  const driver = makePodmanDriver({
+    childProcess,
+    env: {},
+    ownerId: 'formula-exact-owner',
+  });
+  const failed = await driver.probe();
+  t.false(failed.available);
+  // A transient reconciliation failure must not condemn the driver for
+  // the rest of its lifetime.
+  const recovered = await driver.probe();
+  t.true(recovered.available, recovered.reason);
+  t.is(calls.filter(call => call.args[0] === 'ps').length, 2);
+});
