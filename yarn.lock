@@ -3082,6 +3082,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/sandbox@workspace:packages/sandbox"
   dependencies:
+    "@endo/cancel": "workspace:^"
     "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
@@ -3090,6 +3091,7 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/patterns": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
