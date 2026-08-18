@@ -745,12 +745,14 @@ refused (`SymbolMismatch`) before anything runs.
 **Review wave 3 (2026-08-18): five adversarial reviewers over the
 supervisor-integration delta (`ca270319..99c718ac`) — the boundary
 gate, the non-database backends, the daemon seam, the symbol and
-chunk contracts, and the docs.** Findings are RECORDED here without
-fixes, per this branch's review convention. Nothing confirmed blocks
-the branch: no P0, and the one P1 is a contract-documentation
-falsification whose enforcement is fail-closed.
+chunk contracts, and the docs.** Findings were first RECORDED here
+without fixes, per this branch's review convention; the fix pass
+landed the same day and each finding below carries its disposition
+inline. Nothing confirmed blocked the branch: no P0, and the one P1
+is a contract-documentation falsification whose enforcement is
+fail-closed.
 
-*Confirmed, open (recorded, not actioned):*
+*Confirmed findings, with dispositions:*
 
 - **"Same name set ⟹ same symbol table" is FALSE in general (P1,
   probe-confirmed, cross-process).** The compiled table is ordered by
@@ -764,10 +766,12 @@ falsification whose enforcement is fail-closed.
   spurious `SymbolMismatch` refusal, never a wrong global — but the
   authorable contract is really "same used-name set AND same
   first-appearance order for every bucket-colliding pair", which no
-  author can see. The ledger item below now states the true
-  invariant; the code comment in `ironhorse_engine.rs` still states
-  the falsified one (open action), and the per-crank relinking of the
-  side-table ledger workstream remains the lift.
+  author can see. FIXED (documentation): the ledger item below, the
+  `PersistentMachine` docs and inline comments, the refusal message,
+  and the lifecycle-test comments all state the true invariant now —
+  the enforcement itself was already fail-closed and is unchanged.
+  The per-crank relinking of the side-table ledger workstream remains
+  the lift.
 - **Resumed-machine divergence on Pending side tables is not always
   an honest halt (P2, pre-existing, identical on all backends).** A
   store-resumed `arr.length` answers `undefined` where the continuous
@@ -775,46 +779,53 @@ falsification whose enforcement is fail-closed.
   writes and symbol-keyed `Object.keys` do refuse with named
   `Unsupported` halts. Machine/image-layer property (backend parity
   intact); the quiescent contract's "resumed equals uninterrupted"
-  holds only over programs that avoid the Pending rows.
+  holds only over programs that avoid the Pending rows. DEFERRED to
+  the side-table ledger workstream, with the reason stated: the
+  classification IS the missing side-table entry (`length` reads
+  gate on `arrays.contains_key`), so a resumed machine cannot tell
+  "was an array" from "plain object" to halt honestly — persisting
+  the rows is the fix, not a patch here.
 - **The routed-resume guard drops the message with no reply (P2,
   latent).** `handle_resume`'s store-backed guard logs, drops the
   routed message (every sender today passes `response_tx: None`), and
   re-suspends the record — so every message to such a handle is
   silently swallowed until the envelope lands. Unreachable in
   production: nothing outside tests calls `mark_suspended_store`.
-- P3 set, one line each: `decode_stack` still multiplies
-  `count * SLOT_RECORD_BYTES` unchecked where its twin `decode_heap`
-  got `checked_mul` (32-bit-only wrap; the `i + len` advances in
-  `decode_strings`/`decode_u32s` panic rather than err on the same
-  targets); SQLite commit upserts rows BEFORE verification, so
-  refusal atomicity rests wholly on transaction rollback
-  (probe-confirmed safe today; fragile if commit ever turns
-  incremental); `apply_batch`'s grown-region and boundary checks
-  derive their prior baseline from two sources (leaf-vector length vs
-  prior manifest) equal by construction but never asserted equal;
-  `FileStore::commit` leaks its temp file when the RENAME stage fails
-  (litter inert — opens ignore it — but unbounded); a live machine
-  that linked an EMPTY symbol table refuses a later named crank while
-  the same store REOPENED accepts it (`linked` is derived from
-  name-count at open; no misbinding either way); eval's halt path
-  runs the rewind before returning the halt, so a FAILED rewind
-  surfaces the store error and swallows the halt reason (the
-  poisoning itself is correct — the session clears first and later
-  calls refuse); CI runs the lifecycle test through the crate's
-  DEFAULT feature with no `--features` pin (correct and non-vacuous
-  today, verified; a default flip would turn the step into a 0-test
-  green pass); `query_gc`'s crank-2 `arr[3] = {...}` lands as an
-  id-keyed ordinary property — literal-index access never consults
-  the items map — so the fixture narration overstates the array
-  coverage (the parity assertions stand); page-conservative
-  collection is allocation-stride-sensitive (a 5-slot stride chains
-  every page to its successor and frees zero where a 4-slot stride
-  collects — context for `gc_bench`); `partial_collect` after resume
-  frees pages referenced only by Pending side-table rows, foreclosing
-  recovery once those rows gain ledger coverage; and the PR body's
-  supervisor/testing/review-record paragraphs plus the "264-test"
-  figure predate the two Copilot passes and three added tests (this
-  record closes the doc side; the PR body is open).
+  FIXED (the reply arm): the guard now answers a waiting sender with
+  a named `error` envelope before re-suspending; fire-and-forget
+  messages are still dropped, loudly. The routed-resume gap itself
+  stays with the envelope workstream.
+- P3 set, with dispositions. FIXED, each with its lock or gate:
+  `decode_stack` now `checked_mul`s like its `decode_heap` twin and
+  `decode_strings` bounds `i + len` with `checked_add` (32-bit-only
+  wraps; the existing malformed-count trophies remain the locks);
+  SQLite commit runs EVERY verification before the first table
+  mutation, so a refused batch leaves the tables untouched by
+  construction — rollback is the I/O backstop, not the refusal
+  mechanism (locked by `refused_commit_leaves_the_store_untouched`);
+  `apply_batch` asserts the prior-leaf/prior-manifest baseline
+  coupling it used to trust silently (locked by
+  `commit_refuses_a_desynced_prior_leaf_baseline`);
+  `FileStore::commit` removes its temp file on a failed RENAME
+  (locked by `failed_rename_removes_the_temp_file`); an empty first
+  crank no longer links the table, so the live machine and its
+  reopened twin accept the same next crank (locked by
+  `an_empty_first_crank_does_not_link_the_table`); a failed rewind
+  reports a compound error carrying the halt (or checkpoint failure)
+  it was rewinding from instead of swallowing it; the CI step pins
+  `--features ironhorse-engine` so a default-feature flip cannot
+  turn it into a 0-test green pass; the `query_gc` fixture narration
+  states the literal-index reality (literal `arr[3]` binds an
+  id-keyed ordinary property; crank 1's variable-index loop is the
+  real items-map path); and `gc_bench` documents the
+  allocation-stride sensitivity its freed counts must be read
+  against. STILL OPEN, by design: `partial_collect` after resume
+  frees pages referenced only by Pending side-table rows (recovery
+  belongs to the ledger workstream); FileStore's dir-sync
+  ack-uncertainty and SQLite's ambiguous-commit window (inherent to
+  the layers, fail-closed either way). The PR body and the
+  test-count figure were refreshed with this pass (270 tests across
+  the four engine/store crates).
 
 *Verified clean (the negatives on the record):*
 
@@ -867,11 +878,11 @@ section):
   landed above; the envelope is the gap — including ROUTED resume of
   a store-backed worker, which today fails loudly and re-suspends
   the record rather than taking the XS path (the Copilot review's
-  guard). The guard also DROPS the routed message with no reply
-  (every sender today passes `response_tx: None`), so messages to a
-  store-backed suspend are silently swallowed until the envelope
-  lands — latent, since nothing outside tests calls
-  `mark_suspended_store` (wave 3).
+  guard). The guard answers a waiting sender with a named `error`
+  envelope and re-suspends the record (wave-3 fix); fire-and-forget
+  messages are still dropped, loudly, until the envelope lands —
+  latent either way, since nothing outside tests calls
+  `mark_suspended_store`.
 - Any checkpoint/collect cadence policy richer than the stated
   per-crank minimum (a supervisor policy decision; the schedule is
   replica-visible).
@@ -945,7 +956,7 @@ section):
   no job provisions the moddable toolchain for testing them (the
   `test-ironhorse` comment records this).
 - No line/branch-coverage measurement (llvm-cov) has been run for
-  these crates; the 264-test count is suite size, not coverage.
+  these crates; the 270-test count is suite size, not coverage.
 - Temp-dir cleanup in the query/gc test files runs only on the
   success path (`store_bench` has the RAII guard; the rest follow
   the repo's pre-existing convention) — leaked `$TMPDIR` dirs on
