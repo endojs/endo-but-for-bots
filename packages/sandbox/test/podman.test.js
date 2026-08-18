@@ -189,7 +189,7 @@ test('podman probe fails closed without an exact cleanup scope', async t => {
   const probe = await driver.probe();
   t.false(probe.available);
   t.regex(probe.reason ?? '', /stable ownerId/);
-  t.false(probe.details?.lifecycle?.crashCleanup ?? true);
+  t.false(probe.details?.lifecycle?.available ?? true);
 });
 
 test('podman reconciliation uses only the exact owner label', async t => {
@@ -1537,7 +1537,7 @@ test('orphan sweep still fails closed on a live removal failure', async t => {
   const probe = await driver.probe();
   t.false(probe.available);
   t.regex(probe.reason ?? '', /orphan removal failed/);
-  t.false(probe.details?.lifecycle?.crashCleanup ?? true);
+  t.false(probe.details?.lifecycle?.available ?? true);
 });
 
 test('concurrent probes share one orphan sweep', async t => {

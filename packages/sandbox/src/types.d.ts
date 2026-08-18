@@ -69,8 +69,6 @@ export type BackendProbeDetails = {
    */
   lifecycle?: {
     available: boolean;
-    processGroups: boolean;
-    crashCleanup: boolean;
     reason?: string;
   };
   /** Landlock LSM availability (kernel ≥ 5.13). */

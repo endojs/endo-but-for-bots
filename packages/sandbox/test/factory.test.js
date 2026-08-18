@@ -12,11 +12,7 @@ import {
 } from '../src/interfaces.js';
 
 const lifecycleProbe = harden({
-  lifecycle: harden({
-    available: true,
-    processGroups: true,
-    crashCleanup: true,
-  }),
+  lifecycle: harden({ available: true }),
 });
 
 const stubScratchProvider = harden({

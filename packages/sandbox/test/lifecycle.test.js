@@ -9,11 +9,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { makeSandboxFactory } from '../src/factory.js';
 
 const lifecycleDetails = harden({
-  lifecycle: harden({
-    available: true,
-    processGroups: true,
-    crashCleanup: true,
-  }),
+  lifecycle: harden({ available: true }),
 });
 
 const scratchProvider = harden({
