@@ -7,7 +7,6 @@ import { E } from '@endo/eventual-send';
 import { Fail, makeError, q, X } from '@endo/errors';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makeExo } from '@endo/exo';
-import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { M } from '@endo/patterns';
 
 import {
@@ -16,6 +15,7 @@ import {
   SandboxFactoryInterface,
   SandboxHandleInterface,
 } from './interfaces.js';
+import { makeEagerReader } from './eager-reader.js';
 import { resolveLimits } from './limits.js';
 
 const AsyncWriterInterface = M.interface('SandboxWriter', {
@@ -189,16 +189,6 @@ Methods:
 const KILL_GRACE_MS = 1000;
 const DRAIN_GRACE_MS = 250;
 const DEFAULT_BYTE_LIMIT = 16n * 1024n * 1024n;
-// Captured output is coalesced into blocks of this size so the retained
-// structure is bounded by the byte limit alone: at the 16 MiB default the
-// queue holds at most 256 blocks, however small the source's chunks are.
-const CAPTURE_BLOCK_SIZE = 64 * 1024;
-// Blocks the reader pump may pull ahead of consumer demand. This is
-// counted in blocks, not source chunks, so it multiplies by
-// CAPTURE_BLOCK_SIZE: eight blocks is 512 KiB per stream, already far
-// more than enough to keep a CapTP round trip pipelined.
-const STREAM_BUFFER = 8;
-
 /**
  * Resolve after a bounded delay without keeping the daemon alive solely for
  * the timer.
@@ -239,216 +229,6 @@ const raceDelay = async (work, ms) => {
   }
 };
 harden(raceDelay);
-
-/**
- * Eagerly pump a driver-local byte source into one passable reader.
- *
- * The pump starts at process admission, rather than when a remote consumer
- * first pulls. This both preserves output from short-lived processes and lets
- * the supervisor enforce a byte limit even when nobody consumes the reader.
- * Only this adapter sees the driver-local iterator; callers receive the one
- * `PassableBytesReader` capability and cannot accidentally merge stdout and
- * stderr authority.
- *
- * @param {AsyncIterable<Uint8Array> | null | undefined} iterable
- * @param {{ label: 'stdout' | 'stderr', byteLimit: bigint, onFailure: (error: Error) => void }} options
- * @returns {{ reader: object, finished: Promise<void>, close: () => void }}
- */
-const makeEagerReader = (iterable, { label, byteLimit, onFailure }) => {
-  /** @type {Uint8Array[]} */
-  const queue = [];
-  // Incoming bytes are copied into fixed-size blocks rather than queued
-  // one entry per source chunk: the byte limit alone would not bound the
-  // queue's per-chunk metadata or allocation overhead against a source
-  // that streams one byte at a time.
-  /** @type {Uint8Array | undefined} */
-  let pendingBlock;
-  let pendingLength = 0;
-  /** @param {Uint8Array} bytes */
-  const enqueueBytes = bytes => {
-    let offset = 0;
-    while (offset < bytes.length) {
-      if (pendingBlock === undefined) {
-        pendingBlock = new Uint8Array(CAPTURE_BLOCK_SIZE);
-        pendingLength = 0;
-      }
-      const take = Math.min(
-        CAPTURE_BLOCK_SIZE - pendingLength,
-        bytes.length - offset,
-      );
-      pendingBlock.set(bytes.subarray(offset, offset + take), pendingLength);
-      pendingLength += take;
-      offset += take;
-      if (pendingLength === CAPTURE_BLOCK_SIZE) {
-        queue.push(pendingBlock);
-        pendingBlock = undefined;
-      }
-    }
-  };
-  // Copy out a partially-filled block when a consumer catches up with
-  // the queue, so consumption latency stays chunk-level while unconsumed
-  // output still coalesces.
-  const flushPendingBlock = () => {
-    if (pendingBlock !== undefined && pendingLength > 0) {
-      queue.push(pendingBlock.slice(0, pendingLength));
-      pendingLength = 0;
-    }
-  };
-  let byteCount = 0n;
-  let ended = false;
-  /** @type {Error | undefined} */
-  let failure;
-  /** @type {(() => void) | undefined} */
-  let wakeWaiter;
-  // This iterator is single-consumer by construction: one capture pump
-  // fills it, one reader drains it, and the single `wakeWaiter` slot
-  // above can only ever park one of them. Overlapping `next()` calls —
-  // a consumer that pumps the same reader twice — are refused rather
-  // than parked, because both alternatives are worse than an error.
-  // Parking them overwrites the slot and strands every waiter but the
-  // most recent, which is a permanent hang with no diagnostic; queueing
-  // them instead would hand two consumers an arbitrary interleaved half
-  // of one process's output each, with nothing to tell them apart from
-  // the whole of it.
-  // Nothing reachable from the `PassableBytesReader` surface can trip
-  // this today — `bytesReaderFromIterator` serializes its own pulls —
-  // so it is a tripwire on the contract, not a live failure path.
-  let nextInFlight = false;
-  const { promise: finished, resolve: finish } =
-    /** @type {import('@endo/promise-kit').PromiseKit<void>} */ (
-      makePromiseKit()
-    );
-
-  const wake = () => {
-    const waiter = wakeWaiter;
-    wakeWaiter = undefined;
-    if (waiter !== undefined) waiter();
-  };
-
-  // Ending the source and settling `finished` are one event: the pump
-  // has no more bytes to contribute. Buffered bytes stay readable.
-  const close = () => {
-    if (!ended) {
-      ended = true;
-      finish();
-    }
-    wake();
-  };
-
-  if (iterable === undefined || iterable === null) {
-    close();
-  } else {
-    void (async () => {
-      await null;
-      try {
-        for await (const value of iterable) {
-          if (ended) return;
-          const bytes =
-            value instanceof Uint8Array
-              ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
-              : new Uint8Array(value);
-          const remaining = byteLimit - byteCount;
-          if (remaining > 0n) {
-            // This conversion is exact because the narrowed branch proves the
-            // remaining count is smaller than one typed-array chunk.
-            const captured =
-              BigInt(bytes.length) <= remaining
-                ? bytes
-                : bytes.subarray(0, Number(remaining));
-            enqueueBytes(captured);
-            byteCount += BigInt(captured.length);
-            wake();
-          }
-          if (byteCount >= byteLimit) {
-            failure = makeError(
-              X`sandbox ${label} byte limit reached (${byteLimit})`,
-            );
-            onFailure(failure);
-            close();
-            return;
-          }
-        }
-        close();
-      } catch (e) {
-        failure = makeError(
-          X`sandbox ${label} reader failed: ${q(/** @type {Error} */ (e).message)}`,
-        );
-        onFailure(failure);
-        close();
-      }
-    })();
-  }
-
-  /** @type {AsyncIterableIterator<Uint8Array>} */
-  const iterator = {
-    async next() {
-      // Checked before the first await, so two calls made in the same
-      // turn are still distinguishable from one call made twice.
-      !nextInFlight ||
-        Fail`sandbox ${q(label)} reader is single-consumer: concurrent next() is not supported`;
-      nextInFlight = true;
-      await null;
-      try {
-        for (;;) {
-          if (queue.length === 0) flushPendingBlock();
-          if (queue.length > 0) {
-            // Deliberately NOT hardened, and the one place in this file
-            // where that is true.
-            //
-            // `harden` walks a typed array element by element, so
-            // freezing a 64 KiB block is 65536 property visits: measured
-            // at ~490ms of blocking CPU per captured MiB on this host,
-            // against ~0.1ms to freeze the enclosing result object
-            // alone. At the 16 MiB default limit that is roughly eight
-            // seconds of daemon-wide stall per stream — the daemon is
-            // single-threaded, so it is paid by every other vat too.
-            //
-            // Nothing is given up for it. The block is minted here from
-            // a fresh ArrayBuffer, is never aliased by the driver, and
-            // is consumed by `bytesReaderFromIterator`, which
-            // base64-encodes it into a string before any Passable
-            // crosses a boundary. No caller ever holds a reference to
-            // the raw buffer, so freezing it would protect nothing that
-            // is reachable.
-            return {
-              done: false,
-              value: /** @type {Uint8Array} */ (queue.shift()),
-            };
-          }
-          if (failure !== undefined) throw failure;
-          if (ended) return harden({ done: true, value: undefined });
-          // eslint-disable-next-line no-await-in-loop
-          await new Promise(resolve => {
-            wakeWaiter = () => resolve(undefined);
-          });
-        }
-      } finally {
-        nextInFlight = false;
-      }
-    },
-    async return() {
-      close();
-      // A consumer that abandons the stream will never read the
-      // buffered blocks, and the process handle outlives them: drop the
-      // retained bytes rather than holding up to the byte limit per
-      // stream for as long as the caller keeps the handle.
-      queue.length = 0;
-      pendingBlock = undefined;
-      pendingLength = 0;
-      return harden({ done: true, value: undefined });
-    },
-    [Symbol.asyncIterator]() {
-      return iterator;
-    },
-  };
-
-  return harden({
-    reader: bytesReaderFromIterator(iterator, { buffer: STREAM_BUFFER }),
-    finished,
-    close,
-  });
-};
-harden(makeEagerReader);
 
 /**
  * Wrap driver-side stdin write closures as a `WriterRef`-shaped exo.
