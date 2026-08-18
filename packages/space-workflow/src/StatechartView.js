@@ -64,10 +64,17 @@ export const StatechartView = ({
 }) => {
   const graph = renderGraph(chart);
   const { positions, width, height } = layoutGraph(graph, chart.initial);
-  const active = new Set(activeIdsOf(configuration));
-  const live = new Set(activeIdsOf(liveConfiguration));
+  // `$eachParam` regions render once under a `#each` segment while the
+  // runtime configuration and effect paths carry real indices (`#0`,
+  // `#1`, …); fold runtime ids onto the drawn node when no literal node
+  // matches, so overlays land on the representative region.
+  const nodeIds = new Set(graph.nodes.map(node => node.id));
+  const normalize = id =>
+    nodeIds.has(id) ? id : id.replace(/#[0-9]+/g, '#each');
+  const active = new Set(activeIdsOf(configuration).map(normalize));
+  const live = new Set(activeIdsOf(liveConfiguration).map(normalize));
   const busy = new Set(
-    (pending ?? []).map(record => (record.path ?? []).join('/')),
+    (pending ?? []).map(record => normalize((record.path ?? []).join('/'))),
   );
 
   return h(
@@ -91,23 +98,27 @@ export const StatechartView = ({
         const y2 = to.y + NODE_HEIGHT / 2;
         const backward = to.layer <= from.layer;
         const midY = backward ? Math.max(y1, y2) + NODE_HEIGHT : (y1 + y2) / 2;
-        return h('g', { key: `${edge.from}-${edge.to}-${edge.type}` }, [
-          h('path', {
-            class: backward ? 'wf-edge wf-edge-back' : 'wf-edge',
-            d: backward
-              ? `M ${x1} ${y1} C ${x1 + 40} ${midY}, ${x2 - 40} ${midY}, ${x2} ${y2}`
-              : `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`,
-          }),
-          h(
-            'text',
-            {
-              class: 'wf-edge-label',
-              x: (x1 + x2) / 2,
-              y: midY - 4,
-            },
-            edge.guarded ? `${edge.type} ✓?` : edge.type,
-          ),
-        ]);
+        return h(
+          'g',
+          { key: `${edge.from}-${edge.to}-${edge.type}-${edge.index}` },
+          [
+            h('path', {
+              class: backward ? 'wf-edge wf-edge-back' : 'wf-edge',
+              d: backward
+                ? `M ${x1} ${y1} C ${x1 + 40} ${midY}, ${x2 - 40} ${midY}, ${x2} ${y2}`
+                : `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`,
+            }),
+            h(
+              'text',
+              {
+                class: 'wf-edge-label',
+                x: (x1 + x2) / 2,
+                y: midY - 4,
+              },
+              edge.guarded ? `${edge.type} ✓?` : edge.type,
+            ),
+          ],
+        );
       }),
       ...graph.nodes.map(node => {
         const position = positions[node.id];
