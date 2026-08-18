@@ -83,37 +83,32 @@ import { makeCodeModeAgent } from '@endo/agentry/code-mode';
 
 const { agent } = makeCodeModeAgent({
   model,
-  powers: { workspace, git, gitMode: 'historyRewrite' },
+  powers: { workspace, git },
 });
 await agent.prompt('Inspect the current branch.');
 await agent.waitForIdle();
 ```
 
-`gitMode` is `'readOnly'`, `'readWrite'` (the default), or
-`'historyRewrite'`.
-The history-rewrite mode requires a Git capability minted with explicit
-history-rewrite authority and advertises the elevated `gitHistory` surface,
-including amend and reword operations.
+Git declarations are derived from the recognized live Git facet.
+The history-rewrite surface is advertised only when that facet has explicit
+history-rewrite authority.
 
 The model-facing tool surface is intentionally one tool:
 `evaluate({ source })`, with `resultName` added only when the host supplies
 storage authority.
-Workspace and Git operations happen inside
-the Endo Compartment through lexical caps (`workspace`, `git`, and any
-configured named powers).
-The prompt carries generated TypeScript declarations selected for the granted
-capability mode; `E(cap).__getMethodNames__()` remains the fallback for methods
-outside a declaration.
+Workspace and Git operations happen inside the Endo Compartment through
+lexical caps (`workspace`, `git`, and any configured named powers).
+Each lexical cap is a `CodeModeGrant` pairing the live capability with its
+generated declaration.
+Runtime endowments, evaluator declarations, collision checks, and prompt text
+are all derived from that grant list.
 
 By default a code-mode session has no `@endo/exo-shell` Shell global: the
 example above only requests `workspace` and `git`, so no shell binding
-appears in the compartment or the prompt. A caller that wants shell opts in
-explicitly by adding a `makeShellGlobal` descriptor to `namedPowers` and
-resolving the matching capability through `lookupPowers` (or, for an
-already-live capability, through `endowments`):
+appears in the compartment or the prompt. A caller that wants another generic
+capability opts in explicitly through the trusted lookup handle:
 
 ```js
-import { makeShellGlobal } from '@endo/agent-tools/code-mode-globals/shell.js';
 import { makeCodeModeAgent } from '@endo/agentry/code-mode';
 
 const { agent } = makeCodeModeAgent({
@@ -121,21 +116,39 @@ const { agent } = makeCodeModeAgent({
   powers: {
     workspace,
     git,
-    gitMode: 'readWrite',
-    namedPowers: [makeShellGlobal({ name: 'shell', petName: 'shell' })],
+    namedPowers: [{ name: 'shell', petName: 'shell' }],
   },
-  // lookupPowers resolves `shell` by pet name to the capability the host
-  // already granted; makeShellGlobal only describes it, it grants nothing.
   lookupPowers,
 });
 await agent.prompt('Inspect the repository status.');
 await agent.waitForIdle();
 ```
 
-A `namedPowers` descriptor is opt-in and describes a capability the host has
-already granted elsewhere; `makeShellGlobal` alone never provisions or widens
-Shell authority, and omitting it (as in the first example) keeps Shell out of
-the compartment.
+The trusted lookup handle supplies the live capability.
+Because this generic compatibility path has no local interface recognizer, the
+prompt advertises `shell` as an opaque capability (`unknown`) rather than
+claiming an independently supplied interface declaration.
+
+The `workspace` and `git` powers are different: their declarations are derived
+from the live capability's recognized posture, which is a synchronous check
+that a pending lookup cannot satisfy.
+Name either of them by pet name instead of passing it inline and the
+asynchronous entry point resolves it first:
+
+```js
+import { makeCodeModeAgentFromLookup } from '@endo/agentry/code-mode';
+
+const { agent } = await makeCodeModeAgentFromLookup({
+  model,
+  powers: { workspacePetName: 'workspace', gitPetName: 'git' },
+  lookupPowers,
+});
+```
+
+`resolveCodeModePowers(powers, lookupPowers)` is the same resolution step on
+its own, for a caller that assembles the powers record itself.
+The synchronous `makeCodeModeAgent` refuses an unresolved lookup for these two
+powers rather than minting a grant whose posture nobody has inspected.
 
 Plain-data completion values returned from `evaluate` are encoded for the model
 with the SmallCaps renderer from `@endo/agent-tools`, so BigInts and other
@@ -175,7 +188,7 @@ const session = await provisionEndoCodeMode({
 const { agent } = makeCodeModeAgent({
   model,
   evaluate: makeDaemonEvaluate(session.powers),
-  globals: session.globals,
+  powers: { grants: session.grants },
 });
 
 // Save this plain record, not the guest or any daemon capability.
@@ -203,8 +216,9 @@ The `EndoProvisionSpec` fields are optional grants:
   host-side credential pet name.
 
 There is no `shell` field: retained provisioning never provisions or includes
-a `@endo/exo-shell` Shell global, so `session.globals` above carries only
-`workspace` and `git`. A caller that wants shell composes it separately with
+a `@endo/exo-shell` Shell global, so `session.grants` above carries only
+the live `workspace` and Git capabilities selected by policy. A caller that
+wants Shell composes it separately with
 `makeShellGlobal` and its own capability, as shown in
 [Code mode](#code-mode); omitting it, as this example does, is the opt-out.
 

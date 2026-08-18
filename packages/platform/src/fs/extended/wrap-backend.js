@@ -26,6 +26,7 @@ import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iter
 import {
   DirectoryInterface,
   FileInterface,
+  FilesystemInterface,
   OpenFileInterface,
 } from './type-guards.js';
 
@@ -63,6 +64,7 @@ import { makeFilesystem } from './posture.js';
  *   OpenFile,
  *   Qid,
  * } from './types.js'
+ * @import { FilesystemMethods, FilesystemPosture } from './posture.js'
  */
 
 /**
@@ -146,15 +148,26 @@ const narrowStatPatch = patch => {
 /**
  * Build a `Filesystem` exo on top of an `FsBackend`.
  *
+ * The `posture` option states the authority the backend actually confers.
+ * It defaults to `readWrite`, which is correct for a backend this package
+ * mints over storage it fully controls (in-memory, node-fs). A backend that
+ * merely adapts someone else's capability — a daemon mount, say, whose write
+ * methods may reject at the mount boundary — cannot be assumed writable, and
+ * should pass its known posture or `unknown` so that trusted consumers such
+ * as `isFilesystemReadWrite()` fail closed rather than advertise writes the
+ * guest does not have.
+ *
  * @param {FsBackend} backend
  * @param {{
  *   description?: string,
  *   namedDirs?: Record<string, string[]>,
+ *   posture?: FilesystemPosture | 'unknown',
  * }} [opts]
  * @returns {Filesystem}
  */
 export const wrapBackend = (backend, opts = {}) => {
   const caps = probeCapabilities(backend);
+  const posture = opts.posture ?? 'readWrite';
   const description = opts.description ?? 'wrapBackend-built Filesystem';
   const namedDirs = harden({ ...(opts.namedDirs ?? {}) });
 
@@ -1048,43 +1061,45 @@ export const wrapBackend = (backend, opts = {}) => {
 
   const root = makeDirectoryExo([]);
 
-  return makeFilesystem(
-    {
-      root() {
-        return root;
-      },
-      named(name) {
-        const segs = namedDirs[name];
-        if (!segs) {
-          throw makeError(X`ENOENT: no named directory ${q(name)}`);
-        }
-        return makeDirectoryExo([...segs]);
-      },
-      async statfs() {
-        if (caps.statfs) {
-          // @ts-expect-error optional method probed above
-          const stats = await backend.statfs();
-          return harden({ type: description, ...stats });
-        }
-        // Minimal default — toy backings without real disk metrics.
-        return harden({
-          type: description,
-          blockSize: 0n,
-          totalBlocks: 0n,
-          freeBlocks: 0n,
-        });
-      },
-      async brands() {
-        return brandSet;
-      },
-      help(method) {
-        if (method === undefined) {
-          return `Filesystem (${description}): root/named/statfs/brands.`;
-        }
-        return `No documentation for method ${q(method)}.`;
-      },
+  /** @type {FilesystemMethods} */
+  const filesystemMethods = {
+    root() {
+      return root;
     },
-    'readWrite',
-  );
+    named(name) {
+      const segs = namedDirs[name];
+      if (!segs) {
+        throw makeError(X`ENOENT: no named directory ${q(name)}`);
+      }
+      return makeDirectoryExo([...segs]);
+    },
+    async statfs() {
+      if (caps.statfs) {
+        // @ts-expect-error optional method probed above
+        const stats = await backend.statfs();
+        return harden({ type: description, ...stats });
+      }
+      // Minimal default — toy backings without real disk metrics.
+      return harden({
+        type: description,
+        blockSize: 0n,
+        totalBlocks: 0n,
+        freeBlocks: 0n,
+      });
+    },
+    async brands() {
+      return brandSet;
+    },
+    help(method) {
+      if (method === undefined) {
+        return `Filesystem (${description}): root/named/statfs/brands.`;
+      }
+      return `No documentation for method ${q(method)}.`;
+    },
+  };
+
+  return posture === 'unknown'
+    ? makeExo('Filesystem', FilesystemInterface, filesystemMethods)
+    : makeFilesystem(filesystemMethods, posture);
 };
 harden(wrapBackend);

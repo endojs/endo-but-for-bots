@@ -54,17 +54,34 @@ harden(makeWorkspaceGlobal);
  * Standalone in-memory and node-fs seams use this surface rather than the raw
  * daemon mount bound by code-mode provisioning.
  *
+ * The read-only vs writable split follows the same rule as
+ * {@link makeWorkspaceGlobal}: the read-only attenuator in
+ * `@endo/platform/fs/extended` keeps every method of the `Filesystem`,
+ * `Directory`, `File`, and `OpenFile` contracts present and callable — the
+ * mutating ones reject with `EACCES` — so the declared type is genuinely the
+ * same in both cases and only the description differs. Advertising a narrowed
+ * type would tell the guest that methods it can in fact call do not exist;
+ * stating that mutation rejects tells it the authority it actually holds.
+ *
  * @param {object} options
  * @param {string} options.name JS-identifier lexical binding name.
  * @param {string | string[]} [options.petName] Pet name to look the capability
  *   up by; defaults to `name`.
+ * @param {boolean} [options.readOnly] Describe a read-only Filesystem whose
+ *   mutating methods reject at the capability.
  * @returns {CodeModeGlobal}
  */
-export const makeFilesystemGlobal = ({ name, petName = name }) =>
+export const makeFilesystemGlobal = ({
+  name,
+  petName = name,
+  readOnly = false,
+}) =>
   harden({
     name,
     petName,
-    description: 'Writable @endo/platform/fs/extended Filesystem.',
+    description: readOnly
+      ? 'Read-only @endo/platform/fs/extended Filesystem; mutating methods reject with EACCES at the capability.'
+      : 'Writable @endo/platform/fs/extended Filesystem.',
     declaration: fsDeclarations.filesystem,
   });
 harden(makeFilesystemGlobal);

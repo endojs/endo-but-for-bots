@@ -14,6 +14,7 @@ import { relative, sep } from 'node:path';
 import { exit, stderr } from 'node:process';
 
 import { makeCodeModeSystemPrompt } from './code-mode.js';
+import { codeModeGrantGlobals } from './code-mode-grants.js';
 import { EndoCredentialUnavailableError } from './code-mode-provision-host.js';
 import {
   normalizeEndoProvisionSpec,
@@ -692,7 +693,7 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
 
           const evaluate = makeEvaluateTool(
             makeDaemonEvaluate(connected.powers),
-            connected.globals,
+            codeModeGrantGlobals(connected.grants),
           );
           pi.registerTool(
             toPiAgentTool(evaluate, {
@@ -731,9 +732,12 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
 
       pi.on('before_agent_start', event => {
         if (active !== undefined) {
-          const codeModePrompt = makeCodeModeSystemPrompt(active.globals, {
-            preserveTools: preservePiTools,
-          });
+          const codeModePrompt = makeCodeModeSystemPrompt(
+            codeModeGrantGlobals(active.grants),
+            {
+              preserveTools: preservePiTools,
+            },
+          );
           return harden({
             systemPrompt: preservePiTools
               ? `${event.systemPrompt}\n\n${codeModePrompt}`

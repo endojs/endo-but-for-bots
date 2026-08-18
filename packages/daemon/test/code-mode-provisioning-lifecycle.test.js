@@ -82,6 +82,11 @@ test.serial(
       }),
     );
     t.true(Object.isFrozen(localRemote));
+    t.true(Object.isFrozen(localRemote.grants));
+    t.deepEqual(
+      localRemote.grants.map(({ name }) => name),
+      ['workspace', 'git', 'origin'],
+    );
     t.true(Object.isFrozen(localRemote.globals));
     t.true(Object.isFrozen(localRemote.persistence));
 

@@ -13,7 +13,8 @@ import { whereEndoSock } from '@endo/where';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { env, platform } from 'node:process';
 
-import { makeEndoProvisionGlobals } from './code-mode-provision-globals.js';
+import { makeEndoProvisionGrants } from './code-mode-provision-globals.js';
+import { codeModeGrantGlobals } from './code-mode-grants.js';
 import {
   normalizeEndoProvisionSpec,
   validateEndoProvisionPersistence,
@@ -111,9 +112,13 @@ const connectAndRealize = async (
     const bootstrap = await client.getBootstrap();
     const host = /** @type {EndoHost} */ (await E(bootstrap).host());
     const guest = await realizeEndoProvisionOnHost(host, persistence);
+    const grants = await makeEndoProvisionGrants(guest, persistence);
     return harden({
       powers: guest,
-      globals: makeEndoProvisionGlobals(persistence),
+      grants,
+      // Compatibility projection only.  All runtime and prompt consumers use
+      // `grants`; this field cannot be supplied by callers or persisted.
+      globals: codeModeGrantGlobals(grants),
       persistence,
       cleanup,
     });

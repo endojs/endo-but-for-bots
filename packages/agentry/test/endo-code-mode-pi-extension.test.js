@@ -121,6 +121,7 @@ const makeHarness = options => {
     reconstructions.push(persistence);
     return harden({
       powers: FAKE_POWERS,
+      grants: harden([]),
       globals: makeEndoProvisionGlobals(persistence),
       persistence,
       cleanup: async () => {
@@ -355,6 +356,7 @@ test('load registers only daemon-independent flag and command', async t => {
       reconstructCount += 1;
       return harden({
         powers: FAKE_POWERS,
+        grants: harden([]),
         globals: harden([]),
         persistence,
         cleanup: async () => {},
@@ -874,6 +876,7 @@ test('daemon absence triggers one standard-daemon autostart and reconnect', asyn
       }
       return harden({
         powers: FAKE_POWERS,
+        grants: harden([]),
         globals: harden([]),
         persistence,
         cleanup: async () => {},
@@ -1029,6 +1032,7 @@ test('a daemon that returns different persistence than requested is rejected and
     reconstructProvision: async persistence =>
       harden({
         powers: FAKE_POWERS,
+        grants: harden([]),
         globals: makeEndoProvisionGlobals(persistence),
         // The daemon is trusted to echo back the persistence it was asked to
         // provision; simulate it returning a workspace other than requested.
@@ -1081,6 +1085,7 @@ test('trusted interactive hook can rehydrate a credential without handling its v
       }
       return harden({
         powers: FAKE_POWERS,
+        grants: harden([]),
         globals: makeEndoProvisionGlobals(persistence),
         persistence,
         cleanup: async () => {},
@@ -1199,6 +1204,7 @@ test('intentional shutdown ignores the connection close observation', async t =>
       observer = options.onConnectionFailure;
       return harden({
         powers: FAKE_POWERS,
+        grants: harden([]),
         globals: harden([]),
         persistence,
         cleanup: async () => {

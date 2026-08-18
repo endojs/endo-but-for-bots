@@ -2,12 +2,16 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { makeWorkspaceGlobal } from '@endo/agent-tools/code-mode-globals/fs.js';
+import { Far } from '@endo/pass-style';
 import { makeGitGlobal } from '@endo/agent-tools/code-mode-globals/git.js';
-import { makeGitRemoteGlobal } from '@endo/agent-tools/code-mode-globals/git-remote.js';
+import { normalizeGlobals } from '@endo/agent-tools/code-mode/declarations.js';
 
 import { makeCodeModeSystemPrompt } from '../src/code-mode.js';
-import { makeEndoProvisionGlobals } from '../src/code-mode-provision-globals.js';
+import {
+  makeEndoProvisionGlobals,
+  makeEndoProvisionGrants,
+} from '../src/code-mode-provision-globals.js';
+import { registerProvisionedGuest } from '../src/code-mode-grants.js';
 
 /** @param {Record<string, unknown>} policy */
 const makePersistence = policy =>
@@ -37,7 +41,7 @@ test('globals match filesystem and Git authority modes', t => {
           },
         },
       }),
-      [makeWorkspaceGlobal({ name: 'workspace', readOnly: true })],
+      normalizeGlobals([{ name: 'workspace' }]),
     ],
     [
       makePersistence({
@@ -50,7 +54,7 @@ test('globals match filesystem and Git authority modes', t => {
           },
         },
       }),
-      [makeWorkspaceGlobal({ name: 'workspace' })],
+      normalizeGlobals([{ name: 'workspace' }]),
     ],
     [
       makePersistence({
@@ -111,7 +115,7 @@ test('globals match filesystem and Git authority modes', t => {
         },
       }),
       [
-        makeWorkspaceGlobal({ name: 'workspace' }),
+        ...normalizeGlobals([{ name: 'workspace' }]),
         makeGitGlobal({ name: 'git', historyRewrite: true }),
       ],
     ],
@@ -145,8 +149,7 @@ test('remote globals are sorted and hardened', t => {
 
   t.deepEqual(globals, [
     makeGitGlobal({ name: 'git' }),
-    makeGitRemoteGlobal({ name: 'alpha' }),
-    makeGitRemoteGlobal({ name: 'zebra' }),
+    ...normalizeGlobals([{ name: 'alpha' }, { name: 'zebra' }]),
   ]);
   t.true(Object.isFrozen(globals));
   t.true(globals.every(Object.isFrozen));
@@ -188,7 +191,7 @@ test('named Git globals each appear in the system prompt', t => {
   t.true(prompt.includes('declare const zeta: EndoGitHistory;'));
 });
 
-test('read-only guest-bound mount advertises a read-only declaration', t => {
+test('guest-bound mounts remain untyped until their live capability is rebound', t => {
   const [readOnly] = makeEndoProvisionGlobals(
     makePersistence({
       mounts: {
@@ -214,16 +217,8 @@ test('read-only guest-bound mount advertises a read-only declaration', t => {
     }),
   );
 
-  t.deepEqual(
-    readOnly,
-    makeWorkspaceGlobal({ name: 'workspace', readOnly: true }),
-  );
-  t.true(/read-only/iu.test(readOnly.description ?? ''));
-  t.false(/writable/iu.test(readOnly.description ?? ''));
-  t.true(/writable/iu.test(writable.description ?? ''));
-  // The read-only mount reuses the same Filesystem declaration; the read-only
-  // cap is enforced at the capability, not by hiding verbs from the prompt.
-  t.deepEqual(readOnly.declaration, writable.declaration);
+  t.deepEqual(readOnly, normalizeGlobals([{ name: 'workspace' }])[0]);
+  t.deepEqual(writable, normalizeGlobals([{ name: 'workspace' }])[0]);
 });
 
 test('writable Git declaration discloses its writable worktree reach', t => {
@@ -288,4 +283,90 @@ test('named mount and Git globals expose only named capabilities', t => {
   const prompt = makeCodeModeSystemPrompt(globals);
   t.false(prompt.includes('/workspace'));
   t.false(prompt.includes('/sibling'));
+});
+
+test('retained grants reject a guest without trusted provisioning provenance', async t => {
+  const workspace = Far('Workspace', {});
+  const git = Far('Git', {});
+  const guest = Far('Guest', {
+    lookup: async name => (name === 'workspace' ? workspace : git),
+  });
+  const persistence = makePersistence({
+    mounts: {
+      workspace: {
+        root: '/workspace',
+        mode: 'readOnly',
+        deniedSegments: [],
+        guestBinding: true,
+      },
+    },
+    gits: {
+      git: {
+        mount: 'workspace',
+        path: [],
+        root: '/workspace',
+        mode: 'readOnly',
+      },
+    },
+  });
+
+  await t.throwsAsync(
+    () =>
+      makeEndoProvisionGrants(
+        /** @type {any} */ (guest),
+        /** @type {any} */ (persistence),
+      ),
+    {
+      message: /guest returned by the trusted provisioning path/,
+    },
+  );
+});
+
+test('trusted provisioning provenance derives grants from the rebound guest', async t => {
+  const workspace = Far('Workspace', {});
+  const git = Far('Git', {});
+  const guest = Far('Guest', {
+    lookup: async name => (name === 'workspace' ? workspace : git),
+  });
+  const persistence = makePersistence({
+    mounts: {
+      workspace: {
+        root: '/workspace',
+        mode: 'readOnly',
+        deniedSegments: [],
+        guestBinding: true,
+      },
+    },
+    gits: {
+      git: {
+        mount: 'workspace',
+        path: [],
+        root: '/workspace',
+        mode: 'readOnly',
+      },
+    },
+  });
+
+  registerProvisionedGuest(guest);
+  const grants = await makeEndoProvisionGrants(
+    /** @type {any} */ (guest),
+    /** @type {any} */ (persistence),
+  );
+  t.deepEqual(
+    grants.map(({ name, declaration }) => ({ name, declaration })),
+    [
+      {
+        name: 'workspace',
+        declaration: { body: 'unknown' },
+      },
+      {
+        name: 'git',
+        declaration: makeGitGlobal({ name: 'git', readOnly: true }).declaration,
+      },
+    ],
+  );
+  t.is(grants[0].capability, workspace);
+  t.is(grants[1].capability, git);
+  t.true(Object.isFrozen(grants));
+  t.true(grants.every(Object.isFrozen));
 });
