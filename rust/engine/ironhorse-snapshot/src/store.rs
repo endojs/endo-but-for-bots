@@ -617,6 +617,24 @@ pub fn apply_batch(
     let n_exts = chunk_extent_count(batch.manifest.chunk_len) as usize;
     let n_frees = free_seg_count(batch.manifest.free_len) as usize;
 
+    // The grown-region checks below key off the PRIOR LEAF VECTORS'
+    // lengths while the boundary checks key off the PRIOR MANIFEST's
+    // geometry. Every backend maintains leaves sized to its stored
+    // manifest (and open-time validation re-checks it), but the two
+    // baselines arrive through different arguments — assert the
+    // coupling so a desynced caller fails closed HERE instead of
+    // skewing which rows the two checks require (wave-3 finding).
+    if let Some(prev) = prior {
+        if pages.len() != slot_page_count(prev.slot_count) as usize
+            || exts.len() != chunk_extent_count(prev.chunk_len) as usize
+            || frees.len() != free_seg_count(prev.free_len) as usize
+        {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "prior leaf tables disagree with the prior manifest geometry",
+            )));
+        }
+    }
+
     let batch_pages: std::collections::HashSet<u32> =
         batch.slot_pages.iter().map(|(p, _)| *p).collect();
     let batch_exts: std::collections::HashSet<u32> =
@@ -2097,6 +2115,42 @@ mod tests {
             store.commit(&crafted),
             Err(StoreError::MissingRow("chunk extent", tail_ext)),
             "the boundary row must travel when its expected length changes"
+        );
+    }
+
+    #[test]
+    fn commit_refuses_a_desynced_prior_leaf_baseline() {
+        // The wave-3 coupling assertion: the grown-region checks key
+        // off the prior LEAF VECTORS' lengths while the boundary
+        // checks key off the prior MANIFEST's geometry. The backends
+        // keep the two equal by construction; `apply_batch` itself
+        // now refuses a caller whose baselines disagree instead of
+        // letting its two checks require different rows.
+        let mut m = Interp::new();
+        assert!(m.run(&PROG_A).completed);
+        let image1 = m.snapshot_image(&sig());
+        let mut store = MemoryStore::new();
+        store.commit(&image_to_batch(&image1, 1, "")).unwrap();
+        let prev = store.manifest().unwrap();
+
+        let batch = image_to_batch(&image1, 2, &prev.seal);
+        let mut pages = store.leaf_pages.clone();
+        let mut exts = store.leaf_exts.clone();
+        let mut frees = store.leaf_frees.clone();
+        let mut edges = store.edges.clone();
+        pages.pop(); // desync: one leaf short of the manifest's geometry
+        assert_eq!(
+            apply_batch(
+                &mut pages,
+                &mut exts,
+                &mut frees,
+                &mut edges,
+                Some(&prev),
+                &batch
+            ),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "prior leaf tables disagree with the prior manifest geometry"
+            ))),
         );
     }
 

@@ -677,7 +677,11 @@ jobs:
         # needs the bundles generated above — so its integration test
         # runs here rather than in test-ironhorse, which deliberately
         # avoids the XS C toolchain.
-        run: cargo test -p endo --test ironhorse_store_worker
+        # --features pinned explicitly: the test file is gated on
+        # cfg(feature = "ironhorse-engine"), so without the pin a
+        # default-feature flip would turn this step into a 0-test
+        # green pass with no error (wave-3 finding).
+        run: cargo test -p endo --features ironhorse-engine --test ironhorse_store_worker
 
   # The pure-Rust ironhorse crates: the engine's zero-C members
   # (ironhorse-vm, ironhorse-snapshot — including the store seam's

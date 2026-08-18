@@ -255,14 +255,20 @@ pub mod engine {
     ///
     /// The SES boot bundle and the worker envelope protocol remain the
     /// named gaps they were; this type is the heap-persistence half the
-    /// supervisor owns either way. Cranks after the first must
-    /// reference the SAME NAME SET as the linked crank (the compiled
-    /// symbol table is a deterministic function of the crank's name
-    /// set — the store suites' convention), and this is ENFORCED, not
-    /// merely documented: a crank whose compiled table differs from
-    /// the persisted one is refused with
+    /// supervisor owns either way. Cranks after the first must compile
+    /// to the SAME SYMBOL TABLE as the linked crank, and this is
+    /// ENFORCED, not merely documented: a crank whose compiled table
+    /// differs from the persisted one is refused with
     /// [`MachineError::SymbolMismatch`] before it runs, because its
     /// ids would silently bind the wrong globals (review finding).
+    /// Equal tables require the same used-name set AND, for any two
+    /// names that collide in the coder's hash buckets, the same
+    /// first-appearance order — review wave 3 falsified the earlier
+    /// "same name set suffices" claim (the table is bucket-ordered,
+    /// so equal sets suffice only when no two names share a bucket).
+    /// The practical contract: keep later cranks' references
+    /// textually aligned with the linked crank; the side-table
+    /// ledger's per-crank relinking lifts the constraint.
     pub struct PersistentMachine {
         store: std::rc::Rc<std::cell::RefCell<ironhorse_store_sqlite::SqliteHeapStore>>,
         session: Option<ironhorse_snapshot::machine::StoreSession>,
@@ -357,29 +363,43 @@ pub mod engine {
                     MachineError::Store("machine has no session (a rewind failed)".to_string())
                 })?;
                 if !self.linked {
-                    session.machine_mut().link_intrinsics(&names);
-                    self.linked = true;
+                    // An EMPTY table links nothing and constrains
+                    // nothing (there are no ids to misalign), and
+                    // `open` derives `linked` from the persisted name
+                    // count — so leave the machine unlinked on an
+                    // empty first crank, keeping the live machine and
+                    // its reopened twin accepting the same next crank
+                    // (wave-3 finding: they diverged).
+                    if !names.is_empty() {
+                        session.machine_mut().link_intrinsics(&names);
+                        self.linked = true;
+                    }
                 } else {
                     // Refused BEFORE the crank runs unless this
                     // crank's compiled table EQUALS the persisted
                     // one: ids are table positions, so any position
                     // whose name differs would read and mutate the
-                    // wrong global silently. The table is a
-                    // deterministic function of the crank's name set,
-                    // so the authorable contract is "reference the
-                    // same name set" — subsets are refused too,
-                    // because the coder's internal ordering is not a
-                    // documented surface and a subset's table aligns
-                    // only by luck. Nothing ran on refusal, so no
-                    // rewind is needed and the epoch stands.
+                    // wrong global silently. Comparing the actual
+                    // name strings means the check can never
+                    // false-accept; it CAN refuse spuriously, because
+                    // the table is ordered by the coder's hash-bucket
+                    // walk — the same name set yields the same table
+                    // only when no two names share a bucket, and
+                    // colliding names order by first appearance
+                    // (review wave 3 falsified the earlier "same
+                    // name set suffices" claim). Subsets are refused
+                    // too. Nothing ran on refusal, so no rewind is
+                    // needed and the epoch stands.
                     let persisted = session.machine().program_symbol_names();
                     let aligned = persisted == names.as_slice();
                     if !aligned {
                         return Err(MachineError::SymbolMismatch(format!(
                             "this crank's compiled table ({} names) differs from the \
                              machine's persisted table ({} names) — later cranks must \
-                             reference the linked crank's exact name set (the side-table \
-                             ledger workstream lifts this)",
+                             compile to the linked crank's exact symbol table: same \
+                             name set, referenced in the same order when names collide \
+                             in the coder's hash buckets (the side-table ledger \
+                             workstream lifts this)",
                             names.len(),
                             persisted.len(),
                         )));
@@ -400,12 +420,26 @@ pub mod engine {
             match checkpointed {
                 Some(Ok(_epoch)) => Ok(outcome.into()),
                 Some(Err(e)) => {
-                    self.rewind_to_last_checkpoint()?;
+                    // A failed rewind poisons the session (later
+                    // calls refuse), but the caller asked what
+                    // happened to ITS crank — keep the original
+                    // failure visible inside the compound error
+                    // instead of swallowing it (wave-3 finding).
+                    if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
+                        return Err(MachineError::Store(format!(
+                            "rewind failed after a failed checkpoint ({e:?}): {rewind_err}"
+                        )));
+                    }
                     Err(store_err(e))
                 }
                 None => {
                     let halt = outcome.halt;
-                    self.rewind_to_last_checkpoint()?;
+                    if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
+                        return Err(MachineError::Store(format!(
+                            "rewind failed after a crank halt ({}): {rewind_err}",
+                            describe_halt(&halt)
+                        )));
+                    }
                     Err(MachineError::Halt(halt))
                 }
             }
@@ -437,7 +471,11 @@ pub mod engine {
             match checkpointed {
                 Ok(_epoch) => Ok(freed),
                 Err(e) => {
-                    self.rewind_to_last_checkpoint()?;
+                    if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
+                        return Err(MachineError::Store(format!(
+                            "rewind failed after a failed collection checkpoint ({e:?}): {rewind_err}"
+                        )));
+                    }
                     Err(store_err(e))
                 }
             }

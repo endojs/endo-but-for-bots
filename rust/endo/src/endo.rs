@@ -715,15 +715,15 @@ fn handle_resume(
     handle: Handle,
     suspended: supervisor::SuspendedWorker,
     _cas_dir: &std::path::Path,
-    pending_msg: Message,
+    mut pending_msg: Message,
 ) {
     // A store-backed Ironhorse worker cannot take the XS resume path:
     // its durable state is the heap database (`heap_store`), not a
     // CAS blob, and its `sha256` is empty — following the XS path
     // would hand the machine an empty snapshot path. Routed Ironhorse
     // resume needs the worker envelope (a named gap), so fail loudly,
-    // drop the message, and leave the worker suspended intact
-    // (review finding).
+    // answer a waiting sender with a named error, and leave the
+    // worker suspended intact (review finding).
     if suspended.heap_store.is_some() {
         eprintln!(
             "endor: worker {handle} is store-backed ({}); routed resume needs the \
@@ -735,6 +735,20 @@ fn handle_resume(
                 .map(|p| p.display().to_string())
                 .unwrap_or_default()
         );
+        // Every construction site passes `response_tx: None` today,
+        // so this arm is armed for the first sender that awaits a
+        // reply — without it that sender would hang on a silently
+        // dropped oneshot (wave-3 finding).
+        if let Some(tx) = pending_msg.response_tx.take() {
+            let _ = tx.send(Envelope {
+                handle,
+                verb: "error".to_string(),
+                payload: b"store-backed worker: routed resume needs the Ironhorse \
+                           worker envelope (not built yet); the worker stays suspended"
+                    .to_vec(),
+                nonce: pending_msg.envelope.nonce,
+            });
+        }
         drop(pending_msg);
         sup.put_suspended(handle, suspended);
         return;

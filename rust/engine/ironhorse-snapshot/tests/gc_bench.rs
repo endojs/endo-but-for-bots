@@ -54,7 +54,14 @@ fn gc_cost_across_heap_sizes() {
     // Live structure (an array of objects) plus an equal volume of
     // dropped garbage, scaled by the loop count. Three slots per
     // element keeps the live graph side-table-referenced (the
-    // partial collector's hard case).
+    // partial collector's hard case). Read PAGE-level freed counts
+    // with the allocation stride in mind (wave-3 observation): when
+    // an object's slot stride does not divide the 256-slot page,
+    // consecutive allocations straddle page boundaries and chain
+    // page p -> p+1 (plus the prototype edge to page 0), and
+    // page-conservative collection then frees far less than an
+    // aligned stride would — deterministic, and identical across
+    // backends.
     for &n in &[5_000u32, 20_000, 80_000] {
         let build = format!(
             "var arr = []; var g = 0; var i = 0; \
