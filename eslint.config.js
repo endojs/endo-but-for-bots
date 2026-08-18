@@ -136,6 +136,7 @@ export default defineConfig(
       'packages/space-inventory-graph/**',
       'packages/space-peers/**',
       'packages/space-whylip/**',
+      'packages/space-workflow/**',
       'packages/spaces-util/**',
     ],
     languageOptions: {
