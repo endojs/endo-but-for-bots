@@ -1197,18 +1197,28 @@ export const makeWorkflowService = async ({
         });
         // Fire-and-forget compensation: invokes go out; emits are inert
         // against a run that is about to be terminal; settlements of a
-        // terminal run drop as stale.
-        for (const { effect } of compensation) {
+        // terminal run drop as stale. The trailing idempotency key honors
+        // the same run-qualified contract as dispatchInvoke — a shared
+        // endowment deduping on the key must not conflate different runs'
+        // compensations (or two compensations of one cancel) under one
+        // key. `exitEffects` is a pure function of the fold, so the index
+        // is deterministic and a cancel re-issued after a crash re-derives
+        // the same keys.
+        compensation.forEach(({ effect }, index) => {
           if (effect.kind === 'invoke') {
             const targetPath = runPath(runId, ENDOWMENTS, effect.target);
+            const idempotencyKey = `${runId}:cancel:${index}`;
             E(powers)
               .lookup(targetPath)
               .then(target =>
-                E(target)[effect.method](...(effect.args ?? []), 'cancel'),
+                E(target)[effect.method](
+                  ...(effect.args ?? []),
+                  idempotencyKey,
+                ),
               )
               .catch(() => {});
           }
-        }
+        });
         await append({
           kind: 'cancelled',
           by: 'control',
@@ -2111,7 +2121,13 @@ export const makeWorkflowService = async ({
       return chartDiagnostics(resolved);
     },
     start: async (chartOrKey, options = {}) => {
-      const engine = await startRun(chartOrKey, options);
+      // Forward only the public options. `runId` is the internal spawn
+      // path's parameter; a caller-chosen run id could clobber an
+      // existing run's store and mint duplicate `${runId}:${effectId}`
+      // keys for two distinct runs — recreating the cross-run conflation
+      // the run-qualified invoke keys eliminate.
+      const { params, endowments } = options;
+      const engine = await startRun(chartOrKey, { params, endowments });
       return harden({
         runId: engine.runId,
         run: engine.runFacet,

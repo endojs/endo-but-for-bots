@@ -504,6 +504,33 @@ test('cancel runs compensation invokes and cascades to children', async t => {
   t.is(child.fold.outcome, 'cancelled');
   await until(() => calls.length === 1, 'compensation ran');
   t.deepEqual(calls[0].args, ['sweep']);
+  // Compensation invokes honor the run-qualified key contract too: a
+  // shared endowment deduping on the trailing key must never conflate
+  // different runs' cancels (or two compensations of one cancel) under a
+  // constant. The index is deterministic, so a re-issued cancel after a
+  // crash re-derives the same key.
+  t.is(calls[0].effectId, `${runId}:cancel:0`);
+});
+
+test('the service start facet ignores a caller-supplied runId', async t => {
+  // `runId` is the internal spawn path's parameter. A caller-chosen id
+  // could clobber an existing run's store and mint duplicate
+  // `${runId}:${effectId}` keys for two distinct runs.
+  const { service, engines, stop } = await makeHarness();
+  t.teardown(stop);
+  const chart = harden({
+    name: 'plain',
+    version: 1,
+    initial: 'done',
+    states: { done: { final: true } },
+  });
+  const { runId } = await E(service).start(chart, {
+    params: harden({}),
+    runId: 'r-chosen',
+  });
+  t.not(runId, 'r-chosen');
+  t.true(engines.has(runId));
+  t.false(engines.has('r-chosen'));
 });
 
 test('spawned children settle their parents with outputs', async t => {
