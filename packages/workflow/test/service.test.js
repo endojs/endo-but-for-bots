@@ -524,9 +524,8 @@ test('the service start facet ignores a caller-supplied runId', async t => {
     initial: 'done',
     states: { done: { final: true } },
   });
-  // The literal deliberately smuggles the internal `runId` parameter;
-  // the cast keeps the excess-property check from rejecting what the
-  // runtime must be shown to drop.
+  // Deliberately smuggling a property the options type (rightly) rejects:
+  // the point of the test is that the runtime ignores it too.
   const options = /** @type {any} */ (
     harden({ params: harden({}), runId: 'r-chosen' })
   );
@@ -616,9 +615,7 @@ test('follow replays from a seq cursor then tails live entries', async t => {
   const seen = [];
   const reader = await E(run).follow({ since: 1n });
   const consumed = (async () => {
-    for await (const entry of /** @type {AsyncIterable<any>} */ (
-      iterateReader(reader)
-    )) {
+    for await (const entry of iterateReader(reader)) {
       seen.push(`${entry.seq}:${entry.kind}`);
     }
   })();
