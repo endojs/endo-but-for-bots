@@ -71,6 +71,16 @@ const tagSets = new WeakMap();
 const fresh = () => Symbol('endo-fs:tag');
 
 /**
+ * Filesystems whose `readWrite` posture is an aggregate: at least one
+ * participant is writable and at least one is not, so writable authority holds
+ * for the whole view but not for every subtree of it. `chroot` consults this
+ * to avoid handing a narrowed view a posture the narrowed view may not have.
+ *
+ * @type {WeakSet<object>}
+ */
+const aggregateWritableFilesystems = new WeakSet();
+
+/**
  * @param {object} methods
  * @param {object[]} participants
  */
@@ -79,12 +89,19 @@ const makeCombinedFilesystem = (methods, participants) => {
   if (postures.some(posture => posture === undefined)) {
     return makeExo('Filesystem', FilesystemInterface, methods);
   }
-  return makeFilesystem(
-    methods,
-    postures.some(posture => posture === 'readWrite')
-      ? 'readWrite'
-      : 'readOnly',
-  );
+  if (postures.every(posture => posture === 'readOnly')) {
+    return makeFilesystem(methods, 'readOnly');
+  }
+  const fs = makeFilesystem(methods, 'readWrite');
+  if (
+    !postures.every(posture => posture === 'readWrite') ||
+    participants.some(participant =>
+      aggregateWritableFilesystems.has(participant),
+    )
+  ) {
+    aggregateWritableFilesystems.add(fs);
+  }
+  return fs;
 };
 harden(makeCombinedFilesystem);
 
@@ -571,11 +588,20 @@ export const chroot = (fs, subPath) => {
         ? `Filesystem (chrooted to /${subPath.join('/')}).`
         : `No documentation for method "${method}".`,
   };
+  // Narrowing never adds authority, so a read-only view stays read-only. A
+  // writable view only stays writable when its writability is uniform: when
+  // `fs` is a bind or namespace that is writable because *some* participant
+  // is, `subPath` may select a subtree where every mutation rejects, and
+  // copying the aggregate posture would advertise writes the guest lacks.
   const posture = filesystemPostureOf(fs);
+  const narrowed =
+    posture === 'readWrite' && aggregateWritableFilesystems.has(fs)
+      ? undefined
+      : posture;
   const inner =
-    posture === undefined
+    narrowed === undefined
       ? makeExo('Filesystem', FilesystemInterface, methods)
-      : makeFilesystem(methods, posture);
+      : makeFilesystem(methods, narrowed);
   registerTags(inner, new Set([tag, ...tagsOf(fs)]));
   return inner;
 };
@@ -1948,11 +1974,17 @@ export const compose = (layer, backing, _opts = {}) => {
         ? 'Filesystem (compose: layer over backing, CoW union).'
         : `No documentation for method "${method}".`,
   };
+  // Every write lands in `layer`, so the union's posture is the layer's. An
+  // aggregate-writable layer keeps that qualification here too, so a later
+  // `chroot` of this union does not inherit writability it cannot honor.
   const posture = filesystemPostureOf(layer);
   const fs =
     posture === undefined
       ? makeExo('Filesystem', FilesystemInterface, methods)
       : makeFilesystem(methods, posture);
+  if (posture === 'readWrite' && aggregateWritableFilesystems.has(layer)) {
+    aggregateWritableFilesystems.add(fs);
+  }
   registerTags(fs, new Set([tag, ...tagsOf(layer), ...tagsOf(backing)]));
   return fs;
 };

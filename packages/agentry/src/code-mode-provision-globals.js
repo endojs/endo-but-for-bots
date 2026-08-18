@@ -1,13 +1,19 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { CodeModeGlobal } from '@endo/agent-tools/code-mode/evaluate-tool.js' */
+/** @import { CodeModeGlobal, CodeModeGrant, CodeModePower } from '@endo/agent-tools/code-mode/types.js' */
+/** @import { EndoGuest } from '@endo/daemon' */
 /** @import { EndoProvisionPersistence } from './code-mode-provisioning-types.js' */
 
-import { makeWorkspaceGlobal } from '@endo/agent-tools/code-mode-globals/fs.js';
+import { E } from '@endo/eventual-send';
 import { makeGitGlobal } from '@endo/agent-tools/code-mode-globals/git.js';
-import { makeGitRemoteGlobal } from '@endo/agent-tools/code-mode-globals/git-remote.js';
 import { normalizeGlobals } from '@endo/agent-tools/code-mode/declarations.js';
+
+import {
+  makeCodeModeGrantMinter,
+  normalizeCodeModeGrants,
+  provisionedGuestAuthorityOf,
+} from './code-mode-grants.js';
 
 /**
  * Select prompt descriptors from normalized policy. This helper is exported
@@ -21,11 +27,11 @@ export const makeEndoProvisionGlobals = persistence => {
   /** @type {CodeModeGlobal[]} */
   const globals = [];
   for (const name of Object.keys(policy.mounts).sort()) {
-    const mount = policy.mounts[name];
-    if (mount.guestBinding) {
-      globals.push(
-        makeWorkspaceGlobal({ name, readOnly: mount.mode === 'readOnly' }),
-      );
+    if (policy.mounts[name].guestBinding) {
+      // EndoMount is a Directory-shaped capability, not the platform
+      // Filesystem object described by makeWorkspaceGlobal.  Withhold an
+      // interface declaration until a mount-specific recognizer exists.
+      globals.push({ name });
     }
   }
   const gits = policy.gits ?? {};
@@ -40,8 +46,77 @@ export const makeEndoProvisionGlobals = persistence => {
     );
   }
   for (const name of Object.keys(policy.gitRemotes ?? {}).sort()) {
-    globals.push(makeGitRemoteGlobal({ name }));
+    // A remote is foreign to this vat and has no local posture recognizer.
+    globals.push({ name });
   }
   return normalizeGlobals(globals);
 };
 harden(makeEndoProvisionGlobals);
+
+/**
+ * Rebind every guest-facing capability and derive its declaration from the
+ * same normalized policy that minted that capability.  This function is
+ * intentionally asynchronous: a retained session must not manufacture a
+ * prompt descriptor until the live guest has rebound the actual capability.
+ *
+ * @param {EndoGuest} guest
+ * @param {EndoProvisionPersistence} persistence
+ * @returns {Promise<CodeModeGrant[]>}
+ */
+export const makeEndoProvisionGrants = async (guest, persistence) => {
+  await null;
+  const minter = makeCodeModeGrantMinter();
+  const authority = provisionedGuestAuthorityOf(guest);
+  if (authority === undefined) {
+    throw new Error(
+      'code-mode provisioning grants require a guest returned by the trusted provisioning path',
+    );
+  }
+  const { policy } = persistence;
+  const gits = policy.gits ?? {};
+  /** @type {CodeModeGrant[]} */
+  const grants = [];
+  for (const name of Object.keys(policy.mounts).sort()) {
+    if (policy.mounts[name].guestBinding) {
+      const capability = /** @type {CodeModePower} */ (
+        // eslint-disable-next-line no-await-in-loop
+        await E(guest).lookup(name)
+      );
+      grants.push(
+        minter.provisionedFilesystem({
+          name,
+          capability,
+          mode: policy.mounts[name].mode,
+          authority,
+        }),
+      );
+    }
+  }
+  for (const name of Object.keys(gits).sort()) {
+    const grant = gits[name];
+    const capability = /** @type {CodeModePower} */ (
+      // eslint-disable-next-line no-await-in-loop
+      await E(guest).lookup(name)
+    );
+    grants.push(
+      minter.provisionedGit({
+        name,
+        capability,
+        mode: grant.mode,
+        authority,
+      }),
+    );
+  }
+  for (const name of Object.keys(policy.gitRemotes ?? {}).sort()) {
+    const capability = /** @type {CodeModePower} */ (
+      // eslint-disable-next-line no-await-in-loop
+      await E(guest).lookup(name)
+    );
+    // A remote capability has no local interface recognizer in this package.
+    // Keep the compatibility binding truthful by withholding an interface
+    // declaration until a trusted remote minter is available.
+    grants.push(minter.opaque({ name, capability }));
+  }
+  return normalizeCodeModeGrants(grants);
+};
+harden(makeEndoProvisionGrants);

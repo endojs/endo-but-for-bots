@@ -1,4 +1,7 @@
-import type { CodeModeGlobal } from '@endo/agent-tools/code-mode/evaluate-tool.js';
+import type {
+  CodeModeGlobal,
+  CodeModeGrant,
+} from '@endo/agent-tools/code-mode/types.js';
 import type { EndoGuest } from '@endo/daemon';
 import type { NormalizedRemotePolicy, RemotePolicy } from '@endo/exo-git';
 
@@ -130,6 +133,8 @@ export type ReconstructEndoCodeModeOptions = EndoCodeModeConnectionOptions & {
 export type EndoProvisionResult = {
   /** Retained guest used as the live daemon-evaluation powers handle. */
   powers: EndoGuest;
+  /** Live capabilities paired with the exact declarations they advertise. */
+  grants: CodeModeGrant[];
   /** Lexical descriptors selected to match the capabilities actually granted. */
   globals: CodeModeGlobal[];
   persistence: EndoProvisionPersistence;

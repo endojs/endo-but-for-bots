@@ -75,8 +75,10 @@ test('agentry subpaths resolve through package exports', async t => {
     Object.keys(codeModeModule).sort(),
     [
       'makeCodeModeAgent',
+      'makeCodeModeAgentFromLookup',
       'makeCodeModeGitLoopAgent',
       'makeCodeModeSystemPrompt',
+      'resolveCodeModePowers',
     ],
     '@endo/agentry/code-mode export surface',
   );

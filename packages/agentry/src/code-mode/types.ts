@@ -3,6 +3,7 @@ import type { Model } from '@earendil-works/pi-ai';
 
 import type {
   CodeModeGlobal,
+  CodeModeGrant,
   CodeModePower,
   Evaluate,
   LookupPowers,
@@ -17,6 +18,8 @@ import type {
 
 /** The powers selected for a code-mode agent's lexical scope. */
 export interface CodeModePowers {
+  /** Explicit capability-and-declaration grants. */
+  grants?: CodeModeGrant[];
   workspace?: CodeModePower;
   workspacePetName?: string;
   /**
@@ -28,6 +31,7 @@ export interface CodeModePowers {
   git?: CodeModePower;
   gitPetName?: string;
   gitMode?: 'readOnly' | 'readWrite' | 'historyRewrite';
+  /** Legacy names are normalized into name-only grants immediately. */
   namedPowers?: CodeModeGlobal[];
 }
 

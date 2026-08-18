@@ -85,6 +85,7 @@
     "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/marshal": "workspace:^",
+    "@endo/platform": "workspace:^",
     "@endo/where": "workspace:^",
     "ses": "workspace:^"
   },

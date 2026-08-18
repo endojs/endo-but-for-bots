@@ -19,18 +19,29 @@ import { makeGit } from '@endo/exo-git';
 import { makeNativeGitBackend } from '@endo/git';
 import { makeMount, lineageOf } from '@endo/daemon/src/mount.js';
 import { makeFilePowers } from '@endo/daemon/src/manager-node-powers.js';
-import { makeNodeFilesystem } from '@endo/platform/fs/extended';
+import {
+  isFilesystemReadOnly,
+  isFilesystemReadWrite,
+  makeInMemoryFilesystem,
+  makeNodeFilesystem,
+  readOnly,
+} from '@endo/platform/fs/extended';
 
 import { makeEvaluateTool } from '@endo/agent-tools/code-mode/evaluate-tool.js';
 import { makeCompartmentEvaluate } from '@endo/agent-tools/code-mode/compartment.js';
+import { makeWorkspaceGlobal } from '@endo/agent-tools/code-mode-globals/fs.js';
+import { makeGitGlobal } from '@endo/agent-tools/code-mode-globals/git.js';
 import { gitDeclarations } from '@endo/agent-tools/generated/code-mode-globals/git-declarations.js';
 import { fsDeclarations } from '@endo/agent-tools/generated/code-mode-globals/fs-declarations.js';
 import {
   makeCodeModeSystemPrompt,
   makeCodeModeAgent,
+  makeCodeModeAgentFromLookup,
   makeCodeModeGitLoopAgent,
+  resolveCodeModePowers,
 } from '../src/code-mode.js';
 import { defineAgent, makeEnvCredentials } from '../src/define-agent.js';
+import { makeCodeModeGrantMinter } from '../src/code-mode-grants.js';
 
 /** @import { CodeModeGlobal, CodeModePower, Evaluate } from '@endo/agent-tools/code-mode/types.js' */
 /** @import { Model } from '@earendil-works/pi-ai' */
@@ -382,7 +393,7 @@ test('makeCodeModeAgent exposes only evaluate and rejects non-readOnly git in re
   );
 });
 
-test('faux provider drives a scripted evaluate-only code-mode agent', async t => {
+test('faux provider drives a scripted named-capability code-mode agent', async t => {
   const gitCalls = [];
   const git = makeStubGit(gitCalls);
   const executions = [];
@@ -394,9 +405,17 @@ test('faux provider drives a scripted evaluate-only code-mode agent', async t =>
     }),
     fauxAssistantMessage('done'),
   ]);
+  const minter = makeCodeModeGrantMinter();
   const { agent } = makeCodeModeAgent({
     model,
-    powers: { git, gitPetName: 'git', gitMode: 'readOnly' },
+    powers: {
+      grants: [
+        minter.opaque({
+          name: 'git',
+          capability: git,
+        }),
+      ],
+    },
     evaluate: async input => {
       const result = await compartmentEvaluateOver({ git })(input);
       executions.push(result);
@@ -409,6 +428,284 @@ test('faux provider drives a scripted evaluate-only code-mode agent', async t =>
 
   t.deepEqual(gitCalls, ['branches']);
   t.deepEqual(executions, [['main']]);
+});
+
+test('makeCodeModeAgent rejects caller-supplied capability declarations', t => {
+  const capability = Far('Capability', {});
+  t.throws(
+    () =>
+      makeCodeModeAgent({
+        model: fauxModel(t, []),
+        powers: {
+          grants: [
+            /** @type {any} */ ({
+              name: 'capability',
+              capability,
+              declaration: { body: 'WritableEndoGit' },
+            }),
+          ],
+        },
+      }),
+    { message: /trusted code-mode grant minter/ },
+  );
+  t.throws(
+    () =>
+      makeCodeModeAgent({
+        model: fauxModel(t, []),
+        powers: {
+          namedPowers: [
+            /** @type {any} */ ({
+              name: 'capability',
+              capability,
+              declaration: { body: 'WritableEndoGit' },
+            }),
+          ],
+        },
+      }),
+    { message: /cannot supply a capability-and-declaration pair/ },
+  );
+  t.throws(
+    () =>
+      makeCodeModeAgent({
+        model: fauxModel(t, []),
+        endowments: { capability },
+        globals: harden([
+          { name: 'capability', declaration: { body: 'WritableEndoGit' } },
+        ]),
+      }),
+    { message: /cannot pair an unrecognized capability with a declaration/ },
+  );
+});
+
+test('hostile foreign Git and Filesystem objects cannot self-attest posture', t => {
+  let postureCalls = 0;
+  const hostileGit = Far('HostileGit', {
+    readOnly() {
+      postureCalls += 1;
+      return false;
+    },
+    historyRewrite() {
+      postureCalls += 1;
+      return true;
+    },
+  });
+  const hostileFilesystem = Far('HostileFilesystem', {
+    readOnly() {
+      postureCalls += 1;
+      return this;
+    },
+    root() {
+      postureCalls += 1;
+      return this;
+    },
+  });
+  t.throws(
+    () =>
+      makeCodeModeAgent({
+        model: fauxModel(t, []),
+        powers: { git: hostileGit },
+      }),
+    { message: /recognized same-vat Git capability/ },
+  );
+  t.throws(
+    () =>
+      makeCodeModeAgent({
+        model: fauxModel(t, []),
+        powers: { workspace: hostileFilesystem },
+      }),
+    { message: /locally recognized exact reader or writer posture/ },
+  );
+  t.is(postureCalls, 0);
+});
+
+test('filesystem posture forgery subpaths are unreachable and unrecognized objects fail closed', async t => {
+  const postureSubpath = ['@endo/platform/fs/extended', 'posture.js'].join('/');
+  await t.throwsAsync(() => import(postureSubpath), {
+    code: 'ERR_PACKAGE_PATH_NOT_EXPORTED',
+  });
+
+  const hostileFilesystem = Far('HostileFilesystem', {
+    root() {
+      return this;
+    },
+    named() {
+      return this;
+    },
+    statfs() {
+      return harden({});
+    },
+    brands() {
+      return harden([]);
+    },
+    help() {
+      return 'hostile';
+    },
+  });
+  const minter = makeCodeModeGrantMinter();
+  t.throws(
+    () =>
+      minter.filesystem({
+        name: 'hostile',
+        capability: hostileFilesystem,
+        surface: 'filesystem',
+      }),
+    { message: /locally recognized exact reader or writer posture/ },
+  );
+  t.false(isFilesystemReadOnly(hostileFilesystem));
+  t.false(isFilesystemReadWrite(hostileFilesystem));
+});
+
+test('recognized filesystem reader and writer grants retain exact declarations', t => {
+  const writer = makeInMemoryFilesystem();
+  const reader = readOnly(writer);
+  const minter = makeCodeModeGrantMinter();
+
+  t.false(isFilesystemReadOnly(writer));
+  t.true(isFilesystemReadWrite(writer));
+  t.true(isFilesystemReadOnly(reader));
+  t.false(isFilesystemReadWrite(reader));
+
+  const writerGrant = minter.filesystem({
+    name: 'writer',
+    capability: writer,
+    surface: 'filesystem',
+  });
+  const readerGrant = minter.filesystem({
+    name: 'reader',
+    capability: reader,
+    surface: 'filesystem',
+  });
+  t.deepEqual(writerGrant.declaration, fsDeclarations.filesystem);
+  t.deepEqual(readerGrant.declaration, fsDeclarations.filesystem);
+  t.is(
+    writerGrant.description,
+    'Writable @endo/platform/fs/extended Filesystem.',
+  );
+  t.is(
+    readerGrant.description,
+    'Read-only @endo/platform/fs/extended Filesystem; mutating methods reject with EACCES at the capability.',
+  );
+});
+
+test('a reader filesystem grant describes read-only authority in the prompt', t => {
+  const reader = readOnly(makeInMemoryFilesystem());
+  const { grants, globals, systemPrompt } = makeCodeModeAgent({
+    model: fauxModel(t, []),
+    powers: { workspace: reader, workspaceSurface: 'filesystem' },
+  });
+
+  // The global shape: one grant, the exact generated Filesystem declaration,
+  // and a description that states mutation rejects.
+  t.deepEqual(
+    globals.map(global => global.name),
+    ['workspace'],
+  );
+  t.deepEqual(globals[0].declaration, fsDeclarations.filesystem);
+  t.is(
+    globals[0].description,
+    'Read-only @endo/platform/fs/extended Filesystem; mutating methods reject with EACCES at the capability.',
+  );
+  t.is(grants[0].capability, reader);
+
+  // The generated prompt must not advertise a writable filesystem.
+  t.true(systemPrompt.includes('declare const workspace: Filesystem;'));
+  t.true(
+    systemPrompt.includes(
+      'Read-only @endo/platform/fs/extended Filesystem; mutating methods reject with EACCES at the capability.',
+    ),
+  );
+  t.false(
+    systemPrompt.includes('Writable @endo/platform/fs/extended Filesystem.'),
+  );
+});
+
+test('lookup-backed workspace and git powers resolve before posture validation', async t => {
+  const { workspace, git } = await makeRealGit(t);
+  const looked = [];
+  const lookupPowers = Far('Powers', {
+    async lookup(petName) {
+      looked.push(petName);
+      if (petName === 'workspace') return workspace;
+      if (petName === 'git') return git;
+      throw new Error(`no such power ${petName}`);
+    },
+  });
+
+  // The synchronous entry point cannot inspect a promise's posture, so it
+  // refuses rather than minting an unvalidated grant.
+  t.throws(
+    () =>
+      makeCodeModeAgent({
+        model: fauxModel(t, []),
+        lookupPowers,
+        powers: { workspacePetName: 'workspace', gitPetName: 'git' },
+      }),
+    {
+      message:
+        /code-mode workspace capability must be resolved before posture validation/,
+    },
+  );
+
+  const { grants, globals, systemPrompt } = await makeCodeModeAgentFromLookup({
+    model: fauxModel(t, []),
+    lookupPowers,
+    powers: { workspacePetName: 'workspace', gitPetName: 'git' },
+  });
+  t.deepEqual(looked.sort(), ['git', 'workspace']);
+  t.deepEqual(
+    globals.map(global => global.name),
+    ['workspace', 'git'],
+  );
+  t.is(grants[0].capability, workspace);
+  t.is(grants[1].capability, git);
+  t.true(systemPrompt.includes('declare const workspace: DaemonMount;'));
+  t.true(systemPrompt.includes('declare const git: WritableEndoGit;'));
+});
+
+test('resolveCodeModePowers leaves inline capabilities and named powers alone', async t => {
+  const { workspace, git } = await makeRealGit(t);
+  const looked = [];
+  const lookupPowers = Far('Powers', {
+    async lookup(petName) {
+      looked.push(petName);
+      return Far('Cap', {});
+    },
+  });
+  const powers = harden({
+    workspace,
+    git,
+    namedPowers: [{ name: 'helper', petName: 'helper-cap' }],
+  });
+  t.is(await resolveCodeModePowers(powers, lookupPowers), powers);
+  t.deepEqual(looked, []);
+});
+
+test('a lookup-backed capability still requires a lookup powers handle', async t => {
+  await t.throwsAsync(
+    () =>
+      makeCodeModeAgentFromLookup({
+        model: fauxModel(t, []),
+        powers: { gitPetName: 'git' },
+      }),
+    { message: /code-mode git capability requires powers/ },
+  );
+});
+
+test('the git-loop preset preserves a caller-supplied system prompt', async t => {
+  const { workspace, git } = await makeRealGit(t);
+  const systemPrompt = 'You are a bespoke repository agent.';
+  const agent = makeCodeModeGitLoopAgent({
+    model: fauxModel(t, []),
+    workspace,
+    git,
+    systemPrompt,
+  });
+  t.true(agent.state.systemPrompt.startsWith(systemPrompt));
+  t.false(
+    agent.state.systemPrompt.includes(
+      'You are an Endo-hosted Pi coding agent.',
+    ),
+  );
 });
 
 test('git-loop preset edits the workspace, commits, and reads HEAD~1 over a real mount', async t => {
@@ -472,14 +769,8 @@ test('git-loop preset edits the workspace, commits, and reads HEAD~1 over a real
     git,
     evaluate,
     globals: harden([
-      {
-        name: 'workspace',
-        description: 'Writable repository Filesystem.',
-      },
-      {
-        name: 'git',
-        description: 'Read/write repository Git capability.',
-      },
+      makeWorkspaceGlobal({ name: 'workspace' }),
+      makeGitGlobal({ name: 'git' }),
       {
         name: 'readFileText',
         description: 'Read a UTF-8 file through an endo-fs File capability.',
@@ -489,6 +780,7 @@ test('git-loop preset edits the workspace, commits, and reads HEAD~1 over a real
         description: 'Write UTF-8 text through an endo-fs File capability.',
       },
     ]),
+    endowments: { readFileText, writeFileText },
   });
 
   await agent.prompt('Edit note.txt, commit the change, and inspect HEAD~1.');

@@ -33,6 +33,9 @@
       "path": "../marshal/tsconfig.composite.json"
     },
     {
+      "path": "../platform/tsconfig.composite.json"
+    },
+    {
       "path": "../where/tsconfig.composite.json"
     }
   ]

@@ -12,6 +12,7 @@ import {
   equalEndoProvisionPersistence,
   validateEndoProvisionPersistence,
 } from './code-mode-provision-policy.js';
+import { registerProvisionedGuest } from './code-mode-grants.js';
 
 /** @typedef {{ audience(): Promise<string> }} GitCredential */
 /** @typedef {{ inspect(): Promise<{ available: boolean, revoked?: boolean }> }} GitCredentialController */
@@ -332,6 +333,7 @@ const realizeProvisionResources = async (host, persistence, credentials) => {
     await E(guest).storeIdentifier(guestName, id);
   }
 
+  registerProvisionedGuest(guest);
   return guest;
 };
 

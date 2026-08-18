@@ -392,7 +392,7 @@ test('makeCodeModeAgent resolves named powers through a live lookup handle', t =
   });
   t.is(model, fauxModel);
   t.is(typeof evaluate, 'function');
-  t.true(systemPrompt.includes('declare const helper;'));
+  t.true(systemPrompt.includes('declare const helper: unknown;'));
   t.deepEqual(
     globals.map(global => global.name),
     ['helper'],
@@ -404,13 +404,15 @@ test('makeCodeModeAgent resolves named powers through a live lookup handle', t =
 });
 
 test('makeCodeModeAgent honors an explicit globals list and preamble override', t => {
+  const thing = Far('Thing', {});
   const { systemPrompt, globals } = makeCodeModeAgent({
     model: fauxModel,
+    endowments: { thing },
     globals: harden([{ name: 'thing', description: 'a thing' }]),
     preamble: 'CUSTOM PREAMBLE.',
   });
   t.true(systemPrompt.startsWith('CUSTOM PREAMBLE.'));
-  t.true(systemPrompt.includes('declare const thing;'));
+  t.true(systemPrompt.includes('declare const thing: unknown;'));
   t.deepEqual(
     globals.map(global => global.name),
     ['thing'],
@@ -441,13 +443,17 @@ test('makeCodeModeAgent conditions resultName on storeValue authority', t => {
 });
 
 test('makeCodeModeAgent uses a supplied evaluate and lexical endowments end to end', async t => {
+  const tally = Far('Tally', { value: () => 10 });
   const { evaluate } = makeCodeModeAgent({
     model: fauxModel,
-    endowments: { tally: 10 },
+    endowments: { tally },
     powers: { namedPowers: [] },
   });
   // The default compartment evaluate runs the source against the endowments.
-  const result = await evaluate({ source: 'tally * 2', globals: [] });
+  const result = await evaluate({
+    source: '(async () => (await E(tally).value()) * 2)()',
+    globals: [],
+  });
   t.is(result, 20);
   // E is always endowed.
   t.is(typeof E, 'function');
