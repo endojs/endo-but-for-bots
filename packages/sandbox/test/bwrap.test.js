@@ -937,9 +937,8 @@ test.serial('bwrap serializes spawn and dispose in both orderings', async t => {
     harden({ captureStdout: false, captureStderr: false }),
   );
   const disposed = E(spawnFirst).dispose();
-  // Disposal cancels a still-pending admission, so the spawn either
-  // rejects as disposed or yields a handle whose wait() reports the
-  // disposal; either way the process group must be gone afterwards.
+  // If disposal wins before spawn settles, spawn rejects; otherwise wait()
+  // reports disposal. Either arm must leave the process group gone.
   /** @type {Awaited<typeof spawned> | undefined} */
   let proc;
   /** @type {Error | undefined} */
@@ -1063,10 +1062,8 @@ test.serial(
         nodeFs.rmSync(dir, { recursive: true, force: true });
     });
 
-    // A 25 ms timeout can fire while the driver admission is still in
-    // flight, in which case the cancelled admission rejects the spawn
-    // itself; when the process wins the race, wait() reports the
-    // timeout and the group check applies.
+    // Timeout may win before spawn settles (spawn rejects) or afterwards
+    // (wait() reports timeout); either arm must leave the process group gone.
     /** @type {Error | undefined} */
     let admissionError;
     const timed = await E(handle)

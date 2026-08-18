@@ -312,6 +312,13 @@ export type SandboxFactory = FarRef<{
  */
 export type SandboxHandle = FarRef<{
   help(methodName?: string): string;
+  /**
+   * Spawn a process in the slice.
+   * `spawn()` rejects for any timeout, disposal, or owner cancellation
+   * initiated before it settles, including after driver admission resolves.
+   * A resolved handle means the process was admitted and still owned by the
+   * caller at settlement; failures initiated later surface through `wait()`.
+   */
   spawn(argv: readonly string[], opts?: SpawnOpts): Promise<ProcessHandle>;
   mount(
     cap: MountCap,
