@@ -28,7 +28,8 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
     // the epoch advances before the outcome is visible.
     let outcome = machine
         .eval(
-            "var n = 0; var junk = 0; var i = 0; \
+            "var n = 0; var junk = 0; var i = 0; var probe = 0; \
+             probe = { v: 0, w: 0 }; \
              for (i = 0; i < 100; i = i + 1) { n = n + 1; } \
              for (i = 0; i < 500; i = i + 1) { junk = { v: i, w: i }; } \
              junk = 0; n",
@@ -39,10 +40,12 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
     assert_eq!(machine.epoch().expect("epoch"), 2);
 
     // Crank 2 continues the SAME heap (globals persist; later cranks
-    // reference the same name set — the compiled symbol table is a
-    // deterministic function of the crank's name set).
+    // must reference the EXACT same name set — the compiled symbol
+    // table is a deterministic function of the crank's name set, and
+    // eval refuses a divergent table; the live `probe` object lets a
+    // crank reference the property names v/w without allocating).
     let outcome = machine
-        .eval("var n; var junk; var i; n = n + 1")
+        .eval("var n; var junk; var i; var probe; i = probe.v + probe.w; n = n + 1")
         .expect("crank 2");
     assert_eq!(outcome.result, "101");
     assert_eq!(machine.epoch().expect("epoch"), 3);
@@ -51,16 +54,32 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
     // The throw arrives AFTER a mutation; neither the mutation nor the
     // crank survives — the machine rewinds to epoch 3's state and the
     // epoch does not advance.
-    match machine.eval("var n; var junk; var i; n = n + 1000; throw n;") {
+    match machine.eval("var n; var junk; var i; var probe; i = probe.v + probe.w; n = n + 1000; throw n;") {
         Err(MachineError::Halt(_)) => {}
         other => panic!("expected a halt, got {other:?}"),
     }
     assert_eq!(machine.epoch().expect("epoch"), 3, "no checkpoint for a crashed crank");
     let outcome = machine
-        .eval("var n; var junk; var i; n")
+        .eval("var n; var junk; var i; var probe; i = probe.v + probe.w; n")
         .expect("crank after rewind");
     assert_eq!(outcome.result, "101", "the partial crank's effects are gone");
     assert_eq!(machine.epoch().expect("epoch"), 4);
+
+    // --- The symbol-set precondition is ENFORCED. --------------------
+    // A crank whose compiled table differs from the persisted one is
+    // refused BEFORE it runs (its ids would bind the wrong globals
+    // silently); nothing ran, so the epoch stands and the machine
+    // stays usable.
+    match machine.eval("var zzz = 1; zzz") {
+        Err(MachineError::SymbolMismatch(_)) => {}
+        other => panic!("expected a symbol-table refusal, got {other:?}"),
+    }
+    assert_eq!(machine.epoch().expect("epoch"), 4, "a refused crank commits nothing");
+    let outcome = machine
+        .eval("var n; var junk; var i; var probe; i = probe.v + probe.w; n")
+        .expect("aligned crank after the refusal");
+    assert_eq!(outcome.result, "101", "the machine stayed usable");
+    assert_eq!(machine.epoch().expect("epoch"), 5);
 
     // --- Partial collection at the boundary. ------------------------
     // The dropped `junk` chain is page-isolated garbage; the
@@ -71,7 +90,7 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
     // epoch advances.
     let freed = machine.collect().expect("partial collect");
     assert!(freed > 0, "the dropped chain is reclaimable: {freed}");
-    assert_eq!(machine.epoch().expect("epoch"), 5, "the collection checkpointed");
+    assert_eq!(machine.epoch().expect("epoch"), 6, "the collection checkpointed");
 
     // --- Suspend through the supervisor. ----------------------------
     // The database is the durable state: the suspend record carries
@@ -96,12 +115,12 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
         signature: options.signature.clone(),
     })
     .expect("resume open");
-    assert_eq!(machine.epoch().expect("epoch"), 5, "the epoch chain continues");
+    assert_eq!(machine.epoch().expect("epoch"), 6, "the epoch chain continues");
     let outcome = machine
-        .eval("var n; var junk; var i; n = n + 1")
+        .eval("var n; var junk; var i; var probe; i = probe.v + probe.w; n = n + 1")
         .expect("crank after resume");
     assert_eq!(outcome.result, "102", "guest state survived suspend/resume");
-    assert_eq!(machine.epoch().expect("epoch"), 6);
+    assert_eq!(machine.epoch().expect("epoch"), 7);
     // The pre-suspend collection was durable: collecting again finds
     // nothing left of the junk chain (before the fix, close discarded
     // the reclamation and this second collect re-freed it).

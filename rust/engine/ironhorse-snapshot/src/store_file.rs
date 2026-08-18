@@ -479,6 +479,7 @@ impl HeapStore for FileStore {
             &mut leaf_exts,
             &mut leaf_frees,
             &mut edges,
+            durable.as_ref().map(|(l, _)| &l.manifest),
             batch,
         )?;
         let n_free_segs = crate::store::free_seg_count(batch.manifest.free_len) as usize;
