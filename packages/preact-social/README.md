@@ -98,6 +98,36 @@ A stable, **public** glyph+colour keyed by the party object — it distinguishes
 parties, it does **not** authenticate. Do not confuse it with the secret
 pattern above.
 
+## `@endo/preact-social/composition`
+
+Render several parties' content inline in one document, each region attributed
+to its source, with no party able to read another's input or output.
+
+```js
+import { composeRegions } from '@endo/preact-social/composition';
+import { makePatternBadge } from '@endo/preact-social/pattern-badge';
+
+const FrameBadge = makePatternBadge(secret, { label: 'Thread' }); // minted once
+const tree = composeRegions(
+  [
+    { party: alice, Component: AliceWidget, props: { … } },
+    { party: bram, Component: BramWidget, props: { … } },
+  ],
+  { nameOf: party => book.get(party), FrameBadge, label: 'Thread' },
+);
+renderConfined(tree, container);
+```
+
+The composition is trusted host chrome: the **frame** draws each attribution
+mark itself (from `partyMark` and your `nameOf`), so a party is never handed
+the means to claim another's name. **Sibling opacity** — one party cannot read
+another's props or output — is inherited from `confineComponent`, not added
+here. Each region's `Component` must be a confined component; a raw function is
+visibly **refused**, never rendered with host authority under a party's mark. A
+region with no `party` renders as *unattributed*, never inheriting a
+neighbour's mark. The optional `FrameBadge` (a pattern badge minted once)
+authenticates the composition itself.
+
 ## `@endo/preact-social/modifiers`
 
 Composable input disciplines you layer over the function you confine (see
@@ -117,8 +147,9 @@ const Badge = confineComponent(withLimitedCss(withPrimitiveParams(render)));
 - It does not make a guest-drawn imitation *impossible* — it makes the real
   article *recognizable* (the pattern) and *unreadable/unforgeable* (the seal).
 - It does not defend a user who never learns their pattern.
-- Multi-party inline composition (several parties' content woven together with
-  frame-placed attribution) is a planned follow-up, not in this release.
+- It does not stop a party drawing a lookalike mark *inside its own region*; it
+  stops that forgery being placed as the frame's attribution for another party
+  (which the frame alone controls) and from being read across regions.
 
 See `@endo/preact-container`'s `SECURITY-PROPERTIES` for the boundary's full
 threat model and preconditions.
