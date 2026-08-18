@@ -3,15 +3,19 @@
 | | |
 |---|---|
 | **Created** | 2026-08-17 |
-| **Updated** | 2026-08-17 |
+| **Updated** | 2026-08-18 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 
 ## Status
 
 Phases 1–4 are implemented as `packages/workflow` (`@endo/workflow`),
-with Phase 5's status feeds and a fake-daemon realization of Phase 6's
-acceptance flow; 39 tests pass and package lint is clean.
+with Phase 5's status feeds, the `@endo/space-workflow` Chat space, and
+a fake-daemon realization of Phase 6's acceptance flow; 62 tests pass
+and package lint is clean.
+A cross-review against the parallel implementation on
+`claude/endo-workflow-system-5u7764` folded that branch's best ideas
+into this one (hardening round below).
 
 - **Phase 1 (kernel)** — `src/machine.js` (`assertChart`, `initialStep`,
   `transition`, `exitEffects`, `activePaths`), `src/template.js` (total
@@ -32,10 +36,13 @@ acceptance flow; 39 tests pass and package lint is clean.
 - **Phase 4 (composition)** — compound states, parallel regions with
   `counts`/`outcomes` join envelopes, `$eachParam` expansion, `spawn` /
   child settlement with cancel cascade, and endowment subsetting by name.
-- **Phase 5 (partial)** — `status()`, seq-cursored `follow({ since })`,
-  `journal({ from, to })`, `list()`, and `followRuns()` ship as far
-  readers over `@endo/exo-stream`; the `space-workflow` UI and CLI verbs
-  remain unbuilt.
+- **Phase 5** — `status()` / `explain()`, seq-cursored
+  `follow({ since })`, `journal({ from, to })`, `list()`, and
+  `followRuns()` ship as far readers over `@endo/exo-stream`;
+  `packages/space-workflow` renders runs in Chat (runs rail, SVG
+  statechart with active-path and pending overlays, journal timeline,
+  time-travel scrubber over the client fold), wired through
+  `packages/chat` as a space mode. CLI verbs remain unbuilt.
 - **Phase 6 (acceptance, fake substrate)** —
   `test/feature-change.test.js` drives the motivating chart end to end
   over an in-memory fake of the daemon's agent surface
@@ -73,6 +80,48 @@ Deviations from the design as first written, adopted during the build:
 6. Nested compound states raise a `state-done` internal event when their
    child reaches a final state — a small addition the design did not
    enumerate.
+
+Hardening round (2026-08-18), after the cross-review of the two parallel
+implementations — each item either fixes a weakness the comparison
+surfaced here or adopts (and, where the pet store allows, strengthens)
+an idea from the other branch:
+
+1. **Capability redaction with durable refs.** Journal entries are now
+   capability-free data: remotables in params and settled values redact
+   to `ref-<n>` alias strings whose capabilities park durably under
+   `runs/<runId>/refs/`. Observers read a legible audit log without
+   acquiring authority; the control facet's journaled `resolveRef`
+   recovers the capability. (The other branch aliased in memory only;
+   the pet store makes the mapping — and GC retention — durable.)
+2. **Journal hash chain.** Every entry carries `prev`, the SHA-256 of
+   the previous entry's canonical encoding (`canonicalStringify`, which
+   refuses remotables — so hashing also enforces redaction). Recovery
+   verifies the chain and surfaces breaks as `integrity`; sync clients
+   re-verify end-to-end.
+3. **Fail-loud settlements.** An ask/invoke/spawn settlement that fires
+   no transition fails the run instead of wedging it silently, kernel
+   throws fail the run, and exit-effect (compensation) settlements are
+   exempt by an `exit` mark on their records. `install` gates on
+   `chartDiagnostics` errors (statically unhandled outcomes);
+   unreachable states and deaf timers warn.
+4. **Facet split corrected.** `port()` moved off the shareable run facet
+   onto control; the run facet is observation-only and gains
+   `explain()`. Pending records carry `since`.
+5. **Delimited interpolation.** Ask/form text renders substituted values
+   as quoted data (`interpolateDelimited`), so participant-supplied
+   strings cannot masquerade as workflow instruction to a human or LLM
+   recipient.
+6. **Durable factories.** `makeFactory` binds a chart + data params +
+   endowments as a revocable grant; `start` fills open slots and returns
+   the observer facet only; `with()` derives narrower factories;
+   `revoke()` cascades over durable parent links and cancels live runs;
+   all of it survives restarts (records in the pet store, run
+   attribution via the `started` entry's `factory` field).
+7. **Authoring and observation tools.** `chartDiagnostics`,
+   `makeSimulator` (kernel + fold, effects settled by hand, engine
+   policies intact), `renderGraph` / `renderMermaid` /
+   `externalEventTypes`, and `makeRunSyncClient` (client-side fold
+   mirror with `stateAt` time travel and chain verification).
 
 ## What is the Problem Being Solved?
 
