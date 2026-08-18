@@ -254,14 +254,14 @@ test('the feature-change loop survives review rounds and a mid-CI restart', asyn
 
   // Round 0: the implementer is asked and submits a head ref.
   await until(
-    () => marker('Implement adder (round 0)') !== undefined,
+    () => marker('Implement "adder" (round 0)') !== undefined,
     'implementer asked',
   );
-  await controls.resolveRequest(marker('Implement adder (round 0)'), 'sha-1');
+  await controls.resolveRequest(marker('Implement "adder" (round 0)'), 'sha-1');
 
   // Both reviewers are asked about sha-1, in parallel.
   await until(
-    () => controls.messageCount('request', 'Review adder at sha-1') === 2,
+    () => controls.messageCount('request', 'Review "adder" at "sha-1"') === 2,
     'reviewers asked',
   );
   // One reviewer requests changes — decisive on its own — and the other
@@ -269,11 +269,11 @@ test('the feature-change loop survives review rounds and a mid-CI restart', asyn
   // duplicate resolution of the already-settled request is a no-op, as
   // in the daemon.)
   await controls.resolveRequest(
-    marker('Review adder at sha-1'),
+    marker('Review "adder" at "sha-1"'),
     harden({ approve: false, feedback: 'needs tests' }),
   );
   for (const message of (await E(powers).listMessages()).filter(m =>
-    m.description?.includes('Review adder at sha-1'),
+    m.description?.includes('Review "adder" at "sha-1"'),
   )) {
     // eslint-disable-next-line no-await-in-loop
     await controls.resolveRequest(
@@ -282,21 +282,21 @@ test('the feature-change loop survives review rounds and a mid-CI restart', asyn
     );
   }
   await until(
-    () => marker('Implement adder (round 1)') !== undefined,
+    () => marker('Implement "adder" (round 1)') !== undefined,
     'round-1 implementer ask',
   );
-  const round1 = marker('Implement adder (round 1)');
+  const round1 = marker('Implement "adder" (round 1)');
   t.true(round1.description.includes('needs tests'));
   t.is(engine1.fold.context.round, 1);
 
   // Round 1: submit sha-2; both reviewers approve; CI starts and hangs.
   await controls.resolveRequest(round1, 'sha-2');
   await until(
-    () => controls.messageCount('request', 'Review adder at sha-2') === 2,
+    () => controls.messageCount('request', 'Review "adder" at "sha-2"') === 2,
     'round-1 reviewers asked',
   );
   for (const message of (await E(powers).listMessages()).filter(m =>
-    m.description?.includes('Review adder at sha-2'),
+    m.description?.includes('Review "adder" at "sha-2"'),
   )) {
     // eslint-disable-next-line no-await-in-loop
     await controls.resolveRequest(
@@ -325,11 +325,11 @@ test('the feature-change loop survives review rounds and a mid-CI restart', asyn
 
   // Green CI prompts the operator; approval lands the merge.
   await until(
-    () => controls.findMessage('form', 'Merge adder (sha-2)') !== undefined,
+    () => controls.findMessage('form', 'Merge "adder" ("sha-2")') !== undefined,
     'operator prompted',
   );
   await controls.submitForm(
-    controls.findMessage('form', 'Merge adder (sha-2)'),
+    controls.findMessage('form', 'Merge "adder" ("sha-2")'),
     { approved: true },
   );
   await until(() => engine.fold.done, 'run completion');
@@ -341,9 +341,9 @@ test('the feature-change loop survives review rounds and a mid-CI restart', asyn
 
   // Ask economy: two implementer rounds, two reviews per reviewer round,
   // one operator form. Nothing was double-sent across the restart.
-  t.is(controls.messageCount('request', 'Implement adder'), 2);
-  t.is(controls.messageCount('request', 'Review adder'), 4);
-  t.is(controls.messageCount('form', 'Merge adder'), 1);
+  t.is(controls.messageCount('request', 'Implement "adder"'), 2);
+  t.is(controls.messageCount('request', 'Review "adder"'), 4);
+  t.is(controls.messageCount('form', 'Merge "adder"'), 1);
 
   // The journal is the attributed audit log: asks, invokes, and the
   // operator's decision are all traceable to structural senders.

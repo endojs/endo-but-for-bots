@@ -38,11 +38,13 @@
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { Fail, q } from '@endo/errors';
+import { makeTagged, passStyleOf, getTag } from '@endo/pass-style';
 import { mustMatch } from '@endo/patterns';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 import {
   assertChart,
+  chartDiagnostics,
   initialStep,
   transition,
   exitEffects,
@@ -52,6 +54,10 @@ import {
   initialFoldState,
   foldJournal,
   effectRecordsFor,
+  canonicalStringify,
+  hashEntry,
+  verifyJournalChain,
+  GENESIS_HASH,
 } from './journal.js';
 import { makeSerialJobs } from './serial-jobs.js';
 import { makeChangeTopic } from './topic.js';
@@ -60,6 +66,7 @@ import {
   WorkflowRunInterface,
   WorkflowControlInterface,
   WorkflowPortInterface,
+  WorkflowFactoryInterface,
 } from './interfaces.js';
 
 const { entries, keys, fromEntries } = Object;
@@ -68,9 +75,13 @@ const { isArray } = Array;
 const ROOT = 'workflow';
 const CHARTS = 'charts';
 const RUNS = 'runs';
+const FACTORIES = 'factories';
 const ENDOWMENTS = 'endowments';
 const ANSWERS = 'answers';
+const REFS = 'refs';
 const CHART_NAME = 'chart';
+const FACTORY_RECORD = 'record';
+const FACTORY_PARAMS = 'params';
 
 /** Cap on engine-generated event cascades per external trigger. */
 const MAX_CASCADE_DEPTH = 64;
@@ -82,6 +93,7 @@ const SNAPSHOT_EVERY = 64;
 
 const DECIMAL_NAME = /^(0|[1-9][0-9]*)$/;
 const CHART_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,99}$/;
+const REF_ALIAS = /^ref-(0|[1-9][0-9]*)$/;
 
 /**
  * @param {number} [length]
@@ -285,6 +297,109 @@ export const makeWorkflowService = async ({
 
   // #endregion
 
+  // #region redaction
+
+  /**
+   * Make a per-run redactor: deep-replace remotables with `ref-<n>`
+   * alias strings, durably storing each capability at the run's
+   * `refs/ref-<n>` pet name — so journal entries are capability-free
+   * data (enforced by the hash chain's `canonicalStringify`), the
+   * audit log stays legible to any observer, and the capability itself
+   * remains recoverable by the control holder via `resolveRef` (a
+   * journaled `admin` action). Promises redact to the marker string
+   * `'<promise>'` and are not stored — an unresolved promise inside a
+   * settlement is not durable evidence of anything.
+   *
+   * Tagged values (patterns, copySets) are walked and rebuilt only when
+   * their payload contained a capability.
+   *
+   * @param {object} options
+   * @param {string} options.runId
+   * @param {number} options.initialNextRef
+   */
+  const makeRedactor = ({ runId, initialNextRef }) => {
+    let nextRef = initialNextRef;
+    const redact = async value => {
+      await null;
+      // Defensive: values arrive from arbitrary callers; freeze before
+      // the passStyleOf walk.
+      harden(value);
+      /** @type {{ alias: string, cap: any }[]} */
+      const captured = [];
+      /** @type {(v: any) => any} */
+      const walk = v => {
+        if (v === null || typeof v !== 'object') {
+          if (typeof v === 'function') {
+            // A far function is a remotable.
+            const alias = `ref-${nextRef}`;
+            nextRef += 1;
+            captured.push({ alias, cap: v });
+            return alias;
+          }
+          return v;
+        }
+        const style = passStyleOf(v);
+        if (style === 'remotable') {
+          const alias = `ref-${nextRef}`;
+          nextRef += 1;
+          captured.push({ alias, cap: v });
+          return alias;
+        }
+        if (style === 'promise') {
+          return '<promise>';
+        }
+        if (style === 'copyArray') {
+          const mapped = v.map(walk);
+          return mapped.some((member, i) => member !== v[i])
+            ? harden(mapped)
+            : v;
+        }
+        if (style === 'copyRecord') {
+          let changed = false;
+          const mapped = fromEntries(
+            entries(v).map(([name, member]) => {
+              const next = walk(member);
+              if (next !== member) {
+                changed = true;
+              }
+              return [name, next];
+            }),
+          );
+          return changed ? harden(mapped) : v;
+        }
+        if (style === 'tagged') {
+          const payload = walk(v.payload);
+          return payload !== v.payload ? makeTagged(getTag(v), payload) : v;
+        }
+        return v;
+      };
+      const redacted = walk(value);
+      for (const { alias, cap } of captured) {
+        // eslint-disable-next-line no-await-in-loop
+        await E(powers).storeValue(cap, runPath(runId, REFS, alias));
+      }
+      return harden(redacted);
+    };
+    return redact;
+  };
+
+  /**
+   * Assert a value is capability-free data (throws on remotables and
+   * promises), by way of the canonical journal encoding.
+   *
+   * @param {any} value
+   * @param {string} label
+   */
+  const assertDataOnly = (value, label) => {
+    try {
+      canonicalStringify(value);
+    } catch {
+      throw Fail`${q(label)} must be capability-free data`;
+    }
+  };
+
+  // #endregion
+
   // #region run engine
 
   /**
@@ -292,20 +407,37 @@ export const makeWorkflowService = async ({
    * @param {string} options.runId
    * @param {any} options.chart
    * @param {import('./journal.js').FoldState} options.fold
+   * @param {number} [options.initialNextRef] - next `ref-<n>` alias
+   *   ordinal (recovered from the run's `refs/` directory)
+   * @param {string} [options.tailHash] - hash of the last stored journal
+   *   entry (`GENESIS_HASH` for a fresh run)
+   * @param {{ ok: boolean, badSeq?: bigint } | undefined} [options.integrity] -
+   *   set when recovery found the journal hash chain broken
    */
-  const makeRunEngine = ({ runId, chart, fold }) => {
+  const makeRunEngine = ({
+    runId,
+    chart,
+    fold,
+    initialNextRef = 0,
+    tailHash = GENESIS_HASH,
+    integrity = undefined,
+  }) => {
     const jobs = makeSerialJobs();
     const topic = makeChangeTopic();
     /** @type {Map<string, any>} */
     const timers = new Map();
     /** @type {Set<string>} */
     const attachedAsks = new Set();
+    /** @type {string} */
+    let tail = tailHash;
 
     /** @type {any} */
     const engine = {};
     engine.runId = runId;
     engine.chart = chart;
     engine.fold = fold;
+    const redact = makeRedactor({ runId, initialNextRef });
+    engine.redact = redact;
 
     const summary = () =>
       harden({
@@ -321,6 +453,8 @@ export const makeWorkflowService = async ({
         done: fold.done,
         outcome: fold.outcome,
         updatedAt: fold.updatedAt,
+        ...(fold.factory !== undefined ? { factory: fold.factory } : {}),
+        ...(integrity !== undefined ? { integrity } : {}),
       });
     engine.summary = summary;
 
@@ -346,11 +480,20 @@ export const makeWorkflowService = async ({
       }
     };
 
-    // Append one journal entry: store first, then fold, then publish.
+    // Append one journal entry: hash (which also enforces that the entry
+    // is capability-free), store, fold, then publish. `prev` chains each
+    // entry to the hash of the one before it.
     const append = async fields => {
-      const entry = harden({ seq: fold.nextSeq, at: isoNow(), ...fields });
+      const entry = harden({
+        seq: fold.nextSeq,
+        at: isoNow(),
+        prev: tail,
+        ...fields,
+      });
+      const hash = hashEntry(entry);
       await E(powers).storeValue(entry, runPath(runId, String(entry.seq)));
       applyEntry(fold, entry);
+      tail = hash;
       topic.publisher.next(entry);
       runsTopic.publisher.next(summary());
       return entry;
@@ -411,6 +554,15 @@ export const makeWorkflowService = async ({
      * atomic entry, then perform its effects and schedule its internal
      * events. Runs inside the run's serial queue.
      *
+     * Fail-loud policy: a kernel throw fails the run, and so does a
+     * settlement envelope (an ask answer, invoke result, or child-run
+     * outcome) that fires no transition — a lost answer is a wedged run,
+     * and a failed run is visible where a wedge is silent. Compensation
+     * (exit-effect) settlements are exempt: their owner state is dead by
+     * design. Timer emissions and external signals may fall through
+     * guards without firing; the journaled no-fire event is their audit
+     * trail.
+     *
      * @param {any} envelope
      * @param {number} depth
      * @param {bigint} [replays]
@@ -422,7 +574,24 @@ export const makeWorkflowService = async ({
         context: fold.context,
         params: fold.params,
       };
-      const result = transition(chart, machineState, envelope);
+      let result;
+      try {
+        result = transition(chart, machineState, envelope);
+      } catch (error) {
+        await append({
+          kind: 'event',
+          by: envelope.by,
+          event: envelope,
+          ...(replays !== undefined ? { replays } : {}),
+        });
+        await append({
+          kind: 'failed',
+          by: 'engine',
+          reason: `kernel step threw: ${/** @type {Error} */ (error).message}`,
+        });
+        settleTerminal('failed');
+        return;
+      }
       if (!result.fired) {
         await append({
           kind: 'event',
@@ -430,6 +599,20 @@ export const makeWorkflowService = async ({
           event: envelope,
           ...(replays !== undefined ? { replays } : {}),
         });
+        const { by } = envelope;
+        const settlement =
+          envelope.effectId !== undefined &&
+          envelope.compensation !== true &&
+          typeof by === 'string' &&
+          (by.startsWith('ask:') || by.startsWith('invoke:') || by === 'spawn');
+        if (settlement) {
+          await append({
+            kind: 'failed',
+            by: 'engine',
+            reason: `unhandled '${envelope.type}' settlement of effect ${envelope.effectId} at ${isArray(envelope.path) ? envelope.path.join('.') : '?'}`,
+          });
+          settleTerminal('failed');
+        }
         return;
       }
       const effects = effectRecordsFor(fold.nextSeq, result.effects);
@@ -508,19 +691,24 @@ export const makeWorkflowService = async ({
     engine.inject = (envelope, depth = 0) =>
       jobs.enqueue(() => processEnvelope(envelope, depth));
 
-    // Settle a pending effect; stale and duplicate settlements drop.
+    // Settle a pending effect; stale and duplicate settlements drop. The
+    // settled value is redacted before it touches the journal: any
+    // remotable becomes a durable `ref-<n>` alias.
     const settleEffect = (effectId, status, value) =>
       jobs.enqueue(async () => {
         if (stopped || fold.done || !fold.pending.has(effectId)) {
           return;
         }
         const record = fold.pending.get(effectId);
+        const redacted = await redact(value);
         await append({
           kind: 'effect-settled',
           by: 'engine',
           effectId,
           status,
-          ...(status === 'fulfilled' ? { value } : { reason: value }),
+          ...(status === 'fulfilled'
+            ? { value: redacted }
+            : { reason: redacted }),
         });
         clearTimer(effectId);
         clearStaleSideEffects();
@@ -539,11 +727,13 @@ export const makeWorkflowService = async ({
                 : 'engine';
         const envelope = harden({
           type,
-          value: status === 'fulfilled' ? value : harden({ reason: value }),
+          value:
+            status === 'fulfilled' ? redacted : harden({ reason: redacted }),
           by,
           at: isoNow(),
           path: record.path,
           effectId,
+          ...(record.exit === true ? { compensation: true } : {}),
         });
         if (fold.paused) {
           await append({ kind: 'event', by, event: envelope });
@@ -849,7 +1039,7 @@ export const makeWorkflowService = async ({
 
     // #endregion
 
-    engine.start = (params, endowmentNames) =>
+    engine.start = (params, endowmentNames, factory) =>
       jobs.enqueue(async () => {
         const result = initialStep(chart, { params });
         const effects = effectRecordsFor(fold.nextSeq, result.effects);
@@ -858,6 +1048,7 @@ export const makeWorkflowService = async ({
           by: 'control',
           chartName: chart.name,
           chartVersion: chart.version,
+          ...(factory !== undefined ? { factory } : {}),
           params,
           endowmentNames,
           configuration: result.configuration,
@@ -1082,6 +1273,8 @@ export const makeWorkflowService = async ({
         runId,
         chartName: chart.name,
         chartVersion: chart.version,
+        ...(fold.factory !== undefined ? { factory: fold.factory } : {}),
+        ...(integrity !== undefined ? { integrity } : {}),
         configuration: fold.configuration,
         context: fold.context,
         seq: fold.nextSeq,
@@ -1098,6 +1291,7 @@ export const makeWorkflowService = async ({
               effectId: record.effectId,
               kind: record.effect.kind,
               path: record.path,
+              ...(record.since !== undefined ? { since: record.since } : {}),
               ...(record.correlation !== undefined
                 ? { correlation: record.correlation }
                 : {}),
@@ -1122,16 +1316,90 @@ export const makeWorkflowService = async ({
         ),
       });
 
+    // A human-oriented account of what the run is waiting on right now.
+    const explain = () => {
+      const waiting = [...fold.pending.values()].map(record => {
+        const { effect, effectId, path, since, correlation } = record;
+        let detail;
+        if (effect.kind === 'ask') {
+          const description =
+            effect.what?.description ?? effect.form?.description;
+          detail = `ask '${effect.to}': ${description}${
+            correlation === undefined ? ' (not yet delivered)' : ''
+          }`;
+        } else if (effect.kind === 'invoke') {
+          detail = `invoke '${effect.target}.${effect.method}'${
+            correlation === undefined && record.since === undefined
+              ? ''
+              : ' (dispatched)'
+          }`;
+        } else if (effect.kind === 'after') {
+          detail =
+            correlation === undefined
+              ? 'timer (not yet armed)'
+              : `timer fires at ${new Date(correlation.deadline).toISOString()}`;
+        } else if (effect.kind === 'spawn') {
+          detail =
+            record.childRunId === undefined
+              ? 'child run (starting)'
+              : `child run ${record.childRunId}`;
+        } else {
+          detail = effect.kind;
+        }
+        return harden({
+          effectId,
+          kind: effect.kind,
+          path,
+          ...(since !== undefined ? { since } : {}),
+          detail,
+        });
+      });
+      return harden({
+        runId,
+        chartName: chart.name,
+        chartVersion: chart.version,
+        ...(fold.factory !== undefined ? { factory: fold.factory } : {}),
+        ...(integrity !== undefined ? { integrity } : {}),
+        state:
+          fold.configuration === undefined
+            ? undefined
+            : fold.configuration.state,
+        paused: fold.paused,
+        done: fold.done,
+        ...(fold.outcome !== undefined ? { outcome: fold.outcome } : {}),
+        ...(fold.reason !== undefined ? { reason: fold.reason } : {}),
+        queuedEvents: fold.queuedEvents.size,
+        waiting,
+      });
+    };
+
     /** @type {Map<string, any>} */
     const ports = new Map();
 
+    // Observation only: status, journal, chart. Freely shareable — holds
+    // no way to move the run or to reach redacted capabilities.
     engine.runFacet = makeExo('WorkflowRun', WorkflowRunInterface, {
       status: async () => status(),
+      explain: async () => explain(),
       follow: async ({ since = 0n } = {}) =>
         readerFromIterator(followEntries(since)),
       journal: async ({ from = 0n, to = undefined } = {}) =>
         readEntries(from, to),
       chart: async () => chart,
+      help: () =>
+        `Workflow run ${runId} of ${chart.name} v${chart.version} (read-only): status(), explain(), follow({ since }), journal({ from, to }), chart()`,
+    });
+
+    engine.controlFacet = makeExo('WorkflowControl', WorkflowControlInterface, {
+      signal: async event => {
+        const redacted = await redact(event);
+        return engine.inject(
+          harden({ ...redacted, by: 'control', at: isoNow() }),
+        );
+      },
+      pause: async () => engine.pause(),
+      resume: async () => engine.resume(),
+      cancel: async reason => engine.cancel(reason),
       port: async role => {
         const pattern =
           chart.ports?.[role] ??
@@ -1141,8 +1409,19 @@ export const makeWorkflowService = async ({
           port = makeExo('WorkflowPort', WorkflowPortInterface, {
             submit: async event => {
               mustMatch(event, pattern, `port ${role}`);
+              const redacted = await redact(event);
+              // Routing and settlement marks are the engine's, not a
+              // participant's, to assert.
+              const cleaned = fromEntries(
+                entries(redacted).filter(
+                  ([name]) =>
+                    name !== 'path' &&
+                    name !== 'effectId' &&
+                    name !== 'compensation',
+                ),
+              );
               return engine.inject(
-                harden({ ...event, by: `port:${role}`, at: isoNow() }),
+                harden({ ...cleaned, by: `port:${role}`, at: isoNow() }),
               );
             },
             help: () =>
@@ -1152,18 +1431,23 @@ export const makeWorkflowService = async ({
         }
         return port;
       },
+      resolveRef: async alias => {
+        REF_ALIAS.test(alias) || Fail`not a ref alias (ref-<n>): ${q(alias)}`;
+        const cap = await E(powers).maybeLookup(runPath(runId, REFS, alias));
+        cap !== undefined || Fail`run ${q(runId)} has no ref ${q(alias)}`;
+        // Journal the access before releasing the capability.
+        await jobs.enqueue(() =>
+          append({
+            kind: 'admin',
+            by: 'control',
+            action: 'resolve-ref',
+            detail: alias,
+          }),
+        );
+        return cap;
+      },
       help: () =>
-        `Workflow run ${runId} of ${chart.name} v${chart.version}: status(), follow({ since }), journal({ from, to }), chart(), port(role)`,
-    });
-
-    engine.controlFacet = makeExo('WorkflowControl', WorkflowControlInterface, {
-      signal: async event =>
-        engine.inject(harden({ ...event, by: 'control', at: isoNow() })),
-      pause: async () => engine.pause(),
-      resume: async () => engine.resume(),
-      cancel: async reason => engine.cancel(reason),
-      help: () =>
-        `Control for workflow run ${runId}: signal(event), pause(), resume(), cancel(reason?)`,
+        `Control for workflow run ${runId}: signal(event), pause(), resume(), cancel(reason?), port(role), resolveRef(alias)`,
     });
 
     // #endregion
@@ -1185,7 +1469,7 @@ export const makeWorkflowService = async ({
 
   startRun = async (
     chartOrKey,
-    { params = harden({}), endowments = harden({}) } = {},
+    { params = harden({}), endowments = harden({}), factory = undefined } = {},
   ) => {
     await null;
     !stopped || Fail`workflow service is stopped`;
@@ -1201,7 +1485,14 @@ export const makeWorkflowService = async ({
     await E(powers).makeDirectory([ROOT, RUNS, runId]);
     await E(powers).makeDirectory(runPath(runId, ANSWERS));
     await E(powers).makeDirectory(runPath(runId, ENDOWMENTS));
+    await E(powers).makeDirectory(runPath(runId, REFS));
     await E(powers).storeValue(chart, runPath(runId, CHART_NAME));
+    const engine = makeRunEngine({ runId, chart, fold: initialFoldState() });
+    // Params are redacted like any other journaled value, then
+    // pre-validated with a pure kernel step before the run registers, so
+    // a bad start throws to the caller instead of minting a broken run.
+    const redactedParams = await engine.redact(params);
+    initialStep(chart, { params: redactedParams });
     const endowmentNames = harden(keys(endowments).sort());
     for (const name of endowmentNames) {
       // eslint-disable-next-line no-await-in-loop
@@ -1210,23 +1501,262 @@ export const makeWorkflowService = async ({
         runPath(runId, ENDOWMENTS, name),
       );
     }
-    const engine = makeRunEngine({ runId, chart, fold: initialFoldState() });
     engines.set(runId, engine);
-    await engine.start(params, endowmentNames);
+    await engine.start(redactedParams, endowmentNames, factory);
     return engine;
   };
 
   const recoverRun = async runId => {
     const chart = await E(powers).lookup(runPath(runId, CHART_NAME));
     const journal = await readJournal(runId);
+    const chain = verifyJournalChain(journal);
+    if (!chain.ok) {
+      console.error(
+        `workflow run ${runId}: journal hash chain broken at seq ${chain.badSeq}`,
+      );
+    }
     const fold = foldJournal(journal);
-    const engine = makeRunEngine({ runId, chart, fold });
+    let initialNextRef = 0;
+    const hasRefs = await E(powers).has(...runPath(runId, REFS));
+    if (hasRefs) {
+      /** @type {string[]} */
+      const names = await E(powers).list(...runPath(runId, REFS));
+      for (const name of names) {
+        const found = REF_ALIAS.exec(name);
+        if (found !== null) {
+          initialNextRef = Math.max(initialNextRef, Number(found[1]) + 1);
+        }
+      }
+    } else {
+      await E(powers).makeDirectory(runPath(runId, REFS));
+    }
+    const engine = makeRunEngine({
+      runId,
+      chart,
+      fold,
+      initialNextRef,
+      tailHash: chain.tail,
+      integrity: chain.ok
+        ? undefined
+        : harden({ ok: false, badSeq: chain.badSeq }),
+    });
     engines.set(runId, engine);
     return engine;
   };
 
   const getEngine = runId =>
     engines.get(runId) ?? Fail`no workflow run ${q(runId)}`;
+
+  // #region factories
+
+  const factoryPath = (fid, ...rest) => [ROOT, FACTORIES, fid, ...rest];
+
+  const loadFactoryRecord = async fid => {
+    const record = await E(powers).maybeLookup(
+      factoryPath(fid, FACTORY_RECORD),
+    );
+    record !== undefined || Fail`no workflow factory ${q(fid)}`;
+    return record;
+  };
+
+  /**
+   * Create a durable factory: a revocable grant to start runs of one
+   * chart with pre-bound params (capability-free data) and endowments
+   * (the capability channel). Derived factories record their parent so
+   * revocation can cascade.
+   *
+   * @param {object} options
+   * @param {any} options.chart - inline chart or installed chart key
+   * @param {Record<string, any>} [options.params]
+   * @param {Record<string, any>} [options.endowments]
+   * @param {string} [options.parent]
+   * @returns {Promise<string>} the factory id
+   */
+  const createFactory = async ({
+    chart: chartOrKey,
+    params = harden({}),
+    endowments = harden({}),
+    parent = undefined,
+  }) => {
+    await null;
+    !stopped || Fail`workflow service is stopped`;
+    let chart = chartOrKey;
+    if (typeof chart === 'string') {
+      chart = await loadInstalledChart(chart);
+      chart !== undefined || Fail`no installed chart ${q(chartOrKey)}`;
+    }
+    chart = await resolveChartRefs(chart, loadInstalledChart);
+    assertChart(chart);
+    const { errors } = chartDiagnostics(chart);
+    errors.length === 0 || Fail`chart has diagnostic errors: ${q(errors)}`;
+    assertDataOnly(params, 'factory-bound params');
+    const fid = `f-${makeId()}`;
+    await E(powers).makeDirectory([ROOT, FACTORIES, fid]);
+    await E(powers).makeDirectory(factoryPath(fid, ENDOWMENTS));
+    await E(powers).storeValue(chart, factoryPath(fid, CHART_NAME));
+    await E(powers).storeValue(params, factoryPath(fid, FACTORY_PARAMS));
+    const endowmentNames = harden(keys(endowments).sort());
+    for (const name of endowmentNames) {
+      // eslint-disable-next-line no-await-in-loop
+      await E(powers).storeValue(
+        endowments[name],
+        factoryPath(fid, ENDOWMENTS, name),
+      );
+    }
+    const record = harden({
+      fid,
+      chartName: chart.name,
+      chartVersion: chart.version,
+      boundParamNames: harden(keys(params).sort()),
+      endowmentNames,
+      revoked: false,
+      createdAt: isoNow(),
+      ...(parent !== undefined ? { parent } : {}),
+    });
+    await E(powers).storeValue(record, factoryPath(fid, FACTORY_RECORD));
+    return fid;
+  };
+
+  const loadFactoryBindings = async fid => {
+    const record = await loadFactoryRecord(fid);
+    !record.revoked || Fail`workflow factory ${q(fid)} is revoked`;
+    const chart = await E(powers).lookup(factoryPath(fid, CHART_NAME));
+    const boundParams = await E(powers).lookup(
+      factoryPath(fid, FACTORY_PARAMS),
+    );
+    /** @type {Record<string, any>} */
+    const boundEndowments = {};
+    for (const name of record.endowmentNames) {
+      // eslint-disable-next-line no-await-in-loop
+      boundEndowments[name] = await E(powers).lookup(
+        factoryPath(fid, ENDOWMENTS, name),
+      );
+    }
+    return harden({ record, chart, boundParams, boundEndowments });
+  };
+
+  const assertNoOverlap = (record, params, endowments) => {
+    for (const name of keys(params)) {
+      !record.boundParamNames.includes(name) ||
+        Fail`factory ${q(record.fid)} already binds param ${q(name)}`;
+    }
+    for (const name of keys(endowments)) {
+      !record.endowmentNames.includes(name) ||
+        Fail`factory ${q(record.fid)} already binds endowment ${q(name)}`;
+    }
+  };
+
+  /** @type {Map<string, any>} */
+  const factoryFacets = new Map();
+
+  const revokeFactory = async (fid, reason) => {
+    await null;
+    // Collect this factory and every descendant by durable parent links.
+    /** @type {string[]} */
+    const fids = await E(powers).list(ROOT, FACTORIES);
+    /** @type {Map<string, any>} */
+    const records = new Map();
+    for (const each of fids) {
+      // eslint-disable-next-line no-await-in-loop
+      const record = await E(powers).maybeLookup(
+        factoryPath(each, FACTORY_RECORD),
+      );
+      if (record !== undefined) {
+        records.set(each, record);
+      }
+    }
+    records.has(fid) || Fail`no workflow factory ${q(fid)}`;
+    const condemned = new Set([fid]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const [each, record] of records) {
+        if (
+          !condemned.has(each) &&
+          record.parent !== undefined &&
+          condemned.has(record.parent)
+        ) {
+          condemned.add(each);
+          grew = true;
+        }
+      }
+    }
+    const revokedAt = isoNow();
+    for (const each of condemned) {
+      const record = records.get(each);
+      if (!record.revoked) {
+        // eslint-disable-next-line no-await-in-loop
+        await E(powers).storeValue(
+          harden({
+            ...record,
+            revoked: true,
+            revokedAt,
+            ...(reason !== undefined ? { revokedReason: reason } : {}),
+          }),
+          factoryPath(each, FACTORY_RECORD),
+        );
+      }
+    }
+    // Cancel every live run started through a condemned factory.
+    for (const engine of [...engines.values()]) {
+      if (!engine.fold.done && condemned.has(engine.fold.factory)) {
+        engine
+          .cancel(
+            `factory ${engine.fold.factory} revoked${
+              reason !== undefined ? `: ${reason}` : ''
+            }`,
+          )
+          .catch(() => {});
+      }
+    }
+  };
+
+  /** @type {(fid: string) => any} */
+  const factoryFacetFor = fid => {
+    let facet = factoryFacets.get(fid);
+    if (facet !== undefined) {
+      return facet;
+    }
+    facet = makeExo('WorkflowFactory', WorkflowFactoryInterface, {
+      start: async ({ params = harden({}), endowments = harden({}) } = {}) => {
+        const { record, chart, boundParams, boundEndowments } =
+          await loadFactoryBindings(fid);
+        assertNoOverlap(record, params, endowments);
+        const engine = await startRun(chart, {
+          params: harden({ ...params, ...boundParams }),
+          endowments: harden({ ...endowments, ...boundEndowments }),
+          factory: fid,
+        });
+        // The starter through a factory observes; it does not control.
+        return harden({ runId: engine.runId, run: engine.runFacet });
+      },
+      describe: async () => {
+        const record = await loadFactoryRecord(fid);
+        return record;
+      },
+      with: async ({ params = harden({}), endowments = harden({}) } = {}) => {
+        const { record, chart, boundParams, boundEndowments } =
+          await loadFactoryBindings(fid);
+        assertNoOverlap(record, params, endowments);
+        const derived = await createFactory({
+          chart,
+          params: harden({ ...boundParams, ...params }),
+          endowments: harden({ ...boundEndowments, ...endowments }),
+          parent: fid,
+        });
+        return factoryFacetFor(derived);
+      },
+      revoke: async reason => {
+        await revokeFactory(fid, reason);
+      },
+      help: () =>
+        `Workflow factory ${fid}: start({ params, endowments }) -> { runId, run } (observer only), describe(), with({ params, endowments }) -> narrower factory, revoke(reason?) (cascades to derived factories and their runs)`,
+    });
+    factoryFacets.set(fid, facet);
+    return facet;
+  };
+
+  // #endregion
 
   const watchMail = async () => {
     await null;
@@ -1282,6 +1812,7 @@ export const makeWorkflowService = async ({
   await ensureDirectory([ROOT]);
   await ensureDirectory([ROOT, CHARTS]);
   await ensureDirectory([ROOT, RUNS]);
+  await ensureDirectory([ROOT, FACTORIES]);
   const runIds = await E(powers).list(ROOT, RUNS);
   for (const runId of runIds) {
     // eslint-disable-next-line no-await-in-loop
@@ -1307,10 +1838,24 @@ export const makeWorkflowService = async ({
       .then(() => stop());
   }
 
+  const resolveChartOrKey = async chartOrKey => {
+    await null;
+    let chart = chartOrKey;
+    if (typeof chart === 'string') {
+      chart = await loadInstalledChart(chart);
+      chart !== undefined || Fail`no installed chart ${q(chartOrKey)}`;
+    }
+    const resolved = await resolveChartRefs(chart, loadInstalledChart);
+    assertChart(resolved);
+    return resolved;
+  };
+
   const service = makeExo('WorkflowService', WorkflowServiceInterface, {
     install: async chart => {
       const resolved = await resolveChartRefs(chart, loadInstalledChart);
       assertChart(resolved);
+      const { errors } = chartDiagnostics(resolved);
+      errors.length === 0 || Fail`chart has diagnostic errors: ${q(errors)}`;
       const key = chartKeyFor(resolved);
       await E(powers).storeValue(resolved, [ROOT, CHARTS, key]);
       return key;
@@ -1327,6 +1872,10 @@ export const makeWorkflowService = async ({
       }
       return harden(installed);
     },
+    diagnose: async chartOrKey => {
+      const resolved = await resolveChartOrKey(chartOrKey);
+      return chartDiagnostics(resolved);
+    },
     start: async (chartOrKey, options = {}) => {
       const engine = await startRun(chartOrKey, options);
       return harden({
@@ -1337,6 +1886,14 @@ export const makeWorkflowService = async ({
     },
     run: async runId => getEngine(runId).runFacet,
     control: async runId => getEngine(runId).controlFacet,
+    makeFactory: async ({ chart, params, endowments }) => {
+      const fid = await createFactory({ chart, params, endowments });
+      return harden({ fid, factory: factoryFacetFor(fid) });
+    },
+    factory: async fid => {
+      await loadFactoryRecord(fid);
+      return factoryFacetFor(fid);
+    },
     list: async () =>
       harden([...engines.values()].map(engine => engine.summary())),
     followRuns: async () => {
@@ -1350,7 +1907,7 @@ export const makeWorkflowService = async ({
       return readerFromIterator(summaries());
     },
     help: () =>
-      `Durable workflow service: install(chart), charts(), start(chartOrKey, { params, endowments }), run(runId), control(runId), list(), followRuns()`,
+      `Durable workflow service: install(chart), charts(), diagnose(chartOrKey), start(chartOrKey, { params, endowments }), run(runId), control(runId), makeFactory({ chart, params, endowments }), factory(fid), list(), followRuns()`,
   });
 
   return harden({ service, stop, startRun, engines });
