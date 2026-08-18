@@ -270,6 +270,17 @@ NixosAdmin (reshaped; guards take .optional(M.string()) for the key): {
 `stageFiles`; the fire-and-poll `build`/`apply` shapes are simply gone, and
 the system prompt's polling dance goes with them.)
 
+`help()` is part of the surface and changes with it.
+It is the caplet's self-description — the thing a conversational agent
+reads after `__getMethodNames__()` discovery, per the repo convention —
+and its current text teaches exactly the shapes the reshape removes
+("build/apply return immediately", "poll status() until phase is ok").
+The reshape rewrites the general line and every per-method line to the
+settlement-shaped contract (verbs return the terminal outcome; the
+optional trailing key dedupes retries), so the three places that describe
+the caplet — guards, `help()`, and the machine-admin system prompt —
+change in the same commit and cannot drift.
+
 The caplet serializes spool submissions internally (the spool has one
 request slot; `@endo/workflow`'s own `serial-jobs` is the in-tree precedent
 for the queue).
@@ -598,8 +609,9 @@ line on `llm` (rebase-merge) closes the phase when the work graduates.
 `packages/workflow/setup.js` (pinned service via `ENDO_EXTRA`); the
 `space-nixos-admin` caplet reshaped per the Design section — serial queue,
 trailing-key idempotency protocol, settlement-shaped
-build/apply/rollback/verify, stageFiles/revertFiles — keeping its formula
-identity; the endo-host applier id-echo verification/change.
+build/apply/rollback/verify, stageFiles/revertFiles, and the rewritten
+`help()` text — keeping its formula identity; the endo-host applier
+id-echo verification/change.
 Restart test: apply requested, daemon killed, the caplet re-invoked with
 the same key returns the recorded outcome without re-submitting.
 
