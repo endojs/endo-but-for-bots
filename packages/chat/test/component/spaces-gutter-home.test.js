@@ -7,7 +7,7 @@ import harden from '@endo/harden';
 import { Far } from '@endo/pass-style';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { makePromiseKit } from '@endo/promise-kit';
-import { createDOM, waitFor } from '../helpers/dom-setup.js';
+import { createDOM, tick, waitFor } from '../helpers/dom-setup.js';
 
 const { document: testDocument } = createDOM();
 
@@ -273,6 +273,70 @@ test.serial('right-click home space shows Edit but not Delete', async t => {
   t.is($edit.style.display, '', 'edit is visible');
   // Delete should be hidden (data-menu-scope="delible")
   t.is($delete.style.display, 'none', 'delete is hidden for home');
+});
+
+// ── setActivePath: navigation that did not come from the gutter ──
+
+// The gutter is built once, outside every space, so it no longer learns the
+// current path by being rebuilt with it. This is the seam that replaces that.
+test.serial('setActivePath highlights the space at that path', async t => {
+  const storedValues = new Map();
+  storedValues.set(
+    'spaces/1',
+    harden({
+      id: '1',
+      name: 'Work',
+      icon: '🧙',
+      profilePath: ['work-agent'],
+      mode: 'inbox',
+      scheme: 'auto',
+    }),
+  );
+
+  const { $container, gutter } = await setupGutter({ storedValues });
+  t.truthy($container.querySelector('.space-item.home.active'));
+
+  gutter.setActivePath(['work-agent']);
+  await waitFor(
+    () => !!$container.querySelector('.space-item[data-space-id="1"].active'),
+  );
+  t.falsy($container.querySelector('.space-item.home.active'));
+
+  gutter.setActivePath([]);
+  await waitFor(() => !!$container.querySelector('.space-item.home.active'));
+  t.falsy($container.querySelector('.space-item[data-space-id="1"].active'));
+});
+
+test.serial('setActivePath keeps the open space when two share a path', async t => {
+  const storedValues = new Map();
+  for (const id of ['1', '2']) {
+    storedValues.set(
+      `spaces/${id}`,
+      harden({
+        id,
+        name: `View ${id}`,
+        icon: '🧙',
+        profilePath: ['work-agent'],
+        mode: 'inbox',
+        scheme: 'auto',
+      }),
+    );
+  }
+
+  const { $container, gutter } = await setupGutter({ storedValues });
+
+  gutter.selectSpace('2');
+  await waitFor(
+    () => !!$container.querySelector('.space-item[data-space-id="2"].active'),
+  );
+
+  // The path alone cannot say which of the two is open, so being told about the
+  // path the open space already has must leave the highlight where it is —
+  // deriving from the path would snap it to whichever space came first.
+  gutter.setActivePath(['work-agent']);
+  await tick(50);
+  t.truthy($container.querySelector('.space-item[data-space-id="2"].active'));
+  t.falsy($container.querySelector('.space-item[data-space-id="1"].active'));
 });
 
 // ── Test 2: Right-click regular space shows both Edit and Delete ──
