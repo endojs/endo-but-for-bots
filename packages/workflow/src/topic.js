@@ -41,15 +41,18 @@ export const makeChangeTopic = () => {
       [Symbol.asyncIterator]: () => iterator,
       next: async () => {
         if (returned) {
-          return harden({ value: undefined, done: true });
+          return harden({ value: undefined, done: /** @type {true} */ (true) });
         }
         const node = await cursor;
         cursor = node.tail.promise;
-        return harden({ value: node.value, done: false });
+        return harden({
+          value: node.value,
+          done: /** @type {false} */ (false),
+        });
       },
       return: async () => {
         returned = true;
-        return harden({ value: undefined, done: true });
+        return harden({ value: undefined, done: /** @type {true} */ (true) });
       },
       throw: async error => {
         returned = true;
