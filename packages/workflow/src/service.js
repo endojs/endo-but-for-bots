@@ -26,8 +26,10 @@
  *   otherwise re-attaches without re-sending — the correlation marker
  *   appended to each ask's description makes the send idempotent.
  * - `invoke` (eventual send): at-least-once. Recovery re-dispatches
- *   unsettled invokes with the same `effectId`, which is also passed to
- *   the target as its final argument for deduplication.
+ *   unsettled invokes under the same identity; the run-qualified key
+ *   `${runId}:${effectId}` is passed to the target as its final argument
+ *   for deduplication (globally unique, since bare effect ids repeat
+ *   across runs sharing an endowment).
  * - `after`: re-armed from the journaled absolute deadline; past-due
  *   deadlines fire immediately.
  * - `spawn`: children are runs in the same store and recover
@@ -1026,10 +1028,18 @@ export const makeWorkflowService = async ({
       const { effectId, effect } = record;
       await append({ kind: 'effect-dispatched', by: 'engine', effectId });
       const targetPath = runPath(runId, ENDOWMENTS, effect.target);
+      // The trailing idempotency key is run-qualified: effect ids are
+      // `${seq}-${index}`, unique within one run only, and an endowment is
+      // typically shared by many runs (factories bind one target for all
+      // their runs), so the bare effect id would collide across runs.
+      // `${runId}:${effectId}` is globally unique and stable across
+      // recovery re-dispatch — the same contract the ask path's
+      // `[workflow ${runId} ${effectId}]` marker already keeps.
+      const idempotencyKey = `${runId}:${effectId}`;
       E(powers)
         .lookup(targetPath)
         .then(target =>
-          E(target)[effect.method](...(effect.args ?? []), effectId),
+          E(target)[effect.method](...(effect.args ?? []), idempotencyKey),
         )
         .then(
           value => settleEffect(effectId, 'fulfilled', value),

@@ -80,6 +80,18 @@ Deviations from the design as first written, adopted during the build:
 6. Nested compound states raise a `state-done` internal event when their
    child reaches a final state — a small addition the design did not
    enumerate.
+7. **The invoke idempotency key on the wire is run-qualified**:
+   `${runId}:${effectId}` rather than the bare effect id.
+   Effect ids are `${seq}-${index}`, unique within one run only, and an
+   endowment is typically shared by many runs (a factory binds one
+   target for all of its runs), so a target deduping on the bare id
+   would conflate distinct runs' effects.
+   Journal entries and pending records keep the run-scoped id; only the
+   trailing argument handed to the target carries the run prefix —
+   matching the run-qualified `[workflow <runId> <effectId>]` marker the
+   ask path already uses.
+   Adopted 2026-08-18 for the floot-admin-deploy-workflows integration,
+   whose deploy performer is exactly such a shared endowment.
 
 Hardening round (2026-08-18), after the cross-review of the two parallel
 implementations — each item either fixes a weakness the comparison
@@ -914,8 +926,10 @@ Restart contract: an `invoke` journaled `effect-dispatched` but not
 `effect-settled` is re-sent on recovery with the same `effectId`.
 The chart author's obligation, stated plainly: an `invoke` target must be
 idempotent, or re-derivable (a pure read), or wrapped in an adapter that
-dedupes on `effectId` (which is passed as the final argument for exactly
-this purpose).
+dedupes on the run-qualified key `${runId}:${effectId}` (which is passed
+as the final argument for exactly this purpose; bare effect ids are
+`${seq}-${index}` and repeat across runs sharing an endowment, so the
+wire key carries the run id, as the ask marker already does).
 Where idempotence cannot be promised, use `ask` — mail's exactly-once is
 the reason it exists.
 

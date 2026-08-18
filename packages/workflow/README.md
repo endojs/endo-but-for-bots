@@ -93,7 +93,7 @@ const chart = harden({
   | kind     | delivery                                                        |
   | -------- | --------------------------------------------------------------- |
   | `ask`    | daemon mail (`request` / `form`) — durable, exactly-once        |
-  | `invoke` | eventual send to a named endowment — at-least-once, `effectId` idempotency key passed as the final argument |
+  | `invoke` | eventual send to a named endowment — at-least-once, run-qualified `${runId}:${effectId}` idempotency key passed as the final argument |
   | `spawn`  | child run; the terminal outcome settles the parent              |
   | `after`  | deadline re-armed from its journaled absolute time              |
   | `emit`   | internal event                                                  |
