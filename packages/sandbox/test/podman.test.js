@@ -841,9 +841,8 @@ test.serial(
       harden({ captureStdout: false, captureStderr: false }),
     );
     const disposed = E(spawnFirst).dispose();
-    // Disposal cancels a still-pending admission, so the spawn either
-    // rejects as disposed or yields a handle whose wait() reports the
-    // disposal; either way no labelled container may survive.
+    // If disposal wins before spawn settles, spawn rejects; otherwise wait()
+    // reports disposal. Either arm must leave the labelled container gone.
     /** @type {Awaited<typeof spawned> | undefined} */
     let proc;
     /** @type {Error | undefined} */
@@ -996,10 +995,9 @@ test.serial(
       cleanupTmpdirs(tmpdirs);
     });
 
-    // A 25 ms timeout usually fires while `podman create` is still
-    // running, in which case the cancelled admission rejects the spawn
-    // itself; when the container wins the race, wait() reports the
-    // timeout instead. Either way nothing labelled may survive.
+    // Timeout may win before spawn settles (spawn rejects) or afterwards
+    // (wait() reports timeout); either arm must leave the labelled container
+    // gone.
     /** @type {Error | undefined} */
     let admissionError;
     const timed = await E(handle)

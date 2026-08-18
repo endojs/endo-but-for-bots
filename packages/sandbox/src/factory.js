@@ -792,6 +792,11 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
      * @param {readonly string[]} argv
      * @param {SpawnOpts} [spawnOpts]
      * @returns {Promise<ProcessHandle>}
+     *
+     * Termination initiated before this promise settles rejects the spawn,
+     * even when admission has already resolved; the background reap
+     * continues. A resolved handle means admission and ownership were still
+     * valid at settlement. Later failures surface through `wait()`.
      */
     const spawnProc = async (argv, spawnOpts = {}) => {
       assertRunning();
@@ -1054,6 +1059,16 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
         publishStreamControls([]);
         liveProcesses.delete(lease);
         throw e;
+      }
+
+      // Preserve the admission-failure contract when termination wins between
+      // driver admission and spawn settlement; reap in the background.
+      if (terminalError !== undefined) {
+        admissionAbandoned = true;
+        if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
+        publishStreamControls([]);
+        liveProcesses.delete(lease);
+        throw terminalError;
       }
 
       /**

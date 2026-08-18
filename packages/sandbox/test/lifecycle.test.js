@@ -78,7 +78,7 @@ const makeByteSource = () => {
 };
 
 /**
- * @param {{ spawnGate?: Promise<unknown>, softRefuse?: boolean, brokenSignals?: boolean, lifecycle?: boolean, context?: any }} [options]
+ * @param {{ spawnGate?: Promise<unknown>, afterAdmission?: () => void, softRefuse?: boolean, brokenSignals?: boolean, lifecycle?: boolean, context?: any }} [options]
  */
 const makeDriverFixture = (options = {}) => {
   const stdout = makeByteSource();
@@ -116,6 +116,8 @@ const makeDriverFixture = (options = {}) => {
         admissionAborts += 1;
       });
       if (options.spawnGate !== undefined) await options.spawnGate;
+      if (options.afterAdmission !== undefined)
+        queueMicrotask(options.afterAdmission);
       return harden({
         pid: 1234,
         stdin: null,
@@ -209,6 +211,29 @@ test('dispose cancels a pending admission and reaps a late arrival', async t => 
   const status = await fixture.exitStatus();
   t.deepEqual(status, { code: null, signal: 'SIGKILL' });
   t.deepEqual(fixture.signals(), ['SIGKILL']);
+});
+
+test('termination after admission resolves still rejects unsettled spawn', async t => {
+  t.timeout(2000);
+  const gate = makePromiseKit();
+  /** @type {import('../src/types.js').SandboxHandle} */
+  let handle;
+  const fixture = makeDriverFixture({
+    spawnGate: gate.promise,
+    // This local Exo call starts disposal synchronously in the stub's
+    // post-admission microtask, before the driver's promise reactions run.
+    afterAdmission: () => void (/** @type {any} */ (handle).dispose()),
+  });
+  handle = await makeHandle(fixture);
+
+  const spawned = E(handle).spawn(harden(['/bin/true']));
+  await null;
+  // Resolve admission and initiate disposal in the same turn, before the
+  // spawn() continuation can settle its promise.
+  gate.resolve(undefined);
+  await t.throwsAsync(() => spawned, { message: /disposed/ });
+  t.deepEqual(fixture.signals(), ['SIGTERM']);
+  t.deepEqual(await fixture.exitStatus(), { code: null, signal: 'SIGTERM' });
 });
 
 test('a never-resolving driver admission cannot hold up disposal', async t => {
