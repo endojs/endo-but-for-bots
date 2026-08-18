@@ -28,3 +28,14 @@ export type RawStatusEntry = {
   /** When the index is 'renamed' or 'copied'. */
   renamedFrom?: string;
 };
+
+export type RawWorktreeEntry = {
+  /** Mount-relative path with forward slashes; `.` names the mount root. */
+  path: string;
+  head?: string;
+  branch?: string;
+  bare: boolean;
+  detached: boolean;
+  locked: boolean;
+  prunable: boolean;
+};
