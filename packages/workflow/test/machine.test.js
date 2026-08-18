@@ -198,7 +198,7 @@ test('initialStep validates params, enters initial, substitutes entry effects', 
   t.deepEqual(step.context, { attempts: 0 });
   t.is(step.effects.length, 1);
   t.deepEqual(step.effects[0].path, ['draft']);
-  t.is(step.effects[0].effect.what.description, 'Draft Adder');
+  t.is(step.effects[0].effect.what.description, 'Draft "Adder"');
   t.is(step.terminal, undefined);
 });
 

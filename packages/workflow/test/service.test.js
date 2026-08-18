@@ -242,7 +242,7 @@ test('ask (request) sends durable mail and settles on resolution', async t => {
   );
   const message = controls.findMessage('request', `[workflow ${runId} 0-0]`);
   t.truthy(message);
-  t.true(message.description.startsWith('Approve Adder?'));
+  t.true(message.description.startsWith('Approve "Adder"?'));
   const status = await E(run).status();
   t.is(status.prompts.length, 1);
   t.is(status.prompts[0].to, 'operator');
@@ -345,13 +345,13 @@ test('ports pattern-check events and attribute them structurally', async t => {
       ok: { final: true },
     },
   });
-  const { runId, run } = await E(service).start(chart, {});
+  const { runId, run, control } = await E(service).start(chart, {});
   const engine = engines.get(runId);
-  const port = await E(run).port('approver');
+  const port = await E(control).port('approver');
   await t.throwsAsync(() => E(port).submit(harden({ type: 'reject' })), {
     message: /approver/,
   });
-  await t.throwsAsync(() => E(run).port('missing'), {
+  await t.throwsAsync(() => E(control).port('missing'), {
     message: /declares no port/,
   });
   await E(port).submit(harden({ type: 'approve' }));
