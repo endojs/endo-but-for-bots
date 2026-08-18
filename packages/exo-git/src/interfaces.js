@@ -101,6 +101,30 @@ const GitCommitShape = M.splitRecord(
   },
 );
 
+const GitWorktreeEntryShape = M.splitRecord(
+  {
+    path: M.string(),
+    bare: M.boolean(),
+    detached: M.boolean(),
+    locked: M.boolean(),
+    prunable: M.boolean(),
+  },
+  {
+    head: M.string(),
+    branch: M.string(),
+  },
+  harden({}),
+);
+
+const GitWorktreeAddOptionsShape = M.splitRecord(
+  {},
+  {
+    ref: RefArgShape,
+    newBranch: M.string(),
+  },
+  harden({}),
+);
+
 const GitCommitOptionsShape = M.splitRecord(
   {},
   {
@@ -331,6 +355,10 @@ export const GIT_METHOD_GUARDS = harden({
   // structural read-only view) before the return shape is matched; a
   // writable Git returns its mount synchronously and is unaffected.
   worktree: M.callWhen().returns(M.remotable()),
+  worktreeAdd: M.callWhen(M.remotable())
+    .optional(GitWorktreeAddOptionsShape)
+    .returns(M.remotable('Git')),
+  worktreeList: M.callWhen().returns(M.arrayOf(GitWorktreeEntryShape)),
 });
 
 /**
@@ -355,6 +383,7 @@ export const GIT_READER_METHODS = harden([
   'trackingStatus',
   'tree',
   'worktree',
+  'worktreeList',
 ]);
 
 export const GIT_WRITER_ONLY_METHODS = harden([
@@ -372,6 +401,7 @@ export const GIT_WRITER_ONLY_METHODS = harden([
   'stashPush',
   'switch',
   'switchBranch',
+  'worktreeAdd',
 ]);
 export const GIT_WRITER_METHODS = harden([
   ...GIT_READER_METHODS,

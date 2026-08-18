@@ -82,6 +82,22 @@ export type GitWorktreeStatus =
   | 'ignored'
   | 'conflicted';
 
+export type GitWorktreeEntry = {
+  /** Mount-relative path with `.` naming the current Git mount root. */
+  path: string;
+  head?: string;
+  branch?: string;
+  bare: boolean;
+  detached: boolean;
+  locked: boolean;
+  prunable: boolean;
+};
+
+export type GitWorktreeAddOptions = {
+  ref?: GitRef | string;
+  newBranch?: string;
+};
+
 export type GitStatusEntry = {
   path: string;
   index: GitIndexStatus;
@@ -335,6 +351,7 @@ export type ReadOnlyEndoGit = {
   worktree: () => Promise<ReadOnlyGitWorktree>;
   status: (options?: GitStatusOptions) => Promise<GitStatusResult>;
   trackingStatus: () => Promise<GitTrackingStatus>;
+  worktreeList: () => Promise<GitWorktreeEntry[]>;
   diff: (options?: GitDiffOptions) => Promise<string>;
   log: (options?: GitLogOptions) => Promise<GitCommit[]>;
   show: (ref: GitRef | string) => Promise<string>;
@@ -366,6 +383,10 @@ export type ReadWriteEndoGit = ReadOnlyEndoGit & {
     designators: GitPathDesignator[],
     options?: GitRestoreOptions,
   ) => Promise<void>;
+  worktreeAdd: (
+    entry: PathEntry,
+    options?: GitWorktreeAddOptions,
+  ) => Promise<ReadWriteEndoGit>;
   checkoutConflict: (
     designators: GitPathDesignator[],
     side: GitConflictSide,
@@ -397,6 +418,10 @@ export type ReadWriteEndoGit = ReadOnlyEndoGit & {
 
 /** The elevated read-write surface that may rewrite existing history. */
 export type HistoryRewriteEndoGit = ReadWriteEndoGit & {
+  worktreeAdd: (
+    entry: PathEntry,
+    options?: GitWorktreeAddOptions,
+  ) => Promise<HistoryRewriteEndoGit>;
   scope: (name: 'reader' | 'writer' | 'rewriter') => EndoGit;
   commit: (message: string, options?: GitCommitOptions) => Promise<GitCommit>;
   reword: (ref: GitRef | string, message: string) => Promise<GitCommit>;
