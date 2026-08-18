@@ -690,8 +690,33 @@ validation):**
    open-time error either. Decoding every record at open would defeat
    lazy resume; the panic path is the accepted trade.
 
-Remaining, mapped to the phases: the supervisor cadence policy and
-`endor` binary wiring (with the worker-envelope work). The
+**Supervisor wiring, first cut (2026-08-18).** The daemon gains the
+store seam's supervisor-side option: `HeapStoreOptions { path,
+signature }` + `PersistentMachine` in the endo crate's Ironhorse
+engine seam (`rust/endo/src/ironhorse_engine.rs`, feature
+`ironhorse-engine`), and the engine-agnostic `Supervisor` records
+store-backed suspends via `mark_suspended_store` — a `SuspendedWorker`
+whose durable identity is the heap database path (`heap_store`), no
+CAS key, because every completed crank already checkpointed. The
+cadence policy is deliberately minimal and stated: checkpoint per
+completed crank (the outcome is durable before the caller sees it); a
+crank that halts without completing is REWOUND — the session is
+discarded and resumed from the last checkpoint, so no partial effect
+ever persists; `collect()` offers partial collection at any boundary
+and the supervisor picks the schedule (replica-visible, like the full
+collector's). The lifecycle test
+(`rust/endo/tests/ironhorse_store_worker.rs`, run by the `build-xsnap`
+CI job, which owns the bundle/toolchain prerequisites) exercises fresh
+open → multi-crank state growth with per-crank epochs → crashed-crank
+rewind → partial collection → supervisor suspend record → close (WAL
+folded) → reopen from the record with state and epoch chain intact →
+the signature gate refusing a foreign host surface.
+
+Remaining, mapped to the phases: the worker ENVELOPE protocol for
+Ironhorse (`endor worker -e ironhorse` — needs the host-function
+surface and the SES boot bundle; the heap-persistence half above is
+wired) and any richer checkpoint/collect cadence policy beyond the
+stated per-crank minimum. The
 attached-mode benchmark landed with phase 10's instruments, and the
 cargo-fuzz CI lane landed as the `fuzz-ironhorse` smoke job (30 s per
 decode/round-trip target on every ironhorse-relevant change, corpus

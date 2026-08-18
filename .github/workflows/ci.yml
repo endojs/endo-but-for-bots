@@ -669,6 +669,16 @@ jobs:
       - name: Build xsnap crate
         run: cargo check --manifest-path rust/endo/xsnap/Cargo.toml
 
+      - name: Test the store-backed worker lifecycle (endo crate)
+        # The supervisor's Ironhorse heap-persistence option
+        # (HeapStoreOptions + PersistentMachine + mark_suspended_store,
+        # designs/ironhorse-snapshot-store-seam.md § supervisor wiring)
+        # lives in the endo crate, which links xsnap and therefore
+        # needs the bundles generated above — so its integration test
+        # runs here rather than in test-ironhorse, which deliberately
+        # avoids the XS C toolchain.
+        run: cargo test -p endo --test ironhorse_store_worker
+
   # The pure-Rust ironhorse crates: the engine's zero-C members
   # (ironhorse-vm, ironhorse-snapshot — including the store seam's
   # metamorphic determinism and checkpoint acceptance suites) plus the
