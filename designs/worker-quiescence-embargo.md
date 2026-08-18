@@ -29,7 +29,8 @@ vocabulary from their first sentence.
 - **Envelope.** The logical unit of the wire protocol: one of the four verbs
   `deliver` / `resolve` / `drop` / `abort`. "Message" in this document is a synonym
   for envelope, used only where the surrounding prose reads more naturally than
-  "envelope" would; there is no third protocol verb.
+  "envelope" would; *message* and *envelope* name the same thing and add no fifth
+  verb.
 - **Control envelope.** An out-of-band supervisor command that shares the inbound
   receive path but is **not** a protocol verb: `debug-attach`, `debug-detach`,
   `debug`, `suspend`, and `meter-config`, dispatched by `handle_envelope`
@@ -46,9 +47,14 @@ vocabulary from their first sentence.
   the wire. An envelope is buffered as its frame; "outbound batch" and "outbound
   frames" name the same bytes at the logical and serialized layers respectively.
 - **Quiescence.** The worker has drained its promise-job queue to empty with no
-  pending reactions and no synchronously-due timers. XS already exposes the
-  primitive: `Machine::quiesce` and the check-and-reset `fxMachineHasPendingJobs`
-  in `rust/endo/xsnap/src/lib.rs`. Quiescence is bounded to **due-now** work:
+  pending reactions, no synchronously-due timers, and no **outstanding host-power
+  continuation** (an awaited `powers/fs.rs` / `powers/sqlite.rs` read whose promise
+  has not yet resolved). XS already exposes the primitive: `Machine::quiesce` and
+  the check-and-reset `fxMachineHasPendingJobs` in `rust/endo/xsnap/src/lib.rs`. The
+  host-power clause is load-bearing only on Node, where a host call resolves from a
+  later event-loop turn rather than synchronously inside the crank as it does on XS
+  (Decision 6 fences on it); on XS the synchronous host call has already settled
+  before the pump tests for pending jobs. Quiescence is bounded to **due-now** work:
   timers scheduled for the future do not hold the embargo open, or it would never
   open.
 - **Crank.** The processing of a single inbound **protocol** envelope plus all
@@ -96,7 +102,7 @@ sections need not re-derive the taxonomy: **ordinary outbound** (embargoed:
 buffered and released at quiescence), **synchronous ancestor-calls** (Decision 5,
 always exempt), and **debug frames** (Decision 8, always exempt).
 
-## What is the Problem Being Solved? (the hangover inconsistency)
+## What is the Problem Being Solved?
 
 A worker processes an inbound delivery by dispatching it and then running the
 promise reactions it queues. Today the worker both **emits outbound envelopes**
@@ -209,11 +215,22 @@ the worker is re-created from its last snapshot), which takes the still-unflushe
 buffer with it. On the Node side the buffer and the flush live in different turns
 (Decision 6 puts the flush in a later `setImmediate` turn), so lexical unwinding of
 the dispatch turn does **not** by itself guarantee the flush is skipped. The crank
-therefore carries an explicit **per-crank abort flag**: a dispatch or reaction that
-throws sets the flag, and the flush step consults it and drops the buffer instead
-of writing it. The abort decision and the commit decision share one observable
-(the flag) rather than relying on a stack extent that Decision 6 has already
-broken. Either way the failed crank has written no outbound to the wire and leaves
+therefore carries an explicit **per-crank abort flag**, and what sets it must be
+named precisely, because on Node an ordinary delivery rejection is **not** a crank
+abort. Node CapTP's `dispatch` catches every handler exception into `quietReject`
+and returns `false` (`packages/captp/src/captp.js:1000-1026`), converting a rejected
+delivery into an ordinary outbound `CTP_RETURN isRejected` frame
+(`packages/captp/src/captp.js:855-861`): that is a **well-defined, committed crank
+outcome** whose reply frame belongs in the batch and must flush normally, not a
+fault that drops the batch. The abort flag is set only by a genuine **crank fault**:
+a metering hard-stop, or an exception that escapes the pump turn itself (the
+buffering wrapper around `send`, the `setImmediate` drive, or the flush step), none
+of which `quietReject` intercepts. It is never set by a handler rejection that CapTP
+has already turned into a reply frame. So the Node abort-flag path is exercised by
+injecting a fault into the pump/flush machinery, not by making a handler reject. The
+abort decision and the commit decision share one observable (the flag) rather than
+relying on a stack extent that Decision 6 has already broken. Either way the failed
+crank has written no outbound to the wire and leaves
 no buffered outbound behind, so there is nothing partial for a peer or a later
 crank to observe (there is no redelivery; see the "a failed crank emits nothing"
 statement above).
@@ -266,13 +283,20 @@ sequenceDiagram
    drains (Node, Decision 6). Admit no inbound envelope during the drain.
 4. **Flush the outbound batch** to the supervisor in emission order, as one
    atomic unit, at the quiescence boundary, unless the per-crank abort flag is
-   set, in which case drop the buffer (see § failure-atomicity above).
+   set, in which case drop the buffer (see § Relationship to the metering "output
+   embargo" above).
 5. **Report the crank** (`meter-report`), then admit the next inbound envelope.
 
 The invariant this buys: **the outbound batch is a pure function of (pre-crank
-worker state, the single delivered envelope)**, independent of wire timing and host
-scheduler. Both supervisors compute the identical batch, so the outbound byte
-stream is identical. This holds unconditionally because the design scopes itself to
+worker state, the single delivered envelope, and the replies to any host-power reads
+and synchronous ancestor-calls the crank issues)**, independent of wire timing and
+host scheduler. The last term is named explicitly because a crank that reads a
+`powers/fs.rs` file or receives a synchronous ancestor reply (Decision 5) takes an
+input from neither of the first two terms; parity holds only when both supervisors
+are handed the same host-power and sync-reply values (the host is deterministic
+across the two runtimes for the fixture inputs). Both supervisors compute the
+identical batch, so the outbound byte stream is identical. This holds
+unconditionally because the design scopes itself to
 **timer-free workers** (Decision 4): the supervised pump fires no timers, so no
 wall-clock quantity enters the batch. Extending parity to a timer-using supervised
 worker would require both a timer-firing pump change on each side and a shared
@@ -287,26 +311,32 @@ is a property only the worker machine can observe.
   the transport after the promise-job drain completes and before it blocks for
   the next envelope, consulting the abort flag first.
 - **Node.** Wrap the `send` passed to `makeCapTP` / `makeMessageSlots` so it
-  appends to an array rather than chaining onto `writeTail`. Drive dispatch through
-  a turn that flushes the array in a `setImmediate` turn after the microtask queue
-  empties (consulting the abort flag), then reads the next inbound frame. **This
-  barrier is installed only on the worker-facing pump**: the raw Node worker splice
-  (`bus-worker-node-raw.js`) and the XS worker splice, enabled per session through
-  the `pumpOptions` bag (§ The configuration option). The non-worker callers of the
-  shared `makeMessageCapTP` pump (the WebSocket gateway, the peer-to-peer network
-  links) pass no `pumpOptions` and are unchanged; see the `connection.js` row in
+  appends to an array rather than chaining onto `writeTail`. This is the Node
+  **emission seam** (the point at which the worker's outbound is produced), so
+  siting the buffer here is **worker-side** per Decision 1 even though `connection.js`
+  sits in `packages/daemon`, the Node supervisor package (see the Supervisor and
+  emission-seam entries in Definitions); it is not a supervisor-side buffer. Drive
+  dispatch through a turn that flushes the array in a `setImmediate` turn after the
+  microtask queue empties **and** after any outstanding host-power promise settles
+  (Decision 6, consulting the abort flag), then reads the next inbound frame. **This
+  barrier is installed only for a worker session**, established by the worker-facing
+  splices (the raw Node worker splice `bus-worker-node-raw.js`, and the XS worker
+  splice) through an explicit worker entry point, not by the mere presence of an
+  options bag (§ The configuration option). The non-worker callers of the shared
+  `makeMessageCapTP` pump (the WebSocket gateway, the peer-to-peer network links)
+  establish a link session and are unchanged; see the `connection.js` row in
   § Affected components.
 
 ## Affected components
 
 | Component | Change |
 |---|---|
-| `rust/endo/xsnap/src/lib.rs` (`run_supervised` pump, near the `'outer` crank loop) | Stop folding mid-crank inbound **protocol** envelopes into the current crank: move the `try_recv_raw_envelope` drain to **after** the outbound flush so each crank consumes one protocol envelope. Add the per-crank outbound buffer and flush it after the promise-job drain. Read the embargo flag from the worker's spawn/control envelope (see § Cross-supervisor parity implications). Preserve mid-crank admission of **control** envelopes (`debug-attach`/`debug-detach`/`debug`, `suspend`, `meter-config`; Decision 10): `handle_envelope` (`lib.rs:1046-1082`) must still intercept them ahead of the one-protocol-envelope gate, so a debug resume or mid-crank suspend still reaches a stopped or draining machine. |
+| `rust/endo/xsnap/src/lib.rs` (`run_supervised` pump, near the `'outer` crank loop) | Stop folding mid-crank inbound **protocol** envelopes into the current crank: move the `try_recv_raw_envelope` drain to **after** the outbound flush so each crank consumes one protocol envelope. Add the per-crank outbound buffer and flush it after the promise-job drain. Persist that buffer **alongside** the machine snapshot in `handle_suspend` (which today snapshots only the XS heap via `machine.suspend_to_cas`, not the Rust-side `Vec<Vec<u8>>`) so a mid-crank `suspend` does not lose buffered sends (Decision 10). Read the embargo flag from the worker's spawn/control envelope (see § Cross-supervisor parity implications). Preserve mid-crank admission of **control** envelopes (`debug-attach`/`debug-detach`/`debug`, `suspend`, `meter-config`; Decision 10): `handle_envelope` (`lib.rs:1046-1082`) must still intercept them ahead of the one-protocol-envelope gate, so a debug resume or mid-crank suspend still reaches a stopped or draining machine. |
 | `rust/endo/xsnap/src/worker_io.rs` | Confirm the synchronous-ancestor-call reply path for child-process XS workers so strict one-envelope-per-crank cannot deadlock on a synchronous response: `try_recv_raw_envelope` semantics and the `PipeTransport` stub (child-process workers return `None`, noted in-code as a "quiesce deadlock" risk). The synchronous-ancestor-call exemption (Decision 5) is what keeps strict one-envelope-per-crank from deadlocking on a synchronous response here; confirming that response path, or giving those workers real non-blocking recv, is residual build validation. |
 | `packages/daemon/src/bus-xs-core.js` | `sendEnvelope` / `sendRawFrame` seam: buffer instead of writing; expose a flush the pump calls and a per-crank abort flag it consults. |
-| `packages/daemon/src/connection.js` (`makeMessageCapTP`) | `makeMessageCapTP` is the shared pump for **every** CapTP session, worker and non-worker alike (`bus-worker-node-raw.js:48`, `bus-manager-node-powers.js:311`, `bus-manager-rust-xs.js:550`, `ws-gateway.js:217`, `networks/tcp-netstring.js:101,169`). The turn barrier (dispatch one frame, await the `setImmediate` drain, flush the buffered outbound unless aborted, then read the next frame; buffer `send` instead of the immediate `writeTail` write) must therefore **not** replace the bare loop unconditionally: a gateway or peer-to-peer session has no worker, no machine, and no quiescence to observe, and serializing it one-message-per-turn would be a regression. The barrier is enabled per session through the `pumpOptions` bag (§ The configuration option) and is set **only** by the worker-facing splices (`bus-worker-node-raw.js`, the XS worker splice); the non-worker callers (`ws-gateway.js`, `networks/tcp-netstring.js`, `bus-manager-node-powers.js`) pass no `pumpOptions` and keep the existing eager `for await ... dispatch` loop. Crank exclusivity is unconditional **for a worker session** (Decision 3): exactly the callers that opt in. |
+| `packages/daemon/src/connection.js` (`makeMessageCapTP`, plus a worker entry point) | `makeMessageCapTP` is the shared pump for **every** CapTP session, worker and non-worker alike (`bus-worker-node-raw.js:48`, `bus-manager-node-powers.js:311`, `bus-manager-rust-xs.js:550`, `ws-gateway.js:217`, `networks/tcp-netstring.js:101,169`). Crank exclusivity and the turn barrier must therefore **not** replace the bare loop for every caller: a gateway or peer-to-peer session has no worker, no machine, and no quiescence to observe, and serializing it one-message-per-turn would be a regression. So the worker discipline binds to an explicit **session kind**, not to the presence of an options bag: the worker-facing splices (`bus-worker-node-raw.js`, the XS worker splice) establish a **worker session** through a dedicated `makeWorkerMessageCapTP` entry point (equivalently a `sessionKind: 'worker'` selector), which installs crank exclusivity **unconditionally** and the turn barrier (dispatch one frame, await the `setImmediate` drain and any outstanding host-power promise, flush the buffered outbound unless aborted, then read the next frame; buffer `send` instead of the immediate `writeTail` write). The non-worker callers (`ws-gateway.js`, `networks/tcp-netstring.js`, `bus-manager-node-powers.js`) keep calling `makeMessageCapTP` (a **link session**) and keep the existing eager `for await ... dispatch` loop; they cannot acquire cranking by passing a policy flag. `bufferOutboundUntilQuiescence` (§ The configuration option) is then a pure buffering-policy knob a worker session reads, orthogonal to the kind (Decision 3). |
 | `packages/daemon/src/bus-worker-node-raw.js`, `worker.js` | Node raw worker inherits the barrier through `makeMessageCapTP`. |
-| `packages/slots` (`@endo/slots`: `makeMessageSlots`, `makeNetstringSlots`) and the daemon splices (`bus-manager-endor.js`, `bus-worker-xs.js`) | Thread the same `pumpOptions` bag (`{ bufferOutboundUntilQuiescence, stuckCrankThreshold }`) into the slot-machine session (`makeMessageSlots` takes no options bag today, so this adds the same bag `makeMessageCapTP` grows) so both wire protocols behave identically. This is the surface [PR #124](https://github.com/endojs/endo-but-for-bots/pull/124) adds; do not alter [PR #124](https://github.com/endojs/endo-but-for-bots/pull/124) itself; instead, land the embargo as its own change once PR #124 has merged (see § Dependencies for the blocking order). |
+| `packages/slots` (`@endo/slots`: `makeMessageSlots`, `makeNetstringSlots`) and the daemon splices (`bus-manager-endor.js`, `bus-worker-xs.js`) | Thread the same `pumpOptions` bag (`{ bufferOutboundUntilQuiescence, stuckCrankThresholdMs }`) into the slot-machine session (`makeMessageSlots` takes no options bag today, so this adds the same bag `makeMessageCapTP` grows) so both wire protocols behave identically. This is the surface [PR #124](https://github.com/endojs/endo-but-for-bots/pull/124) adds; do not alter [PR #124](https://github.com/endojs/endo-but-for-bots/pull/124) itself; instead, land the embargo as its own change once PR #124 has merged (see § Dependencies for the blocking order). |
 | `rust/endo/src/supervisor.rs` (`start_routing` / `route_message`, per-worker inbox) | The one-envelope-per-crank gate binds at the per-worker inbox admission, adjacent to the existing suspended-worker and admission-control skips. The supervisor's own `outbox_rx.drain()` batching must not reorder relative to a worker's crank flush. |
 
 ## Cross-supervisor parity implications
@@ -327,7 +357,7 @@ and `@endo/cbor` fixtures), batch equality is checkable at the byte level, in th
 same spirit as `sqlite-parity.test.js`.
 
 **Which frame classes the total-order and byte-parity invariant covers.** The
-"emission order, as one atomic unit" flush (§ Design step 4) and the byte-parity
+"emission order, as one atomic unit" flush (§ Design: the embargo, step 4) and the byte-parity
 contract above range over **ordinary outbound frames only**: the embargoed batch.
 The two exempt classes are emitted eagerly and are **not** members of the ordered
 batch: a synchronous-reply frame (Decision 5) is emitted mid-crank, ahead of the
@@ -357,8 +387,8 @@ of which the configuration option controls:
 
 The maintainer's request was precise: "It would be good for this option to
 **exist** in all captp variants including ocapn, slot machine, and our legacy
-captp," on the grounds that "it's not clear that the delay this introduces is
-always better than timely emission." The option is therefore
+captp" (emphasis added), on the grounds that "it's not clear that the delay this
+introduces is always better than timely emission." The option is therefore
 `bufferOutboundUntilQuiescence`, named for exactly what it gates (the buffering
 delay), not the whole embargo discipline, since crank exclusivity is not behind it.
 
@@ -398,23 +428,31 @@ plan does not deliver, is what keeps the compliance claim true.
   session (`makeMessageSlots` has no options bag) nor the Rust+XS supervisor (which
   reads no JS object at all). The correct siting is per-variant, each in that
   variant's own configuration surface:
-  - **Node CapTP / slot machine (JS).** A single `pumpOptions` bag
-    (`{ bufferOutboundUntilQuiescence, stuckCrankThreshold }`) passed to **both**
-    `makeMessageCapTP` and `makeMessageSlots`, rather than a bare positional
-    parameter. `makeMessageCapTP` already carries seven positional parameters with
-    two trailing optionals that callers pad with `undefined`
+  - **Node CapTP / slot machine (JS).** Two orthogonal things kept on separate
+    surfaces, so that no single absence signals several decisions at once. **Session
+    kind** (worker versus non-worker link) is an **explicit datum**, not inferred
+    from the presence of an options bag: a worker session is established by the
+    worker entry point (`makeWorkerMessageCapTP` / `makeWorkerMessageSlots`,
+    equivalently a `sessionKind: 'worker'` selector) that the worker splices call,
+    and crank exclusivity (Decision 3) derives from that kind alone. A non-worker
+    caller of the plain `makeMessageCapTP` / `makeMessageSlots` gets a link session
+    and cannot acquire cranking by passing any flag. **Buffering policy** is the
+    `bufferOutboundUntilQuiescence` knob (default on), carried in a single
+    `pumpOptions` bag (`{ bufferOutboundUntilQuiescence, stuckCrankThresholdMs }`)
+    passed to the worker entry point and **read only for a worker session**. A bare
+    positional parameter is rejected because `makeMessageCapTP` already carries seven
+    positional parameters with two trailing optionals callers pad with `undefined`
     (`bus-manager-rust-xs.js:556`), so a boolean at slot 8 (and the Decision 9
-    `stuckCrankThreshold` at slot 9) would force every caller to write extra
+    `stuckCrankThresholdMs` at slot 9) would force every caller to write extra
     `undefined`s, and the concept would spell two ways once `makeMessageSlots` (which
-    has no options bag today) grew a bag of its own. One `pumpOptions` bag on both
-    entry points spells the concept **once**. It follows the in-repo precedent of
-    `capTpConnectionRegistrar` (`connection.js:103`), which is a separate parameter
-    precisely because it is not a CapTP option: the embargo is a property of the
-    reader/dispatch pump, not of CapTP, so it does not belong in `capTpOptions`.
-    Absence of the bag (or of its `bufferOutboundUntilQuiescence` member) leaves the
-    pump in its current eager, non-serializing mode, which is exactly how the
-    non-worker callers (gateway, peer-to-peer) stay unchanged (§ Affected
-    components).
+    has no options bag today) grew a bag of its own. The bag follows the in-repo
+    precedent of `capTpConnectionRegistrar` (`connection.js:103`), a separate
+    parameter precisely because it is not a CapTP option: the embargo is a property
+    of the reader/dispatch pump, not of CapTP, so it does not belong in
+    `capTpOptions`. Because the kind is explicit, an omitted or `{}` `pumpOptions` on
+    a **worker** session still gets crank exclusivity and default-on buffering, and a
+    **non-worker** session cannot get either; the three reachable states are named in
+    the table below.
   - **Rust+XS supervisor.** A field on the existing control-envelope surface that
     already crosses the language boundary: the `meter-config` control envelope,
     CBOR `{"hard_limit": u64}` decoded at `rust/endo/xsnap/src/lib.rs:1285`, gains
@@ -423,21 +461,39 @@ plan does not deliver, is what keeps the compliance claim true.
     Rust's snake_case convention. It is deliberately **not** `quiescence_embargo`,
     which would reintroduce on the wire surface exactly the "embargo" word the JS name
     avoids (an operator seeing `quiescence_embargo: false` could wrongly read it as
-    gating the whole discipline, when crank exclusivity survives the flip). One
+    gating the whole discipline, when crank exclusivity survives the flip). The
+    Decision 9 stuck-crank threshold takes the same treatment: the field is spelled
+    `stuck_crank_threshold_ms` beside the embargo field, carrying the `_ms` unit
+    suffix its JS bagmate carries, so the Rust+XS operator has the key too. One
     concept, one word, on every variant; only casing varies per language.
-- **The single value-source and who reconciles.** The authoritative value is set
+- **The three reachable states, named once.** Session kind and buffering policy are
+  orthogonal, so a worker splice and a gateway caller reach exactly three
+  configurations, no fourth:
+
+  | Session (entry point) | Crank exclusivity | Outbound |
+  |---|---|---|
+  | Non-worker link (`makeMessageCapTP` / `makeMessageSlots`) | none | eager |
+  | Worker, `bufferOutboundUntilQuiescence` default or `true` | unconditional | buffered, flushed at quiescence |
+  | Worker, `bufferOutboundUntilQuiescence: false` | unconditional | eager (byte-parity and pre-flush failure-atomicity forfeited) |
+
+  A non-worker link has no `bufferOutboundUntilQuiescence` row because the knob is
+  read only for a worker session; a worker session always has crank exclusivity
+  regardless of the knob's value.
+- **The single value-source.** The authoritative value is set
   once, per worker, by the supervisor at **spawn time**, and each runtime derives
   its local spelling from that one decision: the Node pump parameter and the Rust
   control-envelope field are both written from the same per-worker spawn
   configuration, so the two are set together rather than by independent
-  per-connection discipline. The operator-facing surface that per-worker spawn
-  decision lives on (the concrete key on the worker-spawn request the supervisor
+  per-connection discipline (nothing reconciles them after spawn because there is
+  one source). The operator-facing surface on which that per-worker spawn
+  decision lives (the concrete key on the worker-spawn request the supervisor
   reads, alongside `hard_limit` and the other per-worker metering parameters) is
   **deferred to the build as a named residual** (see § Resolved in review, "Option
   gating"): this design fixes the two derived spellings and the single-source
   requirement, and the build names the one spawn-config key both derive from rather
-  than this design inventing a surface it cannot yet verify against the spawn path. A parity test configures both sides on; a
-  single-supervisor deployment sets whichever value it wants. The design does not,
+  than this design inventing a surface it cannot yet verify against the spawn path.
+  A parity test configures both sides on; a single-supervisor deployment sets
+  whichever value it wants. The design does not,
   and per the maintainer need not, enforce a global constant. It guarantees the
   option exists in every variant and is derived from one per-worker source, and it
   states plainly that byte-parity is claimed only across two supervisors that were
@@ -470,7 +526,11 @@ outbound only; synchronous ancestor-calls (Decision 5) and debug frames
     crank emits nothing (there is no redelivery; the crank is fatal). Assert no
     partial batch is ever observable on the wire, exercising both the Rust+XS
     terminate-and-restore-from-snapshot path and the Node
-    abort-flag-drops-the-buffer path.
+    abort-flag-drops-the-buffer path. The Node case injects a fault into the
+    pump/flush machinery (a genuine crank fault sets the abort flag), **not** a
+    handler rejection, which CapTP turns into an ordinary `CTP_RETURN isRejected`
+    reply frame that must flush normally (§ Relationship to the metering "output
+    embargo").
   - Option off: with `bufferOutboundUntilQuiescence: false`, outbound is emitted
     promptly and crank exclusivity still holds (one envelope per crank, verified by
     `meter-report` count) even though byte-parity and failure-atomicity are not
@@ -481,16 +541,21 @@ outbound only; synchronous ancestor-calls (Decision 5) and debug frames
   reply (Decision 5) or a blocking host power (`powers/fs.rs`, `powers/sqlite.rs`)
   burns no computrons, so the hard-limit never fires (Decision 9). The stuck-crank
   observability mitigation therefore applies to **both** supervisors: after the
-  drain exceeds a configurable threshold (`stuckCrankThreshold`) the pump (XS or
+  drain exceeds a configurable threshold (`stuckCrankThresholdMs`) the pump (XS or
   Node) surfaces a supervisor-visible stuck-crank warning rather than the worker
   hanging silently. Closing the gap with a real bound (a Node metering bound, or an
   XS wall-clock bound for a non-compute-divergent crank) is a follow-up against the
   metering design, out of scope for this test.
 - **Determinism / replay.** The same inbound script run twice under the scripted
   scheduler yields identical outbound bytes.
-- **Snapshot-resume.** A worker suspended at a quiescence boundary resumes and
-  produces the identical continuation, tying into the existing suspend/resume
-  infrastructure.
+- **Snapshot-resume.** Two cases. A worker suspended at a quiescence boundary
+  (empty buffer) resumes and produces the identical continuation. And, the harder
+  case skeptic named, a worker suspended **mid-crank with a non-empty outbound
+  buffer** resumes and flushes exactly that buffered batch once, at the resumed
+  crank's quiescence, with no send lost or duplicated: this exercises the
+  buffer-persisted-alongside-the-snapshot path (Decision 10), without which the
+  resumed heap would believe it emitted sends that died with the suspended process.
+  Both tie into the existing suspend/resume infrastructure.
 
 ## Dependencies
 
@@ -522,8 +587,14 @@ outbound only; synchronous ancestor-calls (Decision 5) and debug frames
    but scoped to worker sessions only: the shared Node pump (`makeMessageCapTP`)
    also serves non-worker sessions (the WebSocket gateway, peer-to-peer network
    links) that have no worker and no crank, and those keep their eager dispatch loop
-   (see the `connection.js` row in § Affected components). Control envelopes are
-   exempt regardless (Decision 10).
+   (see the `connection.js` row in § Affected components). Worker-ness is an
+   **explicit session kind** (a dedicated worker entry point, equivalently a
+   `sessionKind: 'worker'` selector; § The configuration option), not inferred from
+   the presence of a `pumpOptions` bag, so a worker splice cannot silently lose
+   exclusivity by omitting the bag and a non-worker cannot acquire it by passing one.
+   Crank exclusivity derives from the kind; `bufferOutboundUntilQuiescence` is pure
+   policy read only within a worker session. Control envelopes are exempt regardless
+   (Decision 10).
 4. **Timers are out of scope; the supervised pump fires none.** Quiescence is
    bounded to due-now jobs (a future-scheduled timer does not hold the embargo
    open), but the supervised pump does not *fire* timers at all, so no crank is ever
@@ -538,7 +609,7 @@ outbound only; synchronous ancestor-calls (Decision 5) and debug frames
    a timer-crank mechanism at all, and adding one on each side (plus a shared
    deterministic clock) is what parity for a timer-using worker would require. This
    design does **not** add it. It scopes its pure-function and byte-parity claims
-   (§ Design, § Cross-supervisor parity implications) to **timer-free workers** and
+   (§ Design: the embargo, § Cross-supervisor parity implications) to **timer-free workers** and
    files timer support in the supervised pump as a follow-up (against the metering
    and `worker-rust-xs` designs) that must name the pump change on both sides. A
    worker that schedules a timer still runs correctly under the non-supervised path;
@@ -567,6 +638,24 @@ outbound only; synchronous ancestor-calls (Decision 5) and debug frames
    flush lives in this later turn, failure-atomicity relies on the per-crank abort
    flag (Decision 2 / the failure-atomicity discussion in § Relationship to the
    metering "output embargo"), not on lexical unwinding of the dispatch turn.
+   The same `setImmediate` fence must also account for **outstanding host-power
+   promises**, or it splits a Node crank that XS runs as one. A host power reads
+   synchronously on XS (`powers/fs.rs` uses `std::fs::read`, so the continuation
+   settles as a microtask inside the same job drain), but on Node
+   `fs.promises.readFile` / the sqlite reads resolve from a later `poll` phase,
+   strictly **after** the `check` phase where the flush lives. So a crank that awaits
+   a file or sqlite power would appear quiesced at the `setImmediate` fence while its
+   continuation is still pending, then flush, report, and admit the next envelope
+   while XS still holds one crank: one XS crank becomes N Node cranks, voiding both
+   byte-parity and crank exclusivity with no timer involved. The Node pump therefore
+   tracks in-flight host-power operations and does **not** treat the crank as
+   quiesced (does not fire the flush) until that count returns to zero, re-arming the
+   fence across the intervening turn. This is why the Quiescence definition names "no
+   outstanding host-power continuation" as a third condition, and it makes the Node
+   crank boundary coincide with XS's for a host-power-using crank. (The alternative,
+   a stated host-power-free precondition alongside timer-free, was rejected: file and
+   sqlite powers are ordinary worker inputs, so excluding them would gut the design's
+   reach; the fence keeps them in scope.)
 7. **The outbound-buffering delay is a configuration option that exists in every
    CapTP variant; crank exclusivity is not option-gated.** The delay buffering
    introduces is not universally better than timely emission, so *that delay* is a
@@ -611,7 +700,10 @@ outbound only; synchronous ancestor-calls (Decision 5) and debug frames
    unbounded for the blocked case too): each pump tracks how long the current crank
    has been draining without quiescing and surfaces a supervisor-visible
    **stuck-crank warning** once the drain exceeds a configurable threshold
-   (`stuckCrankThreshold`), so a wedged worker is detectable even though its outbound
+   (`stuckCrankThresholdMs`, spelled `stuck_crank_threshold_ms` on the Rust+XS side;
+   it carries a stated default, on the order of a few seconds, so the warning fires
+   without an operator setting it, and the exact figure is a build-tuning residual),
+   so a wedged worker is detectable even though its outbound
    is embargoed. A real liveness bound (a Node metering bound, or an XS wall-clock
    bound for a blocked, non-compute-divergent crank) is filed as a follow-up against
    the metering design, not improvised during this build.
@@ -621,15 +713,24 @@ outbound only; synchronous ancestor-calls (Decision 5) and debug frames
     `rust/endo/xsnap/src/lib.rs:1046-1082`) alongside the four protocol verbs, off
     the *same* `recv_raw_envelope` / `try_recv_raw_envelope` source. Moving the
     `try_recv_raw_envelope` drain to after the flush (§ Affected components) must
-    **not** starve them: several exist precisely to act on a stopped or draining
+    **not** starve them. Several exist precisely to act on a stopped or draining
     machine: a `debug` resume command reaches XS only via the mid-crank drain
     (`powers/debug.rs:80` -> `fxRunDebugger`), and a mid-crank `suspend` must be
     observed to snapshot the drained machine (which the snapshot-resume test
-    depends on). Control envelopes therefore remain admissible mid-crank, on a path
-    that intercepts them *before* the one-protocol-envelope gate: the inbound
-    mirror of debug outbound's exemption (Decision 8) on the outbound side. They are
-    not cranks: they buffer no outbound and are not counted by `meter-report`. Only
-    the four **protocol** verbs are held to one-per-crank.
+    depends on). A mid-crank `suspend` snapshots a machine whose crank is
+    **incomplete**, so the per-crank outbound buffer must be persisted **alongside**
+    the snapshot and rehydrated on resume: `handle_suspend`'s `machine.suspend_to_cas`
+    captures only the XS heap, not the Rust-side `Vec<Vec<u8>>`, so without this the
+    resumed heap believes it emitted sends that died with the suspended process. The
+    buffer is therefore part of the suspended worker state, restored so the resumed
+    crank flushes exactly the batch the pre-suspend heap produced (§ Test /
+    verification strategy covers this non-empty-buffer resume case, not only
+    suspension at a quiescence boundary where the buffer is empty). Control envelopes
+    therefore remain admissible mid-crank, on a path that intercepts them *before*
+    the one-protocol-envelope gate: the inbound mirror of debug outbound's exemption
+    (Decision 8) on the outbound side. They are not cranks: they buffer no outbound
+    and are not counted by `meter-report`. Only the four **protocol** verbs are held
+    to one-per-crank.
 
 ## Resolved in review
 
