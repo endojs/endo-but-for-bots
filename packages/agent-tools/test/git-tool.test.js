@@ -169,6 +169,8 @@ test('makeGitTool keeps mutators on writable facets only', t => {
     t.false(names.has('status'), `facet: ${facet}`);
     t.is(names.has('add'), facet !== 'reader', `facet: ${facet}`);
     t.is(names.has('checkoutConflict'), facet !== 'reader', `facet: ${facet}`);
+    t.false(names.has('worktreeList'), `facet: ${facet}`);
+    t.false(names.has('worktreeAdd'), `facet: ${facet}`);
     t.false(names.has('restore'), `facet: ${facet}`);
     t.false(names.has('filesystemAt'), `facet: ${facet}`);
   }
