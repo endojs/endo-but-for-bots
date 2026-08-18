@@ -134,11 +134,11 @@ harden(reportsContainerNotRunning);
  * @returns {string}
  */
 let nextOperationNumber = 0n;
-const makeSliceName = () => {
+const makeOperationName = () => {
   nextOperationNumber += 1n;
   return `${ENDO_SANDBOX_PREFIX}${process.pid.toString(16)}-${Date.now().toString(16)}-${nextOperationNumber.toString(16)}`;
 };
-harden(makeSliceName);
+harden(makeOperationName);
 
 /**
  * Rootless network backend the driver prefers when mapping the
@@ -480,15 +480,6 @@ harden(assembleCreateArgv);
  *                                                            process module
  *                                                            override
  *                                                            (tests).
- * @param {boolean} [input.reapOrphans]                       Whether to
- *                                                            reconcile stale
- *                                                            containers with
- *                                                            the exact owner
- *                                                            label on first
- *                                                            probe. Defaults
- *                                                            to true; false
- *                                                            makes the driver
- *                                                            unavailable.
  * @param {string} [input.ociRuntime]                         Override the
  *                                                            podman OCI
  *                                                            runtime
@@ -522,7 +513,6 @@ harden(assembleCreateArgv);
 export const makePodmanDriver = ({
   env: _env = {},
   childProcess: childProcessModule,
-  reapOrphans = true,
   ociRuntime,
   ownerId,
 } = {}) => {
@@ -703,36 +693,39 @@ export const makePodmanDriver = ({
    *
    * @returns {Promise<Omit<BackendProbe, 'name'>>}
    */
+  /**
+   * Report the driver unavailable because crash cleanup cannot be
+   * proven. Process-group termination is never in doubt for podman —
+   * the operation is container PID 1 — so only the cleanup half varies.
+   *
+   * @param {string} reason           Caller-facing summary.
+   * @param {string} lifecycleReason  Which lifecycle proof is missing.
+   * @param {Partial<Omit<BackendProbe, 'name' | 'available' | 'reason'>>} [extra]
+   * @returns {Omit<BackendProbe, 'name'>}
+   */
+  const crashCleanupUnavailable = (reason, lifecycleReason, extra = {}) =>
+    harden({
+      available: false,
+      ...extra,
+      reason,
+      details: harden({
+        lifecycle: harden({
+          available: false,
+          processGroups: true,
+          crashCleanup: false,
+          reason: lifecycleReason,
+        }),
+        ...extra.details,
+      }),
+    });
+
   const probe = async () => {
     await null;
     if (ownerId === undefined || ownerId === '' || /[\0\r\n]/.test(ownerId)) {
-      return harden({
-        available: false,
-        reason:
-          'podman driver requires a stable ownerId for exact-label crash cleanup',
-        details: harden({
-          lifecycle: harden({
-            available: false,
-            processGroups: true,
-            crashCleanup: false,
-            reason: 'stable ownerId is not configured',
-          }),
-        }),
-      });
-    }
-    if (!reapOrphans) {
-      return harden({
-        available: false,
-        reason: 'podman crash-orphan reconciliation is disabled',
-        details: harden({
-          lifecycle: harden({
-            available: false,
-            processGroups: true,
-            crashCleanup: false,
-            reason: 'orphan reconciliation disabled',
-          }),
-        }),
-      });
+      return crashCleanupUnavailable(
+        'podman driver requires a stable ownerId for exact-label crash cleanup',
+        'stable ownerId is not configured',
+      );
     }
     let cp;
     try {
@@ -825,28 +818,19 @@ export const makePodmanDriver = ({
     // failures degrade to "no override".
     await ensureRuntime(cp);
 
-    // Boot-time orphan reap.  We swallow the result list — the test
-    // suite calls `_sweepOrphans()` directly when it wants to assert
-    // names.
+    // Boot-time orphan reap. Reconciliation is the crash-cleanup proof,
+    // so a failure here makes the driver unavailable rather than
+    // degrading it.
     if (!orphanSweepDone) {
       try {
         await sweepOrphans(cp);
         orphanSweepDone = true;
       } catch (e) {
-        return harden({
-          available: false,
-          version,
-          reason: /** @type {Error} */ (e).message,
-          details: harden({
-            lifecycle: harden({
-              available: false,
-              processGroups: true,
-              crashCleanup: false,
-              reason: 'exact-label orphan reconciliation failed',
-            }),
-            rootless,
-          }),
-        });
+        return crashCleanupUnavailable(
+          /** @type {Error} */ (e).message,
+          'exact-label orphan reconciliation failed',
+          harden({ version, details: harden({ rootless }) }),
+        );
       }
     }
 
@@ -1094,7 +1078,7 @@ export const makePodmanDriver = ({
     }
     const admissionSignal = controls?.signal;
 
-    const containerName = makeSliceName();
+    const containerName = makeOperationName();
     // Names include pid, time, and a counter, so the operation label remains
     // unique even when multiple handles share one formula owner.
     const operationId = containerName;
