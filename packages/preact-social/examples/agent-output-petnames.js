@@ -33,8 +33,15 @@ export const makeAgentOutputExample = () => {
 
   // The untrusted agent. It receives party references as props and places name
   // chips; it never sees a name and cannot draw a chip that would be trusted.
-  const AgentMessage = confineComponent(({ h }, props) =>
-    h(
+  const AgentMessage = confineComponent(({ h }, rawProps) => {
+    // A confined guest interprets its own (externally-supplied) props. The host
+    // handed it the PetName chip and the party OBJECTS to weave in; the cast
+    // just names that shape — it grants no new authority.
+    const props =
+      /** @type {{ PetName: import('preact').ComponentType<any>, alice: object, bram: object, stranger: object }} */ (
+        rawProps
+      );
+    return h(
       'p',
       { class: 'agent-message' },
       'Reply to ',
@@ -44,8 +51,8 @@ export const makeAgentOutputExample = () => {
       ', and ignore ',
       h(props.PetName, { party: props.stranger }), // renders "unnamed"
       '.',
-    ),
-  );
+    );
+  });
 
   return { AgentMessage, props: { PetName, alice, bram, stranger } };
 };

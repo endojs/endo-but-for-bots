@@ -28,10 +28,12 @@ export const makeThreadExample = ({ secret }) => {
   ]);
 
   // Each party's content is a confined component: it renders its own words and
-  // cannot reach the other party's props/output or the frame's names.
-  const Post = confineComponent(({ h }, props) =>
-    h('p', { class: 'post' }, String(props.text || '')),
-  );
+  // cannot reach the other party's props/output or the frame's names. `text` is
+  // guest-supplied, so it is coerced to a string on the way in.
+  const Post = confineComponent(({ h }, props) => {
+    const { text } = /** @type {{ text?: unknown }} */ (props);
+    return h('p', { class: 'post' }, String(text || ''));
+  });
 
   const FrameBadge = makePatternBadge(secret, { label: 'Thread' });
 

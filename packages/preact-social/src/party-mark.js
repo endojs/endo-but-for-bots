@@ -22,9 +22,8 @@ import { freeze } from './freeze.js';
  */
 
 // High-contrast glyphs and colours, chosen so two parties are told apart at a
-// glance. Colours are hex, not `hsl(...)`: the container renderer's style
-// filter can strip function-valued style tokens, so a hex string is what
-// reliably reaches the DOM.
+// glance. Colours are plain hex strings — a simple, self-contained value with
+// no dependency on how any CSS-function syntax is treated downstream.
 const GLYPHS = freeze([
   '●',
   '■',

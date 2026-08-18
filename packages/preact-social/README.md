@@ -150,9 +150,14 @@ const Badge = confineComponent(withLimitedCss(withPrimitiveParams(render)));
 - It does not stop a party drawing a lookalike mark *inside its own region*; it
   stops that forgery being placed as the frame's attribution for another party
   (which the frame alone controls) and from being read across regions.
+- It does not contain a confined guest's own **CSS geometry**: this container
+  version has no `style`-property filter, so a guest can draw a positioned
+  overlay within its own box. `withLimitedCss` stops a guest restyling a
+  *trusted component*, but the anti-spoofing control for guest-drawn chrome is
+  the recognizable pattern badge, not CSS containment.
 
-See `@endo/preact-container`'s `SECURITY-PROPERTIES` for the boundary's full
-threat model and preconditions.
+See `@endo/preact-container`'s README for the boundary's threat model,
+preconditions (SES `lockdown()` above all), and known gaps.
 
 ## Tests
 

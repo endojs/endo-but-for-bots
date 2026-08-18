@@ -67,9 +67,12 @@ const CSS_PROPS = freeze(['style', 'class', 'className']);
  * sees them, so a trusted component cannot be restyled, recoloured, or hidden
  * by whoever places it — the presentation is the component's own.
  *
- * This is presentation INTEGRITY for one component. It is orthogonal to
- * `renderConfined({ strictStyle: true })`, which constrains the CSS the whole
- * confined GUEST subtree may emit; layer both as the threat model needs.
+ * This is presentation INTEGRITY for one component — it stops a component
+ * being restyled by whoever places it. It does NOT constrain the CSS geometry
+ * a confined GUEST emits in its own output: this container has no CSS-property
+ * filter, so a guest can still draw a positioned overlay in its own box. The
+ * anti-spoofing control for that is the recognizable pattern badge, not CSS
+ * containment (see the package README's "What this does not do").
  *
  * @template {(endowments: CompartmentEndowments, props: any) => unknown} F
  * @param {F} fn

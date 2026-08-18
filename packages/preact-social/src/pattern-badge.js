@@ -29,6 +29,8 @@ import { confineComponent } from '@endo/preact-container/compartment';
 import { withPrimitiveParams, withLimitedCss } from './modifiers.js';
 import { freeze } from './freeze.js';
 
+/** @import { CompartmentEndowments, ConfinedProps } from '@endo/preact-container/compartment' */
+
 // Small, high-contrast sets: recognition is a human act done at a glance, and
 // a blind guesser faces the product of these with no feedback on a wrong try.
 const GLYPHS = freeze([
@@ -162,7 +164,9 @@ freeze(getOrCreatePatternSecret);
  * guest from restyling or hiding the badge.
  *
  * @param {string} secret From `getOrCreatePatternSecret`.
- * @param {{ label?: string }} [opts] `label`: default text when the guest supplies none.
+ * @param {{ label?: string, onError?: (error: unknown) => void }} [opts]
+ *   `label`: default text when the guest supplies none. `onError` is forwarded
+ *   to `confineComponent`.
  * @returns {import('preact').FunctionComponent<{ text?: string }>} The badge.
  */
 export const makePatternBadge = (secret, opts = {}) => {
@@ -175,26 +179,34 @@ export const makePatternBadge = (secret, opts = {}) => {
     `color:hsl(${pattern.hue2} 90% 82%);` +
     `border:1px solid hsl(${pattern.hue2} 70% 45%);`;
 
-  return confineComponent(
-    withLimitedCss(
-      withPrimitiveParams(({ h }, { text }) => {
-        const label = text != null && text !== '' ? String(text) : defaultLabel;
-        return h(
-          'span',
-          {
-            class: 'secure-badge',
-            style: badgeStyle,
-            title: `Your security pattern: ${pattern.glyph} ${pattern.phrase}. If this does not match, do not trust this prompt.`,
-          },
-          h('span', { 'aria-hidden': 'true' }, pattern.glyph),
-          h('span', null, pattern.phrase),
-          label
-            ? h('span', { style: 'opacity:.85;font-weight:400' }, label)
-            : null,
-        );
-      }),
-    ),
-    { name: 'PatternBadge', onError: opts.onError },
-  );
+  // The cast restates the guest-facing prop contract at the boundary: the
+  // `any`-typed modifiers erase `confineComponent`'s prop generic, so we name
+  // it here rather than let the wrapper widen to `FunctionComponent<{}>`.
+  const render =
+    /** @type {(e: CompartmentEndowments, p: ConfinedProps<{ text?: string }>) => import('preact').VNode} */ (
+      withLimitedCss(
+        withPrimitiveParams(({ h }, { text }) => {
+          const label =
+            text != null && text !== '' ? String(text) : defaultLabel;
+          return h(
+            'span',
+            {
+              class: 'secure-badge',
+              style: badgeStyle,
+              title: `Your security pattern: ${pattern.glyph} ${pattern.phrase}. If this does not match, do not trust this prompt.`,
+            },
+            h('span', { 'aria-hidden': 'true' }, pattern.glyph),
+            h('span', null, pattern.phrase),
+            label
+              ? h('span', { style: 'opacity:.85;font-weight:400' }, label)
+              : null,
+          );
+        }),
+      )
+    );
+  return confineComponent(render, {
+    name: 'PatternBadge',
+    onError: opts.onError,
+  });
 };
 freeze(makePatternBadge);

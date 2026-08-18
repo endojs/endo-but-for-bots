@@ -20,7 +20,7 @@ export function withPrimitiveParams<F extends ConfinedRender>(fn: F): F;
 /**
  * Drop guest-supplied `style`, `class`, and `className` before the component
  * sees them, so it cannot be restyled, recoloured, or hidden by whoever places
- * it. Orthogonal to `renderConfined({ strictStyle })`, which constrains the
- * guest subtree's own CSS.
+ * it. This is presentation integrity for one component; it does not constrain
+ * the CSS geometry a confined guest emits in its own output.
  */
 export function withLimitedCss<F extends ConfinedRender>(fn: F): F;

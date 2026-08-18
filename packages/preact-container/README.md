@@ -187,15 +187,17 @@ with `(endowments, props)`. `props.children`, if any, is an array of
 opaque sentinel vnodes the guest can position but not inspect.
 
 Only `children` crosses opaquely.
-Passing a vnode through any **other** prop throws a `TypeError`: a raw
-vnode would hand the guest live host component references
-(`vnode.type` is directly callable with arguments of the guest's
-choosing).
-Use `children` — or a confined component the guest places (see "Trusted
-content" below) — as the carrier for host content.
-Function-valued props are **not** rejected: passing a callback is a
-deliberate capability grant, and host code must treat the arguments it
-receives as untrusted data.
+A vnode passed through any **other** prop is **dropped** (best-effort:
+top-level values and one level of array): a raw vnode there would hand
+the receiver a live, callable component reference (`vnode.type`). This
+is a tripwire for the common idiom, not a boundary — carry host content
+as `children`, or as a confined component the guest places (see "Trusted
+content" below). It drops rather than throws so that a guest placing
+trusted content cannot crash the render by supplying a vnode-shaped
+prop.
+Function-valued props are **not** dropped: passing a callback is a
+deliberate capability grant, and the receiver must treat the arguments
+it gets as untrusted data.
 
 `opts.name` sets the devtools display name; `opts.onError` is invoked
 when `fn` throws (the host render is not interrupted; exceptions from
