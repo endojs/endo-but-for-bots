@@ -128,6 +128,48 @@ body {
   z-index: 70;
 }
 
+/* Toggles the spaces gutter. Sits leftmost, over the column it controls, and
+   is the reason the gutter can be reached from a space that fills the page:
+   hiding it is a preference rather than something a space does to you. */
+.app-header-gutter-toggle {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.app-header-gutter-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.app-header-gutter-toggle.showing {
+  color: var(--text-primary);
+}
+
+/* Three bars from one box and its shadows, so the icon needs no font, no
+   image, and no glyph the renderer would have to pass through. */
+.app-header-gutter-icon {
+  width: 15px;
+  height: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  box-shadow:
+    0 -5px 0 currentColor,
+    0 5px 0 currentColor;
+}
+
 /* The logo doubles as the "go home" control, so it is a real button rather
    than a decorated div: keyboard focus and Enter/Space come for free. */
 .app-header-home {
@@ -174,15 +216,16 @@ body {
 #space-root {
   position: absolute;
   top: var(--header-height);
-  left: 0;
+  left: var(--gutter-width);
   right: 0;
   bottom: 0;
 }
 
-/* Spaces Gutter */
+/* Spaces Gutter. A sibling of the space root, not a child of it: the space that
+   is open must not be able to replace the bar that navigates between spaces. */
 #spaces-gutter {
   position: absolute;
-  top: 0;
+  top: var(--header-height);
   left: 0;
   bottom: 0;
   width: var(--gutter-width);
@@ -191,6 +234,18 @@ body {
   display: flex;
   flex-direction: column;
   z-index: 60;
+}
+
+/* Hiding the bar is one variable: the space root beside it reserves its room
+   from `--gutter-width`, so zeroing that here reclaims the width for whichever
+   space is open. The element leaves the layout as well, since a zero-width
+   column would still draw its right border as a stray line. */
+body.gutter-hidden {
+  --gutter-width: 0px;
+}
+
+body.gutter-hidden #spaces-gutter {
+  display: none;
 }
 
 .spaces-gutter-inner {
@@ -395,11 +450,11 @@ body {
   text-align: center;
 }
 
-/* Sidebar - Inventory (shifted for gutter) */
+/* Sidebar - Inventory */
 #pets {
   position: absolute;
   top: 0;
-  left: var(--gutter-width);
+  left: 0;
   bottom: 0;
   width: var(--sidebar-width);
   background: var(--bg-sidebar);
@@ -409,12 +464,12 @@ body {
   flex-direction: column;
 }
 
-/* Resize handle (shifted for gutter) */
+/* Resize handle */
 #resize-handle {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: calc(var(--gutter-width) + var(--sidebar-width));
+  left: var(--sidebar-width);
   width: 6px;
   margin-left: -3px;
   cursor: col-resize;
@@ -829,11 +884,11 @@ body.resizing * {
   cursor: not-allowed;
 }
 
-/* Main content - Messages (shifted for gutter) */
+/* Main content - Messages */
 #messages {
   position: absolute;
   top: 0;
-  left: calc(var(--gutter-width) + var(--sidebar-width));
+  left: var(--sidebar-width);
   right: 0;
   bottom: 60px;
   padding: 20px 24px;
@@ -843,10 +898,10 @@ body.resizing * {
   background: var(--bg-primary);
 }
 
-/* Chat input bar (shifted for gutter) */
+/* Chat input bar */
 #chat-bar {
   position: absolute;
-  left: calc(var(--gutter-width) + var(--sidebar-width));
+  left: var(--sidebar-width);
   right: 0;
   bottom: 0;
   height: auto;
@@ -5834,7 +5889,7 @@ button.btn-spinner::after {
   display: none;
   position: absolute;
   top: 0;
-  left: calc(var(--gutter-width) + var(--sidebar-width));
+  left: var(--sidebar-width);
   right: 0;
   z-index: 10;
   align-items: center;

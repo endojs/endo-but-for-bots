@@ -66,6 +66,8 @@ const KNOWN_MODES = new Set([
  * @property {(id: string, updates: Partial<Pick<SpaceConfig, 'name' | 'icon' | 'scheme' | 'viewMode' | 'lastChannelPetName' | 'channelOrder' | 'bookmarks'>>) => Promise<void>} updateSpace - Update a space
  * @property {(id: string) => Promise<void>} removeSpace - Remove a space
  * @property {() => string} getActiveSpaceId - Get currently active space ID
+ * @property {(path: string[]) => void} setActivePath - Report a navigation that
+ *   did not come from the gutter, so the highlight follows it
  */
 
 /** @type {SpaceConfig} */
@@ -118,6 +120,42 @@ const DEVICE_DEFAULT_KEY = 'chat-default-space';
 // configuration, so a space that moved or changed mode is corrected on the load
 // after the change, and one that was removed is corrected during that load.
 const BOOT_DEFAULT_KEY = 'chat-default-space-boot';
+
+// Whether this browser shows the gutter. Absent means showing, so a device that
+// has never touched the toggle — and one whose storage is unavailable — gets the
+// bar rather than a page with no way back to the other spaces.
+const GUTTER_VISIBLE_KEY = 'chat-spaces-gutter-hidden';
+
+/**
+ * Whether the spaces gutter should be showing on this device.
+ *
+ * Synchronous, like the boot cache, because the shell applies it before the
+ * first paint rather than letting the gutter appear and then vanish.
+ *
+ * @returns {boolean}
+ */
+export const readGutterVisible = () => {
+  try {
+    return window.localStorage.getItem(GUTTER_VISIBLE_KEY) !== 'true';
+  } catch {
+    return true;
+  }
+};
+harden(readGutterVisible);
+
+/**
+ * Remember whether the gutter is showing on this device.
+ *
+ * @param {boolean} visible
+ */
+export const writeGutterVisible = visible => {
+  try {
+    window.localStorage.setItem(GUTTER_VISIBLE_KEY, String(!visible));
+  } catch {
+    // A device that cannot remember the choice still honors it for this page.
+  }
+};
+harden(writeGutterVisible);
 
 const loadDeviceDefaultSpaceId = () => {
   try {
@@ -472,6 +510,12 @@ export const createSpacesGutter = ({
   currentProfilePath,
   onNavigate,
 }) => {
+  // The gutter outlives every space change, so the path it highlights is
+  // state rather than a construction-time fact. `setActivePath` below is how
+  // navigation that did not come from here — a deep link, the header's home
+  // control, a space that closed itself — keeps the highlight honest.
+  let activePath = currentProfilePath;
+
   /** @type {Map<string, SpaceConfig>} */
   const spacesMap = new Map();
   /** @type {SpaceConfig} */
@@ -492,7 +536,7 @@ export const createSpacesGutter = ({
   // cache's two readers cannot disagree about what was opened.
   const booted = readBootDefaultSpace();
   const bootedDefaultSpaceId =
-    booted !== undefined && pathsEqual(booted.profilePath, currentProfilePath)
+    booted !== undefined && pathsEqual(booted.profilePath, activePath)
       ? booted.id
       : '';
 
@@ -532,7 +576,7 @@ export const createSpacesGutter = ({
    * Update active space based on current profile path.
    */
   const syncActiveSpaceToPath = () => {
-    activeSpaceId = findSpaceForPath(currentProfilePath);
+    activeSpaceId = findSpaceForPath(activePath);
   };
 
   /**
@@ -861,8 +905,10 @@ export const createSpacesGutter = ({
       }
       return;
     }
-    // Only redirect a plain Home open; a deep-linked path stays put.
-    if (currentProfilePath.length !== 0) return;
+    // Only redirect a plain Home open; a deep-linked path stays put. This
+    // runs once per gutter, and the gutter is built once per page load, so
+    // returning to Home later is never mistaken for a fresh open.
+    if (activePath.length !== 0) return;
     const target = deviceDefaultSpaceId || systemDefaultSpaceId();
     // '' and 'home' both mean "stay on Home", which is where we already are.
     if (!target || target === 'home') return;
@@ -1346,6 +1392,33 @@ export const createSpacesGutter = ({
   const getActiveSpaceId = () => activeSpaceId;
 
   /**
+   * Point the gutter at a profile path something else navigated to.
+   *
+   * Advisory on purpose: when the space already open still matches the path,
+   * the highlight stays where it is. Several spaces can share one profile path
+   * — a chat and a file view of the same host, say — and re-deriving from the
+   * path alone would quietly move the highlight to whichever of them was
+   * created first.
+   *
+   * @param {string[]} path
+   */
+  const setActivePath = path => {
+    activePath = path;
+    const open =
+      activeSpaceId === 'home' ? homeSpaceConfig : spacesMap.get(activeSpaceId);
+    if (open && pathsEqual(open.profilePath, path)) {
+      return;
+    }
+    activeSpaceId = findSpaceForPath(path);
+    const opened =
+      activeSpaceId === 'home' ? homeSpaceConfig : spacesMap.get(activeSpaceId);
+    if (opened) {
+      applyScheme(opened.scheme);
+    }
+    pushState();
+  };
+
+  /**
    * Handle keyboard shortcuts (Cmd+1..9).
    *
    * @param {KeyboardEvent} e
@@ -1411,6 +1484,7 @@ export const createSpacesGutter = ({
     updateSpace,
     removeSpace,
     getActiveSpaceId,
+    setActivePath,
   });
 };
 harden(createSpacesGutter);
