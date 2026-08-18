@@ -1091,6 +1091,81 @@ mod tests {
         assert_eq!(store_to_image(&store).unwrap().chunks, Vec::<u8>::new());
     }
 
+    /// A page whose outgoing summary transitions non-empty → EMPTY
+    /// across commits must have its stale pairs cleared: the
+    /// commit-side maintenance deletes a traveling page's pairs
+    /// BEFORE inserting the (possibly zero) new ones, and guarding
+    /// that delete behind `!targets.is_empty()` would pass every
+    /// other suite while leaving ghost edges that inflate the CTE's
+    /// reachability forever (review-wave-2 coverage finding). The
+    /// empty-transition batch is legitimate by construction:
+    /// `image_to_batch` re-derives summaries and leaves from the
+    /// mutated rows, so the batch stays self-consistent through
+    /// `apply_batch`'s symmetric-difference check.
+    #[test]
+    fn commit_clears_pairs_when_a_page_loses_all_edges() {
+        use ironhorse_snapshot::store::SLOTS_PER_PAGE;
+
+        let mut store = SqliteHeapStore::open_in_memory().unwrap();
+        let mut m = Interp::new();
+        assert!(m.run(&PROG_A).completed);
+        let image1 = m.snapshot_image(&sig());
+        store.commit(&image_to_batch(&image1, 1, "")).unwrap();
+
+        // Pick a page with outgoing edges (the boot region guarantees
+        // cross-page references exist).
+        let p: i64 = store
+            .conn
+            .query_row("SELECT page FROM edge_pairs ORDER BY page LIMIT 1", [], |r| r.get(0))
+            .expect("fixture has at least one outgoing edge");
+        let before: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM edge_pairs WHERE page = ?1",
+                params![p],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(before > 0, "picked page starts with pairs");
+
+        // Zero the page's records: no references, null next — its
+        // derived summary becomes the empty list.
+        let mut image2 = image1.clone();
+        let start = p as usize * SLOTS_PER_PAGE as usize;
+        let end = (start + SLOTS_PER_PAGE as usize).min(image2.slots.len());
+        for s in &mut image2.slots[start..end] {
+            *s = ironhorse_vm::Slot::undefined();
+        }
+        let prev = store.manifest().unwrap().seal;
+        store.commit(&image_to_batch(&image2, 2, &prev)).unwrap();
+
+        let after: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM edge_pairs WHERE page = ?1",
+                params![p],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(after, 0, "empty transition clears the page's stale pairs");
+
+        // And the whole index still mirrors the sealed rows: every
+        // decoded blob edge has its pair and nothing else remains.
+        let blob_edges: i64 = store
+            .conn
+            .query_row(
+                "SELECT COALESCE(SUM(length(targets) / 4), 0) FROM page_edges",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let pairs: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM edge_pairs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(blob_edges, pairs, "pairs mirror the sealed rows after the transition");
+    }
+
     /// A file that is not a SQLite database fails closed at open.
     #[test]
     fn foreign_file_fails_closed() {

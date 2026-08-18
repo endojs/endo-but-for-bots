@@ -2790,3 +2790,71 @@ mod tests {
         assert!(identical > 0, "some generated programs should compile byte-identically");
     }
 }
+
+#[cfg(test)]
+mod hostile_suspend_tests {
+    //! The YIELD twin of the AWAIT stack-underflow guard (both landed
+    //! after the fuzz lane's first CI trophy; the AWAIT lock lives in
+    //! ironhorse-vm's unit tests, driven by seven raw bytes). Raw
+    //! top-level bytecode cannot reach a generator RESUME — the
+    //! `gen_run_stack` base is recorded only inside the `.next()`
+    //! driver — so this reproducer compiles a real generator program
+    //! and then rewrites the resumed body itself: every byte between
+    //! `START_GENERATOR` and the body's `YIELD` becomes a POP (one
+    //! byte each, so every offset and the trailing branch survive).
+    //! The resumed frame's own stack starts empty, so those pops
+    //! drain the DRIVER's slots below the recorded run base — exactly
+    //! the shape hostile bytecode produces — and the YIELD guard must
+    //! refuse it by name instead of letting `split_off` panic.
+
+    #[test]
+    fn hostile_yield_below_run_base_fails_closed() {
+        let (bytecode, symbols) =
+            ironhorse_compile::compile_atoms("function* g() { yield; } var it = g(); it.next();")
+                .expect("generator fixture compiles");
+        // Sanity: the untampered program runs to completion.
+        let clean = ironhorse_vm::run_program_with_symbols(&bytecode, &symbols);
+        assert!(clean.completed, "clean generator fixture: {:?}", clean.halt);
+
+        const START_GENERATOR: u8 = 195; // XS_CODE_START_GENERATOR
+        const POP: u8 = 146; //             XS_CODE_POP (1 byte)
+        const YIELD: u8 = 235; //           XS_CODE_YIELD
+
+        // Walk instruction boundaries (the vm's own decode, so a
+        // literal byte inside an operand cannot be mistaken for an
+        // opcode) to find the generator body: START_GENERATOR, then
+        // the first YIELD after it.
+        let mut start = None;
+        let mut yield_at = None;
+        let mut pc = 0usize;
+        while pc < bytecode.len() {
+            match bytecode[pc] {
+                START_GENERATOR if start.is_none() => start = Some(pc),
+                YIELD if start.is_some() && yield_at.is_none() => yield_at = Some(pc),
+                _ => {}
+            }
+            pc += ironhorse_vm::instruction_len(&bytecode, pc)
+                .expect("compiled fixture decodes")
+                .max(1);
+        }
+        let (start, yield_at) = (
+            start.expect("fixture has START_GENERATOR"),
+            yield_at.expect("fixture has YIELD after it"),
+        );
+
+        let mut patched = bytecode.clone();
+        for b in &mut patched[start + 1..yield_at] {
+            *b = POP;
+        }
+
+        // The patch only replaces instructions with POPs, so it
+        // cannot introduce a dispatch cycle; the unbounded symbols
+        // runner (the clean run's entry) is safe.
+        let out = ironhorse_vm::run_program_with_symbols(&patched, &symbols);
+        assert_eq!(
+            out.halt,
+            ironhorse_vm::Halt::Unsupported("yield:stack-underflow"),
+            "the YIELD guard refuses a frame drained below its run base"
+        );
+    }
+}

@@ -473,28 +473,37 @@ negatives are on the record too.
   leaves the dominant page-free to subtraction, and prints cold
   first-round enum/query samples beside warm partial medians; time
   all four phases in one warm round.
-- **`YIELD` stack-underflow guard has no regression test** (the
-  `AWAIT` twin does). The guard is confirmed sound by inspection
-  (structural twin of the tested one; `pop()` is total) and the fuzz
-  lane explores the generator path. A byte-patch reproducer was
-  attempted and abandoned as too fragile: a compiled generator's own
-  stack starts empty at resume, so a balanced-then-patched body does
-  not underflow; a genuine reproducer needs hand-assembled hostile
-  bytecode that drives a generator resume with a nonzero base.
-- **Cross-crank bench fixtures** rely on the positional-symbol
-  convention with only `.completed` asserted (all four are correctly
-  aligned today); pin the results so a future edit that misaligns a
-  redeclaration fails loudly.
-- **FileStore has no `partial_collect` coverage**: the
-  backend-equivalence test covers Memory vs SQLite only. The non-DB
-  reviewer's probe showed current equivalence (freed 2919 == 2919,
-  byte-exact round-trips), but the durable non-DB backend's
-  edge-section decode and post-commit reload feeding the new trait
-  methods are untested. Fix: extend the equivalence test to a
-  three-way Memory/File/SQLite check.
 - **Temp-dir cleanup** in the bench/query tests runs only on success
   (pid-keyed start-of-test cleanup mitigates leakage; a repo-wide
   convention gap, low severity).
+
+*Coverage gaps from the open list, closed 2026-08-18:*
+
+- **`YIELD` stack-underflow guard is now regression-locked**
+  (`hostile_yield_below_run_base_fails_closed`, in the fuzz lib's
+  unit tests). The reproducer that finally worked: compile a real
+  generator program, walk instruction boundaries with the vm's own
+  decode to find `START_GENERATOR` and the body's `YIELD`, and
+  rewrite everything between them to single-byte POPs — the resumed
+  frame's own stack starts empty, so the pops drain the driver's
+  slots below the recorded run base and the guard must refuse by
+  name. (Two earlier fixed-offset byte patches failed because
+  `NEW_PROPERTY`'s stack arity left own-stack slack above the base —
+  the disassembly-guided rewrite is arity-independent.)
+- **FileStore joined the backend equivalence**:
+  `partial_collect_equivalent_across_backends` is now three-way
+  (Memory/File/SQLite; same freed count, same free-list length), so
+  the durable non-DB backend's edge-section decode feeds the same
+  locked decision path.
+- **Cross-crank fixture bindings are result-pinned**: query_gc's
+  crank 2 asserts its completion value and store_bench's touch crank
+  asserts the per-round counter, so a misaligned redeclaration fails
+  loudly instead of silently shifting what the suite builds.
+- **The empty-transition pair clear is bite-locked**
+  (`commit_clears_pairs_when_a_page_loses_all_edges`): a page whose
+  summary goes non-empty → empty across commits must shed its stale
+  pairs — guarding the commit-side delete behind a non-empty check
+  would have passed every prior suite while leaving ghost edges.
 
 *Cleared on inspection or by empirical probe (no defect):*
 

@@ -56,7 +56,11 @@ fn store_query_cost_across_heap_sizes() {
             "var arr = []; var t = 0; var i = 0; \
              for (i = 0; i < {n}; i = i + 1) {{ arr[i] = {{ v: i, w: i }}; }} t = 7;"
         );
-        let touch = "var arr; var t; var i; var v; var w; t = t + 1;";
+        // Redeclares the build crank's symbols in order (the
+        // positional-id convention); ends in an EXPRESSION so the
+        // result pins the binding — a misaligned redeclaration would
+        // still complete but return the wrong number (review finding).
+        let touch = "var arr; var t; var i; var v; var w; t = t + 1";
         let (b1, names) = compile(&build);
         let (b2, _) = compile(touch);
 
@@ -77,8 +81,9 @@ fn store_query_cost_across_heap_sizes() {
         // Incremental checkpoint after a one-global crank.
         let mut commit_ms = Vec::new();
         let mut session = resume_from_store_lazy(store.clone(), &sig()).unwrap();
-        for _ in 0..5 {
-            assert!(session.machine_mut().run(&b2).completed);
+        for round in 0..5 {
+            let o = session.machine_mut().run(&b2);
+            assert_eq!(o.result, (8 + round).to_string(), "touch-crank binding pinned");
             let t0 = Instant::now();
             checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).unwrap();
             commit_ms.push(t0.elapsed().as_secs_f64() * 1e3);
