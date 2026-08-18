@@ -93,9 +93,16 @@ test('start journals, invokes with effectId, and completes on the outcome', asyn
   const journal = await E(run).journal();
   t.deepEqual(
     journal.map(entry => entry.kind),
-    ['started', 'effect-dispatched', 'effect-settled', 'event', 'completed'],
+    ['started', 'effect-dispatched', 'event'],
   );
-  t.is(journal[3].by, 'invoke:worker');
+  // The settlement, its transition, and the terminal outcome commit as
+  // ONE atomic entry — no crash can separate them.
+  const settlementEntry = journal[2];
+  t.is(settlementEntry.by, 'invoke:worker');
+  t.is(settlementEntry.settles.effectId, '0-0');
+  t.is(settlementEntry.settles.status, 'fulfilled');
+  t.truthy(settlementEntry.fired);
+  t.is(settlementEntry.terminal.outcome, 'completed');
 });
 
 test('invoke failures route to the declared failure event', async t => {
@@ -541,7 +548,8 @@ test('follow replays from a seq cursor then tails live entries', async t => {
   await E(control).signal(harden({ type: 'go' }));
   await until(() => engine.fold.done, 'run completion');
   await consumed;
-  t.deepEqual(seen, ['1:event', '2:event', '3:completed']);
+  // The terminal outcome rides the final event entry.
+  t.deepEqual(seen, ['1:event', '2:event']);
 });
 
 test('service lists, installs, and starts charts by key with region refs', async t => {

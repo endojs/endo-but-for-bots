@@ -118,10 +118,11 @@ guest as its powers, and **pin it** so it wakes on restart:
 # a dedicated agent for the service
 endo mkguest workflow-powers workflow-agent
 
-# provision the plugin; pinning the result is what revives it at boot
-endo make-unconfined --UNCONFINED @endo/workflow \
+# provision the plugin from its entry module; pinning the result is
+# what revives it at boot (--UNCONFINED takes a file path)
+endo make --UNCONFINED node_modules/@endo/workflow/src/index.js \
   --powers workflow-agent --name workflow-service
-endo cp workflow-service @pins:workflow-service
+endo cp workflow-service @pins/workflow-service
 ```
 
 The daemon eagerly revives exactly one caplet collection at boot: the
@@ -204,7 +205,21 @@ value (or in params) is **redacted** to a `ref-<n>` alias string and
 durably parked under the run's `refs/` directory — the audit log stays
 legible to any observer, the pet-store name keeps the capability alive
 in the daemon's GC graph, and the control holder can recover it via
-`resolveRef`.
+`resolveRef` (charts themselves must be capability-free; endowments are
+the only capability channel).
+Causally-coupled facts commit in ONE entry: an effect settlement rides
+the same write as the transition it fires (`settles`), a step that
+enters a final state carries its own `terminal` outcome, and the
+internal events and `emit`s a step raises are journaled as delivery
+obligations that recovery re-dispatches — no crash window separates a
+durable cause from its durable consequence.
+Recovery is isolated per run (one corrupt journal cannot block the
+rest), spawn re-dispatch adopts its deterministically-named child
+instead of duplicating it, and a crash mid-`resume` drains the
+remaining queued events at the next boot.
+One honest limit: a hash chain authenticates everything BEFORE its
+tail, so an edit to the final entry of a stopped service's journal is
+not detectable from the journal alone.
 Every entry carries `prev`, the SHA-256 of the previous entry's
 canonical encoding, so the journal is a hash chain: recovery verifies
 it (a broken chain surfaces as `integrity` in status), clients can

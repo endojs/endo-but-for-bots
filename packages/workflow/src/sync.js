@@ -10,6 +10,7 @@
  */
 
 import { E } from '@endo/eventual-send';
+
 import {
   applyEntry,
   initialFoldState,
@@ -55,21 +56,45 @@ export const makeRunSyncClient = (
   /** @type {any[]} */
   const log = [];
   let stopped = false;
+  let broken = false;
+  // Disposal goes through the LOCAL iterator's `return()` (the remote
+  // reader exposes no `return` method); it signals the responder so the
+  // service-side follower is released promptly.
   /** @type {any} */
-  let reader;
+  let iterator;
 
   const consumed = (async () => {
     await null;
     try {
-      reader = await E(run).follow({ since: 0n });
-      for await (const entry of iterateEntries(reader)) {
+      const reader = await E(run).follow({ since: 0n });
+      iterator = iterateEntries(reader);
+      if (stopped) {
+        // stop() ran while follow() was in flight; close what we made.
+        await iterator.return?.(undefined);
+        return;
+      }
+      for await (const entry of iterator) {
         if (stopped) {
           return;
         }
-        applyEntry(fold, entry);
-        log.push(entry);
+        try {
+          applyEntry(fold, entry);
+          log.push(entry);
+        } catch (error) {
+          // A malformed entry breaks the mirror, not the caller; the
+          // fold freezes and `broken` marks the divergence.
+          broken = true;
+          if (onError !== undefined) {
+            onError(error);
+          }
+          return;
+        }
         if (onEntry !== undefined) {
-          onEntry(entry);
+          try {
+            onEntry(entry);
+          } catch {
+            // A listener throw must not kill the mirror.
+          }
         }
       }
     } catch (error) {
@@ -82,6 +107,8 @@ export const makeRunSyncClient = (
   return harden({
     /** The mirrored state as of the last received entry. */
     current: () => snapshotOf(fold),
+    /** True when a malformed entry froze the mirror. */
+    isBroken: () => broken,
     /** The journal entries received so far. */
     entries: () => harden([...log]),
     /**
@@ -102,10 +129,8 @@ export const makeRunSyncClient = (
     done: () => consumed,
     stop: () => {
       stopped = true;
-      if (reader !== undefined) {
-        E(reader)
-          .return(undefined)
-          .catch(() => {});
+      if (iterator !== undefined && typeof iterator.return === 'function') {
+        Promise.resolve(iterator.return(undefined)).catch(() => {});
       }
     },
   });
