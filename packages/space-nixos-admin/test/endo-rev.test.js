@@ -28,23 +28,23 @@ test('a host with no pin reports an empty revision', async t => {
   t.is(await admin.getEndoRev(), '');
 });
 
-test('setEndoRev writes the pin file and reports what it replaced', async t => {
+test('stageRev writes the pin file and reports what it replaced', async t => {
   const { admin, configDir } = await makeAdmin(t);
 
-  const first = await admin.setEndoRev(GOOD);
+  const first = await admin.stageRev(GOOD);
   t.deepEqual(first, { path: 'endo.rev', rev: GOOD, previous: '' });
   // The trailing newline matters: `lib.fileContents` strips exactly one, and a
   // file without it is a diff-noisy no-newline-at-end-of-file.
   t.is(await readFile(join(configDir, 'endo.rev'), 'utf8'), `${GOOD}\n`);
   t.is(await admin.getEndoRev(), GOOD);
 
-  const second = await admin.setEndoRev(OTHER);
+  const second = await admin.stageRev(OTHER);
   t.deepEqual(second, { path: 'endo.rev', rev: OTHER, previous: GOOD });
 });
 
-test('setEndoRev rejects anything that is not a full commit hash', async t => {
+test('stageRev rejects anything that is not a full commit hash', async t => {
   const { admin, configDir } = await makeAdmin(t);
-  await admin.setEndoRev(GOOD);
+  await admin.stageRev(GOOD);
 
   for (const bad of [
     'f83f0430', // abbreviated: ambiguous, and Nix cannot resolve it
@@ -55,7 +55,7 @@ test('setEndoRev rejects anything that is not a full commit hash', async t => {
     '',
   ]) {
     // eslint-disable-next-line no-await-in-loop
-    await t.throwsAsync(() => admin.setEndoRev(bad), {
+    await t.throwsAsync(() => admin.stageRev(bad), {
       message: /40-character lowercase commit hash/,
     });
   }
@@ -66,7 +66,7 @@ test('setEndoRev rejects anything that is not a full commit hash', async t => {
 
 test('surrounding whitespace is tolerated, since a hash is often pasted', async t => {
   const { admin } = await makeAdmin(t);
-  await admin.setEndoRev(`  ${GOOD}\n`);
+  await admin.stageRev(`  ${GOOD}\n`);
   t.is(await admin.getEndoRev(), GOOD);
 });
 

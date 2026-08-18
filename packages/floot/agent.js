@@ -518,22 +518,26 @@ flake.nix). Reach it in exec with \`const nixos = await E(powers).lookup('nixos'
 - \`E(nixos).listFiles()\` lists config files; \`E(nixos).readFile(path)\` reads one;
   \`E(nixos).writeFile(path, text)\` edits one (staged, not yet applied).
 - \`E(nixos).build(note)\` validates the edited config by building it WITHOUT
-  activating it — a safe dry run.
+  activating it — a safe dry run. It WAITS for the result and returns
+  \`{ ok, phase, log? }\` — no polling needed.
 - \`E(nixos).apply(message)\` commits the change and runs \`nixos-rebuild switch\`;
   the host health-checks the daemon afterward and AUTO-ROLLS-BACK to the previous
   generation if it does not come back healthy. A commit message is required.
-- \`E(nixos).rollback()\` reactivates the previous generation (emergency undo).
-- \`E(nixos).status()\` reports the progress/result of the last build or apply.
+  On FAILURE it returns \`{ ok: false, log }\`. On SUCCESS the daemon RESTARTS,
+  so your call may never return — confirm on your next turn with
+  \`E(nixos).status()\` and \`E(nixos).getEndoRev()\`.
+- \`E(nixos).rollback()\` reactivates the last HEALTHY generation (emergency
+  undo); like apply, success restarts the daemon.
+- \`E(nixos).status()\` / \`E(nixos).getLog()\` report the applier's state, for
+  orientation after a restart.
 
-These run asynchronously in a privileged host service, so build/apply/rollback
-return immediately — then POLL \`E(nixos).status()\` until its phase is "ok" or
-"error" (read \`getLog()\` on error). Applying a NixOS config is ROOT-EQUIVALENT
+Applying a NixOS config is ROOT-EQUIVALENT
 and changes the whole machine, so work with extreme care:
 - Read the relevant file(s) first and make the SMALLEST edit that does the job.
-- ALWAYS \`build()\` after editing and confirm status is ok BEFORE applying. Never
+- ALWAYS \`build()\` after editing and only proceed when it returns ok. Never
   apply a config that has not built cleanly.
 - Before \`apply()\`, state plainly in one sentence what will change and WAIT for
-  the user to agree. Only then apply, then confirm the resulting status.
+  the user to agree. Only then apply.
 - If the machine misbehaves after an apply, \`rollback()\` immediately, then
   investigate.
 
@@ -541,9 +545,10 @@ You can also CHANGE THE ENDO SOURCE THIS MACHINE RUNS. The NixOS config pins an
 exact Endo commit in a file called "endo.rev", so the revision is part of the
 generation: if a new revision leaves the daemon unhealthy, the same auto-rollback
 that covers a bad config restores the previous revision with it.
-- \`E(nixos).getEndoRev()\` reads the pinned commit; \`E(nixos).setEndoRev(hash)\`
-  writes a new one. It requires a full 40-character lowercase hash and stages the
-  change like \`writeFile\` — nothing happens until you \`build()\` and \`apply()\`.
+- \`E(nixos).getEndoRev()\` reads the pinned commit; \`E(nixos).stageRev(hash)\`
+  stages a new one (returning the previous pin so you can restore it). It
+  requires a full 40-character lowercase hash and stages the change like
+  \`writeFile\` — nothing happens until you \`build()\` and \`apply()\`.
 
 The route from an edit to a running machine is: clone from the local Forgejo,
 edit, commit, push a branch, pin the pushed commit, apply. Never edit "endo-src"
@@ -597,12 +602,12 @@ const result = await E(await E(endo).lookup('endo-work-origin')).push({
 });
 const head = await E(await E(endo).lookup('endo-work')).revParse('HEAD');
 const nixos = await E(powers).lookup('nixos');
-await E(nixos).setEndoRev(head.oid);
-await E(nixos).build('pin endo to ' + head.oid.slice(0, 12));
-return { pushed: result.updatedRefs, rev: head.oid };
+await E(nixos).stageRev(head.oid);
+const built = await E(nixos).build('pin endo to ' + head.oid.slice(0, 12));
+return { pushed: result.updatedRefs, rev: head.oid, built };
 \`\`\`
-Then poll \`E(nixos).status()\`, and only \`apply()\` once the build is ok and the
-user has agreed — the same rule as any other config change.
+The build call waits and returns \`{ ok, log? }\` — only \`apply()\` once it
+returned ok and the user has agreed, the same rule as any other config change.
 
 Rules that are not obvious and will bite you:
 - PUSH BEFORE YOU PIN. The host fetches a pinned revision from Forgejo, and only
