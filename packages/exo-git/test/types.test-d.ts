@@ -43,6 +43,8 @@ import type {
   GitStatusResult,
   GitTrackingStatus,
   GitWorktree,
+  GitWorktreeAddOptions,
+  GitWorktreeEntry,
   GitWorktreeStatus,
   HistoryRewriteEndoGit,
   NormalizedRemotePolicy,
@@ -257,6 +259,22 @@ expectTypeOf<
 >().toEqualTypeOf<ReadOnlyGitWorktree>();
 expectTypeOf<WritableGitWorktree>().toExtend<PathEntryIssuer>();
 
+expectTypeOf<
+  Awaited<ReturnType<ReadOnlyEndoGit['worktreeList']>>
+>().toEqualTypeOf<GitWorktreeEntry[]>();
+expectTypeOf<
+  Parameters<ReadWriteEndoGit['worktreeAdd']>[0]
+>().toEqualTypeOf<PathEntry>();
+expectTypeOf<
+  NonNullable<Parameters<ReadWriteEndoGit['worktreeAdd']>[1]>
+>().toEqualTypeOf<GitWorktreeAddOptions>();
+expectTypeOf<
+  Awaited<ReturnType<ReadWriteEndoGit['worktreeAdd']>>
+>().toEqualTypeOf<ReadWriteEndoGit>();
+expectTypeOf<
+  Awaited<ReturnType<HistoryRewriteEndoGit['worktreeAdd']>>
+>().toEqualTypeOf<HistoryRewriteEndoGit>();
+
 // `ReadOnlyEndoGit` must expose none of the mutating methods under any name;
 // a mutator method leaking onto the read-only posture (e.g. through a bad
 // intersection) would let a guest holding only a read-only Git mutate the
@@ -279,7 +297,9 @@ type Mutator =
   | 'stashApply'
   | 'stashPop'
   | 'stashDrop';
-expectTypeOf<Extract<keyof ReadOnlyEndoGit, Mutator>>().toEqualTypeOf<never>();
+expectTypeOf<
+  Extract<keyof ReadOnlyEndoGit, Mutator | 'worktreeAdd'>
+>().toEqualTypeOf<never>();
 
 // The history-rewrite operations are visible only on `HistoryRewriteEndoGit`:
 // `ReadWriteEndoGit` must omit them entirely (not merely reject their
