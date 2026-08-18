@@ -28,6 +28,7 @@
         "packages/monaco-wrapper",
         "packages/platform",
         "packages/preact-container",
+        "packages/preact-social",
         "c",
         "target",
         "**/dist-xs",
