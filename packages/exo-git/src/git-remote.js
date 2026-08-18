@@ -22,10 +22,20 @@ import {
   GitRemoteControllerInterface,
   GitRemoteInterface,
 } from './interfaces.js';
+import {
+  DEFAULT_REMOTE_REF_STRING_LIMIT,
+  DEFAULT_REMOTE_TEXT_LIMIT,
+  DEFAULT_REMOTE_UPDATED_REFS_LIMIT,
+  REMOTE_TEXT_MARKER_OVERHEAD,
+  boundGitRef,
+  boundRemoteOperationResult,
+  truncateRemoteText,
+} from './result-bounds.js';
 
 /**
  * @import {
  *   GitDirection,
+ *   GitRef,
  *   GitRemote,
  *   GitRemoteAuditEvent,
  *   GitRemoteController,
@@ -209,6 +219,16 @@ harden(makeGitRemoteEndpoint);
  * @param {boolean} [args.revoked]
  * @param {object} [args.credential]
  * @param {(state: { policy: RemotePolicy, revoked: boolean }) => Promise<void> | void} [args.onStateChange]
+ * @param {{ text?: number, updatedRefs?: number, refString?: number }} [args.resultLimits]
+ *   Overrides for the transparent bounding applied to `fetch` / `pull` /
+ *   `push` results (and to failure audit messages) before they reach the
+ *   `GitRemoteInterface` guard and the durable audit log. Each field
+ *   defaults to, and is clamped to never exceed, `interfaces.js`'s
+ *   structural guard ceiling for that field (see `result-bounds.js`) — a
+ *   caller may only tighten a bound, never widen it past the guard.
+ *   A field must be a positive integer, and the string limits (`text`,
+ *   `refString`) must be at least `REMOTE_TEXT_MARKER_OVERHEAD` so the
+ *   promised visible truncation marker always fits.
  * @returns {GitRemoteKit}
  */
 export const makeGitRemote = ({
@@ -219,7 +239,61 @@ export const makeGitRemote = ({
   revoked: initialRevoked = false,
   credential,
   onStateChange,
+  resultLimits = {},
 }) => {
+  /**
+   * Each limit is a discrete capacity — a string length or an array
+   * cardinality — so a fractional value has no meaning: `slice` would
+   * quietly floor it while the dropped-count arithmetic reported the
+   * fraction.  A string limit must additionally be able to represent the
+   * visible truncation marker the bounding promises (see
+   * `REMOTE_TEXT_MARKER_OVERHEAD` in `result-bounds.js`); below that
+   * minimum the marker itself would be sliced away.
+   *
+   * @param {string} label
+   * @param {number | undefined} configured
+   * @param {number} ceiling
+   * @param {number} [minimum]
+   */
+  const clampResultLimit = (label, configured, ceiling, minimum = 1) => {
+    if (configured === undefined) {
+      return ceiling;
+    }
+    if (
+      typeof configured !== 'number' ||
+      !Number.isInteger(configured) ||
+      configured <= 0
+    ) {
+      throw new Error(
+        `GitRemote resultLimits.${label} must be a positive integer`,
+      );
+    }
+    if (configured < minimum) {
+      throw new Error(
+        `GitRemote resultLimits.${label} must be at least ${minimum} to carry the truncation marker`,
+      );
+    }
+    return Math.min(configured, ceiling);
+  };
+  const effectiveResultLimits = harden({
+    text: clampResultLimit(
+      'text',
+      resultLimits.text,
+      DEFAULT_REMOTE_TEXT_LIMIT,
+      REMOTE_TEXT_MARKER_OVERHEAD,
+    ),
+    updatedRefs: clampResultLimit(
+      'updatedRefs',
+      resultLimits.updatedRefs,
+      DEFAULT_REMOTE_UPDATED_REFS_LIMIT,
+    ),
+    refString: clampResultLimit(
+      'refString',
+      resultLimits.refString,
+      DEFAULT_REMOTE_REF_STRING_LIMIT,
+      REMOTE_TEXT_MARKER_OVERHEAD,
+    ),
+  });
   const gitReadOnly = isGitReadOnly(git);
   if (gitReadOnly !== false) {
     throw new Error(
@@ -394,15 +468,22 @@ export const makeGitRemote = ({
    */
   const recordOperationSuccess = (type, result) => {
     const record =
-      /** @type {{ updatedRefs?: unknown, fetch?: { updatedRefs?: unknown }, integration?: unknown, head?: unknown }} */ (
+      /** @type {{ updatedRefs?: unknown, droppedUpdatedRefsCount?: number, fetch?: { updatedRefs?: unknown, droppedUpdatedRefsCount?: number }, integration?: unknown, head?: unknown }} */ (
         result
       );
     const updatedRefs =
       type === 'pull' ? record.fetch?.updatedRefs : record.updatedRefs;
+    const droppedUpdatedRefsCount =
+      type === 'pull'
+        ? record.fetch?.droppedUpdatedRefsCount
+        : record.droppedUpdatedRefsCount;
     recordAudit({
       type,
       outcome: 'ok',
       ...(updatedRefs === undefined ? {} : { updatedRefs }),
+      ...(droppedUpdatedRefsCount === undefined
+        ? {}
+        : { droppedUpdatedRefsCount }),
       ...(record.integration === undefined
         ? {}
         : { integration: record.integration }),
@@ -416,11 +497,28 @@ export const makeGitRemote = ({
    * @param {{ appliedLocally?: boolean }} [extra]
    */
   const recordOperationFailure = (type, err, extra = {}) => {
+    // The backend may reject with any JavaScript value, not only an Error:
+    // use `message` only when it is a non-empty string, and stringify the
+    // whole rejection otherwise, so an array-valued `message` cannot smuggle
+    // unbounded retained data past the truncation below and a non-string one
+    // cannot make the truncator throw.  The guard also covers a hostile
+    // `message` getter or `toString`, either of which would otherwise mask
+    // the original failure and skip the audit entry.
+    let rawMessage;
+    try {
+      const { message } = /** @type {{ message?: unknown }} */ (err ?? {});
+      rawMessage =
+        typeof message === 'string' && message !== '' ? message : String(err);
+    } catch (_stringifyErr) {
+      rawMessage = '(failure reason is unprintable)';
+    }
     recordAudit({
       type,
       outcome: 'error',
-      message:
-        /** @type {{ message?: string }} */ (err)?.message || String(err),
+      // The remote (or a hostile backend) can drive an unbounded error
+      // message; truncate it the same as a success result's `text` before
+      // it is retained in the durable audit log.
+      message: truncateRemoteText(rawMessage, effectiveResultLimits.text),
       ...(extra.appliedLocally ? { appliedLocally: true } : {}),
     });
   };
@@ -639,6 +737,7 @@ export const makeGitRemote = ({
         } finally {
           activeOperation.finish();
         }
+        result = boundRemoteOperationResult(result, effectiveResultLimits);
         assertOperationFence('fetch', fence);
         recordOperationSuccess('fetch', result);
         return result;
@@ -681,6 +780,7 @@ export const makeGitRemote = ({
         } finally {
           activeOperation.finish();
         }
+        fetch = boundRemoteOperationResult(fetch, effectiveResultLimits);
         assertOperationFence('pull', fence);
         const branch = normalizePullBranch(opts.branch);
         /** @type {'merge' | 'rebase' | 'ff-only'} */
@@ -730,7 +830,10 @@ export const makeGitRemote = ({
         const result = harden({
           fetch,
           integration,
-          head,
+          head: boundGitRef(
+            /** @type {GitRef} */ (head),
+            effectiveResultLimits.refString,
+          ),
         });
         assertOperationFence('pull', fence);
         recordOperationSuccess('pull', result);
@@ -770,6 +873,7 @@ export const makeGitRemote = ({
         } finally {
           activeOperation.finish();
         }
+        result = boundRemoteOperationResult(result, effectiveResultLimits);
         assertOperationFence('push', fence);
         recordOperationSuccess('push', result);
         return result;
