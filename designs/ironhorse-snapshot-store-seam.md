@@ -712,25 +712,86 @@ rewind → partial collection → supervisor suspend record → close (WAL
 folded) → reopen from the record with state and epoch chain intact →
 the signature gate refusing a foreign host surface.
 
-Remaining, in one place (each item's plan or bar lives in its own
+Remaining, in one place — every known shortcoming, grouped by where
+the work lives (each item's plan, bar, or pin lives in its own
 section):
+
+*Seam and daemon:*
 
 - The Ironhorse worker ENVELOPE protocol (`endor worker -e
   ironhorse`): needs the host-function surface and the SES boot
   bundle. The heap-persistence half of the supervisor wiring is
-  landed above; the envelope is the named gap that remains.
+  landed above; the envelope is the gap — including ROUTED resume of
+  a store-backed worker, which today fails loudly and re-suspends
+  the record rather than taking the XS path (the Copilot review's
+  guard).
 - Any checkpoint/collect cadence policy richer than the stated
   per-crank minimum (a supervisor policy decision; the schedule is
   replica-visible).
-- Counted-accessor side-table ref-page counts — retires the last
-  decision-side O(live) term; full plan in "Plan: counted side-table
-  ref-page accessors"; its own reviewed PR by design.
-- Phase 11, the summary-generational full mark (roadmap item 11).
-- Phase 12, identity-keyed chunk rows and compaction as row moves
-  (roadmap item 12).
 - The side-table LEDGER (its own workstream): side tables do not yet
   persist — the quiescent contract keeps resumed machines
   arena-confined, and `KEYS`/`SYMB` travel empty until it lands.
+- Sparse attach (roadmap item 9's deferred half): lazy attach still
+  allocates the dense placeholder arena up front (the O(slot_count)
+  zero-fill the phase-3 trade recorded); pages faulting into a truly
+  sparse arena remains measured-and-deferred.
+- Commit-seal metadata is O(pages) per checkpoint (the stored leaf
+  re-read plus root recombination — measured and labeled in
+  `store_bench`); incremental root maintenance is the named
+  optimization when checkpoint latency matters at large page counts.
+- Schema migration does not exist: `STORE_SCHEMA_VERSION` gates
+  refuse across versions. Acceptable while no production stores
+  exist; MUST be revisited before real worker heaps persist.
+- Integrity scope is tamper-evidence at row scale, not
+  authentication (§ threat model): an author who can rewrite rows,
+  leaves, root, and seal together still forges a validating store.
+
+*Engine (ironhorse-vm), named gaps the seam inherits:*
+
+- Counted-accessor side-table ref-page counts — retires the last
+  decision-side O(live) term; full plan in "Plan: counted side-table
+  ref-page accessors"; its own reviewed PR by design.
+- Phase 11, the summary-generational full mark (roadmap item 11) —
+  until then the full mark is O(heap).
+- Phase 12, identity-keyed chunk rows and compaction as row moves
+  (roadmap item 12) — until then chunk compaction slides the whole
+  space.
+- Weak collections are marked STRONG (no ephemeron pass): objects
+  reachable only through a WeakMap/WeakSet are retained, and
+  dead-keyed entries are never pruned — retention only, never a
+  live-object free; pinned by
+  `weak_collection_entries_are_retained_conservatively`, which flips
+  when ephemeron marking lands.
+- Symbol-key descriptors are retained CONSERVATIVELY: a symbol used
+  as a property key roots its descriptor forever (correctness
+  demands at least while its id lives in a chain; the precise
+  trace-the-property-chains refinement that would reclaim
+  dead-keyed descriptors is deferred). `Symbol.for` registry
+  retention is exact per spec.
+- Suspend in a live `try` (`yield`/`await` with a jump handler
+  active) halts with a named refusal — the jump-chain
+  snapshot/rebase into the saved frame is unbuilt (pre-existing;
+  backend-independent).
+- Detached intrinsic calls are unsupported: storing an intrinsic
+  function in a variable and calling it (`var n = Object.keys;
+  n(o)`) throws "call: not a function" — natives are dispatched by
+  access path, not by callee identity (surfaced while building the
+  symbol-key reproducer; previously unnamed).
+
+*Tooling and coverage:*
+
+- Deep fuzzing stays a local/scheduled concern; CI runs 30-second
+  smoke passes per decoder target only.
+- The oracle-linked crate test suites (ironhorse-compile, -regexp,
+  -262, the fuzz lib's unit tests) run locally/manually, not in CI —
+  no job provisions the moddable toolchain for testing them (the
+  `test-ironhorse` comment records this).
+- No line/branch-coverage measurement (llvm-cov) has been run for
+  these crates; the 264-test count is suite size, not coverage.
+- Temp-dir cleanup in the query/gc test files runs only on the
+  success path (`store_bench` has the RAII guard; the rest follow
+  the repo's pre-existing convention) — leaked `$TMPDIR` dirs on
+  assertion failure, low severity.
 
 Landed context for the items above: the
 attached-mode benchmark landed with phase 10's instruments, and the
