@@ -93,7 +93,7 @@ const NixosAdminInterface = M.interface('NixosAdmin', {
   apply: M.call(M.string()).optional(M.string()).returns(M.promise()),
   rollback: M.call().optional(M.string()).returns(M.promise()),
   verify: M.call(M.string()).optional(M.string()).returns(M.promise()),
-  status: M.call().returns(M.promise()),
+  status: M.call().optional(M.string()).returns(M.promise()),
   getLog: M.call().optional(M.number()).returns(M.promise()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
@@ -642,8 +642,13 @@ export const make = async (_powers, _context, options = {}) => {
       });
     },
 
-    /** Current applier status plus the static host config. */
-    async status() {
+    /**
+     * Current applier status plus the static host config. A pure read;
+     * accepts the workflow engine's trailing key so charts can probe it.
+     *
+     * @param {string} [_key] - workflow idempotency key (unused)
+     */
+    async status(_key) {
       await null;
       const status = statusPath ? ((await readStatus()) ?? null) : null;
       return harden({ config, status });
