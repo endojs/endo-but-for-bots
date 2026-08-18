@@ -3,7 +3,7 @@
 |               |                                                                                                                                                                                                                                                    |
 | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Created**   | 2026-08-06                                                                                                                                                                                                                                         |
-| **Updated**   | 2026-08-17                                                                                                                                                                                                                                         |
+| **Updated**   | 2026-08-18                                                                                                                                                                                                                                         |
 | **Author**    | 0xpatrickdev (prompted)                                                                                                                                                                                                                             |
 | **Status**    | Proposed                                                                                                                                                                                                                                           |
 | **Builds on** | [session-execution-capabilities](session-execution-capabilities.md), [endo-posix-sandbox](endo-posix-sandbox.md), [endo-fs-backend-seam](endo-fs-backend-seam.md), [daemon-mount-capabilities](daemon-mount-capabilities.md), and [daemon-git-remotes](daemon-git-remotes.md) |
@@ -21,9 +21,12 @@ mount grants and modes, rootfs or toolchain profile, network posture, limits,
 and policy version. No incarnation automatically receives every mount in the
 session, and the owner does not pre-create every possible grant combination.
 
-The backend is the planned production boundary for package lifecycle scripts,
-package binaries, tests, builds, generators, and native Git or package-manager
-processes that consume untrusted workspace content. It does not make the
+The backend is the planned production boundary for native Git and
+package-manager/project processes that consume untrusted workspace content.
+For package management, it is only the enforcement and adapter layer: it
+consumes the operation-scoped generated broker configuration and selected mount
+specified by the [session-execution-capabilities](session-execution-capabilities.md)
+base design. It does not make the
 portable Exo facades, trusted-host development backend, or daemon-owned Web
 research depend on sandbox availability.
 
@@ -43,7 +46,7 @@ This design covers:
 - workload-specific broker-only networking for Git and package management;
 - separately granted broad public networking for project-selected code;
 - operation-scoped Git credential descriptors;
-- a borrowed package-manager and project-execution backend;
+- an enforcement adapter for the package-manager and project-execution backend;
 - bounded process lifecycle, cancellation, output, and orphan cleanup;
 - restart interruption and conservative mutating-effect reconciliation; and
 - driver- and profile-specific conformance tests.
@@ -62,6 +65,7 @@ live pull-request heads.
 | Surface | Current state and consequence |
 | ------- | ----------------------------- |
 | `@endo/sandbox` | `SandboxFactory.make(spec)` and `SandboxHandle.spawn(argv, opts)` exist with bwrap and Podman driver seams, mount-capability inputs, passable byte streams, and an implemented `network: 'none'` posture. Networking is selected per handle, not per spawn. |
+| Package-manager integration | The revised base design owns the portable facets, coordinator, generated operation configuration, `@endo/npm-registry-broker`, verified package-artifact substrate, and grant policy. This backend adds only the confined adapter that enforces the selected mount, toolchain, process bounds, and named-broker network profile. |
 | Network enforcement | Bwrap does not yet wire the documented private-egress namespace and filter path. Podman private filtering remains operator-owned. Bwrap also does not load the default seccomp profile. Only `network: 'none'` has the present implementation evidence needed here. |
 | Driver selection | The current automatic factory path selects a registered driver; it does not mean “probe every driver and choose the first conforming implementation.” A durable binding must record a concrete driver selected by explicit probing or track the factory change that supplies that behavior. |
 | Lifecycle work | [#954](https://github.com/endojs/endo-but-for-bots/pull/954), head `6d4ce0723c921c1b3009358a0d8a2ea094a92405`, serializes spawn and disposal, bounds captured output, labels operation containers, and cleans exact-owner orphans. It is the first implementation cut for this design. |
@@ -105,7 +109,7 @@ flowchart TD
     B --> O[backend owner]
     O --> H1[exact-authority incarnation: no network]
     O --> H2[exact-authority incarnation: Git broker only]
-    O --> H3[exact-authority incarnation: registry broker only]
+    O --> H3[exact-authority incarnation: package broker only]
     M1 --> H1
     M1 --> H2
     M2 --> H3
@@ -216,20 +220,19 @@ Therefore the following are distinct incarnation keys until a proven per-spawn
 attenuation contract exists:
 
 - `none`: no network namespace reachability;
-- `registry-broker-only`: reach only the selected registry and tarball mediator;
+- `package-broker-only`: reach only the operation's named
+  `@endo/npm-registry-broker` endpoint;
 - `git-broker-only`: reach only the selected exact-origin Git mediator; and
 - `public-project`: filtered public egress for explicitly granted project code.
 
-Package installation and Git operations never borrow `public-project` merely
-because that handle already exists. Broker-only profiles are kernel-enforced:
-the child may reach the named sidecar, socket, or isolated endpoint and cannot
-open a direct public, private, host-service, metadata, DNS, or alternate-proxy
-connection.
-
-The registry mediator understands HTTP registry and tarball requests and is
-backed by `EndoRegistry`, integrity verification, and CAS. The Git mediator
-permits only the selected HTTPS origin and bounded CONNECT tunnel. Git retains
-end-to-end TLS hostname and certificate verification.
+Package-manager and Git operations never borrow `public-project` merely because
+that handle already exists. Broker-only profiles are kernel-enforced: the child
+may reach its named sidecar, socket, or isolated endpoint and cannot open a
+direct public, private, host-service, metadata, DNS, or alternate-proxy
+connection. The package broker and verified package-artifact substrate are
+injected dependencies owned by the base design; this backend neither defines
+their protocol or records nor synthesizes registry metadata, resolves
+packages, stores artifacts, or materializes a CAS.
 
 DNS filtering is transport enforcement, not origin authorization. A driver may
 classify answers and constrain packet destinations, but it cannot inspect HTTPS
@@ -289,30 +292,39 @@ file or persistent environment fallback.
 
 ## Package Management and Project Execution
 
-`@endo/exo-package-manager` retains structurally distinct reader, installer,
-and executor facets. The installer is narrower than the executor, but its name
-is not a hostile-workspace assurance claim.
+The public reader, installer, and executor facets, their cumulative authority,
+and the backend-independent coordinator contract belong to the
+[session-execution-capabilities](session-execution-capabilities.md) base design.
+That design also assigns package-artifact production, registry resolution,
+broker protocol, durable policy, and grant provisioning to their respective
+owners. This design does not restate those contracts.
 
-The sandbox adapter borrows an exact-authority incarnation containing the
-selected project mount and working directory. Frozen installation uses
-`registry-broker-only`. Named scripts, lifecycle hooks, package binaries,
-tests, builds, and generators require the executor or project-execution grant
-and use `none` unless broad public networking is independently granted.
+The confined adapter accepts one coordinator-produced operation at a time with
+these enforcement inputs:
 
-No public method accepts a shell fragment, arbitrary host executable,
-unvalidated working directory, or opaque extra argv. The pinned manager and
-rootfs profile resolve script names and package binaries inside the selected
-mount ceiling. Environment, mounts, resources, output, deadlines, and
-cancellation are explicit.
+- the selected mount grant and validated mount-relative working directory;
+- the immutable rootfs and pinned toolchain profile;
+- operation-scoped generated broker configuration naming the selected
+  `@endo/npm-registry-broker` endpoint; and
+- process bounds, sanitized environment policy, deadline, and cancellation.
 
-Rootfs selection is a versioned toolchain profile, not a promise that one image
-contains every supported Git, Node, npm, pnpm, and Yarn version forever. A
-profile advertises only the manager and runtime versions its conformance tests
-cover.
+The generated configuration is ephemeral operation input, not user or project
+configuration. The adapter accepts no shell fragment, host path, unvalidated
+working directory, ambient package-manager configuration, or opaque extra
+process arguments. It does not synthesize npm metadata or packuments, resolve
+packages, store tarballs or CAS records, choose portable manager arguments,
+materialize artifacts, or decide daemon grants.
+
+Frozen installation and any package operation that needs package transport use
+`package-broker-only`. Named scripts, lifecycle hooks, package binaries, tests,
+builds, and generators require the executor or project-execution grant and use
+`none` unless broad public networking is independently granted. The selected
+mount and profile are enforcement inputs; package semantics remain in the
+coordinator and injected substrate.
 
 If the confined backend is unavailable after restart, executor and project-code
-operations remain unavailable. They never fall back to host-shell, exo-shell,
-or the trusted-host installer.
+operations remain unavailable. They never fall back to ambient execution,
+host-shell, exo-shell, or the trusted-host installer.
 
 ## Process Lifecycle and Bounds
 
@@ -424,8 +436,11 @@ pull request is unposted work.
   #897. Done when direct `EndoMount` projection and extraction of #971's 9P path
   are compared, the selected approach has no host-path fast path, and any new
   protocol requires a separate reviewed justification.
-- [ ] Add `registry-broker-only` and `git-broker-only` to one reference driver.
-  Done when packet-level probes prove only the selected mediator is reachable.
+- [ ] Add `package-broker-only` and `git-broker-only` to one reference driver.
+  The package profile consumes an operation-scoped generated configuration and
+  a named `@endo/npm-registry-broker` endpoint supplied by the package-manager
+  stack. Done when packet-level probes prove the child reaches its named
+  mediator and nothing else.
 - [ ] Qualify additional drivers independently. Dependency: a reference
   profile. Done per driver and profile; parity does not block first delivery.
 - [ ] Add the narrow operation-scoped Git credential descriptor primitive.
@@ -437,17 +452,22 @@ pull request is unposted work.
   process or path power.
 - [ ] Let every named Git remote select a named Git grant. Dependency: #958.
   Done when compatibility root `git` is unnecessary for named-only sessions.
-- [ ] Implement the borrowed package-manager and project-execution adapters.
-  Dependencies: mount projection, lifecycle, and network profiles. Done when
-  frozen install, executor, and project operations use only their selected
-  mount, toolchain, and independently granted network authority.
+- [ ] Implement the package-manager and project-execution enforcement adapters.
+  Dependencies: the base design's coordinator and broker contracts, mount
+  projection, lifecycle, and network profiles. Done when the adapter consumes
+  only operation-scoped generated broker configuration, the selected mount,
+  the pinned toolchain, and independently granted network authority. Registry
+  metadata, package resolution, artifact records, CAS, portable manager
+  arguments, and daemon grant policy remain outside this design.
 - [ ] Add durable write-ahead records for mutating effects. Owner: daemon.
   Done when dispatch follows durable admission, liveness and outcome are
   separate, arbitrary execution may remain `indeterminate`, and read-only calls
   are not transactions by default.
 - [ ] Add crash-point and cross-driver conformance tests. Done when every
   advertised driver and profile proves its own filesystem, lifecycle, network,
-  credential, restart, and cleanup claims.
+  credential, restart, and cleanup claims. Package-driver probes must include
+  a positive connection to the named broker and negative direct-connection
+  probes for public, private, host, metadata, DNS, and alternate-proxy paths.
 - [ ] Run strict consumer-independent acceptance. Done when a session with
   selected grants can open or clone a repository, edit, install, run a bounded
   test, commit, fetch, conditionally push, restart between steps, and explicitly
@@ -467,10 +487,10 @@ Each driver advertises only the rows and profiles it passes.
 | Authority | Exact selected mount set and network posture; no sibling session grant appears in the handle. |
 | Lifecycle | Every spawn/dispose race is leak-free; output overflow kills before EOF; exact-owner orphan cleanup leaves unrelated processes and containers alone. |
 | Filesystem | Read-only enforcement, relative-path validation, symlink-race resistance, revocation during walks, cross-mount denial, and no host-path fast path. |
-| Network | `none` blocks all sockets; each broker-only profile reaches only its mediator; public-project blocks host, private, link-local, metadata, multicast, alternate DNS, and rebinding paths. |
+| Network | `none` blocks all sockets; `package-broker-only` reaches only the operation's named `@endo/npm-registry-broker`, `git-broker-only` reaches only its selected Git mediator, and public-project blocks host, private, link-local, metadata, multicast, alternate DNS, and rebinding paths. |
 | Git | Selected-grant roots, repository identity, configuration and protocol denials, bounded results, cancellation, public fetch, authenticated fetch/push, and no host fallback. |
 | Credentials | No argv, environment, formula, mount, log, stream, model-context, process-inspection, or concurrent-process disclosure. |
-| Package code | Pinned toolchain profiles; fixed argv; selected mount and working directory; independent network grant; no host execution fallback. |
+| Package code | Driver-owned probes start the adapter with a selected mount and operation-scoped generated broker configuration, reach the named broker, and fail closed for every other socket path; toolchain, process bounds, cleanup, and no ambient execution fallback are also verified. |
 | Restart | Fresh incarnation, exact-owner orphan cleanup, interrupted liveness, conservative outcome, no replay, and fail-closed unavailable dependencies. |
 
 Strict acceptance has `piTools: 'preserve'` absent. Trusted-host tests are
@@ -496,6 +516,11 @@ reported separately and never count as confined-backend conformance.
   broad security commitment without a second demonstrated consumer.
 - **Proxy configuration as network confinement:** a hostile child can ignore
   it. Broker-only reachability is enforced outside the process.
+- **Reimplementing package metadata or artifact handling here:** the adapter
+  consumes the base design's operation-scoped broker configuration and
+  verified package-artifact substrate. Duplicating registry resolution,
+  packuments, tarball or CAS storage, or grant policy would split authority
+  ownership and weaken the enforcement boundary.
 - **Stable identity across unproven backend migration:** a driver, rootfs, or
   policy change can alter authority and assurance.
 - **Durable transactions for read-only calls:** cancellation and bounded
@@ -516,6 +541,12 @@ Two implementation choices remain deliberately open:
 Neither question changes the durable public authority graph. Both must be
 settled with implementation probes before the design claims their profiles are
 available.
+
+Package-manager metadata, resolution, artifact records, broker protocol, and
+grant policy are not open questions for this design. They follow the revised
+[session-execution-capabilities](session-execution-capabilities.md) contract and
+its referenced package-substrate work; this design only decides whether a
+selected driver enforces the named broker and selected mount.
 
 ## Prompt
 
