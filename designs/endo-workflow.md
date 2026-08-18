@@ -11,7 +11,7 @@
 
 Phases 1–4 are implemented as `packages/workflow` (`@endo/workflow`),
 with Phase 5's status feeds, the `@endo/space-workflow` Chat space, and
-a fake-daemon realization of Phase 6's acceptance flow; 62 tests pass
+a fake-daemon realization of Phase 6's acceptance flow; 83 tests pass
 and package lint is clean.
 A cross-review against the parallel implementation on
 `claude/endo-workflow-system-5u7764` folded that branch's best ideas
@@ -1169,7 +1169,7 @@ before the run ever sees them:
 | `reviewers[i]` | handles of reviewer agents or human agents (guests/hosts) | reviewers additionally receive, inside the ask payload, pet names for a **read-only** `Git` formula (`provideGit(mount, n, { readOnly: true })`) and the diff text — they can read `filesystemAt(headRef)`, never write |
 | `ci` | a small CI caplet: `check(ref)` → clone-or-snapshot the ref (via `provideGitClone` / `tree(ref)` materialization), run the baked test argv in an `exo-shell` / `@endo/sandbox`, return `{ ok, log }` | shell formula has a fixed command allowlist; sandbox mounts only the materialized tree; `check` is idempotent by construction (fresh materialization per call), which is what licenses `invoke` |
 | `operator` | the operator's own host handle | asks arrive as ordinary inbox forms |
-| `merger` | a merge caplet holding the elevated writer `Git` (and `GitRemote` if landing means pushing) | `land(ref)` is `merge(ref, { fastForwardOnly })` + push; conflicts throw → `land-failed` → `needs-attention`; dedupes on `effectId` since a re-sent merge of an already-merged ref is a fast-forward no-op |
+| `merger` | a merge caplet holding the elevated writer `Git` (and `GitRemote` if landing means pushing) | `land(ref)` is `merge(ref, { fastForwardOnly })` + push; conflicts throw → `land-failed` → `needs-attention`; dedupes on the run-qualified `${runId}:${effectId}` key since a re-sent merge of an already-merged ref is a fast-forward no-op |
 
 The run itself holds *no* git capability — it holds performers who do.
 An auditor reading the journal sees: who was asked, what they answered,
@@ -1297,7 +1297,8 @@ one-state workflow.
 5. **Mail is the durable effect channel; direct sends are the fast one.**
    `ask` inherits exactly-once from the daemon's message/promise
    formulas instead of rebuilding persistence; `invoke` is honest about
-   at-least-once and hands targets an `effectId` to dedupe on.
+   at-least-once and hands targets a run-qualified
+   `${runId}:${effectId}` key to dedupe on.
    The alternative — building a bespoke durable RPC layer — duplicates
    the mailbox.
 6. **Guards are patterns over engine-enriched envelopes.**
