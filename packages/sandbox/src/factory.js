@@ -3,7 +3,7 @@
 /* global AbortController, clearTimeout, setTimeout */
 
 import { E } from '@endo/eventual-send';
-import { makeError, q, X } from '@endo/errors';
+import { Fail, makeError, q, X } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { M } from '@endo/patterns';
@@ -293,8 +293,7 @@ const makeEagerReader = (iterable, { label, byteLimit, onFailure }) => {
     }
   };
   let byteCount = 0n;
-  let ended = iterable === undefined || iterable === null;
-  let closed = false;
+  let ended = false;
   /** @type {Error | undefined} */
   let failure;
   /** @type {(() => void) | undefined} */
@@ -313,7 +312,7 @@ const makeEagerReader = (iterable, { label, byteLimit, onFailure }) => {
   // this today — `bytesReaderFromIterator` serializes its own pulls —
   // so it is a tripwire on the contract, not a live failure path.
   let nextInFlight = false;
-  /** @type {(() => void) | undefined} */
+  /** @type {() => void} */
   let finish;
   const finished = new Promise(resolve => {
     finish = () => resolve(undefined);
@@ -325,27 +324,24 @@ const makeEagerReader = (iterable, { label, byteLimit, onFailure }) => {
     if (waiter !== undefined) waiter();
   };
 
-  const markFinished = () => {
-    if (!closed) {
-      closed = true;
-      finish?.();
+  // Ending the source and settling `finished` are one event: the pump
+  // has no more bytes to contribute. Buffered bytes stay readable.
+  const close = () => {
+    if (!ended) {
+      ended = true;
+      finish();
     }
     wake();
   };
 
-  const close = () => {
-    ended = true;
-    markFinished();
-  };
-
-  if (ended) markFinished();
-
-  if (iterable !== undefined && iterable !== null) {
+  if (iterable === undefined || iterable === null) {
+    close();
+  } else {
     void (async () => {
       await null;
       try {
         for await (const value of iterable) {
-          if (closed) return;
+          if (ended) return;
           const bytes =
             value instanceof Uint8Array
               ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
@@ -366,21 +362,18 @@ const makeEagerReader = (iterable, { label, byteLimit, onFailure }) => {
             failure = makeError(
               X`sandbox ${label} byte limit reached (${byteLimit})`,
             );
-            ended = true;
             onFailure(failure);
-            markFinished();
+            close();
             return;
           }
         }
-        ended = true;
-        markFinished();
+        close();
       } catch (e) {
         failure = makeError(
           X`sandbox ${label} reader failed: ${q(/** @type {Error} */ (e).message)}`,
         );
-        ended = true;
         onFailure(failure);
-        markFinished();
+        close();
       }
     })();
   }
@@ -716,10 +709,9 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
       const reasons = selected.failures
         .map(probe => `${probe.name}: ${probe.reason ?? 'unavailable'}`)
         .join('; ');
-      if (reasons === '') {
-        throw makeError(X`no backend available for ${q(selector)}`);
-      }
-      throw makeError(X`no backend available for ${q(selector)}: ${reasons}`);
+      throw makeError(
+        X`no backend available for ${q(selector)}: ${reasons || 'no drivers registered'}`,
+      );
     }
 
     // Resolve everything that requires the privileged
@@ -783,12 +775,17 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
     const containmentFailures = [];
     /** @type {Set<MountHandle>} */
     const liveMounts = new Set();
-    /** @type {'running' | 'stopping' | 'stopped'} */
-    let state = 'running';
     /** @type {Promise<void> | undefined} */
     let disposePromise;
     /** @type {SandboxHandle | undefined} */
     let handle;
+
+    // `disposeSlice` assigns `disposePromise` synchronously, so its
+    // presence *is* the "no longer accepting work" flag; a separate
+    // status variable could only ever restate it.
+    const assertRunning = () => {
+      disposePromise === undefined || Fail`sandbox handle has been disposed`;
+    };
 
     /**
      * @param {readonly string[]} argv
@@ -796,22 +793,12 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
      * @returns {Promise<ProcessHandle>}
      */
     const spawnProc = async (argv, spawnOpts = {}) => {
-      if (state !== 'running') {
-        throw makeError(X`sandbox handle has been disposed`);
-      }
+      assertRunning();
 
-      /** @type {(value: DriverProcess | PromiseLike<DriverProcess>) => void} */
-      let resolveDriverProcess =
-        /** @type {(value: DriverProcess | PromiseLike<DriverProcess>) => void} */ (
-          () => undefined
-        );
-      /** @type {(reason?: unknown) => void} */
-      let rejectDriverProcess = () => undefined;
-      const driverProcessPromise = new Promise((resolve, reject) => {
-        resolveDriverProcess = resolve;
-        rejectDriverProcess = reject;
-      });
-      driverProcessPromise.catch(() => undefined);
+      // Assigned at the registration point below, before the driver
+      // boundary is crossed and therefore before anything can read it.
+      /** @type {Promise<DriverProcess>} */
+      let driverProcessPromise;
 
       // Admission cancellation. The driver receives the signal so it can
       // abort its in-flight control command and remove the exact named
@@ -843,22 +830,20 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
       // outlive its owner. Whichever of this reaction and an abandoning
       // path runs last observes the other's state, so exactly one of
       // them terminates a late arrival.
-      driverProcessPromise.then(
-        proc => {
-          admittedProc = proc;
-          if (!admissionAbandoned) return;
-          void (async () => {
-            await null;
-            try {
-              await proc.kill('SIGKILL');
-            } catch {
-              // The late process may already be gone.
-            }
-            await proc.wait().catch(() => undefined);
-          })();
-        },
-        () => undefined,
-      );
+      /** @param {DriverProcess} proc */
+      const observeAdmission = proc => {
+        admittedProc = proc;
+        if (!admissionAbandoned) return;
+        void (async () => {
+          await null;
+          try {
+            await proc.kill('SIGKILL');
+          } catch {
+            // The late process may already be gone.
+          }
+          await proc.wait().catch(() => undefined);
+        })();
+      };
 
       /** @type {Error | undefined} */
       let terminalError;
@@ -922,29 +907,19 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
             // Cancel a still-pending admission first so this settles even
             // when the driver call never does.
             admission.abort(reason);
-            /** @type {DriverProcess} */
-            let driverProc;
-            const alreadyAdmitted = admittedProc;
-            if (alreadyAdmitted !== undefined) {
-              driverProc = alreadyAdmitted;
-            } else {
-              try {
-                driverProc = await Promise.race([
-                  driverProcessPromise,
-                  admissionAborted,
-                ]);
-              } catch {
-                const landed = admittedProc;
-                if (landed === undefined) {
-                  // No controllable process exists yet. A late arrival is
-                  // reaped by the abandoned-admission reaction above.
-                  admissionAbandoned = true;
-                  return;
-                }
-                // The admission landed while the race was settling; fall
-                // through and terminate it here.
-                driverProc = landed;
-              }
+            // The cancellation loses the race only when the admission
+            // never landed; a process that landed while the race was
+            // settling is still visible in `admittedProc`, and is
+            // terminated here rather than by the abandonment reaction.
+            const driverProc = await Promise.race([
+              driverProcessPromise,
+              admissionAborted,
+            ]).catch(() => admittedProc);
+            if (driverProc === undefined) {
+              // No controllable process exists yet. A late arrival is
+              // reaped by the abandoned-admission reaction above.
+              admissionAbandoned = true;
+              return;
             }
             const waitPromise = driverProc.wait();
             let exited = false;
@@ -1058,11 +1033,12 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
       liveProcesses.add(lease);
 
       // Cross the driver boundary only after the lease is observable.
-      Promise.resolve()
-        .then(() =>
-          driver.spawn(driverSlice, [...argv], spawnOpts, spawnControls),
-        )
-        .then(resolveDriverProcess, rejectDriverProcess);
+      // `Promise.resolve().then` defers the call itself to a microtask,
+      // so the registration above is already visible when it runs.
+      driverProcessPromise = Promise.resolve().then(() =>
+        driver.spawn(driverSlice, [...argv], spawnOpts, spawnControls),
+      );
+      driverProcessPromise.then(observeAdmission, () => undefined);
 
       /** @type {ReturnType<typeof setTimeout> | undefined} */
       let timeoutTimer;
@@ -1222,8 +1198,7 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
      * @param {MountMode} [mode]
      */
     const mountInSlice = async (cap, innerPath, mode = 'ro') => {
-      if (state !== 'running')
-        throw makeError(X`sandbox handle has been disposed`);
+      assertRunning();
       // Phase 1 only supports mounts declared at slice construction;
       // dynamic mounts after the fact would require remounting bwrap.
       // We still mint a tracker so dispose() can iterate.
@@ -1234,8 +1209,7 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
      * @param {string} innerPath
      */
     const scratchInSlice = async innerPath => {
-      if (state !== 'running')
-        throw makeError(X`sandbox handle has been disposed`);
+      assertRunning();
       // Lifecycle is bound to the slice; the daemon's scratch GC
       // sweeps the host directory when the cap is unpinned.
       const scratchCap = /** @type {MountCap} */ (
@@ -1283,22 +1257,14 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
      */
     const beginDispose = reason => {
       if (disposePromise === undefined) {
-        // Change admission and snapshot leases without awaiting so exactly
-        // one spawn/dispose race winner is visible.
-        state = 'stopping';
         const leases = [...liveProcesses];
         disposePromise = (async () => {
           // A lease whose cleanup cannot prove containment must not stop
-          // the others (or the driver teardown) from running, but its
-          // failure must surface rather than be swallowed.
-          /** @type {Error[]} */
-          const killFailures = [];
+          // the others (or the driver teardown) from running. Swallowing
+          // the rejection here loses nothing: `killAndReap` records every
+          // such failure in `containmentFailures` before it throws.
           await Promise.all(
-            leases.map(lease =>
-              lease.killAndReap(reason).catch(e => {
-                killFailures.push(/** @type {Error} */ (e));
-              }),
-            ),
+            leases.map(lease => lease.killAndReap(reason).catch(() => {})),
           );
           await Promise.all(
             [...liveMounts].map(m =>
@@ -1317,17 +1283,11 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
             // pre-empt that summary and show the caller one of the two.
             containmentFailures.push(/** @type {Error} */ (e));
           } finally {
-            state = 'stopped';
             if (handle !== undefined) liveHandles.delete(handle);
           }
-          if (killFailures.length > 0 || containmentFailures.length > 0) {
-            // A lease that failed before dispose appears in both lists
-            // with the same error object; the Set collapses it.
-            const failures = [
-              ...new Set([...containmentFailures, ...killFailures]),
-            ];
+          if (containmentFailures.length > 0) {
             throw makeError(
-              X`sandbox dispose could not prove containment: ${q(failures.map(e => e.message).join('; '))}`,
+              X`sandbox dispose could not prove containment: ${q(containmentFailures.map(e => e.message).join('; '))}`,
             );
           }
         })();
