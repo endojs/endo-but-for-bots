@@ -1036,6 +1036,8 @@ dependencies = [
  "flate2",
  "hex",
  "ironhorse-compile",
+ "ironhorse-snapshot",
+ "ironhorse-store-sqlite",
  "ironhorse-vm",
  "libc",
  "rusqlite",
