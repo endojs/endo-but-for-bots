@@ -54,7 +54,16 @@
     "./fs/extended/backend-types.js": {
       "types": "./src/fs/extended/backend-types-index.d.ts"
     },
-    "./fs/extended/*": "./src/fs/extended/*",
+    "./fs/extended/cached-fs.js": "./src/fs/extended/cached-fs.js",
+    "./fs/extended/cas.js": "./src/fs/extended/cas.js",
+    "./fs/extended/from-mount.js": "./src/fs/extended/from-mount.js",
+    "./fs/extended/in-memory.js": "./src/fs/extended/in-memory.js",
+    "./fs/extended/layer.js": "./src/fs/extended/layer.js",
+    "./fs/extended/node-fs-module.js": "./src/fs/extended/node-fs-module.js",
+    "./fs/extended/node-fs.js": "./src/fs/extended/node-fs.js",
+    "./fs/extended/readonly.js": "./src/fs/extended/readonly.js",
+    "./fs/extended/shared/helpers.js": "./src/fs/extended/shared/helpers.js",
+    "./fs/extended/wrap-backend.js": "./src/fs/extended/wrap-backend.js",
     "./proc": "./src/proc.js",
     "./exo-fs": "./src/exo-fs.js",
     "./package.json": "./package.json"

@@ -4,6 +4,7 @@ export { makeInMemoryFilesystem } from './in-memory.js';
 export { makeNodeFilesystem } from './node-fs.js';
 export { readOnly } from './readonly.js';
 export { mountAsFilesystem } from './from-mount.js';
+export { isFilesystemReadOnly, isFilesystemReadWrite } from './posture.js';
 export {
   emptyFilesystem,
   chroot,

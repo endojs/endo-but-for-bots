@@ -26,7 +26,6 @@ import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iter
 import {
   DirectoryInterface,
   FileInterface,
-  FilesystemInterface,
   OpenFileInterface,
 } from './type-guards.js';
 
@@ -50,6 +49,7 @@ import {
 import { makeXattrsExo } from './shared/xattrs-exo.js';
 import { makeCursorExo } from './shared/cursor-exo.js';
 import { makeNodeWatcherExo } from './shared/watcher-exo.js';
+import { makeFilesystem } from './posture.js';
 
 /**
  * @import { FsBackend } from './backend-types.js'
@@ -1048,40 +1048,43 @@ export const wrapBackend = (backend, opts = {}) => {
 
   const root = makeDirectoryExo([]);
 
-  return makeExo('Filesystem', FilesystemInterface, {
-    root() {
-      return root;
+  return makeFilesystem(
+    {
+      root() {
+        return root;
+      },
+      named(name) {
+        const segs = namedDirs[name];
+        if (!segs) {
+          throw makeError(X`ENOENT: no named directory ${q(name)}`);
+        }
+        return makeDirectoryExo([...segs]);
+      },
+      async statfs() {
+        if (caps.statfs) {
+          // @ts-expect-error optional method probed above
+          const stats = await backend.statfs();
+          return harden({ type: description, ...stats });
+        }
+        // Minimal default — toy backings without real disk metrics.
+        return harden({
+          type: description,
+          blockSize: 0n,
+          totalBlocks: 0n,
+          freeBlocks: 0n,
+        });
+      },
+      async brands() {
+        return brandSet;
+      },
+      help(method) {
+        if (method === undefined) {
+          return `Filesystem (${description}): root/named/statfs/brands.`;
+        }
+        return `No documentation for method ${q(method)}.`;
+      },
     },
-    named(name) {
-      const segs = namedDirs[name];
-      if (!segs) {
-        throw makeError(X`ENOENT: no named directory ${q(name)}`);
-      }
-      return makeDirectoryExo([...segs]);
-    },
-    async statfs() {
-      if (caps.statfs) {
-        // @ts-expect-error optional method probed above
-        const stats = await backend.statfs();
-        return harden({ type: description, ...stats });
-      }
-      // Minimal default — toy backings without real disk metrics.
-      return harden({
-        type: description,
-        blockSize: 0n,
-        totalBlocks: 0n,
-        freeBlocks: 0n,
-      });
-    },
-    async brands() {
-      return brandSet;
-    },
-    help(method) {
-      if (method === undefined) {
-        return `Filesystem (${description}): root/named/statfs/brands.`;
-      }
-      return `No documentation for method ${q(method)}.`;
-    },
-  });
+    'readWrite',
+  );
 };
 harden(wrapBackend);
