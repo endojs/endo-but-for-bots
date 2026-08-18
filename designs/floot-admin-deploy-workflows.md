@@ -3,8 +3,24 @@
 | | |
 |---|---|
 | **Created** | 2026-08-18 |
+| **Updated** | 2026-08-18 |
 | **Author** | kumavis (prompted) |
 | **Status** | Proposed |
+
+## Status
+
+Written against two branches that had never met; revised the same day
+after the owner's review settled three things: the workflow branch is
+**merged into this staging branch** (so the engine is in-tree here), the
+per-run invoke `effectId` was accepted as an engine shortcoming and
+**fixed** (`feat(workflow):` on this branch — the wire key is now the
+run-qualified `${runId}:${effectId}`, deviation 7 in
+[endo-workflow](endo-workflow.md)), and `NixosAdmin`'s API **may change
+freely** (no backwards-compatibility constraint).
+The revision folds the formerly separate `deploy-performer` adapter into
+a reshaped `NixosAdmin` and deletes the `opId`-threading workaround the
+engine fix obsoleted.
+Everything else remains proposal.
 
 ## Summary
 
@@ -22,12 +38,13 @@ The invariants are enforced by nothing; the approval gate is the model's
 self-restraint; and the flow's own success condition (the daemon restarting on
 a new revision) destroys the conversational context that was driving it.
 
-`claude/endo-workflow-system-r58hrd` supplies exactly the missing machinery:
-statechart definitions as passable data, journaled runs that survive daemon
-restarts by refolding, mail-backed `ask` effects whose approval forms land in
-the operator's ordinary inbox, idempotency-keyed `invoke` effects, deadline
-timers, and durable revocable **factories** that pre-bind a chart to
-attenuated endowments.
+`@endo/workflow` (merged into this staging branch from
+`claude/endo-workflow-system-r58hrd` on 2026-08-18) supplies exactly the
+missing machinery: statechart definitions as passable data, journaled runs
+that survive daemon restarts by refolding, mail-backed `ask` effects whose
+approval forms land in the operator's ordinary inbox, idempotency-keyed
+`invoke` effects, deadline timers, and durable revocable **factories** that
+pre-bind a chart to attenuated endowments.
 This design installs two charts — `endo-release` and `nixos-config-change` —
 and changes the admin presets to grant factories for starting runs of them,
 so a session *proposes* a deployment and a durable, auditable, operator-gated
@@ -38,9 +55,10 @@ becomes the workflow engine's home turf instead of the flow's failure mode.
 
 ## What You Should Know First
 
-Two branches, which have never met, each hold half of this design:
+Two lines of work, now united on this staging branch by the 2026-08-18
+merge, each hold half of this design:
 
-- **`feat/hosted-endo-management`** (the branch this document lands on) forked
+- **`feat/hosted-endo-management`** (this staging branch's own line) forked
   from `llm` and carries the hosted-Endo stack: `packages/space-nixos-admin`
   (the `NixosAdmin` caplet: a file spool to the root `endo-nixos-apply`
   service, with `writeFile`/`setEndoRev` staging, `build` dry-runs,
@@ -55,10 +73,12 @@ Two branches, which have never met, each hold half of this design:
 - **`claude/endo-workflow-system-r58hrd`** forked from a later `llm` and
   carries `packages/workflow` (`@endo/workflow`) and
   `packages/space-workflow`, per [endo-workflow](endo-workflow.md) (In
-  Progress there; 81 tests).
+  Progress; 82 tests after the merge and the invoke-key change below).
   Its motivating use case is already this loop's generalization: an agent
   implements, reviewers review, CI runs, the operator approves, the change
   lands — with a mid-flow daemon restart as the acceptance test.
+  The merge brought it (and the `llm` commits it rode on) into this tree,
+  with the chat space registrations of both lines unioned.
 
 Mechanics of each side that this design leans on, stated once:
 
@@ -68,20 +88,26 @@ Mechanics of each side that this design leans on, stated once:
   so a caplet formula revived after a restart is reached automatically.
 - `ask` is exactly-once (durable mail; forms validated on submit; answers
   adopted during recovery).
-  `invoke` is at-least-once: `E(target)[method](...args, effectId)` with the
-  same `effectId` re-sent on recovery — and `effectId` is `` `${seq}-${index}` ``,
-  **unique within one run only**.
+  `invoke` is at-least-once: `E(target)[method](...args, key)` with the same
+  key re-sent on recovery — and since this branch's
+  `feat(workflow): qualify invoke idempotency keys with the run id`, the
+  key on the wire is `` `${runId}:${effectId}` ``: **globally unique**
+  across all runs sharing an endowment (journal entries keep the bare
+  run-scoped `` `${seq}-${index}` `` id).
+  A performer can therefore dedupe on the trailing argument alone.
 - A **factory** (`makeFactory`) durably binds chart + data params +
   endowments; `factory.start()` returns the *observer* facet only; `with()`
   derives narrower factories; `revoke()` cascades and cancels live runs.
   Control (signals, cancel, ports, `resolveRef`) stays with the service
   holder.
-- The `NixosAdmin` caplet's methods return immediately (they write a
+- The `NixosAdmin` caplet's methods today return immediately (they write a
   spool-request file with an internally minted nonce); completion is observed
-  only by polling `status()`.
-  Its interface guards are exact-arity (`apply: M.call(M.string())`), so a
-  workflow `invoke`'s trailing `effectId` argument would be **rejected by the
-  guard** today.
+  only by polling `status()`, and its exact-arity guards
+  (`apply: M.call(M.string())`) would reject a workflow `invoke`'s trailing
+  key argument.
+  Per the owner's direction, this API **may change freely — there is no
+  backwards-compatibility constraint** — so this design reshapes the caplet
+  itself rather than wrapping it.
 - The applier commits and mirrors the config on apply, health-checks the
   gateway, and auto-rolls-back the generation — including `endo.rev` — when
   the daemon does not come back healthy.
@@ -139,8 +165,8 @@ integration is the two sides meeting.
 
 A pinned `workflow-service` runs on the hosted daemon.
 Host setup installs two charts and mints two **factories** whose endowments
-are a new `deploy-performer` caplet (wrapping `NixosAdmin` behind the
-workflow's invoke contract) and the owner's own handle (`@self`) as
+are the reshaped `NixosAdmin` deploy surface (settlement-shaped,
+invoke-contract-native — below) and the owner's own handle (`@self`) as
 `operator`.
 The Floot factory receives the two factories the same way it receives
 `nixos-admin` today, and admin presets provision them into session petstores
@@ -156,14 +182,19 @@ daemon, the run refolds and finishes.
 
 ### Branch integration order
 
-1. Land `claude/endo-workflow-system-r58hrd` on `llm` (it is self-contained
-   against `llm` and carries its own tests and design registration).
-2. Rebase `feat/hosted-endo-management` onto the result, per the repository's
-   rebase-merge convention.
-3. Build this design's phases as commits on the rebased hosted branch (or a
-   successor integration branch); nothing below requires changes *inside*
-   `@endo/workflow` beyond its published surface, though two small upstream
-   niceties are noted in Known Gaps.
+1. **Done (2026-08-18):** `claude/endo-workflow-system-r58hrd` is merged
+   into this staging branch (`claude/floot-admin-integration-plan-qn748l`),
+   bringing `@endo/workflow`, `@endo/space-workflow`, and the `llm` commits
+   they rode on; both lines' chat space registrations are unioned, and the
+   merged tree passes the workflow suite, the chat component tests, an
+   immutable install, and the composite-tsconfig check.
+2. **Done (2026-08-18):** the one engine change this design needed —
+   run-qualified invoke idempotency keys — landed on this branch
+   (deviation 7 in [endo-workflow](endo-workflow.md)); everything below
+   builds on `@endo/workflow`'s published surface.
+3. Build this design's phases as commits on this staging branch; land the
+   whole line on `llm` per the repository's rebase-merge convention when it
+   graduates.
 
 ### Provisioning topology
 
@@ -177,9 +208,10 @@ the daemon's `ENDO_EXTRA`, module specifier rerouted through the deploy's
   every stored run — at boot.
   Formula-identity stability matters twice here: for the pin, and because
   factory grants stored by locator must not dangle.
-- **`packages/space-nixos-admin/setup.js`** additionally provisions the
-  `deploy-performer` caplet (below) as `controller-for-deploy-performer`,
-  wrapping the same spool paths.
+- **`packages/space-nixos-admin/setup.js`** keeps provisioning the one
+  caplet it provisions today; the reshape (below) changes that caplet's
+  surface, not the provisioning path or the
+  `controller-for-nixos-admin` formula identity.
 - **`packages/floot/floot-factory-setup.js`** gains
   `grantDeployFactories(...)` beside `grantNixosAdmin(...)`: it looks up
   `workflow-service`, idempotently `install`s the two charts (install is
@@ -193,46 +225,52 @@ The service holder (the root host, via setup) retains `control(runId)` for
 every run — cancel, signal, `resolveRef` — which is the correct place for
 break-glass authority; sessions get observation and the power to start.
 
-### The deploy performer
+### Reshaping `NixosAdmin` into the deploy performer
 
-A thin caplet exists because the raw `NixosAdmin` cannot be a workflow
-endowment as-is, for three reasons that are each worth designing around
-rather than papering over:
+The raw `NixosAdmin` cannot be a workflow endowment as-is: its exact-arity
+guards reject the engine's trailing key, its `build`/`apply` return before
+the work happens (a chart would need a poll-loop of states), and its
+internally minted nonce gives a re-dispatched invoke nothing to dedupe on.
+With no backwards-compatibility constraint on the caplet, the fix is not an
+adapter in front of it but a reshape of the caplet itself — same name, same
+`controller-for-nixos-admin` provisioning and formula identity, a
+workflow-native verb surface:
 
-1. **Guard arity.** The engine appends `effectId` to every invoke;
-   `NixosAdmin`'s exact-arity guards reject it.
-2. **Poll-only completion.** `build`/`apply` return before the work happens; a
-   chart would need a poll-loop of states.
-   The performer instead exposes *settlement-shaped* methods: request, then
-   watch `status()` until the terminal phase for that request, then return
-   `{ ok, phase, log? }` — one invoke, one journaled settlement.
-   A promise that dies with the daemon mid-apply is exactly what the engine's
-   at-least-once re-dispatch handles.
-3. **Cross-run idempotency.** `effectId` is per-run, so the performer keys
-   idempotency on a caller-supplied `opId` threaded from chart params (the
-   revision for a release; a session-minted change id for a config change),
-   written into the spool request as its id and echoed by the applier in
-   `apply-status.json`.
-   A re-dispatched invoke first reads status: same id terminal → return the
-   recorded outcome; same id in flight → keep watching; otherwise → submit.
-   This closes the "re-applied after crash" window with one contract.
-
-Sketch (guards elided; every method takes the engine's trailing `effectId`
-and ignores it in favor of `opId`):
+1. **Settlement-shaped verbs.** `build`/`apply`/`rollback` submit the spool
+   request, watch `status()` until the terminal phase *for that request*,
+   and return `{ ok, phase, log? }` — one invoke, one journaled settlement.
+   A promise that dies with the daemon mid-apply is exactly what the
+   engine's at-least-once re-dispatch handles.
+2. **The engine's key is the idempotency key.** Every mutating verb takes an
+   optional trailing key — the run-qualified `` `${runId}:${effectId}` ``
+   the engine now passes (a conversational caller that omits it gets an
+   internally minted one, today's nonce behavior).
+   The key becomes the spool request's id and is echoed by the applier in
+   `apply-status.json`; a re-dispatched invoke reads status first: same id
+   terminal → return the recorded outcome; same id in flight → keep
+   watching; otherwise → submit.
+   This closes the "re-applied after crash" window with one contract and no
+   params threading in charts.
 
 ```js
-DeployPerformer: {
-  stageRev(rev, opId)        → { rev, previous }        // 40-hex validated
-  stageFiles(files, opId)    → { paths, previous }      // [{ path, text }] whole-file writes
-  revertFiles(previous, opId)→ { paths }                // compensation for abandon
-  build(opId)                → { ok, log }              // request + await terminal
-  apply(message, opId)       → { ok, generation?, log } // idempotent per opId
-  verify(rev, opId)          → { ok, runningRev }       // getEndoRev + health readback
-  status() / getLog(n)                                   // pass-through reads
+NixosAdmin (reshaped; guards take .optional(M.string()) for the key): {
+  listFiles / readFile / getConfig / getEndoRev        // reads, unchanged
+  stageRev(rev, key?)         → { rev, previous }      // 40-hex validated
+  stageFiles(files, key?)     → { paths, previous }    // [{ path, text }] whole-file writes
+  revertFiles(previous, key?) → { paths }              // compensation for abandon
+  build(note, key?)           → { ok, log }            // request + await terminal
+  apply(message, key?)        → { ok, generation?, log }
+  rollback(key?)              → { ok, log }
+  verify(rev, key?)           → { ok, runningRev }     // pin + gateway readback
+  status() / getLog(n)                                 // observation, unchanged
 }
 ```
 
-The performer serializes spool submissions internally (the spool has one
+(`writeFile` may remain as the single-file transitional form of
+`stageFiles`; the fire-and-poll `build`/`apply` shapes are simply gone, and
+the system prompt's polling dance goes with them.)
+
+The caplet serializes spool submissions internally (the spool has one
 request slot; `@endo/workflow`'s own `serial-jobs` is the in-tree precedent
 for the queue).
 Whole-deploy interleaving — two runs staging different edits into one
@@ -267,7 +305,7 @@ export const endoReleaseChart = harden({
     {
       title: M.string(),   // commit-message-grade, becomes the apply message
       summary: M.string(), // what changed and why, for the operator form
-      rev: HEX40,          // the pushed commit to run; doubles as the opId
+      rev: HEX40,          // the pushed commit to run
     },
     { branch: M.string() }, // provenance: where the rev was pushed
   ),
@@ -298,7 +336,7 @@ export const endoReleaseChart = harden({
           kind: 'invoke',
           target: 'performer',
           method: 'build',
-          args: [{ $params: 'rev' }],
+          args: [{ $params: 'title' }],
           outcome: 'built',
           failure: 'build-failed',
         },
@@ -358,7 +396,7 @@ export const endoReleaseChart = harden({
           kind: 'invoke',
           target: 'performer',
           method: 'apply',
-          args: [{ $params: 'title' }, { $params: 'rev' }],
+          args: [{ $params: 'title' }],
           outcome: 'applied',
           failure: 'apply-failed',
         },
@@ -440,7 +478,7 @@ export const endoReleaseChart = harden({
 ```
 
 `nixos-config-change` is the same skeleton with a different head: params are
-`{ title, summary, changeId, files: [{ path, text }] }` (the whole staged
+`{ title, summary, files: [{ path, text }] }` (the whole staged
 edit as capability-free data, so **the journal carries the change itself**);
 `pin`/`unpinning` become `stage` (invoke `stageFiles`, capturing `previous`)
 and `reverting` (invoke `revertFiles(previous)`); the operator form lists the
@@ -455,7 +493,7 @@ deadlines honest.
 
 | Endowment | Capability | Attenuation |
 |---|---|---|
-| `performer` | the `deploy-performer` caplet | spool-scoped: stage/build/apply/verify only; serializes deploys; validates rev shape and path confinement at its boundary; no shell, no git, no host powers |
+| `performer` | the reshaped `NixosAdmin` caplet | spool-scoped: stage/build/apply/verify only; serializes deploys; dedupes on the engine's run-qualified key; validates rev shape and path confinement at its boundary; no shell, no git, no host powers |
 | `operator` | the owner host's `@self` handle | asks arrive as ordinary inbox requests/forms; the daemon's existing sender verification attributes the answer |
 
 That is the whole table, and its brevity is the point: the run that can
@@ -496,15 +534,15 @@ it).
 The sequence that today orphans the flow, replayed under this design:
 
 1. The run's `apply` invoke dispatches; the performer submits the spool
-   request with `opId = rev`; `switch-to-configuration` restarts
-   `endo-daemon`.
+   request with the invoke's run-qualified key as its id;
+   `switch-to-configuration` restarts `endo-daemon`.
    The performer's pending promise dies with the process; the journal holds
    `effect-dispatched` without a settlement.
 2. Boot: `revivePins()` incarnates the workflow service; the run refolds to
    configuration `{ apply }` with one unsettled invoke and its deadline;
    the invoke re-dispatches with the same `effectId`, reaching the *revived*
    performer formula through the run's stored endowment name.
-3. The performer reads `apply-status.json`, finds its `opId` — terminal and
+3. The performer reads `apply-status.json`, finds its key — terminal and
    healthy — and returns the recorded outcome; the settlement and the
    transition to `verify` commit as one journal entry; `verify` confirms
    `getEndoRev` matches and the gateway answers.
@@ -541,7 +579,7 @@ with a Floot mail-wake bridge as its own small follow-up design.
 
 | Design / package | Relationship |
 |---|---|
-| [endo-workflow](endo-workflow.md) (`@endo/workflow`, `@endo/space-workflow`) | The engine, factories, journal, and run UI; lives on `claude/endo-workflow-system-r58hrd` until landed. This design is its first production chart set. |
+| [endo-workflow](endo-workflow.md) (`@endo/workflow`, `@endo/space-workflow`) | The engine, factories, journal, and run UI; merged into this staging branch 2026-08-18, with the run-qualified invoke key (deviation 7) landed for this design. This design is its first production chart set. |
 | [hosted-endo-self-update-loop](hosted-endo-self-update-loop.md) | **Complete** substrate: revision pinning, per-revision releases, health-checked apply with auto-rollback, Forgejo mirror + credential. This design realizes its phases 5–6. |
 | `packages/space-nixos-admin` | The `NixosAdmin` caplet the performer wraps; its setup.js precedent (idempotency, `current`-symlink formula stability) is reused for the service and performer. |
 | `packages/floot` | Preset catalog, `provisionPresetObjects`, `floot-factory-setup.js` grant plumbing; system-prompt rewrites. |
@@ -551,17 +589,19 @@ with a Floot mail-wake bridge as its own small follow-up design.
 
 ## Phased Implementation
 
-**Phase 0 — branch convergence (S).**
-Land the workflow branch on `llm`; rebase `feat/hosted-endo-management` onto
-it, per Branch integration order above.
+**Phase 0 — branch convergence (S). Done 2026-08-18.**
+The workflow branch is merged into this staging branch and the
+run-qualified invoke key landed with a regression test; landing the staged
+line on `llm` (rebase-merge) closes the phase when the work graduates.
 
-**Phase 1 — service and performer provisioning (M).**
-`packages/workflow/setup.js` (pinned service via `ENDO_EXTRA`);
-`deploy-performer` in `space-nixos-admin` with the serial queue, `opId`
-idempotency protocol, and settlement-shaped build/apply/verify; the
-endo-host applier id-echo verification/change.
-Restart test: apply requested, daemon killed, performer re-invoked with the
-same opId returns the recorded outcome without re-submitting.
+**Phase 1 — service provisioning and the NixosAdmin reshape (M).**
+`packages/workflow/setup.js` (pinned service via `ENDO_EXTRA`); the
+`space-nixos-admin` caplet reshaped per the Design section — serial queue,
+trailing-key idempotency protocol, settlement-shaped
+build/apply/rollback/verify, stageFiles/revertFiles — keeping its formula
+identity; the endo-host applier id-echo verification/change.
+Restart test: apply requested, daemon killed, the caplet re-invoked with
+the same key returns the recorded outcome without re-submitting.
 
 **Phase 2 — charts and factories (M).**
 The two charts (in `packages/floot` or a small `@endo/deploy-charts`
@@ -595,16 +635,23 @@ bridge is specified separately.
    charts with arbitrary endowments; a factory is a durable, revocable,
    pre-attenuated grant whose `start` returns observation only — the right
    authority for "may propose deployments".
-2. **A performer adapter, not loosened caplet guards.**
-   Accepting a trailing `effectId` on `NixosAdmin` would fix arity but not
-   poll-only completion or cross-run idempotency; the performer solves all
-   three at one boundary and leaves the human-facing caplet unchanged.
-3. **Idempotency keys from params (`opId`), engine `effectId` ignored.**
-   `effectId` is per-run; the revision (or session-minted `changeId`) is the
-   natural cross-run identity of a deployment, and putting it in params also
-   journals it.
-   An upstream option — the engine passing `` `${runId}:${effectId}` `` — is
-   noted in Known Gaps but not required.
+2. **Reshape `NixosAdmin`, not an adapter in front of it.**
+   An adapter was the plan while the caplet's API was assumed frozen; with
+   that constraint lifted (owner's direction, 2026-08-18), a second formula
+   wrapping the first would be pure indirection.
+   The reshape keeps one boundary owning spool access, serialization,
+   validation, and idempotency, and keeps the
+   `controller-for-nixos-admin` formula identity every existing grant
+   points at.
+3. **The engine's run-qualified key is the idempotency key.**
+   Originally this design threaded an `opId` through chart params because
+   bare effect ids collide across runs; that engine shortcoming was
+   accepted and fixed on this branch
+   (`feat(workflow): qualify invoke idempotency keys with the run id`), so
+   charts stay free of correlation plumbing and every invoke target gets a
+   globally unique, recovery-stable key for free.
+   The trailing key stays optional on the caplet so conversational callers
+   are not forced to invent one.
 4. **The change travels as data.**
    `nixos-config-change` takes file contents in params: the journal then
    *contains* the proposed change, the operator form can list it, and the
@@ -638,10 +685,12 @@ bridge is specified separately.
 
 - [ ] Verify whether the current applier echoes the request nonce in
       `apply-status.json`; specify the id-echo contract in the endo-host
-      module either way.
-- [ ] Upstream nicety: engine-passed globally-unique invoke keys
-      (`` `${runId}:${effectId}` ``) would let future performers skip the
-      `opId` threading; propose on the workflow package after landing.
+      module either way (the id is now the engine's run-qualified key).
+- [ ] Decide how much of the legacy staging surface (`writeFile`,
+      fire-shaped verbs) survives the reshape for transitional
+      conversational use, and how a session should hold a long-running
+      awaited `apply` across its own exec turn (fire-without-await plus
+      `status()` remains available).
 - [ ] The observer-only session cannot abandon its own run before the
       operator sees it; decide whether factories should optionally bind a
       chart-declared `port` (e.g. a `withdraw` signal guarded to the
