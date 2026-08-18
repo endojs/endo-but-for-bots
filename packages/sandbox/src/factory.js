@@ -186,27 +186,57 @@ Methods:
 
 const KILL_GRACE_MS = 1000;
 const DRAIN_GRACE_MS = 250;
-const DEFAULT_STDOUT_BYTE_LIMIT = 16n * 1024n * 1024n;
-const DEFAULT_STDERR_BYTE_LIMIT = 16n * 1024n * 1024n;
-const STREAM_BUFFER = 64;
+const DEFAULT_BYTE_LIMIT = 16n * 1024n * 1024n;
 // Captured output is coalesced into blocks of this size so the retained
 // structure is bounded by the byte limit alone: at the 16 MiB default the
 // queue holds at most 256 blocks, however small the source's chunks are.
 const CAPTURE_BLOCK_SIZE = 64 * 1024;
+// Blocks the reader pump may pull ahead of consumer demand. This is
+// counted in blocks, not source chunks, so it multiplies by
+// CAPTURE_BLOCK_SIZE: eight blocks is 512 KiB per stream, already far
+// more than enough to keep a CapTP round trip pipelined.
+const STREAM_BUFFER = 8;
 
 /**
  * Resolve after a bounded delay without keeping the daemon alive solely for
  * the timer.
  *
  * @param {number} ms
- * @returns {Promise<void>}
+ * @returns {{ promise: Promise<void>, cancel: () => void }}
  */
-const delay = ms =>
-  new Promise(resolve => {
-    const timer = setTimeout(resolve, ms);
+const delay = ms => {
+  /** @type {ReturnType<typeof setTimeout>} */
+  let timer;
+  const promise = new Promise(resolve => {
+    timer = setTimeout(resolve, ms);
     if (typeof timer.unref === 'function') timer.unref();
   });
+  // Every caller races this against real work, so the loser is dead the
+  // moment the race settles; `cancel` lets the caller drop the timer
+  // (and the resolve closure it retains) instead of leaving one live
+  // entry in the timer heap per spawn and per kill.
+  return harden({ promise, cancel: () => clearTimeout(timer) });
+};
 harden(delay);
+
+/**
+ * Race real work against a bounded delay, releasing the timer either
+ * way.
+ *
+ * @param {Promise<unknown>} work
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
+const raceDelay = async (work, ms) => {
+  await null;
+  const timeout = delay(ms);
+  try {
+    await Promise.race([work, timeout.promise]);
+  } finally {
+    timeout.cancel();
+  }
+};
+harden(raceDelay);
 
 /**
  * Eagerly pump a driver-local byte source into one passable reader.
@@ -404,6 +434,13 @@ const makeEagerReader = (iterable, { label, byteLimit, onFailure }) => {
     },
     async return() {
       close();
+      // A consumer that abandons the stream will never read the
+      // buffered blocks, and the process handle outlives them: drop the
+      // retained bytes rather than holding up to the byte limit per
+      // stream for as long as the caller keeps the handle.
+      queue.length = 0;
+      pendingBlock = undefined;
+      pendingLength = 0;
       return harden({ done: true, value: undefined });
     },
     [Symbol.asyncIterator]() {
@@ -538,34 +575,36 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
   };
 
   /**
+   * Probe one driver, reporting a thrown probe as an unavailable
+   * backend rather than propagating it. Both the listing and the
+   * selection path go through here so the failure shape cannot drift
+   * between them.
+   *
+   * @param {SandboxDriver} driver
+   * @returns {Promise<BackendProbe>}
+   */
+  const probeDriver = driver =>
+    driver.probe().then(
+      value => normalizeProbe(driver, value),
+      e =>
+        harden({
+          name: driver.name,
+          available: false,
+          reason: /** @type {Error} */ (e).message || String(e),
+        }),
+    );
+
+  /**
    * @returns {Promise<BackendProbe[]>}
    */
   const listBackends = async () => {
-    /** @type {BackendProbe[]} */
-    const probes = [];
-    for (const driver of driverList) {
-      // eslint-disable-next-line no-await-in-loop, @jessie.js/safe-await-separator
-      const result = await driver.probe().then(
-        r => harden({ ok: /** @type {const} */ (true), value: r }),
-        e => harden({ ok: /** @type {const} */ (false), error: e }),
-      );
-      if (result.ok === true) {
-        probes.push(normalizeProbe(driver, result.value));
-      } else {
-        const err = /** @type {{ error: any }} */ (result).error;
-        const reason = /** @type {Error} */ (err).message || String(err);
-        probes.push(harden({ name: driver.name, available: false, reason }));
-      }
-    }
+    const probes = await Promise.all(driverList.map(probeDriver));
     return harden(probes);
   };
 
   /**
    * @param {SandboxMakeOpts['backend']} selector
-   * @returns {Promise<
-   *   | { driver: SandboxDriver; probe: BackendProbe; failures?: never }
-   *   | { driver: undefined; failures: BackendProbe[] }
-   * >}
+   * @returns {Promise<{ driver?: SandboxDriver; failures: BackendProbe[] }>}
    */
   const pickDriver = async selector => {
     await null;
@@ -577,16 +616,9 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
     const failures = [];
     for (const driver of candidates) {
       // eslint-disable-next-line no-await-in-loop
-      const probe = await driver.probe().then(
-        value => normalizeProbe(driver, value),
-        e =>
-          harden({
-            name: driver.name,
-            available: false,
-            reason: /** @type {Error} */ (e).message || String(e),
-          }),
-      );
-      if (probe.available) return harden({ driver, probe });
+      const probe = await probeDriver(driver);
+      if (probe.available)
+        return harden({ driver, failures: harden(failures) });
       failures.push(probe);
     }
     return harden({ driver: undefined, failures: harden(failures) });
@@ -842,12 +874,16 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
       containmentFailed.catch(() => undefined);
       /** @type {Promise<void> | undefined} */
       let killPromise;
-      /** @type {Array<{ finished: Promise<void>, close: () => void }>} */
-      let streamControls = [];
-      /** @type {() => void} */
-      let markStreamsReady = () => undefined;
-      const streamsReady = new Promise(resolve => {
-        markStreamsReady = () => resolve(undefined);
+      // The capture readers cannot be built until admission returns the
+      // driver's streams, but termination and drain may both run before
+      // that. One promise of the controls carries the "not yet attached"
+      // state, so no early-exit path has to remember to trip a separate
+      // latch as well as publish the (possibly empty) array.
+      /** @type {(controls: Array<{ finished: Promise<void>, close: () => void }>) => void} */
+      let publishStreamControls = () => undefined;
+      /** @type {Promise<Array<{ finished: Promise<void>, close: () => void }>>} */
+      const streamControls = new Promise(resolve => {
+        publishStreamControls = resolve;
       });
       /** @type {Promise<void> | undefined} */
       let drainPromise;
@@ -855,12 +891,12 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
       const boundedDrain = () => {
         if (drainPromise === undefined) {
           drainPromise = (async () => {
-            await streamsReady;
-            await Promise.race([
-              Promise.all(streamControls.map(control => control.finished)),
-              delay(DRAIN_GRACE_MS),
-            ]);
-            for (const control of streamControls) control.close();
+            const controls = await streamControls;
+            await raceDelay(
+              Promise.all(controls.map(control => control.finished)),
+              DRAIN_GRACE_MS,
+            );
+            for (const control of controls) control.close();
           })();
         }
         return drainPromise;
@@ -936,7 +972,7 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
             if (!hardFirst && signalFailures.length === 0) {
               // The grace period exists for the process to act on the
               // soft signal; skip it when nothing was delivered.
-              await Promise.race([exitTracked, delay(KILL_GRACE_MS)]);
+              await raceDelay(exitTracked, KILL_GRACE_MS);
             }
             if (!exited && !hardKillDelivered) {
               try {
@@ -952,19 +988,19 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
               // on its own, force backend-level teardown, and surface a
               // cleanup error rather than waiting forever on containment
               // that cannot be proven.
-              await Promise.race([exitTracked, delay(KILL_GRACE_MS)]);
+              await raceDelay(exitTracked, KILL_GRACE_MS);
               if (!exited) {
-                await Promise.race([
+                await raceDelay(
                   driver.teardown(driverSlice).then(
                     () => undefined,
                     e => {
                       signalFailures.push(/** @type {Error} */ (e));
                     },
                   ),
-                  delay(KILL_GRACE_MS),
-                ]);
+                  KILL_GRACE_MS,
+                );
                 // Let a teardown-induced exit land before judging.
-                await Promise.race([exitTracked, delay(DRAIN_GRACE_MS)]);
+                await raceDelay(exitTracked, DRAIN_GRACE_MS);
               }
               if (!exited) {
                 await boundedDrain();
@@ -1053,11 +1089,15 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
       } catch (e) {
         admissionAbandoned = true;
         if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
-        markStreamsReady();
+        publishStreamControls([]);
         liveProcesses.delete(lease);
         throw e;
       }
 
+      /**
+       * @param {Error} error
+       * @param {'stdout' | 'stderr'} label
+       */
       const onReaderFailure = (error, label) => {
         void killAndReap(
           makeError(
@@ -1065,32 +1105,35 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
           ),
         );
       };
-      const stdoutControl = makeEagerReader(
-        spawnOpts.captureStdout === false
-          ? undefined
-          : /** @type {AsyncIterable<Uint8Array> | null} */ (
-              driverProc.stdout ?? undefined
-            ),
-        {
-          label: 'stdout',
-          byteLimit: spawnOpts.stdoutByteLimit ?? DEFAULT_STDOUT_BYTE_LIMIT,
-          onFailure: error => onReaderFailure(error, 'stdout'),
-        },
+      /**
+       * @param {'stdout' | 'stderr'} label
+       * @param {boolean | undefined} capture
+       * @param {bigint | undefined} byteLimit
+       */
+      const captureStream = (label, capture, byteLimit) =>
+        makeEagerReader(
+          capture === false
+            ? undefined
+            : /** @type {AsyncIterable<Uint8Array> | null} */ (
+                driverProc[label] ?? undefined
+              ),
+          {
+            label,
+            byteLimit: byteLimit ?? DEFAULT_BYTE_LIMIT,
+            onFailure: error => onReaderFailure(error, label),
+          },
+        );
+      const stdoutControl = captureStream(
+        'stdout',
+        spawnOpts.captureStdout,
+        spawnOpts.stdoutByteLimit,
       );
-      const stderrControl = makeEagerReader(
-        spawnOpts.captureStderr === false
-          ? undefined
-          : /** @type {AsyncIterable<Uint8Array> | null} */ (
-              driverProc.stderr ?? undefined
-            ),
-        {
-          label: 'stderr',
-          byteLimit: spawnOpts.stderrByteLimit ?? DEFAULT_STDERR_BYTE_LIMIT,
-          onFailure: error => onReaderFailure(error, 'stderr'),
-        },
+      const stderrControl = captureStream(
+        'stderr',
+        spawnOpts.captureStderr,
+        spawnOpts.stderrByteLimit,
       );
-      streamControls = [stdoutControl, stderrControl];
-      markStreamsReady();
+      publishStreamControls([stdoutControl, stderrControl]);
 
       // The driver exposes `writeStdin` / `closeStdin` closures (see
       // drivers/bwrap.js) so the writer adapter does not need to
