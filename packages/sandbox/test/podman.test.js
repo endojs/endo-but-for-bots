@@ -20,6 +20,8 @@ import {
   parseImagePathFromConfigEnv,
   PODMAN_OPERATION_LABEL,
   PODMAN_OWNER_LABEL,
+  reportsContainerGone,
+  reportsContainerNotRunning,
 } from '../src/drivers/podman.js';
 import { DEFAULT_PATH } from '../src/drivers/path.js';
 import { makeSandboxFactory } from '../src/factory.js';
@@ -1342,3 +1344,83 @@ test.serial(
     t.regex(help, /path: .* \(source: fallback\)/);
   },
 );
+
+// ---------------------------------------------------------------------------
+// Unit coverage for the driver's pure helpers and for probe-path behaviour
+// driven through a stubbed child_process, so these run on hosts without
+// podman.
+// ---------------------------------------------------------------------------
+
+test('reportsContainerGone recognises the already-removed family', t => {
+  t.true(
+    reportsContainerGone({
+      stdout: '',
+      stderr: 'Error: no such container 9f2a1c\n',
+    }),
+  );
+  t.true(reportsContainerGone({ stdout: '', stderr: 'Error: no such object' }));
+  t.true(
+    reportsContainerGone({
+      stdout: '',
+      stderr: 'Error: container 9f2a1c does not exist in database',
+    }),
+  );
+  // Live backend failures must reach the supervisor untouched.
+  t.false(
+    reportsContainerGone({
+      stdout: '',
+      stderr: 'Error: unlinking layer: permission denied',
+    }),
+  );
+});
+
+test('reportsContainerNotRunning tolerates an exited-but-unreaped container', t => {
+  // podman's verbatim refusal when the operation handled SIGTERM but its
+  // `rm -f` has not completed yet.
+  t.true(
+    reportsContainerNotRunning({
+      stdout: '',
+      stderr:
+        'Error: can only kill running containers. 9f2a1c is in state exited: container state improper\n',
+    }),
+  );
+  // A container that was created but never started refuses the same way.
+  t.true(
+    reportsContainerNotRunning({
+      stdout: '',
+      stderr: '9f2a1c is in state configured: container state improper',
+    }),
+  );
+});
+
+test('reportsContainerNotRunning keeps live backend failures distinguishable', t => {
+  // The opposite state verdict shares podman's `container state improper`
+  // sentinel, so the predicate must not key on that sentinel alone.
+  t.false(
+    reportsContainerNotRunning({
+      stdout: '',
+      stderr:
+        'Error: cannot remove container 9f2a1c as it is running - running or paused containers cannot be removed without force: container state improper',
+    }),
+  );
+  t.false(
+    reportsContainerNotRunning({
+      stdout: '',
+      stderr: 'Error: writing blob: storage: no space left on device',
+    }),
+  );
+  t.false(
+    reportsContainerNotRunning({
+      stdout: '',
+      stderr:
+        'Cannot connect to Podman. Please verify your connection: connection refused',
+    }),
+  );
+  t.false(
+    reportsContainerNotRunning({
+      stdout: '',
+      stderr: 'Error: OCI runtime error: permission denied',
+    }),
+  );
+});
+

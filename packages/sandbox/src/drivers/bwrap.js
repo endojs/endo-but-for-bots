@@ -1,6 +1,6 @@
 // @ts-check
 
-/* global Buffer, process, setTimeout, clearTimeout */
+/* global clearTimeout, process, setTimeout */
 
 import { makeError, q, X } from '@endo/errors';
 
@@ -50,7 +50,56 @@ import {
  */
 const CONTROL_COMMAND_TIMEOUT_MS = 30_000;
 
-const DEFAULT_KILL_GRACE_MS = 5000;
+/**
+ * Grace allowed, after the SIGKILL sweep in `teardown`, for each
+ * straggler's stdio to reach `'close'`.
+ *
+ * A slice child leaves `slice.live` on `'close'`, not on `'exit'`.  That
+ * asymmetry is deliberate — a descendant that escaped the process group
+ * still holding an inherited pipe keeps the parent's stdio open, and the
+ * driver wants to know about it — but it also means such a straggler
+ * never leaves the set, so an unbounded wait here would hang `teardown`,
+ * and with it the factory's `dispose()`.
+ *
+ * The value mirrors `KILL_GRACE_MS` in `../factory.js`: that is the
+ * grace the supervisor allows a signalled process, and it is also the
+ * budget it races `driver.teardown()` against on its own cleanup path.
+ * A longer bound would be invisible there — the supervisor gives up
+ * first — while making `dispose()`, which does not race, hang longer.  A
+ * shorter one would report an escape for a process group that is merely
+ * slow to finish dying.
+ */
+const TEARDOWN_CLOSE_GRACE_MS = 1000;
+
+/**
+ * Wait for `child` to emit `'close'`, giving up after `ms`.
+ *
+ * Resolves `true` when the stdio closed within the bound and `false`
+ * when it did not.  Both outcomes release the timer and the `'close'`
+ * listener, so a child that outlives the bound leaves nothing of ours
+ * attached to it.
+ *
+ * @param {import('child_process').ChildProcess} child
+ * @param {number} ms
+ * @returns {Promise<boolean>}
+ */
+const raceChildClose = (child, ms) =>
+  new Promise(resolve => {
+    /** @type {ReturnType<typeof setTimeout>} */
+    let timer;
+    const onClose = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    timer = setTimeout(() => {
+      child.removeListener('close', onClose);
+      resolve(false);
+    }, ms);
+    // Nothing should stay alive merely to keep watching a straggler.
+    if (typeof timer.unref === 'function') timer.unref();
+    child.once('close', onClose);
+  });
+harden(raceChildClose);
 
 /**
  * Inner mount points the driver always installs for a usable rootfs.
@@ -860,41 +909,41 @@ export const makeBwrapDriver = ({
   };
 
   /**
+   * Release everything the slice still holds.
+   *
+   * Rejects when the SIGKILL sweep cannot prove the slice's stdio was
+   * released within `TEARDOWN_CLOSE_GRACE_MS`.  The rest of the teardown
+   * (pasta, seccomp temp file) runs first either way, so the rejection
+   * costs the caller no cleanup.
+   *
    * @param {BwrapSliceContext} slice
    * @returns {Promise<void>}
    */
   const teardown = async slice => {
-    // Kill any stragglers.  SIGTERM first, then SIGKILL after the
-    // grace window.  The factory layer already issues kills before
-    // teardown(); this is the safety net for code paths that skip it.
-    /** @type {Promise<void>[]} */
-    const reaped = [];
-    for (const child of slice.live) {
-      reaped.push(
-        new Promise(resolve => {
-          /** @type {NodeJS.Timeout | undefined} */
-          let killTimer;
-          const finish = () => {
-            if (killTimer !== undefined) clearTimeout(killTimer);
-            resolve();
-          };
-          child.once('close', finish);
-          try {
-            if (child.pid !== undefined) process.kill(-child.pid, 'SIGTERM');
-          } catch {
-            // ignore
-          }
-          killTimer = setTimeout(() => {
-            try {
-              if (child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
-            } catch {
-              // ignore
-            }
-          }, DEFAULT_KILL_GRACE_MS);
-        }),
-      );
-    }
-    await Promise.all(reaped);
+    // Kill any stragglers.  The factory owns the graceful ladder and
+    // reaps every process before it calls teardown(), so reaching a
+    // straggler here means the soft path is already spent (or was
+    // skipped entirely) — go straight to SIGKILL rather than running a
+    // second escalation on a budget that disagrees with the factory's.
+    const stragglers = [...slice.live];
+    const closures = stragglers.map(child => {
+      // Arm the bounded wait before signalling so a child that dies
+      // instantly cannot close between the kill and the listener.
+      const closed = raceChildClose(child, TEARDOWN_CLOSE_GRACE_MS);
+      try {
+        killProcessGroup(child, 'SIGKILL');
+      } catch {
+        // A backend refusal here is reported by the supervisor's
+        // own kill path; teardown must still finish the sweep.
+      }
+      return closed;
+    });
+    const closed = await Promise.all(closures);
+    const escaped = closed.filter(ok => !ok).length;
+    // The ladder is spent whatever the outcome: a second sweep would
+    // re-signal a process group the kernel may already have reissued,
+    // and holding the handles would only retain the child objects and
+    // their stdio buffers.
     slice.live.clear();
 
     // Stop pasta if we ever spawned one.
@@ -916,6 +965,18 @@ export const makeBwrapDriver = ({
         // already gone
       }
       slice.seccompTempPath = null;
+    }
+
+    if (escaped > 0) {
+      // Reported rather than logged: `dispose()` already rejects to say
+      // "could not prove containment", and the supervisor's other
+      // teardown call site folds a teardown rejection into that same
+      // report.  Resolving here would claim the slice was released while
+      // an fd is still out, which is exactly what tracking `'close'`
+      // instead of `'exit'` exists to detect.
+      throw makeError(
+        X`bwrap teardown could not prove containment: ${q(escaped)} of ${q(stragglers.length)} slice children still held stdio open ${q(TEARDOWN_CLOSE_GRACE_MS)}ms after SIGKILL; a descendant likely escaped the process group with an inherited pipe`,
+      );
     }
   };
 

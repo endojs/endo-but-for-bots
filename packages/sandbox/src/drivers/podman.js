@@ -45,12 +45,10 @@ harden(PODMAN_OWNER_LABEL);
 export const PODMAN_OPERATION_LABEL = 'io.endo.sandbox.operation';
 harden(PODMAN_OPERATION_LABEL);
 
-const DEFAULT_STOP_GRACE_S = 5;
-
 /**
  * Deadline applied to lifecycle-critical podman control commands
- * (`create`, `kill`, `stop`, `rm`). A stalled control command must not
- * be able to wedge admission, termination, or reaping; commands with
+ * (`create`, `kill`, `rm`). A stalled control command must not be able
+ * to wedge admission, termination, or reaping; commands with
  * legitimately unbounded duration (`pull`) are not subject to it.
  */
 const CONTROL_COMMAND_TIMEOUT_MS = 30_000;
@@ -72,9 +70,60 @@ const parsePodmanVersion = stdout => {
 harden(parsePodmanVersion);
 
 /**
+ * Recognise podman's "the container is already gone" family of errors.
  *
+ * Removal and signalling are both idempotent goals rather than
+ * commands: a container that no longer exists is the desired state, not
+ * a failure. Every other non-zero exit is a live backend failure
+ * (storage, permission, daemon) that the supervisor must see.
  *
+ * Exported for unit testing.
+ *
+ * @param {{ stdout: string, stderr: string }} result
+ * @returns {boolean}
  */
+export const reportsContainerGone = ({ stdout, stderr }) =>
+  /no such (container|object)|does not exist/i.test(`${stderr}\n${stdout}`);
+harden(reportsContainerGone);
+
+/**
+ * Recognise podman's "the container is not in a killable state" family
+ * of errors, which is the signalling counterpart of
+ * `reportsContainerGone`.
+ *
+ * podman refuses to signal a container that has already stopped:
+ *
+ *   Error: can only kill running containers. <id> is in state exited:
+ *   container state improper
+ *
+ * That is reachable on the ordinary graceful path. `podman rm -f` gates
+ * the operation's `wait()`, so a process that handled SIGTERM promptly
+ * but whose removal is still in flight looks un-exited to the
+ * supervisor's kill ladder, which then escalates onto a container that
+ * is already gone in every sense that matters. Treating the refusal as
+ * a backend failure would make the supervisor declare that it could not
+ * prove containment of a process that exited on its own.
+ *
+ * The match is deliberately anchored on podman's kill-path prefix and
+ * on the non-running container states it names, not on the generic
+ * `container state improper` sentinel: that sentinel also covers the
+ * opposite verdict (`cannot remove container ... as it is running`),
+ * which must stay a live failure. Storage, permission, and daemon
+ * failures name none of these.
+ *
+ * Exported for unit testing.
+ *
+ * @param {{ stdout: string, stderr: string }} result
+ * @returns {boolean}
+ */
+export const reportsContainerNotRunning = ({ stdout, stderr }) => {
+  const text = `${stderr}\n${stdout}`;
+  return (
+    /can only kill running containers/i.test(text) ||
+    /is in state (configured|created|exited|stopped|removing)\b/i.test(text)
+  );
+};
+harden(reportsContainerNotRunning);
 
 /**
  * Generate a fresh operation-container name. The single-owner invariant and
@@ -242,9 +291,10 @@ harden(probeRootlessNetBackend);
  *                                     creation so subsequent spawns
  *                                     stay on the same runtime even if
  *                                     the host's default flips.
- * @property {Set<{ name: string, child: import('child_process').ChildProcess, wait: Promise<{ code: number | null, signal: string | null }> }>} live
- *                                     Operation containers and their
- *                                     attached podman clients.
+ * @property {Map<string, { child: import('child_process').ChildProcess, wait: Promise<{ code: number | null, signal: string | null }> }>} live
+ *                                     Live operation containers keyed by
+ *                                     container name, with the attached
+ *                                     podman client for each.
  * @property {string | null} seccompTempPath  Temp file path holding the
  *                                     caller-supplied seccomp profile,
  *                                     or `null` when no profile was
@@ -584,17 +634,29 @@ export const makePodmanDriver = ({
     runtime === '' ? args : ['--runtime', runtime, ...args];
 
   /**
+   * Remove one operation container, forcibly and under the control
+   * deadline. Every removal path — orphan sweep, abandoned admission,
+   * reap, teardown — goes through here so the deadline policy cannot be
+   * applied to some of them and forgotten on the rest.
+   *
+   * @param {typeof import('child_process')} cp
+   * @param {string} runtime
+   * @param {string} name
+   */
+  const removeContainer = (cp, runtime, name) =>
+    spawnAndCollect(cp, 'podman', podmanArgs(runtime, ['rm', '-f', name]), {
+      timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+    });
+
+  /**
    * Reap containers with this driver's exact owner label from a previous
    * daemon run. Listing or removal failures make the lifecycle probe fail
    * closed.
    *
    * @param {typeof import('child_process')} cp
-   * @returns {Promise<string[]>}  Names of containers that were
-   *                                removed.
+   * @returns {Promise<void>}
    */
   const sweepOrphans = async cp => {
-    /** @type {string[]} */
-    const reaped = [];
     const runtime = await ensureRuntime(cp);
     const listing = await spawnAndCollect(
       cp,
@@ -620,15 +682,8 @@ export const makePodmanDriver = ({
     const removals = await Promise.all(
       names.map(async name => {
         await null;
-        const result = await spawnAndCollect(
-          cp,
-          'podman',
-          podmanArgs(runtime, ['rm', '-f', name]),
-        );
-        if (result.code === 0) {
-          reaped.push(name);
-          return undefined;
-        }
+        const result = await removeContainer(cp, runtime, name);
+        if (result.code === 0) return undefined;
         return `${name}: ${result.stderr.trim() || result.stdout.trim()}`;
       }),
     );
@@ -638,7 +693,6 @@ export const makePodmanDriver = ({
         X`podman exact-label orphan removal failed: ${q(failures.join('; '))}`,
       );
     }
-    return reaped;
   };
 
   /**
@@ -1016,7 +1070,7 @@ export const makePodmanDriver = ({
       ref,
       netBackend,
       runtime,
-      live: new Set(),
+      live: new Map(),
       seccompTempPath,
       runtimeDetails,
     };
@@ -1068,12 +1122,7 @@ export const makePodmanDriver = ({
     // Used on every abandonment path so an aborted or failed admission
     // cannot leak the container.
     const removeOperation = () =>
-      spawnAndCollect(
-        cp,
-        'podman',
-        podmanArgs(slice.runtime, ['rm', '-f', containerName]),
-        { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
-      ).catch(() => undefined);
+      removeContainer(cp, slice.runtime, containerName).catch(() => undefined);
 
     let created;
     try {
@@ -1133,8 +1182,6 @@ export const makePodmanDriver = ({
     });
     proxyExited.catch(() => undefined);
 
-    /** @type {{ name: string, child: import('child_process').ChildProcess, wait: Promise<{ code: number | null, signal: string | null }> } | undefined} */
-    let entry;
     const exited = (async () => {
       await null;
       let status;
@@ -1144,14 +1191,9 @@ export const makePodmanDriver = ({
       } catch (e) {
         proxyFailure = e;
       }
-      const removed = await spawnAndCollect(
-        cp,
-        'podman',
-        podmanArgs(slice.runtime, ['rm', '-f', containerName]),
-        { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
-      );
-      if (entry !== undefined) slice.live.delete(entry);
-      if (removed.code !== 0) {
+      const removed = await removeContainer(cp, slice.runtime, containerName);
+      slice.live.delete(containerName);
+      if (removed.code !== 0 && !reportsContainerGone(removed)) {
         throw makeError(
           X`podman operation reap failed: ${q(removed.stderr.trim() || removed.stdout.trim())}`,
         );
@@ -1162,8 +1204,9 @@ export const makePodmanDriver = ({
       );
     })();
     exited.catch(() => undefined);
-    entry = { name: containerName, child, wait: exited };
-    slice.live.add(entry);
+    // Not hardened: the entry holds a Node ChildProcess, whose internal
+    // stream state cannot survive a deep freeze.
+    slice.live.set(containerName, { child, wait: exited });
 
     const stdinStream = child.stdin;
     /** @type {DriverProcess & { writeStdin(chunk: Uint8Array): Promise<void>, closeStdin(): Promise<void> }} */
@@ -1190,9 +1233,8 @@ export const makePodmanDriver = ({
         );
         if (
           result.code !== 0 &&
-          !/no such (container|object)|does not exist/i.test(
-            `${result.stderr}\n${result.stdout}`,
-          )
+          !reportsContainerGone(result) &&
+          !reportsContainerNotRunning(result)
         ) {
           throw makeError(
             X`podman operation signal failed: ${q(result.stderr.trim() || result.stdout.trim())}`,
@@ -1222,32 +1264,19 @@ export const makePodmanDriver = ({
    */
   const teardown = async slice => {
     const cp = await getCp();
-    const operations = [...slice.live];
+    // The factory owns the graceful ladder and reaps every operation
+    // before it calls teardown(), so a straggler here has already spent
+    // the soft path: remove it forcibly rather than running a second
+    // escalation on a budget that disagrees with the factory's. Each
+    // operation removes and then awaits its own reaper independently,
+    // so one slow container does not gate the rest; the reaper tolerates
+    // finding the container already gone.
     await Promise.all(
-      operations.map(entry =>
-        spawnAndCollect(
-          cp,
-          'podman',
-          podmanArgs(slice.runtime, [
-            'stop',
-            '--time',
-            String(DEFAULT_STOP_GRACE_S),
-            entry.name,
-          ]),
-          { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
-        ).catch(() => undefined),
-      ),
-    );
-    await Promise.all(operations.map(entry => entry.wait.catch(() => null)));
-    await Promise.all(
-      operations.map(entry =>
-        spawnAndCollect(
-          cp,
-          'podman',
-          podmanArgs(slice.runtime, ['rm', '-f', entry.name]),
-          { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
-        ).catch(() => undefined),
-      ),
+      [...slice.live].map(async ([name, operation]) => {
+        await null;
+        await removeContainer(cp, slice.runtime, name).catch(() => undefined);
+        await operation.wait.catch(() => undefined);
+      }),
     );
     slice.live.clear();
 

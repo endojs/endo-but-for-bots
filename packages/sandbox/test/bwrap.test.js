@@ -7,6 +7,7 @@ import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { M } from '@endo/patterns';
 
 import { spawn as nodeSpawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import * as nodeFs from 'node:fs';
 import * as nodeOs from 'node:os';
 import * as nodePath from 'node:path';
@@ -1716,4 +1717,125 @@ test('PATH synthesis: ambient PATH undefined is not an error', async t => {
     },
   );
   t.is(extractSetenvPath(argv), DEFAULT_PATH);
+});
+
+// --- teardown bounding -----------------------------------------------------
+//
+// These drive `teardown` against an injected `child_process` stub, so
+// they run on every host.  The scenario under test is the one the
+// driver's `'close'`-based liveness tracking exists to detect: the slice
+// child has exited, but a descendant that escaped the process group
+// still holds the inherited pipe, so `'close'` never arrives and the
+// child never leaves `slice.live`.
+
+/**
+ * Build a `child_process`-shaped stub whose `spawn` returns a fake child
+ * that has already exited (so `killProcessGroup` correctly declines to
+ * signal a pid it no longer owns) and whose stdio behaviour is dictated
+ * by `closeOnKill`:
+ *
+ *   - `false` — `'close'` never fires, the escaped-fd case.
+ *   - `true`  — `'close'` fires on the next turn, the ordinary case.
+ *
+ * @param {{ closeOnKill: boolean }} opts
+ * @returns {{ childProcess: any, children: any[] }}
+ */
+const makeStubChildProcess = ({ closeOnKill }) => {
+  /** @type {any[]} */
+  const children = [];
+  const childProcess = {
+    spawn: () => {
+      /** @type {any} */
+      const child = new EventEmitter();
+      // A pid Node has already reaped: `exitCode !== null` makes
+      // `killProcessGroup` decline to signal, so no real process group
+      // on the test host is ever touched.
+      child.pid = 999_999;
+      child.exitCode = 0;
+      child.signalCode = null;
+      child.stdin = null;
+      child.stdout = null;
+      child.stderr = null;
+      if (closeOnKill) {
+        setTimeout(() => child.emit('close', 0, null), 0);
+      }
+      children.push(child);
+      return child;
+    },
+  };
+  return { childProcess, children };
+};
+
+/**
+ * Drive `prepareSlice` + one `spawn` against a stubbed child process.
+ *
+ * @param {any} childProcess
+ * @returns {Promise<{ driver: any, slice: any }>}
+ */
+const prepareStubbedSlice = async childProcess => {
+  const driver = /** @type {any} */ (
+    makeBwrapDriver({ env: {}, childProcess })
+  );
+  const slice = await driver.prepareSlice(
+    makeStubSpec({ rootfs: { kind: 'host-bind' } }),
+  );
+  await driver.spawn(slice, ['/bin/true'], {});
+  return { driver, slice };
+};
+
+test('teardown gives up on a child whose stdio never closes', async t => {
+  // Guards the hang: `slice.live` drops a child only on `'close'`, so
+  // without a bound this teardown never settles and `dispose()` wedges
+  // the whole shutdown path.
+  t.timeout(10_000);
+  const { childProcess, children } = makeStubChildProcess({
+    closeOnKill: false,
+  });
+  const { driver, slice } = await prepareStubbedSlice(childProcess);
+  t.is(children.length, 1, 'the stub should have produced one child');
+  t.is(slice.live.size, 1, 'the child should still be live at teardown');
+  // `spawn` leaves its own liveness listener attached; the assertion
+  // below is that teardown's bounded wait adds none of its own on top.
+  const listenersBefore = children[0].listenerCount('close');
+
+  const started = Date.now();
+  await t.throwsAsync(driver.teardown(slice), {
+    message: /could not prove containment/,
+  });
+  const elapsed = Date.now() - started;
+  t.true(
+    elapsed < 5000,
+    `teardown must settle within its own bound, took ${elapsed}ms`,
+  );
+
+  t.is(slice.live.size, 0, 'teardown must not keep the straggler live');
+  t.is(
+    children[0].listenerCount('close'),
+    listenersBefore,
+    "a bounded-out child must not retain teardown's close listener",
+  );
+});
+
+test('teardown resolves as soon as the child stdio closes', async t => {
+  // The bound is a ceiling, not a floor: the ordinary path must not
+  // wait it out.
+  t.timeout(10_000);
+  const { childProcess, children } = makeStubChildProcess({
+    closeOnKill: true,
+  });
+  const { driver, slice } = await prepareStubbedSlice(childProcess);
+
+  const started = Date.now();
+  await t.notThrowsAsync(driver.teardown(slice));
+  const elapsed = Date.now() - started;
+  t.true(
+    elapsed < 500,
+    `teardown should settle on 'close', not on the bound; took ${elapsed}ms`,
+  );
+  t.is(slice.live.size, 0);
+  t.is(
+    children[0].listenerCount('close'),
+    0,
+    'a closed child must not retain a close listener',
+  );
 });
