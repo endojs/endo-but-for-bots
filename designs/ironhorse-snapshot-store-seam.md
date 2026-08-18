@@ -340,27 +340,44 @@ Landed as infrastructure and instruments:
   `reachable_pages_sql(roots)` runs reachability INSIDE SQLite as a
   recursive CTE; dense/CTE parity is locked by test.
 - The store instrument (`store_bench.rs`; release, medians of 5,
-  this repo's dev container): dense reachability reads the whole
-  edge set and scales with the heap — 0.014 / 0.043 / 0.146 ms at
-  60 / 236 / 939 pages — while the CTE stays flat at ~0.02 ms:
-  transfer proportional to the ANSWER, the property the generational
-  mark needs. Incremental checkpoints: 0.9 / 1.2 / 2.0 ms end to end
-  under WAL + `synchronous=FULL`.
-- The GC instrument (`gc_bench.rs`, same provenance): steady-state
-  full mark scales linearly — 0.7 / 3.3 / 13.4 ms at 30k / 120k /
-  480k slots — and `partial_collect` costs 0.4 / 1.9 / 9.5 ms
-  (that session; end-to-end partial timings vary ~±30% between
-  sessions on this container — cross-figure comparisons below quote
-  same-session pairs):
-  cheaper, but still O(live) through the side-table enumeration and
-  O(pages) through the dense edge read — exactly the two terms
-  phases 10-11 remove. Sweep runs ~24-29 ns/slot flat across
-  free-list sizes (the review wave's bitmap fix; the prior sweep was
-  quadratic in free-list length).
+  this repo's dev container, re-measured 2026-08-18 with the
+  arena-visible chain fixture — the first-cut array fixture's
+  numbers were retired with it, see the review record): reachability
+  has TWO regimes, and the honest instrument shows both. Big answer
+  (the whole 60/236/939-page graph): the dense read WINS — 0.022 /
+  0.069 / 0.289 ms against the CTE's 0.083 / 0.298 / 1.380 ms — when
+  the answer IS the graph, one bulk blob read plus an in-Rust BFS
+  beats per-row query transfer; there is no free lunch. Small answer
+  (one edgeless page): the CTE stays flat at ~0.023-0.029 ms while
+  the dense path grows 0.025 → 0.222 ms with the heap — transfer
+  proportional to the ANSWER, the regime the generational mark's
+  small mutation sets live in. Phase 11 should therefore use the CTE
+  for incremental marks and the dense read for full passes. Cold
+  partial collect on the reachable chain frees 0 and prices the pure
+  decision path: 0.18 / 0.43 / 1.52 ms. Checkpoints run 0.94 / 1.48 /
+  2.70 ms end to end — the growth is the commit's O(pages) seal
+  metadata (leaf re-read + root recombination), not the O(dirty) row
+  writes, as the arm's label now says.
+- The GC instrument (`gc_bench.rs`, same provenance; four-phase
+  split re-measured 2026-08-18 — timings vary ~±30% between sessions
+  on this shared container, so cross-figure comparisons quote
+  same-session pairs): steady-state full mark scales linearly — 2.3 /
+  5.4 / 23.5 ms at 30k / 120k / 480k slots that session — and
+  `partial_collect` runs 0.44 / 2.30 / 10.83 ms, split gate 0.099 +
+  enumeration 1.147 + query 0.191 + free 9.334 ms at 480k (the sum
+  cross-checks the end-to-end median): ~86% is the O(garbage
+  reclaimed) free term, the enumeration is the remaining O(live)
+  decision-side term, and the query term is the one the indexed path
+  already collapsed. Sweep runs ~44-49 ns/slot flat across free-list
+  sizes (the review wave's bitmap fix; the prior sweep was quadratic
+  in free-list length).
 - The attached-mode instrument (`attached_bench.rs`) closed the
-  deferred bar: a fully resident attached machine runs a hot crank
-  at x1.009 of detached; the same crank cold-faulting its whole
-  working set costs x1.075.
+  deferred bar. Re-measured 2026-08-18 with the wake excluded from
+  the faulting arm's clock (the instrument pass): resident x1.051 of
+  detached, cold-faulting x1.061 — the faulting-minus-resident delta
+  is ~1%, so fault-during-dispatch sits at the noise floor once the
+  wake (which `wake_latency_bench` isolates) is not folded in; the
+  absolute ratios move with host load session to session.
 
 The partial collector's decision queries now run through the trait
 (`HeapStore::summary_page_count` / `reachable_page_set`, dense
