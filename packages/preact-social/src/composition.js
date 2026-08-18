@@ -63,6 +63,11 @@ const renderAttribution = (party, nameOf) => {
       '(unattributed)',
     );
   }
+  // Mint a mark for every ATTRIBUTED party, named or not — marking an
+  // unnamed-but-attributed party is the point here (petname mints only for
+  // known parties because it also renders guest-designated, possibly
+  // fabricated, objects). The parties composed here are host-designated, so
+  // the mark table grows only with real parties the host chose to attribute.
   const mark = partyMark(party);
   let name;
   try {

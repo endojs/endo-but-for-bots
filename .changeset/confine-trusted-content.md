@@ -23,10 +23,15 @@ component's output as data). Normal rendering, including
 No new public API. Also in this change: the privileged function surface
 reachable from confined code (`Confined` wrappers and the opaque-child
 sentinel type) is frozen (`harden` under lockdown) so it cannot be a writable
-channel between mutually-suspicious parties; and `confineComponent` throws a
-`TypeError` when the host passes a raw vnode through a non-`children` prop
-(such a vnode would hand the guest live host component references via
-`vnode.type`). Host content crosses as `children` or as a confined component
-the guest places; function-valued props remain allowed as deliberate
-capability grants. `fn`'s output is always sanitized; use `HostPassthrough`
-if trusted content genuinely needs un-sanitized output.
+channel between mutually-suspicious parties; and `confineComponent` drops a
+raw vnode passed through a non-`children` prop (such a vnode would hand the
+receiver live component references via `vnode.type`). Dropping rather than
+throwing is deliberate: the boundary runs in both directions, so a throw here
+would be a guest-triggerable crash of the host render; dropping keeps a host
+vnode from reaching a guest and a guest vnode from reaching trusted code, and
+never crashes the render — matching the renderer's model, where disallowed
+tags and attributes are dropped rather than fatal. Host content crosses as
+`children` or as a confined component the guest places; function-valued props
+remain allowed as deliberate capability grants. `fn`'s output is always
+sanitized; use `HostPassthrough` if trusted content genuinely needs
+un-sanitized output.

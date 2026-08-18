@@ -565,6 +565,11 @@ function install() {
       vnode._slotMapBracketed = false;
       popSlotMap();
     }
+    // Defensive: clear any armed diff-invocation gate on the error path so a
+    // throw between arming (in __r) and the component body cannot leave it
+    // armed. Not reachable by guest code today (the next diff overwrites it),
+    // but removes the latent footgun.
+    pendingDiffProps = null;
     if (previousCatchError) {
       return previousCatchError(error, vnode, oldVNode, errorInfo);
     }
@@ -588,34 +593,38 @@ function looksLikeHostVNode(value) {
 }
 
 // Only `children` is transcluded opaquely (`wrapOpaqueChildren`); every
-// other prop is passed to the guest AS-IS. A vnode in one of those
-// props therefore reaches the guest raw: `props.header.type` is a live
-// host component function the guest can CALL with arguments of its
-// choosing — host-authority invocation, handed over by an idiom
-// (`h(Confined, { header: h(HostHeader) })`) that looks like ordinary
-// Preact. Fail fast at the seam, like the renderer's
-// mounted-outside-renderConfined throw, rather than let the mistake
-// degrade quietly. The check is a TRIPWIRE for the common idiom
-// (top-level prop values and one level of array), not a boundary: a
-// vnode buried deeper still cannot be RENDERED with host authority
-// (the coercer's identity gate turns its type into a Fragment) — the
-// hazard is only ever the guest calling what the host handed it, which
-// is the same hazard as any deliberately passed callback.
-function assertNoRawVNodeProps(props) {
+// other prop is passed through AS-IS. A vnode in one of those props
+// therefore reaches the receiver raw: `props.header.type` is a live
+// component function it can CALL with arguments of its choosing. So drop
+// any non-`children` prop whose value is vnode-shaped, mutating the
+// caller's already-fresh `rest` bag in place.
+//
+// DROP, do not throw. A confined wrapper is a mutual-suspicion boundary
+// used in BOTH directions: the host may place a guest, but a guest may
+// also place trusted content (a petname, a badge) and supply ITS props.
+// A throw here — which would run before the wrapper's own try/catch and
+// escape `renderConfined` — is therefore a guest-triggerable crash of
+// the whole host render. Dropping is safe either way: a host vnode never
+// reaches a guest, and a guest vnode never reaches trusted code, and
+// nothing crashes. Silent drop also matches the renderer's model, where
+// disallowed tags/attributes are dropped, never fatal.
+//
+// This is a best-effort TRIPWIRE for the common idiom
+// (`h(Confined, { header: h(HostHeader) })`), covering top-level values
+// and one level of array — NOT a boundary. A vnode buried deeper still
+// cannot be RENDERED with foreign authority (the coercer's identity gate
+// turns an unknown type into a Fragment); the residual hazard is only a
+// receiver calling what it was handed, the same hazard as any
+// deliberately passed callback. Carry host content as `children` or as a
+// confined component the guest places.
+function dropRawVNodeProps(props) {
   for (const key of Object.keys(props)) {
     const value = props[key];
     if (
       looksLikeHostVNode(value) ||
       (Array.isArray(value) && value.some(looksLikeHostVNode))
     ) {
-      throw new TypeError(
-        `confineComponent: prop ${JSON.stringify(key)} carries a raw ` +
-          'vnode. Only `children` crosses as opaque, uninspectable ' +
-          'sentinels; a vnode in any other prop would hand the guest ' +
-          'live host component references (`vnode.type` is directly ' +
-          'callable). Pass host content as children, or as a ' +
-          'confineComponent wrapper the child places.',
-      );
+      delete props[key];
     }
   }
 }
@@ -666,9 +675,10 @@ export function confineComponent(fn, opts) {
     // walk is unforgeable because `SecureBoundary` is module-
     // private to `@endo/preact-container/renderer`).
     const { children: rawChildren, ...rest } = rawProps;
-    // Host mistake, not guest attack: raw vnodes in non-children props
-    // would hand the guest callable host component functions.
-    assertNoRawVNodeProps(rest);
+    // Drop any raw vnode in a non-children prop (see `dropRawVNodeProps`):
+    // only `children` carries content opaquely, and a throw here would be
+    // a guest-triggerable crash when a guest places trusted content.
+    dropRawVNodeProps(rest);
     const opaqueChildren = wrapOpaqueChildren(rawChildren);
     const sanitizedProps = Object.freeze({
       ...rest,

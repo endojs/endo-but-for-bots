@@ -82,19 +82,27 @@ describe('makePatternBadge', () => {
   it('the guest cannot read the pattern or secret — it draws blind', () => {
     const Badge = makePatternBadge(SECRET);
     const seen = [];
+    let directCall = 'not-run';
     const Peeker = confineComponent(({ h: ch }, props) => {
       const vnode = ch(props.Badge, {});
       seen.push(JSON.stringify(vnode.props || {}));
+      seen.push(String(vnode.type));
       try {
-        seen.push(String(vnode.type));
-        seen.push(String(props.Badge({})));
+        // the exfiltration move: call the badge directly to read its output
+        directCall = props.Badge({});
+        seen.push(JSON.stringify(directCall));
       } catch (e) {
-        seen.push(`threw:${e && e.message}`);
+        directCall = `threw:${e && e.message}`;
+        seen.push(String(directCall));
       }
       return ch('div', null, vnode);
     });
     renderConfined(h(Peeker, { Badge }), scratch);
     expect(scratch.textContent).to.contain(pattern.phrase); // user sees it
+    // the direct call yields nothing — the gate returns null, not the badge
+    expect(directCall === null || /^threw:/.test(String(directCall))).to.equal(
+      true,
+    );
     const blob = seen.join(' ');
     expect(blob).to.not.contain(pattern.phrase); // guest never does
     expect(blob).to.not.contain(pattern.glyph);

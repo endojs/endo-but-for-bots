@@ -111,7 +111,7 @@ badge once per secret — not inside a render.
 
 All of this rests on `@endo/preact-container`'s precondition: call
 `lockdown({ overrideTaming: 'severe' })` before evaluating any guest source.
-Without it the boundary is decorative (see the container's README and
-SECURITY-PROPERTIES). This package's `freeze` helper hardens its exports under
-lockdown and falls back to a shallow freeze only so the browser test harness
-can run.
+Without it the boundary is decorative (see the container's README § "SES /
+lockdown is a hard precondition"). This package's `freeze` helper hardens its
+exports under lockdown and falls back to a shallow freeze only so the browser
+test harness can run.

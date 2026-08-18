@@ -1,17 +1,20 @@
-// raw-vnode-props.test.js — the host-side seam of `confineComponent`.
+// raw-vnode-props.test.js — the raw-vnode seam of `confineComponent`.
 //
-// Only `children` is transcluded opaquely. Any OTHER prop is passed to the guest as-is, so a vnode
-// in one of those props reaches the guest raw: `props.header.type` is a live host component
-// function the guest can call with arguments of its choosing. That is a host MISTAKE (the host
-// handed it over), but it wears the shape of ordinary Preact (`h(Confined, { header: h(...) })`),
-// so the seam fails fast instead of degrading quietly — same policy as the renderer's
-// mounted-outside-renderConfined throw.
+// Only `children` is transcluded opaquely. A vnode in any OTHER prop would
+// reach the receiver raw (`props.header.type` is a live, callable component),
+// so the wrapper DROPS vnode-shaped non-children props. It drops rather than
+// throws: a confined wrapper is used in both directions, and when a guest
+// places trusted content it supplies that content's props — a throw there
+// would be a guest-triggerable crash of the whole render. Dropping is safe
+// either way and never crashes. This is a best-effort tripwire (top level plus
+// one array level), not a boundary; carry host content as children or as a
+// confined component.
 import { h } from 'preact';
 import { renderConfined, unmount } from '../src/renderer.js';
 import { confineComponent } from '../src/compartment.js';
 import { setupScratch, teardown } from './_util/helpers.js';
 
-describe('confineComponent — raw host vnodes must not cross as props', () => {
+describe('confineComponent — raw vnodes in non-children props are dropped', () => {
   /** @type {HTMLDivElement} */
   let scratch;
   beforeEach(() => {
@@ -24,21 +27,60 @@ describe('confineComponent — raw host vnodes must not cross as props', () => {
 
   const HostHeader = () => h('h1', null, 'host header');
 
-  it('throws when the host passes a vnode in a non-children prop', () => {
-    const Child = confineComponent(({ h: ch }) => ch('div', null, 'guest'));
+  it('drops a vnode passed in a non-children prop, without throwing', () => {
+    let sawHeader = 'unset';
+    const Child = confineComponent(({ h: ch }, props) => {
+      sawHeader = props.header;
+      return ch('div', null, 'guest');
+    });
     expect(() =>
       renderConfined(h(Child, { header: h(HostHeader, null) }), scratch),
-    ).to.throw(TypeError, /raw.*vnode/i);
+    ).to.not.throw();
+    expect(sawHeader).to.equal(undefined); // the raw host vnode never reached the guest
+    expect(scratch.textContent).to.contain('guest');
+    expect(scratch.textContent).to.not.contain('host header');
   });
 
-  it('throws when a vnode hides inside an array prop', () => {
-    const Child = confineComponent(({ h: ch }) => ch('div', null, 'guest'));
+  it('drops a vnode hidden inside an array prop, without throwing', () => {
+    let sawItems = 'unset';
+    const Child = confineComponent(({ h: ch }, props) => {
+      sawItems = props.items;
+      return ch('div', null, 'guest');
+    });
     expect(() =>
       renderConfined(
         h(Child, { items: ['plain', h('li', null, 'host item')] }),
         scratch,
       ),
-    ).to.throw(TypeError, /raw.*vnode/i);
+    ).to.not.throw();
+    expect(sawItems).to.equal(undefined);
+    expect(scratch.textContent).to.not.contain('host item');
+  });
+
+  // The regression the drop-not-throw change fixes: a GUEST placing trusted
+  // content and supplying a vnode-shaped prop must not crash the render.
+  it('a guest placing trusted content with a vnode-shaped prop does not crash the render', () => {
+    const names = new WeakMap();
+    const ALICE = Object.freeze({});
+    names.set(ALICE, 'Alexa');
+    // trusted content the host wraps and hands to the guest
+    const PetName = confineComponent(({ h: ch }, props) =>
+      ch('span', null, names.get(props.party) || 'unknown'),
+    );
+    const Guest = confineComponent(({ h: ch }, props) =>
+      ch(
+        'div',
+        null,
+        'from ',
+        // guest supplies a hostile vnode-shaped prop alongside the designator
+        ch(props.PetName, { party: props.author, evil: ch('span', null, 'x') }),
+      ),
+    );
+    expect(() =>
+      renderConfined(h(Guest, { PetName, author: ALICE }), scratch),
+    ).to.not.throw();
+    // the trusted content still renders; the render is intact, not blanked
+    expect(scratch.textContent).to.contain('Alexa');
   });
 
   it('host children still cross — as opaque sentinels, not a rejection', () => {
@@ -83,11 +125,9 @@ describe('confineComponent — raw host vnodes must not cross as props', () => {
     expect(scratch.textContent).to.contain('data');
   });
 
-  it('the sanitizer state recovers after the throw — a later render is unaffected', () => {
+  it('the sanitizer state is unaffected by a dropped prop — a later render is normal', () => {
     const Child = confineComponent(({ h: ch }) => ch('div', null, 'guest'));
-    expect(() =>
-      renderConfined(h(Child, { header: h(HostHeader, null) }), scratch),
-    ).to.throw(TypeError);
+    renderConfined(h(Child, { header: h(HostHeader, null) }), scratch);
     const second = setupScratch();
     try {
       const Ok = confineComponent(({ h: ch }) => ch('em', null, 'recovered'));

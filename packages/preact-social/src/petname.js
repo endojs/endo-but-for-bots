@@ -27,6 +27,8 @@ import { partyMark } from './party-mark.js';
 import { withLimitedCss } from './modifiers.js';
 import { freeze } from './freeze.js';
 
+/** @import { CompartmentEndowments, ConfinedProps } from '@endo/preact-container/compartment' */
+
 // Style is INLINE so the surrounding untrusted content's stylesheet cannot
 // restyle a known name to look unknown, or hide it. `display:inline` (not
 // inline-flex/inline-block) so the chip is real text on the text baseline: it
@@ -48,10 +50,11 @@ const BASE_STYLE =
  *
  * @param {(party: object) => (string | undefined)} nameOf Host resolver:
  *   party OBJECT → the reader's local name, or undefined if unnamed/unknown.
- * @param {{ onName?: (party: object) => void }} [opts] `onName`, if given,
- *   makes an unnamed chip activatable so the reader can name the party on the
- *   spot; it is called with the party OBJECT and must validate it against the
- *   host's own known parties (the guest chose which object to pass).
+ * @param {{ onName?: (party: object) => void, onError?: (error: unknown) => void }} [opts]
+ *   `onName`, if given, makes an unnamed chip activatable so the reader can
+ *   name the party on the spot; it is called with the party OBJECT and must
+ *   validate it against the host's own known parties (the guest chose which
+ *   object to pass). `onError` is forwarded to `confineComponent`.
  * @returns {import('preact').FunctionComponent<{ party?: object }>} The chip.
  *   A guest places it as `h(PetName, { party })` with a party it was handed.
  */
@@ -64,68 +67,74 @@ export const makePetName = (nameOf, opts = {}) => {
   // chrome that looks like the host's. (`withLimitedCss` also keeps the guest
   // from restyling the chip; a party object is not a primitive, so
   // `withPrimitiveParams` deliberately does NOT apply here.)
-  return confineComponent(
-    withLimitedCss(({ h }, { party }) => {
-      const isParty =
-        party !== null &&
-        (typeof party === 'object' || typeof party === 'function');
-      let name;
-      try {
-        name =
-          isParty && typeof nameOf === 'function' ? nameOf(party) : undefined;
-      } catch (_) {
-        // A throwing resolver must not become a rendering hole.
-        name = undefined;
-      }
-      const known = typeof name === 'string' && name.length > 0;
-      // A known party gets its stable mark; we do NOT mint a mark for an
-      // unknown/fabricated object, so the guest cannot grow the mark table by
-      // passing throwaway objects.
-      const mark = known ? partyMark(party) : null;
-      const nameable = !known && isParty && onName;
+  //
+  // The cast restates the guest-facing prop contract at the boundary: the
+  // `any`-typed modifiers erase `confineComponent`'s prop generic, so we name
+  // it here rather than let the wrapper widen to `FunctionComponent<{}>`.
+  const render =
+    /** @type {(e: CompartmentEndowments, p: ConfinedProps<{ party?: object }>) => import('preact').VNode} */ (
+      withLimitedCss(({ h }, { party }) => {
+        const isParty =
+          party !== null &&
+          (typeof party === 'object' || typeof party === 'function');
+        let name;
+        try {
+          name =
+            isParty && typeof nameOf === 'function' ? nameOf(party) : undefined;
+        } catch (_) {
+          // A throwing resolver must not become a rendering hole.
+          name = undefined;
+        }
+        const known = typeof name === 'string' && name.length > 0;
+        // A known party gets its stable mark; we do NOT mint a mark for an
+        // unknown/fabricated object, so the guest cannot grow the mark table by
+        // passing throwaway objects. `known` implies `nameOf` resolved `party`,
+        // which only happens for an object, so the cast is sound.
+        const mark = known ? partyMark(/** @type {object} */ (party)) : null;
+        const nameable = !known && isParty && onName;
 
-      const style =
-        BASE_STYLE +
-        (known
-          ? 'font-weight:600;background-color:color-mix(in srgb, currentColor 12%, transparent);'
-          : 'opacity:.75;font-style:italic;') +
-        (nameable ? 'cursor:pointer;' : '') +
-        (mark ? `color:${mark.color};` : '');
+        const style =
+          BASE_STYLE +
+          (known
+            ? 'font-weight:600;background-color:color-mix(in srgb, currentColor 12%, transparent);'
+            : 'opacity:.75;font-style:italic;') +
+          (nameable ? 'cursor:pointer;' : '') +
+          (mark ? `color:${mark.color};` : '');
 
-      const attrs = {
-        class: known ? 'petname' : 'petname petname-unknown',
-        style,
-      };
-      if (nameable) {
-        attrs.role = 'button';
-        attrs.tabindex = 0;
-        attrs.title = 'Give this party a local name';
-        attrs.onClick = () => onName(party);
-        attrs.onKeyDown = e => {
-          if (e && (e.key === 'Enter' || e.key === ' ')) onName(party);
+        const attrs = {
+          class: known ? 'petname' : 'petname petname-unknown',
+          style,
         };
-      }
+        if (nameable) {
+          attrs.role = 'button';
+          attrs.tabindex = 0;
+          attrs.title = 'Give this party a local name';
+          attrs.onClick = () => onName(party);
+          attrs.onKeyDown = e => {
+            if (e && (e.key === 'Enter' || e.key === ' ')) onName(party);
+          };
+        }
 
-      return h(
-        'span',
-        attrs,
-        mark
-          ? h(
-              'span',
-              { 'aria-hidden': 'true', style: 'margin-inline-end:.25em' },
-              mark.glyph,
-            )
-          : null,
-        // Unknown renders as a fixed word, NEVER the raw designator and never
-        // guest-supplied text — the fallback is the attack surface here.
-        h(
+        return h(
           'span',
-          null,
-          known ? String(name) : nameable ? 'name this…' : 'unnamed',
-        ),
-      );
-    }),
-    { name: 'PetName', onError: opts.onError },
-  );
+          attrs,
+          mark
+            ? h(
+                'span',
+                { 'aria-hidden': 'true', style: 'margin-inline-end:.25em' },
+                mark.glyph,
+              )
+            : null,
+          // Unknown renders as a fixed word, NEVER the raw designator and never
+          // guest-supplied text — the fallback is the attack surface here.
+          h(
+            'span',
+            null,
+            known ? String(name) : nameable ? 'name this…' : 'unnamed',
+          ),
+        );
+      })
+    );
+  return confineComponent(render, { name: 'PetName', onError: opts.onError });
 };
 freeze(makePetName);
