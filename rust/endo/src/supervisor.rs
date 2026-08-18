@@ -201,6 +201,15 @@ impl Supervisor {
         self.suspended.write().unwrap_or_else(|e| e.into_inner()).remove(&handle)
     }
 
+    /// Put a suspended-worker record back, exactly as taken — for a
+    /// resume path that discovers it cannot serve this record (e.g. a
+    /// store-backed Ironhorse worker reaching the XS resume dispatch
+    /// before the Ironhorse envelope exists) and must leave the
+    /// worker suspended rather than half-resumed.
+    pub fn put_suspended(&self, handle: Handle, worker: SuspendedWorker) {
+        self.suspended.write().unwrap_or_else(|e| e.into_inner()).insert(handle, worker);
+    }
+
     // ---- Metering API ----
 
     /// Get a clone of the current meter state for a worker.

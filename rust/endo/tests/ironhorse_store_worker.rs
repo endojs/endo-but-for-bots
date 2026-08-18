@@ -39,7 +39,8 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
     assert_eq!(machine.epoch().expect("epoch"), 2);
 
     // Crank 2 continues the SAME heap (globals persist; later cranks
-    // redeclare positionally per the store suites' convention).
+    // reference the same name set — the compiled symbol table is a
+    // deterministic function of the crank's name set).
     let outcome = machine
         .eval("var n; var junk; var i; n = n + 1")
         .expect("crank 2");
@@ -64,10 +65,13 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
     // --- Partial collection at the boundary. ------------------------
     // The dropped `junk` chain is page-isolated garbage; the
     // summary-driven collector reclaims some of it without touching
-    // row content. Freeing never dirties, so the epoch stands.
+    // row content — and the collection is made DURABLE by a
+    // checkpoint before `collect` returns (the review's finding: an
+    // unrecorded collection would be discarded by close), so the
+    // epoch advances.
     let freed = machine.collect().expect("partial collect");
     assert!(freed > 0, "the dropped chain is reclaimable: {freed}");
-    assert_eq!(machine.epoch().expect("epoch"), 4);
+    assert_eq!(machine.epoch().expect("epoch"), 5, "the collection checkpointed");
 
     // --- Suspend through the supervisor. ----------------------------
     // The database is the durable state: the suspend record carries
@@ -78,6 +82,11 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
     machine.close().expect("close folds the WAL");
     assert!(sup.is_suspended(handle));
     let suspended = sup.take_suspended(handle).expect("suspended record");
+    // A resume path that cannot serve the record (the Ironhorse
+    // envelope gap) puts it back untouched; round-trip that API.
+    sup.put_suspended(handle, suspended);
+    assert!(sup.is_suspended(handle), "the record survives a put-back");
+    let suspended = sup.take_suspended(handle).expect("suspended record, again");
     assert!(suspended.sha256.is_empty(), "store-backed workers have no CAS key");
     let heap_store = suspended.heap_store.expect("the record carries the heap path");
 
@@ -87,12 +96,17 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
         signature: options.signature.clone(),
     })
     .expect("resume open");
-    assert_eq!(machine.epoch().expect("epoch"), 4, "the epoch chain continues");
+    assert_eq!(machine.epoch().expect("epoch"), 5, "the epoch chain continues");
     let outcome = machine
         .eval("var n; var junk; var i; n = n + 1")
         .expect("crank after resume");
     assert_eq!(outcome.result, "102", "guest state survived suspend/resume");
-    assert_eq!(machine.epoch().expect("epoch"), 5);
+    assert_eq!(machine.epoch().expect("epoch"), 6);
+    // The pre-suspend collection was durable: collecting again finds
+    // nothing left of the junk chain (before the fix, close discarded
+    // the reclamation and this second collect re-freed it).
+    let freed_again = machine.collect().expect("second partial collect");
+    assert_eq!(freed_again, 0, "the reclamation survived suspend/resume");
     machine.close().expect("close");
 
     // --- The signature gate refuses a foreign worker. ---------------

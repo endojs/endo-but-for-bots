@@ -19463,6 +19463,21 @@ impl Interp {
         for (_, s) in &self.well_known_symbols {
             slot_roots(s, &mut roots);
         }
+        // Symbol identity tables. A symbol used as a property key is
+        // held BY ID in property records — no arena reference points
+        // back at its descriptor slot, and `symbol_key_ids` is the
+        // only descriptor→id link — so sweeping the descriptor while
+        // its id still lives in a chain makes `is_symbol_key_id`
+        // misclassify that property (the PR review's finding). And a
+        // `Symbol.for` registry entry must live as long as the
+        // registry itself (the spec's registry never drops entries).
+        // Both tables key by descriptor slot; their keys are roots.
+        // For `symbol_key_ids` this is deliberately conservative — a
+        // key whose last property died is retained until a precise
+        // trace-the-property-chains refinement — which is retention
+        // only, never misclassification.
+        roots.extend(self.symbol_key_ids.keys().copied());
+        roots.extend(self.symbol_registry_keys.keys().copied());
         for (idx, _, s) in &self.proto_value_data {
             roots.push(*idx);
             slot_roots(s, &mut roots);
@@ -19665,6 +19680,16 @@ impl Interp {
                     }
                 }
                 if let Some(c) = self.collections.get(&idx) {
+                    // Weak collections are DELIBERATELY marked strong
+                    // for now: ephemeron semantics (mark a WeakMap
+                    // value only while its key is live; drop
+                    // dead-keyed entries before compaction) need a
+                    // fixpoint pass this mark loop does not have.
+                    // Conservative direction only — weakly-held
+                    // objects are retained, never freed while live —
+                    // pinned by the gc_machine test
+                    // `weak_collection_entries_are_retained_conservatively`,
+                    // which flips when ephemerons land.
                     for (k, v) in &c.entries {
                         k.each_ref_slot(&mut *visit);
                         v.each_ref_slot(&mut *visit);
@@ -20127,6 +20152,16 @@ impl Interp {
         }
         for p in self.promise_functions.values() {
             visit(p.promise);
+        }
+        // Symbol identity tables (see `gc_roots`): descriptor slots
+        // held by id-mapping only, invisible to arena edges — the
+        // partial collector must root their pages for exactly the
+        // reason the full collector roots the slots.
+        for d in self.symbol_key_ids.keys() {
+            visit(*d);
+        }
+        for d in self.symbol_registry_keys.keys() {
+            visit(*d);
         }
     }
 }
