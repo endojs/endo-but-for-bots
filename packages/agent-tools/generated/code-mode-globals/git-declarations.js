@@ -56,6 +56,8 @@ export const gitDeclarations = harden({
   trackingStatus: () => Promise<GitTrackingStatus>;
   tree: (ref: GitRef | string) => Promise<GitReadableTree>;
   worktree: () => Promise<GitWritableGitWorktree>;
+  worktreeAdd: (entry: GitPathEntry, options?: GitWorktreeAddOptions) => Promise<WritableEndoGit>;
+  worktreeList: () => Promise<GitWorktreeEntry[]>;
 };
 type GitBlobInfo = {
     algorithm: string;
@@ -232,6 +234,19 @@ type GitTrackingStatus = {
     behind: number;
     detached: boolean;
 };
+type GitWorktreeAddOptions = {
+    ref?: GitRef | string;
+    newBranch?: string;
+};
+type GitWorktreeEntry = {
+    path: string;
+    head?: string;
+    branch?: string;
+    bare: boolean;
+    detached: boolean;
+    locked: boolean;
+    prunable: boolean;
+};
 type GitWorktreeStatus = 'clean' | 'modified' | 'deleted' | 'untracked' | 'ignored' | 'conflicted';
 type GitLiteDirectory = {
     has: (...path: string[]) => Promise<boolean>;
@@ -336,6 +351,7 @@ type GitReadOnlyEndoGit = {
     worktree: () => Promise<GitReadOnlyGitWorktree>;
     status: (options?: GitStatusOptions) => Promise<GitStatusResult>;
     trackingStatus: () => Promise<GitTrackingStatus>;
+    worktreeList: () => Promise<GitWorktreeEntry[]>;
     diff: (options?: GitDiffOptions) => Promise<string>;
     log: (options?: GitLogOptions) => Promise<GitCommit[]>;
     show: (ref: GitRef | string) => Promise<string>;
@@ -444,6 +460,7 @@ type GitRef = {
   trackingStatus: () => Promise<GitTrackingStatus>;
   tree: (ref: GitRef | string) => Promise<GitReadableTree>;
   worktree: () => Promise<GitReadOnlyGitWorktree>;
+  worktreeList: () => Promise<GitWorktreeEntry[]>;
 };
 type GitBlobInfo = {
     algorithm: string;
@@ -590,6 +607,15 @@ type GitTrackingStatus = {
     ahead: number;
     behind: number;
     detached: boolean;
+};
+type GitWorktreeEntry = {
+    path: string;
+    head?: string;
+    branch?: string;
+    bare: boolean;
+    detached: boolean;
+    locked: boolean;
+    prunable: boolean;
 };
 type GitWorktreeStatus = 'clean' | 'modified' | 'deleted' | 'untracked' | 'ignored' | 'conflicted';
 type GitLitePathEntry = {

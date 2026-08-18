@@ -69,6 +69,7 @@ harden(withoutOptionalFinalArgument);
  */
 export const GIT_READONLY_MEMBERS = harden([
   'worktree',
+  'worktreeList',
   'status',
   'trackingStatus',
   'diff',
