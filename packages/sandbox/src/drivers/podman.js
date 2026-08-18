@@ -783,6 +783,12 @@ export const makePodmanDriver = ({
       }),
     });
 
+  // Probes deliberately re-run per `make()` so backend availability is a
+  // fresh fail-closed proof. Enforcement (exact labels, the termination
+  // ladder, and containment teardown) is per-operation and does not depend
+  // on probe freshness. Memoizing the probe verdict would need an
+  // invalidation policy reconciled with the `listBackends()` re-probe
+  // contract; revisit if `make()` frequency ever makes probe cost material.
   const probe = async () => {
     await null;
     if (ownerId === undefined || ownerId === '' || /[\0\r\n]/.test(ownerId)) {
