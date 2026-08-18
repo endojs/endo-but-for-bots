@@ -16,6 +16,11 @@ import {
   resolveLimits,
 } from '../limits.js';
 import {
+  killProcessGroup,
+  readableToAsyncIterable,
+  spawnAndCollect,
+} from './child-process.js';
+import {
   CANONICAL_BIN_PATHS,
   DEFAULT_PATH,
   detectMountBinPaths,
@@ -37,6 +42,13 @@ import {
  * teardown bookkeeping (pasta subprocess, temporary files), and the
  * resolved mount table.
  */
+
+/**
+ * Deadline applied to lifecycle-critical bwrap control commands. A
+ * stalled probe must not be able to wedge backend selection, and
+ * therefore `make()`, indefinitely.
+ */
+const CONTROL_COMMAND_TIMEOUT_MS = 30_000;
 
 const DEFAULT_KILL_GRACE_MS = 5000;
 
@@ -94,69 +106,6 @@ const parseBwrapVersion = stdout => {
   return match ? match[1] : trimmed;
 };
 harden(parseBwrapVersion);
-
-/**
- * Spawn a child process and collect its stdout / stderr.  Used for
- * `--version` probes and short-lived control commands like `pasta`
- * and `nft -f`.
- *
- * @param {typeof import('child_process')} cpModule
- * @param {string} command
- * @param {string[]} args
- * @returns {Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string }>}
- */
-const spawnAndCollect = (cpModule, command, args) => {
-  return new Promise((resolve, reject) => {
-    let child;
-    try {
-      child = cpModule.spawn(command, args, { stdio: 'pipe' });
-    } catch (e) {
-      reject(/** @type {Error} */ (e));
-      return;
-    }
-    /** @type {Buffer[]} */
-    const stdoutChunks = [];
-    /** @type {Buffer[]} */
-    const stderrChunks = [];
-    child.stdout?.on('data', chunk => stdoutChunks.push(chunk));
-    child.stderr?.on('data', chunk => stderrChunks.push(chunk));
-    child.once('error', reject);
-    child.once('close', (code, signal) => {
-      resolve({
-        code,
-        signal,
-        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
-        stderr: Buffer.concat(stderrChunks).toString('utf8'),
-      });
-    });
-  });
-};
-harden(spawnAndCollect);
-
-/**
- * Wrap a Node `Readable` stream as a single-use async iterable of
- * `Uint8Array` chunks.  Each `[Symbol.asyncIterator]()` call returns
- * the SAME underlying stream iterator — Node streams are not
- * re-iterable.  The factory's reader-ref adapter consumes the
- * iterator exactly once.
- *
- * @param {NodeJS.ReadableStream | null} stream
- * @returns {AsyncIterable<Uint8Array> | null}
- */
-const readableToAsyncIterable = stream => {
-  if (stream === null || stream === undefined) return null;
-  /** @type {AsyncIterableIterator<Uint8Array> | null} */
-  let cached = null;
-  return {
-    [Symbol.asyncIterator]() {
-      if (cached === null) {
-        cached = /** @type {any} */ (stream)[Symbol.asyncIterator]();
-      }
-      return /** @type {AsyncIterableIterator<Uint8Array>} */ (cached);
-    },
-  };
-};
-harden(readableToAsyncIterable);
 
 /**
  * Internal slice context the driver hands back from `prepareSlice` and
@@ -550,7 +499,9 @@ export const makeBwrapDriver = ({
 
     let result;
     try {
-      result = await spawnAndCollect(cp, 'bwrap', ['--version']);
+      result = await spawnAndCollect(cp, 'bwrap', ['--version'], {
+        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+      });
     } catch (e) {
       const cause = /** @type {Error & { code?: string }} */ (e);
       const reason =
@@ -577,7 +528,9 @@ export const makeBwrapDriver = ({
 
     let helpResult;
     try {
-      helpResult = await spawnAndCollect(cp, 'bwrap', ['--help']);
+      helpResult = await spawnAndCollect(cp, 'bwrap', ['--help'], {
+        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+      });
     } catch (e) {
       return harden({
         available: false,
@@ -887,18 +840,7 @@ export const makeBwrapDriver = ({
       stderr: readableToAsyncIterable(child.stderr),
       wait: () => exited,
       kill: async signal => {
-        const pid = child.pid;
-        if (pid === undefined) return;
-        try {
-          process.kill(
-            -pid,
-            /** @type {NodeJS.Signals | number} */ (signal ?? 'SIGTERM'),
-          );
-        } catch (e) {
-          // ESRCH (process already gone) is fine; rethrow others.
-          const err = /** @type {Error & { code?: string }} */ (e);
-          if (err.code !== 'ESRCH') throw err;
-        }
+        killProcessGroup(child, signal ?? 'SIGTERM');
       },
       /** @param {Uint8Array} chunk */
       writeStdin: async chunk => {

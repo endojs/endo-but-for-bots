@@ -1,10 +1,11 @@
 // @ts-check
 
-/* global Buffer, clearTimeout, process, setTimeout */
+/* global Buffer, process */
 
 import { makeError, q, X } from '@endo/errors';
 
 import { makeCgroup2Probe } from '../limits.js';
+import { readableToAsyncIterable, spawnAndCollect } from './child-process.js';
 import { DEFAULT_PATH } from './path.js';
 
 /** @import { SandboxDriver, SliceSpec, SpawnOpts, DriverProcess, BackendProbe, BackendProbeDetails } from '../types.js' */
@@ -71,116 +72,9 @@ const parsePodmanVersion = stdout => {
 harden(parsePodmanVersion);
 
 /**
- * Spawn a child process and collect its stdout / stderr.  Used for
- * `--version` probes and short-lived control commands like `podman
- * pull` and `podman create`.
  *
- * A `timeoutMs` deadline or an `AbortSignal` bounds control commands
- * that must not stall the sandbox lifecycle: on expiry or abort the
- * child is hard-killed and the promise rejects with a structured error.
  *
- * @param {typeof import('child_process')} cpModule
- * @param {string} command
- * @param {string[]} args
- * @param {{ timeoutMs?: number, signal?: AbortSignal }} [options]
- * @returns {Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string }>}
  */
-const spawnAndCollect = (cpModule, command, args, options = {}) => {
-  const { timeoutMs, signal: abortSignal } = options;
-  return new Promise((resolve, reject) => {
-    if (abortSignal?.aborted) {
-      reject(makeError(X`${q(command)} control command aborted`));
-      return;
-    }
-    let child;
-    try {
-      child = cpModule.spawn(command, args, { stdio: 'pipe' });
-    } catch (e) {
-      reject(/** @type {Error} */ (e));
-      return;
-    }
-    /** @type {Buffer[]} */
-    const stdoutChunks = [];
-    /** @type {Buffer[]} */
-    const stderrChunks = [];
-    /** @type {ReturnType<typeof setTimeout> | undefined} */
-    let deadline;
-    /** @type {(() => void) | undefined} */
-    let removeAbortListener;
-    /** @param {(value: any) => void} settle */
-    const makeSettler = settle => (/** @type {any} */ value) => {
-      if (deadline !== undefined) clearTimeout(deadline);
-      removeAbortListener?.();
-      settle(value);
-    };
-    const settleResolve = makeSettler(resolve);
-    const settleReject = makeSettler(reject);
-    const abandon = (/** @type {Error} */ failure) => {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        // The control command may already have exited.
-      }
-      settleReject(failure);
-    };
-    child.stdout?.on('data', chunk => stdoutChunks.push(chunk));
-    child.stderr?.on('data', chunk => stderrChunks.push(chunk));
-    child.once('error', settleReject);
-    child.once('close', (code, exitSignal) => {
-      settleResolve({
-        code,
-        signal: exitSignal,
-        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
-        stderr: Buffer.concat(stderrChunks).toString('utf8'),
-      });
-    });
-    if (timeoutMs !== undefined) {
-      deadline = setTimeout(
-        () =>
-          abandon(
-            makeError(
-              X`${q(command)} control command timed out after ${q(timeoutMs)}ms`,
-            ),
-          ),
-        timeoutMs,
-      );
-      if (typeof deadline.unref === 'function') deadline.unref();
-    }
-    if (abortSignal !== undefined) {
-      const onAbort = () =>
-        abandon(makeError(X`${q(command)} control command aborted`));
-      abortSignal.addEventListener('abort', onAbort, { once: true });
-      removeAbortListener = () =>
-        abortSignal.removeEventListener('abort', onAbort);
-    }
-  });
-};
-harden(spawnAndCollect);
-
-/**
- * Wrap a Node `Readable` stream as a single-use async iterable of
- * `Uint8Array` chunks.  Each `[Symbol.asyncIterator]()` call returns
- * the SAME underlying stream iterator — Node streams are not
- * re-iterable.  The factory's reader-ref adapter consumes the
- * iterator exactly once.
- *
- * @param {NodeJS.ReadableStream | null} stream
- * @returns {AsyncIterable<Uint8Array> | null}
- */
-const readableToAsyncIterable = stream => {
-  if (stream === null || stream === undefined) return null;
-  /** @type {AsyncIterableIterator<Uint8Array> | null} */
-  let cached = null;
-  return {
-    [Symbol.asyncIterator]() {
-      if (cached === null) {
-        cached = /** @type {any} */ (stream)[Symbol.asyncIterator]();
-      }
-      return /** @type {AsyncIterableIterator<Uint8Array>} */ (cached);
-    },
-  };
-};
-harden(readableToAsyncIterable);
 
 /**
  * Generate a fresh operation-container name. The single-owner invariant and
