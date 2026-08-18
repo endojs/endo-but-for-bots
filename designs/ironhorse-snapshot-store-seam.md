@@ -702,15 +702,158 @@ cadence policy is deliberately minimal and stated: checkpoint per
 completed crank (the outcome is durable before the caller sees it); a
 crank that halts without completing is REWOUND — the session is
 discarded and resumed from the last checkpoint, so no partial effect
-ever persists; `collect()` offers partial collection at any boundary
-and the supervisor picks the schedule (replica-visible, like the full
+ever persists — and a completed crank whose CHECKPOINT fails is
+rewound the same way; cranks after the first must compile to the
+linked crank's exact symbol table — a divergent table is refused
+(`SymbolMismatch`) before anything runs, with the epoch standing and
+the machine usable; `collect()` offers partial collection at any
+boundary, made durable by a checkpoint before it returns, and the
+supervisor picks the schedule (replica-visible, like the full
 collector's). The lifecycle test
 (`rust/endo/tests/ironhorse_store_worker.rs`, run by the `build-xsnap`
 CI job, which owns the bundle/toolchain prerequisites) exercises fresh
 open → multi-crank state growth with per-crank epochs → crashed-crank
-rewind → partial collection → supervisor suspend record → close (WAL
-folded) → reopen from the record with state and epoch chain intact →
-the signature gate refusing a foreign host surface.
+rewind → refused divergent-symbol crank (epoch stands) → partial
+collection (durable: a post-resume second collect frees 0) →
+supervisor suspend record (put-back round-trip) → close (WAL folded) →
+reopen from the record with state and epoch chain intact → the
+signature gate refusing a foreign host surface.
+
+**Two Copilot review passes over the supervisor wiring (2026-08-18),
+both fully actioned in this branch's commits.** First pass, five
+findings, fixed with locks: the symbol identity tables joined
+`gc_roots` and the side-table ref visitor — either collector could
+reclaim a descriptor page held only by id (locked by
+`symbol_key_descriptor_survives_collection`); weak-collection strong
+marking pinned as a named decision (locked by
+`weak_collection_entries_are_retained_conservatively`); `collect()`
+checkpoints before returning, so a reclamation can no longer be
+discarded by close; a completed crank whose checkpoint fails is
+rewound like a crashed crank; and routed resume of a store-backed
+worker fails loudly and re-suspends the record. Second pass, three
+findings, fixed: `apply_batch` gained the boundary-row gate — the
+prior manifest travels into commit and the prior/new TAIL of each row
+class must be present whenever its geometry-derived length changes
+(locked by
+`commit_refuses_a_geometry_change_that_omits_the_affected_tail_row`,
+bite-checked, with a well-formed twin proving the happy path); the
+chunk-arena validation pass uses `checked_add` so a corrupt length
+cannot wrap the range guard on 32-bit targets; and `PersistentMachine`
+ENFORCES the crank symbol contract — a divergent compiled table is
+refused (`SymbolMismatch`) before anything runs.
+
+**Review wave 3 (2026-08-18): five adversarial reviewers over the
+supervisor-integration delta (`ca270319..99c718ac`) — the boundary
+gate, the non-database backends, the daemon seam, the symbol and
+chunk contracts, and the docs.** Findings are RECORDED here without
+fixes, per this branch's review convention. Nothing confirmed blocks
+the branch: no P0, and the one P1 is a contract-documentation
+falsification whose enforcement is fail-closed.
+
+*Confirmed, open (recorded, not actioned):*
+
+- **"Same name set ⟹ same symbol table" is FALSE in general (P1,
+  probe-confirmed, cross-process).** The compiled table is ordered by
+  XS's hash-bucket walk — buckets ascending, within a bucket REVERSE
+  interning order — so equal used-name sets yield equal tables IFF no
+  two names collide modulo the 1993 buckets. Counterexample:
+  `v12; v20;` vs `v20; v12;` — identical set, different
+  `program_symbol_names()`, second crank refused; collisions are
+  common (136 of 200 probe names). The enforcement compares actual
+  name strings, so it can never MISBIND — the failure mode is a
+  spurious `SymbolMismatch` refusal, never a wrong global — but the
+  authorable contract is really "same used-name set AND same
+  first-appearance order for every bucket-colliding pair", which no
+  author can see. The ledger item below now states the true
+  invariant; the code comment in `ironhorse_engine.rs` still states
+  the falsified one (open action), and the per-crank relinking of the
+  side-table ledger workstream remains the lift.
+- **Resumed-machine divergence on Pending side tables is not always
+  an honest halt (P2, pre-existing, identical on all backends).** A
+  store-resumed `arr.length` answers `undefined` where the continuous
+  machine answers `10` — a silent wrong answer — while dynamic element
+  writes and symbol-keyed `Object.keys` do refuse with named
+  `Unsupported` halts. Machine/image-layer property (backend parity
+  intact); the quiescent contract's "resumed equals uninterrupted"
+  holds only over programs that avoid the Pending rows.
+- **The routed-resume guard drops the message with no reply (P2,
+  latent).** `handle_resume`'s store-backed guard logs, drops the
+  routed message (every sender today passes `response_tx: None`), and
+  re-suspends the record — so every message to such a handle is
+  silently swallowed until the envelope lands. Unreachable in
+  production: nothing outside tests calls `mark_suspended_store`.
+- P3 set, one line each: `decode_stack` still multiplies
+  `count * SLOT_RECORD_BYTES` unchecked where its twin `decode_heap`
+  got `checked_mul` (32-bit-only wrap; the `i + len` advances in
+  `decode_strings`/`decode_u32s` panic rather than err on the same
+  targets); SQLite commit upserts rows BEFORE verification, so
+  refusal atomicity rests wholly on transaction rollback
+  (probe-confirmed safe today; fragile if commit ever turns
+  incremental); `apply_batch`'s grown-region and boundary checks
+  derive their prior baseline from two sources (leaf-vector length vs
+  prior manifest) equal by construction but never asserted equal;
+  `FileStore::commit` leaks its temp file when the RENAME stage fails
+  (litter inert — opens ignore it — but unbounded); a live machine
+  that linked an EMPTY symbol table refuses a later named crank while
+  the same store REOPENED accepts it (`linked` is derived from
+  name-count at open; no misbinding either way); eval's halt path
+  runs the rewind before returning the halt, so a FAILED rewind
+  surfaces the store error and swallows the halt reason (the
+  poisoning itself is correct — the session clears first and later
+  calls refuse); CI runs the lifecycle test through the crate's
+  DEFAULT feature with no `--features` pin (correct and non-vacuous
+  today, verified; a default flip would turn the step into a 0-test
+  green pass); `query_gc`'s crank-2 `arr[3] = {...}` lands as an
+  id-keyed ordinary property — literal-index access never consults
+  the items map — so the fixture narration overstates the array
+  coverage (the parity assertions stand); page-conservative
+  collection is allocation-stride-sensitive (a 5-slot stride chains
+  every page to its successor and frees zero where a 4-slot stride
+  collects — context for `gc_bench`); `partial_collect` after resume
+  frees pages referenced only by Pending side-table rows, foreclosing
+  recovery once those rows gain ledger coverage; and the PR body's
+  supervisor/testing/review-record paragraphs plus the "264-test"
+  figure predate the two Copilot passes and three added tests (this
+  record closes the doc side; the PR body is open).
+
+*Verified clean (the negatives on the record):*
+
+- The boundary-row gate is SOUND in both directions: an exhaustive
+  geometry-by-omission sweep (119 commits, 129 refusals) upheld
+  commit-OK ⟹ open-OK with zero exceptions; the off-by-one matrix is
+  correct in every cell (shrink-to-zero and equal-count shared tail
+  included); intermediates of multi-row growth are required; a
+  required tail traveling with wrong LENGTH refuses as `RowLength`
+  and with stale CONTENT as `BaselineMismatch` — gate = length, root
+  = content-at-rest, open-time inventory = backstop.
+- No legitimate producer is refused: real cross-extent compaction,
+  free-churn-only commits, growth, and a 28-epoch drift sweep with
+  reopens and mid-sweep collections hit zero refusals; every backend
+  passes a self-consistent CURRENT prior (Memory shares its committed
+  state, FileStore re-loads the durable file each commit, SQLite
+  reads manifest and leaves inside the one IMMEDIATE transaction —
+  the stale-prior scenario is unrepresentable).
+- Three-way backend parity holds at every epoch of a lockstep
+  boot→growth→reopen→collect→reopen→eval sequence: fifteen
+  fingerprint fields identical across Memory/File/SQLite (manifest
+  with root and seal, small state, inventory, leaf hashes, edge
+  summaries, reachability sets including degenerate roots, canonical
+  export); collect-after-reopen frees exactly 0 on all three.
+- FileStore crash windows: torn, partial, and parked tmp files are
+  inert; both sides of the rename-durability window reopen valid and
+  the rolled-back side replays the lost epoch byte-identically; a
+  149-position single-byte flip sweep was caught at open, validate,
+  or first content read with zero silent passes.
+- The GC symbol roots are load-bearing on all three backends
+  (bite-check: reverting them reproduces the predicted
+  classification failure); the daemon error paths hold (double fault
+  after rewind probed; `Rc::try_unwrap` at close proven unreachable
+  through the public API; both lifecycle mutations bite — disabling
+  the rewind or collect's checkpoint each fails the test); the
+  `checked_add` chunk guard is correct though inert on 64-bit (the
+  pre-fix wrap was unreachable there; hostile chunk CONTENT remains
+  the documented decode-later-panic-at-compact surface); both
+  YIELD/AWAIT underflow guards are load-bearing (mutation-checked).
 
 Remaining, in one place — every known shortcoming, grouped by where
 the work lives (each item's plan, bar, or pin lives in its own
@@ -724,13 +867,28 @@ section):
   landed above; the envelope is the gap — including ROUTED resume of
   a store-backed worker, which today fails loudly and re-suspends
   the record rather than taking the XS path (the Copilot review's
-  guard).
+  guard). The guard also DROPS the routed message with no reply
+  (every sender today passes `response_tx: None`), so messages to a
+  store-backed suspend are silently swallowed until the envelope
+  lands — latent, since nothing outside tests calls
+  `mark_suspended_store` (wave 3).
 - Any checkpoint/collect cadence policy richer than the stated
   per-crank minimum (a supervisor policy decision; the schedule is
   replica-visible).
 - The side-table LEDGER (its own workstream): side tables do not yet
   persist — the quiescent contract keeps resumed machines
   arena-confined, and `KEYS`/`SYMB` travel empty until it lands.
+  Two wave-3 sharpenings. First, the divergence is not always an
+  honest halt: a resumed `arr.length` answers `undefined` where the
+  continuous machine answers `10`, while element writes and
+  symbol-keyed `Object.keys` do refuse with named halts. Second,
+  until the ledger's per-crank relinking lands, cranks after the
+  first must compile to the linked crank's EXACT symbol table: same
+  used-name set AND same first-appearance order for every
+  hash-bucket-colliding pair (buckets ascending, within-bucket
+  reverse interning order; equal sets suffice only when
+  bucket-injective) — a divergent table is refused (`SymbolMismatch`)
+  before anything runs, fail-closed, never misbinding.
 - Sparse attach (roadmap item 9's deferred half): lazy attach still
   allocates the dense placeholder arena up front (the O(slot_count)
   zero-fill the phase-3 trade recorded); pages faulting into a truly
