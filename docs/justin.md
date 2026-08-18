@@ -369,7 +369,7 @@ path today), the error constructors (`Error`, `TypeError`, …), `NaN`,
 ### The capability question
 
 Because Justin's meaning is supplied by its endowments, **evaluating Justin is a
-capability decision, not a parsing detail.** The dangerous endowments are
+capability decision, not a parsing detail.** The most expressive endowments are
 `slot`/`slotToVal`. A resolver that maps a slot back to a *real* capability
 grants the evaluated expression live authority: the very remotables and
 promises the reference denoted. An evaluator that wants only data
