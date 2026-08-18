@@ -524,10 +524,12 @@ test('the service start facet ignores a caller-supplied runId', async t => {
     initial: 'done',
     states: { done: { final: true } },
   });
-  const { runId } = await E(service).start(chart, {
-    params: harden({}),
-    runId: 'r-chosen',
-  });
+  // Deliberately smuggling a property the options type (rightly) rejects:
+  // the point of the test is that the runtime ignores it too.
+  const options = /** @type {any} */ (
+    harden({ params: harden({}), runId: 'r-chosen' })
+  );
+  const { runId } = await E(service).start(chart, options);
   t.not(runId, 'r-chosen');
   t.true(engines.has(runId));
   t.false(engines.has('r-chosen'));

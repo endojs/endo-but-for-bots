@@ -473,7 +473,13 @@ export const make = async (_powers, _context, options = {}) => {
   // on-disk request/outcome files carry the truth, and driveOperation's
   // foreign-pending wait below restores ordering against a previous
   // incarnation's still-unprocessed request.
+  /** @type {Promise<unknown>} */
   let queueTail = Promise.resolve();
+  /**
+   * @template T
+   * @param {() => Promise<T>} job
+   * @returns {Promise<T>}
+   */
   const enqueue = job => {
     const run = queueTail.then(job, job);
     queueTail = run.then(
@@ -696,7 +702,7 @@ export const make = async (_powers, _context, options = {}) => {
      * failure while writing restores the already-written prefix before
      * throwing, so a failed stage leaves the checkout as it found it.
      *
-     * @param {Array<{ path: string, text: string }>} files
+     * @param {ReadonlyArray<{ path: string, text: string }>} files
      * @param {string} [_key] - workflow idempotency key (unused)
      */
     async stageFiles(files, _key) {
@@ -765,7 +771,7 @@ export const make = async (_powers, _context, options = {}) => {
      * abandoned change. Entries with `text: null` are removed (the stage
      * created them). Naturally idempotent.
      *
-     * @param {Array<{ path: string, text: string | null }>} previous
+     * @param {ReadonlyArray<{ path: string, text: string | null }>} previous
      * @param {string} [_key] - workflow idempotency key (unused)
      */
     async revertFiles(previous, _key) {

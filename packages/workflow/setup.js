@@ -55,7 +55,7 @@ const serviceSpecifier = toCurrentSpecifier(
 );
 
 /**
- * @param {import('@endo/far').ERef<any>} agent
+ * @param {import('@endo/eventual-send').ERef<any>} agent
  */
 export const main = async agent => {
   const alreadyInstalled = await E(agent).has(SERVICE_NAME);
