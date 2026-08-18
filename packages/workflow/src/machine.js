@@ -35,8 +35,9 @@
  *   and `outcomes` so quorum guards stay total.
  */
 
-import { matches, mustMatch, assertPattern } from '@endo/patterns';
 import { Fail, q } from '@endo/errors';
+import { matches, mustMatch, assertPattern } from '@endo/patterns';
+
 import {
   substitute,
   substituteDelimited,
@@ -195,9 +196,10 @@ const assertStates = (states, initial, where) => {
     if (hasRegions) {
       if (isArray(regions)) {
         regions.length > 0 || Fail`${q(at)}: regions must be non-empty`;
-        regions.forEach((regionChart, i) =>
-          assertChartBody(regionChart, `${at}#${i}`),
-        );
+        regions.forEach((regionChart, i) => {
+          assertChartBody(regionChart, `${at}#${i}`);
+          assertRegionFinals(regionChart, `${at}#${i}`);
+        });
       } else {
         isRecord(regions) ||
           Fail`${q(at)}: regions must be an array or an $eachParam record`;
@@ -209,6 +211,7 @@ const assertStates = (states, initial, where) => {
           isRecord(regions.input) ||
           Fail`${q(at)}: regions.input must be a template record`;
         assertChartBody(regions.chart, `${at}#each`);
+        assertRegionFinals(regions.chart, `${at}#each`);
       }
       def.join === undefined ||
         def.join === 'counts' ||
@@ -220,6 +223,16 @@ const assertStates = (states, initial, where) => {
       (def.entry ?? []).length === 0 ||
         Fail`${q(at)}: a final state has no entry effects`;
     }
+  }
+};
+
+// The join envelope's `counts` record reserves `pending` for the
+// unsettled-region count; a region final state of that name would be
+// clobbered by the spread in `makeJoinEvent`.
+const assertRegionFinals = (regionChart, where) => {
+  for (const [name, def] of entries(regionChart.states)) {
+    !(def.final === true && name === 'pending') ||
+      Fail`${q(where)}: a region final state may not be named 'pending' (reserved join-count key)`;
   }
 };
 
@@ -370,6 +383,14 @@ export const chartDiagnostics = chart => {
         });
       }
       if (def.states !== undefined) {
+        if (
+          values(def.states).some(child => child.final === true) &&
+          !handled(selfChain, STATE_DONE)
+        ) {
+          warnings.push(
+            `${at}: compound state's '${STATE_DONE}' completion is handled by no state on its path`,
+          );
+        }
         walkStates(def.states, def.initial, selfChain, at);
       } else if (def.regions !== undefined) {
         if (!handled(selfChain, REGIONS_SETTLED)) {
@@ -402,6 +423,59 @@ export const chartDiagnostics = chart => {
   return harden({ errors: harden(errors), warnings: harden(warnings) });
 };
 harden(chartDiagnostics);
+
+/**
+ * Every event type the engine itself can produce for a chart: the
+ * internal kernel events plus all effect `outcome` / `failure` types,
+ * `after` emissions, and `emit` event types (dynamic, interpolated
+ * types are skipped). Ports refuse these — a participant may not
+ * impersonate the engine or another participant's settlement.
+ *
+ * @param {any} chart
+ * @returns {string[]}
+ */
+export const engineEventTypes = chart => {
+  assertChart(chart);
+  /** @type {Set<string>} */
+  const types = new Set([REGIONS_SETTLED, STATE_DONE, 'effect-failed']);
+  const addType = type => {
+    if (typeof type === 'string' && !type.includes('{')) {
+      types.add(type);
+    }
+  };
+  const checkEffect = effect => {
+    addType(effect.outcome);
+    addType(effect.failure);
+    if (effect.kind === 'after') {
+      addType(effect.emit.type);
+    } else if (effect.kind === 'emit') {
+      addType(effect.event.type);
+    }
+  };
+  const walk = states => {
+    for (const def of values(states)) {
+      (def.entry ?? []).forEach(checkEffect);
+      (def.exit ?? []).forEach(checkEffect);
+      for (const candidates of values(def.on ?? {})) {
+        for (const t of candidates) {
+          (t.effects ?? []).forEach(checkEffect);
+        }
+      }
+      if (def.states !== undefined) {
+        walk(def.states);
+      } else if (def.regions !== undefined) {
+        if (isArray(def.regions)) {
+          def.regions.forEach(regionChart => walk(regionChart.states));
+        } else {
+          walk(def.regions.chart.states);
+        }
+      }
+    }
+  };
+  walk(chart.states);
+  return harden([...types].sort());
+};
+harden(engineEventTypes);
 
 // #endregion
 
@@ -560,6 +634,25 @@ const enterState = (states, name, frame, eventEnvelope, parentPath, out) => {
       path,
       out,
     );
+    const initialDef = def.states[def.initial];
+    if (initialDef.final === true) {
+      // The compound's initial child is already final: raise
+      // `state-done` immediately, exactly as an immediately-settled
+      // region raises its join — otherwise the compound wedges with
+      // nothing pending.
+      out.internals.push(
+        harden({
+          type: STATE_DONE,
+          path: harden([...path]),
+          value: harden({
+            state: def.initial,
+            ...(initialDef.output !== undefined
+              ? { output: substitute(initialDef.output, scope) }
+              : {}),
+          }),
+        }),
+      );
+    }
   } else if (def.regions !== undefined) {
     const specs = regionSpecsOf(def, scope);
     node.regions = specs.map(({ chart: regionChart, params }, i) => {

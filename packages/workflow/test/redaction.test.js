@@ -81,8 +81,8 @@ test('settled capabilities are redacted to durable ref aliases', async t => {
   // The journal and context see the alias, never the capability.
   t.deepEqual(engine.fold.context.got, { token: 'ref-0', note: 'fresh' });
   const journal = await E(run).journal();
-  const settled = journal.find(entry => entry.kind === 'effect-settled');
-  t.deepEqual(settled.value, { token: 'ref-0', note: 'fresh' });
+  const settled = journal.find(entry => entry.settles !== undefined);
+  t.deepEqual(settled.settles.value, { token: 'ref-0', note: 'fresh' });
   // Every entry is hash-chained and data-only.
   t.true(verifyJournalChain(journal).ok);
   t.true(journal.every(entry => typeof entry.prev === 'string'));
@@ -196,7 +196,10 @@ test('an unhandled settlement fails the run loudly', async t => {
   t.is(engine.fold.outcome, 'failed');
   t.regex(engine.fold.reason, /unhandled 'done-x' settlement of effect 0-0/);
   const journal = await E(run).journal();
-  t.is(journal[journal.length - 1].kind, 'failed');
+  const last = journal[journal.length - 1];
+  t.is(last.kind, 'event');
+  t.is(last.terminal.outcome, 'failed');
+  t.is(last.settles.effectId, '0-0');
 });
 
 test('an undeclared ask failure fails the run rather than wedging it', async t => {
@@ -266,16 +269,21 @@ test('a tampered journal is flagged on recovery', async t => {
     initial: 'a',
     states: {
       a: { on: { go: [{ target: 'b' }] } },
-      b: { final: true },
+      b: { on: { go: [{ target: 'c' }] } },
+      c: { final: true },
     },
   });
   const { runId, control } = await E(service).start(chart, {});
   const engine1 = engines.get(runId);
   await E(control).signal(harden({ type: 'go' }));
+  await E(control).signal(harden({ type: 'go' }));
   await until(() => engine1.fold.done, 'run completion');
   stop();
 
   // Rewrite entry 1 in place; its hash no longer matches entry 2's prev.
+  // (Tampering the LAST entry is invisible to the chain after a restart
+  // — nothing anchors the head — which is why the mid-journal edit is
+  // the detection case.)
   const original = controls.peek(['workflow', 'runs', runId, '1']);
   await E(powers).storeValue(harden({ ...original, by: 'evil' }), [
     'workflow',

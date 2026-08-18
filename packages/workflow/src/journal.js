@@ -11,32 +11,49 @@
  * `applyEntry` to the same state shape as it appends, so a recovered run
  * and a live run can never disagree.
  *
- * One deliberate deviation from the design document's first sketch: the
- * `event` and `fired` entries are coalesced into a single `event` entry
- * whose optional `fired` payload carries the step result. The kernel is
- * synchronous, so the step is computed before the append and the two
- * halves commit in one write — there is no crash window in which an
- * event was durably received but its transition lost.
+ * One deliberate principle, extended after the durability review: every
+ * causally-coupled pair of facts commits in ONE entry, so there is no
+ * crash window between them. The `event` entry therefore optionally
+ * carries, alongside its envelope:
+ *
+ * - `fired` — the step result `{ configuration, context, exited,
+ *   effects, internals? }`; `internals` are the id'd internal envelopes
+ *   (`regions-settled` / `state-done`) the step raised, tracked as
+ *   delivery obligations until their own entries land (an envelope's
+ *   `delivers` field discharges one).
+ * - `settles` — `{ effectId, status, value? / reason? }` when the event
+ *   IS an effect settlement; the pending record is removed by the same
+ *   write that journals its transition.
+ * - `terminal` — `{ outcome, output? / reason? }` when the step entered
+ *   a top-level final state (or the fail-loud policy fired); completion
+ *   commits with the step, never as a separate write.
+ * - `replays` — the seq of a queued event being stepped after `resumed`.
+ *
+ * `emit` effects are likewise delivery obligations: their effect
+ * records (journaled in `fired.effects` / `started.effects`) enter
+ * `pendingInternals` keyed by effectId until the emitted envelope's own
+ * entry (carrying `delivers`) lands. Recovery re-dispatches whatever
+ * obligations remain.
  *
  * Entry kinds:
  *
  * | kind               | payload                                                       |
  * | ------------------ | ------------------------------------------------------------- |
- * | `started`          | chartName, chartVersion, params, endowmentNames,              |
- * |                    | configuration, context, effects                               |
- * | `event`            | event envelope; optional `fired` `{ configuration, context,   |
- * |                    | exited, effects }`; optional `replays` (seq of a queued event  |
- * |                    | being stepped after `resumed`)                                |
+ * | `started`          | chartName, chartVersion, factory?, params, endowmentNames,    |
+ * |                    | configuration, context, effects, internals?, terminal?        |
+ * | `event`            | event envelope; optional `fired`, `settles`, `terminal`,      |
+ * |                    | `replays` as above                                            |
  * | `effect-dispatched`| effectId, correlation? (mail message ids, responseName, or an |
  * |                    | absolute timer deadline)                                      |
- * | `effect-settled`   | effectId, status `fulfilled` \| `failed`, value? / reason?    |
+ * | `effect-settled`   | legacy shape (still folded); live engines journal settlements |
+ * |                    | as `event` entries with `settles`                             |
  * | `spawned`          | effectId, childRunId                                          |
  * | `paused`/`resumed` | —                                                             |
  * | `cancelled`        | reason?                                                       |
- * | `completed`        | output?                                                       |
- * | `failed`           | reason                                                        |
- * | `snapshot`         | configuration, context, pending (replay shortener; the engine |
- * |                    | only snapshots at rest — not paused, no queued events)        |
+ * | `completed`        | output? (legacy; live engines use `terminal`)                 |
+ * | `failed`           | reason (standalone failures, e.g. cascade overflow)           |
+ * | `snapshot`         | configuration, context, pending, internals (replay shortener; |
+ * |                    | the engine only snapshots at rest)                            |
  * | `admin`            | action, detail — journaled administrative access (for         |
  * |                    | example `resolve-ref`); no effect on the fold                 |
  *
@@ -51,9 +68,9 @@
  */
 
 import { Fail, q } from '@endo/errors';
+import { encodeHex } from '@endo/hex';
 import { passStyleOf, getTag } from '@endo/pass-style';
 import { sha256 } from '@endo/sha256';
-import { encodeHex } from '@endo/hex';
 
 const { keys } = Object;
 
@@ -114,7 +131,11 @@ harden(effectRecordsFor);
  * @property {string[]} endowmentNames
  * @property {any} configuration
  * @property {Record<string, any>} context
- * @property {Map<string, { effectId: string, path: string[], effect: any, since?: string, correlation?: any, childRunId?: string }>} pending
+ * @property {Map<string, { effectId: string, path: string[], effect: any, since?: string, correlation?: any, childRunId?: string, exit?: boolean }>} pending
+ * @property {Map<string, any>} pendingInternals - engine-generated
+ *   envelopes (internal events and `emit`s) journaled but not yet
+ *   delivered as their own entries, keyed by internalId / effectId; the
+ *   recovery path re-dispatches whatever remains
  * @property {boolean} paused
  * @property {Map<string, any>} queuedEvents - envelopes journaled while
  *   paused and not yet stepped, keyed by decimal seq
@@ -137,6 +158,7 @@ export const initialFoldState = () => ({
   configuration: undefined,
   context: harden({}),
   pending: new Map(),
+  pendingInternals: new Map(),
   paused: false,
   queuedEvents: new Map(),
   done: false,
@@ -150,12 +172,37 @@ harden(initialFoldState);
 
 const addEffects = (state, effectRecords, at) => {
   for (const record of effectRecords) {
-    // `emit` effects are instantaneous internal events: journaled for
-    // audit, never pending against the world.
-    if (record.effect.kind !== 'emit') {
+    if (record.effect.kind === 'emit') {
+      // `emit` effects never pend against the world, but their delivery
+      // (the emitted envelope's own entry) is a durable obligation.
+      state.pendingInternals.set(
+        record.effectId,
+        harden({ ...record.effect.event, by: 'engine', path: record.path }),
+      );
+    } else {
       state.pending.set(record.effectId, harden({ ...record, since: at }));
     }
   }
+};
+
+const addInternals = (state, internals) => {
+  for (const internal of internals ?? []) {
+    state.pendingInternals.set(internal.internalId, internal.envelope);
+  }
+};
+
+const applyTerminal = (state, terminal) => {
+  state.done = true;
+  state.outcome = terminal.outcome;
+  if (terminal.output !== undefined) {
+    state.output = terminal.output;
+  }
+  if (terminal.reason !== undefined) {
+    state.reason = terminal.reason;
+  }
+  state.pending.clear();
+  state.pendingInternals.clear();
+  state.queuedEvents.clear();
 };
 
 const pruneExited = (state, exited) => {
@@ -193,8 +240,18 @@ export const applyEntry = (state, entry) => {
     state.configuration = entry.configuration;
     state.context = entry.context;
     addEffects(state, entry.effects, entry.at);
+    addInternals(state, entry.internals);
     state.startedAt = entry.at;
+    if (entry.terminal !== undefined) {
+      applyTerminal(state, entry.terminal);
+    }
   } else if (kind === 'event') {
+    if (entry.settles !== undefined) {
+      state.pending.delete(entry.settles.effectId);
+    }
+    if (entry.event !== undefined && entry.event.delivers !== undefined) {
+      state.pendingInternals.delete(entry.event.delivers);
+    }
     if (entry.replays !== undefined) {
       state.queuedEvents.delete(String(entry.replays));
     }
@@ -203,8 +260,16 @@ export const applyEntry = (state, entry) => {
       state.context = entry.fired.context;
       pruneExited(state, entry.fired.exited);
       addEffects(state, entry.fired.effects, entry.at);
-    } else if (state.paused && entry.replays === undefined) {
+      addInternals(state, entry.fired.internals);
+    } else if (
+      state.paused &&
+      entry.replays === undefined &&
+      entry.terminal === undefined
+    ) {
       state.queuedEvents.set(String(seq), entry.event);
+    }
+    if (entry.terminal !== undefined) {
+      applyTerminal(state, entry.terminal);
     }
   } else if (kind === 'effect-dispatched') {
     const record = state.pending.get(entry.effectId);
@@ -215,6 +280,8 @@ export const applyEntry = (state, entry) => {
       );
     }
   } else if (kind === 'effect-settled') {
+    // Legacy settlement shape; live engines coalesce settlements into
+    // `event` entries with `settles`.
     state.pending.delete(entry.effectId);
   } else if (kind === 'spawned') {
     const record = state.pending.get(entry.effectId);
@@ -229,29 +296,30 @@ export const applyEntry = (state, entry) => {
   } else if (kind === 'resumed') {
     state.paused = false;
   } else if (kind === 'cancelled') {
-    state.done = true;
-    state.outcome = 'cancelled';
-    state.reason = entry.reason;
-    state.pending.clear();
-    state.queuedEvents.clear();
+    applyTerminal(
+      state,
+      harden({
+        outcome: 'cancelled',
+        ...(entry.reason !== undefined ? { reason: entry.reason } : {}),
+      }),
+    );
   } else if (kind === 'completed') {
-    state.done = true;
-    state.outcome = 'completed';
-    state.output = entry.output;
-    state.pending.clear();
-    state.queuedEvents.clear();
+    applyTerminal(
+      state,
+      harden({
+        outcome: 'completed',
+        ...(entry.output !== undefined ? { output: entry.output } : {}),
+      }),
+    );
   } else if (kind === 'failed') {
-    state.done = true;
-    state.outcome = 'failed';
-    state.reason = entry.reason;
-    state.pending.clear();
-    state.queuedEvents.clear();
+    applyTerminal(state, harden({ outcome: 'failed', reason: entry.reason }));
   } else if (kind === 'snapshot') {
     state.configuration = entry.configuration;
     state.context = entry.context;
     state.pending = new Map(
       entry.pending.map(record => [record.effectId, record]),
     );
+    state.pendingInternals = new Map(entry.internals ?? []);
   }
   // `admin` entries are audit-only: they take the common envelope
   // bookkeeping above and change nothing else.
@@ -275,22 +343,22 @@ export const foldJournal = entries => {
 harden(foldJournal);
 
 /**
- * Deterministically encode a capability-free passable as a string, for
- * hashing. JSON syntax with sorted record keys plus escape records for
- * the passable extensions: `{"#":"undefined"}`, `{"#num":"NaN"}` (and
- * `-0`, `Infinity`, `-Infinity`), `{"#big":"7"}` for bigints,
- * `{"#tag":t,"payload":p}` for tagged values, and
- * `{"#error":name,"message":m}` for errors. Literal record keys
- * beginning with `#` are escaped by doubling, so the encoding is
- * prefix-unambiguous.
- *
- * Throws on remotables and promises: journal entries must have been
- * redacted to data before hashing, and this refusal is the enforcement.
- *
+ * The deepest structure the canonical encoder (and, in the service, the
+ * redactor) will walk. Journal entries built by the engine are shallow;
+ * participant-supplied values beyond this depth are refused rather than
+ * risking the stack.
+ */
+export const MAX_ENCODING_DEPTH = 128;
+harden(MAX_ENCODING_DEPTH);
+
+/**
  * @param {any} value
+ * @param {number} depth
  * @returns {string}
  */
-export const canonicalStringify = value => {
+const encodeCanonical = (value, depth) => {
+  depth <= MAX_ENCODING_DEPTH ||
+    Fail`journal value exceeds encoding depth ${q(MAX_ENCODING_DEPTH)}`;
   if (value === undefined) {
     return '{"#":"undefined"}';
   }
@@ -322,30 +390,64 @@ export const canonicalStringify = value => {
   if (type === 'bigint') {
     return `{"#big":"${value}"}`;
   }
+  if (type === 'symbol') {
+    // Passable symbols are well-known or registered; the description
+    // names them for hashing purposes.
+    const description = /** @type {symbol} */ (value).description;
+    return `{"#sym":${JSON.stringify(String(description ?? ''))}}`;
+  }
   const style = passStyleOf(value);
   if (style === 'copyArray') {
     const array = /** @type {any[]} */ (value);
-    return `[${array.map(canonicalStringify).join(',')}]`;
+    return `[${array.map(member => encodeCanonical(member, depth + 1)).join(',')}]`;
   }
   if (style === 'copyRecord') {
     const inner = keys(value)
       .sort()
       .map(name => {
         const escaped = name.startsWith('#') ? `#${name}` : name;
-        return `${JSON.stringify(escaped)}:${canonicalStringify(value[name])}`;
+        return `${JSON.stringify(escaped)}:${encodeCanonical(value[name], depth + 1)}`;
       })
       .join(',');
     return `{${inner}}`;
   }
   if (style === 'tagged') {
-    return `{"#tag":${JSON.stringify(getTag(value))},"payload":${canonicalStringify(value.payload)}}`;
+    return `{"#tag":${JSON.stringify(getTag(value))},"payload":${encodeCanonical(value.payload, depth + 1)}}`;
   }
   if (style === 'error') {
-    const error = /** @type {Error} */ (value);
-    return `{"#error":${JSON.stringify(error.name)},"message":${JSON.stringify(error.message)}}`;
+    const error = /** @type {Error & { cause?: any, errors?: any }} */ (value);
+    let encoded = `{"#error":${JSON.stringify(error.name)},"message":${JSON.stringify(error.message)}`;
+    // Aux data participates in the hash, so tampering with a stored
+    // error's cause chain is as detectable as any other edit.
+    if (error.cause !== undefined) {
+      encoded += `,"cause":${encodeCanonical(error.cause, depth + 1)}`;
+    }
+    if (error.errors !== undefined) {
+      encoded += `,"errors":${encodeCanonical(error.errors, depth + 1)}`;
+    }
+    return `${encoded}}`;
   }
   throw Fail`journal entries must be capability-free data, cannot encode a ${q(style)}`;
 };
+
+/**
+ * Deterministically encode a capability-free passable as a string, for
+ * hashing. JSON syntax with sorted record keys plus escape records for
+ * the passable extensions: `{"#":"undefined"}`, `{"#num":"NaN"}` (and
+ * `-0`, `Infinity`, `-Infinity`), `{"#big":"7"}` for bigints,
+ * `{"#sym":d}` for passable symbols, `{"#tag":t,"payload":p}` for
+ * tagged values, and `{"#error":name,"message":m,"cause"?,"errors"?}`
+ * for errors (aux data included). Literal record keys beginning with
+ * `#` are escaped by doubling, so the encoding is prefix-unambiguous.
+ *
+ * Throws on remotables and promises — journal entries must have been
+ * redacted to data before hashing, and this refusal is the enforcement
+ * — and on structures deeper than `MAX_ENCODING_DEPTH`.
+ *
+ * @param {any} value
+ * @returns {string}
+ */
+export const canonicalStringify = value => encodeCanonical(value, 0);
 harden(canonicalStringify);
 
 const textEncoder = new TextEncoder();

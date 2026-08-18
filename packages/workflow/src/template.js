@@ -27,8 +27,8 @@
  * a form field's `pattern` survives substitution intact.
  */
 
-import { passStyleOf } from '@endo/pass-style';
 import { Fail, q } from '@endo/errors';
+import { passStyleOf } from '@endo/pass-style';
 
 const { fromEntries, entries, keys } = Object;
 

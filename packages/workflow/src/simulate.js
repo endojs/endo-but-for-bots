@@ -18,6 +18,7 @@
  */
 
 import { Fail, q } from '@endo/errors';
+
 import { assertChart, initialStep, transition } from './machine.js';
 import { applyEntry, initialFoldState, effectRecordsFor } from './journal.js';
 
@@ -51,10 +52,16 @@ export const makeSimulator = (chart, { params = harden({}) } = {}) => {
   };
 
   /**
+   * Mirror the engine's atomic composite entries: settlement, step
+   * result (with id'd internal obligations), and terminal outcome all
+   * ride one entry.
+   *
    * @param {any} envelope
    * @param {number} depth
+   * @param {{ settles?: any }} [options]
    */
-  const stepEnvelope = (envelope, depth) => {
+  const stepEnvelope = (envelope, depth, options = {}) => {
+    const { settles } = options;
     if (fold.done) {
       return;
     }
@@ -66,6 +73,12 @@ export const makeSimulator = (chart, { params = harden({}) } = {}) => {
       });
       return;
     }
+    const base = harden({
+      kind: 'event',
+      by: envelope.by,
+      event: envelope,
+      ...(settles !== undefined ? { settles } : {}),
+    });
     const machineState = {
       configuration: fold.configuration,
       context: fold.context,
@@ -73,7 +86,6 @@ export const makeSimulator = (chart, { params = harden({}) } = {}) => {
     };
     const result = transition(chart, machineState, envelope);
     if (!result.fired) {
-      append({ kind: 'event', by: envelope.by, event: envelope });
       const { by } = envelope;
       const settlement =
         envelope.effectId !== undefined &&
@@ -82,26 +94,49 @@ export const makeSimulator = (chart, { params = harden({}) } = {}) => {
         (by.startsWith('ask:') || by.startsWith('invoke:') || by === 'spawn');
       if (settlement) {
         append({
-          kind: 'failed',
-          by: 'engine',
-          reason: `unhandled '${envelope.type}' settlement of effect ${envelope.effectId}`,
+          ...base,
+          terminal: harden({
+            outcome: 'failed',
+            reason: `unhandled '${envelope.type}' settlement of effect ${envelope.effectId}`,
+          }),
         });
         settleTerminal();
+      } else {
+        append(base);
       }
       return;
     }
     const effects = effectRecordsFor(fold.nextSeq, result.effects);
+    const internals = harden(
+      result.internalEvents.map((internal, index) => ({
+        internalId: `${fold.nextSeq}-i${index}`,
+        envelope: harden({ ...internal, by: 'engine' }),
+      })),
+    );
     append({
-      kind: 'event',
-      by: envelope.by,
-      event: envelope,
+      ...base,
       fired: harden({
         configuration: result.configuration,
         context: result.context,
         exited: result.exited,
         effects,
+        ...(internals.length > 0 ? { internals } : {}),
       }),
+      ...(result.terminal !== undefined
+        ? {
+            terminal: harden({
+              outcome: 'completed',
+              ...(result.terminal.output !== undefined
+                ? { output: result.terminal.output }
+                : {}),
+            }),
+          }
+        : {}),
     });
+    if (result.terminal !== undefined) {
+      settleTerminal();
+      return;
+    }
     for (const record of effects) {
       if (record.effect.kind === 'emit') {
         queue.push({
@@ -110,26 +145,21 @@ export const makeSimulator = (chart, { params = harden({}) } = {}) => {
             by: 'engine',
             at: `t${tick}`,
             path: record.path,
+            delivers: record.effectId,
           }),
           depth: depth + 1,
         });
       }
     }
-    for (const internal of result.internalEvents) {
+    for (const { internalId, envelope: internalEnvelope } of internals) {
       queue.push({
-        envelope: harden({ ...internal, by: 'engine' }),
+        envelope: harden({
+          ...internalEnvelope,
+          at: `t${tick}`,
+          delivers: internalId,
+        }),
         depth: depth + 1,
       });
-    }
-    if (result.terminal !== undefined && !fold.done) {
-      append({
-        kind: 'completed',
-        by: 'engine',
-        ...(result.terminal.output !== undefined
-          ? { output: result.terminal.output }
-          : {}),
-      });
-      settleTerminal();
     }
   };
 
@@ -145,6 +175,12 @@ export const makeSimulator = (chart, { params = harden({}) } = {}) => {
   {
     const result = initialStep(chart, { params });
     const effects = effectRecordsFor(fold.nextSeq, result.effects);
+    const internals = harden(
+      result.internalEvents.map((internal, index) => ({
+        internalId: `${fold.nextSeq}-i${index}`,
+        envelope: harden({ ...internal, by: 'engine' }),
+      })),
+    );
     append({
       kind: 'started',
       by: 'control',
@@ -155,31 +191,43 @@ export const makeSimulator = (chart, { params = harden({}) } = {}) => {
       configuration: result.configuration,
       context: result.context,
       effects,
+      ...(internals.length > 0 ? { internals } : {}),
+      ...(result.terminal !== undefined
+        ? {
+            terminal: harden({
+              outcome: 'completed',
+              ...(result.terminal.output !== undefined
+                ? { output: result.terminal.output }
+                : {}),
+            }),
+          }
+        : {}),
     });
-    for (const record of effects) {
-      if (record.effect.kind === 'emit') {
+    if (result.terminal === undefined) {
+      for (const record of effects) {
+        if (record.effect.kind === 'emit') {
+          queue.push({
+            envelope: harden({
+              ...record.effect.event,
+              by: 'engine',
+              at: `t${tick}`,
+              path: record.path,
+              delivers: record.effectId,
+            }),
+            depth: 1,
+          });
+        }
+      }
+      for (const { internalId, envelope } of internals) {
         queue.push({
           envelope: harden({
-            ...record.effect.event,
-            by: 'engine',
+            ...envelope,
             at: `t${tick}`,
-            path: record.path,
+            delivers: internalId,
           }),
           depth: 1,
         });
       }
-    }
-    for (const internal of result.internalEvents) {
-      queue.push({ envelope: harden({ ...internal, by: 'engine' }), depth: 1 });
-    }
-    if (result.terminal !== undefined && !fold.done) {
-      append({
-        kind: 'completed',
-        by: 'engine',
-        ...(result.terminal.output !== undefined
-          ? { output: result.terminal.output }
-          : {}),
-      });
     }
     drain();
   }
@@ -225,9 +273,7 @@ export const makeSimulator = (chart, { params = harden({}) } = {}) => {
      */
     settle: (effectId, outcome = 'fulfilled', value = undefined) => {
       const record = requirePending(effectId);
-      append({
-        kind: 'effect-settled',
-        by: 'engine',
+      const settles = harden({
         effectId,
         status: outcome,
         ...(outcome === 'fulfilled' ? { value } : { reason: value }),
@@ -256,6 +302,7 @@ export const makeSimulator = (chart, { params = harden({}) } = {}) => {
           ...(record.exit === true ? { compensation: true } : {}),
         }),
         0,
+        { settles },
       );
       drain();
       return status();
@@ -269,12 +316,6 @@ export const makeSimulator = (chart, { params = harden({}) } = {}) => {
       const record = requirePending(effectId);
       record.effect.kind === 'after' ||
         Fail`effect ${q(effectId)} is a ${q(record.effect.kind)}, not an after`;
-      append({
-        kind: 'effect-settled',
-        by: 'engine',
-        effectId,
-        status: 'fulfilled',
-      });
       stepEnvelope(
         harden({
           ...record.effect.emit,
@@ -284,6 +325,7 @@ export const makeSimulator = (chart, { params = harden({}) } = {}) => {
           effectId,
         }),
         0,
+        { settles: harden({ effectId, status: 'fulfilled' }) },
       );
       drain();
       return status();

@@ -51,9 +51,17 @@ const ENTRY_ICONS = harden({
 const summarize = entry => {
   if (entry.kind === 'event') {
     const type = entry.event?.type ?? '';
+    const settled =
+      entry.settles === undefined ? '' : ` ⇐ ${entry.settles.effectId}`;
+    const terminal =
+      entry.terminal === undefined ? '' : ` ■ ${entry.terminal.outcome}`;
     // An unfired entry may have been queued while paused (replayed
     // later) or fallen through guards; either way, no transition here.
-    return entry.fired === undefined ? `${type} (no transition)` : type;
+    const fired =
+      entry.fired === undefined && entry.terminal === undefined
+        ? ' (no transition)'
+        : '';
+    return `${type}${settled}${terminal}${fired}`;
   }
   if (entry.kind === 'effect-dispatched' || entry.kind === 'effect-settled') {
     return `${entry.effectId}${entry.status !== undefined ? ` ${entry.status}` : ''}`;
