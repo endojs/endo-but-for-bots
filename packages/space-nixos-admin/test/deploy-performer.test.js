@@ -23,6 +23,9 @@ const makeHarness = async t => {
     ENDO_NIXOS_CONFIG_DIR: configDir,
     ENDO_NIXOS_DIR: spoolDir,
     ENDO_NIXOS_POLL_MS: '10',
+    // Bound abandoned watchers so a failing test cannot hold the worker
+    // open for the production 24h cap.
+    ENDO_NIXOS_WATCH_LIMIT_MS: '5000',
   };
   // A second `make` over the same directories stands in for the caplet's
   // next incarnation after a daemon restart.
@@ -41,53 +44,80 @@ const makeHarness = async t => {
     readFile(requestPath, 'utf8').catch(() => undefined);
 
   /**
-   * The applier's fake: wait for a request this run has not yet processed,
-   * echo its id in status, and record the terminal outcome per the id-echo
-   * spool contract.
-   *
-   * @param {{ phase?: string }} [outcome]
+   * The applier's fake, per the id-echo spool contract. It FAILS THE TEST
+   * on any physical re-submission of an id it already processed (a fresh
+   * nonce under a seen id), so every test that runs it is inherently
+   * sensitive to the resubmission regressions that would loop a machine.
    */
-  const seen = new Set();
-  const processNext = async ({ phase = 'ok' } = {}) => {
+  /** @type {Map<string, string>} */
+  const seen = new Map();
+  const nextRequest = async () => {
     await null;
     for (let i = 0; i < 500; i += 1) {
       // eslint-disable-next-line no-await-in-loop
       const request = await readRequest().catch(() => undefined);
-      if (request !== undefined && !seen.has(request.id)) {
-        seen.add(request.id);
-        const record = {
-          id: request.id,
-          action: request.action,
-          message: request.message,
-          phase,
-        };
-        // eslint-disable-next-line no-await-in-loop
-        await writeFile(statusPath, JSON.stringify(record), 'utf8');
-        // eslint-disable-next-line no-await-in-loop
-        await mkdir(outcomesDir, { recursive: true });
-        // eslint-disable-next-line no-await-in-loop
-        await writeFile(
-          join(outcomesDir, `${sanitizeId(request.id)}.json`),
-          JSON.stringify(record),
-          'utf8',
-        );
-        return record;
+      if (request !== undefined && seen.has(request.id)) {
+        if (seen.get(request.id) !== request.nonce) {
+          throw Error(
+            `fake applier saw a RE-SUBMISSION of ${request.id} — a real ` +
+              'applier would rebuild and re-switch the machine',
+          );
+        }
+      } else if (request !== undefined) {
+        seen.set(request.id, request.nonce);
+        return request;
       }
       // eslint-disable-next-line no-await-in-loop
       await delay(5);
     }
     throw Error('fake applier saw no fresh request');
   };
+  const recordOutcome = async (request, { phase = 'ok' } = {}) => {
+    const record = {
+      id: request.id,
+      action: request.action,
+      message: request.message,
+      phase,
+    };
+    await writeFile(statusPath, JSON.stringify(record), 'utf8');
+    await mkdir(outcomesDir, { recursive: true });
+    await writeFile(
+      join(outcomesDir, `${sanitizeId(request.id)}.json`),
+      JSON.stringify(record),
+      'utf8',
+    );
+    return record;
+  };
+  const processNext = async ({ phase = 'ok' } = {}) => {
+    const request = await nextRequest();
+    return recordOutcome(request, { phase });
+  };
+  // A CONSUMING applier: picks the request up, deletes the slot, echoes the
+  // id in status — and does not settle. Models the health-check window of
+  // an applier that consumes request files.
+  const pickUpAndConsume = async () => {
+    const request = await nextRequest();
+    await rm(join(spoolDir, 'apply-request.json'), { force: true });
+    await writeFile(
+      statusPath,
+      JSON.stringify({ id: request.id, phase: 'switching' }),
+      'utf8',
+    );
+    return request;
+  };
 
   return {
     admin,
     reincarnate,
     processNext,
+    pickUpAndConsume,
+    recordOutcome,
     readRequest,
     requestBytes,
     configDir,
     spoolDir,
     statusPath,
+    outcomesDir,
   };
 };
 
@@ -242,4 +272,121 @@ test('sanitizeId makes engine keys filesystem-safe and stable', t => {
   t.is(sanitizeId('r-12:8-1'), 'r-12_8-1');
   t.is(sanitizeId('r-12:8-1'), sanitizeId('r-12:8-1'));
   t.throws(() => sanitizeId(''), { message: /non-empty request id/ });
+});
+
+test('a consuming applier: re-dispatch attaches via the status echo, never re-submits', async t => {
+  // The health-check window: the applier consumed apply-request.json and
+  // echoes our id in status while the switch (and our own restart) is in
+  // flight. A re-dispatch arriving in this window must watch, not write —
+  // writing would queue a SECOND switch behind the one being health-checked.
+  const { admin, reincarnate, pickUpAndConsume, recordOutcome, requestBytes } =
+    await makeHarness(t);
+  const first = admin.apply('deploy', 'r-7:1-0');
+  const request = await pickUpAndConsume();
+  t.is(request.id, 'r-7:1-0');
+  t.is(await requestBytes(), undefined, 'the slot was consumed');
+
+  const revived = await reincarnate();
+  const second = revived.apply('deploy', 'r-7:1-0');
+  await delay(100);
+  t.is(await requestBytes(), undefined, 'no re-submission into the slot');
+
+  await recordOutcome(request);
+  const [a, b] = await Promise.all([first, second]);
+  t.true(a.ok);
+  t.true(b.ok);
+});
+
+test('a foreign pending request is slot-busy, not clobbered', async t => {
+  // A previous incarnation submitted an operation the applier has not
+  // picked up yet. A new incarnation's different operation must wait for
+  // its outcome instead of overwriting the slot — the overwrite would
+  // destroy a possibly-approved apply and later misreport it as
+  // superseded.
+  const { admin, processNext, readRequest, spoolDir } = await makeHarness(t);
+  await mkdir(spoolDir, { recursive: true });
+  await writeFile(
+    join(spoolDir, 'apply-request.json'),
+    JSON.stringify({ action: 'switch', message: 'earlier', id: 'earlier-op', nonce: 'x1' }),
+    'utf8',
+  );
+  const settled = admin.build('mine', 'r-8:0-0');
+  await delay(80);
+  t.is((await readRequest()).id, 'earlier-op', 'the busy slot is untouched');
+  const earlier = await processNext();
+  t.is(earlier.id, 'earlier-op');
+  const mine = await processNext();
+  t.is(mine.id, 'r-8:0-0');
+  t.true((await settled).ok);
+});
+
+test('an unreadable file at a submit decision refuses, never submits', async t => {
+  // "Cannot read" must not be conflated with "does not exist": converting
+  // an I/O error into absence at a submit decision was the one reviewed
+  // path to a re-submission loop. A directory squatting on the outcome
+  // path gives a persistent non-ENOENT read error.
+  const { admin, requestBytes, outcomesDir } = await makeHarness(t);
+  await mkdir(join(outcomesDir, `${sanitizeId('r-9:0-0')}.json`), {
+    recursive: true,
+  });
+  await t.throwsAsync(() => admin.build('note', 'r-9:0-0'), {
+    message: /Refusing to decide/,
+  });
+  t.is(await requestBytes(), undefined, 'nothing was submitted');
+});
+
+test('an outcome record for a colliding sanitized name fails loud', async t => {
+  // sanitizeId is not injective; the record's embedded raw id is the
+  // authority. Settling from another operation's record could skip a
+  // needed apply while reporting the old one's success.
+  const { admin, requestBytes, outcomesDir } = await makeHarness(t);
+  await mkdir(outcomesDir, { recursive: true });
+  await writeFile(
+    join(outcomesDir, `${sanitizeId('r-10:0-0')}.json`),
+    JSON.stringify({ id: 'r-10_0-0', phase: 'ok' }),
+    'utf8',
+  );
+  await t.throwsAsync(() => admin.apply('m', 'r-10:0-0'), {
+    message: /collision/,
+  });
+  t.is(await requestBytes(), undefined, 'nothing was submitted');
+});
+
+test('an id-less status appearing mid-watch errs after the grace, without rewriting', async t => {
+  const { admin, requestBytes, statusPath, spoolDir } = await makeHarness(t);
+  const settled = admin.apply('deploy', 'r-11:0-0');
+  for (let i = 0; i < 500; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    if ((await requestBytes()) !== undefined) break;
+    // eslint-disable-next-line no-await-in-loop
+    await delay(5);
+  }
+  const bytesBefore = await requestBytes();
+  await mkdir(spoolDir, { recursive: true });
+  await writeFile(statusPath, JSON.stringify({ phase: 'ok' }), 'utf8');
+  await t.throwsAsync(() => settled, {
+    message: /does not echo request ids/,
+  });
+  t.is(await requestBytes(), bytesBefore, 'the request was never rewritten');
+});
+
+test('stageFiles refuses when a previous capture is unreadable', async t => {
+  // An existing-but-unreadable file must refuse the whole stage: capturing
+  // it as text:null would make a later revert DELETE it.
+  const { admin, configDir } = await makeHarness(t);
+  await mkdir(join(configDir, 'adir.nix'));
+  await t.throwsAsync(
+    () =>
+      admin.stageFiles(
+        harden([
+          { path: 'adir.nix', text: 'x' },
+          { path: 'other.nix', text: 'y' },
+        ]),
+        'r-12:0-0',
+      ),
+    { message: /refusing to stage/ },
+  );
+  await t.throwsAsync(() => readFile(join(configDir, 'other.nix')), {
+    code: 'ENOENT',
+  });
 });

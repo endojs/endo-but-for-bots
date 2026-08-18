@@ -52,7 +52,6 @@ test('stageRev rejects anything that is not a full commit hash', async t => {
     'llm', // a branch name is not a pin
     `${GOOD}0`, // 41 characters
     `${GOOD.slice(0, 39)}g`, // right length, not hex
-    '',
   ]) {
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(() => admin.stageRev(bad), {
@@ -62,6 +61,23 @@ test('stageRev rejects anything that is not a full commit hash', async t => {
 
   // A rejected write leaves the previous pin intact rather than clearing it.
   t.is(await readFile(join(configDir, 'endo.rev'), 'utf8'), `${GOOD}\n`);
+});
+
+test("stageRev('') removes the pin, restoring branch tracking", async t => {
+  const { admin, configDir } = await makeAdmin(t);
+  await admin.stageRev(GOOD);
+  const removed = await admin.stageRev('');
+  t.deepEqual(removed, { path: 'endo.rev', rev: '', previous: GOOD });
+  t.is(await admin.getEndoRev(), '');
+  await t.throwsAsync(() => readFile(join(configDir, 'endo.rev')), {
+    code: 'ENOENT',
+  });
+  // Compensation symmetry: restaging a captured previous of '' restores
+  // the exact "no pin" state a first-pin host started from.
+  const first = await admin.stageRev(OTHER);
+  t.is(first.previous, '');
+  await admin.stageRev(first.previous);
+  t.is(await admin.getEndoRev(), '');
 });
 
 test('surrounding whitespace is tolerated, since a hash is often pasted', async t => {
