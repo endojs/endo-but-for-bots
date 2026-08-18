@@ -1,8 +1,10 @@
 // @ts-check
 
 import test from '@endo/ses-ava/prepare-endo.js';
+import { makeCancelKit } from '@endo/cancel';
 import { E } from '@endo/eventual-send';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeSandboxFactory } from '../src/factory.js';
 
@@ -22,17 +24,6 @@ const scratchProvider = harden({
     throw new Error('mount resolution not needed by lifecycle fixtures');
   },
 });
-
-const makePromiseKit = () => {
-  let resolve = /** @type {(value?: any) => void} */ (() => undefined);
-  let reject = /** @type {(reason?: any) => void} */ (() => undefined);
-  const promise = new Promise((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  promise.catch(() => undefined);
-  return harden({ promise, resolve, reject });
-};
 
 const makeByteSource = () => {
   /** @type {Uint8Array[]} */
@@ -116,12 +107,12 @@ const makeDriverFixture = (options = {}) => {
      * @param {unknown} _slice
      * @param {string[]} _argv
      * @param {object} _opts
-     * @param {{ signal?: AbortSignal }} [controls]
+     * @param {import('../src/types.js').DriverSpawnControls} [controls]
      */
     spawn: async (_slice, _argv, _opts, controls) => {
       await null;
       spawnCalls += 1;
-      controls?.signal?.addEventListener('abort', () => {
+      controls?.cancelled?.catch(() => {
         admissionAborts += 1;
       });
       if (options.spawnGate !== undefined) await options.spawnGate;
@@ -214,7 +205,7 @@ test('dispose cancels a pending admission and reaps a late arrival', async t => 
 
   // A driver that ignored the cancellation and produces the process
   // late must see it terminated and reaped, not leaked.
-  gate.resolve();
+  gate.resolve(undefined);
   const status = await fixture.exitStatus();
   t.deepEqual(status, { code: null, signal: 'SIGKILL' });
   t.deepEqual(fixture.signals(), ['SIGKILL']);
@@ -275,13 +266,13 @@ test('disposal and cancellation are idempotent', async t => {
 });
 
 test('owner cancellation disposes children and stops new handles', async t => {
-  const cancelled = makePromiseKit();
+  const { cancelled, cancel } = makeCancelKit();
   const fixture = makeDriverFixture({
-    context: harden({ whenCancelled: () => cancelled.promise }),
+    context: harden({ whenCancelled: () => cancelled }),
   });
   const handle = await makeHandle(fixture);
   const proc = await E(handle).spawn(harden(['/bin/sleep', 'forever']));
-  cancelled.reject(new Error('owner died'));
+  cancel(new Error('owner died'));
   await t.throwsAsync(() => E(proc).wait(), { message: /disposed/ });
   await t.throwsAsync(() => makeHandle(fixture), {
     message: /owner has been cancelled/,

@@ -424,18 +424,20 @@ export type DriverSliceContext = unknown;
 /**
  * Factory-supplied controls for a `SandboxDriver.spawn()` call.
  *
- * The `signal` aborts when the factory abandons the admission (process
- * timeout, handle disposal, or owner cancellation) before the driver has
- * produced a controllable process. On abort the driver must cancel its
+ * The `cancelled` token rejects when the factory abandons the admission
+ * (process timeout, handle disposal, or owner cancellation) before the
+ * driver has produced a controllable process; `isCancelled` observes the
+ * same state synchronously. On cancellation the driver must cancel its
  * in-flight control command, remove the exact named/labelled operation it
  * was creating, and reject the spawn. The factory does not rely on the
- * driver honouring the signal for its own liveness — a spawn that
+ * driver honouring the token for its own liveness — a spawn that
  * resolves after abandonment is terminated and reaped — but an ignored
- * abort can leave the external control command running until the
+ * cancellation can leave the external control command running until the
  * driver's own command deadline fires.
  */
 export type DriverSpawnControls = {
-  signal?: AbortSignal;
+  cancelled?: import('@endo/cancel').Cancelled;
+  isCancelled?: import('@endo/cancel').IsCancelled;
 };
 
 /**
