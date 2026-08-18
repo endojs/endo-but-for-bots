@@ -2,17 +2,24 @@
 /* global Buffer, clearTimeout, process, setTimeout */
 
 import { createHash } from 'node:crypto';
+import { lstat, rm } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import zlib from 'node:zlib';
 import harden from '@endo/harden';
 import { encodeHex } from '@endo/hex';
 import { bytesFromText } from '@endo/bytes/from-string.js';
+import { makeError, q, X } from '@endo/errors';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makePipe } from '@endo/stream';
 import { makeNodeReader, makeNodeWriter } from '@endo/stream-node';
 import { makeNetstringCapTP } from './connection.js';
 import { makePetStoreMaker } from './pet-store.js';
 import { servePrivatePath } from './serve-private-path.js';
+import {
+  claimSocketLock,
+  releaseSocketLock,
+  socketLockPath,
+} from './socket-lock.js';
 import { makeSerialJobs } from './serial-jobs.js';
 import { makeDaemonDatabase } from './manager-database-node.js';
 import { makeRegistryNodePowers } from './registry-node-powers.js';
@@ -25,6 +32,94 @@ import { makeDaemonicPersistencePowers } from './manager-persistence-powers.js';
 export { makeDaemonicPersistencePowers };
 
 const gunzipBuffer = promisify(zlib.gunzip);
+
+/**
+ * Resolve to `undefined` when the operation fails with ENOENT.
+ *
+ * @template T
+ * @param {Promise<T>} operation
+ * @returns {Promise<T | undefined>}
+ */
+const orAbsent = operation =>
+  operation.catch(error => {
+    if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT') {
+      return undefined;
+    }
+    throw error;
+  });
+
+/**
+ * @param {typeof import('net')} net
+ * @param {string} path
+ * @returns {Promise<'live' | 'stale' | 'absent' | 'unknown'>}
+ */
+const probeSocket = (net, path) =>
+  new Promise(resolve => {
+    const conn = net.createConnection({ path });
+    /** @param {'live' | 'stale' | 'absent' | 'unknown'} status */
+    const finish = status => {
+      conn.destroy();
+      resolve(status);
+    };
+    conn.once('connect', () => finish('live'));
+    conn.once('error', error => {
+      const code = /** @type {NodeJS.ErrnoException} */ (error).code;
+      if (code === 'ECONNREFUSED') {
+        finish('stale');
+      } else if (code === 'ENOENT') {
+        finish('absent');
+      } else {
+        finish('unknown');
+      }
+    });
+    conn.setTimeout(100, () => finish('unknown'));
+  });
+
+/**
+ * Make a Unix socket pathname available to bind, removing a socket left by a
+ * dead owner. Removal needs both a refused connection and the same inode as
+ * before the probe, leaving live sockets and racing replacements alone.
+ *
+ * @param {typeof import('net')} net
+ * @param {string} path
+ * @returns {Promise<boolean>} whether the pathname is free to bind
+ */
+const reclaimSocketPath = async (net, path) => {
+  const before = await orAbsent(lstat(path));
+  if (before === undefined) {
+    return true;
+  }
+  if (!before.isSocket()) {
+    return false;
+  }
+
+  const status = await probeSocket(net, path);
+  if (status === 'absent') {
+    return true;
+  }
+  if (status !== 'stale') {
+    return false;
+  }
+
+  const after = await orAbsent(lstat(path));
+  if (after === undefined) {
+    // Someone else removed it between the probe and now.
+    return true;
+  }
+  if (after.dev !== before.dev || after.ino !== before.ino) {
+    // A different socket has taken the pathname since the probe.
+    return false;
+  }
+
+  await rm(path, { force: true });
+  return true;
+};
+
+/**
+ * How long a closing server waits for its accepted connections to end before
+ * hanging up on them.
+ */
+const serverCloseGraceMs = 1000;
 
 /** @param {Uint8Array} bytes */
 export const gunzip = async bytes => {
@@ -44,30 +139,82 @@ export const gunzip = async bytes => {
  * @returns {SocketPowers}
  */
 export const makeSocketPowers = ({ net, fsp: { access } }) => {
-  const serveListener = async (listen, cancelled) => {
+  /**
+   * @template {number | void} TPort
+   * @param {(server: import('net').Server, erred: Promise<never>) => Promise<TPort>} listen
+   * receives `erred`, which rejects on a server error, so that it can abandon
+   * a bind that will never call back.
+   * @param {Promise<never>} cancelled
+   * @param {() => Promise<void>} [afterClose] runs once the server is closed,
+   * whether it closed because listening failed or because it was cancelled.
+   */
+  const serveListener = async (listen, cancelled, afterClose = undefined) => {
     const [
       /** @type {Reader<Connection>} */ readFrom,
       /** @type {Writer<Connection} */ writeTo,
     ] = makePipe();
 
     const server = net.createServer();
-    const { promise: erred, reject: err } = makePromiseKit();
+    const { promise: erred, reject: err } =
+      /** @type {import('@endo/promise-kit').PromiseKit<never>} */ (
+        makePromiseKit()
+      );
     server.on('error', error => {
       err(error);
       void writeTo.throw(error);
     });
-    server.on('close', () => {
-      void writeTo.return(undefined);
+
+    /** @type {Set<import('net').Socket>} */
+    const accepted = new Set();
+    server.on('connection', conn => {
+      accepted.add(conn);
+      conn.on('close', () => accepted.delete(conn));
     });
 
-    cancelled.catch(error => {
-      server.close();
+    // Racing `erred` makes a failed bind settle `bound`, which closing waits
+    // for. Leaving that to each `listen` would hang the close whenever one
+    // forgot.
+    const bound = Promise.race([listen(server, erred), erred]);
+    void bound.catch(() => {});
+
+    let closeP;
+    const closeServer = () => {
+      closeP ??= (async () => {
+        // A bind that lands after we decide to close would outlive this call.
+        await bound.catch(() => {});
+        if (server.listening) {
+          // `close` releases the pathname at once but calls back only once
+          // every accepted connection has ended, which a peer that never
+          // hangs up can defer forever, so nothing awaits it.
+          server.close();
+          const graceTimer = setTimeout(() => {
+            for (const conn of accepted) {
+              conn.destroy();
+            }
+          }, serverCloseGraceMs);
+          graceTimer.unref?.();
+        }
+        await afterClose?.();
+      })();
+      return closeP;
+    };
+
+    // Close before reporting, so the pathname is gone by the time the consumer
+    // learns of the cancellation.
+    void cancelled.catch(async error => {
+      await closeServer().catch(() => {});
       void writeTo.throw(error);
     });
 
-    const listening = listen(server);
-
-    await Promise.race([erred, cancelled, listening]);
+    try {
+      await Promise.race([erred, cancelled, bound]);
+    } catch (error) {
+      // The server may have bound before failing.
+      await closeServer().catch(() => {});
+      // Nobody will read the connections stream, so own its rejection.
+      void readFrom.next().catch(() => {});
+      throw error;
+    }
 
     server.on('connection', conn => {
       const reader = makeNodeReader(conn);
@@ -77,7 +224,7 @@ export const makeSocketPowers = ({ net, fsp: { access } }) => {
       void writeTo.next({ reader, writer, closed });
     });
 
-    const port = await listening;
+    const port = await bound;
 
     return harden({
       port,
@@ -89,8 +236,19 @@ export const makeSocketPowers = ({ net, fsp: { access } }) => {
   const servePort = async ({ port, host = '0.0.0.0', cancelled }) =>
     serveListener(
       server =>
-        new Promise(resolve =>
-          server.listen(port, host, () => resolve(server.address().port)),
+        new Promise((resolve, reject) =>
+          server.listen(port, host, () => {
+            const address = server.address();
+            if (address === null || typeof address === 'string') {
+              reject(
+                makeError(
+                  X`Expected listener to be assigned a port on ${q(host)}`,
+                ),
+              );
+              return;
+            }
+            resolve(address.port);
+          }),
         ),
       cancelled,
     );
@@ -116,34 +274,70 @@ export const makeSocketPowers = ({ net, fsp: { access } }) => {
       });
     });
 
+  /**
+   * @param {import('net').Server} server
+   * @param {string} path
+   * @param {Promise<never>} erred
+   */
+  const listenOnPath = (server, path, erred) =>
+    Promise.race([
+      new Promise(resolve => server.listen({ path }, () => resolve(undefined))),
+      erred,
+    ]);
+
+  /** @param {import('ses').Details} details */
+  const addressInUse = details =>
+    makeError(details, undefined, { code: 'EADDRINUSE' });
+
   /** @type {SocketPowers['servePath']} */
   const servePath = async ({ path, cancelled }) => {
-    const { connections } = await serveListener(server => {
-      return new Promise((resolve, reject) =>
-        server.listen({ path }, async error => {
-          await null;
-          // In some environments, an overly-long Unix domain socket path
-          // (`sockaddr_un` `sun_path`) is silently truncated. This exposes the
-          // problem, but we may still leak the incorrectly-named file and
-          // thereby cause EADDRINUSE errors for future attempts to start.
-          error ||= await access(path).catch(err => err);
-          if (error) {
-            if (path.length >= 104) {
-              console.warn(
-                `Warning: Length of path for domain socket or named path exceeeds common maximum (104, possibly 108) for some platforms (length: ${path.length}, path: ${path})`,
-              );
-            }
-            try {
-              server.close(_serverNotRunningErr => reject(error));
-            } catch (_serverCloseErr) {
-              reject(error);
-            }
-          } else {
-            resolve(undefined);
+    // Windows named pipes leave no filesystem pathname behind, so neither the
+    // lock nor the stale-pathname recovery applies there.
+    const guarded = process.platform !== 'win32';
+    const lockPath = socketLockPath(path);
+    // `serveListener` runs this once the server closes, whether listening
+    // failed or the service was cancelled, so it is the lock's only release.
+    const releaseLock = guarded ? () => releaseSocketLock(lockPath) : undefined;
+    const socketIsLive = async () => (await probeSocket(net, path)) === 'live';
+
+    const { connections } = await serveListener(
+      async (server, erred) => {
+        await null;
+        if (guarded) {
+          if (!(await claimSocketLock(lockPath, socketIsLive))) {
+            throw addressInUse(
+              X`Socket path ${q(path)} is held by another live Endo daemon`,
+            );
           }
-        }),
-      );
-    }, cancelled);
+          // Holding the lock means no other Endo daemon is binding this
+          // pathname, so anything still here was left by a dead one and can
+          // be reclaimed before binding rather than after a failed bind.
+          if (!(await reclaimSocketPath(net, path))) {
+            throw addressInUse(
+              X`Socket path ${q(path)} is occupied and cannot be reclaimed`,
+            );
+          }
+        }
+        await listenOnPath(server, path, erred);
+
+        // In some environments, an overly-long Unix domain socket path
+        // (`sockaddr_un` `sun_path`) is silently truncated. This exposes the
+        // problem, but we may still leak the incorrectly-named file and
+        // thereby cause EADDRINUSE errors for future attempts to start.
+        const error = await access(path).catch(err => err);
+        if (error) {
+          if (path.length >= 104) {
+            console.warn(
+              `Warning: Length of path for domain socket or named path exceeeds common maximum (104, possibly 108) for some platforms (length: ${path.length}, path: ${path})`,
+            );
+          }
+          throw error;
+        }
+        return undefined;
+      },
+      cancelled,
+      releaseLock,
+    );
     return connections;
   };
 
