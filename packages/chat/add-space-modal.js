@@ -52,7 +52,7 @@ The scene runs in a sandboxed iframe with no network access.`;
  * @property {string} name - Display name for the space
  * @property {string} icon - Emoji or letter icon
  * @property {string[]} profilePath - Pet name path to the profile
- * @property {'mailbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot'} layout - Layout type
+ * @property {'mailbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow'} layout - Layout type
  * @property {ColorScheme} [scheme] - Color scheme preference
  * @property {string} [channelPetName] - Pet name for the channel object (channel mode)
  * @property {string} [proposedName] - Display name for the channel creator
@@ -61,6 +61,7 @@ The scene runs in a sandboxed iframe with no network access.`;
  * @property {boolean} [ownedPersona] - Whether the space owns the persona (for cleanup)
  * @property {string[]} [audioPath] - Pet name path to a speech-to-text object (floot mic)
  * @property {string[]} [ttsPath] - Pet name path to a text-to-speech object (floot spoken replies)
+ * @property {string[]} [workflowPath] - Pet name path to a workflow service (workflow mode)
  */
 
 // ── Confined Preact view ──────────────────────────────────────────────────
@@ -102,6 +103,7 @@ The scene runs in a sandboxed iframe with no network access.`;
  * @property {string} whylipAgentName
  * @property {string} flootAudioPath
  * @property {string} flootTtsPath
+ * @property {string} workflowServicePath
  * @property {string | null} error
  * @property {boolean} isSubmitting
  */
@@ -166,6 +168,12 @@ const SPACE_TYPE_CARDS = harden([
     icon: '💬',
     title: 'Floot Chat',
     desc: 'Chat with a Floot streaming agent and watch its reply arrive token by token',
+  },
+  {
+    mode: 'workflow',
+    icon: '🗺️',
+    title: 'Workflows',
+    desc: 'Watch durable workflow runs: live statechart, event timeline, time-travel scrubber',
   },
 ]);
 
@@ -931,6 +939,42 @@ const FilesForm = ({ view, on }) =>
   );
 harden(FilesForm);
 
+/** @param {{ view: AddSpaceView, on: AddSpaceHandlers }} props */
+const WorkflowForm = ({ view, on }) =>
+  h(
+    FormShell,
+    { title: 'Workflows', on },
+    h(IconField, { view, on }),
+    h(
+      'div',
+      { class: 'add-space-field' },
+      h('label', null, 'Workflow Service Path (optional)'),
+      h('input', {
+        type: 'text',
+        id: 'workflow-service-path',
+        class: 'add-space-input',
+        placeholder: 'workflow',
+        value: view.workflowServicePath,
+        /** @param {{ target: { value: string } }} e */
+        onInput: e => on.workflowServiceInput(e.target.value),
+      }),
+      h(
+        'div',
+        { class: 'field-hint' },
+        'Pet-name path to a provisioned @endo/workflow service (slash-separated). Defaults to workflow.',
+      ),
+    ),
+    h(SchemeSlot, null),
+    h(ErrorBlock, { error: view.error }),
+    h(Actions, {
+      isSubmitting: view.isSubmitting,
+      label: 'Create Space',
+      busyLabel: 'Creating...',
+      onCancel: on.close,
+    }),
+  );
+harden(WorkflowForm);
+
 /**
  * The root view: dispatch on `view.mode` to the matching screen.
  *
@@ -958,6 +1002,8 @@ const AddSpaceView = ({ view, on }) => {
       return h(FilesForm, { view, on });
     case 'floot':
       return h(FlootForm, { view, on });
+    case 'workflow':
+      return h(WorkflowForm, { view, on });
     default:
       return h(ChooseMode, { view, on });
   }
@@ -983,6 +1029,7 @@ harden(AddSpaceView);
  * @property {(value: string) => void} whylipAgentNameInput
  * @property {(value: string) => void} flootAudioInput
  * @property {(value: string) => void} flootTtsInput
+ * @property {(value: string) => void} workflowServiceInput
  * @property {(value: string) => void} connectLocatorInput
  * @property {(value: string) => void} connectSpaceNameInput
  * @property {(value: string) => void} connectProposedNameInput
@@ -1026,7 +1073,7 @@ export const createAddSpaceModal = ({
   };
 
   let visible = false;
-  /** @type {'choose' | 'new-agent' | 'existing' | 'new-channel' | 'connect-channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot'} */
+  /** @type {'choose' | 'new-agent' | 'existing' | 'new-channel' | 'connect-channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow'} */
   let mode = 'choose';
   /** @type {string} */
   let whylipName = '';
@@ -1036,6 +1083,8 @@ export const createAddSpaceModal = ({
   let flootAudioPath = '';
   /** @type {string} */
   let flootTtsPath = '';
+  /** @type {string} */
+  let workflowServicePath = '';
   // Auto-detected default for the Floot controller path picker (the well-known
   // `floot/controller`, or a probed entry under `floot/`). Null until detection
   // runs / finds nothing, in which case the picker falls back to `['@agent']`.
@@ -1122,6 +1171,7 @@ export const createAddSpaceModal = ({
       whylipAgentName,
       flootAudioPath,
       flootTtsPath,
+      workflowServicePath,
       error,
       isSubmitting,
     });
@@ -1147,7 +1197,8 @@ export const createAddSpaceModal = ({
       mode === 'graph' ||
       mode === 'peers' ||
       mode === 'files' ||
-      mode === 'floot'
+      mode === 'floot' ||
+      mode === 'workflow'
     ) {
       const $slot = /** @type {HTMLElement | null} */ (
         $container.querySelector('#scheme-picker-slot')
@@ -1418,6 +1469,12 @@ export const createAddSpaceModal = ({
         useLetterIcon = false;
         error = null;
         render();
+      } else if (selectedMode === 'workflow') {
+        mode = 'workflow';
+        selectedIcon = '🗺️';
+        useLetterIcon = false;
+        error = null;
+        render();
       } else if (selectedMode === 'floot') {
         mode = 'floot';
         selectedIcon = '💬';
@@ -1468,6 +1525,8 @@ export const createAddSpaceModal = ({
         handleFilesSubmit();
       } else if (mode === 'floot') {
         handleFlootSubmit();
+      } else if (mode === 'workflow') {
+        handleWorkflowSubmit();
       }
     },
     selectIcon: icon => {
@@ -1541,6 +1600,9 @@ export const createAddSpaceModal = ({
     },
     flootTtsInput: value => {
       flootTtsPath = value;
+    },
+    workflowServiceInput: value => {
+      workflowServicePath = value;
     },
     connectLocatorInput: value => {
       connectLocator = value;
@@ -2193,6 +2255,31 @@ export const createAddSpaceModal = ({
   /**
    * Handle floot chat form submission.
    */
+  const handleWorkflowSubmit = async () => {
+    isSubmitting = true;
+    error = null;
+    render();
+
+    const workflowPath = workflowServicePath.split('/').filter(Boolean);
+
+    try {
+      await onSubmit({
+        name: 'workflows',
+        icon: selectedIcon,
+        profilePath: [],
+        layout: 'workflow',
+        scheme: schemePicker ? schemePicker.getValue() : 'auto',
+        ...(workflowPath.length ? { workflowPath } : {}),
+      });
+      hide({ restoreScheme: false });
+      onClose();
+    } catch (err) {
+      error = `Failed to create workflow space: ${/** @type {Error} */ (err).message}`;
+      isSubmitting = false;
+      render();
+    }
+  };
+
   const handleFlootSubmit = async () => {
     if (!pathAutocomplete) return;
 
@@ -2375,6 +2462,7 @@ export const createAddSpaceModal = ({
     whylipAgentName = '';
     flootAudioPath = '';
     flootTtsPath = '';
+    workflowServicePath = '';
     error = null;
     isSubmitting = false;
     schemePicker = null;

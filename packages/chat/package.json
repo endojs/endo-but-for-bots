@@ -70,6 +70,7 @@
     "@endo/space-inventory-graph": "workspace:^",
     "@endo/space-peers": "workspace:^",
     "@endo/space-whylip": "workspace:^",
+    "@endo/space-workflow": "workspace:^",
     "@endo/spaces-util": "workspace:^",
     "@endo/where": "workspace:^",
     "marked": "^17.0.5",
