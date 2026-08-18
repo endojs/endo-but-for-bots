@@ -219,6 +219,225 @@ test('remoteFetch keeps above-ceiling transport output within TOOL_OUTPUT_LIMIT'
 const LEASE_URL = 'https://github.com/example/repo.git';
 const LEASE_OID = '0123456789abcdef0123456789abcdef01234567';
 
+const provisionCommittedRepo = async t => {
+  const root = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'native-git-worktree-'),
+  );
+  t.teardown(() => fs.promises.rm(root, { recursive: true, force: true }));
+  await execFileAsync('git', ['init', '-q', '-b', 'main', root]);
+  await execFileAsync('git', [
+    '-C',
+    root,
+    '-c',
+    'user.name=Test',
+    '-c',
+    'user.email=test@example.invalid',
+    'commit',
+    '--allow-empty',
+    '-qm',
+    'root',
+  ]);
+  return fs.promises.realpath(root);
+};
+
+test('worktreeList parses locked, detached, prunable, and bare records', async t => {
+  const root = await provisionCommittedRepo(t);
+  const parent = path.dirname(root);
+  const detached = path.join(parent, 'native-git-worktree-detached');
+  const locked = path.join(parent, 'native-git-worktree-locked');
+  const prunable = path.join(parent, 'native-git-worktree-prunable');
+  t.teardown(() =>
+    Promise.all(
+      [detached, locked, prunable].map(worktree =>
+        fs.promises.rm(worktree, { recursive: true, force: true }),
+      ),
+    ),
+  );
+  await execFileAsync('git', [
+    '-C',
+    root,
+    'worktree',
+    'add',
+    '-q',
+    '--detach',
+    detached,
+    'HEAD',
+  ]);
+  await execFileAsync('git', [
+    '-C',
+    root,
+    'worktree',
+    'add',
+    '-q',
+    '-b',
+    'locked-branch',
+    locked,
+    'HEAD',
+  ]);
+  await execFileAsync('git', [
+    '-C',
+    root,
+    'worktree',
+    'lock',
+    '--reason',
+    'test lock',
+    locked,
+  ]);
+  await execFileAsync('git', [
+    '-C',
+    root,
+    'worktree',
+    'add',
+    '-q',
+    '-b',
+    'prunable-branch',
+    prunable,
+    'HEAD',
+  ]);
+  await fs.promises.rm(prunable, { recursive: true, force: true });
+
+  const backend = makeNativeGitBackend({ repoRoot: root });
+  const records = await backend.worktreeList();
+  t.deepEqual(
+    records.map(({ path: recordPath }) => recordPath),
+    ['.'],
+  );
+  t.like(records[0], {
+    branch: 'refs/heads/main',
+    bare: false,
+    detached: false,
+    locked: false,
+    prunable: false,
+  });
+  const parsed = internalHelpers.parseWorktreeList(
+    [
+      `worktree ${root}`,
+      `HEAD ${'0'.repeat(40)}`,
+      'branch refs/heads/main',
+      '',
+      'worktree /outside/detached',
+      `HEAD ${'1'.repeat(40)}`,
+      'detached',
+      '',
+      'worktree /outside/locked',
+      `HEAD ${'2'.repeat(40)}`,
+      'branch refs/heads/locked-branch',
+      'locked test lock',
+      '',
+      'worktree /outside/prunable',
+      `HEAD ${'3'.repeat(40)}`,
+      'branch refs/heads/prunable-branch',
+      'prunable missing',
+      '',
+      'worktree /outside/bare',
+      'bare',
+      '',
+    ].join('\0'),
+  );
+  t.like(parsed[1], { detached: true, locked: false, prunable: false });
+  t.like(parsed[2], { locked: true, prunable: false });
+  t.like(parsed[3], { locked: false, prunable: true });
+  t.like(parsed[4], { bare: true, detached: false });
+
+  const bare = await fs.promises.realpath(
+    await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'native-git-worktree-bare-'),
+    ),
+  );
+  t.teardown(() => fs.promises.rm(bare, { recursive: true, force: true }));
+  await execFileAsync('git', ['clone', '-q', '--bare', root, bare]);
+  const bareCheckout = path.join(parent, 'native-git-worktree-bare-checkout');
+  t.teardown(() =>
+    fs.promises.rm(bareCheckout, { recursive: true, force: true }),
+  );
+  await execFileAsync('git', [
+    '--git-dir',
+    bare,
+    'worktree',
+    'add',
+    '-q',
+    '--detach',
+    bareCheckout,
+    'main',
+  ]);
+  const bareBackend = makeNativeGitBackend({ repoRoot: bare });
+  const bareRecords = await bareBackend.worktreeList();
+  t.deepEqual(
+    bareRecords.map(({ path: recordPath }) => recordPath),
+    ['.'],
+  );
+  t.like(bareRecords[0], {
+    bare: true,
+    detached: false,
+    locked: false,
+    prunable: false,
+  });
+});
+
+test('worktreeAdd creates a derived checkout and rejects escaped destinations', async t => {
+  const root = await provisionCommittedRepo(t);
+  const backend = makeNativeGitBackend({ repoRoot: root });
+  await fs.promises.mkdir(path.join(root, 'checkouts'));
+  const derived = await backend.worktreeAdd(['checkouts', 'feature'], {
+    ref: 'HEAD',
+    newBranch: 'feature',
+  });
+  t.deepEqual(await derived.currentBranch(), {
+    name: 'feature',
+    kind: 'branch',
+  });
+  t.deepEqual(await derived.status(), []);
+  const listed = await backend.worktreeList();
+  t.true(listed.some(({ path: recordPath }) => recordPath === '.'));
+  t.true(
+    listed.some(({ path: recordPath }) => recordPath === 'checkouts/feature'),
+  );
+  t.false(listed.some(({ path: recordPath }) => path.isAbsolute(recordPath)));
+
+  const outside = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'native-git-worktree-outside-'),
+  );
+  t.teardown(() => fs.promises.rm(outside, { recursive: true, force: true }));
+  await fs.promises.symlink(outside, path.join(root, 'escape'));
+  await t.throwsAsync(
+    backend.worktreeAdd(['escape', 'feature'], { ref: 'HEAD' }),
+    { message: /outside the repository mount/ },
+  );
+  await t.throwsAsync(backend.worktreeAdd(['..', 'outside'], { ref: 'HEAD' }), {
+    message: /single non-admin mount-relative segment/,
+  });
+  await t.throwsAsync(backend.worktreeAdd([], { ref: 'HEAD' }), {
+    message: /must not be empty/,
+  });
+  for (const segment of ['.git', '.GIT', 'git~1']) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(backend.worktreeAdd([segment], { ref: 'HEAD' }), {
+      message: /single non-admin mount-relative segment/,
+    });
+  }
+});
+
+test('worktreeAdd refuses a linked checkout whose administrative directory is outside its mount', async t => {
+  const root = await provisionCommittedRepo(t);
+  const linked = path.join(path.dirname(root), 'native-git-worktree-linked');
+  t.teardown(() => fs.promises.rm(linked, { recursive: true, force: true }));
+  await execFileAsync('git', [
+    '-C',
+    root,
+    'worktree',
+    'add',
+    '-q',
+    '--detach',
+    linked,
+    'HEAD',
+  ]);
+  const backend = makeNativeGitBackend({ repoRoot: linked });
+  await backend.assertRepositoryRoot();
+  await t.throwsAsync(backend.worktreeAdd(['new-checkout'], { ref: 'HEAD' }), {
+    message: /outside the repository mount/,
+  });
+});
+
 test('remotePush rejects a malformed force-with-lease before transport', async t => {
   const backend = await provisionRepoRoot(t);
   const push = forceWithLease =>
