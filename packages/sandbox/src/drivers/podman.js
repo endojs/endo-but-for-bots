@@ -165,13 +165,31 @@ harden(makeOperationName);
  * (the path is then folded into `assembleCreateArgv` via
  * `extras.seccompProfilePath`).
  *
+ * A caller-supplied `{ profile }` with no materialised path fails
+ * closed. Returning `undefined` there would silently downgrade the
+ * container to podman's default allow-list — a weaker policy than the
+ * caller asked for, applied without any signal. The predicate here is
+ * the same one `prepareSlice` uses to decide whether to materialise a
+ * profile, so the two cannot drift apart.
+ *
+ * Exported for unit testing.
+ *
  * @param {SliceSpec['seccomp']} policy
  * @param {string | null} seccompProfilePath
  * @returns {string | undefined}
+ * @throws {Error} when `policy` names a caller-supplied profile that
+ *   was never materialised to a path.
  */
-const seccompSecurityOpt = (policy, seccompProfilePath) => {
+export const seccompSecurityOpt = (policy, seccompProfilePath) => {
   if (policy === 'unconfined') return 'seccomp=unconfined';
-  if (seccompProfilePath !== null) return `seccomp=${seccompProfilePath}`;
+  if (typeof policy === 'object' && policy !== null && 'profile' in policy) {
+    if (seccompProfilePath === null) {
+      throw makeError(
+        X`podman driver: caller-supplied seccomp profile was requested but no materialised profile path is available`,
+      );
+    }
+    return `seccomp=${seccompProfilePath}`;
+  }
   return undefined;
 };
 harden(seccompSecurityOpt);
