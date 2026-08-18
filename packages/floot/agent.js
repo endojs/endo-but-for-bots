@@ -503,6 +503,23 @@ before acting through "endo". In exec, look it up and read from it:
 - It is strictly read-only — you cannot modify it. It may be absent if the
   daemon host does not have the source on disk; if a lookup fails, carry on
   without it.
+
+A filesystem capability can also be MOUNTED AS A DISK in your sandbox, which
+turns cap-by-cap file calls into ordinary file work. When your session runs the
+Claude CLI runtime you have three extra tools for it: attachContainerMount,
+detachContainerMount, and listContainerMounts.
+- \`attachContainerMount({ petName: 'endo-src', innerPath: '/mnt/endo-src' })\`
+  binds a capability from YOUR petstore under \`/mnt/\`. A slash-separated path
+  reaches through a capability you hold, so \`petName: 'endo/some-mount'\` finds
+  \`some-mount\` in the daemon host's names.
+- An EndoGit capability attaches its WORKTREE, so a checkout becomes a plain
+  directory that in-container \`git\` reads as a normal repository.
+- The capability is the policy. Attaching "endo-src" gives you a READ-ONLY disk
+  no matter which mode you ask for, because the cap itself is read-only —
+  attach something writable when you intend to edit.
+- Attaching RESTARTS the sandbox and aborts the turn in flight, so the call may
+  never return its result. Check \`listContainerMounts()\` on the next turn
+  instead of retrying blindly.
 Speak short, plain summaries of what you did — never read code or raw capability
 output aloud.`;
 
@@ -579,20 +596,36 @@ return await E(git).currentBranch();
 Naming the mount, the git, and the remote is what lets later exec calls reach
 them — the clone itself returns capabilities you cannot store by name.
 
-Edit and commit. Files go through the MOUNT, staging through the git:
+Then MOUNT THE CHECKOUT AS A DISK and edit it as ordinary files. Prefer this to
+editing through capability calls — it is the difference between one round trip
+per file and simply working in a directory:
+\`\`\`
+attachContainerMount({ petName: 'endo/endo-work', innerPath: '/mnt/endo-work' })
+\`\`\`
+The worktree appears at \`/mnt/endo-work\`, and \`git\` in the sandbox inspects it
+(status, diff, log) as the same repository the "endo-work" capability holds. The
+attach restarts the sandbox and aborts this turn, so expect no result from the
+call: begin the next turn with \`listContainerMounts()\` to confirm the bind, then
+do the work.
+
+Edit at \`/mnt/endo-work\` with your normal file tools, then stage and commit
+THROUGH THE CAPABILITY — it already carries the author identity from the clone,
+which in-container \`git commit\` does not:
 \`\`\`
 const endo = await E(powers).lookup('endo');
-const mount = await E(endo).lookup('endo-work-mount');
 const git = await E(endo).lookup('endo-work');
 await E(git).switchBranch('agent');    // createBranch('agent') the first time
-const path = ['packages', 'floot', 'agent.js'];
-const before = await E(mount).readText(path);
-await E(mount).writeText(path, before.replace(oldText, newText));
-await E(git).add([await E(mount).entry(path)]);
+const st = await E(git).status();
+await E(git).add(st.map(s => s.entry));
 const commit = await E(git).commit('fix(floot): …');
 return commit.oid;
 \`\`\`
-\`add\` takes mount ENTRIES, not path strings — \`E(mount).entry(path)\` gets one.
+For a one-line change, or when no disk is attached, you can still go through the
+mount capability instead — \`const mount = await E(endo).lookup('endo-work-mount')\`,
+then read with \`E(mount).readText(path)\`, write with
+\`E(mount).writeText(path, text)\`, and stage with
+\`E(git).add([await E(mount).entry(path)])\`. \`add\` takes mount ENTRIES, not path
+strings — \`E(mount).entry(path)\` gets one.
 
 Push, then pin what you pushed:
 \`\`\`
@@ -617,11 +650,18 @@ Rules that are not obvious and will bite you:
   credential is re-minted as a NEW capability, and "endo-work-origin" still holds
   the old one — so pushing after a restart fails until you re-run the
   \`provideGitRemote\` call above. Do not re-clone; only the remote needs redoing.
+  A \`/mnt/\` disk survives too — attach records are replayed onto the rebuilt
+  sandbox — so re-attaching is unnecessary; \`listContainerMounts()\` tells you.
 - Your push authority is not fenced in — nothing stops you writing to another
   branch. Stay on \`agent\` so the change is reviewable, and say what you pushed.
 - A revision that only exists on Forgejo is fine to run, but it is not proposed
-  anywhere. Tell the user their change lives on the \`agent\` branch of the local
-  forge and has not been sent upstream.
+  anywhere. Running a change and PROPOSING a change are separate steps: pushing
+  to \`agent\` and pinning makes the machine run it, and nothing more. You have no
+  route to GitHub — the sandbox has no network and the forge credential is for
+  the local forge only — so proposing upstream ends with you. Report the commit
+  hash, the branch, and a one-line summary of what changed, and say plainly that
+  it is running here and not yet submitted upstream, so the user can take it
+  from there.
 Speak short, plain summaries — never read config text aloud.`;
 
 // Catalog of session presets. Each preset pairs a system prompt with a set of

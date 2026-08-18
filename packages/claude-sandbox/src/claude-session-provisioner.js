@@ -120,12 +120,15 @@ export const makeClaudeSessionProvisioner = (
     });
   const provisionSession = powers.provisionSession || provisionClaudeSession;
   const removeDirectory = powers.removeDirectory || rm;
+  // `lookup` takes ONE name-or-path argument, so a namespaced mounter has to
+  // arrive as a path array rather than as two arguments — the same shape
+  // `underNamespace` produces for every other resolution in this package.
   const getFsMounter =
     powers.getFsMounter ||
     (() =>
-      sandboxNamespace
-        ? E(hostAgent).lookup(sandboxNamespace, fsMounterName)
-        : E(hostAgent).lookup(fsMounterName));
+      E(hostAgent).lookup(
+        sandboxNamespace ? [sandboxNamespace, fsMounterName] : fsMounterName,
+      ));
   /** @type {Map<string, Promise<string>>} */
   const inFlight = new Map();
 

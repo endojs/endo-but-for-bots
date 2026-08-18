@@ -82,6 +82,7 @@
   /* Layout */
   --sidebar-width: 280px;
   --gutter-width: 64px;
+  --header-height: 44px;
 }
 
 * {
@@ -106,10 +107,125 @@ body {
   padding: 0;
 }
 
-/* Spaces Gutter */
-#spaces-gutter {
+/* App header — the one bar every space shares.
+
+   It spans the whole window above the gutter, the sidebar, and the main pane,
+   so the Familiar mark sits in a fixed spot no matter which space is open (and
+   no matter how many spaces the gutter has grown). Everything below it is
+   offset by --header-height. */
+#app-header {
   position: absolute;
   top: 0;
+  left: 0;
+  right: 0;
+  height: var(--header-height);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  z-index: 70;
+}
+
+/* Toggles the spaces gutter. Sits leftmost, over the column it controls, and
+   is the reason the gutter can be reached from a space that fills the page:
+   hiding it is a preference rather than something a space does to you. */
+.app-header-gutter-toggle {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.app-header-gutter-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.app-header-gutter-toggle.showing {
+  color: var(--text-primary);
+}
+
+/* Three bars from one box and its shadows, so the icon needs no font, no
+   image, and no glyph the renderer would have to pass through. */
+.app-header-gutter-icon {
+  width: 15px;
+  height: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  box-shadow:
+    0 -5px 0 currentColor,
+    0 5px 0 currentColor;
+}
+
+/* The logo doubles as the "go home" control, so it is a real button rather
+   than a decorated div: keyboard focus and Enter/Space come for free. */
+.app-header-home {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px 2px 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.app-header-home:hover {
+  background: var(--bg-hover);
+}
+
+/* The mark rides in as a CSS background rather than an <img src>: the
+   sanitizing renderer scheme-checks every src, while a stylesheet url() is a
+   build-time asset reference that never becomes a prop at all. */
+.app-header-logo {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  background-image: url('./familiar.svg');
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.app-header-wordmark {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* Everything below the header. The space that is open owns this box and only
+   this box — navigation empties the space root, never the body, so the header
+   outlives every space change. Positioning it here is also what lets the panes
+   inside stay at `top: 0`: they resolve against the space root rather than the
+   window. */
+#space-root {
+  position: absolute;
+  top: var(--header-height);
+  left: var(--gutter-width);
+  right: 0;
+  bottom: 0;
+}
+
+/* Spaces Gutter. A sibling of the space root, not a child of it: the space that
+   is open must not be able to replace the bar that navigates between spaces. */
+#spaces-gutter {
+  position: absolute;
+  top: var(--header-height);
   left: 0;
   bottom: 0;
   width: var(--gutter-width);
@@ -118,6 +234,18 @@ body {
   display: flex;
   flex-direction: column;
   z-index: 60;
+}
+
+/* Hiding the bar is one variable: the space root beside it reserves its room
+   from `--gutter-width`, so zeroing that here reclaims the width for whichever
+   space is open. The element leaves the layout as well, since a zero-width
+   column would still draw its right border as a stray line. */
+body.gutter-hidden {
+  --gutter-width: 0px;
+}
+
+body.gutter-hidden #spaces-gutter {
+  display: none;
 }
 
 .spaces-gutter-inner {
@@ -322,11 +450,11 @@ body {
   text-align: center;
 }
 
-/* Sidebar - Inventory (shifted for gutter) */
+/* Sidebar - Inventory */
 #pets {
   position: absolute;
   top: 0;
-  left: var(--gutter-width);
+  left: 0;
   bottom: 0;
   width: var(--sidebar-width);
   background: var(--bg-sidebar);
@@ -336,12 +464,12 @@ body {
   flex-direction: column;
 }
 
-/* Resize handle (shifted for gutter) */
+/* Resize handle */
 #resize-handle {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: calc(var(--gutter-width) + var(--sidebar-width));
+  left: var(--sidebar-width);
   width: 6px;
   margin-left: -3px;
   cursor: col-resize;
@@ -756,24 +884,24 @@ body.resizing * {
   cursor: not-allowed;
 }
 
-/* Main content - Messages (shifted for gutter) */
+/* Main content - Messages */
 #messages {
   position: absolute;
   top: 0;
-  left: calc(var(--gutter-width) + var(--sidebar-width));
+  left: var(--sidebar-width);
   right: 0;
   bottom: 60px;
   padding: 20px 24px;
-  padding-top: calc(100dvh - 160px);
+  padding-top: calc(100dvh - 160px - var(--header-height));
   overflow-y: auto;
   overflow-x: hidden;
   background: var(--bg-primary);
 }
 
-/* Chat input bar (shifted for gutter) */
+/* Chat input bar */
 #chat-bar {
   position: absolute;
-  left: calc(var(--gutter-width) + var(--sidebar-width));
+  left: var(--sidebar-width);
   right: 0;
   bottom: 0;
   height: auto;
@@ -5761,7 +5889,7 @@ button.btn-spinner::after {
   display: none;
   position: absolute;
   top: 0;
-  left: calc(var(--gutter-width) + var(--sidebar-width));
+  left: var(--sidebar-width);
   right: 0;
   z-index: 10;
   align-items: center;
@@ -9466,8 +9594,7 @@ button.btn-spinner::after {
 .fx-root {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  height: 100dvh;
+  height: 100%;
   width: 100%;
   background: var(--bg-primary);
   color: var(--text-primary);
