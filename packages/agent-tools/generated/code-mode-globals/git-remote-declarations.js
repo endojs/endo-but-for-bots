@@ -55,6 +55,7 @@ type RemoteNormalizedRemotePolicy = RemotePolicy & Required<Pick<RemotePolicy, '
 type RemoteOperationResult = {
     updatedRefs: RemoteRefUpdate[];
     text: string;
+    droppedUpdatedRefsCount?: number;
 };
 type RemotePolicy = {
     url: string;
