@@ -2253,7 +2253,7 @@ export const createAddSpaceModal = ({
   };
 
   /**
-   * Handle floot chat form submission.
+   * Handle workflow space form submission.
    */
   const handleWorkflowSubmit = async () => {
     isSubmitting = true;
@@ -2280,6 +2280,9 @@ export const createAddSpaceModal = ({
     }
   };
 
+  /**
+   * Handle floot chat form submission.
+   */
   const handleFlootSubmit = async () => {
     if (!pathAutocomplete) return;
 

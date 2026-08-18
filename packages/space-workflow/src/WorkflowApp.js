@@ -48,23 +48,27 @@ export const WorkflowApp = ({ service }) => {
   // on seq.
   useEffect(() => {
     let disposed = false;
+    // The exo reader has no `return` method; disposal goes through the
+    // LOCAL iterator, whose `return()` sends the close signal to the
+    // responder so the daemon-side follower is released promptly (the
+    // same discipline as the other spaces' change followers).
     /** @type {any} */
-    let reader;
+    let iterator;
     (async () => {
       const initial = await E(service).list();
       if (disposed) return;
       setSummaries(initial);
-      reader = await E(service).followRuns();
+      setStale(false);
+      const reader = await E(service).followRuns();
+      iterator = iterateReader(reader);
       // Cleanup may have run while followRuns() was in flight; close the
-      // reader we just received rather than parking on it forever.
+      // iterator we just made rather than parking on it forever.
       if (disposed) {
-        await E(reader)
-          .return(undefined)
-          .catch(() => {});
+        iterator.return(undefined).catch(() => {});
         return;
       }
       for await (const summary of /** @type {AsyncIterable<any>} */ (
-        iterateReader(reader)
+        iterator
       )) {
         if (disposed) break;
         setSummaries(previous => {
@@ -80,13 +84,15 @@ export const WorkflowApp = ({ service }) => {
           return [...next, summary];
         });
       }
-    })().catch(() => setStale(true));
+    })().catch(() => {
+      if (!disposed) {
+        setStale(true);
+      }
+    });
     return () => {
       disposed = true;
-      if (reader !== undefined) {
-        E(reader)
-          .return(undefined)
-          .catch(() => {});
+      if (iterator !== undefined) {
+        iterator.return(undefined).catch(() => {});
       }
     };
   }, [service]);
@@ -107,6 +113,7 @@ export const WorkflowApp = ({ service }) => {
       // run, state from the new).
       if (disposed) return;
       setChart(runChart);
+      setStale(false);
       syncClient = makeRunSyncClient(run, {
         iterateEntries: iterateReader,
         onEntry: () => {
@@ -117,7 +124,11 @@ export const WorkflowApp = ({ service }) => {
         },
       });
       setClient(() => syncClient);
-    })().catch(() => setStale(true));
+    })().catch(() => {
+      if (!disposed) {
+        setStale(true);
+      }
+    });
     return () => {
       disposed = true;
       if (syncClient) syncClient.stop();
@@ -135,6 +146,14 @@ export const WorkflowApp = ({ service }) => {
     [client, scrubSeq, entries.length],
   );
   const shownState = scrubbed ?? current;
+  // Client-side audit: re-verify the received journal's hash chain.
+  const chain = useMemo(
+    () => (client === undefined ? undefined : client.verify()),
+    [client, entries.length],
+  );
+  /** @param {number | undefined} seq */
+  const scrub = seq =>
+    setScrubSeq(seq !== undefined && seq >= lastSeq ? undefined : seq);
 
   return h('div', { class: 'wf-app' }, [
     h('nav', { class: 'wf-rail' }, [
@@ -154,6 +173,9 @@ export const WorkflowApp = ({ service }) => {
                     ? 'wf-rail-run wf-rail-run-selected'
                     : 'wf-rail-run',
                 onClick: () => {
+                  // A render error from one run must not stick to the
+                  // next selection.
+                  resetRenderError();
                   setSelectedRunId(summary.runId);
                   setScrubSeq(undefined);
                 },
@@ -164,8 +186,10 @@ export const WorkflowApp = ({ service }) => {
                   {
                     class: `wf-rail-badge wf-rail-badge-${summary.outcome ?? 'live'}`,
                   },
-                  summary.outcome ??
-                    (summary.paused ? 'paused' : (summary.state ?? 'live')),
+                  `${summary.integrity !== undefined ? '⚠ ' : ''}${
+                    summary.outcome ??
+                    (summary.paused ? 'paused' : (summary.state ?? 'live'))
+                  }`,
                 ),
                 h(
                   'span',
@@ -215,6 +239,13 @@ export const WorkflowApp = ({ service }) => {
                 { class: 'wf-placeholder' },
                 selectedRunId === undefined ? 'Select a run' : 'Loading run…',
               ),
+          chain !== undefined && chain.ok === false
+            ? h(
+                'div',
+                { class: 'wf-stale' },
+                `⚠ journal hash chain broken at #${chain.badSeq}`,
+              )
+            : null,
           client !== undefined && lastSeq > 0
             ? h('div', { class: 'wf-scrubber' }, [
                 h('input', {
@@ -223,8 +254,7 @@ export const WorkflowApp = ({ service }) => {
                   max: lastSeq,
                   value: scrubSeq ?? lastSeq,
                   onInput: (/** @type {any} */ event) => {
-                    const seq = Number(event.currentTarget.value);
-                    setScrubSeq(seq >= lastSeq ? undefined : seq);
+                    scrub(Number(event.currentTarget.value));
                   },
                 }),
                 h(
@@ -246,9 +276,11 @@ export const WorkflowApp = ({ service }) => {
               setFilter(event.currentTarget.value),
           }),
           h(TimelineView, {
+            // Keyed by run so expansion state cannot bleed across runs.
+            key: selectedRunId ?? 'none',
             entries,
             scrubSeq,
-            onScrub: setScrubSeq,
+            onScrub: scrub,
             filter,
           }),
         ]),

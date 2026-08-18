@@ -2,7 +2,11 @@
 
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
-import { WorkflowApp } from '@endo/space-workflow';
+import {
+  WorkflowApp,
+  WORKFLOW_SPACE_TAGS,
+  WORKFLOW_SPACE_ATTRS,
+} from '@endo/space-workflow';
 
 import { h, renderConfined, unmount } from './setup-preact-container.js';
 
@@ -53,7 +57,14 @@ export const workflowComponent = (
   $mount.style.height = '100%';
   $parent.appendChild($mount);
 
-  renderConfined(h(WorkflowApp, { service }), $mount);
+  // The space names its own markup contract: `allowedTags` REPLACES the
+  // renderer's default set (which admits no SVG — the statechart would
+  // flatten to text), so the space exports the exact tags it renders
+  // plus the SVG geometry attributes to add.
+  renderConfined(h(WorkflowApp, { service }), $mount, {
+    allowedTags: WORKFLOW_SPACE_TAGS,
+    allowedAttrs: WORKFLOW_SPACE_ATTRS,
+  });
 
   return () => {
     // Unmount runs the component's useEffect teardown (stops the sync
