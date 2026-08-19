@@ -37,12 +37,7 @@ export interface ModelProfileConfig extends ModelBudget {
 
 /** Reasoning effort requested from a thinking-capable model. */
 export type ThinkingLevel =
-  | 'off'
-  | 'minimal'
-  | 'low'
-  | 'medium'
-  | 'high'
-  | 'xhigh';
+  'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 /** A named provider/model profile and its credential binding. */
 export interface ModelProfileDefinition extends ModelBudget {

@@ -81,9 +81,7 @@ export type NameOrPath = Name | NamePath;
 export type NamesOrPaths = NameOrPath[];
 
 export type SomehowAsyncIterable<T> =
-  | AsyncIterable<T>
-  | Iterable<T>
-  | { next: () => IteratorResult<T> };
+  AsyncIterable<T> | Iterable<T> | { next: () => IteratorResult<T> };
 
 export type Config = {
   statePath: string;
@@ -884,12 +882,10 @@ export interface Handle {
 export type MakeSha256 = () => Sha256;
 
 export type PetStoreNameChange =
-  | { add: Name; value: IdRecord; type?: string }
-  | { remove: Name };
+  { add: Name; value: IdRecord; type?: string } | { remove: Name };
 
 export type PetStoreIdNameChange =
-  | { add: IdRecord; names: Name[] }
-  | { remove: IdRecord; names?: Name[] };
+  { add: IdRecord; names: Name[] } | { remove: IdRecord; names?: Name[] };
 
 export type NameChangesTopic = Topic<PetStoreNameChange>;
 
@@ -937,8 +933,7 @@ export type KnownPeersStore = Omit<
  * `add` and `remove` are locators.
  */
 export type LocatorNameChange =
-  | { add: string; names: Name[] }
-  | { remove: string; names?: Name[] };
+  { add: string; names: Name[] } | { remove: string; names?: Name[] };
 
 export interface NameHub {
   has(...petNamePath: string[]): Promise<boolean>;
@@ -1252,8 +1247,7 @@ export type EndoMountStat = {
 };
 
 export type MountNameChange =
-  | { add: string; type: 'file' | 'directory' }
-  | { remove: string };
+  { add: string; type: 'file' | 'directory' } | { remove: string };
 
 /**
  * The `{ algorithm, hash, size }` content-address triple returned by a rich

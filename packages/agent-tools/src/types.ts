@@ -21,12 +21,7 @@ export type GitToolFacet = 'reader' | 'writer' | 'rewriter';
 
 /** The read/navigation slice every facet's catalog carries. */
 type GitToolReadMethodNames =
-  | 'log'
-  | 'diff'
-  | 'show'
-  | 'branches'
-  | 'currentBranch'
-  | 'trackingStatus';
+  'log' | 'diff' | 'show' | 'branches' | 'currentBranch' | 'trackingStatus';
 
 /**
  * Adds the ordinary edit verbs a writer facet (and above) carries: `commit`
@@ -47,10 +42,7 @@ type GitToolWriteMethodNames =
  * `skip`), and `commit`'s `amend` option.
  */
 type GitToolRewriteMethodNames =
-  | GitToolWriteMethodNames
-  | 'reword'
-  | 'cherryPick'
-  | 'rebase';
+  GitToolWriteMethodNames | 'reword' | 'cherryPick' | 'rebase';
 
 /**
  * The read-only slice of the default git tool catalog: `makeGitTool(gitCap,

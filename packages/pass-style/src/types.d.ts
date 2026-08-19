@@ -7,14 +7,7 @@ import { PASS_STYLE } from './passStyle-helpers.js';
  * but some of which are represented as JS object.
  */
 export type Atom =
-  | undefined
-  | null
-  | boolean
-  | number
-  | bigint
-  | string
-  | ByteArray
-  | symbol;
+  undefined | null | boolean | number | bigint | string | ByteArray | symbol;
 
 export type AtomStyle =
   | 'undefined'
@@ -30,13 +23,7 @@ export type AtomStyle =
  * The actual JS primitive types.
  */
 export type JSPrimitive =
-  | undefined
-  | null
-  | boolean
-  | number
-  | bigint
-  | string
-  | symbol;
+  undefined | null | boolean | number | bigint | string | symbol;
 
 /**
  * @deprecated Use `Atom` instead, which is also the ocapn name. Now that
@@ -55,11 +42,7 @@ export type PrimitiveStyle = AtomStyle;
 export type ContainerStyle = 'copyRecord' | 'copyArray' | 'tagged';
 
 export type PassStyle =
-  | AtomStyle
-  | ContainerStyle
-  | 'remotable'
-  | 'error'
-  | 'promise';
+  AtomStyle | ContainerStyle | 'remotable' | 'error' | 'promise';
 
 export type PassStyleMarker = 'tagged' | 'remotable';
 
@@ -201,9 +184,7 @@ export type RemotableMethodName = PropertyKey;
  * The authority-bearing leaves of a Passable's pass-by-copy superstructure.
  */
 export type PassableCap =
-  | Promise<any>
-  | RemotableObject
-  | RemotableBrand<any, any>;
+  Promise<any> | RemotableObject | RemotableBrand<any, any>;
 
 /**
  * A Passable sequence of Passable values.

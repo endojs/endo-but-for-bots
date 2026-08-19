@@ -10,10 +10,7 @@ export type PackageManagerFacetName = 'reader' | 'installer' | 'executor';
 export type LockfileMode = 'frozen' | 'update';
 export type PackageOperation = 'install' | 'run';
 export type PackageTermination =
-  | 'exit'
-  | 'timeout'
-  | 'cancelled'
-  | 'output-limit';
+  'exit' | 'timeout' | 'cancelled' | 'output-limit';
 
 /**
  * Inert mount-relative selector accepted by public methods (platform

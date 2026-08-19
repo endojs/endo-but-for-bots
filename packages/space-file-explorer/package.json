@@ -40,7 +40,7 @@
     "@endo/monaco-wrapper": "workspace:^",
     "@endo/platform": "workspace:^",
     "@endo/preact-container": "workspace:^",
-    "preact": "^10.29.2"
+    "preact": "^10.29.8"
   },
   "devDependencies": {
     "@endo/init": "workspace:^",
@@ -50,7 +50,7 @@
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
-    "happy-dom": "^20.11.0"
+    "happy-dom": "^20.11.2"
   },
   "ava": {
     "files": [
