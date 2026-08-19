@@ -1,7 +1,7 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { getPreset } from '../agent.js';
+import { getPreset, refreshPresetEntry } from '../agent.js';
 
 test('machine-admin receives the two attenuated deploy factories', t => {
   const preset = getPreset('machine-admin');
@@ -43,4 +43,28 @@ test('machine-admin prompt routes ordinary deploys through durable runs', t => {
   // operator gate even though the preset now holds attenuated factories.
   t.false(systemPrompt.includes('E(nixos).stageRev(head.oid)'));
   t.false(systemPrompt.includes("E(nixos).apply('pin endo"));
+});
+
+test('machine-admin prompt migration updates legacy sessions exactly once', t => {
+  const legacy = harden({
+    id: 'old-admin',
+    presetId: 'machine-admin',
+    systemPrompt: 'use the raw caplet',
+  });
+  const migrated = refreshPresetEntry(legacy);
+
+  t.not(migrated, legacy);
+  t.is(migrated.presetPromptVersion, 1);
+  t.is(migrated.systemPrompt, getPreset('machine-admin').systemPrompt);
+  t.is(refreshPresetEntry(migrated), migrated);
+});
+
+test('versioned migration leaves other preset snapshots unchanged', t => {
+  const general = harden({
+    id: 'general-session',
+    presetId: 'general',
+    systemPrompt: 'my pinned persona',
+  });
+
+  t.is(refreshPresetEntry(general), general);
 });

@@ -732,6 +732,12 @@ const PRESETS = [
   },
   {
     id: 'machine-admin',
+    // Unlike ordinary persona edits, deploy-authority changes must reach
+    // existing admin sessions: an old prompt would keep driving the raw
+    // root-equivalent caplet after the attenuated factories arrive. Bump this
+    // only for a deliberate, reviewed migration; refreshPresetEntry snapshots
+    // the new text into each matching registry entry exactly once.
+    promptVersion: 1,
     title: 'Machine admin (NixOS)',
     description:
       "Full Endo control PLUS editing and applying this host's NixOS configuration. Root-equivalent machine control — handle with extreme care.",
@@ -759,6 +765,32 @@ export const getPreset = id =>
   /** @type {(typeof PRESETS)[number]} */ (
     PRESETS.find(p => p.id === DEFAULT_PRESET_ID)
   );
+
+/**
+ * Apply an explicitly versioned preset-prompt migration to one session
+ * registry entry. Ordinary preset text remains snapshotted forever; only a
+ * preset carrying a newer `promptVersion` opts into changing live sessions.
+ *
+ * @param {{ presetId?: string, systemPrompt?: string, presetPromptVersion?: number } & Record<string, any>} entry
+ * @returns {typeof entry}
+ */
+export const refreshPresetEntry = entry => {
+  const preset = getPreset(entry.presetId || DEFAULT_PRESET_ID);
+  const promptVersion =
+    'promptVersion' in preset ? preset.promptVersion : undefined;
+  if (
+    promptVersion === undefined ||
+    (entry.presetPromptVersion || 0) >= promptVersion
+  ) {
+    return entry;
+  }
+  return harden({
+    ...entry,
+    systemPrompt: preset.systemPrompt,
+    presetPromptVersion: promptVersion,
+  });
+};
+harden(refreshPresetEntry);
 
 // Catalog of Anthropic models selectable for a session, ordered faster/lighter
 // to stronger. Ids are passed verbatim to the API provider AND to `claude
@@ -1908,13 +1940,20 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
   // In-memory session registry, mirrored to the factory's petstore. Loaded
   // lazily so make() never awaits.
-  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, model?: string }> | undefined} */
+  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, presetPromptVersion?: number, model?: string }> | undefined} */
   let registry;
   const loadRegistry = async () => {
     if (registry) return registry;
     if (await E(powers).has(REGISTRY_NAME)) {
       const stored = await E(powers).lookup(REGISTRY_NAME);
-      registry = Array.isArray(stored) ? [...stored] : [];
+      const entries = Array.isArray(stored) ? [...stored] : [];
+      const refreshed = entries.map(refreshPresetEntry);
+      registry = refreshed;
+      if (refreshed.some((entry, index) => entry !== entries[index])) {
+        // Persist before any session agent is rebuilt, so this release and
+        // every later incarnation agree on the exact prompt snapshot.
+        await saveRegistry();
+      }
     } else {
       registry = [];
     }
@@ -2271,6 +2310,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
         createdAt: Date.now(),
         presetId: preset.id,
         systemPrompt: preset.systemPrompt,
+        ...('promptVersion' in preset
+          ? { presetPromptVersion: preset.promptVersion }
+          : {}),
         runtime: chosenRuntime,
         model: chosenModel,
       });

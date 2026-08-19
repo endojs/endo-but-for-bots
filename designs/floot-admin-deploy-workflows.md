@@ -60,8 +60,11 @@ the design against restart loops, § "Why the loop cannot happen"):
   `deploy-endo` and `change-nixos` factory objects, and its prompt starts,
   durably names, observes, and narrates those runs. The raw caplet remains
   for read access and emergencies, with ordinary deploys explicitly routed
-  through the factories and their owner-inbox approval forms. Two preset
-  regression tests pin the grants and the no-raw-apply prompt contract.
+  through the factories and their owner-inbox approval forms. A versioned,
+  one-time registry migration refreshes existing `machine-admin` prompts
+  without changing the general rule that session personas are snapshotted.
+  Four preset regression tests pin the grants, no-raw-apply prompt contract,
+  exact-once admin migration, and non-admin snapshot preservation.
   Phases 4–5 remain unstarted.
 
 A five-reviewer adversarial round (2026-08-18: merge integrity, the
