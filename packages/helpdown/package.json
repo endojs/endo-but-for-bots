@@ -1,0 +1,71 @@
+{
+  "name": "@endo/helpdown",
+  "version": "0.1.0",
+  "description": "Markdown help scanner and the help() factory for capabilities",
+  "keywords": [
+    "endo",
+    "help",
+    "markdown",
+    "documentation"
+  ],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/endojs/endo/tree/master/packages/helpdown#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/helpdown"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "main": "./index.js",
+  "module": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./tools.js": "./tools.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "prepack": "git clean -fX -e node_modules/ && tsc --build tsconfig.build.json",
+    "postpack": "git clean -fX -e node_modules/",
+    "cover": "c8 ava",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "eslint --fix .",
+    "lint:eslint": "eslint .",
+    "lint:types": "tsc",
+    "test": "ava"
+  },
+  "dependencies": {
+    "@endo/harden": "workspace:^"
+  },
+  "devDependencies": {
+    "ava": "catalog:dev",
+    "c8": "catalog:dev",
+    "eslint": "catalog:dev",
+    "typescript": "catalog:dev"
+  },
+  "files": [
+    "./*.d.ts",
+    "./*.js",
+    "./*.map",
+    "LICENSE*",
+    "SECURITY*",
+    "README.md",
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.*"
+    ],
+    "timeout": "2m"
+  },
+  "typeCoverage": {
+    "atLeast": 95
+  }
+}

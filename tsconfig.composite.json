@@ -135,6 +135,9 @@
       "path": "packages/harden/tsconfig.composite.json"
     },
     {
+      "path": "packages/helpdown/tsconfig.composite.json"
+    },
+    {
       "path": "packages/hex/tsconfig.composite.json"
     },
     {

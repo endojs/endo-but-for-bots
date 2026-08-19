@@ -11,11 +11,15 @@
  *
  * The scanner is aware of fenced code blocks and blockquotes so that
  * headers inside those constructs are not mistaken for structure.
+ *
+ * This module is pure: it reads no files and imports no host builtins, so it
+ * runs in any SES realm, including the XS supervisor, as readily as it runs in
+ * a build script.
  */
 
-/** @import { HelpText } from './help-text.js' */
+import harden from '@endo/harden';
 
-import fs from 'fs';
+/** @import { HelpText } from './types.js' */
 
 /**
  * Extract the method name from a level-2 header line.
@@ -188,51 +192,4 @@ export const parseHelpdown = text => {
 
   return entries;
 };
-
-/**
- * Read a helpdown Markdown file and yield [name, HelpText] entries.
- *
- * @param {URL} path - URL to the Markdown file
- * @returns {AsyncIterable<[string, HelpText]>}
- */
-export const loadHelpTextFile = path => {
-  return harden({
-    [Symbol.asyncIterator]: () => {
-      /** @type {Array<[string, HelpText]> | undefined} */
-      let entries;
-      let index = 0;
-
-      return harden({
-        /** @returns {Promise<IteratorResult<[string, HelpText]>>} */
-        next: async () => {
-          if (entries === undefined) {
-            const text = await fs.promises.readFile(path, 'utf-8');
-            entries = parseHelpdown(text);
-          }
-          if (index < entries.length) {
-            const value = entries[index];
-            index += 1;
-            return harden({ value, done: false });
-          }
-          return harden({ value: undefined, done: true });
-        },
-      });
-    },
-  });
-};
-
-/**
- * Synchronously read and parse a helpdown Markdown file.
- *
- * @param {URL} path - URL to the Markdown file
- * @returns {Map<string, HelpText>}
- */
-export const readHelpTextFileSync = path => {
-  const text = fs.readFileSync(path, 'utf-8');
-  const entries = parseHelpdown(text);
-  return new Map(entries);
-};
-
 harden(parseHelpdown);
-harden(loadHelpTextFile);
-harden(readHelpTextFileSync);
