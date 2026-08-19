@@ -28,6 +28,6 @@ Every mint records an explicit escalation — `OS_EFFECT`, `RESOURCE_LIMIT`, or
 new `EndoDiagnostics.listSandboxEscalations()`. The `getFormula` record for a
 `sandbox` formula surfaces the same fields.
 
-`@endo/sandbox` moves `@endo/daemon` from `dependencies` to `devDependencies`
-(only its daemon smoke test imports it), so the daemon can depend on the sandbox
-package without a workspace cycle.
+`@endo/sandbox` drops its `@endo/daemon` dependency, which nothing in the package
+imports — its daemon smoke test only names the daemon in a comment — so the
+daemon can depend on the sandbox package without a workspace cycle.
