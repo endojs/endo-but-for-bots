@@ -11,6 +11,7 @@ import {
   scenarioIncludes,
   scenarioIsModule,
   scenarioIsRaw,
+  scenarioIsLockdown,
   scenarioIsAsync,
   scenarioOk,
 } from './agents/scenario.js';
@@ -18,6 +19,7 @@ import {
   generateScenariosForTests,
   filterOnlyRules,
   filterNoRules,
+  scenariosForTests,
   agentRunsScenario,
 } from './test.js';
 
@@ -231,6 +233,65 @@ test('scenarioOk requires a declared-async case to signal completion', () => {
   assert.equal(scenarioOk(asyncCase, 0, 'partial output, no marker'), false);
   // Completion marker present: a real async pass.
   assert.equal(scenarioOk(asyncCase, 0, 'Test262:AsyncTestComplete'), true);
+});
+
+// --- scenarioIsLockdown: the node agent's single source of truth -------------
+
+test('scenarioIsLockdown reads the scenario lockdown axis, not the name', () => {
+  assert.equal(scenarioIsLockdown({ lockdown: true }), true);
+  assert.equal(scenarioIsLockdown({ lockdown: false }), false);
+  assert.equal(scenarioIsLockdown({}), false);
+});
+
+// --- scenariosForTests: a fully-excluded file surfaces as zero-coverage -------
+
+test('a file whose no* flags exclude every wired agent yields one zero-coverage skip', async () => {
+  // engine-realist/spec-keeper/corner-prober: noXs+noSesXs+noSesNode together
+  // makes filterNoRules drop every (agent,mode,lockdown,compartment) combination,
+  // so without a synthetic record the file vanishes from both --list and the run.
+  const scenarios = await collect(
+    scenariosForTests(
+      asyncIterable([
+        fakeCase({ flags: ['onlyStrict', 'noXs', 'noSesXs', 'noSesNode'] }),
+      ]),
+      ['xs', 'sesXs', 'sesNode'],
+      {},
+    ),
+  );
+  assert.equal(scenarios.length, 1);
+  assert.equal(scenarios[0].zeroCoverage, true);
+  assert.equal(scenarios[0].skipped, true);
+  assert.equal(scenarios[0].file, 'test/x.js');
+});
+
+test('a raw+module case yields one zero-coverage skip, never silently nothing', async () => {
+  // corner-prober: `module`→onlyModule wants the module scenario, but `raw`
+  // suppresses every strict/module axis, so filterOnlyRules rejects the surviving
+  // sloppy scenarios. The gap is now deliberate and visible, not a silent drop.
+  const scenarios = await collect(
+    scenariosForTests(
+      asyncIterable([fakeCase({ flags: ['raw', 'module'] })]),
+      ['sesNode'],
+      {},
+    ),
+  );
+  assert.equal(scenarios.length, 1);
+  assert.equal(scenarios[0].zeroCoverage, true);
+  assert.equal(scenarios[0].skipped, true);
+});
+
+test('scenariosForTests emits no zero-coverage record for a normally-covered file', async () => {
+  const scenarios = await collect(
+    scenariosForTests(
+      asyncIterable([fakeCase({ flags: [] })]),
+      ['sesNode'],
+      {},
+    ),
+  );
+  assert.ok(scenarios.length > 1);
+  for (const scenario of scenarios) {
+    assert.notEqual(scenario.zeroCoverage, true);
+  }
 });
 
 // --- agentRunsScenario: the child-spawn boundary classifier ------------------

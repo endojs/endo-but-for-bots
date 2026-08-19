@@ -28,6 +28,8 @@ const c2 = new Compartment({
   },
 });
 
-c2.import('.').then(() => {
-  assert.sameValue(message, 'hi');
-});
+c2.import('.')
+  .then(() => {
+    assert.sameValue(message, 'hi');
+  })
+  .then($DONE, $DONE);

@@ -5,7 +5,7 @@ import { readFileSync } from 'fs';
 import TestStream from 'test262-stream';
 
 // agents:
-import { testSesNodeModule, testSesNodeLockdownModule } from './agents/node.js';
+import { testSesNode } from './agents/node.js';
 import { testXs } from './agents/xs.js';
 
 // This harness reuses its own package root as the test262 corpus directory, so
@@ -172,20 +172,82 @@ export async function* filterOnlyRules(tests) {
   }
 }
 
-export const scenariosForTests = (tests, agents, conditions) => {
-  tests = generateScenariosForTests(tests, agents, conditions);
-  tests = filterNoRules(tests);
-  tests = filterOnlyRules(tests);
-  return tests;
-};
+/**
+ * Wrap a single value as a one-shot async iterable for the per-file pipeline.
+ *
+ * @template T
+ * @param {T} item
+ */
+async function* asyncOnce(item) {
+  yield item;
+}
+
+/**
+ * A synthetic record for a source file whose EVERY generated scenario was
+ * filtered out — so that a file which the `no*`/`only*` rules leave with zero
+ * runnable-or-skippable scenarios still surfaces, rather than vanishing from both
+ * `--list` and the run report. Two distinct front-matter shapes reach here:
+ *   - every wired agent excluded, e.g. `noXs`+`noSesXs`+`noSesNode` together, so
+ *     `filterNoRules` drops all combinations (engine-realist/spec-keeper/corner-prober);
+ *   - a `raw`+`module` contradiction, where the `module`→`onlyModule` promotion
+ *     wants the module scenario but `raw` suppresses every strict/module axis, so
+ *     `filterOnlyRules` rejects the surviving sloppy scenarios (corner-prober).
+ * Emitting a `skipped` zero-coverage record upholds the same visibility invariant
+ * `runTests` enforces for the unwired scenarios (README.md; scripts/test.js).
+ *
+ * @param {{ file: string, attrs?: object }} test
+ */
+export const zeroCoverageScenario = test => ({
+  file: test.file,
+  attrs: test.attrs,
+  agent: '',
+  mode: '',
+  scenario: '',
+  lockdown: false,
+  compartment: false,
+  skipped: true,
+  zeroCoverage: true,
+});
+
+export async function* scenariosForTests(tests, agents, conditions) {
+  for await (const test of tests) {
+    // Filter each file's scenarios in isolation so we can tell a file that
+    // yielded zero survivors from one that merely interleaves with its
+    // neighbours; the filters are per-scenario and stateless, so per-file and
+    // whole-stream filtering produce the identical surviving set and order.
+    let survived = false;
+    const generated = generateScenariosForTests(
+      asyncOnce(test),
+      agents,
+      conditions,
+    );
+    for await (const scenario of filterOnlyRules(filterNoRules(generated))) {
+      survived = true;
+      yield scenario;
+    }
+    if (!survived) {
+      yield zeroCoverageScenario(test);
+    }
+  }
+}
 
 const verboseBegin = test => {
+  if (test.zeroCoverage) {
+    console.error(
+      `## (zero coverage: every wired agent excluded) ${test.file}`,
+    );
+    return;
+  }
   console.error(
     `## ${test.agent} ${test.mode}${test.lockdown ? ' lockdown' : ''}${test.compartment ? ' compartment' : ''}${test.description ? `${test.description}` : ''} ${test.file}`,
   );
 };
 
 const terseEnd = test => {
+  if (test.zeroCoverage) {
+    console.error('# skip (zero coverage: every wired agent excluded)');
+    return;
+  }
   if (test.skipped) {
     console.error('# skip (no agent runs this scenario yet)');
     return;
@@ -196,6 +258,10 @@ const terseEnd = test => {
 };
 
 const compactEnd = test => {
+  if (test.zeroCoverage) {
+    console.error(['skip', test.file, 'zero-coverage', '', '', ''].join(':'));
+    return;
+  }
   console.error(
     [
       test.skipped ? 'skip' : test.ok ? 'pass' : 'fail',
@@ -229,11 +295,7 @@ async function* runTests({ quiet, begin }, tests) {
     } else if (agent === 'sesXs') {
       yield await testXs(test, { sesShim: true, quiet });
     } else if (agent === 'sesNode') {
-      if (scenario === 'lockdownModule') {
-        yield await testSesNodeLockdownModule(test, { quiet });
-      } else {
-        yield await testSesNodeModule(test, { quiet });
-      }
+      yield await testSesNode(test, { quiet });
     } else {
       yield { ...test, skipped: true };
     }
@@ -278,6 +340,13 @@ const main = async () => {
       }
     } else {
       for await (const test of tests) {
+        if (test.zeroCoverage) {
+          // A file every rule excluded still gets one enumerated line, so the
+          // list and a run agree and no ported case silently disappears.
+          console.log(`${test.file}:zero-coverage:::`);
+          // eslint-disable-next-line no-continue
+          continue;
+        }
         const { file, agent, mode, lockdown, compartment } = test;
         console.log(
           `${file}:${agent}:${mode}:${lockdown ? 'lockdown' : ''}:${compartment ? 'compartment' : ''}`,

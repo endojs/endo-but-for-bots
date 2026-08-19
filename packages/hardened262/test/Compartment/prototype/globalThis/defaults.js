@@ -2,7 +2,7 @@
 description: |
   Currently failing in SES.
   Passes with XS, but not with XS under Lockdown.
-flags: [onlyStrict,noXs,noSesXs,noSesNode]
+flags: [onlyStrict,noLockdown,noSesXs,noSesNode]
 ---*/
 
 const c = new Compartment();

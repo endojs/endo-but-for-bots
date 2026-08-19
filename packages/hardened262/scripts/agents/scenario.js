@@ -39,6 +39,19 @@ export const scenarioIncludes = test => {
 export const scenarioIsModule = test => test.mode === 'module';
 
 /**
+ * Whether a scenario runs under Lockdown. Reads the scenario's own `lockdown`
+ * axis the generator (../test.js) sets — the SAME single source of truth the xs
+ * agent (agents/xs.js) already reads via `test.lockdown` — so the node agent no
+ * longer has to re-derive it by string-matching the composed scenario NAME
+ * (`scenario === 'lockdownModule'`), which silently breaks the moment any other
+ * lockdown scenario (say `lockdownStrict`) wires to an agent.
+ *
+ * @param {{ lockdown?: boolean }} test
+ * @returns {boolean}
+ */
+export const scenarioIsLockdown = test => Boolean(test.lockdown);
+
+/**
  * Whether a scenario is a raw test262 case: no harness wrapper, and therefore no
  * injected includes. Reads the canonical `raw` flag `test262-stream` parses out
  * of the front-matter.
@@ -89,3 +102,61 @@ export const scenarioOk = (test, code, stdout) => {
   }
   return true;
 };
+
+/**
+ * Per-scenario child wall-clock budget in milliseconds. Defaults to 60s and is
+ * overridable with `HARDENED262_TIMEOUT_MS` (set `0` to disable). A malformed or
+ * negative value falls back to the default rather than silently disabling the
+ * guard.
+ *
+ * @returns {number}
+ */
+export const scenarioTimeoutMs = () => {
+  const raw = process.env.HARDENED262_TIMEOUT_MS;
+  if (raw === undefined) {
+    return 60_000;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 60_000;
+};
+
+/**
+ * Await a spawned scenario child to completion and report its `{ code, signal }`.
+ * Adds the wall-clock timeout the wire-watcher seat required: a non-terminating
+ * case would otherwise hang its child forever and, because `runTests` (../test.js)
+ * awaits scenarios sequentially, silently wedge the ENTIRE run behind one stuck
+ * child. On timeout the child is SIGKILLed (uncatchable, so a child that traps
+ * SIGTERM cannot keep the run wedged) and reported as `{ code: null, signal:
+ * 'SIGKILL' }` — a nonzero outcome `scenarioOk` rejects — rather than a hang.
+ * Resolves on `close` (not `exit`) so every stdout chunk is captured before the
+ * caller inspects it for the async markers, and rejects on a launch failure (a
+ * missing `${label}` binary on the PATH) so the run fails loud with a diagnostic
+ * instead of hanging.
+ *
+ * @param {import('child_process').ChildProcess} child
+ * @param {string} label the binary name, for the launch-failure diagnostic
+ * @returns {Promise<{ code: number | null, signal: string | null }>}
+ */
+export const awaitScenarioChild = (child, label) =>
+  new Promise((resolve, reject) => {
+    const timeoutMs = scenarioTimeoutMs();
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let timer;
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        resolve({ code: null, signal: 'SIGKILL' });
+      }, timeoutMs);
+      // Do not let the pending timeout keep the process alive on its own.
+      timer.unref();
+    }
+    child.on('error', error => {
+      clearTimeout(timer);
+      // Name the binary so a missing `${label}` on the PATH is diagnosable.
+      reject(new Error(`Failed to launch ${label}: ${error.message}`));
+    });
+    child.on('close', (exitCode, exitSignal) => {
+      clearTimeout(timer);
+      resolve({ code: exitCode, signal: exitSignal });
+    });
+  });

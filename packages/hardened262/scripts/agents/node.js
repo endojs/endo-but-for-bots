@@ -2,12 +2,23 @@ import { mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 
-import { scenarioIncludes, scenarioIsRaw, scenarioOk } from './scenario.js';
+import {
+  awaitScenarioChild,
+  scenarioIncludes,
+  scenarioIsLockdown,
+  scenarioIsRaw,
+  scenarioOk,
+} from './scenario.js';
 
-export const testSesNodeModule = (test, { quiet }) =>
-  testNode(test, { quiet, lockdownFlag: 'no-lockdown' });
-export const testSesNodeLockdownModule = (test, { quiet }) =>
-  testNode(test, { quiet, lockdownFlag: 'lockdown' });
+// One export that reads the scenario's own `lockdown` axis (scenarioIsLockdown),
+// rather than the caller re-deriving Lockdown by string-matching the composed
+// scenario NAME (`scenario === 'lockdownModule'`) — the same single source of
+// truth the xs agent (agents/xs.js) already reads via `test.lockdown`.
+export const testSesNode = (test, { quiet }) =>
+  testNode(test, {
+    quiet,
+    lockdownFlag: scenarioIsLockdown(test) ? 'lockdown' : 'no-lockdown',
+  });
 
 const testNode = async (test, { quiet, lockdownFlag }) => {
   const runPath = fileURLToPath(new URL('../node-helper.js', import.meta.url));
@@ -63,17 +74,7 @@ const testNode = async (test, { quiet, lockdownFlag }) => {
       process.stdout.write(chunk);
     }
   });
-  const { code, signal } = await new Promise((resolve, reject) => {
-    // Without an 'error' listener a failure to launch the child (for example a
-    // missing `node` on the PATH) never fires 'close', so the awaited promise
-    // would hang forever; reject so the run fails loud with a diagnostic.
-    child.on('error', reject);
-    // Resolve on 'close' (not 'exit') so every stdout chunk has been captured
-    // before we inspect it for the async markers.
-    child.on('close', (exitCode, exitSignal) => {
-      resolve({ code: exitCode, signal: exitSignal });
-    });
-  });
+  const { code, signal } = await awaitScenarioChild(child, 'node');
   if (scenarioOk(test, code, stdout)) {
     unlinkSync(temporaryFile);
     return { ok: true, ...test };

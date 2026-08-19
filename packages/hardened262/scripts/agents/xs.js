@@ -4,6 +4,7 @@ import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 
 import {
+  awaitScenarioChild,
   scenarioIncludes,
   scenarioIsModule,
   scenarioIsRaw,
@@ -61,18 +62,7 @@ export const testXs = async (test, { sesShim, quiet }) => {
       process.stdout.write(chunk);
     }
   });
-  const { code, signal } = await new Promise((resolve, reject) => {
-    // Without an 'error' listener a failure to launch `xst` (which the README
-    // requires on the PATH for the xs/sesXs agents) never fires 'close', so the
-    // awaited promise would hang forever; reject so the run fails loud with a
-    // diagnostic.
-    child.on('error', reject);
-    // Resolve on 'close' (not 'exit') so every stdout chunk has been captured
-    // before we inspect it for the async markers.
-    child.on('close', (exitCode, exitSignal) => {
-      resolve({ code: exitCode, signal: exitSignal });
-    });
-  });
+  const { code, signal } = await awaitScenarioChild(child, 'xst');
   if (scenarioOk(test, code, stdout)) {
     unlinkSync(temporaryFile);
     return { ok: true, ...test };
