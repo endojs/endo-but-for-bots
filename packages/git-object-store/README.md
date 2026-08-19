@@ -20,9 +20,11 @@ See [`designs/cas-git-object-store.md`](../../designs/cas-git-object-store.md).
 ## Relationship to native Git
 
 This package owns the portable JavaScript object and CAS contract.
-PR 987 ([the native Git binding design](https://github.com/endojs/endo-but-for-bots/pull/987)) owns the full-power libgit2 adapter for packs, refs, transport, and other native repository behavior.
-An actor-side consumer can use this contract with that adapter where native Git is available; the two layers are complementary, not competing semantic stores.
-PR 872 ([the earlier gix-only Phase 1](https://github.com/endojs/endo-but-for-bots/pull/872)) remains a target-specific daemon-private implementation and is not duplicated here.
+PR 987 ([the proposed native Git binding design](https://github.com/endojs/endo-but-for-bots/pull/987)) is expected to supersede the current PR 872 direction if it lands, with a full-power libgit2 adapter for packs, refs, transport, and other native repository behavior.
+PR 987 remains open, so this package does not assume that proposal has landed.
+The future portable `GitBackend` / `@endo/exo-git` immutable-tree seam is the intended consumer of this contract as portable coverage grows.
+The portable layer and native backend direction are complementary, not competing semantic stores.
+PR 872 ([the earlier gix-only Phase 1](https://github.com/endojs/endo-but-for-bots/pull/872)) remains the currently committed target-specific daemon-private implementation and is not duplicated here.
 
 ## Non-goals
 

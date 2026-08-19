@@ -235,11 +235,14 @@ Only the read path must be pure.
 
 This package is the portable JavaScript layer for logical Git objects and
 their ContentStore representation.
-PR 987 ([the native Git binding design](https://github.com/endojs/endo-but-for-bots/pull/987)) owns the full-power libgit2 adapter, including packs, refs, transport, and other native repository behavior.
-That adapter can implement or bridge this logical contract for native-capable
-deployments; the portable layer and native adapter are complementary layers,
-not competing semantic stores.
-PR 872 ([the earlier gix-only Phase 1](https://github.com/endojs/endo-but-for-bots/pull/872)) is a daemon-private, target-specific implementation and is not copied into this package.
+PR 987 ([the proposed native Git binding design](https://github.com/endojs/endo-but-for-bots/pull/987)) is expected to supersede the current PR 872 direction if it lands, with a full-power libgit2 adapter for packs, refs, transport, and other native repository behavior.
+PR 987 remains open, so this design does not assume that proposal has landed.
+The future portable `GitBackend` / `@endo/exo-git` immutable-tree seam is the
+intended consumer of this contract as portable coverage grows through concrete
+consumers.
+The portable layer and native backend direction are complementary layers, not
+competing semantic stores.
+PR 872 ([the earlier gix-only Phase 1](https://github.com/endojs/endo-but-for-bots/pull/872)) remains the currently committed daemon-private, target-specific implementation and is not copied into this package.
 
 ## Out of scope (G1)
 
