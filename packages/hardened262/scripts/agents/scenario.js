@@ -47,3 +47,45 @@ export const scenarioIsModule = test => test.mode === 'module';
  * @returns {boolean}
  */
 export const scenarioIsRaw = test => Boolean(test.attrs?.flags?.raw);
+
+/**
+ * Whether a scenario runs under the test262 async protocol. An `async`-flagged
+ * case reports its outcome by calling `$DONE` (harness/doneprintHandle.js), which
+ * only `print()`s a `Test262:AsyncTestComplete` / `Test262:AsyncTestFailure:...`
+ * marker and NEVER sets a nonzero exit. A clean child exit is therefore not, on
+ * its own, a pass for these cases.
+ *
+ * @param {{ attrs?: { flags?: Record<string, boolean> } }} test
+ * @returns {boolean}
+ */
+export const scenarioIsAsync = test => Boolean(test.attrs?.flags?.async);
+
+/** Markers `$DONE` prints (harness/doneprintHandle.js) to signal async outcome. */
+export const asyncFailureMarker = 'Test262:AsyncTestFailure';
+export const asyncCompleteMarker = 'Test262:AsyncTestComplete';
+
+/**
+ * Decide a scenario's pass/fail from the child's exit `code` and its captured
+ * `stdout`. Shared by the node and xs agents so they cannot drift on the async
+ * protocol. A nonzero exit is always a fail; beyond that, an async case's outcome
+ * lives in the printed marker, not the exit code, so a clean exit that either
+ * printed a failure marker OR (for a declared-async case) never printed the
+ * completion marker is a fail rather than a laundered false pass.
+ *
+ * @param {{ attrs?: { flags?: Record<string, boolean> } }} test
+ * @param {number | null} code
+ * @param {string} stdout
+ * @returns {boolean}
+ */
+export const scenarioOk = (test, code, stdout) => {
+  if (code !== 0) {
+    return false;
+  }
+  if (stdout.includes(asyncFailureMarker)) {
+    return false;
+  }
+  if (scenarioIsAsync(test) && !stdout.includes(asyncCompleteMarker)) {
+    return false;
+  }
+  return true;
+};

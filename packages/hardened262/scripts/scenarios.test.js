@@ -11,6 +11,8 @@ import {
   scenarioIncludes,
   scenarioIsModule,
   scenarioIsRaw,
+  scenarioIsAsync,
+  scenarioOk,
 } from './agents/scenario.js';
 import {
   generateScenariosForTests,
@@ -171,12 +173,14 @@ test('filterNoRules retains a case that trips no `no*` rule', async () => {
   assert.ok(kept.length > 0);
 });
 
-// --- raw + Strict: a raw case has no wrapper for a strict pragma -------------
+// --- raw + strict/module: a raw case has no wrapper for a strict pragma -------
 
-test('a raw case yields no strict-mode scenario', async () => {
+test('a raw case yields neither a strict- nor a module-mode scenario', async () => {
   // A raw test262 case carries no harness wrapper into which to inject the
   // `"use strict";` pragma, so `generateScenariosForTests` skips its strict
-  // scenarios entirely (test.js). Pin that documented contract.
+  // scenarios entirely; the module axis is skipped for the same reason, since an
+  // ES module body is inherently strict and would silently impose strict
+  // semantics on a sloppy-only raw case (test.js). Pin that documented contract.
   const scenarios = await collect(
     generateScenariosForTests(
       asyncIterable([fakeCase({ flags: ['raw'] })]),
@@ -187,7 +191,46 @@ test('a raw case yields no strict-mode scenario', async () => {
   assert.ok(scenarios.length > 0);
   for (const scenario of scenarios) {
     assert.notEqual(scenario.mode, 'strict');
+    assert.notEqual(scenario.mode, 'module');
   }
+});
+
+// --- scenarioOk: the async protocol is signaled by print(), not exit code ----
+
+test('scenarioIsAsync reads the canonical async flag', () => {
+  assert.equal(scenarioIsAsync({ attrs: { flags: { async: true } } }), true);
+  assert.equal(scenarioIsAsync({ attrs: { flags: {} } }), false);
+  assert.equal(scenarioIsAsync({}), false);
+});
+
+test('scenarioOk fails on a nonzero exit regardless of stdout', () => {
+  assert.equal(scenarioOk(fakeCase(), 1, ''), false);
+  assert.equal(
+    scenarioOk(fakeCase(), null, 'Test262:AsyncTestComplete'),
+    false,
+  );
+});
+
+test('scenarioOk passes a clean synchronous case', () => {
+  assert.equal(scenarioOk(fakeCase(), 0, '# some TAP output\n'), true);
+});
+
+test('scenarioOk fails a clean exit that printed the async-failure marker', () => {
+  // The regression the breaker seat found: $DONE(error) prints the marker but
+  // never sets a nonzero exit, so exit-code-only logic laundered it into a pass.
+  const asyncCase = fakeCase({ flags: ['async'] });
+  assert.equal(
+    scenarioOk(asyncCase, 0, 'Test262:AsyncTestFailure:Test262Error: boom'),
+    false,
+  );
+});
+
+test('scenarioOk requires a declared-async case to signal completion', () => {
+  const asyncCase = fakeCase({ flags: ['async'] });
+  // Clean exit but no completion marker: $DONE never fired.
+  assert.equal(scenarioOk(asyncCase, 0, 'partial output, no marker'), false);
+  // Completion marker present: a real async pass.
+  assert.equal(scenarioOk(asyncCase, 0, 'Test262:AsyncTestComplete'), true);
 });
 
 // --- agentRunsScenario: the child-spawn boundary classifier ------------------

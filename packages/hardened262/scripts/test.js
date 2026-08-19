@@ -74,9 +74,16 @@ export async function* generateScenariosForTests(tests, agents, extraFlags) {
             }
             scenario.push(mode);
             scenario[0] = scenario[0].toLowerCase();
-            if (test.attrs.flags.raw && mode === 'Strict') {
+            if (
+              test.attrs.flags.raw &&
+              (mode === 'Strict' || mode === 'Module')
+            ) {
               // A raw test has no harness wrapper into which to inject the
-              // strict pragma, so it has no distinct strict scenario.
+              // strict pragma, so it has no distinct strict scenario. The module
+              // axis is skipped for the same reason: an ES module body is
+              // inherently strict, so running a raw case there would silently
+              // impose strict semantics on a case that only exists in its sloppy
+              // form rather than reporting the strict/module scenario as skip.
               // eslint-disable-next-line no-continue
               continue;
             }
