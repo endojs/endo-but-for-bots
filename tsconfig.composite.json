@@ -129,6 +129,9 @@
       "path": "packages/git/tsconfig.composite.json"
     },
     {
+      "path": "packages/git-object-store/tsconfig.composite.json"
+    },
+    {
       "path": "packages/goblin-chat/tsconfig.composite.json"
     },
     {
