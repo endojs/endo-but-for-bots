@@ -49,7 +49,7 @@ stacked backend design. Retired Genie code is
 salvage or reference material. Summary, M3 row, estimate, totals, and timeline
 are synchronized.*
 
-*Layered on 2026-08-06 and revised on 2026-08-18:
+*Layered on 2026-08-06 and revised on 2026-08-19:
 [session-sandbox-backend](session-sandbox-backend.md) to M10 as an optional
 execution backend over
 [session-execution-capabilities](session-execution-capabilities.md), retaining
@@ -57,14 +57,32 @@ one private owner and a lazy pool of exact-authority incarnations over selected
 mount grants, confined Git and a package-manager enforcement adapter,
 workload-specific broker-only networking, operation-scoped Git credential
 descriptors, bounded lifecycle and orphan cleanup, conservative restart
-outcomes, and profile-specific driver conformance. The package adapter consumes
-operation-scoped generated broker configuration and a selected mount; the
+outcomes, and profile-specific driver conformance. The package adapter is the
+runner half of the coordinator merged in
+[PR 1011](https://github.com/endojs/endo-but-for-bots/pull/1011), so it resolves
+a pinned npm, pnpm, or Yarn executable only from its rootfs profile, proves the
+requested version, and confirms complete cleanup. It now declares the native
+manager compatibility profile that a real install and a granted `pnpm run test`
+need — writable workspace and manager paths, store linking, a shell and pinned
+Node runtime, manager-owned `.bin` resolution, child processes, and a per
+operation resource envelope — while install-time lifecycle scripts stay disabled
+by default and granted test, build, or lifecycle commands use only the powers
+and envelope declared for them. Generated configuration is a compatibility
+mechanism rather than the boundary; the `package-broker-only` posture is, and
+the profile proves broker reachability plus the full public-registry, alternate
+proxy, DNS, metadata, private-network, and host-loopback denial set. The
 `@endo/npm-registry-broker` and verified package-artifact substrate remain
-injected dependencies owned by #949 and its separate substrate design. The
-design evaluates direct `EndoMount` and the adjacent #971 9P projection before
-introducing another filesystem protocol, and it does not hold the
-frozen-installer or mediated-Web milestones; summary, dependency graph, M10 row,
-estimate, totals, and timeline synced.*
+injected dependencies owned by #949 and the merged CAS substrate architecture,
+which also keeps packument synthesis, resolution, artifact identity, extraction,
+persistent CAS, materialization, and action caching. The ledger records #948,
+#954, #958, #960, #961, #962, #965, #973, #974, #1010, and #1011 as landed,
+leaves #897 and #1021 open, and holds the
+[PR 950](https://github.com/endojs/endo-but-for-bots/pull/950) projection until
+one representative end-to-end operation passes. The design evaluates direct
+`EndoMount` and the adjacent #971 9P projection before introducing another
+filesystem protocol, and it does not hold the frozen-installer or mediated-Web
+milestones; summary, dependency graph, M10 row, estimate, totals, and timeline
+synced.*
 
 *Layered on 2026-08-06: added
 [session-execution-capabilities](session-execution-capabilities.md) to M3,
@@ -94,10 +112,12 @@ totals, and timeline synced.*
 
 *Recently added or revised:
 [session-sandbox-backend](session-sandbox-backend.md) (added 2026-08-06,
-revised 2026-08-18; an optional confined backend over the durable authority
+revised 2026-08-19; an optional confined backend over the durable authority
 graph, with lazy exact-authority incarnations, compatibility and named mount
-projection, sandbox Git, a package-manager enforcement adapter that consumes
-generated broker configuration and a selected mount, broker-only profiles,
+projection, sandbox Git, a package-manager enforcement adapter that runs a
+pinned npm, pnpm, or Yarn executable as the merged #1011 coordinator's runner
+under a declared native-manager compatibility profile and resource envelope,
+broker-only profiles proven by reachability and bypass-denial probes,
 descriptor-scoped Git credentials, bounded lifecycle, conservative restart
 outcomes, and driver-specific conformance),
 [session-execution-capabilities](session-execution-capabilities.md) (added
@@ -927,7 +947,7 @@ capabilities available to agents.
 | endo-agent-tools | In Progress | `@endo/agent-tools`: method-guard tools over a confined workspace. The canonical `ToolRecord` (`makeTool`), the confinement axis plus attenuation levers, the git authority tiers (read / write / push), and capability args as camelCase petnames resolved against the guest petstore via `E(powers).lookup`, bound host-side with `storeIdentifier` / `storeValue` (no opaque handle, no bespoke registry). `Filesystem`-targeted file tools over `@endo/platform/fs/extended` read the live worktree and history through one cap; #523 reconciled the FS read tool onto the canonical `ToolRecord`. One petstore is the system of record at two granularities (per-call tool mode, per-session code mode); petname-for-caps plus SmallCaps-for-data are complementary. Wire schemas are hand-authored and pinned to the live guard by a divergence gate; #524 shipped the code-mode TypeScript declaration renderer (build-time codegen, two paths, gated against the guards). Realizes the package `endo-gateway-mcp` named; supersedes [agent-tools-mount-fs-tools](agent-tools-mount-fs-tools.md). Sibling of `@endo/agentry`'s `defineAgent` builder ([agentry-agent-builder](agentry-agent-builder.md)) |
 | agentry-agent-builder | In Progress | `@endo/agentry` `defineAgent`: the agent builder that lets someone build their own lal (dogfooded by reconstructing lal itself). Core landed in #517: a single-call `defineAgent(config)` returning a maker function (the powerless definition is the maker's closure; calling the maker with a powers handle is the powered stage), a module in #308's optimizer and eval package, keeping the exo `define*`/`make*` spirit (no separate `makeAgent(template, powers)` export). Primary interaction mode is code-mode `evaluate` over petname-bound endowments (not a multi-interface cli/sdk/web export); discrete `arg0`-style tools are kept as a distinct second mode. Code-mode result rendering uses the real SmallCaps marshaller (`@endo/marshal`), not `JSON.stringify`. #902 adds generated declarations for daemon mount, Git, and Git-remote globals; the Pi-independent `code-mode-provisioning` subpath maps plain session policy to a retained daemon guest and selects those matching declarations, with versioned non-secret reconstruction data. Shipped config is `{ model, instructions, tools, endow }`: `model` folds in the provider (profile string / `provider/modelId` / concrete pi-ai `Model`), `instructions` is the system prompt, and the credential key resolves through a `Credentials` seam (`makeEnvCredentials`) plus the `endow` hook. No `harness` abstraction (one pi loop via `@earendil-works/pi-agent-core` v0.79.0; code-mode guest code is confined in a fresh Endo Compartment per #297). #517 ships the two code-mode presets `makeCodeModeAgent` / `makeCodeModeGitLoopAgent` (`@endo/agentry/code-mode`), each wrapping `defineAgent({ model, instructions, tools: [toPiAgentTool(...)] })`. The SmallCaps renderer lives in `@endo/agent-tools/adapters/smallcaps.js`. Aspirational (not in #517): declarative tool selection plus attenuation (functions-of-cap), define-time wire-schema derivation (`Tool.parameters` plus MCP `inputSchema`), a `compaction` selector (pi-default or genie's observer/reflector pair), `prompts.steering`, a `discovery` axis, and per-harness `define(Lal\|Genie)Agent` preset bundles (fae deprioritized, keeps its own loop). Capped at the eval-vs-optimize distinction the git code-mode eval harness draws. Drives the #404 wizard's Submit (which calls the maker); wires the `Filesystem` plus Git capabilities into the #370 loop |
 | session-execution-capabilities | Proposed | Current plan for daemon-backed code-mode grants, generic to consumers with endo-pi as one strict acceptance surface. It adopts Endor's landed CAS-native module execution and owns only native package-manager operation in a development sandbox, where CAS is the verified artifact source and acceleration layer rather than a replacement manager. Portable Exo guarantees, broker-configured integration, and conformance-qualified sandbox claims are distinct. The landed/open/unposted checklist tracks Web, daemon registry adapter convergence (#1027, rename deferred), the merged #1011 coordinator, `@endo/npm-registry-broker`, `@endo/package-manager`, the held #950 projection, Git, workload brokers, durable effect reconciliation, `broker-only` sandbox work, and acceptance. `piTools: 'preserve'` is a developer escape hatch outside whole-session confinement claims. |
-| session-sandbox-backend | Proposed | Optional confined enforcement backend over the generic authority graph. One owner lazily pools exact-authority sandbox incarnations keyed by selected mount set, modes, rootfs, network posture, and policy version. Compatibility `/workspace` and named `/mnt/<name>` projections, sandbox-backed Git, and a package-manager adapter consuming operation-scoped generated broker configuration plus a selected mount are tracked with broker-only profiles, descriptor-scoped credentials, bounded lifecycle, conservative restart outcomes, and driver-specific conformance. The `@endo/npm-registry-broker` and verified package-artifact substrate are injected dependencies from #949, not owned here. |
+| session-sandbox-backend | Proposed | Optional confined enforcement backend over the generic authority graph. One owner lazily pools exact-authority sandbox incarnations keyed by selected mount set, modes, rootfs, network posture, and policy version. Compatibility `/workspace` and named `/mnt/<name>` projections, sandbox-backed Git, and a package-manager adapter that runs a pinned npm, pnpm, or Yarn executable as the merged #1011 coordinator's runner are tracked with broker-only profiles, descriptor-scoped credentials, bounded lifecycle, conservative restart outcomes, and driver-specific conformance. The adapter declares the native-manager compatibility profile and per-operation resource envelope a real install and a granted `pnpm run test` need, keeps install-time lifecycle scripts disabled by default, and proves broker reachability plus every bypass denial. The `@endo/npm-registry-broker`, verified package-artifact substrate, resolution, CAS, materialization, and action caching are injected or external dependencies from #949 and the CAS substrate architecture, not owned here; the #950 projection stays held until one end-to-end operation passes. |
 | agentry-git-verb-gaps | Proposed | Narrow local-git history-editing verb set for the agentry `stack-surgery` eval lane: `cherryPick`, `commit({ amend })`, `reword`, `rebase({ autosquash })`, and `checkoutConflict`. Depends on `daemon-git-capability`; the downstream `agentry-git-eval-scenarios` `stack-surgery` edge lands with that design's README node. |
 | agentry-git-eval-scenarios | Not Started | Small canonical git code-mode eval set for `@endo/agentry`: trim to `stage-and-commit`, `conflict-rebase`, and `stack-surgery`; rework PR #526 in place as the buildable conflict leg; rework PR #626 in place so its fixture and scorer land behind a pending live row, with live activation depending on agentry-git-verb-gaps for cherry-pick, amend, reword, autosquash, and conflict-side selection; name ReadableBlob `fetch`, `rangeRead`, and `rangeReadText` as the sed-like filesystem/blob path; retain rendered Git output bounds and remote exo propagation as follow-ups; and score outcomes by final state and authority boundary, never command sequence. |
 | ~~platform-fs~~ | **Complete** | `@endo/platform/fs` — shared types, content store, tree adapters; landed on `llm` (initial commit `e0dda06fb` + PR #122 review cycle fixups) |
@@ -1291,7 +1311,7 @@ ecosystem.
 |--------|--------|-------|
 | ~~daemon-os-sandbox-plugin~~ | Superseded | Replaced by `endo-posix-sandbox`; retained as historical proposal |
 | endo-posix-sandbox | In Progress | Phases 0-1 shipped, Phases 2 + 3 in flight on `bots-ssh/jcorbin-sandbox-paths`; Phase 4 (macOS via lima + Apple Containerization) and Phase 6 (Windows via WSL2) compose the same in-guest backend pattern |
-| session-sandbox-backend | Proposed | Optional confined enforcement backend over `session-execution-capabilities`: lazy exact-authority incarnations over selected mount grants, confined Git, and a package-manager adapter that consumes generated broker configuration and a selected mount. It verifies broker-only networking, descriptor-scoped Git credentials, bounded lifecycle, explicit backend migration, conservative restart outcomes, and profile-specific conformance. The package broker and verified artifact substrate are injected dependencies, and this design is not durable session identity or a gate on the base release. |
+| session-sandbox-backend | Proposed | Optional confined enforcement backend over `session-execution-capabilities`: lazy exact-authority incarnations over selected mount grants, confined Git, and a package-manager adapter that runs a pinned native manager as the merged #1011 coordinator's runner under a declared compatibility profile and resource envelope. It verifies broker-only networking with full bypass denial, descriptor-scoped Git credentials, bounded lifecycle, explicit backend migration, conservative restart outcomes, and profile-specific conformance, and it supports a representative install plus `pnpm run test` workflow. The package broker and verified artifact substrate are injected dependencies, and this design is not durable session identity or a gate on the base release. |
 | daemon-capability-persona | Not Started | Epithets and delegation |
 | daemon-capability-bank | Not Started | Integrates all capability categories |
 | endoclaw-browser | Not Started | Playwright-backed `Browser` exo with origin allowlist |
@@ -1635,7 +1655,7 @@ have been remapped: 0 → 1, ½ → 2, 1 → 3, 2 → 4, 3 → 7, 4 → 9,
 | namehub-interface-unification | S | 1-2 days | 9 | Introduce `ReadableNameHubInterface`; refactor `MountInterface` and inventory-component dispatch; defers mount-entry locator question |
 | ~~daemon-os-sandbox-plugin~~ | — | — | 10 | Superseded by `endo-posix-sandbox` |
 | endo-posix-sandbox | L-XL | 6-10 weeks remaining | 10 | Phases 0-1 shipped (bwrap on Linux); Phase 2 (podman) and Phase 3 (nested slices) in flight; Phases 1.5, 4, 6 ahead. Per-phase estimates pending PLAN backfill |
-| session-sandbox-backend | XL | 8-12 weeks | 10 | Optional confined enforcement backend over the generic authority graph: #954 lifecycle, versioned binding and lazy exact-authority pool, direct-mount versus #971 9P projection decision, one reference driver's broker-only profiles, narrow Git credential descriptors, sandbox Git and remotes, the package-manager adapter over operation-scoped generated broker configuration and a selected mount, mutating-effect records, and profile-specific acceptance. Additional drivers qualify independently. The package broker and verified artifact substrate remain external dependencies; this design does not hold the M3 frozen-installer or mediated-Web path. |
+| session-sandbox-backend | XL | 8-12 weeks | 10 | Optional confined enforcement backend over the generic authority graph: versioned binding and lazy exact-authority pool over merged #954 lifecycle, direct-mount versus #971 9P projection decision, one reference driver's broker-only profiles, narrow Git credential descriptors, sandbox Git and remotes, the package-manager runner over the merged #1011 coordinator with its native-manager compatibility profile and per-operation resource envelope, one representative end-to-end install plus granted-script operation, mutating-effect records, and profile-specific acceptance. Additional drivers qualify independently. The package broker and verified artifact substrate remain external dependencies; this design does not hold the M3 frozen-installer or mediated-Web path. |
 | daemon-capability-persona | S-M | 3 days | 10 | Handle extension, epithet tracking |
 | daemon-capability-bank | XL | 4-6 weeks | 10 | Integrates all capabilities (XL bumped 1.3x as conservative pending data) |
 | endoclaw-browser | M-L | 1.5 weeks | 10 | Playwright-backed, origin-confined; smallest cut in PR #106 |
