@@ -3,6 +3,12 @@ import { mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 
+import {
+  scenarioIncludes,
+  scenarioIsModule,
+  scenarioIsRaw,
+} from './scenario.js';
+
 const sesXsPreludePath = fileURLToPath(
   new URL('../../tmp/ses-xs-prelude.js', import.meta.url),
 );
@@ -11,32 +17,34 @@ const lockdownPreludePath = fileURLToPath(
   new URL('../lockdown.js', import.meta.url),
 );
 
-export const testXs = async (test, { ses, tacet }) => {
-  const temporaryLocation = new URL(`../../tmp/${test.tmp}`, import.meta.url)
-    .href;
+export const testXs = async (test, { sesShim, quiet }) => {
+  const temporaryLocation = new URL(
+    `../../tmp/${test.temporaryPath}`,
+    import.meta.url,
+  ).href;
   const temporaryFile = fileURLToPath(temporaryLocation);
   const temporaryDirectory = fileURLToPath(new URL('./', temporaryLocation));
 
   mkdirSync(temporaryDirectory, { recursive: true });
   writeFileSync(temporaryFile, test.contents);
 
-  const args = [
-    ...(test.module ? ['-m'] : []),
-    ...(test.raw
+  const childArguments = [
+    ...(scenarioIsModule(test) ? ['-m'] : []),
+    ...(scenarioIsRaw(test)
       ? []
-      : (test.includes ?? ['assert.js', 'sta.js']).map(include =>
+      : scenarioIncludes(test).map(include =>
           fileURLToPath(new URL(`../../harness/${include}`, import.meta.url)),
         )),
-    ...(ses ? [sesXsPreludePath] : []),
+    ...(sesShim ? [sesXsPreludePath] : []),
     ...(test.lockdown ? [lockdownPreludePath] : []),
     temporaryFile,
   ];
-  // console.error(`# ${['xst', ...args].join(' ')}`);
-  const child = spawn('xst', args, {
+  // console.error(`# ${['xst', ...childArguments].join(' ')}`);
+  const child = spawn('xst', childArguments, {
     stdio: [
       'ignore',
-      tacet ? 'ignore' : 'inherit',
-      tacet ? 'ignore' : 'inherit',
+      quiet ? 'ignore' : 'inherit',
+      quiet ? 'ignore' : 'inherit',
     ],
   });
   const { code, signal } = await new Promise((resolve, reject) => {

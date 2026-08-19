@@ -1,5 +1,5 @@
 import { parseArgs } from 'util';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { readFileSync } from 'fs';
 
 import TestStream from 'test262-stream';
@@ -49,14 +49,18 @@ const strictTest = test => {
   };
 };
 
-async function* generateScenariosForTests(tests, agents, extraFlags) {
+export async function* generateScenariosForTests(tests, agents, extraFlags) {
   for await (const test of tests) {
     const { attrs } = test;
     const { flags } = attrs;
-    // promote these ad-hoc conventions so they are observed by the only/no
-    // filters.
+    // Promote the ad-hoc `module` convention to the `only` filter so a
+    // module-flagged case is restricted to the module scenario. `onlyStrict` is
+    // already a canonical test262 flag `test262-stream` parses directly from the
+    // front-matter (there is no `flags.strict`), so it is left untouched — the
+    // earlier `flags.onlyStrict = flags.strict` clobbered the real value with
+    // `undefined` and silently defeated the strict-only filter on every case
+    // that declared it.
     flags.onlyModule = flags.module;
-    flags.onlyStrict = flags.strict;
     for (const agent of agents) {
       for (const mode of ['Sloppy', 'Strict', 'Module']) {
         for (const lockdown of [false, true]) {
@@ -97,7 +101,7 @@ async function* generateScenariosForTests(tests, agents, extraFlags) {
                 lockdown,
                 lockdownCompartment: lockdown && compartment,
               },
-              tmp: [
+              temporaryPath: [
                 agent,
                 mode.toLowerCase(),
                 ...(compartment ? ['compartment'] : []),
@@ -112,7 +116,7 @@ async function* generateScenariosForTests(tests, agents, extraFlags) {
   }
 }
 
-async function* filterNoRules(tests) {
+export async function* filterNoRules(tests) {
   for await (const test of tests) {
     const { attrs, qualifiers } = test;
     const { flags } = attrs;
@@ -132,7 +136,7 @@ async function* filterNoRules(tests) {
   }
 }
 
-async function* filterOnlyRules(tests) {
+export async function* filterOnlyRules(tests) {
   for await (const test of tests) {
     const { attrs, qualifiers } = test;
     const { flags } = attrs;
@@ -152,7 +156,7 @@ async function* filterOnlyRules(tests) {
   }
 }
 
-const scenariosForTests = (tests, agents, conditions) => {
+export const scenariosForTests = (tests, agents, conditions) => {
   tests = generateScenariosForTests(tests, agents, conditions);
   tests = filterNoRules(tests);
   tests = filterOnlyRules(tests);
@@ -195,7 +199,7 @@ const compactEnd = test => {
 const agentRunsScenario = scenario =>
   scenario === 'module' || scenario === 'lockdownModule';
 
-async function* runTests({ tacet, begin }, tests) {
+async function* runTests({ quiet, begin }, tests) {
   for await (const test of tests) {
     const { agent, scenario } = test;
     begin(test);
@@ -205,14 +209,14 @@ async function* runTests({ tacet, begin }, tests) {
       // cases stay visible.
       yield { ...test, skipped: true };
     } else if (agent === 'xs') {
-      yield await testXs(test, { ses: false, tacet });
+      yield await testXs(test, { sesShim: false, quiet });
     } else if (agent === 'sesXs') {
-      yield await testXs(test, { ses: true, tacet });
+      yield await testXs(test, { sesShim: true, quiet });
     } else if (agent === 'sesNode') {
       if (scenario === 'lockdownModule') {
-        yield await testSesNodeLockdownModule(test, { tacet });
+        yield await testSesNodeLockdownModule(test, { quiet });
       } else {
-        yield await testSesNodeModule(test, { tacet });
+        yield await testSesNodeModule(test, { quiet });
       }
     } else {
       yield { ...test, skipped: true };
@@ -267,13 +271,23 @@ const main = async () => {
   } else {
     const begin = compactReport ? Function.prototype : verboseBegin;
     const end = compactReport ? compactEnd : terseEnd;
-    for await (const test of runTests({ tacet: compactReport, begin }, tests)) {
+    for await (const test of runTests({ quiet: compactReport, begin }, tests)) {
       end(test);
     }
   }
 };
 
-main().catch(err => {
-  console.error('Error running main:', err);
-  process.exitCode = 1;
-});
+// Only drive the harness when run as a script (`node scripts/test.js`); when
+// imported (by the golden test that pins the scenario/filter contract) the
+// exports above are all a consumer needs and `main` must not parse argv or run.
+const invokedPath = process.argv[1];
+const isMain =
+  invokedPath !== undefined &&
+  fileURLToPath(import.meta.url) === fileURLToPath(pathToFileURL(invokedPath));
+
+if (isMain) {
+  main().catch(err => {
+    console.error('Error running main:', err);
+    process.exitCode = 1;
+  });
+}

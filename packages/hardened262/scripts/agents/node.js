@@ -1,27 +1,29 @@
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 
-export const testSesNodeModule = (test, { tacet }) =>
-  testNode(test, { tacet, lockdownFlag: 'no-lockdown' });
-export const testSesNodeLockdownModule = (test, { tacet }) =>
-  testNode(test, { tacet, lockdownFlag: 'lockdown' });
+import { scenarioIncludes } from './scenario.js';
 
-const testNode = async (test, { tacet, lockdownFlag }) => {
+export const testSesNodeModule = (test, { quiet }) =>
+  testNode(test, { quiet, lockdownFlag: 'no-lockdown' });
+export const testSesNodeLockdownModule = (test, { quiet }) =>
+  testNode(test, { quiet, lockdownFlag: 'lockdown' });
+
+const testNode = async (test, { quiet, lockdownFlag }) => {
   const runPath = fileURLToPath(new URL('../node-helper.js', import.meta.url));
-  const args = [
+  const childArguments = [
     runPath,
     test.file,
     lockdownFlag,
-    ...(test.attrs.includes ?? ['assert.js', 'sta.js']).map(include =>
+    ...scenarioIncludes(test).map(include =>
       fileURLToPath(new URL(`../../harness/${include}`, import.meta.url)),
     ),
   ];
-  // console.error(`# node ${args.join(' ')}`);
-  const child = spawn('node', args, {
+  // console.error(`# node ${childArguments.join(' ')}`);
+  const child = spawn('node', childArguments, {
     stdio: [
       'ignore',
-      tacet ? 'ignore' : 'inherit',
-      tacet ? 'ignore' : 'inherit',
+      quiet ? 'ignore' : 'inherit',
+      quiet ? 'ignore' : 'inherit',
     ],
   });
   const { code, signal } = await new Promise((resolve, reject) => {
