@@ -12,7 +12,12 @@ import {
   scenarioIsModule,
   scenarioIsRaw,
 } from './agents/scenario.js';
-import { generateScenariosForTests, filterOnlyRules } from './test.js';
+import {
+  generateScenariosForTests,
+  filterOnlyRules,
+  filterNoRules,
+  agentRunsScenario,
+} from './test.js';
 
 /**
  * Build a test262-stream-shaped case. `test262-stream` normalizes `flags` to a
@@ -114,7 +119,11 @@ test('a module-flagged case is promoted to onlyModule', async () => {
   assert.equal(scenario.attrs.flags.onlyModule, true);
 });
 
-test('filterOnlyRules keeps an onlyStrict case only in the strict mode', async () => {
+test('filterOnlyRules keeps an onlyStrict case in the strict and module modes only', async () => {
+  // An ES-module body is strict, so `module` satisfies `onlyStrict`; without
+  // that alias every onlyStrict case (55 of the 89 ported, incl. the harden
+  // cases) would be generated only into scenario names no agent runs and be
+  // reported `skip` indistinguishably from the deliberate backlog.
   const generated = generateScenariosForTests(
     asyncIterable([fakeCase({ flags: ['onlyStrict'] })]),
     ['sesNode'],
@@ -122,7 +131,76 @@ test('filterOnlyRules keeps an onlyStrict case only in the strict mode', async (
   );
   const kept = await collect(filterOnlyRules(generated));
   assert.ok(kept.length > 0);
+  const modes = new Set(kept.map(scenario => scenario.mode));
+  assert.deepEqual([...modes].sort(), ['module', 'strict']);
   for (const scenario of kept) {
-    assert.equal(scenario.mode, 'strict');
+    assert.notEqual(scenario.mode, 'sloppy');
   }
+});
+
+// --- filterNoRules: the parallel-but-differently-cased twin of filterOnlyRules
+
+test('filterNoRules drops a noStrict case from the strict and module modes', async () => {
+  // Symmetric to onlyStrict: because `module` is strict, a `noStrict` case must
+  // be excluded from BOTH the strict and module scenarios and retained only in
+  // sloppy — the exact asymmetry class the fixed onlyStrict drift came from.
+  const generated = generateScenariosForTests(
+    asyncIterable([fakeCase({ flags: ['noStrict'] })]),
+    ['sesNode'],
+    {},
+  );
+  const kept = await collect(filterNoRules(generated));
+  assert.ok(kept.length > 0);
+  for (const scenario of kept) {
+    assert.equal(scenario.mode, 'sloppy');
+  }
+});
+
+test('filterNoRules retains a case that trips no `no*` rule', async () => {
+  // The sesNode agent never trips a `noSesXs` rule, so every generated scenario
+  // survives the filter unchanged.
+  const generated = await collect(
+    generateScenariosForTests(
+      asyncIterable([fakeCase({ flags: ['noSesXs'] })]),
+      ['sesNode'],
+      {},
+    ),
+  );
+  const kept = await collect(filterNoRules(asyncIterable(generated)));
+  assert.equal(kept.length, generated.length);
+  assert.ok(kept.length > 0);
+});
+
+// --- raw + Strict: a raw case has no wrapper for a strict pragma -------------
+
+test('a raw case yields no strict-mode scenario', async () => {
+  // A raw test262 case carries no harness wrapper into which to inject the
+  // `"use strict";` pragma, so `generateScenariosForTests` skips its strict
+  // scenarios entirely (test.js). Pin that documented contract.
+  const scenarios = await collect(
+    generateScenariosForTests(
+      asyncIterable([fakeCase({ flags: ['raw'] })]),
+      ['sesNode'],
+      {},
+    ),
+  );
+  assert.ok(scenarios.length > 0);
+  for (const scenario of scenarios) {
+    assert.notEqual(scenario.mode, 'strict');
+  }
+});
+
+// --- agentRunsScenario: the child-spawn boundary classifier ------------------
+
+test('agentRunsScenario wires exactly module and lockdownModule today', () => {
+  assert.equal(agentRunsScenario('module'), true);
+  assert.equal(agentRunsScenario('lockdownModule'), true);
+  // Everything else — the sloppy/strict modes and the whole compartment axis —
+  // is generated and enumerated by `--list` but not yet wired to an agent; pin
+  // that so an accidental future widening of the wired set is caught.
+  assert.equal(agentRunsScenario('sloppy'), false);
+  assert.equal(agentRunsScenario('strict'), false);
+  assert.equal(agentRunsScenario('lockdownStrict'), false);
+  assert.equal(agentRunsScenario('compartmentModule'), false);
+  assert.equal(agentRunsScenario('lockdownCompartmentModule'), false);
 });

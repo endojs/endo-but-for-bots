@@ -97,6 +97,15 @@ export async function* generateScenariosForTests(tests, agents, extraFlags) {
               qualifiers: {
                 [agent]: true,
                 [mode.toLowerCase()]: true,
+                // An ES-module body is strict regardless of a pragma, so the
+                // `module` mode SATISFIES `onlyStrict` (and, symmetrically, a
+                // `noStrict` case must not run there). Without this alias an
+                // `onlyStrict` case is generated only into `strict`/`lockdownStrict`
+                // scenario names no agent runs today, so it is reported `skip`
+                // indistinguishably from the deliberate backlog — stranding 55 of
+                // the 89 ported cases (including the harden vs. native cases this
+                // package most exists to pin) as structurally inert.
+                strict: mode === 'Strict' || mode === 'Module',
                 compartment,
                 lockdown,
                 lockdownCompartment: lockdown && compartment,
@@ -196,7 +205,7 @@ const compactEnd = test => {
 // currently drives only the `module` and `lockdownModule` scenarios; the
 // remaining sloppy/strict modes and the whole compartment axis are generated
 // (and enumerated by `--list`) but not yet wired to any agent.
-const agentRunsScenario = scenario =>
+export const agentRunsScenario = scenario =>
   scenario === 'module' || scenario === 'lockdownModule';
 
 async function* runTests({ quiet, begin }, tests) {
@@ -286,8 +295,8 @@ const isMain =
   fileURLToPath(import.meta.url) === fileURLToPath(pathToFileURL(invokedPath));
 
 if (isMain) {
-  main().catch(err => {
-    console.error('Error running main:', err);
+  main().catch(error => {
+    console.error('Error running main:', error);
     process.exitCode = 1;
   });
 }
