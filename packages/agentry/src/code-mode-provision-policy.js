@@ -1,7 +1,7 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { EndoProvisionPersistence, EndoProvisionPolicy, EndoProvisionSpec, GitGrant, MountGrant, NormalizeEndoProvisionOptions, NormalizedGitGrant, NormalizedGitRemoteSpec, NormalizedMountGrant } from './code-mode-provisioning-types.js' */
+/** @import { EndoProvisionGrantSpec, EndoProvisionPersistence, EndoProvisionPolicy, EndoProvisionSpec, GitGrant, MountGrant, NormalizeEndoProvisionOptions, NormalizedGitGrant, NormalizedGitRemoteSpec, NormalizedMountGrant } from './code-mode-provisioning-types.js' */
 
 import { defaultDeniedSegments } from '@endo/daemon/src/mount.js';
 import { isPetName } from '@endo/daemon/pet-name.js';
@@ -19,11 +19,13 @@ const ROOT_FIELDS = harden([
   'mounts',
   'gits',
   'gitRemotes',
+  'grants',
   'piTools',
 ]);
 const WORKSPACE_FIELDS = harden(['path', 'deniedSegments']);
 const MOUNT_FIELDS = harden(['path', 'mode', 'deniedSegments']);
 const GIT_FIELDS = harden(['mount', 'path', 'mode']);
+const GRANT_FIELDS = harden(['from', 'description']);
 const NORMALIZED_MOUNT_FIELDS = harden([
   'root',
   'mode',
@@ -305,6 +307,36 @@ const assertMountReferenceName = (name, label) => {
   if (name !== 'workspace') {
     assertBindingName(name, label);
   }
+};
+
+/**
+ * @param {unknown} value
+ * @param {string} name
+ * @returns {EndoProvisionGrantSpec}
+ */
+const normalizeGrant = (value, name) => {
+  assertBindingName(name, `Grant name ${name}`);
+  const grant = requirePlainRecord(value, `grants.${name}`);
+  assertKnownFields(grant, GRANT_FIELDS, `grants.${name}`);
+  const from = requireStringArray(grant.from, `grants.${name}.from`);
+  if (from.length === 0 || !from.every(isPetName)) {
+    throw makeError(
+      X`grants.${q(name)}.from must be a non-empty host pet-name path`,
+    );
+  }
+  const description =
+    grant.description === undefined
+      ? undefined
+      : requireString(grant.description, `grants.${name}.description`);
+  if (description !== undefined && /\x60{3,}/u.test(description)) {
+    throw makeError(
+      X`grants.${q(name)}.description must not contain a run of three or more backticks because it would break the TypeScript prompt fence`,
+    );
+  }
+  return harden({
+    from: harden([...from]),
+    ...(description === undefined ? {} : { description }),
+  });
 };
 
 /**
@@ -722,6 +754,24 @@ const normalizePolicy = async (spec, cwd, pinnedGitRoots = undefined) => {
     )
   );
 
+  const grantsRecord =
+    root.grants === undefined
+      ? undefined
+      : requirePlainRecord(root.grants, 'EndoProvisionSpec.grants');
+  const grants = /** @type {Record<string, EndoProvisionGrantSpec>} */ (
+    Object.fromEntries(
+      Object.keys(grantsRecord ?? {})
+        .sort()
+        .map(name => [
+          name,
+          normalizeGrant(
+            /** @type {Record<string, unknown>} */ (grantsRecord)[name],
+            name,
+          ),
+        ]),
+    )
+  );
+
   const allNames = new Map();
   for (const name of Object.keys(mounts)) {
     allNames.set(name, 'mount');
@@ -742,6 +792,19 @@ const normalizePolicy = async (spec, cwd, pinnedGitRoots = undefined) => {
     }
     allNames.set(name, 'remote');
   }
+  for (const name of Object.keys(grants)) {
+    if (allNames.has(name)) {
+      if (Object.hasOwn(gitRemotes, name)) {
+        throw makeError(
+          X`Grant name ${q(name)} conflicts with a provisioned Git remote binding`,
+        );
+      }
+      throw makeError(
+        X`Grant name ${q(name)} conflicts with another provisioned binding`,
+      );
+    }
+    allNames.set(name, 'grant');
+  }
 
   /** @type {EndoProvisionPolicy} */
   const policy = harden({
@@ -759,6 +822,7 @@ const normalizePolicy = async (spec, cwd, pinnedGitRoots = undefined) => {
     ...(Object.keys(gitRemotes).length === 0
       ? {}
       : { gitRemotes: harden(gitRemotes) }),
+    ...(Object.keys(grants).length === 0 ? {} : { grants: harden(grants) }),
   });
   return harden({ workspacePath, policy });
 };
@@ -792,6 +856,84 @@ export const normalizeEndoProvisionSpec = async (spec, options) => {
   });
 };
 harden(normalizeEndoProvisionSpec);
+
+/**
+ * Project persistence into the part that selects runtime capability
+ * authority.
+ *
+ * Descriptions are deliberately omitted here. They are prompt context, not
+ * capability selectors; a grant's binding name and host-side `from` path are
+ * the authority-bearing parts of its policy.
+ *
+ * @param {EndoProvisionPersistence} persistence
+ * @returns {{ workspacePath: string, policy: EndoProvisionPolicy }}
+ */
+export const projectEndoProvisionRuntimeAuthority = persistence => {
+  const { policy } = persistence;
+  const gits =
+    policy.gits === undefined
+      ? undefined
+      : harden(
+          Object.fromEntries(
+            Object.entries(policy.gits).map(([name, grant]) => [
+              name,
+              harden({ ...grant, path: [] }),
+            ]),
+          ),
+        );
+  const grants =
+    policy.grants === undefined
+      ? undefined
+      : harden(
+          Object.fromEntries(
+            Object.entries(policy.grants).map(([name, grant]) => [
+              name,
+              harden({ from: harden([...grant.from]) }),
+            ]),
+          ),
+        );
+  return harden({
+    workspacePath: persistence.workspacePath,
+    policy: harden({
+      ...policy,
+      ...(gits === undefined ? {} : { gits }),
+      ...(grants === undefined ? {} : { grants }),
+    }),
+  });
+};
+harden(projectEndoProvisionRuntimeAuthority);
+
+/**
+ * Project persistence into deterministic prompt/session context.
+ *
+ * Caller-supplied descriptions remain supplemental annotations. A future
+ * trusted descriptor registry selects any TypeScript declaration separately;
+ * this projection must never turn a description into a declaration.
+ *
+ * @param {EndoProvisionPersistence} persistence
+ * @returns {{ piTools?: 'preserve', grants?: Record<string, { description?: string }> }}
+ */
+export const projectEndoProvisionContext = persistence => {
+  const { policy } = persistence;
+  const grants =
+    policy.grants === undefined
+      ? undefined
+      : harden(
+          Object.fromEntries(
+            Object.entries(policy.grants).map(([name, grant]) => [
+              name,
+              grant.description === undefined
+                ? harden({})
+                : harden({ description: grant.description }),
+            ]),
+          ),
+        );
+  return harden({
+    ...(policy.piTools === undefined ? {} : { piTools: policy.piTools }),
+    ...(grants === undefined ? {} : { grants }),
+  });
+};
+harden(projectEndoProvisionContext);
 
 /**
  * Validate and re-normalize caller-held persistence before reconstruction.
@@ -841,7 +983,7 @@ export const validateEndoProvisionPersistence = async value => {
   );
   assertKnownFields(
     policyRecord,
-    harden(['mounts', 'gits', 'gitRemotes', 'piTools']),
+    harden(['mounts', 'gits', 'gitRemotes', 'grants', 'piTools']),
     'Endo provision persistence.policy',
   );
   const persistedMounts = requirePlainRecord(
@@ -854,6 +996,14 @@ export const validateEndoProvisionPersistence = async value => {
       : requirePlainRecord(
           policyRecord.gits,
           'Endo provision persistence.policy.gits',
+        );
+
+  const persistedGrants =
+    policyRecord.grants === undefined
+      ? undefined
+      : requirePlainRecord(
+          policyRecord.grants,
+          'Endo provision persistence.policy.grants',
         );
 
   /** @type {Record<string, MountGrant>} */
@@ -979,6 +1129,7 @@ export const validateEndoProvisionPersistence = async value => {
     ...(policyRecord.gitRemotes === undefined
       ? {}
       : { gitRemotes: policyRecord.gitRemotes }),
+    ...(persistedGrants === undefined ? {} : { grants: persistedGrants }),
   });
   const normalized = await normalizePolicy(
     /** @type {EndoProvisionSpec} */ (reconstructedSpec),

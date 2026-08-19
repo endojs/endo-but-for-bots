@@ -212,6 +212,9 @@ The `EndoProvisionSpec` fields are optional grants:
   with a `'readOnly'` or `'readWrite'` mode;
 - `gits`: named Git grants, each `{ mount?, path, mode }` selecting a non-bare
   Git worktree by mount-relative path segments; and
+- `grants`: named host pet-name paths, each `{ from, description? }`, bound as
+  opaque code-mode capabilities whose declarations are minted by the trusted
+  provisioning path; and
 - `gitRemotes`: remote policies normalized by `@endo/exo-git`, plus an optional
   host-side credential pet name.
 
@@ -342,6 +345,39 @@ endo-pi --endo-provision='{"git":"historyRewrite"}'
 # Keep Pi's standard tools active alongside evaluate.
 endo-pi --endo-provision='{"piTools":"preserve","fs":"readOnly"}'
 ```
+
+Named grants resolve host pet-name paths once during initial provisioning and
+retain the resulting formula identifiers across restart.
+Their optional descriptions are prompt context only, and runs of three or more
+backticks are rejected so caller text cannot escape the generated TypeScript
+fence.
+
+```sh
+# Combine workspace, filesystem, Git, and a named host capability.
+# First name the capability in the host's pet store, nested under a directory:
+endo mkdir tools
+endo make packages/cli/demo/counter.js --name tools/counter
+
+endo-pi --endo-provision='{
+  "fs": "readWrite",
+  "git": "readWrite",
+  "grants": {
+    "counter": {
+      "from": ["tools", "counter"],
+      "description": "A counter, incremented with E(counter).incr()"
+    }
+  }
+}'
+```
+
+In this example, the counter name is the guest lexical binding and
+["tools","counter"] is a pet-name path in the connected host namespace.
+The JSON is policy data only; it does not execute code or grant the guest a way
+to look up other host names.
+
+Descriptions are prompt context only.
+They are rendered as one-line comments on opaque declarations; trusted
+TypeScript declarations are selected by the minter, never supplied by policy.
 
 Named mounts and Git grants use the same JSON spec.
 Run from the parent directory of sibling checkouts, this grants a read-only

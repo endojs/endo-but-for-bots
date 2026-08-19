@@ -50,6 +50,20 @@ export type NormalizedGitGrant = {
   mode: 'readOnly' | 'readWrite' | 'historyRewrite';
 };
 
+export type EndoProvisionGrantSpec = {
+  /** Host-side pet-name path resolved when the session is first provisioned. */
+  from: string[];
+  /**
+   * Optional supplemental prompt context; it is neither runtime authority nor
+   * a method declaration.
+   *
+   * A future trusted descriptor registry selects TypeScript declarations
+   * independently. This caller text must never supply, replace, or override
+   * those declarations.
+   */
+  description?: string;
+};
+
 export type EndoProvisionSpec = {
   /** Keep Pi's standard tools active alongside the Endo evaluate tool. */
   piTools?: 'preserve';
@@ -62,6 +76,8 @@ export type EndoProvisionSpec = {
   mounts?: { [name: string]: MountGrant };
   gits?: { [name: string]: GitGrant };
   gitRemotes?: { [name: string]: GitRemoteSpec };
+  /** Named capabilities to bind into the confined guest's lexical scope. */
+  grants?: { [name: string]: EndoProvisionGrantSpec };
 };
 
 export type NormalizedGitRemoteSpec = NormalizedRemotePolicy & {
@@ -76,6 +92,8 @@ export type EndoProvisionPolicy = {
   /** Every Git grant names its selected mount explicitly. */
   gits?: { [name: string]: NormalizedGitGrant };
   gitRemotes?: { [name: string]: NormalizedGitRemoteSpec };
+  /** Named capabilities to bind into the confined guest's lexical scope. */
+  grants?: { [name: string]: EndoProvisionGrantSpec };
 };
 
 /**
@@ -89,6 +107,15 @@ export type EndoProvisionPersistence = {
   guestHandlePath: string[];
   workspacePath: string;
   policy: EndoProvisionPolicy;
+};
+
+/**
+ * Optional parent retained session used only while creating a Pi fork.
+ * The host validates this inert record and copies formula identifiers from its
+ * retained controller aliases; it never gives the guest host lookup access.
+ */
+export type EndoProvisionForkOptions = {
+  forkFrom?: EndoProvisionPersistence;
 };
 
 export type NormalizeEndoProvisionOptions = {
@@ -126,9 +153,10 @@ export type ProvisionEndoCodeModeOptions = NormalizeEndoProvisionOptions &
     spec?: EndoProvisionSpec;
   };
 
-export type ReconstructEndoCodeModeOptions = EndoCodeModeConnectionOptions & {
-  persistence: EndoProvisionPersistence;
-};
+export type ReconstructEndoCodeModeOptions = EndoCodeModeConnectionOptions &
+  EndoProvisionForkOptions & {
+    persistence: EndoProvisionPersistence;
+  };
 
 export type EndoProvisionResult = {
   /** Retained guest used as the live daemon-evaluation powers handle. */
