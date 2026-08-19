@@ -5,7 +5,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
-/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, SandboxDeferredTaskParams, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 
 import { E } from '@endo/eventual-send';
@@ -50,6 +50,7 @@ import {
 } from './interfaces.js';
 import { hostHelp, makeHelp } from './help-text.js';
 import { assertValidTreeEntryName, getMountBacking } from './mount.js';
+import { normalizeSandboxProfile } from './sandbox.js';
 
 /**
  * @param {string} name
@@ -311,6 +312,11 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['formulateSubMount']} args.formulateSubMount
  * @param {DaemonCore['formulateGit']} args.formulateGit
  * @param {DaemonCore['formulateShell']} args.formulateShell
+ * @param {DaemonCore['formulateSandbox']} args.formulateSandbox
+ * @param {() => import('./types.js').SandboxEscalationRecord[]} [args.listSandboxEscalations]
+ *   The daemon's sandbox escalation ledger, surfaced through the
+ *   diagnostics facet.  An embedder that does not wire it sees an empty
+ *   ledger rather than a hard error, matching `listRetentionPaths`.
  * @param {DaemonCore['formulateHttpClient']} args.formulateHttpClient
  * @param {(client: unknown) => unknown} args.getHttpClientControlForClient
  *   Host-private resolver from a daemon-minted `HttpClient` cap to its
@@ -363,6 +369,8 @@ export const makeHostMaker = ({
   formulateSubMount,
   formulateGit,
   formulateShell,
+  formulateSandbox,
+  listSandboxEscalations = () => harden([]),
   formulateHttpClient,
   getHttpClientControlForClient,
   formulateGitCredential,
@@ -920,6 +928,64 @@ export const makeHostMaker = ({
       );
 
       const { value } = await formulateShell(mountId, normalizedPolicy, tasks);
+      return value;
+    };
+
+    /** @type {EndoHost['provideSandbox']} */
+    const provideSandbox = async (petName, profile) => {
+      const { namePath } = petNamePathFrom(petName);
+
+      // Resolve every granted mount cap to the formula identifier the
+      // profile persists, and refuse a grant the mount itself cannot
+      // support.  Both checks run before a formula exists: an
+      // unresolvable cap or a writable bind over a read-only mount is a
+      // caller error, not a slice that fails on every incarnation.
+      /** @type {Map<unknown, 'ro' | 'rw'>} */
+      const requestedModes = new Map();
+      for (const mount of /** @type {any[]} */ (profile?.mounts ?? [])) {
+        if (mount && typeof mount === 'object') {
+          requestedModes.set(mount.cap, mount.mode ?? 'ro');
+        }
+      }
+      /**
+       * @param {unknown} cap
+       * @param {string} label
+       * @returns {FormulaIdentifier}
+       */
+      const resolveMountId = (cap, label) => {
+        const mountId = getIdForRef(cap);
+        if (mountId === undefined) {
+          throw makeError(
+            X`provideSandbox: ${q(label)} must be a daemon-minted mount cap`,
+          );
+        }
+        // A slice binds a mount into a kernel namespace, where the
+        // mount's own read-only attenuation no longer applies: a
+        // writable bind over a read-only mount would hand out authority
+        // the mount denies.  Same rationale as `provideShell`'s
+        // read-only rejection.
+        if (requestedModes.get(cap) === 'rw') {
+          const backing = getMountBacking(cap);
+          if (backing !== undefined && backing.readOnly) {
+            throw makeError(
+              X`provideSandbox: ${q(label)} is a read-only mount and cannot be bound read-write`,
+            );
+          }
+        }
+        return /** @type {FormulaIdentifier} */ (mountId);
+      };
+
+      const normalizedProfile = normalizeSandboxProfile(profile, {
+        resolveMountId,
+      });
+
+      /** @type {DeferredTasks<SandboxDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        E(directory).storeIdentifier(namePath, identifiers.sandboxId),
+      );
+
+      const { value } = await formulateSandbox(normalizedProfile, tasks);
       return value;
     };
 
@@ -2497,10 +2563,12 @@ export const makeHostMaker = ({
           DiagnosticsInterface,
           /** @type {any} */ ({
             help: () =>
-              'Privileged read-only diagnostics. Use getFormula(id) for a formula record, getFormulaGraph() for the dependency graph reachable from this agent, and traces() for the error-trace aggregator.',
+              'Privileged read-only diagnostics. Use getFormula(id) for a formula record, getFormulaGraph() for the dependency graph reachable from this agent, traces() for the error-trace aggregator, and listSandboxEscalations() for the sandbox escalation ledger.',
             getFormula,
             getFormulaGraph,
             traces,
+            listSandboxEscalations: async () =>
+              harden(listSandboxEscalations()),
           }),
         )
       );
@@ -2562,6 +2630,7 @@ export const makeHostMaker = ({
       provideSubMount,
       provideGit,
       provideShell,
+      provideSandbox,
       provideHttpClient,
       getHttpClientControl,
       provideGitRemote,

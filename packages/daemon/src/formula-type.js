@@ -36,6 +36,7 @@ const formulaTypes = new Set([
   'readable-tree',
   'registry',
   'resolver',
+  'sandbox',
   'scratch-mount',
   'shell',
   'timer',

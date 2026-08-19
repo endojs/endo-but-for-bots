@@ -4,10 +4,11 @@
  * Host tool powers: the capabilities the daemon core needs that are
  * implemented by spawning an operating-system process.
  *
- * `@endo/git` shells out to `git` and `@endo/host-spawner` spawns
- * arbitrary commands, so both statically import `node:child_process`
- * (and, for git, eight more `node:` builtins).  A static import of
- * either from `manager.js` keeps the daemon out of the XS bundle,
+ * `@endo/git` shells out to `git`, `@endo/host-spawner` spawns
+ * arbitrary commands, and `@endo/sandbox` / `@endo/9p-server` spawn
+ * `bwrap` / `podman` / `mount`, so all four statically import
+ * `node:child_process` (and, for git, eight more `node:` builtins).  A
+ * static import of any of them from `manager.js` keeps the daemon out of the XS bundle,
  * which has no host process to spawn into and no `node:` builtins to
  * resolve.  They are therefore injected through `DaemonicPowers`
  * rather than imported by the daemon core, the same way
@@ -32,7 +33,7 @@ import { makeError, X, q } from '@endo/errors';
  */
 const refuse = name => {
   throw makeError(
-    X`This supervisor supplied no host tool powers, so ${q(name)} is unavailable; formulas that spawn host processes (git, shell) are not supported here`,
+    X`This supervisor supplied no host tool powers, so ${q(name)} is unavailable; formulas that spawn host processes (git, shell, sandbox) are not supported here`,
   );
 };
 
@@ -52,5 +53,9 @@ export const provideHostToolPowers = (hostTools = {}) =>
       hostTools.makeNativeGitBackend ?? (() => refuse('makeNativeGitBackend')),
     makeHostSpawner:
       hostTools.makeHostSpawner ?? (() => refuse('makeHostSpawner')),
+    makeSandboxFactory:
+      hostTools.makeSandboxFactory ?? (() => refuse('makeSandboxFactory')),
+    makeMountProjector:
+      hostTools.makeMountProjector ?? (() => refuse('makeMountProjector')),
   });
 harden(provideHostToolPowers);

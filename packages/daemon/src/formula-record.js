@@ -259,6 +259,40 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
       properties.readOnly = { kind: 'literal', value: formula.readOnly };
       break;
     }
+    case 'sandbox': {
+      // The escalation is the point of the record: an inspector looking
+      // at a slice should see why it exists and what it was granted
+      // without reading the daemon's log. The mounts are references so
+      // the inspector can walk to them.
+      properties.escalationReason = {
+        kind: 'literal',
+        value: formula.profile.escalation.reason,
+      };
+      properties.escalationCapability = {
+        kind: 'literal',
+        value: formula.profile.escalation.capability,
+      };
+      properties.backend = { kind: 'literal', value: formula.profile.backend };
+      properties.network = { kind: 'literal', value: formula.profile.network };
+      if (formula.profile.rootfs.kind === 'mount') {
+        properties.rootfs = {
+          kind: 'reference',
+          identifier: formula.profile.rootfs.mountId,
+        };
+      } else {
+        properties.rootfs = {
+          kind: 'literal',
+          value: formula.profile.rootfs.kind,
+        };
+      }
+      /** @type {Record<string, FormulaIdentifier>} */
+      const sandboxMounts = {};
+      for (const mount of formula.profile.mounts) {
+        sandboxMounts[mount.innerPath] = mount.mountId;
+      }
+      properties.mounts = { kind: 'reference-list', entries: sandboxMounts };
+      break;
+    }
     case 'http-client': {
       // Surface the formula-owned policy bounds (allowlist and limits) as
       // literals for inspector auditability. The `fetch`/`now` seams are

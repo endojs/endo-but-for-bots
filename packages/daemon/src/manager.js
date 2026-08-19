@@ -52,6 +52,7 @@ import { makeGuestMaker } from './guest.js';
 import { makeChannelMaker } from './channel.js';
 import { makeHostMaker } from './host.js';
 import { provideHostToolPowers } from './host-tool-powers.js';
+import { makeSandboxEscalationLog, makeSandboxSlice } from './sandbox.js';
 import { makeRemoteControlProvider } from './remote-control.js';
 import {
   assertName,
@@ -489,12 +490,21 @@ const makeDaemonCore = async (
     hostTools,
   } = powers;
   const { randomHex256, generateEd25519Keypair } = cryptoPowers;
-  // `git` and `shell` formulas spawn host processes.  The supervisor
-  // injects the implementations rather than the daemon core importing
-  // them, so the core stays free of `node:` builtins; a supervisor that
-  // cannot spawn gets stand-ins that refuse.
-  const { gitClone, makeNativeGitBackend, makeHostSpawner } =
-    provideHostToolPowers(hostTools);
+  // `git`, `shell`, and `sandbox` formulas spawn host processes.  The
+  // supervisor injects the implementations rather than the daemon core
+  // importing them, so the core stays free of `node:` builtins; a
+  // supervisor that cannot spawn gets stand-ins that refuse.
+  const {
+    gitClone,
+    makeNativeGitBackend,
+    makeHostSpawner,
+    makeSandboxFactory,
+    makeMountProjector,
+  } = provideHostToolPowers(hostTools);
+  // One slice mint per record, plus one line on stderr.  Held by the
+  // daemon core (not the formula) so a restart's re-mints and a
+  // cancelled slice's original mint both land in the same ledger.
+  const sandboxEscalations = makeSandboxEscalationLog();
   const contentStore = persistencePowers.makeContentStore();
   /** @type {WeakMap<object, ERef<WorkerDaemonFacet>>} */
   const workerDaemonFacets = new WeakMap();
@@ -834,6 +844,19 @@ const makeDaemonCore = async (
         return [['mount', formula.mountId]];
       case 'shell':
         return [['mount', formula.mountId]];
+      case 'sandbox': {
+        // Every mount the slice binds — including a rootfs mount — keeps
+        // the slice alive and dies with it.
+        /** @type {Array<[string, FormulaIdentifier]>} */
+        const deps = [];
+        if (formula.profile.rootfs.kind === 'mount') {
+          deps.push(['rootfs', formula.profile.rootfs.mountId]);
+        }
+        for (const [index, mount] of formula.profile.mounts.entries()) {
+          deps.push([`mount${index}`, mount.mountId]);
+        }
+        return deps;
+      }
       case 'http-client':
         // The HTTP client is rooted in a host-owned `fetch` seam, not a mount
         // or any other daemon-minted capability, so it has no formula deps.
@@ -3333,6 +3356,76 @@ const makeDaemonCore = async (
         readOnly: false,
       });
     },
+    sandbox: async ({ profile }, context, id, formulaNumber) => {
+      // The slice dies with any mount it binds: a granted mount that is
+      // cancelled or collected out from under a running container would
+      // otherwise leave the container writing into a directory the
+      // daemon no longer vouches for.
+      if (profile.rootfs.kind === 'mount') {
+        context.thisDiesIfThatDies(profile.rootfs.mountId);
+      }
+      for (const mount of profile.mounts) {
+        context.thisDiesIfThatDies(mount.mountId);
+      }
+
+      // Per-slice state: the ephemeral scratch upper layer and the
+      // mountpoints any 9P projection attaches to.  Both are re-created
+      // from scratch on reincarnation — nothing here is durable.
+      const statePath = filePowers.joinPath(
+        persistencePowers.statePath,
+        'sandboxes',
+        /** @type {string} */ (formulaNumber),
+      );
+
+      // The projector's mounter tears down every kernel mount it minted
+      // when this formula's context settles, so a slice whose release
+      // hook does not run (a crash between cancel and dispose) still
+      // does not strand a mount over a dead bridge.
+      const projector = makeMountProjector({
+        env: /** @type {Record<string, string>} */ (process.env),
+        cancelled: context.cancelled,
+        // Physical fast path: a mount the daemon minted over a real
+        // directory names that directory, so the driver binds it
+        // straight in.  Anything else — a peer-hosted mount, a mount
+        // face this process cannot see the backing of — falls through
+        // to the 9P chain.
+        resolveHostPath: async cap => {
+          const backing = getMountBacking(cap);
+          return backing?.kind === 'physical' ? backing.currentDir : undefined;
+        },
+      });
+
+      const { slice, release } = await makeSandboxSlice({
+        profile,
+        sandboxId: id,
+        statePath,
+        provideMount: mountId => provide(mountId),
+        projector,
+        makeSandboxFactory,
+        makePath: filePowers.makePath,
+        joinPath: filePowers.joinPath,
+        escalations: sandboxEscalations,
+        // `provideSandbox` rejects a writable grant over a read-only
+        // mount before persisting; this is the reincarnation-time
+        // defense, so a persisted formula cannot smuggle one in.
+        assertMountGrant: (cap, mode, innerPath) => {
+          const backing = getMountBacking(cap);
+          if (backing !== undefined && backing.readOnly && mode === 'rw') {
+            throw makeError(
+              X`Sandbox cannot bind a read-only mount read-write at ${q(innerPath)}`,
+            );
+          }
+        },
+        farContext: makeFarContext(context),
+        env: /** @type {Record<string, string>} */ (process.env),
+      });
+
+      // Terminal: the slice's processes are killed and its projections
+      // released when the formula is cancelled or collected.  There is
+      // no resume — the next `provide()` mints a new slice.
+      context.onCancel(() => release());
+      return slice;
+    },
     'http-client': ({ policy }) => {
       // The Network (HTTP) tier is the deliberate exception to "everything
       // derives from the mount": there is no filesystem to root it in, so its
@@ -4753,6 +4846,29 @@ const makeDaemonCore = async (
         return formulate(formulaNumber, formula);
       })
     );
+  };
+
+  /** @type {DaemonCore['formulateSandbox']} */
+  const formulateSandbox = async (profile, deferredTasks) => {
+    return withFormulaGraphLock(async () => {
+      await null;
+      const formulaNumber = /** @type {FormulaNumber} */ (await randomHex256());
+
+      await deferredTasks.execute({
+        sandboxId: formatId({
+          number: formulaNumber,
+          node: localNodeNumber,
+        }),
+      });
+
+      /** @type {import('./types.js').SandboxFormula} */
+      const formula = harden({
+        type: 'sandbox',
+        profile,
+      });
+
+      return formulate(formulaNumber, formula);
+    });
   };
 
   /** @type {DaemonCore['formulateHttpClient']} */
@@ -7208,6 +7324,8 @@ const makeDaemonCore = async (
     formulateSubMount,
     formulateGit,
     formulateShell,
+    formulateSandbox,
+    listSandboxEscalations: sandboxEscalations.list,
     formulateHttpClient,
     getHttpClientControlForClient,
     formulateGitCredential,

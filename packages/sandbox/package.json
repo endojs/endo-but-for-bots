@@ -36,7 +36,6 @@
   },
   "dependencies": {
     "@endo/cancel": "workspace:^",
-    "@endo/daemon": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
@@ -45,6 +44,7 @@
     "@endo/promise-kit": "workspace:^"
   },
   "devDependencies": {
+    "@endo/daemon": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/lockdown": "workspace:^",
     "@endo/ses-ava": "workspace:^",

@@ -364,6 +364,15 @@ export const HostInterface = M.interface('EndoHost', {
     NameOrPathShape,
     M.recordOf(M.string(), M.any()),
   ).returns(M.remotable('Shell')),
+  // Mint a confined POSIX slice from a formula-owned profile.  The
+  // profile is checked in depth by `normalizeSandboxProfile` (it carries
+  // mount capabilities, an escalation reason, and enum-valued policy),
+  // so the guard admits the record and lets the normalizer produce the
+  // diagnosis.
+  provideSandbox: M.callWhen(
+    NameOrPathShape,
+    M.recordOf(M.string(), M.any()),
+  ).returns(M.remotable('SandboxHandle')),
   // Mint a confined outbound-HTTP client from a host-owned `fetch` seam. No
   // mount arg: the Network tier is rooted in the fetch seam, not a mount.
   provideHttpClient: M.callWhen(
@@ -543,6 +552,8 @@ export const DiagnosticsInterface = M.interface('EndoDiagnostics', {
   getFormula: M.call(IdShape).returns(M.promise()),
   // Access the privileged error-trace aggregator.
   traces: M.call().returns(M.promise()),
+  // The sandbox escalation ledger: one record per slice mint.
+  listSandboxEscalations: M.call().returns(M.promise()),
 });
 
 export const ChannelInterface = M.interface('EndoChannel', {
