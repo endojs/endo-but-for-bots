@@ -499,6 +499,33 @@ export const makeFsMounter = ({
 harden(makeFsMounter);
 
 /**
+ * Wire the real Node effects into {@link makeFsMounter}.
+ *
+ * Both entry points into this module need the same four bindings: the
+ * `make-unconfined` caplet below, and any in-process holder of Node
+ * authority that wants a mounter without going through a formula — the
+ * daemon's `sandbox` formula reaches it this way, through the
+ * `DaemonicPowers` host-tool seam, so the daemon core never imports
+ * `node:child_process` itself.
+ *
+ * @param {object} [options]
+ * @param {Record<string, string>} [options.env] - operator configuration
+ *   (`NINEP_SUDO`, `NINEP_MOUNT_PROGRAM`, `NINEP_UMOUNT_PROGRAM`, …).
+ * @param {Promise<never> | null} [options.cancelledP] - settles when the
+ *   owner is torn down; every live mount is released.
+ */
+export const makeNodeFsMounter = ({ env = {}, cancelledP = null } = {}) =>
+  makeFsMounter({
+    env,
+    cancelledP,
+    runProgram: execFileP,
+    makeDir: mkdir,
+    removeDir: rmdir,
+    makeBridge: makeFsBridge9p,
+  });
+harden(makeNodeFsMounter);
+
+/**
  * `make-unconfined` entry point.  Resolves the daemon cancellation
  * context and wires the real Node effects into {@link makeFsMounter}.
  *
@@ -510,13 +537,6 @@ harden(makeFsMounter);
  */
 export const make = async (_powers, context, options = {}) => {
   const cancelledP = await resolveCancelled(context);
-  return makeFsMounter({
-    env: options.env ?? {},
-    cancelledP,
-    runProgram: execFileP,
-    makeDir: mkdir,
-    removeDir: rmdir,
-    makeBridge: makeFsBridge9p,
-  });
+  return makeNodeFsMounter({ env: options.env ?? {}, cancelledP });
 };
 harden(make);
