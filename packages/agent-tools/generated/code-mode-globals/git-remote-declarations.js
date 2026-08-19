@@ -28,6 +28,7 @@ export const gitRemoteDeclarations = harden({
     prune?: boolean;
     tags?: boolean;
 }) => Promise<RemoteOperationResult>;
+  help: (method?: string) => string;
   inspect: () => Promise<RemoteSnapshot>;
   pull: (options?: {
     branch?: RemoteGitRef | string;

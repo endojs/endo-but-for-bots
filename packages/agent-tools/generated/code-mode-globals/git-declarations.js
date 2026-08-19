@@ -36,6 +36,7 @@ export const gitDeclarations = harden({
   detach: (ref: GitRef | string) => Promise<void>;
   diff: (options?: GitDiffOptions) => Promise<string>;
   filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
+  help: (method?: string) => string;
   log: (options?: GitLogOptions) => Promise<GitCommit[]>;
   merge: (ref: GitRef | string, options?: GitMergeOptions) => Promise<string>;
   readOnly: () => GitReadOnlyEndoGit;
@@ -54,7 +55,7 @@ export const gitDeclarations = harden({
   switch: (ref: GitRef | string) => Promise<void>;
   switchBranch: (name: string) => Promise<void>;
   trackingStatus: () => Promise<GitTrackingStatus>;
-  tree: (ref: GitRef | string) => Promise<GitReadableTree>;
+  tree: (ref: GitRef | string) => Promise<GitTree>;
   worktree: () => Promise<GitWritableGitWorktree>;
   worktreeAdd: (entry: GitPathEntry, options?: GitWorktreeAddOptions) => Promise<WritableEndoGit>;
   worktreeList: () => Promise<GitWorktreeEntry[]>;
@@ -234,6 +235,9 @@ type GitTrackingStatus = {
     behind: number;
     detached: boolean;
 };
+type GitTree = GitReadableTree & {
+    help: (method?: string) => string;
+};
 type GitWorktreeAddOptions = {
     ref?: GitRef | string;
     newBranch?: string;
@@ -348,6 +352,7 @@ type GitQid<K = GitNodeKind> = {
     version: bigint;
 };
 type GitReadOnlyEndoGit = {
+    help: (method?: string) => string;
     worktree: () => Promise<GitReadOnlyGitWorktree>;
     status: (options?: GitStatusOptions) => Promise<GitStatusResult>;
     trackingStatus: () => Promise<GitTrackingStatus>;
@@ -360,7 +365,7 @@ type GitReadOnlyEndoGit = {
     branches: () => Promise<GitRef[]>;
     stashList: () => Promise<string[]>;
     stashShow: (index?: number) => Promise<string>;
-    tree: (ref: GitRef | string) => Promise<GitReadableTree>;
+    tree: (ref: GitRef | string) => Promise<GitTree>;
     filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
     readOnly: () => GitReadOnlyEndoGit;
     scope: (name: 'reader') => GitReadOnlyEndoGit;
@@ -458,7 +463,7 @@ type GitRef = {
   stashShow: (index?: number) => Promise<string>;
   status: (options?: GitStatusOptions) => Promise<GitStatusResult>;
   trackingStatus: () => Promise<GitTrackingStatus>;
-  tree: (ref: GitRef | string) => Promise<GitReadableTree>;
+  tree: (ref: GitRef | string) => Promise<GitTree>;
   worktree: () => Promise<GitReadOnlyGitWorktree>;
   worktreeList: () => Promise<GitWorktreeEntry[]>;
 };
@@ -607,6 +612,9 @@ type GitTrackingStatus = {
     ahead: number;
     behind: number;
     detached: boolean;
+};
+type GitTree = GitReadableTree & {
+    help: (method?: string) => string;
 };
 type GitWorktreeEntry = {
     path: string;
