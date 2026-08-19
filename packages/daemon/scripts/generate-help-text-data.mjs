@@ -8,10 +8,12 @@
  * Usage: node packages/daemon/scripts/generate-help-text-data.mjs
  */
 import '@endo/init';
+import { parseHelpdown } from '@endo/helpdown';
+import prettier from 'prettier';
+
 import fs from 'fs';
 import url from 'url';
 import path from 'path';
-import { parseHelpdown } from '../src/helpdown.js';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const helpMdPath = path.resolve(__dirname, '../src/help.md');
@@ -43,5 +45,9 @@ for (const [name, helpObj] of entries) {
 lines.push(']);');
 lines.push('');
 
-fs.writeFileSync(outPath, lines.join('\n'));
+const formatted = await prettier.format(lines.join('\n'), {
+  filepath: outPath,
+  singleQuote: true,
+});
+fs.writeFileSync(outPath, formatted);
 console.log(`Wrote ${outPath} (${entries.length} entities)`);

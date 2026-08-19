@@ -6,14 +6,20 @@
  * Each help object maps method names to documentation strings.
  * The special key '' (empty string) provides an overview of the interface.
  *
- * Documentation is loaded from help.md using the helpdown scanner.
+ * Documentation is authored in help.md and compiled to help-text-data.js by
+ * scripts/generate-help-text-data.mjs with the `@endo/helpdown` scanner.
+ *
+ * `makeHelp` and the `HelpText` type come from `@endo/helpdown` and are
+ * re-exported here, where daemon modules have always reached for them.
  */
+
+import { makeHelp } from '@endo/helpdown';
 
 import { helpTextEntries } from './help-text-data.js';
 
-/**
- * @typedef {Record<string, string>} HelpText
- */
+/** @typedef {import('@endo/helpdown').HelpText} HelpText */
+
+export { makeHelp };
 
 const helpMap = new Map(helpTextEntries);
 
@@ -43,35 +49,6 @@ export const mountHelp = helpMap.get('EndoMount') || {};
 
 /** @type {HelpText} */
 export const mountFileHelp = helpMap.get('EndoMountFile') || {};
-
-/**
- * Create a help function that looks up documentation.
- *
- * @param {HelpText} helpText - The help text object
- * @param {HelpText[]} [fallbacks] - Additional help texts to search
- * @returns {(methodName?: string) => string}
- */
-export const makeHelp = (helpText, fallbacks = []) => {
-  /**
-   * @param {string} [methodName]
-   * @returns {string}
-   */
-  const help = (methodName = '') => {
-    if (methodName in helpText) {
-      return helpText[methodName];
-    }
-    for (const fallback of fallbacks) {
-      if (methodName in fallback) {
-        return fallback[methodName];
-      }
-    }
-    if (methodName === '') {
-      return 'No documentation available for this interface.';
-    }
-    return `No documentation available for method "${methodName}".`;
-  };
-  return help;
-};
 
 harden(directoryHelp);
 harden(mailHelp);

@@ -1823,6 +1823,7 @@ __metadata:
     "@endo/far": "workspace:^"
     "@endo/git": "workspace:^"
     "@endo/harden": "workspace:^"
+    "@endo/helpdown": "workspace:^"
     "@endo/hex": "workspace:^"
     "@endo/host-spawner": "workspace:^"
     "@endo/import-bundle": "workspace:^"
@@ -2392,6 +2393,18 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/harden@workspace:packages/harden"
   dependencies:
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/helpdown@workspace:^, @endo/helpdown@workspace:packages/helpdown":
+  version: 0.0.0-use.local
+  resolution: "@endo/helpdown@workspace:packages/helpdown"
+  dependencies:
+    "@endo/harden": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
