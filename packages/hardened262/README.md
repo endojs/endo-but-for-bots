@@ -73,34 +73,8 @@ JavaScript cases and their harness includes.
   Hardened JavaScript corpus, run as a multi-agent cross product in one process.
   The two corpora are disjoint, so there is no duplication to reconcile away.
 
-- **`designs/ironhorse-test262-convergence.md`** plans the evolution of the
-  Rust engine's bring-up harness into `ironhorse-xst`, an `xst` analogue with a
-  differential oracle. That is a Rust-side, engine-parity instrument; its cross
-  product is over _engines_ (`xst` / `node` / `ironhorse`). This harness is the
-  JavaScript-side analogue whose cross product is over _shim delivery_ (bare XS
-  vs. SES-on-XS vs. SES-on-Node) x lockdown/compartment/mode. Ironhorse can
+- **`designs/ironhorse-test262-convergence.md`** plans `ironhorse-xst`, an
+  engine-parity instrument whose cross product is over _engines_
+  (`xst` / `node` / `ironhorse`) rather than over _shim delivery_. Ironhorse can
   later join here as an additional agent, exactly as it joins `test262-runner`
   as an additional host.
-
-### Two consumers
-
-1. **Ironhorse.** As the native Hardened JavaScript surface on XS (and its
-   Rust successor) lands, this harness's `xs` agent measures how far bare XS
-   can run the Hardened JavaScript corpus without the shim — the shim-obviation
-   progress the `ironhorse-test262-convergence` design anticipates from the
-   engine side.
-
-2. **Byte-array validation.** The genuine-versus-emulated `Uint8Array` parity
-   bugs found by hand during PR review (`bytesEqual`, `base64` encoding,
-   `ocapn` diagnostics) are exactly the class this cross product is built to
-   catch systematically. Once its corpus grows Hardened-JavaScript cases that
-   exercise `@endo/bytes`, `@endo/base64`, `@endo/hex`, and
-   `@endo/immutable-arraybuffer`, a divergence between the `xs`, `sesXs`, and
-   `sesNode` agents surfaces such a bug as a scenario mismatch rather than a
-   review-time catch.
-
-Whether these three instruments should eventually be _unified_ (a single
-cross-product runner spanning both the shim-delivery and engine axes) is an
-open design question, deliberately left to a follow-up design rather than
-forced here; this package lands the harness as its upstream author shaped it,
-reconciled against — not colliding with — the two existing pieces.
