@@ -115,13 +115,11 @@ export const main = async (args, { loadModule, pid, log }) => {
     return;
   }
 
-  if (
-    !(
-      positionals.length > 0 &&
-      positionals.length % 2 === 0 &&
-      [cacheJson, cacheJs, cacheJsAlias].filter(Boolean).length === 1
-    )
-  ) {
+  if (!(
+    positionals.length > 0 &&
+    positionals.length % 2 === 0 &&
+    [cacheJson, cacheJs, cacheJsAlias].filter(Boolean).length === 1
+  )) {
     throw Error(USAGE);
   }
 

@@ -1,8 +1,5 @@
 export type PolicyMode =
-  | 'strict'
-  | 'tofu-auto'
-  | 'tofu-prompt'
-  | 'tofu-attenuator';
+  'strict' | 'tofu-auto' | 'tofu-prompt' | 'tofu-attenuator';
 
 export type BindingState = 'Pinned-Allow' | 'Pinned-Deny' | 'Revoked';
 

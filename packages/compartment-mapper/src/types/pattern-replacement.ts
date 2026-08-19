@@ -27,8 +27,7 @@ export type SubpathReplacer = (
  * an array of PatternDescriptors, or a record object.
  */
 export type SubpathMapping =
-  | Array<[pattern: string, replacement: string]>
-  | Record<string, string>;
+  Array<[pattern: string, replacement: string]> | Record<string, string>;
 
 /**
  * Internal representation of a parsed pattern entry, split into

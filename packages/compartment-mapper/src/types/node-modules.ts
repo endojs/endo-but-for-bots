@@ -41,10 +41,7 @@ export type ExportConditions = {
  * @see {@link https://github.com/sindresorhus/type-fest/blob/850b33c4dd292e0ff8cff039ee167d69be324fce/source/package-json.d.ts#L227-L248 | type-fest Exports}
  */
 export type Exports =
-  | null
-  | string
-  | Array<string | ExportConditions>
-  | ExportConditions;
+  null | string | Array<string | ExportConditions> | ExportConditions;
 
 /**
  * The `imports` field of `package.json`.

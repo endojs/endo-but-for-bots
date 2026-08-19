@@ -1226,11 +1226,12 @@ const makeMountExo = ctx => {
     // `checkinTree` uses.  A `streamBase64`-bearing remotable is
     // materialised through bytes; a `list`-bearing remotable is
     // materialised recursively.
-    const source = /** @type {{
-     *   __getMethodNames__: () => Promise<string[]>;
-     *   list: () => Promise<string[]>;
-     *   lookup: (path: string | string[]) => Promise<unknown>;
-     * }} */ (value);
+    const source =
+      /** @type {{
+       *   __getMethodNames__: () => Promise<string[]>;
+       *   list: () => Promise<string[]>;
+       *   lookup: (path: string | string[]) => Promise<unknown>;
+       * }} */ (value);
     // eslint-disable-next-line no-underscore-dangle
     const methodNames = await E(source).__getMethodNames__();
     if (methodNames.includes('streamBase64')) {
