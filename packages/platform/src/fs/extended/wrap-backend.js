@@ -539,7 +539,7 @@ export const wrapBackend = (backend, opts = {}) => {
         if (method === undefined) {
           return 'OpenFile: session-shaped file handle — read/write at offsets, stream, truncate, lock, fsync, close.';
         }
-        return `No documentation for method ${q(method)}.`;
+        return `No documentation available for method ${q(method)}.`;
       },
     });
   };
@@ -791,7 +791,7 @@ export const wrapBackend = (backend, opts = {}) => {
         if (method === undefined) {
           return 'File: bytes-level file capability — open(), read(opts), write(bytes, opts), getStat, setStat, watch.';
         }
-        return `No documentation for method ${q(method)}.`;
+        return `No documentation available for method ${q(method)}.`;
       },
     });
   };
@@ -1050,7 +1050,7 @@ export const wrapBackend = (backend, opts = {}) => {
         if (method === undefined) {
           return 'Directory: tree-shaped directory capability — lookup, lookupStep, subView, list, write, create, makeDirectory, remove, move, copy, materialise, watch, watchFrom, fsync, getStat, setStat.';
         }
-        return `No documentation for method ${q(method)}.`;
+        return `No documentation available for method ${q(method)}.`;
       },
     });
     dirPaths.set(exo, path);
@@ -1094,7 +1094,7 @@ export const wrapBackend = (backend, opts = {}) => {
       if (method === undefined) {
         return `Filesystem (${description}): root/named/statfs/brands.`;
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
   };
 

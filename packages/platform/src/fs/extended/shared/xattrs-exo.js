@@ -120,7 +120,7 @@ export const makeXattrsExo = ({ xattrTable, fireLocal, lockKeyOf, path }) => {
       if (method === undefined) {
         return 'Xattrs: vat-local user.* metadata (sidecar storage).';
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };
