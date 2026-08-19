@@ -401,6 +401,40 @@ export const makeSandboxEscalationLog = ({ limit = 128 } = {}) => {
 harden(makeSandboxEscalationLog);
 
 /**
+ * Whether a granted mount may be projected into a slice by naming its
+ * backing directory — the physical fast path — rather than being served
+ * through the mount capability over 9P.
+ *
+ * A bind mount hands the kernel the directory itself, so every check the
+ * mount capability performs on the way to a path stops mediating access
+ * the moment a process inside the slice reads through the kernel. Two of
+ * those checks survive the bind by other means: confinement, because the
+ * bound directory *is* the confinement root, and the read-only axis,
+ * because the bind carries `ro` (and a writable grant over a read-only
+ * mount is refused outright). Per-segment denial does not survive: a
+ * mount carrying the default denied set exists precisely to withhold
+ * `.ssh`, `.aws`, `.gnupg` and the rest, and binding its directory hands
+ * them straight back.
+ *
+ * So a mount that denies nothing keeps the fast path, and a mount that
+ * denies anything projects through 9P instead, where every path the
+ * slice names is resolved by the mount capability and denied per
+ * segment. A backing this process cannot see (a peer-hosted mount) has
+ * no directory to bind and takes the same 9P route.
+ *
+ * @param {{ kind: string, deniedSegments?: readonly string[] } | undefined} backing
+ *   The mount's host-private backing, as `getMountBacking` reports it.
+ * @returns {boolean}
+ */
+export const allowsDirectBind = backing =>
+  backing !== undefined &&
+  backing.kind === 'physical' &&
+  // Fails closed on a backing that does not report a denied set at all:
+  // an unreported set is not an empty one.
+  backing.deniedSegments?.length === 0;
+harden(allowsDirectBind);
+
+/**
  * Mint the live slice a `sandbox` formula evaluates to.
  *
  * The privileged parts are all injected, which is also what makes this
@@ -417,9 +451,13 @@ harden(makeSandboxEscalationLog);
  * @param {(path: string) => Promise<unknown>} args.makePath
  * @param {(...components: string[]) => string} args.joinPath
  * @param {{ record: (entry: SandboxEscalationRecord) => unknown }} args.escalations
- * @param {(cap: unknown, mode: 'ro' | 'rw', innerPath: string) => void} [args.assertMountGrant]
- *   Reincarnation-time gate on each resolved mount, e.g. refusing a
- *   writable bind over a read-only mount.
+ * @param {(cap: unknown, mode: 'ro' | 'rw', innerPath: string, projection?: { kind: string }) => void} [args.assertMountGrant]
+ *   Reincarnation-time gate on each resolved mount, called twice per
+ *   grant: once with the requested mode before projection (refusing, for
+ *   instance, a writable bind over a read-only mount), and once with the
+ *   projection that was realized, so a grant whose *posture* the gate
+ *   refuses — a direct bind of a mount that withholds path segments — is
+ *   unwound rather than handed to the driver.
  * @param {unknown} [args.farContext] Cancellation context handed to the
  *   sandbox factory, which disposes every live slice when it settles.
  * @param {Record<string, string>} [args.env] Daemon-process environment
@@ -479,6 +517,13 @@ export const makeSandboxSlice = async ({
       });
       index += 1;
       projections.push({ innerPath, projection });
+      // Gate the projection that was realized, not only the one that was
+      // requested: a projector that reached a direct bind of the backing
+      // directory — through a resolver this formula did not install, or
+      // one blind to the mount's attenuation — would hand the slice
+      // authority the mount itself withholds. Recorded above first, so
+      // the unwind releases what this attempt stood up.
+      assertMountGrant(cap, mode, innerPath, projection);
       hostPathForCap.set(cap, projection.hostPath);
       return cap;
     };

@@ -16,9 +16,13 @@
  * capability's contents?* — with two answers:
  *
  *   1. **Physical.** The capability is a locally-minted mount over a real
- *      directory, so the resolver hands back that directory. Nothing is
- *      created and `release()` is a no-op. This is the fast path and the
- *      only one that survives a host without `CAP_SYS_ADMIN`.
+ *      directory *and* its holder's resolver is willing to name that
+ *      directory, so the resolver hands it back. Nothing is created and
+ *      `release()` is a no-op. This is the fast path and the only one
+ *      that survives a host without `CAP_SYS_ADMIN`. A resolver may
+ *      decline a capability it can resolve: a bind mount carries the
+ *      directory, not the capability's own attenuation, so a mount that
+ *      withholds parts of its tree has to be served rather than bound.
  *   2. **9P.** There is no local directory to name — the capability is a
  *      remote presence, an in-memory or layered `Filesystem`, or a mount
  *      whose backing this process cannot see. The projection serves the
@@ -86,9 +90,11 @@ import { mountAsFilesystem } from '@endo/platform/fs/extended/from-mount.js';
  *   degrading a capability it cannot project.
  * @param {(cap: unknown) => Promise<string | undefined>} [powers.resolveHostPath]
  *   Physical-backing resolver. Returns the directory naming the
- *   capability's contents, or `undefined` when there is none — a thrown
- *   error propagates rather than falling through to 9P, so a broken
- *   resolver is not mistaken for a virtual filesystem.
+ *   capability's contents, or `undefined` when there is none — or when
+ *   the resolver declines to name one, which is how a caller keeps a
+ *   capability whose attenuation a bind mount cannot carry on the 9P
+ *   branch. A thrown error propagates rather than falling through to
+ *   9P, so a broken resolver is not mistaken for a virtual filesystem.
  * @param {(hostPath: string) => Promise<unknown>} [powers.provideMount]
  *   Registers `hostPath` as a daemon-minted `Mount` capability. Callers
  *   that need only a path (the daemon's own `sandbox` formula) omit it.

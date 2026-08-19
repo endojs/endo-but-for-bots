@@ -24,12 +24,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { makeMountProjector } from '@endo/9p-server/mount-projection.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 
 import { makeFilePowers } from '../src/manager-node-powers.js';
 import { getMountBacking, makeMount } from '../src/mount.js';
 import {
+  allowsDirectBind,
   makeSandboxEscalationLog,
   makeSandboxSlice,
   normalizeSandboxProfile,
@@ -38,16 +40,28 @@ import {
 /**
  * Provision a real on-disk mount, mirroring `shell.test.js`.
  *
+ * `deniedSegments` defaults to `undefined`, which selects the daemon's
+ * default deny set — the same mount every `provideMount` caller gets.
+ * A test that wants the physical fast path has to ask for a mount that
+ * withholds nothing (`deniedSegments: []`), because a bind mount cannot
+ * enforce per-segment denial.
+ *
  * @param {import('ava').ExecutionContext} t
- * @param {{ readOnly?: boolean }} [opts]
+ * @param {{ readOnly?: boolean, deniedSegments?: string[] }} [opts]
  */
-const provisionMount = async (t, { readOnly = false } = {}) => {
+const provisionMount = async (
+  t,
+  { readOnly = false, deniedSegments = undefined } = {},
+) => {
   const root = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), 'sandbox-test-'),
   );
   t.teardown(() => fs.promises.rm(root, { recursive: true, force: true }));
   const filePowers = makeFilePowers({ fs, path });
-  return { root, mount: makeMount({ rootPath: root, readOnly, filePowers }) };
+  return {
+    root,
+    mount: makeMount({ rootPath: root, readOnly, filePowers, deniedSegments }),
+  };
 };
 
 /**
@@ -64,27 +78,38 @@ const provisionStatePath = async t => {
 };
 
 /**
- * The physical-backing resolver and the read-only gate the daemon's
+ * The physical-backing resolver and the mount gate the daemon's
  * `sandbox` maker installs, restated here so the tests pin the
- * composition rather than a copy of the policy.
+ * composition rather than a copy of the policy. Both defer to
+ * `allowsDirectBind`, which is the policy itself and is imported, not
+ * restated.
  *
  * @param {unknown} cap
  */
 const resolveHostPath = async cap => {
   const backing = getMountBacking(cap);
-  return backing?.kind === 'physical' ? backing.currentDir : undefined;
+  if (backing === undefined || !allowsDirectBind(backing)) {
+    return undefined;
+  }
+  return backing.currentDir;
 };
 
 /**
  * @param {unknown} cap
  * @param {'ro' | 'rw'} mode
  * @param {string} innerPath
+ * @param {{ kind: string }} [projection]
  */
-const assertMountGrant = (cap, mode, innerPath) => {
+const assertMountGrant = (cap, mode, innerPath, projection) => {
   const backing = getMountBacking(cap);
   if (backing !== undefined && backing.readOnly && mode === 'rw') {
     throw new Error(
       `Sandbox cannot bind a read-only mount read-write at ${innerPath}`,
+    );
+  }
+  if (projection?.kind === 'physical' && !allowsDirectBind(backing)) {
+    throw new Error(
+      `Sandbox cannot bind ${innerPath} to the backing directory of a mount that withholds path segments`,
     );
   }
 };
@@ -344,7 +369,9 @@ test('normalizeSandboxProfile rejects malformed grants before a formula exists',
 });
 
 test('a physically-backed grant reaches the driver as its own directory', async t => {
-  const { root, mount } = await provisionMount(t);
+  // A mount that withholds nothing: the bind exposes exactly what the
+  // capability does, so the fast path is available.
+  const { root, mount } = await provisionMount(t, { deniedSegments: [] });
   const profile = normalizeSandboxProfile(
     {
       rootfs: { kind: 'host-bind' },
@@ -411,6 +438,146 @@ test('a mount with no physical backing reaches the driver through a projection',
   t.true(projections[0].released);
 });
 
+test('a mount that withholds segments is projected, not bound', async t => {
+  // The default deny set is what every `provideMount` caller gets, so
+  // this is the ordinary case: binding the directory would hand the
+  // slice `.ssh`, `.aws`, `.gnupg` and the rest, which the mount exists
+  // to withhold.  It takes the 9P branch instead.
+  const { root, mount } = await provisionMount(t);
+  await fs.promises.mkdir(path.join(root, '.ssh'));
+  await fs.promises.writeFile(path.join(root, '.ssh', 'id_rsa'), 'PRIVATE');
+
+  const profile = normalizeSandboxProfile(
+    {
+      rootfs: { kind: 'host-bind' },
+      mounts: [{ cap: mount, innerPath: '/workspace', mode: 'rw' }],
+      escalation: baseEscalation,
+    },
+    resolveFakeMountId,
+  );
+  const { backend, projections, statePath, escalations } = await mintSlice(
+    t,
+    profile,
+    { capForId: { 'mount-id': mount } },
+  );
+
+  t.is(projections.length, 1);
+  // The driver receives the projection's mountpoint, never the backing
+  // directory itself.
+  t.deepEqual(backend.calls.slices[0].mounts, [
+    {
+      hostPath: path.join(statePath, 'mnt', '0'),
+      innerPath: '/workspace',
+      mode: 'rw',
+    },
+  ]);
+  t.not(backend.calls.slices[0].mounts[0].hostPath, root);
+  t.deepEqual(escalations.list()[0].projections, [
+    { innerPath: '/workspace', kind: '9p' },
+  ]);
+});
+
+test('what 9P serves for such a mount denies the restricted segments', async t => {
+  // The other half of the previous test: the 9P branch serves *through*
+  // the mount capability, so a path the mount denies is denied to the
+  // slice too.  Drive the real projection layer with a mounter that
+  // captures the filesystem it would have attached — a kernel mount
+  // needs privileges this test does not assume — and read through it.
+  const { root, mount } = await provisionMount(t);
+  await fs.promises.mkdir(path.join(root, '.ssh'));
+  await fs.promises.writeFile(path.join(root, '.ssh', 'id_rsa'), 'PRIVATE');
+  await fs.promises.writeFile(path.join(root, 'README.md'), '# readme');
+
+  /** @type {any} */
+  let served;
+  const projector = makeMountProjector({
+    resolveHostPath,
+    mounter: harden({
+      /**
+       * @param {unknown} fs9p
+       * @param {string} mountPoint
+       */
+      mount: async (fs9p, mountPoint) => {
+        served = fs9p;
+        return harden({ unmount: async () => {}, mountPoint });
+      },
+    }),
+  });
+
+  const statePath = await provisionStatePath(t);
+  const projection = await projector.projectMount(mount, {
+    mountPoint: path.join(statePath, 'mnt', '0'),
+    readOnly: false,
+    label: '/workspace',
+  });
+  t.is(projection.kind, '9p');
+
+  const servedRoot = await E(served).root();
+  t.truthy(await E(servedRoot).lookup('README.md'));
+  await t.throwsAsync(() => E(servedRoot).lookup('.ssh'), {
+    message: /Access denied/,
+  });
+  // Nor by a multi-segment walk that names the restricted segment on
+  // the way to a file under it.
+  await t.throwsAsync(() => E(servedRoot).lookup(['.ssh', 'id_rsa']), {
+    message: /Access denied/,
+  });
+});
+
+test('a persisted profile cannot smuggle a direct bind past the gate', async t => {
+  // Reincarnation: the maker rebuilds the slice from the persisted
+  // profile, so the gate has to re-derive the posture from the live
+  // mount rather than trust anything the formula carries.  A projector
+  // that hands back a direct bind of a mount that withholds segments —
+  // a resolver this formula did not install — is refused, and the
+  // projection it stood up is released.
+  const { root, mount } = await provisionMount(t);
+  const profile = /** @type {SandboxFormulaProfile} */ (
+    harden({
+      rootfs: { kind: 'minimal' },
+      mounts: [{ mountId: fakeMountId, innerPath: '/workspace', mode: 'rw' }],
+      network: 'none',
+      backend: 'auto',
+      seccomp: 'default',
+      env: {},
+      escalation: baseEscalation,
+    })
+  );
+  const statePath = await provisionStatePath(t);
+  const filePowers = makeFilePowers({ fs, path });
+  let released = 0;
+  const rogueProjector = harden({
+    projectMount: async (/** @type {unknown} */ cap) =>
+      harden({
+        kind: 'physical',
+        hostPath: root,
+        mountCap: cap,
+        release: async () => {
+          released += 1;
+        },
+      }),
+  });
+
+  await t.throwsAsync(
+    makeSandboxSlice({
+      profile,
+      sandboxId: fakeSandboxId,
+      statePath,
+      provideMount: async () => mount,
+      projector: rogueProjector,
+      makeSandboxFactory: async () => {
+        throw new Error('the gate should have refused before the backend');
+      },
+      makePath: filePowers.makePath,
+      joinPath: filePowers.joinPath,
+      escalations: makeSandboxEscalationLog(),
+      assertMountGrant,
+    }),
+    { message: /withholds path segments/ },
+  );
+  t.is(released, 1);
+});
+
 test('the slice can resolve only the mounts its profile names', async t => {
   const { mount } = await provisionMount(t);
   const other = await provisionMount(t);
@@ -473,7 +640,7 @@ test('a read-only mount cannot be bound read-write', async t => {
 });
 
 test('every mint records an escalation with the projections it needed', async t => {
-  const { mount } = await provisionMount(t);
+  const { mount } = await provisionMount(t, { deniedSegments: [] });
   const profile = normalizeSandboxProfile(
     {
       rootfs: { kind: 'host-bind' },
@@ -597,7 +764,9 @@ test('the real backend mints a slice over a daemon-minted mount', async t => {
     return;
   }
 
-  const { root, mount } = await provisionMount(t);
+  // The real backend binds the directory, which only a mount that
+  // withholds nothing is eligible for.
+  const { root, mount } = await provisionMount(t, { deniedSegments: [] });
   await fs.promises.writeFile(path.join(root, 'hello.txt'), 'from the host\n');
   const profile = normalizeSandboxProfile(
     {

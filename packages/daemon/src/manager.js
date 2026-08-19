@@ -52,7 +52,11 @@ import { makeGuestMaker } from './guest.js';
 import { makeChannelMaker } from './channel.js';
 import { makeHostMaker } from './host.js';
 import { provideHostToolPowers } from './host-tool-powers.js';
-import { makeSandboxEscalationLog, makeSandboxSlice } from './sandbox.js';
+import {
+  allowsDirectBind,
+  makeSandboxEscalationLog,
+  makeSandboxSlice,
+} from './sandbox.js';
 import { makeRemoteControlProvider } from './remote-control.js';
 import {
   assertName,
@@ -3387,11 +3391,17 @@ const makeDaemonCore = async (
         // Physical fast path: a mount the daemon minted over a real
         // directory names that directory, so the driver binds it
         // straight in.  Anything else — a peer-hosted mount, a mount
-        // face this process cannot see the backing of — falls through
-        // to the 9P chain.
+        // face this process cannot see the backing of, a mount that
+        // withholds path segments the kernel would hand back (see
+        // `allowsDirectBind`) — falls through to the 9P chain, which
+        // serves through the mount capability and so denies per
+        // segment.
         resolveHostPath: async cap => {
           const backing = getMountBacking(cap);
-          return backing?.kind === 'physical' ? backing.currentDir : undefined;
+          if (backing === undefined || !allowsDirectBind(backing)) {
+            return undefined;
+          }
+          return backing.currentDir;
         },
       });
 
@@ -3407,12 +3417,20 @@ const makeDaemonCore = async (
         escalations: sandboxEscalations,
         // `provideSandbox` rejects a writable grant over a read-only
         // mount before persisting; this is the reincarnation-time
-        // defense, so a persisted formula cannot smuggle one in.
-        assertMountGrant: (cap, mode, innerPath) => {
+        // defense, so a persisted formula cannot smuggle one in.  The
+        // same gate re-checks the projection that was realized, so a
+        // persisted formula cannot smuggle in a direct bind of a mount
+        // that withholds path segments either.
+        assertMountGrant: (cap, mode, innerPath, projection) => {
           const backing = getMountBacking(cap);
           if (backing !== undefined && backing.readOnly && mode === 'rw') {
             throw makeError(
               X`Sandbox cannot bind a read-only mount read-write at ${q(innerPath)}`,
+            );
+          }
+          if (projection?.kind === 'physical' && !allowsDirectBind(backing)) {
+            throw makeError(
+              X`Sandbox cannot bind ${q(innerPath)} to the backing directory of a mount that withholds path segments; a bind mount cannot enforce the mount's per-segment denial`,
             );
           }
         },
