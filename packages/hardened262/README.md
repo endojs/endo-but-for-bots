@@ -50,6 +50,13 @@ pass/fail; it is a preliminary instrument and does not yet gate (a failing case
 is printed, not a non-zero exit), so cases the native surface has not yet
 reached are visible rather than fatal.
 
+Today only the `module` and `lockdownModule` scenarios are wired to an agent.
+The remaining scenarios along the **mode** (`sloppy`, `strict`) and
+**compartment** axes are still generated and enumerated by `--list`, but no
+agent executes them yet; a run reports each such scenario as an explicit `skip`
+rather than silently omitting it, so a run and `--list` enumerate the same
+scenarios and the not-yet-covered corner of the cross product stays visible.
+
 ## Relationship to the rest of the repository
 
 This package is a **third, distinct** test262-shaped instrument, complementary
@@ -71,7 +78,7 @@ JavaScript cases and their harness includes.
   differential oracle. That is a Rust-side, engine-parity instrument; its cross
   product is over _engines_ (`xst` / `node` / `ironhorse`). This harness is the
   JavaScript-side analogue whose cross product is over _shim delivery_ (bare XS
-  vs. SES-on-XS vs. SES-on-Node) × lockdown/compartment/mode. Ironhorse can
+  vs. SES-on-XS vs. SES-on-Node) x lockdown/compartment/mode. Ironhorse can
   later join here as an additional agent, exactly as it joins `test262-runner`
   as an additional host.
 

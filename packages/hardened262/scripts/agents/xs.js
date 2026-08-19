@@ -40,6 +40,11 @@ export const testXs = async (test, { ses, tacet }) => {
     ],
   });
   const { code, signal } = await new Promise((resolve, reject) => {
+    // Without an 'error' listener a failure to launch `xst` (which the README
+    // requires on the PATH for the xs/sesXs agents) never fires 'exit', so the
+    // awaited promise would hang forever; reject so the run fails loud with a
+    // diagnostic.
+    child.on('error', reject);
     child.on('exit', (exitCode, exitSignal) => {
       resolve({ code: exitCode, signal: exitSignal });
     });

@@ -24,7 +24,11 @@ const testNode = async (test, { tacet, lockdownFlag }) => {
       tacet ? 'ignore' : 'inherit',
     ],
   });
-  const { code, signal } = await new Promise(resolve => {
+  const { code, signal } = await new Promise((resolve, reject) => {
+    // Without an 'error' listener a failure to launch the child (for example a
+    // missing `node` on the PATH) never fires 'exit', so the awaited promise
+    // would hang forever; reject so the run fails loud with a diagnostic.
+    child.on('error', reject);
     child.on('exit', (exitCode, exitSignal) => {
       resolve({ code: exitCode, signal: exitSignal });
     });

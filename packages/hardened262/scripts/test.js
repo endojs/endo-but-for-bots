@@ -1,11 +1,21 @@
 import { parseArgs } from 'util';
 import { fileURLToPath } from 'url';
+import { readFileSync } from 'fs';
 
 import TestStream from 'test262-stream';
 
 // agents:
 import { testSesNodeModule, testSesNodeLockdownModule } from './agents/node.js';
 import { testXs } from './agents/xs.js';
+
+// This harness reuses its own package root as the test262 corpus directory, so
+// test262-stream reads THIS package's version as the "corpus version" and, by
+// default, rejects any version outside its supported major range (1-5). Read
+// our own version so we can accept it explicitly and stay free to follow the
+// 0.1.0 initial-release convention.
+const { version: corpusVersion } = JSON.parse(
+  readFileSync(new URL('../package.json', import.meta.url), 'utf-8'),
+);
 
 const options = /** @type {const} */ ({
   list: {
@@ -156,6 +166,10 @@ const verboseBegin = test => {
 };
 
 const terseEnd = test => {
+  if (test.skipped) {
+    console.error('# skip (no agent runs this scenario yet)');
+    return;
+  }
   console.error(
     `# ${test.ok ? 'ok' : `not ok code=${test.code} signal=${test.signal}`}`,
   );
@@ -164,7 +178,7 @@ const terseEnd = test => {
 const compactEnd = test => {
   console.error(
     [
-      test.ok ? 'pass' : 'fail',
+      test.skipped ? 'skip' : test.ok ? 'pass' : 'fail',
       test.file,
       test.agent,
       test.mode,
@@ -174,29 +188,34 @@ const compactEnd = test => {
   );
 };
 
+// Which (agent, scenario) pairs an agent actually executes today. Every agent
+// currently drives only the `module` and `lockdownModule` scenarios; the
+// remaining sloppy/strict modes and the whole compartment axis are generated
+// (and enumerated by `--list`) but not yet wired to any agent.
+const agentRunsScenario = scenario =>
+  scenario === 'module' || scenario === 'lockdownModule';
+
 async function* runTests({ tacet, begin }, tests) {
   for await (const test of tests) {
     const { agent, scenario } = test;
-    if (agent === 'xs') {
-      if (scenario === 'lockdownModule' || scenario === 'module') {
-        begin(test);
-        yield await testXs(test, { ses: false, tacet });
-      }
-    }
-    if (agent === 'sesXs') {
-      if (scenario === 'lockdownModule' || scenario === 'module') {
-        begin(test);
-        yield await testXs(test, { ses: true, tacet });
-      }
+    begin(test);
+    if (!agentRunsScenario(scenario)) {
+      // Report the scenario as an explicit skip rather than silently dropping
+      // it, so a run and `--list` enumerate the same scenarios and un-covered
+      // cases stay visible.
+      yield { ...test, skipped: true };
+    } else if (agent === 'xs') {
+      yield await testXs(test, { ses: false, tacet });
+    } else if (agent === 'sesXs') {
+      yield await testXs(test, { ses: true, tacet });
     } else if (agent === 'sesNode') {
       if (scenario === 'lockdownModule') {
-        begin(test);
         yield await testSesNodeLockdownModule(test, { tacet });
-      }
-      if (scenario === 'module') {
-        begin(test);
+      } else {
         yield await testSesNodeModule(test, { tacet });
       }
+    } else {
+      yield { ...test, skipped: true };
     }
   }
 }
@@ -220,6 +239,7 @@ const main = async () => {
   // for progress toward obviating the shim.
   const stream = new TestStream(fileURLToPath(new URL('..', import.meta.url)), {
     paths: positionals.length ? positionals : undefined,
+    acceptVersion: corpusVersion,
   });
   const conditions = Object.fromEntries(
     (flagArguments ?? []).map(flag => [flag, true]),
