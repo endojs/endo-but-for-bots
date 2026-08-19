@@ -25,7 +25,12 @@ import { mapReader } from '@endo/stream';
 // See designs/fs-interface-consolidation.md § C4.
 import { ReadableBlobRangeInterface } from '@endo/platform/fs/lite';
 import { toSafeNumber } from '@endo/platform/fs/extended/shared/helpers.js';
-import { GitTreeInterface } from '@endo/exo-git';
+import {
+  GitTreeInterface,
+  gitBlobHelp,
+  gitTreeHelp,
+  makeHelp,
+} from '@endo/exo-git';
 
 // `TextDecoder` is portable across XS, browsers, and SES realms;
 // prefer it over `Buffer.from(...).toString('utf8')` per the project
@@ -56,6 +61,7 @@ const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
  *   GitRestoreOptions,
  *   GitWorktreeAddOptions,
  *   ReadableTree,
+ *   GitTree,
  * } from '@endo/exo-git'
  * @import {
  *   GitTreeEntry,
@@ -2246,19 +2252,15 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
         );
       },
 
-      /** @param {string} [method] */
-      help: method =>
-        method === undefined
-          ? 'GitBlob: read-only blob over a git object (text, json, streamBase64, getInfo, fetch).'
-          : `No documentation for method ${method}.`,
+      help: makeHelp(gitBlobHelp),
     });
 
   /**
    * @param {string} treeOid
-   * @returns {ReadableTree}
+   * @returns {GitTree}
    */
   const makeGitTree = treeOid => {
-    /** @type {ReadableTree} */
+    /** @type {GitTree} */
     let self;
 
     /**
@@ -2300,6 +2302,8 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
     };
 
     self = makeExo('GitTree', GitTreeInterface, {
+      help: makeHelp(gitTreeHelp),
+
       /**
        * Returns a `PassableBytesReader` over the
        * `git archive --format=tar` stream.
@@ -2341,7 +2345,7 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
         const segments = normalizeTreePath(pathArgs);
         if (segments.length > 0) {
           const subtree = await lookupSegments(segments);
-          return /** @type {ReadableTree} */ (subtree).list();
+          return /** @type {GitTree} */ (subtree).list();
         }
         const entries = await listTreeEntries(treeOid);
         return harden(entries.map(entry => entry.name));
@@ -3303,7 +3307,7 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
      * implement `ReadableBlob`.
      *
      * @param {string} ref
-     * @returns {Promise<ReadableTree>}
+     * @returns {Promise<GitTree>}
      */
     tree: async ref => {
       const revision = requireRevision(ref, 'tree.ref');

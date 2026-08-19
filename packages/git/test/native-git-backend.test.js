@@ -3,6 +3,8 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
+import { E } from '@endo/eventual-send';
+
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -66,6 +68,78 @@ test('gitClone rejects unsafe clone boundaries before transport', async t => {
     }),
     { message: /destination mount must be empty/ },
   );
+});
+
+test('NativeGitBackend.tree documents every method GitTree advertises', async t => {
+  const { backend, repoRoot } = await provisionRepo(t);
+  await fs.promises.writeFile(path.join(repoRoot, 'README.md'), 'hello\n');
+  await execFileAsync('git', ['add', 'README.md'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'init'],
+    { cwd: repoRoot },
+  );
+
+  const tree = await backend.tree('HEAD');
+  /** @type {string[]} */
+  const advertised =
+    // eslint-disable-next-line no-underscore-dangle
+    await E(/** @type {any} */ (tree)).__getMethodNames__();
+  const methods = advertised.filter(name => !name.startsWith('__'));
+  /** @type {string[]} */
+  const [overview, unknown, ...docs] = await Promise.all([
+    E(tree).help(),
+    E(tree).help('unknownMethod'),
+    ...methods.map(method => E(tree).help(method)),
+  ]);
+  t.true(overview.startsWith('GitTree - '));
+  methods.forEach((method, index) => {
+    const doc = docs[index];
+    t.not(doc, '', `GitTree.${method} must have documentation`);
+    t.true(
+      doc.startsWith(`${method}(`),
+      `GitTree.${method} documentation must open with its signature`,
+    );
+  });
+  // The fallback wording is spelled out rather than imported so the test
+  // pins what a caller actually sees.
+  t.is(unknown, 'No documentation available for method "unknownMethod".');
+});
+
+test('NativeGitBackend.tree exposes GitBlob help through eventual send', async t => {
+  const { backend, repoRoot } = await provisionRepo(t);
+  await fs.promises.writeFile(path.join(repoRoot, 'README.md'), 'hello\n');
+  await execFileAsync('git', ['add', 'README.md'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'init'],
+    { cwd: repoRoot },
+  );
+
+  const tree = await backend.tree('HEAD');
+  const blob = await tree.lookup('README.md');
+  const blobRef = E(/** @type {any} */ (blob));
+  /** @type {string[]} */
+  const advertised =
+    // eslint-disable-next-line no-underscore-dangle
+    await E(/** @type {any} */ (blob)).__getMethodNames__();
+  const methods = advertised.filter(name => !name.startsWith('__'));
+  /** @type {string[]} */
+  const [overview, unknown, ...docs] = await Promise.all([
+    blobRef.help(),
+    blobRef.help('unknownMethod'),
+    ...methods.map(method => blobRef.help(method)),
+  ]);
+  t.true(overview.startsWith('GitBlob - '));
+  methods.forEach((method, index) => {
+    const doc = docs[index];
+    t.not(doc, '', `GitBlob.${method} must have documentation`);
+    t.true(
+      doc.startsWith(`${method}(`),
+      `GitBlob.${method} documentation must open with its signature`,
+    );
+  });
+  t.is(unknown, 'No documentation available for method "unknownMethod".');
 });
 
 /**
