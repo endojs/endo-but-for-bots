@@ -74,7 +74,8 @@ const makeByteSource = () => {
 };
 
 /**
- * @param {{ spawnGate?: Promise<unknown>, afterAdmission?: () => void, softRefuse?: boolean, brokenSignals?: boolean, lifecycle?: boolean, context?: any }} [options]
+ * @typedef {(ms: number) => { promise: Promise<void>, cancel: () => void }} MakeDelay
+ * @param {{ spawnGate?: Promise<unknown>, afterAdmission?: () => void, softRefuse?: boolean, brokenSignals?: boolean, lifecycle?: boolean, context?: any, makeDelay?: MakeDelay }} [options]
  */
 const makeDriverFixture = (options = {}) => {
   const stdout = makeByteSource();
@@ -143,11 +144,14 @@ const makeDriverFixture = (options = {}) => {
     },
   });
 
-  const factory = makeSandboxFactory({
-    drivers: harden([driver]),
-    scratchProvider,
-    context: options.context,
-  });
+  const factory = makeSandboxFactory(
+    {
+      drivers: harden([driver]),
+      scratchProvider,
+      context: options.context,
+    },
+    { makeDelay: options.makeDelay },
+  );
 
   return harden({
     factory,
@@ -476,15 +480,31 @@ test('timeout escalates a soft-kill refusal and reaps', async t => {
 
 test('a descendant-held pipe cannot hold wait past bounded drain', async t => {
   t.timeout(2000);
-  const fixture = makeDriverFixture();
+  const drain = makePromiseKit();
+  const drainStarted = makePromiseKit();
+  /** @type {MakeDelay} */
+  const makeDelay = ms => {
+    t.is(ms, 250);
+    drainStarted.resolve(undefined);
+    return harden({ promise: drain.promise, cancel: () => undefined });
+  };
+  const fixture = makeDriverFixture({ makeDelay });
   const handle = await makeHandle(fixture);
   t.teardown(() => E(handle).dispose());
   const proc = await E(handle).spawn(harden(['/bin/fake']));
   fixture.stderr.end();
   fixture.finish();
-  const started = Date.now();
-  t.deepEqual(await E(proc).wait(), { code: 0, signal: null });
-  t.true(Date.now() - started < 1500, 'wait is bounded independently of EOF');
+  const wait = E(proc).wait();
+  t.is(
+    await Promise.race([
+      wait.then(() => 'wait'),
+      drainStarted.promise.then(() => 'drain'),
+    ]),
+    'drain',
+    'wait must remain pending until the bounded drain starts',
+  );
+  drain.resolve(undefined);
+  t.deepEqual(await wait, { code: 0, signal: null });
 });
 
 test('driver availability fails closed without lifecycle proof', async t => {
