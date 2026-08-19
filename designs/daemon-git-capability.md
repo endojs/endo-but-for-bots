@@ -15,7 +15,7 @@
 
 Define a local-git capability `Git` whose authority is derived from an already-authorized `EndoMount` (not from a path string).
 Worktree operations (status / diff / log / add / commit / branch / merge / rebase / stash) and historical reads live on `Git`; `Git.readOnly()` attenuates the cap for read-only auditor agents, matching the `EndoMount.readOnly()` idiom.
-`filesystemAt(ref)` is the canonical agent-facing historical-read entry point, returning an `@endo/endo-fs` `Filesystem` view of the ref's tree ([endo-fs-from-git](endo-fs-from-git.md)). Platform and admin code separately receive a pinned-history capability for Git-specific bulk operations. `tree(ref)` is the current compatibility surface, not the intended permanent second historical-read vocabulary.
+`filesystemAt(ref)` is the single agent-facing historical-read method, returning an `@endo/endo-fs` `Filesystem` view of the ref's tree ([endo-fs-from-git](endo-fs-from-git.md)); it is the rename of the earlier `tree(ref)`, not a second surface kept beside it. Platform and admin code separately receive a pinned-tree capability (`treeAt(ref)`) for Git-specific bulk-archive operations.
 Path-bearing inputs are `EndoMountEntry` values, not free-form strings.
 The first backend is native git (`NativeGitBackend`) on a pinned `git >= 2.30`, with the hardening envelope (sanitized env, askpass-only authentication, allowlist, repo-local-filter rejection) called out separately from the essential `GitBackend` contract so a future JS backend can implement the essential parts without inheriting native-only methods.
 Structured result shapes for diff / show / merge / rebase / stash arrive in a later phase; the first phase returns those as text so consumers can start integrating against the path-bearing inputs immediately.
@@ -28,7 +28,7 @@ This document assumes you know the following primitives from [daemon-mount-capab
 - **`EndoMountFile`** is the live mutable-file handle minted by `EndoMount.lookup()`; it is structurally compatible with `ReadableBlob`.
 - **`EndoMountEntry`** is the mount-scoped value-shaped descriptor for a path that may not currently exist on disk; the `Git` capability consumes entries (not free-form path strings) for its path-bearing methods.
 - **`EndoMountBacking`** is the host-private Exo facet on the mount formula that trusted daemon code uses to reach the physical worktree without leaking the path to guests; `provideGit` uses it to verify a mount is physical.
-- **`ReadableTree` / `ReadableBlob`** are the shared read-surface interfaces in [platform-fs](platform-fs.md); `Git.tree(ref)` returns a `ReadableTree`.
+- **`ReadableTree` / `ReadableBlob`** are the shared read-surface interfaces in [platform-fs](platform-fs.md); the git-tree backend exposes historical reads through these read-surface shapes, which `Git.filesystemAt(ref)` lifts into a full `Filesystem`.
 - **`Filesystem`** is `@endo/endo-fs`'s richer read surface (directories, files, open-file handles, `BlobRef` snapshots, cursor listings) — the same shape the content layer exposes for the live worktree; `Git.filesystemAt(ref)` returns a read-only `Filesystem` over a ref's tree ([endo-fs-from-git](endo-fs-from-git.md)).
 
 ## What is the Problem Being Solved?
@@ -98,7 +98,7 @@ That work should remain useful as a reference for a `NativeGitBackend`.
 |---|---|
 | Repository root string configured authority | `EndoMount` carries public worktree authority |
 | Path strings were passed into git calls | `EndoMountEntry` values are passed after mount-local resolution |
-| Git only meant commands against a worktree | Git exposes worktree mutation, `filesystemAt(ref)` / `tree(ref)` for immutable historical reads, and `readOnly()` for in-place attenuation |
+| Git only meant commands against a worktree | Git exposes worktree mutation, `filesystemAt(ref)` for immutable historical reads, and `readOnly()` for in-place attenuation |
 | Adapter details leaked into the tool design | Public `Git` capability is backend-shaped (native-first), with `NativeGitBackend` named separately |
 
 ## Architecture
@@ -327,13 +327,12 @@ interface Git {
   stashPop(index?: number): Promise<void>;
   stashDrop(index?: number): Promise<void>;
 
-  // Historical read (one-turn read on the same capability).
-  // See § Historical Read: Agent Projection and Platform History.
+  // Historical read (one-turn read on the same capability).  This is the
+  // sole agent-facing historical-read method; it is the rename of the
+  // earlier tree(ref), returning the full Filesystem shape rather than the
+  // narrower ReadableTree.  See § Historical Read: Agent Projection and
+  // Platform Tree.
   filesystemAt(ref: GitRef | string): Promise<Filesystem>;
-
-  // Compatibility during the migration only. See the migration sequence
-  // in daemon-git-next-steps.md.
-  tree(ref: GitRef | string): Promise<ReadableTree>;
 
   // Attenuation to a read-only posture.  Mutation methods on the returned
   // cap throw at runtime in the first implementation phase; the type
@@ -342,34 +341,31 @@ interface Git {
 }
 ```
 
-`tree(ref)` returns the current compatibility surface defined by `GitTreeProvider` below. It remains while callers migrate, but is not part of the target ordinary-agent vocabulary.
-
-### Historical Read: Agent Projection and Platform History
+### Historical Read: Agent Projection and Platform Tree
 
 Git refs and filesystem paths select different coordinates. A ref selects one repository version; a filesystem path selects content within that version. `filesystemAt(ref)` is the bridge: it resolves the ref once to an immutable tree OID, then returns a read-only filesystem pinned to that tree. Moving a branch later cannot change the returned filesystem.
 
-- **`filesystemAt(ref)` is the ordinary agent-facing historical-read method.**
+- **`filesystemAt(ref)` is the sole agent-facing historical-read method.**
   It lifts the ref's tree into the full `@endo/endo-fs` `Filesystem` shape — the same vocabulary the content layer exposes for the live worktree — so an agent inspects `HEAD~1`, another branch, or a remote-tracking ref as an ordinary filesystem: directory listings, open-file handles, range reads, `BlobRef` snapshots.
   The view is natively read-only; write verbs reject at the cap boundary.
+  It is a straight **rename** of the earlier `tree(ref)`, which returned the narrower `ReadableTree` ([platform-fs](platform-fs.md)); the two are not kept side by side and there is no compatibility window. Callers that held `tree(ref)` are renamed to `filesystemAt(ref)` in place. The `ReadableTree` and extended `Directory` protocols differ materially — `list` result shape, `has`, child/blob protocols — so this is a shape change, not a drop-in alias; because we do not carry backward compatibility, that shape change travels with the rename rather than being deferred behind a second retained API.
   Its design and implementation status live in [endo-fs-from-git](endo-fs-from-git.md).
-- **Platform and admin code use a richer pinned-history capability.**
-  The target name is provisional, but its authority boundary is not:
+- **Platform and admin code use a richer pinned-tree capability.**
+  A ref resolved once to an immutable tree OID is a pinned *tree*, a real Git object — not a "history", which is not a Git plumbing concept. The method and type names below say so directly; the authority boundary they draw is the durable part:
 
   ```ts
   interface PlatformGit {
-    historyAt(ref: GitRef | string): Promise<PinnedGitHistory>;
+    treeAt(ref: GitRef | string): Promise<PinnedGitTree>;
   }
 
-  interface PinnedGitHistory {
+  interface PinnedGitTree {
     filesystem(): Promise<Filesystem>;
     archiveLossless(): Promise<boolean>;
     archiveTar(): Promise<PassableBytesReader>;
   }
   ```
 
-  `historyAt(ref)` resolves the ref once. Its `filesystem()` and archive methods consequently describe the same immutable tree OID. This keeps Git-specific bulk authority available without granting it to ordinary agents or adding tar methods to the general filesystem protocol.
-- **`tree(ref)` is a migration compatibility surface.**
-  It directly returns the narrower shared read surface ([platform-fs](platform-fs.md)) for existing callers. The `ReadableTree` and extended `Directory` protocols differ materially, including `list` result shape, `has`, and child/blob protocols, so it is not safe to call one a structural projection of the other. That migration work is real, but it does not justify retaining two ordinary historical-read APIs indefinitely.
+  `treeAt(ref)` resolves the ref once to its tree OID. Its `filesystem()` and archive methods consequently describe that same immutable tree. This keeps Git-specific bulk-archive authority available without granting it to ordinary agents or adding tar methods to the general filesystem protocol.
 
 The bulk archive path is a design requirement, not an optional optimization. Check-in resolves a ref once and prefers `archiveTar()` only when `archiveLossless()` says the archive faithfully represents that tree. It otherwise traverses the `Filesystem` as the correctness fallback. The fallback handles attributes and gitlinks correctly, but must not become the normal path for lossless Git trees.
 
@@ -385,7 +381,7 @@ A read-only auditor agent holds the attenuated `Git`; the operator hands it `awa
 
 The design panel recommended splitting tree access off `Git` into a separately-grantable `GitTreeProvider` capability obtained via `git.trees()`.
 Two further shapes were considered.
-The then-chosen shape (tree on `Git` plus `Git.readOnly()`) was picked for consistency with the existing `EndoMount.readOnly()` idiom and for the one-turn cost on the common case. It is historical context, superseded for new agent-facing design by § Historical Read: Agent Projection and Platform History.
+The then-chosen shape (a historical-read method on `Git` plus `Git.readOnly()`) was picked for consistency with the existing `EndoMount.readOnly()` idiom and for the one-turn cost on the common case. It is historical context, superseded for new agent-facing design by § Historical Read: Agent Projection and Platform Tree. The table below records the shapes as they were named during the panel; the chosen `Git.tree(ref)` method has since been renamed to `Git.filesystemAt(ref)` (returning the full `Filesystem` rather than `ReadableTree`) — the axis the table weighs (method-on-`Git` vs. separately-grantable provider) is unchanged by that rename.
 
 | Shape | Pros | Cons |
 |---|---|---|
@@ -394,7 +390,7 @@ The then-chosen shape (tree on `Git` plus `Git.readOnly()`) was picked for consi
 | **Considered: both axes (`Git.tree(ref)` + `Git.readOnly()` + separately-grantable `GitTreeProvider` via host shortcut)** | Covers every use case: one-turn tree access for `Git` holders, read-only attenuation posture, and tree-only grants for build systems / archivers that should never see worktree state. | Widest public surface.  Two ways to obtain a tree-reading capability (via `Git.tree(ref)` and via the separately-granted provider) is the kind of accidental complexity creep an implementation later regrets. |
 
 If a real build-system or code-archiver use case surfaces that wants a genuinely tree-only grant (without worktree-method advertisement at all), the implementation can revisit and add the separately-grantable `GitTreeProvider` shape.
-Until then, an attenuated `Git` plus `tree(ref)` covers the auditor case without inventing a new cap type.
+Until then, an attenuated `Git` plus `filesystemAt(ref)` covers the auditor case without inventing a new cap type.
 
 The initial implementation can keep some result types textual where the stable structure is not yet worth committing to.
 The path-bearing inputs should not regress back to arbitrary strings.
@@ -415,16 +411,11 @@ const readme = await E(worktree).entry('README.md');
 await E(git).add([readme]);
 const commit = await E(git).commit('docs: update README');
 
-// browse history without touching the worktree: filesystemAt is the
-// historical-read method (full Filesystem shape) ...
+// browse a ref without touching the worktree: filesystemAt is the sole
+// historical-read method (full Filesystem shape)
 const previous = await E(git).filesystemAt('HEAD~1');
 const oldReadmeFile = await E(E(previous).root()).lookup('README.md');
-
-// ... and tree(ref) remains the existing ReadableTree compatibility
-// surface for callers that want the narrower shared read surface
-const headTree = await E(git).tree('HEAD');
-const oldReadme = await E(headTree).lookup('README.md');
-const text = await E(oldReadme).text();
+const text = await E(oldReadmeFile).text();
 
 // hand a read-only attenuated Git to an auditor agent
 const auditor = await E(git).readOnly();
@@ -508,25 +499,14 @@ Without them, the design inevitably falls back to free-form relative strings and
 
 ### Read Surface
 
-The git-tree backend serves the agent-facing filesystem projection, the platform/admin pinned-history capability, and the temporary `ReadableTree` compatibility surface (§ Historical Read: Agent Projection and Platform History). `Git.filesystemAt(ref)` lifts a ref's tree into the full `@endo/endo-fs` `Filesystem` via the shared `wrapBackend` seam ([endo-fs-from-git](endo-fs-from-git.md)). The platform/admin history capability retains archive operations for bulk check-in. `Git.tree(ref)` returns the narrower `ReadableTree` only until migration completes:
+The git-tree backend serves both historical-read surfaces (§ Historical Read: Agent Projection and Platform Tree): the agent-facing filesystem projection and the platform/admin pinned-tree capability. `Git.filesystemAt(ref)` lifts a ref's tree into the full `@endo/endo-fs` `Filesystem` via the shared `wrapBackend` seam ([endo-fs-from-git](endo-fs-from-git.md)). The platform/admin pinned-tree capability (`treeAt(ref)`) additionally retains archive operations for bulk check-in.
 
-```ts
-interface GitTreeProvider {
-  // Documented name for the shape Git.tree(ref) returns when factored
-  // out conceptually; tree access is a method on Git itself, not a
-  // separately-grantable cap.  See § Alternatives Considered for Tree
-  // Access Shape for the trade-off.
-  tree(ref: GitRef | string): Promise<ReadableTree>;
-}
-```
-
-The returned tree should:
+Underneath both, the backend resolves a ref to an immutable tree. That resolved-tree read should:
 
 - resolve the ref in the repository object database;
-- expose directories as `ReadableTree`;
-- expose blobs as `ReadableBlob`;
+- expose directories and blobs read-only (as the `Filesystem`/`Directory`/`ReadableBlob` shapes the projection lifts them into);
 - never expose mutation methods;
-- be usable anywhere a `ReadableTree` is accepted today, including checkin, checkout, staging, and later VFS mounting.
+- be usable everywhere the historical-read projection is accepted, including checkin, checkout, staging, and later VFS mounting.
 
 ### VFS Integration
 
@@ -674,14 +654,14 @@ Remote repository interaction is still required for an agent MVP; it is specifie
 - No push, pull, fetch, clone, remote mutation, or credential helpers (those live separately on [daemon-git-remotes](daemon-git-remotes.md)).
 - No hooks, aliases, external diff, fsmonitor, textconv, custom filters, merge drivers, or signing helpers unless a future explicit capability design authorizes them.
   Repo-local executable filter / merge-driver config is verified absent before each mutating worktree operation (`add`, `restore`, `commit`, branch create / rename / delete / switch, `detach`, `switch`, `merge`, `rebase`, and the worktree-touching `stash*` verbs).
-  Read-only inspection methods (`status`, `diff`, `log`, `show`, `revParse`, `branches`, `currentBranch`, `stashList`, `stashShow`, `tree`) dispatch straight to the backend and do not re-check, because they cannot invoke a filter or merge driver in the first place.
+  Read-only inspection methods (`status`, `diff`, `log`, `show`, `revParse`, `branches`, `currentBranch`, `stashList`, `stashShow`, `filesystemAt`) dispatch straight to the backend and do not re-check, because they cannot invoke a filter or merge driver in the first place.
 - No accepting arbitrary host paths; all path-bearing operations consume `EndoMountEntry` values from the same worktree mount.
 
 ### Read-Only and Snapshot Interactions
 
 - A read-only worktree mount may support inspection and immutable tree reads but must reject mutating git operations.
 - `git.filesystemAt(ref)` returns an immutable read-only `Filesystem`; it never exposes mutation.
-- The platform/admin pinned-history capability may additionally expose lossless archive extraction for bulk operations, but ordinary filesystem capabilities do not.
+- The platform/admin pinned-tree capability may additionally expose lossless archive extraction for bulk operations, but ordinary filesystem capabilities do not.
 - `git.readOnly()` returns a `Git` whose mutation methods throw; use it to grant an auditor agent inspection authority without the worktree mutation surface.
 - `worktree.snapshot()` remains the way to capture the live worktree into content-addressed snapshot storage.
 
@@ -738,13 +718,13 @@ Complete the required phases from [daemon-mount-capabilities](daemon-mount-capab
 
 ### Phase 5: Historical Implementation Record
 
-- [x] Implement `Git.tree(ref) -> ReadableTree` directly on the `Git` cap (the `GitTreeProvider` shape names the returned read surface). This current compatibility implementation is superseded as a target by the migration sequence in [daemon-git-next-steps](daemon-git-next-steps.md).
+- [x] Implement a historical-read method directly on the `Git` cap. As first shipped this was `Git.tree(ref) -> ReadableTree`; it is renamed to `Git.filesystemAt(ref) -> Filesystem` (§ Historical Read: Agent Projection and Platform Tree), the single agent-facing historical-read method, with the rename and `ReadableTree`→`Filesystem` shape change owned by the migration sequence in [daemon-git-next-steps](daemon-git-next-steps.md).
 - [ ] Implement `Git.readOnly()` returning an attenuated `Git`; mutation methods throw at runtime in this phase and are dropped from the type in Phase 7 alongside the structured-result-shape migration.
 - [ ] Add tests for browsing blobs and subtrees at specific refs.
 - [ ] Add tests for read-only attenuation: every mutation method on a `readOnly()` cap throws; every read method still works.
 - [ ] Verify compatibility with existing checkin / checkout / stage-tree flows.
 - [ ] Add a backend-private bulk tree path for large materialization operations, initially using `git archive --format=tar` if the native backend remains the practical implementation.
-- [ ] Keep the read surface separable enough that platform/admin bulk history can be introduced without widening the ordinary agent-facing `Filesystem` surface. The replacement sequence owns migration and removal of `Git.tree(ref)` (see [daemon-git-next-steps](daemon-git-next-steps.md)).
+- [ ] Keep the read surface separable enough that the platform/admin pinned-tree capability (`treeAt(ref)`, with bulk-archive authority) can be introduced without widening the ordinary agent-facing `Filesystem` surface. The migration sequence owns the rename of `Git.tree(ref)` to `Git.filesystemAt(ref)` (see [daemon-git-next-steps](daemon-git-next-steps.md)).
 
 ### Phase 6: Agent Adapters and Migration
 
@@ -839,7 +819,7 @@ No open questions remain on this document; revisit if real implementation surfac
 
 ### Resolved (recorded as Design Decisions)
 
-- Tree-access shape (`tree(ref)` on `Git` plus `readOnly()` attenuation; separately-grantable `GitTreeProvider` is a documented alternative for future use cases) — decision 3 and § Alternatives Considered for Tree Access Shape.
+- Historical-read shape (`filesystemAt(ref)` on `Git` plus `readOnly()` attenuation; separately-grantable `GitTreeProvider` is a documented alternative for future use cases) — decision 3 and § Alternatives Considered for Tree Access Shape.
 - Structured `diff()` shape — decision 6.
 - Structured conflict state in phase 4 — decision 6.
 - Pinning repository identity separately from worktree mount — decision 7.
@@ -854,9 +834,9 @@ No open questions remain on this document; revisit if real implementation surfac
    No host API mints local `Git` from a raw path string once the mount model exists.
 2. **Entries, not strings, carry path authority.**
    Path strings may appear at UI boundaries, but git operations consume mount-minted descriptors.
-3. **Live worktree, ordinary historical read, and bulk history are separately layered.**
-   Mutable worktree operations and the historical-read methods both live on `Git`; read-only attenuation comes via `Git.readOnly()`, matching the `EndoMount.readOnly()` idiom.
-   `filesystemAt(ref)` is the sole ordinary agent-facing historical-read entry point. A platform/admin Git facet provides pinned-history and archive authority. `tree(ref)` is a temporary `ReadableTree` compatibility surface whose removal is owned by the migration sequence in [daemon-git-next-steps](daemon-git-next-steps.md) (§ Historical Read: Agent Projection and Platform History; [endo-fs-from-git](endo-fs-from-git.md)).
+3. **Live worktree, ordinary historical read, and bulk-archive access are separately layered.**
+   Mutable worktree operations and the historical-read method both live on `Git`; read-only attenuation comes via `Git.readOnly()`, matching the `EndoMount.readOnly()` idiom.
+   `filesystemAt(ref)` is the sole ordinary agent-facing historical-read entry point — the rename of the earlier `tree(ref)`, not a second surface kept beside it (there is no backward-compatibility window; § Historical Read: Agent Projection and Platform Tree; [endo-fs-from-git](endo-fs-from-git.md)). A platform/admin Git facet provides the richer pinned-tree capability (`treeAt(ref)`) with bulk-archive authority. A "Git history" is not a plumbing object; the platform surface pins a ref to its immutable *tree*, and the names say so.
    An audit-grant for a read-only auditor agent is `await E(git).readOnly()`; the auditor holds an attenuated `Git`.
    See § Alternatives Considered for Tree Access Shape for the split-capability variant the design panel originally recommended and the rationale for picking attenuation instead.
 4. **Backend choice is best-effort pluggable, not contractually swappable.**

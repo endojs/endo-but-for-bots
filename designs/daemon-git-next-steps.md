@@ -35,8 +35,8 @@ Naming them explicitly is the load-bearing contribution of this roadmap, because
 | **Content** | `EndoMount` / `EndoMountFile` / `EndoMountEntry` | The live worktree: read, list, edit, stat, snapshot one confined physical subtree. The filesystem is the content authority — Git never becomes the way you edit a file. | [daemon-mount-capabilities](daemon-mount-capabilities.md) |
 | **Versioning** | `Git` | Status, diff, log, stage, commit, branch, merge, rebase, stash over the content layer's worktree. Derived from an `EndoMount`, never from a path. | [daemon-git-capability](daemon-git-capability.md) |
 | **Network + credential** | `GitRemote` | Bounded fetch / pull / push against one host-chosen endpoint, with non-extractable credentials and policy-fixed refspecs. The only layer that crosses the daemon boundary. | [daemon-git-remotes](daemon-git-remotes.md) |
-| **Historical read** | `Git.filesystemAt(ref)` | Read-only snapshots of any ref: `HEAD~1`, a branch tip, a remote-tracking ref. The agent "looks at" history as an ordinary filesystem; it cannot mutate through this view. | [daemon-git-capability](daemon-git-capability.md) § Historical Read: Agent Projection and Platform History; [endo-fs-from-git](endo-fs-from-git.md) |
-| **Bulk storage (detail)** | platform/admin pinned history + archive / CAS | How many files from one revision move efficiently into a sink (content store, scratch mount). The platform/admin facet makes archive authority explicit; tar bytes are never part of the ordinary agent filesystem API. | [daemon-git-capability](daemon-git-capability.md) § Historical Read: Agent Projection and Platform History |
+| **Historical read** | `Git.filesystemAt(ref)` | Read-only snapshots of any ref: `HEAD~1`, a branch tip, a remote-tracking ref. The agent "looks at" a past revision as an ordinary filesystem; it cannot mutate through this view. | [daemon-git-capability](daemon-git-capability.md) § Historical Read: Agent Projection and Platform Tree; [endo-fs-from-git](endo-fs-from-git.md) |
+| **Bulk storage (detail)** | platform/admin pinned-tree + archive / CAS | How many files from one revision move efficiently into a sink (content store, scratch mount). The platform/admin facet makes archive authority explicit; tar bytes are never part of the ordinary agent filesystem API. | [daemon-git-capability](daemon-git-capability.md) § Historical Read: Agent Projection and Platform Tree |
 
 The split is the discipline that keeps the loop honest:
 
@@ -58,7 +58,7 @@ flowchart TD
   git["Git — versioning"]
   remote["GitRemote — bounded network + credential"]
   hist["Git.filesystemAt(ref) — historical read-only Filesystem"]
-  bulk["pinned history archive / CAS — platform-admin bulk data plane"]
+  bulk["pinned-tree archive / CAS — platform-admin bulk data plane"]
 
   mount --> git
   git --> remote
@@ -92,14 +92,14 @@ Each is a dispatchable work item or a pointer to the design that owns it.
   The bootstrap design (and the identity boundary as a section or sibling) lives in its own `daemon-git-clone.md`; depends on the `GitRemote` composition being stable.
 
 - [ ] **Layer historical reads and migrate off `tree(ref)`.**
-  [daemon-git-capability](daemon-git-capability.md) § Historical Read: Agent Projection and Platform History owns the destination: `filesystemAt(ref)` is the sole ordinary agent-facing historical-read API, and a platform/admin Git facet provides a pinned-history capability with filesystem and archive projections over one resolved tree OID.
+  [daemon-git-capability](daemon-git-capability.md) § Historical Read: Agent Projection and Platform Tree owns the destination: `filesystemAt(ref)` is the sole ordinary agent-facing historical-read API — the rename of the earlier `tree(ref)`, carried as a rename rather than a compatibility surface — and a platform/admin Git facet provides a pinned-tree capability with filesystem and archive projections over one resolved tree OID.
 
-  1. Name and expose the platform/admin history facet. `historyAt(ref)` is the provisional spelling. It must resolve a ref once, then make both `filesystem()` and archive operations describe that exact immutable tree.
+  1. Name and expose the platform/admin pinned-tree facet. `treeAt(ref)` is the provisional spelling (a ref pinned to its immutable *tree* — a real Git object — not a "history", which is not a plumbing concept). It must resolve a ref once, then make both `filesystem()` and archive operations describe that exact immutable tree.
   2. Move `archiveTar()` and `archiveLossless()` from the general `ReadableTree` return surface to that facet. Preserve their public availability to platform/admin callers, but do not add archive methods to the extended filesystem protocol.
-  3. Teach generic check-in to consume the canonical `Filesystem` protocol as its correctness fallback. When the pinned history reports a lossless archive, stream it into check-in instead of walking the tree.
+  3. Teach generic check-in to consume the canonical `Filesystem` protocol as its correctness fallback. When the pinned tree reports a lossless archive, stream it into check-in instead of walking the tree.
   4. Add tests that prove both projections are pinned to the same tree even if the supplied branch moves. Add lossless and lossy archive cases, including export-ignore and gitlinks, and a performance guard or benchmark that shows lossless bulk check-in takes the archive path.
-  5. Migrate in-tree `tree(ref)` consumers and tests. The extended `Directory` and lite `ReadableTree` protocols are not structurally interchangeable, so replace call sites rather than preserving a permanent `asReadableTree(filesystem)` bridge.
-  6. Remove `tree(ref)`, the duplicate general tree/blob traversal implementation, and compatibility types once consumers are migrated. Document any external compatibility or release handling before removal.
+  5. Rename in-tree `tree(ref)` consumers and tests to `filesystemAt(ref)`. The extended `Directory` and lite `ReadableTree` protocols are not structurally interchangeable, so replace call sites rather than preserving a permanent `asReadableTree(filesystem)` bridge — this is the rename, and we do not carry backward compatibility for it.
+  6. Remove the old `tree(ref)` spelling, the duplicate general tree/blob traversal implementation, and its compatibility types once consumers are renamed.
 
   `filesystemAt(ref)` remains canonical because it exposes the same `Filesystem` shape the content layer uses for the live worktree. It also carries the documented object-identity requirements: a filesystem view uses Git tree/blob identity for QIDs and reports the repository object format in `BlobRef.algorithm` ([endo-fs-from-git](endo-fs-from-git.md) § Status).
 
@@ -126,7 +126,7 @@ They are named so a builder dispatch does not mistake them for gaps in the miles
 | Design | Relationship |
 |---|---|
 | [daemon-mount-capabilities](daemon-mount-capabilities.md) | Content layer (mount-scoped descriptors, snapshot, host-private backing). |
-| [daemon-git-capability](daemon-git-capability.md) | Versioning + historical-read layers (`Git`, `filesystemAt(ref)`, `readOnly()`, platform/admin pinned history, bulk data plane, Phase 7 structured shapes). |
+| [daemon-git-capability](daemon-git-capability.md) | Versioning + historical-read layers (`Git`, `filesystemAt(ref)`, `readOnly()`, platform/admin pinned-tree capability, bulk data plane, Phase 7 structured shapes). |
 | [endo-fs-from-git](endo-fs-from-git.md) | Historical-read foundation: `Git.filesystemAt(ref)` returning an `@endo/endo-fs` `Filesystem` over the git object database. |
 | [daemon-git-remotes](daemon-git-remotes.md) | Network + credential layer (`GitRemote`, credential injection, `provideGitClone` bootstrap, audit). |
 | [endo-gateway-mcp](endo-gateway-mcp.md) | Defines `@endo/agent-tools` and the `extra` seam (`makeAgentTools(powers, { extra })`) that the agent tool adapters (#416) plug into. |
@@ -142,9 +142,9 @@ They are named so a builder dispatch does not mistake them for gaps in the miles
    New capability designs (the clone bootstrap, the provider advisory layer) are named here but designed in their own documents.
 2. **The layer split is the load-bearing contribution.**
    Content / versioning / network / historical-read / bulk-storage each carry a distinct authority; every roadmap item lands in exactly one layer, and the priority order falls out of which layers gate which.
-   Keeping the layers distinct is what keeps the agent from editing through git, reaching the wire through `Git`, or mutating through a history view.
+   Keeping the layers distinct is what keeps the agent from editing through git, reaching the wire through `Git`, or mutating through a read-only historical view.
 3. **Historical read has one ordinary agent-facing entry point.**
-   `filesystemAt(ref)` returns a `Filesystem` pinned to a resolved tree. A separately scoped platform/admin history facet retains archive authority over that same tree. `tree(ref)` is a compatibility surface to remove through the concrete migration sequence above, not a second permanent agent API.
+   `filesystemAt(ref)` returns a `Filesystem` pinned to a resolved tree. A separately scoped platform/admin pinned-tree facet (`treeAt(ref)`) retains archive authority over that same tree. `filesystemAt(ref)` is the rename of the earlier `tree(ref)` — carried as a rename through the sequence above, not a second permanent agent API kept for backward compatibility.
 4. **The agent-tools layer belongs to #416, not here.**
    The agent tool adapters were this roadmap's "item 1"; PR #416 makes them concrete (`endo-agent-tools` + `agentry-agent-builder`) and wires this roadmap.
    This document defers to #416 rather than re-specifying the tool surface.
