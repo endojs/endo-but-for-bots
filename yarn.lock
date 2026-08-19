@@ -3085,7 +3085,6 @@ __metadata:
   resolution: "@endo/sandbox@workspace:packages/sandbox"
   dependencies:
     "@endo/cancel": "workspace:^"
-    "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"

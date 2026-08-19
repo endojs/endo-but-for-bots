@@ -44,7 +44,6 @@
     "@endo/promise-kit": "workspace:^"
   },
   "devDependencies": {
-    "@endo/daemon": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/lockdown": "workspace:^",
     "@endo/ses-ava": "workspace:^",
