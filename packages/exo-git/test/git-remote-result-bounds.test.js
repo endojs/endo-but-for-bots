@@ -525,6 +525,7 @@ test('audit log normalizes non-string rejection values before truncating', async
 
 test('GitRemoteInterface rejects a fetch result whose text exceeds the guard ceiling', async t => {
   const exo = makeExo('GitRemote', GitRemoteInterface, {
+    help: () => '',
     inspect: async () => {
       throw new Error('not needed');
     },
@@ -545,6 +546,7 @@ test('GitRemoteInterface rejects a fetch result whose text exceeds the guard cei
 
 test('GitRemoteInterface rejects a fetch result whose updatedRefs exceeds the guard ceiling', async t => {
   const exo = makeExo('GitRemote', GitRemoteInterface, {
+    help: () => '',
     inspect: async () => {
       throw new Error('not needed');
     },
@@ -574,6 +576,7 @@ test('GitRemoteInterface rejects a fetch result whose updatedRefs exceeds the gu
 
 test('GitRemoteInterface accepts a fetch result exactly at the guard ceiling', async t => {
   const exo = makeExo('GitRemote', GitRemoteInterface, {
+    help: () => '',
     inspect: async () => {
       throw new Error('not needed');
     },

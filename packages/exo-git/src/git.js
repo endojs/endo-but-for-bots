@@ -13,6 +13,7 @@ import { readOnly as readOnlyFs } from '@endo/platform/fs/extended/readonly.js';
 import { wrapBackend } from '@endo/platform/fs/extended/wrap-backend.js';
 
 import { makeGitFsBackend } from './git-filesystem.js';
+import { gitHelp, makeHelp } from './help-text.js';
 import {
   GitReaderInterface,
   GitWriterInterface,
@@ -52,6 +53,7 @@ import {
  *   GitWorktreeStatus,
  *   GitWorktreeAddOptions,
  *   GitWorktreeEntry,
+ *   GitTree,
  *   HistoryRewriteEndoGit,
  *   ReadOnlyEndoGit,
  *   ReadOnlyGitWorktree,
@@ -161,8 +163,8 @@ import {
  * @property {(index?: number) => Promise<void>} stashApply
  * @property {(index?: number) => Promise<void>} stashPop
  * @property {(index?: number) => Promise<void>} stashDrop
- * @property {(ref: string) => Promise<ReadableTree>} tree  Returns a
- *   `ReadableTree` exo for the given tree-ish; blobs implement
+ * @property {(ref: string) => Promise<GitTree>} tree  Returns a
+ *   `GitTree` exo for the given tree-ish; blobs implement
  *   `ReadableBlob`.
  * @property {(input: { url?: unknown, refspecs?: unknown, prune?: boolean, tags?: boolean, credential?: GitRemoteCredential, signal?: AbortSignal }) => Promise<RemoteOperationResult>} remoteFetch
  *   Fetch from a policy-bound remote URL.  The caller has already
@@ -951,6 +953,7 @@ function scope(name) {
 // #endregion
 
 const readerMethods = harden({
+  help: makeHelp(gitHelp),
   worktree: worktreeReadOnly,
   status: statusReadOnly,
   trackingStatus,

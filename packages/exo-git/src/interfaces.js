@@ -271,6 +271,8 @@ const GitReaderScopeNameShape = M.eq('reader');
 const GitWriterScopeNameShape = M.or('reader', 'writer');
 const GitRewriterScopeNameShape = M.or('reader', 'writer', 'rewriter');
 
+const HelpMethod = M.call().optional(M.string()).returns(M.string());
+
 // #endregion
 
 /**
@@ -317,6 +319,7 @@ export const GIT_METHOD_GUARDS = harden({
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.string()),
   filesystemAt: M.callWhen(RefArgShape).returns(M.remotable('Filesystem')),
+  help: HelpMethod,
   log: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.arrayOf(GitCommitShape)),
@@ -372,6 +375,7 @@ export const GIT_READER_METHODS = harden([
   'currentBranch',
   'diff',
   'filesystemAt',
+  'help',
   'log',
   'readOnly',
   'revParse',
@@ -480,6 +484,7 @@ export const GitTreeInterface = M.interface('EndoGitTree', {
   archiveLossless: M.callWhen().returns(M.boolean()),
   archiveTar: M.call().returns(M.remotable()),
   has: M.callWhen().rest(M.arrayOf(M.string())).returns(M.boolean()),
+  help: HelpMethod,
   list: M.callWhen().rest(M.arrayOf(M.string())).returns(M.arrayOf(M.string())),
   lookup: M.callWhen(M.or(M.string(), M.arrayOf(M.string()))).returns(
     M.remotable(),
@@ -490,6 +495,7 @@ export const GitRemoteInterface = M.interface('GitRemote', {
   fetch: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
     .returns(RemoteOperationResultShape),
+  help: HelpMethod,
   inspect: M.callWhen().returns(RemoteSnapshotShape),
   pull: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
@@ -501,6 +507,7 @@ export const GitRemoteInterface = M.interface('GitRemote', {
 
 export const GitRemoteControllerInterface = M.interface('GitRemoteController', {
   audit: M.call().returns(M.promise()),
+  help: HelpMethod,
   inspect: M.callWhen().returns(RemoteControllerSnapshotShape),
   revoke: M.call().returns(M.promise()),
   setAllowedBranches: M.call(M.arrayOf(M.string())).returns(M.promise()),
@@ -517,6 +524,7 @@ export const GitRemoteControllerInterface = M.interface('GitRemoteController', {
 export const GitCredentialControllerInterface = M.interface(
   'GitCredentialController',
   {
+    help: HelpMethod,
     inspect: M.callWhen().returns(GitCredentialSnapshotShape),
     revoke: M.call().returns(M.promise()),
     rotate: M.call(M.recordOf(M.string(), M.any())).returns(M.promise()),
@@ -525,8 +533,10 @@ export const GitCredentialControllerInterface = M.interface(
 
 export const BearerCredentialInterface = M.interface('BearerCredential', {
   audience: M.call().returns(M.string()),
+  help: HelpMethod,
 });
 
 export const BasicCredentialInterface = M.interface('BasicCredential', {
   audience: M.call().returns(M.string()),
+  help: HelpMethod,
 });

@@ -19,6 +19,11 @@ import {
 } from './git-remote-policy.js';
 import { gitPairingTokenFor, isGitReadOnly } from './git.js';
 import {
+  gitRemoteControllerHelp,
+  gitRemoteHelp,
+  makeHelp,
+} from './help-text.js';
+import {
   GitRemoteControllerInterface,
   GitRemoteInterface,
 } from './interfaces.js';
@@ -705,6 +710,8 @@ export const makeGitRemote = ({
   };
 
   const remote = makeExo('GitRemote', GitRemoteInterface, {
+    help: makeHelp(gitRemoteHelp),
+
     /** @returns {Promise<RemoteSnapshot>} */
     async inspect() {
       ensureLive();
@@ -899,6 +906,8 @@ export const makeGitRemote = ({
     'GitRemoteController',
     GitRemoteControllerInterface,
     {
+      help: makeHelp(gitRemoteControllerHelp),
+
       async inspect() {
         return harden({ ...snapshotPolicy(), revoked });
       },
