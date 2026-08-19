@@ -56,6 +56,13 @@ test.serial(
     await execFileAsync('git', ['init', '--bare', '-q', bareRemote]);
 
     const host = await fixture.connectHost('provision-host');
+    await E(host).makeDirectory(['tools']);
+    const originalCalendar = await E(host).provideGuest(
+      ['tools', 'calendar-handle'],
+      { agentName: ['tools', 'calendar'] },
+    );
+    await E(originalCalendar).storeValue('original', 'value');
+    const originalCalendarId = await E(host).identify('tools', 'calendar');
     const localRemote = fixture.trackSession(
       await provisionEndoCodeMode({
         harness: 'test',
@@ -78,6 +85,12 @@ test.serial(
               allowLocalFileTransport: true,
             },
           },
+          grants: {
+            calendar: {
+              from: ['tools', 'calendar'],
+              description: 'A calendar service',
+            },
+          },
         },
       }),
     );
@@ -85,7 +98,7 @@ test.serial(
     t.true(Object.isFrozen(localRemote.grants));
     t.deepEqual(
       localRemote.grants.map(({ name }) => name),
-      ['workspace', 'git', 'origin'],
+      ['workspace', 'git', 'origin', 'calendar'],
     );
     t.true(Object.isFrozen(localRemote.globals));
     t.true(Object.isFrozen(localRemote.persistence));
@@ -110,6 +123,8 @@ test.serial(
       ],
     );
     t.is(originPolicy.defaultPullRef, 'refs/heads/main');
+    const calendar = await E(localRemote.powers).lookup('calendar');
+    t.is(await E(calendar).lookup('value'), 'original');
 
     const readOnlySession = fixture.trackSession(
       await provisionEndoCodeMode({
@@ -131,6 +146,12 @@ test.serial(
     t.false(readOnlyMethods.includes('commit'));
 
     const controllerPath = localRemote.persistence.guestHandlePath.slice(0, -1);
+    const controllerGrantId = await E(host).identify(
+      ...controllerPath,
+      'grants',
+      'calendar',
+    );
+    t.is(controllerGrantId, originalCalendarId);
     const controllerWorkspaceId = await E(host).identify(
       ...controllerPath,
       'mounts',
@@ -155,6 +176,17 @@ test.serial(
     t.is(await E(localRemote.powers).lookup('answer'), 42);
     t.is(await E(host).identify('answer'), undefined);
 
+    const reboundCalendar = await E(host).provideGuest(
+      ['tools', 'calendar-rebound-handle'],
+      { agentName: ['tools', 'calendar-rebound'] },
+    );
+    await E(reboundCalendar).storeValue('rebound', 'value');
+    const reboundCalendarId = await E(host).identify(
+      'tools',
+      'calendar-rebound',
+    );
+    await E(host).storeIdentifier(['tools', 'calendar'], reboundCalendarId);
+
     await localRemote.cleanup();
     const reconnected = fixture.trackSession(
       await reconstructEndoCodeMode({
@@ -163,6 +195,9 @@ test.serial(
       }),
     );
     t.is(await E(reconnected.powers).identify('git'), guestGitId);
+    t.is(await E(reconnected.powers).identify('calendar'), originalCalendarId);
+    const reconnectedCalendar = await E(reconnected.powers).lookup('calendar');
+    t.is(await E(reconnectedCalendar).lookup('value'), 'original');
     t.is(await E(reconnected.powers).lookup('answer'), 42);
 
     await fixture.restartDaemon();
@@ -174,6 +209,9 @@ test.serial(
       }),
     );
     t.is(await E(recovered.powers).identify('git'), guestGitId);
+    t.is(await E(recovered.powers).identify('calendar'), originalCalendarId);
+    const recoveredCalendar = await E(recovered.powers).lookup('calendar');
+    t.is(await E(recoveredCalendar).lookup('value'), 'original');
     t.is(
       await E(restartedHost).identify(
         ...controllerPath,
@@ -368,5 +406,87 @@ test.serial(
       recoveredRows.map(({ path }) => path),
       ['inside.txt'],
     );
+  },
+);
+
+test.serial(
+  'forked named grants retain the parent formula after source rebinding',
+  async t => {
+    t.timeout(120_000);
+    const fixture = await makeProvisioningFixture(t);
+    const host = await fixture.connectHost('fork-provision-host');
+    await E(host).makeDirectory(['tools']);
+    const original = await E(host).provideGuest(['tools', 'counter-handle'], {
+      agentName: ['tools', 'counter'],
+    });
+    await E(original).storeValue('original', 'value');
+    const parent = fixture.trackSession(
+      await provisionEndoCodeMode({
+        harness: 'test',
+        sessionId: 'parent-session',
+        cwd: fixture.workspace,
+        sockPath: fixture.sockPath,
+        spec: {
+          grants: {
+            counter: {
+              from: ['tools', 'counter'],
+              description: 'The original counter',
+            },
+          },
+        },
+      }),
+    );
+    const parentControllerPath = parent.persistence.guestHandlePath.slice(
+      0,
+      -1,
+    );
+    const originalId = await E(host).identify(
+      ...parentControllerPath,
+      'grants',
+      'counter',
+    );
+    const rebound = await E(host).provideGuest(
+      ['tools', 'counter-rebound-handle'],
+      { agentName: ['tools', 'counter-rebound'] },
+    );
+    await E(rebound).storeValue('rebound', 'value');
+    const reboundId = await E(host).identify('tools', 'counter-rebound');
+    await E(host).storeIdentifier(['tools', 'counter'], reboundId);
+
+    const childPersistence = await normalizeEndoProvisionSpec(
+      {
+        grants: {
+          counter: {
+            from: ['tools', 'counter'],
+            description: 'The original counter',
+          },
+        },
+      },
+      { harness: 'test', sessionId: 'child-session', cwd: fixture.workspace },
+    );
+    const child = fixture.trackSession(
+      await reconstructEndoCodeMode({
+        persistence: childPersistence,
+        forkFrom: parent.persistence,
+        sockPath: fixture.sockPath,
+      }),
+    );
+    const childControllerPath = child.persistence.guestHandlePath.slice(0, -1);
+    const childControllerId = await E(host).identify(
+      ...childControllerPath,
+      'grants',
+      'counter',
+    );
+    const childGuestId = await E(child.powers).identify('counter');
+
+    t.notDeepEqual(
+      child.persistence.guestHandlePath,
+      parent.persistence.guestHandlePath,
+    );
+    t.is(childControllerId, originalId);
+    t.is(childGuestId, originalId);
+    t.not(childGuestId, reboundId);
+    const childCounter = await E(child.powers).lookup('counter');
+    t.is(await E(childCounter).lookup('value'), 'original');
   },
 );

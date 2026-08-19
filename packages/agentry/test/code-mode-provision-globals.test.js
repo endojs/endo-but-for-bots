@@ -370,3 +370,28 @@ test('trusted provisioning provenance derives grants from the rebound guest', as
   t.true(Object.isFrozen(grants));
   t.true(grants.every(Object.isFrozen));
 });
+
+test('named provisioned grants receive opaque minter declarations', async t => {
+  const calendar = Far('Calendar', {});
+  const guest = Far('Guest', {
+    lookup: async name => calendar,
+  });
+  const persistence = makePersistence({
+    grants: {
+      calendar: {
+        from: ['tools', 'calendar'],
+        description: 'A calendar service',
+      },
+    },
+  });
+
+  registerProvisionedGuest(guest);
+  const [grant] = await makeEndoProvisionGrants(
+    /** @type {any} */ (guest),
+    /** @type {any} */ (persistence),
+  );
+  t.is(grant.name, 'calendar');
+  t.deepEqual(grant.declaration, { body: 'unknown' });
+  t.is(grant.description, 'A calendar service');
+  t.is(grant.capability, calendar);
+});

@@ -2,7 +2,7 @@
 /// <reference types="ses"/>
 
 /** @import { EndoHost } from '@endo/daemon' */
-/** @import { EndoConnectionFailureObserver, EndoProvisionPersistence, EndoProvisionResult, ProvisionEndoCodeModeOptions, ReconstructEndoCodeModeOptions } from './code-mode-provisioning-types.js' */
+/** @import { EndoConnectionFailureObserver, EndoProvisionForkOptions, EndoProvisionPersistence, EndoProvisionResult, ProvisionEndoCodeModeOptions, ReconstructEndoCodeModeOptions } from './code-mode-provisioning-types.js' */
 
 import { makeCancelKit } from '@endo/cancel';
 import { makeEndoClient } from '@endo/daemon';
@@ -72,12 +72,14 @@ harden(makeCodeModeCapTpOptions);
  * @param {EndoProvisionPersistence} persistence
  * @param {string | undefined} sockPath
  * @param {EndoConnectionFailureObserver | undefined} onConnectionFailure
+ * @param {EndoProvisionForkOptions} [forkOptions]
  * @returns {Promise<EndoProvisionResult>}
  */
 const connectAndRealize = async (
   persistence,
   sockPath,
   onConnectionFailure,
+  forkOptions,
 ) => {
   await null;
   const { cancelled, cancel } = makeCancelKit();
@@ -111,7 +113,11 @@ const connectAndRealize = async (
     closed.catch(() => {});
     const bootstrap = await client.getBootstrap();
     const host = /** @type {EndoHost} */ (await E(bootstrap).host());
-    const guest = await realizeEndoProvisionOnHost(host, persistence);
+    const guest = await realizeEndoProvisionOnHost(
+      host,
+      persistence,
+      forkOptions,
+    );
     const grants = await makeEndoProvisionGrants(guest, persistence);
     return harden({
       powers: guest,
@@ -168,6 +174,9 @@ export const reconstructEndoCodeMode = async options => {
     persistence,
     options?.sockPath,
     options?.onConnectionFailure,
+    options?.forkFrom === undefined
+      ? undefined
+      : { forkFrom: options.forkFrom },
   );
 };
 harden(reconstructEndoCodeMode);

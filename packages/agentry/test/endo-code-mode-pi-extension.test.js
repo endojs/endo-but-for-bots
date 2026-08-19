@@ -64,7 +64,7 @@ const runLauncher = (args, cwd) =>
  * @property {string} [flag]
  * @property {string[]} [activeToolNames]
  * @property {'tui' | 'rpc' | 'json' | 'print'} [mode]
- * @property {(persistence: EndoProvisionPersistence, options: { onConnectionFailure: EndoConnectionFailureObserver }) => Promise<EndoProvisionResult>} [reconstructProvision]
+ * @property {(persistence: EndoProvisionPersistence, options: { onConnectionFailure: EndoConnectionFailureObserver, forkFrom?: EndoProvisionPersistence }) => Promise<EndoProvisionResult>} [reconstructProvision]
  * @property {() => Promise<void>} [startDaemon]
  * @property {import('../src/endo-code-mode-pi-extension.js').EndoCodeModePiExtensionOptions['rehydrateCredential']} [rehydrateCredential]
  * @property {import('../src/endo-code-mode-pi-extension.js').EndoCodeModePiExtensionOptions['validatePersistence']} [validatePersistence]
@@ -113,6 +113,8 @@ const makeHarness = options => {
   const commands = [];
   /** @type {EndoProvisionPersistence[]} */
   const reconstructions = [];
+  /** @type {Array<EndoProvisionPersistence | undefined>} */
+  const forkSources = [];
   let cleanupCount = 0;
   /** @type {EndoConnectionFailureObserver | undefined} */
   let onConnectionFailure;
@@ -133,6 +135,7 @@ const makeHarness = options => {
     options.reconstructProvision ?? defaultReconstruct;
   const reconstructProvision = async (persistence, connectionOptions) => {
     onConnectionFailure = connectionOptions.onConnectionFailure;
+    forkSources.push(connectionOptions.forkFrom);
     return selectedReconstruct(persistence, connectionOptions);
   };
 
@@ -218,6 +221,7 @@ const makeHarness = options => {
     flags,
     notifications,
     reconstructions,
+    forkSources,
     terminations,
     tools,
     get currentActiveTools() {
@@ -563,7 +567,17 @@ for (const reason of ['resume', 'reload']) {
 test('new and fork create distinct retained namespaces; fork inherits policy', async t => {
   const cwd = await makeWorkspace(t);
   const parent = await normalizeEndoProvisionSpec(
-    { fs: 'readWrite', git: 'readOnly', piTools: 'preserve' },
+    {
+      fs: 'readWrite',
+      git: 'readOnly',
+      piTools: 'preserve',
+      grants: {
+        calendar: {
+          from: ['tools', 'calendar'],
+          description: 'A calendar service',
+        },
+      },
+    },
     { harness: 'pi', sessionId: 'parent-session', cwd },
   );
   const fresh = makeHarness({ cwd, sessionId: 'new-session' });
@@ -588,6 +602,7 @@ test('new and fork create distinct retained namespaces; fork inherits policy', a
   t.notDeepEqual(forkPersistence.guestHandlePath, parent.guestHandlePath);
   t.deepEqual(forkPersistence.policy, parent.policy);
   t.is(forkPersistence.workspacePath, parent.workspacePath);
+  t.deepEqual(fork.forkSources, [parent]);
   t.deepEqual(fork.activeTools, [
     [],
     ['read', 'write', 'edit', 'bash', 'evaluate'],
@@ -654,6 +669,80 @@ test('resume rejects a conflicting CLI policy with fork/new guidance', async t =
   t.regex(harness.notifications[0].message, /conflicts/);
   t.regex(harness.notifications[0].message, /new session.*fork/s);
 });
+
+test('resume reports a description-only change as a prompt-context conflict', async t => {
+  const cwd = await makeWorkspace(t);
+  const stored = await normalizeEndoProvisionSpec(
+    {
+      grants: {
+        calendar: {
+          from: ['tools', 'calendar'],
+          description: 'Original calendar context',
+        },
+      },
+    },
+    { harness: 'pi', sessionId: 'retained-session', cwd },
+  );
+  const harness = makeHarness({
+    cwd,
+    sessionId: 'retained-session',
+    entries: [persistenceEntry(stored)],
+    flag: JSON.stringify({
+      grants: {
+        calendar: {
+          from: ['tools', 'calendar'],
+          description: 'Changed calendar context',
+        },
+      },
+    }),
+  });
+
+  await harness.emit('session_start', {
+    type: 'session_start',
+    reason: 'resume',
+  });
+
+  t.deepEqual(harness.reconstructions, []);
+  t.is(harness.notifications.length, 1);
+  t.is(harness.notifications[0].message.includes('authority'), false);
+  t.regex(harness.notifications[0].message, /prompt context/);
+  t.regex(harness.notifications[0].message, /description/);
+});
+
+for (const [label, requestedGrants] of [
+  ['changed', { calendar: { from: ['tools', 'rebound'] } }],
+  [
+    'added',
+    {
+      calendar: { from: ['tools', 'calendar'] },
+      clock: { from: ['tools', 'clock'] },
+    },
+  ],
+  ['removed', {}],
+  ['renamed', { agenda: { from: ['tools', 'calendar'] } }],
+]) {
+  test(`resume rejects ${label} named grant authority`, async t => {
+    const cwd = await makeWorkspace(t);
+    const stored = await normalizeEndoProvisionSpec(
+      { grants: { calendar: { from: ['tools', 'calendar'] } } },
+      { harness: 'pi', sessionId: 'retained-session', cwd },
+    );
+    const harness = makeHarness({
+      cwd,
+      entries: [persistenceEntry(stored)],
+      flag: JSON.stringify({ grants: requestedGrants }),
+    });
+
+    await harness.emit('session_start', {
+      type: 'session_start',
+      reason: 'resume',
+    });
+
+    t.deepEqual(harness.reconstructions, []);
+    t.regex(harness.notifications[0].message, /conflicts/);
+    t.regex(harness.notifications[0].message, /authority/);
+  });
+}
 
 const preservationConflicts =
   /** @type {Array<[string, EndoProvisionSpec | undefined, EndoProvisionSpec]>} */ ([
@@ -1051,7 +1140,7 @@ test('a daemon that returns different persistence than requested is rejected and
   t.is(cleanupCount, 1);
   t.deepEqual(harness.appended, []);
   t.is(harness.diagnostics[0].code, 'ENDO_PROVISION_RECOVERY_MISMATCH');
-  t.regex(harness.diagnostics[0].message, /different persistence/);
+  t.regex(harness.diagnostics[0].message, /different runtime authority/);
 });
 
 test('trusted interactive hook can rehydrate a credential without handling its value', async t => {

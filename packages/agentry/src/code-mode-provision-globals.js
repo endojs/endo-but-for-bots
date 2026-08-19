@@ -18,6 +18,9 @@ import {
 /**
  * Select prompt descriptors from normalized policy. This helper is exported
  * from the source module for focused tests; the public subpath filters it out.
+ * Caller-supplied descriptions are supplemental model context only. A future
+ * trusted descriptor registry owns any TypeScript declaration and must not let
+ * policy text supply, replace, or override that declaration.
  *
  * @param {EndoProvisionPersistence} persistence
  * @returns {CodeModeGlobal[]}
@@ -48,6 +51,18 @@ export const makeEndoProvisionGlobals = persistence => {
   for (const name of Object.keys(policy.gitRemotes ?? {}).sort()) {
     // A remote is foreign to this vat and has no local posture recognizer.
     globals.push({ name });
+  }
+  for (const [name, grant] of Object.entries(policy.grants ?? {}).sort(
+    ([left], [right]) => left.localeCompare(right),
+  )) {
+    globals.push(
+      harden({
+        name,
+        ...(grant.description === undefined
+          ? {}
+          : { description: grant.description }),
+      }),
+    );
   }
   return normalizeGlobals(globals);
 };
@@ -116,6 +131,21 @@ export const makeEndoProvisionGrants = async (guest, persistence) => {
     // Keep the compatibility binding truthful by withholding an interface
     // declaration until a trusted remote minter is available.
     grants.push(minter.opaque({ name, capability }));
+  }
+  for (const [name, grant] of Object.entries(policy.grants ?? {}).sort(
+    ([left], [right]) => left.localeCompare(right),
+  )) {
+    const capability = /** @type {CodeModePower} */ (
+      // eslint-disable-next-line no-await-in-loop
+      await E(guest).lookup(name)
+    );
+    grants.push(
+      minter.opaque({
+        name,
+        description: grant.description,
+        capability,
+      }),
+    );
   }
   return normalizeCodeModeGrants(grants);
 };

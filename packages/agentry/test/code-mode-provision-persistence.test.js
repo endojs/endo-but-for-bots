@@ -9,6 +9,8 @@ import { join } from 'node:path';
 import {
   equalEndoProvisionPersistence,
   normalizeEndoProvisionSpec,
+  projectEndoProvisionContext,
+  projectEndoProvisionRuntimeAuthority,
   validateEndoProvisionPersistence,
 } from '../src/code-mode-provision-policy.js';
 
@@ -64,6 +66,27 @@ test('persistence validation accepts only normalized records', async t => {
       }),
     { message: /not in normalized form/ },
   );
+});
+
+test('persistence round-trips named grants without live capabilities', async t => {
+  const root = await makeWorkspace(t);
+  const persistence = await normalizeEndoProvisionSpec(
+    {
+      grants: {
+        calendar: {
+          from: ['tools', 'calendar'],
+          description: 'A calendar service',
+        },
+      },
+    },
+    { harness: 'test', sessionId: 'persist-grants', cwd: root },
+  );
+
+  const roundTrip = await validateEndoProvisionPersistence(
+    JSON.parse(JSON.stringify(persistence)),
+  );
+  t.deepEqual(roundTrip, persistence);
+  t.false(Object.hasOwn(roundTrip.policy.grants?.calendar ?? {}, 'capability'));
 });
 
 test('Git grants reconstruct from persistence without the original spec', async t => {
@@ -139,6 +162,56 @@ test('missing Git directories reject the whole persisted authority', async t => 
   await t.throwsAsync(() => validateEndoProvisionPersistence(persistence), {
     message: /does not exist or cannot be resolved/,
   });
+});
+
+test('runtime authority and prompt context project separately', async t => {
+  const root = await makeWorkspace(t);
+  const original = await normalizeEndoProvisionSpec(
+    {
+      grants: {
+        calendar: {
+          from: ['tools', 'calendar'],
+          description: 'Original calendar context',
+        },
+      },
+    },
+    { harness: 'test', sessionId: 'authority-context', cwd: root },
+  );
+  const describedDifferently = await normalizeEndoProvisionSpec(
+    {
+      grants: {
+        calendar: {
+          from: ['tools', 'calendar'],
+          description: 'Updated calendar context',
+        },
+      },
+    },
+    { harness: 'test', sessionId: 'authority-context', cwd: root },
+  );
+  const selectedDifferently = await normalizeEndoProvisionSpec(
+    {
+      grants: {
+        calendar: {
+          from: ['tools', 'rebound'],
+          description: 'Original calendar context',
+        },
+      },
+    },
+    { harness: 'test', sessionId: 'authority-context', cwd: root },
+  );
+
+  t.deepEqual(
+    projectEndoProvisionRuntimeAuthority(original),
+    projectEndoProvisionRuntimeAuthority(describedDifferently),
+  );
+  t.notDeepEqual(
+    projectEndoProvisionContext(original),
+    projectEndoProvisionContext(describedDifferently),
+  );
+  t.notDeepEqual(
+    projectEndoProvisionRuntimeAuthority(original),
+    projectEndoProvisionRuntimeAuthority(selectedDifferently),
+  );
 });
 
 test('persistence equality ignores record key order but preserves array order', async t => {

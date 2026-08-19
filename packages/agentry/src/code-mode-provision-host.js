@@ -3,13 +3,14 @@
 
 /** @import { EndoGuest, EndoHost, EndoMount } from '@endo/daemon' */
 /** @import { GitRemote, GitRemoteController } from '@endo/exo-git' */
-/** @import { EndoProvisionPersistence } from './code-mode-provisioning-types.js' */
+/** @import { EndoProvisionForkOptions, EndoProvisionPersistence } from './code-mode-provisioning-types.js' */
 
 import { makeError, q, X } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 
 import {
   equalEndoProvisionPersistence,
+  projectEndoProvisionRuntimeAuthority,
   validateEndoProvisionPersistence,
 } from './code-mode-provision-policy.js';
 import { registerProvisionedGuest } from './code-mode-grants.js';
@@ -169,12 +170,168 @@ const reprovisionCredentialedRemote = async (
 };
 
 /**
+ * Resolve each requested grant once and retain its exact formula identifier.
+ * Reusing that identifier prevents a concurrent host-name change from
+ * substituting a different capability between resolution and retention.
+ *
+ * @param {EndoHost} host
+ * @param {EndoProvisionPersistence} persistence
+ * @returns {Promise<Map<string, string>>}
+ */
+const resolveGrantIdentifiers = async (host, persistence) => {
+  await null;
+  const identifiers = new Map();
+  for (const [name, grant] of Object.entries(persistence.policy.grants ?? {})) {
+    // eslint-disable-next-line no-await-in-loop
+    const id = await E(host).identify(...grant.from);
+    if (typeof id !== 'string') {
+      throw makeError(
+        X`Grant ${q(name)} source ${q(grant.from.join('/'))} is not available on the host`,
+      );
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await E(host).lookupById(id);
+    identifiers.set(name, id);
+  }
+  return identifiers;
+};
+
+/**
+ * @param {EndoHost} host
+ * @param {EndoProvisionPersistence} persistence
+ * @returns {Promise<void>}
+ */
+const assertRetainedGrantAliases = async (host, persistence) => {
+  await null;
+  const controllerPath = persistence.guestHandlePath.slice(0, -1);
+  for (const name of Object.keys(persistence.policy.grants ?? {})) {
+    const alias = harden([...controllerPath, 'grants', name]);
+    // eslint-disable-next-line no-await-in-loop
+    if (!(await hasNamePath(host, alias))) {
+      throw makeError(
+        X`Retained code-mode grant ${q(name)} is missing; refusing to re-resolve its host source`,
+      );
+    }
+  }
+};
+
+/**
+ * Resolve formula identifiers only after retained aliases have been checked.
+ * This is used for forks, where the identifiers are copied into a new
+ * controller namespace instead of resolving the parent's source paths.
+ *
+ * @param {EndoHost} host
+ * @param {EndoProvisionPersistence} persistence
+ * @returns {Promise<Map<string, string>>}
+ */
+const resolveRetainedGrantIdentifiers = async (host, persistence) => {
+  await assertRetainedGrantAliases(host, persistence);
+  const controllerPath = persistence.guestHandlePath.slice(0, -1);
+  const identifiers = new Map();
+  for (const name of Object.keys(persistence.policy.grants ?? {})) {
+    const alias = harden([...controllerPath, 'grants', name]);
+    // eslint-disable-next-line no-await-in-loop
+    const id = await E(host).identify(...alias);
+    if (typeof id !== 'string') {
+      throw makeError(
+        X`Retained code-mode grant ${q(name)} has no formula identifier`,
+      );
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await E(host).lookupById(id);
+    identifiers.set(name, id);
+  }
+  return identifiers;
+};
+
+/**
+ * Validate a retained parent session and obtain the exact formula identifiers
+ * retained by its controller aliases for a child fork.
+ *
+ * @param {EndoHost} host
+ * @param {EndoProvisionPersistence} parent
+ * @param {EndoProvisionPersistence} child
+ * @returns {Promise<Map<string, string>>}
+ */
+const resolveForkGrantIdentifiers = async (host, parent, child) => {
+  await null;
+  const normalizedParent = await validateEndoProvisionPersistence(parent);
+  const normalizedChild = await validateEndoProvisionPersistence(child);
+  if (
+    equalEndoProvisionPersistence(
+      normalizedParent.guestHandlePath,
+      normalizedChild.guestHandlePath,
+    )
+  ) {
+    throw makeError(
+      X`Fork target must use a distinct retained guest namespace`,
+    );
+  }
+
+  const parentControllerPath = normalizedParent.guestHandlePath.slice(0, -1);
+  const parentPersistencePath = harden([
+    ...parentControllerPath,
+    'persistence',
+  ]);
+  if (!(await hasNamePath(host, parentPersistencePath))) {
+    throw makeError(
+      X`Fork parent has no retained code-mode policy; refusing to copy grants`,
+    );
+  }
+  const storedParent = await E(host).lookup(parentPersistencePath);
+  const normalizedStoredParent =
+    await validateEndoProvisionPersistence(storedParent);
+  if (
+    !equalEndoProvisionPersistence(normalizedStoredParent, normalizedParent)
+  ) {
+    throw makeError(
+      X`Fork parent retained policy does not match the requested parent`,
+    );
+  }
+
+  const childControllerPath = normalizedChild.guestHandlePath.slice(0, -1);
+  const childPersistencePath = harden([...childControllerPath, 'persistence']);
+  if (await hasNamePath(host, childPersistencePath)) {
+    throw makeError(
+      X`Fork target already has retained code-mode policy; refusing to copy grants`,
+    );
+  }
+
+  if (
+    !equalEndoProvisionPersistence(
+      projectEndoProvisionRuntimeAuthority(normalizedParent),
+      projectEndoProvisionRuntimeAuthority(normalizedChild),
+    )
+  ) {
+    throw makeError(
+      X`Fork provision policies select different runtime authority`,
+    );
+  }
+  if (
+    !equalEndoProvisionPersistence(
+      normalizedParent.policy,
+      normalizedChild.policy,
+    )
+  ) {
+    throw makeError(X`Fork provision policies have different session context`);
+  }
+
+  return resolveRetainedGrantIdentifiers(host, normalizedParent);
+};
+
+/**
  * @param {EndoHost} host
  * @param {EndoProvisionPersistence} persistence
  * @param {Map<string, GitCredential>} credentials
+ * @param {Map<string, string> | undefined} grantIdentifiersToInstall
  * @returns {Promise<EndoGuest>}
  */
-const realizeProvisionResources = async (host, persistence, credentials) => {
+const realizeProvisionResources = async (
+  host,
+  persistence,
+  credentials,
+  grantIdentifiersToInstall,
+) => {
   const controllerPath = persistence.guestHandlePath.slice(0, -1);
   const guestAgentPath = harden([...controllerPath, 'guest-agent']);
   const persistencePath = harden([...controllerPath, 'persistence']);
@@ -304,6 +461,35 @@ const realizeProvisionResources = async (host, persistence, credentials) => {
     throw makeError(X`Git remotes have no retained root Git grant`);
   }
 
+  const grantEntries = Object.entries(persistence.policy.grants ?? {});
+  if (grantEntries.length > 0) {
+    const grantsPath = harden([...controllerPath, 'grants']);
+    await ensureNameDirectory(host, grantsPath);
+  }
+  for (const [name] of grantEntries) {
+    const grantAlias = harden([...controllerPath, 'grants', name]);
+    if (grantIdentifiersToInstall !== undefined) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await hasNamePath(host, grantAlias)) {
+        throw makeError(
+          X`Retained code-mode grant ${q(name)} exists without a retained policy`,
+        );
+      }
+      const id = grantIdentifiersToInstall.get(name);
+      if (id === undefined) {
+        throw makeError(X`No resolved formula for grant ${q(name)}`);
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await E(host).storeIdentifier(grantAlias, id);
+      // eslint-disable-next-line no-await-in-loop
+    } else if (!(await hasNamePath(host, grantAlias))) {
+      throw makeError(
+        X`Retained code-mode grant ${q(name)} is missing; refusing to re-resolve its host source`,
+      );
+    }
+    guestBindings.push([name, grantAlias]);
+  }
+
   const hasHandle = await hasNamePath(host, persistence.guestHandlePath);
   const hasAgent = await hasNamePath(host, guestAgentPath);
   if (hasHandle !== hasAgent) {
@@ -342,18 +528,28 @@ const realizeProvisionResources = async (host, persistence, credentials) => {
  *
  * @param {EndoHost} host
  * @param {EndoProvisionPersistence} persistence
+ * @param {EndoProvisionForkOptions} [options]
  * @returns {Promise<EndoGuest>}
  */
-export const realizeEndoProvisionOnHost = async (host, persistence) => {
-  // Revalidate the caller-held record immediately before minting capabilities.
-  // This catches a moved or symlink-swapped canonical root during first
-  // realization, not only during a later daemon restart.
+export const realizeEndoProvisionOnHost = async (
+  host,
+  persistence,
+  options = {},
+) => {
   const normalizedPersistence =
     await validateEndoProvisionPersistence(persistence);
-  const controllerPath = persistence.guestHandlePath.slice(0, -1);
+  const controllerPath = normalizedPersistence.guestHandlePath.slice(0, -1);
   const persistencePath = harden([...controllerPath, 'persistence']);
   const hasPersistence = await hasNamePath(host, persistencePath);
-  if (hasPersistence) {
+  /** @type {Map<string, string> | undefined} */
+  let grantIdentifiersToInstall;
+  if (options.forkFrom !== undefined) {
+    grantIdentifiersToInstall = await resolveForkGrantIdentifiers(
+      host,
+      options.forkFrom,
+      normalizedPersistence,
+    );
+  } else if (hasPersistence) {
     const stored = await E(host).lookup(persistencePath);
     const normalizedStored = await validateEndoProvisionPersistence(stored);
     if (
@@ -363,8 +559,20 @@ export const realizeEndoProvisionOnHost = async (host, persistence) => {
         X`Reconstruction cannot widen or change a retained code-mode provision policy`,
       );
     }
+    await assertRetainedGrantAliases(host, normalizedPersistence);
+  } else {
+    await null;
+    grantIdentifiersToInstall = await resolveGrantIdentifiers(
+      host,
+      normalizedPersistence,
+    );
   }
   const credentials = await resolveGitCredentials(host, normalizedPersistence);
-  return realizeProvisionResources(host, normalizedPersistence, credentials);
+  return realizeProvisionResources(
+    host,
+    normalizedPersistence,
+    credentials,
+    grantIdentifiersToInstall,
+  );
 };
 harden(realizeEndoProvisionOnHost);

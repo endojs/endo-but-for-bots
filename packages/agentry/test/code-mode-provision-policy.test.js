@@ -68,6 +68,33 @@ test('normalization retains explicit Pi tool preservation in policy data', async
   });
 });
 
+test('normalization accepts named host grants as inert lexical policy', async t => {
+  const { root } = await makeWorkspace(t);
+  const persistence = await normalizeEndoProvisionSpec(
+    {
+      grants: {
+        zebra: { from: ['services', 'zebra'] },
+        calendar: {
+          from: ['tools', 'calendar'],
+          description: 'A calendar service',
+        },
+      },
+    },
+    { harness: 'test', sessionId: 'named-grants', cwd: root },
+  );
+
+  t.deepEqual(persistence.policy.grants, {
+    calendar: {
+      from: ['tools', 'calendar'],
+      description: 'A calendar service',
+    },
+    zebra: { from: ['services', 'zebra'] },
+  });
+  t.true(Object.isFrozen(persistence.policy.grants));
+  t.true(Object.isFrozen(persistence.policy.grants?.calendar));
+  t.true(Object.isFrozen(persistence.policy.grants?.calendar.from));
+});
+
 test('normalization rejects malformed harness keys', async t => {
   const { root } = await makeWorkspace(t);
   const invalidHarnesses = ['Pi', 'pi_code', '-pi', `a${'b'.repeat(32)}`];
@@ -558,6 +585,79 @@ test('EndoProvisionSpec rejects malformed roots and incompatible modes', async t
         { harness: 'test', sessionId: 'missing', cwd: root },
       ),
     { message: /does not exist or cannot be resolved/ },
+  );
+});
+
+test('named grants reject invalid bindings, paths, descriptions, and collisions', async t => {
+  const { root } = await makeWorkspace(t);
+  const normalize = grants =>
+    normalizeEndoProvisionSpec(/** @type {any} */ ({ grants }), {
+      harness: 'test',
+      sessionId: 'invalid-grant',
+      cwd: root,
+    });
+  const invalid = [
+    [
+      { 'bad/name': { from: ['tools', 'calendar'] } },
+      /non-reserved JavaScript binding/,
+    ],
+    [
+      { class: { from: ['tools', 'calendar'] } },
+      /non-reserved JavaScript binding/,
+    ],
+    [
+      { workspace: { from: ['tools', 'calendar'] } },
+      /non-reserved JavaScript binding/,
+    ],
+    [{ calendar: { from: [] } }, /non-empty host pet-name path/],
+    [
+      { calendar: { from: ['tools', '@calendar'] } },
+      /non-empty host pet-name path/,
+    ],
+    [{ calendar: { from: 'tools' } }, /must be an array of strings/],
+    [
+      { calendar: { from: ['tools'], description: 42 } },
+      /description.*non-empty string/,
+    ],
+    [
+      { calendar: { from: ['tools'], description: '' } },
+      /description.*non-empty string/,
+    ],
+    [
+      {
+        calendar: {
+          from: ['tools'],
+          description: `safe ${String.fromCharCode(96).repeat(3)} fence`,
+        },
+      },
+      /description.*three or more backticks.*TypeScript prompt fence/,
+    ],
+  ];
+
+  for (const [grants, message] of invalid) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => normalize(grants), {
+      message: /** @type {RegExp} */ (message),
+    });
+  }
+
+  await t.throwsAsync(
+    () =>
+      normalizeEndoProvisionSpec(
+        {
+          fs: 'readWrite',
+          git: 'readWrite',
+          grants: { origin: { from: ['tools', 'origin'] } },
+          gitRemotes: {
+            origin: {
+              url: 'file:///tmp/origin',
+              allowLocalFileTransport: true,
+            },
+          },
+        },
+        { harness: 'test', sessionId: 'grant-remote-collision', cwd: root },
+      ),
+    { message: /conflicts with a provisioned Git remote binding/ },
   );
 });
 
