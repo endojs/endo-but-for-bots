@@ -2318,6 +2318,19 @@ pub enum NativeMethod {
     WeakMapGet,
     WeakMapHas,
     WeakMapDelete,
+    /// `WeakMap.prototype.getOrInsert(key, value)` (upsert proposal): return the
+    /// existing value for `key`, or insert `value` and return it. Requires a
+    /// real `[[WeakMapData]]` receiver and a weakly-holdable `key` (a TypeError
+    /// otherwise, checked before insertion). No key canonicalization — WeakMap
+    /// keys are objects, so SameValue and SameValueZero coincide.
+    WeakMapGetOrInsert,
+    /// `WeakMap.prototype.getOrInsertComputed(key, callbackfn)` (upsert
+    /// proposal): return the existing value for `key`; on absence call
+    /// `callbackfn(key)` exactly once (`this` undefined), then insert its result
+    /// under the key (overwriting any entry the callback itself added) and
+    /// return it. The weak-key check precedes the callable check (spec order).
+    /// Re-entrant (drives a user callback).
+    WeakMapGetOrInsertComputed,
     /// `Set.prototype.add(v)` / `WeakSet.prototype.add(v)`: insert `v`,
     /// returning the receiver (`fxSetEntry` with no pair → two entry slots;
     /// the weak form allocates three).
@@ -5131,6 +5144,19 @@ impl Interp {
                 for (m_name, m) in [
                     ("getOrInsert", NativeMethod::MapGetOrInsert),
                     ("getOrInsertComputed", NativeMethod::MapGetOrInsertComputed),
+                ] {
+                    let mf = self.alloc_named_method(m, m_name, 2);
+                    self.proto_methods.push((proto, m_name, mf));
+                }
+            }
+            // The same two upsert-proposal methods on `WeakMap.prototype`
+            // (cache == 2). The proposal covers Map *and* WeakMap; the handler
+            // is shared and branches on the receiver kind (weak-key validation,
+            // no canonicalization). `.name`/`.length` (arity 2) as on Map.
+            if cache == 2 {
+                for (m_name, m) in [
+                    ("getOrInsert", NativeMethod::WeakMapGetOrInsert),
+                    ("getOrInsertComputed", NativeMethod::WeakMapGetOrInsertComputed),
                 ] {
                     let mf = self.alloc_named_method(m, m_name, 2);
                     self.proto_methods.push((proto, m_name, mf));
@@ -23933,7 +23959,10 @@ impl Interp {
             // The upsert-proposal `Map.prototype` methods. `getOrInsert` is
             // allocation-only; `getOrInsertComputed` drives a user callback, so
             // both take the code buffer for the (possible) nested dispatch.
-            NativeMethod::MapGetOrInsert | NativeMethod::MapGetOrInsertComputed => {
+            NativeMethod::MapGetOrInsert
+            | NativeMethod::MapGetOrInsertComputed
+            | NativeMethod::WeakMapGetOrInsert
+            | NativeMethod::WeakMapGetOrInsertComputed => {
                 self.call_map_get_or_insert(m, this, base, code)?
             }
             // The array-grouping-proposal statics — each iterates `items` and
@@ -27487,13 +27516,17 @@ impl Interp {
     }
 
     // ------------------------------------------------------------------
-    // Upsert proposal: `Map.prototype.getOrInsert` / `getOrInsertComputed`.
-    // Each requires a real `[[MapData]]` receiver (never a Set/WeakMap), reads
-    // its argument against the canonicalized key, and — on absence —
-    // inserts (three entry slots, the same metering `Map.prototype.set`
-    // charges). `getOrInsertComputed` calls the callback exactly once on
-    // absence with `this` undefined and the canonical key as its sole argument,
-    // then overwrites whatever entry the callback itself may have inserted.
+    // Upsert proposal: `{Map,WeakMap}.prototype.getOrInsert` /
+    // `getOrInsertComputed`. Shared handler — the proposal covers both Map and
+    // WeakMap. It requires a real `[[MapData]]`/`[[WeakMapData]]` receiver of
+    // the matching kind, reads its argument against the (canonicalized for Map;
+    // pass-through for WeakMap) key, and — on absence — inserts (three entry
+    // slots, the same metering `set` charges on either collection).
+    // `getOrInsertComputed` calls the callback exactly once on absence with
+    // `this` undefined and the key as its sole argument, then overwrites
+    // whatever entry the callback itself may have inserted. The WeakMap forms
+    // additionally reject a non-weakly-holdable key (a primitive) with a
+    // TypeError *before* any callable check or insertion (spec order).
     // ------------------------------------------------------------------
     fn call_map_get_or_insert(
         &mut self,
@@ -27502,8 +27535,17 @@ impl Interp {
         base: usize,
         code: &[u8],
     ) -> Result<Slot, Halt> {
+        let (expected_kind, weak) = match m {
+            NativeMethod::MapGetOrInsert | NativeMethod::MapGetOrInsertComputed => {
+                (CollKind::Map, false)
+            }
+            NativeMethod::WeakMapGetOrInsert | NativeMethod::WeakMapGetOrInsertComputed => {
+                (CollKind::WeakMap, true)
+            }
+            _ => return Err(self.catchable_type_error()),
+        };
         let inst = match self.collection_ref(this) {
-            Some(i) if self.collections[&i].kind == CollKind::Map => i,
+            Some(i) if self.collections[&i].kind == expected_kind => i,
             _ => return Err(self.catchable_type_error()),
         };
         let key_arg = self
@@ -27511,14 +27553,20 @@ impl Interp {
             .get(base + 4)
             .copied()
             .unwrap_or_else(Slot::undefined);
+        // `CanBeHeldWeakly(key)` — a WeakMap key must be a reference (XS, like
+        // this engine's `WeakMap.prototype.set`, admits objects only). Checked
+        // before the callable check and before any lookup/insert.
+        let key = self.normalize_coll_key(key_arg);
+        if weak && key.kind != Kind::Reference {
+            return Err(self.catchable_type_error());
+        }
         match m {
-            NativeMethod::MapGetOrInsert => {
+            NativeMethod::MapGetOrInsert | NativeMethod::WeakMapGetOrInsert => {
                 let value = self
                     .stack
                     .get(base + 5)
                     .copied()
                     .unwrap_or_else(Slot::undefined);
-                let key = self.normalize_coll_key(key_arg);
                 if let Some(p) = self.collection_find(inst, &key) {
                     return Ok(self.collections[&inst].entries[p].unwrap().1);
                 }
@@ -27531,7 +27579,8 @@ impl Interp {
                 self.collection_table_resize(inst);
                 Ok(value)
             }
-            NativeMethod::MapGetOrInsertComputed => {
+            NativeMethod::MapGetOrInsertComputed
+            | NativeMethod::WeakMapGetOrInsertComputed => {
                 let callbackfn = self
                     .stack
                     .get(base + 5)
@@ -27540,7 +27589,6 @@ impl Interp {
                 if !self.value_is_callable(callbackfn) {
                     return Err(self.catchable_type_error());
                 }
-                let key = self.normalize_coll_key(key_arg);
                 if let Some(p) = self.collection_find(inst, &key) {
                     return Ok(self.collections[&inst].entries[p].unwrap().1);
                 }

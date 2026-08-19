@@ -71,6 +71,56 @@ fn get_or_insert_computed_calls_callback_only_on_absence() {
 }
 
 #[test]
+fn weakmap_upsert_methods_are_present_and_callable() {
+    agrees("typeof WeakMap.prototype.getOrInsert");
+    agrees("typeof WeakMap.prototype.getOrInsertComputed");
+    agrees("WeakMap.prototype.getOrInsert.name");
+    agrees("WeakMap.prototype.getOrInsert.length");
+    agrees("WeakMap.prototype.getOrInsertComputed.name");
+    agrees("WeakMap.prototype.getOrInsertComputed.length");
+    // The upsert proposal does not add these to WeakSet.prototype.
+    agrees("typeof WeakSet.prototype.getOrInsert");
+    // The Map and WeakMap methods are distinct function objects.
+    agrees("WeakMap.prototype.getOrInsert === Map.prototype.getOrInsert");
+}
+
+#[test]
+fn weakmap_get_or_insert_returns_existing_or_inserts() {
+    // Absent (object) key: insert the value and return it.
+    agrees("var k = {}; var m = new WeakMap(); m.getOrInsert(k, 'a')");
+    agrees("var k = {}; var m = new WeakMap(); m.getOrInsert(k, 'a'); m.get(k)");
+    agrees("var k = {}; var m = new WeakMap(); m.getOrInsert(k, 'a'); m.has(k)");
+    // Present key: return the existing value, do NOT overwrite.
+    agrees("var k = {}; var m = new WeakMap([[k, 'x']]); m.getOrInsert(k, 'y')");
+    agrees("var k = {}; var m = new WeakMap([[k, 'x']]); m.getOrInsert(k, 'y'); m.get(k)");
+    // A primitive (non-weakly-holdable) key throws a (catchable) TypeError.
+    agrees("var ok = false; var m = new WeakMap(); try { m.getOrInsert(1, 'a'); } catch (e) { ok = e instanceof TypeError; } ok");
+    agrees("var ok = false; var m = new WeakMap(); try { m.getOrInsert('s', 'a'); } catch (e) { ok = e instanceof TypeError; } ok");
+    // A non-WeakMap receiver throws a (catchable) TypeError.
+    agrees("var ok = false; try { WeakMap.prototype.getOrInsert.call(new Map(), {}, 1); } catch (e) { ok = e instanceof TypeError; } ok");
+    agrees("var ok = false; try { WeakMap.prototype.getOrInsert.call(5, {}, 1); } catch (e) { ok = e instanceof TypeError; } ok");
+}
+
+#[test]
+fn weakmap_get_or_insert_computed_calls_callback_only_on_absence() {
+    // Absent: call the callback once, insert and return its result.
+    agrees("var k = {}; var m = new WeakMap(); m.getOrInsertComputed(k, function () { return 'v'; })");
+    agrees("var k = {}; var m = new WeakMap(); m.getOrInsertComputed(k, function () { return 'v'; }); m.get(k)");
+    // Present: the callback is NOT evaluated; the existing value is returned.
+    agrees("var k = {}; var calls = 0; var m = new WeakMap([[k, 'x']]); m.getOrInsertComputed(k, function () { calls++; return 'y'; }); calls + ':' + m.get(k)");
+    // The key is passed to the callback (this === undefined).
+    agrees("var k = {}; var seen; var m = new WeakMap(); m.getOrInsertComputed(k, function (arg) { seen = (arg === k); }); seen");
+    // A callback that mutates the same key is overwritten by the computed value.
+    agrees("var k = {}; var m = new WeakMap(); m.getOrInsertComputed(k, function () { m.set(k, 0); return 3; }); m.get(k)");
+    // A primitive key throws a (catchable) TypeError BEFORE any callable check.
+    agrees("var ok = false; var m = new WeakMap(); try { m.getOrInsertComputed(1, {}); } catch (e) { ok = e instanceof TypeError; } ok");
+    // A non-callable callbackfn (with a valid key) throws a (catchable) TypeError.
+    agrees("var ok = false; var m = new WeakMap(); try { m.getOrInsertComputed({}, {}); } catch (e) { ok = e instanceof TypeError; } ok");
+    // A throwing callback propagates; the map is unchanged.
+    agrees("var k = {}; var m = new WeakMap(); var t = false; try { m.getOrInsertComputed(k, function () { throw 42; }); } catch (e) { t = (e === 42); } t + ':' + m.has(k)");
+}
+
+#[test]
 fn map_group_by_is_present_and_buckets_by_same_value_zero() {
     agrees("typeof Map.groupBy");
     agrees("Map.groupBy.name");
