@@ -99,7 +99,7 @@ export const makeBlobRefExo = (bytes, help, infoOverride) => {
       if (method === undefined) {
         return help ?? 'BlobRef: content-addressed handle (DESIGN.md §6).';
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };

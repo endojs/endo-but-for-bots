@@ -198,7 +198,7 @@ const makeCachingFilesystem = (
       if (method === undefined) {
         return 'Filesystem (CAS-cached). Reads consult a local CAS before falling through to the underlying file.';
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
   };
   const posture = filesystemPostureOf(inner);
@@ -375,7 +375,7 @@ const makeCachingDirectory = (
       if (method === undefined) {
         return 'Directory (CAS-cached).';
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
   wrapperToInner.set(exo, dir);
@@ -490,7 +490,7 @@ const makeCachingFile = (file, cachedQid, cas, populateInBackground) => {
       if (method === undefined) {
         return 'File (CAS-cached).';
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };
@@ -628,7 +628,7 @@ const makeCachingOpenFile = (
       if (method === undefined) {
         return 'OpenFile (CAS-cached). `read` consults the CAS; other methods pass through.';
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };

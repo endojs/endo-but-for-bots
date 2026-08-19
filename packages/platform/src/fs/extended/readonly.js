@@ -17,7 +17,7 @@
 
 import { makeExo } from '@endo/exo';
 import { E } from '@endo/eventual-send';
-import { makeError, X } from '@endo/errors';
+import { makeError, X, q } from '@endo/errors';
 
 import {
   DirectoryInterface,
@@ -117,7 +117,7 @@ const makeReadOnlyFilesystem = inner => {
         if (method === undefined) {
           return 'Filesystem (read-only attenuator) — mutating methods reject with EACCES.';
         }
-        return `No documentation for method "${method}".`;
+        return `No documentation available for method ${q(method)}.`;
       },
     },
     'readOnly',
@@ -223,7 +223,7 @@ const makeReadOnlyDirectory = (dir, qid) => {
       if (method === undefined) {
         return 'Directory (read-only attenuator).';
       }
-      return `No documentation for method "${method}".`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };
@@ -279,7 +279,7 @@ const makeReadOnlyFile = (file, qid) => {
       if (method === undefined) {
         return 'File (read-only attenuator).';
       }
-      return `No documentation for method "${method}".`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };
@@ -315,7 +315,7 @@ const makeReadOnlyOpenFile = oh => {
       if (method === undefined) {
         return 'OpenFile (read-only attenuator).';
       }
-      return `No documentation for method "${method}".`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };
@@ -342,7 +342,7 @@ const makeReadOnlyXattrs = xattrs => {
       if (method === undefined) {
         return 'Xattrs (read-only attenuator).';
       }
-      return `No documentation for method "${method}".`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };

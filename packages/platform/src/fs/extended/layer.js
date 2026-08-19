@@ -397,7 +397,7 @@ export const makeLayer = (layerFs, backingFs) => {
       if (method === undefined) {
         return 'Layer (DESIGN.md §8.5).';
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };
