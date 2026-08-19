@@ -19,8 +19,10 @@ endo-claude's ~1-1.5 weeks.*
 current daemon-backed code-mode capability roadmap.
 It now separates two execution planes. Endor's landed npm-via-CAS path resolves
 verified package graphs into the CAS and executes module entry points with no
-npm CLI, no `node_modules`, no lockfile, and no package scripts; the design
-adopts it and proposes no competing resolver, version-selection table, artifact
+npm CLI, no install, no lockfile, and no package scripts, emitting CAS
+compartments rather than an installed layout; the design adopts it, along with
+the in-flight `endor run` dependency walk (#282) and `--conditions` work
+(#876), and proposes no competing resolver, version-selection table, artifact
 fetcher, compartment assembly, or module loader. Sandbox development keeps
 native npm, pnpm, and Yarn semantics, where CAS is the verified artifact source,
 durable store, and acceleration layer behind an operation-scoped loopback

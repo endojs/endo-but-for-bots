@@ -27,7 +27,7 @@ Endo-pi remains one consumer and one end-to-end acceptance surface.
 
 This plan covers one of two distinct execution planes. Endor already resolves
 verified package graphs into the CAS and executes module entry points with no
-npm CLI, no `node_modules` tree, and no package-script interpretation. This
+npm CLI, no install step, and no package-script interpretation. This
 design adopts that path rather than competing with it, and owns only the
 remaining case where a development session needs a real npm, pnpm, or Yarn
 process against a real project. The
@@ -82,8 +82,8 @@ Three neighboring bodies of work are adopted rather than restated here:
 
 - Endor's CAS-native resolution, artifact fetch, compartment assembly, and
   module execution, owned by
-  [endor-npm-registry-proxy](endor-npm-registry-proxy.md) and its pull
-  requests;
+  [endor-npm-registry-proxy](endor-npm-registry-proxy.md) and
+  [endor-run-expanded](endor-run-expanded.md) and their pull requests;
 - CAS identities, artifact records, install graphs, materialization, action
   caches, and native Git ownership, owned by the merged
   [CAS package substrate architecture](https://github.com/0xpatrickdev/garden/blob/4998506899/designs/draft/cas-git-package-substrate.md);
@@ -106,8 +106,13 @@ other.
 graph with its own registry table and Minimum Version Selection, fetches and
 SRI-verifies artifacts into the CAS, assembles a deterministic compartment map
 whose locations are `cas:sha256:<tree>` references, and executes the entry
-point in an XS machine. It uses no npm CLI, no `node_modules` tree, no
-lockfile, and no package-script interpretation. This path is landed on `llm`
+point in an XS machine. It runs no npm CLI, performs no install, consults no
+lockfile, and interprets no package scripts. It never produces a
+`node_modules` tree, and its executable form is always a CAS compartment map
+rather than an installed layout; where a `node_modules` tree already exists on
+disk, `endor run` may read it as one resolution input, which is a way of
+finding module sources and not a way of installing them.
+This path is landed on `llm`
 through [#276](https://github.com/endojs/endo-but-for-bots/pull/276),
 [#799](https://github.com/endojs/endo-but-for-bots/pull/799),
 [#800](https://github.com/endojs/endo-but-for-bots/pull/800),
@@ -119,6 +124,19 @@ by [endor-npm-registry-proxy](endor-npm-registry-proxy.md). This design adopts
 it. It proposes no second resolver, Minimum Version Selection table, artifact
 fetcher, compartment-assembly path, or Endor module loader, and it does not own
 Endor's runtime-identity and condition questions.
+
+That plane is still being extended, and this design adopts the extensions on
+the same terms. [#282](https://github.com/endojs/endo-but-for-bots/pull/282)
+adds the dependency walk for `endor run <entry.js>` under
+[endor-run-expanded](endor-run-expanded.md), including the local
+`node_modules` resolution input described above;
+[#876](https://github.com/endojs/endo-but-for-bots/pull/876) adds the
+`--conditions` flag and a webcrypto endowment for browser-build packages; and
+[#879](https://github.com/endojs/endo-but-for-bots/pull/879) and
+[#892](https://github.com/endojs/endo-but-for-bots/pull/892) hold the
+runtime-identity and remaining design questions. None of them is this
+document's to specify, and none of them is a prerequisite for the sandbox
+plane below.
 
 **Sandbox plane: native package-manager operation.** Development sessions work
 on foreign repositories that expect their own package manager. That plane needs
@@ -163,7 +181,7 @@ must not be absorbed into this design branch.
 | Surface | State | Live evidence and remaining boundary |
 |---|---|---|
 | Daemon-backed code mode | **Landed on `llm`.** | [#905](https://github.com/endojs/endo-but-for-bots/pull/905) and [#907](https://github.com/endojs/endo-but-for-bots/pull/907) supply retained daemon guests, restart/reconnect behavior, and the endo-pi `evaluate` acceptance surface. They do not supply package-manager or mediated Web grants. |
-| Endor CAS-native module execution | **Landed on `llm`.** | [#276](https://github.com/endojs/endo-but-for-bots/pull/276), [#799](https://github.com/endojs/endo-but-for-bots/pull/799), [#800](https://github.com/endojs/endo-but-for-bots/pull/800), [#803](https://github.com/endojs/endo-but-for-bots/pull/803), [#857](https://github.com/endojs/endo-but-for-bots/pull/857), [#873](https://github.com/endojs/endo-but-for-bots/pull/873), and [#875](https://github.com/endojs/endo-but-for-bots/pull/875) supply the registry table, Minimum Version Selection resolver, artifact fetch and verification, `cas:sha256:` compartment assembly, XS execution, offline mode, and peer, workspace, and `imports` handling. Runtime identity and remaining design questions belong to [#879](https://github.com/endojs/endo-but-for-bots/pull/879) and [#892](https://github.com/endojs/endo-but-for-bots/pull/892). This design adopts that plane and adds nothing to it. |
+| Endor CAS-native module execution | **Landed on `llm`, with extensions in flight.** | [#276](https://github.com/endojs/endo-but-for-bots/pull/276), [#799](https://github.com/endojs/endo-but-for-bots/pull/799), [#800](https://github.com/endojs/endo-but-for-bots/pull/800), [#803](https://github.com/endojs/endo-but-for-bots/pull/803), [#857](https://github.com/endojs/endo-but-for-bots/pull/857), [#873](https://github.com/endojs/endo-but-for-bots/pull/873), and [#875](https://github.com/endojs/endo-but-for-bots/pull/875) supply the registry table, Minimum Version Selection resolver, artifact fetch and verification, `cas:sha256:` compartment assembly, XS execution, offline mode, and peer, workspace, and `imports` handling. [#282](https://github.com/endojs/endo-but-for-bots/pull/282) adds the `endor run` dependency walk and local `node_modules` resolution input, and [#876](https://github.com/endojs/endo-but-for-bots/pull/876) adds `--conditions` and a webcrypto endowment. Runtime identity and remaining design questions belong to [#879](https://github.com/endojs/endo-but-for-bots/pull/879) and [#892](https://github.com/endojs/endo-but-for-bots/pull/892). This design adopts that plane, landed and in flight, and adds nothing to it. |
 | Portable package manager | **Landed on `llm`.** | [#948](https://github.com/endojs/endo-but-for-bots/pull/948), merged 2026-08-17, defines structurally distinct cumulative reader, installer, and executor facets plus the injected backend protocol. |
 | Package-manager coordinator | **Merged into `llm` on 2026-08-19.** | [#1011](https://github.com/endojs/endo-but-for-bots/pull/1011) is merged at `c6b70e8fdb98d4bbfc72e7e0d655f942134eaa50` and places the reusable coordinator in `@endo/exo-package-manager`: fixed argv, snapshot revalidation, generated configuration handoff, bounds, cancellation, exact-version evidence, and structured results. It added no ambient backend package and no host authority. |
 | Package-manager projection | **Open draft, deliberately held.** | [#950](https://github.com/endojs/endo-but-for-bots/pull/950), head `f0bf013a800b5081484815843318696983883cd2`, projects metadata tools for a reader, adds `installDependencies` only for an installer, and adds `runPackageScript` only for an executor. It stays held until the broker and confined backend complete one operation end to end, so the projected tools describe an authority that actually works. |
@@ -350,7 +368,7 @@ not in this capability roadmap.
 | `@endo/exo-npm` (`@endo/exo-npm-registry` after the deferred rename) | The portable canonical registry interface, resolution logic, structured errors, and artifact identity. It accepts injected daemon adapters for HTTP acquisition, cryptographic verification, persistent CAS/cache access, `@registry` integration, and formula lifecycle; its package-artifact records are the broker's verified input. |
 | `@endo/npm-registry-broker` | The operation-scoped loopback protocol projection for package-manager processes. It serves manager-compatible metadata and original verified tarball bytes from artifact records, rewrites tarball URLs, authorizes only that operation's packages and versions, and owns no CAS storage, extraction, resolution, install-graph planning, or direct materialization. |
 | `@endo/package-manager` | The broker-configured confined backend that composes the merged coordinator with the loopback broker, pinned native manager execution, workspace and configuration revalidation, output/process bounds, and cleanup. It is not a host-ambient default and may claim hostile-workspace containment only after the selected sandbox profile passes conformance. |
-| Endor npm-via-CAS path in `rust/endo` | Actor-plane resolution, Minimum Version Selection, artifact fetch, CAS storage, compartment assembly, and module execution with no npm CLI, `node_modules`, or package scripts. It is adopted by this design and owned by [endor-npm-registry-proxy](endor-npm-registry-proxy.md). |
+| Endor npm-via-CAS path in `rust/endo` | Actor-plane resolution, Minimum Version Selection, artifact fetch, CAS storage, compartment assembly, and module execution with no npm CLI, no install, and no package scripts. It emits CAS compartments rather than an installed layout, though it may read an existing `node_modules` tree as a resolution input. It is adopted by this design and owned by [endor-npm-registry-proxy](endor-npm-registry-proxy.md) and [endor-run-expanded](endor-run-expanded.md). |
 | `@endo/exo-git`, `packages/git`, and `packages/daemon` | Existing Git capability and native backend policy, plus the remaining public HTTPS broker, credential-free public fetch, bounded process lifecycle, and daemon provisioning. |
 
 ### Shared address semantics
@@ -805,10 +823,11 @@ linked pull request is unposted work, not implied follow-up.
   Tracking: #957. Done: `piTools: 'preserve'` is an explicit compatibility
   posture and does not become a strict-session authority claim.
 - [x] Endor CAS-native module resolution and execution. Owner: the Endor
-  npm-via-CAS path. Tracking: #276, #799, #800, #803, #857, #873, and #875.
-  Done: verified package graphs resolve into the CAS and entry points execute
-  with no npm CLI, `node_modules`, lockfile, or package scripts. This design
-  adopts that plane and adds no competing implementation.
+  npm-via-CAS path. Tracking: #276, #799, #800, #803, #857, #873, and #875,
+  with #282 and #876 extending the plane in flight. Done: verified package
+  graphs resolve into the CAS and entry points execute with no npm CLI, no
+  install, no lockfile, and no package scripts. This design adopts that plane
+  and adds no competing implementation.
 - [x] Reusable package-manager backend coordinator. Owner:
   `@endo/exo-package-manager`. Tracking: #1011, merged 2026-08-19. Done: fixed
   argv, generated configuration handoff, snapshot revalidation, bounds,
@@ -842,6 +861,12 @@ linked pull request is unposted work, not implied follow-up.
 - [ ] Close portable mount containment gaps. Owner: daemon mount. Tracking:
   #897. Done when symlink-deny and mid-walk revocation behavior are covered by
   adversarial tests and the remaining level-1 claims are accurate.
+- [ ] Extend named startup grant provisioning. Owner: `@endo/agentry`.
+  Tracking: #1021, stacked on landed #965. Done when a configured grant path is
+  resolved once by the host, its exact formula is retained, and the capability
+  is bound in code mode without exposing host lookup authority. The
+  package-manager and Web grants below extend this path rather than adding a
+  second one.
 - [ ] Land exact package-manager projection. Owner: `@endo/agent-tools`.
   Tracking: #950, based on landed #948 and #1011. Dependencies: the loopback
   broker and the confined backend demonstrating one end-to-end installation.
