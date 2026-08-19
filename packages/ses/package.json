@@ -105,7 +105,7 @@
   "devDependencies": {
     "ava": "catalog:dev",
     "c8": "catalog:dev",
-    "core-js": "^3.31.0",
+    "core-js": "^3.50.0",
     "eslint": "catalog:dev",
     "expect-type": "^1.4.0",
     "hermes-engine-cli": "^0.12.0",

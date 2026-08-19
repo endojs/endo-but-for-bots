@@ -89,10 +89,10 @@
     "@endo/zip": "workspace:^",
     "better-sqlite3": "^11.0.0",
     "ses": "workspace:^",
-    "ws": "^8.13.0"
+    "ws": "^8.21.3"
   },
   "optionalDependencies": {
-    "@number0/iroh": "^1.0.0"
+    "@number0/iroh": "^1.1.0"
   },
   "devDependencies": {
     "@endo/bundle-source": "workspace:^",

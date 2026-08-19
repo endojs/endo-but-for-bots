@@ -55,7 +55,7 @@
     "ava": "catalog:dev",
     "electron": "^43.3.0",
     "electron-installer-dmg": "^5.0.1",
-    "esbuild": "^0.28.0",
+    "esbuild": "^0.28.2",
     "eslint": "catalog:dev",
     "typescript": "catalog:dev"
   },

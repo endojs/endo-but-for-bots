@@ -23,17 +23,17 @@
     "lint:types": "tsc"
   },
   "dependencies": {
-    "@eslint-community/eslint-utils": "^4.7.0",
+    "@eslint-community/eslint-utils": "^4.10.1",
     "@eslint/js": "^10.0.1",
     "@stylistic/eslint-plugin": "^5.0.0",
-    "@typescript-eslint/eslint-plugin": "^8.39.1",
-    "@typescript-eslint/parser": "^8.39.1",
-    "@typescript-eslint/utils": "^8.62.1",
+    "@typescript-eslint/eslint-plugin": "^8.67.0",
+    "@typescript-eslint/parser": "^8.67.0",
+    "@typescript-eslint/utils": "^8.67.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-import": "npm:eslint-plugin-import-x@4.16.2",
     "eslint-plugin-jsdoc": "^63.0.14",
     "eslint-plugin-unicorn": "^72.0.0",
-    "typescript-eslint": "^8.39.1"
+    "typescript-eslint": "^8.67.0"
   },
   "peerDependencies": {
     "eslint": "^8.57.0 || ^9.0.0 || ^10.0.0",
@@ -41,8 +41,8 @@
   },
   "devDependencies": {
     "@types/eslint-config-prettier": "^6.11.3",
-    "@typescript-eslint/rule-tester": "^8.62.1",
-    "@typescript-eslint/types": "^8.63.0",
+    "@typescript-eslint/rule-tester": "^8.67.0",
+    "@typescript-eslint/types": "^8.67.0",
     "eslint": "catalog:dev",
     "typescript": "catalog:dev"
   },
