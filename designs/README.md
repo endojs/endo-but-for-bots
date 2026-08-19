@@ -14,26 +14,38 @@ designs (mcp-endo-guest, mcp-daemon-guest-tools). Summary table, M6 constituent 
 dependency graph (including the `endo-posix-sandbox` prerequisite edge), per-design
 estimate, and design-count totals synced; M6's own-work rollup now folds in
 endo-claude's ~1-1.5 weeks.*
-*Refreshed on 2026-08-18:
+*Refreshed on 2026-08-19:
 [session-execution-capabilities](session-execution-capabilities.md) is the
 current daemon-backed code-mode capability roadmap.
+It now separates two execution planes. Endor's landed npm-via-CAS path resolves
+verified package graphs into the CAS and executes module entry points with no
+npm CLI, no install, no lockfile, and no package scripts, emitting CAS
+compartments rather than an installed layout; the design adopts it, along with
+the in-flight `endor run` dependency walk (#282) and `--conditions` work
+(#876), and proposes no competing resolver, version-selection table, artifact
+fetcher, compartment assembly, or module loader. Sandbox development keeps
+native npm, pnpm, and Yarn semantics, where CAS is the verified artifact source,
+durable store, and acceleration layer behind an operation-scoped loopback
+broker rather than a replacement manager or a canonical installed layout.
 It scopes zero-grant and confinement claims to strict harness posture,
 distinguishes portable Exo guarantees from broker-configured integration and
 conformance-qualified sandbox backends, and makes `@endo/sandbox` the planned
 production boundary for native processes over untrusted workspaces. The durable
 session is one authority graph with multiple named mount and Git grants, while
 lazy sandbox incarnations receive only the exact selected mount set and network
-posture. The work ledger now includes active mount, sandbox-lifecycle, and Git
-stacks, reserves durable write-ahead records for mutating effects, distinguishes
-grant identity from backing-resource identity, and makes backend migration
-explicit. Daemon-owned Web uses confined HTTP, package installation converges
-the portable and daemon registry implementations through the proposed
-`@endo/exo-npm-registry`, the `@endo/npm-registry-broker` loopback projection,
-and the broker-configured `@endo/package-manager` backend. The reusable
-coordinator is in [PR 1011](https://github.com/endojs/endo-but-for-bots/pull/1011),
-the convergence issue is [issue 1027](https://github.com/endojs/endo-but-for-bots/issues/1027),
-and the CAS package substrate remains a separate architecture document.
-Retired Genie code is
+posture. The ledger records the merged coordinator
+([PR 1011](https://github.com/endojs/endo-but-for-bots/pull/1011)), the landed
+named-grant and generic-provisioning work, sandbox lifecycle, Git surface, and
+cancellation changes, and holds the
+[PR 950](https://github.com/endojs/endo-but-for-bots/pull/950) agent-tools
+projection until the broker and confined `@endo/package-manager` backend
+complete one operation end to end. The portable registry contract stays in the
+landed `@endo/exo-npm` with the `@endo/exo-npm-registry` rename deferred as
+later compatibility work under
+[issue 1027](https://github.com/endojs/endo-but-for-bots/issues/1027); CAS
+identities, artifact records, install graphs, and materialization remain in the
+merged CAS package substrate architecture, and sandbox mechanics remain in the
+stacked backend design. Retired Genie code is
 salvage or reference material. Summary, M3 row, estimate, totals, and timeline
 are synchronized.*
 
@@ -89,11 +101,12 @@ generated broker configuration and a selected mount, broker-only profiles,
 descriptor-scoped Git credentials, bounded lifecycle, conservative restart
 outcomes, and driver-specific conformance),
 [session-execution-capabilities](session-execution-capabilities.md) (added
-2026-08-06, revised 2026-08-18; the current daemon-backed code-mode roadmap
-scopes strict versus preserved harness claims, defines portable,
-broker-configured, and confined assurance levels, and tracks every landed, open,
-and unposted Web, package, Git, operation-recovery, sandbox, and acceptance
-item with an explicit checkbox),
+2026-08-06, revised 2026-08-19; the current daemon-backed code-mode roadmap
+separates Endor's CAS-native module execution from native package-manager
+operation in a development sandbox, scopes strict versus preserved harness
+claims, defines portable, broker-configured, and confined assurance levels, and
+tracks every landed, open, and unposted Web, package, Git, operation-recovery,
+sandbox, and acceptance item with an explicit checkbox),
 [endor-registry-proxy-worker](endor-registry-proxy-worker.md) (added
 2026-08-06; an XS-hosted JavaScript mapping phase over a virtual read-only CAS
 package graph, using compartment-mapper's shared package resolver to emit a
@@ -441,8 +454,8 @@ LLM-agent stack).*
 | [daemon-locator-terminology](daemon-locator-terminology.md) | 2026-02-24 | 2026-02-24 | Not Started |
 | [daemon-os-sandbox-plugin](daemon-os-sandbox-plugin.md) | 2026-02-15 | 2026-03-19 | Superseded by [endo-posix-sandbox](endo-posix-sandbox.md) |
 | [endo-posix-sandbox](endo-posix-sandbox.md) | 2026-05-07 | 2026-05-07 | In Progress (Phase 3) |
-| [session-execution-capabilities](session-execution-capabilities.md) | 2026-08-06 | 2026-08-18 | Proposed |
-| [session-sandbox-backend](session-sandbox-backend.md) | 2026-08-06 | 2026-08-18 | Proposed |
+| [session-execution-capabilities](session-execution-capabilities.md) | 2026-08-06 | 2026-08-19 | Proposed |
+| [session-sandbox-backend](session-sandbox-backend.md) | 2026-08-06 | 2026-08-19 | Proposed |
 | [daemon-value-message](daemon-value-message.md) | 2026-03-02 | 2026-03-03 | **Complete** |
 | [daemon-web-gateway](daemon-web-gateway.md) | 2026-03-11 | 2026-03-11 | **Complete** |
 | [daemon-weblet-application](daemon-weblet-application.md) | 2026-02-24 | 2026-02-25 | Not Started |
@@ -535,6 +548,7 @@ LLM-agent stack).*
 Superseded (166 designs). This corrects the preceding historical snapshot
 after filing the 17 unattended documents and recording the merged
 `editMessage` successor as Complete.
+
 ## Roadmap
 
 ### Execution lead: Minion Town federation experiment
@@ -909,10 +923,10 @@ capabilities available to agents.
 | gateway-package | Proposed | `@endo/gateway` package integrating gateway/weblet/Noise; absorbs the prior endo-gateway design (removed 2026-05-29 per PR #343 review). **Implementation in flight as the gateway-package stack:** overarching design PR [#343](https://github.com/endojs/endo-but-for-bots/pull/343); phases [#388](https://github.com/endojs/endo-but-for-bots/pull/388) UDS bootstrap, [#389](https://github.com/endojs/endo-but-for-bots/pull/389) admin, [#392](https://github.com/endojs/endo-but-for-bots/pull/392) `/ocapn-cbor-np` WS, [#393](https://github.com/endojs/endo-but-for-bots/pull/393) relay policy, [#394](https://github.com/endojs/endo-but-for-bots/pull/394) Git-HTTP, [#395](https://github.com/endojs/endo-but-for-bots/pull/395) AppsNameHub, [#396](https://github.com/endojs/endo-but-for-bots/pull/396) ResourceLedger, [#397](https://github.com/endojs/endo-but-for-bots/pull/397) Familiar-bundled fallback all open. **Phase 10 (Feature 9 HTTPS proxy compat) and Phase 11 (Feature 10 OS packaging) pending.** Per-host system-service HTTP virtual hosting for OCapN, lifting hosting out of the per-user daemon, is now Feature 4 + Feature 6 + Feature 7 of this package; closes issue #173, unblocks PR #134. |
 | endo-gateway-mcp | Not Started | MCP JSON-RPC termination on the gateway; bearer-token → formula-id → Endo agent tools. Design merged today (PR [#376](https://github.com/endojs/endo-but-for-bots/pull/376)). Strategic-early for the MCP-bridge milestone (M6): the gateway-as-MCP-bridge endpoint, gated on gateway-package phases 2/7/8 (UDS bootstrap, AppsNameHub, ResourceLedger) but not on phases 10/11. |
 | daemon-docker-selfhost | Not Started | Dockerfile, state persistence, network exposure, Chat hosting |
-| daemon-agent-tools | In Progress | Capability-layer map and build sequence for the M3 "Claw-like coding capabilities" pillar, reconciled 2026-07-06 against the landed mount/git trio and re-swept 2026-08-06 for package management. Filesystem, Shell, local-git, and remote-git tool groups shipped: file tools list/edit/stat (#614, Phase 1), the `Shell` capability + `makeShellTool` (#615, Phase 2a/2b), mount-bridged git `status`/`add` (#616), and the `makeGitRemoteTool` push tier (#705), on top of `@endo/agent-tools` #523/#524. The **Network (HTTP)** tier maps the landed `HttpClient`/`HttpClientControl` capability from `@endo/exo-http-client` over `@endo/http-confine` (#566). The **Package management** tier maps portable reader, safe-installer, and project-executor facets (#948), the reusable coordinator (#1011), the daemon-backed base-session design (#949), the grant-sensitive agent-tools projection (#950), and the conformance-qualified enforcement adapter. The broker and verified package-artifact substrate remain owned by the base package design and its separate substrate work. Remaining phased work: the sandbox shell engine (Phase 2c, gated on `endo-posix-sandbox`), the `makeHttpTool` binding and plugin provisioning (Phase 3.6), and the Phase 4 worked loop. |
+| daemon-agent-tools | In Progress | Capability-layer map and build sequence for the M3 "Claw-like coding capabilities" pillar, reconciled 2026-07-06 against the landed mount/git trio and re-swept 2026-08-06 for package management. Filesystem, Shell, local-git, and remote-git tool groups shipped: file tools list/edit/stat (#614, Phase 1), the `Shell` capability + `makeShellTool` (#615, Phase 2a/2b), mount-bridged git `status`/`add` (#616), and the `makeGitRemoteTool` push tier (#705), on top of `@endo/agent-tools` #523/#524. The **Network (HTTP)** tier maps the landed `HttpClient`/`HttpClientControl` capability from `@endo/exo-http-client` over `@endo/http-confine` (#566). The **Package management** tier maps portable reader, safe-installer, and project-executor facets (#948), the merged reusable coordinator (#1011), the daemon-backed base-session design (#949), the grant-sensitive agent-tools projection (#950, held until a working end-to-end backend), daemon registry adapter convergence (#1027), the loopback broker, and the conformance-qualified backend. Remaining phased work: the sandbox shell engine (Phase 2c, gated on `endo-posix-sandbox`), the `makeHttpTool` binding and plugin provisioning (Phase 3.6), and the Phase 4 worked loop. |
 | endo-agent-tools | In Progress | `@endo/agent-tools`: method-guard tools over a confined workspace. The canonical `ToolRecord` (`makeTool`), the confinement axis plus attenuation levers, the git authority tiers (read / write / push), and capability args as camelCase petnames resolved against the guest petstore via `E(powers).lookup`, bound host-side with `storeIdentifier` / `storeValue` (no opaque handle, no bespoke registry). `Filesystem`-targeted file tools over `@endo/platform/fs/extended` read the live worktree and history through one cap; #523 reconciled the FS read tool onto the canonical `ToolRecord`. One petstore is the system of record at two granularities (per-call tool mode, per-session code mode); petname-for-caps plus SmallCaps-for-data are complementary. Wire schemas are hand-authored and pinned to the live guard by a divergence gate; #524 shipped the code-mode TypeScript declaration renderer (build-time codegen, two paths, gated against the guards). Realizes the package `endo-gateway-mcp` named; supersedes [agent-tools-mount-fs-tools](agent-tools-mount-fs-tools.md). Sibling of `@endo/agentry`'s `defineAgent` builder ([agentry-agent-builder](agentry-agent-builder.md)) |
 | agentry-agent-builder | In Progress | `@endo/agentry` `defineAgent`: the agent builder that lets someone build their own lal (dogfooded by reconstructing lal itself). Core landed in #517: a single-call `defineAgent(config)` returning a maker function (the powerless definition is the maker's closure; calling the maker with a powers handle is the powered stage), a module in #308's optimizer and eval package, keeping the exo `define*`/`make*` spirit (no separate `makeAgent(template, powers)` export). Primary interaction mode is code-mode `evaluate` over petname-bound endowments (not a multi-interface cli/sdk/web export); discrete `arg0`-style tools are kept as a distinct second mode. Code-mode result rendering uses the real SmallCaps marshaller (`@endo/marshal`), not `JSON.stringify`. #902 adds generated declarations for daemon mount, Git, and Git-remote globals; the Pi-independent `code-mode-provisioning` subpath maps plain session policy to a retained daemon guest and selects those matching declarations, with versioned non-secret reconstruction data. Shipped config is `{ model, instructions, tools, endow }`: `model` folds in the provider (profile string / `provider/modelId` / concrete pi-ai `Model`), `instructions` is the system prompt, and the credential key resolves through a `Credentials` seam (`makeEnvCredentials`) plus the `endow` hook. No `harness` abstraction (one pi loop via `@earendil-works/pi-agent-core` v0.79.0; code-mode guest code is confined in a fresh Endo Compartment per #297). #517 ships the two code-mode presets `makeCodeModeAgent` / `makeCodeModeGitLoopAgent` (`@endo/agentry/code-mode`), each wrapping `defineAgent({ model, instructions, tools: [toPiAgentTool(...)] })`. The SmallCaps renderer lives in `@endo/agent-tools/adapters/smallcaps.js`. Aspirational (not in #517): declarative tool selection plus attenuation (functions-of-cap), define-time wire-schema derivation (`Tool.parameters` plus MCP `inputSchema`), a `compaction` selector (pi-default or genie's observer/reflector pair), `prompts.steering`, a `discovery` axis, and per-harness `define(Lal\|Genie)Agent` preset bundles (fae deprioritized, keeps its own loop). Capped at the eval-vs-optimize distinction the git code-mode eval harness draws. Drives the #404 wizard's Submit (which calls the maker); wires the `Filesystem` plus Git capabilities into the #370 loop |
-| session-execution-capabilities | Proposed | Current plan for daemon-backed code-mode grants, generic to consumers with endo-pi as one strict acceptance surface. Portable Exo guarantees, broker-configured integration, and conformance-qualified sandbox claims are distinct. The landed/open/unposted checklist tracks Web, package registry convergence, the #1011 coordinator, `@endo/npm-registry-broker`, `@endo/package-manager`, Git, workload brokers, durable effect reconciliation, `broker-only` sandbox work, and acceptance. `piTools: 'preserve'` is a developer escape hatch outside whole-session confinement claims. |
+| session-execution-capabilities | Proposed | Current plan for daemon-backed code-mode grants, generic to consumers with endo-pi as one strict acceptance surface. It adopts Endor's landed CAS-native module execution and owns only native package-manager operation in a development sandbox, where CAS is the verified artifact source and acceleration layer rather than a replacement manager. Portable Exo guarantees, broker-configured integration, and conformance-qualified sandbox claims are distinct. The landed/open/unposted checklist tracks Web, daemon registry adapter convergence (#1027, rename deferred), the merged #1011 coordinator, `@endo/npm-registry-broker`, `@endo/package-manager`, the held #950 projection, Git, workload brokers, durable effect reconciliation, `broker-only` sandbox work, and acceptance. `piTools: 'preserve'` is a developer escape hatch outside whole-session confinement claims. |
 | session-sandbox-backend | Proposed | Optional confined enforcement backend over the generic authority graph. One owner lazily pools exact-authority sandbox incarnations keyed by selected mount set, modes, rootfs, network posture, and policy version. Compatibility `/workspace` and named `/mnt/<name>` projections, sandbox-backed Git, and a package-manager adapter consuming operation-scoped generated broker configuration plus a selected mount are tracked with broker-only profiles, descriptor-scoped credentials, bounded lifecycle, conservative restart outcomes, and driver-specific conformance. The `@endo/npm-registry-broker` and verified package-artifact substrate are injected dependencies from #949, not owned here. |
 | agentry-git-verb-gaps | Proposed | Narrow local-git history-editing verb set for the agentry `stack-surgery` eval lane: `cherryPick`, `commit({ amend })`, `reword`, `rebase({ autosquash })`, and `checkoutConflict`. Depends on `daemon-git-capability`; the downstream `agentry-git-eval-scenarios` `stack-surgery` edge lands with that design's README node. |
 | agentry-git-eval-scenarios | Not Started | Small canonical git code-mode eval set for `@endo/agentry`: trim to `stage-and-commit`, `conflict-rebase`, and `stack-surgery`; rework PR #526 in place as the buildable conflict leg; rework PR #626 in place so its fixture and scorer land behind a pending live row, with live activation depending on agentry-git-verb-gaps for cherry-pick, amend, reword, autosquash, and conflict-side selection; name ReadableBlob `fetch`, `rangeRead`, and `rangeReadText` as the sed-like filesystem/blob path; retain rendered Git output bounds and remote exo propagation as follow-ups; and score outcomes by final state and authority boundary, never command sequence. |
