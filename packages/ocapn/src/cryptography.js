@@ -1,5 +1,6 @@
 // @ts-check
 /* global crypto */
+import { encodeAscii } from '@endo/ascii';
 import harden from '@endo/harden';
 import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
@@ -28,9 +29,7 @@ import {
  * @import { OcapnCodec } from './codec-interface.js'
  */
 
-const textEncoder = new TextEncoder();
-
-const sessionIdHashPrefixBytes = textEncoder.encode('prot0');
+const sessionIdHashPrefixBytes = encodeAscii('prot0');
 
 /**
  * @typedef {object} OcapnPublicKey
@@ -238,12 +237,7 @@ export const makeCryptography = codec => {
   // Includes a length-prefixed channel-binding value (the Noise
   // handshake hash on the np netlayer; an empty buffer where no
   // session-bound binding is available, e.g. tcp-testing-only).
-  const LOCATION_SIG_DOMAIN = (() => {
-    const text = 'ocapn-location-v1\0';
-    const bytes = new Uint8Array(text.length);
-    for (let i = 0; i < text.length; i += 1) bytes[i] = text.charCodeAt(i);
-    return bytes;
-  })();
+  const LOCATION_SIG_DOMAIN = encodeAscii('ocapn-location-v1\0');
 
   /**
    * @param {OcapnLocation} location

@@ -1,4 +1,5 @@
 // @ts-check
+import { encodeAscii } from '@endo/ascii';
 import harden from '@endo/harden';
 import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 import { Far } from '@endo/marshal';
@@ -13,6 +14,8 @@ import { makePassableCodecs } from '../codecs/passable.js';
 import { makeOcapnOperationsCodecs } from '../codecs/operations.js';
 import { getSelectorName, makeSelector } from '../selector.js';
 import { makeSturdyRef } from '../client/sturdyrefs.js';
+
+/** @import { OcapnLocation } from '../codecs/components.js' */
 
 /**
  * An OCapN hub: a comms-vat-style forwarding node that is NOT a
@@ -130,8 +133,25 @@ const bytesFromHex = hex => {
  */
 const swissnumHex = swissnum =>
   typeof swissnum === 'string'
-    ? hexFromBytes(new TextEncoder().encode(swissnum))
+    ? hexFromBytes(encodeAscii(swissnum, 'swissnum'))
     : hexFromBytes(swissnum);
+
+/**
+ * Derive a durable session key for the exporter named by an inbound handoff.
+ * Its UTF-8 representation is intentionally preserved for compatibility with
+ * durable sessions created before string swissnums became ASCII-only.
+ *
+ * @param {OcapnLocation} exporterLocation
+ * @returns {string}
+ */
+export const makeHandoffSessionKey = exporterLocation => {
+  const json = JSON.stringify(exporterLocation);
+  if (json === undefined) {
+    throw TypeError('handoff exporter location must be JSON-serializable');
+  }
+  return `handoff:${hexFromBytes(new TextEncoder().encode(json))}`;
+};
+harden(makeHandoffSessionKey);
 
 const makeMemoryHubStore = () => {
   /** @type {any} */
@@ -781,9 +801,7 @@ export const makeOcapnHub = ({
           );
         }
         const { exporterLocation } = signedGive.object;
-        const outKey = `handoff:${swissnumHex(
-          JSON.stringify(exporterLocation),
-        )}`;
+        const outKey = makeHandoffSessionKey(exporterLocation);
         const outSession = provideSessionState(outKey);
         // Frames toward the exporter queue until the dial completes;
         // the location persists so a successor process (or a later
@@ -2014,7 +2032,7 @@ export const makeOcapnHub = ({
      * Publish a reference row under a swissnum: `(origin session,
      * position there, flavor)`. Position 0 is the origin's bootstrap.
      *
-     * @param {string | Uint8Array} swissnum
+     * @param {string | Uint8Array | ArrayBufferLike} swissnum
      * @param {{ session: string, position: bigint, flavor?: 'object' | 'promise' }} at
      */
     publish: (swissnum, { session, position, flavor = 'object' }) => {
@@ -2046,7 +2064,7 @@ export const makeOcapnHub = ({
      * positions toward it — the natural form for an embedder endpoint
      * that knows its own import positions.
      *
-     * @param {string | Uint8Array} swissnum
+     * @param {string | Uint8Array | ArrayBufferLike} swissnum
      * @param {{ session: string, position: bigint }} at
      */
     publishHeld: (swissnum, { session, position }) => {
@@ -2120,7 +2138,7 @@ export const makeOcapnHub = ({
       }
       return harden(dials);
     },
-    /** @param {string | Uint8Array} swissnum */
+    /** @param {string | Uint8Array | ArrayBufferLike} swissnum */
     unpublish: swissnum => {
       const key = swissnumHex(swissnum);
       const refId = publications.get(key);

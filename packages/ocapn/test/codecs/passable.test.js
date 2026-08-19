@@ -153,6 +153,22 @@ const table = [
     },
   },
   {
+    name: 'sturdyRef with raw non-ASCII secret',
+    makeValue: testKit =>
+      testKit.sturdyRefTracker.makeSturdyRef(
+        exporterLocation,
+        Uint8Array.of(0x00, 0x80, 0xff),
+      ),
+    customAssert: (t, actual) => {
+      const details = getSturdyRefDetails(actual);
+      if (!details) {
+        throw Error('SturdyRef has no details');
+      }
+      t.deepEqual(details.location, exporterLocation);
+      t.deepEqual(details.secret, Uint8Array.of(0x00, 0x80, 0xff));
+    },
+  },
+  {
     name: 'sturdyRef in list',
     makeValue: testKit =>
       harden([testKit.sturdyRefTracker.makeSturdyRef(exporterLocation, '123')]),

@@ -10,8 +10,9 @@
  * @import { SessionId, PublicKeyId } from '../client/types.js'
  */
 
-import harden from '@endo/harden';
+import { decodeAscii } from '@endo/ascii';
 import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import harden from '@endo/harden';
 
 import { makeCodec, makeRecordUnionCodec } from '../syrup/codec.js';
 import {
@@ -321,12 +322,20 @@ export const makeDescCodecs = referenceKit => {
     syrupReader => {
       const node = OcapnPeerCodec.read(syrupReader);
       const swissNum = syrupReader.readBytestring();
-      const textDecoder = new TextDecoder('ascii', { fatal: true });
       const secretBytes =
         swissNum instanceof Uint8Array
           ? swissNum
           : new Uint8Array(/** @type {ArrayBuffer} */ (swissNum.slice()));
-      const secret = textDecoder.decode(secretBytes);
+      /** @type {string | Uint8Array} */
+      let secret;
+      try {
+        secret = decodeAscii(secretBytes, 'sturdyref secret');
+      } catch (error) {
+        if (!(error instanceof RangeError)) {
+          throw error;
+        }
+        secret = new Uint8Array(secretBytes);
+      }
       const value = referenceKit.makeSturdyRef(node, secret);
       return value;
     },

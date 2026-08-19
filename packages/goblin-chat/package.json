@@ -48,6 +48,7 @@
     "test:xs": "exit 0"
   },
   "dependencies": {
+    "@endo/ascii": "workspace:^",
     "@endo/base64": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",

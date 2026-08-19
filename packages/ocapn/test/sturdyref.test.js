@@ -4,7 +4,12 @@ import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 import { passStyleOf } from '@endo/pass-style';
 import { test, testWithErrorUnwrapping, makeTestClient } from './_util.js';
-import { isSturdyRef, getSturdyRefDetails } from '../src/client/sturdyrefs.js';
+import {
+  getSturdyRefDetails,
+  isSturdyRef,
+  makeSturdyRef,
+  makeSturdyRefTracker,
+} from '../src/client/sturdyrefs.js';
 import { ocapnPassStyleOf } from '../src/codecs/ocapn-pass-style.js';
 
 testWithErrorUnwrapping('SturdyRef is a tagged type', async t => {
@@ -105,6 +110,62 @@ testWithErrorUnwrapping(
     clientB.shutdown();
   },
 );
+
+test('SturdyRef snapshots and hardens raw-byte secrets', t => {
+  const secret = Uint8Array.of(0x00, 0x80, 0xff);
+  const sturdyRef = makeSturdyRef(
+    {
+      type: 'ocapn-peer',
+      transport: 'tcp-test-only',
+      designator: 'example.test',
+      hints: false,
+    },
+    secret,
+  );
+
+  secret[1] = 0x01;
+  const details = getSturdyRefDetails(sturdyRef);
+  t.truthy(details);
+  if (details && typeof details.secret !== 'string') {
+    t.deepEqual(details.secret, Uint8Array.of(0x00, 0x80, 0xff));
+    details.secret[2] = 0x02;
+    const freshDetails = getSturdyRefDetails(sturdyRef);
+    t.deepEqual(freshDetails?.secret, Uint8Array.of(0x00, 0x80, 0xff));
+    t.true(Object.isFrozen(details));
+  }
+});
+
+test('SturdyRef tracker does not retry locator failures', async t => {
+  let calls = 0;
+  const tracker = makeSturdyRefTracker({
+    get: () => {
+      calls += 1;
+      throw TypeError('locator failure');
+    },
+  });
+
+  await t.throwsAsync(tracker.lookup(Uint8Array.of(0x41).buffer), {
+    instanceOf: TypeError,
+    message: 'locator failure',
+  });
+  t.is(calls, 1);
+});
+
+test('SturdyRef tracker propagates byte validation failures', async t => {
+  let calls = 0;
+  const tracker = makeSturdyRefTracker({
+    get: () => {
+      calls += 1;
+      return undefined;
+    },
+  });
+  const proxy = new Proxy(Uint8Array.of(0x41), {});
+
+  await t.throwsAsync(tracker.lookup(/** @type {any} */ (proxy)), {
+    instanceOf: TypeError,
+  });
+  t.is(calls, 0);
+});
 
 test('client.enlivenSturdyRef() returns promise for fetched value', async t => {
   const testObjectTable = new Map();

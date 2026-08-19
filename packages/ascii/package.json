@@ -1,10 +1,12 @@
 {
   "name": "@endo/ascii",
   "version": "0.1.0",
-  "description": "Encodes ASCII text to bytes, asserting each code unit is 7-bit",
+  "description": "Transcodes between ASCII text and bytes, asserting every value is 7-bit",
   "keywords": [
     "ascii",
+    "decode",
     "endo",
+    "encode",
     "ses"
   ],
   "author": "Endo contributors",
@@ -23,6 +25,7 @@
   "exports": {
     ".": "./index.js",
     "./encode.js": "./encode.js",
+    "./decode.js": "./decode.js",
     "./src/*": {
       "test-endo-ascii": "./src/*"
     },
