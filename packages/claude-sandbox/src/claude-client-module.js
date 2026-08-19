@@ -54,6 +54,7 @@
  * @module
  */
 
+import { makeMountProjector } from '@endo/9p-server/mount-projection.js';
 import { E } from '@endo/eventual-send';
 import { makeError, q, X } from '@endo/errors';
 
@@ -193,12 +194,29 @@ export const make = (powers, context, contextWrapper = {}) => {
       }
     };
 
-    // Materialise the credential, mount the FS over 9P, register the
-    // mountpoint as a daemon Mount cap, then mint the slice. On any
-    // failure release whatever was created — unmount the 9P mount and
-    // revoke the issued credential grant — rather than leak it.
-    /** @type {any} */
-    let mountHandle = null;
+    // The mount-projection chain (9P bridge → kernel mount → daemon
+    // Mount cap) is `@endo/9p-server`'s, not this package's: the daemon's
+    // own `sandbox` formula projects its mounts through the same layer.
+    // What stays here is the session-shaped configuration — which
+    // mountpoint, which pet name, and the lazy detach this session wants
+    // so an unattended teardown can release a busy workspace.
+    const projector = makeMountProjector({
+      mounter: fsMounter,
+      provideMount: hostPath =>
+        E(sessionPowers).provideMount(hostPath, workspacePetName),
+      defaultMountOptions: { lazyUnmount: true },
+    });
+
+    // Materialise the credential, project the workspace to a host path,
+    // then mint the slice. On any failure release whatever was created —
+    // release the projection, drop the workspace Mount name, and revoke
+    // the issued credential grant — rather than leak it.
+    // The 9P branch always carries its mount handle (only the physical
+    // branch omits one), which is what the client's teardown expects, so
+    // take the type from `projectFilesystem` rather than from the wider
+    // `MountProjection` union.
+    /** @type {Awaited<ReturnType<typeof projector.projectFilesystem>> | null} */
+    let projection = null;
     try {
       // Materialise the credential immediately before it flows into the
       // slice env. The cap may live on a remote peer; the host only ever
@@ -234,21 +252,16 @@ export const make = (powers, context, contextWrapper = {}) => {
         credentialEnv[envVar] = await E(issuedCred).materialise();
       }
 
-      mountHandle = await E(fsMounter).mount(
-        fs,
-        workspaceMountPoint,
-        harden({ lazyUnmount: true }),
-      );
-      const workspaceCap = await E(sessionPowers).provideMount(
-        workspaceMountPoint,
-        workspacePetName,
-      );
+      projection = await projector.projectFilesystem(fs, {
+        mountPoint: workspaceMountPoint,
+        label: `claude session ${sessionId} workspace`,
+      });
       const slice = await E(sandboxFactory).make(
         harden({
           rootfs: parsedRootfs,
           mounts: [
             {
-              cap: workspaceCap,
+              cap: projection.mountCap,
               innerPath: workspacePath,
               mode: 'rw',
             },
@@ -261,7 +274,7 @@ export const make = (powers, context, contextWrapper = {}) => {
       );
       return harden({
         slice,
-        mountHandle,
+        mountHandle: projection.mountHandle,
         revoke: revokeCredential,
         // Reclaim the workspace Mount pet name that `provideMount` registered
         // at the host root, so a torn-down session leaves no live Mount
@@ -269,12 +282,11 @@ export const make = (powers, context, contextWrapper = {}) => {
         removeMount: () => E(sessionPowers).removeMount(),
       });
     } catch (error) {
-      if (mountHandle) {
-        try {
-          await E(mountHandle).unmount();
-        } catch {
-          // best-effort
-        }
+      if (projection) {
+        // `release()` is itself best-effort — it reports an unmount
+        // failure rather than throwing — so a failed provision cannot
+        // mask its own cause.
+        await projection.release();
       }
       // If `provideMount` had already registered the workspace Mount name
       // before this failure, drop it so a failed provision leaks nothing.
