@@ -217,11 +217,12 @@ harden(delay);
  *
  * @param {Promise<unknown>} work
  * @param {number} ms
+ * @param {typeof delay} [makeDelay]
  * @returns {Promise<void>}
  */
-const raceDelay = async (work, ms) => {
+const raceDelay = async (work, ms, makeDelay = delay) => {
   await null;
-  const timeout = delay(ms);
+  const timeout = makeDelay(ms);
   try {
     await Promise.race([work, timeout.promise]);
   } finally {
@@ -296,9 +297,13 @@ const resolveHostPath = async (scratchProvider, cap, context) => {
  * Phase 1 factory.
  *
  * @param {MakeSandboxFactoryInput} input
+ * @param {{ makeDelay?: typeof delay }} [powers]
  * @returns {SandboxFactory}
  */
-export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
+export const makeSandboxFactory = (
+  { drivers, scratchProvider, context },
+  { makeDelay = delay } = {},
+) => {
   const driverList = harden([...drivers]);
   /** @type {Set<SandboxHandle>} */
   const liveHandles = new Set();
@@ -646,6 +651,7 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
             await raceDelay(
               Promise.all(controls.map(control => control.finished)),
               DRAIN_GRACE_MS,
+              makeDelay,
             );
             for (const control of controls) control.close();
           })();
@@ -713,7 +719,7 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
             if (!hardFirst && signalFailures.length === 0) {
               // The grace period exists for the process to act on the
               // soft signal; skip it when nothing was delivered.
-              await raceDelay(exitTracked, KILL_GRACE_MS);
+              await raceDelay(exitTracked, KILL_GRACE_MS, makeDelay);
             }
             if (!exited && !hardKillDelivered) {
               try {
@@ -729,7 +735,7 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
               // on its own, force backend-level teardown, and surface a
               // cleanup error rather than waiting forever on containment
               // that cannot be proven.
-              await raceDelay(exitTracked, KILL_GRACE_MS);
+              await raceDelay(exitTracked, KILL_GRACE_MS, makeDelay);
               if (!exited) {
                 await raceDelay(
                   driver.teardown(driverSlice).then(
@@ -739,9 +745,10 @@ export const makeSandboxFactory = ({ drivers, scratchProvider, context }) => {
                     },
                   ),
                   KILL_GRACE_MS,
+                  makeDelay,
                 );
                 // Let a teardown-induced exit land before judging.
-                await raceDelay(exitTracked, DRAIN_GRACE_MS);
+                await raceDelay(exitTracked, DRAIN_GRACE_MS, makeDelay);
               }
               if (!exited) {
                 await boundedDrain();
