@@ -1,0 +1,60 @@
+{
+  "name": "@endo/hardened262",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tests for Hardened JavaScript in test262 format",
+  "keywords": [],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/endojs/endo/tree/master/packages/hardened262#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/hardened262"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "exports": {},
+  "scripts": {
+    "build": "node scripts/generate-preludes.js",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-check": "yarn lint",
+    "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
+    "lint:eslint": "eslint '**/*.js'",
+    "lint:types": "tsc",
+    "postpack": "git clean -f '*.d.ts*'",
+    "prepack": "tsc --build tsconfig.build.json",
+    "test262": "yarn build && node scripts/test.js",
+    "test:xs": "exit 0"
+  },
+  "dependencies": {
+    "@endo/compartment-mapper": "workspace:^",
+    "@endo/module-source": "workspace:^",
+    "ses": "workspace:^",
+    "test262-stream": "^1.4.0"
+  },
+  "devDependencies": {
+    "typescript": "catalog:dev"
+  },
+  "files": [
+    "./*.d.ts",
+    "./*.js",
+    "./*.map",
+    "LICENSE*",
+    "SECURITY*",
+    "dist",
+    "lib",
+    "src",
+    "tools"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/internal"
+    ]
+  }
+}
