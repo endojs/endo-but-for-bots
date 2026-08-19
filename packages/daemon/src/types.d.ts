@@ -3030,6 +3030,15 @@ export interface DebugSession {
   evaluate(source: string): Promise<string>;
   startProfiling(): void;
   stopProfiling(): void;
+  /**
+   * Set the exception break mode.
+   *
+   * `'uncaught'` is not yet honored by any shipping engine. On the current
+   * C-XS/xsnap engine the `uncaughtExceptions` pseudo-path is unrecognized, so
+   * selecting `'uncaught'` *disables* exception breaking rather than narrowing
+   * it. The mode goes live only against an Ironhorse-backed session (see
+   * `designs/ironhorse-debugger-recovery-and-uncaught.md`, issue #940).
+   */
   setExceptionBreakMode(mode: 'none' | 'all' | 'uncaught'): void;
   onBreak(listener: (event: BreakEvent) => void): () => void;
   isBroken(): boolean;
@@ -3060,6 +3069,13 @@ export interface Debugger {
   selectFrame(id: string): Promise<Property[]>;
   toggleProperty(id: string): Promise<Property[]>;
   evaluate(source: string): Promise<string>;
+  /**
+   * Set the exception break mode.
+   *
+   * `'uncaught'` is not yet honored by any shipping engine; on the current
+   * C-XS/xsnap engine it *disables* exception breaking (see `DebugSession`).
+   * It goes live only against an Ironhorse-backed session.
+   */
   setExceptionBreakMode(mode: 'none' | 'all' | 'uncaught'): void;
   isBroken(): boolean;
   getTitle(): string | undefined;
