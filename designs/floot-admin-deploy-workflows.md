@@ -56,10 +56,13 @@ the design against restart loops, § "Why the loop cannot happen"):
   `E(svc).factory(fid)`, re-mints on chart-version drift without
   revoking the old factory); and the `workflow-factory` preset object
   kind in `agent.js` with graceful skip.
-- **Phase 3 (open).** Admin presets do not yet list the factory objects,
-  and the machine-admin prompt does not yet teach starting runs; deploys
-  still run conversationally against the reshaped caplet until then.
-  Phases 4–5 unstarted.
+- **Phase 3 (done 2026-08-19).** `machine-admin` receives the
+  `deploy-endo` and `change-nixos` factory objects, and its prompt starts,
+  durably names, observes, and narrates those runs. The raw caplet remains
+  for read access and emergencies, with ordinary deploys explicitly routed
+  through the factories and their owner-inbox approval forms. Two preset
+  regression tests pin the grants and the no-raw-apply prompt contract.
+  Phases 4–5 remain unstarted.
 
 A five-reviewer adversarial round (2026-08-18: merge integrity, the
 invoke-key change, a caplet loop-hunt, chart semantics against the live
@@ -804,7 +807,7 @@ Simulator tests over `makeSimulator` for every path (decline, expiry,
 build-fail, auto-rollback, needs-attention resume), plus a forked-daemon
 test of the restart-mid-apply walkthrough.
 
-**Phase 3 — preset and prompt integration (S–M).**
+**Phase 3 — preset and prompt integration (S–M). Done 2026-08-19.**
 `machine-admin` gains the factories and the rewritten deploy section of its
 system prompt; voice narration follows the run via `follow`/`status`.
 `space-workflow` needs no change — runs appear in its rail.
