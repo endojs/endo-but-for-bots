@@ -78,7 +78,7 @@ It does not add runtime code in this pull request, grant a raw shell, expose a
 package-manager executor on the host, combine registry access with arbitrary
 Web authority, or make one UI's policy record the general capability identity.
 
-Three neighbouring bodies of work are adopted rather than restated here:
+Three neighboring bodies of work are adopted rather than restated here:
 
 - Endor's CAS-native resolution, artifact fetch, compartment assembly, and
   module execution, owned by
@@ -139,11 +139,15 @@ store, and the acceleration layer behind the loopback broker. It does not
 replace the native package manager, and a manager-specific installed layout
 never becomes canonical dependency state; the canonical state is the verified
 artifact and graph records described by the CAS substrate architecture.
+The two acquisition paths are expected to converge on the same canonical
+content there, and how they converge is that architecture's question, not this
+document's.
 
 | Question | Plane | Owner |
 |---|---|---|
 | Resolve and execute an Endo or npm module graph with no manager | Actor | Endor npm-via-CAS path |
-| Version selection, artifact fetch, SRI verification, CAS storage | Both, one implementation | Portable registry contract plus daemon adapters |
+| Version selection, artifact fetch, and SRI verification for the actor plane | Actor | Endor registry table and resolver |
+| The same for the sandbox plane, over the shared CAS | Sandbox | Portable registry contract plus daemon adapters |
 | Lockfile semantics, workspaces, peers, linker layout, `.bin` | Sandbox | Native manager under `@endo/package-manager` |
 | Serving those artifacts to a manager process | Sandbox | `@endo/npm-registry-broker` |
 | Lifecycle, test, and build script execution | Sandbox, separately granted | Executor facet plus [#953](https://github.com/endojs/endo-but-for-bots/pull/953) |
