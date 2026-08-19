@@ -265,7 +265,7 @@ test('a file whose no* flags exclude every wired agent yields one zero-coverage 
 });
 
 test('a raw+module case yields one zero-coverage skip, never silently nothing', async () => {
-  // corner-prober: `module`→onlyModule wants the module scenario, but `raw`
+  // corner-prober: `module`->onlyModule wants the module scenario, but `raw`
   // suppresses every strict/module axis, so filterOnlyRules rejects the surviving
   // sloppy scenarios. The gap is now deliberate and visible, not a silent drop.
   const scenarios = await collect(

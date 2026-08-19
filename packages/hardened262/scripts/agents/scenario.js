@@ -6,6 +6,8 @@
 // generator never sets — while the node agent read the real ones; routing both
 // through these accessors is the single source of truth that closes that gap.
 
+/** @import { ChildProcess } from 'child_process' */
+
 /** The default test262 harness includes injected into every non-raw case. */
 export const defaultIncludes = ['assert.js', 'sta.js'];
 
@@ -133,7 +135,7 @@ export const scenarioTimeoutMs = () => {
  * missing `${label}` binary on the PATH) so the run fails loud with a diagnostic
  * instead of hanging.
  *
- * @param {import('child_process').ChildProcess} child
+ * @param {ChildProcess} child
  * @param {string} label the binary name, for the launch-failure diagnostic
  * @returns {Promise<{ code: number | null, signal: string | null }>}
  */

@@ -1,11 +1,12 @@
 import 'ses';
-import { mkdirSync, writeFileSync, unlinkSync } from 'fs';
+import { mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 
 import {
   awaitScenarioChild,
   scenarioIncludes,
+  scenarioIsLockdown,
   scenarioIsModule,
   scenarioIsRaw,
   scenarioOk,
@@ -30,15 +31,39 @@ export const testXs = async (test, { sesShim, quiet }) => {
   mkdirSync(temporaryDirectory, { recursive: true });
   writeFileSync(temporaryFile, test.contents);
 
+  // Load the test262 harness includes (assert.js, sta.js, ...) into XS *global*
+  // scope. They cannot be passed to `xst` as bare file arguments: `-m` is a
+  // GLOBAL option covering every following file, so under the module scenarios
+  // this agent runs the harness files parse as modules and their top-level
+  // `var`/`function` declarations never leak onto the global object the subject
+  // reads (`assert`, `Test262Error`, ...), throwing `ReferenceError` before the
+  // test's own assertions run. Indirect eval always evaluates in global scope
+  // regardless of `-m`, so a single generated loader that `(0, eval)`s each
+  // include's source installs the harness globals by a mechanism insensitive to
+  // the module flag — mirroring node-helper.js's indirect-eval of the same
+  // includes.
+  const harnessIncludes = scenarioIsRaw(test) ? [] : scenarioIncludes(test);
+  let harnessLoaderFile;
+  if (harnessIncludes.length > 0) {
+    const loaderSource = harnessIncludes
+      .map(include => {
+        const includePath = fileURLToPath(
+          new URL(`../../harness/${include}`, import.meta.url),
+        );
+        return `(0, eval)(${JSON.stringify(readFileSync(includePath, 'utf8'))});\n`;
+      })
+      .join('');
+    harnessLoaderFile = fileURLToPath(
+      new URL(`../../tmp/${test.temporaryPath}.harness.js`, import.meta.url),
+    );
+    writeFileSync(harnessLoaderFile, loaderSource);
+  }
+
   const childArguments = [
     ...(scenarioIsModule(test) ? ['-m'] : []),
-    ...(scenarioIsRaw(test)
-      ? []
-      : scenarioIncludes(test).map(include =>
-          fileURLToPath(new URL(`../../harness/${include}`, import.meta.url)),
-        )),
+    ...(harnessLoaderFile ? [harnessLoaderFile] : []),
     ...(sesShim ? [sesXsPreludePath] : []),
-    ...(test.lockdown ? [lockdownPreludePath] : []),
+    ...(scenarioIsLockdown(test) ? [lockdownPreludePath] : []),
     temporaryFile,
   ];
   // console.error(`# ${['xst', ...childArguments].join(' ')}`);
@@ -65,6 +90,9 @@ export const testXs = async (test, { sesShim, quiet }) => {
   const { code, signal } = await awaitScenarioChild(child, 'xst');
   if (scenarioOk(test, code, stdout)) {
     unlinkSync(temporaryFile);
+    if (harnessLoaderFile) {
+      unlinkSync(harnessLoaderFile);
+    }
     return { ok: true, ...test };
   } else {
     return { ok: false, code, signal, ...test };

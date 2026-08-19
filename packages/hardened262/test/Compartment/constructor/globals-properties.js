@@ -75,7 +75,7 @@ c2.evaluate(`
 
 assert.sameValue(getterCount, 2, 'getterCount');
 assert.sameValue(setterCount, 0, 'setterCount');
-assert.sameValue(setterCount, 0, 'neverCount');
+assert.sameValue(neverCount, 0, 'neverCount');
 assert.sameValue(globals.foo, 0, 'globals.foo');
 assert.sameValue(globals.bar, 0, 'globals.bar');
 assert.sameValue(globals.shared.foo, 4, 'globals.shared.foo');

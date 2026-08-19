@@ -189,7 +189,7 @@ async function* asyncOnce(item) {
  * `--list` and the run report. Two distinct front-matter shapes reach here:
  *   - every wired agent excluded, e.g. `noXs`+`noSesXs`+`noSesNode` together, so
  *     `filterNoRules` drops all combinations (engine-realist/spec-keeper/corner-prober);
- *   - a `raw`+`module` contradiction, where the `module`→`onlyModule` promotion
+ *   - a `raw`+`module` contradiction, where the `module`->`onlyModule` promotion
  *     wants the module scenario but `raw` suppresses every strict/module axis, so
  *     `filterOnlyRules` rejects the surviving sloppy scenarios (corner-prober).
  * Emitting a `skipped` zero-coverage record upholds the same visibility invariant
