@@ -10,6 +10,11 @@ export type ReadableBlob =
   import('@endo/platform/fs/lite/types').ReadableBlobRange;
 export type ReadableTree = import('@endo/platform/fs/lite/types').ReadableTree;
 
+/** A Git tree capability with the standard capability-help surface. */
+export type GitTree = ReadableTree & {
+  help: (method?: string) => string;
+};
+
 export type WritableGitWorktree = Directory & PathEntryIssuer;
 export type ReadOnlyGitWorktree = ReadableTree;
 /** @deprecated Use `WritableGitWorktree` or `ReadOnlyGitWorktree`. */
@@ -287,6 +292,7 @@ export type GitRemoteAuditEvent =
 export type RemoteSnapshot = NormalizedRemotePolicy & { name: string };
 
 export type GitRemote = {
+  help: (method?: string) => string;
   inspect: () => Promise<RemoteSnapshot>;
   fetch: (options?: {
     prune?: boolean;
@@ -324,6 +330,7 @@ export type GitRemote = {
 };
 
 export type GitRemoteController = {
+  help: (method?: string) => string;
   inspect: () => Promise<RemoteSnapshot & { revoked: boolean }>;
   audit: () => Promise<any>;
   setAllowedDirections: (directions: GitDirection[]) => Promise<void>;
@@ -343,6 +350,7 @@ export type GitRemoteKit = {
 
 /** The read-only capability surface returned by `readOnly()`. */
 export type ReadOnlyEndoGit = {
+  help: (method?: string) => string;
   worktree: () => Promise<ReadOnlyGitWorktree>;
   status: (options?: GitStatusOptions) => Promise<GitStatusResult>;
   trackingStatus: () => Promise<GitTrackingStatus>;
@@ -356,7 +364,7 @@ export type ReadOnlyEndoGit = {
   stashList: () => Promise<string[]>;
   stashShow: (index?: number) => Promise<string>;
   /** @see filesystemAt, the preferred historical-read method; `tree(ref)` is its `ReadableTree` projection. */
-  tree: (ref: GitRef | string) => Promise<ReadableTree>;
+  tree: (ref: GitRef | string) => Promise<GitTree>;
   filesystemAt: (ref: GitRef | string) => Promise<Filesystem>;
   readOnly: () => ReadOnlyEndoGit;
   /**

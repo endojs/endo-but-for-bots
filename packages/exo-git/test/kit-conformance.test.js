@@ -30,6 +30,17 @@ const INTROSPECTION_METHODS = harden([
 ]);
 
 /**
+ * The fallback `makeHelp` yields for a method it has no entry for.
+ * Spelled out here rather than imported so the test pins the wording a
+ * caller actually sees.
+ *
+ * @param {string} method
+ * @returns {string}
+ */
+const unknownMethodHelp = method =>
+  `No documentation available for method "${method}".`;
+
+/**
  * @param {object} facet
  * @returns {Promise<string[]>}
  */
@@ -246,6 +257,61 @@ test('every facet advertises exactly its schema, no more and no less', async t =
       `${name} facet method set must equal its schema exactly`,
     );
   }
+});
+
+test('every facet documents its overview and each method it advertises', async t => {
+  const { reader, writer, rewriter } = makeGitKit(makePowers());
+  const schemaByFacet = harden({
+    reader: GIT_READER_METHODS,
+    writer: GIT_WRITER_METHODS,
+    rewriter: GIT_REWRITER_METHODS,
+  });
+  for (const [name, facet] of /** @type {const} */ ([
+    ['reader', reader],
+    ['writer', writer],
+    ['rewriter', rewriter],
+  ])) {
+    const schema = schemaByFacet[name];
+    // eslint-disable-next-line no-await-in-loop
+    const [overview, unknown, ...docs] = await Promise.all([
+      E(facet).help(),
+      E(facet).help('unknownMethod'),
+      ...schema.map(method => E(facet).help(method)),
+    ]);
+    t.regex(
+      overview,
+      /^Git - /,
+      `${name} overview must be the Git entity overview`,
+    );
+    schema.forEach((method, index) => {
+      const doc = docs[index];
+      t.not(doc, '', `${name}.${method} must have documentation`);
+      t.not(
+        doc,
+        unknownMethodHelp(method),
+        `${name}.${method} must have per-method documentation, not the fallback`,
+      );
+      t.true(
+        doc.startsWith(`${method}(`),
+        `${name}.${method} documentation must open with its signature`,
+      );
+    });
+    t.is(unknown, unknownMethodHelp('unknownMethod'));
+  }
+});
+
+test('worktree methods have specific help and retain the fallback contract', async t => {
+  const { reader, writer } = makeGitKit(makePowers());
+  const [listDoc, addDoc, unknown] = await Promise.all([
+    E(reader).help('worktreeList'),
+    E(writer).help('worktreeAdd'),
+    E(reader).help('unknownWorktreeMethod'),
+  ]);
+  t.regex(listDoc, /^worktreeList\(\) -> Promise<GitWorktreeEntry\[\]>/);
+  t.regex(addDoc, /^worktreeAdd\(entry, options\?\) -> Promise<Git>/);
+  t.not(listDoc, '');
+  t.not(addDoc, '');
+  t.is(unknown, unknownMethodHelp('unknownWorktreeMethod'));
 });
 
 test('a method absent from a facet schema is absent, not merely rejecting', async t => {
