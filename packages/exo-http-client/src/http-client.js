@@ -19,12 +19,13 @@ import harden from '@endo/harden';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
-import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import {
   makeHttpConfinement,
   normalizeMethod,
   parseAllowedOrigins,
 } from '@endo/http-confine';
+
+import { makeFramedBytesReader } from './byte-frames.js';
 
 /**
  * @import {
@@ -50,14 +51,6 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_POLICY_PROMPT_TIMEOUT_MS = 30_000;
 const DEFAULT_AUDIT_LIMIT = 1024;
 const DEFAULT_BINDING_LIMIT = 1024;
-
-/**
- * Chunk size for `HttpResponse.stream()`. The already-bounded body is hauled
- * over CapTP in fixed-size frames rather than as one string; the value trades
- * per-frame overhead against memory residency and is not security-relevant
- * (the response byte cap is enforced upstream by the confinement).
- */
-const RESPONSE_STREAM_CHUNK_BYTES = 16 * 1024;
 
 /**
  * The optional second argument of `HttpClient.fetch`.  Exported so tool
@@ -650,24 +643,6 @@ const makeHttpResponse = ({ response, maxResponseBytes, bytes, truncated }) => {
   const statusText = String(response.statusText || '');
   const ok = Boolean(response.ok);
 
-  /**
-   * Yield the already-bounded body in fixed-size chunks so `stream()` hauls it
-   * over CapTP incrementally (base64-framed with flow control) instead of
-   * returning the whole body as one string. A fresh generator per `stream()`
-   * call keeps each reader independent of `text()`/`json()` and of any other
-   * concurrent `stream()` reader over the same response.
-   */
-  const chunkBody = async function* chunkBody() {
-    await null;
-    for (
-      let offset = 0;
-      offset < bytes.length;
-      offset += RESPONSE_STREAM_CHUNK_BYTES
-    ) {
-      yield bytes.slice(offset, offset + RESPONSE_STREAM_CHUNK_BYTES);
-    }
-  };
-
   return makeExo('HttpResponse', HttpResponseInterface, {
     status: () => status,
     statusText: () => statusText,
@@ -689,7 +664,10 @@ const makeHttpResponse = ({ response, maxResponseBytes, bytes, truncated }) => {
         throw err;
       }
     },
-    stream: () => bytesReaderFromIterator(chunkBody()),
+    // A fresh framed reader per `stream()` call keeps each reader independent
+    // of `text()`/`json()` and of any other concurrent `stream()` reader over
+    // the same response.
+    stream: () => makeFramedBytesReader(bytes),
     help: () => httpResponseHelp,
   });
 };
