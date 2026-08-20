@@ -57,5 +57,13 @@ export const provideHostToolPowers = (hostTools = {}) =>
       hostTools.makeSandboxFactory ?? (() => refuse('makeSandboxFactory')),
     makeMountProjector:
       hostTools.makeMountProjector ?? (() => refuse('makeMountProjector')),
+    // Absent rather than refusing: a sandbox factory built without projection
+    // powers refuses `projectEndpoint` with its own diagnosis, and a slice
+    // that never projects is unaffected.
+    ...(hostTools.makeSandboxProjectionPowers === undefined
+      ? {}
+      : {
+          makeSandboxProjectionPowers: hostTools.makeSandboxProjectionPowers,
+        }),
   });
 harden(provideHostToolPowers);

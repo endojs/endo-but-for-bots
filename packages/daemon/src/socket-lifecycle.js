@@ -131,7 +131,7 @@ harden(addressInUse);
  *
  * @param {object} args
  * @param {typeof import('net')} args.net
- * @param {<TPort extends number | void>(server: import('net').Server, erred: Promise<never>) => Promise<TPort>} args.listen
+ * @param {(server: import('net').Server, erred: Promise<never>) => Promise<any>} args.listen
  *   receives `erred`, which rejects on a server error, so that it can abandon
  *   a bind that will never call back.
  * @param {Promise<never>} args.cancelled

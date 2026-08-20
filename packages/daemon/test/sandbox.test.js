@@ -21,10 +21,15 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import fs from 'node:fs';
+import { createServer as createHttpServer } from 'node:http';
+import { connect as netConnect } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
 import { E } from '@endo/eventual-send';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
+import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iterator.js';
+import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { Far } from '@endo/pass-style';
 
 import { makeFilePowers } from '../src/manager-node-powers.js';
@@ -34,6 +39,128 @@ import {
   makeSandboxSlice,
   normalizeSandboxProfile,
 } from '../src/sandbox.js';
+
+/**
+ * An HTTP listener on host loopback, standing in for whatever a consumer of
+ * this primitive (a git relay, a registry broker) would put behind a dialer.
+ *
+ * @param {string} body
+ */
+const startProbeServer = async body => {
+  let hits = 0;
+  const server = createHttpServer((_req, res) => {
+    hits += 1;
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end(body);
+  });
+  await new Promise(resolve =>
+    server.listen(0, '127.0.0.1', () => resolve(undefined)),
+  );
+  const address = server.address();
+  return harden({
+    port: address !== null && typeof address === 'object' ? address.port : 0,
+    hits: () => hits,
+    close: async () =>
+      new Promise(resolve => server.close(() => resolve(undefined))),
+  });
+};
+
+/**
+ * The one authority a projection carries: open one more connection to one
+ * daemon-side endpoint. Both ends are `@endo/exo-stream` passables, so a real
+ * consumer is free to hold this from another vat.
+ *
+ * @param {number} port
+ */
+const makeLoopbackDialer = port =>
+  Far('EndpointDialer', {
+    help: () => `dialer for 127.0.0.1:${port}`,
+    connect: async () => {
+      await null;
+      const socket = await new Promise((resolve, reject) => {
+        const conn = netConnect(port, '127.0.0.1');
+        conn.once('connect', () => resolve(conn));
+        conn.once('error', reject);
+      });
+      const stream = /** @type {import('node:net').Socket} */ (socket);
+      stream.on('error', () => stream.destroy());
+      const reader = bytesReaderFromIterator(
+        (async function* readConn() {
+          for await (const chunk of stream) {
+            yield new Uint8Array(chunk);
+          }
+        })(),
+      );
+      const writer = bytesWriterFromIterator(
+        /** @type {any} */ ({
+          /** @param {Uint8Array} chunk */
+          next: async chunk =>
+            new Promise(resolve =>
+              stream.write(chunk, () =>
+                resolve({ done: false, value: undefined }),
+              ),
+            ),
+          return: async () => {
+            stream.end();
+            return { done: true, value: undefined };
+          },
+          [Symbol.asyncIterator]() {
+            return this;
+          },
+        }),
+      );
+      return harden({ reader, writer });
+    },
+  });
+
+/**
+ * Ask the slice to dial both endpoints and report what happened.
+ */
+const SLICE_PROBE_SOURCE = `
+const http = require('node:http');
+const get = port => new Promise(resolve => {
+  const req = http.get({ host: '127.0.0.1', port, path: '/probe' }, res => {
+    let body = '';
+    res.on('data', d => { body += d; });
+    res.on('end', () => resolve({ ok: true, body }));
+  });
+  req.on('error', e => resolve({ ok: false, code: e.code }));
+  req.setTimeout(4000, () => { req.destroy(); resolve({ ok: false, code: 'TIMEOUT' }); });
+});
+(async () => {
+  const origin = process.env.ENDO_PROJECTED_ORIGIN ?? null;
+  process.stdout.write(JSON.stringify({
+    origin,
+    projected: await get(origin === null ? 1 : Number(new URL(origin).port)),
+    other: await get(Number(process.env.ENDO_PROBE_OTHER_PORT)),
+  }) + '\\n');
+})();
+`;
+
+/**
+ * @param {unknown} slice
+ * @param {Record<string, string>} env
+ */
+const runSliceProbe = async (slice, env) => {
+  const proc = await E(/** @type {any} */ (slice)).spawn(
+    ['node', '-e', SLICE_PROBE_SOURCE],
+    { env, timeoutMs: 30_000 },
+  );
+  /** @type {Uint8Array[]} */
+  const chunks = [];
+  for await (const chunk of iterateBytesReader(await E(proc).stdout())) {
+    chunks.push(chunk);
+  }
+  await E(proc).wait();
+  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return JSON.parse(new TextDecoder().decode(bytes).trim());
+};
 
 /**
  * Provision a real on-disk mount, mirroring `shell.test.js`.
@@ -633,4 +760,94 @@ test('the real backend mints a slice over a daemon-minted mount', async t => {
   ]);
   const result = await E(process1).wait();
   t.is(result.code, 0);
+});
+
+test('the real backend projects one endpoint into a network: none slice', async t => {
+  const { make: makeSandboxFactory } = await import('@endo/sandbox');
+  const { makeNodeHostToolPowers } = await import(
+    '../src/host-tool-powers-node.js'
+  );
+  const probeFactory = await makeSandboxFactory(
+    /** @type {any} */ (
+      harden({
+        provideScratchMount: async () => {
+          throw new Error('unused during probe');
+        },
+      })
+    ),
+    null,
+    {},
+  );
+  const backends = await E(probeFactory).listBackends();
+  const usable = backends.find(
+    backend => backend.available && backend.name === 'bwrap',
+  );
+  if (usable === undefined) {
+    t.pass('SKIP: no bwrap backend available for endpoint projection');
+    return;
+  }
+  t.timeout(120_000);
+
+  // The endpoint the slice is granted, and a second one on host loopback
+  // that it must not be able to reach.
+  const granted = await startProbeServer('granted-endpoint');
+  t.teardown(() => granted.close());
+  const ungranted = await startProbeServer('SHOULD-NOT-BE-REACHABLE');
+  t.teardown(() => ungranted.close());
+
+  const { mount } = await provisionMount(t);
+  const profile = normalizeSandboxProfile(
+    {
+      rootfs: { kind: 'host-bind' },
+      mounts: [{ cap: mount, innerPath: '/workspace', mode: 'ro' }],
+      backend: 'bwrap',
+      network: 'none',
+      escalation: baseEscalation,
+    },
+    resolveFakeMountId,
+  );
+
+  const statePath = await provisionStatePath(t);
+  const filePowers = makeFilePowers({ fs, path });
+  const { projector } = makeFakeProjector();
+  // The daemon's own projection seam, not a fake: this is the half the
+  // supervisor supplies through `HostToolPowers`.
+  const projectionPowers = /** @type {any} */ (
+    makeNodeHostToolPowers()
+  ).makeSandboxProjectionPowers();
+  const { slice, release } = await makeSandboxSlice({
+    profile,
+    sandboxId: fakeSandboxId,
+    statePath,
+    provideMount: async () => mount,
+    projector,
+    makeSandboxFactory: /** @type {any} */ (makeSandboxFactory),
+    makePath: filePowers.makePath,
+    joinPath: filePowers.joinPath,
+    escalations: makeSandboxEscalationLog(),
+    assertMountGrant,
+    projectionPowers,
+  });
+  t.teardown(() => release());
+
+  const projection = await E(/** @type {any} */ (slice)).projectEndpoint(
+    makeLoopbackDialer(granted.port),
+  );
+  const origin = await E(projection).origin();
+  t.is(origin, 'http://127.0.0.1:8080');
+
+  const reached = await runSliceProbe(slice, {
+    ENDO_PROBE_OTHER_PORT: String(ungranted.port),
+  });
+  t.true(reached.projected.ok, JSON.stringify(reached.projected));
+  t.is(reached.projected.body, 'granted-endpoint');
+  t.false(reached.other.ok, 'the ungranted host listener stays unreachable');
+  t.is(ungranted.hits(), 0);
+
+  await E(projection).revoke();
+  const afterRevoke = await runSliceProbe(slice, {
+    ENDO_PROBE_OTHER_PORT: String(ungranted.port),
+  });
+  t.is(afterRevoke.origin, null);
+  t.false(afterRevoke.projected.ok);
 });

@@ -203,6 +203,7 @@ test('the forwarder refuses an argv that would leave it without an endpoint', t 
  * are the same.
  *
  * @param {string} dir
+ * @returns {any}
  */
 const makeStubProjectionPowers = dir => {
   let next = 0;
@@ -316,7 +317,8 @@ const makeStubProjectionPowers = dir => {
  * @param {number} port
  */
 const makeLoopbackDialer = port =>
-  makeExo('EndpointDialer', DialerInterface, {
+  /** @type {any} */ (
+  makeExo('EndpointDialer', DialerInterface, /** @type {any} */ ({
     help: () => `dialer for 127.0.0.1:${port}`,
     connect: async () => {
       await null;
@@ -336,7 +338,7 @@ const makeLoopbackDialer = port =>
           }
         })(),
       );
-      const writer = bytesWriterFromIterator({
+      const writer = bytesWriterFromIterator(/** @type {any} */ ({
         /** @param {Uint8Array} chunk */
         next: async chunk =>
           new Promise(resolve =>
@@ -349,10 +351,11 @@ const makeLoopbackDialer = port =>
         [Symbol.asyncIterator]() {
           return this;
         },
-      });
+      }));
       return harden({ reader, writer });
     },
-  });
+  }))
+  );
 
 /**
  * @param {string} body

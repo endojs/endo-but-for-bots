@@ -141,7 +141,7 @@ harden(projectedOrigin);
  * pump's own close is what tells its peer.
  *
  * @param {AsyncIterable<Uint8Array>} source
- * @param {{ next: (chunk: Uint8Array) => Promise<unknown>, return: (value?: unknown) => Promise<unknown> }} sink
+ * @param {{ next: (chunk: Uint8Array) => Promise<unknown>, return: (value?: any) => Promise<unknown> }} sink
  * @returns {Promise<void>}
  */
 const pump = async (source, sink) => {
