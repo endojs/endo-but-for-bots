@@ -1,9 +1,10 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { EndoProvisionGrantSpec, EndoProvisionPersistence, EndoProvisionPolicy, EndoProvisionSpec, GitGrant, MountGrant, NormalizeEndoProvisionOptions, NormalizedGitGrant, NormalizedGitRemoteSpec, NormalizedMountGrant } from './code-mode-provisioning-types.js' */
+/** @import { EndoProvisionGrantSpec, EndoProvisionPersistence, EndoProvisionPolicy, EndoProvisionSpec, GitGrant, HttpGrant, MountGrant, NormalizeEndoProvisionOptions, NormalizedGitGrant, NormalizedGitRemoteSpec, NormalizedHttpGrant, NormalizedMountGrant } from './code-mode-provisioning-types.js' */
 
 import { defaultDeniedSegments } from '@endo/daemon/src/mount.js';
+import { normalizeHttpClientPolicy } from '@endo/daemon/http-client-policy.js';
 import { isPetName } from '@endo/daemon/pet-name.js';
 import { makeError, q, X } from '@endo/errors';
 import { normalizeGitRemotePolicy } from '@endo/exo-git';
@@ -16,6 +17,7 @@ const ROOT_FIELDS = harden([
   'workspace',
   'fs',
   'git',
+  'http',
   'mounts',
   'gits',
   'gitRemotes',
@@ -52,6 +54,7 @@ const PI_TOOLS_MODES = harden(['preserve']);
 const PRODUCT_RESERVED_BINDINGS = harden([
   'E',
   'git',
+  'http',
   'gits',
   'mounts',
   'workspace',
@@ -754,6 +757,20 @@ const normalizePolicy = async (spec, cwd, pinnedGitRoots = undefined) => {
     )
   );
 
+  // Delegated wholesale: the daemon owns what an origin, a rate bound, and a
+  // byte bound may be, and restating any of it here would be a second copy
+  // free to drift from the one `provideHttpClient` actually enforces. All this
+  // layer adds is the field's own presence and shape.
+  /** @type {NormalizedHttpGrant | undefined} */
+  const http =
+    root.http === undefined
+      ? undefined
+      : /** @type {NormalizedHttpGrant} */ (
+          normalizeHttpClientPolicy(
+            requirePlainRecord(root.http, 'EndoProvisionSpec.http'),
+          )
+        );
+
   const grantsRecord =
     root.grants === undefined
       ? undefined
@@ -773,7 +790,18 @@ const normalizePolicy = async (spec, cwd, pinnedGitRoots = undefined) => {
   );
 
   const allNames = new Map();
+  if (http !== undefined) {
+    // `http` is a fixed root binding, like the compatibility root `git`; a
+    // mount, Git grant, remote, or named grant claiming the same lexical name
+    // would shadow it.
+    allNames.set('http', 'http');
+  }
   for (const name of Object.keys(mounts)) {
+    if (allNames.has(name)) {
+      throw makeError(
+        X`Binding name ${q(name)} is reserved by the root http grant`,
+      );
+    }
     allNames.set(name, 'mount');
   }
   for (const name of Object.keys(gits)) {
@@ -822,6 +850,7 @@ const normalizePolicy = async (spec, cwd, pinnedGitRoots = undefined) => {
     ...(Object.keys(gitRemotes).length === 0
       ? {}
       : { gitRemotes: harden(gitRemotes) }),
+    ...(http === undefined ? {} : { http: harden(http) }),
     ...(Object.keys(grants).length === 0 ? {} : { grants: harden(grants) }),
   });
   return harden({ workspacePath, policy });
@@ -983,7 +1012,7 @@ export const validateEndoProvisionPersistence = async value => {
   );
   assertKnownFields(
     policyRecord,
-    harden(['mounts', 'gits', 'gitRemotes', 'grants', 'piTools']),
+    harden(['mounts', 'gits', 'gitRemotes', 'http', 'grants', 'piTools']),
     'Endo provision persistence.policy',
   );
   const persistedMounts = requirePlainRecord(
@@ -1129,6 +1158,9 @@ export const validateEndoProvisionPersistence = async value => {
     ...(policyRecord.gitRemotes === undefined
       ? {}
       : { gitRemotes: policyRecord.gitRemotes }),
+    ...(policyRecord.http === undefined
+      ? {}
+      : { http: /** @type {HttpGrant} */ (policyRecord.http) }),
     ...(persistedGrants === undefined ? {} : { grants: persistedGrants }),
   });
   const normalized = await normalizePolicy(

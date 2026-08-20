@@ -7,6 +7,7 @@
 
 import { E } from '@endo/eventual-send';
 import { makeGitGlobal } from '@endo/agent-tools/code-mode-globals/git.js';
+import { makeHttpGlobal } from '@endo/agent-tools/code-mode-globals/http.js';
 import { normalizeGlobals } from '@endo/agent-tools/code-mode/declarations.js';
 
 import {
@@ -51,6 +52,12 @@ export const makeEndoProvisionGlobals = persistence => {
   for (const name of Object.keys(policy.gitRemotes ?? {}).sort()) {
     // A remote is foreign to this vat and has no local posture recognizer.
     globals.push({ name });
+  }
+  if (policy.http !== undefined) {
+    // A proper global, not an opaque binding: the HttpClient's declaration is
+    // generated from the exo's own surface, so the session is told what it may
+    // call rather than left to probe.
+    globals.push(makeHttpGlobal({ name: 'http' }));
   }
   for (const [name, grant] of Object.entries(policy.grants ?? {}).sort(
     ([left], [right]) => left.localeCompare(right),
@@ -131,6 +138,18 @@ export const makeEndoProvisionGrants = async (guest, persistence) => {
     // Keep the compatibility binding truthful by withholding an interface
     // declaration until a trusted remote minter is available.
     grants.push(minter.opaque({ name, capability }));
+  }
+  if (policy.http !== undefined) {
+    const capability = /** @type {CodeModePower} */ (
+      await E(guest).lookup('http')
+    );
+    grants.push(
+      minter.provisionedHttp({
+        name: 'http',
+        capability,
+        authority,
+      }),
+    );
   }
   for (const [name, grant] of Object.entries(policy.grants ?? {}).sort(
     ([left], [right]) => left.localeCompare(right),

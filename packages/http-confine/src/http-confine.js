@@ -674,7 +674,13 @@ export const makeHttpConfinement = (policy, { fetch, now }) => {
       });
       const bytes = await limited.stream;
       assertNotRevoked();
-      return freeze({
+      // Shallow on purpose. `response` is a foreign host object — a platform
+      // `Response`, whose `headers` memoizes a sorted view into an internal
+      // slot on first iteration. A deep freeze reaches that object, and the
+      // next header read throws when the memo assignment fails. Freezing our
+      // own record is what this call is for; the foreign object is the
+      // caller's to treat as it finds it.
+      return Object.freeze({
         response,
         bytes,
         truncated: limited.truncated(),
