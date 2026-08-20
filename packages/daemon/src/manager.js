@@ -19,6 +19,7 @@ import { decodeUtf8 } from '@endo/utf8/decode.js';
 import {
   checkinTree as platformCheckinTree,
   snapshotTreeMethods,
+  makeBlobRangeMethods,
 } from '@endo/platform/fs/lite';
 import { toSafeNumber } from '@endo/platform/fs/extended/shared/helpers.js';
 import {
@@ -126,7 +127,7 @@ import { getUnredactedStackString } from './unredacted-stack.js';
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
-/** @import { ReadableBlobRange, SnapshotTree } from '@endo/platform/fs/lite/types' */
+/** @import { RichReadableBlob, SnapshotTree } from '@endo/platform/fs/lite/types' */
 /** @import { ArchiveTreeMethods } from './tar-checkin.js' */
 /** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
@@ -161,23 +162,6 @@ import { getUnredactedStackString } from './unredacted-stack.js';
  * @type {WeakMap<object, import('@endo/exo-git/src/git.js').GitOperations>}
  */
 const gitOperationsByCap = new WeakMap();
-
-/**
- * Wrap a byte range as a `PassableBytesReader`, the CapTP-passable bytes
- * stream `BlobRef.fetch` returns. Empty ranges yield a reader that is
- * immediately done. Mirrors the extended layer's `makeBytesReaderFromBytes`.
- *
- * @param {Uint8Array} bytes
- */
-const bytesFromRange = bytes => {
-  function* generator() {
-    if (bytes.length > 0) {
-      yield bytes;
-    }
-  }
-  return bytesReaderFromIterator(generator());
-};
-harden(bytesFromRange);
 
 /**
  * @param {string | undefined} raw
@@ -513,6 +497,15 @@ const makeDaemonCore = async (
     backend: secretBackend,
     randomHex256,
   });
+  /**
+   * @param {Uint8Array} bytes
+   * @returns {Uint8Array}
+   */
+  const hashBytes = bytes => {
+    const digester = cryptoPowers.makeSha256();
+    digester.update(bytes);
+    return fromHex(digester.digestHex());
+  };
   /** @type {WeakMap<object, ERef<WorkerDaemonFacet>>} */
   const workerDaemonFacets = new WeakMap();
   /** @type {Map<string, (reason?: Error) => Promise<void>>} */
@@ -1880,7 +1873,61 @@ const makeDaemonCore = async (
   const makeReadableBlob = sha256 => {
     const { makeFileReader, text, json, size, readRange } =
       /** @type {DaemonContentStoreBlob} */ (contentStore.fetch(sha256));
-    /** @satisfies {ReadableBlobRange} */
+    // Byte-window / line-window attenuation over the stored content: only the
+    // requested `[start, end)` window leaves disk (via the content store's
+    // `readRange`), and `getInfo` on a derived range reports the SHA-256 of the
+    // *selected* bytes. See designs/readableblob-range-attenuation.md.
+    const { range, textRange } = makeBlobRangeMethods({
+      readWindow: async (start, end) => {
+        const from = toSafeNumber(start, 'start');
+        // `readRange` (→ `filePowers.readFileRange`) already stats the stored
+        // blob internally to clamp the request to the bytes available and
+        // short-reads at EOF, so we don't pre-stat via `size()` here: an
+        // explicit `end` passes its own length (an over-long one is clamped
+        // down), and `end === undefined` (to end-of-content) passes a sentinel
+        // the power clamps to the stored size.
+        const len =
+          end === undefined
+            ? Number.MAX_SAFE_INTEGER - from
+            : Math.max(0, toSafeNumber(end, 'end') - from);
+        if (len <= 0) {
+          return new Uint8Array(0);
+        }
+        return readRange(from, len);
+      },
+      // A content-store reader is one source stream. Under the XS supervisor
+      // it materializes the stored object once; using it here avoids calling
+      // the whole-file-backed `readRange` once per 48 KiB stream window.
+      streamBytes: async function* streamBytes() {
+        await null;
+        const reader = makeFileReader();
+        try {
+          for (;;) {
+            // eslint-disable-next-line no-await-in-loop
+            const result = await reader.next();
+            if (result.done) {
+              return;
+            }
+            yield result.value;
+          }
+        } finally {
+          if (reader.return !== undefined) {
+            await reader.return(undefined);
+          }
+        }
+      },
+      hashBytes,
+      // The derived-range exo tag must NOT embed the parent's SHA-256: this
+      // range is an attenuation, and its label travels over CapTP to whoever
+      // holds the derived cap, so a `${sha256.slice(0, 8)}` prefix would leak 32
+      // bits of the parent's content address to a holder who should only see a
+      // window. Use the static type-plus-derivation form the sibling adopters
+      // use (`LocalBlob range`, `BlobRef range`, `GitBlob range`,
+      // `EndoMountFile range`); the parent's own tag still names its address
+      // (below), which its holder can already read via `getInfo`.
+      label: 'EndoBlob range',
+    });
+    /** @satisfies {RichReadableBlob} */
     const readableBlobMethods = {
       /** @param {import('@endo/eventual-send').ERef<unknown>} synPromise */
       streamBase64(synPromise) {
@@ -1889,11 +1936,11 @@ const makeDaemonCore = async (
       },
       text,
       json,
-      // Range-I/O surface (aligns with the extended `BlobRef`): the
-      // `{ algorithm, hash, size }` triple in one round-trip, then a
-      // windowed `fetch`. `hash` is base64 to match `BlobRef.getInfo`
-      // (this `EndoBlob` cap no longer carries a hex `sha256()` accessor;
-      // the hex spelling lives only in the internal content-store address).
+      // Content-address surface (aligns with the extended `BlobRef`): the
+      // `{ algorithm, hash, size }` triple in one round-trip. `hash` is base64
+      // to match `BlobRef.getInfo` (this `EndoBlob` cap no longer carries a hex
+      // `sha256()` accessor; the hex spelling lives only in the internal
+      // content-store address).
       async getInfo() {
         return harden({
           algorithm: 'sha256',
@@ -1901,20 +1948,8 @@ const makeDaemonCore = async (
           size: await size(),
         });
       },
-      /**
-       * @param {bigint} offset
-       * @param {bigint} length
-       */
-      async fetch(offset, length) {
-        // Validate at the bigint→Number boundary (same `toSafeNumber`
-        // the extended `BlobRef.fetch` uses) so negative or out-of-range
-        // windows throw `EINVAL` rather than silently losing precision.
-        const bytes = await readRange(
-          toSafeNumber(offset, 'offset'),
-          toSafeNumber(length, 'length'),
-        );
-        return bytesFromRange(bytes);
-      },
+      range,
+      textRange,
       help: makeHelp(blobHelp),
     };
     return makeExo(
@@ -2297,6 +2332,26 @@ const makeDaemonCore = async (
       hash: encodeBase64(fromHex(sha256Hex)),
       size: BigInt(bytes.length),
     });
+    // Byte-window / line-window attenuation over the captured transient bytes;
+    // `getInfo` on a derived range reports the SHA-256 of the selected bytes.
+    const { range, textRange } = makeBlobRangeMethods({
+      readWindow: (start, end) => {
+        const from = toSafeNumber(start, 'start');
+        const to =
+          end === undefined
+            ? bytes.length
+            : Math.min(toSafeNumber(end, 'end'), bytes.length);
+        return Promise.resolve(
+          from >= bytes.length || to <= from
+            ? new Uint8Array(0)
+            : bytes.slice(from, to),
+        );
+      },
+      hashBytes,
+      // `<parent exo tag> <derivation>`; the parent exo is tagged
+      // `TransientBlob` (below), matching the sibling range adopters.
+      label: 'TransientBlob range',
+    });
     return makeExo(
       'TransientBlob',
       BlobInterface,
@@ -2315,20 +2370,8 @@ const makeDaemonCore = async (
         text: async () => decodeUtf8(bytes),
         json: async () => JSON.parse(decodeUtf8(bytes)),
         getInfo: () => info,
-        /**
-         * @param {bigint} offset
-         * @param {bigint} length
-         */
-        fetch: async (offset, length) => {
-          const off = toSafeNumber(offset, 'offset');
-          const len = toSafeNumber(length, 'length');
-          const end = Math.min(off + len, bytes.length);
-          const slice =
-            off >= bytes.length || len <= 0
-              ? new Uint8Array(0)
-              : bytes.subarray(off, end);
-          return bytesFromRange(slice);
-        },
+        range,
+        textRange,
       }),
     );
   };
@@ -3205,6 +3248,7 @@ const makeDaemonCore = async (
         snapshotTree: snapshotMountTree,
         snapshotFile: snapshotMountFile,
         deniedSegments,
+        makeSha256: cryptoPowers.makeSha256,
       });
       // Tie revocation to the mount formula's lifetime: when the formula is
       // cancelled, the caretaker trips the shared liveness flag and every
@@ -3234,6 +3278,7 @@ const makeDaemonCore = async (
         snapshotTree: snapshotMountTree,
         snapshotFile: snapshotMountFile,
         deniedSegments,
+        makeSha256: cryptoPowers.makeSha256,
       });
       context.onCancel(() => {
         /** @type {{ revoke: () => void }} */ (control).revoke();

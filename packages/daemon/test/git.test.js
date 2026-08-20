@@ -4008,8 +4008,8 @@ test('Git.filesystemAt: File.snapshot returns a BlobRef over the blob bytes', as
   t.is(info.hash, blobOid);
   t.is(info.size, BigInt('snapshot test\n'.length));
 
-  // fetch returns the bytes.
-  const reader = await E(blobRef).fetch(0n, BigInt('snapshot test\n'.length));
+  // range attenuates to the byte window and reads the bytes.
+  const reader = await E(blobRef).range(0n, BigInt('snapshot test\n'.length));
   const bytes = await collectReader(reader);
   t.is(new TextDecoder().decode(bytes), 'snapshot test\n');
 });

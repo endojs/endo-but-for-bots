@@ -14,8 +14,9 @@ export const EMPTY_BYTES = harden(new Uint8Array(0));
 
 /**
  * Wrap a `Uint8Array` snapshot as a `PassableBytesReader` that
- * yields its bytes in one chunk. Used by `shared/blob-ref.js` for
- * `BlobRef.fetch`.
+ * yields its bytes in one chunk. Used by `extended/cached-fs.js` to
+ * serve a cached byte slice back through the `streamBase64` reader
+ * surface (the ranged `BlobRef.fetch` it once backed is retired).
  *
  * @param {Uint8Array} bytes
  */

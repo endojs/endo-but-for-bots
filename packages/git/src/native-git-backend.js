@@ -24,11 +24,15 @@ import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
 import { encodeHex } from '@endo/hex';
 import { sha256 } from '@endo/sha256';
 import { mapReader } from '@endo/stream';
-// `GitBlob` exposes the whole-value read surface plus the richer `BlobRef`
-// range-I/O surface (`getInfo` / `fetch`), so a remote reader of a git tree can
-// learn a blob's content hash + size in one round-trip and read byte ranges.
-// See designs/fs-interface-consolidation.md § C4.
-import { ReadableBlobRangeInterface } from '@endo/platform/fs/lite';
+// `GitBlob` exposes the whole-value read surface plus the rich `ReadableBlob`
+// content-address + attenuation surface (`getInfo` / `range` / `textRange`), so
+// a remote reader of a git tree can learn a blob's content hash + size in one
+// round-trip and attenuate to byte / line windows. See
+// designs/readableblob-range-attenuation.md.
+import {
+  RichReadableBlobInterface,
+  makeBlobRangeMethods,
+} from '@endo/platform/fs/lite';
 import { toSafeNumber } from '@endo/platform/fs/extended/shared/helpers.js';
 import {
   GitTreeInterface,
@@ -2301,8 +2305,37 @@ export const makeNativeGitBackend = ({
    * @param {string} blobOid
    * @returns {unknown}
    */
-  const makeGitBlob = blobOid =>
-    makeExo('GitBlob', ReadableBlobRangeInterface, {
+  const makeGitBlob = blobOid => {
+    // Git serves whole objects, so scalar window reads slice one materialized
+    // object. Derived streams use the native object stream below, which keeps
+    // one `git cat-file` process for the entire range instead of starting one
+    // for every 48 KiB window. `getInfo` on a derived range reports the SHA-256
+    // of the selected bytes (a content sha256, distinct from the git object's
+    // own sha1 OID).
+    const { range, textRange } = makeBlobRangeMethods({
+      readWindow: async (start, end) => {
+        // Validate at the bigint→Number boundary (same `toSafeNumber` the
+        // daemon and `BlobRef` paths use) so a negative offset can't slip
+        // through to the copy and silently return the tail of the object.
+        const from = toSafeNumber(start, 'start');
+        const bytes = await readBlobBytes(blobOid);
+        const to =
+          end === undefined
+            ? bytes.length
+            : Math.min(toSafeNumber(end, 'end'), bytes.length);
+        // `slice` (not `subarray`) so the window is a copy, never a view onto
+        // the whole object's `ArrayBuffer`; the other four range producers copy
+        // too, and a view would let the first method that hands bytes out leak
+        // past the attenuation to the full object.
+        return from >= bytes.length || to <= from
+          ? new Uint8Array(0)
+          : bytes.slice(from, to);
+      },
+      streamBytes: () => streamBlobBytes(blobOid),
+      hashBytes: bytes => sha256(bytes),
+      label: 'GitBlob range',
+    });
+    return makeExo('GitBlob', RichReadableBlobInterface, {
       /**
        * @param {unknown} synPromise
        */
@@ -2337,33 +2370,13 @@ export const makeNativeGitBackend = ({
         });
       },
 
-      // Windowed read of `[offset, offset + length)`, clamped at EOF. Git
-      // serves whole objects, so the window is sliced from the materialized
-      // bytes (matching the in-memory `BlobRef.fetch`).
-      /**
-       * @param {bigint} offset
-       * @param {bigint} length
-       */
-      async fetch(offset, length) {
-        // Validate at the bigint→Number boundary (same `toSafeNumber` the
-        // daemon and `BlobRef` paths use) so a negative offset can't slip
-        // through to `subarray` and silently return the tail of the object.
-        const off = toSafeNumber(offset, 'offset');
-        const len = toSafeNumber(length, 'length');
-        if (len <= 0) {
-          return bytesReaderFromIterator([][Symbol.iterator]());
-        }
-        const bytes = await readBlobBytes(blobOid);
-        const end = Math.min(off + len, bytes.length);
-        const slice =
-          off >= bytes.length ? new Uint8Array(0) : bytes.subarray(off, end);
-        return bytesReaderFromIterator(
-          (slice.length > 0 ? [slice] : [])[Symbol.iterator](),
-        );
-      },
+      // Byte-window and line-window attenuation over the git object's bytes.
+      range,
+      textRange,
 
       help: makeHelp(gitBlobHelp),
     });
+  };
 
   /**
    * @param {string} treeOid

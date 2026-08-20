@@ -32,6 +32,7 @@
       "types": "./src/fs/types-index.d.ts"
     },
     "./fs/node": "./src/fs-node/index.js",
+    "./fs/node/read-file-window": "./src/fs-node/read-file-window.js",
     "./fs/search": "./src/fs/search.js",
     "./fs/search.types": {
       "types": "./src/fs/search-types-index.d.ts"

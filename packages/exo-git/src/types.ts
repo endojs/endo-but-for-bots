@@ -15,7 +15,7 @@ export type PathEntry = import('@endo/platform/fs/lite/types').PathEntry;
 export type PathEntryIssuer =
   import('@endo/platform/fs/lite/types').PathEntryIssuer;
 export type ReadableBlob =
-  import('@endo/platform/fs/lite/types').ReadableBlobRange;
+  import('@endo/platform/fs/lite/types').RichReadableBlob;
 export type ReadableTree = import('@endo/platform/fs/lite/types').ReadableTree;
 
 /** A Git tree capability with the standard capability-help surface. */

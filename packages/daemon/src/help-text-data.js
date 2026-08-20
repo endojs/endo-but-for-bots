@@ -166,12 +166,14 @@ export const helpTextEntries = harden([
   [
     'EndoReadable',
     {
-      '': 'EndoReadable - A readable blob of binary data.\n\nBlobs store binary content with a content-addressed hash.\nUse text() to read as a string, json() to parse as JSON,\nstreamBase64() for streaming access, or getInfo()/fetch()\nfor the content-addressed range-I/O surface.',
+      '': 'EndoReadable - A readable blob of binary data.\n\nBlobs store binary content with a content-addressed hash.\nUse text() to read as a string, json() to parse as JSON,\nstreamBase64() for streaming access, getInfo() for the\ncontent-addressed identity, or range()/textRange() to attenuate\nto a byte or line window as a new ReadableBlob.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
       getInfo:
         'getInfo() -> Promise<{ algorithm, hash, size }>\nThe content-addressed identity of the blob in one round-trip:\nalgorithm ("sha256"), hash (base64), and size (bigint bytes).\nLets a caller consult a local content store before fetching.',
-      fetch:
-        'fetch(offset, length) -> Promise<PassableBytesReader>\nRead the byte range [offset, offset + length) without\nstreaming the whole blob. offset and length are bigints;\nthe range is clamped at end-of-content.',
+      range:
+        'range(start, end?) -> Promise<ReadableBlob>\nAttenuate to the half-open byte interval [start, end) as a new\nReadableBlob with exactly the authority to read those bytes.\nstart and end are non-negative bigints; start > end, a negative,\nor a non-safe value throws EINVAL; the selection clamps at\nend-of-content, and ranges compose. end is optional — omitting it\n(range(start)) reads from start to end-of-content.',
+      textRange:
+        'textRange(startLine, endLine) -> Promise<ReadableBlob>\nAttenuate to lines [startLine, endLine) (zero-based, end-exclusive,\nLF-delimited) of the current bytes, returning that byte slice as a\nnew ReadableBlob. Line indices are non-negative safe integers; an\nendLine past the last line clamps to the end.',
       streamBase64:
         'streamBase64(syndicationPromise) -> Promise\nStream the blob content as base64 chunks, driven by the\nsyndication promise (the reader-pump flow-control protocol).\nUse for large files to avoid loading everything into memory.',
       text: 'text() -> Promise<string>\nRead the entire blob as a UTF-8 string.',
@@ -213,10 +215,10 @@ export const helpTextEntries = harden([
         "sha256() -> string\nThe content address of the tree's manifest, as base64.",
       getInfo:
         'getInfo() -> Promise<{ algorithm, hash, size }>\nThe content-addressed identity of the tree in one round-trip: algorithm\n("sha256"), hash (base64, the same value as sha256()), and size (the byte\nlength of the tree\'s own manifest). The uniform identity accessor shared with\nblobs, so generic code can read a content hash off any blob or tree.',
-      has: 'has(...names) -> Promise<boolean>\nCheck if an entry exists at the given path.\nnames: string[] - Path segments.\nExample: has("index.html") → true\nExample: has("assets", "style.css") → true',
-      list: 'list(...names) -> Promise<string[]>\nList entry names at the given path (or root).\nnames: string[] - Path segments (optional, defaults to root).\nExample: list() → ["index.html", "app.js", "assets"]\nExample: list("assets") → ["style.css", "logo.png"]',
+      has: 'has(...names) -> Promise<boolean>\nCheck if an entry exists at the given path.\nnames: string[] - Path segments.\nExample: has("index.html") -> true\nExample: has("assets", "style.css") -> true',
+      list: 'list(...names) -> Promise<string[]>\nList entry names at the given path (or root).\nnames: string[] - Path segments (optional, defaults to root).\nExample: list() -> ["index.html", "app.js", "assets"]\nExample: list("assets") -> ["style.css", "logo.png"]',
       lookup:
-        'lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup("index.html") → EndoReadable\nExample: lookup(["assets", "style.css"]) → EndoReadable',
+        'lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup("index.html") -> EndoReadable\nExample: lookup(["assets", "style.css"]) -> EndoReadable',
     },
   ],
   [
@@ -263,14 +265,16 @@ export const helpTextEntries = harden([
   [
     'EndoMountFile',
     {
-      '': 'EndoMountFile - A file within a mounted directory.\n\nA live, host-backed file. Read it with text() / json() / streamBase64(),\ninspect and range-read it with getInfo() / fetch(), write it with\nwriteText() / append() / writeBytes(), or snapshot() it into the content\nstore. kind() returns "file" and stat() returns the bigint-nanosecond metadata\nrecord.',
+      '': 'EndoMountFile - A file within a mounted directory.\n\nA live, host-backed file. Read it with text() / json() / streamBase64(),\ninspect it with getInfo(), attenuate to a byte or line window with\nrange() / textRange(), write it with writeText() / append() /\nwriteBytes(), or snapshot() it into the content store. stat() returns the\nbigint-nanosecond metadata record.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
       kind: 'kind() -> "file"\nReturn the structural kind of this lookup result.',
       list: 'list() -> never\nNot available on a file.\nUse text() to read its contents.',
       getInfo:
         'getInfo() -> Promise<{ algorithm, hash, size }>\nThe content-addressed identity of the file\'s current bytes in one\nround-trip: algorithm ("sha256"), hash (base64), and size (bigint).\nRecomputed each call, since the live file may change.',
-      fetch:
-        'fetch(offset, length) -> Promise<PassableBytesReader>\nRead the byte range [offset, offset + length) of the live file without\nstreaming the whole thing. offset and length are bigints; the range is\nclamped at end-of-content.',
+      range:
+        'range(start, end?) -> Promise<ReadableBlob>\nAttenuate to the half-open byte interval [start, end) of the live file\nas a new ReadableBlob. start and end are non-negative bigints; start >\nend, a negative, or a non-safe value throws EINVAL; the selection clamps\nat end-of-content. end is optional — omitting it (range(start)) reads\nfrom start to end-of-content. Each read of the result observes the live\nfile at that operation, subject to the fixed interval.',
+      textRange:
+        "textRange(startLine, endLine) -> Promise<ReadableBlob>\nAttenuate to lines [startLine, endLine) (zero-based, end-exclusive,\nLF-delimited) of the live file's current bytes, as a new ReadableBlob.\nLine indices are non-negative safe integers; an endLine past the last\nline clamps to the end.",
       text: 'text() -> Promise<string>\nRead the file content as a UTF-8 string.',
       streamBase64:
         'streamBase64(syndicationPromise) -> Promise\nStream the file content as base64 chunks, driven by the syndication\npromise (the reader-pump flow-control protocol).',
@@ -282,7 +286,7 @@ export const helpTextEntries = harden([
       writeBytes:
         'writeBytes(readableRef) -> Promise<void>\nWrite bytes from an async iterator. Throws if read-only.',
       readOnly:
-        'readOnly() -> ReadableBlob\nReturns a structural ReadableBlob view (text, json, streamBase64, getInfo,\nfetch) of this file. The view is a write-disabled face over the live file,\nnot a snapshot. Mount-specific extensions (stat, snapshot) are not on it.',
+        'readOnly() -> ReadableBlob\nReturns a structural ReadableBlob view (text, json, streamBase64, getInfo,\nrange, textRange) of this file. The view is a write-disabled face over the\nlive file, not a snapshot. Mount-specific extensions (stat, snapshot) are not\non it.',
     },
   ],
 ]);

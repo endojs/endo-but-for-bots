@@ -45,9 +45,13 @@ for (const [name, helpObj] of entries) {
 lines.push(']);');
 lines.push('');
 
+// Format with the repo's Prettier config before writing, so the committed
+// artifact matches CI's `prettier --check` and a regeneration never re-breaks
+// lint (a hand-Prettier'd artifact is reverted by the next run otherwise).
+const prettierConfig = await prettier.resolveConfig(outPath);
 const formatted = await prettier.format(lines.join('\n'), {
+  ...prettierConfig,
   filepath: outPath,
-  singleQuote: true,
 });
 fs.writeFileSync(outPath, formatted);
 console.log(`Wrote ${outPath} (${entries.length} entities)`);

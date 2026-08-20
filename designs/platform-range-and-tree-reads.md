@@ -7,6 +7,18 @@
 | **Author** | endolinbot (prompted by kriskowal) |
 | **Status** | In Progress |
 
+> **Superseded in part (2026-08-01).** The two *blob* range reads specified
+> below — `rangeRead(offset, length)` and `rangeReadText(startLine, endLine)` —
+> were replaced before shipping by the **attenuation** surface `range(start, end)`
+> / `textRange(startLine, endLine)`, which each return a new `ReadableBlob`
+> confined to the selected bytes rather than a materialized `Uint8Array` /
+> `string`. The shipped guard is `rangeAttenuationMethodGuards` and the single
+> rich interface is `RichReadableBlobInterface` (the `ReadableBlobRange` /
+> `ReadableBlobRangeRead` split named below was collapsed into one). See
+> [readableblob-range-attenuation.md](readableblob-range-attenuation.md). The
+> `listTree` recursive tree read is unaffected; the blob range-read prose below
+> is retained as the original specification.
+
 ## Motivation
 
 The `genie`, `lal`, and `fae` agent toolkits each grew their own file-reading
@@ -21,9 +33,11 @@ This design adds three methods to the platform's own read surfaces:
 - **`listTree(petNamePath, options?)`** — recursive counterpart to `list`, on
   the readable **tree** surface.
 - **`rangeRead(offset, length)`** — whole-value byte-range read, on the
-  readable **blob** surface.
+  readable **blob** surface. *(Superseded by `range(start, end)` attenuation —
+  see the note at the top.)*
 - **`rangeReadText(startLine, endLine)`** — whole-value line-range read, on the
-  readable **blob** surface.
+  readable **blob** surface. *(Superseded by `textRange(startLine, endLine)`
+  attenuation.)*
 
 It also records two explicit decisions from the same directive: **`stat` is
 omitted** (it leaks security-germane host details), and **`getInfo` should be
@@ -36,7 +50,7 @@ The platform read surfaces (`packages/platform/src/fs/interfaces.js`, per
 carried:
 
 - On blobs: `text` / `json` / `streamBase64` (whole-value), plus
-  `getInfo() → { algorithm, hash, size }` and `fetch(offset, length)` — the
+  `getInfo() -> { algorithm, hash, size }` and `fetch(offset, length)` — the
   latter a **streaming** windowed read returning a `PassableBytesReader`.
 - On trees: `has` / `list` / `lookup` — where `list` is **shallow** (immediate
   child names only).
@@ -48,7 +62,10 @@ lal / fae each re-invented.
 
 ## The methods
 
-### `rangeRead(offset, length) → Uint8Array`
+### `rangeRead(offset, length) -> Uint8Array`
+
+*(Superseded by `range(start, end)` attenuation — see the note at the top. The
+description below is the original specification.)*
 
 Returns the raw bytes of the window `[offset, offset + length)`, clamped at
 EOF, in one round-trip. This is the convenience twin of `fetch`: `fetch`
@@ -62,7 +79,10 @@ out-of-range offsets are identical.
 Offsets are **`bigint`**, matching `fetch` — a blob may exceed
 `Number.MAX_SAFE_INTEGER` bytes.
 
-### `rangeReadText(startLine, endLine) → string`
+### `rangeReadText(startLine, endLine) -> string`
+
+*(Superseded by `textRange(startLine, endLine)` attenuation — see the note at
+the top. The description below is the original specification.)*
 
 Decodes the blob as UTF-8 and returns lines `[startLine, endLine)` — **0-based,
 end-exclusive** — joined with `'\n'`. `endLine` past the last line clamps to
@@ -74,7 +94,7 @@ Line indices are plain **numbers** (ordinary counts, not byte offsets), matching
 the ergonomics of the toolkits being consolidated and JS array indexing. A
 negative or non-integer index throws `EINVAL` (via the shared `toSafeNumber`).
 
-### `listTree(petNamePath, options?) → Array<{ path: string[], type }>`
+### `listTree(petNamePath, options?) -> Array<{ path: string[], type }>`
 
 Recursive counterpart to `list`. Where `list` yields only the immediate child
 names of the sub-path, `listTree` walks the whole subtree in one round-trip and
@@ -143,15 +163,18 @@ the distinct interface tags only keep diagnostics unambiguous.
 
 ## Follow-ups
 
-- **Rename `getInfo` → `contentAddress`.** Raised as an aside in the same
-  directive ("`getInfo` is poorly named … should become more like
+- **Rename `getInfo` -> `contentAddress`.** Raised as an aside in the same
+  directive ("`getInfo` is poorly named ... should become more like
   `contentAddress()`"). It is a cross-cutting rename touching ~30 files across
   daemon / git / chat / platform and is intentionally **out of scope** here to
   keep this change reviewable; it wants its own PR (likely with a deprecation
   alias window). Tracked as a follow-up.
 - **Propagate the conveniences to the daemon / git / mount blob and tree
-  exos**, so `rangeRead` / `rangeReadText` / `listTree` are available over
+  exos**, so `range` / `textRange` / `listTree` are available over
   CapTP from a remote daemon, not just on the in-process platform surfaces.
+  (The `range` / `textRange` attenuation half of this shipped across every rich
+  blob; see
+  [readableblob-range-attenuation.md](readableblob-range-attenuation.md).)
 
 ## Dependencies
 

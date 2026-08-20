@@ -14,7 +14,7 @@ import {
   MountInterface,
 } from '@endo/daemon/src/interfaces.js';
 import {
-  ReadableBlobRangeInterface,
+  RichReadableBlobInterface,
   ReadableTreeInterface,
 } from '@endo/platform/fs/lite';
 import ts from 'typescript';
@@ -73,7 +73,9 @@ const WORKSPACE_GUARDS = harden({
   DaemonMount: /** @type {InterfaceGuard} */ (MountInterface),
   EndoMountFile: /** @type {InterfaceGuard} */ (MountFileInterface),
   EndoMountEntry: /** @type {InterfaceGuard} */ (MountEntryInterface),
-  ReadableBlobView: /** @type {InterfaceGuard} */ (ReadableBlobRangeInterface),
+  ReadableBlobView: /** @type {InterfaceGuard} */ (
+    RichReadableBlobInterface
+  ),
   ReadableTreeView: /** @type {InterfaceGuard} */ (ReadableTreeInterface),
 });
 
@@ -255,6 +257,9 @@ test('git declarations retain reachable filesystem contracts without status caps
     'lookup: (path: string | string[]) => Promise<unknown>;',
     'write: (path: string[], value: GitDirectoryWriteSource)',
     'root: () => GitERef<GitExtendedDirectory>;',
+    'type GitReadableTree =',
+    'range: (start: bigint, end?: bigint) => Promise<GitRichReadableBlob>;',
+    'textRange: (startLine: number, endLine: number) => Promise<GitRichReadableBlob>;',
   ]) {
     t.true(text.includes(shape), `missing reachable type shape: ${shape}`);
   }
@@ -286,6 +291,35 @@ test('git status declarations expose copy data without live capabilities', t => 
   t.false(text.includes('entry: GitPathEntry;'));
   t.false(text.includes('node?:'));
   t.false(text.includes('type GitStatusNode ='));
+});
+
+test('git blob declarations expose Exo methods without CAS backing helpers', t => {
+  const { aux } = gitDeclarations.git;
+  t.deepEqual(listDeclaredTypeMembers(aux, 'GitLiteReadableBlob'), [
+    'streamBase64',
+    'text',
+    'json',
+    'help',
+  ]);
+  t.deepEqual(listDeclaredTypeMembers(aux, 'GitRichReadableBlob'), [
+    'getInfo',
+    'range',
+    'textRange',
+  ]);
+  const leakedMethodNames = [
+    'makeFileReader',
+    'readRange',
+    'rangeRead',
+    'rangeReadText',
+  ];
+  const leaked = leakedMethodNames.filter(
+    name => aux.includes(`${name}:`) || aux.includes(`${name}?:`),
+  );
+  t.deepEqual(
+    leaked,
+    [],
+    `leaked non-Git blob method(s): ${leaked.join(', ')}`,
+  );
 });
 
 test('combined Git and workspace declarations have unique alias names', t => {
@@ -514,6 +548,49 @@ test('workspace declaration names mount result records and path conventions', t 
   ]) {
     t.true(text.includes(shape), `missing named result shape: ${shape}`);
   }
+  // `BlobRef.range()` / `.textRange()` derive a generic `RichReadableBlob`
+  // (per the range-attenuation surface, PR #910); the authored source imports
+  // that type from `@endo/platform/fs/lite/types`, so the extractor follows the
+  // import and the results name the concrete shape instead of `unknown`. In the
+  // workspace declaration the alias carries the `Mount` prefix.
+  t.true(
+    aux.includes(
+      'range: (start: bigint, end?: bigint) => Promise<MountRichReadableBlob>;',
+    ),
+    'BlobRef.range names the derived MountRichReadableBlob',
+  );
+  t.true(
+    aux.includes(
+      'textRange: (startLine: number, endLine: number) => Promise<MountRichReadableBlob>;',
+    ),
+    'BlobRef.textRange names the derived MountRichReadableBlob',
+  );
+  // The `unknown` results left are the caller-supplied stream promise of
+  // `streamBase64()`, `BlobRef.json()` (which parses arbitrary JSON), the
+  // whole-tree `snapshot()`, and the mount `lookup()` — none of them the
+  // range-attenuation methods, which name their concrete `MountRichReadableBlob`.
+  const unknownResults = aux
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.includes('=> Promise<unknown>'));
+  t.deepEqual(unknownResults, [
+    'json: () => Promise<unknown>;',
+    'snapshot: () => Promise<unknown>;',
+    'streamBase64: (synPromise: unknown) => Promise<unknown>;',
+    'json: () => Promise<unknown>;',
+    'lookup: (petNamePath: string | readonly string[]) => Promise<unknown>;',
+  ]);
+  // The sole `: any` is the structural `ReadableBlobSource` variadic; no
+  // concrete result type leaks `any`.
+  const anyLeaks = aux
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.includes(': any'));
+  t.deepEqual(anyLeaks, [
+    'streamBase64: (...args: any[]) => PromiseLike<unknown>;',
+  ]);
+  t.true(aux.includes('mtime: bigint;'));
+  t.false(aux.includes('wait?: boolean;'));
 });
 
 // `EndoMount` declares `has` twice, once for path segments and once for a

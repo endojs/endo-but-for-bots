@@ -180,7 +180,7 @@ test('snapshot produces a BlobRef backed by current bytes', async t => {
   const info = await E(blob).getInfo();
   t.is(info.algorithm, 'sha256');
   t.is(info.size, 7n);
-  const bytes = await collectBytes(await E(blob).fetch(0n, 64n));
+  const bytes = await collectBytes(await E(blob).range(0n, 64n));
   t.is(fromUtf8(bytes), 'payload');
 });
 

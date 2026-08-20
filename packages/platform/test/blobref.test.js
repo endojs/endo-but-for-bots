@@ -65,7 +65,7 @@ test('snapshot returns a BlobRef with sha256 hash + size', async t => {
   t.is(info.hash, expected);
 });
 
-test('BlobRef.fetch reads the captured bytes', async t => {
+test('BlobRef.range reads the captured bytes', async t => {
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
   const opened = await E(root).create('x', {});
@@ -74,7 +74,7 @@ test('BlobRef.fetch reads the captured bytes', async t => {
 
   const file = await E(root).lookup('x');
   const blob = await E(file).snapshot();
-  const bytes = await collectBytes(await E(blob).fetch(0n, 64n));
+  const bytes = await collectBytes(await E(blob).range(0n, 64n));
   t.is(fromUtf8(bytes), 'hello world');
 });
 
@@ -107,7 +107,7 @@ test('BlobRef survives a later mutation to the source file', async t => {
   await E(opened2).close();
 
   // BlobRef still yields the original bytes.
-  const bytes = await collectBytes(await E(blob).fetch(0n, 64n));
+  const bytes = await collectBytes(await E(blob).range(0n, 64n));
   t.is(fromUtf8(bytes), 'original');
 
   // The file itself has the new content.
@@ -116,7 +116,7 @@ test('BlobRef survives a later mutation to the source file', async t => {
   t.is(fromUtf8(after), 'different content');
 });
 
-test('BlobRef.fetch with offset returns the suffix', async t => {
+test('BlobRef.range with offset returns the suffix', async t => {
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
   const opened = await E(root).create('x', {});
@@ -124,7 +124,7 @@ test('BlobRef.fetch with offset returns the suffix', async t => {
   await E(opened).close();
   const file = await E(root).lookup('x');
   const blob = await E(file).snapshot();
-  const bytes = await collectBytes(await E(blob).fetch(3n, 4n));
+  const bytes = await collectBytes(await E(blob).range(3n, 7n));
   t.is(fromUtf8(bytes), 'defg');
 });
 

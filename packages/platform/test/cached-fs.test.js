@@ -15,10 +15,11 @@
  *
  *   - **Cache miss** — first read of a file. The transcript shows
  *     `snapshot` + `getInfo` + `read` issued in one batch, then the
- *     background cache populate (`fetch` + `streamBase64`). The
- *     speculative `read`'s bytes flow to the caller; the
- *     populating `fetch` runs after the caller has already received
- *     the response.
+ *     background cache populate (`streamBase64` — the ranged `fetch`
+ *     primitive is retired, so the populate streams the whole blob
+ *     through the whole-value surface). The speculative `read`'s
+ *     bytes flow to the caller; the populating `streamBase64` runs
+ *     after the caller has already received the response.
  *
  *   - **Cache hit** — second read of a file whose hash is in the
  *     CAS. The transcript shows `snapshot` + `getInfo` + a

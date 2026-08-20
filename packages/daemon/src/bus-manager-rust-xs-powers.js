@@ -153,9 +153,11 @@ export const makeXsFilePowers = () => {
   /**
    * Binary-safe range read returning `[offset, offset + length)`. The XS
    * host has no native pread primitive, so this reads the whole file and
-   * slices — correct, if not as I/O-efficient as the Node powers' windowed
-   * read. Mirrors the `BlobRef.fetch` clamp: a short read past EOF returns
-   * the available bytes, and `offset` at/beyond EOF returns empty.
+   * copies the requested interval. The copy is part of the FilePowers
+   * contract: a range-attenuated consumer must not receive a `subarray` view
+   * whose backing allocation still contains bytes outside its window. Derived
+   * `streamBase64` reads use `makeFileReader` once for the whole operation, so
+   * this whole-file fallback is not repeated for every 48 KiB stream window.
    *
    * @type {FilePowers['readFileRange']}
    */
@@ -167,7 +169,7 @@ export const makeXsFilePowers = () => {
     if (offset >= bytes.length) {
       return new Uint8Array(0);
     }
-    return bytes.subarray(offset, Math.min(offset + length, bytes.length));
+    return bytes.slice(offset, Math.min(offset + length, bytes.length));
   };
 
   /**

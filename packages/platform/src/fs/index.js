@@ -8,14 +8,12 @@ export {
   pathEntryMethodGuards,
   pathEntryIssuerMethodGuards,
   getInfoMethodGuard,
-  rangeReadMethodGuards,
+  rangeAttenuationMethodGuards,
   PathEntryInterface,
   PathEntryIssuerInterface,
-  rangeReadConvenienceMethodGuards,
   recursiveListMethodGuards,
   ReadableBlobInterface,
-  ReadableBlobRangeInterface,
-  ReadableBlobRangeReadInterface,
+  RichReadableBlobInterface,
   SnapshotBlobInterface,
   ReadableTreeInterface,
   SnapshotTreeInterface,
@@ -23,6 +21,8 @@ export {
   FileInterface,
   DirectoryInterface,
 } from './interfaces.js';
+
+export { makeBlobRangeMethods } from './blob-range.js';
 
 export { snapshotBlobMethods } from './snapshot-blob.js';
 export { snapshotTreeMethods } from './snapshot-tree.js';
