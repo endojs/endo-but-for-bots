@@ -83,7 +83,8 @@ test('the http grant normalizes through the daemon validator', async t => {
   );
   await t.throwsAsync(
     normalizeEndoProvisionSpec(
-      { http: { policyMode: 'tofu-prompt' } },
+      // A mode that needs a live authority a retained formula cannot hold.
+      { http: { policyMode: /** @type {any} */ ('tofu-prompt') } },
       { harness: 'test', sessionId: 'http-bad-mode', cwd: process.cwd() },
     ),
     { message: /policyMode must be one of/ },
