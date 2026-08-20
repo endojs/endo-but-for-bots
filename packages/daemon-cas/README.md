@@ -36,9 +36,9 @@ of contracts:
   [`@endo/platform/fs/lite/types`](../platform/src/fs/types.ts).
   A raw store from this package feeds `makeSnapshotStore` from
   `@endo/platform/fs/lite` unchanged.
-  `ContentStoreBlob.readRange` is an internal safe-number helper used to
-  implement public `ReadableBlobRange.fetch(bigint, bigint)`; it is not a
-  ReadableBlob Exo method.
+  `ContentStoreBlob.readRange` is an internal safe-number helper that backs the
+  public bigint `RichReadableBlob.range()` attenuation at the daemon boundary;
+  it is not a ReadableBlob Exo method.
 - **The injected dependencies it consumes.** The `filePowers` and
   `cryptoPowers` it materialises blobs with are the platform-owned
   `ContentStoreFilePowers` and `ContentStoreCryptoPowers` contracts,

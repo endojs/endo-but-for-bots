@@ -107,45 +107,47 @@ The concrete filesystem/blob realization of this sed-like affordance is the
 range-read surface described in
 [platform-range-and-tree-reads.md](platform-range-and-tree-reads.md).
 The corrected public declarations in PR
-[#766](https://github.com/endojs/endo-but-for-bots/pull/766) separate the base
-`ReadableBlob` from the richer range surfaces, so this section uses the
-following contract rather than presenting ReadableBlob reads as an entirely
-separate, not-yet-designed companion API:
+[#766](https://github.com/endojs/endo-but-for-bots/pull/766) separated the base
+`ReadableBlob` from the richer range surfaces; those richer surfaces were then
+replaced by the composable **range-attenuation** surface (`range` / `textRange`)
+per [readableblob-range-attenuation.md](readableblob-range-attenuation.md), so
+this section uses the following contract rather than presenting ReadableBlob
+reads as an entirely separate, not-yet-designed companion API:
 
 ### `ReadableBlob` byte and line windows
 
-- `fetch(offset, length) → Promise<PassableBytesReader>` is the streaming
-  byte-range primitive.
-  It streams only the selected byte window
-  `[offset, offset + length)`, rather than materializing that window as a
-  `Uint8Array` or streaming the whole blob.
-  Both arguments are non-negative
-  `bigint` values.
-  A valid window clamps at EOF, including an empty result for
-  a window beginning at or beyond EOF; invalid negative or non-safe values
-  reject with `EINVAL`.
-- `rangeRead(offset, length) → Promise<Uint8Array>` is the whole-value byte
-  window convenience.
-  It uses the same non-negative `bigint` byte offsets as
-  `fetch`, returns the selected bytes in one materialized array, and applies
-  the same EOF clamping and invalid-domain behavior. “Whole-value” means the
-  selected window is returned as one value, not that the entire blob is read.
-- `rangeReadText(startLine, endLine) → Promise<string>` is the whole-value
-  line window convenience.
-  It decodes the blob as UTF-8 and returns lines
-  `[startLine, endLine)`, with 0-based, end-exclusive line indices, joined by
-  `\n`.
-  A past-the-end `endLine` clamps to the end, an empty or inverted
-  range returns `''`, and a range wholly past the end also returns `''`.
+A range attenuation returns a **further readable blob** with exactly the
+authority to read the selected portion of the receiver — the same rich
+interface, so ranges compose (a range of a range intersects the two intervals).
+Read the returned blob whole-value with `text()` / `json()` / `streamBase64()`.
+
+- `range(start, end?) → Promise<RichReadableBlob>` is the byte-window
+  attenuator.
+  It selects the half-open byte interval `[start, end)` and reads
+  only that window from the source (it does not stream the whole blob).
+  Both arguments are non-negative `bigint` values; an omitted `end` (or the
+  sentinel `range(start, MAX)`) means "to end-of-content".
+  A valid window clamps at EOF, including an empty result for a window
+  beginning at or beyond EOF; invalid negative or non-safe values reject with
+  `EINVAL`.
+- `textRange(startLine, endLine) → Promise<RichReadableBlob>` is the line-window
+  attenuator.
+  It decodes the receiver as UTF-8, locates lines `[startLine, endLine)`
+  (0-based, end-exclusive), and mints a byte-range blob over their span; read
+  it whole-value to obtain the selected lines joined by `\n`.
+  A past-the-end `endLine` clamps to the end, an empty or inverted range
+  yields `''`, and a range wholly past the end also yields `''`.
   Negative or non-integer line indices reject with `EINVAL`; a trailing
   newline contributes a final empty line, and `\r` is preserved.
+  Because it must read the receiver's current content to find LF boundaries, on
+  a *live* source the located byte offsets are frozen at call time.
 
-The byte methods and the line method deliberately have different addressing
-domains: byte windows use `bigint` offsets because blobs may exceed
+The byte attenuator and the line attenuator deliberately have different
+addressing domains: byte windows use `bigint` offsets because blobs may exceed
 `Number.MAX_SAFE_INTEGER`, while line indices are ordinary JavaScript
 `number` counts.
-The blob methods return the selected bytes or text directly;
-they do not add a truncation marker or `{ truncated, nextOffset }` metadata.
+Both return a readable blob rather than a materialized value with a truncation
+marker or `{ truncated, nextOffset }` metadata.
 
 This does not make `{ offset, limit }` the ReadableBlob method signature.
 That vocabulary remains useful for a higher-level tool or rendered-text API
@@ -155,10 +157,10 @@ when it needs a line window:
   positions, with an omitted value meaning the first line), and `limit` is a
   maximum line count.
 - When such an API is backed by a `ReadableBlob`, it can translate that
-  vocabulary to `rangeReadText` by converting the line origin and computing an
+  vocabulary to `textRange` by converting the line origin and computing an
   exclusive end line.
-  It must not pass those values to `fetch` or `rangeRead`,
-  whose offsets and lengths are byte-oriented `bigint`s.
+  It must not pass those values to `range`, whose offsets are byte-oriented
+  `bigint`s.
 - A higher-level tool may choose a truncation marker, continuation metadata, or
   a character guardrail.
   Those are tool/rendering policies, not properties of
@@ -168,8 +170,10 @@ The remaining Git text surfaces are intentionally separate follow-ups.
 The rendered outputs of `git.diff()`, `git.show()`, `git.log()`, and `stashShow()`
 remain unbounded here; a future tool or Git API design must decide how its
 line-window vocabulary and continuation result apply to those strings.
-The platform design also leaves propagation of `rangeRead` and `rangeReadText` to
-the remote daemon, Git, and mount blob exos as a follow-up.
+The platform design left propagation of the range surface to
+the remote daemon, Git, and mount blob exos as a follow-up; the
+range-attenuation work has since carried `range` / `textRange` to those exos
+(readableblob-range-attenuation.md).
 This design does
 not implement either follow-up or runtime/declaration changes beyond recording
 the contract above.
@@ -395,9 +399,9 @@ Keep the scenario set small:
 - Which higher-level tool and rendered Git text APIs adopt `{ offset, limit }`,
   what exact continuation metadata do they return, and is an optional
   character guardrail needed?
-- When should the remote daemon, Git, and mount blob exos adopt
-  `rangeRead`/`rangeReadText`, and what feature-detection or interface rollout
-  contract should accompany that propagation?
+- What feature-detection or interface rollout contract should accompany the
+  `range`/`textRange` surface now that the remote daemon, Git, and mount blob
+  exos have adopted it (readableblob-range-attenuation.md)?
 
 ## Prompt
 
@@ -433,3 +437,14 @@ Revision 2026-07-17:
 > reads; retain `{ offset, limit }` only for higher-level line-window APIs;
 > and keep rendered Git output bounds and remote daemon/Git/mount propagation
 > as explicit follow-ups.
+
+Revision 2026-08-06:
+
+Reconciled the ReadableBlob byte/line-window contract above with the shipped
+range-attenuation surface (readableblob-range-attenuation.md): the streaming
+`fetch(offset, length)` primitive and the `rangeRead` / `rangeReadText`
+conveniences named in the 2026-07-17 directive were replaced by `range(start,
+end?)` / `textRange(startLine, endLine)`, which return a further readable blob
+rather than a materialized `Uint8Array` / `string` — read the result
+whole-value. The daemon/Git/mount propagation left as a follow-up above has
+since landed. The quoted directives are preserved as the historical record.

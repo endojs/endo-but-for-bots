@@ -42,10 +42,12 @@ type BlobInfo = {
 };
 type BlobRef = {
     getInfo: () => BlobInfo;
-    fetch: (offset: bigint, length: bigint) => ERef<PassableBytesReader>;
+    streamBase64: (synPromise: unknown) => Promise<unknown>;
     text: () => Promise<string>;
     json: () => Promise<unknown>;
     help: (method?: string) => string;
+    range: (start: bigint, end?: bigint) => Promise<RichReadableBlob>;
+    textRange: (startLine: number, endLine: number) => Promise<RichReadableBlob>;
 };
 type Cursor = {
     read: (limit?: bigint) => Promise<DirectoryPage>;
@@ -127,6 +129,11 @@ type FilesystemStats = {
     directories?: bigint;
     type?: string;
 };
+type LiteBlobInfo = {
+    algorithm: string;
+    hash: string;
+    size: bigint;
+};
 type Lock = {
     release: () => Promise<void>;
     help: (method?: string) => string;
@@ -194,6 +201,17 @@ type Qid<K = NodeKind> = {
     type: K;
     pathId: bigint;
     version: bigint;
+};
+type ReadableBlob = {
+    streamBase64: (synPromise: unknown) => Promise<unknown>;
+    text: () => Promise<string>;
+    json: () => Promise<any>;
+    help: (method?: string) => string;
+};
+type RichReadableBlob = ReadableBlob & {
+    getInfo: () => Promise<LiteBlobInfo>;
+    range: (start: bigint, end?: bigint) => Promise<RichReadableBlob>;
+    textRange: (startLine: number, endLine: number) => Promise<RichReadableBlob>;
 };
 type StreamNode<Y = undefined, R = undefined> = StreamYieldNode<Y, R> | StreamReturnNode<R>;
 type StreamReturnNode<R = undefined> = {
@@ -273,7 +291,8 @@ type MountEndoMountFile = {
     streamBase64: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<string, undefined>>;
     json: () => Promise<unknown>;
     getInfo: () => Promise<MountBlobInfo>;
-    fetch: (offset: bigint, length: bigint) => Promise<MountPassableBytesReader>;
+    range: (start: bigint, end?: bigint) => Promise<MountRichReadableBlob>;
+    textRange: (startLine: number, endLine: number) => Promise<MountRichReadableBlob>;
     writeText: (content: string) => Promise<void>;
     append: (content: string) => Promise<void>;
     writeBytes: (readableRef: MountERef<MountPassableBytesReader>) => Promise<void>;
@@ -319,6 +338,12 @@ type MountPathEntry = {
     child: (name: string) => MountPathEntry;
     help: (method?: string) => string;
 };
+type MountReadableBlob = {
+    streamBase64: (synPromise: unknown) => Promise<unknown>;
+    text: () => Promise<string>;
+    json: () => Promise<any>;
+    help: (method?: string) => string;
+};
 type MountReadableBlobSource = {
     streamBase64: (...args: any[]) => PromiseLike<unknown>;
 };
@@ -327,7 +352,8 @@ type MountReadableBlobView = {
     text: () => Promise<string>;
     json: () => Promise<unknown>;
     getInfo: () => Promise<MountBlobInfo>;
-    fetch: (offset: bigint, length: bigint) => Promise<MountPassableBytesReader>;
+    range: (start: bigint, end?: bigint) => Promise<MountRichReadableBlob>;
+    textRange: (startLine: number, endLine: number) => Promise<MountRichReadableBlob>;
     help: (method?: string) => string;
 };
 type MountReadableTree = {
@@ -346,6 +372,11 @@ type MountReadableTreeView = {
     }) => Promise<MountTreeEntry[]>;
     lookup: (path: string | readonly string[]) => Promise<MountReadableTreeView | MountReadableBlobView>;
     help: (method?: string) => string;
+};
+type MountRichReadableBlob = MountReadableBlob & {
+    getInfo: () => Promise<MountLiteBlobInfo>;
+    range: (start: bigint, end?: bigint) => Promise<MountRichReadableBlob>;
+    textRange: (startLine: number, endLine: number) => Promise<MountRichReadableBlob>;
 };
 type MountSnapshotTree = MountReadableTree & {
     sha256: () => string;

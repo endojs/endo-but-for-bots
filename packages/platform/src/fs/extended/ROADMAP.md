@@ -97,7 +97,7 @@ covering leaf symlinks, mid-tree symlink swap, and `O_NOFOLLOW` on
   The transcripts capture every `@endo/captp` wire message, so the
   *message-order properties* the snapshots pin (pipelined chain ↔
   N consecutive `CTP_CALL`s; CAS cache hit ↔ no `CTP_CALL` for
-  `fetch`) are real.
+  `streamBase64`) are real.
   What the tests *don't* prove: real wire latency, real bytes-on-the-
   wire savings, or behavior under a real transport's failure modes.
   Same convention as `@endo/captp`'s own tests.

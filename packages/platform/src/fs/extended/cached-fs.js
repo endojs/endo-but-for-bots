@@ -56,6 +56,7 @@ import {
   FileInterface,
   OpenFileInterface,
 } from './type-guards.js';
+import { MAX_FRAME_BASE64_LENGTH, verifyContentAddress } from './cas.js';
 import {
   EMPTY_BYTES,
   makeBytesReaderFromBytes,
@@ -103,14 +104,35 @@ export const withCachedReads = (inner, cas) => {
     const promise = (async () => {
       try {
         if (cas.has(info)) return;
-        const size = toSafeNumber(info.size, 'size');
-        const fullReader = await E(blobP).fetch(0n, BigInt(size));
+        // Stream the full payload through the normal `streamBase64` blob
+        // surface (the ranged `fetch` primitive is retired). `iterateBytesReader`
+        // calls `streamBase64` on the blob directly.
+        //
+        // The per-frame limit is the FIXED `MAX_FRAME_BASE64_LENGTH` from
+        // `cas.js`, never derived from the sender-advertised `info.size`, and
+        // the total is bounded by that advertised size — so a remote controls
+        // neither the per-frame nor the aggregate allocation. Every producer
+        // here chunks `streamBase64` at 48 KiB (base64 ~64 KiB), well under the
+        // fixed bound.
+        const expectedSize =
+          typeof info.size === 'bigint' ? Number(info.size) : info.size;
+        const maxTotal =
+          Number.isSafeInteger(expectedSize) && expectedSize >= 0
+            ? expectedSize
+            : 0;
         /** @type {Uint8Array[]} */
         const chunks = [];
         let total = 0;
-        for await (const chunk of iterateBytesReader(fullReader)) {
-          chunks.push(chunk);
+        for await (const chunk of iterateBytesReader(blobP, {
+          stringLengthLimit: MAX_FRAME_BASE64_LENGTH,
+        })) {
           total += chunk.length;
+          if (total > maxTotal) {
+            // Size-lying source: stop rather than buffer unboundedly. The
+            // surrounding `catch` turns this into a skipped populate.
+            throw new Error('cached-fs: blob exceeded its advertised size');
+          }
+          chunks.push(chunk);
         }
         const merged = new Uint8Array(total);
         let off = 0;
@@ -118,6 +140,11 @@ export const withCachedReads = (inner, cas) => {
           merged.set(c, off);
           off += c.length;
         }
+        // Verify the streamed bytes against the advertised content address
+        // before caching, so a remote cannot poison the CAS under a key whose
+        // bytes it forged. A mismatch throws into the `catch` below, which
+        // simply skips the (best-effort) populate.
+        verifyContentAddress(info, merged);
         if (!cas.has(info)) cas.put(info, merged);
       } catch {
         // Best-effort. Caller already got their bytes via the

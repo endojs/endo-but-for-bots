@@ -7,6 +7,8 @@ import harden from '@endo/harden';
 import { encodeHex } from '@endo/hex';
 import { makeNodeReader, makeNodeWriter } from '@endo/stream-node';
 
+import { readFileHandleWindow } from './read-file-window.js';
+
 /**
  * @import {
  *   ContentStoreFilePowers,
@@ -42,17 +44,12 @@ export const makeContentStoreFilePowers = () =>
       }
       const handle = await fs.promises.open(path, 'r');
       try {
-        // Clamp the request to the bytes actually available before
-        // allocating, so a huge `length` against a small file can't
-        // drive an unbounded host allocation.
-        const { size } = await handle.stat();
-        const clamped = Math.min(length, Math.max(0, size - offset));
-        if (clamped <= 0) {
-          return new Uint8Array(0);
-        }
-        const buffer = new Uint8Array(clamped);
-        const { bytesRead } = await handle.read(buffer, 0, clamped, offset);
-        return buffer.subarray(0, bytesRead);
+        // Loop to EOF rather than deriving the count from `stat().size` or
+        // stopping on the first short read: a procfs/sysfs/FIFO source reports
+        // a stale-or-zero size and short-reads, and truncating there would mint
+        // a false empty content address for content that exists. The per-chunk
+        // buffer stays bounded, so a huge `length` still can't over-allocate.
+        return await readFileHandleWindow(handle, offset, length);
       } finally {
         await handle.close();
       }

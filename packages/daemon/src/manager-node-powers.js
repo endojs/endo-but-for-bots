@@ -10,6 +10,7 @@ import { bytesFromText } from '@endo/bytes/from-string.js';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makePipe } from '@endo/stream';
 import { makeNodeReader, makeNodeWriter } from '@endo/stream-node';
+import { readFileHandleWindow } from '@endo/platform/fs/node/read-file-window';
 import { makeNetstringCapTP } from './connection.js';
 import { makePetStoreMaker } from './pet-store.js';
 import { servePrivatePath } from './serve-private-path.js';
@@ -289,17 +290,13 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     }
     const handle = await fs.promises.open(path, 'r');
     try {
-      // Clamp the request to the bytes actually available before allocating,
-      // so a huge `length` against a small file can't drive a multi-GB host
-      // allocation (the buffer stays bounded by the file size).
-      const { size } = await handle.stat();
-      const clamped = Math.min(length, Math.max(0, size - offset));
-      if (clamped <= 0) {
-        return new Uint8Array(0);
-      }
-      const buffer = new Uint8Array(clamped);
-      const { bytesRead } = await handle.read(buffer, 0, clamped, offset);
-      return buffer.subarray(0, bytesRead);
+      // Loop to EOF rather than deriving the count from `stat().size` or
+      // stopping on the first short read. A procfs/sysfs/FIFO source reports a
+      // stale-or-zero size and short-reads mid-window; truncating there would
+      // mint a false empty content address for content that exists. The
+      // per-chunk buffer stays bounded, so a huge `length` (the
+      // end-of-content sentinel) still can't drive a multi-GB allocation.
+      return await readFileHandleWindow(handle, offset, length);
     } finally {
       await handle.close();
     }

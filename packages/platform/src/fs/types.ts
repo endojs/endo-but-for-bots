@@ -17,34 +17,77 @@ export interface ReadableBlob {
 }
 
 /**
- * A ReadableBlob with content identity and streaming byte-range reads.
- * This matches `ReadableBlobRangeInterface`, implemented by daemon, mount,
- * Git, and platform LocalBlob Exos.
+ * The one rich `ReadableBlob` surface: a whole-value `ReadableBlob` plus the
+ * content-address `getInfo` and the `range` / `textRange` attenuation
+ * (designs/readableblob-range-attenuation.md), implemented by the daemon,
+ * mount, Git, extended `BlobRef`, and platform `LocalBlob` Exos. `range` and
+ * `textRange` return a new `RichReadableBlob` with exactly the authority to
+ * read the selected byte / line window of the receiver, so ranges compose.
+ * Replaces the retired `ReadableBlobRange` (getInfo + `fetch`) and
+ * `ReadableBlobRangeRead` (+ `rangeRead` / `rangeReadText`) types.
  */
-export type ReadableBlobRange = ReadableBlob & {
+export type RichReadableBlob = ReadableBlob & {
   getInfo: () => Promise<BlobInfo>;
-  fetch: (
-    offset: bigint,
-    length: bigint,
-  ) => Promise<import('@endo/exo-stream').PassableBytesReader>;
+  /**
+   * Attenuate to the half-open byte interval `[start, end)` relative to the
+   * receiver, clamped at end-of-content. `start`/`end` are non-negative
+   * `bigint`s; `start > end`, a negative, or a non-safe value rejects with
+   * `EINVAL`; `start === end` is an empty attenuation. `end` is optional:
+   * omitting it selects from `start` to end-of-content.
+   */
+  range: (start: bigint, end?: bigint) => Promise<RichReadableBlob>;
+  /**
+   * Attenuate to lines `[startLine, endLine)` (zero-based, end-exclusive,
+   * LF-delimited with a terminal empty line for a final LF) relative to the
+   * receiver's current bytes. Indices are non-negative safe-integer `number`s;
+   * an `endLine` past the last line clamps to the end.
+   *
+   * The line boundaries are resolved to **byte** offsets once, at call time,
+   * against the receiver's then-current content. On an *immutable* source
+   * (`BlobRef`, snapshot `EndoBlob`, a Git blob) that is exact and stable. On a
+   * *live* source (a mount-file view) a later read on the returned blob reads
+   * the source's then-current bytes at those frozen byte offsets, which may no
+   * longer be the same lines if the content changed — so a `textRange` grant on
+   * a live face can decay into a byte grant. Prefer `textRange` on immutable
+   * snapshots when the line semantics must be stable.
+   */
+  textRange: (startLine: number, endLine: number) => Promise<RichReadableBlob>;
 };
 
 /**
- * The richer LocalBlob surface, with whole-value range conveniences layered
- * on top of `ReadableBlobRange.fetch`.
+ * The source a producer supplies to `makeBlobRangeMethods` (src/fs/blob-range.js)
+ * to build the shared range attenuator: a single `readWindow` primitive over the
+ * source's current bytes, a `hashBytes` digest (so the maker needs no host
+ * `crypto` import), and an optional exo label for the derived ranges. Named here
+ * rather than inline in the implementation because it is the parameter type of
+ * an exported maker reused by every producer (`LocalBlob`, `BlobRef`, the daemon
+ * `EndoBlob` / `EndoMountFile`, and the Git blob), any of which may `@import` it
+ * to type the record it passes.
  */
-export type ReadableBlobRangeRead = ReadableBlobRange & {
+export interface RangeSource {
   /**
-   * Whole-value windowed read: the raw bytes of `[offset, offset + length)`,
-   * clamped at EOF, as a `Uint8Array`.
+   * Read the source's current bytes in the absolute half-open interval
+   * `[start, end)`, clamped at end-of-content. `end === undefined` reads to
+   * end-of-content. A read that returns fewer bytes than requested signals
+   * end-of-content — the maker relies on this to stream `streamBase64` in
+   * bounded windows. The returned bytes must occupy a fresh backing buffer:
+   * callers with authority to the selected interval must not retain a view of
+   * an unattenuated source allocation and thereby reach bytes outside it.
    */
-  rangeRead: (offset: bigint, length: bigint) => Promise<Uint8Array>;
+  readWindow: (start: bigint, end: bigint | undefined) => Promise<Uint8Array>;
   /**
-   * Whole-value line-range read: the file decoded as UTF-8, lines
-   * `[startLine, endLine)` (0-based, end-exclusive) joined with '\n'.
+   * Optional fresh whole-source byte stream. Immutable producers whose native
+   * read primitive is a stream (Git), and hosts whose range primitive must
+   * first materialize the whole source (XS), provide this so a derived
+   * `streamBase64` uses one source read rather than one per 48 KiB window. The
+   * shared maker applies the attenuation and copies every yielded window.
    */
-  rangeReadText: (startLine: number, endLine: number) => Promise<string>;
-};
+  streamBytes?: () => AsyncIterable<Uint8Array>;
+  /** Raw digest (e.g. SHA-256) of the given bytes, base64-encoded by the maker. */
+  hashBytes: (bytes: Uint8Array) => Uint8Array;
+  /** Exo label for derived ranges; defaults to `'ReadableBlob range'`. */
+  label?: string;
+}
 
 /**
  * One entry in a recursive `listTree` walk: the path relative to the queried
@@ -128,7 +171,7 @@ export type SnapshotTree = ReadableTree & {
  *
  * This is a local CAS implementation seam, not a public ReadableBlob Exo.
  * `readRange` uses safe-number offsets because it backs the public bigint
- * `ReadableBlobRange.fetch()` method at the daemon boundary.
+ * `RichReadableBlob.range()` attenuation at the daemon boundary.
  */
 export interface ContentStoreBlob {
   makeFileReader: () => import('@endo/stream').Reader<Uint8Array>;
@@ -187,7 +230,11 @@ export interface ContentStoreFilePowers {
   makeFileReader: (path: string) => import('@endo/stream').Reader<Uint8Array>;
   makeFileWriter: (path: string) => ContentStoreFileWriter;
   readFileText: (path: string) => Promise<string>;
-  /** Windowed read of `[offset, offset + length)`, clamped at EOF. */
+  /**
+   * Copy `[offset, offset + length)` into a fresh backing buffer, clamped at
+   * EOF. Returning a view into a whole-file allocation would expose bytes
+   * outside an attenuated window.
+   */
   readFileRange: (
     path: string,
     offset: number,

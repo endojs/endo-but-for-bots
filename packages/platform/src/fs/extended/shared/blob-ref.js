@@ -4,24 +4,24 @@
  * captured `Uint8Array` snapshot (DESIGN.md §6).
  *
  * Identical across the in-memory, node-fs, and from-mount
- * `Filesystem` implementations: defensively copy the bytes,
- * SHA-256 them, return an exo whose `getInfo()` carries
- * the algorithm / hash / size triple and whose `fetch(offset,
- * length)` returns a `PassableBytesReader` over the captured
- * range.
+ * `Filesystem` implementations: defensively copy + harden the
+ * bytes, SHA-256 them, return an exo whose `getInfo()` carries
+ * the algorithm / hash / size triple, whose `text()` / `json()` /
+ * `streamBase64()` read the whole captured bytes, and whose
+ * `range(start, end)` / `textRange(startLine, endLine)` attenuate to a
+ * byte / line window over the captured bytes
+ * (designs/readableblob-range-attenuation.md).
  */
 
 import { makeExo } from '@endo/exo';
 import { encodeBase64 } from '@endo/base64';
 import { sha256 } from '@endo/sha256';
+import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
 import { q } from '@endo/errors';
 
 import { BlobRefInterface } from '../type-guards.js';
-import {
-  EMPTY_BYTES,
-  makeBytesReaderFromBytes,
-  toSafeNumber,
-} from './helpers.js';
+import { makeBlobRangeMethods, encodeBase64Chunks } from '../../blob-range.js';
+import { toSafeNumber } from './helpers.js';
 
 /** @import { BlobInfo, BlobRef } from '../types.js' */
 
@@ -75,18 +75,39 @@ export const makeBlobRefExo = (bytes, help, infoOverride) => {
     });
   }
 
+  // Attenuation over the captured bytes. `getInfo` on a derived range reports
+  // the SHA-256 of the *selected* bytes (a stable content address for the
+  // selection), independent of this `BlobRef`'s own `infoOverride`-or-computed
+  // whole-blob identity above.
+  const { range, textRange } = makeBlobRangeMethods({
+    readWindow: (start, end) => {
+      const from = toSafeNumber(start, 'start');
+      const to =
+        end === undefined
+          ? captured.length
+          : Math.min(toSafeNumber(end, 'end'), captured.length);
+      return Promise.resolve(
+        from >= captured.length || to <= from
+          ? new Uint8Array(0)
+          : captured.slice(from, to),
+      );
+    },
+    hashBytes: selected => sha256(selected),
+    label: 'BlobRef range',
+  });
+
   return makeExo('BlobRef', BlobRefInterface, {
     getInfo() {
       return info;
     },
-    async fetch(offset, length) {
-      const off = toSafeNumber(offset, 'offset');
-      const len = toSafeNumber(length, 'length');
-      const end = Math.min(off + len, captured.length);
-      const slice =
-        off >= captured.length ? EMPTY_BYTES : captured.slice(off, end);
-      return makeBytesReaderFromBytes(slice);
+    /** @param {unknown} synPromise */
+    streamBase64(synPromise) {
+      return makeReaderPump(encodeBase64Chunks(captured))(
+        /** @type {any} */ (synPromise),
+      );
     },
+    range,
+    textRange,
     // Whole-value conveniences mirroring the daemon `EndoBlob` / lite
     // `SnapshotBlob` surface, decoding the captured bytes as UTF-8.
     async text() {

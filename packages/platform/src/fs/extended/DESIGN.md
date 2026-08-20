@@ -552,11 +552,11 @@ const [node, qid] = await Promise.all([child, E(child).getQid()]);
 // Identity comparison: 1 RTT for N caps
 const qids = await Promise.all(caps.map(c => E(c).getQid()));
 
-// BlobRef consumption: getInfo + fetch share one batch
+// BlobRef consumption: getInfo + a range attenuation share one batch
 const blob = E(file).snapshot();
-const [info, reader] = await Promise.all([
+const [info, window] = await Promise.all([
   E(blob).getInfo(),
-  E(blob).fetch(0n, expectedSize),  // speculative; only flows on cache miss
+  E(blob).range(0n, expectedSize),  // speculative; only flows on cache miss
 ]);
 ```
 
@@ -613,14 +613,19 @@ When a `BlobRef` is present:
   slots, so `getInfo()` costs one round-trip in practice — see
   §10.1 and ROADMAP §1.1.
   A caller holding a CAS keyed by `hash` can still skip the
-  `fetch` call (and the byte payload) on a cache hit; what's not
+  range read (and the byte payload) on a cache hit; what's not
   yet saved is the `getInfo` round-trip that learns the hash.
-- `fetch(offset, length)` returns a stream identical in shape to
-  `OpenFile.read(offset, length)`. The two are interchangeable from
-  the caller's perspective; the difference is that `fetch` is
-  guaranteed to be reproducible (the bytes won't have changed since
-  the `BlobRef` was minted) and *may* hit a CAS peer rather than the
-  origin.
+- `range(start, end)` selects the half-open **byte** interval
+  `[start, end)` and returns a further readable blob over just those
+  bytes (read it whole-value with `text` / `json` / `streamBase64`);
+  `textRange(startLine, endLine)` does the same over a line interval.
+  A range is guaranteed to be reproducible (the bytes won't have
+  changed since the `BlobRef` was minted) and *may* hit a CAS peer
+  rather than the origin. (This replaces the earlier
+  `fetch(offset, length)` streaming read — a `length`, not a
+  half-open `end`, that returned a `PassableBytesReader` — since
+  replaced per designs/readableblob-range-attenuation.md; whole-value
+  streaming is now `streamBase64`.)
 
 The interface does not specify a hash algorithm. Implementations
 choose; `BlobRef.hash` is an opaque byte string with the algorithm
@@ -649,10 +654,10 @@ Bulk transfers ride streams sized to the underlying transport, not
 to any protocol's msize equivalent. A 1 GiB read is one method call
 and a stream the caller pulls at its own rate.
 
-Cached content avoids `BlobRef.fetch` (and therefore the byte
+Cached content avoids `BlobRef.range` (and therefore the byte
 payload) when a peer's CAS knows the hash. The peer still pays
 one round-trip to `BlobRef.getInfo()` to learn the hash before
-deciding to skip the fetch — see §10.1 and ROADMAP §1.1.
+deciding to skip the read — see §10.1 and ROADMAP §1.1.
 
 Writes are async with deferred error reporting at `fsync` —
 matching Linux page-cache semantics and freeing translators from

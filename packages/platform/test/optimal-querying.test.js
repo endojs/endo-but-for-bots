@@ -14,7 +14,7 @@
  *
  * Each test demonstrates either:
  *   (a) a PATTERN the design supports well — pipelined walks,
- *       parallel lookups, streamed bulk transfer, snapshot+fetch;
+ *       parallel lookups, streamed bulk transfer, snapshot+range;
  *   (b) a WEAKNESS where the API forces serial round-trips that
  *       a richer primitive could collapse, OR a non-round-trip
  *       gap that's still worth pinning (bandwidth, complexity,
@@ -171,13 +171,13 @@ test('PATTERN: parallel lookups for known sibling names — Promise.all of N loo
   for (const q of qids) t.is(q.type, 'file');
 });
 
-test('PATTERN: snapshot + fetch — read bytes without holding the file open', async t => {
+test('PATTERN: snapshot + range — read bytes without holding the file open', async t => {
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
   await writeFile(root, 'big.bin', 'A'.repeat(1024));
   const file = await E(root).lookup('big.bin');
 
-  // Snapshot captures the bytes at this moment. fetch() can be
+  // Snapshot captures the bytes at this moment. range() can be
   // called repeatedly with different ranges; the source file can
   // mutate without affecting the snapshot.
   const blob = await E(file).snapshot();
@@ -186,9 +186,9 @@ test('PATTERN: snapshot + fetch — read bytes without holding the file open', a
   await E(oh).close();
 
   // Original bytes still served by the BlobRef.
-  const head = await collectBytes(await E(blob).fetch(0n, 16n));
+  const head = await collectBytes(await E(blob).range(0n, 16n));
   t.is(new TextDecoder().decode(head), 'A'.repeat(16));
-  const tail = await collectBytes(await E(blob).fetch(1008n, 16n));
+  const tail = await collectBytes(await E(blob).range(1008n, 1024n));
   t.is(new TextDecoder().decode(tail), 'A'.repeat(16));
 });
 
