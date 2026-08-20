@@ -42,7 +42,7 @@ yarn test262                       # build the XS prelude, then run every scenar
 node scripts/test.js --list        # enumerate scenarios without running them
 node scripts/test.js --agent sesNode --compact test/harden
 yarn test262:report                # write report.json, indexed by scenario
-yarn test262:baseline              # compare results with baseline.json
+yarn test262:baseline              # compare results with baseline/
 yarn test262:update                # accept current results as the baseline
 ```
 
@@ -53,11 +53,13 @@ pass/fail; it is a preliminary instrument and does not yet gate (a failing case
 is printed, not a non-zero exit), so cases the native surface has not yet
 reached are visible rather than fatal. `test262:report` writes the complete
 `skipped`, `failed`, and `passed` file lists under each agent/scenario key.
-`test262:baseline` compares those lists with the checked-in `baseline.json` and
-exits nonzero if any test changes outcome. The repository's `test-xs` CI job
-runs this comparison with the pinned XS binary. An intentional change therefore
-includes the updated baseline as reviewable evidence; an unacknowledged change
-fails CI.
+`test262:baseline` compares those lists with the checked-in `baseline/`
+directory and exits nonzero if any test changes outcome. Each scenario has one
+flat textual list per outcome, with one test path per line, so changes are
+legible as ordinary line additions and removals. The repository's `test-xs` CI
+job runs this comparison with the pinned XS binary. An intentional change
+therefore includes the updated baseline as reviewable evidence; an
+unacknowledged change fails CI.
 
 Today only the `module` and `lockdownModule` scenarios are wired to an agent.
 The remaining scenarios along the **mode** (`sloppy`, `strict`) and

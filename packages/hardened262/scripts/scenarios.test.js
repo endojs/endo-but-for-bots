@@ -6,6 +6,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   scenarioIncludes,
@@ -23,6 +26,8 @@ import {
   agentRunsScenario,
   makeResultReport,
   diffResultReports,
+  readResultBaseline,
+  writeResultBaseline,
 } from './test.js';
 
 /**
@@ -360,4 +365,37 @@ test('diffResultReports identifies both sides of a changed outcome', () => {
     '- xs/module failed test/x.js',
     '+ xs/module passed test/x.js',
   ]);
+});
+
+test('result baseline uses directories of flat textual lists', () => {
+  const baselineDirectory = mkdtempSync(join(tmpdir(), 'hardened262-'));
+  const report = {
+    version: 1,
+    scenarios: {
+      'xs/module': {
+        skipped: [],
+        failed: ['test/fail.js'],
+        passed: ['test/pass.js'],
+      },
+      zeroCoverage: {
+        skipped: ['test/none.js'],
+        failed: [],
+        passed: [],
+      },
+    },
+  };
+  try {
+    writeResultBaseline(baselineDirectory, report);
+    assert.equal(
+      readFileSync(join(baselineDirectory, 'xs/module/failed.txt'), 'utf-8'),
+      'test/fail.js\n',
+    );
+    assert.equal(
+      readFileSync(join(baselineDirectory, 'xs/module/skipped.txt'), 'utf-8'),
+      '',
+    );
+    assert.deepEqual(readResultBaseline(baselineDirectory), report);
+  } finally {
+    rmSync(baselineDirectory, { recursive: true, force: true });
+  }
 });

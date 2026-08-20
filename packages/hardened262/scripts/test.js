@@ -1,6 +1,13 @@
 import { parseArgs } from 'util';
 import { fileURLToPath, pathToFileURL } from 'url';
-import { readFileSync, writeFileSync } from 'fs';
+import {
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
+import { dirname, join } from 'path';
 
 import TestStream from 'test262-stream';
 
@@ -359,6 +366,67 @@ export const makeResultReport = async results => {
 
 const reportText = report => `${JSON.stringify(report, null, 2)}\n`;
 
+const resultStatuses = ['skipped', 'failed', 'passed'];
+
+/**
+ * Write one sorted test path per line. Each scenario gets a directory and each
+ * outcome gets a flat text file, so outcome changes appear as ordinary line
+ * additions and removals in a diff.
+ *
+ * @param {string} baselineDirectory
+ * @param {object} report
+ */
+export const writeResultBaseline = (baselineDirectory, report) => {
+  rmSync(baselineDirectory, { recursive: true, force: true });
+  for (const [scenario, outcomes] of Object.entries(report.scenarios ?? {})) {
+    for (const status of resultStatuses) {
+      const baselineFile = join(baselineDirectory, scenario, `${status}.txt`);
+      mkdirSync(dirname(baselineFile), { recursive: true });
+      const files = outcomes[status] ?? [];
+      writeFileSync(baselineFile, files.length ? `${files.join('\n')}\n` : '');
+    }
+  }
+};
+
+/**
+ * @param {string} baselineDirectory
+ */
+export const readResultBaseline = baselineDirectory => {
+  /** @type {Record<string, { skipped: string[], failed: string[], passed: string[] }>} */
+  const scenarios = {};
+
+  /**
+   * @param {string} directory
+   * @param {string[]} segments
+   */
+  const visit = (directory, segments) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const entryPath = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(entryPath, [...segments, entry.name]);
+      } else if (entry.isFile() && entry.name.endsWith('.txt')) {
+        const status = entry.name.slice(0, -'.txt'.length);
+        if (!resultStatuses.includes(status)) {
+          throw new Error(`Unknown baseline outcome file: ${entryPath}`);
+        }
+        const scenario = segments.join('/');
+        if (scenario === '') {
+          throw new Error(`Baseline outcome has no scenario: ${entryPath}`);
+        }
+        scenarios[scenario] ??= { skipped: [], failed: [], passed: [] };
+        scenarios[scenario][status] = readFileSync(entryPath, 'utf-8')
+          .split('\n')
+          .filter(Boolean);
+      } else {
+        throw new Error(`Unknown baseline entry: ${entryPath}`);
+      }
+    }
+  };
+
+  visit(baselineDirectory, []);
+  return { version: 1, scenarios };
+};
+
 /**
  * Name every changed baseline entry. A leading minus is an expected outcome
  * that disappeared; a leading plus is a newly observed outcome.
@@ -456,10 +524,10 @@ const main = async () => {
       writeFileSync(reportPath, reportText(report));
     }
     if (updateBaselinePath !== undefined) {
-      writeFileSync(updateBaselinePath, reportText(report));
+      writeResultBaseline(updateBaselinePath, report);
     }
     if (baselinePath !== undefined) {
-      const baseline = JSON.parse(readFileSync(baselinePath, 'utf-8'));
+      const baseline = readResultBaseline(baselinePath);
       const differences = diffResultReports(baseline, report);
       if (differences.length > 0) {
         console.error(
