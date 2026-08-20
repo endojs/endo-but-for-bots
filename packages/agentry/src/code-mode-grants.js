@@ -286,7 +286,9 @@ export const makeCodeModeGrantMinter = () => {
       // policy it enforces is the host's, not this record's.
       const global = makeHttpGlobal({ name, petName });
       if (global.declaration === undefined) {
-        throw new Error('HttpClient global is missing its generated declaration');
+        throw new Error(
+          'HttpClient global is missing its generated declaration',
+        );
       }
       return mintGrant({
         name,

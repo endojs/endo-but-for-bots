@@ -143,7 +143,10 @@ test('byte framing honours a caller-chosen frame size', async t => {
 });
 
 test('a bytes reader is recognized as a streaming body, a buffer is not', t => {
-  t.is(classifyStreamingBody(makeFramedBytesReader(new Uint8Array(4))), 'reader');
+  t.is(
+    classifyStreamingBody(makeFramedBytesReader(new Uint8Array(4))),
+    'reader',
+  );
   t.is(classifyStreamingBody('text'), 'none');
   t.is(classifyStreamingBody(new Uint8Array(4)), 'none');
   t.is(classifyStreamingBody(undefined), 'none');

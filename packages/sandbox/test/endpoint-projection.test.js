@@ -10,7 +10,10 @@ import { M } from '@endo/patterns';
 
 import { spawn as nodeSpawn } from 'node:child_process';
 import { createServer as createHttpServer } from 'node:http';
-import { connect as netConnect, createServer as createNetServer } from 'node:net';
+import {
+  connect as netConnect,
+  createServer as createNetServer,
+} from 'node:net';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -67,7 +70,10 @@ test('projection options are bounded, and the loopback address is not a choice',
   t.throws(() => normalizeProjectionOptions({ envName: 'not a name' }), {
     message: /envName must match/,
   });
-  t.is(projectedOrigin({ host: '127.0.0.1', port: 8080 }), 'http://127.0.0.1:8080');
+  t.is(
+    projectedOrigin({ host: '127.0.0.1', port: 8080 }),
+    'http://127.0.0.1:8080',
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -185,9 +191,12 @@ test('the forwarder refuses an argv that would leave it without an endpoint', t 
   t.throws(() => parseForwarderArgv(['--socket', '/run/p.sock', '--', 'x']), {
     message: /--port must be a positive integer/,
   });
-  t.throws(() => parseForwarderArgv(['--socket', '/run/p.sock', '--port', '8080']), {
-    message: /a command must follow/,
-  });
+  t.throws(
+    () => parseForwarderArgv(['--socket', '/run/p.sock', '--port', '8080']),
+    {
+      message: /a command must follow/,
+    },
+  );
   t.throws(() => parseForwarderArgv(['--bogus', 'x', '--', 'y']), {
     message: /unknown flag/,
   });
@@ -318,43 +327,51 @@ const makeStubProjectionPowers = dir => {
  */
 const makeLoopbackDialer = port =>
   /** @type {any} */ (
-  makeExo('EndpointDialer', DialerInterface, /** @type {any} */ ({
-    help: () => `dialer for 127.0.0.1:${port}`,
-    connect: async () => {
-      await null;
-      const conn = await new Promise((resolve, reject) => {
-        const socket = netConnect(port, '127.0.0.1');
-        socket.once('connect', () => resolve(socket));
-        socket.once('error', reject);
-      });
-      const socket = /** @type {import('node:net').Socket} */ (conn);
-      socket.on('error', () => socket.destroy());
-      // Both ends are passables, so a granted endpoint is free to live in
-      // another vat; the projection never assumes it is local.
-      const reader = bytesReaderFromIterator(
-        (async function* readConn() {
-          for await (const chunk of socket) {
-            yield new Uint8Array(chunk);
-          }
-        })(),
-      );
-      const writer = bytesWriterFromIterator(/** @type {any} */ ({
-        /** @param {Uint8Array} chunk */
-        next: async chunk =>
-          new Promise(resolve =>
-            socket.write(chunk, () => resolve({ done: false, value: undefined })),
-          ),
-        return: async () => {
-          socket.end();
-          return { done: true, value: undefined };
+    makeExo(
+      'EndpointDialer',
+      DialerInterface,
+      /** @type {any} */ ({
+        help: () => `dialer for 127.0.0.1:${port}`,
+        connect: async () => {
+          await null;
+          const conn = await new Promise((resolve, reject) => {
+            const socket = netConnect(port, '127.0.0.1');
+            socket.once('connect', () => resolve(socket));
+            socket.once('error', reject);
+          });
+          const socket = /** @type {import('node:net').Socket} */ (conn);
+          socket.on('error', () => socket.destroy());
+          // Both ends are passables, so a granted endpoint is free to live in
+          // another vat; the projection never assumes it is local.
+          const reader = bytesReaderFromIterator(
+            (async function* readConn() {
+              for await (const chunk of socket) {
+                yield new Uint8Array(chunk);
+              }
+            })(),
+          );
+          const writer = bytesWriterFromIterator(
+            /** @type {any} */ ({
+              /** @param {Uint8Array} chunk */
+              next: async chunk =>
+                new Promise(resolve =>
+                  socket.write(chunk, () =>
+                    resolve({ done: false, value: undefined }),
+                  ),
+                ),
+              return: async () => {
+                socket.end();
+                return { done: true, value: undefined };
+              },
+              [Symbol.asyncIterator]() {
+                return this;
+              },
+            }),
+          );
+          return harden({ reader, writer });
         },
-        [Symbol.asyncIterator]() {
-          return this;
-        },
-      }));
-      return harden({ reader, writer });
-    },
-  }))
+      }),
+    )
   );
 
 /**
@@ -368,7 +385,9 @@ const startHttpServer = async body => {
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end(body);
   });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(undefined)));
+  await new Promise(resolve =>
+    server.listen(0, '127.0.0.1', () => resolve(undefined)),
+  );
   const address = server.address();
   const port =
     address !== null && typeof address === 'object' ? address.port : 0;
@@ -388,7 +407,15 @@ const probeBwrapUserns = async () => {
     try {
       const proc = nodeSpawn(
         'bwrap',
-        ['--unshare-net', '--unshare-user', '--dev-bind', '/', '/', '--', '/bin/true'],
+        [
+          '--unshare-net',
+          '--unshare-user',
+          '--dev-bind',
+          '/',
+          '/',
+          '--',
+          '/bin/true',
+        ],
         { stdio: 'ignore' },
       );
       proc.once('error', () => resolve(false));
@@ -501,7 +528,9 @@ test.serial(
     );
 
     // Before any projection, the slice reaches nothing at all.
-    const before = await runProbe(handle, { OTHER_PORT: String(ungranted.port) });
+    const before = await runProbe(handle, {
+      OTHER_PORT: String(ungranted.port),
+    });
     t.is(before.origin, null);
     t.false(before.projected.ok);
     t.false(before.other.ok);
@@ -535,7 +564,11 @@ test.serial(
     const afterRevoke = await runProbe(handle, {
       OTHER_PORT: String(ungranted.port),
     });
-    t.is(afterRevoke.origin, null, 'a later spawn is not told about an endpoint');
+    t.is(
+      afterRevoke.origin,
+      null,
+      'a later spawn is not told about an endpoint',
+    );
     t.false(afterRevoke.projected.ok);
 
     // And leaves no socket behind.

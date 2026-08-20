@@ -764,9 +764,8 @@ test('the real backend mints a slice over a daemon-minted mount', async t => {
 
 test('the real backend projects one endpoint into a network: none slice', async t => {
   const { make: makeSandboxFactory } = await import('@endo/sandbox');
-  const { makeNodeHostToolPowers } = await import(
-    '../src/host-tool-powers-node.js'
-  );
+  const { makeNodeHostToolPowers } =
+    await import('../src/host-tool-powers-node.js');
   const probeFactory = await makeSandboxFactory(
     /** @type {any} */ (
       harden({

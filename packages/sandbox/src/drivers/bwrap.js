@@ -8,9 +8,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { fileURLToPath } from 'node:url';
 
 import { makeLandlockProbe } from '../landlock.js';
-import {
-  assertProjectableNetwork,
-} from '../net/endpoint-projection.js';
+import { assertProjectableNetwork } from '../net/endpoint-projection.js';
 import {
   PRIVATE_BLOCKED_RANGES,
   HOST_LOOPBACK_ALLOWED_RANGES,

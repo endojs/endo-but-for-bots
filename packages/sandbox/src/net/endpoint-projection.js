@@ -98,8 +98,10 @@ harden(assertProjectableNetwork);
  * @returns {{ host: string, port: number, envName: string }}
  */
 export const normalizeProjectionOptions = (options = {}) => {
-  const { port = DEFAULT_PROJECTED_PORT, envName = DEFAULT_PROJECTED_ORIGIN_ENV } =
-    options;
+  const {
+    port = DEFAULT_PROJECTED_PORT,
+    envName = DEFAULT_PROJECTED_ORIGIN_ENV,
+  } = options;
   if (
     typeof port !== 'number' ||
     !Number.isInteger(port) ||

@@ -1080,7 +1080,8 @@ export const makeSandboxFactory = (
         );
       }
 
-      const { host, port, envName } = normalizeProjectionOptions(projectionOpts);
+      const { host, port, envName } =
+        normalizeProjectionOptions(projectionOpts);
       const socketPath = await E(projectionPowers).provideSocketPath(
         'endpoint-projection',
       );

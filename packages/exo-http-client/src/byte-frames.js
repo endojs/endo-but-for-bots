@@ -92,9 +92,9 @@ export const classifyStreamingBody = value => {
     return 'reader';
   }
   if (
-    typeof (/** @type {Record<PropertyKey, unknown>} */ (value)[
-      Symbol.asyncIterator
-    ]) === 'function'
+    typeof (
+      /** @type {Record<PropertyKey, unknown>} */ (value)[Symbol.asyncIterator]
+    ) === 'function'
   ) {
     return 'async-iterable';
   }
@@ -114,9 +114,7 @@ export const iterateStreamingBody = body => {
   const kind = classifyStreamingBody(body);
   if (kind === 'reader') {
     return iterateBytesReader(
-      /** @type {import('@endo/exo-stream').PassableBytesReader} */ (
-        body
-      ),
+      /** @type {import('@endo/exo-stream').PassableBytesReader} */ (body),
     );
   }
   if (kind === 'async-iterable') {
