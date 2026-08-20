@@ -1,0 +1,26 @@
+/*---
+description: |
+  Currently failing on XS.
+  Currently failing on SES.
+flags: [onlyStrict,noXs,noSesNode,noSesXs]
+includes: [propertyHelper.js]
+---*/
+
+var descriptor = Object.getOwnPropertyDescriptor(
+  ModuleSource.prototype,
+  'needsImportMeta',
+);
+
+assert.sameValue(
+  typeof descriptor.get,
+  'function',
+  'typeof descriptor.get is function',
+);
+assert.sameValue(
+  typeof descriptor.set,
+  'undefined',
+  'typeof descriptor.set is undefined',
+);
+
+verifyNotEnumerable(ModuleSource.prototype, 'needsImportMeta');
+verifyConfigurable(ModuleSource.prototype, 'needsImportMeta');

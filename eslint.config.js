@@ -320,6 +320,12 @@ export default defineConfig(
       'rust/',
       '**/*.json',
       'packages/test262-runner/prelude/',
+      // Borrowed test262 cases and harness includes: third-party test262
+      // format, not subject to @endo/internal lint (parallel to the
+      // **/test262/** ignore that covers test262-runner's corpus).
+      'packages/hardened262/test/',
+      'packages/hardened262/harness/',
+      'packages/hardened262/tmp/',
       'packages/chat/test/**/probe.mjs',
       'packages/chat/test/**/run.mjs',
       'packages/daemon/scripts/*.mjs',

@@ -1,0 +1,10 @@
+test/Compartment/ModuleSource/bindings/name.js
+test/Compartment/ModuleSource/needsImport/name.js
+test/Compartment/ModuleSource/needsImportMeta/name.js
+test/Compartment/constructor/resolveHook.js
+test/Compartment/prototype/Symbol.toStringTag-lockdown.js
+test/Compartment/prototype/Symbol.toStringTag.js
+test/Compartment/prototype/import/importHook-separate-errors.js
+test/Compartment/prototype/importNow/importNowHook-separate-errors.js
+test/Compartment/prototype/importNow/importNowHook-source-parent.js
+test/Compartment/prototype/importNow/loadNowHook-source-parent.js

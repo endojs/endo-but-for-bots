@@ -19,6 +19,7 @@
     "packages/ocapn",
     "packages/ocapn-noise",
     "packages/test262-runner",
+    "packages/hardened262",
     "packages/conversation-tree",
     "packages/demo",
     "packages/fae",
