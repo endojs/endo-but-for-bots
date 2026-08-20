@@ -184,6 +184,9 @@ test('provideHttpClient composition: control.inspect reveals the bounds, not the
     allowedOrigins: ['https://api.example.com'],
     maxRequestsPerMinute: 60,
     maxResponseBytes: 1024 * 1024,
+    // The request direction is bounded too, at the exo's own default: the
+    // formula bakes no request-byte cap of its own yet.
+    maxRequestBytes: 1024 * 1024,
     policyMode: 'strict',
     revoked: false,
   });
