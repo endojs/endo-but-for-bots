@@ -54,6 +54,7 @@ export type PolicySnapshot = {
     allowedOrigins: string[];
     maxRequestsPerMinute: number;
     maxResponseBytes: number;
+    maxRequestBytes: number;
     policyMode: PolicyMode;
     revoked: boolean;
   };
@@ -71,6 +72,13 @@ export type PolicyAuthority = {
 export type FetchOptions = {
   method?: string;
   headers?: Record<string, string>;
+  /**
+   * A string or `Uint8Array` is sent as-is and refused before dialing when it
+   * exceeds `maxRequestBytes`. An `@endo/exo-stream` bytes reader — local or a
+   * CapTP presence for a remote one — or a local async iterable of byte chunks
+   * is streamed in fixed-size frames, so a large upload is never resident
+   * whole, and is refused at the first frame that crosses the cap.
+   */
   body?: unknown;
 };
 
@@ -127,6 +135,7 @@ export type HttpClientControl = {
     allowedOrigins: string[];
     maxRequestsPerMinute: number;
     maxResponseBytes: number;
+    maxRequestBytes: number;
     policyMode: string;
     revoked: boolean;
   };
@@ -135,6 +144,7 @@ export type HttpClientControl = {
   removeAllowedOrigin: (origin: string) => void;
   setMaxRequestsPerMinute: (n: number) => void;
   setMaxResponseBytes: (n: number) => void;
+  setMaxRequestBytes: (n: number) => void;
   revoke: () => void;
   isRevoked: () => boolean;
   listBindings: () => Binding[];
