@@ -25,161 +25,17 @@
 
 export const gitDeclarations = harden({
   git: {
-    aux: `type WritableEndoGit = {
-  add: (designators: GitPathDesignator[]) => Promise<void>;
-  branches: () => Promise<GitRef[]>;
-  checkoutConflict: (designators: GitPathDesignator[], side: GitConflictSide) => Promise<void>;
-  commit: (message: string) => Promise<GitCommit>;
-  createBranch: (name: string, options?: GitCreateBranchOptions) => Promise<GitRef>;
-  currentBranch: () => Promise<GitRef | undefined>;
-  deleteBranch: (name: string, options?: GitDeleteBranchOptions) => Promise<void>;
-  detach: (ref: GitRef | string) => Promise<void>;
-  diff: (options?: GitDiffOptions) => Promise<string>;
-  filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
-  help: (method?: string) => string;
-  log: (options?: GitLogOptions) => Promise<GitCommit[]>;
-  merge: (ref: GitRef | string, options?: GitMergeOptions) => Promise<string>;
-  readOnly: () => GitReadOnlyEndoGit;
-  renameBranch: (from: string, to: string) => Promise<void>;
-  restore: (designators: GitPathDesignator[], options?: GitRestoreOptions) => Promise<void>;
-  revParse: (ref: GitRef | string) => Promise<GitRef>;
-  scope: (name: 'reader' | 'writer') => GitReadOnlyEndoGit | WritableEndoGit;
-  show: (ref: GitRef | string) => Promise<string>;
-  stashApply: (index?: number) => Promise<void>;
-  stashDrop: (index?: number) => Promise<void>;
-  stashList: () => Promise<string[]>;
-  stashPop: (index?: number) => Promise<void>;
-  stashPush: (options?: GitStashPushOptions) => Promise<string>;
-  stashShow: (index?: number) => Promise<string>;
-  status: (options?: GitStatusOptions) => Promise<GitStatusResult>;
-  switch: (ref: GitRef | string) => Promise<void>;
-  switchBranch: (name: string) => Promise<void>;
-  trackingStatus: () => Promise<GitTrackingStatus>;
-  tree: (ref: GitRef | string) => Promise<GitTree>;
-  worktree: () => Promise<GitWritableGitWorktree>;
-  worktreeAdd: (entry: GitPathEntry, options?: GitWorktreeAddOptions) => Promise<WritableEndoGit>;
-  worktreeList: () => Promise<GitWorktreeEntry[]>;
-};
-type GitBlobInfo = {
-    algorithm: string;
-    hash: string;
-    size: bigint;
-};
-type GitBlobRef = {
-    getInfo: () => GitExtendedBlobInfo;
-    fetch: (offset: bigint, length: bigint) => GitERef<GitPassableBytesReader>;
-    text: () => Promise<string>;
-    json: () => Promise<unknown>;
-    help: (method?: string) => string;
-};
-type GitCursor = {
-    read: (limit?: bigint) => Promise<GitDirectoryPage>;
-    stream: () => GitERef<GitPassableReader<GitDirectoryEntry>>;
-    toArray: () => Promise<GitDirectoryEntry[]>;
-    skip: (n: bigint) => Promise<void>;
-    rewind: () => Promise<void>;
-    close: () => Promise<void>;
-    help: (method?: string) => string;
-};
-type GitDirectory = GitLiteDirectory;
-type GitDirectoryEntry = {
+    aux: `type GitPathDesignator = GitPathEntry | string;
+type GitRef = {
     name: string;
-    kind: 'file';
-    qid: GitQid<'file'>;
-} | {
-    name: string;
-    kind: 'directory';
-    qid: GitQid<'directory'>;
-};
-type GitDirectoryPage = {
-    entries: GitDirectoryEntry[];
-    atEnd: boolean;
-};
-type GitDirectoryWriteSource = GitReadableBlobSource | GitLiteReadableTree;
-type GitERef<T> = T | Promise<T>;
-type GitExtendedBlobInfo = {
-    algorithm: string;
-    hash: string;
-    size: bigint;
-};
-type GitExtendedDirectory = {
-    getQid: () => GitQid<'directory'>;
-    getStat: () => Promise<GitNodeStat>;
-    setStat: (patch: GitNodeStat) => Promise<void>;
-    getAttrs: () => Promise<GitNodeAttrs>;
-    setAttrs: (patch: GitNodeStat) => Promise<void>;
-    watch: () => GitERef<GitNodeWatcher>;
-    xattrs: () => GitERef<GitXattrs>;
-    lookup: (nameOrPath: string | readonly string[]) => GitERef<GitExtendedDirectory | GitExtendedFile>;
-    lookupStep: (name: string) => GitERef<GitExtendedDirectory | GitExtendedFile>;
-    subView: (nameOrPath: string | readonly string[]) => GitERef<GitExtendedDirectory>;
-    list: () => GitERef<GitCursor>;
-    write: (name: string, value: string) => Promise<void>;
-    create: (name: string, opts?: GitOpenFileOptions) => GitERef<GitOpenFile>;
-    makeDirectory: (name: string) => GitERef<GitExtendedDirectory>;
-    mkdir: (name: string) => GitERef<GitExtendedDirectory>;
-    remove: (name: string) => Promise<void>;
-    unlink: (name: string) => Promise<void>;
-    move: (fromPath: string | readonly string[], toPath: string | readonly string[]) => Promise<void>;
-    copy: (fromPath: string | readonly string[], toPath: string | readonly string[]) => Promise<void>;
-    rename: (oldName: string, newParent: GitERef<GitExtendedDirectory>, newName: string) => Promise<void>;
-    fsync: () => Promise<void>;
-    materialise: (path: readonly string[]) => GitERef<GitExtendedDirectory>;
-    watchFrom: () => GitERef<GitWatchFromResult>;
-    help: (method?: string) => string;
-};
-type GitExtendedFile = {
-    getQid: () => GitQid<'file'>;
-    getStat: () => Promise<GitNodeStat>;
-    setStat: (patch: GitNodeStat) => Promise<void>;
-    getAttrs: () => Promise<GitNodeAttrs>;
-    setAttrs: (patch: GitNodeStat) => Promise<void>;
-    watch: () => GitERef<GitNodeWatcher>;
-    xattrs: () => GitERef<GitXattrs>;
-    open: (opts?: GitOpenFileOptions) => GitERef<GitOpenFile>;
-    read: (opts?: GitFileReadOptions) => GitERef<GitPassableBytesReader>;
-    write: (opts?: GitFileWriteOptions) => GitERef<GitPassableBytesWriter>;
-    snapshot: () => Promise<GitBlobRef>;
-    help: (method?: string) => string;
-};
-type GitExtendedFilesystem = {
-    root: () => GitERef<GitExtendedDirectory>;
-    named: (name: string) => GitERef<GitExtendedDirectory>;
-    statfs: () => Promise<GitFilesystemStats>;
-    brands: () => Promise<ReadonlySet<bigint> | readonly bigint[]>;
-    help: (method?: string) => string;
-};
-type GitFileReadOptions = {
-    offset?: bigint;
-    length?: bigint;
-};
-type GitFileWriteOptions = {
-    offset?: bigint;
-};
-type GitFilesystem = GitExtendedFilesystem;
-type GitFilesystemStats = {
-    blockSize?: bigint;
-    totalBlocks?: bigint;
-    freeBlocks?: bigint;
-    totalBytes?: bigint;
-    freeBytes?: bigint;
-    files?: bigint;
-    directories?: bigint;
-    type?: string;
+    kind: 'branch' | 'tag' | 'commit' | 'detached';
+    oid?: string;
 };
 type GitCommit = {
     oid: string;
     summary: string;
     author?: string;
     committedAt?: number;
-};
-type GitConflictSide = 'ours' | 'theirs';
-type GitCreateBranchOptions = {
-    startPoint?: string;
-    switchAfterCreate?: boolean;
-};
-type GitDeleteBranchOptions = {
-    force?: boolean;
 };
 type GitDiffOptions = {
     cached?: boolean;
@@ -188,168 +44,12 @@ type GitDiffOptions = {
     entries?: GitPathEntry[];
     paths?: string[];
 };
-type GitIndexStatus = 'clean' | 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'conflicted';
+type GitFilesystem = GitExtendedFilesystem;
 type GitLogOptions = {
     maxCount?: number;
     ref?: GitRef | string;
     since?: string;
     until?: string;
-};
-type GitMergeOptions = {
-    fastForwardOnly?: boolean;
-    noFastForward?: boolean;
-};
-type GitPathDesignator = GitPathEntry | string;
-type GitRef = {
-    name: string;
-    kind: 'branch' | 'tag' | 'commit' | 'detached';
-    oid?: string;
-};
-type GitRestoreOptions = {
-    staged?: boolean;
-};
-type GitStashPushOptions = {
-    message?: string;
-    entries?: GitPathEntry[];
-    paths?: string[];
-    includeUntracked?: boolean;
-};
-type GitStatusEntry = {
-    path: string;
-    index: GitIndexStatus;
-    worktree: GitWorktreeStatus;
-    renamedFrom?: string;
-};
-type GitStatusOptions = {
-    untracked?: 'all' | 'normal' | 'no';
-    maxCount?: number;
-};
-type GitStatusResult = {
-    entries: GitStatusEntry[];
-    truncated: boolean;
-};
-type GitTrackingStatus = {
-    branch?: string;
-    upstream?: string;
-    ahead: number;
-    behind: number;
-    detached: boolean;
-};
-type GitTree = GitReadableTree & {
-    help: (method?: string) => string;
-};
-type GitWorktreeAddOptions = {
-    ref?: GitRef | string;
-    newBranch?: string;
-};
-type GitWorktreeEntry = {
-    path: string;
-    head?: string;
-    branch?: string;
-    bare: boolean;
-    detached: boolean;
-    locked: boolean;
-    prunable: boolean;
-};
-type GitWorktreeStatus = 'clean' | 'modified' | 'deleted' | 'untracked' | 'ignored' | 'conflicted';
-type GitLiteDirectory = {
-    has: (...path: string[]) => Promise<boolean>;
-    list: (...path: string[]) => Promise<string[]>;
-    lookup: (path: string | string[]) => Promise<unknown>;
-    write: (path: string[], value: GitDirectoryWriteSource) => Promise<void>;
-    remove: (path: string[]) => Promise<void>;
-    move: (from: string[], to: string[]) => Promise<void>;
-    copy: (from: string[], to: string[]) => Promise<void>;
-    makeDirectory: (path: string[]) => Promise<GitLiteDirectory>;
-    readOnly: () => GitLiteReadableTree;
-    snapshot: () => Promise<GitSnapshotTree>;
-};
-type GitLitePathEntry = {
-    segments: () => string[];
-    displayPath: () => string;
-    child: (name: string) => GitLitePathEntry;
-    help: (method?: string) => string;
-};
-type GitLitePathEntryIssuer = {
-    entry: (path: string | string[]) => GitLitePathEntry;
-};
-type GitLiteReadableTree = {
-    has: (...petNamePath: string[]) => Promise<boolean>;
-    list: (...petNamePath: string[]) => Promise<readonly string[]>;
-    lookup: (petNamePath: string | readonly string[]) => Promise<unknown>;
-    listTree?: (petNamePath: string | readonly string[], options?: {
-        ignore?: readonly string[];
-    }) => Promise<GitTreeEntry[]>;
-};
-type GitLock = {
-    release: () => Promise<void>;
-    help: (method?: string) => string;
-};
-type GitLockOpts = {
-    type: GitLockType;
-    start?: bigint;
-    length?: bigint;
-};
-type GitLockQuery = {
-    start?: bigint;
-    length?: bigint;
-};
-type GitLockState = {
-    type: GitLockType;
-    start: bigint;
-    length: bigint;
-};
-type GitLockType = 'shared' | 'exclusive';
-type GitNodeAttrs = GitNodeStat & {
-    ctime?: bigint;
-    btime?: bigint | null;
-};
-type GitNodeKind = 'file' | 'directory';
-type GitNodeStat = {
-    size?: bigint;
-    mtime?: bigint;
-    atime?: bigint;
-};
-type GitNodeWatcher = {
-    events: () => GitERef<GitPassableReader<GitWatchEvent>>;
-    cancel: () => Promise<void>;
-};
-type GitOpenFile = {
-    read: (offset?: bigint, length?: bigint) => GitERef<GitPassableBytesReader>;
-    write: (offset?: bigint) => GitERef<GitPassableBytesWriter>;
-    truncate: (size: bigint) => Promise<void>;
-    fsync: () => Promise<void>;
-    lock: (opts: GitLockOpts) => GitERef<GitLock>;
-    getLock: (opts: GitLockQuery) => Promise<GitLockState | null>;
-    close: () => Promise<void>;
-    help: (method?: string) => string;
-};
-type GitOpenFileOptions = {
-    read?: boolean;
-    write?: boolean;
-    create?: boolean;
-    truncate?: boolean;
-    append?: boolean;
-};
-type GitPassableBytesReader<TReadReturn = undefined> = {
-    streamBase64: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
-    readReturnPattern: () => unknown | undefined;
-};
-type GitPassableBytesWriter<TWriteReturn = undefined> = {
-    streamBase64: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
-    writeReturnPattern: () => unknown | undefined;
-};
-type GitPassableReader<TRead = unknown, TReadReturn = unknown> = {
-    stream: (synPromise: GitERef<GitStreamNode<undefined, TReadReturn>>) => Promise<GitStreamNode<TRead, TReadReturn>>;
-    readPattern: () => unknown | undefined;
-    readReturnPattern: () => unknown | undefined;
-};
-type GitPathEntry = GitLitePathEntry;
-type GitPathEntryIssuer = GitLitePathEntryIssuer;
-type GitQid<K = GitNodeKind> = {
-    type: K;
-    pathId: bigint;
-    version: bigint;
 };
 type GitReadOnlyEndoGit = {
     help: (method?: string) => string;
@@ -370,123 +70,58 @@ type GitReadOnlyEndoGit = {
     readOnly: () => GitReadOnlyEndoGit;
     scope: (name: 'reader') => GitReadOnlyEndoGit;
 };
-type GitReadOnlyGitWorktree = GitReadableTree;
-type GitReadableBlobSource = {
-    streamBase64: (...args: any[]) => PromiseLike<unknown>;
+type GitStashPushOptions = {
+    message?: string;
+    entries?: GitPathEntry[];
+    paths?: string[];
+    includeUntracked?: boolean;
 };
-type GitReadableTree = GitLiteReadableTree;
-type GitSnapshotTree = GitLiteReadableTree & {
-    sha256: () => string;
-    getInfo: () => Promise<GitBlobInfo>;
+type GitStatusOptions = {
+    untracked?: 'all' | 'normal' | 'no';
+    maxCount?: number;
 };
-type GitStreamNode<Y = undefined, R = undefined> = GitStreamYieldNode<Y, R> | GitStreamReturnNode<R>;
-type GitStreamReturnNode<R = undefined> = {
-    value: R;
-    promise: null;
+type GitStatusResult = {
+    entries: GitStatusEntry[];
+    truncated: boolean;
 };
-type GitStreamYieldNode<Y = unknown, R = undefined> = {
-    value: Y;
-    promise: Promise<GitStreamNode<Y, R>>;
+type GitTrackingStatus = {
+    branch?: string;
+    upstream?: string;
+    ahead: number;
+    behind: number;
+    detached: boolean;
 };
-type GitTreeEntry = {
-    path: string[];
-    type: 'file' | 'directory';
-};
-type GitWatchEvent = {
-    kind: 'changed' | 'created' | 'removed' | 'child-added' | 'child-removed';
-    name?: string;
-};
-type GitWatchFromResult = {
-    cursor: GitCursor;
-    watcher: GitNodeWatcher;
+type GitTree = GitReadableTree & {
+    help: (method?: string) => string;
 };
 type GitWritableGitWorktree = GitDirectory & GitPathEntryIssuer;
-type GitXattrSetOptions = {
-    existence?: 'create' | 'replace';
+type GitPathEntry = GitLitePathEntry;
+type GitWorktreeAddOptions = {
+    ref?: GitRef | string;
+    newBranch?: string;
 };
-type GitXattrs = {
-    get: (name: string) => GitERef<GitPassableBytesReader>;
-    set: (name: string, opts?: GitXattrSetOptions) => GitERef<GitPassableBytesWriter>;
-    list: () => GitERef<GitPassableReader<string>>;
-    remove: (name: string) => Promise<void>;
-    help: (method?: string) => string;
-};`,
-    body: `WritableEndoGit`,
-  },
-  gitHistory: {
-    aux: `type EndoGitHistory = {
-  cherryPick: (ref: GitRef | string, options?: GitCherryPickOptions) => Promise<string>;
-  commit: (message: string, options?: GitCommitOptions) => Promise<GitCommit>;
-  rebase: (input: GitRebaseInput) => Promise<string>;
-  reword: (ref: GitRef | string, message: string) => Promise<GitCommit>;
+type GitWorktreeEntry = {
+    path: string;
+    head?: string;
+    branch?: string;
+    bare: boolean;
+    detached: boolean;
+    locked: boolean;
+    prunable: boolean;
 };
-type GitCherryPickOptions = {
-    noCommit?: boolean;
+type GitERef<T> = T | Promise<T>;
+type GitPassableBytesReader<TReadReturn = undefined> = {
+    streamBase64: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
+    readReturnPattern: () => unknown | undefined;
 };
-type GitCommit = {
-    oid: string;
-    summary: string;
-    author?: string;
-    committedAt?: number;
+type GitDirectoryPage = {
+    entries: GitDirectoryEntry[];
+    atEnd: boolean;
 };
-type GitCommitOptions = {
-    amend?: boolean;
-};
-type GitRebaseInput = {
-    mode: 'start';
-    upstream: string;
-    autosquash?: boolean;
-} | {
-    mode: 'continue' | 'abort' | 'skip';
-    upstream?: never;
-    autosquash?: never;
-};
-type GitRef = {
-    name: string;
-    kind: 'branch' | 'tag' | 'commit' | 'detached';
-    oid?: string;
-};`,
-    body: `EndoGitHistory`,
-  },
-  gitReadOnly: {
-    aux: `type ReadOnlyEndoGit = {
-  branches: () => Promise<GitRef[]>;
-  currentBranch: () => Promise<GitRef | undefined>;
-  diff: (options?: GitDiffOptions) => Promise<string>;
-  filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
-  log: (options?: GitLogOptions) => Promise<GitCommit[]>;
-  readOnly: () => ReadOnlyEndoGit;
-  revParse: (ref: GitRef | string) => Promise<GitRef>;
-  scope: (name: 'reader') => ReadOnlyEndoGit;
-  show: (ref: GitRef | string) => Promise<string>;
-  stashList: () => Promise<string[]>;
-  stashShow: (index?: number) => Promise<string>;
-  status: (options?: GitStatusOptions) => Promise<GitStatusResult>;
-  trackingStatus: () => Promise<GitTrackingStatus>;
-  tree: (ref: GitRef | string) => Promise<GitTree>;
-  worktree: () => Promise<GitReadOnlyGitWorktree>;
-  worktreeList: () => Promise<GitWorktreeEntry[]>;
-};
-type GitBlobInfo = {
-    algorithm: string;
-    hash: string;
-    size: bigint;
-};
-type GitBlobRef = {
-    getInfo: () => GitBlobInfo;
-    fetch: (offset: bigint, length: bigint) => GitERef<GitPassableBytesReader>;
-    text: () => Promise<string>;
-    json: () => Promise<unknown>;
-    help: (method?: string) => string;
-};
-type GitCursor = {
-    read: (limit?: bigint) => Promise<GitDirectoryPage>;
-    stream: () => GitERef<GitPassableReader<GitDirectoryEntry>>;
-    toArray: () => Promise<GitDirectoryEntry[]>;
-    skip: (n: bigint) => Promise<void>;
-    rewind: () => Promise<void>;
-    close: () => Promise<void>;
-    help: (method?: string) => string;
+type GitPassableReader<TRead = unknown, TReadReturn = unknown> = {
+    stream: (synPromise: GitERef<GitStreamNode<undefined, TReadReturn>>) => Promise<GitStreamNode<TRead, TReadReturn>>;
+    readPattern: () => unknown | undefined;
+    readReturnPattern: () => unknown | undefined;
 };
 type GitDirectoryEntry = {
     name: string;
@@ -497,11 +132,62 @@ type GitDirectoryEntry = {
     kind: 'directory';
     qid: GitQid<'directory'>;
 };
-type GitDirectoryPage = {
-    entries: GitDirectoryEntry[];
-    atEnd: boolean;
+type GitLiteDirectory = {
+    has: (...path: string[]) => Promise<boolean>;
+    list: (...path: string[]) => Promise<string[]>;
+    lookup: (path: string | string[]) => Promise<unknown>;
+    write: (path: string[], value: GitDirectoryWriteSource) => Promise<void>;
+    remove: (path: string[]) => Promise<void>;
+    move: (from: string[], to: string[]) => Promise<void>;
+    copy: (from: string[], to: string[]) => Promise<void>;
+    makeDirectory: (path: string[]) => Promise<GitLiteDirectory>;
+    readOnly: () => GitLiteReadableTree;
+    snapshot: () => Promise<GitSnapshotTree>;
 };
-type GitERef<T> = T | Promise<T>;
+type GitQid<K = GitNodeKind> = {
+    type: K;
+    pathId: bigint;
+    version: bigint;
+};
+type GitReadableBlobSource = {
+    streamBase64: (...args: any[]) => PromiseLike<unknown>;
+};
+type GitLiteReadableTree = {
+    has: (...petNamePath: string[]) => Promise<boolean>;
+    list: (...petNamePath: string[]) => Promise<readonly string[]>;
+    lookup: (petNamePath: string | readonly string[]) => Promise<unknown>;
+    listTree?: (petNamePath: string | readonly string[], options?: {
+        ignore?: readonly string[];
+    }) => Promise<{
+        path: string[];
+        type: 'file' | 'directory';
+    }[]>;
+};
+type GitNodeStat = {
+    size?: bigint;
+    mtime?: bigint;
+    atime?: bigint;
+};
+type GitNodeAttrs = GitNodeStat & {
+    ctime?: bigint;
+    btime?: bigint | null;
+};
+type GitNodeWatcher = {
+    events: () => GitERef<GitPassableReader<{
+        kind: 'changed' | 'created' | 'removed' | 'child-added' | 'child-removed';
+        name?: string;
+    }>>;
+    cancel: () => Promise<void>;
+};
+type GitXattrs = {
+    get: (name: string) => GitERef<GitPassableBytesReader>;
+    set: (name: string, opts?: {
+        existence?: 'create' | 'replace';
+    }) => GitERef<GitPassableBytesWriter>;
+    list: () => GitERef<GitPassableReader<string>>;
+    remove: (name: string) => Promise<void>;
+    help: (method?: string) => string;
+};
 type GitExtendedDirectory = {
     getQid: () => GitQid<'directory'>;
     getStat: () => Promise<GitNodeStat>;
@@ -537,26 +223,64 @@ type GitExtendedFile = {
     watch: () => GitERef<GitNodeWatcher>;
     xattrs: () => GitERef<GitXattrs>;
     open: (opts?: GitOpenFileOptions) => GitERef<GitOpenFile>;
-    read: (opts?: GitFileReadOptions) => GitERef<GitPassableBytesReader>;
-    write: (opts?: GitFileWriteOptions) => GitERef<GitPassableBytesWriter>;
+    read: (opts?: {
+        offset?: bigint;
+        length?: bigint;
+    }) => GitERef<GitPassableBytesReader>;
+    write: (opts?: {
+        offset?: bigint;
+    }) => GitERef<GitPassableBytesWriter>;
     snapshot: () => Promise<GitBlobRef>;
     help: (method?: string) => string;
 };
-type GitExtendedFilesystem = {
-    root: () => GitERef<GitExtendedDirectory>;
-    named: (name: string) => GitERef<GitExtendedDirectory>;
-    statfs: () => Promise<GitFilesystemStats>;
-    brands: () => Promise<ReadonlySet<bigint> | readonly bigint[]>;
+type GitCursor = {
+    read: (limit?: bigint) => Promise<GitDirectoryPage>;
+    stream: () => GitERef<GitPassableReader<GitDirectoryEntry>>;
+    toArray: () => Promise<GitDirectoryEntry[]>;
+    skip: (n: bigint) => Promise<void>;
+    rewind: () => Promise<void>;
+    close: () => Promise<void>;
     help: (method?: string) => string;
 };
-type GitFileReadOptions = {
-    offset?: bigint;
-    length?: bigint;
+type GitOpenFileOptions = {
+    read?: boolean;
+    write?: boolean;
+    create?: boolean;
+    truncate?: boolean;
+    append?: boolean;
 };
-type GitFileWriteOptions = {
-    offset?: bigint;
+type GitOpenFile = {
+    read: (offset?: bigint, length?: bigint) => GitERef<GitPassableBytesReader>;
+    write: (offset?: bigint) => GitERef<GitPassableBytesWriter>;
+    truncate: (size: bigint) => Promise<void>;
+    fsync: () => Promise<void>;
+    lock: (opts: GitLockOpts) => GitERef<GitLock>;
+    getLock: (opts: {
+        start?: bigint;
+        length?: bigint;
+    }) => Promise<GitLockState | null>;
+    close: () => Promise<void>;
+    help: (method?: string) => string;
 };
-type GitFilesystem = GitExtendedFilesystem;
+type GitWatchFromResult = {
+    cursor: GitCursor;
+    watcher: GitNodeWatcher;
+};
+type GitPassableBytesWriter<TWriteReturn = undefined> = {
+    streamBase64: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
+    writeReturnPattern: () => unknown | undefined;
+};
+type GitBlobRef = {
+    getInfo: () => {
+        algorithm: string;
+        hash: string;
+        size: bigint;
+    };
+    fetch: (offset: bigint, length: bigint) => GitERef<GitPassableBytesReader>;
+    text: () => Promise<string>;
+    json: () => Promise<unknown>;
+    help: (method?: string) => string;
+};
 type GitFilesystemStats = {
     blockSize?: bigint;
     totalBlocks?: bigint;
@@ -567,11 +291,148 @@ type GitFilesystemStats = {
     directories?: bigint;
     type?: string;
 };
+type GitExtendedFilesystem = {
+    root: () => GitERef<GitExtendedDirectory>;
+    named: (name: string) => GitERef<GitExtendedDirectory>;
+    statfs: () => Promise<GitFilesystemStats>;
+    brands: () => Promise<ReadonlySet<bigint> | readonly bigint[]>;
+    help: (method?: string) => string;
+};
+type GitStatusEntry = {
+    path: string;
+    index: 'clean' | 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'conflicted';
+    worktree: 'clean' | 'modified' | 'deleted' | 'untracked' | 'ignored' | 'conflicted';
+    renamedFrom?: string;
+};
+type GitReadableTree = GitLiteReadableTree;
+type GitDirectoryWriteSource = GitReadableBlobSource | GitLiteReadableTree;
+type GitSnapshotTree = GitLiteReadableTree & {
+    sha256: () => string;
+    getInfo: () => Promise<{
+        algorithm: string;
+        hash: string;
+        size: bigint;
+    }>;
+};
+type GitLitePathEntry = {
+    segments: () => string[];
+    displayPath: () => string;
+    child: (name: string) => GitLitePathEntry;
+    help: (method?: string) => string;
+};
+type GitLockType = 'shared' | 'exclusive';
+type GitLockOpts = {
+    type: GitLockType;
+    start?: bigint;
+    length?: bigint;
+};
+type GitLock = {
+    release: () => Promise<void>;
+    help: (method?: string) => string;
+};
+type GitLockState = {
+    type: GitLockType;
+    start: bigint;
+    length: bigint;
+};
+type GitStreamNode<Y = undefined, R = undefined> = GitStreamYieldNode<Y, R> | {
+    value: R;
+    promise: null;
+};
+type GitLitePathEntryIssuer = {
+    entry: (path: string | string[]) => GitLitePathEntry;
+};
+type GitNodeKind = 'file' | 'directory';
+type GitReadOnlyGitWorktree = GitReadableTree;
+type GitStreamYieldNode<Y = unknown, R = undefined> = {
+    value: Y;
+    promise: Promise<GitStreamNode<Y, R>>;
+};
+type GitDirectory = GitLiteDirectory;
+type GitPathEntryIssuer = GitLitePathEntryIssuer;`,
+    body: `{
+    add: (designators: GitPathDesignator[]) => Promise<void>;
+    branches: () => Promise<GitRef[]>;
+    checkoutConflict: (designators: GitPathDesignator[], side: 'ours' | 'theirs') => Promise<void>;
+    commit: (message: string) => Promise<GitCommit>;
+    createBranch: (name: string, options?: {
+        startPoint?: string;
+        switchAfterCreate?: boolean;
+    }) => Promise<GitRef>;
+    currentBranch: () => Promise<GitRef | undefined>;
+    deleteBranch: (name: string, options?: {
+        force?: boolean;
+    }) => Promise<void>;
+    detach: (ref: GitRef | string) => Promise<void>;
+    diff: (options?: GitDiffOptions) => Promise<string>;
+    filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
+    help: (method?: string) => string;
+    log: (options?: GitLogOptions) => Promise<GitCommit[]>;
+    merge: (ref: GitRef | string, options?: {
+        fastForwardOnly?: boolean;
+        noFastForward?: boolean;
+    }) => Promise<string>;
+    readOnly: () => GitReadOnlyEndoGit;
+    renameBranch: (from: string, to: string) => Promise<void>;
+    restore: (designators: GitPathDesignator[], options?: {
+        staged?: boolean;
+    }) => Promise<void>;
+    revParse: (ref: GitRef | string) => Promise<GitRef>;
+    scope: (name: 'reader' | 'writer') => GitReadOnlyEndoGit | typeof git;
+    show: (ref: GitRef | string) => Promise<string>;
+    stashApply: (index?: number) => Promise<void>;
+    stashDrop: (index?: number) => Promise<void>;
+    stashList: () => Promise<string[]>;
+    stashPop: (index?: number) => Promise<void>;
+    stashPush: (options?: GitStashPushOptions) => Promise<string>;
+    stashShow: (index?: number) => Promise<string>;
+    status: (options?: GitStatusOptions) => Promise<GitStatusResult>;
+    switch: (ref: GitRef | string) => Promise<void>;
+    switchBranch: (name: string) => Promise<void>;
+    trackingStatus: () => Promise<GitTrackingStatus>;
+    tree: (ref: GitRef | string) => Promise<GitTree>;
+    worktree: () => Promise<GitWritableGitWorktree>;
+    worktreeAdd: (entry: GitPathEntry, options?: GitWorktreeAddOptions) => Promise<typeof git>;
+    worktreeList: () => Promise<GitWorktreeEntry[]>;
+}`,
+  },
+  gitHistory: {
+    aux: `type GitRef = {
+    name: string;
+    kind: 'branch' | 'tag' | 'commit' | 'detached';
+    oid?: string;
+};
 type GitCommit = {
     oid: string;
     summary: string;
     author?: string;
     committedAt?: number;
+};
+type GitRebaseInput = {
+    mode: 'start';
+    upstream: string;
+    autosquash?: boolean;
+} | {
+    mode: 'continue' | 'abort' | 'skip';
+    upstream?: never;
+    autosquash?: never;
+};`,
+    body: `{
+    cherryPick: (ref: GitRef | string, options?: {
+        noCommit?: boolean;
+    }) => Promise<string>;
+    commit: (message: string, options?: {
+        amend?: boolean;
+    }) => Promise<GitCommit>;
+    rebase: (input: GitRebaseInput) => Promise<string>;
+    reword: (ref: GitRef | string, message: string) => Promise<GitCommit>;
+}`,
+  },
+  gitReadOnly: {
+    aux: `type GitRef = {
+    name: string;
+    kind: 'branch' | 'tag' | 'commit' | 'detached';
+    oid?: string;
 };
 type GitDiffOptions = {
     cached?: boolean;
@@ -580,27 +441,18 @@ type GitDiffOptions = {
     entries?: GitPathEntry[];
     paths?: string[];
 };
-type GitIndexStatus = 'clean' | 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'conflicted';
+type GitFilesystem = GitExtendedFilesystem;
 type GitLogOptions = {
     maxCount?: number;
     ref?: GitRef | string;
     since?: string;
     until?: string;
 };
-type GitRef = {
-    name: string;
-    kind: 'branch' | 'tag' | 'commit' | 'detached';
-    oid?: string;
-};
-type GitStatusEntry = {
-    path: string;
-    index: GitIndexStatus;
-    worktree: GitWorktreeStatus;
-    renamedFrom?: string;
-};
-type GitStatusOptions = {
-    untracked?: 'all' | 'normal' | 'no';
-    maxCount?: number;
+type GitCommit = {
+    oid: string;
+    summary: string;
+    author?: string;
+    committedAt?: number;
 };
 type GitStatusResult = {
     entries: GitStatusEntry[];
@@ -616,6 +468,7 @@ type GitTrackingStatus = {
 type GitTree = GitReadableTree & {
     help: (method?: string) => string;
 };
+type GitReadOnlyGitWorktree = GitReadableTree;
 type GitWorktreeEntry = {
     path: string;
     head?: string;
@@ -625,61 +478,110 @@ type GitWorktreeEntry = {
     locked: boolean;
     prunable: boolean;
 };
-type GitWorktreeStatus = 'clean' | 'modified' | 'deleted' | 'untracked' | 'ignored' | 'conflicted';
-type GitLitePathEntry = {
-    segments: () => string[];
-    displayPath: () => string;
-    child: (name: string) => GitLitePathEntry;
-    help: (method?: string) => string;
+type GitERef<T> = T | Promise<T>;
+type GitPassableBytesReader<TReadReturn = undefined> = {
+    streamBase64: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
+    readReturnPattern: () => unknown | undefined;
 };
-type GitLiteReadableTree = {
-    has: (...petNamePath: string[]) => Promise<boolean>;
-    list: (...petNamePath: string[]) => Promise<readonly string[]>;
-    lookup: (petNamePath: string | readonly string[]) => Promise<unknown>;
-    listTree?: (petNamePath: string | readonly string[], options?: {
-        ignore?: readonly string[];
-    }) => Promise<GitTreeEntry[]>;
+type GitDirectoryPage = {
+    entries: GitDirectoryEntry[];
+    atEnd: boolean;
 };
-type GitLock = {
-    release: () => Promise<void>;
-    help: (method?: string) => string;
+type GitPassableReader<TRead = unknown, TReadReturn = unknown> = {
+    stream: (synPromise: GitERef<GitStreamNode<undefined, TReadReturn>>) => Promise<GitStreamNode<TRead, TReadReturn>>;
+    readPattern: () => unknown | undefined;
+    readReturnPattern: () => unknown | undefined;
 };
-type GitLockOpts = {
-    type: GitLockType;
-    start?: bigint;
-    length?: bigint;
+type GitDirectoryEntry = {
+    name: string;
+    kind: 'file';
+    qid: GitQid<'file'>;
+} | {
+    name: string;
+    kind: 'directory';
+    qid: GitQid<'directory'>;
 };
-type GitLockQuery = {
-    start?: bigint;
-    length?: bigint;
+type GitQid<K = GitNodeKind> = {
+    type: K;
+    pathId: bigint;
+    version: bigint;
 };
-type GitLockState = {
-    type: GitLockType;
-    start: bigint;
-    length: bigint;
-};
-type GitLockType = 'shared' | 'exclusive';
-type GitNodeAttrs = GitNodeStat & {
-    ctime?: bigint;
-    btime?: bigint | null;
-};
-type GitNodeKind = 'file' | 'directory';
 type GitNodeStat = {
     size?: bigint;
     mtime?: bigint;
     atime?: bigint;
 };
+type GitNodeAttrs = GitNodeStat & {
+    ctime?: bigint;
+    btime?: bigint | null;
+};
 type GitNodeWatcher = {
-    events: () => GitERef<GitPassableReader<GitWatchEvent>>;
+    events: () => GitERef<GitPassableReader<{
+        kind: 'changed' | 'created' | 'removed' | 'child-added' | 'child-removed';
+        name?: string;
+    }>>;
     cancel: () => Promise<void>;
 };
-type GitOpenFile = {
-    read: (offset?: bigint, length?: bigint) => GitERef<GitPassableBytesReader>;
-    write: (offset?: bigint) => GitERef<GitPassableBytesWriter>;
-    truncate: (size: bigint) => Promise<void>;
+type GitXattrs = {
+    get: (name: string) => GitERef<GitPassableBytesReader>;
+    set: (name: string, opts?: {
+        existence?: 'create' | 'replace';
+    }) => GitERef<GitPassableBytesWriter>;
+    list: () => GitERef<GitPassableReader<string>>;
+    remove: (name: string) => Promise<void>;
+    help: (method?: string) => string;
+};
+type GitExtendedDirectory = {
+    getQid: () => GitQid<'directory'>;
+    getStat: () => Promise<GitNodeStat>;
+    setStat: (patch: GitNodeStat) => Promise<void>;
+    getAttrs: () => Promise<GitNodeAttrs>;
+    setAttrs: (patch: GitNodeStat) => Promise<void>;
+    watch: () => GitERef<GitNodeWatcher>;
+    xattrs: () => GitERef<GitXattrs>;
+    lookup: (nameOrPath: string | readonly string[]) => GitERef<GitExtendedDirectory | GitExtendedFile>;
+    lookupStep: (name: string) => GitERef<GitExtendedDirectory | GitExtendedFile>;
+    subView: (nameOrPath: string | readonly string[]) => GitERef<GitExtendedDirectory>;
+    list: () => GitERef<GitCursor>;
+    write: (name: string, value: string) => Promise<void>;
+    create: (name: string, opts?: GitOpenFileOptions) => GitERef<GitOpenFile>;
+    makeDirectory: (name: string) => GitERef<GitExtendedDirectory>;
+    mkdir: (name: string) => GitERef<GitExtendedDirectory>;
+    remove: (name: string) => Promise<void>;
+    unlink: (name: string) => Promise<void>;
+    move: (fromPath: string | readonly string[], toPath: string | readonly string[]) => Promise<void>;
+    copy: (fromPath: string | readonly string[], toPath: string | readonly string[]) => Promise<void>;
+    rename: (oldName: string, newParent: GitERef<GitExtendedDirectory>, newName: string) => Promise<void>;
     fsync: () => Promise<void>;
-    lock: (opts: GitLockOpts) => GitERef<GitLock>;
-    getLock: (opts: GitLockQuery) => Promise<GitLockState | null>;
+    materialise: (path: readonly string[]) => GitERef<GitExtendedDirectory>;
+    watchFrom: () => GitERef<GitWatchFromResult>;
+    help: (method?: string) => string;
+};
+type GitExtendedFile = {
+    getQid: () => GitQid<'file'>;
+    getStat: () => Promise<GitNodeStat>;
+    setStat: (patch: GitNodeStat) => Promise<void>;
+    getAttrs: () => Promise<GitNodeAttrs>;
+    setAttrs: (patch: GitNodeStat) => Promise<void>;
+    watch: () => GitERef<GitNodeWatcher>;
+    xattrs: () => GitERef<GitXattrs>;
+    open: (opts?: GitOpenFileOptions) => GitERef<GitOpenFile>;
+    read: (opts?: {
+        offset?: bigint;
+        length?: bigint;
+    }) => GitERef<GitPassableBytesReader>;
+    write: (opts?: {
+        offset?: bigint;
+    }) => GitERef<GitPassableBytesWriter>;
+    snapshot: () => Promise<GitBlobRef>;
+    help: (method?: string) => string;
+};
+type GitCursor = {
+    read: (limit?: bigint) => Promise<GitDirectoryPage>;
+    stream: () => GitERef<GitPassableReader<GitDirectoryEntry>>;
+    toArray: () => Promise<GitDirectoryEntry[]>;
+    skip: (n: bigint) => Promise<void>;
+    rewind: () => Promise<void>;
     close: () => Promise<void>;
     help: (method?: string) => string;
 };
@@ -690,59 +592,125 @@ type GitOpenFileOptions = {
     truncate?: boolean;
     append?: boolean;
 };
-type GitPassableBytesReader<TReadReturn = undefined> = {
-    streamBase64: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
-    readReturnPattern: () => unknown | undefined;
-};
-type GitPassableBytesWriter<TWriteReturn = undefined> = {
-    streamBase64: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
-    writeReturnPattern: () => unknown | undefined;
-};
-type GitPassableReader<TRead = unknown, TReadReturn = unknown> = {
-    stream: (synPromise: GitERef<GitStreamNode<undefined, TReadReturn>>) => Promise<GitStreamNode<TRead, TReadReturn>>;
-    readPattern: () => unknown | undefined;
-    readReturnPattern: () => unknown | undefined;
-};
-type GitPathEntry = GitLitePathEntry;
-type GitQid<K = GitNodeKind> = {
-    type: K;
-    pathId: bigint;
-    version: bigint;
-};
-type GitReadOnlyGitWorktree = GitReadableTree;
-type GitReadableTree = GitLiteReadableTree;
-type GitStreamNode<Y = undefined, R = undefined> = GitStreamYieldNode<Y, R> | GitStreamReturnNode<R>;
-type GitStreamReturnNode<R = undefined> = {
-    value: R;
-    promise: null;
-};
-type GitStreamYieldNode<Y = unknown, R = undefined> = {
-    value: Y;
-    promise: Promise<GitStreamNode<Y, R>>;
-};
-type GitTreeEntry = {
-    path: string[];
-    type: 'file' | 'directory';
-};
-type GitWatchEvent = {
-    kind: 'changed' | 'created' | 'removed' | 'child-added' | 'child-removed';
-    name?: string;
+type GitOpenFile = {
+    read: (offset?: bigint, length?: bigint) => GitERef<GitPassableBytesReader>;
+    write: (offset?: bigint) => GitERef<GitPassableBytesWriter>;
+    truncate: (size: bigint) => Promise<void>;
+    fsync: () => Promise<void>;
+    lock: (opts: GitLockOpts) => GitERef<GitLock>;
+    getLock: (opts: {
+        start?: bigint;
+        length?: bigint;
+    }) => Promise<GitLockState | null>;
+    close: () => Promise<void>;
+    help: (method?: string) => string;
 };
 type GitWatchFromResult = {
     cursor: GitCursor;
     watcher: GitNodeWatcher;
 };
-type GitXattrSetOptions = {
-    existence?: 'create' | 'replace';
+type GitPassableBytesWriter<TWriteReturn = undefined> = {
+    streamBase64: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
+    writeReturnPattern: () => unknown | undefined;
 };
-type GitXattrs = {
-    get: (name: string) => GitERef<GitPassableBytesReader>;
-    set: (name: string, opts?: GitXattrSetOptions) => GitERef<GitPassableBytesWriter>;
-    list: () => GitERef<GitPassableReader<string>>;
-    remove: (name: string) => Promise<void>;
+type GitBlobRef = {
+    getInfo: () => {
+        algorithm: string;
+        hash: string;
+        size: bigint;
+    };
+    fetch: (offset: bigint, length: bigint) => GitERef<GitPassableBytesReader>;
+    text: () => Promise<string>;
+    json: () => Promise<unknown>;
     help: (method?: string) => string;
+};
+type GitFilesystemStats = {
+    blockSize?: bigint;
+    totalBlocks?: bigint;
+    freeBlocks?: bigint;
+    totalBytes?: bigint;
+    freeBytes?: bigint;
+    files?: bigint;
+    directories?: bigint;
+    type?: string;
+};
+type GitExtendedFilesystem = {
+    root: () => GitERef<GitExtendedDirectory>;
+    named: (name: string) => GitERef<GitExtendedDirectory>;
+    statfs: () => Promise<GitFilesystemStats>;
+    brands: () => Promise<ReadonlySet<bigint> | readonly bigint[]>;
+    help: (method?: string) => string;
+};
+type GitPathEntry = GitLitePathEntry;
+type GitStatusEntry = {
+    path: string;
+    index: 'clean' | 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'conflicted';
+    worktree: 'clean' | 'modified' | 'deleted' | 'untracked' | 'ignored' | 'conflicted';
+    renamedFrom?: string;
+};
+type GitReadableTree = GitLiteReadableTree;
+type GitLitePathEntry = {
+    segments: () => string[];
+    displayPath: () => string;
+    child: (name: string) => GitLitePathEntry;
+    help: (method?: string) => string;
+};
+type GitLockType = 'shared' | 'exclusive';
+type GitLockOpts = {
+    type: GitLockType;
+    start?: bigint;
+    length?: bigint;
+};
+type GitLock = {
+    release: () => Promise<void>;
+    help: (method?: string) => string;
+};
+type GitLockState = {
+    type: GitLockType;
+    start: bigint;
+    length: bigint;
+};
+type GitStreamNode<Y = undefined, R = undefined> = GitStreamYieldNode<Y, R> | {
+    value: R;
+    promise: null;
+};
+type GitNodeKind = 'file' | 'directory';
+type GitLiteReadableTree = {
+    has: (...petNamePath: string[]) => Promise<boolean>;
+    list: (...petNamePath: string[]) => Promise<readonly string[]>;
+    lookup: (petNamePath: string | readonly string[]) => Promise<unknown>;
+    listTree?: (petNamePath: string | readonly string[], options?: {
+        ignore?: readonly string[];
+    }) => Promise<{
+        path: string[];
+        type: 'file' | 'directory';
+    }[]>;
+};
+type GitStreamYieldNode<Y = unknown, R = undefined> = {
+    value: Y;
+    promise: Promise<GitStreamNode<Y, R>>;
 };`,
-    body: `ReadOnlyEndoGit`,
+    body: `{
+    branches: () => Promise<GitRef[]>;
+    currentBranch: () => Promise<GitRef | undefined>;
+    diff: (options?: GitDiffOptions) => Promise<string>;
+    filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
+    log: (options?: GitLogOptions) => Promise<GitCommit[]>;
+    readOnly: () => typeof gitReadOnly;
+    revParse: (ref: GitRef | string) => Promise<GitRef>;
+    scope: (name: 'reader') => typeof gitReadOnly;
+    show: (ref: GitRef | string) => Promise<string>;
+    stashList: () => Promise<string[]>;
+    stashShow: (index?: number) => Promise<string>;
+    status: (options?: {
+        untracked?: 'all' | 'normal' | 'no';
+        maxCount?: number;
+    }) => Promise<GitStatusResult>;
+    trackingStatus: () => Promise<GitTrackingStatus>;
+    tree: (ref: GitRef | string) => Promise<GitTree>;
+    worktree: () => Promise<GitReadOnlyGitWorktree>;
+    worktreeList: () => Promise<GitWorktreeEntry[]>;
+}`,
   },
 });
 harden(gitDeclarations);

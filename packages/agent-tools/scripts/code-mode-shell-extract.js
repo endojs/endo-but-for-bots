@@ -37,5 +37,10 @@ harden(buildShellIR);
  * @returns {{ shell: { aux: string, body: string } }}
  */
 export const buildShellTypeDeclarations = () =>
-  harden({ shell: renderDeclaration(buildShellIR(), { auxPrefix: 'Shell' }) });
+  harden({
+    shell: renderDeclaration(buildShellIR(), {
+      globalName: 'shell',
+      auxPrefix: 'Shell',
+    }),
+  });
 harden(buildShellTypeDeclarations);

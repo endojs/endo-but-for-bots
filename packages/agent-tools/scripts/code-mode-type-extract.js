@@ -73,7 +73,443 @@ import { getTag, passStyleOf } from '@endo/pass-style';
  *   text. Defaults to `rootName` when omitted.
  */
 
-// #region shared renderer (no typescript / patterns dependency)
+// #region shared renderer and graph-bounded locality expansion
+
+const EXPANSION_MAX_DEPTH = 32;
+const EXPANSION_MAX_NODES = 100_000;
+const DECLARATION_MAX_CHARACTERS = 100_000;
+const INLINE_DATA_LEAF_MAX_LINES = 5;
+
+/**
+ * Find aliases that participate in a recursive strongly connected component.
+ * A one-node component is recursive only when it has a self-edge.
+ *
+ * @param {Map<string, ts.TypeAliasDeclaration>} aliases
+ * @returns {Set<string>}
+ */
+const recursiveAliasNames = aliases => {
+  const names = new Set(aliases.keys());
+  /** @type {Map<string, Set<string>>} */
+  const edges = new Map();
+  for (const [name, declaration] of aliases) {
+    const references = new Set();
+    const visit = node => {
+      if (
+        ts.isTypeReferenceNode(node) &&
+        ts.isIdentifier(node.typeName) &&
+        names.has(node.typeName.text)
+      ) {
+        references.add(node.typeName.text);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(declaration.type);
+    edges.set(name, references);
+  }
+
+  let nextIndex = 0;
+  /** @type {string[]} */
+  const stack = [];
+  const onStack = new Set();
+  /** @type {Map<string, number>} */
+  const indices = new Map();
+  /** @type {Map<string, number>} */
+  const lowLinks = new Map();
+  const recursive = new Set();
+
+  /** @param {string} name */
+  const visitComponent = name => {
+    indices.set(name, nextIndex);
+    lowLinks.set(name, nextIndex);
+    nextIndex += 1;
+    stack.push(name);
+    onStack.add(name);
+
+    for (const reference of /** @type {Set<string>} */ (edges.get(name))) {
+      if (!indices.has(reference)) {
+        visitComponent(reference);
+        lowLinks.set(
+          name,
+          Math.min(
+            /** @type {number} */ (lowLinks.get(name)),
+            /** @type {number} */ (lowLinks.get(reference)),
+          ),
+        );
+      } else if (onStack.has(reference)) {
+        lowLinks.set(
+          name,
+          Math.min(
+            /** @type {number} */ (lowLinks.get(name)),
+            /** @type {number} */ (indices.get(reference)),
+          ),
+        );
+      }
+    }
+
+    if (lowLinks.get(name) !== indices.get(name)) {
+      return;
+    }
+    /** @type {string[]} */
+    const component = [];
+    let member;
+    do {
+      member = /** @type {string} */ (stack.pop());
+      onStack.delete(member);
+      component.push(member);
+    } while (member !== name);
+    if (
+      component.length > 1 ||
+      /** @type {Set<string>} */ (edges.get(name)).has(name)
+    ) {
+      for (const recursiveName of component) {
+        recursive.add(recursiveName);
+      }
+    }
+  };
+
+  for (const name of names) {
+    if (!indices.has(name)) {
+      visitComponent(name);
+    }
+  }
+  return recursive;
+};
+
+/**
+ * ERef is a deliberately retained primitive anchor. Its compact generic name
+ * communicates eventual delivery more clearly than repeating `T | Promise<T>`
+ * at every capability edge.
+ *
+ * @param {string} name
+ * @param {ts.TypeAliasDeclaration} declaration
+ */
+const isPrimitiveAnchor = (name, declaration) =>
+  name.endsWith('ERef') && declaration.typeParameters?.length === 1;
+
+/**
+ * Flatten the root and small, single-use, data-only leaf aliases into their
+ * use sites. Recursive SCCs, aliases with methods, and aliases referenced from
+ * multiple sites remain named so the generated prompt keeps semantic names and
+ * does not duplicate capability or data shapes. Generic aliases substitute
+ * their actual type arguments while expanding. Hard depth, node, and output
+ * budgets fail generation before a future source graph can recurse or grow
+ * exponentially without bound.
+ *
+ * @param {string} source
+ * @param {string} rootName
+ * @param {string} globalName
+ * @returns {{ aux: string, body: string }}
+ */
+const flattenDeclaration = (source, rootName, globalName) => {
+  const sourceFile = ts.createSourceFile(
+    'code-mode-rollup.d.ts',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const allAliases = new Map(
+    sourceFile.statements
+      .filter(statement => ts.isTypeAliasDeclaration(statement))
+      .map(statement => [statement.name.text, statement]),
+  );
+  const root = allAliases.get(rootName);
+  if (root === undefined) {
+    throw new Error(`missing generated root alias: ${rootName}`);
+  }
+  const aliases = new Map(allAliases);
+  aliases.delete(rootName);
+  const requiredAnchors = recursiveAliasNames(aliases);
+  for (const [name, declaration] of aliases) {
+    if (isPrimitiveAnchor(name, declaration)) {
+      requiredAnchors.add(name);
+    }
+  }
+
+  const docs = new Map(
+    [...allAliases].map(([name, declaration]) => [
+      name,
+      ts
+        .getJSDocCommentsAndTags(declaration)
+        .filter(node => ts.isJSDoc(node))
+        .map(node => node.getText(sourceFile))
+        .join('\n'),
+    ]),
+  );
+  const printer = ts.createPrinter({
+    newLine: ts.NewLineKind.LineFeed,
+    removeComments: false,
+  });
+
+  /**
+   * @param {ts.TypeAliasDeclaration} declaration
+   * @returns {boolean}
+   */
+  const isDataOnlyLeaf = declaration => {
+    let hasMethod = false;
+    let hasAliasReference = false;
+    const visit = node => {
+      if (
+        ts.isTypeReferenceNode(node) &&
+        ts.isIdentifier(node.typeName) &&
+        aliases.has(node.typeName.text)
+      ) {
+        hasAliasReference = true;
+      }
+      if (
+        ts.isMethodSignature(node) ||
+        ts.isCallSignatureDeclaration(node) ||
+        ts.isConstructSignatureDeclaration(node) ||
+        ts.isFunctionTypeNode(node)
+      ) {
+        hasMethod = true;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(declaration.type);
+    return !hasMethod && !hasAliasReference;
+  };
+
+  /** @typedef {{ node: ts.TypeNode, substitutions: Map<string, TypeBinding> }} TypeBinding */
+
+  /**
+   * @param {Set<string>} anchors
+   * @returns {{ aux: string, body: string }}
+   */
+  const renderWithAnchors = anchors => {
+    const emittedDocs = new Set([rootName]);
+    let visitedNodes = 0;
+
+    /**
+     * @param {ts.TypeNode} type
+     * @param {Map<string, TypeBinding>} [initialSubstitutions]
+     * @returns {ts.TypeNode}
+     */
+    const expandType = (type, initialSubstitutions = new Map()) => {
+      const transformed = ts.transform(type, [
+        context => {
+          /**
+           * @param {ts.Node} node
+           * @param {Map<string, TypeBinding>} substitutions
+           * @param {Set<string>} expanding
+           * @param {number} depth
+           * @returns {ts.VisitResult<ts.Node>}
+           */
+          const expand = (node, substitutions, expanding, depth) => {
+            visitedNodes += 1;
+            if (visitedNodes > EXPANSION_MAX_NODES) {
+              throw new Error(
+                `generated declaration exceeds ${EXPANSION_MAX_NODES} expanded nodes`,
+              );
+            }
+            if (depth > EXPANSION_MAX_DEPTH) {
+              throw new Error(
+                `generated declaration exceeds expansion depth ${EXPANSION_MAX_DEPTH}`,
+              );
+            }
+            if (
+              !ts.isTypeReferenceNode(node) ||
+              !ts.isIdentifier(node.typeName)
+            ) {
+              return ts.visitEachChild(
+                node,
+                child => expand(child, substitutions, expanding, depth),
+                context,
+              );
+            }
+
+            const name = node.typeName.text;
+            const binding = substitutions.get(name);
+            if (binding !== undefined && node.typeArguments === undefined) {
+              return expand(
+                binding.node,
+                binding.substitutions,
+                expanding,
+                depth + 1,
+              );
+            }
+            if (name === rootName) {
+              return ts.factory.createTypeQueryNode(
+                ts.factory.createIdentifier(globalName),
+              );
+            }
+            const declaration = aliases.get(name);
+            if (declaration === undefined || anchors.has(name)) {
+              return ts.visitEachChild(
+                node,
+                child => expand(child, substitutions, expanding, depth),
+                context,
+              );
+            }
+            if (expanding.has(name)) {
+              throw new Error(`unanchored recursive type alias: ${name}`);
+            }
+
+            const nextExpanding = new Set(expanding);
+            nextExpanding.add(name);
+            /** @type {Map<string, TypeBinding>} */
+            const aliasSubstitutions = new Map();
+            for (const [index, parameter] of (
+              declaration.typeParameters ?? []
+            ).entries()) {
+              const argument = node.typeArguments?.[index];
+              if (argument !== undefined) {
+                aliasSubstitutions.set(parameter.name.text, {
+                  node: argument,
+                  substitutions,
+                });
+              } else if (parameter.default !== undefined) {
+                aliasSubstitutions.set(parameter.name.text, {
+                  node: parameter.default,
+                  substitutions: aliasSubstitutions,
+                });
+              } else {
+                aliasSubstitutions.set(parameter.name.text, {
+                  node: ts.factory.createKeywordTypeNode(
+                    ts.SyntaxKind.UnknownKeyword,
+                  ),
+                  substitutions: new Map(),
+                });
+              }
+            }
+            let replacement = /** @type {ts.TypeNode} */ (
+              expand(
+                declaration.type,
+                aliasSubstitutions,
+                nextExpanding,
+                depth + 1,
+              )
+            );
+            const doc = docs.get(name);
+            if (doc !== undefined && doc !== '' && !emittedDocs.has(name)) {
+              emittedDocs.add(name);
+              replacement = ts.addSyntheticLeadingComment(
+                ts.factory.createParenthesizedType(replacement),
+                ts.SyntaxKind.MultiLineCommentTrivia,
+                doc.slice(2, -2),
+                true,
+              );
+            }
+            return replacement;
+          };
+          return node =>
+            /** @type {ts.TypeNode} */ (
+              expand(node, initialSubstitutions, new Set(), 0)
+            );
+        },
+      ]);
+      const [result] = transformed.transformed;
+      transformed.dispose();
+      return /** @type {ts.TypeNode} */ (result);
+    };
+
+    const body = printer.printNode(
+      ts.EmitHint.Unspecified,
+      expandType(root.type),
+      sourceFile,
+    );
+    const retainedAliases = [...aliases]
+      .filter(([name]) => anchors.has(name))
+      .sort(([leftName], [rightName]) => {
+        const leftPosition = /** @type {number} */ (
+          firstReferencePositions.get(leftName)
+        );
+        const rightPosition = /** @type {number} */ (
+          firstReferencePositions.get(rightName)
+        );
+        return (
+          leftPosition - rightPosition ||
+          /** @type {number} */ (aliasPositions.get(leftName)) -
+            /** @type {number} */ (aliasPositions.get(rightName))
+        );
+      })
+      .map(([, declaration]) => {
+        const expanded = expandType(declaration.type);
+        const updated = ts.factory.updateTypeAliasDeclaration(
+          declaration,
+          declaration.modifiers,
+          declaration.name,
+          declaration.typeParameters,
+          expanded,
+        );
+        return printer.printNode(ts.EmitHint.Unspecified, updated, sourceFile);
+      });
+    const rootDoc = docs.get(rootName);
+    const aux = [
+      ...(rootDoc === undefined || rootDoc === '' ? [] : [rootDoc]),
+      ...retainedAliases,
+    ].join('\n');
+    if (aux.length + body.length > DECLARATION_MAX_CHARACTERS) {
+      throw new Error(
+        `generated declaration exceeds ${DECLARATION_MAX_CHARACTERS} characters`,
+      );
+    }
+    return { aux, body };
+  };
+
+  /** @type {Map<string, number>} */
+  const referenceCounts = new Map([...aliases.keys()].map(name => [name, 0]));
+  for (const [, declaration] of allAliases) {
+    const visit = node => {
+      if (
+        ts.isTypeReferenceNode(node) &&
+        ts.isIdentifier(node.typeName) &&
+        aliases.has(node.typeName.text)
+      ) {
+        const name = node.typeName.text;
+        referenceCounts.set(
+          name,
+          /** @type {number} */ (referenceCounts.get(name)) + 1,
+        );
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(declaration.type);
+  }
+  const firstReferencePositions = new Map(
+    [...aliases.keys()].map(name => [name, Number.POSITIVE_INFINITY]),
+  );
+  /** @type {Map<string, number>} */
+  const aliasPositions = new Map(
+    [...aliases.keys()].map((name, index) => [name, index]),
+  );
+  const recordReference = node => {
+    if (
+      ts.isTypeReferenceNode(node) &&
+      ts.isIdentifier(node.typeName) &&
+      firstReferencePositions.has(node.typeName.text)
+    ) {
+      firstReferencePositions.set(
+        node.typeName.text,
+        Math.min(
+          /** @type {number} */ (
+            firstReferencePositions.get(node.typeName.text)
+          ),
+          node.getStart(sourceFile),
+        ),
+      );
+    }
+    ts.forEachChild(node, recordReference);
+  };
+  recordReference(sourceFile);
+  const anchors = new Set(aliases.keys());
+  for (const [name, declaration] of aliases) {
+    const rendered = printer.printNode(
+      ts.EmitHint.Unspecified,
+      declaration.type,
+      sourceFile,
+    );
+    const isSmall = rendered.split('\n').length <= INLINE_DATA_LEAF_MAX_LINES;
+    if (
+      !requiredAnchors.has(name) &&
+      referenceCounts.get(name) === 1 &&
+      isSmall &&
+      isDataOnlyLeaf(declaration)
+    ) {
+      anchors.delete(name);
+    }
+  }
+  return renderWithAnchors(anchors);
+};
 
 /**
  * @param {TypeMember[]} members
@@ -91,16 +527,17 @@ const renderAuxTypes = auxTypes =>
 
 /**
  * The single renderer applied to every IR regardless of source: synthesize the
- * root `type` from `members`, print it alongside the supporting aliases as
- * `aux`, and reference it by name as the `body` spliced after
- * `declare const <name>:`.
+ * root `type` from `members`, flatten bounded data leaves into their use sites,
+ * and return the root object itself as the `body` spliced after
+ * `declare const <name>:`. Recursive SCCs, compact primitive anchors,
+ * capability aliases, shared aliases, and larger data shapes remain in `aux`.
  *
  * @param {GlobalTypeIR} ir
- * @param {{ auxPrefix?: string }} [options]
+ * @param {{ globalName: string, auxPrefix?: string }} options
  * @returns {{ aux: string, body: string }}
  */
-export const renderDeclaration = (ir, options = {}) => {
-  const { auxPrefix = '' } = options;
+export const renderDeclaration = (ir, options) => {
+  const { globalName, auxPrefix = '' } = options;
   /** @type {Map<string, string>} */
   const renamed = new Map();
   if (ir.selfName !== undefined && ir.selfName !== ir.rootName) {
@@ -145,7 +582,9 @@ export const renderDeclaration = (ir, options = {}) => {
       text: rewrite(type.text),
     })),
   ];
-  return harden({ aux: renderAuxTypes(aux), body: ir.rootName });
+  return harden(
+    flattenDeclaration(renderAuxTypes(aux), ir.rootName, globalName),
+  );
 };
 harden(renderDeclaration);
 

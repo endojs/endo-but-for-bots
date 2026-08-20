@@ -18,7 +18,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { extractTsFileTextIR } from '../scripts/code-mode-type-extract.js';
+import {
+  extractTsFileTextIR,
+  renderDeclaration,
+} from '../scripts/code-mode-type-extract.js';
 
 // Extraction resolves relative and `@endo/*` specifiers from the source file's
 // own directory, so an in-memory source still needs a real one to sit in.
@@ -267,5 +270,36 @@ test('a root reached through a re-export prints self-references as the root', t 
     ir.auxTypes,
     [],
     'the declaration the root resolves to is the root, not a second alias',
+  );
+});
+
+test('bounded inlining keeps shared and capability aliases named', t => {
+  const ir = extract(`
+    export type TinyOptions = {
+      read?: boolean;
+      write?: boolean;
+    };
+    export type SharedRecord = {
+      label: string;
+    };
+    export interface Child {
+      read(record: SharedRecord): string;
+      help(): string;
+    }
+    export interface Root {
+      child(): Child;
+      create(options?: TinyOptions): Promise<void>;
+      inspect(): SharedRecord;
+    }
+  `);
+  const declaration = renderDeclaration(ir, { globalName: 'root' });
+  t.true(declaration.aux.includes('type Child ='));
+  t.true(declaration.aux.includes('type SharedRecord ='));
+  t.false(declaration.aux.includes('type TinyOptions ='));
+  t.true(
+    declaration.body.includes(`options?: {
+        read?: boolean;
+        write?: boolean;
+    }`),
   );
 });

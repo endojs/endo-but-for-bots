@@ -71,12 +71,8 @@ ${sourceDoc}
  * @param {string} s
  * @returns {string}
  */
-const guardTemplate = s => {
-  if (s.includes('`') || s.includes('${')) {
-    throw new Error('generated declaration contains a template-literal sigil');
-  }
-  return s;
-};
+const escapeTemplateLiteral = s =>
+  s.replaceAll('\\', '\\\\').replaceAll('`', '\\`').replaceAll('${', '\\${');
 
 /**
  * @param {Record<string, { aux: string, body: string }>} declarations
@@ -86,9 +82,9 @@ const renderEntries = declarations =>
   Object.entries(declarations)
     .map(
       ([key, { aux, body }]) =>
-        `  ${key}: {\n    aux: \`${guardTemplate(aux)}\`,\n    body: \`${guardTemplate(
-          body,
-        )}\`,\n  },`,
+        `  ${key}: {\n    aux: \`${escapeTemplateLiteral(
+          aux,
+        )}\`,\n    body: \`${escapeTemplateLiteral(body)}\`,\n  },`,
     )
     .join('\n');
 
