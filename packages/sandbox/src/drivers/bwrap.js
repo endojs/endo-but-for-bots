@@ -5,7 +5,12 @@
 import { makeError, q, X } from '@endo/errors';
 import { makePromiseKit } from '@endo/promise-kit';
 
+import { fileURLToPath } from 'node:url';
+
 import { makeLandlockProbe } from '../landlock.js';
+import {
+  assertProjectableNetwork,
+} from '../net/endpoint-projection.js';
 import {
   PRIVATE_BLOCKED_RANGES,
   HOST_LOOPBACK_ALLOWED_RANGES,
@@ -31,7 +36,7 @@ import {
   probeMountRootfsBinPaths,
 } from './path.js';
 
-/** @import { SandboxDriver, SliceSpec, SpawnOpts, DriverProcess, BackendProbe, BackendProbeDetails } from '../types.js' */
+/** @import { SandboxDriver, SliceSpec, SpawnOpts, DriverProcess, BackendProbe, BackendProbeDetails, EndpointProjectionSpec } from '../types.js' */
 
 /**
  * `SandboxDriver` for `bubblewrap` (`bwrap`) on Linux.
@@ -175,6 +180,12 @@ harden(parseBwrapVersion);
  * @property {{ proc: import('child_process').ChildProcess, netnsPath: string } | null} pasta
  *                                     `pasta` subprocess and netns
  *                                     path when network is `private`.
+ * @property {EndpointProjectionSpec | null} projection
+ *                                     The one endpoint projected into this
+ *                                     slice, when a projection is live.
+ *                                     Attached after `prepareSlice` because a
+ *                                     projection is minted per operation, and
+ *                                     consulted by every subsequent `spawn`.
  * @property {string | null} seccompTempPath  Temp file holding the
  *                                     compiled seccomp BPF blob,
  *                                     unlinked at teardown.
@@ -508,10 +519,117 @@ harden(assembleSliceArgv);
  *                                                            stub.
  * @returns {SandboxDriver}
  */
+/**
+ * The outer bubblewrap invocation exists to own a network namespace, not to
+ * confine anything: it binds the host root back into place and runs
+ * daemon-side code. What it *does* provide is a namespace that starts empty,
+ * with only the loopback interface bubblewrap brings up, and that is the
+ * property the projection rests on. The slice's own bubblewrap then shares
+ * that namespace instead of unsharing a second one, so the endpoint the
+ * forwarder binds is the only reachable address in the slice's network — no
+ * other host loopback port, no route out.
+ *
+ * Order matters in bubblewrap argv: the slice prefix already carries
+ * `--unshare-all`, and the `--share-net` appended here overrides its network
+ * half exactly as the `host-*` profiles do.
+ */
+const PROJECTION_NAMESPACE_ARGV = harden([
+  '--unshare-net',
+  '--unshare-user',
+  '--die-with-parent',
+  '--dev-bind',
+  '/',
+  '/',
+]);
+
+/**
+ * Assemble the full exec line for a spawn, with or without a projection.
+ *
+ * Exported so the shape can be pinned by a test that does not need bubblewrap
+ * on the host: the nesting, the `--share-net` override, the environment the
+ * slice discovers its endpoint through, and the fact that the projection's
+ * socket pathname never reaches the slice's argv are all checkable here.
+ *
+ * @param {object} args
+ * @param {readonly string[]} args.sliceArgv
+ * @param {readonly string[]} args.prlimitArgv
+ * @param {readonly string[]} args.argv the slice command
+ * @param {EndpointProjectionSpec | null} args.projection
+ * @param {string} args.nodePath
+ * @param {string} args.forwarderPath
+ * @returns {{ program: string, argv: string[] }}
+ */
+export const assembleExecArgv = ({
+  sliceArgv,
+  prlimitArgv,
+  argv,
+  projection,
+  nodePath,
+  forwarderPath,
+}) => {
+  const innerArgv = [...sliceArgv];
+  if (projection !== null) {
+    innerArgv.push('--share-net');
+    innerArgv.push('--setenv', projection.envName, projection.origin);
+  }
+  innerArgv.push('--', ...argv);
+
+  // When the factory supplied resource caps, prepend `prlimit --foo=N --`
+  // so the rlimits are set on the bubblewrap process and inherited into the
+  // slice via execve.  The empty-prefix case preserves the behaviour of
+  // execing bubblewrap directly.
+  const sliceLine =
+    prlimitArgv.length === 0
+      ? ['bwrap', ...innerArgv]
+      : [...prlimitArgv, 'bwrap', ...innerArgv];
+
+  if (projection === null) {
+    return harden({ program: sliceLine[0], argv: sliceLine.slice(1) });
+  }
+
+  return harden({
+    program: 'bwrap',
+    argv: [
+      ...PROJECTION_NAMESPACE_ARGV,
+      '--',
+      nodePath,
+      forwarderPath,
+      '--socket',
+      projection.socketPath,
+      '--host',
+      projection.host,
+      '--port',
+      String(projection.port),
+      '--',
+      ...sliceLine,
+    ],
+  });
+};
+harden(assembleExecArgv);
+
+/**
+ * @param {object} [options]
+ * @param {Record<string, string | undefined>} [options.env] daemon-side
+ *   environment, mined for `$PATH` during host-bind PATH synthesis.
+ * @param {typeof import('child_process')} [options.childProcess]
+ * @param {typeof import('fs')} [options.fs]
+ * @param {string} [options.nodePath] path to the Node binary that runs the
+ *   endpoint forwarder. Daemon-side; never reaches the slice.
+ * @param {string} [options.forwarderPath] path to the forwarder module.
+ *   Daemon-side; never reaches the slice.
+ * @returns {SandboxDriver}
+ */
 export const makeBwrapDriver = ({
   env = {},
   childProcess: childProcessModule,
   fs: fsModule,
+  // The forwarder runs as a plain Node program beside the slice, so the driver
+  // needs a path to the running Node binary and to the forwarder module. Both
+  // are daemon-side paths and never reach the slice.
+  nodePath = process.execPath,
+  forwarderPath = fileURLToPath(
+    new URL('../net/forward-endpoint.js', import.meta.url),
+  ),
 } = {}) => {
   // Lazy-resolve `child_process` so callers in test environments can
   // inject a stub without paying the import cost up front.
@@ -763,6 +881,7 @@ export const makeBwrapDriver = ({
       spec,
       live: new Set(),
       pasta: null,
+      projection: null,
       seccompTempPath,
       runtimeDetails,
     };
@@ -789,6 +908,37 @@ export const makeBwrapDriver = ({
   };
 
   /**
+   * Put one projected endpoint in front of this slice.
+   *
+   * Refused on any profile whose namespace the slice does not have to itself,
+   * and refused while another projection is live: the primitive projects one
+   * endpoint, and a second would make "nothing else is reachable" false.
+   *
+   * @param {BwrapSliceContext} slice
+   * @param {EndpointProjectionSpec} projection
+   * @returns {Promise<void>}
+   */
+  const attachProjection = async (slice, projection) => {
+    await null;
+    assertProjectableNetwork(slice.spec.network);
+    if (slice.projection !== null) {
+      throw makeError(
+        X`bwrap slice already has a projected endpoint at ${q(slice.projection.origin)}`,
+      );
+    }
+    slice.projection = projection;
+  };
+
+  /**
+   * @param {BwrapSliceContext} slice
+   * @returns {Promise<void>}
+   */
+  const detachProjection = async slice => {
+    await null;
+    slice.projection = null;
+  };
+
+  /**
    * @param {BwrapSliceContext} slice
    * @param {string[]} argv
    * @param {SpawnOpts} opts
@@ -801,38 +951,28 @@ export const makeBwrapDriver = ({
     const cp = await getCp();
 
     /** @type {string[]} */
-    const fullArgv = [...slice.sliceArgv];
+    const sliceArgv = [...slice.sliceArgv];
 
     // Per-spawn cwd override.  Layer on top of the slice's cwd.
     if (opts.cwd !== undefined) {
-      fullArgv.push('--chdir', opts.cwd);
+      sliceArgv.push('--chdir', opts.cwd);
     }
 
     // Per-spawn env overrides.
     if (opts.env !== undefined) {
       for (const [key, value] of Object.entries(opts.env)) {
-        fullArgv.push('--setenv', key, value);
+        sliceArgv.push('--setenv', key, value);
       }
     }
 
-    fullArgv.push('--', ...argv);
-
-    // Phase 1.5: when the factory supplied resource caps, prepend
-    // `prlimit --foo=N -- bwrap …` so the rlimits are set on the
-    // bwrap process and inherited into the slice via execve.  The
-    // empty-prefix case (`prlimitArgv.length === 0`) preserves the
-    // Phase 1 behaviour of execing bwrap directly.
-    /** @type {string} */
-    let execProgram;
-    /** @type {string[]} */
-    let execArgv;
-    if (slice.prlimitArgv.length === 0) {
-      execProgram = 'bwrap';
-      execArgv = fullArgv;
-    } else {
-      execProgram = slice.prlimitArgv[0];
-      execArgv = [...slice.prlimitArgv.slice(1), 'bwrap', ...fullArgv];
-    }
+    const { program: execProgram, argv: execArgv } = assembleExecArgv({
+      sliceArgv,
+      prlimitArgv: slice.prlimitArgv,
+      argv,
+      projection: slice.projection,
+      nodePath,
+      forwarderPath,
+    });
 
     /** @type {import('child_process').ChildProcess} */
     let child;
@@ -985,6 +1125,8 @@ export const makeBwrapDriver = ({
     prepareSlice,
     spawn,
     teardown,
+    attachProjection,
+    detachProjection,
   });
 };
 harden(makeBwrapDriver);

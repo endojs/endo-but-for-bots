@@ -10,6 +10,7 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
 import {
+  EndpointProjectionInterface,
   MountHandleInterface,
   ProcessHandleInterface,
   SandboxFactoryInterface,
@@ -17,6 +18,12 @@ import {
 } from './interfaces.js';
 import { makeEagerReader } from './eager-reader.js';
 import { resolveLimits } from './limits.js';
+import {
+  assertProjectableNetwork,
+  makeEndpointProjectionSpec,
+  normalizeProjectionOptions,
+  serveEndpointProjection,
+} from './net/endpoint-projection.js';
 
 const AsyncWriterInterface = M.interface('SandboxWriter', {
   next: M.call().optional(M.any()).returns(M.promise()),
@@ -24,7 +31,7 @@ const AsyncWriterInterface = M.interface('SandboxWriter', {
   throw: M.call().optional(M.any()).returns(M.promise()),
 });
 
-/** @import { MakeSandboxFactoryInput, SandboxFactory, SandboxMakeOpts, SandboxDriver, BackendProbe, MountSpec, SliceSpec, MountCap, MountMode, SandboxHandle, ProcessHandle, MountHandle, SpawnOpts, DriverProcess, RootfsSpec, TerminationSignal } from './types.js' */
+/** @import { MakeSandboxFactoryInput, SandboxFactory, SandboxMakeOpts, SandboxDriver, BackendProbe, MountSpec, SliceSpec, MountCap, MountMode, SandboxHandle, ProcessHandle, MountHandle, SpawnOpts, DriverProcess, RootfsSpec, TerminationSignal, EndpointDialer, EndpointProjection, EndpointProjectionOpts } from './types.js' */
 
 const FACTORY_HELP = `\
 SandboxFactory — root capability of the @endo/sandbox plugin.
@@ -176,6 +183,22 @@ Methods:
                       to SIGKILL, and reap.
 `;
 
+const PROJECTION_HELP = `\
+EndpointProjection — one daemon-side endpoint, reachable from inside a
+\`network: 'none'\` slice and from nowhere else.
+
+The slice sees a real loopback TCP endpoint in its own network namespace,
+so native tools that will not dial a Unix socket can use it. Nothing else in
+that namespace answers: no other host loopback port and no egress.
+
+Methods:
+  origin()      The URL the slice dials, e.g. http://127.0.0.1:8080.
+  port()        The loopback port inside the slice.
+  envName()     The environment variable carrying origin() into the slice.
+  isRevoked()   Whether this projection still carries reachability.
+  revoke()      Close the endpoint. Settles once the listener is gone.
+`;
+
 const MOUNT_HELP = `\
 MountHandle — a mount bound into a slice.
 
@@ -301,7 +324,7 @@ const resolveHostPath = async (scratchProvider, cap, context) => {
  * @returns {SandboxFactory}
  */
 export const makeSandboxFactory = (
-  { drivers, scratchProvider, context },
+  { drivers, scratchProvider, context, projectionPowers },
   { makeDelay = delay } = {},
 ) => {
   const driverList = harden([...drivers]);
@@ -1023,6 +1046,112 @@ export const makeSandboxFactory = (
       );
     };
 
+    // At most one projection may be live: the primitive projects one
+    // endpoint, and a second concurrent one would make "nothing else is
+    // reachable" false for the first.
+    /** @type {{ revoke: () => Promise<void> } | undefined} */
+    let liveProjection;
+
+    /**
+     * @param {EndpointDialer} dialer
+     * @param {EndpointProjectionOpts} [projectionOpts]
+     * @returns {Promise<EndpointProjection>}
+     */
+    const projectEndpointIntoSlice = async (dialer, projectionOpts = {}) => {
+      assertRunning();
+      // Refuse rather than widen. A slice whose profile shares the host's
+      // network namespace cannot confine an endpoint to itself, and quietly
+      // "upgrading" it to host-loopback is the exact failure the ladder's
+      // discipline exists to prevent.
+      assertProjectableNetwork(sliceSpec.network);
+      if (projectionPowers === undefined) {
+        throw makeError(
+          X`projectEndpoint: this sandbox factory was built without endpoint-projection powers`,
+        );
+      }
+      if (driver.attachProjection === undefined) {
+        throw makeError(
+          X`projectEndpoint: backend ${q(driver.name)} cannot confine a projected endpoint to one slice`,
+        );
+      }
+      if (liveProjection !== undefined) {
+        throw makeError(
+          X`projectEndpoint: this slice already has a live projection; revoke it first`,
+        );
+      }
+
+      const { host, port, envName } = normalizeProjectionOptions(projectionOpts);
+      const socketPath = await E(projectionPowers).provideSocketPath(
+        'endpoint-projection',
+      );
+      const spec = makeEndpointProjectionSpec({
+        socketPath,
+        host,
+        port,
+        envName,
+      });
+
+      // The listener's own cancellation, so revoking one projection does not
+      // disturb the slice, and disposing the slice settles the listener even
+      // if nobody revoked it.
+      const { cancelled: projectionCancelled, cancel: cancelProjection } =
+        makeCancelKit();
+      const service = await serveEndpointProjection({
+        dialer,
+        socketPath,
+        serveSocketPath: /** @type {any} */ (projectionPowers).serveSocketPath,
+        cancelled: projectionCancelled,
+      });
+
+      let revoked = false;
+      /** @type {Promise<void> | undefined} */
+      let revokePromise;
+      const revoke = () => {
+        if (revokePromise === undefined) {
+          revoked = true;
+          revokePromise = (async () => {
+            await null;
+            // Withdraw the endpoint from future spawns first, so a spawn
+            // racing the revocation cannot come up believing it has one.
+            await /** @type {NonNullable<SandboxDriver['detachProjection']>} */ (
+              driver.detachProjection
+            )(driverSlice).catch(() => {});
+            cancelProjection(makeError(X`endpoint projection revoked`));
+            await service.close();
+            if (liveProjection === handleForProjection) {
+              liveProjection = undefined;
+            }
+          })();
+          revokePromise.catch(() => undefined);
+        }
+        return revokePromise;
+      };
+
+      const handleForProjection = { revoke };
+
+      try {
+        await driver.attachProjection(driverSlice, spec);
+      } catch (e) {
+        cancelProjection(/** @type {Error} */ (e));
+        await service.close().catch(() => {});
+        throw e;
+      }
+      liveProjection = handleForProjection;
+
+      return /** @type {EndpointProjection} */ (
+        /** @type {unknown} */ (
+          makeExo('EndpointProjection', EndpointProjectionInterface, {
+            help: () => PROJECTION_HELP,
+            origin: () => spec.origin,
+            port: () => spec.port,
+            envName: () => spec.envName,
+            isRevoked: () => revoked,
+            revoke,
+          })
+        )
+      );
+    };
+
     /**
      * Begin — or observe — the one disposal of this slice.
      *
@@ -1056,6 +1185,13 @@ export const makeSandboxFactory = (
                 .catch(() => {}),
             ),
           );
+          // Fail closed on teardown: a projection outliving its slice would
+          // leave a listener answering for a namespace that no longer exists.
+          if (liveProjection !== undefined) {
+            await liveProjection.revoke().catch(e => {
+              containmentFailures.push(/** @type {Error} */ (e));
+            });
+          }
           try {
             await driver.teardown(driverSlice);
           } catch (e) {
@@ -1086,6 +1222,7 @@ export const makeSandboxFactory = (
         makeExo('SandboxHandle', SandboxHandleInterface, {
           help: () => `${HANDLE_HELP_BASE}\n${sliceRuntimeReport}`,
           spawn: spawnProc,
+          projectEndpoint: projectEndpointIntoSlice,
           mount: mountInSlice,
           scratch: scratchInSlice,
           open: openInSlice,

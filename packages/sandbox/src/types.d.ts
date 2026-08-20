@@ -325,10 +325,127 @@ export type SandboxHandle = FarRef<{
    * a kernel-feature probe.
    */
   fork(opts?: SandboxMakeOpts): Promise<SandboxHandle>;
+  /**
+   * Project one daemon-side endpoint into this `network: 'none'` slice, as a
+   * real loopback TCP endpoint inside the slice's own network namespace.
+   *
+   * Nothing else becomes reachable: the namespace is fresh, so there is no
+   * other listener in it, no host loopback port, and no egress. At most one
+   * projection may be live at a time, and only spawns made while it is live
+   * see the endpoint.
+   *
+   * Refused — never downgraded to a wider profile — for a slice whose network
+   * profile is anything but `none`, for a second concurrent projection, and
+   * for a backend that cannot confine the endpoint to one slice.
+   */
+  projectEndpoint(
+    dialer: EndpointDialer,
+    opts?: EndpointProjectionOpts,
+  ): Promise<EndpointProjection>;
   /** Tear down processes and ephemeral scratch, keeping mounts. */
   reset(): Promise<void>;
   /** Full teardown — all processes killed, all mounts released. */
   dispose(): Promise<void>;
+}>;
+
+// ---------------------------------------------------------------------------
+// Single-endpoint projection
+// ---------------------------------------------------------------------------
+
+/**
+ * One connection to the granted endpoint.
+ *
+ * Both ends are `@endo/exo-stream` passables rather than local iterators, so a
+ * granted endpoint may live in another vat: the git relay and the registry
+ * broker that will consume this primitive are not obliged to run inside the
+ * daemon.
+ */
+export type EndpointDialedConnection = {
+  reader: import('@endo/exo-stream').PassableBytesReader;
+  writer: import('@endo/exo-stream').PassableBytesWriter;
+};
+
+/**
+ * A connection the daemon itself accepted, in the shape `@endo/stream` uses
+ * everywhere else in the daemon. Local by construction: this is the listener
+ * the daemon binds on the projection's behalf.
+ */
+export type EndpointConnection = {
+  reader: AsyncIterable<Uint8Array>;
+  writer: {
+    next(value: Uint8Array): Promise<unknown>;
+    return(value?: unknown): Promise<unknown>;
+    throw?(error: unknown): Promise<unknown>;
+  };
+  closed: Promise<unknown>;
+};
+
+/**
+ * The authority a projection carries: the ability to open one more connection
+ * to one daemon-side endpoint, and nothing else.
+ *
+ * A dialer is deliberately a capability rather than an address. If
+ * `projectEndpoint` took a host and port, a holder of a slice handle could
+ * name any listener on the daemon's loopback — the daemon's own gateway
+ * included — and the projection would become a way to *acquire* reachability
+ * rather than a way to *place* reachability it was already granted. Holding a
+ * dialer is the grant; projecting it only changes where it can be reached
+ * from.
+ */
+export type EndpointDialer = FarRef<{
+  connect(): Promise<EndpointDialedConnection>;
+  help?(): string;
+}>;
+
+/** Caller-facing options for `SandboxHandle.projectEndpoint`. */
+export type EndpointProjectionOpts = {
+  /**
+   * The loopback port the slice dials. Any port is free inside the slice's
+   * own network namespace, so this is a naming choice rather than an
+   * allocation; it must be at least 1024 because the forwarder holds no
+   * `CAP_NET_BIND_SERVICE`.
+   */
+  port?: number;
+  /** Environment variable carrying the origin into the slice. */
+  envName?: string;
+};
+
+/**
+ * What a driver needs in order to put the endpoint in front of a slice.
+ * Carries no capability: the socket pathname is daemon-side and is never bound
+ * into the slice's filesystem, and the origin names only a loopback address in
+ * the slice's own network namespace.
+ */
+export type EndpointProjectionSpec = {
+  socketPath: string;
+  host: string;
+  port: number;
+  envName: string;
+  /** `http://<host>:<port>` — what the slice dials. */
+  origin: string;
+};
+
+/**
+ * A live projection. Revoking closes the daemon-side listener, so the slice's
+ * next connection is refused; processes already running keep their network
+ * namespace but find nothing answering in it.
+ */
+export type EndpointProjection = FarRef<{
+  /** The origin the slice dials, e.g. `http://127.0.0.1:8080`. */
+  origin(): string;
+  /** The loopback port inside the slice. */
+  port(): number;
+  /** The environment variable the slice finds `origin()` in. */
+  envName(): string;
+  /** Whether this projection still carries reachability. */
+  isRevoked(): boolean;
+  /**
+   * Close the endpoint. Settles once the listener is gone, so a caller that
+   * revokes at the end of an operation can rely on the absence rather than
+   * assume it. Idempotent.
+   */
+  revoke(): Promise<void>;
+  help(): string;
 }>;
 
 /**
@@ -457,6 +574,18 @@ export type SandboxDriver = {
   ): Promise<DriverProcess>;
   /** Tear down the slice's namespace / container. */
   teardown(slice: DriverSliceContext): Promise<void>;
+  /**
+   * Put one projected endpoint in front of the slice, so every subsequent
+   * `spawn` sees it. Optional: a backend that cannot confine a loopback
+   * endpoint to one slice omits the pair, and the factory refuses the
+   * projection rather than substituting a wider posture.
+   */
+  attachProjection?(
+    slice: DriverSliceContext,
+    projection: EndpointProjectionSpec,
+  ): Promise<void>;
+  /** Withdraw the projection; later spawns see no endpoint. */
+  detachProjection?(slice: DriverSliceContext): Promise<void>;
 };
 
 // ---------------------------------------------------------------------------
@@ -517,4 +646,29 @@ export type MakeSandboxFactoryInput = {
   scratchProvider: SandboxPowers;
   /** Formula/daemon cancellation context that owns every minted handle. */
   context?: ERef<{ whenCancelled(): Promise<unknown> }>;
+  /**
+   * Powers for single-endpoint projection. Omitted when the host cannot serve
+   * a Unix socket on the factory's behalf, in which case `projectEndpoint`
+   * refuses rather than falling back to a wider network profile.
+   */
+  projectionPowers?: SandboxProjectionPowers;
 };
+
+/**
+ * The daemon-side effects a projection needs, kept behind the same seam as the
+ * rest of the factory's host authority: `@endo/sandbox` describes the
+ * projection, and the daemon's host-tool powers supply the socket.
+ */
+export type SandboxProjectionPowers = ERef<{
+  /**
+   * Reserve a per-projection Unix socket pathname under daemon-owned ephemeral
+   * state. Short by construction — a projection socket shares the
+   * `sockaddr_un` length budget with every other socket the daemon binds.
+   */
+  provideSocketPath(label: string): Promise<string>;
+  /** Serve that pathname, with the daemon's own listener lifecycle. */
+  serveSocketPath(opts: { path: string; cancelled: Promise<never> }): Promise<{
+    connections: AsyncIterable<EndpointConnection>;
+    close(): Promise<void>;
+  }>;
+}>;
