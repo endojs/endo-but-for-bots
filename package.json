@@ -31,7 +31,7 @@
     "eslint-plugin-eslint-plugin": "^7.6.1",
     "eslint-plugin-import": "catalog:dev",
     "eslint-plugin-jsdoc": "^62.5.5",
-    "eslint-plugin-unicorn": "^72.0.0",
+    "eslint-plugin-unicorn": "^73.0.0",
     "globals": "^17.10.0",
     "js-yaml": "^5.2.3",
     "lerna": "^8.2.4",
