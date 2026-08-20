@@ -136,6 +136,7 @@ export const makeFetchService = async powers => {
           allowedOrigins: [...inspected.allowedOrigins],
           maxRequestsPerMinute: inspected.maxRequestsPerMinute,
           maxResponseBytes: inspected.maxResponseBytes,
+          maxRequestBytes: inspected.maxRequestBytes,
           // `inspect()` widens `policyMode` to `string`; it is one of the
           // `PolicyMode` literals by construction, so narrow it back.
           policyMode: /** @type {PolicyMode} */ (inspected.policyMode),

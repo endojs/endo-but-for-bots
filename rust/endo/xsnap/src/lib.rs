@@ -1452,6 +1452,14 @@ fn cbor_skip(data: &[u8], pos: usize) -> Option<usize> {
 /// program's output is separable from the runner's stderr
 /// diagnostics; warn/error ride the trace channel (stderr).
 ///
+/// `crypto` is the web-platform subset a package's `browser` build
+/// reaches for — `getRandomValues` and `randomUUID` — a standard
+/// veneer over the `randomFillBytes` host function, which populates
+/// the caller's view in place with the same shape as
+/// `getRandomValues` (no hexadecimal round-trip), so it grants no
+/// authority the compartment did not already hold. `crypto.subtle`
+/// is deliberately absent.
+///
 /// `process` is a minimal frozen shim of the Node global, not a Node
 /// emulation: real npm packages branch on `process.env.NODE_ENV`
 /// before doing anything else (react and graphql select their
@@ -1487,6 +1495,28 @@ globalThis.__archiveEndowments = {
         var err = function () { trace(format(arguments)); };
         return { log: out, info: out, debug: out, trace: out, warn: err, error: err };
     })(),
+    crypto: Object.freeze((function () {
+        var getRandomValues = function (view) {
+            if (!ArrayBuffer.isView(view)) {
+                throw new TypeError(
+                    'crypto.getRandomValues: argument must be an ArrayBuffer view');
+            }
+            randomFillBytes(view);
+            return view;
+        };
+        var randomUUID = function () {
+            var b = getRandomValues(new Uint8Array(16));
+            b[6] = (b[6] & 15) | 64;
+            b[8] = (b[8] & 63) | 128;
+            var text = '';
+            for (var i = 0; i < 16; i++) {
+                text += (b[i] + 256).toString(16).slice(1);
+                if (i === 3 || i === 5 || i === 7 || i === 9) text += '-';
+            }
+            return text;
+        };
+        return { getRandomValues: getRandomValues, randomUUID: randomUUID };
+    })()),
     process: (function () {
         var noopChain = function () { return this; };
         return Object.freeze({
@@ -1942,7 +1972,6 @@ pub fn run_xs_archive_loaded(loaded: &archive::LoadedArchive) -> Result<(), Xsna
         "__archiveEndowments.URL = globalThis.URL; \
          __archiveEndowments.URLSearchParams = globalThis.URLSearchParams;",
     );
-
     if !archive::install_archive_async(&machine, loaded) {
         return Err(XsnapError::Archive(
             "archive installation failed".to_string(),

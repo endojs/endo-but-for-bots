@@ -20,6 +20,11 @@ export type FetchLikeRequestOptions = {
   method: string;
   headers?: Record<string, string>;
   body?: unknown;
+  /**
+   * Declared only for a streamed body. The platform `fetch` requires the
+   * half-duplex declaration before it will accept an async iterable body.
+   */
+  duplex?: 'half';
   signal?: AbortSignal;
 };
 
@@ -32,6 +37,13 @@ export type HttpConfinementPolicy = {
   allowedOrigins?: string[] | (() => string[]);
   maxRequestsPerMinute?: number;
   maxResponseBytes?: number;
+  /**
+   * Cap on the bytes a request body may carry. A body of knowable size is
+   * refused before the request is dialed; a streamed body is refused at the
+   * first frame that crosses the cap. Over-limit always fails closed: unlike a
+   * response, a request body is never truncated.
+   */
+  maxRequestBytes?: number;
   timeoutMs?: number;
   allowedMethods?: Set<string>;
 };

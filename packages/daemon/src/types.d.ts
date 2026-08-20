@@ -2522,8 +2522,21 @@ export type HostToolPowers = {
     // and the daemon core is deliberately not compiled against them.
     powers: any,
     context: any,
-    options?: { env?: Record<string, string>; ownerId?: string },
+    options?: {
+      env?: Record<string, string>;
+      ownerId?: string;
+      projectionPowers?: any;
+    },
   ) => Promise<any>;
+  /**
+   * The daemon-side half of a sandbox endpoint projection: a per-projection
+   * Unix socket pathname and the daemon's own listener lifecycle over it.
+   *
+   * Optional. A supervisor that supplies none leaves `projectEndpoint`
+   * refusing with its own diagnosis rather than falling back to a wider
+   * network profile.
+   */
+  makeSandboxProjectionPowers?: () => any;
   /**
    * `@endo/9p-server`'s mount projector: resolves a mount capability to
    * a host path, standing up a 9P bridge and kernel mount when the

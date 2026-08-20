@@ -3089,6 +3089,7 @@ __metadata:
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
     "@endo/exo-stream": "workspace:^"
+    "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/patterns": "workspace:^"

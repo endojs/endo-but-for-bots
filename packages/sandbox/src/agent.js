@@ -25,7 +25,7 @@ import { makeSandboxFactory } from './factory.js';
  *
  * @param {SandboxPowers} powers - guest powers from the daemon
  * @param {unknown} context - formula cancellation context
- * @param {{ env?: Record<string, string>, ownerId?: string }} [options]
+ * @param {{ env?: Record<string, string>, ownerId?: string, projectionPowers?: import('./types.js').SandboxProjectionPowers }} [options]
  * @returns {Promise<SandboxFactory>}
  */
 export const make = async (powers, context, options = {}) => {
@@ -62,6 +62,13 @@ export const make = async (powers, context, options = {}) => {
     drivers: harden(drivers),
     scratchProvider: powers,
     context: /** @type {any} */ (context),
+    // Omitted rather than defaulted: a factory without projection powers
+    // refuses `projectEndpoint` with a diagnosis, which is the fail-closed
+    // outcome. Substituting a stand-in would let a slice come up believing it
+    // has an endpoint.
+    ...(options.projectionPowers === undefined
+      ? {}
+      : { projectionPowers: options.projectionPowers }),
   });
 };
 harden(make);

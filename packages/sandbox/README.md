@@ -297,6 +297,66 @@ exported alongside `PRIVATE_BLOCKED_RANGES`:
 These exports give operators a single source of truth they can
 feed into `firewalld` / `ufw` / `nftables` rules on the host.
 
+### Single-endpoint projection
+
+The profile ladder cannot express "one daemon-side endpoint and nothing
+else".
+`none` blocks that endpoint along with everything else, and `host-loopback`
+shares the host's entire loopback namespace, exposing every local service
+the operator happens to be running rather than the one the slice was
+granted.
+
+`SandboxHandle.projectEndpoint(dialer, opts?)` is that missing primitive,
+and it is not a rung on the ladder: it is an authority handed to one slice,
+not a posture selected for it.
+Given an `EndpointDialer` — a capability that opens one more connection to
+one daemon-side endpoint — the slice gets a real loopback TCP endpoint
+(`http://127.0.0.1:8080` by default) inside its own network namespace, and
+nothing else becomes reachable.
+
+The endpoint has to be TCP: native `git` and package managers will not dial
+a Unix socket.
+
+How it works: the driver runs the slice inside a bubblewrap invocation that
+owns a fresh network namespace, and runs
+[`src/net/forward-endpoint.js`](./src/net/forward-endpoint.js) in that
+namespace, outside the slice's own confinement.
+The forwarder binds the loopback listener the slice dials and copies bytes
+to a per-projection Unix socket the daemon serves; the daemon answers each
+accepted connection with a fresh `E(dialer).connect()`.
+The slice's own bubblewrap shares that namespace rather than unsharing a
+second one, so its only reachable address is the projected endpoint: no
+other host loopback port and no egress.
+The slice runs under its own PID and mount namespaces, so the forwarder is
+neither visible nor signallable from inside, and the daemon-side socket
+pathname is never bound into the slice's filesystem or passed in its argv
+or environment.
+
+Boundaries the primitive keeps:
+
+- **The target is a capability, never an address.**
+  If `projectEndpoint` took a host and port, a holder of a slice handle
+  could name any listener on the daemon's loopback — the daemon's own
+  gateway included.
+  Holding a dialer is the grant; projecting only changes where it can be
+  reached from.
+- **Per-slice mintable, per-operation revocable.**
+  `revoke()` withdraws the endpoint from later spawns and closes the
+  daemon-side listener, settling only once the pathname is gone.
+- **One at a time.**
+  A second concurrent projection would make "nothing else is reachable"
+  false, so it is refused.
+- **Fail closed.**
+  A projection is refused — never downgraded to a wider profile — for any
+  network profile but `none`, for a backend that cannot confine the
+  endpoint to one slice, and for a factory built without projection powers.
+  A forwarder that cannot bind exits without spawning the slice.
+- **No secret crosses into the slice.**
+  The origin is a loopback address.
+  A consumer that needs request-level routing may add a per-operation
+  random path prefix of its own; nothing here carries a credential that
+  means anything outside the projection.
+
 ## Seccomp
 
 `SeccompPolicy` accepts:

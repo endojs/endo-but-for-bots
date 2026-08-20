@@ -22,7 +22,8 @@
     "./types.js": "./src/types.d.ts",
     "./factory.js": "./src/factory.js",
     "./interfaces.js": "./src/interfaces.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./net/forward-endpoint.js": "./src/net/forward-endpoint.js"
   },
   "scripts": {
     "build": "exit 0",
@@ -40,6 +41,7 @@
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/exo-stream": "workspace:^",
+    "@endo/harden": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/promise-kit": "workspace:^"
   },

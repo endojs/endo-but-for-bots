@@ -19,12 +19,17 @@ import harden from '@endo/harden';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
-import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import {
   makeHttpConfinement,
   normalizeMethod,
   parseAllowedOrigins,
 } from '@endo/http-confine';
+
+import {
+  classifyStreamingBody,
+  iterateStreamingBody,
+  makeFramedBytesReader,
+} from './byte-frames.js';
 
 /**
  * @import {
@@ -46,18 +51,11 @@ import {
 
 const DEFAULT_MAX_REQUESTS_PER_MINUTE = 60;
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
+const DEFAULT_MAX_REQUEST_BYTES = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_POLICY_PROMPT_TIMEOUT_MS = 30_000;
 const DEFAULT_AUDIT_LIMIT = 1024;
 const DEFAULT_BINDING_LIMIT = 1024;
-
-/**
- * Chunk size for `HttpResponse.stream()`. The already-bounded body is hauled
- * over CapTP in fixed-size frames rather than as one string; the value trades
- * per-frame overhead against memory residency and is not security-relevant
- * (the response byte cap is enforced upstream by the confinement).
- */
-const RESPONSE_STREAM_CHUNK_BYTES = 16 * 1024;
 
 /**
  * The optional second argument of `HttpClient.fetch`.  Exported so tool
@@ -108,6 +106,7 @@ const PolicyShape = M.splitRecord(
     allowedOrigins: M.arrayOf(M.string()),
     maxRequestsPerMinute: M.number(),
     maxResponseBytes: M.number(),
+    maxRequestBytes: M.number(),
     policyMode: M.string(),
     revoked: M.boolean(),
   },
@@ -143,6 +142,7 @@ export const HttpClientControlInterface = M.interface('HttpClientControl', {
   removeAllowedOrigin: M.call(M.string()).returns(),
   setMaxRequestsPerMinute: M.call(M.number()).returns(),
   setMaxResponseBytes: M.call(M.number()).returns(),
+  setMaxRequestBytes: M.call(M.number()).returns(),
   revoke: M.call().returns(),
   isRevoked: M.call().returns(M.boolean()),
   listBindings: M.call().returns(M.arrayOf(BindingShape)),
@@ -650,24 +650,6 @@ const makeHttpResponse = ({ response, maxResponseBytes, bytes, truncated }) => {
   const statusText = String(response.statusText || '');
   const ok = Boolean(response.ok);
 
-  /**
-   * Yield the already-bounded body in fixed-size chunks so `stream()` hauls it
-   * over CapTP incrementally (base64-framed with flow control) instead of
-   * returning the whole body as one string. A fresh generator per `stream()`
-   * call keeps each reader independent of `text()`/`json()` and of any other
-   * concurrent `stream()` reader over the same response.
-   */
-  const chunkBody = async function* chunkBody() {
-    await null;
-    for (
-      let offset = 0;
-      offset < bytes.length;
-      offset += RESPONSE_STREAM_CHUNK_BYTES
-    ) {
-      yield bytes.slice(offset, offset + RESPONSE_STREAM_CHUNK_BYTES);
-    }
-  };
-
   return makeExo('HttpResponse', HttpResponseInterface, {
     status: () => status,
     statusText: () => statusText,
@@ -689,7 +671,10 @@ const makeHttpResponse = ({ response, maxResponseBytes, bytes, truncated }) => {
         throw err;
       }
     },
-    stream: () => bytesReaderFromIterator(chunkBody()),
+    // A fresh framed reader per `stream()` call keeps each reader independent
+    // of `text()`/`json()` and of any other concurrent `stream()` reader over
+    // the same response.
+    stream: () => makeFramedBytesReader(bytes),
     help: () => httpResponseHelp,
   });
 };
@@ -702,6 +687,10 @@ const makeHttpResponse = ({ response, maxResponseBytes, bytes, truncated }) => {
  * @param {ReadonlyArray<string>} [args.allowedOrigins]
  * @param {number} [args.maxRequestsPerMinute]
  * @param {number} [args.maxResponseBytes]
+ * @param {number} [args.maxRequestBytes] - cap on the bytes a request body may
+ *   carry. A body of knowable size is refused before the request is dialed; a
+ *   streamed body is refused at the first frame that crosses the cap. Unlike a
+ *   response, a request body is never truncated — over-limit fails closed.
  * @param {PolicyMode} [args.policyMode]
  * @param {PolicyAuthority} [args.policyAuthority]
  * @param {number} [args.policyPromptTimeoutMs]
@@ -727,6 +716,7 @@ export const makeHttpClientAndControl = ({
   allowedOrigins = [],
   maxRequestsPerMinute = DEFAULT_MAX_REQUESTS_PER_MINUTE,
   maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES,
+  maxRequestBytes = DEFAULT_MAX_REQUEST_BYTES,
   policyMode = 'strict',
   policyAuthority,
   policyPromptTimeoutMs = DEFAULT_POLICY_PROMPT_TIMEOUT_MS,
@@ -749,6 +739,10 @@ export const makeHttpClientAndControl = ({
   const responseByteLimit = validatePositiveInteger(
     maxResponseBytes,
     'maxResponseBytes',
+  );
+  const requestByteLimit = validatePositiveInteger(
+    maxRequestBytes,
+    'maxRequestBytes',
   );
 
   // Until construction finishes, binding mutations must not persist (a reload is
@@ -788,6 +782,7 @@ export const makeHttpClientAndControl = ({
       allowedOrigins: effectiveAllowedOrigins,
       maxRequestsPerMinute: requestLimit,
       maxResponseBytes: responseByteLimit,
+      maxRequestBytes: requestByteLimit,
       timeoutMs: DEFAULT_TIMEOUT_MS,
       allowedMethods: new Set(HTTP_METHODS),
     },
@@ -809,6 +804,7 @@ export const makeHttpClientAndControl = ({
         allowedOrigins: [...allowed],
         maxRequestsPerMinute: confinementPolicy.maxRequestsPerMinute,
         maxResponseBytes: confinementPolicy.maxResponseBytes,
+        maxRequestBytes: confinementPolicy.maxRequestBytes,
         policyMode: policy.getPolicyMode(),
         revoked: confinementPolicy.revoked,
       },
@@ -848,11 +844,21 @@ export const makeHttpClientAndControl = ({
       allowedMethods: new Set(HTTP_METHODS),
     });
     await policy.assertAllowed(origin, { method });
+    // A bytes reader (including a CapTP presence for a remote one) is hauled
+    // through the same framing that carries a response body the other way, so
+    // a large upload is never resident whole in this vat. Anything else is
+    // already resident and goes to the confinement as-is, which bounds it
+    // before dialing.
+    const body =
+      options.body !== undefined &&
+      classifyStreamingBody(options.body) !== 'none'
+        ? iterateStreamingBody(options.body)
+        : options.body;
     const confined = await confinement.request({
       url,
       method,
       ...(options.headers === undefined ? {} : { headers: options.headers }),
-      ...(options.body === undefined ? {} : { body: options.body }),
+      ...(body === undefined ? {} : { body }),
     });
     return makeHttpResponse({
       response: confined.response,
@@ -879,6 +885,7 @@ export const makeHttpClientAndControl = ({
         allowedOrigins: effectiveAllowedOrigins(),
         maxRequestsPerMinute: confinementPolicy.maxRequestsPerMinute,
         maxResponseBytes: confinementPolicy.maxResponseBytes,
+        maxRequestBytes: confinementPolicy.maxRequestBytes,
         policyMode: policy.getPolicyMode(),
         revoked: confinementPolicy.revoked,
       });
@@ -927,6 +934,13 @@ export const makeHttpClientAndControl = ({
       assertNotRevoked();
       confinement.setMaxResponseBytes(
         validatePositiveInteger(n, 'maxResponseBytes'),
+      );
+      notifyPolicyChange();
+    },
+    setMaxRequestBytes: n => {
+      assertNotRevoked();
+      confinement.setMaxRequestBytes(
+        validatePositiveInteger(n, 'maxRequestBytes'),
       );
       notifyPolicyChange();
     },

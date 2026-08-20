@@ -9,6 +9,7 @@ import {
   makeWorkspaceGlobal,
 } from '@endo/agent-tools/code-mode-globals/fs.js';
 import { makeGitGlobal } from '@endo/agent-tools/code-mode-globals/git.js';
+import { makeHttpGlobal } from '@endo/agent-tools/code-mode-globals/http.js';
 import { lineageOf } from '@endo/daemon/src/mount.js';
 import { isGitHistoryRewrite, isGitReadOnly } from '@endo/exo-git';
 import {
@@ -25,6 +26,7 @@ import {
  * @property {(options: { name: string, petName?: string | string[], capability: CodeModePower, surface?: 'mount' | 'filesystem' }) => CodeModeGrant} filesystem
  * @property {(options: { name: string, petName?: string | string[], capability: CodeModePower, mode: 'readOnly' | 'readWrite', authority: object }) => CodeModeGrant} provisionedFilesystem
  * @property {(options: { name: string, petName?: string | string[], capability: CodeModePower, mode: GitMode, authority: object }) => CodeModeGrant} provisionedGit
+ * @property {(options: { name: string, petName?: string | string[], capability: CodeModePower, authority: object }) => CodeModeGrant} provisionedHttp
  */
 
 /** @type {WeakSet<object>} */
@@ -267,6 +269,26 @@ export const makeCodeModeGrantMinter = () => {
       });
       if (global.declaration === undefined) {
         throw new Error('Git global is missing its generated declaration');
+      }
+      return mintGrant({
+        name,
+        petName,
+        description: global.description,
+        declaration: global.declaration,
+        capability,
+      });
+    },
+    provisionedHttp: ({ name, petName = name, capability, authority }) => {
+      assertProvisionAuthority(authority);
+      // An HttpClient is a foreign-to-this-vat capability with no local
+      // posture recognizer, but it does have a generated declaration, so the
+      // binding can be a described global rather than an opaque one. The
+      // policy it enforces is the host's, not this record's.
+      const global = makeHttpGlobal({ name, petName });
+      if (global.declaration === undefined) {
+        throw new Error(
+          'HttpClient global is missing its generated declaration',
+        );
       }
       return mintGrant({
         name,

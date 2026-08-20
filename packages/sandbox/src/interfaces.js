@@ -128,6 +128,21 @@ const SpawnOptsShape = M.splitRecord(
 );
 harden(SpawnOptsShape);
 
+/**
+ * Options for `SandboxHandle.projectEndpoint`. `port` is bounded here so a
+ * value the forwarder could never bind is refused at the boundary rather than
+ * at exec time; the lower bound is the privileged-port line, which the
+ * forwarder holds no capability to cross.
+ */
+const EndpointProjectionOptsShape = M.splitRecord(
+  {},
+  {
+    port: M.and(M.number(), M.gte(1024), M.lte(65_535)),
+    envName: M.string(),
+  },
+);
+harden(EndpointProjectionOptsShape);
+
 const BackendProbeDetailsShape = M.splitRecord(
   {},
   {
@@ -186,6 +201,11 @@ export const SandboxHandleInterface = M.interface('SandboxHandle', {
   spawn: M.call(M.arrayOf(M.string()))
     .optional(SpawnOptsShape)
     .returns(M.promise()),
+  // The endpoint is named by a dialer capability, never by an address, so a
+  // holder of this handle can project only an endpoint it was already given.
+  projectEndpoint: M.call(M.remotable('EndpointDialer'))
+    .optional(EndpointProjectionOptsShape)
+    .returns(M.promise()),
   mount: M.call(M.remotable('Mount'), M.string())
     .optional(MountModeShape)
     .returns(M.promise()),
@@ -213,6 +233,19 @@ export const ProcessHandleInterface = M.interface('SandboxProcess', {
 harden(ProcessHandleInterface);
 
 /**
+ * One daemon-side endpoint projected into a slice.
+ */
+export const EndpointProjectionInterface = M.interface('EndpointProjection', {
+  help: M.call().returns(M.string()),
+  origin: M.call().returns(M.string()),
+  port: M.call().returns(M.number()),
+  envName: M.call().returns(M.string()),
+  isRevoked: M.call().returns(M.boolean()),
+  revoke: M.call().returns(M.promise()),
+});
+harden(EndpointProjectionInterface);
+
+/**
  * A mount bound into a slice.
  */
 export const MountHandleInterface = M.interface('SandboxMount', {
@@ -230,6 +263,7 @@ harden(MountHandleInterface);
 
 export {
   BackendNameShape,
+  EndpointProjectionOptsShape,
   BackendProbeDetailsShape,
   BackendProbeShape,
   BackendSelectorShape,

@@ -25,6 +25,7 @@ const CONFINED_ALLOWED_METHODS = freeze(
 const HTTP_SCHEMES = freeze(new Set(['http:', 'https:']));
 const DEFAULT_MAX_REQUESTS_PER_MINUTE = 60;
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
+const DEFAULT_MAX_REQUEST_BYTES = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 const FORBIDDEN_HEADER_NAMES = freeze(
@@ -104,6 +105,11 @@ freeze(RateLimitError);
 export const RevokedError = makeErrorConstructor('RevokedError');
 freeze(RevokedError);
 
+export const RequestTooLargeError = makeErrorConstructor(
+  'RequestTooLargeError',
+);
+freeze(RequestTooLargeError);
+
 /**
  * @param {string} name
  * @param {string} message
@@ -121,6 +127,8 @@ const makeNamedError = (name, message) => {
       return new RateLimitError(message);
     case 'RevokedError':
       return new RevokedError(message);
+    case 'RequestTooLargeError':
+      return new RequestTooLargeError(message);
     default:
       return makeError(message);
   }
@@ -394,6 +402,76 @@ export const limitResponseBytes = (source, { maxBytes, signal }) => {
 freeze(limitResponseBytes);
 
 /**
+ * Measure an already-resident request body without copying it. Returns
+ * `undefined` for a body whose size is not knowable up front, which is the
+ * signal to bound it while it streams instead.
+ *
+ * @param {unknown} body
+ * @returns {number | undefined}
+ */
+export const residentBodyByteLength = body => {
+  if (body === undefined || body === null) {
+    return 0;
+  }
+  if (typeof body === 'string') {
+    return new TextEncoder().encode(body).byteLength;
+  }
+  if (ArrayBuffer.isView(body)) {
+    return /** @type {ArrayBufferView} */ (body).byteLength;
+  }
+  if (body instanceof ArrayBuffer) {
+    return body.byteLength;
+  }
+  return undefined;
+};
+freeze(residentBodyByteLength);
+
+/**
+ * Bound a streaming request body the way `limitResponseBytes` bounds a
+ * response: count as the bytes go by and refuse past the cap.
+ *
+ * The two directions differ in what "past the cap" means, and deliberately so.
+ * A response arrives from a server we do not control, so truncating it is the
+ * conservative outcome and the caller is told it was truncated. A request body
+ * is the caller's own, so a silent truncation would put a partial upload on
+ * the wire and call it a success: over-limit fails closed instead, before any
+ * further chunk is offered to `fetch`.
+ *
+ * The pump never holds more than one chunk, so a body far larger than the cap
+ * costs one chunk of memory and stops at the first frame that crosses it.
+ *
+ * @param {AsyncIterable<unknown>} source
+ * @param {{ maxBytes: number }} opts
+ * @returns {{ frames: AsyncIterable<Uint8Array>, sent: () => number }}
+ */
+export const limitRequestBytes = (source, { maxBytes }) => {
+  const max = validatePositiveInteger(maxBytes, 'maxBytes');
+  let total = 0;
+
+  const frames = freeze({
+    async *[Symbol.asyncIterator]() {
+      await null;
+      for await (const chunk of source) {
+        const bytes = chunkToBytes(chunk);
+        if (bytes.byteLength > 0) {
+          total += bytes.byteLength;
+          if (total > max) {
+            throw makeNamedError(
+              'RequestTooLargeError',
+              `Request body exceeds maxRequestBytes: ${max} bytes`,
+            );
+          }
+          yield bytes;
+        }
+      }
+    },
+  });
+
+  return freeze({ frames, sent: () => total });
+};
+freeze(limitRequestBytes);
+
+/**
  * @param {FetchLikeResponse} response
  * @param {Set<string>} origins
  * @returns {'follow' | 'reject'}
@@ -488,6 +566,10 @@ export const makeHttpConfinement = (policy, { fetch, now }) => {
     policy.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
     'maxResponseBytes',
   );
+  let maxRequestBytes = validatePositiveInteger(
+    policy.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES,
+    'maxRequestBytes',
+  );
   let timeoutMs = validatePositiveInteger(
     policy.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     'timeoutMs',
@@ -535,6 +617,25 @@ export const makeHttpConfinement = (policy, { fetch, now }) => {
     assertHeadersSafe(headers);
     checkOriginAllowed(url, getAllowedOrigins());
 
+    // A body whose size is knowable is refused before anything is dialed; one
+    // that is not is bounded frame by frame while it streams. Either way the
+    // cap is enforced by this confinement, never by the peer.
+    /** @type {unknown} */
+    let sendBody = body;
+    const residentBytes = residentBodyByteLength(body);
+    if (residentBytes === undefined) {
+      const limited = limitRequestBytes(
+        /** @type {AsyncIterable<unknown>} */ (body),
+        { maxBytes: maxRequestBytes },
+      );
+      sendBody = limited.frames;
+    } else if (residentBytes > maxRequestBytes) {
+      throw makeNamedError(
+        'RequestTooLargeError',
+        `Request body exceeds maxRequestBytes: ${maxRequestBytes} bytes`,
+      );
+    }
+
     const { signal, dispose } = makeRequestSignal({ timeoutMs, cancellation });
     const controller = signalToController.get(signal);
     if (controller) {
@@ -547,7 +648,16 @@ export const makeHttpConfinement = (policy, { fetch, now }) => {
           redirect: 'manual',
           method,
           ...(headers === undefined ? {} : { headers }),
-          ...(body === undefined ? {} : { body }),
+          ...(body === undefined
+            ? {}
+            : {
+                body: sendBody,
+                // A streamed body is half-duplex: the platform `fetch`
+                // requires the declaration before it will accept one.
+                ...(residentBytes === undefined
+                  ? { duplex: /** @type {const} */ ('half') }
+                  : {}),
+              }),
           signal,
         }),
       );
@@ -564,7 +674,13 @@ export const makeHttpConfinement = (policy, { fetch, now }) => {
       });
       const bytes = await limited.stream;
       assertNotRevoked();
-      return freeze({
+      // Shallow on purpose. `response` is a foreign host object — a platform
+      // `Response`, whose `headers` memoizes a sorted view into an internal
+      // slot on first iteration. A deep freeze reaches that object, and the
+      // next header read throws when the memo assignment fails. Freezing our
+      // own record is what this call is for; the foreign object is the
+      // caller's to treat as it finds it.
+      return Object.freeze({
         response,
         bytes,
         truncated: limited.truncated(),
@@ -626,6 +742,13 @@ export const makeHttpConfinement = (policy, { fetch, now }) => {
     /**
      * @param {number} n
      */
+    setMaxRequestBytes: n => {
+      assertNotRevoked();
+      maxRequestBytes = validatePositiveInteger(n, 'maxRequestBytes');
+    },
+    /**
+     * @param {number} n
+     */
     setTimeoutMs: n => {
       assertNotRevoked();
       timeoutMs = validatePositiveInteger(n, 'timeoutMs');
@@ -643,6 +766,7 @@ export const makeHttpConfinement = (policy, { fetch, now }) => {
         allowedOrigins: freeze([...getAllowedOrigins()]),
         maxRequestsPerMinute: requestLimit,
         maxResponseBytes,
+        maxRequestBytes,
         timeoutMs,
         revoked,
       }),

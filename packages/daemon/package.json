@@ -30,6 +30,7 @@
     "./locator.js": "./locator.js",
     "./pet-name.js": "./src/pet-name.js",
     "./type-guards.js": "./src/type-guards.js",
+    "./http-client-policy.js": "./src/http-client-policy.js",
     "./src/interfaces.js": "./src/interfaces.js",
     "./src/mount.js": "./src/mount.js",
     "./src/manager-node-powers.js": "./src/manager-node-powers.js",

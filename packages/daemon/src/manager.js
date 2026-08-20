@@ -500,7 +500,12 @@ const makeDaemonCore = async (
     makeHostSpawner,
     makeSandboxFactory,
     makeMountProjector,
+    makeSandboxProjectionPowers,
   } = provideHostToolPowers(hostTools);
+  // One projection seam per daemon, shared by every slice: the sockets it
+  // hands out are per projection, but the directory they live in and the
+  // listener lifecycle over them belong to the daemon.
+  const sandboxProjectionPowers = makeSandboxProjectionPowers?.();
   // One slice mint per record, plus one line on stderr.  Held by the
   // daemon core (not the formula) so a restart's re-mints and a
   // cancelled slice's original mint both land in the same ledger.
@@ -3405,6 +3410,7 @@ const makeDaemonCore = async (
         makePath: filePowers.makePath,
         joinPath: filePowers.joinPath,
         escalations: sandboxEscalations,
+        projectionPowers: sandboxProjectionPowers,
         // `provideSandbox` rejects a writable grant over a read-only
         // mount before persisting; this is the reincarnation-time
         // defense, so a persisted formula cannot smuggle one in.

@@ -12,11 +12,21 @@
  * builtins off the XS daemon bundle's compartment graph.
  */
 
+import { access, mkdtemp, rm } from 'node:fs/promises';
+import net from 'node:net';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+
 import { makeNodeFsMounter } from '@endo/9p-server/mount-caplet.js';
 import { makeMountProjector } from '@endo/9p-server/mount-projection.js';
 import { gitClone, makeNativeGitBackend } from '@endo/git';
 import { makeHostSpawner } from '@endo/host-spawner';
 import { make as makeSandboxFactory } from '@endo/sandbox';
+
+import {
+  makeSocketPathBinder,
+  serveSocketListener,
+} from './socket-lifecycle.js';
 
 /** @import { HostToolPowers } from './types.js' */
 
@@ -49,6 +59,53 @@ const makeNodeMountProjector = ({
   });
 
 /**
+ * Build the daemon-side half of a sandbox endpoint projection: a place to put
+ * a per-projection Unix socket, and the daemon's own listener lifecycle over
+ * it.
+ *
+ * Each projection gets its own short temporary directory, for two reasons.
+ * A Unix socket pathname is capped by `sun_path` at 108 bytes, and a path
+ * under the daemon's ephemeral state plus a formula-identifier segment
+ * exhausts that budget on its own. And a directory per projection is a
+ * directory the projection's own close can remove, so releasing the listener
+ * releases the pathname *and* what held it — no residue, and no dependence on
+ * the daemon reaching an orderly shutdown.
+ *
+ * The pathname reaches the forwarder, which runs beside the slice rather than
+ * inside it; it is never bound into a slice's filesystem or passed in its
+ * argv.
+ */
+const makeNodeSandboxProjectionPowers = () =>
+  harden({
+    /** @param {string} label */
+    provideSocketPath: async label => {
+      const dir = await mkdtemp(join(tmpdir(), 'endo-px-'));
+      // The label is diagnostic; the daemon owns the directory, so the socket
+      // only has to be named, not made unique.
+      void label;
+      return join(dir, 'p.sock');
+    },
+    /** @param {{ path: string, cancelled: Promise<never> }} opts */
+    serveSocketPath: async ({ path, cancelled }) => {
+      const { bind, release } = makeSocketPathBinder({ net, access, path });
+      const { connections, close } = await serveSocketListener({
+        net,
+        listen: bind,
+        cancelled,
+        afterClose: async () => {
+          await release?.();
+          // Best-effort: the socket and its marker are already gone by the
+          // time this runs, and a directory left behind is inert.
+          await rm(dirname(path), { recursive: true, force: true }).catch(
+            () => {},
+          );
+        },
+      });
+      return harden({ connections, close });
+    },
+  });
+
+/**
  * @returns {HostToolPowers}
  */
 export const makeNodeHostToolPowers = () =>
@@ -58,5 +115,6 @@ export const makeNodeHostToolPowers = () =>
     makeHostSpawner,
     makeSandboxFactory,
     makeMountProjector: makeNodeMountProjector,
+    makeSandboxProjectionPowers: makeNodeSandboxProjectionPowers,
   });
 harden(makeNodeHostToolPowers);

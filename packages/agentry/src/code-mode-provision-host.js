@@ -461,6 +461,18 @@ const realizeProvisionResources = async (
     throw makeError(X`Git remotes have no retained root Git grant`);
   }
 
+  const httpPolicy = persistence.policy.http;
+  if (httpPolicy !== undefined) {
+    const httpAlias = harden([...controllerPath, 'http']);
+    await provideOrLookup(host, httpAlias, () =>
+      E(host).provideHttpClient(httpAlias, httpPolicy),
+    );
+    // Only the client is bound into the guest. The policy-bearing
+    // `HttpClientControl` stays reachable from the host alone, so a session
+    // cannot widen its own allowlist or lift its own bounds.
+    guestBindings.push(['http', httpAlias]);
+  }
+
   const grantEntries = Object.entries(persistence.policy.grants ?? {});
   if (grantEntries.length > 0) {
     const grantsPath = harden([...controllerPath, 'grants']);

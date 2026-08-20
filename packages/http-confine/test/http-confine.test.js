@@ -10,12 +10,14 @@ import {
   RevokedError,
   assertHeadersSafe,
   checkOriginAllowed,
+  limitRequestBytes,
   limitResponseBytes,
   makeHttpConfinement,
   makeRateLimiter,
   makeRequestSignal,
   normalizeMethod,
   parseAllowedOrigins,
+  residentBodyByteLength,
   resolveRedirect,
 } from '../src/http-confine.js';
 
@@ -390,4 +392,130 @@ test('makeHttpConfinement thunk mode rejects origin mutators', t => {
   t.throws(() => core.removeAllowedOrigin('https://api.example.com'), {
     message: /externally owned/,
   });
+});
+
+test('residentBodyByteLength measures what it can and declines what it cannot', t => {
+  t.is(residentBodyByteLength(undefined), 0);
+  t.is(residentBodyByteLength(null), 0);
+  t.is(residentBodyByteLength('abc'), 3);
+  // Measured in bytes, not code units.
+  t.is(residentBodyByteLength('é'), 2);
+  t.is(residentBodyByteLength(new Uint8Array(7)), 7);
+  t.is(residentBodyByteLength(new ArrayBuffer(5)), 5);
+  t.is(
+    residentBodyByteLength(
+      (async function* nope() {
+        yield new Uint8Array(1);
+      })(),
+    ),
+    undefined,
+    'a streamed body has no knowable size, and says so',
+  );
+});
+
+test('limitRequestBytes stops at the first frame past the cap', async t => {
+  const chunk = new Uint8Array(4).fill(1);
+  const offered = [];
+  const source = (async function* generate() {
+    for (let i = 0; i < 10; i += 1) {
+      offered.push(i);
+      yield chunk;
+    }
+  })();
+  const limited = limitRequestBytes(source, { maxBytes: 10 });
+  const seen = [];
+  await t.throwsAsync(
+    (async () => {
+      for await (const frame of limited.frames) {
+        seen.push(frame.byteLength);
+      }
+    })(),
+    { message: /exceeds maxRequestBytes/ },
+  );
+  t.deepEqual(seen, [4, 4], 'two frames pass, the third crosses the cap');
+  t.is(
+    offered.length,
+    3,
+    'the source is not drained past the frame that failed',
+  );
+});
+
+test('limitRequestBytes passes a body that fits, dropping empty frames', async t => {
+  const source = (async function* generate() {
+    yield new Uint8Array(0);
+    yield new TextEncoder().encode('ab');
+    yield new Uint8Array(0);
+    yield new TextEncoder().encode('c');
+  })();
+  const limited = limitRequestBytes(source, { maxBytes: 8 });
+  const seen = [];
+  for await (const frame of limited.frames) {
+    seen.push(new TextDecoder().decode(frame));
+  }
+  t.deepEqual(seen, ['ab', 'c']);
+  t.is(limited.sent(), 3);
+});
+
+test('makeHttpConfinement refuses an over-limit resident body before dialing', async t => {
+  let dialed = 0;
+  const core = makeHttpConfinement(
+    {
+      allowedOrigins: ['https://api.example.com'],
+      maxRequestBytes: 4,
+    },
+    {
+      fetch: () => {
+        dialed += 1;
+        throw new Error('should not be reached');
+      },
+      now: () => 1000,
+    },
+  );
+  t.is(core.inspect().maxRequestBytes, 4);
+  await t.throwsAsync(
+    core.request({
+      url: 'https://api.example.com/upload',
+      method: 'POST',
+      body: 'abcde',
+    }),
+    { message: /exceeds maxRequestBytes/ },
+  );
+  t.is(dialed, 0);
+});
+
+test('makeHttpConfinement declares a streamed body half-duplex', async t => {
+  /** @type {any} */
+  let seen;
+  const core = makeHttpConfinement(
+    {
+      allowedOrigins: ['https://api.example.com'],
+      maxRequestBytes: 1024,
+    },
+    {
+      fetch: (_url, options) => {
+        seen = options;
+        return harden({
+          status: 200,
+          url: 'https://api.example.com/upload',
+          headers: {},
+          body: makeBody([]),
+        });
+      },
+      now: () => 1000,
+    },
+  );
+  const source = (async function* generate() {
+    yield new TextEncoder().encode('hello');
+  })();
+  await core.request({
+    url: 'https://api.example.com/upload',
+    method: 'POST',
+    body: source,
+  });
+  t.is(seen.duplex, 'half');
+  const frames = [];
+  for await (const frame of seen.body) {
+    frames.push(new TextDecoder().decode(frame));
+  }
+  t.deepEqual(frames, ['hello']);
 });

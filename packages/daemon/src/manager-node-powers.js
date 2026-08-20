@@ -7,12 +7,15 @@ import zlib from 'node:zlib';
 import harden from '@endo/harden';
 import { encodeHex } from '@endo/hex';
 import { bytesFromText } from '@endo/bytes/from-string.js';
-import { makePromiseKit } from '@endo/promise-kit';
-import { makePipe } from '@endo/stream';
+import { makeError, q, X } from '@endo/errors';
 import { makeNodeReader, makeNodeWriter } from '@endo/stream-node';
 import { makeNetstringCapTP } from './connection.js';
 import { makePetStoreMaker } from './pet-store.js';
 import { servePrivatePath } from './serve-private-path.js';
+import {
+  makeSocketPathBinder,
+  serveSocketListener,
+} from './socket-lifecycle.js';
 import { makeSerialJobs } from './serial-jobs.js';
 import { makeDaemonDatabase } from './manager-database-node.js';
 import { makeRegistryNodePowers } from './registry-node-powers.js';
@@ -44,56 +47,29 @@ export const gunzip = async bytes => {
  * @returns {SocketPowers}
  */
 export const makeSocketPowers = ({ net, fsp: { access } }) => {
-  const serveListener = async (listen, cancelled) => {
-    const [
-      /** @type {Reader<Connection>} */ readFrom,
-      /** @type {Writer<Connection} */ writeTo,
-    ] = makePipe();
-
-    const server = net.createServer();
-    const { promise: erred, reject: err } = makePromiseKit();
-    server.on('error', error => {
-      err(error);
-      void writeTo.throw(error);
-    });
-    server.on('close', () => {
-      void writeTo.return(undefined);
-    });
-
-    cancelled.catch(error => {
-      server.close();
-      void writeTo.throw(error);
-    });
-
-    const listening = listen(server);
-
-    await Promise.race([erred, cancelled, listening]);
-
-    server.on('connection', conn => {
-      const reader = makeNodeReader(conn);
-      const writer = makeNodeWriter(conn);
-      const closed = new Promise(resolve => conn.on('close', resolve));
-      // TODO Respect back-pressure signal and avoid accepting new connections.
-      void writeTo.next({ reader, writer, closed });
-    });
-
-    const port = await listening;
-
-    return harden({
-      port,
-      connections: readFrom,
-    });
-  };
-
   /** @type {SocketPowers['servePort']} */
-  const servePort = async ({ port, host = '0.0.0.0', cancelled }) =>
-    serveListener(
-      server =>
-        new Promise(resolve =>
-          server.listen(port, host, () => resolve(server.address().port)),
+  const servePort = async ({ port, host = '0.0.0.0', cancelled }) => {
+    const { port: boundPort, connections } = await serveSocketListener({
+      net,
+      listen: server =>
+        new Promise((resolve, reject) =>
+          server.listen(port, host, () => {
+            const address = server.address();
+            if (address === null || typeof address === 'string') {
+              reject(
+                makeError(
+                  X`Expected listener to be assigned a port on ${q(host)}`,
+                ),
+              );
+              return;
+            }
+            resolve(address.port);
+          }),
         ),
       cancelled,
-    );
+    });
+    return harden({ port: boundPort, connections });
+  };
 
   /** @type {SocketPowers['connectPort']} */
   const connectPort = ({ port, host, cancelled }) =>
@@ -118,32 +94,16 @@ export const makeSocketPowers = ({ net, fsp: { access } }) => {
 
   /** @type {SocketPowers['servePath']} */
   const servePath = async ({ path, cancelled }) => {
-    const { connections } = await serveListener(server => {
-      return new Promise((resolve, reject) =>
-        server.listen({ path }, async error => {
-          await null;
-          // In some environments, an overly-long Unix domain socket path
-          // (`sockaddr_un` `sun_path`) is silently truncated. This exposes the
-          // problem, but we may still leak the incorrectly-named file and
-          // thereby cause EADDRINUSE errors for future attempts to start.
-          error ||= await access(path).catch(err => err);
-          if (error) {
-            if (path.length >= 104) {
-              console.warn(
-                `Warning: Length of path for domain socket or named path exceeeds common maximum (104, possibly 108) for some platforms (length: ${path.length}, path: ${path})`,
-              );
-            }
-            try {
-              server.close(_serverNotRunningErr => reject(error));
-            } catch (_serverCloseErr) {
-              reject(error);
-            }
-          } else {
-            resolve(undefined);
-          }
-        }),
-      );
-    }, cancelled);
+    const { bind, release } = makeSocketPathBinder({ net, access, path });
+    const { connections } = await serveSocketListener({
+      net,
+      listen: bind,
+      cancelled,
+      // `serveSocketListener` runs this once the server closes, whether
+      // listening failed or the service was cancelled, so it is the lock's
+      // only release.
+      afterClose: release,
+    });
     return connections;
   };
 

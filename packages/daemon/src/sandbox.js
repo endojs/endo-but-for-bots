@@ -424,6 +424,10 @@ harden(makeSandboxEscalationLog);
  *   sandbox factory, which disposes every live slice when it settles.
  * @param {Record<string, string>} [args.env] Daemon-process environment
  *   the drivers read their own configuration from.
+ * @param {unknown} [args.projectionPowers] The daemon-side half of a
+ *   single-endpoint projection. Omitted when the supervisor supplies none, in
+ *   which case `projectEndpoint` refuses rather than the slice silently
+ *   getting a wider network profile.
  * @returns {Promise<{ slice: unknown, release: () => Promise<void> }>}
  */
 export const makeSandboxSlice = async ({
@@ -439,6 +443,7 @@ export const makeSandboxSlice = async ({
   assertMountGrant = () => {},
   farContext,
   env = {},
+  projectionPowers,
 }) => {
   /** @type {Array<{ innerPath: string, projection: any }>} */
   const projections = [];
@@ -536,6 +541,7 @@ export const makeSandboxSlice = async ({
     const factory = await makeSandboxFactory(scratchProvider, farContext, {
       env,
       ownerId: sandboxId,
+      ...(projectionPowers === undefined ? {} : { projectionPowers }),
     });
 
     const slice = await E(factory).make(
