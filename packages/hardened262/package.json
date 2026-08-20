@@ -28,7 +28,10 @@
     "prepack": "tsc --build tsconfig.build.json",
     "test": "node --test 'scripts/**/*.test.js'",
     "test262": "yarn build && node scripts/test.js",
-    "test:xs": "exit 0"
+    "test262:baseline": "yarn build && node scripts/test.js --baseline baseline.json",
+    "test262:report": "yarn build && node scripts/test.js --report report.json",
+    "test262:update": "yarn build && node scripts/test.js --update-baseline baseline.json",
+    "test:xs": "yarn test262:baseline"
   },
   "dependencies": {
     "@endo/compartment-mapper": "workspace:^",

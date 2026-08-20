@@ -1,6 +1,6 @@
 import { parseArgs } from 'util';
 import { fileURLToPath, pathToFileURL } from 'url';
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 
 import TestStream from 'test262-stream';
 
@@ -34,6 +34,18 @@ const options = /** @type {const} */ ({
   },
   compact: {
     type: 'boolean',
+    multiple: false,
+  },
+  baseline: {
+    type: 'string',
+    multiple: false,
+  },
+  report: {
+    type: 'string',
+    multiple: false,
+  },
+  'update-baseline': {
+    type: 'string',
     multiple: false,
   },
 });
@@ -281,7 +293,7 @@ const compactEnd = test => {
 export const agentRunsScenario = scenario =>
   scenario === 'module' || scenario === 'lockdownModule';
 
-async function* runTests({ quiet, begin }, tests) {
+export async function* runTests({ quiet, begin }, tests) {
   for await (const test of tests) {
     const { agent, scenario } = test;
     begin(test);
@@ -302,13 +314,92 @@ async function* runTests({ quiet, begin }, tests) {
   }
 }
 
+const resultStatus = test =>
+  test.skipped ? 'skipped' : test.ok ? 'passed' : 'failed';
+
+const resultScenario = test =>
+  test.zeroCoverage ? 'zeroCoverage' : `${test.agent}/${test.scenario}`;
+
+/**
+ * Build a stable, reviewable inventory of every outcome, indexed first by the
+ * scenario that produced it and then by status. This is deliberately lossless:
+ * a baseline diff names the tests that moved, not just changed totals.
+ *
+ * @param {AsyncIterable<object>} results
+ */
+export const makeResultReport = async results => {
+  /** @type {Record<string, { skipped: string[], failed: string[], passed: string[] }>} */
+  const scenarios = {};
+  for await (const result of results) {
+    const scenario = resultScenario(result);
+    scenarios[scenario] ??= { skipped: [], failed: [], passed: [] };
+    const files = scenarios[scenario][resultStatus(result)];
+    if (!files.includes(result.file)) {
+      files.push(result.file);
+    }
+  }
+
+  return {
+    version: 1,
+    scenarios: Object.fromEntries(
+      Object.entries(scenarios)
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .map(([scenario, outcomes]) => [
+          scenario,
+          Object.fromEntries(
+            Object.entries(outcomes).map(([status, files]) => [
+              status,
+              files.sort(),
+            ]),
+          ),
+        ]),
+    ),
+  };
+};
+
+const reportText = report => `${JSON.stringify(report, null, 2)}\n`;
+
+/**
+ * Name every changed baseline entry. A leading minus is an expected outcome
+ * that disappeared; a leading plus is a newly observed outcome.
+ *
+ * @param {object} expected
+ * @param {object} actual
+ */
+export const diffResultReports = (expected, actual) => {
+  const flatten = report =>
+    new Set(
+      Object.entries(report.scenarios ?? {}).flatMap(([scenario, outcomes]) =>
+        Object.entries(outcomes).flatMap(([status, files]) =>
+          files.map(file => `${scenario} ${status} ${file}`),
+        ),
+      ),
+    );
+  const expectedEntries = flatten(expected);
+  const actualEntries = flatten(actual);
+  return [
+    ...[...expectedEntries]
+      .filter(entry => !actualEntries.has(entry))
+      .sort()
+      .map(entry => `- ${entry}`),
+    ...[...actualEntries]
+      .filter(entry => !expectedEntries.has(entry))
+      .sort()
+      .map(entry => `+ ${entry}`),
+  ];
+};
+
 const main = async () => {
+  await null;
   const {
     values: {
       flag: flagArguments,
       agent: agentArguments,
       list: showList,
       compact: compactReport,
+      baseline: baselinePath,
+      report: reportPath,
+      'update-baseline': updateBaselinePath,
     },
     positionals,
   } = parseArgs({
@@ -328,6 +419,11 @@ const main = async () => {
   );
   const agents = agentArguments ?? ['xs', 'sesXs', 'sesNode'];
   const tests = scenariosForTests(stream, agents, conditions);
+
+  const resultArtifactRequested =
+    baselinePath !== undefined ||
+    reportPath !== undefined ||
+    updateBaselinePath !== undefined;
 
   if (showList) {
     if (compactReport) {
@@ -351,6 +447,31 @@ const main = async () => {
         console.log(
           `${file}:${agent}:${mode}:${lockdown ? 'lockdown' : ''}:${compartment ? 'compartment' : ''}`,
         );
+      }
+    }
+  } else if (resultArtifactRequested) {
+    const results = runTests({ quiet: true, begin: Function.prototype }, tests);
+    const report = await makeResultReport(results);
+    if (reportPath !== undefined) {
+      writeFileSync(reportPath, reportText(report));
+    }
+    if (updateBaselinePath !== undefined) {
+      writeFileSync(updateBaselinePath, reportText(report));
+    }
+    if (baselinePath !== undefined) {
+      const baseline = JSON.parse(readFileSync(baselinePath, 'utf-8'));
+      const differences = diffResultReports(baseline, report);
+      if (differences.length > 0) {
+        console.error(
+          `Result baseline changed (${differences.length} entries):`,
+        );
+        for (const difference of differences) {
+          console.error(difference);
+        }
+        console.error(
+          `Run \`yarn test262:update\` and commit ${baselinePath} if the change is intended.`,
+        );
+        process.exitCode = 1;
       }
     }
   } else {

@@ -21,6 +21,8 @@ import {
   filterNoRules,
   scenariosForTests,
   agentRunsScenario,
+  makeResultReport,
+  diffResultReports,
 } from './test.js';
 
 /**
@@ -307,4 +309,55 @@ test('agentRunsScenario wires exactly module and lockdownModule today', () => {
   assert.equal(agentRunsScenario('lockdownStrict'), false);
   assert.equal(agentRunsScenario('compartmentModule'), false);
   assert.equal(agentRunsScenario('lockdownCompartmentModule'), false);
+});
+
+// --- result report: lossless baseline indexed by agent/scenario --------------
+
+test('makeResultReport lists skipped, failed, and passed files by scenario', async () => {
+  const report = await makeResultReport(
+    asyncIterable([
+      { file: 'test/pass.js', agent: 'xs', scenario: 'module', ok: true },
+      { file: 'test/pass.js', agent: 'xs', scenario: 'module', ok: true },
+      { file: 'test/fail.js', agent: 'xs', scenario: 'module', ok: false },
+      { file: 'test/skip.js', agent: 'xs', scenario: 'strict', skipped: true },
+      { file: 'test/none.js', zeroCoverage: true, skipped: true },
+    ]),
+  );
+  assert.deepEqual(report, {
+    version: 1,
+    scenarios: {
+      'xs/module': {
+        skipped: [],
+        failed: ['test/fail.js'],
+        passed: ['test/pass.js'],
+      },
+      'xs/strict': {
+        skipped: ['test/skip.js'],
+        failed: [],
+        passed: [],
+      },
+      zeroCoverage: {
+        skipped: ['test/none.js'],
+        failed: [],
+        passed: [],
+      },
+    },
+  });
+});
+
+test('diffResultReports identifies both sides of a changed outcome', () => {
+  const expected = {
+    scenarios: {
+      'xs/module': { skipped: [], failed: ['test/x.js'], passed: [] },
+    },
+  };
+  const actual = {
+    scenarios: {
+      'xs/module': { skipped: [], failed: [], passed: ['test/x.js'] },
+    },
+  };
+  assert.deepEqual(diffResultReports(expected, actual), [
+    '- xs/module failed test/x.js',
+    '+ xs/module passed test/x.js',
+  ]);
 });
