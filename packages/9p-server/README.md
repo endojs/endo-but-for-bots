@@ -102,6 +102,28 @@ socket and runs `mount -t 9p -o trans=unix,version=9p2000.L,…`. Its
 returns a handle with `unmount()`; every live mount is torn down when
 the caplet's cancellation context fires.
 
+### Mount projection
+
+[`mount-projection.js`](./mount-projection.js) is the layer above the
+mounter, for callers whose real question is *what host path names this
+capability's contents?* — a sandbox binding a mount into a container,
+say. `makeMountProjector({ mounter, resolveHostPath, provideMount })`
+returns `projectMount(cap, options)` and
+`projectFilesystem(fs, options)`, each resolving to a projection with a
+`hostPath` and an idempotent `release()`.
+
+`projectMount` takes the physical branch when `resolveHostPath` names a
+real directory for the capability — nothing is mounted and `release()`
+is a no-op — and otherwise falls through to the 9P chain above. The
+optional `provideMount` power registers the resulting mountpoint as a
+daemon `Mount` capability; a failure there releases the kernel mount
+rather than leaking it. Both `@endo/daemon`'s `sandbox` formula and
+`@endo/claude-sandbox`'s per-session workspace go through this layer.
+
+The projector imports no `node:` builtin: the privileged parts are the
+injected `mounter` (which shells out to `mount(8)`) and `provideMount`,
+so it loads in a worker, in the daemon, or under a test with fakes.
+
 For an end-to-end walkthrough — fresh daemon, iroh networking, printing
 an invitation on the remote daemon, sharing a `Filesystem` cap, and
 mounting it on another machine — see [`DEMO.md`](./DEMO.md). That doc
