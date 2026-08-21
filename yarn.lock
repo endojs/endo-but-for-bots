@@ -1893,6 +1893,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/daemon@workspace:packages/daemon"
   dependencies:
+    "@endo/9p-server": "workspace:^"
     "@endo/base64": "workspace:^"
     "@endo/bundle-source": "workspace:^"
     "@endo/bytes": "workspace:^"
@@ -1922,6 +1923,7 @@ __metadata:
     "@endo/platform": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/relay-server": "workspace:^"
+    "@endo/sandbox": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/stream": "workspace:^"
     "@endo/stream-node": "workspace:^"
@@ -3209,7 +3211,6 @@ __metadata:
   resolution: "@endo/sandbox@workspace:packages/sandbox"
   dependencies:
     "@endo/cancel": "workspace:^"
-    "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
