@@ -133,8 +133,12 @@ harden(lineageOf);
 /**
  * Host-private accessor for daemon-minted physical mount backing.
  *
+ * `deniedSegments` is the effective lowercased set `assertSegmentAllowed`
+ * refuses, empty when nothing is denied. Naming the backing directory
+ * bypasses it, so a host that does needs to check it first.
+ *
  * @param {unknown} mount
- * @returns {{ kind: 'physical', physicalRoot: string, currentDir: string, readOnly: boolean } | undefined}
+ * @returns {{ kind: 'physical', physicalRoot: string, currentDir: string, readOnly: boolean, deniedSegments: readonly string[] } | undefined}
  */
 export const getMountBacking = mount => {
   const record = mountRecords.get(/** @type {object} */ (mount));
@@ -146,6 +150,7 @@ export const getMountBacking = mount => {
     physicalRoot: record.confinementRoot,
     currentDir: record.currentDir,
     readOnly: record.readOnly,
+    deniedSegments: record.deniedSegments,
   });
 };
 harden(getMountBacking);
@@ -1364,7 +1369,15 @@ const makeMountExo = ctx => {
 
   mountRecords.set(
     exo,
-    harden({ rootId, currentDir, confinementRoot, readOnly }),
+    harden({
+      rootId,
+      currentDir,
+      confinementRoot,
+      readOnly,
+      // A frozen copy, not the live `Set`: `getMountBacking` hands this out,
+      // and freezing a `Set` does not freeze its contents.
+      deniedSegments: harden([...(deniedSegments ?? [])]),
+    }),
   );
   // `MountInterface` is the canonical CapTP contract and `makeExo` checks the
   // implementation against it above.

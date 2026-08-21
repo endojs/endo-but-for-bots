@@ -14,6 +14,7 @@ import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 
 import { makeFilePowers } from '../src/manager-node-powers.js';
 import {
+  getMountBacking,
   makeMount,
   makeRevocableMount,
   defaultDeniedSegments,
@@ -213,6 +214,46 @@ test('override: an empty set disables denial entirely', async t => {
   const names = await E(mount).list();
   t.true(names.includes('.ssh'));
   t.true(names.includes('.env'));
+});
+
+// The host-private view of the deny set.
+
+test('getMountBacking reports the effective denied set', async t => {
+  const rootPath = makeDenyFixture(t);
+  // The three shapes a host must tell apart: default, disabled, replaced.
+  const byDefault = getMountBacking(
+    makeMount({ rootPath, readOnly: false, filePowers }),
+  );
+  t.deepEqual(byDefault?.deniedSegments, [...defaultDeniedSegments]);
+
+  const allowed = getMountBacking(
+    makeMount({ rootPath, readOnly: false, filePowers, deniedSegments: [] }),
+  );
+  t.deepEqual(allowed?.deniedSegments, []);
+
+  // Matching is case-insensitive, so the reported set is lowercased like
+  // the one `assertSegmentAllowed` probes.
+  const custom = getMountBacking(
+    makeMount({
+      rootPath,
+      readOnly: false,
+      filePowers,
+      deniedSegments: ['Secret', 'VAULT'],
+    }),
+  );
+  t.deepEqual(custom?.deniedSegments, ['secret', 'vault']);
+  t.true(Object.isFrozen(custom?.deniedSegments));
+});
+
+test('getMountBacking reports the denied set of a sub-view', async t => {
+  const rootPath = makeDenyFixture(t);
+  // A sub-view shares its parent's enforcement set, so the host-private
+  // view of it must report the same names rather than an empty set.
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  const subView = await E(mount).lookup('src');
+  t.deepEqual(getMountBacking(subView)?.deniedSegments, [
+    ...defaultDeniedSegments,
+  ]);
 });
 
 test('override: callers extend the default by spreading defaultDeniedSegments', async t => {
