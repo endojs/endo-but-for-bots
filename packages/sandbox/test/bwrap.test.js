@@ -16,6 +16,7 @@ import { setTimeout } from 'node:timers';
 import { assembleSliceArgv, makeBwrapDriver } from '../src/drivers/bwrap.js';
 import { DEFAULT_PATH } from '../src/drivers/path.js';
 import { makeSandboxFactory } from '../src/factory.js';
+import { probeBwrapUserns } from '../src/probe-bwrap-userns.js';
 
 const StubMountInterface = M.interface('Mount', {
   help: M.call().returns(M.string()),
@@ -52,86 +53,6 @@ const probeBwrap = async () => {
     });
   } catch (e) {
     return { available: false, reason: /** @type {Error} */ (e).message };
-  }
-};
-
-/**
- * Confirm that `bwrap` can actually create a user namespace on this
- * host with the same flags every slice uses.  Some hosts ship bwrap
- * but block unprivileged user-namespace creation via AppArmor,
- * `kernel.unprivileged_userns_clone=0`, or by being nested inside a
- * locked-down container.  When that happens bwrap exits non-zero with
- * `bwrap: Creating new namespace failed: ...` on stderr — a single
- * clean skip is more useful than seven look-alike exit-code-1
- * failures with the stderr swallowed.
- *
- * Returns the same shape as `probeBwrap` plus the captured stderr so
- * the skip reason can quote the kernel's own message.
- *
- * @returns {Promise<{ available: boolean; reason?: string }>}
- */
-const probeBwrapUserns = async () => {
-  await null;
-  try {
-    const proc = nodeSpawn(
-      'bwrap',
-      [
-        '--unshare-all',
-        '--die-with-parent',
-        '--cap-drop',
-        'ALL',
-        '--ro-bind-try',
-        '/usr',
-        '/usr',
-        '--ro-bind-try',
-        '/bin',
-        '/bin',
-        '--ro-bind-try',
-        '/lib',
-        '/lib',
-        '--ro-bind-try',
-        '/lib64',
-        '/lib64',
-        '--proc',
-        '/proc',
-        '--dev',
-        '/dev',
-        '--clearenv',
-        '--',
-        '/bin/true',
-      ],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
-    );
-    /** @type {Buffer[]} */
-    const stderrChunks = [];
-    proc.stderr?.on('data', c => stderrChunks.push(c));
-    return await new Promise(resolve => {
-      proc.once('error', e =>
-        resolve({
-          available: false,
-          reason: `failed to spawn bwrap: ${/** @type {Error} */ (e).message}`,
-        }),
-      );
-      proc.once('close', code => {
-        if (code === 0) {
-          resolve({ available: true });
-          return;
-        }
-        const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
-        resolve({
-          available: false,
-          reason:
-            stderr === ''
-              ? `bwrap user-namespace smoke test exit ${code}`
-              : `bwrap user-namespace smoke test exit ${code}: ${stderr}`,
-        });
-      });
-    });
-  } catch (e) {
-    return {
-      available: false,
-      reason: /** @type {Error} */ (e).message,
-    };
   }
 };
 
@@ -1142,6 +1063,7 @@ test.serial('bwrap parent death leaves no owned process group', async t => {
   owner.kill('SIGKILL');
   await new Promise(resolve => owner.once('close', resolve));
   await waitForProcessGroupGone(/** @type {number} */ (pid));
+  t.pass('parent death reaped the owned process group');
 });
 
 // --- PATH synthesis tests --------------------------------------------------
