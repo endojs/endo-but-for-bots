@@ -340,6 +340,7 @@ export default defineConfig(
       'packages/familiar/out/',
       'packages/module-source/test/fixtures/',
       'packages/module-source/src/external.types.js',
+      'packages/parser-pipeline/test/fixture/*-error.js',
       'packages/pass-style/src/types.js',
       'packages/nat/integration-test/',
       'packages/captp/scripts/',

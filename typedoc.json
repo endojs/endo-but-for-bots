@@ -43,6 +43,7 @@
     "packages/netstring",
     "packages/ocapn",
     "packages/ocapn-noise",
+    "packages/parser-pipeline",
     "packages/platform",
     "packages/preact-container",
     "packages/preact-social",
