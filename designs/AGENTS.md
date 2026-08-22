@@ -39,15 +39,22 @@ the document is materially revised.
 |--------|---------|
 | Not Started | Design written, no implementation work begun |
 | Proposed | Design under discussion, not yet accepted |
+| Draft | Design still being written; not yet ready for discussion |
 | In Progress | Implementation underway |
-| **Complete** | Fully implemented (bolded) |
-| Implemented | Synonym for Complete (some docs use this) |
+| **Complete** | Fully implemented |
+| Implemented | Synonym for Complete (older docs use this; prefer **Complete** in new work) |
 | Active | Living document, continuously maintained |
 | Reference | Informational; not an implementation target |
 | Deprecated | Superseded by another design |
+| Superseded | Replaced by a named successor design (link it) |
 
-Complete/Implemented status is sometimes bolded (`**Complete**`) for visual
-emphasis in the metadata table and in the README summary table.
+Terminal status (`**Complete**`, and the legacy synonym `Implemented`) is
+bolded in the metadata table and in the README summary table. A cell may carry
+a short parenthetical qualifier after the status word — e.g.
+`**Complete** (on \`llm\`)`, `**Complete** (archived)`, `In Progress (Phase 3)`
+— but the leading word is always one of the values above; the qualifier is a
+Note, not a new status. This keeps the README summary counts reproducible by
+bucketing each cell on its leading word.
 
 ## Document Structure
 
@@ -112,3 +119,54 @@ Progress is tracked at two levels:
   dependency graph if it has dependencies or dependents, adding a
   per-design size/duration estimate, and updating the milestone totals
   and timeline if the new work changes the critical path.
+
+## Archiving Completed Milestones
+
+`designs/README.md` is a working document; it should describe the work
+that is still ahead, not carry the full weight of everything already
+delivered. When an entire milestone is done, move it out of the README
+into `designs/ARCHIVE.md` so the working plan stays short.
+
+### When a milestone qualifies
+
+A milestone is archivable when **both** hold:
+
+1. **Every design in the milestone is landed** — its Status is
+   `Complete`, `Implemented`, or an equivalent terminal state (a
+   `Deprecated`/`Superseded` row whose successor has itself landed does
+   not block archiving; a `Reference` row that was only ever
+   informational does not block it either).
+2. **The milestone's exit criterion is met** — the prose exit criterion
+   in the milestone section is satisfied in the shipped product, not
+   merely on paper.
+
+Do not archive a milestone with any `Not Started`, `Proposed`, `In
+Progress`, or `Active` design still open. A milestone that is *mostly*
+complete stays in the README; archiving is all-or-nothing per milestone.
+
+### Where it goes and what stays behind
+
+- **Move** the entire milestone section — goal, design table, exit
+  criterion, and actual duration — into `designs/ARCHIVE.md`. The archive
+  entry must stand alone: a reader should be able to understand what the
+  milestone delivered without opening the README. Preserve the milestone
+  number and title as its archive heading.
+- **Leave behind** in `designs/README.md`, where the milestone section
+  used to be, a one-line pointer heading of the form:
+  `#### Milestone N: <Title> — **Complete**; archived to [ARCHIVE.md](ARCHIVE.md).`
+  The heading may be followed by a short provenance note (a sentence or two:
+  any pre-renumbering milestone number, the closure date, and a one-line
+  restatement that all designs are terminal and the exit criterion was met), so
+  the pointer stands on its own without opening the archive. This keeps the
+  milestone numbering contiguous and tells the next reader where the detail went.
+- The archived milestone's designs **remain rows in the README summary
+  table** (the table is the whole-corpus index, and their `Complete`
+  status is still true); only the milestone *section* and its
+  per-milestone estimate/timeline rows move. Note in the summary that
+  those designs are archived.
+
+### Archive ordering
+
+`designs/ARCHIVE.md` is ordered by milestone number (M1 first). Newly
+archived milestones append in number order, so the archive reads as the
+delivery history in the same sequence the README once presented it.

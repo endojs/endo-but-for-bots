@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-15 |
-| **Updated** | 2026-05-15 |
+| **Updated** | 2026-08-17 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+| **Status** | Implemented |
 | **Parent** | [endopi](endopi.md) |
 
 ## Motivation

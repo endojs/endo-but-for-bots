@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-03-18 |
-| **Updated** | 2026-05-10 |
+| **Updated** | 2026-08-17 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Current |
+| **Status** | Reference |
 
 ## Overview
 

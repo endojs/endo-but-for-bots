@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-07-13 |
-| **Updated** | 2026-07-15 |
+| **Updated** | 2026-08-17 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | In Progress |
 | **Supersedes** | [endoclaw-network-fetch](endoclaw-network-fetch.md) (provisioning; the capability shape is landed and carries over) |
 | **Parent** | [endoclaw](endoclaw.md) |
 

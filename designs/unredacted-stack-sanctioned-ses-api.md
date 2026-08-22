@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-07-02 |
-| **Updated** | 2026-07-10 |
+| **Updated** | 2026-08-17 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Draft — design only, no implementation |
+| **Status** | Proposed |
 | **Reviewer** | @erights (requested) |
 
 > Split out of [`captp-error-identification.md`](./captp-error-identification.md)

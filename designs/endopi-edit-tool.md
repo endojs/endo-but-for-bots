@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-15 |
-| **Updated** | 2026-07-10 |
+| **Updated** | 2026-08-17 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+| **Status** | Implemented |
 | **Parent** | [endopi](endopi.md) |
 
 > **Implementation note (2026-07-10).** The exact-string-replacement core has
