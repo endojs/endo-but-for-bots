@@ -238,13 +238,21 @@ pub(crate) fn decode_strings(p: &[u8]) -> Result<Vec<String>, SnapshotError> {
         }
         let len = u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]) as usize;
         i += 4;
-        if i + len > p.len() {
+        // checked_add: `len` is attacker-sized (a full u32), so on a
+        // 32-bit usize `i + len` can wrap past the gate and panic at
+        // the slice below instead of returning the structured error
+        // (wave-3 finding; the `i + 4` advances elsewhere cannot wrap
+        // because `i` never exceeds `p.len()`).
+        let end = i
+            .checked_add(len)
+            .ok_or(SnapshotError::Corrupt("string list entry body"))?;
+        if end > p.len() {
             return Err(SnapshotError::Corrupt("string list entry body"));
         }
-        let s = std::str::from_utf8(&p[i..i + len])
+        let s = std::str::from_utf8(&p[i..end])
             .map_err(|_| SnapshotError::Corrupt("string list entry not utf8"))?;
         out.push(s.to_string());
-        i += len;
+        i = end;
     }
     Ok(out)
 }
@@ -312,9 +320,36 @@ fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
         free.push(u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]));
         i += 4;
     }
-    let want = slot_count * SLOT_RECORD_BYTES;
+    // checked_mul, not `*`: on a 32-bit usize the product can wrap,
+    // and a wrapped `want` would satisfy the truncation gate below
+    // while `slot_count` stays attacker-sized — falsifying the bound
+    // the `seen` scratch depends on (review finding; latent until a
+    // 32-bit/wasm port, but the comment below claims the bound on
+    // every target, so make it true on every target).
+    let want = slot_count
+        .checked_mul(SLOT_RECORD_BYTES)
+        .ok_or(SnapshotError::Corrupt("HEAP record count"))?;
     if p.len() - i < want {
         return Err(SnapshotError::Corrupt("HEAP records truncated"));
+    }
+    // Semantic gates on the free list, matching the store path's
+    // (`validate_store`): every index in range, no duplicates. An
+    // out-of-range entry would panic the arena's free-bitmap rebuild
+    // at construction (the snapshot_decoder fuzz target found that
+    // panic within its first half-minute once the toolchain ran
+    // locally), and a duplicate aliases one record to two allocations
+    // after resume. Checked AFTER the records-truncation gate above,
+    // which bounds `slot_count` by the payload length, so the `seen`
+    // scratch cannot be attacker-sized.
+    let mut seen = vec![false; slot_count];
+    for &f in &free {
+        if (f as usize) >= slot_count || seen[f as usize] {
+            return Err(SnapshotError::Corrupt("HEAP free list entry"));
+        }
+        seen[f as usize] = true;
+    }
+    if free.len() as u64 + live as u64 != slot_count as u64 {
+        return Err(SnapshotError::Corrupt("HEAP live/free accounting"));
     }
     let slots = decode_slots(&p[i..i + want]).map_err(|_| SnapshotError::Corrupt("HEAP slot record"))?;
     Ok((slots, free, live))
@@ -333,7 +368,14 @@ pub(crate) fn decode_stack(p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
         return Err(SnapshotError::Corrupt("STAC header"));
     }
     let count = u32::from_be_bytes([p[0], p[1], p[2], p[3]]) as usize;
-    let want = count * SLOT_RECORD_BYTES;
+    // checked_mul for the same reason as `decode_heap`'s twin gate: on
+    // a 32-bit usize the product can wrap to a small `want` that
+    // satisfies the truncation gate below, silently short-decoding the
+    // stack (wave-3 finding — the decode_heap fix was not mirrored
+    // here; latent until a 32-bit/wasm port, closed on every target).
+    let want = count
+        .checked_mul(SLOT_RECORD_BYTES)
+        .ok_or(SnapshotError::Corrupt("STAC record count"))?;
     if p.len() - 4 < want {
         return Err(SnapshotError::Corrupt("STAC records truncated"));
     }
@@ -709,6 +751,43 @@ mod tests {
             read_machine(&bytes, &sig()),
             Err(SnapshotError::Corrupt("HEAP free list"))
         );
+    }
+
+    #[test]
+    fn heap_free_list_semantic_gates_fail_closed() {
+        // Fuzz trophy (snapshot_decoder, first local run): an
+        // out-of-range free index panicked the arena's free-bitmap
+        // rebuild at construction. The decoder now refuses range,
+        // duplicate, and accounting violations — same gates as the
+        // store path.
+        let record = [0u8; SLOT_RECORD_BYTES]; // one Undefined record
+        let arm = |free: &[u32], live: u32, slot_count: u32, what: &'static str| {
+            let mut heap = Vec::new();
+            heap.extend_from_slice(&slot_count.to_be_bytes());
+            heap.extend_from_slice(&(free.len() as u32).to_be_bytes());
+            heap.extend_from_slice(&live.to_be_bytes());
+            for f in free {
+                heap.extend_from_slice(&f.to_be_bytes());
+            }
+            for _ in 0..slot_count {
+                heap.extend_from_slice(&record);
+            }
+            let mut w = AtomWriter::new();
+            w.atom(VERS, &Version::current().encode());
+            w.atom(SIGN, &sig().encode());
+            w.atom(HEAP, &heap);
+            assert_eq!(
+                read_machine(&w.finish(), &sig()),
+                Err(SnapshotError::Corrupt(what)),
+                "free={free:?} live={live} slot_count={slot_count}"
+            );
+        };
+        // Out of range.
+        arm(&[7], 0, 1, "HEAP free list entry");
+        // Duplicate.
+        arm(&[0, 0], 0, 2, "HEAP free list entry");
+        // Accounting: free + live != slot_count.
+        arm(&[], 5, 1, "HEAP live/free accounting");
     }
 
     #[test]

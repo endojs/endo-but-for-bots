@@ -13,10 +13,17 @@ use crate::types::{Handle, MeterMode, MeterState, Message, RateLimit, WorkerInfo
 /// registered.  On next inbound message, the supervisor restores
 /// the machine from the snapshot.
 pub struct SuspendedWorker {
-    /// SHA-256 hex digest of the snapshot (CAS key).
+    /// SHA-256 hex digest of the snapshot (CAS key). Empty for a
+    /// store-backed Ironhorse worker, whose durable identity is
+    /// `heap_store` instead.
     pub sha256: String,
     /// Path to the CAS directory containing the snapshot blob.
     pub cas_dir: std::path::PathBuf,
+    /// For a store-backed Ironhorse worker: the heap database path
+    /// (designs/ironhorse-snapshot-store-seam.md). The store carries
+    /// its own (epoch, seal) succession chain, so no CAS key exists;
+    /// resume reopens the database. `None` for XS snapshot workers.
+    pub heap_store: Option<std::path::PathBuf>,
     /// Worker info (preserved for re-registration on resume).
     pub info: WorkerInfo,
     /// Metering state at suspend time (restored on resume).
@@ -132,6 +139,27 @@ impl Supervisor {
         sha256: String,
         cas_dir: std::path::PathBuf,
     ) {
+        self.mark_suspended_inner(handle, sha256, cas_dir, None);
+    }
+
+    /// Mark a store-backed Ironhorse worker as suspended.
+    ///
+    /// The heap database at `heap_store` IS the durable state — the
+    /// worker checkpointed it at every completed crank, so suspend
+    /// records only the path (no snapshot write, no CAS key). Resume
+    /// reopens the database and continues from its committed epoch
+    /// (designs/ironhorse-snapshot-store-seam.md § supervisor wiring).
+    pub fn mark_suspended_store(&self, handle: Handle, heap_store: std::path::PathBuf) {
+        self.mark_suspended_inner(handle, String::new(), std::path::PathBuf::new(), Some(heap_store));
+    }
+
+    fn mark_suspended_inner(
+        &self,
+        handle: Handle,
+        sha256: String,
+        cas_dir: std::path::PathBuf,
+        heap_store: Option<std::path::PathBuf>,
+    ) {
         let info = {
             let workers = self.workers.read().unwrap_or_else(|e| e.into_inner());
             workers.get(&handle).cloned()
@@ -154,6 +182,7 @@ impl Supervisor {
             SuspendedWorker {
                 sha256,
                 cas_dir,
+                heap_store,
                 info,
                 meter,
             },
@@ -170,6 +199,15 @@ impl Supervisor {
     /// suspended.
     pub fn take_suspended(&self, handle: Handle) -> Option<SuspendedWorker> {
         self.suspended.write().unwrap_or_else(|e| e.into_inner()).remove(&handle)
+    }
+
+    /// Put a suspended-worker record back, exactly as taken — for a
+    /// resume path that discovers it cannot serve this record (e.g. a
+    /// store-backed Ironhorse worker reaching the XS resume dispatch
+    /// before the Ironhorse envelope exists) and must leave the
+    /// worker suspended rather than half-resumed.
+    pub fn put_suspended(&self, handle: Handle, worker: SuspendedWorker) {
+        self.suspended.write().unwrap_or_else(|e| e.into_inner()).insert(handle, worker);
     }
 
     // ---- Metering API ----
@@ -321,10 +359,17 @@ fn route_message(sup: &Arc<Supervisor>, msg: Message, callbacks: &RoutingCallbac
     if sup.is_suspended(msg.to) {
         if let Some(suspended) = sup.take_suspended(msg.to) {
             if is_debug() {
-                eprintln!(
-                    "endor: resuming suspended worker {} (sha256={})",
-                    msg.to, suspended.sha256
-                );
+                // A store-backed record has no CAS key; name its heap
+                // database instead of printing an empty sha256.
+                let identity = if suspended.sha256.is_empty() {
+                    match suspended.heap_store.as_deref() {
+                        Some(p) => format!("heap_store={}", p.display()),
+                        None => "no snapshot identity".to_string(),
+                    }
+                } else {
+                    format!("sha256={}", suspended.sha256)
+                };
+                eprintln!("endor: resuming suspended worker {} ({identity})", msg.to);
             }
             (callbacks.on_resume)(sup, msg.to, suspended, msg);
             return;

@@ -184,8 +184,7 @@ export type Directory = {
  * system on their own: narrowing `kind` narrows `node` to the matching cap.
  */
 export type ResolvedNode =
-  | { kind: 'file'; node: File }
-  | { kind: 'directory'; node: Directory };
+  { kind: 'file'; node: File } | { kind: 'directory'; node: Directory };
 
 /** Options for the one-shot `File.read` porcelain. */
 export type FileReadOptions = {

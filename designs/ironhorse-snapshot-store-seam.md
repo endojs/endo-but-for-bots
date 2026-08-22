@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
-| **Updated** | 2026-08-08 |
+| **Updated** | 2026-08-18 |
 | **Author** | Aaron Kumavis (prompted) |
 | **Status** | In Progress |
 | **Builds on** | designs/ironhorse-engine.md (§ Snapshots, requirement 1c) |
@@ -132,7 +132,8 @@ still left on the lazy paths, and tightened the decoders:
   disposition stands as recorded above.
 
 **The acceptance suite is backend-parameterized (2026-08-08).** The
-six-way metamorphic determinism runner, the lazy working-set bound,
+metamorphic determinism runner (six ways then; seven since phase 8's
+adversarial-evict arm), the lazy working-set bound,
 and the checkpoint acceptance locks moved into
 `ironhorse-snapshot::store_suite` (a `store-suite` cargo feature —
 test support, never in production builds), generic over the
@@ -146,6 +147,425 @@ lifecycle scenarios. Byte-level corruption sweeps and commit-stats
 proportionality locks deliberately stay per-backend: they poke a
 backend's physical representation, so their failure taxonomy is not
 shared.
+
+**Phase 5 landed (2026-08-11, store schema v3): the row-hash tree.**
+Every row (slot page, chunk extent, small state) has a SHA-256 leaf;
+the manifest carries the combined root, which the seal signs (the
+seal hashes the full manifest).
+Backends persist leaves beside rows (a `leaf_hashes` table in SQLite;
+a leaf section in the store file layout, whose magic is
+version-suffixed; vectors in the memory store), maintain them
+transactionally via the shared batch application — which also REFUSES
+any batch whose sealed root does not match its own rows — and serve
+them through `HeapStore::leaf_hashes()` (32 bytes per row,
+metadata-scale like `inventory()`).
+`validate_store` recombines leaves against the root at open;
+`store_to_image` verifies each row as it reads; lazy faults verify
+against the pinned leaves, which the session's own commits refresh
+(see the review wave below — phase 8's eviction made
+committed-then-clean rows re-faultable, so frozen attach-time leaves
+misdiagnosed a healthy re-fault as corruption).
+The root is the store-native identity — two stores compare equal by
+manifest field, no row read; the CAS blob key remains SHA-256 of the
+canonical export, computed only at interchange (the golden vector
+proved the container unchanged across every schema bump).
+The wake-latency instrument (`wake_latency_bench.rs`, `#[ignore]`d
+like the dispatch bench) closed the phase-5 bar: on a 120k-slot
+fixture, eager wake median 15.3 ms vs lazy wake 0.41 ms (ratio
+0.027) for a one-global crank — wake cost is measurably the working
+set, not the heap.
+Provenance: medians of 5 in-process rounds, debug-excluded release
+profile, and the timed span is resume + validation + the wake crank
+— an upper bound on the attach alone.
+Still open: an interior tree if leaf counts ever make the linear
+recombine measurable.
+
+**Phase 6 landed (2026-08-11): persisted page-edge summaries and the
+summary-driven partial collector.**
+Every checkpoint writes per-page outgoing-edge summaries
+(`derive_page_edges` — a pure function of the page's records, NULL
+links excluded), carried in the batch, signed by the seal, and — as
+of schema v5 (review wave, below) — folded into the root and
+verified at commit against the very rows they travel with.
+Backends persist them beside rows (`page_edges` table / file section
+/ memory vectors).
+`reachable_pages` answers reachability from the summaries alone —
+locked to ZERO row-content reads by a counting-store test — and
+`partial_collect` frees every page unreachable from the machine's
+roots at a clean checkpoint boundary, with side-table cleanup via
+`Interp::free_pages`.
+The root set is `gc_roots` PLUS `side_table_ref_slots`: the stored
+summaries carry only ARENA edges, so a reference held in a Rust side
+table (an Array's element map, a Map/Set entry, a captured closure
+record, a suspended frame) roots its page directly — without this,
+an object reachable only through a side table was freed while live
+(the review wave's critical finding, now locked by a test that fails
+without the fix).
+The collect schedule is part of a replica's decision sequence — the
+collect rewrites the free list, so replicas must collect at the same
+boundaries, exactly as with the full collector.
+Locks: strict conservatism (`freed == 0` on summary-chained
+garbage), genuine reclaim (hand-planted page-isolated garbage frees
+at page granularity), side-table survival, and a summary-count
+refusal (`StoreError::SummaryCount`) instead of reading a truncated
+summary table as maximal garbage.
+**Honest limitation, recorded:** edges are derived from ALL records,
+dead ones included, and sequentially allocated objects straddle page
+boundaries — so a dropped allocation run keeps its pages
+summary-chained and the partial collect correctly frees nothing
+there.
+Page-isolated garbage is the reclaim case; live-only summaries after
+a sweep belong to the deferred chunk-row re-key (phase 7 note).
+
+**Phase 7 landed as the incremental-compaction cut (2026-08-11).**
+Compaction dirties only extents whose OWN bytes changed (diffed
+against the pre-compaction space, OR'd with uncommitted
+pre-compaction dirt, the tail extent's own shrink counted), so the
+post-GC checkpoint writes what MOVED, not the whole geometry.
+The review wave extended the same bound to slot pages: identity
+remaps no longer pass through `get_mut`, so a no-movement collection
+leaves slot pages clean too — both halves locked by
+`compaction_dirties_only_moved_extents`.
+The full re-key of chunk rows by stable identity — which would also
+de-chain the page summaries phase 6 needs for dropped sequential
+runs — is deferred with this honest note: it changes the slot→chunk
+reference encoding, the store schema, and the compaction algorithm
+together, and the incremental-dirt cut already removes the
+whole-space recommit cost that motivated it.
+
+**Phase 8 landed (2026-08-11): eviction.**
+See amended Design Decision 3 — clean-row fault-out with
+guard/dirty refusal (dirty lookups fail closed, `#[must_use]`
+returns).
+The review wave completed its story: a session's own checkpoint now
+refreshes the pinned row leaves and advances the arenas' backing
+geometry (`advance_backing`), because a committed-then-clean row is
+evictable and its re-fault must verify against the bytes the commit
+wrote at the committed length — frozen attach-time state misread
+that healthy re-fault as a corrupt store.
+The adversarial-evict arm evicts after every resume AND after every
+checkpoint, asserts eviction genuinely happened, and the
+evict-after-own-checkpoint regression bites on each half of the fix
+independently.
+Honest deferrals, recorded: randomized evict schedules and a
+long-running bounded-residency fixture remain open — the arm's two
+evict points are fixed, not fuzzed.
+
+**Phase 9 landed (2026-08-11, store schema v4): the paged free
+list.**
+The free list no longer rides small state: it lives in leafed,
+dirty-diffed segment rows (`FREE_SEG_ENTRIES` = 4096 entries per
+segment; kind-2 leaf rows; `free_len` in the manifest; segments in
+the seal), so per-commit small-state bytes are O(1) in heap size.
+Locks, each on its own axis:
+`small_state_stays_small_with_a_large_free_list` (sub-512-byte small
+state over a multi-segment list, round-trip length),
+`lifo_churn_rewrites_only_the_tail_free_segment` (LIFO churn ships
+exactly one segment row, observed through
+`CommitStats::free_segs_written`), and
+`free_seg_boundaries_split_and_reassemble_exactly` (order-exact
+split/reassembly at the 4096/4097 boundaries).
+Validation reassembles the list from leaf-verified segments and runs
+the range/distinctness gates on the result — the one O(free-list)
+exception to the metadata-only open, inherent because the machine
+needs the list in memory at wake.
+The sparse-attach half of phase 9 is **measured and deferred**: the
+wake-latency instrument put the whole dense wake path — zero-fill
+included — at 0.41 ms for a 120k-slot heap, so the dense trade the
+benchmark gate priced remains the right one until heaps grow orders
+of magnitude; the disposition and the re-run-the-gate condition stay
+recorded at the phase-3 trade note.
+
+**Store schema v5 landed (2026-08-11): the adversarial-review wave.**
+Eight dimension-scoped review agents swept the phase 5-9 work; the
+confirmed findings landed as three commits (GC completeness +
+partial-collect soundness + evict refresh; schema v5; this doc
+sync).
+The store-side core: page-edge summaries joined the integrity root
+(section-count header; length-prefixed edge entries in root and
+seal), and the shared `apply_batch` now verifies — before any
+backend persists — grown-region presence for ALL three row
+dimensions (free segments were previously checked only by the
+memory store), row lengths against the batch's own geometry, and
+summary coupling (summaries travel with exactly the traveling page
+rows and are recomputed from them).
+`checkpoint_to_store` recombines the stored leaves/summaries/small
+state against the stored root before building on them, so an
+at-rest edit cannot be laundered into the next validly sealed root;
+`store_to_image` verifies the small-state leaf and recombines the
+root for the export/root_hash paths that skip `validate_store`.
+Backend parity: SQLite's commit-time prior-leaf read is
+kind-filtered with per-kind contiguity, its `page_edges()` refuses a
+truncated tail, `synchronous=FULL` is verified by read-back, and
+point reads report `Empty` on an uncommitted store across all three
+backends; the file store survives bare-filename directory syncs,
+checks the free-segment count at open, drops its reservation
+amplification, and removes temp files on failed commits.
+The machine side: the GC root set gained the completion register,
+the pending microtask queue (with reaction-kind payloads — a
+suspended await's instance, a combinator's state), and a sorted
+root sequence; `external_chunk_refs` gained the interned `typeof`
+strings and queued jobs; slot-bearing side tables prune at sweep
+time so chunk reclamation lands in the same collection; free-list
+membership is an O(1) twin bitmap (the sweep was quadratic in
+free-list length).
+The golden seal was re-pinned once more; the canonical blob hash has
+never moved.
+
+**Phase 10 underway (2026-08-16): the query-driven GC layer, measured
+first.**
+The full local toolchain came up in this environment (the `c/moddable`
+oracle submodule, nightly + `cargo-fuzz`; the `snapshot_decoder`
+target promptly earned a trophy — a corrupt blob's out-of-range free
+index panicked the arena's free-bitmap rebuild — fixed with
+range/duplicate/accounting gates at the decoder edge, locked by
+`heap_free_list_semantic_gates_fail_closed`).
+Landed as infrastructure and instruments:
+
+- The SQLite backend maintains `edge_pairs (target, page)` — a
+  normalized, DERIVED twin of the sealed summaries — in the same
+  commit transaction as the rows it mirrors, and rebuilds it from
+  `page_edges` UNCONDITIONALLY at every open: the second review wave
+  showed a cardinality-only staleness gate trusts any count-preserving
+  at-rest edit forever (a moved pair silently shrinks the CTE's
+  reachability), so open never trusts the derived index at all —
+  wiped-index and moved-pair recovery are both locked by test, and
+  the geometry delete mirrors the sealed rows' normalization verbatim
+  (the divergent `OR target >=` disjunct is gone). The
+  `summary_page_count` override checks contiguity, not just COUNT
+  (gap + phantom row fails closed, locked), and both overrides report
+  `Empty` on an uncommitted store exactly like the dense defaults.
+- `pages_referencing(target)` answers the reverse question no blob
+  encoding can (O(in-degree) by primary key), and
+  `reachable_pages_sql(roots)` runs reachability INSIDE SQLite as a
+  recursive CTE; dense/CTE parity is locked by test.
+- The store instrument (`store_bench.rs`; release, medians of 5,
+  this repo's dev container, re-measured 2026-08-18 with the
+  arena-visible chain fixture — the first-cut array fixture's
+  numbers were retired with it, see the review record): reachability
+  has TWO regimes, and the honest instrument shows both. Big answer
+  (the whole 60/236/939-page graph): the dense read WINS — 0.022 /
+  0.069 / 0.289 ms against the CTE's 0.083 / 0.298 / 1.380 ms — when
+  the answer IS the graph, one bulk blob read plus an in-Rust BFS
+  beats per-row query transfer; there is no free lunch. Small answer
+  (one edgeless page): the CTE stays flat at ~0.023-0.029 ms while
+  the dense path grows 0.025 → 0.222 ms with the heap — transfer
+  proportional to the ANSWER, the regime the generational mark's
+  small mutation sets live in. Phase 11 should therefore use the CTE
+  for incremental marks and the dense read for full passes. Cold
+  partial collect on the reachable chain frees 0 and prices the pure
+  decision path: 0.18 / 0.43 / 1.52 ms. Checkpoints run 0.94 / 1.48 /
+  2.70 ms end to end — the growth is the commit's O(pages) seal
+  metadata (leaf re-read + root recombination), not the O(dirty) row
+  writes, as the arm's label now says.
+- The GC instrument (`gc_bench.rs`, same provenance; four-phase
+  split re-measured 2026-08-18 — timings vary ~±30% between sessions
+  on this shared container, so cross-figure comparisons quote
+  same-session pairs): steady-state full mark scales linearly — 2.3 /
+  5.4 / 23.5 ms at 30k / 120k / 480k slots that session — and
+  `partial_collect` runs 0.44 / 2.30 / 10.83 ms, split gate 0.099 +
+  enumeration 1.147 + query 0.191 + free 9.334 ms at 480k (the sum
+  cross-checks the end-to-end median): ~86% is the O(garbage
+  reclaimed) free term, the enumeration is the remaining O(live)
+  decision-side term, and the query term is the one the indexed path
+  already collapsed. Sweep runs ~44-49 ns/slot flat across free-list
+  sizes (the review wave's bitmap fix; the prior sweep was quadratic
+  in free-list length).
+- The attached-mode instrument (`attached_bench.rs`) closed the
+  deferred bar. Re-measured 2026-08-18 with the wake excluded from
+  the faulting arm's clock (the instrument pass): resident x1.051 of
+  detached, cold-faulting x1.061 — the faulting-minus-resident delta
+  is ~1%, so fault-during-dispatch sits at the noise floor once the
+  wake (which `wake_latency_bench` isolates) is not folded in; the
+  absolute ratios move with host load session to session.
+
+The partial collector's decision queries now run through the trait
+(`HeapStore::summary_page_count` / `reachable_page_set`, dense
+defaults preserved; the SQLite backend overrides them with `COUNT(*)`
+and the CTE — backend equivalence locked by
+`partial_collect_equivalent_across_backends`), and the GC instrument
+splits the partial's phases. The split at 480k slots / ~80k
+side-table references (measured from the fixture: one 80,000-item
+array; the review's recount corrected an earlier 160k here): enumeration 3.6 ms (O(live), the remaining
+decision-side term), reachability query 0.13 ms (killed by the
+indexed path), and ~8.5 ms in `free_pages` — O(garbage reclaimed) at
+~30-44 ns per freed slot, the pay-for-what-you-free term.
+
+A framing correction the split forced: `free_pages` is O(garbage
+RECLAIMED), not O(heap) — every freed slot was once allocated, so its
+~30-44 ns is amortized O(1) per allocation, the collector analogue of
+paying for what you used. It is not a scaling defect and page-
+wholesale freeing is NOT queued (it would buy a constant on a term
+that already amortizes; if the paged free list ever makes it nearly
+free, take it then).
+
+The enumeration term then got its constant fixed the sound way: the
+side-table walk is now a single visitor body
+(`Interp::each_side_table_ref`) with two thin projections —
+`side_table_ref_slots` (index vector, tests and future summaries) and
+`side_table_ref_page_bits` (the bitmap the partial collector roots
+from) — so the projections cannot drift (also parity-locked by
+`side_table_page_bits_agree_with_slot_enumeration`). Measured: the
+480k-slot enumeration drops 3.6 ms → 1.06 ms and end-to-end partial
+12.4 ms → 8.4 ms, now free-dominated (the amortized term above).
+
+What remains of the decision-side O(live) is the 1.06 ms walk itself.
+Retiring it outright means incremental ref-page counts behind counted
+accessors on the two bulk tables (arrays, collections; ~60 direct
+mutation sites make privacy-enforced accessors the only sound route,
+parity-locked against the enumeration) — engine-invasive enough to be
+its own reviewed change, queued behind demand from attached machines
+that actually carry side-table state that wide. The stored-summary
+variant belongs to the side-table LEDGER work (rows are not yet
+persisted; the quiescent contract keeps resumed machines
+arena-confined), so it lands there, not here.
+
+**Review wave 2 (2026-08-17): seven adversarial reviewers over the
+post-draft delta.** Findings are recorded here in full; the fixed set
+landed in this wave's commits, the open set was actioned in the
+reviewed passes that followed (2026-08-18 — the coverage subset first,
+then the instrument mislabelings; see the two closed notes below), and
+the cleared set is kept so the negatives are on the record too.
+
+*Fixed and pushed (this wave):*
+
+- **Derived-index trust hole** (raised independently by three
+  reviewers, highest severity). `edge_pairs` is the SQLite
+  collector's only reachability input yet sits outside the sealed
+  root, and the open-time staleness gate compared cardinalities
+  only — so a count-preserving at-rest edit (a moved pair) was
+  trusted forever and silently shrank reachability, the class the v5
+  sealing exists to refuse. Fixed: open rebuilds `edge_pairs` from
+  the sealed rows unconditionally; locked by
+  `edge_pairs_rebuilt_after_count_preserving_desync`.
+- **Geometry-delete normalization divergence**: the commit-side
+  `DELETE … OR target >= ?1` disjunct differed from the rebuild's
+  normalization (dead code on honest histories; a crafted shrink
+  made it oscillate). Removed — pairs mirror the sealed rows
+  verbatim.
+- **SummaryCount weakened to bare `COUNT(*)`**: accepted a gapped
+  `page_edges` (interior gap + phantom beyond-geometry row) the
+  dense default refuses. Fixed: contiguity check
+  (`COUNT == MAX(page)+1`); locked by
+  `summary_page_count_refuses_gapped_page_edges`.
+- **Empty-store parity**: both trait overrides now return `Empty` on
+  an uncommitted store like the dense defaults; read-back page/target
+  columns are range-checked into `u32`, not `as`-truncated.
+- **32-bit decoder wrap**: `slot_count * SLOT_RECORD_BYTES` uses
+  `checked_mul`, so the truncation gate's payload bound (and the
+  `seen`-scratch safety argument) holds on every target, not only
+  64-bit.
+- **CI fuzz lane** (five defects): floating nightly pinned; the
+  corpus cache re-saves every run (run-unique key — the old exact
+  key never re-saved); the change probe covers the oracle inputs the
+  fuzz build links (`c/moddable`, `.gitmodules`, xsnap platform); the
+  submodule fetch retries and fails loud; a lockfile-freshness gate
+  fails a stale `fuzz/Cargo.lock`; the smoke loop surfaces every
+  crashing target.
+- **Docs numerics** (four): "160k side-table entries" corrected to
+  the measured ~80k; a phantom function name in the counted-accessor
+  plan fixed; two unreconciled partial-collect baselines reconciled
+  with a variance note; roadmap item 10 no longer overstates the
+  trait surface.
+
+*Instrument mislabelings, closed 2026-08-18 (the reviewed instrument
+pass):* the remaining open items — the numbers were real, the framing
+was not — are now actioned.
+
+- **Instrument labels vs. what they measure.** `store_bench` now builds
+  an ARENA-VISIBLE object chain (`t.next = { v: i }`, appended at the
+  tail so the head sits on a low page) instead of the array-held graph
+  the arena summaries could not see. The `partial(cte)` arm frees
+  ~nothing on a cold resume and so prices the DECISION path (gate +
+  enumeration + query + the empty free), not an O(heap) mass-free; and
+  the reachability arms are now a big-answer/small-answer pair — the
+  full-graph root `[0]` reaches every page and scales with the heap
+  (dense and CTE agree, so the CTE has no free lunch when the answer
+  *is* the graph), while a bounded edgeless root returns O(answer) rows
+  so the CTE stays flat as the dense path still marshals the whole edge
+  set (transfer ∝ answer). Answer sizes are printed. (A small NONZERO
+  page-answer from a live root is unreachable here — 256-slot pages plus
+  prototype back-edges make the arena graph strongly connected — so the
+  small half uses the edgeless bounded root, exactly the transfer
+  isolation the generational mark needs.)
+- **`attached_bench` faulting arm** now starts its clock AFTER
+  `resume_from_store_lazy` returns, so the wake latency
+  `wake_latency_bench` already isolates is no longer folded into the
+  faulting tax; what remains under the clock is the first-crank faults
+  interleaving with dispatch (~x1.08 of detached, close to the resident
+  arm).
+- **`checkpoint` arm relabeled O(pages)**: the seal re-reads every leaf
+  hash and recombines the root, so the metadata work is O(pages) even
+  though only the dirtied rows are written.
+- **`gc_bench` four-phase warm split**: the summary-count gate, root
+  enumeration, the store query, and the page free are all timed in ONE
+  warm round (round 0 discarded as a warmup), so the dominant free term
+  is measured rather than left to subtraction and no cold sample sits
+  beside a warm median; a `ref_freed` from the public `partial_collect`
+  locks the inline phase replication to the real collector.
+- **Temp-dir cleanup**: `store_bench` replaces its manual start/end
+  `remove_dir_all` with an RAII `TempDir` guard that removes the
+  directory on drop, so a failing assertion (an unwinding panic) cleans
+  up too; the pid-keyed pre-clean still recovers a prior hard-aborted
+  run. (The query-suite's manual cleanup is unchanged — the broader
+  repo-wide convention gap stays low-severity.)
+
+*Coverage gaps from the open list, closed 2026-08-18:*
+
+- **`YIELD` stack-underflow guard is now regression-locked**
+  (`hostile_yield_below_run_base_fails_closed`, in the fuzz lib's
+  unit tests). The reproducer that finally worked: compile a real
+  generator program, walk instruction boundaries with the vm's own
+  decode to find `START_GENERATOR` and the body's `YIELD`, and
+  rewrite everything between them to single-byte POPs — the resumed
+  frame's own stack starts empty, so the pops drain the driver's
+  slots below the recorded run base and the guard must refuse by
+  name. (Two earlier fixed-offset byte patches failed because
+  `NEW_PROPERTY`'s stack arity left own-stack slack above the base —
+  the disassembly-guided rewrite is arity-independent.)
+- **FileStore joined the backend equivalence**:
+  `partial_collect_equivalent_across_backends` is now three-way
+  (Memory/File/SQLite; same freed count, same free-list length), so
+  the durable non-DB backend's edge-section decode feeds the same
+  locked decision path.
+- **Cross-crank fixture bindings are result-pinned**: query_gc's
+  crank 2 asserts its completion value and store_bench's touch crank
+  asserts the per-round counter, so a misaligned redeclaration fails
+  loudly instead of silently shifting what the suite builds.
+- **The empty-transition pair clear is bite-locked**
+  (`commit_clears_pairs_when_a_page_loses_all_edges`): a page whose
+  summary goes non-empty → empty across commits must shed its stale
+  pairs — guarding the commit-side delete behind a non-empty check
+  would have passed every prior suite while leaving ghost edges.
+
+*Cleared on inspection or by empirical probe (no defect):*
+
+- The side-table visitor refactor is set-identical to the old
+  enumeration (entry-by-entry diff), and the bitmap projection loses
+  no page — `capacity == manifest.slot_count` at every clean
+  boundary (the slot arena has no shrink path), proven and
+  test-locked.
+- Both suspend guards are correctly placed (`pop()` is total), and a
+  full dispatch-loop sweep found no other `split_off`/index/truncate
+  on a recorded base reachable below it from hostile bytecode.
+- The `decode_heap` accounting gate (`free + live == slot_count`)
+  holds for every legitimate producer — fresh, post-full-GC,
+  post-`partial_collect`, lazily-attached, and round-tripped
+  machines — verified empirically against a throwaway probe; it can
+  brick no valid snapshot.
+- The provided-default reroute is bit-identical for the
+  non-overriding backends (MemoryStore, FileStore) including
+  error-propagation order, verified old-binary vs new-binary; the two
+  new trait methods are provided-with-default, so external
+  implementors and object-safety are unaffected.
+
+Preceding it, the collaborator-review follow-up wave landed:
+`compare_payloads` as the only sanctioned two-chunk read, SQLite
+EXCLUSIVE locking (second opener fails closed, locked by test) +
+IMMEDIATE transactions + pinned `synchronous=FULL`, full per-crank
+computron vectors and a frozen golden vector in the metamorphic
+suite, a structural-span corruption arm, and the checked
+`compact` header subtraction.
 
 Phase 1-2 detail (2026-08-06):
 
@@ -240,13 +660,27 @@ wake-latency benchmark remain open.
 these bound Requirement 6 and Design Decision 7 to *structural*
 validation):**
 
-1. **Row content is not checksummed.** `validate_store` proves gates,
-   accounting, and row existence/length — a bit flip *inside* a
-   length-valid row passes and resumes a different machine. The blob
-   path has the same property (its integrity comes from the external
-   CAS address). Candidate fix: per-row hashes in the manifest chain
-   (lazy-compatible, priced per commit); whole-store verification via
-   `root_hash` exists but is O(heap).
+1. ~~Row content is not checksummed.~~ **Discharged 2026-08-11 by
+   phase 5** (store schema v3): every row has a stored leaf hash, the
+   manifest carries the sealed row-tree root, validation recombines
+   leaves against the root at open (metadata-scale), and every row
+   read — eager reify or lazy fault — verifies content against its
+   leaf. A length-preserving flip at rest now fails closed (open-time
+   error for a leaf flip; read-time structured error or named panic
+   for a row flip), locked by
+   `length_preserving_flip_at_rest_fails_closed`. Completed by
+   schema v5 (the review wave): the page-edge summaries and the
+   small state joined the root, so the discharge covers every
+   persisted row class — a summary flip now refuses at open (locked
+   by `edge_summary_flip_at_rest_fails_closed`) instead of silently
+   shrinking the partial collector's reachability — and
+   `checkpoint_to_store` recombines the stored metadata against the
+   stored root before building on it, closing the laundering path.
+   Scope, stated honestly: the tree defends against PARTIAL
+   tampering; an author who can rewrite rows, leaves, root, and seal
+   together produces a store that validates as a different machine —
+   this is tamper-evidence at row scale, not authentication. The
+   blob path keeps its external-CAS-address integrity model.
 2. **Record semantics are not validated at open.** A structurally
    valid store whose record *contents* are corrupt (a chunk offset
    below the header width, an out-of-range slot index) passes
@@ -256,15 +690,298 @@ validation):**
    open-time error either. Decoding every record at open would defeat
    lazy resume; the panic path is the accepted trade.
 
-Remaining, mapped to the phases: cargo-fuzz promotion of the hardening
-arms (the `ironhorse-fuzz` crate links the XS oracle, absent in the
-build environment); the supervisor cadence policy and `endor` binary
-wiring (with the worker-envelope work); the attached-mode and
-wake-latency benchmarks; and the phase 5-9 roadmap (added 2026-08-08,
-see Phased Implementation) toward the standing goal that no operation
-ever reifies the whole heap — incremental Merkle root hash,
-summary-driven generational mark, identity-keyed chunk rows, eviction,
-sparse attach + paged free list.
+**Supervisor wiring, first cut (2026-08-18).** The daemon gains the
+store seam's supervisor-side option: `HeapStoreOptions { path,
+signature }` + `PersistentMachine` in the endo crate's Ironhorse
+engine seam (`rust/endo/src/ironhorse_engine.rs`, feature
+`ironhorse-engine`), and the engine-agnostic `Supervisor` records
+store-backed suspends via `mark_suspended_store` — a `SuspendedWorker`
+whose durable identity is the heap database path (`heap_store`), no
+CAS key, because every completed crank already checkpointed. The
+cadence policy is deliberately minimal and stated: checkpoint per
+completed crank (the outcome is durable before the caller sees it); a
+crank that halts without completing is REWOUND — the session is
+discarded and resumed from the last checkpoint, so no partial effect
+ever persists — and a completed crank whose CHECKPOINT fails is
+rewound the same way; cranks after the first must compile to the
+linked crank's exact symbol table — a divergent table is refused
+(`SymbolMismatch`) before anything runs, with the epoch standing and
+the machine usable; `collect()` offers partial collection at any
+boundary, made durable by a checkpoint before it returns, and the
+supervisor picks the schedule (replica-visible, like the full
+collector's). The lifecycle test
+(`rust/endo/tests/ironhorse_store_worker.rs`, run by the `build-xsnap`
+CI job, which owns the bundle/toolchain prerequisites) exercises fresh
+open → multi-crank state growth with per-crank epochs → crashed-crank
+rewind → refused divergent-symbol crank (epoch stands) → partial
+collection (durable: a post-resume second collect frees 0) →
+supervisor suspend record (put-back round-trip) → close (WAL folded) →
+reopen from the record with state and epoch chain intact → the
+signature gate refusing a foreign host surface.
+
+**Two Copilot review passes over the supervisor wiring (2026-08-18),
+both fully actioned in this branch's commits.** First pass, five
+findings, fixed with locks: the symbol identity tables joined
+`gc_roots` and the side-table ref visitor — either collector could
+reclaim a descriptor page held only by id (locked by
+`symbol_key_descriptor_survives_collection`); weak-collection strong
+marking pinned as a named decision (locked by
+`weak_collection_entries_are_retained_conservatively`); `collect()`
+checkpoints before returning, so a reclamation can no longer be
+discarded by close; a completed crank whose checkpoint fails is
+rewound like a crashed crank; and routed resume of a store-backed
+worker fails loudly and re-suspends the record. Second pass, three
+findings, fixed: `apply_batch` gained the boundary-row gate — the
+prior manifest travels into commit and the prior/new TAIL of each row
+class must be present whenever its geometry-derived length changes
+(locked by
+`commit_refuses_a_geometry_change_that_omits_the_affected_tail_row`,
+bite-checked, with a well-formed twin proving the happy path); the
+chunk-arena validation pass uses `checked_add` so a corrupt length
+cannot wrap the range guard on 32-bit targets; and `PersistentMachine`
+ENFORCES the crank symbol contract — a divergent compiled table is
+refused (`SymbolMismatch`) before anything runs.
+
+**Review wave 3 (2026-08-18): five adversarial reviewers over the
+supervisor-integration delta (`ca270319..99c718ac`) — the boundary
+gate, the non-database backends, the daemon seam, the symbol and
+chunk contracts, and the docs.** Findings were first RECORDED here
+without fixes, per this branch's review convention; the fix pass
+landed the same day and each finding below carries its disposition
+inline. Nothing confirmed blocked the branch: no P0, and the one P1
+is a contract-documentation falsification whose enforcement is
+fail-closed.
+
+*Confirmed findings, with dispositions:*
+
+- **"Same name set ⟹ same symbol table" is FALSE in general (P1,
+  probe-confirmed, cross-process).** The compiled table is ordered by
+  XS's hash-bucket walk — buckets ascending, within a bucket REVERSE
+  interning order — so equal used-name sets yield equal tables IFF no
+  two names collide modulo the 1993 buckets. Counterexample:
+  `v12; v20;` vs `v20; v12;` — identical set, different
+  `program_symbol_names()`, second crank refused; collisions are
+  common (136 of 200 probe names). The enforcement compares actual
+  name strings, so it can never MISBIND — the failure mode is a
+  spurious `SymbolMismatch` refusal, never a wrong global — but the
+  authorable contract is really "same used-name set AND same
+  first-appearance order for every bucket-colliding pair", which no
+  author can see. FIXED (documentation): the ledger item below, the
+  `PersistentMachine` docs and inline comments, the refusal message,
+  and the lifecycle-test comments all state the true invariant now —
+  the enforcement itself was already fail-closed and is unchanged.
+  The per-crank relinking of the side-table ledger workstream remains
+  the lift.
+- **Resumed-machine divergence on Pending side tables is not always
+  an honest halt (P2, pre-existing, identical on all backends).** A
+  store-resumed `arr.length` answers `undefined` where the continuous
+  machine answers `10` — a silent wrong answer — while dynamic element
+  writes and symbol-keyed `Object.keys` do refuse with named
+  `Unsupported` halts. Machine/image-layer property (backend parity
+  intact); the quiescent contract's "resumed equals uninterrupted"
+  holds only over programs that avoid the Pending rows. DEFERRED to
+  the side-table ledger workstream, with the reason stated: the
+  classification IS the missing side-table entry (`length` reads
+  gate on `arrays.contains_key`), so a resumed machine cannot tell
+  "was an array" from "plain object" to halt honestly — persisting
+  the rows is the fix, not a patch here.
+- **The routed-resume guard drops the message with no reply (P2,
+  latent).** `handle_resume`'s store-backed guard logs, drops the
+  routed message (every sender today passes `response_tx: None`), and
+  re-suspends the record — so every message to such a handle is
+  silently swallowed until the envelope lands. Unreachable in
+  production: nothing outside tests calls `mark_suspended_store`.
+  FIXED (the reply arm): the guard now answers a waiting sender with
+  a named `error` envelope before re-suspending; fire-and-forget
+  messages are still dropped, loudly. The routed-resume gap itself
+  stays with the envelope workstream.
+- P3 set, with dispositions. FIXED, each with its lock or gate:
+  `decode_stack` now `checked_mul`s like its `decode_heap` twin and
+  `decode_strings` bounds `i + len` with `checked_add` (32-bit-only
+  wraps; the existing malformed-count trophies remain the locks);
+  SQLite commit runs EVERY verification before the first table
+  mutation, so a refused batch leaves the tables untouched by
+  construction — rollback is the I/O backstop, not the refusal
+  mechanism (locked by `refused_commit_leaves_the_store_untouched`);
+  `apply_batch` asserts the prior-leaf/prior-manifest baseline
+  coupling it used to trust silently (locked by
+  `commit_refuses_a_desynced_prior_leaf_baseline`);
+  `FileStore::commit` removes its temp file on a failed RENAME
+  (locked by `failed_rename_removes_the_temp_file`); an empty first
+  crank no longer links the table, so the live machine and its
+  reopened twin accept the same next crank (locked by
+  `an_empty_first_crank_does_not_link_the_table`); a failed rewind
+  reports a compound error carrying the halt (or checkpoint failure)
+  it was rewinding from instead of swallowing it; the CI step pins
+  `--features ironhorse-engine` so a default-feature flip cannot
+  turn it into a 0-test green pass; the `query_gc` fixture narration
+  states the literal-index reality (literal `arr[3]` binds an
+  id-keyed ordinary property; crank 1's variable-index loop is the
+  real items-map path); and `gc_bench` documents the
+  allocation-stride sensitivity its freed counts must be read
+  against. STILL OPEN, by design: `partial_collect` after resume
+  frees pages referenced only by Pending side-table rows (recovery
+  belongs to the ledger workstream); FileStore's dir-sync
+  ack-uncertainty and SQLite's ambiguous-commit window (inherent to
+  the layers, fail-closed either way). The PR body and the
+  test-count figure were refreshed with this pass (270 tests across
+  the four engine/store crates).
+
+*Verified clean (the negatives on the record):*
+
+- The boundary-row gate is SOUND in both directions: an exhaustive
+  geometry-by-omission sweep (119 commits, 129 refusals) upheld
+  commit-OK ⟹ open-OK with zero exceptions; the off-by-one matrix is
+  correct in every cell (shrink-to-zero and equal-count shared tail
+  included); intermediates of multi-row growth are required; a
+  required tail traveling with wrong LENGTH refuses as `RowLength`
+  and with stale CONTENT as `BaselineMismatch` — gate = length, root
+  = content-at-rest, open-time inventory = backstop.
+- No legitimate producer is refused: real cross-extent compaction,
+  free-churn-only commits, growth, and a 28-epoch drift sweep with
+  reopens and mid-sweep collections hit zero refusals; every backend
+  passes a self-consistent CURRENT prior (Memory shares its committed
+  state, FileStore re-loads the durable file each commit, SQLite
+  reads manifest and leaves inside the one IMMEDIATE transaction —
+  the stale-prior scenario is unrepresentable).
+- Three-way backend parity holds at every epoch of a lockstep
+  boot→growth→reopen→collect→reopen→eval sequence: fifteen
+  fingerprint fields identical across Memory/File/SQLite (manifest
+  with root and seal, small state, inventory, leaf hashes, edge
+  summaries, reachability sets including degenerate roots, canonical
+  export); collect-after-reopen frees exactly 0 on all three.
+- FileStore crash windows: torn, partial, and parked tmp files are
+  inert; both sides of the rename-durability window reopen valid and
+  the rolled-back side replays the lost epoch byte-identically; a
+  149-position single-byte flip sweep was caught at open, validate,
+  or first content read with zero silent passes.
+- The GC symbol roots are load-bearing on all three backends
+  (bite-check: reverting them reproduces the predicted
+  classification failure); the daemon error paths hold (double fault
+  after rewind probed; `Rc::try_unwrap` at close proven unreachable
+  through the public API; both lifecycle mutations bite — disabling
+  the rewind or collect's checkpoint each fails the test); the
+  `checked_add` chunk guard is correct though inert on 64-bit (the
+  pre-fix wrap was unreachable there; hostile chunk CONTENT remains
+  the documented decode-later-panic-at-compact surface); both
+  YIELD/AWAIT underflow guards are load-bearing (mutation-checked).
+
+Remaining, in one place — every known shortcoming, grouped by where
+the work lives (each item's plan, bar, or pin lives in its own
+section):
+
+*Seam and daemon:*
+
+- The Ironhorse worker ENVELOPE protocol (`endor worker -e
+  ironhorse`): needs the host-function surface and the SES boot
+  bundle. The heap-persistence half of the supervisor wiring is
+  landed above; the envelope is the gap — including ROUTED resume of
+  a store-backed worker, which today fails loudly and re-suspends
+  the record rather than taking the XS path (the Copilot review's
+  guard). The guard answers a waiting sender with a named `error`
+  envelope and re-suspends the record (wave-3 fix); fire-and-forget
+  messages are still dropped, loudly, until the envelope lands —
+  latent either way, since nothing outside tests calls
+  `mark_suspended_store`.
+- Any checkpoint/collect cadence policy richer than the stated
+  per-crank minimum (a supervisor policy decision; the schedule is
+  replica-visible).
+- The side-table LEDGER (its own workstream): side tables do not yet
+  persist — the quiescent contract keeps resumed machines
+  arena-confined, and `KEYS`/`SYMB` travel empty until it lands.
+  Two wave-3 sharpenings. First, the divergence is not always an
+  honest halt: a resumed `arr.length` answers `undefined` where the
+  continuous machine answers `10`, while element writes and
+  symbol-keyed `Object.keys` do refuse with named halts. Second,
+  until the ledger's per-crank relinking lands, cranks after the
+  first must compile to the linked crank's EXACT symbol table: same
+  used-name set AND same first-appearance order for every
+  hash-bucket-colliding pair (buckets ascending, within-bucket
+  reverse interning order; equal sets suffice only when
+  bucket-injective) — a divergent table is refused (`SymbolMismatch`)
+  before anything runs, fail-closed, never misbinding.
+- Sparse attach (roadmap item 9's deferred half): lazy attach still
+  allocates the dense placeholder arena up front (the O(slot_count)
+  zero-fill the phase-3 trade recorded); pages faulting into a truly
+  sparse arena remains measured-and-deferred.
+- Commit-seal metadata is O(pages) per checkpoint (the stored leaf
+  re-read plus root recombination — measured and labeled in
+  `store_bench`); incremental root maintenance is the named
+  optimization when checkpoint latency matters at large page counts.
+- Schema migration does not exist: `STORE_SCHEMA_VERSION` gates
+  refuse across versions. Acceptable while no production stores
+  exist; MUST be revisited before real worker heaps persist.
+- Integrity scope is tamper-evidence at row scale, not
+  authentication (§ threat model): an author who can rewrite rows,
+  leaves, root, and seal together still forges a validating store.
+
+*Engine (ironhorse-vm), named gaps the seam inherits:*
+
+- Counted-accessor side-table ref-page counts — retires the last
+  decision-side O(live) term; full plan in "Plan: counted side-table
+  ref-page accessors"; its own reviewed PR by design.
+- Phase 11, the summary-generational full mark (roadmap item 11) —
+  until then the full mark is O(heap).
+- Phase 12, identity-keyed chunk rows and compaction as row moves
+  (roadmap item 12) — until then chunk compaction slides the whole
+  space.
+- Weak collections are marked STRONG (no ephemeron pass): objects
+  reachable only through a WeakMap/WeakSet are retained, and
+  dead-keyed entries are never pruned — retention only, never a
+  live-object free; pinned by
+  `weak_collection_entries_are_retained_conservatively`, which flips
+  when ephemeron marking lands.
+- Symbol-key descriptors are retained CONSERVATIVELY: a symbol used
+  as a property key roots its descriptor forever (correctness
+  demands at least while its id lives in a chain; the precise
+  trace-the-property-chains refinement that would reclaim
+  dead-keyed descriptors is deferred). `Symbol.for` registry
+  retention is exact per spec.
+- Suspend in a live `try` (`yield`/`await` with a jump handler
+  active) halts with a named refusal — the jump-chain
+  snapshot/rebase into the saved frame is unbuilt (pre-existing;
+  backend-independent).
+- Detached intrinsic calls are unsupported: storing an intrinsic
+  function in a variable and calling it (`var n = Object.keys;
+  n(o)`) throws "call: not a function" — natives are dispatched by
+  access path, not by callee identity (surfaced while building the
+  symbol-key reproducer; previously unnamed).
+
+*Tooling and coverage:*
+
+- Deep fuzzing stays a local/scheduled concern; CI runs 30-second
+  smoke passes per decoder target only.
+- The oracle-linked crate test suites (ironhorse-compile, -regexp,
+  -262, the fuzz lib's unit tests) run locally/manually, not in CI —
+  no job provisions the moddable toolchain for testing them (the
+  `test-ironhorse` comment records this).
+- No line/branch-coverage measurement (llvm-cov) has been run for
+  these crates; the 270-test count is suite size, not coverage.
+- Temp-dir cleanup in the query/gc test files runs only on the
+  success path (`store_bench` has the RAII guard; the rest follow
+  the repo's pre-existing convention) — leaked `$TMPDIR` dirs on
+  assertion failure, low severity.
+
+Landed context for the items above: the
+attached-mode benchmark landed with phase 10's instruments, and the
+cargo-fuzz CI lane landed as the `fuzz-ironhorse` smoke job (30 s per
+decode/round-trip target on every ironhorse-relevant change, corpus
+cached across runs, crash artifacts uploaded on failure; deep fuzzing
+stays a local/scheduled concern). The lane's FIRST run earned trophy
+#2: hostile bytecode that enters an async run, pops below the run's
+recorded stack base, then suspends — the frame snapshot's `split_off`
+panicked past the stack end. Both suspend twins (`YIELD`/`AWAIT`) now
+refuse the malformed shape with named halts, locked by
+`hostile_suspend_below_run_base_fails_closed` on the seven-byte
+reproducer.
+The phase 5-9 roadmap is LANDED (2026-08-11, see the phase blocks
+above): row-hash tree + wake-latency instrument (5), page-edge
+summaries + partial collect (6), incremental compaction dirt (7),
+eviction + adversarial-evict arm (8), paged free list with sparse
+attach measured-and-deferred (9). The residual O(heap) operations
+are, by design: full GC (the amortized reifier, now with
+incremental-compaction dirt), eager reification, and canonical
+export at interchange.
 
 ## What Is the Problem Being Solved?
 
@@ -414,7 +1131,8 @@ pub trait HeapStore {
     fn manifest(&self) -> &StoreManifest;
     fn read_slot_page(&self, page: u32) -> Result<Box<[Slot]>, StoreError>;
     fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError>;
-    /// Stack, free list, keys/names/symbols, meter — small at quiescence.
+    /// Stack, keys/names/symbols, meter — small at quiescence (the
+    /// free list moved to segment rows in phase 9).
     fn read_small_state(&self) -> Result<SmallState, StoreError>;
     /// One atomic batch: dirty pages/extents + whole small state + epoch.
     fn commit(&mut self, batch: CheckpointBatch) -> Result<(), StoreError>;
@@ -433,7 +1151,8 @@ The arenas gain two bitmaps and an optional backing:
   page / chunk extent, set by the record/byte-mutating paths (`alloc`,
   `get_mut`, `slice_mut`, arena growth, compaction rewrite) — and
   deliberately NOT by `free`/sweep/mark, which never change record
-  bytes (the free list travels whole in the small state). The
+  bytes (the reclamation travels as free-list state — since phase 9,
+  leafed segment rows plus the manifest's `free_len`). The
   checkpoint peeks `dirty_pages()`/`dirty_extents()` and clears only
   after a successful commit.
 - **Residency bits + fault hook** (active only when a backing is
@@ -471,16 +1190,19 @@ so the store introduces no second codec:
 |---|---|---|
 | Slot page `p` | `SLOTS_PER_PAGE` × 20-byte `slot_codec` records, index order | a fixed span of the `HEAP` record array |
 | Chunk extent `e` | `CHUNK_EXTENT_BYTES` raw bytes of the chunk arena (header discipline included) | a fixed span of `BLOC` |
-| Small state | stack (`STAC`), free list + live count (`HEAP` header), keys/names/symbols (`KEYS`/`NAME`/`SYMB`), meter (`METR`) | the small atoms, verbatim |
+| Small state | stack (`STAC`), live count (`HEAP` header), keys/names/symbols (`KEYS`/`NAME`/`SYMB`), meter (`METR`); since phase 9 the free list lives in its own leafed segment rows and small state's free section is empty | the small atoms, verbatim |
 | Manifest | `VERS` + `SIGN` + `CREA` + store schema version + geometry + epoch | the header atoms |
 | Side tables | one keyed row set per ledger row, as each `Pending` atom lands | the future side-table atoms |
 
 Starting geometry (to be calibrated in phase 2): `SLOTS_PER_PAGE` =
 256 (5,120-byte page blobs), `CHUNK_EXTENT_BYTES` = 64 KiB.
-The free list is persisted verbatim — its LIFO order is load-bearing
-for deterministic slot reuse after resume — and at quiescence the
-stack is empty and the tables are small, so "small state" is genuinely
-small and is rewritten whole on every checkpoint rather than deltaed.
+The free list's LIFO order is load-bearing for deterministic slot
+reuse after resume.
+(Amended by phase 9: the list itself moved out of small state into
+leafed, dirty-diffed segment rows — order preserved exactly — so at
+quiescence the stack is empty and the tables are small, and "small
+state" stays genuinely small AND O(1) in heap size; it alone is
+rewritten whole per checkpoint.)
 
 **Logical identity.** A store state's identity is the SHA-256 of its
 canonical export (the `XS_M` bytes), not of the database file —
@@ -498,6 +1220,11 @@ CREATE TABLE chunk_exts  (ext  INTEGER PRIMARY KEY, bytes BLOB NOT NULL);
 CREATE TABLE small_state (name TEXT    PRIMARY KEY, bytes BLOB NOT NULL);
 CREATE TABLE side_tables (name TEXT NOT NULL, key BLOB NOT NULL,
                           bytes BLOB NOT NULL, PRIMARY KEY (name, key));
+-- phases 5-9 (see the landed blocks):
+CREATE TABLE leaf_hashes (kind INTEGER NOT NULL, idx INTEGER NOT NULL,
+                          hash BLOB NOT NULL, PRIMARY KEY (kind, idx));
+CREATE TABLE page_edges  (page INTEGER PRIMARY KEY, targets BLOB NOT NULL);
+CREATE TABLE free_segs   (seg  INTEGER PRIMARY KEY, bytes BLOB NOT NULL);
 ```
 
 - `PRAGMA journal_mode=WAL`; one connection, owned by the worker's
@@ -583,8 +1310,9 @@ At any crank boundary the supervisor (or the suspend verb) may call
 `checkpoint(&mut store)`:
 
 1. Drain dirty bits; encode each dirty slot page and chunk extent.
-2. Encode small state whole (stack empty at quiescence, free list
-   verbatim, meter counters).
+2. Encode small state whole (stack empty at quiescence, meter
+   counters); diff the free-list segments against the stored leaves
+   so only changed segments travel (phase 9).
 3. `store.commit(batch)` — one transaction, epoch bumped.
 
 Costs, stated honestly:
@@ -596,7 +1324,8 @@ Costs, stated honestly:
 - A checkpoint after a GC **compaction** approaches a full chunk-space
   write (slide-compaction rewrites the whole byte space and the
   offsets in surviving slots; the sweep itself dirties nothing — freed
-  records keep their bytes and the free list rides the small state).
+  records keep their bytes, and the reclamation travels as free-list
+  state: segment rows plus the manifest's `free_len`).
   Compaction is inherently global; the seam does not hide that, it
   prices it.
 - Suspend = checkpoint + drop the machine; a *durability* checkpoint
@@ -619,8 +1348,9 @@ Costs, stated honestly:
   against indexed store queries instead of resident content — is
   Open Question 6.
 - Mark bits remain transient (never stored); sweep continues to push
-  free-list entries in deterministic index order; the free list rides
-  small state.
+  free-list entries in deterministic index order; the list travels as
+  leafed segment rows (phase 9), diffed so LIFO churn ships only the
+  tail segment.
 
 ### Determinism analysis (the crux)
 
@@ -647,8 +1377,10 @@ Enforced, not merely argued — a **metamorphic determinism suite**
 extends the existing `suspend_resume_equals_uninterrupted` lock: one
 program, run (i) uninterrupted, (ii) blob suspend/resume, (iii) store
 eager resume, (iv) store lazy resume, (v) store lazy resume with an
-adversarial prefetch order, (vi) checkpoint-every-crank; all six must
-agree on result, final computrons, and heap counts.
+adversarial prefetch order, (vi) store lazy resume with adversarial
+eviction after every resume and checkpoint, (vii)
+checkpoint-every-crank; all seven must agree on per-crank results,
+the per-crank computron vector, and the final canonical blob bytes.
 
 ### Interchange, CAS, and the oracle
 
@@ -784,7 +1516,9 @@ identity, the dense lazy attach with grow-only residency, and the
 free list riding whole in small state.
 
 5. **Incremental root hash (Merkle row tree).** Per-row hashes as
-   tree leaves, maintained at commit in O(dirty · log n), the root
+   tree leaves, maintained at commit in O(dirty · log n) (landed as
+   O(dirty) hashing + an O(rows) linear recombine; the interior tree
+   remains the named upgrade), the root
    sealed into the manifest chain; faults verify the row against its
    leaf, discharging named integrity limitation 1 (unchecksummed row
    content). The Merkle root is the *store-native* identity for
@@ -841,7 +1575,135 @@ free list riding whole in small state.
    small-state bytes O(1) in heap size; slots microbench within the
    recorded envelope.
 
-*Future work beyond phase 9 (out of scope until a consumer demands
+Phases 10-12 (added 2026-08-16) continue the same goal into the
+collectors themselves — GC-shaped questions become indexed store
+queries, so collection cost tracks the mutation set, not the heap:
+
+10. **Query-driven reachability + counted side-table roots.**
+    LANDED (first half): the page-edge summaries normalized into an
+    indexed `(target, page)` pair table, derived and rebuildable,
+    maintained in the same commit transaction as the sealed rows;
+    reachability and the summary-count gate served through provided
+    `HeapStore` methods whose defaults preserve the dense semantics
+    (a recursive CTE on SQLite); reverse-edge lookups stay a
+    backend-specific `SqliteHeapStore` method until the generational
+    collector needs them from every backend.
+    RE-SCOPED (second half): the original "stored side-table summary
+    rows" idea assumed side tables persist — they do not yet (the
+    quiescent contract; the ledger is the workstream that changes
+    that), so the store cannot summarize state it does not hold. The
+    root set instead becomes a standing in-machine count maintained
+    at mutation time — the counted-accessor plan below, its own
+    reviewed PR.
+    *Bar (landed half, met):* query/dense reachability parity locked;
+    derived-index rebuild locked; backend-equivalent partial collect
+    locked. *Bar (plan):* see the plan's own bars.
+11. **Summary-generational full mark.** Mark = pages dirtied since
+    the last full collect ∪ pages reachable from them through the
+    stored summaries, resolved through the phase-10 indexes (the
+    phase-6 roadmap's generational ambition, now with the reverse
+    index it actually needs); the full-heap trace becomes a periodic
+    verification pass, not the steady state.
+    *Bar:* steady-state collection cost sub-O(live heap) on the wide
+    fixture under small mutation sets; a generational metamorphic
+    arm agrees with the other seven ways; collection timing stays a
+    release-fixed pure function of store content.
+12. **Identity-keyed chunk rows; compaction as row moves** — the
+    phase-7 deferral, unchanged scope: per-chunk indexed updates
+    retire the whole-space slide and de-chain the dead sequential
+    runs the page summaries conservatively keep.
+
+### Plan: counted side-table ref-page accessors (phase 10 remainder, its own PR)
+
+Goal: retire the last decision-side O(live) term in
+`partial_collect` — the visitor walk over every side-table entry
+(1.06 ms at 480k slots / ~80k entries after the bitmap projection) —
+by maintaining per-page reference counts incrementally at side-table
+mutation time, so the collector's root projection reads a standing
+map in O(pages-with-refs).
+
+Design:
+
+- New machine state beside the tables: per-page refcounts for
+  side-table-held references (`page -> u32`), plus the nonzero page
+  set the collector reads.
+- The two BULK tables move behind counting accessors: `ArrayData
+  .items` and the collections' `entries` move behind a NEW submodule
+  boundary (they are module-private today, but `interp.rs` is one
+  module, so today's privacy isolates nothing — the boundary is the
+  point); the only mutation route is methods that apply symmetric
+  deltas — increment the refs of stored values, decrement the refs
+  of displaced/removed values — using the same `Slot::each_ref_slot`
+  projection the visitor uses today.
+- **Privacy is the soundness mechanism.** With the fields private,
+  the compiler forces every current and future mutation site through
+  the counted path; a missed site is a compile error, not a silent
+  leak (missed decrement = permanent root) or corruption (missed
+  increment = freeing a live page). Hook-by-convention was rejected
+  for exactly this reason.
+- The small-table tail (functions, bound functions, promises,
+  iterators, typed arrays, generators, async instances, …) keeps the
+  visitor walk — it is O(small), and partial collection roots from
+  counted pages (bulk) ∪ visitor pages (tail).
+- Bulk-removal paths participate: the GC sweeps decrement per
+  dropped entry (O(dropped), amortized like the sweep itself) — the
+  retain-based page sweep lives in `Interp::free_pages` and the full
+  collector's per-table removes in `collect_garbage`'s sweep helper
+  (an earlier draft named a nonexistent `free_slot_indices`; the
+  review's recount fixed the symbols). Restore and any whole-table
+  clear rebuild the counts from what they rebuild.
+
+Inventory (strict call-site grep at the time of writing, all in
+`ironhorse-vm/src/interp.rs`, counting adjacent calls individually):
+44 direct `.items` mutation sites, 4 `.entries` sites, 11 table-level
+inserts for the two bulk tables, plus the two GC sweep paths and the
+restore path — ~60 in total. Recount before executing; the file
+moves.
+
+Soundness protocol:
+
+- Debug-build parity assertion in `partial_collect`: recompute the
+  bulk tables' page set via the visitor and assert equality with the
+  counted map before rooting (compiled out in release).
+- The projection parity lock gains a counts arm; the metamorphic
+  suite gains a collect-under-churn arm (mutate arrays/maps across
+  cranks, partial collect at each clean boundary, compare against an
+  enumeration-rooted twin).
+- Staged landing: arrays first (39 sites), collections second, each
+  stage green through the full suites before the next.
+
+Bars: partial-collect decision cost sub-O(live) on the wide fixture
+(enum column ≈ O(pages-with-refs); target < 0.1 ms at the 480k
+fixture); `dispatch_bench` and `attached_bench` within their recorded
+envelopes (one map delta beside an existing map operation is the
+expected noise floor — the gate decides); zero public-surface change
+outside `ironhorse-vm`; the store seam untouched.
+
+Why its own PR: ~60 mutation sites in the interpreter core with a
+freeing-live-pages failure class is the highest-regression-risk
+change in this arc; it deserves focused review, not a ride on an
+already-wide branch.
+
+### Seam footprint, phases 5-10
+
+The `HeapStore` seam introduced with the SQLite backend has not
+moved: same pull-based row/metadata reads plus one atomic batch
+commit, same crate layout (backend outside the engine workspace),
+same dependency direction (sqlite → snapshot → vm), engine crates
+still `forbid(unsafe_code)`/zero-C. It WIDENED, additively: phases
+5/6/9 added four required metadata methods (`leaf_hashes`,
+`page_edges`, `read_free_seg`, `free_leaf_hashes` — each with the
+store format that carries it), and phase 10 added two PROVIDED query
+methods (`summary_page_count`, `reachable_page_set`) whose defaults
+reproduce the dense semantics exactly, so third-party backends
+compile unchanged and inherit correct behavior. Engine-core changes
+across the branch are additive subsystems (GC wiring, the snapshot/
+enumeration surface, arena bitmaps) plus two named-refusal guards in
+the dispatch loop's suspend arms; hot-path neutrality is held by the
+recorded benchmark gates (detached dispatch unchanged; attached
+×1.009).
+
+*Future work beyond phase 12 (out of scope until a consumer demands
 it):* structural sharing of pages across forked workers; store
 compaction/vacuum policy.
 
@@ -857,10 +1719,25 @@ compaction/vacuum policy.
    backend.
    Ironhorse defines the seam; Endor binds it — matching the
    engine/binding naming doctrine.
-3. **Lazy reification is grow-only residency.** Fault-in, never
-   fault-out, until an eviction design earns its own amendment with
-   its prerequisites named; no observable may depend on residency
-   either way.
+3. **Lazy reification is grow-only residency.** ~~Fault-in, never
+   fault-out~~ **Amended 2026-08-11 (phase 8):** fault-out landed.
+   `evict_page`/`evict_extent` drop residency for CLEAN, source-backed
+   rows only (dirty rows are refused — their content exists nowhere
+   else; a live chunk guard refuses too), so the next touch re-faults
+   committed bytes — verified against the PINNED leaves, which the
+   session's own checkpoints refresh alongside the backing geometry
+   (the review wave's finding: a committed-then-clean row is
+   evictable, and frozen attach-time state misread its healthy
+   re-fault as store corruption). Any evict schedule is observably
+   irrelevant — the adversarial-evict metamorphic arm (warm
+   everything; evict everything after every resume AND after every
+   checkpoint; assert the evictions happened) agrees with the other
+   six ways on every backend, and an evict-after-own-checkpoint
+   regression bites on each half of the refresh independently.
+   Randomized evict schedules and a long-running bounded-residency
+   fixture are the recorded deferrals. The dense arrays keep their RAM until phase 9's sparse
+   backing; eviction is the correctness machinery that makes bounded
+   residency possible.
 4. **GC is the amortized reifier and its scheduling is untouched.**
    Collection stays a pure function of release-fixed thresholds; the
    first collect after a lazy resume pays full reification, and a
@@ -877,7 +1754,7 @@ compaction/vacuum policy.
    faults to genuine I/O errors, which surface as worker death — the
    supervisor's existing recovery path — never as a wrong answer.
 8. **Determinism is enforced by metamorphic tests, not argued.** The
-   six-way agreement suite is the acceptance instrument; the analysis
+   seven-way agreement suite is the acceptance instrument; the analysis
    above only explains why it is expected to pass.
 
 ## Open Questions

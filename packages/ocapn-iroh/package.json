@@ -44,7 +44,7 @@
     "@endo/stream": "workspace:^"
   },
   "optionalDependencies": {
-    "@number0/iroh": "^1.0.0"
+    "@number0/iroh": "^1.1.0"
   },
   "devDependencies": {
     "@endo/eventual-send": "workspace:^",

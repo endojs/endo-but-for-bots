@@ -23,8 +23,6 @@
  * @import {
  *   ModuleDescriptor,
  *   SourceModuleDescriptor,
- *   StrictModuleDescriptor,
- *   ThirdPartyStaticModuleInterface,
  *   VirtualModuleSource,
  * } from 'ses'
  */
@@ -261,10 +259,16 @@ export const makeDeferredAttenuatorsProvider = (
         }
         attenuatorSpecifier = defaultAttenuator;
       }
-      const { namespace } = await compartments[ATTENUATORS_COMPARTMENT].import(
+      const attenuatorsCompartment = compartments[ATTENUATORS_COMPARTMENT];
+      const result = await attenuatorsCompartment.import(
         /** @type {string} */ (attenuatorSpecifier),
       );
-      return namespace;
+      // A compartment constructed with `__noNamespaceBox__: true` returns the
+      // bare namespace from `import` rather than a boxed `{ namespace }`.
+      return /** @type {Attenuator} */ (
+        // eslint-disable-next-line no-underscore-dangle
+        attenuatorsCompartment.__noNamespaceBox__ ? result : result.namespace
+      );
     };
   }
 
@@ -633,4 +637,106 @@ export const attenuateModuleHook = async (
     attenuationDefinition: policyValue,
     moduleDescriptor: attenuatable,
   });
+};
+
+/**
+ * Returns an array of "issue" objects for each unknown canonical name referenced
+ * in `policy`.
+ *
+ * @param {Set<CanonicalName>} canonicalNames Set of all known canonical names
+ * @param {SomePolicy} policy Policy to validate
+ * @returns {Array<{canonicalName: CanonicalName, message: string, path:
+ * string[], suggestion?: CanonicalName}>} Array of "issue" objects
+ */
+export const findUnknownCanonicalNames = (canonicalNames, policy) => {
+  /**
+   * Finds a suggestion for `badName` if it is a suffix of any canonical name in
+   * `canonicalNames`.
+   *
+   * @param {string} badName Unknown canonical name
+   * @returns {CanonicalName | undefined} Canonical name with a suffix of
+   * `>${badName}`, or `undefined` if none found
+   */
+  const findSuggestion = badName => {
+    for (const canonicalName of canonicalNames) {
+      if (canonicalName.endsWith(`>${badName}`)) {
+        return canonicalName;
+      }
+    }
+    return undefined;
+  };
+
+  /**
+   * @type {Array<{canonicalName: CanonicalName, message: string, path:
+   * string[], suggestion?: CanonicalName}>}
+   */
+  const issues = [];
+
+  // check any packages referenced by entry compartment
+  if (typeof policy.entry?.packages === 'object' && policy.entry.packages) {
+    for (const entryPackageName of keys(policy.entry?.packages ?? {})) {
+      if (!canonicalNames.has(entryPackageName)) {
+        const issueMessage = `Resource ${q(entryPackageName)} from entry policy was not found`;
+        const suggestion = findSuggestion(entryPackageName);
+        const issue = {
+          canonicalName: entryPackageName,
+          message: issueMessage,
+          path: ['entry', 'packages', entryPackageName],
+        };
+        if (suggestion) {
+          issue.suggestion = suggestion;
+        }
+        issues.push(issue);
+      }
+    }
+  }
+
+  // drill into resources, checking the resource name (key) first
+  for (const [resourceName, resourcePolicy] of entries(
+    policy.resources ?? {},
+  )) {
+    if (
+      resourceName !== ENTRY_COMPARTMENT &&
+      !canonicalNames.has(resourceName)
+    ) {
+      const issueMessage = `Resource ${q(resourceName)} was not found`;
+      const suggestion = findSuggestion(resourceName);
+      const issue = {
+        canonicalName: resourceName,
+        message: issueMessage,
+        path: ['resources', resourceName],
+      };
+      if (suggestion) {
+        issue.suggestion = suggestion;
+      }
+      issues.push(issue);
+    }
+
+    // check any packages referenced from within a resource
+    if (
+      resourcePolicy?.packages &&
+      typeof resourcePolicy.packages === 'object'
+    ) {
+      for (const packageName of keys(resourcePolicy.packages)) {
+        if (
+          resourceName !== ENTRY_COMPARTMENT &&
+          !canonicalNames.has(packageName)
+        ) {
+          const issueMessage = `Resource ${q(packageName)} from resource ${q(resourceName)} was not found`;
+          const suggestion = findSuggestion(packageName);
+          const issue = {
+            canonicalName: packageName,
+            message: issueMessage,
+            path: ['resources', resourceName, 'packages', packageName],
+          };
+          if (suggestion) {
+            issue.suggestion = suggestion;
+          }
+          issues.push(issue);
+        }
+      }
+    }
+  }
+
+  return issues;
 };

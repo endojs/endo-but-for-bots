@@ -3,11 +3,11 @@
 import net from 'net';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
-import { test } from './_util.js';
 import { makeOcapn } from '../src/client/index.js';
 import { makeTcpNetLayer } from '../src/netlayers/tcp-test-only.js';
 import { encodeSwissnum } from '../src/client/util.js';
 import { syrupCodec } from '../src/syrup/index.js';
+import { makeTestOcapn, test } from './_util.js';
 
 /**
  * @template T
@@ -215,13 +215,13 @@ test('syrup framing round-trip through the test-only TCP netlayer', async t => {
   /** @type {NetlayerRef<Awaited<ReturnType<typeof makeTcpNetLayer>>>} */
   const netlayerRefB = {};
 
-  const clientA = await makeOcapn({
+  const clientA = await makeTestOcapn({
     codec: syrupCodec,
     network: captureTcpNetLayer(netlayerRefA, 'syrup-A'),
     debugLabel: 'syrup-A',
     debugMode: true,
   });
-  const clientB = await makeOcapn({
+  const clientB = await makeTestOcapn({
     codec: syrupCodec,
     network: captureTcpNetLayer(netlayerRefB, 'syrup-B'),
     debugLabel: 'syrup-B',

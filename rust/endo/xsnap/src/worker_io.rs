@@ -504,6 +504,55 @@ pub unsafe fn read_typed_array_bytes(the: *mut XsMachine, slot: *mut XsSlot) -> 
     Some(buf)
 }
 
+/// Read the `byteLength` of a TypedArray (e.g. Uint8Array) argument
+/// slot without copying its contents.
+pub unsafe fn typed_array_byte_length(the: *mut XsMachine, slot: *mut XsSlot) -> usize {
+    fx_push(the, *slot);
+    let byte_length_id = fxID(the, c"byteLength".as_ptr());
+    fxGetID(the, byte_length_id);
+    let byte_length = fxToInteger(the, (*the).stack) as usize;
+    fx_pop(the);
+    byte_length
+}
+
+/// Write `data` into a TypedArray (e.g. Uint8Array) argument slot,
+/// in place, mirroring `read_typed_array_bytes`. Writes exactly the
+/// view's `byteLength` bytes at its `byteOffset` and returns the
+/// number written; a `data` shorter than the view, or an empty view,
+/// writes nothing and returns 0.
+pub unsafe fn write_typed_array_bytes(
+    the: *mut XsMachine,
+    slot: *mut XsSlot,
+    data: &[u8],
+) -> usize {
+    let byte_length = typed_array_byte_length(the, slot);
+    if byte_length == 0 || data.len() < byte_length {
+        return 0;
+    }
+
+    fx_push(the, *slot);
+    let byte_offset_id = fxID(the, c"byteOffset".as_ptr());
+    fxGetID(the, byte_offset_id);
+    let byte_offset = fxToInteger(the, (*the).stack) as i32;
+    fx_pop(the);
+
+    fx_push(the, *slot);
+    let buffer_id = fxID(the, c"buffer".as_ptr());
+    fxGetID(the, buffer_id);
+    let buffer_slot = (*the).stack;
+
+    fxSetArrayBufferData(
+        the,
+        buffer_slot,
+        byte_offset,
+        data.as_ptr() as *mut std::os::raw::c_void,
+        byte_length as i32,
+    );
+    fx_pop(the);
+
+    byte_length
+}
+
 /// `importArchive(uint8Array) -> boolean`
 pub unsafe extern "C" fn host_import_archive(the: *mut XsMachine) {
     let slot = (*the).frame.sub(1);

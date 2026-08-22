@@ -2,6 +2,7 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
+import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
 import { ZipReader } from '@endo/zip/reader.js';
 import { inflate } from '@endo/zip/inflate.js';
 import { unzip } from '@endo/exo-unzip';
@@ -9,6 +10,8 @@ import { unzip } from '@endo/exo-unzip';
 import { zip } from '../index.js';
 
 const textEncoder = new TextEncoder();
+
+const encodeBase64 = bytes => btoa(String.fromCharCode(...bytes));
 
 // `zip()` emits DEFLATE entries on hosts with `CompressionStream`
 // (the project's full Node 18+ matrix and modern browsers); the
@@ -119,6 +122,59 @@ test('zip on an empty tree produces a parseable archive with no entries', async 
 
   const reread = openOutput(outputBytes);
   t.deepEqual([...reread.files.keys()], []);
+});
+
+test('zip discovers the kind protocol once for a mount subtree', async t => {
+  const calls = { introspection: 0, kind: 0 };
+  const makeFile = content =>
+    harden({
+      // eslint-disable-next-line no-underscore-dangle
+      __getMethodNames__() {
+        calls.introspection += 1;
+        return ['__getMethodNames__', 'kind', 'streamBase64'];
+      },
+      kind() {
+        calls.kind += 1;
+        return 'file';
+      },
+      streamBase64(synPromise) {
+        async function* contentBytes() {
+          yield encodeBase64(content);
+        }
+        return makeReaderPump(contentBytes())(synPromise);
+      },
+    });
+  const file = makeFile(textEncoder.encode('content'));
+  const leaf = harden({
+    // eslint-disable-next-line no-underscore-dangle
+    __getMethodNames__() {
+      calls.introspection += 1;
+      return ['__getMethodNames__', 'kind', 'list', 'lookup'];
+    },
+    kind() {
+      calls.kind += 1;
+      return 'directory';
+    },
+    list: () => ['file.txt'],
+    lookup: name => (name === 'file.txt' ? file : undefined),
+  });
+  const root = harden({
+    // eslint-disable-next-line no-underscore-dangle
+    __getMethodNames__() {
+      calls.introspection += 1;
+      return ['__getMethodNames__', 'kind', 'list', 'lookup'];
+    },
+    kind() {
+      calls.kind += 1;
+      return 'directory';
+    },
+    list: () => ['nested'],
+    lookup: name => (name === 'nested' ? leaf : undefined),
+  });
+  const outputBytes = await zip(root);
+  t.truthy(outputBytes);
+  t.is(calls.introspection, 1);
+  t.is(calls.kind, 3);
 });
 
 test('zip honours the date option for entry mtimes', async t => {

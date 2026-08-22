@@ -8,6 +8,7 @@
  */
 
 import type { ERef, FarRef } from '@endo/eventual-send';
+import type { PassableBytesReader } from '@endo/exo-stream';
 
 // ---------------------------------------------------------------------------
 // Network policy
@@ -26,11 +27,7 @@ import type { ERef, FarRef } from '@endo/eventual-send';
  * - `host-net`    — share host net namespace, no extra filtering.
  */
 export type NetworkProfile =
-  | 'none'
-  | 'private'
-  | 'host-loopback'
-  | 'host-lan'
-  | 'host-net';
+  'none' | 'private' | 'host-loopback' | 'host-lan' | 'host-net';
 
 // ---------------------------------------------------------------------------
 // Backend driver names and probe results
@@ -41,11 +38,7 @@ export type NetworkProfile =
  * `podman` (Phase 2); the rest are reserved for later phases.
  */
 export type BackendName =
-  | 'bwrap'
-  | 'podman'
-  | 'lima'
-  | 'containerization'
-  | 'wsl';
+  'bwrap' | 'podman' | 'lima' | 'containerization' | 'wsl';
 
 /**
  * Backend selection passed to `SandboxFactory.make()`.
@@ -60,6 +53,16 @@ export type BackendSelector = 'auto' | BackendName;
  * podman runs as a regular user (the only mode the sandbox supports).
  */
 export type BackendProbeDetails = {
+  /**
+   * Lifecycle properties required by every usable sandbox driver.
+   * Drivers that cannot terminate a whole process tree and clean up after
+   * an owner crash are reported unavailable rather than silently weakening
+   * confinement.
+   */
+  lifecycle?: {
+    available: boolean;
+    reason?: string;
+  };
   /** Landlock LSM availability (kernel ≥ 5.13). */
   landlock?: {
     available: boolean;
@@ -249,7 +252,7 @@ export type SliceSpec = {
 // ---------------------------------------------------------------------------
 
 /** Reader / writer references — Endo's existing stdio plumbing. */
-export type ReaderRef = ERef<unknown>;
+export type ReaderRef = ERef<PassableBytesReader>;
 export type WriterRef = ERef<unknown>;
 
 /**
@@ -262,10 +265,16 @@ export type SpawnOpts = {
   cwd?: string;
   /** Attach an existing reader as stdin. */
   stdin?: ReaderRef;
-  /** Capture stdout via a `WriterRef`. Defaults to true. */
+  /** Capture stdout as a `PassableBytesReader`. Defaults to true. */
   captureStdout?: boolean;
-  /** Capture stderr via a `WriterRef`. Defaults to true. */
+  /** Capture stderr as a separate `PassableBytesReader`. Defaults to true. */
   captureStderr?: boolean;
+  /** Maximum stdout bytes before the whole process tree is terminated. */
+  stdoutByteLimit?: bigint;
+  /** Maximum stderr bytes before the whole process tree is terminated. */
+  stderrByteLimit?: bigint;
+  /** Maximum process runtime in milliseconds, capped at `0x7fffffff`. */
+  timeoutMs?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -293,6 +302,13 @@ export type SandboxFactory = FarRef<{
  */
 export type SandboxHandle = FarRef<{
   help(methodName?: string): string;
+  /**
+   * Spawn a process in the slice.
+   * `spawn()` rejects for any timeout, disposal, or owner cancellation
+   * initiated before it settles, including after driver admission resolves.
+   * A resolved handle means the process was admitted and still owned by the
+   * caller at settlement; failures initiated later surface through `wait()`.
+   */
   spawn(argv: readonly string[], opts?: SpawnOpts): Promise<ProcessHandle>;
   mount(
     cap: MountCap,
@@ -316,6 +332,16 @@ export type SandboxHandle = FarRef<{
 }>;
 
 /**
+ * Termination signals the process supervisor supports for
+ * `ProcessHandle.kill()`. Every kill is terminal cancellation of the
+ * whole process tree, so nonterminating values (a `0` liveness probe,
+ * `SIGUSR1`, …) are rejected at the interface guard rather than being
+ * silently escalated to `SIGKILL`.
+ */
+export type TerminationSignal =
+  'SIGTERM' | 'SIGINT' | 'SIGHUP' | 'SIGQUIT' | 'SIGKILL';
+
+/**
  * A process running inside a slice. Stdio uses Endo's existing
  * `reader-ref` / `writer-ref` plumbing — there is no JSON transcoding of
  * process bytes.
@@ -332,8 +358,13 @@ export type ProcessHandle = FarRef<{
   stderr(): ReaderRef;
   /** Resolves when the process exits. */
   wait(): Promise<{ code: number | null; signal: string | null }>;
-  /** Send `signal` (or `SIGTERM`) to the process. */
-  kill(signal?: string | number): Promise<void>;
+  /**
+   * Begin terminal cancellation of the process tree: deliver `signal`
+   * (default `SIGTERM`), escalate to `SIGKILL` after a bounded grace
+   * period, and settle once the process is reaped. Use `wait()` to
+   * observe liveness rather than a `kill(0)` probe.
+   */
+  kill(signal?: TerminationSignal): Promise<void>;
 }>;
 
 /**
@@ -367,7 +398,13 @@ export type DriverProcess = {
   stdout?: AsyncIterable<Uint8Array> | null;
   stderr?: AsyncIterable<Uint8Array> | null;
   wait(): Promise<{ code: number | null; signal: string | null }>;
-  kill(signal?: string | number): Promise<void>;
+  /**
+   * Deliver one signal to the whole driver-owned process group or
+   * container. The supervisor owns the escalation ladder, so the same
+   * narrow set of terminal signals it can issue is all a driver has to
+   * accept.
+   */
+  kill(signal?: TerminationSignal): Promise<void>;
 };
 
 /**
@@ -376,6 +413,25 @@ export type DriverProcess = {
  * slice and finally to `teardown`.
  */
 export type DriverSliceContext = unknown;
+
+/**
+ * Factory-supplied controls for a `SandboxDriver.spawn()` call.
+ *
+ * The `cancelled` token rejects when the factory abandons the admission
+ * (process timeout, handle disposal, or owner cancellation) before the
+ * driver has produced a controllable process; `isCancelled` observes the
+ * same state synchronously. On cancellation the driver must cancel its
+ * in-flight control command, remove the exact named/labelled operation it
+ * was creating, and reject the spawn. The factory does not rely on the
+ * driver honouring the token for its own liveness — a spawn that
+ * resolves after abandonment is terminated and reaped — but an ignored
+ * cancellation can leave the external control command running until the
+ * driver's own command deadline fires.
+ */
+export type DriverSpawnControls = {
+  cancelled?: import('@endo/cancel').Cancelled;
+  isCancelled?: import('@endo/cancel').IsCancelled;
+};
 
 /**
  * Adapter the plugin loads at startup to translate `SandboxHandle`
@@ -397,6 +453,7 @@ export type SandboxDriver = {
     slice: DriverSliceContext,
     argv: string[],
     opts: SpawnOpts,
+    controls?: DriverSpawnControls,
   ): Promise<DriverProcess>;
   /** Tear down the slice's namespace / container. */
   teardown(slice: DriverSliceContext): Promise<void>;
@@ -458,4 +515,6 @@ export type MakeSandboxFactoryInput = {
   drivers: SandboxDriver[];
   /** Powers used to mint the writable scratch upper layer. */
   scratchProvider: SandboxPowers;
+  /** Formula/daemon cancellation context that owns every minted handle. */
+  context?: ERef<{ whenCancelled(): Promise<unknown> }>;
 };

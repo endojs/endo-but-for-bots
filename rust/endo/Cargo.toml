@@ -12,13 +12,23 @@ optional = true
 path = '../engine/ironhorse-compile'
 optional = true
 
+[dependencies.ironhorse-snapshot]
+path = '../engine/ironhorse-snapshot'
+optional = true
+
+[dependencies.ironhorse-store-sqlite]
+path = 'ironhorse-store-sqlite'
+optional = true
+
 [features]
 # The Ironhorse engine is linked in by default so the one `endor` binary
 # carries both engines through the parity campaign (design
 # designs/ironhorse-engine.md § Endor integration). Build with
-# --no-default-features to get an XS-only binary.
+# --no-default-features to get an XS-only binary. The snapshot/store
+# crates ride the same feature: they are the engine's heap-persistence
+# seam (designs/ironhorse-snapshot-store-seam.md § supervisor wiring).
 default = ['ironhorse-engine']
-ironhorse-engine = ['ironhorse-vm', 'ironhorse-compile']
+ironhorse-engine = ['ironhorse-vm', 'ironhorse-compile', 'ironhorse-snapshot', 'ironhorse-store-sqlite']
 [dependencies]
 base64 = "0.22"
 endo_iroh = { path = "../endo_iroh" }

@@ -71,6 +71,8 @@ packages/fae/
     ├── write-file.js           # FaeTool: write files under root
     ├── edit.js                 # FaeTool: edit files by exact-text replacement
     ├── list-dir.js             # FaeTool: list directory under root
+    ├── glob.js                 # FaeTool: find paths by glob pattern
+    ├── grep.js                 # FaeTool: search file contents by regexp
     └── run-command.js          # FaeTool: run shell commands in root
 ```
 
@@ -256,6 +258,8 @@ Unsandboxed modules that produce `FaeTool` exo objects. Created via
 | `writeFile` | Write files under a fixed root directory |
 | `edit` | Exact-text replacement editing (single or batched), returns a unified diff |
 | `listDir` | List directory contents |
+| `glob` | Find paths by glob pattern |
+| `grep` | Search file contents by regular expression |
 | `runCommand` | Execute shell commands with timeout |
 
 Filesystem tools have their root directory fixed at creation time via

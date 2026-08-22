@@ -61,6 +61,15 @@ export interface RepairOptions {
    */
   legacyRegeneratorRuntimeTaming?: 'safe' | 'unsafe-ignore';
   __hardenTaming__?: 'safe' | 'unsafe';
+  /**
+   * retain (default): the start compartment keeps the host
+   * `URL`'s `createObjectURL` and `revokeObjectURL` blob-registry methods;
+   * shared compartments receive a tamed `URL` without them.
+   *
+   * remove: the blob methods are removed everywhere, so the start
+   * compartment and every shared compartment share one tamed `URL`.
+   */
+  urlBlobTaming?: 'retain' | 'remove';
 }
 
 // Deprecated in favor of the more specific RepairOptions
@@ -133,8 +142,7 @@ export type ModuleDescriptor =
   | string;
 
 export type StrictModuleDescriptor =
-  | SourceModuleDescriptor
-  | NamespaceModuleDescriptor;
+  SourceModuleDescriptor | NamespaceModuleDescriptor;
 
 // Deprecated type aliases:
 export type PrecompiledStaticModuleInterface = PrecompiledModuleSource;
@@ -311,8 +319,7 @@ export type AssertTypeof = AssertTypeofBigint &
  * constructor is an AggregateErrorConstructor or a normal ErrorConstructor.
  */
 export type GenericErrorConstructor =
-  | ErrorConstructor
-  | AggregateErrorConstructor;
+  ErrorConstructor | AggregateErrorConstructor;
 
 /**
  * To make an `assert` which terminates some larger unit of computation
@@ -590,6 +597,8 @@ declare global {
     get globalThis(): Record<PropertyKey, any>;
 
     get name(): string;
+
+    get __noNamespaceBox__(): boolean;
 
     evaluate(code: string, options?: CompartmentEvaluateOptions): any;
 

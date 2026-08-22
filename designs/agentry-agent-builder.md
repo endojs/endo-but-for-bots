@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-06-03 |
-| **Updated** | 2026-08-01 |
+| **Updated** | 2026-08-18 |
 | **Author** | 0xpatrickdev (prompted) |
 | **Status** | In Progress |
 
@@ -18,8 +18,9 @@ The capability-global descriptor factories reviewed in
 HTTP, and GitRemote extractors/globals and their generated declarations.
 The workspace/fs global and its generated declarations predate #902 on `llm`.
 The Pi-independent `@endo/agentry/code-mode-provisioning` subpath now maps a
-plain per-session policy to a retained daemon guest and those matching
-descriptors.
+plain per-session policy to a retained daemon guest and returns one normalized
+grant list whose live guest capabilities are paired with matching generated
+declarations.
 The shipped shape differs from this design's first draft in two ways worth
 naming up front, because the rest of the document has been reconciled to the
 shipped surface:
@@ -173,6 +174,8 @@ The per-session provisioning boundary is now explicit.
 `provisionEndoCodeMode` deterministically retains a guest from a stable session
 ID, binds selected daemon formulas into that guest, and returns the guest as
 evaluation powers alongside matching generated declarations.
+The returned `grants` list is authoritative for both runtime evaluation and
+the model prompt; the `globals` field is only a derived compatibility view.
 Its versioned persistence record contains canonical workspace and normalized
 policy data only; it carries no live capability, formula ID, daemon endpoint, or
 credential material.
@@ -343,7 +346,7 @@ import { makeCodeModeAgent, makeCodeModeGitLoopAgent } from '@endo/agentry/code-
 // Compartment endowed with the configured lexical powers.
 const { agent } = makeCodeModeAgent({
   model,
-  powers: { workspace, git, gitMode: 'readOnly' }, // or 'readWrite'
+  powers: { workspace, git },
 });
 
 // makeCodeModeGitLoopAgent: a thin alias that wires a workspace Filesystem and
@@ -354,14 +357,24 @@ const gitAgent = makeCodeModeGitLoopAgent({ model, workspace, git });
 Each preset builds the single evaluate tool with `makeEvaluateTool`, wraps it
 as a pi-agent-core tool via `toPiAgentTool` with the SmallCaps renderer, and calls
 `defineAgent({ model, instructions, tools: [...] })`.
-The lexical globals (`workspace`, `git`, and any configured `namedPowers`) are
+The lexical globals (`workspace`, `git`, and any configured grants) are
 injected into the Compartment the guest code runs in.
-Generated TypeScript declarations advertise the selected filesystem and Git
-mode; the model uses `E(cap).__getMethodNames__()` as a fallback for live
-methods outside those declarations.
+Each grant pairs the live capability with the exact generated declaration used
+for the prompt and evaluator.
 `makeCodeModeAgent` returns the record
-`{ agent, globals, evaluate, systemPrompt, model }`;
+`{ agent, grants, globals, evaluate, systemPrompt, model }`;
 `makeCodeModeGitLoopAgent` returns the live `Agent` directly.
+
+Deriving each declaration from the live authority makes `makeCodeModeAgent`'s
+validation boundary synchronous: the same-vat instance testers recognize a
+`Git` or `Filesystem` facet, and the promise for one is not a facet.
+A `workspace` or `git` power named by pet name rather than passed inline is
+therefore resolved first, by the asynchronous `makeCodeModeAgentFromLookup`
+(or `resolveCodeModePowers` for a caller assembling powers itself); the
+synchronous entry point refuses an unresolved lookup rather than minting a
+grant nobody has inspected.
+Named powers keep the synchronous path: they mint opaque `unknown` grants that
+consult no posture tester.
 
 ### Retained daemon sessions
 

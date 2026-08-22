@@ -1,16 +1,14 @@
 import { expectTypeOf } from 'expect-type';
-import type { WritableGitWorktree } from '@endo/exo-git';
+import type { ReadOnlyEndoGit } from '@endo/exo-git';
 
 import { makeGitMountTools } from '../src/json-tools/git-mount.js';
 import type { GitMountToolCapability } from '../src/types.js';
 
-// The mount bridge's `worktree()` must resolve to the same lineage-bearing
-// `WritableGitWorktree` the underlying Git exposes; a bridge that widened or
-// narrowed this return type would silently change what downstream mount
-// tools can stage by entry.
-expectTypeOf<
-  Awaited<ReturnType<GitMountToolCapability['worktree']>>
->().toEqualTypeOf<WritableGitWorktree>();
+// The separate maker retains only status so it can apply the agent-facing
+// untracked-file default without requiring writable Git authority.
+expectTypeOf<GitMountToolCapability>().toEqualTypeOf<
+  Pick<ReadOnlyEndoGit, 'status'>
+>();
 
 // `makeGitMountTools` accepts only an eventual-send reference to a
 // `GitMountToolCapability`, never the capability itself; a regression that

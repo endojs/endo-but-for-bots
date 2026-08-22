@@ -47,14 +47,14 @@
   },
   "devDependencies": {
     "@lavamoat/lavatube": "^1.0.0",
-    "@vitest/browser": "^4.1.9",
-    "@vitest/browser-playwright": "^4.1.9",
+    "@vitest/browser": "^4.1.10",
+    "@vitest/browser-playwright": "^4.1.10",
     "eslint": "catalog:dev",
-    "playwright": "^1.60.0",
-    "preact": "^10.29.2",
+    "playwright": "^1.62.1",
+    "preact": "^10.29.8",
     "ses": "workspace:^",
     "vite": "^8.0.16",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.10"
   },
   "files": [
     "src",

@@ -239,13 +239,18 @@ test('Git.readOnly() attenuates mutating operations but preserves reads', async 
   t.is(status.entries.length, 1);
   t.is(status.entries[0].path, 'new.txt');
 
-  const entry = await E(mount).entry(['new.txt']);
-  await t.throwsAsync(E(runtimeReadOnlyGit).add([entry]), {
+  await t.throwsAsync(E(runtimeReadOnlyGit).add(['new.txt']), {
     message: /has no method "add"/,
   });
-  await t.throwsAsync(E(runtimeReadOnlyGit).checkoutConflict([entry], 'ours'), {
-    message: /has no method "checkoutConflict"/,
+  await t.throwsAsync(E(runtimeReadOnlyGit).restore(['new.txt']), {
+    message: /has no method "restore"/,
   });
+  await t.throwsAsync(
+    E(runtimeReadOnlyGit).checkoutConflict(['new.txt'], 'ours'),
+    {
+      message: /has no method "checkoutConflict"/,
+    },
+  );
   await t.throwsAsync(E(runtimeReadOnlyGit).commit('should fail'), {
     message: /has no method "commit"/,
   });
@@ -1421,8 +1426,7 @@ test('Git.checkoutConflict selects and stages ours in a merge conflict', async t
   await t.throwsAsync(E(git).merge('side'), {
     message: /CONFLICT|Automatic merge failed/,
   });
-  const entry = await E(mount).entry(['conflict.txt']);
-  await E(git).checkoutConflict([entry], 'ours');
+  await E(git).checkoutConflict(['conflict.txt'], 'ours');
 
   t.is(
     await fs.promises.readFile(path.join(repoRoot, 'conflict.txt'), 'utf8'),
@@ -1972,12 +1976,15 @@ test('NativeGitBackend.truncateOutput surfaces the visibility marker', t => {
   t.is(truncateOutput(short), short);
   t.notRegex(truncateOutput(short), /truncated|chars total/);
 
-  // Output that exceeds the budget is truncated to the budget and a
-  // visibility marker that names the original length is appended, so a
-  // caller (or an LLM reading the log line) can tell the diff was cut.
+  // Output that exceeds the budget is truncated and a visibility marker
+  // that names the original length is appended, so a caller (or an LLM
+  // reading the log line) can tell the diff was cut.  The marker fits
+  // WITHIN the budget: `@endo/exo-git` bounds remote result text to the
+  // same 50,000-character ceiling, and a marker appended past the limit
+  // would be re-truncated there, losing the original total.
   const oversized = 'a'.repeat(TOOL_OUTPUT_LIMIT + 1234);
   const result = truncateOutput(oversized);
-  t.true(result.length > TOOL_OUTPUT_LIMIT);
+  t.true(result.length <= TOOL_OUTPUT_LIMIT);
   t.regex(result, /\.\.\. \(truncated, \d+ chars total\)$/);
   // The reported total is the pre-truncation length, not the truncated
   // length, so a reader can size the gap.
@@ -3048,6 +3055,321 @@ test('NativeGitBackend.restore --staged unstages an added file', async t => {
   t.is(entries[0].worktree, 'untracked');
 });
 
+test('Git.add stages a single file from a string designator', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  await fs.promises.writeFile(path.join(repoRoot, 'single.txt'), 'single');
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({ repoRoot });
+  const git = makeGit({ mount, backend, lineageOf });
+
+  await E(git).add(['single.txt']);
+
+  const row = (await E(git).status()).entries.find(
+    entry => entry.path === 'single.txt',
+  );
+  t.is(row?.index, 'added');
+});
+
+test('Git.add stages a string-designated directory recursively', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  await fs.promises.mkdir(path.join(repoRoot, 'src', 'nested'), {
+    recursive: true,
+  });
+  await fs.promises.writeFile(path.join(repoRoot, 'src', 'a.js'), 'a');
+  await fs.promises.writeFile(
+    path.join(repoRoot, 'src', 'nested', 'b.js'),
+    'b',
+  );
+  await fs.promises.writeFile(path.join(repoRoot, 'outside.js'), 'outside');
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({ repoRoot });
+  const git = makeGit({ mount, backend, lineageOf });
+
+  await E(git).add(['src']);
+
+  const byPath = Object.fromEntries(
+    (await E(git).status()).entries.map(entry => [entry.path, entry]),
+  );
+  t.is(byPath['src/a.js'].index, 'added');
+  t.is(byPath['src/nested/b.js'].index, 'added');
+  t.is(byPath['outside.js'].index, 'clean');
+});
+
+test('Git.add stages an entry-designated directory recursively', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  await fs.promises.mkdir(path.join(repoRoot, 'lib', 'nested'), {
+    recursive: true,
+  });
+  await fs.promises.writeFile(path.join(repoRoot, 'lib', 'a.js'), 'a');
+  await fs.promises.writeFile(
+    path.join(repoRoot, 'lib', 'nested', 'b.js'),
+    'b',
+  );
+  await fs.promises.writeFile(path.join(repoRoot, 'outside.js'), 'outside');
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({ repoRoot });
+  const git = makeGit({ mount, backend, lineageOf });
+  const directory = await E(mount).entry('lib');
+
+  await E(git).add([directory]);
+
+  const byPath = Object.fromEntries(
+    (await E(git).status()).entries.map(entry => [entry.path, entry]),
+  );
+  t.is(byPath['lib/a.js'].index, 'added');
+  t.is(byPath['lib/nested/b.js'].index, 'added');
+  t.is(byPath['outside.js'].index, 'clean');
+});
+
+test('Git.add accepts mixed string and entry designators', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  await Promise.all(
+    ['string.txt', 'entry.txt', 'outside.txt'].map(name =>
+      fs.promises.writeFile(path.join(repoRoot, name), name),
+    ),
+  );
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({ repoRoot });
+  const git = makeGit({ mount, backend, lineageOf });
+  const entry = await E(mount).entry('entry.txt');
+
+  await E(git).add(['string.txt', entry]);
+
+  const byPath = Object.fromEntries(
+    (await E(git).status()).entries.map(row => [row.path, row]),
+  );
+  t.is(byPath['string.txt'].index, 'added');
+  t.is(byPath['entry.txt'].index, 'added');
+  t.is(byPath['outside.txt'].index, 'clean');
+});
+
+test('Git string designators use mount.entry normalization and denial', async t => {
+  const mount = await provisionMount(t);
+  /** @type {string[][]} */
+  const calls = [];
+  const backend = harden({
+    ...makeNotYetImplementedBackend(),
+    add: async paths => {
+      calls.push(paths);
+    },
+  });
+  const git = makeGit({ mount, backend, lineageOf });
+  const spelling = './a/b/../c';
+  const entry = await E(mount).entry(spelling);
+
+  await E(git).add([spelling]);
+  await E(git).add([entry]);
+
+  t.deepEqual(calls, [['a/c'], ['a/c']]);
+  await t.throwsAsync(E(git).add(['.ssh/key']), {
+    message: /Access denied.*\.ssh/,
+  });
+  t.deepEqual(calls, [['a/c'], ['a/c']]);
+});
+
+test('Git string designators normalize dot, doubled, and trailing separators', async t => {
+  const mount = await provisionMount(t);
+  /** @type {string[][]} */
+  const addCalls = [];
+  /** @type {Array<[string[], string]>} */
+  const conflictCalls = [];
+  const backend = harden({
+    ...makeNotYetImplementedBackend(),
+    add: async paths => {
+      addCalls.push(paths);
+    },
+    checkoutConflict: async (paths, side) => {
+      conflictCalls.push([paths, side]);
+    },
+  });
+  const git = makeGit({ mount, backend, lineageOf });
+
+  // Every spelling below designates the same repository path.  These are the
+  // spellings the mount-bridged `add` / `checkoutConflict` tools accepted
+  // before the resolver absorbed the bridge, so they must keep resolving.
+  const spellings = ['a/b', 'a//b', 'a/b/', './a/b', 'a/./b', './/a//b//'];
+  for (const spelling of spellings) {
+    // eslint-disable-next-line no-await-in-loop
+    await E(git).add([spelling]);
+  }
+  t.deepEqual(
+    addCalls,
+    spellings.map(() => ['a/b']),
+  );
+
+  await E(git).checkoutConflict(['./a//b', 'c/d/'], 'theirs');
+  t.deepEqual(conflictCalls, [[['a/b', 'c/d'], 'theirs']]);
+});
+
+test('Git.add stages normalized string spellings against a real worktree', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  await fs.promises.mkdir(path.join(repoRoot, 'pkg', 'nested'), {
+    recursive: true,
+  });
+  await fs.promises.writeFile(path.join(repoRoot, 'pkg', 'top.txt'), 'top');
+  await fs.promises.writeFile(
+    path.join(repoRoot, 'pkg', 'nested', 'deep.txt'),
+    'deep',
+  );
+  await fs.promises.writeFile(path.join(repoRoot, 'outside.txt'), 'outside');
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({ repoRoot });
+  const git = makeGit({ mount, backend, lineageOf });
+
+  await E(git).add(['./pkg//nested/', 'pkg//top.txt']);
+
+  const byPath = Object.fromEntries(
+    (await E(git).status()).entries.map(row => [row.path, row]),
+  );
+  t.is(byPath['pkg/nested/deep.txt'].index, 'added');
+  t.is(byPath['pkg/top.txt'].index, 'added');
+  t.is(byPath['outside.txt'].index, 'clean');
+});
+
+test('Git.checkoutConflict accepts a normalized string spelling', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  const commit = message =>
+    execFileAsync(
+      'git',
+      ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', message],
+      { cwd: repoRoot },
+    );
+  const conflictPath = path.join(repoRoot, 'nested', 'conflict.txt');
+  await fs.promises.mkdir(path.join(repoRoot, 'nested'));
+  await fs.promises.writeFile(conflictPath, 'base\n');
+  await execFileAsync('git', ['add', 'nested/conflict.txt'], { cwd: repoRoot });
+  await commit('base file');
+
+  await execFileAsync('git', ['switch', '-c', 'side'], { cwd: repoRoot });
+  await fs.promises.writeFile(conflictPath, 'side\n');
+  await execFileAsync('git', ['add', 'nested/conflict.txt'], { cwd: repoRoot });
+  await commit('side edit');
+
+  await execFileAsync('git', ['switch', 'main'], { cwd: repoRoot });
+  await fs.promises.writeFile(conflictPath, 'main\n');
+  await execFileAsync('git', ['add', 'nested/conflict.txt'], { cwd: repoRoot });
+  await commit('main edit');
+
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({ repoRoot });
+  const git = makeGit({ mount, backend, lineageOf });
+
+  await t.throwsAsync(E(git).merge('side'), {
+    message: /CONFLICT|Automatic merge failed/,
+  });
+  await E(git).checkoutConflict(['./nested//conflict.txt'], 'theirs');
+
+  t.is(await fs.promises.readFile(conflictPath, 'utf8'), 'side\n');
+  const { stdout: unmerged } = await execFileAsync(
+    'git',
+    ['ls-files', '-u', '--', 'nested/conflict.txt'],
+    { cwd: repoRoot },
+  );
+  t.is(unmerged, '');
+});
+
+test('Git mutators reject worktree-root designators before backend mutation', async t => {
+  const mount = await provisionMount(t);
+  let mutationCalls = 0;
+  const backend = harden({
+    ...makeNotYetImplementedBackend(),
+    add: async () => {
+      mutationCalls += 1;
+    },
+    restore: async () => {
+      mutationCalls += 1;
+    },
+    checkoutConflict: async () => {
+      mutationCalls += 1;
+    },
+  });
+  const git = makeGit({ mount, backend, lineageOf });
+  const rootEntry = await E(mount).entry('.');
+
+  await t.throwsAsync(E(git).add([]), { message: /non-empty array/ });
+  await t.throwsAsync(E(git).add(['.']), { message: /worktree root/ });
+  await t.throwsAsync(E(git).restore(['/']), { message: /worktree root/ });
+  await t.throwsAsync(E(git).checkoutConflict([rootEntry], 'ours'), {
+    message: /worktree root/,
+  });
+  await t.throwsAsync(E(git).add(['real.txt', '.']), {
+    message: /worktree root/,
+  });
+  // Every spelling that normalizes away to no segments is a root alias: the
+  // empty string, the dot spellings, the separator-only spellings, and a `..`
+  // chain the mount clamps at the root.  Each fails at the Git layer with the
+  // root diagnostic naming the offending spelling, not with a mount-level
+  // empty-segment complaint.
+  for (const alias of ['', '.', './', '/', '//', './/', '..', 'a/..']) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(E(git).add([alias]), {
+      message: new RegExp(
+        `must not resolve to the Git worktree root: "${alias}"`,
+      ),
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(E(git).checkoutConflict([alias], 'ours'), {
+      message: /must not resolve to the Git worktree root/,
+    });
+  }
+  t.is(mutationCalls, 0);
+});
+
+test('Git.restore accepts string and entry directory designators', async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  const directories = ['string-dir', 'entry-dir'];
+  await Promise.all(
+    directories.map(directory =>
+      fs.promises.mkdir(path.join(repoRoot, directory)),
+    ),
+  );
+  await Promise.all(
+    directories.flatMap(directory =>
+      ['a.txt', 'b.txt'].map(name =>
+        fs.promises.writeFile(path.join(repoRoot, directory, name), 'before'),
+      ),
+    ),
+  );
+  await execFileAsync('git', ['add', 'string-dir', 'entry-dir'], {
+    cwd: repoRoot,
+  });
+  await execFileAsync('git', ['commit', '-m', 'track directories'], {
+    cwd: repoRoot,
+  });
+  await Promise.all(
+    directories.flatMap(directory =>
+      ['a.txt', 'b.txt'].map(name =>
+        fs.promises.writeFile(path.join(repoRoot, directory, name), 'after'),
+      ),
+    ),
+  );
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({ repoRoot });
+  const git = makeGit({ mount, backend, lineageOf });
+  const entryDirectory = await E(mount).entry('entry-dir');
+
+  await E(git).restore(['string-dir']);
+  await E(git).restore([entryDirectory]);
+
+  const restored = await Promise.all(
+    directories.flatMap(directory =>
+      ['a.txt', 'b.txt'].map(name =>
+        fs.promises.readFile(path.join(repoRoot, directory, name), 'utf8'),
+      ),
+    ),
+  );
+  for (const content of restored) {
+    t.is(content, 'before');
+  }
+});
+
 test('Git.add wraps PathEntry inputs and refuses cross-mount entries', async t => {
   const repoRoot = await provisionGitWorktree(t);
   await fs.promises.writeFile(path.join(repoRoot, 'sample.txt'), 'sample');
@@ -3095,6 +3417,8 @@ test('Git.checkoutConflict refuses unauthenticated and cross-mount entries befor
   const ownEntry = await E(mount).entry(['conflict.txt']);
   await E(git).checkoutConflict([ownEntry], 'ours');
   t.is(mutationCalls, 1);
+  await E(git).checkoutConflict(['conflict.txt'], 'theirs');
+  t.is(mutationCalls, 2);
 
   const fakeEntry = /** @type {PathEntry} */ (
     /** @type {unknown} */ (
@@ -3104,7 +3428,7 @@ test('Git.checkoutConflict refuses unauthenticated and cross-mount entries befor
   await t.throwsAsync(E(git).checkoutConflict([fakeEntry], 'ours'), {
     message: /not a PathEntry/,
   });
-  t.is(mutationCalls, 1);
+  t.is(mutationCalls, 2);
 
   const otherRoot = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), 'cross-git-'),
@@ -3120,7 +3444,7 @@ test('Git.checkoutConflict refuses unauthenticated and cross-mount entries befor
   await t.throwsAsync(E(git).checkoutConflict([otherEntry], 'theirs'), {
     message: /different mount lineage/,
   });
-  t.is(mutationCalls, 1);
+  t.is(mutationCalls, 2);
 });
 
 test('Git.commit through the public exo returns a structured commit record', async t => {

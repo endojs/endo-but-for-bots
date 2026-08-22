@@ -35,7 +35,7 @@ import { makeMountFsTools } from './json-tools/fs.js';
  *   when the caller holds the backing capability; an ungranted group is
  *   *absent*, not present-but-failing. This maps one grant to one group:
  *   `filesystem` → the mount file tools, `git` → the versioning tools (the
- *   JSON-safe git slice plus the mount-bridged `status` / `add`), `remote` →
+ *   JSON-safe git slice plus agent-facing `status` defaults), `remote` →
  *   the push tier, `shell` → the command tools.
  * - **Formula-owned identity rides the granted `Git`.** Commit attribution is
  *   captured at `provideGit` / `provideGitClone` construction time and is
@@ -109,8 +109,8 @@ export const makeWorkspaceTools = ({
     });
   }
   if (git !== undefined) {
-    // The versioning layer: the JSON-safe git slice (commit / log / diff /
-    // branch navigation) plus the mount-bridged `status` / `add`, both over
+    // The versioning layer: the JSON-safe git slice (staging / commit / log /
+    // diff / branch navigation) plus status's agent-facing default, both over
     // the same granted `Git` whose formula-owned identity attributes commits.
     groups.push({ group: 'git', records: makeGitTool(git) });
     groups.push({ group: 'gitMount', records: makeGitMountTools(git) });

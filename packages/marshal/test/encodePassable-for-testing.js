@@ -1,4 +1,3 @@
-/* eslint-disable no-bitwise, @endo/restrict-comparison-operands */
 import { Fail, q } from '@endo/errors';
 
 import {
@@ -39,6 +38,8 @@ const encodeThing = (prefix, r) => {
 const decodeThing = (prefix, e) => {
   prefix === e ||
     Fail`expected encoding ${q(e)} to simply be the prefix ${q(prefix)}`;
+  // This intentionally generic test helper uses matching dynamic keys.
+  // eslint-disable-next-line @endo/restrict-comparison-operands
   (cursors[prefix] >= 0 && cursors[prefix] < buffers[prefix].length) ||
     Fail`while decoding ${q(e)}, expected cursors[${q(prefix)}], i.e., ${q(
       cursors[prefix],

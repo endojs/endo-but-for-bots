@@ -23,11 +23,11 @@ import { fileURLToPath } from 'node:url';
 
 import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { E } from '@endo/eventual-send';
-import { makeOcapn } from '@endo/ocapn';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
 import { makePipeNetwork } from '../src/pipe-network.js';
 import { makeXsEngine } from '../src/xs-engine.js';
+import { makeTestOcapn } from './_util.js';
 
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const workerBinary =
@@ -124,7 +124,7 @@ testXs('an XS worker peer survives snapshot restore mid-session', async t => {
   t.teardown(async () => incarnation.terminate());
   await incarnation.deliver({ t: 'init', workerId, debugLabel: 'peer-xs' });
 
-  const hostClient = await makeOcapn({
+  const hostClient = await makeTestOcapn({
     codec: syrupCodec,
     network: hostPipe.network,
     debugLabel: 'host-of-xs-peer',

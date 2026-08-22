@@ -31,6 +31,18 @@ export {
 } from './git-credential.js';
 
 export {
+  basicCredentialHelp,
+  bearerCredentialHelp,
+  gitCredentialControllerHelp,
+  gitBlobHelp,
+  gitHelp,
+  gitRemoteControllerHelp,
+  gitRemoteHelp,
+  gitTreeHelp,
+  makeHelp,
+} from './help-text.js';
+
+export {
   GitInterface,
   GitReaderInterface,
   GitWriterInterface,

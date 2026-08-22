@@ -72,7 +72,7 @@
     "eslint": "catalog:dev",
     "ses": "workspace:^",
     "typescript": "catalog:dev",
-    "ws": "^8.13.0"
+    "ws": "^8.21.3"
   },
   "files": [
     "./*.d.ts",

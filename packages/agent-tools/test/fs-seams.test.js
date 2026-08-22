@@ -37,11 +37,16 @@ test('both seams describe the same guest-facing workspace', async t => {
 
   t.deepEqual(memory.global, node.global);
   t.like(memory.global, { name: 'workspace', petName: 'workspace' });
-  t.is(memory.global.declaration?.body, 'Filesystem');
+  const { declaration } = memory.global;
+  if (declaration === undefined) {
+    throw new Error('expected workspace global declaration');
+  }
+  t.true(declaration.body.startsWith('{'));
+  t.true(declaration.aux?.includes('type NodeStat =') ?? false);
   // The backing is the host's business: nothing in what the guest reads names
   // it.
   const prompt = formatGlobalDeclarations([memory.global]);
-  t.true(prompt.includes('declare const workspace: Filesystem;'));
+  t.true(prompt.includes('declare const workspace: {'));
   t.false(/in-memory|node:fs/u.test(prompt));
 });
 
@@ -57,12 +62,15 @@ test('each seam declares a subset of the methods its capability has', async t =>
   ];
   await Promise.all(
     seams.map(async ([label, { workspace, global }]) => {
-      const aux = global.declaration?.aux;
-      if (aux === undefined) {
+      const body = global.declaration?.body;
+      if (body === undefined) {
         t.fail(`${label} seam must carry a declaration`);
         return;
       }
-      const declared = listDeclaredTypeMembers(aux, 'Filesystem');
+      const declared = listDeclaredTypeMembers(
+        `type Filesystem = ${body};`,
+        'Filesystem',
+      );
       t.true(declared.length > 0, `${label} declares no methods`);
       // eslint-disable-next-line no-underscore-dangle
       const live = await E(/** @type {any} */ (workspace)).__getMethodNames__();

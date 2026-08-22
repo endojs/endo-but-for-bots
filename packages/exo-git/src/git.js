@@ -13,6 +13,7 @@ import { readOnly as readOnlyFs } from '@endo/platform/fs/extended/readonly.js';
 import { wrapBackend } from '@endo/platform/fs/extended/wrap-backend.js';
 
 import { makeGitFsBackend } from './git-filesystem.js';
+import { gitHelp, makeHelp } from './help-text.js';
 import {
   GitReaderInterface,
   GitWriterInterface,
@@ -42,6 +43,7 @@ import {
  *   GitRemoteCredential,
  *   RemoteOperationResult,
  *   PathEntry,
+ *   GitPathDesignator,
  *   ReadableTree,
  *   GitRestoreOptions,
  *   GitStashPushOptions,
@@ -49,6 +51,9 @@ import {
  *   GitStatusResult,
  *   GitTrackingStatus,
  *   GitWorktreeStatus,
+ *   GitWorktreeAddOptions,
+ *   GitWorktreeEntry,
+ *   GitTree,
  *   HistoryRewriteEndoGit,
  *   ReadOnlyEndoGit,
  *   ReadOnlyGitWorktree,
@@ -67,6 +72,13 @@ import {
  * @property {GitIndexStatus} index
  * @property {GitWorktreeStatus} worktree
  * @property {string} [renamedFrom]
+ */
+
+/**
+ * Backend-facing linked-worktree record.  The native backend converts Git's
+ * path spelling to a mount-relative path before returning it.
+ *
+ * @typedef {GitWorktreeEntry} BackendWorktreeEntry
  */
 
 /**
@@ -105,10 +117,10 @@ import {
 /**
  * Backend-facing contract.  Concrete backends (native git, future JS git
  * libraries, daemon-native commit storage) translate the structured
- * operations into their implementation-specific calls.  All path-bearing
- * inputs are pre-resolved to host-absolute strings by the public Git exo
- * before reaching the backend, so a backend never sees an unauthenticated
- * relative path or an unresolved `PathEntry`.
+ * operations into their implementation-specific calls.  Path-bearing inputs
+ * are either pre-resolved to host-absolute strings or, for `worktreeAdd`,
+ * validated mount-relative segments; a backend never sees an unresolved
+ * `PathEntry`.
  *
  * Phase 1 declares the contract; later phases implement the methods.
  *
@@ -120,6 +132,10 @@ import {
  *   repository-local config that can execute code via filter or merge
  *   driver hooks before any worktree-mutation method runs.
  * @property {(options?: GitStatusOptions) => Promise<BackendStatusEntry[]>} status
+ * @property {() => Promise<BackendWorktreeEntry[]>} worktreeList  Returns
+ *   mount-relative paths; entries outside the mount are omitted.
+ * @property {(destinationSegments: string[], options?: { ref?: string, newBranch?: string }) => Promise<GitBackend>} worktreeAdd
+ * @property {(destinationSegments: string[]) => Promise<void>} worktreeRemove
  * @property {(opts?: GitBackendDiffOptions) => Promise<string>} diff
  * @property {(opts?: GitBackendLogOptions) => Promise<GitCommit[]>} log
  * @property {(ref: string) => Promise<string>} show
@@ -147,8 +163,8 @@ import {
  * @property {(index?: number) => Promise<void>} stashApply
  * @property {(index?: number) => Promise<void>} stashPop
  * @property {(index?: number) => Promise<void>} stashDrop
- * @property {(ref: string) => Promise<ReadableTree>} tree  Returns a
- *   `ReadableTree` exo for the given tree-ish; blobs implement
+ * @property {(ref: string) => Promise<GitTree>} tree  Returns a
+ *   `GitTree` exo for the given tree-ish; blobs implement
  *   `ReadableBlob`.
  * @property {(input: { url?: unknown, refspecs?: unknown, prune?: boolean, tags?: boolean, credential?: GitRemoteCredential, signal?: AbortSignal }) => Promise<RemoteOperationResult>} remoteFetch
  *   Fetch from a policy-bound remote URL.  The caller has already
@@ -328,6 +344,61 @@ const worktreeAuthorityFor = (state, readOnly) => {
 };
 
 /**
+ * Resolve one PathEntry to mount-relative segments after checking its
+ * lineage.  The native backend receives these segments, never a host path.
+ *
+ * @param {GitState} state
+ * @param {object} entry
+ * @returns {Promise<string[]>}
+ */
+const entryToRepoSegments = async (state, entry) => {
+  const otherLineage = state.lineageOf(entry);
+  if (otherLineage === undefined) {
+    throw new Error('entry is not a PathEntry minted for this Git worktree');
+  }
+  if (otherLineage !== state.mountLineage) {
+    throw new Error(
+      'entry was minted by a different mount lineage and cannot be used here',
+    );
+  }
+  const segments = await E(entry).segments();
+  return segments;
+};
+harden(entryToRepoSegments);
+
+/**
+ * Validate the destination of a linked worktree before handing it to the
+ * backend and the narrowed mount.  Ordinary Git path designators may resolve
+ * to the worktree root so that `designatorsToRepoPaths` can report its
+ * user-facing root diagnostic; linked-worktree destinations must not.
+ *
+ * @param {string[]} segments
+ * @returns {string[]}
+ */
+const assertWorktreeDestination = segments => {
+  if (
+    !Array.isArray(segments) ||
+    segments.length === 0 ||
+    segments.some(
+      segment =>
+        typeof segment !== 'string' ||
+        segment === '.' ||
+        segment === '..' ||
+        segment.includes('/') ||
+        segment.includes('\\') ||
+        /^\.git$/iu.test(segment) ||
+        /^git~\d+$/iu.test(segment),
+    )
+  ) {
+    throw new Error(
+      'entry is not a non-empty confined mount-relative PathEntry',
+    );
+  }
+  return [...segments];
+};
+harden(assertWorktreeDestination);
+
+/**
  * Translate an array of PathEntry caps into the repo-relative path strings
  * that the backend (and the underlying git binary) accept.  Entries from a
  * different mount lineage are rejected before any path is exposed to git.
@@ -342,18 +413,70 @@ const entriesToRepoPaths = async (state, entries) => {
   }
   const paths = [];
   for (const entry of entries) {
-    const otherLineage = state.lineageOf(/** @type {object} */ (entry));
-    if (otherLineage === undefined) {
-      throw new Error('entry is not a PathEntry minted for this Git worktree');
-    }
-    if (otherLineage !== state.mountLineage) {
-      throw new Error(
-        'entry was minted by a different mount lineage and cannot be used here',
-      );
-    }
     // eslint-disable-next-line no-await-in-loop
-    const segments = await E(entry).segments();
+    const segments = await entryToRepoSegments(
+      state,
+      /** @type {object} */ (entry),
+    );
     paths.push(segments.join('/'));
+  }
+  return paths;
+};
+
+/**
+ * Split a worktree-relative path string into the segment list `mount.entry()`
+ * accepts.  Empty components — from a leading, doubled, or trailing separator
+ * — and explicit `.` steps collapse to no-ops, so `a/b`, `a//b`, `./a/b`, and
+ * `a/b/` all designate the same path.  This is spelling normalization only,
+ * and deliberately not a second authority model: a `..` segment is left intact
+ * for the mount to contain (clamped at the worktree root), and a denied
+ * segment is left for the mount to refuse.  A designator built solely from
+ * dropped components (`''`, `.`, `./`, `/`, `//`) yields the empty segment
+ * list, which denotes the worktree root; `designatorsToRepoPaths` rejects that
+ * below rather than handing git an empty pathspec.
+ *
+ * @param {string} designator
+ * @returns {string[]}
+ */
+const designatorToSegments = designator =>
+  designator.split('/').filter(segment => segment !== '' && segment !== '.');
+
+/**
+ * Resolve strings through this Git's own worktree mount, then translate every
+ * resulting entry through the same lineage-checking path used for caller-
+ * supplied `PathEntry` values.  The mount owns confinement, denied segments,
+ * and `..` resolution: this layer only normalizes the spelling of a path
+ * string into the mount's segment form.
+ *
+ * @param {GitState} state
+ * @param {readonly GitPathDesignator[]} designators
+ * @returns {Promise<string[]>}
+ */
+const designatorsToRepoPaths = async (state, designators) => {
+  await null;
+  if (!Array.isArray(designators) || designators.length === 0) {
+    throw new Error('path designators must be a non-empty array');
+  }
+  const entries = await Promise.all(
+    designators.map(async designator => {
+      if (typeof designator !== 'string') {
+        return designator;
+      }
+      return E(state.mount).entry(harden(designatorToSegments(designator)));
+    }),
+  );
+  const paths = await entriesToRepoPaths(state, entries);
+  // A designator that normalizes to no segments — a root alias such as `.`,
+  // `/`, or `//`, a `..` chain clamped at the root, or a caller-supplied root
+  // `PathEntry` — would reach the backend as an empty pathspec, which git
+  // reads as "everything".  Reject it here, before any backend mutation.
+  const rootIndex = paths.indexOf('');
+  if (rootIndex >= 0) {
+    const designator = designators[rootIndex];
+    const spelling = typeof designator === 'string' ? `: ${q(designator)}` : '';
+    throw new Error(
+      `path designator must not resolve to the Git worktree root${spelling}`,
+    );
   }
   return paths;
 };
@@ -383,6 +506,80 @@ async function worktree() {
 /** @this {GitMethodThis} */
 async function worktreeReadOnly() {
   return worktreeAuthorityFor(this.state, true);
+}
+
+/** @this {GitMethodThis} */
+async function worktreeList() {
+  return harden(await this.state.backend.worktreeList());
+}
+
+/**
+ * Add a linked worktree and derive a Git whose mount and backend both point at
+ * the new checkout.  `subView()` is the confinement shift that makes entries
+ * minted by the returned Git relative to the new checkout rather than to its
+ * parent mount.
+ *
+ * @param {GitState} state
+ * @param {object} entry
+ * @param {GitWorktreeAddOptions} options
+ * @param {boolean} allowHistoryRewrite
+ * @returns {Promise<ReadWriteEndoGit | HistoryRewriteEndoGit>}
+ */
+const doWorktreeAdd = async (state, entry, options, allowHistoryRewrite) => {
+  const segments = assertWorktreeDestination(
+    await entryToRepoSegments(state, entry),
+  );
+  const opts = /** @type {GitWorktreeAddOptions} */ (options);
+  const backendOptions = /** @type {{ ref?: string, newBranch?: string }} */ ({
+    ...(opts.ref === undefined ? {} : { ref: refName(opts.ref) }),
+    ...(opts.newBranch === undefined ? {} : { newBranch: opts.newBranch }),
+  });
+  const backend = await state.backend.worktreeAdd(segments, backendOptions);
+  const mountWithSubView =
+    /** @type {{ subView: (path: string[]) => Promise<WritableGitWorktree> }} */ (
+      /** @type {unknown} */ (E(state.mount))
+    );
+  let destinationMount;
+  try {
+    destinationMount = await mountWithSubView.subView(segments);
+  } catch (error) {
+    try {
+      await state.backend.worktreeRemove(segments);
+    } catch (cleanupError) {
+      throw new Error(
+        'worktreeAdd failed to narrow the mount and cleanup also failed',
+        { cause: cleanupError },
+      );
+    }
+    throw error;
+  }
+  return makeGit(
+    {
+      mount: destinationMount,
+      backend,
+      lineageOf: state.lineageOf,
+    },
+    { allowHistoryRewrite },
+  );
+};
+harden(doWorktreeAdd);
+
+/**
+ * @param {object} entry
+ * @param {GitWorktreeAddOptions} options
+ * @this {GitMethodThis}
+ */
+async function worktreeAdd(entry, options = {}) {
+  return doWorktreeAdd(this.state, entry, options, false);
+}
+
+/**
+ * @param {object} entry
+ * @param {GitWorktreeAddOptions} options
+ * @this {GitMethodThis}
+ */
+async function worktreeAddHistory(entry, options = {}) {
+  return doWorktreeAdd(this.state, entry, options, true);
 }
 
 /**
@@ -502,34 +699,34 @@ async function revParse(ref) {
 }
 
 /**
- * @param {readonly object[]} entries
+ * @param {readonly GitPathDesignator[]} designators
  * @this {GitMethodThis}
  */
-async function add(entries) {
+async function add(designators) {
   const { state } = this;
-  const paths = await entriesToRepoPaths(state, entries);
+  const paths = await designatorsToRepoPaths(state, designators);
   return state.backend.add(paths);
 }
 
 /**
- * @param {readonly object[]} entries
+ * @param {readonly GitPathDesignator[]} designators
  * @param {GitRestoreOptions} options
  * @this {GitMethodThis}
  */
-async function restore(entries, options = {}) {
+async function restore(designators, options = {}) {
   const { state } = this;
-  const paths = await entriesToRepoPaths(state, entries);
+  const paths = await designatorsToRepoPaths(state, designators);
   return state.backend.restore(paths, options);
 }
 
 /**
- * @param {readonly object[]} entries
+ * @param {readonly GitPathDesignator[]} designators
  * @param {GitConflictSide} side
  * @this {GitMethodThis}
  */
-async function checkoutConflict(entries, side) {
+async function checkoutConflict(designators, side) {
   const { state } = this;
-  const paths = await entriesToRepoPaths(state, entries);
+  const paths = await designatorsToRepoPaths(state, designators);
   return state.backend.checkoutConflict(paths, side);
 }
 
@@ -756,6 +953,7 @@ function scope(name) {
 // #endregion
 
 const readerMethods = harden({
+  help: makeHelp(gitHelp),
   worktree: worktreeReadOnly,
   status: statusReadOnly,
   trackingStatus,
@@ -769,6 +967,7 @@ const readerMethods = harden({
   stashShow,
   tree,
   filesystemAt,
+  worktreeList,
   scope,
   readOnly: attenuateToReadOnly,
 });
@@ -776,6 +975,7 @@ const readerMethods = harden({
 const writerMethods = harden({
   ...readerMethods,
   worktree,
+  worktreeAdd,
   status,
   add,
   restore,
@@ -796,6 +996,7 @@ const writerMethods = harden({
 
 const rewriterMethods = harden({
   ...writerMethods,
+  worktreeAdd: worktreeAddHistory,
   reword,
   cherryPick,
   rebase,
@@ -1011,6 +1212,9 @@ export const makeNotYetImplementedBackend = () => {
     assertNoExecutableRepoConfig: async () =>
       fail('assertNoExecutableRepoConfig'),
     status: async () => fail('status'),
+    worktreeList: async () => fail('worktreeList'),
+    worktreeAdd: async () => fail('worktreeAdd'),
+    worktreeRemove: async () => fail('worktreeRemove'),
     diff: async () => fail('diff'),
     log: async () => fail('log'),
     show: async () => fail('show'),

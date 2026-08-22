@@ -1,5 +1,5 @@
 //! The **backend-parameterized store acceptance suite** (store seam
-//! design, decision 8): the six-way metamorphic determinism runner,
+//! design, decision 8): the metamorphic determinism runner (seven execution ways),
 //! the lazy working-set bound, and the checkpoint acceptance locks,
 //! generic over the [`HeapStore`] under test so every backend —
 //! in-crate reference or external (the daemon-side SQLite store) —
@@ -25,8 +25,8 @@ use crate::machine::{
     resume_from_store_lazy, MachineSnapshot, StoreSession,
 };
 use crate::store::{
-    chunk_extent_count, export_to_container, root_hash, slot_page_count, store_to_image,
-    HeapStore,
+    chunk_extent_count, derive_page_edges, export_to_container, root_hash, slot_page_count,
+    store_to_image, HeapStore, SLOTS_PER_PAGE,
 };
 use crate::sha256::hex_sha256;
 use crate::Signature;
@@ -43,7 +43,10 @@ fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
 
 struct Baseline {
     results: Vec<String>,
-    final_computrons: u64,
+    /// Cumulative computrons AFTER EVERY CRANK, not just the last: a
+    /// mid-run meter divergence that reconverges by the final crank
+    /// must still fail (the collaborator review's finding).
+    computrons: Vec<u64>,
     final_blob: Vec<u8>,
 }
 
@@ -51,16 +54,16 @@ fn run_baseline(compiled: &[(Vec<u8>, Vec<String>)]) -> Baseline {
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let mut results = Vec::new();
-    let mut final_computrons = 0;
+    let mut computrons = Vec::new();
     for (bytecode, _) in compiled {
         let o = m.run(bytecode);
         assert!(o.completed, "baseline crank completes (halt: {:?})", o.halt);
         results.push(o.result);
-        final_computrons = o.computrons;
+        computrons.push(o.computrons);
     }
     Baseline {
         results,
-        final_computrons,
+        computrons,
         final_blob: m.write_snapshot(&sig()),
     }
 }
@@ -70,7 +73,7 @@ fn assert_agrees(
     scenario: &str,
     baseline: &Baseline,
     results: &[String],
-    final_computrons: u64,
+    computrons: &[u64],
     final_blob: &[u8],
 ) {
     assert_eq!(
@@ -78,8 +81,8 @@ fn assert_agrees(
         "[{scenario}/{variant}] per-crank results agree"
     );
     assert_eq!(
-        final_computrons, baseline.final_computrons,
-        "[{scenario}/{variant}] final computrons agree"
+        computrons, &baseline.computrons[..],
+        "[{scenario}/{variant}] per-crank computron vector agrees"
     );
     assert_eq!(
         final_blob, &baseline.final_blob[..],
@@ -88,11 +91,11 @@ fn assert_agrees(
 }
 
 /// Variant 2: blob suspend/resume between every crank.
-fn run_blob(compiled: &[(Vec<u8>, Vec<String>)]) -> (Vec<String>, u64, Vec<u8>) {
+fn run_blob(compiled: &[(Vec<u8>, Vec<String>)]) -> (Vec<String>, Vec<u64>, Vec<u8>) {
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let mut results = Vec::new();
-    let mut computrons = 0;
+    let mut computrons = Vec::new();
     for (i, (bytecode, _)) in compiled.iter().enumerate() {
         if i > 0 {
             let bytes = m.write_snapshot(&sig());
@@ -100,7 +103,7 @@ fn run_blob(compiled: &[(Vec<u8>, Vec<String>)]) -> (Vec<String>, u64, Vec<u8>) 
         }
         let o = m.run(bytecode);
         results.push(o.result);
-        computrons = o.computrons;
+        computrons.push(o.computrons);
     }
     (results, computrons, m.write_snapshot(&sig()))
 }
@@ -110,36 +113,72 @@ enum Resume {
     Eager,
     Lazy,
     LazyAdversarialPrefetch,
+    /// Prefetch everything, then evict every clean page and extent —
+    /// both right after the resume (attach-time rows) and right after
+    /// each checkpoint (rows the session itself just committed and
+    /// cleaned). Any evict schedule must be observably irrelevant
+    /// (store seam phase 8, the Decision-3 amendment), including the
+    /// commit-then-evict-then-refault ordering the phase-8 review
+    /// found unexercised (stale attach-time leaves). The arm asserts
+    /// eviction genuinely happened, so a future guard change cannot
+    /// silently degrade it into a prefetch duplicate.
+    LazyAdversarialEvict,
 }
 
-/// Variants 3-5: store-backed sleep/wake between every crank, with the
+/// Variants 3-6: store-backed sleep/wake between every crank, with the
 /// chosen resume mode, against a fresh backend from the caller.
 fn run_store<S: HeapStore + 'static>(
     store: S,
     compiled: &[(Vec<u8>, Vec<String>)],
     mode: Resume,
-) -> (Vec<String>, u64, Vec<u8>) {
+) -> (Vec<String>, Vec<u64>, Vec<u8>) {
     let store = Rc::new(RefCell::new(store));
     let mut results = Vec::new();
+    let mut computrons = Vec::new();
 
     // Crank 1 on a fresh machine, then bind.
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let o = m.run(&compiled[0].0);
     results.push(o.result);
-    let mut computrons = o.computrons;
+    computrons.push(o.computrons);
     let mut session = begin_store_session(m, &sig(), &mut *store.borrow_mut())
         .map_err(|(_, e)| e)
         .expect("begin session");
 
+    let mut evictions = 0u32;
     for (bytecode, _) in compiled.iter().skip(1) {
         drop(session);
         session = match mode {
             Resume::Eager => resume_from_store(&*store.borrow(), &sig()).expect("resumes"),
-            Resume::Lazy | Resume::LazyAdversarialPrefetch => {
+            Resume::Lazy | Resume::LazyAdversarialPrefetch | Resume::LazyAdversarialEvict => {
                 resume_from_store_lazy(store.clone(), &sig()).expect("resumes lazily")
             }
         };
+        if let Resume::LazyAdversarialEvict = mode {
+            // Warm everything, then throw it all away again: the
+            // re-faults must reinstall identical content.
+            let manifest = store.borrow().manifest().unwrap();
+            for page in 0..slot_page_count(manifest.slot_count) {
+                session.machine().slots.touch_page(page);
+            }
+            for ext in 0..chunk_extent_count(manifest.chunk_len) {
+                session.machine().chunks.touch_extent(ext);
+            }
+            for page in 0..slot_page_count(manifest.slot_count) {
+                evictions += session.machine().slots.evict_page(page) as u32;
+            }
+            for ext in 0..chunk_extent_count(manifest.chunk_len) {
+                evictions += session.machine().chunks.evict_extent(ext) as u32;
+            }
+            // A freshly resumed session is wholly clean, so the evict
+            // sweep must have emptied residency — the arm's premise.
+            assert_eq!(
+                session.machine().slots.resident_page_count(),
+                0,
+                "post-resume evict sweep empties slot residency"
+            );
+        }
         if let Resume::LazyAdversarialPrefetch = mode {
             // Touch every page and extent in reverse order — a fault
             // schedule no organic run produces. Residency order must
@@ -154,27 +193,51 @@ fn run_store<S: HeapStore + 'static>(
         }
         let o = session.machine_mut().run(bytecode);
         results.push(o.result);
-        computrons = o.computrons;
+        computrons.push(o.computrons);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
+        if let Resume::LazyAdversarialEvict = mode {
+            // Evict AFTER the session's own checkpoint too: the rows
+            // this commit rewrote are clean again — evictable — and
+            // their re-faults must verify against the leaves the
+            // commit refreshed (frozen attach-time leaves would
+            // misdiagnose exactly this healthy re-fault as a corrupt
+            // store — the phase-8 review finding). The final
+            // `write_snapshot` below re-faults everything evicted
+            // here.
+            let manifest = store.borrow().manifest().unwrap();
+            for page in 0..slot_page_count(manifest.slot_count) {
+                evictions += session.machine().slots.evict_page(page) as u32;
+            }
+            for ext in 0..chunk_extent_count(manifest.chunk_len) {
+                evictions += session.machine().chunks.evict_extent(ext) as u32;
+            }
+        }
+    }
+    if let Resume::LazyAdversarialEvict = mode {
+        assert!(
+            evictions > 0,
+            "the adversarial-evict arm must actually evict"
+        );
     }
     (results, computrons, session.machine().write_snapshot(&sig()))
 }
 
-/// Variant 6: one surviving machine, checkpoint after every crank, one
+/// Variant 7: one surviving machine, checkpoint after every crank, one
 /// lazy resume at the end. The resumed machine's blob must equal the
 /// survivor's.
 fn run_checkpoint_every_crank<S: HeapStore + 'static>(
     store: S,
     compiled: &[(Vec<u8>, Vec<String>)],
-) -> (Vec<String>, u64, Vec<u8>) {
+) -> (Vec<String>, Vec<u64>, Vec<u8>) {
     let store = Rc::new(RefCell::new(store));
     let mut results = Vec::new();
+    let mut computrons = Vec::new();
 
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let o = m.run(&compiled[0].0);
     results.push(o.result);
-    let mut computrons = o.computrons;
+    computrons.push(o.computrons);
     let mut session: StoreSession = begin_store_session(m, &sig(), &mut *store.borrow_mut())
         .map_err(|(_, e)| e)
         .expect("begin session");
@@ -182,7 +245,7 @@ fn run_checkpoint_every_crank<S: HeapStore + 'static>(
     for (bytecode, _) in compiled.iter().skip(1) {
         let o = session.machine_mut().run(bytecode);
         results.push(o.result);
-        computrons = o.computrons;
+        computrons.push(o.computrons);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
     }
     drop(session);
@@ -199,27 +262,31 @@ fn metamorphic<S: HeapStore + 'static>(
     let baseline = run_baseline(&compiled);
 
     let (r, c, b) = run_blob(&compiled);
-    assert_agrees("blob", scenario, &baseline, &r, c, &b);
+    assert_agrees("blob", scenario, &baseline, &r, &c, &b);
 
     let (r, c, b) = run_store(fresh(), &compiled, Resume::Eager);
-    assert_agrees("store-eager", scenario, &baseline, &r, c, &b);
+    assert_agrees("store-eager", scenario, &baseline, &r, &c, &b);
 
     let (r, c, b) = run_store(fresh(), &compiled, Resume::Lazy);
-    assert_agrees("store-lazy", scenario, &baseline, &r, c, &b);
+    assert_agrees("store-lazy", scenario, &baseline, &r, &c, &b);
 
     let (r, c, b) = run_store(fresh(), &compiled, Resume::LazyAdversarialPrefetch);
-    assert_agrees("store-lazy-prefetch", scenario, &baseline, &r, c, &b);
+    assert_agrees("store-lazy-prefetch", scenario, &baseline, &r, &c, &b);
+
+    let (r, c, b) = run_store(fresh(), &compiled, Resume::LazyAdversarialEvict);
+    assert_agrees("store-lazy-evict", scenario, &baseline, &r, &c, &b);
 
     let (r, c, b) = run_checkpoint_every_crank(fresh(), &compiled);
-    assert_agrees("checkpoint-every-crank", scenario, &baseline, &r, c, &b);
+    assert_agrees("checkpoint-every-crank", scenario, &baseline, &r, &c, &b);
 }
 
-/// The full six-way metamorphic determinism suite against a backend:
-/// five real-JS scenarios, each executed uninterrupted / blob /
-/// store-eager / store-lazy / adversarial-prefetch /
-/// checkpoint-every-crank, agreeing on per-crank results, final
-/// computrons, and final canonical blob bytes. `fresh` must return an
-/// EMPTY store; it is called once per store-backed variant.
+/// The full seven-way metamorphic determinism suite against a
+/// backend: five real-JS scenarios, each executed uninterrupted /
+/// blob / store-eager / store-lazy / adversarial-prefetch /
+/// adversarial-evict / checkpoint-every-crank, agreeing on per-crank
+/// results, per-crank computrons, and final canonical blob bytes.
+/// `fresh` must return an EMPTY store; it is called once per
+/// store-backed variant.
 ///
 /// Fixtures follow the anchored equal-symbol-set discipline (every
 /// crank of a scenario uses the same program-symbol set).
@@ -341,6 +408,26 @@ pub fn checkpoint_acceptance(store: &mut dyn HeapStore) {
         root_hash(store).unwrap(),
         hex_sha256(&session.machine().write_snapshot(&sig()))
     );
+    assert_edges_match_content(store);
+}
+
+/// The phase-6 purity lock: the STORED page-edge summaries must equal
+/// the summaries recomputed from the store's own content — a pure
+/// function of the rows, never of the schedule that produced them.
+fn assert_edges_match_content(store: &dyn HeapStore) {
+    let image = store_to_image(store).unwrap();
+    let stored = store.page_edges().unwrap();
+    let n_pages = slot_page_count(image.slots.len() as u32) as usize;
+    assert_eq!(stored.len(), n_pages, "one summary per page");
+    for (page, stored_targets) in stored.iter().enumerate() {
+        let start = page * SLOTS_PER_PAGE as usize;
+        let end = image.slots.len().min(start + SLOTS_PER_PAGE as usize);
+        let expected = derive_page_edges(page as u32, &image.slots[start..end]);
+        assert_eq!(
+            stored_targets, &expected,
+            "page {page} summary equals content-derived summary"
+        );
+    }
 }
 
 /// The row-6 bar through an EMPTY backend: a machine that slept in the

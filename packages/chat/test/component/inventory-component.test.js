@@ -664,10 +664,12 @@ test.serial('group header count honors the special-names filter', async t => {
   // hidden special name is excluded, so the header reads 1, not 2.
   t.is(countText(), '1', 'count excludes the hidden special name by default');
 
-  // Reveal special names; the count re-renders to include @self.
+  // Reveal special names; the count re-renders to include @self. Poll rather
+  // than spending a fixed tick budget — on a loaded CI runner the re-render
+  // can land after any fixed number of ticks (observed at 20).
   $toggle.setAttribute('aria-pressed', 'true');
   $toggle.dispatchEvent(new globalThis.Event('change'));
-  await tick(20);
+  await waitFor(() => countText() === '2');
   t.is(countText(), '2', 'count includes special names once revealed');
 });
 

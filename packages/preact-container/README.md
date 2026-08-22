@@ -182,13 +182,26 @@ threat model requires blocking those channels.
 
 ### `confineComponent(fn, opts?)`
 
-Wrap an untrusted function as a Preact function component. `fn` is called
+Wrap a component function as a Preact function component. `fn` is called
 with `(endowments, props)`. `props.children`, if any, is an array of
 opaque sentinel vnodes the guest can position but not inspect.
 
+Only `children` crosses opaquely.
+A vnode passed through any **other** prop is **dropped** (best-effort:
+top-level values and one level of array): a raw vnode there would hand
+the receiver a live, callable component reference (`vnode.type`). This
+is a tripwire for the common idiom, not a boundary — carry host content
+as `children`, or as a confined component the guest places (see "Trusted
+content" below). It drops rather than throws so that a guest placing
+trusted content cannot crash the render by supplying a vnode-shaped
+prop.
+Function-valued props are **not** dropped: passing a callback is a
+deliberate capability grant, and the receiver must treat the arguments
+it gets as untrusted data.
+
 `opts.name` sets the devtools display name; `opts.onError` is invoked
-when the guest function throws (the host render is not interrupted;
-exceptions from `onError` itself are swallowed).
+when `fn` throws (the host render is not interrupted; exceptions from
+`onError` itself are swallowed).
 
 A confined component mounted via plain `preact.render` (i.e. **without**
 `renderConfined` on top) **throws synchronously** — the allow-by-default
@@ -196,9 +209,66 @@ attribute filter lives in the renderer, so rendering without it would
 silently expose the host to HTML injection. Merely _defining_ a confined
 component arms this fail-fast.
 
+A confined wrapper can only be **rendered by Preact's diff**. Calling it
+directly — the exfiltration move of reading its rendered output as a
+plain value — returns `null`. This matters for the trusted-content case
+below; for an ordinary confined guest it is just belt-and-braces
+(nothing should ever read a confined component's output as data).
+
 ### `isConfinedComponent(value)`
 
 Returns `true` for wrappers returned by `confineComponent`.
+
+### Trusted content: a confined component the guest places but cannot read
+
+A confined wrapper is a **mutual-suspicion component boundary**: it
+protects the host from the component's output (coercion + sanitization)
+*and* protects the component's output from whoever holds the wrapper
+(the direct-call gate above). That second half is what lets the host
+hand a **trusted** component to an untrusted guest — "render the host's
+meaning of *this* thing": a reader's private petname for a party, a
+timestamp in the viewer's timezone, a confirmation woven inside a
+less-trusted flow.
+
+Designate by reference, per ocap discipline — the parameter that names a
+thing should *be* the thing:
+
+```js
+const names = new WeakMap(); // party object → the reader's local name
+const PetName = confineComponent(({ h }, { party }) =>
+  h('span', null, names.get(party) ?? 'unknown'),
+);
+// Hand the guest hardened party references as ordinary props; the guest
+// designates one by passing it back:
+//   h(props.PetName, { party: props.author })
+// A guest-fabricated object is simply not in the WeakMap → 'unknown'.
+// No global id, nothing to guess, no ambient lookup table.
+```
+
+What the guest gets, all by construction and none by a flag:
+
+- **Can place, cannot inspect** — the guest holds the wrapper (a frozen
+  function) and may place it as a vnode type; `fn` is a closure it
+  cannot read, and `fn`'s output is rendered by Preact, never returned
+  to the guest. Refs are stripped, so the DOM is unreachable too. The
+  guest cannot read the output back off the vnode it created either —
+  the coercer rebuilds the tree, so Preact renders a copy the guest does
+  not hold.
+- **Cannot invoke for a value** — a direct call returns `null`.
+- **Cannot forge** — the wrapper is identity-checked against a private
+  `WeakSet`.
+
+`props` are **attacker-provided** — the same contract as a callback the
+host hands a guest — and `fn` validates its own inputs (`harden` what
+you keep; designate host objects by reference). `fn`'s output is
+**sanitized** like any confined output, so a `javascript:` URL or a
+disallowed tag it emits is still dropped; if trusted content genuinely
+needs un-sanitized output, use `HostPassthrough`.
+
+This makes trusted content unreachable and unforgeable; it does **not**
+make a guest-drawn imitation recognizable — nothing stops untrusted code
+from drawing its own pixels. An unspoofable presentation (e.g. a
+per-user secret pattern) is a separate layer above this primitive.
 
 ## Tests
 

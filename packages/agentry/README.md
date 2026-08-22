@@ -83,37 +83,32 @@ import { makeCodeModeAgent } from '@endo/agentry/code-mode';
 
 const { agent } = makeCodeModeAgent({
   model,
-  powers: { workspace, git, gitMode: 'historyRewrite' },
+  powers: { workspace, git },
 });
 await agent.prompt('Inspect the current branch.');
 await agent.waitForIdle();
 ```
 
-`gitMode` is `'readOnly'`, `'readWrite'` (the default), or
-`'historyRewrite'`.
-The history-rewrite mode requires a Git capability minted with explicit
-history-rewrite authority and advertises the elevated `gitHistory` surface,
-including amend and reword operations.
+Git declarations are derived from the recognized live Git facet.
+The history-rewrite surface is advertised only when that facet has explicit
+history-rewrite authority.
 
 The model-facing tool surface is intentionally one tool:
 `evaluate({ source })`, with `resultName` added only when the host supplies
 storage authority.
-Workspace and Git operations happen inside
-the Endo Compartment through lexical caps (`workspace`, `git`, and any
-configured named powers).
-The prompt carries generated TypeScript declarations selected for the granted
-capability mode; `E(cap).__getMethodNames__()` remains the fallback for methods
-outside a declaration.
+Workspace and Git operations happen inside the Endo Compartment through
+lexical caps (`workspace`, `git`, and any configured named powers).
+Each lexical cap is a `CodeModeGrant` pairing the live capability with its
+generated declaration.
+Runtime endowments, evaluator declarations, collision checks, and prompt text
+are all derived from that grant list.
 
 By default a code-mode session has no `@endo/exo-shell` Shell global: the
 example above only requests `workspace` and `git`, so no shell binding
-appears in the compartment or the prompt. A caller that wants shell opts in
-explicitly by adding a `makeShellGlobal` descriptor to `namedPowers` and
-resolving the matching capability through `lookupPowers` (or, for an
-already-live capability, through `endowments`):
+appears in the compartment or the prompt. A caller that wants another generic
+capability opts in explicitly through the trusted lookup handle:
 
 ```js
-import { makeShellGlobal } from '@endo/agent-tools/code-mode-globals/shell.js';
 import { makeCodeModeAgent } from '@endo/agentry/code-mode';
 
 const { agent } = makeCodeModeAgent({
@@ -121,21 +116,39 @@ const { agent } = makeCodeModeAgent({
   powers: {
     workspace,
     git,
-    gitMode: 'readWrite',
-    namedPowers: [makeShellGlobal({ name: 'shell', petName: 'shell' })],
+    namedPowers: [{ name: 'shell', petName: 'shell' }],
   },
-  // lookupPowers resolves `shell` by pet name to the capability the host
-  // already granted; makeShellGlobal only describes it, it grants nothing.
   lookupPowers,
 });
 await agent.prompt('Inspect the repository status.');
 await agent.waitForIdle();
 ```
 
-A `namedPowers` descriptor is opt-in and describes a capability the host has
-already granted elsewhere; `makeShellGlobal` alone never provisions or widens
-Shell authority, and omitting it (as in the first example) keeps Shell out of
-the compartment.
+The trusted lookup handle supplies the live capability.
+Because this generic compatibility path has no local interface recognizer, the
+prompt advertises `shell` as an opaque capability (`unknown`) rather than
+claiming an independently supplied interface declaration.
+
+The `workspace` and `git` powers are different: their declarations are derived
+from the live capability's recognized posture, which is a synchronous check
+that a pending lookup cannot satisfy.
+Name either of them by pet name instead of passing it inline and the
+asynchronous entry point resolves it first:
+
+```js
+import { makeCodeModeAgentFromLookup } from '@endo/agentry/code-mode';
+
+const { agent } = await makeCodeModeAgentFromLookup({
+  model,
+  powers: { workspacePetName: 'workspace', gitPetName: 'git' },
+  lookupPowers,
+});
+```
+
+`resolveCodeModePowers(powers, lookupPowers)` is the same resolution step on
+its own, for a caller that assembles the powers record itself.
+The synchronous `makeCodeModeAgent` refuses an unresolved lookup for these two
+powers rather than minting a grant whose posture nobody has inspected.
 
 Plain-data completion values returned from `evaluate` are encoded for the model
 with the SmallCaps renderer from `@endo/agent-tools`, so BigInts and other
@@ -175,7 +188,7 @@ const session = await provisionEndoCodeMode({
 const { agent } = makeCodeModeAgent({
   model,
   evaluate: makeDaemonEvaluate(session.powers),
-  globals: session.globals,
+  powers: { grants: session.grants },
 });
 
 // Save this plain record, not the guest or any daemon capability.
@@ -194,13 +207,21 @@ The `EndoProvisionSpec` fields are optional grants:
 - `piTools`: `'preserve'` keeps Pi's currently active standard and extension
   tools active alongside `evaluate`;
 - `fs`: `'readOnly'` or `'readWrite'`;
-- `git`: `'readOnly'`, `'readWrite'`, or `'historyRewrite'`; and
+- `git`: `'readOnly'`, `'readWrite'`, or `'historyRewrite'`;
+- `mounts`: named filesystem roots, each `{ path, mode, deniedSegments? }`
+  with a `'readOnly'` or `'readWrite'` mode;
+- `gits`: named Git grants, each `{ mount?, path, mode }` selecting a non-bare
+  Git worktree by mount-relative path segments; and
+- `grants`: named host pet-name paths, each `{ from, description? }`, bound as
+  opaque code-mode capabilities whose declarations are minted by the trusted
+  provisioning path; and
 - `gitRemotes`: remote policies normalized by `@endo/exo-git`, plus an optional
   host-side credential pet name.
 
 There is no `shell` field: retained provisioning never provisions or includes
-a `@endo/exo-shell` Shell global, so `session.globals` above carries only
-`workspace` and `git`. A caller that wants shell composes it separately with
+a `@endo/exo-shell` Shell global, so `session.grants` above carries only
+the live `workspace` and Git capabilities selected by policy. A caller that
+wants Shell composes it separately with
 `makeShellGlobal` and its own capability, as shown in
 [Code mode](#code-mode); omitting it, as this example does, is the opt-out.
 
@@ -218,6 +239,48 @@ fetch refspec. When omitted, an unqualified pull uses the first declared
 concrete fetch refspec, so declaration order is preserved.
 A remote credential is only a host-side pet name; tokens, passwords, embedded
 URL credentials, and secret-shaped fields are rejected.
+
+Named mounts and Git grants extend the same spec to a session that spans more
+than one filesystem root.
+A common shape is a primary clone beside a linked worktree created by
+`git worktree add`:
+
+```
+~/src/
+  endo/          # primary clone
+  endo-pr-958/   # git -C endo worktree add ../endo-pr-958
+```
+
+One mount over the shared parent keeps the primary clone's `.git` directory
+inside the granted root, so Git can resolve the linked worktree's gitdir, and
+each Git grant selects its checkout by mount-relative path with its own
+authority mode:
+
+```js
+const session = await provisionEndoCodeMode({
+  harness: 'example',
+  sessionId: conversationId,
+  cwd: '/home/user/src',
+  spec: {
+    mounts: {
+      src: { path: '.', mode: 'readWrite' },
+    },
+    gits: {
+      trunk: { mount: 'src', path: ['endo'], mode: 'readOnly' },
+      feature: { mount: 'src', path: ['endo-pr-958'], mode: 'readWrite' },
+    },
+  },
+});
+```
+
+The compartment then carries a writable `src` filesystem capability plus a
+read-only `trunk` and a writable `feature` Git capability, each named after
+its grant.
+A Git grant's authority is capped by its selected mount: writable or
+history-rewrite Git requires a writable, guest-bound mount, so a read-only
+mount never leaks write authority through Git.
+The compatibility `workspace`, `fs`, and root `git` fields normalize into this
+same named authority graph, so the two styles compose in one spec.
 
 Provisioning derives deterministic controller aliases and retained guest handle
 and agent paths from `sessionId`.
@@ -281,6 +344,53 @@ endo-pi --endo-provision='{"git":"historyRewrite"}'
 
 # Keep Pi's standard tools active alongside evaluate.
 endo-pi --endo-provision='{"piTools":"preserve","fs":"readOnly"}'
+```
+
+Named grants resolve host pet-name paths once during initial provisioning and
+retain the resulting formula identifiers across restart.
+Their optional descriptions are prompt context only, and runs of three or more
+backticks are rejected so caller text cannot escape the generated TypeScript
+fence.
+
+```sh
+# Combine workspace, filesystem, Git, and a named host capability.
+# First name the capability in the host's pet store, nested under a directory:
+endo mkdir tools
+endo make packages/cli/demo/counter.js --name tools/counter
+
+endo-pi --endo-provision='{
+  "fs": "readWrite",
+  "git": "readWrite",
+  "grants": {
+    "counter": {
+      "from": ["tools", "counter"],
+      "description": "A counter, incremented with E(counter).incr()"
+    }
+  }
+}'
+```
+
+In this example, the counter name is the guest lexical binding and
+["tools","counter"] is a pet-name path in the connected host namespace.
+The JSON is policy data only; it does not execute code or grant the guest a way
+to look up other host names.
+
+Descriptions are prompt context only.
+They are rendered as one-line comments on opaque declarations; trusted
+TypeScript declarations are selected by the minter, never supplied by policy.
+
+Named mounts and Git grants use the same JSON spec.
+Run from the parent directory of sibling checkouts, this grants a read-only
+view of the primary clone and a writable linked worktree:
+
+```sh
+endo-pi --endo-provision='{
+  "mounts":{"src":{"path":".","mode":"readWrite"}},
+  "gits":{
+    "trunk":{"mount":"src","path":["endo"],"mode":"readOnly"},
+    "feature":{"mount":"src","path":["endo-pr-958"],"mode":"readWrite"}
+  }
+}'
 ```
 
 By default, the extension strips all built-in Pi tools, leaving only `evaluate`,

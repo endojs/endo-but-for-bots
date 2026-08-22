@@ -242,8 +242,7 @@ const passable: Passable = null as any;
 // can claim the discriminated-union form.
 {
   type Coin =
-    | { kind: 'gold'; weight: number }
-    | { kind: 'silver'; purity: number };
+    { kind: 'gold'; weight: number } | { kind: 'silver'; purity: number };
   type CoinShape = CastedPattern<Coin>;
   type Inferred = TypeFromPattern<CoinShape>;
   expectTypeOf(null as unknown as Inferred).toEqualTypeOf<Coin>();

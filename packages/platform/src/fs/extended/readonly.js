@@ -17,15 +17,15 @@
 
 import { makeExo } from '@endo/exo';
 import { E } from '@endo/eventual-send';
-import { makeError, X } from '@endo/errors';
+import { makeError, X, q } from '@endo/errors';
 
 import {
-  FilesystemInterface,
   DirectoryInterface,
   FileInterface,
   OpenFileInterface,
   XattrsInterface,
 } from './type-guards.js';
+import { makeFilesystem } from './posture.js';
 
 /**
  * @import { ERef } from '@endo/eventual-send'
@@ -95,30 +95,33 @@ harden(readOnly);
  * @returns {Filesystem}
  */
 const makeReadOnlyFilesystem = inner => {
-  return makeExo('Filesystem', FilesystemInterface, {
-    async root() {
-      const r = await E(inner).root();
-      const qid = await E(r).getQid();
-      return makeReadOnlyDirectory(r, qid);
+  return makeFilesystem(
+    {
+      async root() {
+        const r = await E(inner).root();
+        const qid = await E(r).getQid();
+        return makeReadOnlyDirectory(r, qid);
+      },
+      async named(viewName) {
+        const r = await E(inner).named(viewName);
+        const qid = await E(r).getQid();
+        return makeReadOnlyDirectory(r, qid);
+      },
+      async statfs() {
+        return E(inner).statfs();
+      },
+      async brands() {
+        return E(inner).brands();
+      },
+      help(method) {
+        if (method === undefined) {
+          return 'Filesystem (read-only attenuator) — mutating methods reject with EACCES.';
+        }
+        return `No documentation available for method ${q(method)}.`;
+      },
     },
-    async named(viewName) {
-      const r = await E(inner).named(viewName);
-      const qid = await E(r).getQid();
-      return makeReadOnlyDirectory(r, qid);
-    },
-    async statfs() {
-      return E(inner).statfs();
-    },
-    async brands() {
-      return E(inner).brands();
-    },
-    help(method) {
-      if (method === undefined) {
-        return 'Filesystem (read-only attenuator) — mutating methods reject with EACCES.';
-      }
-      return `No documentation for method "${method}".`;
-    },
-  });
+    'readOnly',
+  );
 };
 
 /**
@@ -220,7 +223,7 @@ const makeReadOnlyDirectory = (dir, qid) => {
       if (method === undefined) {
         return 'Directory (read-only attenuator).';
       }
-      return `No documentation for method "${method}".`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };
@@ -276,7 +279,7 @@ const makeReadOnlyFile = (file, qid) => {
       if (method === undefined) {
         return 'File (read-only attenuator).';
       }
-      return `No documentation for method "${method}".`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };
@@ -312,7 +315,7 @@ const makeReadOnlyOpenFile = oh => {
       if (method === undefined) {
         return 'OpenFile (read-only attenuator).';
       }
-      return `No documentation for method "${method}".`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };
@@ -339,7 +342,7 @@ const makeReadOnlyXattrs = xattrs => {
       if (method === undefined) {
         return 'Xattrs (read-only attenuator).';
       }
-      return `No documentation for method "${method}".`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };

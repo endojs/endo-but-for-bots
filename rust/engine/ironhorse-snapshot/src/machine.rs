@@ -63,8 +63,10 @@ use crate::format::{Signature, SnapshotError};
 use crate::image::{read_machine, write_machine, MachineImage, MeterImage};
 use crate::sha256::{hex, Sha256};
 use crate::store::{
-    chunk_extent_count, image_to_batch, seal_commit, store_to_image, validate_store,
-    CheckpointBatch, HeapStore, SmallState, StoreError, StoreManifest, STORE_SCHEMA_VERSION,
+    chunk_extent_count, combine_root, derive_page_edges, image_to_batch, leaf_hash, seal_commit,
+    slot_page_count, store_to_image, validate_store, CheckpointBatch, HeapStore, SmallState,
+    StoreError, StoreLeaves, StoreManifest, LEAF_EXT, LEAF_PAGE, LEAF_SMALL,
+    STORE_SCHEMA_VERSION,
 };
 use ironhorse_vm::Interp;
 
@@ -266,6 +268,16 @@ pub fn resume_from_cas(
 struct LazyPin {
     epoch: std::cell::Cell<u64>,
     seal: std::cell::RefCell<String>,
+    /// The verified row-leaf hashes every fault checks its row
+    /// against. Seeded from `validate_store` at attach and REFRESHED
+    /// by the session's own successful checkpoints (alongside the
+    /// epoch/seal advance): a checkpoint rewrites dirty rows in the
+    /// store, and phase 8's eviction means a rewritten-then-clean row
+    /// CAN fault again — against the committed bytes, which only the
+    /// refreshed leaves match. Frozen attach-time leaves would
+    /// misdiagnose that healthy re-fault as a corrupt store (the
+    /// review's eviction finding).
+    leaves: std::cell::RefCell<StoreLeaves>,
     /// Address of the pinned store's data (the `S` inside the
     /// `Rc<RefCell<S>>` the page source reads through). The session
     /// advances the pin after a commit only when the committed store
@@ -342,7 +354,9 @@ fn manifest_of(interp: &Interp, signature: &Signature, epoch: u64) -> StoreManif
         slot_count: interp.slots.capacity(),
         slot_live: interp.slots.live_count(),
         chunk_len: interp.chunks.byte_size() as u64,
+        free_len: interp.slots.free_list().len() as u32,
         epoch,
+        root: String::new(),
         seal: String::new(),
     }
 }
@@ -425,19 +439,56 @@ pub fn checkpoint_to_store(
     let epoch = session.epoch.checked_add(1).ok_or(StoreError::Snapshot(
         crate::format::SnapshotError::Corrupt("store epoch exhausted"),
     ))?;
+    // The stored metadata this commit builds on must itself cohere:
+    // leaves + summaries + small state recombine to the stored root
+    // (metadata-scale). A leaf edited at rest leaves the manifest
+    // untouched — so the pairing guard above still passes — and
+    // without this check the edit would be laundered into THIS
+    // commit's validly sealed root, surfacing only as a fault panic
+    // at the corrupted row's first read (the review's laundering
+    // finding).
+    let (mut leaf_pages, mut leaf_exts) = store.leaf_hashes()?;
+    let prior_frees = store.free_leaf_hashes()?;
+    let mut edges_all = store.page_edges()?;
+    {
+        let stored_small = store.read_small_state()?;
+        let recombined = combine_root(
+            &leaf_hash(LEAF_SMALL, 0, &stored_small),
+            &leaf_pages,
+            &leaf_exts,
+            &prior_frees,
+            &edges_all,
+        );
+        if recombined != stored.root {
+            return Err(StoreError::BaselineMismatch {
+                expected: recombined,
+                found: stored.root.clone(),
+            });
+        }
+    }
     let interp = &mut session.interp;
     let mut manifest = manifest_of(interp, signature, epoch);
 
     // Dirty rows only — never the whole heap. `page_records`/
     // `extent_bytes` copy one page/extent out of the arena (dirty rows
     // are resident by construction, lazy or not), and the encoding is
-    // the same canonical record codec the full path uses.
+    // the same canonical record codec the full path uses. The range
+    // filter mirrors the chunk side's — the slot bitmap cannot exceed
+    // the geometry today (slot space never shrinks), so it is the
+    // same belt-and-braces, an unindexable panic traded for a row the
+    // root check below would refuse.
+    let page_count = slot_page_count(manifest.slot_count);
+    let mut page_edges: Vec<(u32, Vec<u32>)> = Vec::new();
     let slot_pages: Vec<(u32, Vec<u8>)> = interp
         .slots
         .dirty_pages()
         .into_iter()
+        .filter(|&p| p < page_count)
         .map(|page| {
             let records = interp.slots.page_records(page);
+            // The page-edge summary (phase 6) falls out of the records
+            // already in hand — a pure function of page content.
+            page_edges.push((page, derive_page_edges(page, &records)));
             let mut bytes = Vec::with_capacity(records.len() * crate::slot_codec::SLOT_RECORD_BYTES);
             for slot in &records {
                 crate::slot_codec::encode_slot(slot, &mut bytes);
@@ -458,7 +509,56 @@ pub fn checkpoint_to_store(
         .collect();
 
     let small = small_state_of(interp).encode();
-    manifest.seal = seal_commit(&session.seal, &manifest, &small, &slot_pages, &chunk_extents);
+    // Free-list segments (phase 9): diff against the stored segment
+    // leaves so only CHANGED segments travel — LIFO churn touches the
+    // tail segment, making per-commit free bytes O(1) in heap size.
+    let free_all = crate::store::encode_all_free_segs(interp.slots.free_list());
+    let free_segs: Vec<(u32, Vec<u8>)> = free_all
+        .into_iter()
+        .filter(|(i, bytes)| {
+            prior_frees.get(*i as usize).copied() != Some(leaf_hash(crate::store::LEAF_FREE, *i, bytes))
+        })
+        .collect();
+    // Row-hash tree + summary maintenance (phases 5-6, v5): prior
+    // state + this commit's dirty leaves/summaries → the new sealed
+    // root. Metadata-scale (32 bytes per row) and O(dirty) hashing of
+    // content.
+    let mut leaf_frees = prior_frees;
+    leaf_pages.resize(page_count as usize, [0u8; 32]);
+    leaf_exts.resize(chunk_extent_count(manifest.chunk_len) as usize, [0u8; 32]);
+    leaf_frees.resize(
+        crate::store::free_seg_count(manifest.free_len) as usize,
+        [0u8; 32],
+    );
+    for (i, bytes) in &slot_pages {
+        leaf_pages[*i as usize] = leaf_hash(LEAF_PAGE, *i, bytes);
+    }
+    for (i, bytes) in &chunk_extents {
+        leaf_exts[*i as usize] = leaf_hash(LEAF_EXT, *i, bytes);
+    }
+    for (i, bytes) in &free_segs {
+        leaf_frees[*i as usize] = leaf_hash(crate::store::LEAF_FREE, *i, bytes);
+    }
+    edges_all.resize(page_count as usize, Vec::new());
+    for (i, targets) in &page_edges {
+        edges_all[*i as usize] = targets.clone();
+    }
+    manifest.root = combine_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &leaf_pages,
+        &leaf_exts,
+        &leaf_frees,
+        &edges_all,
+    );
+    manifest.seal = seal_commit(
+        &session.seal,
+        &manifest,
+        &small,
+        &slot_pages,
+        &chunk_extents,
+        &free_segs,
+        &page_edges,
+    );
     let seal = manifest.seal.clone();
     let batch = CheckpointBatch {
         prev_seal: session.seal.clone(),
@@ -466,6 +566,8 @@ pub fn checkpoint_to_store(
         small,
         slot_pages,
         chunk_extents,
+        free_segs,
+        page_edges,
     };
     store.commit(&batch)?;
     session.interp.slots.clear_dirty();
@@ -482,6 +584,22 @@ pub fn checkpoint_to_store(
         if committed.cast::<()>() == pin.store_addr {
             pin.epoch.set(epoch);
             *pin.seal.borrow_mut() = seal;
+            // The pinned store's rows just changed; the leaves every
+            // future fault verifies against must follow (phase 8: a
+            // committed-then-clean row is evictable, so it CAN fault
+            // again — and must verify against the bytes this commit
+            // wrote, not the attach-time ones).
+            *pin.leaves.borrow_mut() = StoreLeaves {
+                pages: leaf_pages,
+                exts: leaf_exts,
+                frees: leaf_frees,
+            };
+            // And the arenas' lazy backing advances to the committed
+            // geometry: rows appended past the attach-time range are
+            // now store-backed (evictable, re-faultable), and the
+            // tail row's expected fault length is the committed one.
+            session.interp.slots.advance_backing();
+            session.interp.chunks.advance_backing();
         }
     }
     Ok(epoch)
@@ -497,7 +615,7 @@ pub fn resume_from_store(
     store: &dyn HeapStore,
     expected_sig: &Signature,
 ) -> Result<StoreSession, StoreError> {
-    let (manifest, _small) = validate_store(store, expected_sig)?;
+    let (manifest, _small, _leaves) = validate_store(store, expected_sig)?;
     let image = store_to_image(store)?;
     // Re-check the manifest after the row reads: the reads above are
     // not one atomic snapshot on every backend, so a concurrent commit
@@ -531,11 +649,15 @@ pub fn resume_from_store(
 /// message — the deterministic crashed-crank path.
 struct StorePageSource<S: HeapStore> {
     store: std::rc::Rc<std::cell::RefCell<S>>,
-    /// The (epoch, seal) the machine's session currently stands at.
-    /// Every fault re-verifies it, so a store advanced by anyone else
-    /// turns torn reads into a deterministic named crashed crank
-    /// instead of a chimera heap (the review's two-lazy-machines
-    /// finding); the session advances the pin on its own commits.
+    /// The (epoch, seal, row leaves) the machine's session currently
+    /// stands at. Every fault re-verifies the pin, so a store
+    /// advanced by anyone else turns torn reads into a deterministic
+    /// named crashed crank instead of a chimera heap (the review's
+    /// two-lazy-machines finding), and checks its row against the
+    /// pinned leaves, so a length-preserving flip at rest dies as a
+    /// named crashed crank, never a different machine. The session
+    /// advances all three on its own commits — see
+    /// [`LazyPin::leaves`] for why the leaves must advance too.
     pin: std::rc::Rc<LazyPin>,
 }
 
@@ -565,6 +687,11 @@ impl<S: HeapStore> ironhorse_vm::PageSource for StorePageSource<S> {
             .borrow()
             .read_slot_page(page)
             .unwrap_or_else(|e| panic!("lazy heap fault: slot page {page}: {e:?}"));
+        if self.pin.leaves.borrow().pages.get(page as usize).copied()
+            != Some(leaf_hash(LEAF_PAGE, page, &bytes))
+        {
+            panic!("lazy heap fault: slot page {page} fails its leaf hash (corrupt store)");
+        }
         // The pin check and the row read are separate store operations,
         // so on a shared backend a foreign commit can land between them
         // and the read return a NEW-epoch row the pre-check could not
@@ -582,6 +709,11 @@ impl<S: HeapStore> ironhorse_vm::PageSource for StorePageSource<S> {
             .borrow()
             .read_chunk_extent(ext)
             .unwrap_or_else(|e| panic!("lazy heap fault: chunk extent {ext}: {e:?}"));
+        if self.pin.leaves.borrow().exts.get(ext as usize).copied()
+            != Some(leaf_hash(LEAF_EXT, ext, &bytes))
+        {
+            panic!("lazy heap fault: chunk extent {ext} fails its leaf hash (corrupt store)");
+        }
         // Same post-read verification as `slot_page` — see there.
         self.check_pin("chunk extent post-read");
         bytes
@@ -605,7 +737,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     store: std::rc::Rc<std::cell::RefCell<S>>,
     expected_sig: &Signature,
 ) -> Result<StoreSession, StoreError> {
-    let (manifest, small) = validate_store(&*store.borrow(), expected_sig)?;
+    let (manifest, small, leaves) = validate_store(&*store.borrow(), expected_sig)?;
     // Re-check the manifest after validation's separate reads, exactly
     // as eager resume does after its row reads: the manifest / small /
     // inventory reads are not one atomic snapshot on every backend, so
@@ -625,6 +757,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     let pin = std::rc::Rc::new(LazyPin {
         epoch: std::cell::Cell::new(manifest.epoch),
         seal: std::cell::RefCell::new(manifest.seal.clone()),
+        leaves: std::cell::RefCell::new(leaves),
         // `RefCell::as_ptr` addresses the `S` itself — the same address
         // a later `&mut *store.borrow_mut()` coerced to
         // `&mut dyn HeapStore` carries into [`checkpoint_to_store`].
@@ -819,4 +952,91 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// **Summary-driven partial collection** (store seam phase 6): free
+/// every page unreachable from the machine's GC roots and side-table
+/// references, deciding arena reachability ENTIRELY from the store's
+/// persisted page-edge summaries — zero row-content reads, no
+/// full-heap reification.
+///
+/// The root set is [`ironhorse_vm::Interp::gc_roots`] **plus**
+/// [`ironhorse_vm::Interp::side_table_ref_slots`]: the stored
+/// summaries carry only arena edges, so every side-table-held
+/// reference (an Array's elements, a Map entry, a captured closure
+/// record, a suspended frame) roots its page directly — the
+/// page-granular equivalent of the full collector's `extra_edges`
+/// hook. Without it, an object reachable only through a side table
+/// would be freed while live (the review's unsoundness finding).
+///
+/// Page-conservative by design, twice over: garbage co-resident with
+/// live data in a reachable page survives, and a side-table entry
+/// whose key is dead still roots its values' pages until the full
+/// [`ironhorse_vm::Interp::collect_garbage`] reclaims exactly (only
+/// it compacts chunk space). Deterministic: a pure function of store
+/// content and machine state — which also means the *schedule* of
+/// partial collections is part of a replica's decision sequence,
+/// exactly like the full collector's (it rewrites the free list, so
+/// a replica that collects and one that does not diverge in
+/// subsequent allocation order).
+///
+/// Contract: call at a checkpoint boundary while the session has no
+/// dirty rows — the summaries describe the committed state, and dirt
+/// would make them stale. A dirty machine panics with a named message
+/// (a caller bug, like the fault contract).
+///
+/// Returns the number of slots freed. Freeing never dirties (no
+/// record byte changes), so the next checkpoint carries the
+/// reclamation as free-list state alone.
+pub fn partial_collect(
+    session: &mut StoreSession,
+    store: &dyn HeapStore,
+) -> Result<u32, StoreError> {
+    let interp = session.machine();
+    assert!(
+        interp.slots.dirty_pages().is_empty() && interp.chunks.dirty_extents().is_empty(),
+        "partial collect requires a clean checkpoint boundary (dirty rows present)"
+    );
+    let manifest = store.manifest()?;
+    if manifest.epoch != session.epoch || manifest.seal != session.seal {
+        return Err(StoreError::BaselineMismatch {
+            expected: session.seal.clone(),
+            found: manifest.seal,
+        });
+    }
+    let total = slot_page_count(manifest.slot_count);
+    // Refuse a summary count that disagrees with the geometry BEFORE
+    // deciding anything from the summaries: reachability treats an
+    // absent entry as "no outgoing edges", so a truncated store would
+    // read as maximal garbage and free live pages. Metadata-scale via
+    // the trait (the dense default counts the full read; indexed
+    // backends answer with a COUNT).
+    let found = store.summary_page_count()?;
+    if found != total {
+        return Err(StoreError::SummaryCount {
+            expected: total,
+            found,
+        });
+    }
+    let mut root_pages: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    for r in interp.gc_roots() {
+        if !r.is_null() {
+            root_pages.insert(r.0 / crate::store::SLOTS_PER_PAGE);
+        }
+    }
+    // The side-table roots come as the page-bit projection: the same
+    // single-body enumeration as `side_table_ref_slots` (parity-locked),
+    // without materializing the O(live) index vector.
+    for (p, hit) in interp.side_table_ref_page_bits().into_iter().enumerate() {
+        if hit {
+            root_pages.insert(p as u32);
+        }
+    }
+    // The decision query goes through the trait so an indexed backend
+    // answers it with transfer proportional to the ANSWER (the SQLite
+    // recursive CTE) instead of the dense whole-edge-set read.
+    let roots: Vec<u32> = root_pages.into_iter().collect();
+    let reached = store.reachable_page_set(&roots)?;
+    let dead: Vec<u32> = (0..total).filter(|p| !reached.contains(p)).collect();
+    Ok(session.machine_mut().free_pages(&dead))
 }

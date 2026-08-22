@@ -21,6 +21,9 @@
       "path": "../harden/tsconfig.composite.json"
     },
     {
+      "path": "../helpdown/tsconfig.composite.json"
+    },
+    {
       "path": "../patterns/tsconfig.composite.json"
     },
     {

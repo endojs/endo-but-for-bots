@@ -129,6 +129,7 @@ export default defineConfig(
       'packages/chat/**',
       'packages/monaco-wrapper/**',
       'packages/preact-container/**',
+      'packages/preact-social/**',
       'packages/space-channel/**',
       'packages/space-chat/**',
       'packages/space-file-explorer/**',
@@ -194,7 +195,7 @@ export default defineConfig(
     },
   },
   {
-    files: ['packages/preact-container/**'],
+    files: ['packages/preact-container/**', 'packages/preact-social/**'],
     rules: {
       'no-underscore-dangle': 'off',
       'no-bitwise': 'off',
@@ -234,6 +235,8 @@ export default defineConfig(
     files: [
       'packages/preact-container/test/**/*.js',
       'packages/preact-container/vitest.config.mjs',
+      'packages/preact-social/test/**/*.js',
+      'packages/preact-social/vitest.config.mjs',
     ],
     languageOptions: {
       globals: {
@@ -317,9 +320,16 @@ export default defineConfig(
       'rust/',
       '**/*.json',
       'packages/test262-runner/prelude/',
+      // Borrowed test262 cases and harness includes: third-party test262
+      // format, not subject to @endo/internal lint (parallel to the
+      // **/test262/** ignore that covers test262-runner's corpus).
+      'packages/hardened262/test/',
+      'packages/hardened262/harness/',
+      'packages/hardened262/tmp/',
       'packages/chat/test/**/probe.mjs',
       'packages/chat/test/**/run.mjs',
       'packages/daemon/scripts/*.mjs',
+      'packages/exo-git/scripts/*.mjs',
       'packages/thixotrope/dist-xs/',
       'packages/thixotrope/scripts/*.mjs',
       'packages/familiar/preload.mjs',
@@ -330,6 +340,7 @@ export default defineConfig(
       'packages/familiar/out/',
       'packages/module-source/test/fixtures/',
       'packages/module-source/src/external.types.js',
+      'packages/parser-pipeline/test/fixture/*-error.js',
       'packages/pass-style/src/types.js',
       'packages/nat/integration-test/',
       'packages/captp/scripts/',

@@ -8,7 +8,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import fc from 'fast-check';
 
 import { execFile } from 'node:child_process';
-import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execPath } from 'node:process';
@@ -64,7 +64,7 @@ const runLauncher = (args, cwd) =>
  * @property {string} [flag]
  * @property {string[]} [activeToolNames]
  * @property {'tui' | 'rpc' | 'json' | 'print'} [mode]
- * @property {(persistence: EndoProvisionPersistence, options: { onConnectionFailure: EndoConnectionFailureObserver }) => Promise<EndoProvisionResult>} [reconstructProvision]
+ * @property {(persistence: EndoProvisionPersistence, options: { onConnectionFailure: EndoConnectionFailureObserver, forkFrom?: EndoProvisionPersistence }) => Promise<EndoProvisionResult>} [reconstructProvision]
  * @property {() => Promise<void>} [startDaemon]
  * @property {import('../src/endo-code-mode-pi-extension.js').EndoCodeModePiExtensionOptions['rehydrateCredential']} [rehydrateCredential]
  * @property {import('../src/endo-code-mode-pi-extension.js').EndoCodeModePiExtensionOptions['validatePersistence']} [validatePersistence]
@@ -113,6 +113,8 @@ const makeHarness = options => {
   const commands = [];
   /** @type {EndoProvisionPersistence[]} */
   const reconstructions = [];
+  /** @type {Array<EndoProvisionPersistence | undefined>} */
+  const forkSources = [];
   let cleanupCount = 0;
   /** @type {EndoConnectionFailureObserver | undefined} */
   let onConnectionFailure;
@@ -121,6 +123,7 @@ const makeHarness = options => {
     reconstructions.push(persistence);
     return harden({
       powers: FAKE_POWERS,
+      grants: harden([]),
       globals: makeEndoProvisionGlobals(persistence),
       persistence,
       cleanup: async () => {
@@ -132,6 +135,7 @@ const makeHarness = options => {
     options.reconstructProvision ?? defaultReconstruct;
   const reconstructProvision = async (persistence, connectionOptions) => {
     onConnectionFailure = connectionOptions.onConnectionFailure;
+    forkSources.push(connectionOptions.forkFrom);
     return selectedReconstruct(persistence, connectionOptions);
   };
 
@@ -217,6 +221,7 @@ const makeHarness = options => {
     flags,
     notifications,
     reconstructions,
+    forkSources,
     terminations,
     tools,
     get currentActiveTools() {
@@ -355,6 +360,7 @@ test('load registers only daemon-independent flag and command', async t => {
       reconstructCount += 1;
       return harden({
         powers: FAKE_POWERS,
+        grants: harden([]),
         globals: harden([]),
         persistence,
         cleanup: async () => {},
@@ -436,7 +442,7 @@ test('startup with an omitted grant uses cwd and activates only evaluate', async
   t.is(harness.reconstructions.length, 1);
   const [persistence] = harness.reconstructions;
   t.is(persistence.workspacePath, canonicalCwd);
-  t.deepEqual(Object.keys(persistence.policy), ['workspace']);
+  t.deepEqual(Object.keys(persistence.policy), ['mounts']);
   t.deepEqual(harness.activeTools, [[], ['evaluate']]);
   t.is(harness.tools.length, 1);
   const [evaluateTool] =
@@ -525,8 +531,8 @@ test('explicit filesystem and Git grants default their workspace to cwd', async 
 
   const [persistence] = harness.reconstructions;
   t.is(persistence.workspacePath, await realpath(cwd));
-  t.is(persistence.policy.fs, 'readWrite');
-  t.is(persistence.policy.git, 'readOnly');
+  t.is(persistence.policy.mounts.workspace.mode, 'readWrite');
+  t.is(persistence.policy.gits?.git?.mode, 'readOnly');
   t.deepEqual(
     makeEndoProvisionGlobals(persistence).map(({ name }) => name),
     ['workspace', 'git'],
@@ -561,7 +567,17 @@ for (const reason of ['resume', 'reload']) {
 test('new and fork create distinct retained namespaces; fork inherits policy', async t => {
   const cwd = await makeWorkspace(t);
   const parent = await normalizeEndoProvisionSpec(
-    { fs: 'readWrite', git: 'readOnly', piTools: 'preserve' },
+    {
+      fs: 'readWrite',
+      git: 'readOnly',
+      piTools: 'preserve',
+      grants: {
+        calendar: {
+          from: ['tools', 'calendar'],
+          description: 'A calendar service',
+        },
+      },
+    },
     { harness: 'pi', sessionId: 'parent-session', cwd },
   );
   const fresh = makeHarness({ cwd, sessionId: 'new-session' });
@@ -586,10 +602,48 @@ test('new and fork create distinct retained namespaces; fork inherits policy', a
   t.notDeepEqual(forkPersistence.guestHandlePath, parent.guestHandlePath);
   t.deepEqual(forkPersistence.policy, parent.policy);
   t.is(forkPersistence.workspacePath, parent.workspacePath);
+  t.deepEqual(fork.forkSources, [parent]);
   t.deepEqual(fork.activeTools, [
     [],
     ['read', 'write', 'edit', 'bash', 'evaluate'],
   ]);
+});
+
+test('resume and fork use pinned Git roots after a selector is retargeted', async t => {
+  const cwd = await makeWorkspace(t);
+  const nested = join(cwd, 'nested-repo');
+  const replacement = join(cwd, 'replacement-repo');
+  const selector = join(cwd, 'nested-link');
+  await mkdir(nested);
+  await mkdir(replacement);
+  await symlink(nested, selector, 'dir');
+  const stored = await normalizeEndoProvisionSpec(
+    {
+      fs: 'readOnly',
+      gits: { nested: { path: ['nested-link'], mode: 'readOnly' } },
+    },
+    { harness: 'pi', sessionId: 'retained-session', cwd },
+  );
+  await rm(selector, { force: true });
+  await symlink(replacement, selector, 'dir');
+
+  for (const reason of ['resume', 'fork']) {
+    const harness = makeHarness({
+      cwd,
+      mode: 'json',
+      sessionId: reason === 'resume' ? 'retained-session' : 'fork-session',
+      entries: [persistenceEntry(stored)],
+    });
+    // The two lifecycle modes intentionally run serially against the same
+    // retargeted selector fixture.
+    // eslint-disable-next-line no-await-in-loop
+    await harness.emit('session_start', {
+      type: 'session_start',
+      reason,
+    });
+    t.is(harness.reconstructions.length, 1);
+    t.deepEqual(harness.reconstructions[0].policy, stored.policy);
+  }
 });
 
 test('resume rejects a conflicting CLI policy with fork/new guidance', async t => {
@@ -615,6 +669,80 @@ test('resume rejects a conflicting CLI policy with fork/new guidance', async t =
   t.regex(harness.notifications[0].message, /conflicts/);
   t.regex(harness.notifications[0].message, /new session.*fork/s);
 });
+
+test('resume reports a description-only change as a prompt-context conflict', async t => {
+  const cwd = await makeWorkspace(t);
+  const stored = await normalizeEndoProvisionSpec(
+    {
+      grants: {
+        calendar: {
+          from: ['tools', 'calendar'],
+          description: 'Original calendar context',
+        },
+      },
+    },
+    { harness: 'pi', sessionId: 'retained-session', cwd },
+  );
+  const harness = makeHarness({
+    cwd,
+    sessionId: 'retained-session',
+    entries: [persistenceEntry(stored)],
+    flag: JSON.stringify({
+      grants: {
+        calendar: {
+          from: ['tools', 'calendar'],
+          description: 'Changed calendar context',
+        },
+      },
+    }),
+  });
+
+  await harness.emit('session_start', {
+    type: 'session_start',
+    reason: 'resume',
+  });
+
+  t.deepEqual(harness.reconstructions, []);
+  t.is(harness.notifications.length, 1);
+  t.is(harness.notifications[0].message.includes('authority'), false);
+  t.regex(harness.notifications[0].message, /prompt context/);
+  t.regex(harness.notifications[0].message, /description/);
+});
+
+for (const [label, requestedGrants] of [
+  ['changed', { calendar: { from: ['tools', 'rebound'] } }],
+  [
+    'added',
+    {
+      calendar: { from: ['tools', 'calendar'] },
+      clock: { from: ['tools', 'clock'] },
+    },
+  ],
+  ['removed', {}],
+  ['renamed', { agenda: { from: ['tools', 'calendar'] } }],
+]) {
+  test(`resume rejects ${label} named grant authority`, async t => {
+    const cwd = await makeWorkspace(t);
+    const stored = await normalizeEndoProvisionSpec(
+      { grants: { calendar: { from: ['tools', 'calendar'] } } },
+      { harness: 'pi', sessionId: 'retained-session', cwd },
+    );
+    const harness = makeHarness({
+      cwd,
+      entries: [persistenceEntry(stored)],
+      flag: JSON.stringify({ grants: requestedGrants }),
+    });
+
+    await harness.emit('session_start', {
+      type: 'session_start',
+      reason: 'resume',
+    });
+
+    t.deepEqual(harness.reconstructions, []);
+    t.regex(harness.notifications[0].message, /conflicts/);
+    t.regex(harness.notifications[0].message, /authority/);
+  });
+}
 
 const preservationConflicts =
   /** @type {Array<[string, EndoProvisionSpec | undefined, EndoProvisionSpec]>} */ ([
@@ -663,7 +791,7 @@ test('resume with unparseable stored persistence is rejected as invalid', async 
     entries: [
       persistenceEntry(
         /** @type {EndoProvisionPersistence} */ (
-          /** @type {unknown} */ ({ ...stored, version: 2 })
+          /** @type {unknown} */ ({ ...stored, version: 1 })
         ),
       ),
     ],
@@ -677,7 +805,44 @@ test('resume with unparseable stored persistence is rejected as invalid', async 
   t.deepEqual(harness.reconstructions, []);
   t.deepEqual(harness.appended, []);
   t.is(harness.diagnostics[0].code, 'ENDO_PROVISION_SESSION_INVALID');
-  t.regex(harness.diagnostics[0].message, /invalid Endo code-mode persistence/);
+  t.regex(
+    harness.diagnostics[0].message,
+    /missing or invalid Endo code-mode authority/,
+  );
+});
+
+test('resume with a missing Git directory fails closed for the session', async t => {
+  const cwd = await makeWorkspace(t);
+  const nestedPath = join(cwd, 'nested-repo');
+  await mkdir(nestedPath);
+  const stored = await normalizeEndoProvisionSpec(
+    {
+      fs: 'readWrite',
+      gits: { nested: { path: ['nested-repo'], mode: 'readOnly' } },
+    },
+    { harness: 'pi', sessionId: 'missing-nested-repo', cwd },
+  );
+  await rm(nestedPath, { recursive: true, force: true });
+  const harness = makeHarness({
+    cwd,
+    mode: 'json',
+    sessionId: 'missing-nested-repo',
+    entries: [persistenceEntry(stored)],
+  });
+
+  await harness.emit('session_start', {
+    type: 'session_start',
+    reason: 'resume',
+  });
+
+  t.deepEqual(harness.reconstructions, []);
+  t.deepEqual(harness.appended, []);
+  t.is(harness.diagnostics[0].code, 'ENDO_PROVISION_SESSION_INVALID');
+  t.regex(harness.diagnostics[0].message, /Git directory is unavailable/);
+  t.regex(
+    harness.diagnostics[0].action,
+    /no previous grant is silently dropped or changed/,
+  );
 });
 
 test('resume whose stored authority cannot be re-derived is rejected as invalid', async t => {
@@ -725,7 +890,12 @@ test('resume whose re-derived authority differs from the persisted policy is rej
     ...stored,
     policy: {
       ...stored.policy,
-      workspace: { deniedSegments: ['NODE_MODULES', 'node_modules'] },
+      mounts: {
+        workspace: {
+          ...stored.policy.mounts.workspace,
+          deniedSegments: ['NODE_MODULES', 'node_modules'],
+        },
+      },
     },
   };
   const harness = makeHarness({
@@ -795,6 +965,7 @@ test('daemon absence triggers one standard-daemon autostart and reconnect', asyn
       }
       return harden({
         powers: FAKE_POWERS,
+        grants: harden([]),
         globals: harden([]),
         persistence,
         cleanup: async () => {},
@@ -950,6 +1121,7 @@ test('a daemon that returns different persistence than requested is rejected and
     reconstructProvision: async persistence =>
       harden({
         powers: FAKE_POWERS,
+        grants: harden([]),
         globals: makeEndoProvisionGlobals(persistence),
         // The daemon is trusted to echo back the persistence it was asked to
         // provision; simulate it returning a workspace other than requested.
@@ -968,13 +1140,14 @@ test('a daemon that returns different persistence than requested is rejected and
   t.is(cleanupCount, 1);
   t.deepEqual(harness.appended, []);
   t.is(harness.diagnostics[0].code, 'ENDO_PROVISION_RECOVERY_MISMATCH');
-  t.regex(harness.diagnostics[0].message, /different persistence/);
+  t.regex(harness.diagnostics[0].message, /different runtime authority/);
 });
 
 test('trusted interactive hook can rehydrate a credential without handling its value', async t => {
   const cwd = await makeWorkspace(t);
   const credentialPersistence = await normalizeEndoProvisionSpec(
     {
+      fs: 'readWrite',
       git: 'readWrite',
       gitRemotes: {
         origin: {
@@ -1001,6 +1174,7 @@ test('trusted interactive hook can rehydrate a credential without handling its v
       }
       return harden({
         powers: FAKE_POWERS,
+        grants: harden([]),
         globals: makeEndoProvisionGlobals(persistence),
         persistence,
         cleanup: async () => {},
@@ -1119,6 +1293,7 @@ test('intentional shutdown ignores the connection close observation', async t =>
       observer = options.onConnectionFailure;
       return harden({
         powers: FAKE_POWERS,
+        grants: harden([]),
         globals: harden([]),
         persistence,
         cleanup: async () => {

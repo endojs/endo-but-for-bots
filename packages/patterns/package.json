@@ -1,6 +1,6 @@
 {
   "name": "@endo/patterns",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Pattern matching for Passable objects, expressed as Passable data",
   "keywords": [],
   "author": "Endo contributors",
@@ -52,7 +52,7 @@
     "eslint-plugin-eslint-comments": "catalog:dev",
     "eslint-plugin-import": "catalog:dev",
     "expect-type": "^1.4.0",
-    "prettier": "^3.5.3",
+    "prettier": "^3.9.6",
     "ses": "workspace:^",
     "typescript": "catalog:dev"
   },

@@ -14,7 +14,6 @@ import test from '@endo/ses-ava/test.js';
 
 import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { E } from '@endo/eventual-send';
-import { makeOcapn } from '@endo/ocapn';
 import { makeOcapnHub } from '@endo/ocapn/hub';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
@@ -25,6 +24,7 @@ import {
   makePeerSnapshottingReplayEngine,
 } from '../src/peer-replay-engine.js';
 import { makeMemoryStore } from '../src/store-fs.js';
+import { makeTestOcapn } from './_util.js';
 
 const textEncoder = new TextEncoder();
 /** @param {string} text */
@@ -90,7 +90,7 @@ const makeHubKit = async (t, { workerId, engine, store, debugLabel }) => {
       }
     },
   });
-  const client = await makeOcapn({
+  const client = await makeTestOcapn({
     codec: syrupCodec,
     network: pipe.network,
     debugLabel: 'embedder',

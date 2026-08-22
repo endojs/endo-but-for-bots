@@ -1544,10 +1544,10 @@ export const makeHostMaker = ({
     /**
      * Walk a ReadableTree or Mount and materialise every entry into the
      * destination Mount via `write()`, preserving blob bytes instead
-     * of passing through text decoding. Children are identified by
-     * their advertised method names: anything with `streamBase64` is a
-     * blob/file; anything with `list` is a subtree. Both Mount and
-     * ReadableTree surfaces participate.
+     * of passing through text decoding. Children are identified by their
+     * explicit `kind()` discriminator when available, with the historical
+     * method-name shape as a fallback. Both Mount and ReadableTree surfaces
+     * participate.
      *
      * Why not just `E(dst).write([], src)`? `EndoMount.write()` performs
      * the same discovery shape internally, so the walker reads as
@@ -1565,17 +1565,39 @@ export const makeHostMaker = ({
      * @param {string[]} [pathSegments]
      */
     const materializeTree = async (src, dst, pathSegments = []) => {
+      // A daemon mount carries `kind()` on every lookup result. Discover that
+      // protocol once; older readable trees keep the per-child fallback.
+      // eslint-disable-next-line no-underscore-dangle
+      const sourceMethods = await E(src).__getMethodNames__();
+      const kindProtocol = sourceMethods.includes('kind');
       const names = await E(src).list(...pathSegments);
       for (const name of names) {
         assertValidTreeEntryName(name);
         const subPath = [...pathSegments, name];
         // eslint-disable-next-line no-await-in-loop
         const child = await E(src).lookup(subPath);
-        const methodNames =
-          // eslint-disable-next-line no-await-in-loop, no-underscore-dangle
-          await E(child).__getMethodNames__();
-        const looksLikeBlob = methodNames.includes('streamBase64');
-        const looksLikeTree = methodNames.includes('list');
+        let methodNames = [];
+        let kind;
+        if (kindProtocol) {
+          // eslint-disable-next-line no-await-in-loop
+          kind = await E(child).kind();
+        } else {
+          methodNames =
+            // eslint-disable-next-line no-await-in-loop, no-underscore-dangle
+            await E(child).__getMethodNames__();
+          if (methodNames.includes('kind')) {
+            // eslint-disable-next-line no-await-in-loop
+            kind = await E(child).kind();
+          }
+        }
+        const looksLikeBlob =
+          kind === undefined
+            ? methodNames.includes('streamBase64')
+            : kind === 'file';
+        const looksLikeTree =
+          kind === undefined
+            ? methodNames.includes('list')
+            : kind === 'directory';
         if (looksLikeBlob && looksLikeTree) {
           throw makeError(
             X`Tree entry ${q(subPath)} has both streamBase64 and list — ambiguous shape`,

@@ -1,0 +1,11 @@
+test/Compartment/ModuleSource/needsImport/test.js
+test/Compartment/ModuleSource/needsImportMeta/test.js
+test/Compartment/evaluate-transforms.js
+test/Compartment/import-now-hook/module-source-descriptor-sees-globals.js
+test/Compartment/import-now-hook/namespace-descriptor.js
+test/Compartment/import-now-hook/returns-undefined.js
+test/modules/module-source-reflection/ses-legacy/duplicate-import.js
+test/modules/module-source-reflection/ses-legacy/export-all-from.js
+test/modules/module-source-reflection/ses-legacy/export-default.js
+test/modules/module-source-reflection/ses-legacy/export-empty-from.js
+test/modules/module-source-reflection/ses-legacy/import-all-as.js

@@ -1,5 +1,5 @@
 //! Instantiates the **backend-parameterized store acceptance suite**
-//! (`ironhorse_snapshot::store_suite` — the six-way metamorphic
+//! (`ironhorse_snapshot::store_suite` — the seven-way metamorphic
 //! determinism runner and the lazy working-set bound) against the two
 //! in-crate reference backends. The daemon-side SQLite backend
 //! instantiates the same suite in its own crate
@@ -11,7 +11,7 @@ use ironhorse_snapshot::store_file::FileStore;
 use ironhorse_snapshot::store_suite::{lazy_working_set_bound, metamorphic_suite};
 
 #[test]
-fn memory_store_agrees_six_ways() {
+fn memory_store_agrees_seven_ways() {
     metamorphic_suite(MemoryStore::new);
 }
 
@@ -43,11 +43,70 @@ fn with_file_stores(name: &str, run: impl FnOnce(&mut dyn FnMut() -> FileStore))
 }
 
 #[test]
-fn file_store_agrees_six_ways() {
-    with_file_stores("six-ways", |fresh| metamorphic_suite(fresh));
+fn file_store_agrees_seven_ways() {
+    with_file_stores("seven-ways", |fresh| metamorphic_suite(fresh));
 }
 
 #[test]
 fn file_store_lazy_resume_faults_only_the_working_set() {
     with_file_stores("working-set", |fresh| lazy_working_set_bound(&mut *fresh));
+}
+
+/// Frozen golden vector (collaborator-review follow-up): every other
+/// comparison in the suite is self-referential within one process, so
+/// a latent host-endianness or map-iteration dependency would cancel
+/// out in-process yet break the cross-host resume claim. These
+/// constants pin the canonical blob bytes and the seal chain; an
+/// intentional format or cost-table change updates them consciously,
+/// with a commit message saying why.
+#[test]
+fn golden_vector_pins_canonical_bytes_and_seal() {
+    use ironhorse_snapshot::machine::{
+        begin_store_session, checkpoint_to_store, MachineSnapshot,
+    };
+    use ironhorse_snapshot::sha256::hex_sha256;
+    use ironhorse_snapshot::store::HeapStore;
+    use ironhorse_snapshot::Signature;
+    use ironhorse_vm::{parse_symbols, Interp};
+
+    let sig = Signature::new("ironhorse-worker-v1");
+    let cranks = ["var x = 5;", "x = x + 1;", "x + 10"];
+    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks
+        .iter()
+        .map(|s| {
+            let (b, sy) = ironhorse_compile::compile_atoms(s).expect("compiles");
+            (b, parse_symbols(&sy))
+        })
+        .collect();
+
+    let mut store = MemoryStore::new();
+    let mut m = Interp::new();
+    m.link_intrinsics(&compiled[0].1);
+    assert!(m.run(&compiled[0].0).completed);
+    let mut session = begin_store_session(m, &sig, &mut store)
+        .map_err(|(_, e)| e)
+        .expect("begin");
+    for (bytecode, _) in compiled.iter().skip(1) {
+        assert!(session.machine_mut().run(bytecode).completed);
+        checkpoint_to_store(&mut session, &sig, &mut store).expect("checkpoint");
+    }
+
+    assert_eq!(
+        hex_sha256(&session.machine().write_snapshot(&sig)),
+        "c36f161dea7e80c5144bc5b3134c5a38105b2e94e8150aa7a496bc1e927d3e2f",
+        "canonical final blob hash"
+    );
+    // Seal re-pinned 2026-08-11 as the schema evolved, once per
+    // format commit: v3 (row-hash tree root), v3+phase 6 (page-edge
+    // summaries in the seal, including the NULL-edge exclusion), v4
+    // (segmented free list: free_len in the manifest, free rows in
+    // the seal), and v5 (summaries folded into the root; counts
+    // header and length-prefixed edge entries in root and seal).
+    // The blob hash above was unchanged by ALL of them — exactly the
+    // container/store independence this vector exists to prove.
+    assert_eq!(
+        store.manifest().unwrap().seal,
+        "0a2751b718025257a83a58ce6447efa975fcc4e4d9c12ec2677602150488b051",
+        "epoch-3 seal chain"
+    );
 }

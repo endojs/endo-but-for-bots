@@ -81,9 +81,7 @@ export type NameOrPath = Name | NamePath;
 export type NamesOrPaths = NameOrPath[];
 
 export type SomehowAsyncIterable<T> =
-  | AsyncIterable<T>
-  | Iterable<T>
-  | { next: () => IteratorResult<T> };
+  AsyncIterable<T> | Iterable<T> | { next: () => IteratorResult<T> };
 
 export type Config = {
   statePath: string;
@@ -811,8 +809,9 @@ export interface Context {
    *
    * @param reason - The reason for the cancellation.
    * @param logPrefix - The prefix to use within the log.
-   * @returns A promise that is resolved when the value is cancelled and
-   * can be garbage collected.
+   * @returns A promise that settles when the value is cancelled and all
+   * disposal hooks have run. The promise rejects with an `AggregateError` if
+   * one or more disposal hooks fail.
    */
   cancel: (reason?: Error, logPrefix?: string) => Promise<void>;
 
@@ -823,10 +822,11 @@ export interface Context {
   cancelled: Promise<never>;
 
   /**
-   * A promise that is resolved when the context is disposed. This occurs
+   * A promise that settles when the context is disposed. This occurs
    * after the `cancelled` promise is rejected, and after all disposal hooks
-   * have been run.
-   * Once resolved, the value may be garbage collected at any time.
+   * have been run. The promise rejects with an `AggregateError` containing
+   * every disposal hook failure, or otherwise fulfills with `undefined`.
+   * Once settled, the value may be garbage collected at any time.
    */
   disposed: Promise<void>;
 
@@ -882,12 +882,10 @@ export interface Handle {
 export type MakeSha256 = () => Sha256;
 
 export type PetStoreNameChange =
-  | { add: Name; value: IdRecord; type?: string }
-  | { remove: Name };
+  { add: Name; value: IdRecord; type?: string } | { remove: Name };
 
 export type PetStoreIdNameChange =
-  | { add: IdRecord; names: Name[] }
-  | { remove: IdRecord; names?: Name[] };
+  { add: IdRecord; names: Name[] } | { remove: IdRecord; names?: Name[] };
 
 export type NameChangesTopic = Topic<PetStoreNameChange>;
 
@@ -935,8 +933,7 @@ export type KnownPeersStore = Omit<
  * `add` and `remove` are locators.
  */
 export type LocatorNameChange =
-  | { add: string; names: Name[] }
-  | { remove: string; names?: Name[] };
+  { add: string; names: Name[] } | { remove: string; names?: Name[] };
 
 export interface NameHub {
   has(...petNamePath: string[]): Promise<boolean>;
@@ -1250,8 +1247,7 @@ export type EndoMountStat = {
 };
 
 export type MountNameChange =
-  | { add: string; type: 'file' | 'directory' }
-  | { remove: string };
+  { add: string; type: 'file' | 'directory' } | { remove: string };
 
 /**
  * The `{ algorithm, hash, size }` content-address triple returned by a rich
@@ -1312,6 +1308,12 @@ export interface EndoGitTree {
  * additive; `readOnly()` narrows to a structural `ReadableBlob` view.
  */
 export interface EndoMountFile {
+  kind(): 'file';
+  /**
+   * Diagnostic-only directory-method stub.
+   * Calling it rejects with guidance to use `text()` instead.
+   */
+  list(): Promise<never>;
   text(): Promise<string>;
   streamBase64(
     synPromise: ERef<StreamNode<Passable, Passable>>,
@@ -1338,6 +1340,7 @@ export interface EndoMountFile {
  * view.
  */
 export interface EndoMount extends PathEntryIssuer {
+  kind(): 'directory';
   has(...pathSegments: string[]): Promise<boolean>;
   has(entry: EndoMountEntry): Promise<boolean>;
   list(...pathSegments: string[]): Promise<string[]>;

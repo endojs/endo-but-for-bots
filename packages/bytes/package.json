@@ -1,6 +1,6 @@
 {
   "name": "@endo/bytes",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Portable Uint8Array helpers for cross-realm byte handling",
   "keywords": [
     "uint8array",
@@ -32,8 +32,6 @@
   },
   "scripts": {
     "build": "exit 0",
-    "prepack": "git clean -fX -e node_modules/ && tsc --build tsconfig.build.json",
-    "postpack": "git clean -fX -e node_modules/",
     "cover": "c8 ses-ava",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "eslint --fix .",
@@ -54,7 +52,7 @@
     "babel-eslint": "^10.1.0",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
-    "prettier": "^3.5.3",
+    "prettier": "^3.9.6",
     "ses": "workspace:^",
     "typescript": "catalog:dev"
   },

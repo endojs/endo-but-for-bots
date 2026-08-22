@@ -50,6 +50,7 @@ import {
 import { makeXattrsExo } from './shared/xattrs-exo.js';
 import { makeCursorExo } from './shared/cursor-exo.js';
 import { makeNodeWatcherExo } from './shared/watcher-exo.js';
+import { makeFilesystem } from './posture.js';
 
 /**
  * @import { FsBackend } from './backend-types.js'
@@ -63,6 +64,7 @@ import { makeNodeWatcherExo } from './shared/watcher-exo.js';
  *   OpenFile,
  *   Qid,
  * } from './types.js'
+ * @import { FilesystemMethods, FilesystemPosture } from './posture.js'
  */
 
 /**
@@ -146,15 +148,26 @@ const narrowStatPatch = patch => {
 /**
  * Build a `Filesystem` exo on top of an `FsBackend`.
  *
+ * The `posture` option states the authority the backend actually confers.
+ * It defaults to `readWrite`, which is correct for a backend this package
+ * mints over storage it fully controls (in-memory, node-fs). A backend that
+ * merely adapts someone else's capability — a daemon mount, say, whose write
+ * methods may reject at the mount boundary — cannot be assumed writable, and
+ * should pass its known posture or `unknown` so that trusted consumers such
+ * as `isFilesystemReadWrite()` fail closed rather than advertise writes the
+ * guest does not have.
+ *
  * @param {FsBackend} backend
  * @param {{
  *   description?: string,
  *   namedDirs?: Record<string, string[]>,
+ *   posture?: FilesystemPosture | 'unknown',
  * }} [opts]
  * @returns {Filesystem}
  */
 export const wrapBackend = (backend, opts = {}) => {
   const caps = probeCapabilities(backend);
+  const posture = opts.posture ?? 'readWrite';
   const description = opts.description ?? 'wrapBackend-built Filesystem';
   const namedDirs = harden({ ...(opts.namedDirs ?? {}) });
 
@@ -526,7 +539,7 @@ export const wrapBackend = (backend, opts = {}) => {
         if (method === undefined) {
           return 'OpenFile: session-shaped file handle — read/write at offsets, stream, truncate, lock, fsync, close.';
         }
-        return `No documentation for method ${q(method)}.`;
+        return `No documentation available for method ${q(method)}.`;
       },
     });
   };
@@ -778,7 +791,7 @@ export const wrapBackend = (backend, opts = {}) => {
         if (method === undefined) {
           return 'File: bytes-level file capability — open(), read(opts), write(bytes, opts), getStat, setStat, watch.';
         }
-        return `No documentation for method ${q(method)}.`;
+        return `No documentation available for method ${q(method)}.`;
       },
     });
   };
@@ -1037,7 +1050,7 @@ export const wrapBackend = (backend, opts = {}) => {
         if (method === undefined) {
           return 'Directory: tree-shaped directory capability — lookup, lookupStep, subView, list, write, create, makeDirectory, remove, move, copy, materialise, watch, watchFrom, fsync, getStat, setStat.';
         }
-        return `No documentation for method ${q(method)}.`;
+        return `No documentation available for method ${q(method)}.`;
       },
     });
     dirPaths.set(exo, path);
@@ -1048,7 +1061,8 @@ export const wrapBackend = (backend, opts = {}) => {
 
   const root = makeDirectoryExo([]);
 
-  return makeExo('Filesystem', FilesystemInterface, {
+  /** @type {FilesystemMethods} */
+  const filesystemMethods = {
     root() {
       return root;
     },
@@ -1080,8 +1094,12 @@ export const wrapBackend = (backend, opts = {}) => {
       if (method === undefined) {
         return `Filesystem (${description}): root/named/statfs/brands.`;
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
-  });
+  };
+
+  return posture === 'unknown'
+    ? makeExo('Filesystem', FilesystemInterface, filesystemMethods)
+    : makeFilesystem(filesystemMethods, posture);
 };
 harden(wrapBackend);

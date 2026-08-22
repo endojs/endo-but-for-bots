@@ -31,6 +31,8 @@ export const makeContextMaker = ({
    */
   const makeContext = id => {
     let done = false;
+    /** @type {Error | undefined} */
+    let cancellationReason;
     const { cancelled, cancel: rejectCancelled } = makeCancelKit();
     const { promise: disposed, resolve: resolveDisposed } =
       /** @type {PromiseKit<void>} */ (makePromiseKit());
@@ -38,7 +40,7 @@ export const makeContextMaker = ({
 
     /** @type {Map<FormulaIdentifier, Context>} */
     const dependents = new Map();
-    /** @type {Array<() => void>} */
+    /** @type {Array<() => void | Promise<void>>} */
     const hooks = [];
 
     /**
@@ -49,7 +51,8 @@ export const makeContextMaker = ({
     const cancel = (reason, prefix = '*') => {
       if (done) return disposed;
       done = true;
-      rejectCancelled(reason || harden(new Error('Cancelled')));
+      cancellationReason = reason || harden(new Error('Cancelled'));
+      rejectCancelled(cancellationReason);
 
       const formulaType = getFormulaType(id) || '?';
       console.log(
@@ -62,8 +65,27 @@ export const makeContextMaker = ({
       }
       dependents.clear();
 
-      // Execute all cancellation hooks and resolve a single `undefined` for them.
-      resolveDisposed(Promise.all(hooks.map(hook => hook())).then(() => {}));
+      const dispose = (async () => {
+        await null;
+        /** @type {unknown[]} */
+        const failures = [];
+        for (const hook of hooks.reverse()) {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            await hook();
+          } catch (failure) {
+            failures.push(failure);
+          }
+        }
+        if (failures.length > 0) {
+          throw new AggregateError(
+            failures,
+            `Cancellation hooks failed for ${id}`,
+          );
+        }
+      })();
+
+      resolveDisposed(dispose);
 
       return disposed;
     };
@@ -74,14 +96,14 @@ export const makeContextMaker = ({
      * @param {FormulaIdentifier} dependentId - The identifier of the dependent formula.
      */
     const thatDiesIfThisDies = dependentId => {
+      const dependentController = provideController(dependentId);
       if (done) {
-        // The formula is already cancelled.  The dependents map has been
-        // cleared, so there is no way to register a new dependent for
-        // future cascaded cancellation.  The caller can still observe
-        // cancellation through the `cancelled` promise.
+        dependentController.context.cancel(cancellationReason, ' *').catch(
+          // The dependent exposes hook failures through its `disposed` promise.
+          () => {},
+        );
         return;
       }
-      const dependentController = provideController(dependentId);
       dependents.set(dependentId, dependentController.context);
     };
 
@@ -98,7 +120,7 @@ export const makeContextMaker = ({
     /**
      * Registers a function to be called when this context is cancelled.
      *
-     * @param {() => void} hook - A function with no parameters to execute during disposal.
+     * @param {() => void | Promise<void>} hook - A function with no parameters to execute during disposal.
      */
     const onCancel = hook => {
       if (done) {

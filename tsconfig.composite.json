@@ -135,6 +135,12 @@
       "path": "packages/harden/tsconfig.composite.json"
     },
     {
+      "path": "packages/hardened262/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/helpdown/tsconfig.composite.json"
+    },
+    {
       "path": "packages/hex/tsconfig.composite.json"
     },
     {
@@ -193,6 +199,9 @@
     },
     {
       "path": "packages/panic/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/parser-pipeline/tsconfig.composite.json"
     },
     {
       "path": "packages/pass-style/tsconfig.composite.json"

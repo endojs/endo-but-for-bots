@@ -360,6 +360,18 @@ impl HeapStore for InterleavingStore {
         }
         served
     }
+    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
+        self.inner.borrow().leaf_hashes()
+    }
+    fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
+        self.inner.borrow().page_edges()
+    }
+    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+        self.inner.borrow().read_free_seg(seg)
+    }
+    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
+        self.inner.borrow().free_leaf_hashes()
+    }
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
         self.inner.borrow_mut().commit(batch)
     }
@@ -453,6 +465,8 @@ fn seal_binds_full_manifest_identity_and_forgeries_are_refused() {
         &batch.small,
         &batch.slot_pages,
         &batch.chunk_extents,
+        &batch.free_segs,
+        &batch.page_edges,
     );
     assert_ne!(
         batch.manifest.seal, foreign_seal,
@@ -467,4 +481,198 @@ fn seal_binds_full_manifest_identity_and_forgeries_are_refused() {
         Err(StoreError::BaselineMismatch { .. }) => {}
         other => panic!("expected forged-seal refusal, got {other:?}"),
     }
+}
+
+/// Phase 5 acceptance: the row-hash tree discharges named integrity
+/// limitation 1 — a length-preserving byte flip at rest can no longer
+/// resume a different machine. A flipped ROW byte fails closed at the
+/// point of read (eager resume error; lazy fault dies as the named
+/// panic), and a flipped LEAF byte fails closed at open (the leaves no
+/// longer recombine to the sealed root).
+#[test]
+fn length_preserving_flip_at_rest_fails_closed() {
+    let (mut store, dir) = file_store("integrity");
+    let path = dir.join("heap.ihstore");
+    let mut m = Interp::new();
+    assert!(m.run(&PROG_A).completed);
+    drop(begin(m, &mut store));
+    drop(store);
+    let pristine = std::fs::read(&path).unwrap();
+
+    // 1. Flip the file's LAST byte — blob content (blobs are the tail
+    //    of the layout), so the store still loads structurally.
+    let mut flipped = pristine.clone();
+    *flipped.last_mut().unwrap() ^= 0xff;
+    std::fs::write(&path, &flipped).unwrap();
+    let store = FileStore::open(&path).expect("structural load still succeeds");
+    match resume_from_store(&store, &sig()) {
+        Err(_) => {}
+        Ok(_) => panic!("eager resume must refuse a flipped row byte"),
+    }
+
+    // The same flip under LAZY resume dies at the fault that reads the
+    // row, as the named leaf-hash panic — never a different machine.
+    let shared = std::rc::Rc::new(std::cell::RefCell::new(FileStore::open(&path).unwrap()));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let session = resume_from_store_lazy(shared.clone(), &sig())?;
+        let manifest = shared.borrow().manifest().unwrap();
+        for ext in 0..ironhorse_snapshot::store::chunk_extent_count(manifest.chunk_len) {
+            session.machine().chunks.touch_extent(ext);
+        }
+        for page in 0..slot_page_count(manifest.slot_count) {
+            session.machine().slots.touch_page(page);
+        }
+        Ok::<(), StoreError>(())
+    }));
+    match outcome {
+        Err(payload) => {
+            let msg = payload.downcast_ref::<String>().map(String::as_str).unwrap_or("");
+            assert!(
+                msg.contains("fails its leaf hash"),
+                "expected the named leaf-hash panic, got: {msg}"
+            );
+        }
+        Ok(Err(_)) => {} // refused before attach: equally fail-closed
+        Ok(Ok(())) => panic!("lazy resume must not serve a flipped row byte"),
+    }
+
+    // 2. Flip a byte inside the LEAF-HASH region: refused at open
+    //    (leaves no longer recombine to the sealed root).
+    let be32 = |b: &[u8], at: usize| u32::from_be_bytes(b[at..at + 4].try_into().unwrap()) as usize;
+    let mlen = be32(&pristine, 8);
+    let slen = be32(&pristine, 12 + mlen);
+    let counts_at = 12 + mlen + 4 + slen;
+    let n_pages = be32(&pristine, counts_at);
+    let n_exts = be32(&pristine, counts_at + 4);
+    let leaves_at = counts_at + 8 + 12 * (n_pages + n_exts);
+    let mut leaf_flipped = pristine.clone();
+    leaf_flipped[leaves_at] ^= 0xff;
+    std::fs::write(&path, &leaf_flipped).unwrap();
+    let store = FileStore::open(&path).expect("structural load still succeeds");
+    match resume_from_store(&store, &sig()) {
+        Err(_) => {}
+        Ok(_) => panic!("a flipped leaf hash must fail closed at open"),
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Phase 6: reachability over the persisted summaries is answered
+/// entirely from indexed metadata — ZERO row-content reads. This is
+/// the substrate for GC-shaped questions as store queries.
+#[test]
+fn reachability_query_reads_no_row_content() {
+    use std::cell::Cell;
+
+    struct CountingStore {
+        inner: MemoryStore,
+        content_reads: Cell<u32>,
+    }
+    impl HeapStore for CountingStore {
+        fn manifest(&self) -> Result<ironhorse_snapshot::store::StoreManifest, StoreError> {
+            self.inner.manifest()
+        }
+        fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
+            self.inner.read_small_state()
+        }
+        fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
+            self.content_reads.set(self.content_reads.get() + 1);
+            self.inner.read_slot_page(page)
+        }
+        fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError> {
+            self.content_reads.set(self.content_reads.get() + 1);
+            self.inner.read_chunk_extent(ext)
+        }
+        fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
+            self.inner.inventory()
+        }
+        fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
+            self.inner.leaf_hashes()
+        }
+        fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
+            self.inner.page_edges()
+        }
+        fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+            self.inner.read_free_seg(seg)
+        }
+        fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
+            self.inner.free_leaf_hashes()
+        }
+        fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
+            self.inner.commit(batch)
+        }
+    }
+
+    let mut store = CountingStore {
+        inner: MemoryStore::new(),
+        content_reads: Cell::new(0),
+    };
+    let mut m = Interp::new();
+    assert!(m.run(&PROG_A).completed);
+    drop(begin(m, &mut store));
+
+    store.content_reads.set(0);
+    let reached =
+        ironhorse_snapshot::store::reachable_pages(&store, [0u32]).expect("query succeeds");
+    assert!(!reached.is_empty(), "page 0 reaches itself at least");
+    assert_eq!(
+        store.content_reads.get(),
+        0,
+        "reachability must be answered from summaries alone"
+    );
+}
+
+/// Phase 8 review regression: a row the session ITSELF committed is
+/// clean again — evictable — and its re-fault must verify against the
+/// leaves that commit refreshed, at the committed geometry. Frozen
+/// attach-time leaves would misdiagnose the healthy re-fault as
+/// "corrupt store"; frozen attach-time geometry would fail the tail
+/// row's length assert once the heap grew. Sequence: lazy resume →
+/// mutate + grow → checkpoint → evict everything → re-fault
+/// everything (write_snapshot) and demand byte equality.
+#[test]
+fn evict_after_own_checkpoint_refaults_cleanly() {
+    use ironhorse_snapshot::store::chunk_extent_count;
+    use ironhorse_vm::{Slot, SLOTS_PER_PAGE};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let mut m = Interp::new();
+    assert!(m.run(&PROG_A).completed);
+    let store = Rc::new(RefCell::new(MemoryStore::new()));
+    let session = begin(m, &mut *store.borrow_mut());
+    drop(session);
+
+    let mut session = resume_from_store_lazy(store.clone(), &sig()).expect("lazy resume");
+    assert!(session.machine_mut().run(&PROG_B).completed);
+    // Grow well past the attach-time tail page so the committed tail
+    // row is longer than the attach-time one — the geometry half of
+    // the finding.
+    for _ in 0..(2 * SLOTS_PER_PAGE + 17) {
+        session.machine_mut().slots.alloc(Slot::integer(7));
+    }
+    checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
+
+    // Reference bytes, faulting everything in (all rows resident).
+    let expect = session.machine().write_snapshot(&sig());
+
+    // Evict every clean row — including the rows the checkpoint just
+    // rewrote and the pages appended past the attach range.
+    let manifest = store.borrow().manifest().unwrap();
+    let mut evictions = 0u32;
+    for page in 0..slot_page_count(manifest.slot_count) {
+        evictions += session.machine().slots.evict_page(page) as u32;
+    }
+    for ext in 0..chunk_extent_count(manifest.chunk_len) {
+        evictions += session.machine().chunks.evict_extent(ext) as u32;
+    }
+    assert!(evictions > 0, "nothing was evicted — the regression is untested");
+
+    // Every re-fault must verify against the REFRESHED leaves at the
+    // COMMITTED geometry and reinstall identical content.
+    assert_eq!(
+        session.machine().write_snapshot(&sig()),
+        expect,
+        "post-commit eviction re-faults reinstall the committed bytes"
+    );
 }

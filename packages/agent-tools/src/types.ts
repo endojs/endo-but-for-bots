@@ -7,7 +7,6 @@ import type {
   HistoryRewriteEndoGit,
   ReadOnlyEndoGit,
   ReadWriteEndoGit,
-  WritableGitWorktree,
 } from '@endo/exo-git';
 import type { EndoShell } from '@endo/exo-shell';
 import type { HttpClient, HttpResponse } from '@endo/exo-http-client';
@@ -22,12 +21,7 @@ export type GitToolFacet = 'reader' | 'writer' | 'rewriter';
 
 /** The read/navigation slice every facet's catalog carries. */
 type GitToolReadMethodNames =
-  | 'log'
-  | 'diff'
-  | 'show'
-  | 'branches'
-  | 'currentBranch'
-  | 'trackingStatus';
+  'log' | 'diff' | 'show' | 'branches' | 'currentBranch' | 'trackingStatus';
 
 /**
  * Adds the ordinary edit verbs a writer facet (and above) carries: `commit`
@@ -36,6 +30,8 @@ type GitToolReadMethodNames =
  */
 type GitToolWriteMethodNames =
   | GitToolReadMethodNames
+  | 'add'
+  | 'checkoutConflict'
   | 'commit'
   | 'createBranch'
   | 'switchBranch';
@@ -46,10 +42,7 @@ type GitToolWriteMethodNames =
  * `skip`), and `commit`'s `amend` option.
  */
 type GitToolRewriteMethodNames =
-  | GitToolWriteMethodNames
-  | 'reword'
-  | 'cherryPick'
-  | 'rebase';
+  GitToolWriteMethodNames | 'reword' | 'cherryPick' | 'rebase';
 
 /**
  * The read-only slice of the default git tool catalog: `makeGitTool(gitCap,
@@ -70,23 +63,21 @@ export type GitToolReaderCapability = Pick<
  * `merge`, `restore`, `deleteBranch`, `renameBranch`, the `stash*` family, and
  * the working-tree/detach mutators (`switch`, `detach`). Those carry
  * authority a tool surface handed to a model should not advertise: they can
- * discard uncommitted work. `commit` (additive only), `createBranch`, and
- * `switchBranch` are included as the write surface the local git tool
- * intentionally grants at this tier; `reword`, `cherryPick`, `rebase`, and
- * `commit`'s `amend` option are held back for {@link GitToolRewriterCapability}
+ * discard uncommitted work. `add`, `checkoutConflict`, `commit` (additive
+ * only), `createBranch`, and `switchBranch` are included as the write surface
+ * the local git tool intentionally grants at this tier; `reword`,
+ * `cherryPick`, `rebase`, and `commit`'s `amend` option are held back for
+ * {@link GitToolRewriterCapability}
  * — the live `Git` capability handed to `makeGitTool` still enforces
  * `allowHistoryRewrite` at the runtime layer (see `GitInterface`) as defense
  * in depth, but the catalog itself no longer advertises verbs the granted
  * facet cannot perform.
  *
- * This slice holds only the JSON-transparent methods whose hand-authored tool
- * schemas map one-to-one onto their `GitInterface` guards (the divergence gate
- * pins that parity). The methods whose native signatures traffic in live
- * capabilities — `add` and `checkoutConflict` (arrays of mount-entry
- * remotables) — are served instead by {@link GitMountToolCapability} /
- * `makeGitMountTools`, which bridge path strings to entries through the
- * worktree mount. `status` remains in that bridge so its agent-facing default
- * can select collapsed untracked directories.
+ * This slice holds the JSON-transparent methods whose hand-authored tool
+ * schemas map onto their `GitInterface` guards (the divergence gate pins that
+ * parity), including path-string forms of `add` and `checkoutConflict`.
+ * `status` remains in {@link GitMountToolCapability} / `makeGitMountTools` so
+ * its agent-facing default can select collapsed untracked directories.
  */
 export type GitToolWriterCapability = Pick<
   ReadWriteEndoGit,
@@ -128,21 +119,10 @@ export type GitHistoryToolCapability = Pick<
 >;
 
 /**
- * The mount-bridged slice of `ReadWriteEndoGit` behind `makeGitMountTools`:
- * `status`, `add`, plus `worktree` (the mount the bridge mints `PathEntry`
- * values from). `add` and `checkoutConflict` take arrays of `PathEntry`
- * remotables, while `status` is kept here to apply the agent-facing
- * `untracked: 'normal'` default. `add` is the additive staging half of the
- * commit loop; `checkoutConflict` selects and stages one side of existing
- * unmerged entries.
+ * The status slice behind `makeGitMountTools`, kept separate so the
+ * agent-facing tool can apply the `untracked: 'normal'` default.
  */
-export type GitMountToolCapability = Pick<
-  ReadWriteEndoGit,
-  'status' | 'add' | 'checkoutConflict'
-> & {
-  /** The bridge mints lineage-bearing entries from the writable worktree. */
-  worktree: () => Promise<WritableGitWorktree>;
-};
+export type GitMountToolCapability = Pick<ReadOnlyEndoGit, 'status'>;
 
 /**
  * The push-tier slice of a `GitRemote` exposed to an LLM: `fetch`, `pull`, and
@@ -215,7 +195,8 @@ export declare function makeTool(spec: ToolSpec): ToolRecord;
  * Build the default attenuated agent-tool records for a live `Git`
  * capability. The `facet` option pins which cumulative facet's catalog is
  * derived — `'reader'` for read/navigation verbs only, `'writer'` (the
- * default) additionally for `commit` / `createBranch` / `switchBranch`, and
+ * default) additionally for `add` / `checkoutConflict` / `commit` /
+ * `createBranch` / `switchBranch`, and
  * `'rewriter'` additionally for `reword` / `cherryPick` / `rebase` and
  * `commit`'s `amend` option. The rebase tool supports `start`, `continue`,
  * `abort`, and `skip`. The `gitCap` type is pinned to match: passing a
@@ -352,8 +333,8 @@ export declare function makeHttpTool(
 
 /**
  * The `Git` slice a workspace catalog composes: the JSON-safe tool methods
- * ({@link GitToolCapability}) plus the mount-bridged `status` / `add` / worktree
- * methods ({@link GitMountToolCapability}). One granted `Git` supplies both the
+ * ({@link GitToolCapability}) plus the status tool
+ * ({@link GitMountToolCapability}). One granted `Git` supplies both the
  * versioning tools and — through its `worktree` mount — the file tools.
  */
 export type WorkspaceGitCapability = GitToolCapability & GitMountToolCapability;

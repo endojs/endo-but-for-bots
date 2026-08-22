@@ -51,9 +51,7 @@ export const conflictRebaseSource = (
   if (app === undefined) {
     throw new Error('app.txt was not present in conflicted status');
   }
-  const worktree = await E(git).worktree();
-  const entry = await E(worktree).entry(app.path);
-  await E(git).add([entry]);
+  await E(git).add([app.path]);
   await E(git).rebase({ mode: 'continue' });
 })()`;
 harden(conflictRebaseSource);
