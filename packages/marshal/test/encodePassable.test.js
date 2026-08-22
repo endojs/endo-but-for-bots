@@ -413,12 +413,13 @@ const testBigInt = test.macro(async (t, pickEncode) => {
   const encodePassable = pickEncode(kit);
   await fc.assert(
     fc.property(fc.bigInt(), fc.bigInt(), (x, y) => {
-      const bigintX = /** @type {bigint} */ (x);
-      const bigintY = /** @type {bigint} */ (y);
-      const ex = /** @type {string} */ (encodePassable(bigintX));
-      const ey = /** @type {string} */ (encodePassable(bigintY));
-      t.is(bigintX < bigintY, ex < ey);
-      t.is(bigintX > bigintY, ex > ey);
+      const ex = encodePassable(x);
+      const ey = encodePassable(y);
+      // This test intentionally compares arbitrary BigInts and their encodings.
+      // eslint-disable-next-line @endo/restrict-comparison-operands
+      t.is(x < y, ex < ey);
+      // eslint-disable-next-line @endo/restrict-comparison-operands
+      t.is(x > y, ex > ey);
     }),
   );
 });

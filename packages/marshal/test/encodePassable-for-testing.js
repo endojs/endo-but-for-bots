@@ -6,7 +6,6 @@ import {
 } from '../src/encodePassable.js';
 import { compareRank, makeComparatorKit } from '../src/rankOrder.js';
 
-/** @type {Record<'r' | '?' | '!', unknown[]>} */
 const buffers = {
   __proto__: null,
   r: [],
@@ -18,7 +17,6 @@ const resetBuffers = () => {
   buffers['?'] = [];
   buffers['!'] = [];
 };
-/** @type {Record<'r' | '?' | '!', number>} */
 const cursors = {
   __proto__: null,
   r: 0,
@@ -31,23 +29,17 @@ const resetCursors = () => {
   cursors['!'] = 0;
 };
 
-/**
- * @param {'r' | '?' | '!'} prefix
- * @param {unknown} r
- */
 const encodeThing = (prefix, r) => {
   buffers[prefix].push(r);
   // With this encoding, all things with the same prefix have the same rank
   return prefix;
 };
 
-/**
- * @param {'r' | '?' | '!'} prefix
- * @param {string} e
- */
 const decodeThing = (prefix, e) => {
   prefix === e ||
     Fail`expected encoding ${q(e)} to simply be the prefix ${q(prefix)}`;
+  // This intentionally generic test helper uses matching dynamic keys.
+  // eslint-disable-next-line @endo/restrict-comparison-operands
   (cursors[prefix] >= 0 && cursors[prefix] < buffers[prefix].length) ||
     Fail`while decoding ${q(e)}, expected cursors[${q(prefix)}], i.e., ${q(
       cursors[prefix],
