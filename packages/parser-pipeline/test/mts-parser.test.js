@@ -1,6 +1,6 @@
 import someTest from '@endo/ses-ava/prepare-endo.js';
-import { createParsers } from '../src/parsers.js';
 import nodeModule from 'node:module';
+import { createParsers } from '../src/parsers.js';
 
 const supportsStripTypes =
   typeof nodeModule.stripTypeScriptTypes === 'function';

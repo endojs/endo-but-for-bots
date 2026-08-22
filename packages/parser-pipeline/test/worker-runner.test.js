@@ -3,8 +3,8 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { MessageChannel } from 'node:worker_threads';
 import { setTimeout } from 'node:timers';
-import { runPipelineInWorker } from '../src/worker-runner.js';
 import { once } from 'node:events';
+import { runPipelineInWorker } from '../src/worker-runner.js';
 
 /**
  * @import {PipelineConfig} from '../src/types/pipeline.js'

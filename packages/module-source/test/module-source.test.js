@@ -2,10 +2,10 @@
 /// <reference types="ses"/>
 /* eslint no-underscore-dangle: ["off"] */
 
-import { ModuleSource } from '../src/module-source.js';
 import url from 'url';
 import fs from 'fs';
 import test from 'ava';
+import { ModuleSource } from '../src/module-source.js';
 
 /** @import {ExecutionContext} from 'ava' */
 

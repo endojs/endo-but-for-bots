@@ -1,6 +1,5 @@
-import test from '../prepare-endo.js';
-
 import { makeEnvironmentCaptor } from '@endo/env-options';
+import test from '../prepare-endo.js';
 
 test('test env options empty env', async t => {
   const c1 = new Compartment();

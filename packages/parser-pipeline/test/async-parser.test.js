@@ -1,7 +1,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
-import { createParsers } from '../src/parsers.js';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
+import { createParsers } from '../src/parsers.js';
 
 /**
  * @import {BabelParseError} from '../src/types/pipeline.js';
