@@ -136,14 +136,16 @@ export const createCommandExecutor = ({
                 `No edge named "${edgeName}" in channel message #${messageNumber}`,
               );
             }
-            const formulaId = msgIds[edgeIndex];
-            if (!formulaId) {
+            const locator = msgIds[edgeIndex];
+            if (!locator) {
               throw new Error(
-                `No formula ID for edge "${edgeName}" in channel message #${messageNumber}`,
+                `No locator for edge "${edgeName}" in channel message #${messageNumber}`,
               );
             }
-            // Write the formula ID into the user's pet store
-            await E(powers).storeLocator(targetNamePath, formulaId);
+            // msgIds carries endo:// locators (the send path uses locate());
+            // storeLocator is the matching API and bare identifiers are
+            // deprecated.
+            await E(powers).storeLocator(targetNamePath, locator);
             return { success: true, message: `Adopted as "${targetNameStr}"` };
           }
 
