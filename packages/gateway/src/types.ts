@@ -731,6 +731,16 @@ export interface GatewayPowers {
    * then, embedders that want admin reads supply a stub.
    */
   resourceLedger?: ResourceLedger;
+  /**
+   * Required when `gitHttp` is enabled. The bearer-token resolver
+   * the Git smart-HTTP handler calls per request. Resolves the
+   * bearer formula identifier to a {@link DaemonRepoCapability}
+   * scoped to that formula's ref within the daemon's one Git object
+   * store. Until the daemon-side wiring lands, tests inject a stub
+   * resolver and embedders that want git off entirely set
+   * `enableFeatures.gitHttp = false`.
+   */
+  serveRepo?: ServeRepo;
 }
 
 export interface Gateway {
@@ -772,6 +782,142 @@ export interface Gateway {
    * upgrade is the embedder's, not the gateway's.
    */
   getOcapnHandler(): Promise<OcapnWebSocketHandler>;
+  /**
+   * Returns the `GitHttpHandler` exo (Feature 3) that an embedder
+   * feeds `/git/...` HTTP requests to. Throws when the `gitHttp`
+   * feature toggle is off; the HTTP listener that routes `/git/`
+   * requests to the handler is the embedder's, not the gateway's.
+   *
+   * The daemon embedding the gateway hosts one Git object store and
+   * serves content for the formula named by the bearer token; the
+   * URL path has no repository segment.
+   */
+  getGitHttpHandler(): Promise<GitHttpHandler>;
+}
+
+// ---------------------------------------------------------------------
+// git-http.js
+// ---------------------------------------------------------------------
+
+/**
+ * The two smart-HTTP service names. `git-upload-pack` is the fetch /
+ * clone direction (server-to-client); `git-receive-pack` is the push
+ * direction (client-to-server).
+ */
+export type GitService = 'git-upload-pack' | 'git-receive-pack';
+
+/**
+ * The three smart-HTTP operations the handler routes. `info/refs` is
+ * the GET advertisement that announces the service's capabilities
+ * and refs; the other two are POST data exchanges.
+ */
+export type GitOperation = 'info/refs' | 'git-upload-pack' | 'git-receive-pack';
+
+/**
+ * The per-request shape the embedder hands the handler. Mirrors a
+ * conventional Node `http.IncomingMessage` slice: the parsed HTTP
+ * method, the URL path, the optional query string (no leading `?`),
+ * the header pairs, and the request body bytes.
+ */
+export interface GitHttpRequest {
+  method: string;
+  /** URL path (no query string, no host). */
+  path: string;
+  /** URL query string with no leading `?`. May be the empty string. */
+  query?: string;
+  headers: ReadonlyArray<readonly [string, string]>;
+  /**
+   * The request body bytes as a `Uint8Array`. Empty bodies are
+   * zero-byte `Uint8Array`s. The handler forwards the body to the
+   * repo capability without parsing the Git protocol.
+   */
+  body: Uint8Array;
+}
+
+/** The per-response shape the handler returns. */
+export interface GitHttpResponse {
+  status: number;
+  headers: ReadonlyArray<readonly [string, string]>;
+  /**
+   * The response body bytes as a `Uint8Array`. Empty bodies are
+   * zero-byte `Uint8Array`s.
+   */
+  body: Uint8Array;
+}
+
+/** Args to the embedder-supplied `serveRepo` adapter. */
+export interface ServeRepoArgs {
+  /**
+   * The bearer token extracted from the Authorization header. A
+   * formula identifier per `daemon-256-bit-identifiers.md`: 64
+   * lowercase hex characters, optionally followed by `:<node>`.
+   */
+  token: string;
+}
+
+/**
+ * The exo the adapter returns from `serveRepo`. Two POST methods
+ * for the two smart-HTTP services, and an `infoRefs` method for the
+ * GET advertisement. The methods are independent: a daemon repo
+ * capability that omits one of them will surface that omission as a
+ * runtime error from the gateway.
+ *
+ * The capability is scoped to a single formula's ref within the
+ * daemon's one Git object store; the methods do not take a repo-id
+ * argument because the daemon hosts exactly one repository for
+ * content served on virtual hosts and the bearer-resolved formula
+ * already names the ref (typically `refs/formulas/<formula-id>`).
+ * A formula GC that drops the formula deletes the matching ref;
+ * the next `git gc` collects the orphan objects.
+ */
+export interface DaemonRepoCapability {
+  /**
+   * Serve the `info/refs?service=<service>` GET advertisement as the
+   * response body.
+   */
+  infoRefs(args: {
+    service: GitService;
+    headers: ReadonlyArray<readonly [string, string]>;
+  }): Promise<GitHttpResponse>;
+  /**
+   * Serve the `git-upload-pack` POST: the request body carries the
+   * client's want/have negotiation; the response body carries the
+   * packfile.
+   */
+  gitUploadPack(args: {
+    requestBody: Uint8Array;
+    headers: ReadonlyArray<readonly [string, string]>;
+  }): Promise<GitHttpResponse>;
+  /**
+   * Serve the `git-receive-pack` POST: the request body carries the
+   * packfile; the response body carries the per-ref status.
+   */
+  gitReceivePack(args: {
+    requestBody: Uint8Array;
+    headers: ReadonlyArray<readonly [string, string]>;
+  }): Promise<GitHttpResponse>;
+}
+
+/**
+ * The bearer-token resolver the Git smart-HTTP handler calls per
+ * request. Returns the daemon repo capability when the bearer token
+ * authorizes access to a live formula, or `undefined` to map to a
+ * 401 response (the gateway does not distinguish "wrong token" from
+ * "no such formula" so a probing attacker cannot enumerate the
+ * formula namespace).
+ */
+export type ServeRepo = (
+  args: ServeRepoArgs,
+) => Promise<DaemonRepoCapability | undefined>;
+
+/** CapTP-facing exo. The single method is `async`. */
+export interface GitHttpHandler {
+  /**
+   * Handle one HTTP request. Returns the response shape the embedder
+   * forwards to its HTTP server. The handler never throws; every
+   * error path maps to a `GitHttpResponse` with a status code.
+   */
+  handleRequest(request: GitHttpRequest): Promise<GitHttpResponse>;
 }
 
 export declare const DEFAULT_BIND_ADDRESS: string;

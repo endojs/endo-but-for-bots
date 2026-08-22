@@ -40,6 +40,10 @@ const defaultPowers = (opts = {}) =>
     env: opts.env,
     crypto: makeNodeCryptoPowers(),
     clock: makeFakeClock(),
+    // gitHttp is on by default (Feature 3) and requires the
+    // serveRepo adapter; tests that don't exercise the Git path
+    // get a stub that 401s every request.
+    serveRepo: async () => undefined,
   });
 
 /**

@@ -29,6 +29,7 @@ import { makeAppsNameHub } from './src/vhost.js';
 import { makeGatewayBootstrap } from './src/bootstrap.js';
 import { makeGatewayAdmin } from './src/admin.js';
 import { makeOcapnWebSocketHandler } from './src/ocapn-ws.js';
+import { makeGitHttpHandler } from './src/git-http.js';
 
 export {
   DEFAULT_BIND_ADDRESS,
@@ -67,6 +68,17 @@ export {
 } from './src/ocapn-ws.js';
 
 export {
+  GIT_HTTP_PATH_PREFIX,
+  GIT_SERVICES,
+  isGitHttpPath,
+  parseAuthorizationHeader,
+  parseGitHttpPath,
+  parseServiceQuery,
+  readerFromBuffer,
+  makeGitHttpHandler,
+} from './src/git-http.js';
+
+export {
   DEFAULT_RELAY_POLICY,
   RELAY_POLICIES,
   checkRelayPolicy,
@@ -96,6 +108,8 @@ export {
  *   GatewayAdmin,
  *   ResourceLedger,
  *   OcapnWebSocketHandler,
+ *   GitHttpHandler,
+ *   ServeRepo,
  *   CryptoPowers,
  *   ClockPowers,
  *   GatewayPowers,
@@ -111,6 +125,7 @@ const GatewayInterface = M.interface('Gateway', {
   getBootstrap: M.call().returns(M.promise()),
   getAdmin: M.call().returns(M.promise()),
   getOcapnHandler: M.call().returns(M.promise()),
+  getGitHttpHandler: M.call().returns(M.promise()),
 });
 harden(GatewayInterface);
 
@@ -168,6 +183,8 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
   let adminFacet;
   /** @type {OcapnWebSocketHandler | undefined} */
   let ocapnHandler;
+  /** @type {GitHttpHandler | undefined} */
+  let gitHttpHandler;
   if (mergedConfig.enableFeatures.sockBootstrap) {
     if (powers.crypto === undefined) {
       throw makeError(
@@ -234,6 +251,27 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
       backplane,
       apps,
       resourceLedger: powers.resourceLedger,
+    });
+  }
+
+  // The Git smart-HTTP handler (Feature 3) is independent of every
+  // other gateway feature (the design's Configuration Model
+  // explicitly names it as independent). It only needs the
+  // embedder-supplied `serveRepo` adapter that resolves the bearer
+  // formula identifier to the daemon's one repo capability scoped
+  // to that formula's ref. When `gitHttp` is on but no adapter is
+  // supplied, the gateway throws at construction time (the design's
+  // invariant: a toggle-on but no-adapter configuration would
+  // silently 401 every request, which is worse than a startup
+  // error).
+  if (mergedConfig.enableFeatures.gitHttp) {
+    if (powers.serveRepo === undefined) {
+      throw makeError(
+        X`gitHttp requires powers.serveRepo; supply a ServeRepo adapter or disable the feature toggle`,
+      );
+    }
+    gitHttpHandler = makeGitHttpHandler({
+      serveRepo: powers.serveRepo,
     });
   }
 
@@ -326,6 +364,22 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
           throw makeError(X`OCapN WebSocket handler is not wired`);
         }
         return ocapnHandler;
+      },
+      async getGitHttpHandler() {
+        // Symmetric with getOcapnHandler. The git surface is the
+        // only Feature 3 surface; the embedder routes `/git/...`
+        // requests here. We do not gate on sockBootstrap because the
+        // git handler does not read from the registration table;
+        // it consults the embedder's `serveRepo` adapter directly.
+        if (!mergedConfig.enableFeatures.gitHttp) {
+          throw makeError(
+            X`Git smart-HTTP handler is disabled (set enableFeatures.gitHttp=true)`,
+          );
+        }
+        if (gitHttpHandler === undefined) {
+          throw makeError(X`Git smart-HTTP handler is not wired`);
+        }
+        return gitHttpHandler;
       },
     }),
   );

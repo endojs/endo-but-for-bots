@@ -559,9 +559,17 @@ The gateway hosts the Git **smart HTTP** protocol (the
 `info/refs?service=git-upload-pack` / `git-receive-pack` shape) for
 push and pull, authenticated by a formula-identifier bearer token.
 
-URL shape: `/git/<repo-id>/info/refs?service=git-upload-pack`,
-where `<repo-id>` is a Git-repo formula identifier (a new daemon
-formula type wrapping a Git working tree or a packed reference).
+URL shape: `/git/info/refs?service=git-upload-pack`.
+There is **no repository segment** in the path: a daemon, including
+the gateway, hosts one Git object store for content served on
+virtual hosts, and the bearer token names which formula's ref
+within that store the request applies to (kriskowal directive, PR
+#394 review).
+The bearer token corresponds to (and may be identical to) a
+reference like `refs/formulas/<formula-id>`, such that a formula
+GC dropping the formula from the formula graph deletes the
+matching ref, and the next `git gc` collects the orphan objects.
+
 Authentication is HTTP Basic with the formula identifier as the
 password (Git's standard Bearer scheme is awkward in many clients;
 Basic auth with an empty username and the token as the password is
@@ -578,8 +586,8 @@ gateway
 ([`gateway-bearer-token-auth`](gateway-bearer-token-auth.md),
 [`daemon-256-bit-identifiers`](daemon-256-bit-identifiers.md)).
 The token grants the authority of whichever formula it identifies;
-for Git the relevant formulas are repo handles with read-only or
-read-write powers.
+for Git, the bearer-resolved formula's ref is the read or write
+target within the daemon's one repository.
 
 Rate-limiting and CIDR-allowlisting reuse the existing
 `gateway-bearer-token-auth` machinery; the gateway exposes both
@@ -590,24 +598,96 @@ rate-limiter table keyed by remote IP.
 sequenceDiagram
     participant Git as git push
     participant GW as Gateway
-    participant Repo as Repo formula
-    Git->>GW: POST /git/<repo-id>/git-receive-pack<br/>Auth: Basic :token
+    participant Daemon as Daemon repo
+    Git->>GW: POST /git/git-receive-pack<br/>Auth: Basic :token
     GW->>GW: rate-limit check
-    GW->>Repo: resolve(repo-id, token)
-    Repo-->>GW: write-handle or 401
-    GW->>Repo: stream pack
-    Repo-->>GW: 200 OK
+    GW->>Daemon: serveRepo(token)
+    Daemon-->>GW: capability scoped to refs/formulas/<token> or 401
+    GW->>Daemon: stream pack
+    Daemon-->>GW: 200 OK
     GW-->>Git: 200 OK
 ```
 
 The smart-HTTP framing is the standard `pkt-line` format defined
 in Git's `Documentation/technical/http-protocol.txt`; the gateway
-proxies the byte stream from the client to the repo formula
-without parsing the Git protocol itself.
-The repo formula's exo exposes `gitUploadPack(reader, writer)` and
-`gitReceivePack(reader, writer)` methods that the gateway invokes.
+proxies the byte stream from the client to the daemon repo
+capability without parsing the Git protocol itself.
+The daemon repo capability's exo exposes `gitUploadPack`,
+`gitReceivePack`, and `infoRefs` methods scoped to the bearer's
+ref; the gateway invokes them with the request body and headers.
 
 Phase 3.
+
+**Daemon-side scope** (not in Phase 6's gateway-side PR): the
+daemon needs a Git-backed content-addressed store that (a) hosts
+exactly one bare repository for content served on virtual hosts,
+(b) materializes each formula as a ref like
+`refs/formulas/<formula-id>`, (c) admits the gateway-side
+`serveRepo(token)` adapter mapping a bearer formula identifier to
+a capability scoped to that formula's ref, and (d) composes
+formula-graph GC with git GC: dropping a formula deletes its ref,
+and the next `git gc` collects the orphan objects.
+A first-iteration Node implementation may shell out to `git`; a
+later iteration may borrow @0xpatrickdev's Node Git library.
+The Rust implementation binds **libgit2** via the `git2` crate, as
+ratified by the maintainer on the daemon-side spike (PR #369,
+`designs/daemon-git-backbone.md` § Status, 2026-05-29).
+The `gix` (gitoxide) alternative was considered and ruled against:
+libgit2 is vendored (bundled C, no system dependency), and the
+`endor` crate already links bundled C for the XS worker and
+rusqlite, so the no-C rationale for `gix` was moot.
+The gateway holds the underlying CAS implementation and vends it
+out to the HTTP server.
+
+**Content key.** Endo's content identity is **sha256** (locked);
+git's internal object database runs in its **default SHA-1 object
+format** behind a persistent `sha256 -> git-oid` index, per the
+spike's Open Question 2 recommendation that the maintainer
+ratified.
+This decouples the locked decision (sha256 identity for every
+Endo formula, `cas-*` verb, and cross-peer reference) from the
+immature one (git's experimental SHA-256 object mode, whose
+library coverage trails its SHA-1 coverage, including in the
+ratified `git2` crate).
+A later transparent adoption of git's SHA-256 object format
+remains possible because the Endo-facing key never changes.
+
+**Retention is reachability-driven.** `refs/formulas/<formula-id>`
+is the durable live-set substrate: `cas-retain` writes the ref
+through libgit2's ref-lock discipline (lock-file + atomic
+rename), `cas-release` deletes it, and GC reduces to git's own
+reachability sweep over the ref set.
+libgit2 itself ships no `git gc` porcelain, so the daemon-side
+implementation drives the sweep in-process (mark from the ref
+set, sweep loose objects directly via the standard
+`objects/<oid[0:2]>/<oid[2:]>` layout); no subprocess.
+The supervisor's link to **formula liveness** is the new wire
+that makes this work: the formula graph (held in the JS daemon's
+SQLite, `packages/daemon/src/daemon-database.js`) must be
+mirrored into `refs/formulas/<formula-id>` so git's reachability
+agrees with the formula graph on the live set.
+The spike notes (and defers as Open Question 3) the atomic write
+order between the SQLite transaction and `update-ref`; the
+gateway's side of the contract is that `serveRepo(token)` resolves
+to a capability scoped to whatever ref the daemon currently
+publishes for that formula.
+
+**Bulk transport off CapTP.** The gateway's smart-HTTP endpoint is
+the remote/HTTP carrier for the spike's **axis 3** (bulk transport
+off the CapTP data plane): pack-format bytes ride the smart-HTTP
+wire from a remote peer to the daemon's one Git object store, and
+back, rather than being encoded one object per CapTP turn.
+The control plane (capability handshakes, eventual sends,
+retention subscriptions) stays on CapTP.
+The same composition holds for local cross-process reads through
+the supervisor-owned object DB: only the bulk *bytes* leave the
+capability envelopes; the *capability* itself, scoped by the
+bearer-resolved formula ref, is the CapTP control surface.
+
+See PR #394 review (2026-05-29) for the maintainer's framing and
+PR #369 (`designs/daemon-git-backbone.md`) for the
+daemon-side substrate spike whose discoveries are folded into the
+paragraphs above.
 
 **Open question:** the rotation story for formula-identifier
 bearer tokens.
