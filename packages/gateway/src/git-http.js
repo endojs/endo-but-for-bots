@@ -72,7 +72,7 @@ import { atob } from '@endo/base64';
  *   DaemonRepoCapability,
  *   ServeRepo,
  *   GitHttpHandler,
- * } from './types.d.ts' */
+ * } from './types.js' */
 
 /**
  * The URL path prefix for the gateway's Git smart-HTTP endpoint.
@@ -314,7 +314,7 @@ harden(GitHttpHandlerInterface);
  * @typedef {object} GitHttpDeps Inputs to {@link makeGitHttpHandler}.
  * @property {ServeRepo} serveRepo The bearer-token-to-daemon-repo
  *   resolver the gateway is wired with. See the `ServeRepo` typedef
- *   in `types.d.ts`.
+ *   in `types.js`.
  */
 
 /**

@@ -1,5 +1,4 @@
 // @ts-check
-/* global Buffer, process */
 
 /**
  * @file Integration test for the gateway's Git smart-HTTP handler
@@ -119,7 +118,7 @@ const readRequestBody = req =>
  * request body on stdin, and collect the CGI response from stdout.
  * The CGI response is a chunk of HTTP headers terminated by a blank
  * line followed by the body; we parse that into the
- * {@link import('../src/types.d.ts').GitHttpResponse} shape the
+ * {@link import('../src/types.js').GitHttpResponse} shape the
  * gateway handler expects.
  *
  * @param {object} args
@@ -319,7 +318,7 @@ const makeFsBackedDaemonRepo = repoDir => {
  * Bridge a Node `IncomingMessage` / `ServerResponse` pair to the
  * gateway handler's request/response shape.
  *
- * @param {import('../src/types.d.ts').GitHttpHandler} handler
+ * @param {import('../src/types.js').GitHttpHandler} handler
  */
 const makeHttpListener = handler => {
   return async (
