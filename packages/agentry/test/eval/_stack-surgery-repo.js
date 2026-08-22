@@ -15,6 +15,8 @@ import {
 } from '../../src/eval/scenarios/stack-surgery/index.js';
 import { initRepo, makePowersOver } from '../_eval-fixture.js';
 
+/** @import { CodeModePower } from '@endo/agent-tools/code-mode/types.js' */
+
 export { EXPECTED_STACK_SURGERY_FILES, EXPECTED_STACK_SURGERY_SUMMARIES };
 
 /**
@@ -34,8 +36,8 @@ harden(writeRepoFile);
  * @param {import('ava').ExecutionContext} t
  * @returns {Promise<{
  *   repoRoot: string,
- *   workspace: unknown,
- *   git: unknown,
+ *   workspace: CodeModePower,
+ *   git: CodeModePower,
  *   run: (args: string[]) => Promise<{ stdout: string, stderr: string }>,
  * }>}
  */
