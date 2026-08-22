@@ -39,15 +39,22 @@ the document is materially revised.
 |--------|---------|
 | Not Started | Design written, no implementation work begun |
 | Proposed | Design under discussion, not yet accepted |
+| Draft | Design still being written; not yet ready for discussion |
 | In Progress | Implementation underway |
-| **Complete** | Fully implemented (bolded) |
-| Implemented | Synonym for Complete (some docs use this) |
+| **Complete** | Fully implemented |
+| Implemented | Synonym for Complete (older docs use this; prefer **Complete** in new work) |
 | Active | Living document, continuously maintained |
 | Reference | Informational; not an implementation target |
 | Deprecated | Superseded by another design |
+| Superseded | Replaced by a named successor design (link it) |
 
-Complete/Implemented status is sometimes bolded (`**Complete**`) for visual
-emphasis in the metadata table and in the README summary table.
+Terminal status (`**Complete**`, and the legacy synonym `Implemented`) is
+bolded in the metadata table and in the README summary table. A cell may carry
+a short parenthetical qualifier after the status word — e.g.
+`**Complete** (on \`llm\`)`, `**Complete** (archived)`, `In Progress (Phase 3)`
+— but the leading word is always one of the values above; the qualifier is a
+Note, not a new status. This keeps the README summary counts reproducible by
+bucketing each cell on its leading word.
 
 ## Document Structure
 
@@ -145,10 +152,13 @@ complete stays in the README; archiving is all-or-nothing per milestone.
   milestone delivered without opening the README. Preserve the milestone
   number and title as its archive heading.
 - **Leave behind** in `designs/README.md`, where the milestone section
-  used to be, a single one-line pointer of the form:
+  used to be, a one-line pointer heading of the form:
   `#### Milestone N: <Title> — **Complete**; archived to [ARCHIVE.md](ARCHIVE.md).`
-  This keeps the milestone numbering contiguous and tells the next reader
-  where the detail went.
+  The heading may be followed by a short provenance note (a sentence or two:
+  any pre-renumbering milestone number, the closure date, and a one-line
+  restatement that all designs are terminal and the exit criterion was met), so
+  the pointer stands on its own without opening the archive. This keeps the
+  milestone numbering contiguous and tells the next reader where the detail went.
 - The archived milestone's designs **remain rows in the README summary
   table** (the table is the whole-corpus index, and their `Complete`
   status is still true); only the milestone *section* and its

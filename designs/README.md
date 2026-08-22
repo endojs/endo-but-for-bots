@@ -1,6 +1,17 @@
 # Endo Design Documents
 
+This is the working plan for the Endo design corpus. The **Summary** table
+below is the whole-corpus index (one row per design, with its Status); the
+**Roadmap** further down sequences the remaining work. Status vocabulary and
+the archiving convention are defined in [AGENTS.md](AGENTS.md) (§ *Status
+Values*, § *Archiving Completed Milestones*). Completed milestones move to
+[ARCHIVE.md](ARCHIVE.md); their designs remain rows in the Summary table.
+
 ## Summary
+
+Rows for designs in an archived milestone (Milestone 1 and Milestone 2) are
+marked "(archived)" in the Status column and their full milestone detail lives
+in [ARCHIVE.md](ARCHIVE.md).
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
@@ -19,7 +30,7 @@
 | [chat-focus-message](chat-focus-message.md) | 2026-03-04 | 2026-05-19 | **Complete** |
 | [chat-markdown-render](chat-markdown-render.md) | 2026-03-03 | 2026-05-19 | **Complete** |
 | [chat-pending-commands](chat-pending-commands.md) | 2026-03-11 | 2026-07-20 | **Complete** |
-| [chat-playwright-smoke](chat-playwright-smoke.md) | 2026-05-06 | 2026-05-18 | **Complete** |
+| [chat-playwright-smoke](chat-playwright-smoke.md) | 2026-05-06 | 2026-05-18 | **Complete** (archived) |
 | [chat-rename-dismiss-to-clear](chat-rename-dismiss-to-clear.md) | 2026-03-03 | 2026-05-19 | **Complete** |
 | [chat-slot-slash-commands](chat-slot-slash-commands.md) | 2026-04-23 | 2026-05-06 | Proposed |
 | [chat-view-edit-commands](chat-view-edit-commands.md) | 2026-03-21 | 2026-05-19 | **Complete** |
@@ -30,7 +41,7 @@
 | [chat-spaces-gutter](chat-spaces-gutter.md) | 2026-02-21 | 2026-02-26 | **Complete** |
 | [chat-spaces-inbox](chat-spaces-inbox.md) | 2026-02-21 | 2026-02-24 | **Complete** |
 | [chat-test-coverage](chat-test-coverage.md) | 2026-03-02 | 2026-03-02 | **Complete** |
-| [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md) | 2026-02-24 | 2026-03-02 | **Complete** |
+| [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md) | 2026-02-24 | 2026-03-02 | **Complete** (archived) |
 | [daemon-agent-network-identity](daemon-agent-network-identity.md) | 2026-03-02 | 2026-03-02 | In Progress |
 | [daemon-agent-tools](daemon-agent-tools.md) | 2026-03-02 | 2026-08-06 | In Progress |
 | [daemon-commands-as-messages](daemon-commands-as-messages.md) | 2026-03-11 | 2026-03-11 | Not Started |
@@ -47,7 +58,7 @@
 | [daemon-mount](daemon-mount.md) | 2026-03-20 | 2026-05-27 | In Progress |
 | [daemon-mount-capabilities](daemon-mount-capabilities.md) | 2026-05-18 | 2026-05-27 | **Complete** |
 | [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-06-02 | Not Started |
-| [registry-capability](registry-capability.md) | 2026-06-02 | 2026-06-02 | In Progress |
+| [registry-capability](registry-capability.md) | 2026-06-02 | 2026-08-17 | In Progress |
 | [mvs-resolver](mvs-resolver.md) | 2026-06-02 | 2026-06-02 | Not Started |
 | [snapshot-mapper](snapshot-mapper.md) | 2026-06-02 | 2026-06-02 | Not Started |
 | [filesystem-watchers](filesystem-watchers.md) | 2026-05-07 | 2026-05-07 | Not Started |
@@ -80,40 +91,40 @@
 | [endor-npm-registry-proxy](endor-npm-registry-proxy.md) | 2026-04-17 | 2026-04-17 | In Progress |
 | [endor-registry-proxy-worker](endor-registry-proxy-worker.md) | 2026-08-06 | — | Proposed |
 | [daemon-make-archive](daemon-make-archive.md) | 2026-04-23 | 2026-04-24 | In Progress |
-| [daemon-form-request](daemon-form-request.md) | 2026-02-25 | 2026-03-02 | **Complete** |
+| [daemon-form-request](daemon-form-request.md) | 2026-02-25 | 2026-03-02 | **Complete** (archived) |
 | [endoclaw](endoclaw.md) | 2026-03-03 | 2026-03-03 | Reference |
 | [endopi](endopi.md) | 2026-05-15 | 2026-06-25 | Reference |
-| [endopi-edit-tool](endopi-edit-tool.md) | 2026-05-15 | 2026-05-15 | Implemented |
-| [endopi-jsonl-transcript-format](endopi-jsonl-transcript-format.md) | 2026-05-15 | 2026-05-15 | Implemented |
+| [endopi-edit-tool](endopi-edit-tool.md) | 2026-05-15 | 2026-08-17 | Implemented |
+| [endopi-jsonl-transcript-format](endopi-jsonl-transcript-format.md) | 2026-05-15 | 2026-08-17 | Implemented |
 | [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md) | 2026-05-15 | 2026-05-15 | Proposed (partially satisfied by `packages/genie`) |
 | [endopi-skills-markdown-format](endopi-skills-markdown-format.md) | 2026-05-15 | 2026-05-15 | Proposed |
 | [endopi-prompt-templates](endopi-prompt-templates.md) | 2026-05-15 | 2026-05-15 | Proposed |
 | [endopi-iterative-compaction](endopi-iterative-compaction.md) | 2026-05-15 | 2026-05-15 | Proposed (partially satisfied by `packages/genie`) |
 | [endopi-stdio-rpc-bridge](endopi-stdio-rpc-bridge.md) | 2026-05-15 | 2026-05-15 | Proposed |
 | [endopi-extension-package-manifest](endopi-extension-package-manifest.md) | 2026-05-15 | 2026-05-15 | Proposed |
-| [endoclaw-browser](endoclaw-browser.md) | 2026-03-03 | 2026-03-03 | Implemented |
+| [endoclaw-browser](endoclaw-browser.md) | 2026-03-03 | 2026-08-17 | Implemented |
 | [endoclaw-channel-bridges](endoclaw-channel-bridges.md) | 2026-03-03 | 2026-03-03 | Not Started |
 | [endoclaw-network-fetch](endoclaw-network-fetch.md) | 2026-03-03 | 2026-07-13 | Superseded by [endo-fetch](endo-fetch.md) |
-| [endo-fetch](endo-fetch.md) | 2026-07-13 | 2026-07-13 | In Progress |
+| [endo-fetch](endo-fetch.md) | 2026-07-13 | 2026-08-17 | In Progress |
 | [endoclaw-notifications](endoclaw-notifications.md) | 2026-03-03 | 2026-03-03 | Not Started |
 | [endoclaw-oauth](endoclaw-oauth.md) | 2026-03-03 | 2026-03-03 | In Progress |
 | [endoclaw-proactive-messages](endoclaw-proactive-messages.md) | 2026-03-03 | 2026-03-03 | Not Started |
 | [endoclaw-skill-registry](endoclaw-skill-registry.md) | 2026-03-03 | 2026-03-03 | Not Started |
 | [endoclaw-timer](endoclaw-timer.md) | 2026-03-03 | 2026-07-10 | Superseded by [endo-reminder](endo-reminder.md) |
-| [endo-reminder](endo-reminder.md) | 2026-07-10 | 2026-07-10 | In Progress |
+| [endo-reminder](endo-reminder.md) | 2026-07-10 | 2026-08-17 | In Progress |
 | [endoclaw-voice](endoclaw-voice.md) | 2026-03-03 | 2026-03-03 | Not Started |
 | [endoclaw-webhooks](endoclaw-webhooks.md) | 2026-03-03 | 2026-03-03 | Not Started |
 | [daemon-locator-terminology](daemon-locator-terminology.md) | 2026-02-24 | 2026-02-24 | In Progress |
 | [daemon-os-sandbox-plugin](daemon-os-sandbox-plugin.md) | 2026-02-15 | 2026-03-19 | Superseded by [endo-posix-sandbox](endo-posix-sandbox.md) |
 | [endo-posix-sandbox](endo-posix-sandbox.md) | 2026-05-07 | 2026-05-07 | In Progress (Phase 3) |
-| [daemon-value-message](daemon-value-message.md) | 2026-03-02 | 2026-03-03 | **Complete** |
+| [daemon-value-message](daemon-value-message.md) | 2026-03-02 | 2026-03-03 | **Complete** (archived) |
 | [daemon-web-gateway](daemon-web-gateway.md) | 2026-03-11 | 2026-03-11 | **Complete** |
 | [daemon-weblet-application](daemon-weblet-application.md) | 2026-02-24 | 2026-02-25 | Not Started |
 | [exo-google-sheets](exo-google-sheets.md) | 2026-07-06 | 2026-07-06 | Proposed |
-| [exo-zip-package](exo-zip-package.md) | 2026-05-08 | 2026-05-08 | Implemented |
-| [familiar-bundled-agents](familiar-bundled-agents.md) | 2026-03-02 | 2026-03-05 | **Complete** |
+| [exo-zip-package](exo-zip-package.md) | 2026-05-08 | 2026-08-17 | Implemented |
+| [familiar-bundled-agents](familiar-bundled-agents.md) | 2026-03-02 | 2026-03-05 | **Complete** (archived) |
 | [familiar-chat-weblet-hosting](familiar-chat-weblet-hosting.md) | 2026-02-14 | 2026-02-26 | Not Started |
-| [familiar-daemon-bundling](familiar-daemon-bundling.md) | 2026-02-14 | 2026-03-05 | **Complete** |
+| [familiar-daemon-bundling](familiar-daemon-bundling.md) | 2026-02-14 | 2026-03-05 | **Complete** (archived) |
 | [familiar-electron-shell](familiar-electron-shell.md) | 2026-02-14 | 2026-02-26 | **Complete** |
 | [familiar-gateway-migration](familiar-gateway-migration.md) | 2026-02-14 | 2026-02-26 | **Complete** |
 | [familiar-localhttp-protocol](familiar-localhttp-protocol.md) | 2026-02-24 | 2026-02-25 | In Progress (partially implemented) |
@@ -122,11 +133,11 @@
 | [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | 2026-03-02 | 2026-03-06 | **Implemented** |
 | [hardened-text-codecs-shim](hardened-text-codecs-shim.md) | 2026-05-04 | 2026-05-04 | Not Started |
 | [hardened-url-shim](hardened-url-shim.md) | 2026-05-04 | 2026-05-04 | Not Started |
-| [inventory-cancel-and-liveness](inventory-cancel-and-liveness.md) | 2026-02-14 | 2026-03-13 | In Progress |
-| [inventory-drag-and-drop](inventory-drag-and-drop.md) | 2026-02-14 | 2026-02-24 | **Complete** |
-| [inventory-grouping-by-type](inventory-grouping-by-type.md) | 2026-02-14 | 2026-06-28 | **Complete** |
-| [lal-fae-form-provisioning](lal-fae-form-provisioning.md) | 2026-03-02 | 2026-03-05 | **Complete** |
-| [lal-reply-chain-transcripts](lal-reply-chain-transcripts.md) | 2026-02-26 | 2026-03-05 | **Complete** |
+| [inventory-cancel-and-liveness](inventory-cancel-and-liveness.md) | 2026-02-14 | 2026-08-17 | In Progress |
+| [inventory-drag-and-drop](inventory-drag-and-drop.md) | 2026-02-14 | 2026-08-17 | **Complete** |
+| [inventory-grouping-by-type](inventory-grouping-by-type.md) | 2026-02-14 | 2026-08-17 | **Complete** |
+| [lal-fae-form-provisioning](lal-fae-form-provisioning.md) | 2026-03-02 | 2026-03-05 | **Complete** (archived) |
+| [lal-reply-chain-transcripts](lal-reply-chain-transcripts.md) | 2026-02-26 | 2026-03-05 | **Complete** (archived) |
 | [lal-transcript-memory-management](lal-transcript-memory-management.md) | 2026-03-05 | 2026-03-05 | Not Started |
 | [ocapn-iroh-netlayer](ocapn-iroh-netlayer.md) | 2026-07-13 | 2026-07-13 | **Complete** |
 | [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | 2026-02-14 | 2026-02-24 | In Progress |
@@ -141,17 +152,17 @@
 | [cbor-frame](cbor-frame.md) | 2026-05-04 | 2026-05-05 | Not Started |
 | [cbor-codec](cbor-codec.md) | 2026-07-12 | 2026-07-28 | Phase 1 implemented |
 | [trust-on-first-bind](trust-on-first-bind.md) | 2026-05-08 | 2026-05-10 | Reference |
-| [outliner-design-doc](outliner-design-doc.md) | 2026-03-17 | 2026-03-18 | In Progress |
+| [outliner-design-doc](outliner-design-doc.md) | 2026-03-17 | 2026-08-17 | In Progress |
 | [patterns-diagnostic-feedback](patterns-diagnostic-feedback.md) | 2026-05-19 | 2026-05-20 | Proposed |
-| [base64-native-fallthrough](base64-native-fallthrough.md) | 2026-04-23 | 2026-05-18 | **Complete** |
-| [ci-no-npm-lifecycle](ci-no-npm-lifecycle.md) | 2026-04-23 | 2026-05-18 | **Complete** |
-| [break-dev-dependency-cycles](break-dev-dependency-cycles.md) | 2026-05-11 | 2026-06-15 | **Complete** (on `llm`) |
+| [base64-native-fallthrough](base64-native-fallthrough.md) | 2026-04-23 | 2026-05-18 | **Complete** (archived) |
+| [ci-no-npm-lifecycle](ci-no-npm-lifecycle.md) | 2026-04-23 | 2026-05-18 | **Complete** (archived) |
+| [break-dev-dependency-cycles](break-dev-dependency-cycles.md) | 2026-05-11 | 2026-08-17 | **Complete** (on `llm`) (archived) |
 | [cli-http-client](cli-http-client.md) | 2026-05-09 | 2026-07-13 | Proposed (PR #144 design revision; formula packaging superseded in part by [endo-fetch](endo-fetch.md)) |
 | [endor-bus-tui](endor-bus-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [endor-native-zip-xs](endor-native-zip-xs.md) | 2026-07-22 | 2026-07-22 | Proposed |
 | [endor-tui](endor-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
-| [hex-package](hex-package.md) | 2026-04-23 | 2026-05-18 | **Complete** |
-| [endo-bytes](endo-bytes.md) | 2026-05-08 | 2026-05-10 | Implemented |
+| [hex-package](hex-package.md) | 2026-04-23 | 2026-05-18 | **Complete** (archived) |
+| [endo-bytes](endo-bytes.md) | 2026-05-08 | 2026-05-10 | Implemented (archived) |
 | [endo-gateway-mcp](endo-gateway-mcp.md) | 2026-05-29 | 2026-05-29 | Not Started |
 | [endo-claude](endo-claude.md) | 2026-08-16 | 2026-08-16 | Not Started |
 | [gateway-package](gateway-package.md) | 2026-05-22 | 2026-06-29 | Proposed (absorbs the removed endo-gateway design) |
@@ -166,16 +177,16 @@
 | [pass-style-promise](pass-style-promise.md) | 2026-05-10 | 2026-05-10 | In Progress |
 | [namehub-interface-unification](namehub-interface-unification.md) | 2026-05-07 | 2026-08-17 | **Complete** |
 | [forge-gap-analysis](forge-gap-analysis.md) | 2026-05-20 | 2026-05-20 | Reference (exploratory) |
-| [captp-error-identification](captp-error-identification.md) | 2026-07-02 | 2026-07-02 | Proposed |
+| [captp-error-identification](captp-error-identification.md) | 2026-07-02 | 2026-08-17 | Proposed |
 | [daemon-engo-supervisor](daemon-engo-supervisor.md) | 2026-02-25 | 2026-02-25 | Not Started |
-| [daemon-locator-reference](daemon-locator-reference.md) | 2026-03-18 | 2026-05-10 | Reference |
+| [daemon-locator-reference](daemon-locator-reference.md) | 2026-03-18 | 2026-08-17 | Reference |
 | [endo-fs-seam-review-followups](endo-fs-seam-review-followups.md) | 2026-06-18 | 2026-06-18 | **Complete** |
-| [http-confine](http-confine.md) | 2026-07-08 | 2026-07-08 | Implemented |
-| [inter-package-plain-re-exports](inter-package-plain-re-exports.md) | 2026-06-27 | 2026-06-27 | In Progress |
-| [intra-package-plain-re-exports](intra-package-plain-re-exports.md) | 2026-06-26 | 2026-06-30 | In Progress |
-| [notifier-pubsub-migration](notifier-pubsub-migration.md) | 2026-06-23 | 2026-06-26 | In Progress |
+| [http-confine](http-confine.md) | 2026-07-08 | 2026-08-17 | Implemented |
+| [inter-package-plain-re-exports](inter-package-plain-re-exports.md) | 2026-06-27 | 2026-08-17 | In Progress |
+| [intra-package-plain-re-exports](intra-package-plain-re-exports.md) | 2026-06-26 | 2026-08-17 | In Progress |
+| [notifier-pubsub-migration](notifier-pubsub-migration.md) | 2026-06-23 | 2026-08-17 | In Progress |
 | [platform-range-and-tree-reads](platform-range-and-tree-reads.md) | 2026-07-12 | 2026-07-12 | In Progress |
-| [unredacted-stack-sanctioned-ses-api](unredacted-stack-sanctioned-ses-api.md) | 2026-07-02 | 2026-07-10 | Proposed |
+| [unredacted-stack-sanctioned-ses-api](unredacted-stack-sanctioned-ses-api.md) | 2026-07-02 | 2026-08-17 | Proposed |
 | [worker-rust-xs](worker-rust-xs.md) | 2026-03-23 | 2026-03-23 | Not Started |
 | [outliner-design-doc-2](outliner-design-doc-2.md) | 2026-07-22 | 2026-07-22 | Proposed (research note) |
 | [outliner_drag_and_drop](outliner_drag_and_drop.md) | 2026-07-22 | 2026-07-22 | Proposed (research note) |
@@ -190,15 +201,16 @@
 | [familiar-app-ui-hosting](familiar-app-ui-hosting.md) | 2026-06-01 | 2026-06-01 | Proposed |
 | [ses-import-attributes](ses-import-attributes.md) | 2026-05-14 | 2026-05-15 | Draft |
 
-**Totals (recounted 2026-08-17 by tallying the summary table's Status column):** 57 Complete/Implemented, 46 In Progress, 35 Not Started, 25 Proposed, 2 Active, 13 Reference, 2 Deprecated, 4 Superseded, 1 Draft (**185 designs**). This supersedes every count in the historical grooming summaries (now relocated to the [Changelog](#changelog) at the foot of this document), which had drifted badly: the last prose total claimed 151 designs while the table had already grown to 185 rows, and ~34 rows this pass verified against real merged/open-PR and `llm`-git state were understated — landed or in-flight work (e.g. `http-confine`, `exo-zip-package`, `inventory-drag-and-drop`/`-grouping-by-type`, `endoclaw-browser`, `endopi-edit-tool`/`-jsonl-transcript-format`, the `daemon-git-*` trio, `endo-reminder`, `endo-fetch`, `inter`/`intra-package-plain-re-exports`, `notifier-pubsub-migration`) was still marked Not Started or Proposed. See the Roadmap's **Verification drift (2026-08-17)** note for the row-by-row list. Design docs whose *own* metadata is also stale are listed there as a scoped follow-up, not silently rewritten in this pass.
+**Totals (recounted 2026-08-17 by tallying the summary table's Status column):** 55 Complete/Implemented, 48 In Progress, 35 Not Started, 25 Proposed, 2 Active, 13 Reference, 2 Deprecated, 4 Superseded, 1 Draft (**185 designs**). The tally buckets each cell by its leading vocabulary word (so `**Complete** (archived)`, `**Complete** (on \`llm\`)`, and `Implemented` all count as Complete/Implemented; `In Progress (Phase 3)` and the one `Phase 1 implemented` cell count as In Progress; the parenthetical qualifiers are Notes, not distinct statuses) — reproduce it with `sort | uniq -c` after that normalization. This supersedes every count in the historical grooming summaries (now relocated to the [Changelog](#changelog) at the foot of this document), which had drifted badly: the last prose total claimed 151 designs while the table had already grown to 185 rows, and ~34 rows this pass verified against real merged/open-PR and `llm`-git state were understated — landed or in-flight work (e.g. `http-confine`, `exo-zip-package`, `inventory-drag-and-drop`/`-grouping-by-type`, `endoclaw-browser`, `endopi-edit-tool`/`-jsonl-transcript-format`, the `daemon-git-*` trio, `endo-reminder`, `endo-fetch`, `inter`/`intra-package-plain-re-exports`, `notifier-pubsub-migration`) was still marked Not Started or Proposed. See the Roadmap's **Verification drift (2026-08-17)** note for the row-by-row list. Design docs whose *own* metadata was also stale were swept into line with the summary table in this PR's second commit (see that drift note).
 
 ## Roadmap
 
-> **This Roadmap was re-verified and re-sequenced on 2026-08-17.** The four
+> **This Roadmap was re-verified and re-sequenced on 2026-08-17.** The five
 > subsections immediately below (verification drift, expected landing order,
-> planned-vs-actual, and the velocity calibration note) are the product of that
-> pass and are the honest current picture. The milestone sections further down
-> retain their canonical **M1–M11 dependency numbering** — that numbering
+> planned-vs-actual landing, delivery-date estimates vs. real dates, and the
+> velocity-and-timing-basis note) are the product of that pass and are the
+> honest current picture. The milestone sections further down
+> retain their canonical **M1-M11 dependency numbering**. That numbering
 > encodes the invariant "every milestone's dependencies live in earlier
 > milestones" and is *not* a prediction of landing order. Where the two diverge,
 > the divergence is called out rather than papered over.
@@ -209,7 +221,7 @@ This pass cross-checked every summary-table row against real merged/open-PR
 state on `endojs/endo-but-for-bots` and the `llm` git log (fanned out across the
 whole corpus). The table had drifted heavily and almost always in one
 direction: **the README understated reality.** Rows corrected this pass
-(claimed → verified, with evidence):
+(claimed -> verified, with evidence):
 
 | Design | Was | Now | Evidence |
 |--------|-----|-----|----------|
@@ -246,24 +258,26 @@ direction: **the README understated reality.** Rows corrected this pass
 | familiar-deep-link-invitations | Proposed | In Progress | `endo://` deep-link impl PR #399 open |
 | registry-capability siblings (mvs-resolver, snapshot-mapper, daemon-worker-import-from-mount) | Proposed | Not Started | accepted-but-unbuilt per the 2026-07-10 flip and each doc's own metadata; the summary table had never taken the flip |
 
-**Stale design docs — swept in the stacked `groom-endo-stale-design-docs` follow-on (this PR).** Per the scope
-guard, the README pass did not rewrite individual design docs. Verification found the
-following docs whose *own* metadata table disagreed with reality; each was
-brought into line with the summary table in the stacked follow-on: `registry-capability` (doc Not Started, impl landed), `http-confine`
+**Stale design docs — swept in this PR's second commit.** The first commit
+(the README groom) deliberately did not touch individual design docs; the
+second commit (`docs(designs): sweep stale per-doc metadata`) did the sweep.
+Verification found the following docs whose *own* metadata table disagreed with
+reality; each was brought into line with the summary table in that second
+commit: `registry-capability` (doc Not Started, impl landed), `http-confine`
 (doc Proposed, landed), `exo-zip-package` (doc Proposed, landed), `endoclaw-browser`
-(doc status is a non-vocabulary string), `endopi-edit-tool` / `endopi-jsonl-transcript-format`
+(doc status was a non-vocabulary string), `endopi-edit-tool` / `endopi-jsonl-transcript-format`
 (docs Proposed, landed), `endo-reminder` / `endo-fetch` (docs Not Started, in flight),
 `inventory-drag-and-drop` / `inventory-grouping-by-type` / `inventory-cancel-and-liveness`
 (docs understate), `inter`/`intra-package-plain-re-exports` and `notifier-pubsub-migration`
 (docs understate), `break-dev-dependency-cycles` (doc In Progress, actually Complete),
-`namehub-interface-unification` (doc "Accepted, not yet implemented" vs likely-landed
-`#339` EndoMount unification — needs confirmation), `captp-error-identification`,
-`unredacted-stack-sanctioned-ses-api` (docs say "Draft", README says Proposed),
+`namehub-interface-unification` (doc "Accepted, not yet implemented" vs the landed
+`#339` EndoMount unification), `captp-error-identification`,
+`unredacted-stack-sanctioned-ses-api` (docs said "Draft", README says Proposed),
 `daemon-locator-reference` (doc "Current" vs Reference), and `outliner-design-doc`
-(no metadata table at all). `namehub-interface-unification` was confirmed landed —
-the daemon's `ReadableNameHubInterface` (`packages/daemon/src/interfaces.js`) implements
+(no metadata table at all). `namehub-interface-unification` is landed: the
+daemon's `ReadableNameHubInterface` (`packages/daemon/src/interfaces.js`) implements
 the design's Decision 3, and PR #339 "complete EndoMount and specialize as Directory"
-merged 2026-05-27 — so it is flipped to **Complete** in the doc, the summary table, and M9.
+merged 2026-05-27, so it is flipped to **Complete** in the doc, the summary table, and M9.
 
 ### Expected landing order (2026-08-17)
 
@@ -274,7 +288,7 @@ than false-precision calendar dates — is:
 
 | Tier | Meaning | Work actually landing in this band |
 |------|---------|-------------------------------------|
-| **A — landing now / imminent** | active merged + open PRs on `llm`; converging | The Rust `endor`/`ironhorse` line (M11): snapshot-store-seam phases 1-4 (#963), rust-sqlite (Complete), npm-registry-proxy phases, native break-on-uncaught (#975). The `daemon-git-*` trio + `registry-capability` layer 1 + `@endo/agent-tools` file/shell/git tiers (M3). `cbor-codec` Phase 1 (M4). `inventory-*` and `workers-panel` (M9). `inter`/`intra-package-plain-re-exports` (M2). `http-confine`, `endoclaw-browser`, `exo-zip-package`, `endopi-edit-tool`/`-jsonl` (already landed). |
+| **A — landing now / imminent** | active merged + open PRs on `llm`; converging | The Rust `endor`/`ironhorse` line (M11): snapshot-store-seam phases 1-4 (#963), rust-sqlite (Complete), npm-registry-proxy phases, native break-on-uncaught (#975). The `daemon-git-*` trio + `registry-capability` layer 1 + `@endo/agent-tools` file/shell/git tiers (M3). `cbor-codec` Phase 1 (M4). `inventory-*` and `workers-panel` (M9). `inter`/`intra-package-plain-re-exports` (post-M2 hygiene). `http-confine`, `endoclaw-browser`, `exo-zip-package`, `endopi-edit-tool`/`-jsonl` (already landed). |
 | **B — in progress, timing uncertain** | design + partial impl landed, remainder open/draft | `gateway-package` stack (M3/M5; nine phase PRs open, several draft). `endo-fetch` / `endo-reminder` (M3, phases 1-3 landed). `endopi-provider-registry-and-oauth` (M3). `ocapn-orthogonal-persistence` remaining phases + `ocapn-network-transport-separation` (M4). `familiar-unified-weblet-server` (M7). `pass-style-promise`, `notifier-pubsub-migration`. |
 | **C — blocked / dependency-gated / not started** | no impl; waits on Tier-A/B substrate | `endo-gateway-mcp` + `endo-claude` (M6; gated on gateway-package phases 2/7/8 and `endo-posix-sandbox`). The three M5 design gaps (`gateway-oauth-bonding`, `gateway-key-recovery`, `gateway-stripe-adapter`). `daemon-capability-bank` (M10). `endor-tui` / `endor-bus-tui` (M11). Most `endoclaw-*` integrations (M7/M10). |
 
@@ -319,7 +333,7 @@ milestone's Gantt slot is the signal.
 The pattern: **landing order correlates weakly with milestone number.** Late
 milestones (M10/M11) are landing early because they are independent parallel
 lanes (Rust port, self-contained exos like the Playwright browser); the
-critical-path gateway milestones (M3→M5→M6) are the ones actually gating and
+critical-path gateway milestones (M3->M5->M6) are the ones actually gating and
 slipping. A dependency-ordered plan and a velocity-ordered forecast are
 different artifacts, and this document had been conflating them.
 
@@ -350,32 +364,29 @@ read as **superseded by the confidence-tier view above.** Prefer the tiers.
 ### Velocity and timing basis (2026-08-17 calibration note)
 
 The "Size and Time Estimates" section further down calibrates a **one-developer,
-LOC-per-day** model (S/M/L/XL → days) against PR-merge velocity through
+LOC-per-day** model (S/M/L/XL -> days) against PR-merge velocity through
 2026-05-20. That discipline is preserved below unchanged. This note extends it
-with the regime change that the older rounds could not see:
+with the regime change that the older rounds could not see. (The concrete
+velocity figures behind these observations come from the automated development
+fleet's own run logs, which live outside this repository; they are stated here
+qualitatively so the conclusion stands on evidence a reader of this repo can
+check against the PR history.)
 
 1. **Development is now fleet-driven, not single-developer.** Implementation
-   lands as autonomous jobs, not one person's commits. Observed from the garden
-   fleet's own usage stamps (`jobs/tada/*.md` `## Cost` sections): a
-   design/build job on this repo runs at a **median ≈ $1–3 and ≈ 6–20 minutes
-   of wall-clock** each (the endo-but-for-bots job stream, n≈460, medians ≈$1.0
-   / ≈9 min; design-labelled jobs ≈$2.4 / ≈10 min). Machine time per design is
-   therefore **cheap and no longer the binding constraint** — the per-size
-   "days of developer effort" figures below overstate the wall-clock a single
-   design now takes to *produce*.
-2. **The binding constraint is human review latency.** Human review dominates
-   total delivery cost by roughly **50–190× the machine cost at the median**, and
-   the review-queue backlog (already flagged as "the binding constraint" in the
-   2026-05 rounds) is what actually paces merges. A design can be *built* in
-   minutes and still wait weeks for review. Forecast to review throughput, not
-   build throughput.
-3. **Token-budget admission now bounds backlog drain.** The garden landed live
-   budget / token-bucket admission at dispatch (garden-repo designs
-   `live-budget-admission`, `budgeted-campaign-dispatch`). Campaigns are now
-   bounded by token budget *at dispatch*, so the fleet does not drain an
-   unbounded backlog at machine speed; it drains at a **budgeted rate**. This
-   caps how fast even review-approved work can be fanned out, and is a real
-   input to any "weeks remaining" figure.
+   lands as autonomous jobs rather than one person's commits, and machine time
+   per design is cheap and no longer the binding constraint. The per-size "days
+   of developer effort" figures below therefore overstate the wall-clock a
+   single design now takes to *produce*.
+2. **The binding constraint is human review latency.** Human review, not build
+   time, dominates total delivery cost, and the review-queue backlog (already
+   flagged as "the binding constraint" in the 2026-05 rounds) is what actually
+   paces merges. A design can be *built* in minutes and still wait weeks for
+   review. Forecast to review throughput, not build throughput.
+3. **Backlog drain is budget-bounded.** The fleet admits work against a token
+   budget at dispatch rather than draining an unbounded backlog at machine
+   speed, so it drains at a bounded rate. This caps how fast even
+   review-approved work can be fanned out, and is a real input to any "weeks
+   remaining" figure.
 
 Net: treat the per-size day estimates and the Gantt target dates as a legacy
 single-developer model. For forward planning, use the **confidence tiers** (A/B/C
@@ -409,7 +420,7 @@ inventing implementation commitments.
 
 | Design | Roadmap home | Role in that work |
 |---|---|---|
-| `inter-package-plain-re-exports`, `intra-package-plain-re-exports` | M2 | Package-hygiene cleanup before cross-package capability work. |
+| `inter-package-plain-re-exports`, `intra-package-plain-re-exports` | Post-M2 hygiene (In Progress) | Package-hygiene cleanup in the M2 lane, but authored (#548/#544, mid-2026) after M2's 2026-06-15 closure and still In Progress, so they are not part of the archived Milestone 2. |
 | `http-confine`, `platform-range-and-tree-reads`, `endo-fs-seam-review-followups` | M3 | HTTP and readable-tree foundations for tools and daemon guests. |
 | `captp-error-identification`, `daemon-locator-reference` | M4 | CapTP identity and locator semantics for federation. |
 | `notifier-pubsub-migration`, `unredacted-stack-sanctioned-ses-api` | M10 | Shared ecosystem surface and confinement diagnostics. |
@@ -661,41 +672,34 @@ milestones. The 2026-06-02 cross-cutting cuts (Peer App Sharing,
 formerly "Milestone A"; MCP Bridge Hosting, formerly "Milestone B")
 are now numbered as ordinary milestones (M8 and M6 respectively).
 
-> **Status cells below may lag.** The 2026-08-17 verification pass
-> reconciled the **summary table** (the authoritative index per
-> [AGENTS.md](AGENTS.md) § *Progress Tracking*) and captured every
-> corrected status in the Roadmap's **Verification drift (2026-08-17)**
-> table above. It did **not** rewrite the per-milestone inline Status
-> cells in the tables below, whose varied column shapes make a mass edit
-> error-prone for low marginal value. Where a cell below disagrees with
-> the summary table or the drift table, the summary/drift table wins.
-> Sweeping these inline cells (and the stale design docs listed in the
-> drift note) is the scoped follow-on `groom-endo-stale-design-docs` job.
->
-> **Milestone 2 (Project Hygiene) is the next archive candidate.** Its six
-> designs are all Complete/Implemented on `llm` and its exit criterion is
-> met (it is already labelled Complete). It qualifies under the new
-> archive convention; it was left in place this pass only to keep the
-> reorganization reviewable one milestone at a time. Archiving it to
-> [ARCHIVE.md](ARCHIVE.md) is a clean next step — flagged here rather than
-> done unasked.
+> **Status cells below may lag.** The single source of truth for a design's
+> status is its own metadata table (per [AGENTS.md](AGENTS.md) § *Progress
+> Tracking*, the per-document Status field is the primary indicator); the
+> **summary table** at the head of this document is the derived cross-document
+> index of those fields. The 2026-08-17 verification pass reconciled the summary
+> table, captured every correction in the Roadmap's **Verification drift
+> (2026-08-17)** table above, and reconciled the per-milestone inline Status
+> cells for the rows that pass corrected. Some inline cells below may still lag
+> where their varied column shapes make a mass edit error-prone for low marginal
+> value; where a cell below disagrees with a design's own metadata table or the
+> summary table, the design's metadata table (then the summary table) wins.
 
 #### Milestone 1: Downloadable AI Agent Experience — **Complete**; archived to [ARCHIVE.md](ARCHIVE.md).
 
 (Was **Milestone 0** before the 2026-06-03 renumbering pass.) All 7
 designs `Complete`, exit criterion met, closed since March 2026. Full
-detail — goal, design table, exit criterion, actual duration — moved to
-[designs/ARCHIVE.md](ARCHIVE.md) on 2026-08-17 per [AGENTS.md](AGENTS.md)
+detail (goal, design table, exit criterion, actual duration) moved to
+[ARCHIVE.md](ARCHIVE.md) on 2026-08-17 per [AGENTS.md](AGENTS.md)
 § *Archiving Completed Milestones*.
 
 ---
 
 #### Milestone 2: Project Hygiene — **Complete**; archived to [ARCHIVE.md](ARCHIVE.md).
 
-(Was **Milestone ½** before the 2026-06-03 renumbering pass.) All six
-designs Complete/Implemented on `llm`, exit criterion met, closed since
-2026-06-15. Full detail — goal, design table, exit criterion, and status
-— moved to [designs/ARCHIVE.md](ARCHIVE.md) on 2026-08-17 per
+(Was **Milestone ½** before the 2026-06-03 renumbering pass.) All 6
+designs `Complete`/`Implemented` on `llm`, exit criterion met, closed since
+2026-06-15. Full detail (goal, design table, exit criterion, and status)
+moved to [ARCHIVE.md](ARCHIVE.md) on 2026-08-17 per
 [AGENTS.md](AGENTS.md) § *Archiving Completed Milestones*.
 
 ---
@@ -1011,7 +1015,7 @@ deep-link → P2 app + sandboxed UI → P3 clone).
 | `familiar-release.md` (MVR plan) | Proposed | 1 — distributable | **Owns Pillar 1.** PR [#231](https://github.com/endojs/endo-but-for-bots/pull/231) (issue #229): G1-G16, **macOS-arm64-first**; P0 adopts it rather than running a competing plan. G-item PRs: [#318](https://github.com/endojs/endo-but-for-bots/pull/318) [#321](https://github.com/endojs/endo-but-for-bots/pull/321) [#319](https://github.com/endojs/endo-but-for-bots/pull/319) [#316](https://github.com/endojs/endo-but-for-bots/pull/316) [#320](https://github.com/endojs/endo-but-for-bots/pull/320) [#323](https://github.com/endojs/endo-but-for-bots/pull/323) [#324](https://github.com/endojs/endo-but-for-bots/pull/324) [#322](https://github.com/endojs/endo-but-for-bots/pull/322) [#317](https://github.com/endojs/endo-but-for-bots/pull/317) [#360](https://github.com/endojs/endo-but-for-bots/pull/360) |
 | ~~ocapn-noise-network~~ | **Complete** | 2 — connect peers | Secure transport peers connect over (counted under M4); daemon-to-daemon [#340](https://github.com/endojs/endo-but-for-bots/pull/340) |
 | daemon-agent-network-identity | Not Started | 2 — connect peers | Per-agent keypairs behind the locator node key; soft prereq (counted under M4). In-flight as `ocapn-daemon-integration` [#138](https://github.com/endojs/endo-but-for-bots/pull/138)/[#262](https://github.com/endojs/endo-but-for-bots/pull/262); locator v2 [#178](https://github.com/endojs/endo-but-for-bots/pull/178) |
-| exo-zip-package | Implemented | 3 — make & share apps | Durable zip backing for clones; in-flight as exo-zip/exo-unzip [#160](https://github.com/endojs/endo-but-for-bots/pull/160) (counted under M7) |
+| exo-zip-package | Implemented | 3 — make & share apps | Durable zip backing for clones; shipped as exo-zip/exo-unzip [#160](https://github.com/endojs/endo-but-for-bots/pull/160) (merged 2026-07-22; counted under M7) |
 | ~~daemon-checkin-checkout~~ | **Complete** | 3 — make & share apps | Local serialisation the clone generalises (counted under M7) |
 | familiar-unified-weblet-server | In Progress | 3 — sandboxed UI | Virtual-host serving for app UIs (counted under M7) |
 | familiar-chat-weblet-hosting | Not Started | 3 — sandboxed UI | In-Chat iframe pane + chrome/guest barrier (counted under M7) |
@@ -1728,7 +1732,20 @@ from the top of the document on 2026-08-17 (it previously sat between the
 title and the Summary table). Individual entries are preserved verbatim;
 new passes add a dated entry to the top of this log.
 
-*Groomed 2026-08-17 (verify / reorganize / archive / illuminate pass): ran a full status re-verification of the summary table and milestone rows against real merged/open PR state and the `llm` git log (fan-out across the corpus), and reconciled the drifted totals. Relocated this entire changelog chain from the head of the document to the bottom as `## Changelog` (no entry rewritten). Archived **Milestone 1** (Downloadable AI Agent Experience — all 7 designs Complete, exit criterion met since March) to the new [designs/ARCHIVE.md](ARCHIVE.md), leaving a one-line pointer where its section was, and added the standing archive convention to [AGENTS.md](AGENTS.md) § *Archiving Completed Milestones* so future passes archive completed milestones without being told. Added an **Expected landing order** view and **planned-vs-actual landing** / **estimate-vs-actual date** discrepancy sections to the Roadmap, and a 2026-08-17 calibration note grounding timing in observed fleet velocity (development is now fleet-driven, not the historical single-developer model; the binding constraint is human review latency, and token-budget admission now bounds backlog drain at dispatch). Flagged Milestone 2 as the next archive candidate and listed stale individual design docs as follow-ups rather than revising docs this job was not scoped to touch.*
+*Swept 2026-08-17 (stale per-doc metadata pass, this PR's second commit): brought
+20 individual design docs' metadata tables into line with the reconciled summary
+table (Status and Updated fields; `outliner-design-doc` gained a metadata table;
+non-vocabulary Status strings normalized on `endoclaw-browser`,
+`captp-error-identification`, `unredacted-stack-sanctioned-ses-api`,
+`daemon-locator-reference`), synced those rows' Updated dates in the summary table,
+confirmed `namehub-interface-unification` landed (#339) and flipped it to Complete
+in doc, summary table, and M9, and **archived Milestone 2** (Project Hygiene) to
+[ARCHIVE.md](ARCHIVE.md) with a one-line pointer per the convention the first commit
+added — superseding that commit's "next archive candidate" note. Also corrected the
+recounted totals (55 Complete/Implemented, 48 In Progress) so the stated
+tally-by-leading-vocabulary-word method reproduces.*
+
+*Groomed 2026-08-17 (verify / reorganize / archive / illuminate pass): ran a full status re-verification of the summary table and milestone rows against real merged/open PR state and the `llm` git log (fan-out across the corpus), and reconciled the drifted totals. Relocated this entire changelog chain from the head of the document to the bottom as `## Changelog` (no entry rewritten). Archived **Milestone 1** (Downloadable AI Agent Experience — all 7 designs Complete, exit criterion met since March) to the new [designs/ARCHIVE.md](ARCHIVE.md), leaving a one-line pointer where its section was, and added the standing archive convention to [AGENTS.md](AGENTS.md) § *Archiving Completed Milestones* so future passes archive completed milestones without being told. Added an **Expected landing order** view and **planned-vs-actual landing** / **estimate-vs-actual date** discrepancy sections to the Roadmap, and a 2026-08-17 calibration note grounding timing in observed fleet velocity (development is now fleet-driven, not the historical single-developer model; the binding constraint is human review latency, and token-budget admission now bounds backlog drain at dispatch). Flagged Milestone 2 as the next archive candidate and listed stale individual design docs as follow-ups (both carried out in the same-PR second commit above).*
 
 *Layered on 2026-08-16: added [endo-claude](endo-claude.md) to M6 (MCP Bridge
 Hosting): `@endo/claude`, a hermetically-sandboxed `claude -p` that provides an

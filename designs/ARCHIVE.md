@@ -36,7 +36,7 @@ their own API key and local capabilities.
 at least one platform that folks can download and use to interact with an
 agent using their own API key and local capabilities.
 
-**Actual duration:** 18 active work days (Feb 15 – Mar 5), primarily 1
+**Actual duration:** 18 active work days (Feb 15 - Mar 5), primarily 1
 developer (128 of 201 commits). 7 designs completed. Original estimate
 was 3-4 days for the final item; revised to 0 remaining.
 
