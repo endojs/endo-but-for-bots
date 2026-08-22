@@ -49,9 +49,7 @@ export type { PackageCompartmentDescriptorName };
  * Canonical names that can be used in {@link PackageData}
  */
 export type PackageDataCanonicalName =
-  | CanonicalName
-  | typeof ATTENUATORS_COMPARTMENT
-  | typeof ENTRY_COMPARTMENT;
+  CanonicalName | typeof ATTENUATORS_COMPARTMENT | typeof ENTRY_COMPARTMENT;
 
 /**
  * Data about a package provided by a {@link PackageDataHook}

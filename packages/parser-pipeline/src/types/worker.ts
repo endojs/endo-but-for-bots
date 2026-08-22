@@ -159,8 +159,7 @@ export interface WorkerErrorMessage extends BaseWorkerMessage<'error'> {
  * @internal
  */
 export type WorkerResponseMessage =
-  | WorkerRawResultMessage<any, any>
-  | WorkerErrorMessage;
+  WorkerRawResultMessage<any, any> | WorkerErrorMessage;
 
 /**
  * @internal

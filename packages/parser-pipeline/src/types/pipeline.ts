@@ -107,8 +107,7 @@ export type PipelineLanguage = MjsLanguage | CjsLanguage | MtsLanguage;
  * @internal
  */
 export type BabelSourceType =
-  | typeof BABEL_SOURCE_TYPE_MODULE
-  | typeof BABEL_SOURCE_TYPE_COMMONJS;
+  typeof BABEL_SOURCE_TYPE_MODULE | typeof BABEL_SOURCE_TYPE_COMMONJS;
 
 /**
  * `structuredClone`-compatible record produced by the pipeline's implicit

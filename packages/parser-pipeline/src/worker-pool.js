@@ -342,7 +342,10 @@ export class WorkerParserPool {
         )
         .on('error', error => {
           this.#log(`Worker ${workerId} emitted error:`, error);
-          this.#handleError(scopedWorker, error);
+          this.#handleError(
+            scopedWorker,
+            error instanceof Error ? error : new Error(String(error)),
+          );
         })
         .on('exit', code => {
           this.#log(`Worker ${workerId} exited with code ${code}`);
