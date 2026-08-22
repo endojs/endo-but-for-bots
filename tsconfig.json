@@ -30,6 +30,7 @@
         "packages/platform",
         "packages/preact-container",
         "packages/preact-social",
+        "packages/parser-pipeline/test/fixture/*-error.js",
         "c",
         "target",
         "**/dist-xs",

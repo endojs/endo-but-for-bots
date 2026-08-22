@@ -2,11 +2,10 @@
 /// <reference types="ses"/>
 /* eslint no-underscore-dangle: ["off"] */
 
-// eslint-disable-next-line import/order
-import { ModuleSource } from '../src/module-source.js';
 import url from 'url';
 import fs from 'fs';
 import test from 'ava';
+import { ModuleSource } from '../src/module-source.js';
 
 /** @import {ExecutionContext} from 'ava' */
 
@@ -798,12 +797,12 @@ test('export namespace as from re-export end-to-end', t => {
 test('source map generation', t => {
   t.plan(5);
   const { __syncModuleProgram__ } = new ModuleSource(`'Hello, World!'`, {
-    sourceUrl: 'must-appear-in-source.js',
+    sourceUrl: 'file:///must-appear-in-source.js',
     sourceMapUrl: 'must-not-appear-in-source.js',
     sourceMapHook(sourceMap, { sourceUrl, sourceMapUrl, source }) {
       t.log(sourceMap);
       t.is(sourceMapUrl, 'must-not-appear-in-source.js');
-      t.is(sourceUrl, 'must-appear-in-source.js');
+      t.is(sourceUrl, 'file:///must-appear-in-source.js');
       t.is(source, `'Hello, World!'`);
     },
   });
