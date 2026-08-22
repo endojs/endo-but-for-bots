@@ -6388,6 +6388,7 @@ test('host-only capabilities are not reachable through an EndoGuest', async t =>
     'provideMount',
     'provideScratchMount',
     'provideShell',
+    'provideSubMount',
     'provideWorker',
     'sign',
     'stageTree',
