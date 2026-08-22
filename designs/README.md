@@ -326,6 +326,7 @@ LLM-agent stack).*
 | [daemon-message-streaming](daemon-message-streaming.md) | 2026-03-26 | 2026-07-22 | **Complete** (PR #125: `editMessage`, `messageHistory`, `done`; supersedes the retired `streamReply` sketch) |
 | [daemon-mount](daemon-mount.md) | 2026-03-20 | 2026-05-27 | In Progress |
 | [daemon-mount-capabilities](daemon-mount-capabilities.md) | 2026-05-18 | 2026-05-27 | **Complete** |
+| [daemon-move-transfer-negotiation](daemon-move-transfer-negotiation.md) | 2026-06-08 | 2026-06-08 | Not Started |
 | [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-06-02 | Proposed |
 | [registry-capability](registry-capability.md) | 2026-06-02 | 2026-06-02 | Proposed |
 | [mvs-resolver](mvs-resolver.md) | 2026-06-02 | 2026-06-02 | Proposed |
@@ -855,6 +856,7 @@ capabilities available to agents.
 | ~~daemon-content-store-gc~~ | **Complete** | Content-store pruning and scratch-mount directory cleanup at GC time; landed in PR #99 |
 | daemon-mount | In Progress | Phases 1-3, 5 on `llm` (commit `e22f71327`); symlink confinement, 20 integration tests; Phase 4 (sub-mounts, snapshot) in PR #135 open, mount extensions in PR #127 open, `followNameChanges` in PR #277 open |
 | daemon-mount-capabilities | Proposed | Complete `EndoMount`: snapshot bridge, mount-scoped descriptors, `makeFile` sibling, entry overloads on `has`/`stat`/`lookup`, trusted backing provenance |
+| daemon-move-transfer-negotiation | Not Started | Six-tier transfer-mechanism ladder (POSIX `renameat` → mount-scoped renameat → same-host copy → CAS refcount swap → CapTP byte stream → out-of-band Git push/pull) with substrate-bind-time sealer / unsealer pairs (brand-and-trademark) at the negotiation core. Picks option (a): single polymorphic `move` extended with sibling `moveWithReport`. Takes the stance that the negotiation token rides direct CapTP method calls on the existing session, not a `value` message envelope |
 | daemon-worker-import-from-mount | Proposed | **Integration layer** of a four-layer stack (decomposed 2026-06-02 per kriskowal CHANGES_REQUESTED on #358). `makeFromPackage(mountName)` daemon-worker entry that runs a `package.json`-rooted `EndoMount` through `compartment-mapper.importLocation`; this layer carries `makeFromMount` dispatcher, worker dispatch body, CLI shape, XS bridging, architecture diagram. Sibling of `daemon-make-archive` § Phase 7 (`makeFromTree` for `compartment-map.json`-rooted trees) |
 | registry-capability | Proposed | Layer 1 of 4. `EndoRegistry` capability shape, `@registry` host special name, snapshot-vs-live-read contract, two-backend roadmap (JS reference impl ships first, Rust drop-in deferred to Phase 5). Required `registry` slot on `HostFormula` with one-shot upgrade pass for already-formulated hosts (the `@node` migration precedent) |
 | mvs-resolver | Proposed | Layer 2 of 4. JS reference implementation of Go-like Minimum Version Selection adapted to npm versioning (greatest mentioned minor per major; major-version coexistence admitted). Eager single-pass resolution shape (no per-import bus roundtrips). Lockfile honoring deferred as a follow-up constraint pass |
