@@ -42,10 +42,7 @@ const UpdatedCellsShape = M.splitRecord(
   { updatedRange: M.string(), updatedCells: M.number() },
   {},
 );
-const AppendedRowsShape = M.splitRecord(
-  { updatedRange: M.string(), appendedRows: M.number() },
-  {},
-);
+const AppendedRowsShape = M.splitRecord({ appendedRows: M.number() }, {});
 
 /** The read-only surface: no method here can change a cell. */
 export const SpreadsheetInterface = M.interface('Spreadsheet', {
@@ -118,7 +115,6 @@ export const SpreadsheetAppenderInterface = M.interface('SpreadsheetAppender', {
   append: M.callWhen(M.string(), CellValuesShape).returns(AppendedRowsShape),
   part: M.call(M.string()).returns(M.remotable('SpreadsheetAppender')),
   sheet: M.call(M.string()).returns(M.remotable('SpreadsheetAppender')),
-  range: M.call(M.string()).returns(M.remotable('SpreadsheetAppender')),
   help: M.call().returns(M.string()),
 });
 

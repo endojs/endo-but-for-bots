@@ -302,12 +302,38 @@ export const makePolicy = options => {
         throw new Error('Read exceeds maximum cell count');
       return selector;
     },
+    /** @param {string[]} selectors */
+    boundReadBatch: selectors => {
+      let count = 0;
+      const bounded = arrayMap(selectors, selector => {
+        const parsed = parseA1(selector);
+        if (!parsed) throw new Error('Read requires a bounded A1 range');
+        count +=
+          (parsed.bottom - parsed.top + 1) * (parsed.right - parsed.left + 1);
+        return selector;
+      });
+      if (count > maxCellsPerRead)
+        throw new Error('Read exceeds maximum cell count');
+      return harden(bounded);
+    },
     /** @param {any[][]} values */
     boundCells: values => {
       const count = arrayReduce(values, (total, row) => total + row.length, 0);
       if (count > maxCellsPerRead)
         throw new Error('Read exceeds maximum cell count');
       return harden(arrayMap(values, row => harden([...row])));
+    },
+    /** @param {{ values?: any[][] }[]} valueRanges */
+    boundReadResults: valueRanges => {
+      let count = 0;
+      const bounded = arrayMap(valueRanges, valueRange => {
+        const values = valueRange.values || [];
+        count = arrayReduce(values, (total, row) => total + row.length, count);
+        return harden(arrayMap(values, row => harden([...row])));
+      });
+      if (count > maxCellsPerRead)
+        throw new Error('Read exceeds maximum cell count');
+      return harden(bounded);
     },
     /** @param {any[][]} values */
     boundWriteCells: values => {
@@ -329,6 +355,10 @@ export const makePolicy = options => {
       if (count > maxCellsPerWrite)
         throw new Error('Write exceeds maximum cell count');
       return harden(bounded);
+    },
+    assertAppendAllowed: () => {
+      if (allowedRanges)
+        throw new Error('Append is unavailable while allowed ranges are set');
     },
     pollIntervalMs: () => pollIntervalMs,
     /**
@@ -512,14 +542,10 @@ export const makeReadPowers = ({
       /** @param {string[]} selectors */
       readBatch: async selectors => {
         if (selectors.length === 0) return harden([]);
-        const bounded = arrayMap(selectors, limits.boundRange);
+        const bounded = limits.boundReadBatch(selectors);
         const targets = access.admitBatch(bounded, scope);
         const result = await batchGetValues(targets);
-        return harden(
-          arrayMap(result.valueRanges || [], valueRange =>
-            limits.boundCells(valueRange.values || []),
-          ),
-        );
+        return limits.boundReadResults(result.valueRanges || []);
       },
       /** Wait one poll interval, as the host currently sets it. */
       pollDelay: () => {
@@ -556,6 +582,7 @@ export const makeAppendPowers = ({ appendValues, access, limits }) => {
       append: async (selector, rows) => {
         if (scope.range)
           throw new Error('Append is not available on a range-scoped facet');
+        limits.assertAppendAllowed();
         const boundedRows = limits.boundWriteCells(rows);
         assertAppendFitsRange(selector, boundedRows);
         const result = await appendValues(
@@ -563,7 +590,6 @@ export const makeAppendPowers = ({ appendValues, access, limits }) => {
           boundedRows,
         );
         return harden({
-          updatedRange: result.updates.updatedRange,
           appendedRows: result.updates.updatedRows,
         });
       },

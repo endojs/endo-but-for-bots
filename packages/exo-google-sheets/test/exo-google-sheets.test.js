@@ -115,6 +115,7 @@ test('facets attenuate permissions and range scope over loopback CapTP', async t
   const appender = await E(writer).appendOnly();
   t.is(reader.write, undefined);
   t.is(appender.read, undefined);
+  t.is(appender.range, undefined);
   await E(E(writer).range('Tasks!A1:B2')).write('A1', [['x']]);
   await t.throwsAsync(
     E(E(writer).range('Tasks!A1:B2')).write('Other!A1', [['x']]),
@@ -132,6 +133,9 @@ test('facets attenuate permissions and range scope over loopback CapTP', async t
   });
   await E(control).setAllowedRanges(['Tasks!A1:B2']);
   await E(writer).write('Tasks!A1', [['inside']]);
+  await t.throwsAsync(E(writer).append('Tasks!A1:B2', [['inside']]), {
+    message: /allowed ranges/,
+  });
   await t.throwsAsync(E(writer).write('Tasks!C1', [['outside']]), {
     message: /allowed/,
   });
@@ -224,7 +228,12 @@ test('part() narrows the whole and composes, on every authority class', async t 
   await t.throwsAsync(writer.appendOnly().append('Tasks', [[1, 2]]), {
     message: /bounded A1 range/,
   });
-  await writer.appendOnly().append('Tasks!A1:B2', [[1, 2]]);
+  t.deepEqual(await writer.appendOnly().append('Tasks!A1:B2', [[1, 2]]), {
+    appendedRows: 1,
+  });
+  t.throws(() => writer.appendOnly().part('Tasks!A1:B2'), {
+    message: /only be narrowed by sheet/,
+  });
   t.is(client.calls.filter(([verb]) => verb === 'update').length, 0);
 });
 
@@ -555,6 +564,7 @@ test('batch methods use one preflighted client request', async t => {
   await null;
   const client = makeClient();
   const { spreadsheet, writer } = makeExoSpreadsheet(client, {
+    maxCellsPerRead: 5,
     maxCellsPerWrite: 4,
   });
   t.deepEqual(await spreadsheet.readBatch(['Tasks!A1:B2', 'Tasks!C1:C1']), [
@@ -578,6 +588,9 @@ test('batch methods use one preflighted client request', async t => {
     ['batchGet', 'Tasks!A1:B2', 'Tasks!C1:C1'],
     ['batchUpdate', 'Tasks!A3:B3', 'Tasks!A4:B4'],
   ]);
+  await t.throwsAsync(spreadsheet.readBatch(['Tasks!A1:B2', 'Tasks!A1:B2']), {
+    message: /maximum cell count/,
+  });
   await t.throwsAsync(
     writer.sheet('Tasks').writeBatch([
       { range: 'Tasks!A5:B5', values: [['four', false]] },
@@ -698,11 +711,15 @@ test('a facet builds over powers alone, with no client in reach', async t => {
       }),
       limits: harden({
         boundRange: selector => selector,
+        boundReadBatch: selectors => harden(selectors),
         /** @param {any[][]} values */
         boundCells: values => harden(values.map(row => harden([...row]))),
+        boundReadResults: valueRanges =>
+          harden(valueRanges.map(({ values }) => harden(values || []))),
         /** @param {any[][]} values */
         boundWriteCells: values => harden(values),
         boundWriteBatch: updates => harden(updates),
+        assertAppendAllowed: () => {},
         pollIntervalMs: () => 0,
         boundSheets: sheets => harden(sheets),
       }),

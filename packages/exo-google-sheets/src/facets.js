@@ -229,12 +229,15 @@ export const makeAppender = powers =>
     SpreadsheetAppenderInterface,
     /** @type {any} */ ({
       ...appendMethods(powers),
-      /** @param {string} designation A tab name, an A1 range, or both. */
-      part: designation => makeAppender(powers.narrow(partScope(designation))),
+      /** @param {string} designation A tab name. */
+      part: designation => {
+        const patch = partScope(designation);
+        if (patch.range)
+          throw new Error('Append-only facets can only be narrowed by sheet');
+        return makeAppender(powers.narrow(patch));
+      },
       /** @param {string} name */
       sheet: name => makeAppender(powers.narrow({ sheet: name })),
-      /** @param {string} selector */
-      range: selector => makeAppender(powers.narrow(rangeScope(selector))),
       help: () =>
         'SpreadsheetAppender: confined append-only Google Sheets capability.',
     }),

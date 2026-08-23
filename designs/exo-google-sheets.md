@@ -206,9 +206,8 @@ interface SpreadsheetWriter /* extends Spreadsheet */ {
 interface SpreadsheetAppender {
   // Blind producer — a queue's write end. Cannot read or overwrite.
   append(range: string, rows: CellValue[][]): Promise<AppendResult>;
-  part(designation: string): SpreadsheetAppender;
+  part(sheet: string): SpreadsheetAppender;
   sheet(title: string): SpreadsheetAppender;
-  range(a1: string): SpreadsheetAppender;
   help(): string;
 }
 
@@ -245,7 +244,7 @@ interface SpreadsheetControl {
 }
 
 type UpdateResult = { updatedRange: string, updatedCells: number };
-type AppendResult = { updatedRange: string, appendedRows: number };
+type AppendResult = { appendedRows: number };
 type RangeChange = { range: string, values: CellValue[][], revision: string };
 ```
 
@@ -270,8 +269,10 @@ type RangeChange = { range: string, values: CellValue[][], revision: string };
   A facet minted by `range()` uses a bounded rectangle because confinement
   must be structurally comparable. Reads always require bounded rectangles so
   `maxCellsPerRead` can reject oversized requests before fetching. Mutating
-  root- or sheet-scoped facets may still use whole-row, whole-column, or named
-  selectors, but those selectors cannot establish a narrower range boundary.
+  root-scoped mutating facets may still use whole-row, whole-column, or named
+  selectors. Sheet-scoped facets may use whole-row or whole-column selectors;
+  named ranges cannot be qualified with a sheet, so they cannot establish a
+  sheet or range boundary.
 - **Rectangles** are `CellValue[][]` (rows of columns), hardened copyable
   arrays: the same shape the REST API uses, cheap to marshal.
 - **Records** (`readRecords`) treat row 1 of the range as a header row and
@@ -315,6 +316,8 @@ Because each attenuator narrows and never widens, a holder can hand a peer a
 sheet-scoped appender without the host re-minting anything. Range-scoped append
 is rejected because Google's append API chooses the destination row from live
 table contents and cannot guarantee a rectangular boundary before mutation.
+For the same reason, setting the host's `allowedRanges` policy disables append;
+hosts that grant append authority must confine it with `allowedSheets` instead.
 
 This is deliberately finer than what the underlying OAuth token can express:
 a Google token scoped `spreadsheets.readonly` cannot write anywhere, but a
