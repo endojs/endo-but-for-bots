@@ -16,6 +16,12 @@
  * something a confined facet should be able to help itself to — so the follower
  * awaits `powers.pollDelay()` rather than an ambient `setTimeout`, and a host
  * that hands out no timer gets facets that cannot schedule.
+ *
+ * Nor does this module import any *value* from `powers.js` — only the types of
+ * the power makers, which do not survive to runtime.  Every power it uses
+ * arrived as an argument, so there is no path from here to a client, a
+ * caretaker, or a policy, and the absence is grep-checkable rather than
+ * asserted.  `powers.js` explains why that boundary is drawn where it is.
  */
 
 import harden from '@endo/harden';
@@ -27,9 +33,10 @@ import {
   SpreadsheetWriteOnlyInterface,
   SpreadsheetWriterInterface,
 } from './interfaces.js';
-import { partScope } from './powers.js';
+import { partScope } from './a1.js';
 
 /**
+ * @import { Scope } from './a1.js'
  * @import { makeAppendPowers, makeReadPowers, makeWritePowers } from './powers.js'
  * @typedef {ReturnType<typeof makeReadPowers>} ReadPowers
  * @typedef {ReturnType<typeof makeAppendPowers>} AppendPowers
@@ -235,7 +242,7 @@ harden(makeWriteOnly);
  * @param {{ read: ReadPowers, append: AppendPowers, write: WritePowers }} powers
  */
 export const makeWriter = powers => {
-  /** @param {import('./powers.js').Scope} patch */
+  /** @param {Scope} patch */
   const narrow = patch =>
     harden({
       read: powers.read.narrow(patch),

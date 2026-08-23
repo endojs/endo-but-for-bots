@@ -1,7 +1,10 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E, makeLoopback } from '@endo/captp';
+import harden from '@endo/harden';
 import { makeExoSpreadsheet } from '../index.js';
+import { makeReader } from '../src/facets.js';
+import { makeReadPowers } from '../src/powers.js';
 
 const makeClient = () => {
   const calls = [];
@@ -210,6 +213,45 @@ test('a host that grants no timer grants no polling', async t => {
   const follower = spreadsheet.follow('Tasks!A1:B2');
   await follower.next();
   await t.throwsAsync(follower.next(), { message: /no timer/ });
+});
+
+test('a facet builds over powers alone, with no client in reach', async t => {
+  await null;
+  // No client and no `makeExoSpreadsheet`: just two read operations, a stub
+  // forwarder, and the caps.  That a working reader composes from this much is
+  // the layer boundary stated as a test — `facets.js` uses nothing it was not
+  // handed, so a reader's authority is exactly the argument list below.
+  const admitted = [];
+  const reader = makeReader(
+    makeReadPowers({
+      getValues: async range => ({ values: [[range]] }),
+      getSpreadsheet: async () => ({ properties: { title: 'Standalone' } }),
+      access: harden({
+        enter: () => {},
+        /**
+         * @param {string} selector
+         * @param {{ sheet?: string }} scope
+         */
+        admit: (selector, scope) => {
+          admitted.push([selector, scope.sheet]);
+          return scope.sheet ? `${scope.sheet}!${selector}` : selector;
+        },
+        revoke: () => {},
+      }),
+      limits: harden({
+        /** @param {any[][]} values */
+        boundCells: values => harden(values.map(row => harden([...row]))),
+        pollIntervalMs: () => 0,
+      }),
+      delay: async () => {},
+    }),
+  );
+  t.is(await reader.title(), 'Standalone');
+  t.deepEqual(await reader.part('Tasks').read('A1'), [['Tasks!A1']]);
+  // Every read went out through the forwarder, carrying the facet's scope.
+  t.deepEqual(admitted, [['A1', 'Tasks']]);
+  // …and there is still no write vocabulary to find, because none was passed.
+  t.is(reader.write, undefined);
 });
 
 test('the throttle bounds every request, metadata included', async t => {

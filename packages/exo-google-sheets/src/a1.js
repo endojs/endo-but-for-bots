@@ -14,6 +14,12 @@
 import harden from '@endo/harden';
 
 /**
+ * @typedef {object} Scope
+ * @property {string} [sheet] Tab a power is confined to, if any.
+ * @property {string} [range] A1 rectangle a power is confined to, if any.
+ */
+
+/**
  * @typedef {object} A1Rectangle
  * @property {string | undefined} sheet Tab name, when the notation named one.
  * @property {number} left Leftmost column, 1-based.
@@ -79,3 +85,34 @@ harden(contains);
 export const sheetPrefix = sheet =>
   /[ !']/.test(sheet) ? `'${sheet.replace(/'/g, "''")}'` : sheet;
 harden(sheetPrefix);
+
+/**
+ * Read one part designation as the scope narrowing it names.  This is the
+ * mereological verb's parser: a tab is a part of the spreadsheet, a rectangle
+ * is a part of a tab, and `'Tasks!A1:C10'` names both in one step.  Which axis
+ * a designation narrows is decided by whether it parses as A1 — so the parse,
+ * not a second method name, carries the distinction.
+ *
+ * It lives here, with the rest of the powerless parsing, because reading a
+ * string into a `Scope` grants nothing: the result is a designation awaiting a
+ * power to be applied to, and it is `powers.js` that decides what a scope
+ * confines.
+ *
+ * The one designation this cannot read is a tab whose *title* is A1-shaped (a
+ * tab literally named `A1`); `sheet(title)` remains for that case, and no
+ * corresponding hazard runs the other way, since a string that parses as A1
+ * always denotes cells.
+ *
+ * @param {string} designation
+ * @returns {Scope}
+ */
+export const partScope = designation => {
+  if (typeof designation !== 'string' || designation.length === 0)
+    throw new TypeError('part must be a non-empty tab name or A1 range');
+  const parsed = parseA1(designation);
+  if (!parsed) return harden({ sheet: designation });
+  return parsed.sheet
+    ? harden({ sheet: parsed.sheet, range: designation })
+    : harden({ range: designation });
+};
+harden(partScope);

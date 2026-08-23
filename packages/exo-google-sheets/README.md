@@ -16,7 +16,7 @@ built out of, rather than from conditions inside its methods.
 
 | Module | Holds |
 | --- | --- |
-| `src/a1.js` | Nothing. A1 notation parsed as powerless data. |
+| `src/a1.js` | Nothing. A1 notation and part designations parsed as powerless data. |
 | `src/powers.js` | The three authority classes — read, append, overwrite — each made from only the client operations it needs, plus the host policy and the revocable forwarders. |
 | `src/facets.js` | The exos. Each maker takes power objects and no client, so `makeReader` provably cannot write. |
 | `src/exo-google-sheets.js` | The one place a whole client is held: it takes the client apart and hands each power maker its share. |
@@ -29,6 +29,41 @@ the sole module that reads `Date.now` and `globalThis.setTimeout`, and only as
 the defaults for `{ now, setTimeout }`; it is already the module entitled to a
 live network client, so it is the honest place to be unconfined. Under a taming
 or a test clock, pass your own and nothing below can reach past it.
+
+The dependencies run one way and thin out as they go: `exo-google-sheets.js` is
+the only module that names the client, `powers.js` is the only one that can
+reach it, and `facets.js` imports no value from `powers.js` at all — only the
+power makers' types, which do not survive to runtime. Everything a facet can do
+arrived as an argument.
+
+### Why `powers.js` is separate from `facets.js`
+
+Because it makes the read-only claim cheap to check. Grep `facets.js` for
+`client`, `access`, `revoke`, or any allowlist and you find nothing but prose:
+a facet maker cannot reach the client, charge the throttle, or consult a
+policy, since none of those are in its scope. "`makeReader` cannot write" is
+settled by its parameter list. Folded into one module, the claim would soften
+to "no method here happens to call the client" — true of the bodies as written,
+and re-litigated on every edit.
+
+Two further properties fall out of the split rather than having to be arranged:
+
+- `writer.readOnly()` returns a reader over the *same* read power object the
+  writer's own read methods use. The delegate's authority is a subset by
+  identity, not by rebuilding a reader from raw operations and trusting the
+  rebuild to have stayed narrower.
+- The power objects carry `narrow`, `designate`, and `unscoped` — needed by the
+  facets, callable by no guest. As locals in `powers.js` they are simply out of
+  reach; as methods on an exo, each would be a thing to remember to withhold
+  from the interface guard.
+
+The cost is one indirection, and it is not the pola-io shape, where
+`makeFileRW()` is itself the attenuated object. The difference is that a
+`FileRd` is a local object whose surface is its API, whereas these facets are
+passable exos whose surface is a published interface guard — so the plumbing an
+attenuated object needs (a scope to compose, a revocable forwarder to pass
+through) cannot live on the object without becoming part of what a remote guest
+sees.
 
 Two consequences worth stating plainly:
 
