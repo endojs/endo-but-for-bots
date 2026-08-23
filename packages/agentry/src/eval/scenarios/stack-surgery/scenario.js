@@ -75,6 +75,7 @@ export const makeStackSurgeryScenario = ({
 } = {}) =>
   harden({
     name: 'stack-surgery',
+    requirements: harden({ allowHistoryRewrite: true }),
     expected,
     referenceSourcePath,
     referenceSourceExport,

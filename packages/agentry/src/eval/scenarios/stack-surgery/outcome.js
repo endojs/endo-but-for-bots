@@ -13,7 +13,7 @@ const MIXED_STACK_SURGERY_SUMMARY = 'feat: update alpha and beta stack';
 /**
  * @typedef {object} GitOutcomeReader
  * @property {(options?: unknown) => Promise<Array<{ oid: string, summary: string }>>} log
- * @property {() => Promise<Array<{ path: string, index: string, worktree: string }>>} status
+ * @property {() => Promise<{ entries: Array<{ path: string, index: string, worktree: string }>, truncated: boolean }>} status
  */
 
 /**
@@ -145,10 +145,7 @@ export const assertStackSurgeryOutcome = async ({
     checks.push(entry);
   }
 
-  const rows =
-    /** @type {Array<{ path: string, index: string, worktree: string }>} */ (
-      await E(gitRef).status()
-    );
+  const { entries: rows } = await E(gitRef).status();
   checks.push(
     check(
       'worktree-clean',

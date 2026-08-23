@@ -140,11 +140,11 @@ export const stackSurgerySource = ({
 
   // Stage every pending change.
   const stageAll = async () => {
-    const rows = await E(git).status();
+    const { entries: rows } = await E(git).status();
     if (rows.length === 0) {
       throw new Error('expected pending changes to stage');
     }
-    await E(git).add(rows.map(row => row.entry));
+    await E(git).add(rows.map(row => row.path));
   };
 
   // Locate the mixed commit and the commits stacked on top of it.
@@ -181,7 +181,7 @@ export const stackSurgerySource = ({
   // touches, then autosquash them away.
   for (const fixup of fixups) {
     await E(git).cherryPick(fixup.oid, { noCommit: true });
-    const staged = await E(git).status();
+    const { entries: staged } = await E(git).status();
     const packages = staged.map(row => row.path.split('/')[0]);
     const target = splitCommits.find(splitCommit =>
       packages.includes(splitCommit.path.split('/')[0]),
