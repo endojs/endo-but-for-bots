@@ -75,6 +75,9 @@
     "access": "public"
   },
   "ava": {
+    "require": [
+      "./test/_setup-owner-pid.js"
+    ],
     "files": [
       "test/**/*.test.*"
     ],
