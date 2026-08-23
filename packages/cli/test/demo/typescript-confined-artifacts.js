@@ -7,7 +7,10 @@ export const section = async (execa, testLine) => {
   await testLine(execa`endo make typescript-counter.ts --name ts-counter`, {
     stdout: 'Object [Alleged: Counter] {}',
   });
-  await testLine(execa`endo eval E(ts-counter).incr() ts-counter`, {
+  // Bind the pet name `ts-counter` to the code name `counter` for the eval
+  // expression: `ts-counter` contains a hyphen, so `E(ts-counter)` would parse
+  // as the subtraction `E(ts - counter)` rather than a reference to the worklet.
+  await testLine(execa`endo eval E(counter).incr() counter:ts-counter`, {
     stdout: '1',
   });
 

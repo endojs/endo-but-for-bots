@@ -19,17 +19,30 @@ const textDecoder = new TextDecoder();
  *
  * @param {import('@endo/compartment-mapper').ParserImplementation} sourceParser
  * @param {{ sawRawTypeScript: boolean }} spy
+ * @returns {import('@endo/compartment-mapper').AsyncParserImplementation}
  */
 const makeStrippingSpyParser = (sourceParser, spy) => ({
   ...sourceParser,
   synchronous: false,
-  async parse(sourceBytes, ...rest) {
+  async parse(
+    sourceBytes,
+    specifier,
+    moduleLocation,
+    packageLocation,
+    options = undefined,
+  ) {
     const sourceText = textDecoder.decode(sourceBytes);
     if (/:\s*number/.test(sourceText)) {
       spy.sawRawTypeScript = true;
     }
     const { code } = transformSync(sourceText, { mode: 'strip-only' });
-    return sourceParser.parse(textEncoder.encode(code), ...rest);
+    return sourceParser.parse(
+      textEncoder.encode(code),
+      specifier,
+      moduleLocation,
+      packageLocation,
+      options,
+    );
   },
 });
 
