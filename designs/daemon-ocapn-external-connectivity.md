@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-21 |
-| **Updated** | 2026-05-21 |
+| **Updated** | 2026-08-23 |
 | **Author** | Aaron Kumavis (prompted) |
 | **Status** | In Progress |
 
@@ -462,20 +462,43 @@ web-gateway edges are demonstrably unaffected.
 - **Locality guard.** Assert `locator.get` rejects a swissnum for a
   non-local formula id with the migrated guard error.
 
-## Known Gaps and TODOs
+## Resolved Decisions
 
-- [ ] Decide the fate of `networks/libp2p.js`: port it to an OCapN
-  transport, or drop it in favour of Noise-over-WebSocket relays.
-- [ ] Confirm the codec (`syrupCodec` vs `cborCodec`) with
-  `ocapn-noise-network`.
-- [ ] Specify how a per-agent NETS directory configures OCapN
-  transports rather than `EndoNetwork` caplets.
-- [ ] Coordinate the user-facing locator string format with
-  `daemon-locator-terminology`.
-- [ ] A wildcard listen bind (`0.0.0.0` / `::`) advertises a
-  connection hint that is not dialable from a remote daemon; the
-  transport needs an operator-supplied or discovered external
-  address. This limitation is shared with `tcp-netstring.js`.
+Maintainer review of [PR #340][pr340-review] (2026-08-23) resolved the
+open questions below.
+
+- [x] **`networks/libp2p.js`: keep it for now.** Leave the libp2p
+  transport in place until it is clear it is no longer needed; do not
+  port it to an OCapN transport nor drop it as part of this work.
+- [x] **Codec: `cborCodec`, for now.** The OCapN-Noise network uses
+  `cborCodec` rather than `syrupCodec` for this increment.
+- [x] **Locator string format: keep `endo://`, for now.** Retain the
+  `endo://` locator format even for OCapN peers. The `ocapn://`
+  locator format is not sufficiently advanced to be treated as final,
+  and shipping it would prematurely force the standard's hand. This
+  supersedes the earlier question of coordinating the user-facing
+  locator string with `daemon-locator-terminology`.
+
+## Remaining Gaps
+
+- [ ] **Per-agent transport configuration.** The per-agent `NETS`
+  directory (now `@nets`) is being renamed to `@transports` under
+  concurrent work, reflecting a single OCapN network going forward
+  that reveals different connection hints depending on the agent's
+  configuration. `@transports` is to hold the mutable configuration of
+  transports (by whatever means); OCapN transport configuration
+  belongs there rather than in `EndoNetwork` caplets. The exact
+  mechanism remains open and is tracked with that concurrent
+  `@transports` work.
+- [ ] **Wildcard bind / external address.** A wildcard listen bind
+  (`0.0.0.0` / `::`) still advertises a connection hint that is not
+  dialable from a remote daemon; this limitation is shared with
+  `tcp-netstring.js`. Resolution options: capture the external address
+  in per-agent `@transports` configuration and pass the capability to
+  write it to a dyndns updater; omit the connection hint entirely; or
+  let the user specify a relay.
+
+[pr340-review]: https://github.com/endojs/endo-but-for-bots/pull/340#pullrequestreview-5001572334
 
 ## Prompt
 
