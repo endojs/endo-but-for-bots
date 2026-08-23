@@ -36,7 +36,7 @@
     "@endo/init": "workspace:^",
     "@endo/lockdown": "workspace:^",
     "@endo/pass-style": "workspace:^",
-    "@rollup/plugin-commonjs": "^28.0.2",
+    "@rollup/plugin-commonjs": "^29.0.3",
     "@rollup/plugin-node-resolve": "^16.0.0",
     "@types/rollup": "^0.54.0",
     "c8": "catalog:dev",
