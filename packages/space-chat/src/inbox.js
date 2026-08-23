@@ -163,6 +163,61 @@ const ColorizeContext = createContext(
 );
 
 /**
+ * The two per-message render modes. Each answers a distinct question about the
+ * same message body:
+ *   markdown ('md'):  default. Markdown is parsed; code fences get syntax
+ *     highlighting; edge names become interactive token chips.
+ *   preformatted ('pre'):  no markdown parsing. Edge names appear inline as
+ *     `@name` text and the body is wrapped in a monospace `<pre>` with
+ *     whitespace preserved, for ASCII art, aligned columns, or
+ *     indentation-sensitive output that markdown would mangle.
+ *
+ * @type {Array<{ mode: 'markdown' | 'preformatted', label: string, title: string }>}
+ */
+const renderModeOptions = [
+  {
+    mode: 'markdown',
+    label: 'md',
+    title: 'Markdown: render headings, lists, code fences, and token chips',
+  },
+  {
+    mode: 'preformatted',
+    label: 'pre',
+    title: 'Preformatted: no markdown, monospace, whitespace preserved',
+  },
+];
+
+/**
+ * Per-message Md/Pre render-mode toggle. Purely presentational: the active mode
+ * and its setter are owned by the enclosing message envelope, so this toggle and
+ * the body render from a single source of truth.
+ *
+ * @param {object} props
+ * @param {'markdown' | 'preformatted'} props.renderMode
+ * @param {(mode: 'markdown' | 'preformatted') => void} props.onRenderModeChange
+ */
+const RenderModeToggle = ({ renderMode, onRenderModeChange }) =>
+  h(
+    'span',
+    { class: 'render-mode-toggle' },
+    renderModeOptions.map(({ mode, label, title }) =>
+      h(
+        'button',
+        {
+          key: mode,
+          type: 'button',
+          class:
+            mode === renderMode ? 'render-mode-btn active' : 'render-mode-btn',
+          title,
+          onClick: () => onRenderModeChange(mode),
+        },
+        label,
+      ),
+    ),
+  );
+harden(RenderModeToggle);
+
+/**
  * The collapsible timestamp tooltip: message number, dismiss button, and the
  * copyable time lines. Class names match the original imperative markup so the
  * existing CSS continues to apply.
@@ -491,8 +546,10 @@ harden(TokenChip);
  * @param {ERef<EndoHost>} props.powers
  * @param {(value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>} props.showValue
  * @param {(text: string) => void} props.setError
+ * @param {'markdown' | 'preformatted'} [props.renderMode] - Per-message
+ *   render mode; defaults to markdown.
  */
-const PackageBody = ({ message, powers, showValue, setError }) => {
+const PackageBody = ({ message, powers, showValue, setError, renderMode }) => {
   const { number, senderChip } = message;
   const { strings, names, ids } = /** @type {any} */ (message.raw);
   const stringParts = Array.isArray(strings) ? strings : [];
@@ -501,7 +558,30 @@ const PackageBody = ({ message, powers, showValue, setError }) => {
 
   // The host supplies an async Monaco colorizer via context; markdown-vnodes
   // renders code fences plain first, then swaps in highlighted token vnodes.
+  // Called unconditionally (Rules of Hooks) even though the preformatted branch
+  // below never consults it.
   const colorize = useContext(ColorizeContext);
+
+  // Preformatted mode bypasses markdown entirely: interleave the literal text
+  // parts with their edge names as `@name`, then wrap the result in a monospace
+  // <pre> with whitespace preserved. The sender chip is reparented as the first
+  // inline child of the <pre> so it leads the first line of content; leaving it
+  // as a sibling ahead of the block-level <pre> would strand it on its own line.
+  if (renderMode === 'preformatted') {
+    const rawText = stringParts.reduce(
+      (accumulated, part, index) =>
+        accumulated +
+        String(part) +
+        (index < nameParts.length ? `@${String(nameParts[index])}` : ''),
+      '',
+    );
+    return h(
+      'pre',
+      { class: 'md-preformatted' },
+      senderChip ? h(SenderChip, { chip: senderChip }) : null,
+      rawText,
+    );
+  }
 
   const textWithPlaceholders = prepareTextWithPlaceholders(
     stringParts.map(String),
@@ -961,6 +1041,8 @@ harden(ValueBody);
  * @param {Map<string, string>} props.formDescriptions
  * @param {(text: string) => void} props.setError
  * @param {(error: unknown) => void} props.reportError
+ * @param {'markdown' | 'preformatted'} [props.renderMode] - Per-message
+ *   render mode for package bodies.
  */
 const MessageContent = ({
   message,
@@ -969,12 +1051,19 @@ const MessageContent = ({
   formDescriptions,
   setError,
   reportError,
+  renderMode,
 }) => {
   switch (message.type) {
     case 'request':
       return h(RequestBody, { message, powers, setError, reportError });
     case 'package':
-      return h(PackageBody, { message, powers, showValue, setError });
+      return h(PackageBody, {
+        message,
+        powers,
+        showValue,
+        setError,
+        renderMode,
+      });
     case 'definition':
       return h(DefinitionBody, { message, powers, setError });
     case 'form':
@@ -1177,6 +1266,10 @@ const MessageEnvelope = ({
   const [error, setError] = useState('');
   const [editOpen, setEditOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Per-message render mode (package messages only). Ephemeral: not persisted.
+  const [renderMode, setRenderMode] = useState(
+    /** @type {'markdown' | 'preformatted'} */ ('markdown'),
+  );
 
   /** @type {Record<string, string>} */
   const dataset = { 'data-number': String(number) };
@@ -1215,7 +1308,19 @@ const MessageEnvelope = ({
           formDescriptions,
           setError,
           reportError,
+          renderMode,
         }),
+        // The Md/Pre toggle sits directly below the body it controls (package
+        // messages only), so toggling gives immediate visible feedback rather
+        // than being hidden inside the timestamp hover, which would overlay the
+        // very content it changes. Structured messages (definitions, forms,
+        // values) have no alternate rendering, so they get no toggle.
+        message.type === 'package'
+          ? h(RenderModeToggle, {
+              renderMode,
+              onRenderModeChange: setRenderMode,
+            })
+          : null,
       ),
       editOpen
         ? h(EditPanel, {

@@ -48,45 +48,53 @@ test('relativeTime returns "just now" for times within 60 seconds', t => {
   t.is(relativeTime(fiftyNineSecondsAgo), 'just now');
 });
 
-test('relativeTime returns minutes for times within an hour', t => {
+test('relativeTime returns spelled-out minutes for times within an hour', t => {
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-  t.is(relativeTime(fiveMinutesAgo), '5m ago');
+  t.is(relativeTime(fiveMinutesAgo), '5 minutes ago');
 
   const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
-  t.is(relativeTime(thirtyMinutesAgo), '30m ago');
+  t.is(relativeTime(thirtyMinutesAgo), '30 minutes ago');
 
   const fiftyNineMinutesAgo = new Date(Date.now() - 59 * 60 * 1000);
-  t.is(relativeTime(fiftyNineMinutesAgo), '59m ago');
+  t.is(relativeTime(fiftyNineMinutesAgo), '59 minutes ago');
 });
 
-test('relativeTime returns hours for times within a day', t => {
+test('relativeTime returns spelled-out hours for times within a day', t => {
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-  t.is(relativeTime(oneHourAgo), '1h ago');
+  t.is(relativeTime(oneHourAgo), '1 hour ago');
 
   const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60 * 1000);
-  t.is(relativeTime(fiveHoursAgo), '5h ago');
+  t.is(relativeTime(fiveHoursAgo), '5 hours ago');
 
   const twentyThreeHoursAgo = new Date(Date.now() - 23 * 60 * 60 * 1000);
-  t.is(relativeTime(twentyThreeHoursAgo), '23h ago');
+  t.is(relativeTime(twentyThreeHoursAgo), '23 hours ago');
 });
 
-test('relativeTime returns days for times within a week', t => {
+test('relativeTime returns spelled-out days for times within a week', t => {
+  // numeric: 'auto' idiomizes the ±1 case to "yesterday".
   const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  t.is(relativeTime(oneDayAgo), '1d ago');
+  t.is(relativeTime(oneDayAgo), 'yesterday');
 
   const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
-  t.is(relativeTime(threeDaysAgo), '3d ago');
+  t.is(relativeTime(threeDaysAgo), '3 days ago');
 
   const sixDaysAgo = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000);
-  t.is(relativeTime(sixDaysAgo), '6d ago');
+  t.is(relativeTime(sixDaysAgo), '6 days ago');
 });
 
-test('relativeTime returns empty string for times older than a week', t => {
+test('relativeTime keeps counting past a week (weeks, months, years)', t => {
+  // The old hand-rolled version returned '' beyond a week; Intl carries on.
   const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  t.is(relativeTime(oneWeekAgo), '');
+  t.is(relativeTime(oneWeekAgo), 'last week');
 
   const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-  t.is(relativeTime(twoWeeksAgo), '');
+  t.is(relativeTime(twoWeeksAgo), '2 weeks ago');
+
+  const twoMonthsAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+  t.is(relativeTime(twoMonthsAgo), '2 months ago');
+
+  const twoYearsAgo = new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000);
+  t.is(relativeTime(twoYearsAgo), '2 years ago');
 });
 
 test('numberFormatter is an Intl.NumberFormat', t => {
