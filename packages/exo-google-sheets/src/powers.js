@@ -63,6 +63,42 @@ const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_REQUESTS_PER_MINUTE = 60;
 
 /**
+ * Intersect a power's current designation with a further narrowing. A second
+ * `part()`/`sheet()`/`range()` call may refine either axis, but must never
+ * replace an axis with a wider or different designation.
+ *
+ * @param {Scope} scope
+ * @param {Scope} patch
+ * @returns {Scope}
+ */
+const narrowScope = (scope, patch) => {
+  const scopeRange = scope.range ? parseA1(scope.range) : undefined;
+  const patchRange = patch.range ? parseA1(patch.range) : undefined;
+  if (scope.range && !scopeRange) throw new Error('Invalid range scope');
+  if (patch.range && !patchRange) throw new Error('Invalid narrower range');
+
+  const scopeSheet = scope.sheet || (scopeRange && scopeRange.sheet);
+  const patchSheet = patch.sheet || (patchRange && patchRange.sheet);
+  if (scopeSheet && patchSheet && scopeSheet !== patchSheet)
+    throw new Error('Part escapes the sheet scope');
+  if (
+    scopeRange &&
+    patchRange &&
+    !contains(scopeRange, { ...patchRange, sheet: undefined })
+  ) {
+    throw new Error('Part escapes the range scope');
+  }
+
+  const sheet = scopeSheet || patchSheet;
+  return harden({
+    ...scope,
+    ...patch,
+    ...(sheet ? { sheet } : {}),
+  });
+};
+harden(narrowScope);
+
+/**
  * The host-retained policy: the allowlists and the caps, plus the token bucket
  * that bounds request rate.  It holds no spreadsheet authority itself — it can
  * only say yes or no to a designation and account for a request — so handing
@@ -297,7 +333,7 @@ export const makeReadPowers = ({
   const at = scope =>
     harden({
       /** @param {Scope} patch */
-      narrow: patch => at({ ...scope, ...patch }),
+      narrow: patch => at(narrowScope(scope, patch)),
       /** The powers as first minted, for a selector already fully qualified. */
       unscoped: () => root,
       /** @param {string} selector */
@@ -344,7 +380,7 @@ export const makeAppendPowers = ({ appendValues, access }) => {
   const at = scope =>
     harden({
       /** @param {Scope} patch */
-      narrow: patch => at({ ...scope, ...patch }),
+      narrow: patch => at(narrowScope(scope, patch)),
       /**
        * @param {string} selector
        * @param {any[][]} rows
@@ -376,7 +412,7 @@ export const makeWritePowers = ({ updateValues, clearValues, access }) => {
   const at = scope =>
     harden({
       /** @param {Scope} patch */
-      narrow: patch => at({ ...scope, ...patch }),
+      narrow: patch => at(narrowScope(scope, patch)),
       /**
        * @param {string} selector
        * @param {any[][]} values

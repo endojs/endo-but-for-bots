@@ -76,6 +76,7 @@ const makeFollower = (powers, selector) => {
       while (!done) {
         // eslint-disable-next-line no-await-in-loop
         const values = await unscoped.read(target);
+        if (done) return { done: true, value: undefined };
         const revision = JSON.stringify(values);
         if (revision !== prior) {
           prior = revision;
@@ -127,14 +128,14 @@ const readMethods = powers => ({
   /** @param {string} selector */
   readRecords: async selector => {
     const [headers = [], ...rows] = await powers.read(selector);
+    const names = headers.map(String);
+    if (new Set(names).size !== names.length)
+      throw new Error('Record headers must be unique');
     return harden(
       rows.map(row =>
         harden(
           Object.fromEntries(
-            headers.map((header, index) => [
-              String(header),
-              row[index] ?? null,
-            ]),
+            names.map((name, index) => [name, row[index] ?? null]),
           ),
         ),
       ),

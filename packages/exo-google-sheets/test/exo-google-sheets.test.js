@@ -139,6 +139,9 @@ test('part() narrows the whole and composes, on every authority class', async t 
     ['one', false],
   ]);
   await t.throwsAsync(cells.read('C1'), { message: /escapes/ });
+  t.throws(() => tab.sheet('Secrets'), { message: /sheet scope/ });
+  t.throws(() => cells.range('A1:Z99'), { message: /range scope/ });
+  t.throws(() => cells.part('Secrets!A1'), { message: /sheet scope/ });
   // One designation may name both axes at once.
   await t.throwsAsync(spreadsheet.part('Tasks!A1:B2').read('Other!A1'), {
     message: /escapes/,
@@ -200,6 +203,18 @@ test('sheet metadata obeys facet and host scope', async t => {
     allowedSheets.map(({ title }) => title),
     ['Secrets'],
   );
+});
+
+test('readRecords rejects duplicate headers instead of dropping a column', async t => {
+  const client = makeClient();
+  client.values.update('Tasks!A1:B2', [
+    ['name', 'name'],
+    ['first', 'second'],
+  ]);
+  const { spreadsheet } = makeExoSpreadsheet(client);
+  await t.throwsAsync(spreadsheet.readRecords('Tasks!A1:B2'), {
+    message: /headers must be unique/,
+  });
 });
 
 test('A1 rectangles normalize corners and reject unsafe coordinates', t => {
