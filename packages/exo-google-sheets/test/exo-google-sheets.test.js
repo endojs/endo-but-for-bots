@@ -3,7 +3,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E, makeLoopback } from '@endo/captp';
 import harden from '@endo/harden';
 import { makeExoSpreadsheet } from '../index.js';
-import { parseA1, sheetPrefix } from '../src/a1.js';
+import { contains, parseA1, sheetPrefix } from '../src/a1.js';
 import { makeReader } from '../src/facets.js';
 import { makeReadPowers } from '../src/powers.js';
 
@@ -232,6 +232,29 @@ test('A1 rectangles normalize corners and reject unsafe coordinates', t => {
   t.is(quoted && quoted.sheet, "It's work!");
 });
 
+test('rectangle containment is reflexive and transitive', t => {
+  const rectangles = [];
+  for (let left = 1; left <= 3; left += 1) {
+    for (let right = left; right <= 3; right += 1) {
+      for (let top = 1; top <= 3; top += 1) {
+        for (let bottom = top; bottom <= 3; bottom += 1) {
+          rectangles.push({ sheet: undefined, left, right, top, bottom });
+        }
+      }
+    }
+  }
+  for (const rectangle of rectangles) t.true(contains(rectangle, rectangle));
+  for (const outer of rectangles) {
+    for (const middle of rectangles) {
+      for (const inner of rectangles) {
+        if (contains(outer, middle) && contains(middle, inner)) {
+          t.true(contains(outer, inner));
+        }
+      }
+    }
+  }
+});
+
 test('range narrowing accepts only bounded rectangles', async t => {
   const { spreadsheet } = makeExoSpreadsheet(makeClient());
   await null;
@@ -310,6 +333,15 @@ test('constructor limits reject invalid zero values', t => {
   );
 });
 
+test('bounded reads are rejected before fetching when they exceed the cap', async t => {
+  const client = makeClient();
+  const { spreadsheet } = makeExoSpreadsheet(client, { maxCellsPerRead: 4 });
+  await t.throwsAsync(spreadsheet.read('Tasks!A1:C2'), {
+    message: /maximum cell count/,
+  });
+  t.deepEqual(client.calls, []);
+});
+
 test('a host that grants no timer grants no polling', async t => {
   await null;
   const client = makeClient();
@@ -352,6 +384,7 @@ test('a facet builds over powers alone, with no client in reach', async t => {
         revoke: () => {},
       }),
       limits: harden({
+        boundRange: selector => selector,
         /** @param {any[][]} values */
         boundCells: values => harden(values.map(row => harden([...row]))),
         pollIntervalMs: () => 0,

@@ -58,7 +58,9 @@ export const SpreadsheetInterface = M.interface('Spreadsheet', {
   readBatch: M.callWhen(M.arrayOf(M.string())).returns(
     M.arrayOf(CellValuesShape),
   ),
-  readRecords: M.callWhen(M.string()).returns(M.arrayOf(M.record())),
+  readRecords: M.callWhen(M.string()).returns(
+    M.arrayOf(M.recordOf(M.string(), CellValueShape)),
+  ),
   // A local async iterator, not a remotable: it carries a `Symbol.asyncIterator`
   // so `for await` works, and symbol-keyed properties are exactly what a
   // remotable may not have.  `M.raw()` says so out loud — `M.any()` here would
@@ -82,7 +84,9 @@ export const SpreadsheetWriterInterface = M.interface('SpreadsheetWriter', {
   readBatch: M.callWhen(M.arrayOf(M.string())).returns(
     M.arrayOf(CellValuesShape),
   ),
-  readRecords: M.callWhen(M.string()).returns(M.arrayOf(M.record())),
+  readRecords: M.callWhen(M.string()).returns(
+    M.arrayOf(M.recordOf(M.string(), CellValueShape)),
+  ),
   // A local async iterator, not a remotable: it carries a `Symbol.asyncIterator`
   // so `for await` works, and symbol-keyed properties are exactly what a
   // remotable may not have.  `M.raw()` says so out loud — `M.any()` here would

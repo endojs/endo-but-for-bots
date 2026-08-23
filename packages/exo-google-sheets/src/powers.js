@@ -62,6 +62,32 @@ const DEFAULT_MAX_CELLS_PER_READ = 10_000;
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_REQUESTS_PER_MINUTE = 60;
 
+const { apply } = Reflect;
+const { filter, map, reduce } = Array.prototype;
+/**
+ * @template T
+ * @param {T[]} array
+ * @param {(value: T) => boolean} callback
+ * @returns {T[]}
+ */
+const arrayFilter = (array, callback) => apply(filter, array, [callback]);
+/**
+ * @template T,U
+ * @param {T[]} array
+ * @param {(value: T) => U} callback
+ * @returns {U[]}
+ */
+const arrayMap = (array, callback) => apply(map, array, [callback]);
+/**
+ * @template T,U
+ * @param {T[]} array
+ * @param {(total: U, value: T) => U} callback
+ * @param {U} initial
+ * @returns {U}
+ */
+const arrayReduce = (array, callback, initial) =>
+  apply(reduce, array, [callback, initial]);
+
 /**
  * Intersect a power's current designation with a further narrowing. A second
  * `part()`/`sheet()`/`range()` call may refine either axis, but must never
@@ -205,12 +231,30 @@ export const makePolicy = options => {
 
   /** The read-side view: caps a reader must respect, nothing it can relax. */
   const limits = harden({
+    /**
+     * Reject a bounded read whose requested rectangle already exceeds the cap.
+     * @param {string} selector
+     */
+    boundRange: selector => {
+      const range = parseA1(selector);
+      if (range) {
+        const rows = range.bottom - range.top + 1;
+        const columns = range.right - range.left + 1;
+        if (rows > maxCellsPerRead / columns)
+          throw new Error('Read exceeds maximum cell count');
+      }
+      return selector;
+    },
     /** @param {any[][]} values */
     boundCells: values => {
-      const count = values.reduce((total, row) => total + row.length, 0);
+      const count = arrayReduce(
+        values,
+        (total, row) => total + row.length,
+        0,
+      );
       if (count > maxCellsPerRead)
         throw new Error('Read exceeds maximum cell count');
-      return harden(values.map(row => harden([...row])));
+      return harden(arrayMap(values, row => harden([...row])));
     },
     pollIntervalMs: () => pollIntervalMs,
     /**
@@ -224,7 +268,7 @@ export const makePolicy = options => {
       const scopeRange = scope.range ? parseA1(scope.range) : undefined;
       const scopeSheet = scope.sheet || (scopeRange && scopeRange.sheet);
       return harden(
-        sheets.filter(({ properties }) => {
+        arrayFilter(sheets, ({ properties }) => {
           const title = properties && properties.title;
           return (
             (!scopeSheet || title === scopeSheet) &&
@@ -357,7 +401,8 @@ export const makeReadPowers = ({
       },
       /** @param {string} selector */
       read: async selector => {
-        const result = await getValues(access.admit(selector, scope));
+        const target = limits.boundRange(access.admit(selector, scope));
+        const result = await getValues(target);
         return limits.boundCells(result.values || []);
       },
       /** Wait one poll interval, as the host currently sets it. */

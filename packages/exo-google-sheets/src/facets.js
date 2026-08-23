@@ -35,6 +35,16 @@ import {
 } from './interfaces.js';
 import { partScope, rangeScope } from './a1.js';
 
+const { apply } = Reflect;
+const { map } = Array.prototype;
+/**
+ * @template T,U
+ * @param {T[]} array
+ * @param {(value: T, index: number) => U} callback
+ * @returns {U[]}
+ */
+const arrayMap = (array, callback) => apply(map, array, [callback]);
+
 /**
  * @import { Scope } from './a1.js'
  * @import { makeAppendPowers, makeReadPowers, makeWritePowers } from './powers.js'
@@ -113,7 +123,7 @@ const readMethods = powers => ({
   sheets: async () => {
     await null;
     const { sheets } = await powers.describe(SHEET_FIELDS);
-    return sheets.map(({ properties }) => ({
+    return arrayMap(sheets, ({ properties }) => ({
       sheetId: properties.sheetId,
       title: properties.title,
       index: properties.index,
@@ -124,18 +134,19 @@ const readMethods = powers => ({
   /** @param {string} selector */
   read: selector => powers.read(selector),
   /** @param {string[]} selectors */
-  readBatch: selectors => Promise.all(selectors.map(one => powers.read(one))),
+  readBatch: selectors =>
+    Promise.all(arrayMap(selectors, one => powers.read(one))),
   /** @param {string} selector */
   readRecords: async selector => {
     const [headers = [], ...rows] = await powers.read(selector);
-    const names = headers.map(String);
+    const names = arrayMap(headers, String);
     if (new Set(names).size !== names.length)
       throw new Error('Record headers must be unique');
     return harden(
-      rows.map(row =>
+      arrayMap(rows, row =>
         harden(
           Object.fromEntries(
-            names.map((name, index) => [name, row[index] ?? null]),
+            arrayMap(names, (name, index) => [name, row[index] ?? null]),
           ),
         ),
       ),
