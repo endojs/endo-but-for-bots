@@ -33,19 +33,19 @@
       "path": "../far/tsconfig.composite.json"
     },
     {
-      "path": "../harden/tsconfig.composite.json"
+      "path": "../git/tsconfig.composite.json"
     },
     {
-      "path": "../git/tsconfig.composite.json"
+      "path": "../harden/tsconfig.composite.json"
     },
     {
       "path": "../host-spawner/tsconfig.composite.json"
     },
     {
-      "path": "../pass-style/tsconfig.composite.json"
+      "path": "../marshal/tsconfig.composite.json"
     },
     {
-      "path": "../marshal/tsconfig.composite.json"
+      "path": "../pass-style/tsconfig.composite.json"
     },
     {
       "path": "../platform/tsconfig.composite.json"
