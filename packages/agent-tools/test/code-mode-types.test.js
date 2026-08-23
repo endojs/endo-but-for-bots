@@ -8,7 +8,16 @@ import {
   HttpResponseInterface,
 } from '@endo/exo-http-client';
 import { ShellInterface } from '@endo/exo-shell';
-import * as extendedFsTypeGuards from '@endo/platform/fs/extended/type-guards.js';
+import {
+  MountEntryInterface,
+  MountFileInterface,
+  MountInterface,
+} from '@endo/daemon/src/interfaces.js';
+import {
+  ReadableBlobRangeInterface,
+  ReadableTreeInterface,
+} from '@endo/platform/fs/lite';
+import ts from 'typescript';
 
 /** @import { InterfaceGuard } from '@endo/patterns' */
 
@@ -52,26 +61,21 @@ const guardMethodNames = guard =>
   Object.keys(getInterfaceGuardPayload(guard).methodGuards).sort();
 
 /**
- * Every `<TypeName>Interface` the extended filesystem publishes, keyed by the
- * type name the `workspace` declaration is expected to print for it. Derived
- * from the guard module's own exports rather than a hand-kept list, so a new
- * guard joins the divergence gate the moment it is exported — including the
- * three stream guards `@endo/platform/fs/extended` re-exports from
- * `@endo/exo-stream`, whose declarations the extractor follows across the
- * package boundary.
+ * Every mounted capability type reachable from the injected `workspace`
+ * declaration, keyed by the generated alias that carries its surface. The
+ * root, the file, and the read-only views are daemon-owned; the path selector
+ * is the shared platform `PathEntry` the daemon's `EndoMountEntry` aliases,
+ * which is why the generated name is the platform one.
  *
  * @type {Record<string, InterfaceGuard>}
  */
-const WORKSPACE_GUARDS = harden(
-  Object.fromEntries(
-    Object.entries(extendedFsTypeGuards)
-      .filter(([name]) => name.endsWith('Interface'))
-      .map(([name, guard]) => [
-        name.slice(0, -'Interface'.length),
-        /** @type {InterfaceGuard} */ (guard),
-      ]),
-  ),
-);
+const WORKSPACE_GUARDS = harden({
+  DaemonMount: /** @type {InterfaceGuard} */ (MountInterface),
+  EndoMountFile: /** @type {InterfaceGuard} */ (MountFileInterface),
+  EndoMountEntry: /** @type {InterfaceGuard} */ (MountEntryInterface),
+  ReadableBlobView: /** @type {InterfaceGuard} */ (ReadableBlobRangeInterface),
+  ReadableTreeView: /** @type {InterfaceGuard} */ (ReadableTreeInterface),
+});
 
 /**
  * @param {import('ava').ExecutionContext} t
@@ -84,6 +88,43 @@ const assertIRMatchesGuard = (t, ir, guard, label) => {
     ir.members.map(member => member.name).sort(),
     guardMethodNames(guard),
     `${label} declaration must match its runtime guard method names`,
+  );
+};
+
+/**
+ * @param {{ aux: string, body: string }} declaration
+ * @returns {string}
+ */
+const declarationText = declaration =>
+  `${declaration.aux}${declaration.aux === '' ? '' : '\n'}${declaration.body}`;
+
+/**
+ * @param {import('ava').ExecutionContext} t
+ * @param {import('../scripts/code-mode-type-extract.js').GlobalTypeIR} ir
+ * @param {string} typeName
+ * @param {InterfaceGuard} guard
+ */
+const assertIRTypeMatchesGuard = (t, ir, typeName, guard) => {
+  if (typeName === ir.rootName) {
+    assertIRMatchesGuard(t, ir, guard, typeName);
+    return;
+  }
+  const type = ir.auxTypes.find(
+    candidate => candidate.name.replace(/<.*>$/u, '') === typeName,
+  );
+  if (type === undefined) {
+    t.fail(`missing ${typeName} in declaration IR`);
+    return;
+  }
+  const targetName =
+    /^([A-Za-z_$][0-9A-Za-z_$]*)$/u.exec(type.text)?.[1] ?? typeName;
+  const source = ir.auxTypes
+    .map(candidate => `type ${candidate.name} = ${candidate.text};`)
+    .join('\n');
+  t.deepEqual(
+    listDeclaredTypeMembers(source, targetName).sort(),
+    guardMethodNames(guard),
+    `${typeName} declaration must match its runtime guard method names`,
   );
 };
 
@@ -140,27 +181,29 @@ test('generated GitRemote declarations are up to date with their source', t => {
 // prompts. Keep their names pinned independently of the generator freshness
 // checks so a regenerated artifact cannot silently rename a model-visible
 // capability without a focused failure.
-test('generated code-mode declaration roots stay stable', t => {
-  t.deepEqual(
-    {
-      git: gitDeclarations.git.body,
-      gitHistory: gitDeclarations.gitHistory.body,
-      gitReadOnly: gitDeclarations.gitReadOnly.body,
-      workspace: fsDeclarations.workspace.body,
-      shell: shellDeclarations.shell.body,
-      http: httpDeclarations.http.body,
-      gitRemote: gitRemoteDeclarations.gitRemote.body,
-    },
-    {
-      git: 'WritableEndoGit',
-      gitHistory: 'EndoGitHistory',
-      gitReadOnly: 'ReadOnlyEndoGit',
-      workspace: 'Filesystem',
-      shell: 'EndoShell',
-      http: 'HttpClient',
-      gitRemote: 'GitRemote',
-    },
-  );
+test('generated code-mode declaration roots stay inline', t => {
+  for (const [name, declaration] of Object.entries({
+    git: gitDeclarations.git,
+    gitHistory: gitDeclarations.gitHistory,
+    gitReadOnly: gitDeclarations.gitReadOnly,
+    workspace: fsDeclarations.workspace,
+    shell: shellDeclarations.shell,
+    http: httpDeclarations.http,
+    gitRemote: gitRemoteDeclarations.gitRemote,
+  })) {
+    t.true(declaration.body.startsWith('{'));
+    const source = `${declaration.aux}\ndeclare const ${name}: ${declaration.body};`;
+    const { diagnostics } = ts.transpileModule(source, {
+      compilerOptions: { declaration: true, target: ts.ScriptTarget.Latest },
+      reportDiagnostics: true,
+    });
+    t.deepEqual(diagnostics, []);
+  }
+  t.false(gitDeclarations.git.aux.includes('type WritableEndoGit ='));
+  t.false(gitDeclarations.gitReadOnly.aux.includes('type ReadOnlyEndoGit ='));
+  t.false(fsDeclarations.workspace.aux.includes('type DaemonMount ='));
+  t.true(gitDeclarations.git.body.includes('typeof git'));
+  t.true(gitDeclarations.gitReadOnly.body.includes('typeof gitReadOnly'));
 });
 
 // The base declaration stays guard-canonical except for the deliberately
@@ -192,63 +235,38 @@ test('read-only git is a subset of read-write git and omits mutators', t => {
   // mutating surface back into the read-only declaration.
   t.false(gitReadOnly.members.some(member => member.name === 'commit'));
   t.false(gitReadOnly.members.some(member => member.name === 'merge'));
-  t.false(gitDeclarations.gitReadOnly.aux.includes('commit:'));
+  t.false(declarationText(gitDeclarations.gitReadOnly).includes('commit:'));
   t.true(readOnly.includes('log'));
   t.true(readOnly.includes('diff'));
 });
 
-test('git declarations expand the reachable platform filesystem contracts', t => {
-  const { aux } = gitDeclarations.git;
-  t.false(aux.includes("import('@endo/platform"));
+test('read-only generated Git declaration exposes tracking status', t => {
+  t.true(
+    declarationText(gitDeclarations.gitReadOnly).includes('trackingStatus'),
+  );
+});
+
+test('git declarations retain reachable filesystem contracts without status caps', t => {
+  const text = declarationText(gitDeclarations.git);
+  t.false(text.includes("import('@endo/platform"));
   for (const shape of [
-    'type GitPathEntry =',
     'child: (name: string) => GitLitePathEntry;',
-    'type GitPathEntryIssuer =',
     'entry: (path: string | string[]) => GitLitePathEntry;',
-    'type GitDirectory =',
     'lookup: (path: string | string[]) => Promise<unknown>;',
-    'type GitDirectoryWriteSource = GitReadableBlobSource | GitLiteReadableTree;',
-    'write: (path: string[], value: GitDirectoryWriteSource) => Promise<void>;',
-    'type GitFile =',
-    'type GitFilesystem =',
+    'write: (path: string[], value: GitDirectoryWriteSource)',
     'root: () => GitERef<GitExtendedDirectory>;',
-    'type GitReadableBlob =',
-    'type GitReadableTree =',
-    // Followed across packages: the blob range's reader comes from
-    // `@endo/exo-stream`, not from the platform filesystem source.
-    'fetch: (offset: bigint, length: bigint) => Promise<GitPassableBytesReader>;',
   ]) {
-    t.true(aux.includes(shape), `missing reachable type shape: ${shape}`);
+    t.true(text.includes(shape), `missing reachable type shape: ${shape}`);
   }
 });
 
-test('git blob declarations expose Exo methods without CAS backing helpers', t => {
-  const { aux } = gitDeclarations.git;
-  t.deepEqual(listDeclaredTypeMembers(aux, 'GitLiteReadableBlob'), [
-    'streamBase64',
-    'text',
-    'json',
-    'help',
-  ]);
-  t.deepEqual(listDeclaredTypeMembers(aux, 'GitReadableBlobRange'), [
-    'getInfo',
-    'fetch',
-  ]);
-  t.true(aux.includes('type GitReadableBlob = GitReadableBlobRange;'));
-  const leakedMethodNames = [
-    'makeFileReader',
-    'readRange',
-    'rangeRead',
-    'rangeReadText',
-  ];
-  const leaked = leakedMethodNames.filter(
-    name => aux.includes(`${name}:`) || aux.includes(`${name}?:`),
-  );
-  t.deepEqual(
-    leaked,
-    [],
-    `leaked non-Git blob method(s): ${leaked.join(', ')}`,
-  );
+test('git status declarations expose copy data without live capabilities', t => {
+  const text = declarationText(gitDeclarations.git);
+  t.true(text.includes('entries: GitStatusEntry[];'));
+  t.true(text.includes('truncated: boolean;'));
+  t.false(text.includes('entry: GitPathEntry;'));
+  t.false(text.includes('node?:'));
+  t.false(text.includes('type GitStatusNode ='));
 });
 
 test('combined Git and workspace declarations have unique alias names', t => {
@@ -267,14 +285,21 @@ test('Git declarations define every reachable custom filesystem alias', t => {
   const declared = new Set(listDeclaredTypeNames(gitDeclarations.git.aux));
   for (const name of [
     'GitERef',
-    'GitFilesystemStats',
-    'GitSnapshotTree',
-    'GitSnapshotBlob',
-    'GitBlobInfo',
+    'GitExtendedDirectory',
+    'GitStreamNode',
+    'GitStreamYieldNode',
+    'GitCursor',
+    'GitBlobRef',
   ]) {
     t.true(declared.has(name), `missing generated alias: ${name}`);
   }
-  t.false(gitDeclarations.git.aux.includes("import('@endo/platform"));
+  t.true(declared.size > 0);
+  t.true(declared.has('GitFilesystemStats'));
+  t.false(declared.has('GitBlobInfo'));
+  const text = declarationText(gitDeclarations.git);
+  t.true(text.includes('statfs: () => Promise<GitFilesystemStats>'));
+  t.true(text.includes('getInfo: () => {\n'));
+  t.false(text.includes("import('@endo/platform"));
 });
 
 test('base and history git declarations split history rewrite authority', t => {
@@ -311,77 +336,91 @@ test('base and history git declarations split history rewrite authority', t => {
   }
 });
 
-// Divergence gate (fs): `workspace` is printed from the checked TypeScript
-// source, and the `M.interface` guards stay the runtime enforcement layer.
-// Neither side may grow, lose, or rename a method without the other, so the
-// declaration's method names must exactly equal the guard's for every guarded
-// type.
-test('workspace declarations match the filesystem runtime guards', t => {
-  const { workspace } = fsDeclarations;
+// Divergence gate (workspace): the injected declaration is printed from the
+// daemon's own `EndoMount` contract, and the `M.interface` guards stay the
+// runtime enforcement layer. Neither side may grow, lose, or rename a method
+// without the other, so every reachable declaration must match its live guard.
+test('workspace declarations match the provisioned mount runtime guards', t => {
+  const workspaceIR = buildWorkspaceIR();
   t.deepEqual(
     Object.keys(WORKSPACE_GUARDS).sort(),
     [
-      'BlobRef',
-      'Cursor',
-      'Directory',
-      'File',
-      'Filesystem',
-      'Lock',
-      'NodeWatcher',
-      'OpenFile',
-      'PassableBytesReader',
-      'PassableBytesWriter',
-      'PassableReader',
-      'Xattrs',
+      'DaemonMount',
+      'EndoMountEntry',
+      'EndoMountFile',
+      'ReadableBlobView',
+      'ReadableTreeView',
     ],
-    'a new extended-filesystem guard must be reachable from the workspace declaration',
+    'a new reachable mount guard must be represented in the workspace declaration',
   );
   for (const [typeName, guard] of Object.entries(WORKSPACE_GUARDS)) {
-    t.deepEqual(
-      listDeclaredTypeMembers(workspace.aux, typeName).sort(),
-      guardMethodNames(guard),
-      `${typeName} declaration must match its runtime guard method names`,
-    );
+    assertIRTypeMatchesGuard(t, workspaceIR, typeName, guard);
   }
+});
+
+test('workspace root declaration is exactly the capability provision binds', t => {
+  const { workspace } = fsDeclarations;
+  t.deepEqual(
+    buildWorkspaceIR()
+      .members.map(member => member.name)
+      .sort(),
+    guardMethodNames(MountInterface),
+    'every declared workspace method must exist on the provisioned EndoMount',
+  );
+  const text = declarationText(workspace);
+  t.false(text.includes('root:'));
+  t.false(text.includes('named:'));
+  t.true(text.includes("kind: () => 'directory';"));
+  t.true(text.includes("kind: () => 'file';"));
+  t.true(
+    text.includes(
+      'lookup: (path: string | readonly string[] | MountEndoMountEntry) => Promise<typeof workspace | MountEndoMountFile>',
+    ),
+  );
+  t.true(
+    text.includes('entry: (path: string | string[]) => MountEndoMountEntry;'),
+  );
 });
 
 test('Shell, HTTP, and GitRemote declarations match runtime method names', t => {
   assertIRMatchesGuard(t, buildShellIR(), ShellInterface, 'Shell');
-  assertIRMatchesGuard(t, buildHttpIR(), HttpClientInterface, 'HttpClient');
+  const httpIR = buildHttpIR();
+  assertIRMatchesGuard(t, httpIR, HttpClientInterface, 'HttpClient');
   assertIRMatchesGuard(t, buildGitRemoteIR(), GitRemoteInterface, 'GitRemote');
-  t.deepEqual(
-    listDeclaredTypeMembers(httpDeclarations.http.aux, 'HttpResponse').sort(),
-    guardMethodNames(HttpResponseInterface),
-    'HttpResponse declaration must match its runtime guard',
-  );
+  assertIRTypeMatchesGuard(t, httpIR, 'HttpResponse', HttpResponseInterface);
 });
 
 // `HttpResponse.stream()` returns `import('@endo/exo-stream').PassableBytesReader`.
 // The extractor follows that import into `@endo/exo-stream`'s own type source,
 // so the declaration carries the real streaming surface and the stream-node
 // types it reaches, rather than a hand-written stand-in or `unknown`.
-test('HTTP stream declaration inlines the followed exo-stream reader shape', t => {
-  const { aux } = httpDeclarations.http;
-  t.false(aux.includes('stream: () => unknown;'));
-  t.true(aux.includes('stream: () => HttpPassableBytesReader;'));
-  t.deepEqual(listDeclaredTypeMembers(aux, 'HttpPassableBytesReader'), [
-    'streamBase64',
-    'readReturnPattern',
-  ]);
+test('HTTP stream declaration keeps the followed reader shape named', t => {
+  const text = declarationText(httpDeclarations.http);
+  t.false(text.includes('stream: () => unknown;'));
+  t.true(text.includes('stream: () => HttpPassableBytesReader;'));
+  t.true(text.includes('type HttpPassableBytesReader'));
+  t.true(text.includes('streamBase64: (synPromise: HttpERef<HttpStreamNode<'));
   for (const shape of [
     'type HttpStreamNode<',
     'type HttpStreamYieldNode<',
     'type HttpStreamReturnNode<',
   ]) {
-    t.true(aux.includes(shape), `missing followed exo-stream type: ${shape}`);
+    if (shape === 'type HttpStreamReturnNode<') {
+      t.false(text.includes(shape));
+    } else {
+      t.true(
+        text.includes(shape),
+        `missing followed exo-stream type: ${shape}`,
+      );
+    }
   }
   // The walk stops at the `@endo` namespace boundary and at packages that
   // publish no type source: `Pattern` (`@endo/patterns`) and `Passable`
   // (`@endo/pass-style`) collapse to `unknown` rather than leaking a dangling
   // reference into the prompt.
-  t.false(aux.includes("import('@endo/"));
-  t.false(/\bPattern\b/u.test(aux));
-  t.false(/\bPassable\b(?!BytesReader)/u.test(aux));
+  t.false(text.includes("import('@endo/"));
+  t.false(/\bPattern\b/u.test(text));
+  t.false(/\bPassable\b(?!BytesReader)/u.test(text));
 });
 
 // A followed type that references itself through another followed type
@@ -395,87 +434,76 @@ test('following imported types is cycle-safe', t => {
 });
 
 test('Shell and HTTP declarations include named arguments and result shapes', t => {
+  const shell = declarationText(shellDeclarations.shell);
+  const http = declarationText(httpDeclarations.http);
   t.true(
-    shellDeclarations.shell.aux.includes(
+    shell.includes(
       'exec: (command: string, args: readonly string[], options?:',
     ),
   );
-  t.true(shellDeclarations.shell.aux.includes('type ShellResult ='));
-  t.true(
-    httpDeclarations.http.aux.includes(
-      'fetch: (url: string, options?: HttpFetchOptions)',
-    ),
-  );
-  t.true(httpDeclarations.http.aux.includes('type HttpResponse ='));
+  t.true(shell.includes('}) => Promise<ShellResult>'));
+  t.true(http.includes('fetch: (url: string, options?: {'));
+  t.true(http.includes('type HttpResponse ='));
 });
 
 test('GitRemote declarations include concrete result records', t => {
-  const { aux } = gitRemoteDeclarations.gitRemote;
-  t.true(aux.includes('Promise<RemoteOperationResult>'));
-  t.true(aux.includes('type RemoteOperationResult ='));
-  t.true(aux.includes('type RemotePullResult ='));
-  t.false(aux.includes('Promise<any>'));
+  const text = declarationText(gitRemoteDeclarations.gitRemote);
+  t.true(text.includes('updatedRefs: RemoteRefUpdate[];'));
+  t.true(text.includes("integration: 'up-to-date' | 'fast-forward'"));
+  t.true(text.includes('type RemoteOperationResult ='));
+  t.true(text.includes('type RemotePullResult ='));
+  t.false(text.includes('Promise<any>'));
 });
 
-test('workspace declaration reaches the Directory surface transitively', t => {
+test('filesystem declaration remains available to local seam helpers', t => {
+  const { filesystem } = fsDeclarations;
+  const text = declarationText(filesystem);
+  t.true(filesystem.body.startsWith('{'));
+  t.true(text.includes('type ERef<T> = T | Promise<T>;'));
+  t.true(text.includes('type Directory = {'));
+  t.true(text.includes('lookup:'));
+  t.true(text.includes('write:'));
+});
+
+test('workspace declaration reaches the mount surface transitively', t => {
   const { workspace } = fsDeclarations;
-  t.is(workspace.body, 'Filesystem');
-  t.true(workspace.aux.includes('type ERef<T> = T | Promise<T>;'));
-  t.true(workspace.aux.includes('type Directory = {'));
-  // Directory verbs only reachable transitively from `root()`.
-  t.true(workspace.aux.includes('lookup:'));
-  t.true(workspace.aux.includes('write:'));
+  const text = declarationText(workspace);
+  t.true(workspace.body.startsWith('{'));
+  t.true(text.includes('type MountPathEntry ='));
+  t.true(text.includes('type MountStreamNode<'));
+  t.true(text.includes('lookup:'));
+  t.true(text.includes('write:'));
+  // Nothing the daemon reaches may arrive as a dangling module reference: a
+  // type the walk cannot follow collapses to `unknown` instead.
+  t.false(text.includes("import('@endo/"));
 });
 
-// The guard walker printed `Promise<unknown>` wherever a guard said
-// `M.promise()` — 32 returns across the workspace section. Printing from the
-// authored TypeScript instead names the concrete result records, so the only
-// `unknown` results left are the ones the authored type really says.
-test('workspace declaration names its result records', t => {
-  const { aux } = fsDeclarations.workspace;
+test('workspace declaration names mount result records and path conventions', t => {
+  const text = declarationText(fsDeclarations.workspace);
   for (const shape of [
-    'statfs: () => Promise<FilesystemStats>;',
-    'getStat: () => Promise<NodeStat>;',
-    'getAttrs: () => Promise<NodeAttrs>;',
-    "getQid: () => Qid<'directory'>;",
-    'read: (limit?: bigint) => Promise<DirectoryPage>;',
-    'toArray: () => Promise<DirectoryEntry[]>;',
-    'watchFrom: () => ERef<WatchFromResult>;',
-    'snapshot: () => Promise<BlobRef>;',
-    'getLock: (opts: LockQuery) => Promise<LockState | null>;',
+    "kind: () => 'directory';",
+    "kind: () => 'file';",
+    'list: () => Promise<never>;',
+    'entry: (path: string | string[])',
+    'lookup: (path: string | readonly string[] | MountEndoMountEntry)',
+    'type MountStreamNode<',
+    // `GrepMatch` lives behind `@endo/platform/fs/search.types`, whose
+    // published type entry point only re-exports it.
+    // `followNameChanges` returns an `@endo/exo-stream` reader parameterized
+    // by the daemon's own change union.
+    'followNameChanges: (...pathSegments: string[]) => MountPassableReader<',
   ]) {
-    t.true(aux.includes(shape), `missing named result shape: ${shape}`);
+    t.true(text.includes(shape), `missing named result shape: ${shape}`);
   }
-  // `BlobRef.json()` is the one member whose authored return really is
-  // unknown: it parses arbitrary JSON.
-  const unknownResults = aux
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line.includes('=> Promise<unknown>'));
-  t.deepEqual(unknownResults, ['json: () => Promise<unknown>;']);
-  t.false(aux.includes(': any'));
-  t.true(aux.includes('btime?: bigint | null;'));
-  t.false(aux.includes('wait?: boolean;'));
 });
 
-// The reader and writer types are `@endo/exo-stream`'s, referenced from the
-// filesystem's authored source rather than re-authored beside it. The
-// extractor follows the import and inlines the real definitions.
-test('workspace declaration inlines the followed exo-stream stream shapes', t => {
-  const { aux } = fsDeclarations.workspace;
-  t.true(aux.includes('stream: () => ERef<PassableReader<DirectoryEntry>>;'));
-  t.true(aux.includes('events: () => ERef<PassableReader<WatchEvent>>;'));
+// `EndoMount` declares `has` twice, once for path segments and once for a
+// minted entry. An overload set is one member of the guarded interface, so it
+// prints as one member whose type carries both call signatures.
+test('workspace declaration folds the mount overload set into one member', t => {
+  const text = declarationText(fsDeclarations.workspace);
   t.true(
-    aux.includes(
-      'read: (opts?: FileReadOptions) => ERef<PassableBytesReader>;',
-    ),
+    text.includes('has: {') && text.includes('(entry: MountEndoMountEntry)'),
   );
-  for (const shape of [
-    'type StreamNode<',
-    'type StreamYieldNode<',
-    'type StreamReturnNode<',
-  ]) {
-    t.true(aux.includes(shape), `missing followed exo-stream type: ${shape}`);
-  }
-  t.false(aux.includes("import('@endo/"));
+  t.is(text.match(/\n {4}has: \{/gu)?.length, 1);
 });

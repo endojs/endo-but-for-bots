@@ -6,21 +6,21 @@ filesystem view, optional network) as one or more `Exo` handles, so a
 caller-granted process tree runs under additional kernel-level
 confinement on top of Endo's capability boundary.
 
-The architecture is documented in
-[`PLAN/endo_posix_sandbox.md`](../../PLAN/endo_posix_sandbox.md).
+The architecture is documented in this README. The original design
+rationale is preserved in this repository's history at
+[`PLAN/endo_posix_sandbox.md`](https://github.com/endojs/endo-but-for-bots/blob/a54c3adb/PLAN/endo_posix_sandbox.md).
 
 ## Status
 
-- **Phase 0** (`12_endo_posix_sandbox_phase0_interfaces.md`): typed
+- **Phase 0**: typed
   contract, runtime guards, stub factory.
   Done.
-- **Phase 1** (`13_endo_posix_sandbox_phase1_bwrap.md`): `bwrap`
+- **Phase 1**: `bwrap`
   driver on Linux, `network: 'none'` and `network: 'private'`
   profiles, scratch-mount-backed writable upper layer, dispose
   semantics.
-  Done — see "Status notes" in the Phase 1 TODO for what is
-  intentionally deferred.
-- **Phase 1.5** (`14_endo_posix_sandbox_phase1_5_bwrap_hardening.md`):
+  Done, with some items intentionally deferred.
+- **Phase 1.5**:
   `host-loopback` / `host-lan` / `host-net` profiles, Landlock probe
   (kernel ≥ 5.13), seccomp profile rebase against
   `containers/common`, `prlimit` resource caps, cgroup v2 detection,
@@ -28,7 +28,7 @@ The architecture is documented in
   surfaced via `slice.help()`.
   Done — see § "Phase 1.5 status notes" below for what is
   intentionally deferred.
-- **Phase 2** (`15_endo_posix_sandbox_phase2_podman.md`): rootless
+- **Phase 2**: rootless
   `podman` driver with OCI image rootfs, `--cap-drop ALL` +
   `no-new-privileges` + `--read-only` posture, slirp4netns / pasta
   rootless network backends, boot-time orphan-container sweep, and
@@ -91,7 +91,7 @@ missing; `make()` then refuses the slice with a structured error.
 | Tool             | Phase | Tested version | Notes                                                                |
 | ---------------- | ----- | -------------- | -------------------------------------------------------------------- |
 | `podman`         | 2     | 5.8.x          | <https://podman.io>; rootful installs are rejected by the probe.     |
-| `crun` / `runc`  | 2     | 1.x            | OCI runtime that supports `podman exec`.  See "OCI runtime" below.   |
+| `crun` / `runc`  | 2     | 1.x            | Supported OCI runtime profile. See "OCI runtime" below.             |
 | `slirp4netns`    | 2     | 1.x            | Default rootless network backend; required for `network: 'private'`. |
 | `pasta`          | 2     | passt 2026_01  | Used as the fallback when `slirp4netns` is absent.                   |
 
@@ -107,16 +107,21 @@ Rootless prerequisites:
 - For `network: 'private'`: either `slirp4netns` or `pasta` must be
   on PATH.  The driver auto-detects which one is present and
   surfaces the choice via `slice.help()`'s `rootless-net:` row.
+- A stable, host-private cleanup scope must be supplied as
+  `options.ownerId` or `options.env.ENDO_SANDBOX_OWNER_ID`.
+  It is used only as the exact Podman owner label for crash recovery;
+  without one the driver fails its lifecycle probe.
 
 ### OCI runtime
 
 `podman` ships with a default OCI runtime that varies across distros.
 Some Bazzite / Universal Blue images default to `krun` (libkrun
-microVM) which does not implement `podman exec`; the driver detects
-that case at probe time and transparently switches to `crun` or
-`runc` so the slice's spawn surface keeps working.  The override is
-visible from `podman info --format '{{.Host.OCIRuntime.Name}}'` and
-in the `--runtime` flag the driver prepends to every podman call.
+microVM).
+The driver detects that profile at probe time and transparently
+switches to its supported `crun` or `runc` profile.
+The override is visible from
+`podman info --format '{{.Host.OCIRuntime.Name}}'` and in the
+`--runtime` flag the driver prepends to every Podman call.
 The override is opt-out via `makePodmanDriver({ ociRuntime: 'krun' })`
 when callers know what they are doing.
 
@@ -127,7 +132,9 @@ On `make(powers, _ctx, options)` it:
 
 1. Constructs `makeBwrapDriver({ env: options.env })`.
    Construction is cheap and does not probe the binary.
-2. Constructs `makePodmanDriver({ env: options.env })` (Phase 2).
+2. Constructs `makePodmanDriver({ env: options.env, ownerId })`
+   (Phase 2), where `ownerId` comes from the host-private option or
+   `ENDO_SANDBOX_OWNER_ID`.
    Same probe-gated pattern: a missing podman binary or rootful-only
    install is reported via `listBackends()`, never surfaces as a
    daemon boot failure.
@@ -144,10 +151,13 @@ The `'auto'` selector picks the first available driver in
 registration order.  Bwrap is registered first, so callers asking
 for OCI image rootfs must opt in via `make({ backend: 'podman',
 rootfs: { kind: 'oci', ref: 'docker.io/library/alpine:3.19' } })`.
+An otherwise reachable driver is unavailable unless its probe proves
+process-group or container-wide termination and crash cleanup.
+The factory never substitutes an unconfined host process.
 
 ## Capability surface
 
-Mirrors `PLAN/endo_posix_sandbox.md` § "Capability surface":
+The capability surface:
 
 - `SandboxFactory` — root cap; `help`, `listBackends`, `make`.
 - `SandboxHandle` — one slice; `spawn`, `mount`, `scratch`, `open`,
@@ -159,6 +169,19 @@ Mirrors `PLAN/endo_posix_sandbox.md` § "Capability surface":
 
 All four are `makeExo()` objects with `M.interface()` guards, so
 `__getMethodNames__()` and other CapTP introspection patterns work.
+
+`ProcessHandle.stdout()` and `stderr()` return separate eventual
+`PassableBytesReader` capabilities.
+Each stream has an independent bigint byte limit, configured with
+`stdoutByteLimit` and `stderrByteLimit` and defaulting to 16 MiB.
+`timeoutMs` bounds process runtime.
+Cancellation, timeouts, reader failure, output limits, handle disposal,
+and owner cancellation all enter the same idempotent supervisor path:
+stop admission, send a soft process-group/container kill, escalate to a
+hard kill after one second, bound stream drain to 250 ms, and reap before
+`wait()` settles.
+Reaching a byte limit kills before waiting for EOF, so an inherited pipe
+that remains open cannot hold completion indefinitely.
 
 ### `SandboxPowers.provideHostPath`
 
@@ -380,12 +403,18 @@ The test suite covers:
 
 - [`test/factory.test.js`](./test/factory.test.js) — Phase 0 typed
   contract; backend-agnostic.
+- [`test/lifecycle.test.js`](./test/lifecycle.test.js) — deterministic
+  lifecycle races, idempotent cancellation and disposal, independent
+  stream accounting, split UTF-8, reader failure, byte limits, timeout,
+  hard-kill escalation, never-EOF drain, owner cancellation, and
+  fail-closed driver admission.
 - [`test/daemon-smoke.test.js`](./test/daemon-smoke.test.js) —
   Phase 0 / 1 plugin entry-point smoke test.
 - [`test/bwrap.test.js`](./test/bwrap.test.js) — Phase 1 + 1.5
   driver acceptance tests including the host-* network profiles,
   the prlimit nproc cap, and the slice runtime report rendered by
-  `help()`.
+  `help()`, plus real process-group termination, spawn/dispose races,
+  hard-kill escalation, inherited-pipe handling, and abrupt owner exit.
   Each case probes `bwrap --version` first; if bwrap is unavailable
   the case `t.pass()`-skips so CI matrix runs on non-Linux hosts
   remain green.
@@ -404,9 +433,13 @@ The test suite covers:
   driver acceptance tests on an Alpine OCI image: `/bin/echo`
   smoke test, read-only mount rejection, `network: 'none'` /
   `'private'` interface inventory, `apk update` (skipped on
-  air-gapped CI), boot-time orphan-container reap, and the
+  air-gapped CI), exact-label orphan-container reap, and the
   rootless / rootless-net rows of the `slice.help()` runtime
-  report.  Each case skips gracefully when `podman` or the
+  report.
+  Lifecycle cases also cover operation-container races, escalation,
+  cancellation, inherited pipes, and abrupt owner exit while leaving
+  unrelated containers untouched.
+  Each case skips gracefully when `podman` or the
   `docker.io/library/alpine:3.19` image is not present.
 
 Run them with:
@@ -456,7 +489,7 @@ Items intentionally deferred:
 - **Full pasta + nftables wiring** for `network: 'private'`.  The
   egress filter is documented and the driver accepts the profile;
   the actual pasta subprocess + `nft -f` invocation lands
-  alongside the genie workspace integration that needs it.
+  alongside the first consumer that needs `network: 'private'` egress.
 - **In-slice Landlock ruleset installation.**  The probe is wired;
   the call-site that runs `landlock_create_ruleset` inside the
   slice's child (after bwrap execs the slice's init) is a focused
@@ -486,19 +519,23 @@ Items that landed:
   `--network host` for the `host-*` family (per-profile filtering
   remains the operator's responsibility, same as the bwrap
   driver — see § "Host network profiles").
-- Boot-time orphan-container sweep: containers whose names start
-  with `endo-sandbox-` are removed at first probe so a daemon
-  restart never trips over leftovers from a crashed run.
-- OCI-runtime auto-fallback (`krun` → `crun` → `runc`) so the
-  driver's `podman exec`-based spawn surface keeps working on
-  hosts that default to a microVM runtime.
+- Each spawn is one operation container labelled with the exact owner
+  and operation identifiers.
+  Termination signals that container's PID 1 and therefore its whole
+  descendant set before the operation is reaped.
+- Boot-time orphan reconciliation lists and removes only containers
+  matching the exact stable owner label.
+  Listing or removal failure makes the driver unavailable, and unrelated
+  containers are never swept.
+- OCI-runtime auto-fallback (`krun` → `crun` → `runc`) keeps the driver
+  on its supported runtime profile.
 - `slice.help()` runtime report extended with `rootless:` and
   `rootless-net:` rows so callers can confirm which hardening
   layers are in effect on a per-slice basis.
 - Acceptance tests covering `apk update` inside an Alpine slice
   (with a graceful skip on air-gapped CI), read-only mount
   rejection, network-profile interface inventory, and the
-  orphan-reap path.
+  exact-label orphan-reap path and lifecycle no-leak stop conditions.
 
 Items intentionally deferred:
 

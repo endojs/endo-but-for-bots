@@ -19,7 +19,13 @@
 //! The worker envelope protocol (`endor worker -e ironhorse`) is not
 //! wired yet: it needs the host-function surface and the SES boot
 //! bundle, which are later roadmap stages. That gap is reported as a
-//! named gap, not simulated.
+//! named gap, not simulated. The worker HEAP-PERSISTENCE lifecycle,
+//! by contrast, IS wired: [`engine::HeapStoreOptions`] +
+//! [`engine::PersistentMachine`] back a machine's heap with the
+//! snapshot store (designs/ironhorse-snapshot-store-seam.md § the
+//! supervisor wiring), checkpointing at every completed crank and
+//! pairing with [`crate::supervisor::Supervisor::mark_suspended_store`]
+//! for suspend/resume bookkeeping.
 
 #[cfg(feature = "ironhorse-engine")]
 pub mod engine {
@@ -42,6 +48,17 @@ pub mod engine {
         /// The engine seam is present but the requested surface is not
         /// built yet. Carries the name of the missing surface.
         Unavailable(String),
+        /// The heap store refused an operation (open, checkpoint,
+        /// resume, collect, or close). Store errors are fail-closed by
+        /// design; the message carries the store's own taxonomy.
+        Store(String),
+        /// A later crank compiled to a different symbol table than
+        /// the one the machine linked and persisted. Running it would
+        /// silently read and mutate the WRONG globals and properties
+        /// (ids are table positions), so it is refused before it
+        /// runs. The side-table ledger workstream lifts this by
+        /// relinking per crank.
+        SymbolMismatch(String),
     }
 
     impl std::fmt::Display for MachineError {
@@ -51,6 +68,10 @@ pub mod engine {
                 MachineError::Halt(h) => write!(f, "{}", describe_halt(h)),
                 MachineError::Unavailable(what) => {
                     write!(f, "not built yet on the Ironhorse engine: {what}")
+                }
+                MachineError::Store(e) => write!(f, "heap store error: {e}"),
+                MachineError::SymbolMismatch(e) => {
+                    write!(f, "crank symbol table mismatch: {e}")
                 }
             }
         }
@@ -197,6 +218,297 @@ pub mod engine {
         }
         println!("{}", outcome.result);
         Ok(())
+    }
+
+    /// Options for a store-backed worker heap: the supervisor-side
+    /// opt-in to the snapshot store seam
+    /// (`designs/ironhorse-snapshot-store-seam.md` § supervisor
+    /// wiring). Absent this option a machine's heap lives and dies
+    /// with the process; with it, the heap is a SQLite database the
+    /// worker checkpoints at every completed crank, so suspend is
+    /// free (the durable state already exists), resume is lazy
+    /// (O(working set), not O(heap)), and a crashed crank rewinds to
+    /// the last checkpoint instead of persisting partial effects.
+    #[derive(Debug, Clone)]
+    pub struct HeapStoreOptions {
+        /// The heap database path. Created when absent; resumed (with
+        /// full succession validation) when present.
+        pub path: std::path::PathBuf,
+        /// The worker's callback-table signature. The store and the
+        /// blob format both gate on it, so a database from a worker
+        /// with a different host surface is refused, not adopted.
+        pub signature: String,
+    }
+
+    /// A machine whose heap is backed by the snapshot store: the
+    /// supervisor-facing worker-heap lifecycle. One instance owns one
+    /// store session over one database.
+    ///
+    /// Cadence policy (deliberately minimal, stated rather than
+    /// configurable): every COMPLETED crank checkpoints before its
+    /// outcome is reported, so the database is always at a crank
+    /// boundary; a crank that halts without completing is discarded by
+    /// resuming from the last checkpoint (the deterministic
+    /// crashed-crank contract — no partial effect ever persists);
+    /// [`PersistentMachine::collect`] offers summary-driven partial
+    /// collection at any boundary, and the supervisor decides when.
+    ///
+    /// The SES boot bundle and the worker envelope protocol remain the
+    /// named gaps they were; this type is the heap-persistence half the
+    /// supervisor owns either way. Cranks after the first must compile
+    /// to the SAME SYMBOL TABLE as the linked crank, and this is
+    /// ENFORCED, not merely documented: a crank whose compiled table
+    /// differs from the persisted one is refused with
+    /// [`MachineError::SymbolMismatch`] before it runs, because its
+    /// ids would silently bind the wrong globals (review finding).
+    /// Equal tables require the same used-name set AND, for any two
+    /// names that collide in the coder's hash buckets, the same
+    /// first-appearance order — review wave 3 falsified the earlier
+    /// "same name set suffices" claim (the table is bucket-ordered,
+    /// so equal sets suffice only when no two names share a bucket).
+    /// The practical contract: keep later cranks' references
+    /// textually aligned with the linked crank; the side-table
+    /// ledger's per-crank relinking lifts the constraint.
+    pub struct PersistentMachine {
+        store: std::rc::Rc<std::cell::RefCell<ironhorse_store_sqlite::SqliteHeapStore>>,
+        session: Option<ironhorse_snapshot::machine::StoreSession>,
+        signature: ironhorse_snapshot::Signature,
+        linked: bool,
+        heap_store: std::path::PathBuf,
+    }
+
+    fn store_err(e: ironhorse_snapshot::store::StoreError) -> MachineError {
+        MachineError::Store(format!("{e:?}"))
+    }
+
+    impl PersistentMachine {
+        /// Open (creating or resuming) a store-backed machine at
+        /// `options.path`. An empty database binds a fresh boot
+        /// machine at epoch 1; a populated one is validated against
+        /// its sealed root and resumed lazily.
+        pub fn open(options: &HeapStoreOptions) -> Result<PersistentMachine, MachineError> {
+            use ironhorse_snapshot::machine::{begin_store_session, resume_from_store_lazy};
+            use ironhorse_snapshot::store::{HeapStore, StoreError};
+
+            let signature = ironhorse_snapshot::Signature::new(&options.signature);
+            let mut store =
+                ironhorse_store_sqlite::SqliteHeapStore::open(&options.path).map_err(store_err)?;
+            match store.manifest() {
+                Err(StoreError::Empty) => {
+                    let session =
+                        begin_store_session(ironhorse_vm::Interp::new(), &signature, &mut store)
+                            .map_err(|(_, e)| store_err(e))?;
+                    Ok(PersistentMachine {
+                        store: std::rc::Rc::new(std::cell::RefCell::new(store)),
+                        session: Some(session),
+                        signature,
+                        linked: false,
+                        heap_store: options.path.clone(),
+                    })
+                }
+                Ok(_) => {
+                    let store = std::rc::Rc::new(std::cell::RefCell::new(store));
+                    let session =
+                        resume_from_store_lazy(store.clone(), &signature).map_err(store_err)?;
+                    // A resumed machine carries its program symbol
+                    // names in the small state; an empty table means
+                    // no crank ever linked (e.g. the first crank
+                    // crashed before its checkpoint).
+                    let linked = !session.machine().program_symbol_names().is_empty();
+                    Ok(PersistentMachine {
+                        store,
+                        session: Some(session),
+                        signature,
+                        linked,
+                        heap_store: options.path.clone(),
+                    })
+                }
+                Err(e) => Err(store_err(e)),
+            }
+        }
+
+        /// Discard the in-memory machine and resume from the store's
+        /// last committed epoch — the crashed-crank/failed-checkpoint
+        /// discipline. The store's commit is atomic, so a failed
+        /// checkpoint left it at the prior epoch.
+        fn rewind_to_last_checkpoint(&mut self) -> Result<(), MachineError> {
+            use ironhorse_snapshot::machine::resume_from_store_lazy;
+            self.session = None;
+            let fresh = resume_from_store_lazy(self.store.clone(), &self.signature)
+                .map_err(store_err)?;
+            self.linked = !fresh.machine().program_symbol_names().is_empty();
+            self.session = Some(fresh);
+            Ok(())
+        }
+
+        /// Compile and run one crank against the persistent heap.
+        ///
+        /// A completed crank checkpoints before returning its outcome
+        /// (the outcome is durable when the caller sees it). A crank
+        /// that halts without completing returns its halt AFTER the
+        /// machine has been rewound to the last checkpoint — the
+        /// partial crank's effects are gone from memory and were never
+        /// in the database. A completed crank whose CHECKPOINT fails
+        /// is rewound the same way before the error is reported: a
+        /// mutated machine whose outcome was never durably recorded
+        /// must not seed a later crank (review finding).
+        pub fn eval(&mut self, source: &str) -> Result<EvalOutcome, MachineError> {
+            use ironhorse_snapshot::machine::checkpoint_to_store;
+
+            let (bytecode, symbols) = compile_atoms_with(source, false)
+                .map_err(|e| MachineError::Compile(e.to_string()))?;
+            let names = ironhorse_vm::parse_symbols(&symbols);
+            let (outcome, checkpointed) = {
+                let session = self.session.as_mut().ok_or_else(|| {
+                    MachineError::Store("machine has no session (a rewind failed)".to_string())
+                })?;
+                if !self.linked {
+                    // An EMPTY table links nothing and constrains
+                    // nothing (there are no ids to misalign), and
+                    // `open` derives `linked` from the persisted name
+                    // count — so leave the machine unlinked on an
+                    // empty first crank, keeping the live machine and
+                    // its reopened twin accepting the same next crank
+                    // (wave-3 finding: they diverged).
+                    if !names.is_empty() {
+                        session.machine_mut().link_intrinsics(&names);
+                        self.linked = true;
+                    }
+                } else {
+                    // Refused BEFORE the crank runs unless this
+                    // crank's compiled table EQUALS the persisted
+                    // one: ids are table positions, so any position
+                    // whose name differs would read and mutate the
+                    // wrong global silently. Comparing the actual
+                    // name strings means the check can never
+                    // false-accept; it CAN refuse spuriously, because
+                    // the table is ordered by the coder's hash-bucket
+                    // walk — the same name set yields the same table
+                    // only when no two names share a bucket, and
+                    // colliding names order by first appearance
+                    // (review wave 3 falsified the earlier "same
+                    // name set suffices" claim). Subsets are refused
+                    // too. Nothing ran on refusal, so no rewind is
+                    // needed and the epoch stands.
+                    let persisted = session.machine().program_symbol_names();
+                    let aligned = persisted == names.as_slice();
+                    if !aligned {
+                        return Err(MachineError::SymbolMismatch(format!(
+                            "this crank's compiled table ({} names) differs from the \
+                             machine's persisted table ({} names) — later cranks must \
+                             compile to the linked crank's exact symbol table: same \
+                             name set, referenced in the same order when names collide \
+                             in the coder's hash buckets (the side-table ledger \
+                             workstream lifts this)",
+                            names.len(),
+                            persisted.len(),
+                        )));
+                    }
+                }
+                let outcome = session.machine_mut().run(&bytecode);
+                if outcome.completed {
+                    let r = checkpoint_to_store(
+                        session,
+                        &self.signature,
+                        &mut *self.store.borrow_mut(),
+                    );
+                    (outcome, Some(r))
+                } else {
+                    (outcome, None)
+                }
+            };
+            match checkpointed {
+                Some(Ok(_epoch)) => Ok(outcome.into()),
+                Some(Err(e)) => {
+                    // A failed rewind poisons the session (later
+                    // calls refuse), but the caller asked what
+                    // happened to ITS crank — keep the original
+                    // failure visible inside the compound error
+                    // instead of swallowing it (wave-3 finding).
+                    if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
+                        return Err(MachineError::Store(format!(
+                            "rewind failed after a failed checkpoint ({e:?}): {rewind_err}"
+                        )));
+                    }
+                    Err(store_err(e))
+                }
+                None => {
+                    let halt = outcome.halt;
+                    if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
+                        return Err(MachineError::Store(format!(
+                            "rewind failed after a crank halt ({}): {rewind_err}",
+                            describe_halt(&halt)
+                        )));
+                    }
+                    Err(MachineError::Halt(halt))
+                }
+            }
+        }
+
+        /// Summary-driven partial collection at the current crank
+        /// boundary (the machine is always clean here — `eval` either
+        /// checkpointed or rewound), made DURABLE before it returns:
+        /// collection rewrites the free list, and free-list order
+        /// feeds subsequent allocation, so an unrecorded collection
+        /// would be silently discarded by `close()` and replayed
+        /// differently after reopen (review finding). The checkpoint
+        /// advances the epoch; a failed checkpoint rewinds, so the
+        /// collection either persists or never happened. Returns the
+        /// number of slots freed. The supervisor owns the cadence;
+        /// the schedule is replica-visible, like the full collector's.
+        pub fn collect(&mut self) -> Result<u32, MachineError> {
+            use ironhorse_snapshot::machine::{checkpoint_to_store, partial_collect};
+            let (freed, checkpointed) = {
+                let session = self.session.as_mut().ok_or_else(|| {
+                    MachineError::Store("machine has no session (a rewind failed)".to_string())
+                })?;
+                let freed =
+                    partial_collect(session, &*self.store.borrow()).map_err(store_err)?;
+                let r =
+                    checkpoint_to_store(session, &self.signature, &mut *self.store.borrow_mut());
+                (freed, r)
+            };
+            match checkpointed {
+                Ok(_epoch) => Ok(freed),
+                Err(e) => {
+                    if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
+                        return Err(MachineError::Store(format!(
+                            "rewind failed after a failed collection checkpoint ({e:?}): {rewind_err}"
+                        )));
+                    }
+                    Err(store_err(e))
+                }
+            }
+        }
+
+        /// The store's committed epoch (advances by one per
+        /// checkpoint).
+        pub fn epoch(&self) -> Result<u64, MachineError> {
+            use ironhorse_snapshot::store::HeapStore;
+            self.store
+                .borrow()
+                .manifest()
+                .map(|m| m.epoch)
+                .map_err(store_err)
+        }
+
+        /// The heap database path — the suspend record the supervisor
+        /// stores ([`crate::supervisor::Supervisor::mark_suspended_store`]).
+        pub fn heap_store_path(&self) -> &std::path::Path {
+            &self.heap_store
+        }
+
+        /// Release the machine and close the database with the full
+        /// last-connection contract: after `Ok`, the file is
+        /// self-contained (WAL folded in, sidecars removed) and safe
+        /// to copy or hand to another supervisor.
+        pub fn close(mut self) -> Result<(), MachineError> {
+            drop(self.session.take());
+            let store = std::rc::Rc::try_unwrap(self.store)
+                .map_err(|_| MachineError::Store("store still shared at close".to_string()))?
+                .into_inner();
+            store.close().map_err(store_err)
+        }
     }
 
     /// `endor worker -e ironhorse`: not built yet.

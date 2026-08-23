@@ -10,11 +10,18 @@ export type ReadableBlob =
   import('@endo/platform/fs/lite/types').ReadableBlobRange;
 export type ReadableTree = import('@endo/platform/fs/lite/types').ReadableTree;
 
+/** A Git tree capability with the standard capability-help surface. */
+export type GitTree = ReadableTree & {
+  help: (method?: string) => string;
+};
+
 export type WritableGitWorktree = Directory & PathEntryIssuer;
 export type ReadOnlyGitWorktree = ReadableTree;
 /** @deprecated Use `WritableGitWorktree` or `ReadOnlyGitWorktree`. */
 export type GitWorktree = WritableGitWorktree | ReadOnlyGitWorktree;
-export type GitStatusNode = Directory | File | ReadableTree | ReadableBlob;
+
+/** A path within a Git capability's worktree authority. */
+export type GitPathDesignator = PathEntry | string;
 
 export type GitRef = {
   name: string;
@@ -40,6 +47,14 @@ export type RemoteRefUpdate = {
 export type RemoteOperationResult = {
   updatedRefs: RemoteRefUpdate[];
   text: string;
+  /**
+   * Present only when the remote's `updatedRefs` exceeded the configured
+   * cardinality bound; the value is the count of entries dropped to fit
+   * under it. The count accumulates across layers: a backend that already
+   * bounded its own result contributes the count it reports, plus whatever
+   * the exo layer drops on top. See `result-bounds.js`.
+   */
+  droppedUpdatedRefsCount?: number;
 };
 
 export type RemotePullResult = {
@@ -65,25 +80,48 @@ export type GitIndexStatus =
   | 'conflicted';
 
 export type GitWorktreeStatus =
-  | 'clean'
-  | 'modified'
-  | 'deleted'
-  | 'untracked'
-  | 'ignored'
-  | 'conflicted';
+  'clean' | 'modified' | 'deleted' | 'untracked' | 'ignored' | 'conflicted';
+
+export type GitWorktreeEntry = {
+  /** Mount-relative path with `.` naming the current Git mount root. */
+  path: string;
+  head?: string;
+  branch?: string;
+  bare: boolean;
+  detached: boolean;
+  locked: boolean;
+  prunable: boolean;
+};
+
+export type GitWorktreeAddOptions = {
+  ref?: GitRef | string;
+  newBranch?: string;
+};
 
 export type GitStatusEntry = {
-  entry: PathEntry;
   path: string;
   index: GitIndexStatus;
   worktree: GitWorktreeStatus;
-  node?: GitStatusNode;
   renamedFrom?: string;
 };
 
 export type GitStatusOptions = {
   /** Include all untracked files, collapse them to directories, or omit them. */
   untracked?: 'all' | 'normal' | 'no';
+  maxCount?: number;
+};
+
+export type GitStatusResult = {
+  entries: GitStatusEntry[];
+  truncated: boolean;
+};
+
+export type GitTrackingStatus = {
+  branch?: string;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+  detached: boolean;
 };
 
 export type GitDiffOptions = {
@@ -230,6 +268,7 @@ export type GitRemoteOperationSuccessAuditEvent = GitRemoteAuditEventBase & {
   type: 'fetch' | 'pull' | 'push';
   outcome: 'ok';
   updatedRefs?: RemoteRefUpdate[];
+  droppedUpdatedRefsCount?: number;
   integration?: 'up-to-date' | 'fast-forward' | 'merge' | 'rebase';
   head?: GitRef;
 };
@@ -253,6 +292,7 @@ export type GitRemoteAuditEvent =
 export type RemoteSnapshot = NormalizedRemotePolicy & { name: string };
 
 export type GitRemote = {
+  help: (method?: string) => string;
   inspect: () => Promise<RemoteSnapshot>;
   fetch: (options?: {
     prune?: boolean;
@@ -290,6 +330,7 @@ export type GitRemote = {
 };
 
 export type GitRemoteController = {
+  help: (method?: string) => string;
   inspect: () => Promise<RemoteSnapshot & { revoked: boolean }>;
   audit: () => Promise<any>;
   setAllowedDirections: (directions: GitDirection[]) => Promise<void>;
@@ -309,8 +350,11 @@ export type GitRemoteKit = {
 
 /** The read-only capability surface returned by `readOnly()`. */
 export type ReadOnlyEndoGit = {
+  help: (method?: string) => string;
   worktree: () => Promise<ReadOnlyGitWorktree>;
-  status: (options?: GitStatusOptions) => Promise<GitStatusEntry[]>;
+  status: (options?: GitStatusOptions) => Promise<GitStatusResult>;
+  trackingStatus: () => Promise<GitTrackingStatus>;
+  worktreeList: () => Promise<GitWorktreeEntry[]>;
   diff: (options?: GitDiffOptions) => Promise<string>;
   log: (options?: GitLogOptions) => Promise<GitCommit[]>;
   show: (ref: GitRef | string) => Promise<string>;
@@ -320,7 +364,7 @@ export type ReadOnlyEndoGit = {
   stashList: () => Promise<string[]>;
   stashShow: (index?: number) => Promise<string>;
   /** @see filesystemAt, the preferred historical-read method; `tree(ref)` is its `ReadableTree` projection. */
-  tree: (ref: GitRef | string) => Promise<ReadableTree>;
+  tree: (ref: GitRef | string) => Promise<GitTree>;
   filesystemAt: (ref: GitRef | string) => Promise<Filesystem>;
   readOnly: () => ReadOnlyEndoGit;
   /**
@@ -337,10 +381,17 @@ export type ReadOnlyEndoGit = {
 /** The ordinary read-write capability surface. */
 export type ReadWriteEndoGit = ReadOnlyEndoGit & {
   worktree: () => Promise<WritableGitWorktree>;
-  add: (entries: PathEntry[]) => Promise<void>;
-  restore: (entries: PathEntry[], options?: GitRestoreOptions) => Promise<void>;
+  add: (designators: GitPathDesignator[]) => Promise<void>;
+  restore: (
+    designators: GitPathDesignator[],
+    options?: GitRestoreOptions,
+  ) => Promise<void>;
+  worktreeAdd: (
+    entry: PathEntry,
+    options?: GitWorktreeAddOptions,
+  ) => Promise<ReadWriteEndoGit>;
   checkoutConflict: (
-    entries: PathEntry[],
+    designators: GitPathDesignator[],
     side: GitConflictSide,
   ) => Promise<void>;
   commit: (
@@ -370,6 +421,10 @@ export type ReadWriteEndoGit = ReadOnlyEndoGit & {
 
 /** The elevated read-write surface that may rewrite existing history. */
 export type HistoryRewriteEndoGit = ReadWriteEndoGit & {
+  worktreeAdd: (
+    entry: PathEntry,
+    options?: GitWorktreeAddOptions,
+  ) => Promise<HistoryRewriteEndoGit>;
   scope: (name: 'reader' | 'writer' | 'rewriter') => EndoGit;
   commit: (message: string, options?: GitCommitOptions) => Promise<GitCommit>;
   reword: (ref: GitRef | string, message: string) => Promise<GitCommit>;
@@ -385,9 +440,7 @@ export type HistoryRewriteEndoGit = ReadWriteEndoGit & {
  * known statically.
  */
 export type EndoGit =
-  | ReadOnlyEndoGit
-  | ReadWriteEndoGit
-  | HistoryRewriteEndoGit;
+  ReadOnlyEndoGit | ReadWriteEndoGit | HistoryRewriteEndoGit;
 
 /** `makeGit` options requesting the read-only facet. */
 export type GitMakeReadOnlyOptions = {

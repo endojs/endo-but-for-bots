@@ -35,8 +35,8 @@ export const conflictRebaseSource = (
     await E(git).rebase({ mode: 'start', upstream: ${JSON.stringify(upstream)} });
     // Rebase succeeded without stopping for a conflict.
   } catch (err) {
-    const rows = await E(git).status();
-    const conflict = rows.find(
+    const status = await E(git).status();
+    const conflict = status.entries.find(
       row => row.path === 'app.txt' && row.worktree === 'conflicted',
     );
     if (conflict === undefined) {
@@ -46,12 +46,12 @@ export const conflictRebaseSource = (
   }
   const root = await E(workspace).root();
   await E(root).write('app.txt', ${JSON.stringify(resolvedText)});
-  const rows = await E(git).status();
-  const app = rows.find(row => row.path === 'app.txt');
+  const status = await E(git).status();
+  const app = status.entries.find(row => row.path === 'app.txt');
   if (app === undefined) {
     throw new Error('app.txt was not present in conflicted status');
   }
-  await E(git).add([app.entry]);
+  await E(git).add([app.path]);
   await E(git).rebase({ mode: 'continue' });
 })()`;
 harden(conflictRebaseSource);

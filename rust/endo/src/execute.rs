@@ -241,6 +241,12 @@ fn normalize_to_esm(
         Some("json") => esm_only(format!("export default ({source});")),
         Some("mjs") => esm_only(source),
         Some("js") if esm_by_default => esm_only(source),
+        // An ambiguous `.js` (its package manifest has no
+        // `"type": "module"`) containing unambiguous ESM syntax runs
+        // as ESM, per Node's module-syntax detection — wrapping it in
+        // the CJS loader would reject its `import` declarations at
+        // evaluation (`SyntaxError: invalid import`).
+        Some("js") if crate::cjs_lexer::detect_esm_syntax(&source) => esm_only(source),
         _ => {
             // Strip the shebang line but keep the newline in its place,
             // as Node does, so line numbers (and stack traces) stay
@@ -639,6 +645,69 @@ mod tests {
             .expect("XS execution of the top-level-await graph");
     }
 
+    /// An ambiguous `.js` entry — its manifest has no `"type"` field —
+    /// that uses `import` declarations executes as ESM rather than
+    /// being wrapped for the CJS loader (which would reject the
+    /// `import` at evaluation with `SyntaxError: invalid import`).
+    /// This is the shape of every quick-start `endor run` demo, and
+    /// the shape Node's module-syntax detection exists for.
+    #[test]
+    fn executes_ambiguous_esm_entry_in_xs() {
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+        let registry = RegistryTable::open_in_memory().unwrap();
+        let app = tempfile::tempdir().unwrap();
+        fs::write(
+            app.path().join("package.json"),
+            r#"{"name":"app","dependencies":{"esm-a":"^1.0.0"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            app.path().join("main.js"),
+            "import { a } from 'esm-a';\nprint(`a=${a}`);\n",
+        )
+        .unwrap();
+        let run = assemble_entry(
+            &esm_graph_http(),
+            &cas,
+            &registry,
+            DEFAULT_REGISTRY,
+            &app.path().join("main.js"),
+        )
+        .unwrap();
+
+        let archive = load_assembled_archive(&cas, &run.compartment_map_hash).unwrap();
+        // The entry source is hosted as ESM verbatim, not a CJS facade.
+        assert_eq!(
+            archive.sources[&(ENTRY_COMPARTMENT.to_string(), "./main.js".to_string())],
+            "import { a } from 'esm-a';\nprint(`a=${a}`);\n"
+        );
+        xsnap::run_xs_archive_loaded(&archive)
+            .expect("XS execution of the ambiguous-entry graph");
+    }
+
+    /// Module-syntax detection applies per file: in the same typeless
+    /// package, an `import`-bearing `.js` passes through as ESM while
+    /// a require-style sibling still gets the CJS facade.
+    #[test]
+    fn ambiguous_js_classification_is_per_file() {
+        let esm = normalize_to_esm(
+            "main.js",
+            b"import { a } from 'esm-a';\nprint(a);\n",
+            false,
+            "app",
+        );
+        assert_eq!(esm.esm, "import { a } from 'esm-a';\nprint(a);\n");
+        assert!(esm.cjs_raw.is_none());
+
+        let cjs = normalize_to_esm("util.js", b"module.exports = 5;", false, "app");
+        assert!(cjs.cjs_raw.is_some());
+
+        // `.cjs` stays CJS even with (broken) import text inside.
+        let forced = normalize_to_esm("forced.cjs", b"import x from 'y';\n", false, "app");
+        assert!(forced.cjs_raw.is_some());
+    }
+
     #[test]
     fn normalizes_cjs_and_json_sources() {
         let cjs = normalize_to_esm("index.js", b"module.exports = 5;", false, "dep-v1.0.0");
@@ -811,6 +880,30 @@ mod tests {
         );
         let archive = load_assembled_archive(&cas, &map_hash).unwrap();
         xsnap::run_xs_archive_loaded(&archive).expect("console endowment lets the run complete");
+    }
+
+    /// Real npm code constructs URLs (normalize-url, node-fetch
+    /// shims, registry clients); the runner endows the WHATWG
+    /// URL/URLSearchParams veneer in archive compartments, with the
+    /// searchParams mutation reflected back into the URL.
+    #[test]
+    fn url_globals_are_endowed_in_the_run_machine() {
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+        let map_hash = single_module_map(
+            &cas,
+            "const u = new URL('../up?b=2&a=1', 'https://example.com/a/b/c');\n\
+             u.searchParams.sort();\n\
+             if (u.href !== 'https://example.com/a/up?a=1&b=2') {\n\
+               throw new Error('unexpected href: ' + u.href);\n\
+             }\n\
+             if (new URLSearchParams('x=%C3%A9').get('x') !== '\\u00e9') {\n\
+               throw new Error('unexpected form-urlencoded decode');\n\
+             }\n\
+             export const done = true;\n",
+        );
+        let archive = load_assembled_archive(&cas, &map_hash).unwrap();
+        xsnap::run_xs_archive_loaded(&archive).expect("URL endowment lets the run complete");
     }
 
     /// A throw in the program being run (here a ReferenceError) must
@@ -1066,6 +1159,59 @@ mod tests {
                 ),
                 ("boom.cjs", "throw new Error('require build must not load');\n"),
                 ("src/sub.js", "export const word = 'esm';\n"),
+            ],
+        )
+        .unwrap();
+    }
+
+    /// The `crypto` endowment: `getRandomValues` fills a typed array
+    /// in place and returns it; `randomUUID` returns a version-4,
+    /// RFC-4122-variant UUID string.
+    #[test]
+    fn crypto_endowment_provides_webcrypto_randomness() {
+        run_two_comp(
+            "const bytes = crypto.getRandomValues(new Uint8Array(64));\n\
+             if (bytes.length !== 64) throw new Error('length');\n\
+             let sum = 0;\n\
+             for (let i = 0; i < bytes.length; i++) sum += bytes[i];\n\
+             if (sum === 0) throw new Error('bytes not filled');\n\
+             const uuid = crypto.randomUUID();\n\
+             if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(uuid)) {\n\
+                 throw new Error('uuid shape: ' + uuid);\n\
+             }\n\
+             export const got = uuid;\n",
+            "dep",
+            &[
+                ("package.json", r#"{"name": "dep"}"#),
+                ("index.js", "export default 0;\n"),
+            ],
+        )
+        .unwrap();
+    }
+
+    /// `crypto.getRandomValues` fills a TypedArray view that sits at a
+    /// non-zero `byteOffset` inside a larger buffer, writing only the
+    /// view's own bytes — the native `randomFillBytes` primitive must
+    /// honour `byteOffset`/`byteLength`, not clobber the whole buffer.
+    #[test]
+    fn crypto_getrandomvalues_respects_view_offset() {
+        run_two_comp(
+            "const buf = new ArrayBuffer(16);\n\
+             const head = new Uint8Array(buf, 0, 4);\n\
+             const mid = new Uint8Array(buf, 4, 8);\n\
+             crypto.getRandomValues(mid);\n\
+             const whole = new Uint8Array(buf);\n\
+             for (let i = 0; i < 4; i++) if (whole[i] !== 0) throw new Error('head clobbered');\n\
+             for (let i = 12; i < 16; i++) if (whole[i] !== 0) throw new Error('tail clobbered');\n\
+             let sum = 0;\n\
+             for (let i = 4; i < 12; i++) sum += whole[i];\n\
+             if (sum === 0) throw new Error('view not filled');\n\
+             void head;\n\
+             export const got = 'ok';\n",
+            "dep",
+            &[
+                ("package.json", r#"{"name": "dep"}"#),
+                ("index.js", "export default 0;\n"),
             ],
         )
         .unwrap();

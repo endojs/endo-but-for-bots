@@ -19,6 +19,8 @@ export const main = async agent => {
   const writeFileUrl = new URL('tools/write-file.js', import.meta.url).href;
   const editUrl = new URL('tools/edit.js', import.meta.url).href;
   const listDirUrl = new URL('tools/list-dir.js', import.meta.url).href;
+  const globUrl = new URL('tools/glob.js', import.meta.url).href;
+  const grepUrl = new URL('tools/grep.js', import.meta.url).href;
   const runCommandUrl = new URL('tools/run-command.js', import.meta.url).href;
 
   await E(agent).makeUnconfined('@main', readFileUrl, {
@@ -44,6 +46,18 @@ export const main = async agent => {
     env,
   });
   console.log('[setup-fs-tools] Created list-dir');
+
+  await E(agent).makeUnconfined('@main', globUrl, {
+    resultName: 'glob',
+    env,
+  });
+  console.log('[setup-fs-tools] Created glob');
+
+  await E(agent).makeUnconfined('@main', grepUrl, {
+    resultName: 'grep',
+    env,
+  });
+  console.log('[setup-fs-tools] Created grep');
 
   await E(agent).makeUnconfined('@main', runCommandUrl, {
     resultName: 'run-command',

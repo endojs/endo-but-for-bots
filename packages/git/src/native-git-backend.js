@@ -3,7 +3,6 @@
 
 import { Buffer } from 'node:buffer';
 import { execFile, spawn } from 'node:child_process';
-import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import process from 'node:process';
 import { setTimeout, clearTimeout } from 'node:timers';
@@ -12,10 +11,13 @@ import path from 'node:path';
 import { URL, fileURLToPath } from 'node:url';
 
 import { encodeBase64 } from '@endo/base64';
+import { bytesFromText } from '@endo/bytes/from-string.js';
 import { q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
+import { encodeHex } from '@endo/hex';
+import { sha256 } from '@endo/sha256';
 import { mapReader } from '@endo/stream';
 // `GitBlob` exposes the whole-value read surface plus the richer `BlobRef`
 // range-I/O surface (`getInfo` / `fetch`), so a remote reader of a git tree can
@@ -23,7 +25,12 @@ import { mapReader } from '@endo/stream';
 // See designs/fs-interface-consolidation.md § C4.
 import { ReadableBlobRangeInterface } from '@endo/platform/fs/lite';
 import { toSafeNumber } from '@endo/platform/fs/extended/shared/helpers.js';
-import { GitTreeInterface } from '@endo/exo-git';
+import {
+  GitTreeInterface,
+  gitBlobHelp,
+  gitTreeHelp,
+  makeHelp,
+} from '@endo/exo-git';
 
 // `TextDecoder` is portable across XS, browsers, and SES realms;
 // prefer it over `Buffer.from(...).toString('utf8')` per the project
@@ -46,17 +53,20 @@ const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
  *   GitDeleteBranchOptions,
  *   GitMergeOptions,
  *   GitRemoteCredential,
+ *   GitStatusOptions,
  *   RemoteRefUpdate,
  *   GitRefUpdateResult,
  *   GitRebaseInput,
  *   GitRef,
  *   GitRestoreOptions,
+ *   GitWorktreeAddOptions,
  *   ReadableTree,
+ *   GitTree,
  * } from '@endo/exo-git'
  * @import {
  *   GitTreeEntry,
- *   NativeGitStatusOptions,
  *   RawStatusEntry,
+ *   RawWorktreeEntry,
  *   RemoteRefspec,
  *   RepositoryIdentity,
  * } from './native-git-backend-types.js'
@@ -601,16 +611,25 @@ harden(gitClone);
 
 /**
  * Limits the bytes one tool call's output can balloon to, so a runaway
- * `git log` cannot fill the worker's CapTP buffer.
+ * `git log` cannot fill the worker's CapTP buffer.  The result, marker
+ * included, is always at most `TOOL_OUTPUT_LIMIT` characters.
  *
  * @param {string} output
  * @returns {string}
  */
 const truncateOutput = output => {
-  if (output.length > TOOL_OUTPUT_LIMIT) {
-    return `${output.slice(0, TOOL_OUTPUT_LIMIT)}\n\n... (truncated, ${output.length} chars total)`;
+  if (output.length <= TOOL_OUTPUT_LIMIT) {
+    return output;
   }
-  return output;
+  // Reserve the actual marker length rather than a guessed overhead, so the
+  // original total remains visible even for unusually large lengths whose
+  // decimal representation needs more digits than the usual marker.
+  const marker = `\n\n... (truncated, ${output.length} chars total)`;
+  const sliceLength = Math.max(0, TOOL_OUTPUT_LIMIT - marker.length);
+  const truncated = `${output.slice(0, sliceLength)}${marker}`;
+  return truncated.length <= TOOL_OUTPUT_LIMIT
+    ? truncated
+    : truncated.slice(0, TOOL_OUTPUT_LIMIT);
 };
 
 /**
@@ -960,10 +979,7 @@ const hashIdentityConfig = configText => {
         !/^\s*\[branch /u.test(line) &&
         !/^\s*(url|pushurl|remote|merge)\s*=/u.test(line),
     );
-  return crypto
-    .createHash('sha256')
-    .update(stableLines.join('\n'))
-    .digest('hex');
+  return encodeHex(sha256(bytesFromText(stableLines.join('\n'))));
 };
 harden(hashIdentityConfig);
 
@@ -1084,6 +1100,205 @@ const worktreeCodeToStatus = (code, indexCode) => {
       return 'clean';
   }
 };
+
+/**
+ * Parse the NUL-delimited records emitted by `git worktree list
+ * --porcelain -z`.
+ *
+ * Git emits one field per NUL-delimited item and an additional empty item
+ * between worktree records.  The path, HEAD, and branch values are kept in
+ * the same spelling Git reports; the remaining fields are stable booleans so
+ * callers do not need to interpret porcelain text.
+ *
+ * @param {string} output
+ * @returns {RawWorktreeEntry[]}
+ */
+const parseWorktreeList = output => {
+  const fields = output.split('\0');
+  /** @type {RawWorktreeEntry[]} */
+  const entries = [];
+  let index = 0;
+  while (index < fields.length) {
+    while (index < fields.length && fields[index] === '') {
+      index += 1;
+    }
+    if (index >= fields.length) {
+      break;
+    }
+    const header = fields[index];
+    index += 1;
+    if (!header.startsWith('worktree ')) {
+      throw new Error(`Malformed git worktree record: ${q(header)}`);
+    }
+    /** @type {RawWorktreeEntry} */
+    const entry = {
+      path: header.slice('worktree '.length),
+      bare: false,
+      detached: false,
+      locked: false,
+      prunable: false,
+    };
+    while (index < fields.length && fields[index] !== '') {
+      const field = fields[index];
+      index += 1;
+      if (field.startsWith('HEAD ')) {
+        entry.head = field.slice('HEAD '.length);
+      } else if (field.startsWith('branch ')) {
+        entry.branch = field.slice('branch '.length);
+      } else if (field === 'bare') {
+        entry.bare = true;
+      } else if (field === 'detached') {
+        entry.detached = true;
+      } else if (field === 'locked' || field.startsWith('locked ')) {
+        entry.locked = true;
+      } else if (field === 'prunable' || field.startsWith('prunable ')) {
+        entry.prunable = true;
+      }
+    }
+    entries.push(harden(entry));
+  }
+  return harden(entries);
+};
+harden(parseWorktreeList);
+
+/**
+ * Convert one Git host-absolute worktree path into a path relative to the
+ * backend mount, or omit it when it points outside the mount.
+ *
+ * @param {RawWorktreeEntry} entry
+ * @param {string} root
+ * @param {string} resolvedRoot
+ * @returns {Promise<RawWorktreeEntry | undefined>}
+ */
+const confineWorktreeEntry = async (entry, root, resolvedRoot) => {
+  const candidate = path.isAbsolute(entry.path)
+    ? path.resolve(entry.path)
+    : path.resolve(root, entry.path);
+  const lexicalRelative = path.relative(resolvedRoot, candidate);
+  const isOutside = relative =>
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative);
+  if (isOutside(lexicalRelative)) {
+    return undefined;
+  }
+  try {
+    const resolvedCandidate = await fs.promises.realpath(candidate);
+    if (isOutside(path.relative(resolvedRoot, resolvedCandidate))) {
+      return undefined;
+    }
+  } catch (error) {
+    const code = /** @type {{ code?: string }} */ (error).code;
+    if (code !== 'ENOENT') {
+      return undefined;
+    }
+  }
+  const relativePath =
+    lexicalRelative === '' ? '.' : lexicalRelative.split(path.sep).join('/');
+  return harden({ ...entry, path: relativePath });
+};
+harden(confineWorktreeEntry);
+
+/**
+ * @param {RawWorktreeEntry[]} entries
+ * @param {string} root
+ * @returns {Promise<RawWorktreeEntry[]>}
+ */
+const confineWorktreeEntries = async (entries, root) => {
+  const resolvedRoot = await fs.promises.realpath(root);
+  const confined = await Promise.all(
+    entries.map(entry => confineWorktreeEntry(entry, root, resolvedRoot)),
+  );
+  return harden(confined.filter(entry => entry !== undefined));
+};
+harden(confineWorktreeEntries);
+
+/**
+ * Validate mount-relative destination segments before resolving them against
+ * the backend's repository root.  `.git` and its common Windows short-name
+ * spelling are reserved because a worktree there would expose Git's
+ * administrative files, including hook files, through the guest mount.
+ *
+ * @param {unknown} value
+ * @returns {string[]}
+ */
+const requireWorktreeDestinationSegments = value => {
+  if (!Array.isArray(value)) {
+    throw new Error('worktreeAdd.destination must be a path-segment array');
+  }
+  if (value.length === 0) {
+    throw new Error('worktreeAdd.destination must not be empty');
+  }
+  return value.map((segment, index) => {
+    const name = requireNonEmptyString(
+      segment,
+      `worktreeAdd.destination[${index}]`,
+    );
+    if (
+      name === '.' ||
+      name === '..' ||
+      name.includes('/') ||
+      name.includes('\\') ||
+      /^\.git$/iu.test(name) ||
+      /^git~\d+$/iu.test(name)
+    ) {
+      throw new Error(
+        `worktreeAdd.destination[${index}] must be a single non-admin mount-relative segment`,
+      );
+    }
+    return name;
+  });
+};
+harden(requireWorktreeDestinationSegments);
+
+/**
+ * Verify a destination and its deepest existing ancestor are inside the
+ * repository root.  This catches symlinked ancestors as well as lexical
+ * traversal before `git worktree add` creates anything.
+ *
+ * @param {string} destination
+ * @param {string} root
+ * @returns {Promise<void>}
+ */
+const assertWorktreeDestinationConfined = async (destination, root) => {
+  const resolvedRoot = await fs.promises.realpath(root);
+  let check = destination;
+  let resolved;
+  for (;;) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      resolved = await fs.promises.realpath(check);
+      break;
+    } catch (error) {
+      const code = /** @type {{ code?: string }} */ (error).code;
+      if (code !== 'ENOENT') {
+        throw new Error(
+          `worktreeAdd destination cannot be resolved: ${q(destination)}`,
+          { cause: error },
+        );
+      }
+      const parent = path.dirname(check);
+      if (parent === check) {
+        throw new Error(
+          `worktreeAdd destination cannot be resolved inside repository root: ${q(destination)}`,
+          { cause: error },
+        );
+      }
+      check = parent;
+    }
+  }
+  const relative = path.relative(resolvedRoot, resolved);
+  if (
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error(
+      `worktreeAdd destination is outside the repository mount: ${q(destination)}`,
+    );
+  }
+};
+harden(assertWorktreeDestinationConfined);
 
 /**
  * Construct the native-git backend.  The backend runs the system `git`
@@ -1231,21 +1446,62 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
         // case-preserving comparison of `--show-toplevel`'s output
         // against the mount root.
         const resolvedMountRoot = await fs.promises.realpath(repoRoot);
-        const { stdout } = await execFileAsync(
-          'git',
-          [...GIT_BASE_ARGS, 'rev-parse', '--show-toplevel'],
-          {
-            cwd: resolvedMountRoot,
-            env: makeGitEnv(resolvedMountRoot),
-            timeout: GIT_TIMEOUT_MS,
-            maxBuffer: GIT_MAX_BUFFER,
-          },
-        );
-        const actualRoot = await fs.promises.realpath(stdout.trim());
-        if (actualRoot !== resolvedMountRoot) {
-          throw new Error(
-            `Git worktree root mismatch: mount root is ${q(resolvedMountRoot)} but git reports ${q(actualRoot)}`,
+        let worktreeRootError;
+        try {
+          const { stdout } = await execFileAsync(
+            'git',
+            [...GIT_BASE_ARGS, 'rev-parse', '--show-toplevel'],
+            {
+              cwd: resolvedMountRoot,
+              env: makeGitEnv(resolvedMountRoot),
+              timeout: GIT_TIMEOUT_MS,
+              maxBuffer: GIT_MAX_BUFFER,
+            },
           );
+          const actualRoot = await fs.promises.realpath(stdout.trim());
+          if (actualRoot !== resolvedMountRoot) {
+            throw new Error(
+              `Git worktree root mismatch: mount root is ${q(resolvedMountRoot)} but git reports ${q(actualRoot)}`,
+            );
+          }
+        } catch (error) {
+          worktreeRootError = error;
+        }
+        if (worktreeRootError !== undefined) {
+          // A bare repository has no worktree for `--show-toplevel` to
+          // report, but its git directory is still a valid repository root
+          // for worktree enumeration (including linked worktrees).
+          const { stdout: bareOut } = await execFileAsync(
+            'git',
+            [...GIT_BASE_ARGS, 'rev-parse', '--is-bare-repository'],
+            {
+              cwd: resolvedMountRoot,
+              env: makeGitEnv(resolvedMountRoot),
+              timeout: GIT_TIMEOUT_MS,
+              maxBuffer: GIT_MAX_BUFFER,
+            },
+          ).catch(() => ({ stdout: 'false' }));
+          if (bareOut.trim() !== 'true') {
+            throw worktreeRootError;
+          }
+          const { stdout: gitDirOut } = await execFileAsync(
+            'git',
+            [...GIT_BASE_ARGS, 'rev-parse', '--git-dir'],
+            {
+              cwd: resolvedMountRoot,
+              env: makeGitEnv(resolvedMountRoot),
+              timeout: GIT_TIMEOUT_MS,
+              maxBuffer: GIT_MAX_BUFFER,
+            },
+          );
+          const actualRoot = await fs.promises.realpath(
+            resolveGitPath(gitDirOut.trim(), resolvedMountRoot),
+          );
+          if (actualRoot !== resolvedMountRoot) {
+            throw new Error(
+              `Git bare repository root mismatch: mount root is ${q(resolvedMountRoot)} but git reports ${q(actualRoot)}`,
+            );
+          }
         }
         repositoryIdentity = await captureRepositoryIdentity(resolvedMountRoot);
       })();
@@ -1320,6 +1576,22 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
         `git ${gitCommandName(args)} failed (exit ${error.code ?? 'unknown'}):\n${truncateOutput(detail.trim())}`,
       );
     }
+  };
+
+  /**
+   * A linked worktree's administrative git directory must remain reachable
+   * through the mount that authorized this backend.  In particular, a
+   * checkout whose `.git` file points at a bare mirror elsewhere must not
+   * create a worktree that the caller cannot subsequently inspect.
+   *
+   * @returns {Promise<void>}
+   */
+  const assertWorktreeAdminConfined = async () => {
+    const commonDir = resolveGitPath(
+      (await runGitRaw(['rev-parse', '--git-common-dir'])).trim(),
+      repoRoot,
+    );
+    await assertWorktreeDestinationConfined(commonDir, repoRoot);
   };
 
   /**
@@ -1472,6 +1744,37 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
       );
     }
   };
+
+  /**
+   * Remove the exact worktree created by this backend when a later
+   * confinement or mount-narrowing check fails.  This is host-private
+   * compensation, not a guest-facing remove authority; the caller supplies
+   * only the destination it has just created.
+   *
+   * @param {string} destination
+   * @returns {Promise<void>}
+   */
+  const removeCreatedWorktree = async destination => {
+    await runGit(['worktree', 'remove', '--force', '--', destination]);
+  };
+  harden(removeCreatedWorktree);
+
+  /**
+   * Remove a worktree after the exo layer has created it but cannot derive a
+   * confined mount for it.  The segment validation and confinement check keep
+   * this compensation bounded to the original mount.
+   *
+   * @param {string[]} destinationSegments
+   * @returns {Promise<void>}
+   */
+  const worktreeRemove = async destinationSegments => {
+    const segments = requireWorktreeDestinationSegments(destinationSegments);
+    const destination = path.resolve(repoRoot, ...segments);
+    await assertWorktreeAdminConfined();
+    await assertWorktreeDestinationConfined(destination, repoRoot);
+    await removeCreatedWorktree(destination);
+  };
+  harden(worktreeRemove);
 
   /**
    * Run a sanitized git invocation with GIT_ASKPASS connected to an inherited
@@ -1916,9 +2219,7 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
       // sha1 OID.
       async getInfo() {
         const bytes = await readBlobBytes(blobOid);
-        const hash = encodeBase64(
-          crypto.createHash('sha256').update(bytes).digest(),
-        );
+        const hash = encodeBase64(sha256(bytes));
         return harden({
           algorithm: 'sha256',
           hash,
@@ -1951,19 +2252,15 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
         );
       },
 
-      /** @param {string} [method] */
-      help: method =>
-        method === undefined
-          ? 'GitBlob: read-only blob over a git object (text, json, streamBase64, getInfo, fetch).'
-          : `No documentation for method ${method}.`,
+      help: makeHelp(gitBlobHelp),
     });
 
   /**
    * @param {string} treeOid
-   * @returns {ReadableTree}
+   * @returns {GitTree}
    */
   const makeGitTree = treeOid => {
-    /** @type {ReadableTree} */
+    /** @type {GitTree} */
     let self;
 
     /**
@@ -2005,6 +2302,8 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
     };
 
     self = makeExo('GitTree', GitTreeInterface, {
+      help: makeHelp(gitTreeHelp),
+
       /**
        * Returns a `PassableBytesReader` over the
        * `git archive --format=tar` stream.
@@ -2046,7 +2345,7 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
         const segments = normalizeTreePath(pathArgs);
         if (segments.length > 0) {
           const subtree = await lookupSegments(segments);
-          return /** @type {ReadableTree} */ (subtree).list();
+          return /** @type {GitTree} */ (subtree).list();
         }
         const entries = await listTreeEntries(treeOid);
         return harden(entries.map(entry => entry.name));
@@ -2081,12 +2380,11 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
      * verbatim) and rename/copy records embed the source-path field
      * inline rather than escaping it.
      *
-     * Returns the raw structural list.  The public Git exo wraps each
-     * entry into a `GitStatusEntry` by minting a `PathEntry` on
-     * the bound mount — the backend has no mount cap to mint with.
+     * Returns the raw structural list.  The public Git exo projects each row
+     * into copy data.
      *
      * @returns {Promise<RawStatusEntry[]>}
-     * @param {NativeGitStatusOptions} [options]
+     * @param {GitStatusOptions} [options]
      */
     status: async (options = {}) => {
       const untracked = options.untracked ?? 'all';
@@ -2095,8 +2393,14 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
           "status.untracked must be one of 'all', 'normal', or 'no'",
         );
       }
-      // Use the streaming reader: porcelain=v1 records start with a column-
-      // sensitive XY code (e.g. ' D' for a worktree-only deletion);
+      if (
+        options.maxCount !== undefined &&
+        (!Number.isInteger(options.maxCount) || options.maxCount <= 0)
+      ) {
+        throw new Error('status.maxCount must be a positive integer');
+      }
+      // Use the streaming reader: porcelain=v1 records start with a
+      // column-sensitive XY code (e.g. ' D' for a worktree-only deletion);
       // trimming would strip a leading space and shift the path.
       const out = await readGitText([
         'status',
@@ -2149,8 +2453,93 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
           }
         }
       }
-      return harden(entries);
+      return harden(
+        options.maxCount === undefined
+          ? entries
+          : entries.slice(0, options.maxCount),
+      );
     },
+
+    /**
+     * Enumerate the main repository and every linked worktree using Git's
+     * unambiguous streamed porcelain format.  `readGitText` deliberately
+     * uses the streaming reader because a repository may have many linked
+     * worktrees and the normal exec-file buffer is capped at one megabyte.
+     *
+     * @returns {Promise<RawWorktreeEntry[]>}
+     */
+    worktreeList: async () =>
+      confineWorktreeEntries(
+        parseWorktreeList(
+          await readGitText(['worktree', 'list', '--porcelain', '-z']),
+        ),
+        repoRoot,
+      ),
+
+    /**
+     * Create a linked worktree beneath the backend's repository root and
+     * return a backend bound to the new checkout.
+     *
+     * @param {string[]} destinationSegments
+     * @param {GitWorktreeAddOptions} [options]
+     * @returns {Promise<GitBackend>}
+     */
+    worktreeAdd: async (destinationSegments, options = {}) => {
+      const segments = requireWorktreeDestinationSegments(destinationSegments);
+      const destination = path.resolve(repoRoot, ...segments);
+      await assertWorktreeAdminConfined();
+      await assertWorktreeDestinationConfined(destination, repoRoot);
+      await assertNoExecutableRepoConfig();
+
+      const opts = /** @type {GitWorktreeAddOptions} */ (options);
+      const args = ['worktree', 'add'];
+      let newBranch;
+      if (opts.newBranch !== undefined) {
+        newBranch = requireRevision(opts.newBranch, 'worktreeAdd.newBranch');
+        args.push('-b', newBranch);
+      }
+      args.push('--', destination);
+      if (opts.ref !== undefined) {
+        const ref = typeof opts.ref === 'string' ? opts.ref : opts.ref?.name;
+        args.push(requireRevision(ref, 'worktreeAdd.ref'));
+      }
+      await runGit(args);
+
+      try {
+        await assertWorktreeDestinationConfined(destination, repoRoot);
+      } catch (error) {
+        try {
+          await removeCreatedWorktree(destination);
+        } catch (cleanupError) {
+          throw new Error(
+            'worktreeAdd created an unconfined worktree and cleanup failed',
+            { cause: cleanupError },
+          );
+        }
+        throw error;
+      }
+
+      const derivedBackend = makeNativeGitBackend({
+        repoRoot: destination,
+        identity,
+      });
+      try {
+        await derivedBackend.assertRepositoryRoot();
+      } catch (error) {
+        try {
+          await removeCreatedWorktree(destination);
+        } catch (cleanupError) {
+          throw new Error(
+            'worktreeAdd created a checkout that failed validation and cleanup failed',
+            { cause: cleanupError },
+          );
+        }
+        throw error;
+      }
+      return derivedBackend;
+    },
+
+    worktreeRemove,
 
     /**
      * Render a textual diff in `git diff` form.  `--no-ext-diff` suppresses
@@ -2590,6 +2979,67 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
     },
 
     /**
+     * Report the checked-out branch and its configured upstream divergence.
+     * A detached HEAD has no branch or upstream, and a branch without an
+     * upstream reports zero divergence rather than failing the inspection.
+     *
+     * @returns {Promise<{ branch?: string, upstream?: string, ahead: number, behind: number, detached: boolean }>}
+     */
+    trackingStatus: async () => {
+      let branch;
+      try {
+        branch = (await runGitRaw(['symbolic-ref', '--short', 'HEAD'])).trim();
+      } catch (err) {
+        const message = /** @type {Error} */ (err).message || '';
+        if (/not a symbolic ref|HEAD is not a symbolic/u.test(message)) {
+          return harden({ ahead: 0, behind: 0, detached: true });
+        }
+        throw err;
+      }
+      if (branch === '') {
+        return harden({ ahead: 0, behind: 0, detached: true });
+      }
+
+      let upstream;
+      try {
+        upstream = (
+          await runGitRaw([
+            'rev-parse',
+            '--abbrev-ref',
+            '--symbolic-full-name',
+            '@{u}',
+          ])
+        ).trim();
+      } catch (err) {
+        const message = /** @type {Error} */ (err).message || '';
+        if (
+          /no upstream|no such ref|unknown revision|ambiguous argument|not stored as a remote-tracking branch/u.test(
+            message,
+          )
+        ) {
+          return harden({ branch, ahead: 0, behind: 0, detached: false });
+        }
+        throw err;
+      }
+      if (upstream === '') {
+        return harden({ branch, ahead: 0, behind: 0, detached: false });
+      }
+
+      const counts = (
+        await runGitRaw(['rev-list', '--left-right', '--count', '@{u}...HEAD'])
+      ).trim();
+      const [behindText, aheadText] = counts.split(/\s+/u);
+      const behind = Number(behindText);
+      const ahead = Number(aheadText);
+      if (!Number.isInteger(behind) || !Number.isInteger(ahead)) {
+        throw new Error(
+          `git rev-list returned invalid tracking counts: ${counts}`,
+        );
+      }
+      return harden({ branch, upstream, ahead, behind, detached: false });
+    },
+
+    /**
      * @returns {Promise<GitRef[]>}
      */
     branches: async () => {
@@ -2857,7 +3307,7 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
      * implement `ReadableBlob`.
      *
      * @param {string} ref
-     * @returns {Promise<ReadableTree>}
+     * @returns {Promise<GitTree>}
      */
     tree: async ref => {
       const revision = requireRevision(ref, 'tree.ref');
@@ -2894,6 +3344,11 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
       const credentialBytes = credentialBytesFor(opts.credential);
       let text;
       if (credentialBytes === undefined) {
+        // `runGit` already applies `truncateOutput` to its return value, so
+        // this plain (no-credential) path is bounded the same as the
+        // askpass path below; the exo-git guard bounds it again
+        // structurally regardless, since a different or hostile backend
+        // could skip this helper entirely.
         text = await runGit(args, undefined, opts.signal);
       } else {
         const { stdout, stderr } = await runGitWithAskpass(
@@ -3083,6 +3538,8 @@ export const internalHelpers = harden({
   requireNonEmptyString,
   requireAskpassLine,
   requireRevision,
+  parseWorktreeList,
+  requireWorktreeDestinationSegments,
   parseGitVersion,
   assertSupportedGitVersion,
   compareVersion,

@@ -329,3 +329,28 @@ fn truncated_database_fails_closed_not_wrong() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The single-writer-per-path model is enforced, not assumed
+/// (collaborator-review follow-up): under `locking_mode=EXCLUSIVE`
+/// the first connection to touch the file holds it, so a second
+/// opener fails closed at its first query (the application_id gate)
+/// with SQLITE_BUSY after the busy timeout, instead of silently
+/// racing the writer. ~5s: the second opener waits out busy_timeout.
+#[test]
+fn second_opener_fails_closed_under_exclusive_locking() {
+    let dir = std::env::temp_dir().join(format!(
+        "ironhorse-sqlite-exclusive-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("heap.sqlite");
+
+    let first = ironhorse_store_sqlite::SqliteHeapStore::open(&path).expect("first opener");
+    match ironhorse_store_sqlite::SqliteHeapStore::open(&path) {
+        Err(_) => {}
+        Ok(_) => panic!("second opener must fail closed while the first holds the file"),
+    }
+    drop(first);
+    let _ = std::fs::remove_dir_all(&dir);
+}

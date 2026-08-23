@@ -4,17 +4,16 @@
  * captured `Uint8Array` snapshot (DESIGN.md §6).
  *
  * Identical across the in-memory, node-fs, and from-mount
- * `Filesystem` implementations: defensively copy + harden the
- * bytes, SHA-256 them, return an exo whose `getInfo()` carries
+ * `Filesystem` implementations: defensively copy the bytes,
+ * SHA-256 them, return an exo whose `getInfo()` carries
  * the algorithm / hash / size triple and whose `fetch(offset,
  * length)` returns a `PassableBytesReader` over the captured
  * range.
  */
 
-import { createHash } from 'node:crypto';
-
 import { makeExo } from '@endo/exo';
 import { encodeBase64 } from '@endo/base64';
+import { sha256 } from '@endo/sha256';
 import { q } from '@endo/errors';
 
 import { BlobRefInterface } from '../type-guards.js';
@@ -48,6 +47,9 @@ const textDecoder = new TextDecoder();
  * @returns {BlobRef}
  */
 export const makeBlobRefExo = (bytes, help, infoOverride) => {
+  // The COPY is what makes these bytes immutable to the caller.
+  // `harden` on a typed array does not freeze its elements, so it
+  // buys nothing here beyond consistency with the rest of the file.
   const captured = harden(new Uint8Array(bytes));
   /** @type {BlobInfo} */
   let info;
@@ -58,12 +60,16 @@ export const makeBlobRefExo = (bytes, help, infoOverride) => {
       size: BigInt(captured.length),
     });
   } else {
-    const hashBytes = createHash('sha256').update(captured).digest();
+    // `@endo/sha256` rather than `node:crypto`: this module is on the XS
+    // daemon bundle's compartment graph, and a static `node:crypto` import
+    // is unresolvable there (`designs/platform-neutral-hash.md`).  The
+    // digest bytes are identical either way.
+    const hashBytes = sha256(captured);
     info = harden({
       algorithm: 'sha256',
-      // `encodeBase64` (over the `Buffer`, a `Uint8Array` subclass) matches the
-      // base64 hash spelling every other implementer in this PR uses, rather
-      // than the Node-only `Buffer.prototype.toString('base64')`.
+      // `encodeBase64` over the raw digest bytes matches the base64 hash
+      // spelling every other implementer uses, rather than the Node-only
+      // `Buffer.prototype.toString('base64')`.
       hash: encodeBase64(hashBytes),
       size: BigInt(captured.length),
     });
@@ -93,7 +99,7 @@ export const makeBlobRefExo = (bytes, help, infoOverride) => {
       if (method === undefined) {
         return help ?? 'BlobRef: content-addressed handle (DESIGN.md §6).';
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };

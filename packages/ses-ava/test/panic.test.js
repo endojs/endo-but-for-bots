@@ -3,10 +3,8 @@
 // platform's built-in `console`.
 // This is a copy of that test so it can use `ses-ava` and the ses `console`.
 // Please co-maintain these two files.
-import test from '../prepare-endo.js';
-
-// eslint-disable-next-line import/order
 import { PanicEndowmentSymbol, panic, lastResortError } from '@endo/panic';
+import test from '../prepare-endo.js';
 
 // The case where it does correctly exit immediately is hard to test with
 // ava tests, so the following tests are indirect.

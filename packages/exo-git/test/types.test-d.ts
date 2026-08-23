@@ -40,8 +40,11 @@ import type {
   GitStashPushOptions,
   GitStatusEntry,
   GitStatusOptions,
-  GitStatusNode,
+  GitStatusResult,
+  GitTrackingStatus,
   GitWorktree,
+  GitWorktreeAddOptions,
+  GitWorktreeEntry,
   GitWorktreeStatus,
   HistoryRewriteEndoGit,
   NormalizedRemotePolicy,
@@ -61,6 +64,27 @@ import type {
 } from '@endo/exo-git';
 import type { GitBackend } from '../src/git.js';
 
+expectTypeOf<GitStatusEntry>().toEqualTypeOf<{
+  path: string;
+  index: GitIndexStatus;
+  worktree: GitWorktreeStatus;
+  renamedFrom?: string;
+}>();
+expectTypeOf<GitStatusOptions>().toEqualTypeOf<{
+  maxCount?: number;
+  untracked?: 'all' | 'normal' | 'no';
+}>();
+expectTypeOf<GitStatusResult>().toEqualTypeOf<{
+  entries: GitStatusEntry[];
+  truncated: boolean;
+}>();
+expectTypeOf<GitTrackingStatus>().toEqualTypeOf<{
+  branch?: string;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+  detached: boolean;
+}>();
 declare const remotePolicy: RemotePolicy;
 const normalizedRemotePolicy = normalizeGitRemotePolicy({
   name: 'origin',
@@ -225,24 +249,31 @@ expectTypeOf<
 
 // `worktree()` returns a mutable `WritableGitWorktree` for read-write
 // postures and an immutable `ReadOnlyGitWorktree` for the read-only posture;
-// and the writable worktree issues lineage-bearing `PathEntry` values (the
-// property downstream mount-bridged tools, e.g. `GitMountToolCapability`,
-// depend on to stage files by entry rather than by trusting a bare path
-// string).
+// and the writable worktree issues lineage-bearing `PathEntry` values for
+// callers composing a designation across a trust boundary.
 expectTypeOf<
   Awaited<ReturnType<ReadWriteEndoGit['worktree']>>
 >().toEqualTypeOf<WritableGitWorktree>();
 expectTypeOf<
   Awaited<ReturnType<ReadOnlyEndoGit['worktree']>>
 >().toEqualTypeOf<ReadOnlyGitWorktree>();
-expectTypeOf<Parameters<ReadOnlyEndoGit['status']>[0]>().toEqualTypeOf<
-  GitStatusOptions | undefined
->();
-const validStatusOptions: GitStatusOptions = { untracked: 'no' };
-expectTypeOf(validStatusOptions).toEqualTypeOf<GitStatusOptions>();
-// @ts-expect-error `status` only accepts Git's three untracked modes.
-const invalidStatusOptions: GitStatusOptions = { untracked: 'invalid' };
 expectTypeOf<WritableGitWorktree>().toExtend<PathEntryIssuer>();
+
+expectTypeOf<
+  Awaited<ReturnType<ReadOnlyEndoGit['worktreeList']>>
+>().toEqualTypeOf<GitWorktreeEntry[]>();
+expectTypeOf<
+  Parameters<ReadWriteEndoGit['worktreeAdd']>[0]
+>().toEqualTypeOf<PathEntry>();
+expectTypeOf<
+  NonNullable<Parameters<ReadWriteEndoGit['worktreeAdd']>[1]>
+>().toEqualTypeOf<GitWorktreeAddOptions>();
+expectTypeOf<
+  Awaited<ReturnType<ReadWriteEndoGit['worktreeAdd']>>
+>().toEqualTypeOf<ReadWriteEndoGit>();
+expectTypeOf<
+  Awaited<ReturnType<HistoryRewriteEndoGit['worktreeAdd']>>
+>().toEqualTypeOf<HistoryRewriteEndoGit>();
 
 // `ReadOnlyEndoGit` must expose none of the mutating methods under any name;
 // a mutator method leaking onto the read-only posture (e.g. through a bad
@@ -266,7 +297,9 @@ type Mutator =
   | 'stashApply'
   | 'stashPop'
   | 'stashDrop';
-expectTypeOf<Extract<keyof ReadOnlyEndoGit, Mutator>>().toEqualTypeOf<never>();
+expectTypeOf<
+  Extract<keyof ReadOnlyEndoGit, Mutator | 'worktreeAdd'>
+>().toEqualTypeOf<never>();
 
 // The history-rewrite operations are visible only on `HistoryRewriteEndoGit`:
 // `ReadWriteEndoGit` must omit them entirely (not merely reject their
@@ -301,6 +334,10 @@ expectTypeOf<
 
 declare const ordinaryGit: ReadWriteEndoGit;
 declare const historyRewriteGit: HistoryRewriteEndoGit;
+
+ordinaryGit.add(['src/main.js']);
+ordinaryGit.restore(['src/main.js']);
+ordinaryGit.checkoutConflict(['src/main.js'], 'ours');
 
 // Call-site proof of the same commit/amend and history-rewrite-operation
 // contract pinned above by shape: an ordinary read-write Git must reject

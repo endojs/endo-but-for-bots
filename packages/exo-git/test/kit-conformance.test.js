@@ -30,6 +30,17 @@ const INTROSPECTION_METHODS = harden([
 ]);
 
 /**
+ * The fallback `makeHelp` yields for a method it has no entry for.
+ * Spelled out here rather than imported so the test pins the wording a
+ * caller actually sees.
+ *
+ * @param {string} method
+ * @returns {string}
+ */
+const unknownMethodHelp = method =>
+  `No documentation available for method "${method}".`;
+
+/**
  * @param {object} facet
  * @returns {Promise<string[]>}
  */
@@ -51,11 +62,27 @@ const BLOB_OID = 'blob-oid-1';
 const FILE_NAME = 'README.md';
 const FILE_BYTES = new TextEncoder().encode('hello\n');
 
-const makeFakeBackend = () =>
+/**
+ * @param {(segments: string[]) => Promise<void>} [worktreeRemove]
+ */
+const makeFakeBackend = (worktreeRemove = async () => undefined) =>
   harden({
     assertRepositoryRoot: async () => undefined,
     assertNoExecutableRepoConfig: async () => undefined,
     status: async () => [],
+    worktreeList: async () => [
+      {
+        path: '.',
+        bare: false,
+        detached: false,
+        locked: false,
+        prunable: false,
+        head: '0'.repeat(40),
+        branch: 'refs/heads/main',
+      },
+    ],
+    worktreeAdd: async () => makeFakeBackend(worktreeRemove),
+    worktreeRemove,
     diff: async () => '',
     log: async () => [],
     show: async () => '',
@@ -126,14 +153,18 @@ const makeFakeBackend = () =>
  * A repo-relative-segments PathEntry stand-in minted by the fake mount.
  *
  * @param {string[]} segments
+ * @param {WeakSet<object>} [entries]
  */
-const makeFakeEntry = segments =>
-  makeExo('FakeEntry', undefined, {
+const makeFakeEntry = (segments, entries) => {
+  const entry = makeExo('FakeEntry', undefined, {
     segments: async () => segments,
     displayPath: () => segments.join('/'),
-    child: () => makeFakeEntry(segments),
+    child: () => makeFakeEntry(segments, entries),
     help: () => '',
   });
+  entries?.add(entry);
+  return entry;
+};
 
 /**
  * A minimal writable-mount fake plus its structural read-only view. Mirrors
@@ -146,7 +177,11 @@ const makeFakeEntry = segments =>
  * so the fakes are minted as exos (`makeExo`, no interface guard) rather
  * than plain hardened objects.
  */
-const makeFakeMount = () => {
+/**
+ * @param {{ failSubView?: boolean }} [options]
+ */
+const makeFakeMount = ({ failSubView = false } = {}) => {
+  const entries = new WeakSet();
   const readOnlyMount = makeExo('FakeReadOnlyMount', undefined, {
     has: async () => false,
     list: async () => [],
@@ -156,6 +191,12 @@ const makeFakeMount = () => {
     has: async () => false,
     list: async () => [],
     lookup: async () => undefined,
+    subView: async () => {
+      if (failSubView) {
+        throw new Error('subView test failure');
+      }
+      return mount;
+    },
     writeText: async () => undefined,
     remove: async () => undefined,
     move: async () => undefined,
@@ -163,18 +204,33 @@ const makeFakeMount = () => {
     makeDirectory: async () => mount,
     readOnly: () => readOnlyMount,
     snapshot: async () => readOnlyMount,
-    entry: segments => makeFakeEntry(segments),
+    entry: segments => makeFakeEntry(segments, entries),
   });
-  return { mount, readOnlyMount };
+  return { mount, readOnlyMount, entries };
 };
 
-/** @returns {{ mount: object, backend: object, lineageOf: (v: unknown) => object | undefined }} */
-const makePowers = () => {
-  const { mount } = makeFakeMount();
-  const backend = makeFakeBackend();
+/**
+ * @param {{ failSubView?: boolean }} [options]
+ * @returns {{ mount: object, backend: object, lineageOf: (v: unknown) => object | undefined, foreignEntry: object, removed: string[][] }}
+ */
+const makePowers = ({ failSubView = false } = {}) => {
+  const { mount, entries } = makeFakeMount({ failSubView });
+  const removed = [];
+  const removeWorktree = async segments => {
+    removed.push([...segments]);
+  };
+  const backend = makeFakeBackend(removeWorktree);
   const lineage = harden({});
-  const lineageOf = value => (value === mount ? lineage : undefined);
-  return { mount, backend, lineageOf };
+  const foreignLineage = harden({});
+  const foreignEntries = new WeakSet();
+  const foreignEntry = makeFakeEntry(['foreign'], foreignEntries);
+  const lineageOf = value =>
+    value === mount || entries.has(value)
+      ? lineage
+      : foreignEntries.has(value)
+        ? foreignLineage
+        : undefined;
+  return { mount, backend, lineageOf, foreignEntry, removed };
 };
 
 // #endregion
@@ -201,6 +257,61 @@ test('every facet advertises exactly its schema, no more and no less', async t =
       `${name} facet method set must equal its schema exactly`,
     );
   }
+});
+
+test('every facet documents its overview and each method it advertises', async t => {
+  const { reader, writer, rewriter } = makeGitKit(makePowers());
+  const schemaByFacet = harden({
+    reader: GIT_READER_METHODS,
+    writer: GIT_WRITER_METHODS,
+    rewriter: GIT_REWRITER_METHODS,
+  });
+  for (const [name, facet] of /** @type {const} */ ([
+    ['reader', reader],
+    ['writer', writer],
+    ['rewriter', rewriter],
+  ])) {
+    const schema = schemaByFacet[name];
+    // eslint-disable-next-line no-await-in-loop
+    const [overview, unknown, ...docs] = await Promise.all([
+      E(facet).help(),
+      E(facet).help('unknownMethod'),
+      ...schema.map(method => E(facet).help(method)),
+    ]);
+    t.regex(
+      overview,
+      /^Git - /,
+      `${name} overview must be the Git entity overview`,
+    );
+    schema.forEach((method, index) => {
+      const doc = docs[index];
+      t.not(doc, '', `${name}.${method} must have documentation`);
+      t.not(
+        doc,
+        unknownMethodHelp(method),
+        `${name}.${method} must have per-method documentation, not the fallback`,
+      );
+      t.true(
+        doc.startsWith(`${method}(`),
+        `${name}.${method} documentation must open with its signature`,
+      );
+    });
+    t.is(unknown, unknownMethodHelp('unknownMethod'));
+  }
+});
+
+test('worktree methods have specific help and retain the fallback contract', async t => {
+  const { reader, writer } = makeGitKit(makePowers());
+  const [listDoc, addDoc, unknown] = await Promise.all([
+    E(reader).help('worktreeList'),
+    E(writer).help('worktreeAdd'),
+    E(reader).help('unknownWorktreeMethod'),
+  ]);
+  t.regex(listDoc, /^worktreeList\(\) -> Promise<GitWorktreeEntry\[\]>/);
+  t.regex(addDoc, /^worktreeAdd\(entry, options\?\) -> Promise<Git>/);
+  t.not(listDoc, '');
+  t.not(addDoc, '');
+  t.is(unknown, unknownMethodHelp('unknownWorktreeMethod'));
 });
 
 test('a method absent from a facet schema is absent, not merely rejecting', async t => {
@@ -352,6 +463,73 @@ test('worktree(): the reader facet hands back a structural read-only view, never
   // The rewriter facet is cumulative over the writer: same pass-through
   // writable worktree, same identity as the writer's.
   t.is(await E(rewriter).worktree(), powers.mount);
+});
+
+test('worktreeList is readable and worktreeAdd preserves the creating posture', async t => {
+  const powers = makePowers();
+  const { reader, writer, rewriter } = makeGitKit(powers);
+  const entry = powers.mount.entry(['linked']);
+
+  t.deepEqual(await E(reader).worktreeList(), [
+    {
+      path: '.',
+      bare: false,
+      detached: false,
+      locked: false,
+      prunable: false,
+      head: '0'.repeat(40),
+      branch: 'refs/heads/main',
+    },
+  ]);
+
+  const writerDerived = await E(writer).worktreeAdd(entry, {
+    ref: 'HEAD',
+    newBranch: 'linked',
+  });
+  t.is(isGitReadOnly(writerDerived), false);
+  t.is(isGitHistoryRewrite(writerDerived), false);
+  t.truthy(await E(writerDerived).currentBranch());
+
+  const rewriterDerived = await E(rewriter).worktreeAdd(entry, {
+    ref: 'HEAD',
+  });
+  t.is(isGitReadOnly(rewriterDerived), false);
+  t.is(isGitHistoryRewrite(rewriterDerived), true);
+
+  const escaped = powers.mount.entry(['..', 'outside']);
+  await t.throwsAsync(E(writer).worktreeAdd(escaped, { ref: 'HEAD' }), {
+    message: /confined mount-relative PathEntry/,
+  });
+  await t.throwsAsync(
+    E(writer).worktreeAdd(powers.foreignEntry, { ref: 'HEAD' }),
+    { message: /different mount lineage/ },
+  );
+  await t.throwsAsync(E(writer).worktreeAdd(powers.mount.entry([])), {
+    message: /non-empty confined mount-relative PathEntry/,
+  });
+  for (const segment of ['.git', '.GIT', 'git~1']) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      E(writer).worktreeAdd(powers.mount.entry([segment]), { ref: 'HEAD' }),
+      { message: /non-empty confined mount-relative PathEntry/ },
+    );
+  }
+  await t.throwsAsync(
+    E(/** @type {any} */ (reader)).worktreeAdd(entry, { ref: 'HEAD' }),
+    {
+      message: /has no method "worktreeAdd"/,
+    },
+  );
+});
+
+test('worktreeAdd compensates when the destination mount cannot be narrowed', async t => {
+  const powers = makePowers({ failSubView: true });
+  const { writer } = makeGitKit(powers);
+  await t.throwsAsync(
+    E(writer).worktreeAdd(powers.mount.entry(['linked']), { ref: 'HEAD' }),
+    { message: /subView test failure/ },
+  );
+  t.deepEqual(powers.removed, [['linked']]);
 });
 
 test('filesystemAt(): the memo is per instance, and the returned Filesystem rejects every mutation regardless of facet', async t => {

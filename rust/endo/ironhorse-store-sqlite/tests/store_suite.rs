@@ -1,6 +1,6 @@
 //! Instantiates the shared **backend-parameterized store acceptance
 //! suite** (`ironhorse_snapshot::store_suite`) against the SQLite
-//! backend, in-memory and on-disk — the six-way metamorphic
+//! backend, in-memory and on-disk — the seven-way metamorphic
 //! determinism runner, the lazy working-set bound, and the checkpoint
 //! acceptance locks. The reference backends run the identical suite
 //! in the engine workspace, so backend parity is enforced by one
@@ -18,7 +18,7 @@ fn in_memory() -> SqliteHeapStore {
 }
 
 #[test]
-fn sqlite_in_memory_agrees_six_ways() {
+fn sqlite_in_memory_agrees_seven_ways() {
     metamorphic_suite(in_memory);
 }
 
@@ -62,7 +62,7 @@ fn with_disk_stores(name: &str, run: impl FnOnce(&mut dyn FnMut() -> SqliteHeapS
 }
 
 #[test]
-fn sqlite_on_disk_agrees_six_ways() {
+fn sqlite_on_disk_agrees_seven_ways() {
     with_disk_stores("metamorphic", |fresh| metamorphic_suite(fresh));
 }
 

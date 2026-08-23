@@ -65,8 +65,17 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// The store schema version, independent of the snapshot
 /// [`crate::format::IRONHORSE_FORMAT_VERSION`] (which governs the record
 /// encodings both containers share). Bumped on any change to the page
-/// geometry, the manifest layout, or the small-state layout.
-pub const STORE_SCHEMA_VERSION: u32 = 2;
+/// geometry, the manifest layout, the small-state layout, the
+/// addition of a persisted row class, or a change to the integrity
+/// root's or seal's inputs — the phase-6 near-miss (a new persisted
+/// row class with no bump) is exactly what the widened trigger list
+/// exists to prevent.
+///
+/// v5: page-edge summaries joined the integrity root (with a section
+/// geometry header and length-prefixed edge entries in both the root
+/// and the seal encodings), and commit verifies summaries against the
+/// rows they travel with.
+pub const STORE_SCHEMA_VERSION: u32 = 5;
 
 /// A store that cannot be used, or an operation on it that failed.
 /// Gate failures reuse the [`SnapshotError`] taxonomy so a foreign or
@@ -108,6 +117,19 @@ pub enum StoreError {
     /// already holds an epoch. Adopting existing content is the resume
     /// path's job; silently overwriting it would discard a heap.
     NotEmpty { epoch: u64 },
+    /// A stored page-edge summary vector whose length disagrees with
+    /// the manifest geometry. Refused before any reachability decision
+    /// is made from the summaries: the partial collector FREES pages
+    /// based on them, so a short vector (a truncated table) must fail
+    /// closed rather than read as "no outgoing edges".
+    SummaryCount { expected: u32, found: u32 },
+    /// A batch's page-edge summary disagrees with the page row it
+    /// travels beside (or a summary travels without its row / a row
+    /// without its summary). Commit recomputes every traveling
+    /// summary from the row's records — the summaries must stay a
+    /// pure function of row content, or the collector's stored
+    /// reachability diverges from the heap it frees from.
+    SummaryMismatch { page: u32 },
 }
 
 impl From<SnapshotError> for StoreError {
@@ -140,14 +162,28 @@ pub struct StoreManifest {
     pub slot_live: u32,
     /// Chunk-arena byte length. May shrink across a GC compaction.
     pub chunk_len: u64,
+    /// Total free-list entries (store seam phase 9): the free list
+    /// lives in dirty-diffed segment rows, and this is their geometry
+    /// the same way `slot_count` is the pages'.
+    pub free_len: u32,
     /// The checkpoint generation. 0 never appears in a committed
     /// manifest; the first commit is epoch 1.
     pub epoch: u64,
+    /// The **row-hash tree root** (store seam design, phase 5): SHA-256
+    /// (hex) over the small-state leaf and every row leaf
+    /// ([`combine_root`]). Unlike the seal — which chains commit
+    /// *deltas* — the root attests the store's complete CURRENT
+    /// content, so a length-preserving byte flip at rest fails closed
+    /// (at open for a leaf flip, at first read for a row flip)
+    /// instead of resuming a different machine. Store-native identity;
+    /// the CAS blob key remains SHA-256 of the canonical export.
+    pub root: String,
     /// The commit-seal chain: SHA-256 (hex) over the previous seal and
     /// this commit's content ([`seal_commit`]). Together with
     /// [`check_succession`] it binds every commit to the exact store
     /// state it was computed against — an epoch number alone cannot
     /// distinguish forks, copies, or unrelated stores at equal height.
+    /// The seal hashes the whole manifest, so it also signs `root`.
     pub seal: String,
 }
 
@@ -198,7 +234,11 @@ impl StoreManifest {
         v.extend_from_slice(&self.slot_count.to_be_bytes());
         v.extend_from_slice(&self.slot_live.to_be_bytes());
         v.extend_from_slice(&self.chunk_len.to_be_bytes());
+        v.extend_from_slice(&self.free_len.to_be_bytes());
         v.extend_from_slice(&self.epoch.to_be_bytes());
+        let rb = self.root.as_bytes();
+        v.extend_from_slice(&(rb.len() as u32).to_be_bytes());
+        v.extend_from_slice(rb);
         let sb = self.seal.as_bytes();
         v.extend_from_slice(&(sb.len() as u32).to_be_bytes());
         v.extend_from_slice(sb);
@@ -262,7 +302,18 @@ impl StoreManifest {
         let slot_count = u32::from_be_bytes(take4(&mut i)?);
         let slot_live = u32::from_be_bytes(take4(&mut i)?);
         let chunk_len = u64::from_be_bytes(take8(&mut i)?);
+        let free_len = u32::from_be_bytes(take4(&mut i)?);
         let epoch = u64::from_be_bytes(take8(&mut i)?);
+        let root_len = u32::from_be_bytes(take4(&mut i)?) as usize;
+        if i + root_len > p.len() {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store manifest root truncated",
+            )));
+        }
+        let root = std::str::from_utf8(&p[i..i + root_len])
+            .map_err(|_| SnapshotError::Corrupt("store manifest root not utf8"))?
+            .to_string();
+        i += root_len;
         let seal_len = u32::from_be_bytes(take4(&mut i)?) as usize;
         if i + seal_len > p.len() {
             return Err(StoreError::Snapshot(SnapshotError::Corrupt(
@@ -289,7 +340,9 @@ impl StoreManifest {
             slot_count,
             slot_live,
             chunk_len,
+            free_len,
             epoch,
+            root,
             seal,
         })
     }
@@ -306,6 +359,8 @@ pub fn seal_commit(
     small: &[u8],
     slot_pages: &[(u32, Vec<u8>)],
     chunk_extents: &[(u32, Vec<u8>)],
+    free_segs: &[(u32, Vec<u8>)],
+    page_edges: &[(u32, Vec<u32>)],
 ) -> String {
     let mut h = crate::sha256::Sha256::new();
     h.update(prev_seal.as_bytes());
@@ -329,7 +384,82 @@ pub fn seal_commit(
         h.update(&i.to_be_bytes());
         h.update(bytes);
     }
+    for (i, bytes) in free_segs {
+        h.update(b"F");
+        h.update(&i.to_be_bytes());
+        h.update(bytes);
+    }
+    for (i, targets) in page_edges {
+        h.update(b"E");
+        h.update(&i.to_be_bytes());
+        // Length prefix (v5): entries are variable-width, so without
+        // it two different summary lists could serialize to one byte
+        // stream (unreachable at sane page indices, but framing
+        // should be structural, not incidental).
+        h.update(&(targets.len() as u32).to_be_bytes());
+        for t in targets {
+            h.update(&t.to_be_bytes());
+        }
+    }
     crate::sha256::hex(&h.finalize())
+}
+
+/// A page's outgoing edge summary: the sorted, deduplicated set of
+/// pages its records reference (self-edges excluded — a page trivially
+/// reaches itself). A pure function of the page's records, so stored
+/// summaries are recomputable from content — the phase-6 determinism
+/// lock.
+pub fn derive_page_edges(page: u32, records: &[Slot]) -> Vec<u32> {
+    let mut targets = std::collections::BTreeSet::new();
+    for r in records {
+        r.each_ref_slot(|t| {
+            // NULL is a link terminator, not a page; recording it
+            // would fabricate an edge to page u32::MAX / SLOTS_PER_PAGE.
+            if t.is_null() {
+                return;
+            }
+            let tp = t.0 / SLOTS_PER_PAGE;
+            if tp != page {
+                targets.insert(tp);
+            }
+        });
+    }
+    targets.into_iter().collect()
+}
+
+/// Reachability over the STORED page-edge summaries alone: BFS from
+/// `roots` (page indices) through [`HeapStore::page_edges`], never
+/// reading row content — GC-shaped questions as indexed queries.
+pub fn reachable_pages(
+    store: &dyn HeapStore,
+    roots: impl IntoIterator<Item = u32>,
+) -> Result<std::collections::BTreeSet<u32>, StoreError> {
+    Ok(bfs_pages(&store.page_edges()?, roots))
+}
+
+/// The dense in-Rust BFS both [`reachable_pages`] and the
+/// [`HeapStore::reachable_page_set`] default body share: roots are in
+/// the result even when out of range (edgeless), matching the SQLite
+/// backend's CTE semantics (parity-locked there).
+pub(crate) fn bfs_pages(
+    edges: &[Vec<u32>],
+    roots: impl IntoIterator<Item = u32>,
+) -> std::collections::BTreeSet<u32> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut work: Vec<u32> = roots.into_iter().collect();
+    while let Some(p) = work.pop() {
+        if !seen.insert(p) {
+            continue;
+        }
+        if let Some(ts) = edges.get(p as usize) {
+            for &t in ts {
+                if !seen.contains(&t) {
+                    work.push(t);
+                }
+            }
+        }
+    }
+    seen
 }
 
 /// Recompute a batch's seal after direct surgery on its contents —
@@ -343,7 +473,341 @@ pub fn reseal_batch(batch: &mut CheckpointBatch) {
         &batch.small,
         &batch.slot_pages,
         &batch.chunk_extents,
+        &batch.free_segs,
+        &batch.page_edges,
     );
+}
+
+/// Row-leaf domain tags for the [`leaf_hash`] tree: slot page, chunk
+/// extent, free-list segment, small state.
+pub const LEAF_PAGE: u8 = b'P';
+pub const LEAF_EXT: u8 = b'X';
+pub const LEAF_FREE: u8 = b'F';
+pub const LEAF_SMALL: u8 = b'S';
+
+/// Free-list entries per stored segment (store seam phase 9): the
+/// free list leaves small state and becomes dirty-diffed segment rows,
+/// so LIFO churn rewrites only the tail segment and per-commit
+/// small-state bytes are O(1) in heap size.
+pub const FREE_SEG_ENTRIES: u32 = 4096;
+
+/// Segments a `free_len`-entry free list occupies.
+pub fn free_seg_count(free_len: u32) -> u32 {
+    free_len.div_ceil(FREE_SEG_ENTRIES)
+}
+
+/// Entry count of segment `seg` under `free_len`.
+pub fn free_seg_len(free_len: u32, seg: u32) -> usize {
+    let start = (seg as u64) * (FREE_SEG_ENTRIES as u64);
+    let end = ((seg as u64) + 1) * (FREE_SEG_ENTRIES as u64);
+    ((free_len as u64).min(end).saturating_sub(start)) as usize
+}
+
+/// Encode one free-list segment (big-endian u32 entries).
+pub fn encode_free_seg(entries: &[u32]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(entries.len() * 4);
+    for e in entries {
+        v.extend_from_slice(&e.to_be_bytes());
+    }
+    v
+}
+
+/// Split a full free list into `(segment index, encoded bytes)` rows.
+pub fn encode_all_free_segs(free: &[u32]) -> Vec<(u32, Vec<u8>)> {
+    let n = free_seg_count(free.len() as u32);
+    (0..n)
+        .map(|seg| {
+            let start = (seg * FREE_SEG_ENTRIES) as usize;
+            let end = free.len().min(start + FREE_SEG_ENTRIES as usize);
+            (seg, encode_free_seg(&free[start..end]))
+        })
+        .collect()
+}
+
+/// One leaf of the row-hash tree: SHA-256 over the domain tag, the
+/// big-endian row index, and the row's exact stored bytes.
+pub fn leaf_hash(kind: u8, index: u32, bytes: &[u8]) -> [u8; 32] {
+    let mut h = crate::sha256::Sha256::new();
+    h.update(&[kind]);
+    h.update(&index.to_be_bytes());
+    h.update(bytes);
+    h.finalize()
+}
+
+/// The row-hash tree root: SHA-256 (hex) over a section geometry
+/// header, the small-state leaf, every page, extent, and free-segment
+/// leaf in index order, and every page-edge summary (v5). Linear
+/// combine — the leaves are 32 bytes each and the summaries
+/// metadata-scale, so recombining stays cheap even for large heaps;
+/// an interior tree is the named upgrade if leaf counts ever make
+/// this measurable.
+///
+/// The counts header makes the section boundaries structural: without
+/// it, two stores with different `(pages, exts, frees)` splits of one
+/// leaf sequence would share a root (unexploitable only through the
+/// leaves' own domain tags — the review asked for the property to be
+/// structural). The edge section (v5) puts the summaries under the
+/// same at-rest integrity as the rows: the partial collector FREES
+/// pages from them, so a flip in a stored summary must fail the
+/// open-time recombination rather than silently shrink reachability.
+pub fn combine_root(
+    small_leaf: &[u8; 32],
+    pages: &[[u8; 32]],
+    exts: &[[u8; 32]],
+    frees: &[[u8; 32]],
+    edges: &[Vec<u32>],
+) -> String {
+    let mut h = crate::sha256::Sha256::new();
+    h.update(b"C");
+    h.update(&(pages.len() as u32).to_be_bytes());
+    h.update(&(exts.len() as u32).to_be_bytes());
+    h.update(&(frees.len() as u32).to_be_bytes());
+    h.update(small_leaf);
+    for l in pages {
+        h.update(l);
+    }
+    for l in exts {
+        h.update(l);
+    }
+    for l in frees {
+        h.update(l);
+    }
+    for (i, targets) in edges.iter().enumerate() {
+        h.update(b"E");
+        h.update(&(i as u32).to_be_bytes());
+        h.update(&(targets.len() as u32).to_be_bytes());
+        for t in targets {
+            h.update(&t.to_be_bytes());
+        }
+    }
+    crate::sha256::hex(&h.finalize())
+}
+
+/// Apply a batch to a store's PRIOR leaf/summary state and return the
+/// new root — the shared per-commit maintenance and verification every
+/// backend runs BEFORE persisting anything, so all three refuse the
+/// same batches for the same reasons (the review's parity findings:
+/// free-segment grown-region and summary coupling were previously
+/// checked in some backends and not others):
+///
+/// 1. Grown-region presence: every row of a grown geometry region
+///    (pages, extents, free segments alike) must travel in the batch
+///    — O(grown), prior rows exist by induction.
+/// 2. Row lengths against the batch's OWN manifest geometry — a
+///    short/long row otherwise hashes into a self-consistent root and
+///    fails only at the next open (deferred fail-closed).
+/// 3. Summary coupling (v5): page-edge summaries travel for EXACTLY
+///    the traveling page rows, and each equals
+///    [`derive_page_edges`] of the row beside it — recomputed here,
+///    so stored summaries are derivation-verified at every write.
+/// 4. Leaf/summary maintenance, then root recombination against
+///    `batch.manifest.root` — a mis-rooted batch fails closed.
+///
+/// `pages`/`exts`/`frees`/`edges` are the PRIOR vectors (sized to the
+/// stored geometry by invariant); on success they hold the new state.
+pub fn apply_batch(
+    pages: &mut Vec<[u8; 32]>,
+    exts: &mut Vec<[u8; 32]>,
+    frees: &mut Vec<[u8; 32]>,
+    edges: &mut Vec<Vec<u32>>,
+    prior: Option<&StoreManifest>,
+    batch: &CheckpointBatch,
+) -> Result<String, StoreError> {
+    let n_pages = slot_page_count(batch.manifest.slot_count) as usize;
+    let n_exts = chunk_extent_count(batch.manifest.chunk_len) as usize;
+    let n_frees = free_seg_count(batch.manifest.free_len) as usize;
+
+    // The grown-region checks below key off the PRIOR LEAF VECTORS'
+    // lengths while the boundary checks key off the PRIOR MANIFEST's
+    // geometry. Every backend maintains leaves sized to its stored
+    // manifest (and open-time validation re-checks it), but the two
+    // baselines arrive through different arguments — assert the
+    // coupling so a desynced caller fails closed HERE instead of
+    // skewing which rows the two checks require (wave-3 finding).
+    if let Some(prev) = prior {
+        if pages.len() != slot_page_count(prev.slot_count) as usize
+            || exts.len() != chunk_extent_count(prev.chunk_len) as usize
+            || frees.len() != free_seg_count(prev.free_len) as usize
+        {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "prior leaf tables disagree with the prior manifest geometry",
+            )));
+        }
+    }
+
+    let batch_pages: std::collections::HashSet<u32> =
+        batch.slot_pages.iter().map(|(p, _)| *p).collect();
+    let batch_exts: std::collections::HashSet<u32> =
+        batch.chunk_extents.iter().map(|(e, _)| *e).collect();
+    let batch_frees: std::collections::HashSet<u32> =
+        batch.free_segs.iter().map(|(f, _)| *f).collect();
+    for page in pages.len() as u32..n_pages as u32 {
+        if !batch_pages.contains(&page) {
+            return Err(StoreError::MissingRow("slot page", page));
+        }
+    }
+    for ext in exts.len() as u32..n_exts as u32 {
+        if !batch_exts.contains(&ext) {
+            return Err(StoreError::MissingRow("chunk extent", ext));
+        }
+    }
+    for seg in frees.len() as u32..n_frees as u32 {
+        if !batch_frees.contains(&seg) {
+            return Err(StoreError::MissingRow("free segment", seg));
+        }
+    }
+
+    // Boundary rows (the second review pass's finding): the growth
+    // checks above cover indexes the new geometry ADDS, but a total
+    // (`slot_count`/`chunk_len`/`free_len`) that changes WITHIN an
+    // existing row changes that row's geometry-derived length without
+    // adding any index — a crafted batch could omit the affected tail
+    // row and land a store whose retained row disagrees with its new
+    // manifest (caught only at the next open). Require the prior tail
+    // and the new tail of each class to travel whenever their
+    // expected length changes between the prior and the new manifest.
+    // Every legitimate producer already satisfies this: growth writes
+    // the tail page, compaction rewrites the tail extent, free churn
+    // ships the changed segments.
+    if let Some(prev) = prior {
+        fn require_boundaries(
+            kind: &'static str,
+            count0: u32,
+            count1: u32,
+            len0: impl Fn(u32) -> usize,
+            len1: impl Fn(u32) -> usize,
+            traveling: &std::collections::HashSet<u32>,
+        ) -> Result<(), StoreError> {
+            let check = |idx: u32| -> Result<(), StoreError> {
+                if len0(idx) != len1(idx) && !traveling.contains(&idx) {
+                    return Err(StoreError::MissingRow(kind, idx));
+                }
+                Ok(())
+            };
+            // The prior tail, when retained under the new geometry.
+            if count0 > 0 && count0 - 1 < count1 {
+                check(count0 - 1)?;
+            }
+            // The new tail, when it already existed under the prior
+            // geometry (distinct from the prior tail).
+            if count1 > 0 && count1 - 1 < count0 && count1 != count0 {
+                check(count1 - 1)?;
+            }
+            Ok(())
+        }
+        require_boundaries(
+            "slot page",
+            slot_page_count(prev.slot_count),
+            n_pages as u32,
+            |i| slot_page_len(prev.slot_count, i),
+            |i| slot_page_len(batch.manifest.slot_count, i),
+            &batch_pages,
+        )?;
+        require_boundaries(
+            "chunk extent",
+            chunk_extent_count(prev.chunk_len),
+            n_exts as u32,
+            |e| chunk_extent_len(prev.chunk_len, e),
+            |e| chunk_extent_len(batch.manifest.chunk_len, e),
+            &batch_exts,
+        )?;
+        require_boundaries(
+            "free segment",
+            free_seg_count(prev.free_len),
+            n_frees as u32,
+            |s| free_seg_len(prev.free_len, s),
+            |s| free_seg_len(batch.manifest.free_len, s),
+            &batch_frees,
+        )?;
+    }
+
+    for (i, bytes) in &batch.slot_pages {
+        let expected = slot_page_len(batch.manifest.slot_count, *i) * SLOT_RECORD_BYTES;
+        if bytes.len() != expected {
+            return Err(StoreError::RowLength {
+                kind: "slot page",
+                index: *i,
+                expected,
+                found: bytes.len(),
+            });
+        }
+    }
+    for (e, bytes) in &batch.chunk_extents {
+        let expected = chunk_extent_len(batch.manifest.chunk_len, *e);
+        if bytes.len() != expected {
+            return Err(StoreError::RowLength {
+                kind: "chunk extent",
+                index: *e,
+                expected,
+                found: bytes.len(),
+            });
+        }
+    }
+    for (s, bytes) in &batch.free_segs {
+        let expected = free_seg_len(batch.manifest.free_len, *s) * 4;
+        if bytes.len() != expected {
+            return Err(StoreError::RowLength {
+                kind: "free segment",
+                index: *s,
+                expected,
+                found: bytes.len(),
+            });
+        }
+    }
+
+    let rows_by_page: std::collections::HashMap<u32, &Vec<u8>> =
+        batch.slot_pages.iter().map(|(p, b)| (*p, b)).collect();
+    let edge_pages: std::collections::HashSet<u32> =
+        batch.page_edges.iter().map(|(p, _)| *p).collect();
+    if let Some(&odd) = batch_pages.symmetric_difference(&edge_pages).next() {
+        return Err(StoreError::SummaryMismatch { page: odd });
+    }
+    for (i, targets) in &batch.page_edges {
+        let bytes = rows_by_page[i];
+        let records = decode_slots(bytes)
+            .map_err(|_| StoreError::Snapshot(SnapshotError::Corrupt("store slot page record")))?;
+        if derive_page_edges(*i, &records) != *targets {
+            return Err(StoreError::SummaryMismatch { page: *i });
+        }
+    }
+
+    pages.resize(n_pages, [0u8; 32]);
+    exts.resize(n_exts, [0u8; 32]);
+    frees.resize(n_frees, [0u8; 32]);
+    for (i, bytes) in &batch.slot_pages {
+        let slot = pages
+            .get_mut(*i as usize)
+            .ok_or(StoreError::MissingRow("slot page", *i))?;
+        *slot = leaf_hash(LEAF_PAGE, *i, bytes);
+    }
+    for (i, bytes) in &batch.chunk_extents {
+        let slot = exts
+            .get_mut(*i as usize)
+            .ok_or(StoreError::MissingRow("chunk extent", *i))?;
+        *slot = leaf_hash(LEAF_EXT, *i, bytes);
+    }
+    for (i, bytes) in &batch.free_segs {
+        let slot = frees
+            .get_mut(*i as usize)
+            .ok_or(StoreError::MissingRow("free segment", *i))?;
+        *slot = leaf_hash(LEAF_FREE, *i, bytes);
+    }
+    edges.resize(n_pages, Vec::new());
+    for (i, targets) in &batch.page_edges {
+        let slot = edges
+            .get_mut(*i as usize)
+            .ok_or(StoreError::MissingRow("page-edge summary", *i))?;
+        *slot = targets.clone();
+    }
+    let small_leaf = leaf_hash(LEAF_SMALL, 0, &batch.small);
+    let root = combine_root(&small_leaf, pages, exts, frees, edges);
+    if root != batch.manifest.root {
+        return Err(StoreError::BaselineMismatch {
+            expected: root,
+            found: batch.manifest.root.clone(),
+        });
+    }
+    Ok(root)
 }
 
 /// The whole-on-every-commit remainder of the machine state: the value
@@ -362,10 +826,15 @@ pub struct SmallState {
 impl SmallState {
     /// Serialize: six sections, each `u32` length-prefixed, in the
     /// fixed order stack, free list, keys, names, symbols, meter.
+    /// Since store schema v4 the free-list section is always EMPTY in
+    /// stored small state — the list lives in dirty-diffed segment
+    /// rows (phase 9) — but the section slot stays so the layout is
+    /// stable; the atom container path still carries the list via the
+    /// image, not this encoding.
     pub fn encode(&self) -> Vec<u8> {
         let sections: [Vec<u8>; 6] = [
             encode_stack(&self.stack),
-            encode_u32s(&self.slot_free),
+            encode_u32s(&[]),
             encode_strings(&self.keys),
             encode_strings(&self.names),
             encode_u32s(&self.symbols),
@@ -440,6 +909,18 @@ pub struct CheckpointBatch {
     pub slot_pages: Vec<(u32, Vec<u8>)>,
     /// `(extent index, raw bytes)` for each dirty chunk extent.
     pub chunk_extents: Vec<(u32, Vec<u8>)>,
+    /// `(segment index, encoded entries)` for each dirty free-list
+    /// segment (store seam phase 9). Dirty-diffed at checkpoint via
+    /// the leaf tree, so LIFO churn carries only the tail segment.
+    pub free_segs: Vec<(u32, Vec<u8>)>,
+    /// `(page index, sorted outgoing page targets)` for each dirty
+    /// slot page — the **persisted page-edge summaries** (phase 6):
+    /// which pages this page's records reference. Derived purely from
+    /// the page's records ([`derive_page_edges`]), sealed with the
+    /// commit, and the substrate for reachability-as-indexed-queries
+    /// ([`reachable_pages`]) — a collector consulting them never
+    /// faults row content.
+    pub page_edges: Vec<(u32, Vec<u32>)>,
 }
 
 /// The keyed snapshot store: point reads by page/extent index and one
@@ -468,10 +949,48 @@ pub trait HeapStore {
     /// O(heap) content I/O (the PR-review finding); backends serve it
     /// from metadata (directory entries, `length(bytes)` aggregates).
     fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError>;
+    /// The stored row-leaf hashes, index-ordered (pages, extents) —
+    /// 32 bytes per row, so metadata-scale like [`Self::inventory`].
+    /// Maintained by `commit` via [`apply_batch_leaves`]; the open-time
+    /// validation recombines them against the manifest root, and the
+    /// fault path verifies each row read against its leaf.
+    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError>;
+    /// The raw bytes of free-list segment `seg` (phase 9).
+    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError>;
+    /// The stored free-segment leaf hashes, index-ordered (phase 9).
+    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError>;
+    /// The stored page-edge summaries, index-ordered (phase 6): one
+    /// sorted target list per slot page. Metadata-scale; maintained by
+    /// `commit` from the batch's `page_edges`.
+    fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError>;
     /// Apply one checkpoint atomically. Must enforce the epoch
     /// discipline via [`check_epoch`] and drop rows beyond the new
     /// geometry.
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError>;
+    /// How many page-edge summaries the store holds — the geometry
+    /// gate the partial collector checks before deciding anything
+    /// from the summaries (a truncated store must fail closed, not
+    /// read as maximal garbage). Provided: counts the dense read;
+    /// backends answer from metadata (the SQLite backend's
+    /// `COUNT(*)`).
+    fn summary_page_count(&self) -> Result<u32, StoreError> {
+        Ok(self.page_edges()?.len() as u32)
+    }
+    /// Page reachability from `roots` over the stored summaries — the
+    /// decision query of summary-driven partial collection. Provided:
+    /// reads the whole edge set and BFSes in Rust (O(pages) transfer
+    /// however small the answer). Backends with an indexed edge
+    /// representation override it with a query whose transfer is
+    /// proportional to the ANSWER — the SQLite backend serves it as a
+    /// recursive CTE over its normalized pairs (phase 10), with
+    /// dense/CTE parity locked by test. Roots appear in the result
+    /// even when out of range (they are edgeless), on both paths.
+    fn reachable_page_set(
+        &self,
+        roots: &[u32],
+    ) -> Result<std::collections::BTreeSet<u32>, StoreError> {
+        Ok(bfs_pages(&self.page_edges()?, roots.iter().copied()))
+    }
 }
 
 /// The epoch discipline every [`HeapStore::commit`] enforces: the first
@@ -501,6 +1020,8 @@ pub fn check_succession(
         &batch.small,
         &batch.slot_pages,
         &batch.chunk_extents,
+        &batch.free_segs,
+        &batch.page_edges,
     );
     if batch.manifest.seal != recomputed {
         return Err(StoreError::BaselineMismatch {
@@ -588,7 +1109,9 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         slot_count: image.slots.len() as u32,
         slot_live: image.slot_live,
         chunk_len: image.chunks.len() as u64,
+        free_len: image.slot_free.len() as u32,
         epoch,
+        root: String::new(),
         seal: String::new(),
     };
     let small = SmallState {
@@ -602,13 +1125,55 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
     let small_bytes = small.encode();
     let slot_pages = encode_all_slot_pages(&image.slots);
     let chunk_extents = encode_all_chunk_extents(&image.chunks);
-    manifest.seal = seal_commit(prev_seal, &manifest, &small_bytes, &slot_pages, &chunk_extents);
+    let free_segs = encode_all_free_segs(&image.slot_free);
+    let page_edges: Vec<(u32, Vec<u32>)> = (0..slot_page_count(manifest.slot_count))
+        .map(|page| {
+            let start = (page * SLOTS_PER_PAGE) as usize;
+            let end = image.slots.len().min(start + SLOTS_PER_PAGE as usize);
+            (page, derive_page_edges(page, &image.slots[start..end]))
+        })
+        .collect();
+    // Root first (a full batch carries every row), then the seal —
+    // which hashes the whole manifest and therefore signs the root.
+    let pages: Vec<[u8; 32]> = slot_pages
+        .iter()
+        .map(|(i, b)| leaf_hash(LEAF_PAGE, *i, b))
+        .collect();
+    let exts: Vec<[u8; 32]> = chunk_extents
+        .iter()
+        .map(|(i, b)| leaf_hash(LEAF_EXT, *i, b))
+        .collect();
+    let frees: Vec<[u8; 32]> = free_segs
+        .iter()
+        .map(|(i, b)| leaf_hash(LEAF_FREE, *i, b))
+        .collect();
+    // A full batch's summaries are dense by construction — the root's
+    // edge section (v5) combines over them in page order.
+    let dense_edges: Vec<Vec<u32>> = page_edges.iter().map(|(_, t)| t.clone()).collect();
+    manifest.root = combine_root(
+        &leaf_hash(LEAF_SMALL, 0, &small_bytes),
+        &pages,
+        &exts,
+        &frees,
+        &dense_edges,
+    );
+    manifest.seal = seal_commit(
+        prev_seal,
+        &manifest,
+        &small_bytes,
+        &slot_pages,
+        &chunk_extents,
+        &free_segs,
+        &page_edges,
+    );
     CheckpointBatch {
         prev_seal: prev_seal.to_string(),
         manifest,
         small: small_bytes,
         slot_pages,
         chunk_extents,
+        free_segs,
+        page_edges,
     }
 }
 
@@ -617,12 +1182,38 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
 /// of [`image_to_batch`] + [`HeapStore::commit`].
 pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError> {
     let manifest = store.manifest()?;
-    let small = SmallState::decode(&store.read_small_state()?)?;
+    let small_bytes = store.read_small_state()?;
+    let small = SmallState::decode(&small_bytes)?;
     if manifest.cost_gate_mismatch(&small) {
         return Err(StoreError::Snapshot(SnapshotError::CostTableMismatch {
             expected: COST_TABLE_VERSION.to_string(),
             found: small.meter.cost_table_version.clone(),
         }));
+    }
+
+    // Row-content integrity (phase 5, completed by the review wave):
+    // every row read below — INCLUDING the small state — is checked
+    // against its stored leaf hash, and the whole leaf/summary set is
+    // recombined against the sealed root first, so eager reification —
+    // and the export/root_hash paths riding on it, which deliberately
+    // skip `validate_store` — cannot absorb a length-preserving flip
+    // or a coordinated row+leaf edit at rest.
+    let (leaf_pages, leaf_exts) = store.leaf_hashes()?;
+    let leaf_frees_all = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    if edges.len() != slot_page_count(manifest.slot_count) as usize {
+        return Err(StoreError::SummaryCount {
+            expected: slot_page_count(manifest.slot_count),
+            found: edges.len() as u32,
+        });
+    }
+    let small_leaf = leaf_hash(LEAF_SMALL, 0, &small_bytes);
+    let root = combine_root(&small_leaf, &leaf_pages, &leaf_exts, &leaf_frees_all, &edges);
+    if root != manifest.root {
+        return Err(StoreError::BaselineMismatch {
+            expected: root,
+            found: manifest.root.clone(),
+        });
     }
 
     let pages = slot_page_count(manifest.slot_count);
@@ -640,6 +1231,11 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
                 expected,
                 found: bytes.len(),
             });
+        }
+        if leaf_pages.get(page as usize).copied() != Some(leaf_hash(LEAF_PAGE, page, &bytes)) {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store slot page fails its leaf hash",
+            )));
         }
         slots.extend(
             decode_slots(&bytes)
@@ -661,7 +1257,37 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
                 found: bytes.len(),
             });
         }
+        if leaf_exts.get(ext as usize).copied() != Some(leaf_hash(LEAF_EXT, ext, &bytes)) {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store chunk extent fails its leaf hash",
+            )));
+        }
         chunks.extend_from_slice(&bytes);
+    }
+
+    let free_leaves = leaf_frees_all;
+    let mut slot_free: Vec<u32> = Vec::with_capacity((manifest.free_len as usize).min(1 << 16));
+    for seg in 0..free_seg_count(manifest.free_len) {
+        let bytes = store.read_free_seg(seg)?;
+        let expected = free_seg_len(manifest.free_len, seg) * 4;
+        if bytes.len() != expected {
+            return Err(StoreError::RowLength {
+                kind: "free segment",
+                index: seg,
+                expected,
+                found: bytes.len(),
+            });
+        }
+        if free_leaves.get(seg as usize).copied() != Some(leaf_hash(LEAF_FREE, seg, &bytes)) {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store free segment fails its leaf hash",
+            )));
+        }
+        slot_free.extend(
+            bytes
+                .chunks_exact(4)
+                .map(|c| u32::from_be_bytes(c.try_into().unwrap())),
+        );
     }
 
     Ok(MachineImage {
@@ -670,7 +1296,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         creation: manifest.creation,
         chunks,
         slots,
-        slot_free: small.slot_free,
+        slot_free,
         slot_live: manifest.slot_live,
         stack: small.stack,
         keys: small.keys,
@@ -686,11 +1312,23 @@ impl StoreManifest {
     }
 }
 
+/// The verified row-leaf hashes [`validate_store`] hands back so the
+/// resume paths can verify every later row read against them without
+/// re-trusting the store.
+#[derive(Clone, Debug)]
+pub struct StoreLeaves {
+    pub pages: Vec<[u8; 32]>,
+    pub exts: Vec<[u8; 32]>,
+    pub frees: Vec<[u8; 32]>,
+}
+
 /// Validate a store exhaustively: manifest gates, signature, meter
-/// cost-table version, live/free/count accounting, and the full row
+/// cost-table version, live/free/count accounting, the full row
 /// inventory (existence and exact length of every page and extent the
-/// geometry promises). Returns the manifest and decoded small state so
-/// a resume does not re-read them.
+/// geometry promises), leaf/summary recombination against the sealed
+/// root, and the reassembled free list's semantic gates. Returns the
+/// manifest and decoded small state so a resume does not re-read
+/// them.
 ///
 /// This is the open-time gate that makes later read faults pure I/O
 /// errors (design decision 7): after `validate_store` succeeds, every
@@ -699,7 +1337,7 @@ impl StoreManifest {
 pub fn validate_store(
     store: &dyn HeapStore,
     expected_sig: &Signature,
-) -> Result<(StoreManifest, SmallState), StoreError> {
+) -> Result<(StoreManifest, SmallState, StoreLeaves), StoreError> {
     let manifest = store.manifest()?;
     if manifest.version != Version::current() {
         return Err(StoreError::Snapshot(SnapshotError::Corrupt(
@@ -723,7 +1361,8 @@ pub fn validate_store(
         )));
     }
 
-    let small = SmallState::decode(&store.read_small_state()?)?;
+    let small_bytes = store.read_small_state()?;
+    let mut small = SmallState::decode(&small_bytes)?;
     if manifest.cost_gate_mismatch(&small) {
         return Err(StoreError::Snapshot(SnapshotError::CostTableMismatch {
             expected: COST_TABLE_VERSION.to_string(),
@@ -731,30 +1370,13 @@ pub fn validate_store(
         }));
     }
 
-    // Accounting: every record is live or on the free list, and every
-    // free index addresses a record.
-    let free_len = small.slot_free.len() as u64;
-    if free_len + manifest.slot_live as u64 != manifest.slot_count as u64 {
+    // Accounting: every record is live or on the free list. The count
+    // side uses the manifest's free_len (the list itself is segment
+    // rows, reassembled below, where the per-entry checks run).
+    if manifest.free_len as u64 + manifest.slot_live as u64 != manifest.slot_count as u64 {
         return Err(StoreError::Snapshot(SnapshotError::Corrupt(
             "store live/free/count accounting mismatch",
         )));
-    }
-    if small.slot_free.iter().any(|&f| f >= manifest.slot_count) {
-        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-            "store free-list index out of range",
-        )));
-    }
-    // Distinctness: a duplicated free index passes the sum check but
-    // aliases one record to two allocations after resume (the
-    // adversarial-review aliasing finding). With distinctness, the sum
-    // check makes the live/free partition exact.
-    {
-        let mut seen = std::collections::HashSet::with_capacity(small.slot_free.len());
-        if !small.slot_free.iter().all(|f| seen.insert(*f)) {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store free-list contains duplicate indices",
-            )));
-        }
     }
 
     // Row inventory: every promised row exists at its exact length —
@@ -792,7 +1414,101 @@ pub fn validate_store(
         }
     }
 
-    Ok((manifest, small))
+    // Row-hash tree (phase 5) + page-edge summaries (v5): the stored
+    // leaves AND summaries must recombine to the manifest's sealed
+    // root — metadata-scale (32 bytes per leaf, a few words per
+    // summary). Row CONTENT is then verified against these leaves at
+    // the point of read (eager reify or lazy fault), so a
+    // length-preserving flip at rest — in a row, a leaf, or a
+    // summary — can never resume a different machine or shrink the
+    // partial collector's reachability.
+    let (leaf_pages, leaf_exts, leaf_frees) = {
+        let (p, e) = store.leaf_hashes()?;
+        (p, e, store.free_leaf_hashes()?)
+    };
+    let n_frees = free_seg_count(manifest.free_len);
+    if leaf_pages.len() != n_pages as usize
+        || leaf_exts.len() != n_exts as usize
+        || leaf_frees.len() != n_frees as usize
+    {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "store leaf-hash inventory disagrees with geometry",
+        )));
+    }
+    let edges = store.page_edges()?;
+    if edges.len() != n_pages as usize {
+        return Err(StoreError::SummaryCount {
+            expected: n_pages,
+            found: edges.len() as u32,
+        });
+    }
+    let small_leaf = leaf_hash(LEAF_SMALL, 0, &small_bytes);
+    let root = combine_root(&small_leaf, &leaf_pages, &leaf_exts, &leaf_frees, &edges);
+    if root != manifest.root {
+        return Err(StoreError::BaselineMismatch {
+            expected: root,
+            found: manifest.root.clone(),
+        });
+    }
+
+    // Reassemble the free list from its segment rows (phase 9), each
+    // verified against its leaf; the accounting checks above already
+    // ran against this list. This is the one O(free-list) exception
+    // to the metadata-only row discipline above: the machine needs
+    // the list in memory at wake, so the read is inherent, not
+    // incidental (the review's honesty note on the "no O(heap) row
+    // I/O" claim).
+    let mut free: Vec<u32> = Vec::with_capacity((manifest.free_len as usize).min(1 << 16));
+    for seg in 0..n_frees {
+        let bytes = store.read_free_seg(seg)?;
+        let expected = free_seg_len(manifest.free_len, seg) * 4;
+        if bytes.len() != expected {
+            return Err(StoreError::RowLength {
+                kind: "free segment",
+                index: seg,
+                expected,
+                found: bytes.len(),
+            });
+        }
+        if leaf_frees.get(seg as usize).copied() != Some(leaf_hash(LEAF_FREE, seg, &bytes)) {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store free segment fails its leaf hash",
+            )));
+        }
+        free.extend(
+            bytes
+                .chunks_exact(4)
+                .map(|c| u32::from_be_bytes(c.try_into().unwrap())),
+        );
+    }
+    if free.iter().any(|&f| f >= manifest.slot_count) {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "store free-list index out of range",
+        )));
+    }
+    // Distinctness: a duplicated free index passes the sum check but
+    // aliases one record to two allocations after resume (the
+    // adversarial-review aliasing finding). With distinctness, the sum
+    // check makes the live/free partition exact.
+    {
+        let mut seen = std::collections::HashSet::with_capacity(free.len());
+        if !free.iter().all(|f| seen.insert(*f)) {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store free-list contains duplicate indices",
+            )));
+        }
+    }
+    small.slot_free = free;
+
+    Ok((
+        manifest,
+        small,
+        StoreLeaves {
+            pages: leaf_pages,
+            exts: leaf_exts,
+            frees: leaf_frees,
+        },
+    ))
 }
 
 // --- container ↔ store (the identity locks) ---
@@ -840,6 +1556,10 @@ pub fn root_hash(store: &dyn HeapStore) -> Result<String, StoreError> {
 pub struct CommitStats {
     pub slot_pages_written: usize,
     pub chunk_extents_written: usize,
+    /// Free-list segment rows written — the phase-9 proportionality
+    /// axis (LIFO churn must rewrite only the tail segment), which
+    /// the review found asserted in prose and observed by nothing.
+    pub free_segs_written: usize,
 }
 
 /// The in-memory [`HeapStore`]: the reference semantics every backend
@@ -850,6 +1570,11 @@ pub struct MemoryStore {
     small: Vec<u8>,
     slot_pages: std::collections::HashMap<u32, Vec<u8>>,
     chunk_extents: std::collections::HashMap<u32, Vec<u8>>,
+    leaf_pages: Vec<[u8; 32]>,
+    leaf_exts: Vec<[u8; 32]>,
+    leaf_frees: Vec<[u8; 32]>,
+    free_segs: std::collections::HashMap<u32, Vec<u8>>,
+    edges: Vec<Vec<u32>>,
     last_commit: CommitStats,
 }
 
@@ -877,6 +1602,12 @@ impl HeapStore for MemoryStore {
     }
 
     fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
+        // Empty-store gate for point-read parity across backends: an
+        // uncommitted store is `Empty`; `MissingRow` means a committed
+        // store lacks the row (the review's parity table).
+        if self.manifest.is_none() {
+            return Err(StoreError::Empty);
+        }
         self.slot_pages
             .get(&page)
             .cloned()
@@ -884,6 +1615,9 @@ impl HeapStore for MemoryStore {
     }
 
     fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError> {
+        if self.manifest.is_none() {
+            return Err(StoreError::Empty);
+        }
         self.chunk_extents
             .get(&ext)
             .cloned()
@@ -913,36 +1647,65 @@ impl HeapStore for MemoryStore {
         Ok((pages, exts))
     }
 
+    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
+        if self.manifest.is_none() {
+            return Err(StoreError::Empty);
+        }
+        Ok((self.leaf_pages.clone(), self.leaf_exts.clone()))
+    }
+
+    fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
+        if self.manifest.is_none() {
+            return Err(StoreError::Empty);
+        }
+        Ok(self.edges.clone())
+    }
+
+    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+        if self.manifest.is_none() {
+            return Err(StoreError::Empty);
+        }
+        self.free_segs
+            .get(&seg)
+            .cloned()
+            .ok_or(StoreError::MissingRow("free segment", seg))
+    }
+
+    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
+        if self.manifest.is_none() {
+            return Err(StoreError::Empty);
+        }
+        Ok(self.leaf_frees.clone())
+    }
+
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
         check_succession(self.manifest.as_ref(), batch)?;
-        // A grown geometry's new rows must be in the batch. Prior rows
-        // exist by induction (they were committed), so only the grown
-        // region is checked — O(grown + dirty), not O(heap) (the
-        // PR-review finding).
+        // The shared per-commit verification (grown-region presence,
+        // row lengths, summary coupling, leaf/summary maintenance,
+        // root recombination) runs on CLONES first — a refused batch
+        // must leave the store untouched.
         let pages = slot_page_count(batch.manifest.slot_count);
         let exts = chunk_extent_count(batch.manifest.chunk_len);
-        let prior_pages = self.manifest.as_ref().map_or(0, |m| slot_page_count(m.slot_count));
-        let prior_exts = self.manifest.as_ref().map_or(0, |m| chunk_extent_count(m.chunk_len));
-        let batch_pages: std::collections::HashSet<u32> =
-            batch.slot_pages.iter().map(|(p, _)| *p).collect();
-        let batch_exts: std::collections::HashSet<u32> =
-            batch.chunk_extents.iter().map(|(e, _)| *e).collect();
-        for page in prior_pages..pages {
-            if !batch_pages.contains(&page) {
-                return Err(StoreError::MissingRow("slot page", page));
-            }
-        }
-        for ext in prior_exts..exts {
-            if !batch_exts.contains(&ext) {
-                return Err(StoreError::MissingRow("chunk extent", ext));
-            }
-        }
+        let mut leaf_pages = self.leaf_pages.clone();
+        let mut leaf_exts = self.leaf_exts.clone();
+        let mut leaf_frees = self.leaf_frees.clone();
+        let mut edges = self.edges.clone();
+        apply_batch(&mut leaf_pages, &mut leaf_exts, &mut leaf_frees, &mut edges, self.manifest.as_ref(), batch)?;
         for (page, bytes) in &batch.slot_pages {
             self.slot_pages.insert(*page, bytes.clone());
         }
         for (ext, bytes) in &batch.chunk_extents {
             self.chunk_extents.insert(*ext, bytes.clone());
         }
+        self.leaf_pages = leaf_pages;
+        self.leaf_exts = leaf_exts;
+        self.leaf_frees = leaf_frees;
+        self.edges = edges;
+        for (seg, bytes) in &batch.free_segs {
+            self.free_segs.insert(*seg, bytes.clone());
+        }
+        let n_frees = free_seg_count(batch.manifest.free_len);
+        self.free_segs.retain(|&s, _| s < n_frees);
         // Drop rows beyond the new geometry (chunk shrink across a GC
         // compaction; slot pages are monotone but the sweep is uniform).
         self.slot_pages.retain(|&p, _| p < pages);
@@ -952,6 +1715,7 @@ impl HeapStore for MemoryStore {
         self.last_commit = CommitStats {
             slot_pages_written: batch.slot_pages.len(),
             chunk_extents_written: batch.chunk_extents.len(),
+            free_segs_written: batch.free_segs.len(),
         };
         Ok(())
     }
@@ -1013,7 +1777,9 @@ mod tests {
             slot_count: 300,
             slot_live: 200,
             chunk_len: 70_000,
+            free_len: 5,
             epoch: 3,
+            root: "r00t".to_string(),
             seal: "abc123".to_string(),
         };
         let bytes = m.encode();
@@ -1060,7 +1826,11 @@ mod tests {
             symbols: vec![11, 22],
             meter: MeterImage::current(),
         };
-        assert_eq!(SmallState::decode(&s.encode()).unwrap(), s);
+        // Since schema v4 the free list does NOT ride in small state
+        // (it lives in segment rows); the round-trip drops it.
+        let mut expected = s.clone();
+        expected.slot_free = Vec::new();
+        assert_eq!(SmallState::decode(&s.encode()).unwrap(), expected);
     }
 
     #[test]
@@ -1143,7 +1913,7 @@ mod tests {
         let image = ran_image();
         let mut store = MemoryStore::new();
         store.commit(&image_to_batch(&image, 1, "")).unwrap();
-        let (manifest, small) = validate_store(&store, &sig()).expect("validates");
+        let (manifest, small, _leaves) = validate_store(&store, &sig()).expect("validates");
         assert_eq!(manifest.epoch, 1);
         assert_eq!(manifest.slot_count as usize, image.slots.len());
         assert_eq!(small.slot_free, image.slot_free);
@@ -1263,7 +2033,125 @@ mod tests {
             CommitStats {
                 slot_pages_written: batch.slot_pages.len(),
                 chunk_extents_written: batch.chunk_extents.len(),
+                free_segs_written: batch.free_segs.len(),
             }
         );
     }
+
+    /// The segment split at exactly the `FREE_SEG_ENTRIES` boundary
+    /// (and one past it, and empty): counts, per-segment lengths, and
+    /// ORDER-exact reassembly — the LIFO reuse order is load-bearing
+    /// (review follow-up: the 4096/4097 edges had no direct lock).
+    #[test]
+    fn free_seg_boundaries_split_and_reassemble_exactly() {
+        let b = FREE_SEG_ENTRIES;
+        for n in [0u32, 1, b - 1, b, b + 1, 2 * b, 2 * b + 1] {
+            let free: Vec<u32> = (0..n).rev().collect();
+            let segs = encode_all_free_segs(&free);
+            assert_eq!(segs.len(), free_seg_count(n) as usize, "count at n={n}");
+            let mut back: Vec<u32> = Vec::new();
+            for (k, (idx, bytes)) in segs.iter().enumerate() {
+                assert_eq!(*idx as usize, k, "dense ascending segment indices");
+                assert_eq!(
+                    bytes.len(),
+                    free_seg_len(n, *idx) * 4,
+                    "exact per-segment length at n={n}, seg={idx}"
+                );
+                back.extend(
+                    bytes
+                        .chunks_exact(4)
+                        .map(|c| u32::from_be_bytes(c.try_into().unwrap())),
+                );
+            }
+            assert_eq!(back, free, "order-exact reassembly at n={n}");
+        }
+    }
+
+    #[test]
+    fn commit_refuses_a_geometry_change_that_omits_the_affected_tail_row() {
+        // The second review pass's finding: the grown-region check
+        // covers indexes the new geometry ADDS, but a total that
+        // changes WITHIN the existing tail row changes that row's
+        // geometry-derived length without adding any index. A crafted
+        // batch that shrinks `chunk_len` inside the same extent,
+        // omits that extent, and seals correctly over the retained
+        // prior leaf must be refused at COMMIT — not discovered at
+        // the next open as a length mismatch.
+        let mut m = Interp::new();
+        assert!(m.run(&PROG_A).completed);
+        let image1 = m.snapshot_image(&sig());
+        let mut store = MemoryStore::new();
+        store.commit(&image_to_batch(&image1, 1, "")).unwrap();
+        let prev = store.manifest().unwrap();
+
+        let mut image2 = image1.clone();
+        assert!(
+            image2.chunks.len() >= 8,
+            "fixture carries chunk bytes to shrink within the tail extent"
+        );
+        image2.chunks.truncate(image2.chunks.len() - 4);
+        let tail_ext = chunk_extent_count(image2.chunks.len() as u64) - 1;
+
+        // A well-formed batch for the shrunk image commits fine (the
+        // tail extent travels with its new length)…
+        let good = image_to_batch(&image2, 2, &prev.seal);
+        assert!(
+            good.chunk_extents.iter().any(|(e, _)| *e == tail_ext),
+            "image_to_batch ships the affected tail extent"
+        );
+        {
+            let mut s2 = MemoryStore::new();
+            s2.commit(&image_to_batch(&image1, 1, "")).unwrap();
+            s2.commit(&image_to_batch(&image2, 2, &prev.seal)).unwrap();
+        }
+
+        // …but the same batch with the tail extent OMITTED (and the
+        // seal recomputed, so succession passes) is refused with the
+        // precise missing-row error.
+        let mut crafted = image_to_batch(&image2, 2, &prev.seal);
+        crafted.chunk_extents.retain(|(e, _)| *e != tail_ext);
+        reseal_batch(&mut crafted);
+        assert_eq!(
+            store.commit(&crafted),
+            Err(StoreError::MissingRow("chunk extent", tail_ext)),
+            "the boundary row must travel when its expected length changes"
+        );
+    }
+
+    #[test]
+    fn commit_refuses_a_desynced_prior_leaf_baseline() {
+        // The wave-3 coupling assertion: the grown-region checks key
+        // off the prior LEAF VECTORS' lengths while the boundary
+        // checks key off the prior MANIFEST's geometry. The backends
+        // keep the two equal by construction; `apply_batch` itself
+        // now refuses a caller whose baselines disagree instead of
+        // letting its two checks require different rows.
+        let mut m = Interp::new();
+        assert!(m.run(&PROG_A).completed);
+        let image1 = m.snapshot_image(&sig());
+        let mut store = MemoryStore::new();
+        store.commit(&image_to_batch(&image1, 1, "")).unwrap();
+        let prev = store.manifest().unwrap();
+
+        let batch = image_to_batch(&image1, 2, &prev.seal);
+        let mut pages = store.leaf_pages.clone();
+        let mut exts = store.leaf_exts.clone();
+        let mut frees = store.leaf_frees.clone();
+        let mut edges = store.edges.clone();
+        pages.pop(); // desync: one leaf short of the manifest's geometry
+        assert_eq!(
+            apply_batch(
+                &mut pages,
+                &mut exts,
+                &mut frees,
+                &mut edges,
+                Some(&prev),
+                &batch
+            ),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "prior leaf tables disagree with the prior manifest geometry"
+            ))),
+        );
+    }
+
 }

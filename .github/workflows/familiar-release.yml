@@ -32,7 +32,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -43,7 +43,7 @@ jobs:
       # yarn caching when package.json carries a `packageManager` field, so the
       # explicit opt-out is load-bearing — removing this line re-enables the cache.
       - name: Use Node.js
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.x
           package-manager-cache: false
@@ -92,7 +92,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -103,7 +103,7 @@ jobs:
       # yarn caching when package.json carries a `packageManager` field, so the
       # explicit opt-out is load-bearing — removing this line re-enables the cache.
       - name: Use Node.js
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.x
           package-manager-cache: false
@@ -126,7 +126,7 @@ jobs:
       - name: Download Node.js binary
         run: |
           cd packages/familiar
-          ./scripts/download-node.sh v20.18.1 "$TARGET_OS" "$TARGET_ARCH"
+          ./scripts/download-node.sh v22.22.3 "$TARGET_OS" "$TARGET_ARCH"
 
       - name: Prepare package
         run: |
@@ -181,7 +181,7 @@ jobs:
           printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: Familiar ${{ steps.version.outputs.tag }}

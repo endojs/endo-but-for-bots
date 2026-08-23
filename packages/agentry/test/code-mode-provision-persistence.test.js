@@ -2,13 +2,15 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
   equalEndoProvisionPersistence,
   normalizeEndoProvisionSpec,
+  projectEndoProvisionContext,
+  projectEndoProvisionRuntimeAuthority,
   validateEndoProvisionPersistence,
 } from '../src/code-mode-provision-policy.js';
 
@@ -36,8 +38,9 @@ test('persistence validation accepts only normalized records', async t => {
   t.true(Object.isFrozen(persistence));
   t.true(Object.isFrozen(persistence.guestHandlePath));
   t.true(Object.isFrozen(persistence.policy));
-  t.true(Object.isFrozen(persistence.policy.workspace));
-  t.true(Object.isFrozen(persistence.policy.workspace.deniedSegments));
+  t.true(Object.isFrozen(persistence.policy.mounts));
+  t.true(Object.isFrozen(persistence.policy.mounts.workspace));
+  t.true(Object.isFrozen(persistence.policy.mounts.workspace.deniedSegments));
 
   await t.throwsAsync(
     () =>
@@ -53,10 +56,161 @@ test('persistence validation accepts only normalized records', async t => {
         ...persistence,
         policy: {
           ...persistence.policy,
-          workspace: { deniedSegments: ['private', '.git'] },
+          mounts: {
+            workspace: {
+              ...persistence.policy.mounts.workspace,
+              deniedSegments: ['PRIVATE', 'private'],
+            },
+          },
         },
       }),
     { message: /not in normalized form/ },
+  );
+});
+
+test('persistence round-trips named grants without live capabilities', async t => {
+  const root = await makeWorkspace(t);
+  const persistence = await normalizeEndoProvisionSpec(
+    {
+      grants: {
+        calendar: {
+          from: ['tools', 'calendar'],
+          description: 'A calendar service',
+        },
+      },
+    },
+    { harness: 'test', sessionId: 'persist-grants', cwd: root },
+  );
+
+  const roundTrip = await validateEndoProvisionPersistence(
+    JSON.parse(JSON.stringify(persistence)),
+  );
+  t.deepEqual(roundTrip, persistence);
+  t.false(Object.hasOwn(roundTrip.policy.grants?.calendar ?? {}, 'capability'));
+});
+
+test('Git grants reconstruct from persistence without the original spec', async t => {
+  const root = await makeWorkspace(t);
+  await mkdir(join(root, 'nested-repo'));
+  const persistence = await normalizeEndoProvisionSpec(
+    {
+      fs: 'readWrite',
+      gits: { ebfb: { path: ['nested-repo'], mode: 'readWrite' } },
+    },
+    { harness: 'test', sessionId: 'git-restart', cwd: root },
+  );
+
+  const persistedRecord = JSON.parse(JSON.stringify(persistence));
+  const reconstructed = await validateEndoProvisionPersistence(persistedRecord);
+  t.deepEqual(reconstructed, persistence);
+  t.deepEqual(reconstructed.policy.gits?.ebfb, {
+    mount: 'workspace',
+    path: ['nested-repo'],
+    root: await realpath(join(root, 'nested-repo')),
+    mode: 'readWrite',
+  });
+});
+
+test('persistence reconstruction retains own __proto__ mount and Git grants', async t => {
+  const root = await makeWorkspace(t);
+  const nested = join(root, 'nested-repo');
+  await mkdir(nested);
+  const mounts = JSON.parse(`{
+    "__proto__": {
+      "path": ${JSON.stringify(nested)},
+      "mode": "readOnly"
+    }
+  }`);
+  const mounted = await normalizeEndoProvisionSpec(
+    {
+      mounts,
+      gits: { nested: { mount: '__proto__', path: [], mode: 'readOnly' } },
+    },
+    { harness: 'test', sessionId: 'persist-proto-mount', cwd: root },
+  );
+  const mountedReconstructed = await validateEndoProvisionPersistence(
+    JSON.parse(JSON.stringify(mounted)),
+  );
+  t.true(Object.hasOwn(mountedReconstructed.policy.mounts, '__proto__'));
+
+  const gits = JSON.parse(`{
+    "__proto__": { "path": [], "mode": "readOnly" }
+  }`);
+  const granted = await normalizeEndoProvisionSpec(
+    { fs: 'readOnly', gits },
+    { harness: 'test', sessionId: 'persist-proto-git', cwd: root },
+  );
+  const grantedReconstructed = await validateEndoProvisionPersistence(
+    JSON.parse(JSON.stringify(granted)),
+  );
+  t.true(Object.hasOwn(grantedReconstructed.policy.gits ?? {}, '__proto__'));
+});
+
+test('missing Git directories reject the whole persisted authority', async t => {
+  const root = await makeWorkspace(t);
+  const nestedPath = join(root, 'nested-repo');
+  await mkdir(nestedPath);
+  const persistence = await normalizeEndoProvisionSpec(
+    {
+      fs: 'readWrite',
+      gits: { ebfb: { path: ['nested-repo'], mode: 'readOnly' } },
+    },
+    { harness: 'test', sessionId: 'missing-git-repo', cwd: root },
+  );
+  await rm(nestedPath, { recursive: true, force: true });
+
+  await t.throwsAsync(() => validateEndoProvisionPersistence(persistence), {
+    message: /does not exist or cannot be resolved/,
+  });
+});
+
+test('runtime authority and prompt context project separately', async t => {
+  const root = await makeWorkspace(t);
+  const original = await normalizeEndoProvisionSpec(
+    {
+      grants: {
+        calendar: {
+          from: ['tools', 'calendar'],
+          description: 'Original calendar context',
+        },
+      },
+    },
+    { harness: 'test', sessionId: 'authority-context', cwd: root },
+  );
+  const describedDifferently = await normalizeEndoProvisionSpec(
+    {
+      grants: {
+        calendar: {
+          from: ['tools', 'calendar'],
+          description: 'Updated calendar context',
+        },
+      },
+    },
+    { harness: 'test', sessionId: 'authority-context', cwd: root },
+  );
+  const selectedDifferently = await normalizeEndoProvisionSpec(
+    {
+      grants: {
+        calendar: {
+          from: ['tools', 'rebound'],
+          description: 'Original calendar context',
+        },
+      },
+    },
+    { harness: 'test', sessionId: 'authority-context', cwd: root },
+  );
+
+  t.deepEqual(
+    projectEndoProvisionRuntimeAuthority(original),
+    projectEndoProvisionRuntimeAuthority(describedDifferently),
+  );
+  t.notDeepEqual(
+    projectEndoProvisionContext(original),
+    projectEndoProvisionContext(describedDifferently),
+  );
+  t.notDeepEqual(
+    projectEndoProvisionRuntimeAuthority(original),
+    projectEndoProvisionRuntimeAuthority(selectedDifferently),
   );
 });
 
@@ -68,10 +222,7 @@ test('persistence equality ignores record key order but preserves array order', 
   );
   const reordered = {
     policy: {
-      fs: persistence.policy.fs,
-      workspace: {
-        deniedSegments: persistence.policy.workspace.deniedSegments,
-      },
+      mounts: persistence.policy.mounts,
     },
     workspacePath: persistence.workspacePath,
     guestHandlePath: persistence.guestHandlePath,
@@ -81,10 +232,13 @@ test('persistence equality ignores record key order but preserves array order', 
     ...reordered,
     policy: {
       ...reordered.policy,
-      workspace: {
-        deniedSegments: [
-          ...persistence.policy.workspace.deniedSegments,
-        ].reverse(),
+      mounts: {
+        workspace: {
+          ...persistence.policy.mounts.workspace,
+          deniedSegments: [
+            ...persistence.policy.mounts.workspace.deniedSegments,
+          ].reverse(),
+        },
       },
     },
   };

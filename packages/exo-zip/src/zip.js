@@ -59,25 +59,43 @@ harden(drainBytes);
  * each leaf blob into the supplied `ZipWriter` under its
  * slash-joined path.
  *
- * Uses `__getMethodNames__()` to discriminate sub-tree from leaf
- * blob, mirroring `@endo/platform`'s `checkoutTree` so the same
- * remotables work on both the read and write side without
- * duck-typing failed CapTP calls.
+ * Uses the mount `kind()` discriminator when available, with
+ * `__getMethodNames__()` as a fallback for older ReadableTree and
+ * ReadableBlob capabilities.
  *
  * @param {unknown} node
  * @param {string[]} pathSegments
  * @param {ZipWriter} writer
  * @param {{ date?: Date }} entryOptions
+ * @param {boolean | undefined} [kindProtocol]
  */
-const walkTree = async (node, pathSegments, writer, entryOptions) => {
-  // eslint-disable-next-line no-underscore-dangle
-  const methods = await E(/** @type {any} */ (node)).__getMethodNames__();
-  const isTree = methods.includes('list');
+const walkTree = async (
+  node,
+  pathSegments,
+  writer,
+  entryOptions,
+  kindProtocol = undefined,
+) => {
+  let methods;
+  if (kindProtocol === undefined) {
+    // eslint-disable-next-line no-underscore-dangle
+    methods = await E(/** @type {any} */ (node)).__getMethodNames__();
+  }
+  const hasKind = kindProtocol ?? methods.includes('kind');
+  const isTree = hasKind
+    ? (await E(/** @type {any} */ (node)).kind()) === 'directory'
+    : methods.includes('list');
   if (isTree) {
     const names = await E(/** @type {any} */ (node)).list();
     for (const name of names) {
       const child = await E(/** @type {any} */ (node)).lookup(name);
-      await walkTree(child, [...pathSegments, name], writer, entryOptions);
+      await walkTree(
+        child,
+        [...pathSegments, name],
+        writer,
+        entryOptions,
+        hasKind ? true : undefined,
+      );
     }
     return;
   }

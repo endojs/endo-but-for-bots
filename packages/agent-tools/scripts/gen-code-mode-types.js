@@ -10,7 +10,7 @@
  *
  *   - `generated/code-mode-globals/git-declarations.js` (git, gitReadOnly)
  *   - `generated/code-mode-globals/git-remote-declarations.js` (gitRemote)
- *   - `generated/code-mode-globals/fs-declarations.js`  (workspace)
+ *   - `generated/code-mode-globals/fs-declarations.js`  (workspace, filesystem)
  *   - `generated/code-mode-globals/shell-declarations.js` (shell)
  *   - `generated/code-mode-globals/http-declarations.js` (http)
  *
@@ -71,12 +71,8 @@ ${sourceDoc}
  * @param {string} s
  * @returns {string}
  */
-const guardTemplate = s => {
-  if (s.includes('`') || s.includes('${')) {
-    throw new Error('generated declaration contains a template-literal sigil');
-  }
-  return s;
-};
+const escapeTemplateLiteral = s =>
+  s.replaceAll('\\', '\\\\').replaceAll('`', '\\`').replaceAll('${', '\\${');
 
 /**
  * @param {Record<string, { aux: string, body: string }>} declarations
@@ -86,9 +82,9 @@ const renderEntries = declarations =>
   Object.entries(declarations)
     .map(
       ([key, { aux, body }]) =>
-        `  ${key}: {\n    aux: \`${guardTemplate(aux)}\`,\n    body: \`${guardTemplate(
-          body,
-        )}\`,\n  },`,
+        `  ${key}: {\n    aux: \`${escapeTemplateLiteral(
+          aux,
+        )}\`,\n    body: \`${escapeTemplateLiteral(body)}\`,\n  },`,
     )
     .join('\n');
 
@@ -136,11 +132,13 @@ writeArtifact({
   outPath: '../generated/code-mode-globals/fs-declarations.js',
   exportName: 'fsDeclarations',
   descriptorFile: 'fs.js',
-  sourceDoc: ` *   - workspace: packages/platform/src/fs/extended/types.ts (the
+  sourceDoc: ` *   - workspace: packages/daemon/src/types.d.ts (the \`EndoMount\` interface),
+ *     reached through the re-export in
+ *     packages/agent-tools/src/code-mode-globals/daemon-mount-types.ts and
+ *     printed by the TypeScript compiler API.
+ *   - filesystem: packages/platform/src/fs/extended/types.ts (the local
  *     \`Filesystem\` type alias and the capability types it reaches), printed
- *     by the TypeScript compiler API, with \`PassableReader\`,
- *     \`PassableBytesReader\`, \`PassableBytesWriter\`, and the stream nodes
- *     they reach followed into packages/exo-stream/types.d.ts.`,
+ *     by the TypeScript compiler API.`,
   declarations: buildFsTypeDeclarations(),
 });
 

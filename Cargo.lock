@@ -1045,6 +1045,8 @@ dependencies = [
  "flate2",
  "hex",
  "ironhorse-compile",
+ "ironhorse-snapshot",
+ "ironhorse-store-sqlite",
  "ironhorse-vm",
  "libc",
  "rusqlite",
@@ -5154,6 +5156,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "url",
  "zip",
 ]
 

@@ -4,7 +4,7 @@ import harden from '@endo/harden';
 import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 import { concatBytes } from '@endo/bytes/concat.js';
-import { ed25519 } from '@noble/curves/ed25519';
+import { ed25519 } from '@noble/curves/ed25519.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 
 import {
@@ -193,7 +193,7 @@ export const makeCryptography = codec => {
   };
 
   const makeOcapnKeyPair = () => {
-    const privateKeyBytes = ed25519.utils.randomPrivateKey();
+    const privateKeyBytes = ed25519.utils.randomSecretKey();
     return makeOcapnKeyPairFromPrivateKey(privateKeyBytes);
   };
 
@@ -205,7 +205,7 @@ export const makeCryptography = codec => {
    * @returns {{ keyPair: OcapnKeyPair, privateKeyBytes: Uint8Array }}
    */
   const makeOcapnKeyPairWithPrivateBytes = () => {
-    const privateKeyBytes = ed25519.utils.randomPrivateKey();
+    const privateKeyBytes = ed25519.utils.randomSecretKey();
     return {
       keyPair: makeOcapnKeyPairFromPrivateKey(privateKeyBytes),
       privateKeyBytes,

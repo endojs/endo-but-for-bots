@@ -30,8 +30,8 @@
     "test": "exit 0"
   },
   "dependencies": {
-    "@noble/curves": "^1.8.1",
-    "ws": "^8.13.0"
+    "@noble/curves": "^2.3.0",
+    "ws": "^8.21.3"
   },
   "files": [
     "src"

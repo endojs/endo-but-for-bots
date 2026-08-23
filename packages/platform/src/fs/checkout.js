@@ -21,21 +21,29 @@ export const checkoutTree = async (tree, writer, options = {}) => {
   /**
    * @param {unknown} node
    * @param {string[]} pathSegments
+   * @param {boolean} kindProtocol
    */
-  const walk = async (node, pathSegments) => {
+  const walk = async (node, pathSegments, kindProtocol) => {
     await writer.makeDirectory(pathSegments);
     const names = await E(/** @type {SnapshotTree} */ (node)).list();
     for (const name of names) {
       /** @type {any} */
       const child = await E(/** @type {SnapshotTree} */ (node)).lookup(name);
       const childPath = [...pathSegments, name];
-      // Use __getMethodNames__ to detect the node type without calling
-      // a method that may not exist (which causes CapTP error logging).
-      // eslint-disable-next-line no-underscore-dangle
-      const methods = await E(child).__getMethodNames__();
-      const isTree = methods.includes('list');
+      let isTree;
+      if (kindProtocol) {
+        isTree = (await E(child).kind()) === 'directory';
+      } else {
+        // Older ReadableTree / ReadableBlob capabilities need method
+        // introspection to avoid a noisy missing-method send.
+        // eslint-disable-next-line no-underscore-dangle
+        const methods = await E(child).__getMethodNames__();
+        isTree = methods.includes('kind')
+          ? (await E(child).kind()) === 'directory'
+          : methods.includes('list');
+      }
       if (isTree) {
-        await walk(child, childPath);
+        await walk(child, childPath, kindProtocol);
       } else {
         // It's a readable-blob. Stream its content through the writer.
         const readable = iterateBytesReader(/** @type {any} */ (child));
@@ -45,6 +53,12 @@ export const checkoutTree = async (tree, writer, options = {}) => {
     }
   };
 
-  await walk(tree, []);
+  // Discover the mount protocol once. Its descendants all implement the
+  // same discriminator, while older capabilities retain the fallback above.
+  // eslint-disable-next-line no-underscore-dangle
+  const rootMethods = await E(
+    /** @type {{ __getMethodNames__: () => Promise<string[]> }} */ (tree),
+  ).__getMethodNames__();
+  await walk(tree, [], rootMethods.includes('kind'));
 };
 harden(checkoutTree);

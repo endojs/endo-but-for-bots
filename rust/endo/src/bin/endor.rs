@@ -580,7 +580,8 @@ fn cmd_run_entry(args: &[String], entry_path: &std::path::Path) -> Result<(), En
 
     let archive = endo::execute::load_assembled_archive(&cas, &assembled.compartment_map_hash)
         .map_err(|e| EndoError::Config(format!("{e}")))?;
-    xsnap::run_xs_archive_loaded(&archive).map_err(|e| EndoError::Config(format!("run: {e}")))?;
+    xsnap::run_xs_archive_loaded(&archive)
+        .map_err(|e| EndoError::Config(format!("run: {e}")))?;
     Ok(())
 }
 
@@ -613,7 +614,8 @@ fn cmd_run_from_cas(root_hash: &str) -> Result<(), EndoError> {
     let archive = endo::cas_archive::load_archive_from_cas(&cas, root_hash)
         .map_err(|e| EndoError::Config(format!("CAS load: {e}")))?;
 
-    xsnap::run_xs_archive_loaded(&archive).map_err(|e| EndoError::Config(format!("run: {e}")))?;
+    xsnap::run_xs_archive_loaded(&archive)
+        .map_err(|e| EndoError::Config(format!("run: {e}")))?;
     Ok(())
 }
 

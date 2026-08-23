@@ -153,7 +153,7 @@ export const makeCursorExo = ({ backend, dirPath, qidOf = synthQid }) => {
       if (method === undefined) {
         return 'Cursor: paged directory listing — read(limit) | stream() | toArray() | skip(n) | rewind().';
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };

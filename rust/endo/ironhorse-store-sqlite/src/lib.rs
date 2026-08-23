@@ -8,10 +8,13 @@
 //! extents inside one SQLite transaction under WAL, where the in-crate
 //! reference [`ironhorse_snapshot::store_file::FileStore`] rewrites its
 //! whole file per commit. The semantics are pinned by the shared
-//! contract, not re-invented here: epoch discipline via
-//! [`ironhorse_snapshot::store::check_epoch`], rows beyond the new
-//! geometry dropped on commit, raw row bytes in the crate's canonical
-//! encodings, and the same fail-closed gate taxonomy.
+//! contract, not re-invented here: succession discipline via
+//! [`ironhorse_snapshot::store::check_succession`] (the seal chain
+//! plus the recomputed batch seal — strictly stronger than a bare
+//! epoch check), the shared [`ironhorse_snapshot::store::apply_batch`]
+//! verification, rows beyond the new geometry dropped on commit, raw
+//! row bytes in the crate's canonical encodings, and the same
+//! fail-closed gate taxonomy.
 //!
 //! Operational discipline follows the daemon's SQLite designs
 //! (`designs/daemon-endo-rust-sqlite.md`,
@@ -32,8 +35,9 @@
 use std::path::Path;
 
 use ironhorse_snapshot::store::{
-    check_succession, chunk_extent_count, slot_page_count, CheckpointBatch, HeapStore,
-    StoreError, StoreManifest,
+    apply_batch, check_succession, chunk_extent_count, free_seg_count, leaf_hash,
+    slot_page_count, CheckpointBatch, HeapStore, StoreError, StoreManifest, LEAF_EXT, LEAF_FREE,
+    LEAF_PAGE,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -42,6 +46,14 @@ use rusqlite::{params, Connection, OptionalExtension};
 /// the machine surface), never silently absorbed.
 fn sql_err(e: rusqlite::Error) -> StoreError {
     StoreError::Io(format!("sqlite: {e}"))
+}
+
+/// A page/target column read back from the database, range-checked
+/// into u32 instead of `as`-truncated: an external writer's negative
+/// or oversized value fails closed like a malformed blob would, never
+/// wraps into a plausible page number (review nit).
+fn page_col(v: i64) -> Result<u32, StoreError> {
+    u32::try_from(v).map_err(|_| StoreError::Io(format!("sqlite: page column out of range ({v})")))
 }
 
 /// The `meta` key holding the encoded [`StoreManifest`].
@@ -63,14 +75,14 @@ impl SqliteHeapStore {
     /// schema. A file that is not a SQLite database fails closed here.
     pub fn open(path: impl AsRef<Path>) -> Result<SqliteHeapStore, StoreError> {
         let conn = Connection::open(path).map_err(sql_err)?;
-        Self::init(conn)
+        Self::init(conn, false)
     }
 
     /// An in-memory store for tests and ephemeral use. Same schema and
     /// semantics; nothing durable.
     pub fn open_in_memory() -> Result<SqliteHeapStore, StoreError> {
         let conn = Connection::open_in_memory().map_err(sql_err)?;
-        Self::init(conn)
+        Self::init(conn, true)
     }
 
     /// The `PRAGMA application_id` stamp: `IRON` as a big-endian u32 —
@@ -80,7 +92,7 @@ impl SqliteHeapStore {
     /// review's foreign-database finding).
     const APPLICATION_ID: i32 = i32::from_be_bytes(*b"IRON");
 
-    fn init(conn: Connection) -> Result<SqliteHeapStore, StoreError> {
+    fn init(conn: Connection, in_memory: bool) -> Result<SqliteHeapStore, StoreError> {
         // Foreign-database gate before anything else touches the file.
         let app_id: i32 = conn
             .query_row("PRAGMA application_id", [], |r| r.get(0))
@@ -116,16 +128,52 @@ impl SqliteHeapStore {
         // silent fallback the review flagged must fail closed instead.
         conn.busy_timeout(std::time::Duration::from_millis(5000))
             .map_err(sql_err)?;
+        // Enforce the documented single-writer-per-path model instead
+        // of assuming it (the collaborator review's finding): under
+        // EXCLUSIVE locking the first connection to touch the file
+        // holds it, so a stray second opener fails closed with
+        // SQLITE_BUSY at its first query (our application_id gate)
+        // rather than silently racing. In-memory databases report
+        // "exclusive" trivially (nothing shares them).
+        let lock_mode: String = conn
+            .query_row("PRAGMA locking_mode=EXCLUSIVE", [], |r| r.get(0))
+            .map_err(sql_err)?;
+        if lock_mode.to_ascii_lowercase() != "exclusive" {
+            return Err(StoreError::Io(format!(
+                "sqlite: locking_mode=EXCLUSIVE refused (got {lock_mode})"
+            )));
+        }
         let mode: String = conn
             .query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))
             .map_err(sql_err)?;
-        if mode != "wal" && mode != "memory" {
+        // "memory" is acceptable ONLY for a genuinely in-memory
+        // connection — keyed on how WE opened it, not on the reported
+        // string, so an on-disk database claiming a memory journal
+        // (no crash durability at all) fails closed (review nit).
+        if mode != "wal" && !(in_memory && mode == "memory") {
             return Err(StoreError::Io(format!(
                 "sqlite: journal_mode=WAL refused (got {mode})"
             )));
         }
         conn.execute_batch("PRAGMA wal_autocheckpoint = 1000")
             .map_err(sql_err)?;
+        // Pin durability explicitly rather than riding the build-time
+        // default: FULL syncs the WAL on every commit, which is the
+        // acked-checkpoint-survives-power-loss contract the machine
+        // layer's fsync discipline assumes. Verified by read-back like
+        // the two pragmas above — `synchronous` is exactly the one
+        // whose silent absence breaks the stated contract (the review
+        // found it fired blind while its siblings were checked).
+        conn.execute_batch("PRAGMA synchronous = FULL")
+            .map_err(sql_err)?;
+        let sync: i64 = conn
+            .query_row("PRAGMA synchronous", [], |r| r.get(0))
+            .map_err(sql_err)?;
+        if sync != 2 {
+            return Err(StoreError::Io(format!(
+                "sqlite: synchronous=FULL refused (got {sync})"
+            )));
+        }
         conn.execute_batch(
             "PRAGMA foreign_keys=ON;
              CREATE TABLE IF NOT EXISTS meta (
@@ -144,6 +192,27 @@ impl SqliteHeapStore {
                name  TEXT PRIMARY KEY,
                bytes BLOB NOT NULL
              );
+             -- Row-leaf hashes (store seam phase 5): kind 0 = slot
+             -- page, 1 = chunk extent; 32-byte SHA-256 per row,
+             -- maintained transactionally with the rows themselves.
+             CREATE TABLE IF NOT EXISTS leaf_hashes (
+               kind  INTEGER NOT NULL,
+               idx   INTEGER NOT NULL,
+               hash  BLOB NOT NULL,
+               PRIMARY KEY (kind, idx)
+             );
+             -- Page-edge summaries (store seam phase 6): the sorted
+             -- outgoing page targets per slot page, as big-endian u32s.
+             CREATE TABLE IF NOT EXISTS page_edges (
+               page    INTEGER PRIMARY KEY,
+               targets BLOB NOT NULL
+             );
+             -- Free-list segments (store seam phase 9): big-endian u32
+             -- entries; kind-2 rows in leaf_hashes checksum them.
+             CREATE TABLE IF NOT EXISTS free_segs (
+               seg   INTEGER PRIMARY KEY,
+               bytes BLOB NOT NULL
+             );
              -- One row set per side-table ledger row, populated as the
              -- Pending atoms land paired with their store rows (design
              -- § Side tables: the ledger governs the schema).
@@ -152,10 +221,69 @@ impl SqliteHeapStore {
                key   BLOB NOT NULL,
                bytes BLOB NOT NULL,
                PRIMARY KEY (name, key)
-             );",
+             );
+             -- Normalized page-edge pairs (the query-driven GC layer,
+             -- store seam phase 10): one row per (target, page) edge,
+             -- DERIVED from page_edges — never sealed, rebuildable —
+             -- maintained in the same commit transaction. The primary
+             -- key answers \"which pages reference target?\" (the
+             -- reverse index no blob encoding can); the page index
+             -- answers forward adjacency, which is what lets
+             -- reachability run as a recursive CTE inside SQLite
+             -- instead of reifying the whole edge set into Rust.
+             CREATE TABLE IF NOT EXISTS edge_pairs (
+               target INTEGER NOT NULL,
+               page   INTEGER NOT NULL,
+               PRIMARY KEY (target, page)
+             ) WITHOUT ROWID;
+             CREATE INDEX IF NOT EXISTS edge_pairs_by_page
+               ON edge_pairs (page);",
         )
         .map_err(sql_err)?;
+        Self::rebuild_edge_pairs(&conn)?;
         Ok(SqliteHeapStore { conn })
+    }
+
+    /// Rebuild `edge_pairs` from the sealed `page_edges` rows,
+    /// UNCONDITIONALLY, at every open. The derived index is
+    /// decision-critical (the CTE collector reads only it) yet sits
+    /// outside the integrity root by design, so open never TRUSTS it:
+    /// any at-rest divergence — a store from before the table existed,
+    /// a wiped index, or a count-preserving content edit no cheap gate
+    /// can see (the review's finding: an earlier version rebuilt only
+    /// when cardinalities disagreed, which a moved pair defeats) — is
+    /// erased here, and between opens the EXCLUSIVE locking mode keeps
+    /// other writers out while our own commits maintain the index
+    /// transactionally. Cost is one pass over metadata-scale rows,
+    /// the same order as the dense summary read `validate_store`
+    /// already performs at resume.
+    fn rebuild_edge_pairs(conn: &Connection) -> Result<(), StoreError> {
+        let tx = conn.unchecked_transaction().map_err(sql_err)?;
+        tx.execute("DELETE FROM edge_pairs", []).map_err(sql_err)?;
+        {
+            let mut read = tx
+                .prepare("SELECT page, targets FROM page_edges")
+                .map_err(sql_err)?;
+            let mut insert = tx
+                .prepare("INSERT OR REPLACE INTO edge_pairs (target, page) VALUES (?1, ?2)")
+                .map_err(sql_err)?;
+            let rows = read
+                .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+                .map_err(sql_err)?;
+            for row in rows {
+                let (page, blob) = row.map_err(sql_err)?;
+                if blob.len() % 4 != 0 {
+                    return Err(StoreError::Io("sqlite: malformed page edges".to_string()));
+                }
+                for c in blob.chunks_exact(4) {
+                    let target = u32::from_be_bytes(c.try_into().unwrap());
+                    insert
+                        .execute(params![target as i64, page])
+                        .map_err(sql_err)?;
+                }
+            }
+        }
+        tx.commit().map_err(sql_err)
     }
 
     /// The full last-connection close of the shutdown-checkpoint
@@ -163,6 +291,13 @@ impl SqliteHeapStore {
     /// sidecars, leaving a self-contained single file safe to copy or
     /// hand off. Consume-on-close mirrors the daemon's "no database
     /// request after close" invariant.
+    ///
+    /// The single-file invariant holds only once this returns `Ok`: a
+    /// dropped (not closed) store runs `Connection`'s `Drop`, which
+    /// swallows any checkpoint error, and may leave live `-wal`/`-shm`
+    /// sidecars beside the file. Committed epochs are still durable
+    /// either way (WAL + `synchronous=FULL`); only the
+    /// one-self-contained-file property needs the explicit close.
     pub fn close(self) -> Result<(), StoreError> {
         self.conn
             .close()
@@ -183,11 +318,133 @@ impl SqliteHeapStore {
             Some(b) => Ok(Some(StoreManifest::decode(&b)?)),
         }
     }
+
+    // --- query-driven GC capabilities (store seam phase 10) ---
+    //
+    // `pages_referencing` is backend-specific (the trait grows a
+    // reverse-edge surface when the generational collector needs it
+    // from every backend); reachability and the summary count are
+    // ALSO served through the `HeapStore` trait overrides below, so
+    // the summary-driven partial collector's decision query runs as
+    // the CTE on this backend with no caller change.
+
+    /// The pages whose summaries reference `target` — the reverse
+    /// query the normalized pairs exist for: O(in-degree) by primary
+    /// key, no blob decode, no whole-edge-set reification. The
+    /// generational mark asks exactly this for each page a crank
+    /// dirtied.
+    pub fn pages_referencing(&self, target: u32) -> Result<Vec<u32>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT page FROM edge_pairs WHERE target = ?1 ORDER BY page")
+            .map_err(sql_err)?;
+        let rows = stmt
+            .query_map(params![target as i64], |r| r.get::<_, i64>(0))
+            .map_err(sql_err)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(page_col(r.map_err(sql_err)?)?);
+        }
+        Ok(out)
+    }
+
+    /// Page reachability computed INSIDE SQLite as a recursive CTE
+    /// over the normalized pairs — the query-driven twin of
+    /// [`ironhorse_snapshot::store::reachable_pages`], which reads
+    /// the WHOLE edge set into Rust first (O(pages) transfer per
+    /// call, regardless of how much is reachable). Same answer by
+    /// construction — locked by a parity test — with transfer
+    /// proportional to the ANSWER; the store bench compares their
+    /// scaling. Roots ride a temp table, so root-set size never hits
+    /// SQL length limits.
+    pub fn reachable_pages_sql(
+        &self,
+        roots: &[u32],
+    ) -> Result<std::collections::BTreeSet<u32>, StoreError> {
+        self.conn
+            .execute_batch(
+                "CREATE TEMP TABLE IF NOT EXISTS reach_roots (p INTEGER PRIMARY KEY);
+                 DELETE FROM reach_roots;",
+            )
+            .map_err(sql_err)?;
+        {
+            let mut ins = self
+                .conn
+                .prepare("INSERT OR IGNORE INTO reach_roots (p) VALUES (?1)")
+                .map_err(sql_err)?;
+            for &r in roots {
+                ins.execute(params![r as i64]).map_err(sql_err)?;
+            }
+        }
+        let mut stmt = self
+            .conn
+            .prepare(
+                "WITH RECURSIVE reach(p) AS (
+                   SELECT p FROM reach_roots
+                   UNION
+                   SELECT e.target FROM edge_pairs e JOIN reach ON e.page = reach.p
+                 )
+                 SELECT p FROM reach",
+            )
+            .map_err(sql_err)?;
+        let rows = stmt.query_map([], |r| r.get::<_, i64>(0)).map_err(sql_err)?;
+        let mut out = std::collections::BTreeSet::new();
+        for r in rows {
+            out.insert(page_col(r.map_err(sql_err)?)?);
+        }
+        self.conn
+            .execute("DELETE FROM reach_roots", [])
+            .map_err(sql_err)?;
+        Ok(out)
+    }
 }
 
 impl HeapStore for SqliteHeapStore {
     fn manifest(&self) -> Result<StoreManifest, StoreError> {
         Self::stored_manifest(&self.conn)?.ok_or(StoreError::Empty)
+    }
+
+    // Trait-level query overrides (store seam phase 10): the partial
+    // collector's decision queries run indexed on this backend — the
+    // summary-count gate as a COUNT(*), reachability as the recursive
+    // CTE — with the dense defaults' exact semantics (dense/CTE parity
+    // and MemoryStore equivalence locked in tests/query_gc.rs).
+
+    fn summary_page_count(&self) -> Result<u32, StoreError> {
+        // Empty-store parity with the dense default (which fails with
+        // `Empty` through `page_edges`), and contiguity, not just
+        // cardinality: `{0,1,3,4,X}` has the right COUNT while page 2
+        // is missing — the dense default fails closed on that gap, so
+        // this override must too (review finding).
+        if Self::stored_manifest(&self.conn)?.is_none() {
+            return Err(StoreError::Empty);
+        }
+        let (count, extent): (i64, i64) = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(MAX(page) + 1, 0) FROM page_edges",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(sql_err)?;
+        if count != extent {
+            return Err(StoreError::Io(format!(
+                "sqlite: page_edges not contiguous ({count} rows, extent {extent})"
+            )));
+        }
+        Ok(count as u32)
+    }
+
+    fn reachable_page_set(
+        &self,
+        roots: &[u32],
+    ) -> Result<std::collections::BTreeSet<u32>, StoreError> {
+        // Same empty-store parity as above; the dense default errors
+        // before BFS on any backend without a committed epoch.
+        if Self::stored_manifest(&self.conn)?.is_none() {
+            return Err(StoreError::Empty);
+        }
+        self.reachable_pages_sql(roots)
     }
 
     fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
@@ -208,6 +465,13 @@ impl HeapStore for SqliteHeapStore {
     }
 
     fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
+        // Empty-store gate for point-read parity: all three backends
+        // report `Empty` for a store with no committed epoch, and
+        // `MissingRow` only for a committed store lacking the row
+        // (the review's parity table).
+        if Self::stored_manifest(&self.conn)?.is_none() {
+            return Err(StoreError::Empty);
+        }
         self.conn
             .query_row(
                 "SELECT bytes FROM slot_pages WHERE page = ?1",
@@ -220,6 +484,9 @@ impl HeapStore for SqliteHeapStore {
     }
 
     fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError> {
+        if Self::stored_manifest(&self.conn)?.is_none() {
+            return Err(StoreError::Empty);
+        }
         self.conn
             .query_row(
                 "SELECT bytes FROM chunk_exts WHERE ext = ?1",
@@ -235,7 +502,7 @@ impl HeapStore for SqliteHeapStore {
         // Metadata-only: `length(bytes)` never materializes the BLOBs,
         // so open-time validation (and lazy resume) reads no row
         // contents.
-        let m = self.manifest()?;
+        let _ = self.manifest()?;
         // Built from the rows actually present (ORDER BY page), never
         // pre-sized from the manifest's untrusted geometry — a forged
         // slot_count must fail validation, not force an allocation
@@ -275,33 +542,208 @@ impl HeapStore for SqliteHeapStore {
         Ok((pages, exts))
     }
 
+    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
+        if Self::stored_manifest(&self.conn)?.is_none() {
+            return Err(StoreError::Empty);
+        }
+        let read = |kind: i64, what: &'static str| -> Result<Vec<[u8; 32]>, StoreError> {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT idx, hash FROM leaf_hashes WHERE kind = ?1 ORDER BY idx")
+                .map_err(sql_err)?;
+            let rows = stmt
+                .query_map(params![kind], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+                })
+                .map_err(sql_err)?;
+            let mut out: Vec<[u8; 32]> = Vec::new();
+            for row in rows {
+                let (idx, hash) = row.map_err(sql_err)?;
+                if idx as usize != out.len() {
+                    return Err(StoreError::MissingRow(what, out.len() as u32));
+                }
+                let arr: [u8; 32] = hash
+                    .try_into()
+                    .map_err(|_| StoreError::Io("sqlite: malformed leaf hash".to_string()))?;
+                out.push(arr);
+            }
+            Ok(out)
+        };
+        Ok((read(0, "slot page leaf")?, read(1, "chunk extent leaf")?))
+    }
+
+    fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
+        let Some(m) = Self::stored_manifest(&self.conn)? else {
+            return Err(StoreError::Empty);
+        };
+        let mut stmt = self
+            .conn
+            .prepare("SELECT page, targets FROM page_edges ORDER BY page")
+            .map_err(sql_err)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+            .map_err(sql_err)?;
+        let mut out: Vec<Vec<u32>> = Vec::new();
+        for row in rows {
+            let (page, blob) = row.map_err(sql_err)?;
+            if page as usize != out.len() {
+                return Err(StoreError::MissingRow("page edges", out.len() as u32));
+            }
+            if blob.len() % 4 != 0 {
+                return Err(StoreError::Io("sqlite: malformed page edges".to_string()));
+            }
+            out.push(
+                blob.chunks_exact(4)
+                    .map(|c| u32::from_be_bytes(c.try_into().unwrap()))
+                    .collect(),
+            );
+        }
+        // Contiguity above rules out interior gaps; this rules out a
+        // truncated TAIL — the case the review showed reads as "no
+        // outgoing edges" and turns the partial collector maximal.
+        let expected = slot_page_count(m.slot_count);
+        if out.len() != expected as usize {
+            return Err(StoreError::SummaryCount {
+                expected,
+                found: out.len() as u32,
+            });
+        }
+        Ok(out)
+    }
+
+    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+        if Self::stored_manifest(&self.conn)?.is_none() {
+            return Err(StoreError::Empty);
+        }
+        self.conn
+            .query_row(
+                "SELECT bytes FROM free_segs WHERE seg = ?1",
+                params![seg as i64],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql_err)?
+            .ok_or(StoreError::MissingRow("free segment", seg))
+    }
+
+    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
+        if Self::stored_manifest(&self.conn)?.is_none() {
+            return Err(StoreError::Empty);
+        }
+        let mut stmt = self
+            .conn
+            .prepare("SELECT idx, hash FROM leaf_hashes WHERE kind = 2 ORDER BY idx")
+            .map_err(sql_err)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+            .map_err(sql_err)?;
+        let mut out: Vec<[u8; 32]> = Vec::new();
+        for row in rows {
+            let (idx, hash) = row.map_err(sql_err)?;
+            if idx as usize != out.len() {
+                return Err(StoreError::MissingRow("free segment leaf", out.len() as u32));
+            }
+            let arr: [u8; 32] = hash
+                .try_into()
+                .map_err(|_| StoreError::Io("sqlite: malformed leaf hash".to_string()))?;
+            out.push(arr);
+        }
+        Ok(out)
+    }
+
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
-        let tx = self.conn.transaction().map_err(sql_err)?;
+        // IMMEDIATE: take the writer lock up front so a concurrent
+        // commit serializes under busy_timeout instead of surfacing
+        // SQLITE_BUSY_SNAPSHOT on the mid-transaction read-to-write
+        // upgrade (the collaborator review's finding).
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(sql_err)?;
         {
             let stored = Self::stored_manifest(&tx)?;
             check_succession(stored.as_ref(), batch)?;
-
-            // A grown geometry's new rows must be in the batch. Prior
-            // rows exist by induction, so only the grown region is
-            // checked — O(grown + dirty) set lookups, zero per-row SQL
-            // (the PR-review finding).
             let pages = slot_page_count(batch.manifest.slot_count);
             let exts = chunk_extent_count(batch.manifest.chunk_len);
-            let prior_pages = stored.as_ref().map_or(0, |m| slot_page_count(m.slot_count));
-            let prior_exts = stored.as_ref().map_or(0, |m| chunk_extent_count(m.chunk_len));
-            let batch_pages: std::collections::HashSet<u32> =
-                batch.slot_pages.iter().map(|(p, _)| *p).collect();
-            let batch_exts: std::collections::HashSet<u32> =
-                batch.chunk_extents.iter().map(|(e, _)| *e).collect();
-            for page in prior_pages..pages {
-                if !batch_pages.contains(&page) {
-                    return Err(StoreError::MissingRow("slot page", page));
+
+            // The shared per-commit verification (grown-region
+            // presence for all three row dimensions, boundary rows
+            // against the prior manifest, row lengths, summary
+            // coupling, root recombination) against the prior leaves
+            // and summaries — all read inside this transaction, the
+            // same snapshot the succession check read, and all BEFORE
+            // any table mutation (wave-3 reorder: a refused batch now
+            // leaves the tables untouched by construction, so the
+            // transaction rollback is the backstop for I/O failures
+            // in the mutation stage below, not the mechanism a
+            // refusal depends on). The prior leaves are read PER KIND
+            // with contiguity enforced, like the trait readers: the
+            // review found an unfiltered `ORDER BY kind, idx` here
+            // silently folding kind-2 free leaves into the extent
+            // vector (masked only by resize bounds), and no gap
+            // detection.
+            {
+                let read_kind = |kind: i64, what: &'static str| -> Result<Vec<[u8; 32]>, StoreError> {
+                    let mut stmt = tx
+                        .prepare("SELECT idx, hash FROM leaf_hashes WHERE kind = ?1 ORDER BY idx")
+                        .map_err(sql_err)?;
+                    let rows = stmt
+                        .query_map(params![kind], |r| {
+                            Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+                        })
+                        .map_err(sql_err)?;
+                    let mut out: Vec<[u8; 32]> = Vec::new();
+                    for row in rows {
+                        let (idx, hash) = row.map_err(sql_err)?;
+                        if idx as usize != out.len() {
+                            return Err(StoreError::MissingRow(what, out.len() as u32));
+                        }
+                        let arr: [u8; 32] = hash.try_into().map_err(|_| {
+                            StoreError::Io("sqlite: malformed leaf hash".to_string())
+                        })?;
+                        out.push(arr);
+                    }
+                    Ok(out)
+                };
+                let mut prior_pages = read_kind(0, "slot page leaf")?;
+                let mut prior_exts = read_kind(1, "chunk extent leaf")?;
+                let mut prior_frees = read_kind(2, "free segment leaf")?;
+                let mut prior_edges: Vec<Vec<u32>> = Vec::new();
+                {
+                    let mut stmt = tx
+                        .prepare("SELECT page, targets FROM page_edges ORDER BY page")
+                        .map_err(sql_err)?;
+                    let rows = stmt
+                        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+                        .map_err(sql_err)?;
+                    for row in rows {
+                        let (page, blob) = row.map_err(sql_err)?;
+                        if page as usize != prior_edges.len() {
+                            return Err(StoreError::MissingRow(
+                                "page edges",
+                                prior_edges.len() as u32,
+                            ));
+                        }
+                        if blob.len() % 4 != 0 {
+                            return Err(StoreError::Io(
+                                "sqlite: malformed page edges".to_string(),
+                            ));
+                        }
+                        prior_edges.push(
+                            blob.chunks_exact(4)
+                                .map(|c| u32::from_be_bytes(c.try_into().unwrap()))
+                                .collect(),
+                        );
+                    }
                 }
-            }
-            for ext in prior_exts..exts {
-                if !batch_exts.contains(&ext) {
-                    return Err(StoreError::MissingRow("chunk extent", ext));
-                }
+                apply_batch(
+                    &mut prior_pages,
+                    &mut prior_exts,
+                    &mut prior_frees,
+                    &mut prior_edges,
+                    stored.as_ref(),
+                    batch,
+                )?;
             }
 
             let mut upsert_page = tx
@@ -335,6 +777,115 @@ impl HeapStore for SqliteHeapStore {
             tx.execute("DELETE FROM chunk_exts WHERE ext >= ?1", params![exts as i64])
                 .map_err(sql_err)?;
 
+            {
+                let mut upsert_leaf = tx
+                    .prepare(
+                        "INSERT INTO leaf_hashes (kind, idx, hash) VALUES (?1, ?2, ?3)
+                         ON CONFLICT(kind, idx) DO UPDATE SET hash = excluded.hash",
+                    )
+                    .map_err(sql_err)?;
+                for (page, bytes) in &batch.slot_pages {
+                    upsert_leaf
+                        .execute(params![0i64, *page as i64, leaf_hash(LEAF_PAGE, *page, bytes).as_slice()])
+                        .map_err(sql_err)?;
+                }
+                for (ext, bytes) in &batch.chunk_extents {
+                    upsert_leaf
+                        .execute(params![1i64, *ext as i64, leaf_hash(LEAF_EXT, *ext, bytes).as_slice()])
+                        .map_err(sql_err)?;
+                }
+                for (seg, bytes) in &batch.free_segs {
+                    upsert_leaf
+                        .execute(params![2i64, *seg as i64, leaf_hash(LEAF_FREE, *seg, bytes).as_slice()])
+                        .map_err(sql_err)?;
+                }
+                drop(upsert_leaf);
+                tx.execute(
+                    "DELETE FROM leaf_hashes WHERE kind = 0 AND idx >= ?1",
+                    params![pages as i64],
+                )
+                .map_err(sql_err)?;
+                tx.execute(
+                    "DELETE FROM leaf_hashes WHERE kind = 1 AND idx >= ?1",
+                    params![exts as i64],
+                )
+                .map_err(sql_err)?;
+                let n_frees = free_seg_count(batch.manifest.free_len);
+                tx.execute(
+                    "DELETE FROM leaf_hashes WHERE kind = 2 AND idx >= ?1",
+                    params![n_frees as i64],
+                )
+                .map_err(sql_err)?;
+                let mut upsert_seg = tx
+                    .prepare(
+                        "INSERT INTO free_segs (seg, bytes) VALUES (?1, ?2)
+                         ON CONFLICT(seg) DO UPDATE SET bytes = excluded.bytes",
+                    )
+                    .map_err(sql_err)?;
+                for (seg, bytes) in &batch.free_segs {
+                    upsert_seg
+                        .execute(params![*seg as i64, bytes])
+                        .map_err(sql_err)?;
+                }
+                drop(upsert_seg);
+                tx.execute("DELETE FROM free_segs WHERE seg >= ?1", params![n_frees as i64])
+                    .map_err(sql_err)?;
+            }
+
+            // Page-edge summaries (phase 6): upsert the dirty pages'
+            // summaries, drop those beyond the new geometry. Grown
+            // pages are necessarily dirty, so every page in range has
+            // a row by induction. The normalized `edge_pairs` twin
+            // (phase 10) is maintained in the SAME transaction from
+            // the same batch rows, so the derived index can never
+            // drift from the sealed source across a commit.
+            {
+                let mut upsert = tx
+                    .prepare(
+                        "INSERT INTO page_edges (page, targets) VALUES (?1, ?2)
+                         ON CONFLICT(page) DO UPDATE SET targets = excluded.targets",
+                    )
+                    .map_err(sql_err)?;
+                let mut clear_pairs = tx
+                    .prepare("DELETE FROM edge_pairs WHERE page = ?1")
+                    .map_err(sql_err)?;
+                let mut insert_pair = tx
+                    .prepare("INSERT OR REPLACE INTO edge_pairs (target, page) VALUES (?1, ?2)")
+                    .map_err(sql_err)?;
+                for (page, targets) in &batch.page_edges {
+                    let mut blob = Vec::with_capacity(targets.len() * 4);
+                    for t in targets {
+                        blob.extend_from_slice(&t.to_be_bytes());
+                    }
+                    upsert
+                        .execute(params![*page as i64, blob])
+                        .map_err(sql_err)?;
+                    clear_pairs.execute(params![*page as i64]).map_err(sql_err)?;
+                    for t in targets {
+                        insert_pair
+                            .execute(params![*t as i64, *page as i64])
+                            .map_err(sql_err)?;
+                    }
+                }
+                drop(upsert);
+                drop(clear_pairs);
+                drop(insert_pair);
+                tx.execute("DELETE FROM page_edges WHERE page >= ?1", params![pages as i64])
+                    .map_err(sql_err)?;
+                // Mirror the page_edges normalization VERBATIM: pairs
+                // are dropped exactly when their page's row is dropped.
+                // (An earlier `OR target >= ?1` disjunct implemented a
+                // different normalization than the open-time rebuild —
+                // dead code on honest histories, and on a crafted
+                // shrink it manufactured a commit/rebuild oscillation;
+                // the review killed it.)
+                tx.execute(
+                    "DELETE FROM edge_pairs WHERE page >= ?1",
+                    params![pages as i64],
+                )
+                .map_err(sql_err)?;
+            }
+
             tx.execute(
                 "INSERT INTO small_state (name, bytes) VALUES (?1, ?2)
                  ON CONFLICT(name) DO UPDATE SET bytes = excluded.bytes",
@@ -359,8 +910,8 @@ mod tests {
         begin_store_session, checkpoint_to_store, resume_from_store, MachineSnapshot,
     };
     use ironhorse_snapshot::store::{
-        export_to_container, image_to_batch, import_from_container, store_to_image,
-        validate_store,
+        export_to_container, image_to_batch, import_from_container, reseal_batch,
+        store_to_image, validate_store,
     };
     use ironhorse_snapshot::Signature;
     use ironhorse_vm::Interp;
@@ -389,6 +940,45 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn refused_commit_leaves_the_store_untouched() {
+        // wave-3 reorder lock: every commit verification (succession,
+        // grown region, boundary rows, lengths, summaries, root) now
+        // runs BEFORE the first table mutation, so a refused batch
+        // leaves the store at its prior epoch by construction — the
+        // transaction rollback is the backstop for I/O failures, not
+        // the mechanism a refusal depends on.
+        let mut m = Interp::new();
+        assert!(m.run(&PROG_A).completed);
+        let image1 = m.snapshot_image(&sig());
+        let mut store = SqliteHeapStore::open_in_memory().unwrap();
+        store.commit(&image_to_batch(&image1, 1, "")).unwrap();
+        let prev = store.manifest().unwrap();
+
+        // The engine suite's crafted omit-the-tail batch: shrink
+        // chunk_len within the tail extent, drop that extent, reseal.
+        let mut image2 = image1.clone();
+        assert!(image2.chunks.len() >= 8, "fixture carries chunk bytes");
+        image2.chunks.truncate(image2.chunks.len() - 4);
+        let tail_ext = chunk_extent_count(image2.chunks.len() as u64) - 1;
+        let mut crafted = image_to_batch(&image2, 2, &prev.seal);
+        crafted.chunk_extents.retain(|(e, _)| *e != tail_ext);
+        reseal_batch(&mut crafted);
+        assert_eq!(
+            store.commit(&crafted),
+            Err(StoreError::MissingRow("chunk extent", tail_ext))
+        );
+
+        let after = store.manifest().unwrap();
+        assert_eq!(after.epoch, prev.epoch, "prior epoch intact after the refusal");
+        assert_eq!(after.seal, prev.seal, "prior seal intact after the refusal");
+        validate_store(&store, &sig()).expect("the refused commit left a valid store");
+        store
+            .commit(&image_to_batch(&image2, 2, &prev.seal))
+            .expect("the well-formed twin still commits");
+        assert_eq!(store.manifest().unwrap().epoch, 2);
     }
 
     #[test]
@@ -548,6 +1138,81 @@ mod tests {
             .unwrap();
         assert_eq!(exts, 0, "stale extents deleted transactionally");
         assert_eq!(store_to_image(&store).unwrap().chunks, Vec::<u8>::new());
+    }
+
+    /// A page whose outgoing summary transitions non-empty → EMPTY
+    /// across commits must have its stale pairs cleared: the
+    /// commit-side maintenance deletes a traveling page's pairs
+    /// BEFORE inserting the (possibly zero) new ones, and guarding
+    /// that delete behind `!targets.is_empty()` would pass every
+    /// other suite while leaving ghost edges that inflate the CTE's
+    /// reachability forever (review-wave-2 coverage finding). The
+    /// empty-transition batch is legitimate by construction:
+    /// `image_to_batch` re-derives summaries and leaves from the
+    /// mutated rows, so the batch stays self-consistent through
+    /// `apply_batch`'s symmetric-difference check.
+    #[test]
+    fn commit_clears_pairs_when_a_page_loses_all_edges() {
+        use ironhorse_snapshot::store::SLOTS_PER_PAGE;
+
+        let mut store = SqliteHeapStore::open_in_memory().unwrap();
+        let mut m = Interp::new();
+        assert!(m.run(&PROG_A).completed);
+        let image1 = m.snapshot_image(&sig());
+        store.commit(&image_to_batch(&image1, 1, "")).unwrap();
+
+        // Pick a page with outgoing edges (the boot region guarantees
+        // cross-page references exist).
+        let p: i64 = store
+            .conn
+            .query_row("SELECT page FROM edge_pairs ORDER BY page LIMIT 1", [], |r| r.get(0))
+            .expect("fixture has at least one outgoing edge");
+        let before: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM edge_pairs WHERE page = ?1",
+                params![p],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(before > 0, "picked page starts with pairs");
+
+        // Zero the page's records: no references, null next — its
+        // derived summary becomes the empty list.
+        let mut image2 = image1.clone();
+        let start = p as usize * SLOTS_PER_PAGE as usize;
+        let end = (start + SLOTS_PER_PAGE as usize).min(image2.slots.len());
+        for s in &mut image2.slots[start..end] {
+            *s = ironhorse_vm::Slot::undefined();
+        }
+        let prev = store.manifest().unwrap().seal;
+        store.commit(&image_to_batch(&image2, 2, &prev)).unwrap();
+
+        let after: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM edge_pairs WHERE page = ?1",
+                params![p],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(after, 0, "empty transition clears the page's stale pairs");
+
+        // And the whole index still mirrors the sealed rows: every
+        // decoded blob edge has its pair and nothing else remains.
+        let blob_edges: i64 = store
+            .conn
+            .query_row(
+                "SELECT COALESCE(SUM(length(targets) / 4), 0) FROM page_edges",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let pairs: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM edge_pairs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(blob_edges, pairs, "pairs mirror the sealed rows after the transition");
     }
 
     /// A file that is not a SQLite database fails closed at open.

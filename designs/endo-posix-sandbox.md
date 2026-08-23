@@ -11,7 +11,9 @@
 ## Source
 
 This design mirrors and tracks
-[`PLAN/endo_posix_sandbox.md`](../PLAN/endo_posix_sandbox.md) on the
+[`PLAN/endo_posix_sandbox.md`](https://github.com/endojs/endo-but-for-bots/blob/a54c3adb/PLAN/endo_posix_sandbox.md)
+(the `PLAN/` directory has since been retired; the link points at the
+last commit before its removal, preserved in git history) on the
 `packages/sandbox` working branch.
 The PLAN is the authoritative phase-by-phase implementation log;
 this design is the roadmap-aligned mirror for milestone-tracking

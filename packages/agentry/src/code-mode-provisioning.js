@@ -2,7 +2,7 @@
 /// <reference types="ses"/>
 
 /** @import { EndoHost } from '@endo/daemon' */
-/** @import { EndoConnectionFailureObserver, EndoProvisionPersistence, EndoProvisionResult, ProvisionEndoCodeModeOptions, ReconstructEndoCodeModeOptions } from './code-mode-provisioning-types.js' */
+/** @import { EndoConnectionFailureObserver, EndoProvisionForkOptions, EndoProvisionPersistence, EndoProvisionResult, ProvisionEndoCodeModeOptions, ReconstructEndoCodeModeOptions } from './code-mode-provisioning-types.js' */
 
 import { makeCancelKit } from '@endo/cancel';
 import { makeEndoClient } from '@endo/daemon';
@@ -13,7 +13,8 @@ import { whereEndoSock } from '@endo/where';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { env, platform } from 'node:process';
 
-import { makeEndoProvisionGlobals } from './code-mode-provision-globals.js';
+import { makeEndoProvisionGrants } from './code-mode-provision-globals.js';
+import { codeModeGrantGlobals } from './code-mode-grants.js';
 import {
   normalizeEndoProvisionSpec,
   validateEndoProvisionPersistence,
@@ -71,12 +72,14 @@ harden(makeCodeModeCapTpOptions);
  * @param {EndoProvisionPersistence} persistence
  * @param {string | undefined} sockPath
  * @param {EndoConnectionFailureObserver | undefined} onConnectionFailure
+ * @param {EndoProvisionForkOptions} [forkOptions]
  * @returns {Promise<EndoProvisionResult>}
  */
 const connectAndRealize = async (
   persistence,
   sockPath,
   onConnectionFailure,
+  forkOptions,
 ) => {
   await null;
   const { cancelled, cancel } = makeCancelKit();
@@ -110,10 +113,18 @@ const connectAndRealize = async (
     closed.catch(() => {});
     const bootstrap = await client.getBootstrap();
     const host = /** @type {EndoHost} */ (await E(bootstrap).host());
-    const guest = await realizeEndoProvisionOnHost(host, persistence);
+    const guest = await realizeEndoProvisionOnHost(
+      host,
+      persistence,
+      forkOptions,
+    );
+    const grants = await makeEndoProvisionGrants(guest, persistence);
     return harden({
       powers: guest,
-      globals: makeEndoProvisionGlobals(persistence),
+      grants,
+      // Compatibility projection only.  All runtime and prompt consumers use
+      // `grants`; this field cannot be supplied by callers or persisted.
+      globals: codeModeGrantGlobals(grants),
       persistence,
       cleanup,
     });
@@ -163,6 +174,9 @@ export const reconstructEndoCodeMode = async options => {
     persistence,
     options?.sockPath,
     options?.onConnectionFailure,
+    options?.forkFrom === undefined
+      ? undefined
+      : { forkFrom: options.forkFrom },
   );
 };
 harden(reconstructEndoCodeMode);

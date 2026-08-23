@@ -299,9 +299,9 @@ export const makeFsMounter = ({
     // spread reads every own-enumerable property exactly once,
     // defeating a `Proxy`-backed record whose per-access getter could
     // otherwise differentiate the value validated here from the one
-    // passed to `mount`, and `harden` freezes the result (cf.
-    // `packages/genie/AGENTS.md` § "deep-harden every structured
-    // input").
+    // passed to `mount`, and `harden` freezes the result (deep-harden
+    // every structured input before it flows toward a privileged
+    // syscall).
     const opts = /** @type {Record<string, unknown>} */ (
       harden({ ...mountOptions })
     );

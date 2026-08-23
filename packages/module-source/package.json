@@ -1,6 +1,6 @@
 {
   "name": "@endo/module-source",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "Ponyfill for the SES ModuleSource and module-to-program transformer",
   "keywords": [
     "ses",
@@ -56,10 +56,11 @@
     "ses": "workspace:^"
   },
   "devDependencies": {
+    "@endo/cjs-module-analyzer": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@types/babel__generator": "~7.27.0",
     "@types/babel__traverse": "~7.28.0",
-    "@types/node": "^20.19.41",
+    "@types/node": "catalog:dev",
     "ava": "catalog:dev",
     "benchmark": "^2.1.4",
     "c8": "catalog:dev",

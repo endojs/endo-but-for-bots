@@ -24,22 +24,34 @@ import { makeGitHistoryTool, makeGitTool } from '../src/json-tools/git.js';
  * @type {Record<GitToolFacet, string[]>}
  */
 const SLICE_BY_FACET = {
-  reader: ['log', 'diff', 'show', 'branches', 'currentBranch'],
+  reader: [
+    'log',
+    'diff',
+    'show',
+    'branches',
+    'currentBranch',
+    'trackingStatus',
+  ],
   writer: [
+    'add',
     'log',
     'diff',
     'show',
     'commit',
+    'checkoutConflict',
     'branches',
     'createBranch',
     'switchBranch',
     'currentBranch',
+    'trackingStatus',
   ],
   rewriter: [
+    'add',
     'log',
     'diff',
     'show',
     'commit',
+    'checkoutConflict',
     'reword',
     'cherryPick',
     'rebase',
@@ -47,6 +59,7 @@ const SLICE_BY_FACET = {
     'createBranch',
     'switchBranch',
     'currentBranch',
+    'trackingStatus',
   ],
 };
 
@@ -62,6 +75,9 @@ const SLICE_BY_FACET = {
 const makeStubGit = calls => {
   /** @type {GitToolRewriterCapability} */
   const stubGit = {
+    add: async (...a) => {
+      calls.push(['add', ...a]);
+    },
     log: async (...a) => {
       calls.push(['log', ...a]);
       return [];
@@ -77,6 +93,9 @@ const makeStubGit = calls => {
     commit: async (...a) => {
       calls.push(['commit', ...a]);
       return { oid: 'x', summary: a[0] };
+    },
+    checkoutConflict: async (...a) => {
+      calls.push(['checkoutConflict', ...a]);
     },
     reword: async (...a) => {
       calls.push(['reword', ...a]);
@@ -104,6 +123,10 @@ const makeStubGit = calls => {
     currentBranch: async (...a) => {
       calls.push(['currentBranch', ...a]);
       return undefined;
+    },
+    trackingStatus: async (...a) => {
+      calls.push(['trackingStatus', ...a]);
+      return { ahead: 0, behind: 0, detached: true };
     },
   };
   return Far('StubGit', stubGit);
@@ -134,7 +157,7 @@ test('makeGitTool defaults to the writer facet when no options are given', t => 
   t.deepEqual(names, [...SLICE_BY_FACET.writer].sort());
 });
 
-test('makeGitTool omits cap-heavy methods at every facet', t => {
+test('makeGitTool keeps mutators on writable facets only', t => {
   for (const facet of /** @type {GitToolFacet[]} */ (
     Object.keys(SLICE_BY_FACET)
   )) {
@@ -144,7 +167,10 @@ test('makeGitTool omits cap-heavy methods at every facet', t => {
     );
     const names = new Set(tools.map(tool => tool.name));
     t.false(names.has('status'), `facet: ${facet}`);
-    t.false(names.has('add'), `facet: ${facet}`);
+    t.is(names.has('add'), facet !== 'reader', `facet: ${facet}`);
+    t.is(names.has('checkoutConflict'), facet !== 'reader', `facet: ${facet}`);
+    t.false(names.has('worktreeList'), `facet: ${facet}`);
+    t.false(names.has('worktreeAdd'), `facet: ${facet}`);
     t.false(names.has('restore'), `facet: ${facet}`);
     t.false(names.has('filesystemAt'), `facet: ${facet}`);
   }
@@ -173,12 +199,19 @@ test('invoke marshals named args to positional and calls the capability at the w
   await null;
 
   await byName('commit').invoke({ message: 'a message' });
+  await byName('add').invoke({ paths: ['src/a.js', 'src/b.js'] });
+  await byName('checkoutConflict').invoke({
+    paths: ['conflict.js'],
+    side: 'ours',
+  });
   await byName('createBranch').invoke({ name: 'feature' });
   await byName('createBranch').invoke({ name: 'feature', options: harden({}) });
   await byName('log').invoke({});
 
   t.deepEqual(calls, [
     ['commit', 'a message'],
+    ['add', ['src/a.js', 'src/b.js']],
+    ['checkoutConflict', ['conflict.js'], 'ours'],
     ['createBranch', 'feature'],
     ['createBranch', 'feature', {}],
     ['log'],
@@ -260,6 +293,8 @@ test('the schemas advertise real, declarative property names', t => {
   }
 
   t.deepEqual(propsOf('commit'), ['message', 'options']);
+  t.deepEqual(propsOf('add'), ['paths']);
+  t.deepEqual(propsOf('checkoutConflict'), ['paths', 'side']);
   t.deepEqual(propsOf('reword'), ['ref', 'message']);
   t.deepEqual(propsOf('cherryPick'), ['ref', 'options']);
   t.deepEqual(propsOf('rebase'), ['input']);

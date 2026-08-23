@@ -18,12 +18,16 @@
 //! # On-disk layout (`FILE_MAGIC`, all integers big-endian)
 //!
 //! ```text
-//! [8]  magic "IHSTORE1"
+//! [8]  magic (the current `FILE_MAGIC` — version-suffixed)
 //! [4]  manifest length   [..] manifest (StoreManifest::encode)
 //! [4]  small length      [..] small state (SmallState::encode)
 //! [4]  slot-page count   [4] chunk-extent count
 //! [page directory: count × (u64 offset, u32 length)]
 //! [extent directory: count × (u64 offset, u32 length)]
+//! [page leaf hashes: count × 32]  [extent leaf hashes: count × 32]
+//! [page edges: count × (u32 len, len × u32 targets)]
+//! [free segments: u32 count, then count × (u32 len, len bytes)]
+//! [free leaf hashes: count × 32]
 //! [blobs, in directory order]
 //! ```
 //!
@@ -45,7 +49,10 @@ use crate::store::{
 
 /// The file-format discriminator. Version-suffixed: a layout change is
 /// a new magic, and a reader fails closed on a magic it does not know.
-pub const FILE_MAGIC: [u8; 8] = *b"IHSTORE1";
+/// v5 carries the same sections as v4; the bump tracks the store
+/// schema (the root/seal encodings changed, so v4 content cannot
+/// validate under v5 rules).
+pub const FILE_MAGIC: [u8; 8] = *b"IHSTORE5";
 
 /// Temp files are uniquely named per process and per commit
 /// (`.tmp-{pid}-{n}`), so two writers can never interleave bytes in a
@@ -70,6 +77,11 @@ struct Loaded {
     small: Vec<u8>,
     pages: Vec<DirEntry>,
     extents: Vec<DirEntry>,
+    leaf_pages: Vec<[u8; 32]>,
+    leaf_exts: Vec<[u8; 32]>,
+    edges: Vec<Vec<u32>>,
+    free_segs: Vec<Vec<u8>>,
+    leaf_frees: Vec<[u8; 32]>,
 }
 
 /// The single-file reference store. See the module docs.
@@ -174,9 +186,77 @@ impl FileStore {
         let pages = read_dir(n_pages)?;
         let extents = read_dir(n_exts)?;
 
+        // The row-leaf hashes (phase 5), 32 bytes per row; the same
+        // reservation clamp discipline as the directories.
+        if (n_pages + n_exts) * 32 > file_len {
+            return Err(corrupt("file store leaf hashes truncated"));
+        }
+        let mut read_leaves = |n: u64| -> Result<Vec<[u8; 32]>, StoreError> {
+            let mut out = Vec::with_capacity(n as usize);
+            for _ in 0..n {
+                let mut b = [0u8; 32];
+                file.read_exact(&mut b)
+                    .map_err(|_| corrupt("file store leaf hashes truncated"))?;
+                out.push(b);
+            }
+            Ok(out)
+        };
+        let leaf_pages = read_leaves(n_pages)?;
+        let leaf_exts = read_leaves(n_exts)?;
+
+        // Page-edge summaries (phase 6): u32 length + targets per
+        // page, with the same clamp discipline. The OUTER vector
+        // grows against real reads — a `with_capacity(n)` here would
+        // reserve 24 bytes per counted entry against a 4-byte-per-
+        // entry clamp, the ~6x amplification the review flagged in
+        // the free-segment read below (the over-allocation trophy
+        // class applies to reservation RATIOS, not just totals).
+        let mut edges: Vec<Vec<u32>> = Vec::new();
+        for _ in 0..n_pages {
+            let len = read_u32(file)? as u64;
+            if len * 4 > file_len {
+                return Err(corrupt("file store page edges truncated"));
+            }
+            let mut ts = Vec::with_capacity(len as usize);
+            for _ in 0..len {
+                ts.push(read_u32(file)?);
+            }
+            edges.push(ts);
+        }
+
+        // Free-list segments + their leaves (phase 9), clamp-checked;
+        // outer vectors grow against real reads (see the edges note).
+        let n_frees = read_u32(file)? as u64;
+        if n_frees * 4 > file_len {
+            return Err(corrupt("file store free segments truncated"));
+        }
+        let mut free_segs: Vec<Vec<u8>> = Vec::new();
+        for _ in 0..n_frees {
+            let len = read_u32(file)? as u64;
+            if len > file_len {
+                return Err(corrupt("file store free segments truncated"));
+            }
+            let mut b = vec![0u8; len as usize];
+            file.read_exact(&mut b)
+                .map_err(|_| corrupt("file store free segments truncated"))?;
+            free_segs.push(b);
+        }
+        if n_frees * 32 > file_len {
+            return Err(corrupt("file store free leaf hashes truncated"));
+        }
+        let mut leaf_frees: Vec<[u8; 32]> = Vec::with_capacity(n_frees as usize);
+        for _ in 0..n_frees {
+            let mut b = [0u8; 32];
+            file.read_exact(&mut b)
+                .map_err(|_| corrupt("file store free leaf hashes truncated"))?;
+            leaf_frees.push(b);
+        }
+
         // The directories must cover exactly the manifest's geometry —
         // the same promise the row inventory of `validate_store`
-        // re-checks with lengths.
+        // re-checks with lengths. The free-segment count gets the same
+        // open-time symmetry (the review found it deferred to
+        // validation while pages/extents were checked here).
         if pages.len() != slot_page_count(manifest.slot_count) as usize {
             return Err(corrupt("file store page directory disagrees with geometry"));
         }
@@ -185,12 +265,22 @@ impl FileStore {
                 "file store extent directory disagrees with geometry",
             ));
         }
+        if free_segs.len() != crate::store::free_seg_count(manifest.free_len) as usize {
+            return Err(corrupt(
+                "file store free segments disagree with geometry",
+            ));
+        }
 
         Ok(Loaded {
             manifest,
             small,
             pages,
             extents,
+            leaf_pages,
+            leaf_exts,
+            edges,
+            free_segs,
+            leaf_frees,
         })
     }
 
@@ -245,6 +335,38 @@ impl HeapStore for FileStore {
         ))
     }
 
+    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
+        self.state
+            .as_ref()
+            .map(|(l, _)| (l.leaf_pages.clone(), l.leaf_exts.clone()))
+            .ok_or(StoreError::Empty)
+    }
+
+    fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
+        self.state
+            .as_ref()
+            .map(|(l, _)| l.edges.clone())
+            .ok_or(StoreError::Empty)
+    }
+
+    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+        self.state
+            .as_ref()
+            .ok_or(StoreError::Empty)?
+            .0
+            .free_segs
+            .get(seg as usize)
+            .cloned()
+            .ok_or(StoreError::MissingRow("free segment", seg))
+    }
+
+    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
+        self.state
+            .as_ref()
+            .map(|(l, _)| l.leaf_frees.clone())
+            .ok_or(StoreError::Empty)
+    }
+
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
         // Reload the durable file: the cached view can be stale if
         // another handle on this path committed (the review's silent
@@ -290,12 +412,18 @@ impl HeapStore for FileStore {
             Prior(DirEntry),
         }
 
+        let row_len = |len: usize, what: &'static str| -> Result<u32, StoreError> {
+            u32::try_from(len).map_err(|_| corrupt(what))
+        };
         let mut sources: Vec<Source> = Vec::with_capacity((n_pages + n_exts) as usize);
         let mut lengths: Vec<u32> = Vec::with_capacity((n_pages + n_exts) as usize);
         for page in 0..n_pages {
             if let Some(&i) = dirty_pages.get(&page) {
                 sources.push(Source::DirtyPage(i));
-                lengths.push(batch.slot_pages[i].1.len() as u32);
+                lengths.push(row_len(
+                    batch.slot_pages[i].1.len(),
+                    "file store slot page row exceeds u32",
+                )?);
             } else {
                 let entry = durable
                     .as_ref()
@@ -309,7 +437,10 @@ impl HeapStore for FileStore {
         for ext in 0..n_exts {
             if let Some(&i) = dirty_exts.get(&ext) {
                 sources.push(Source::DirtyExtent(i));
-                lengths.push(batch.chunk_extents[i].1.len() as u32);
+                lengths.push(row_len(
+                    batch.chunk_extents[i].1.len(),
+                    "file store chunk extent row exceeds u32",
+                )?);
             } else {
                 let entry = durable
                     .as_ref()
@@ -321,6 +452,52 @@ impl HeapStore for FileStore {
             }
         }
 
+        // The shared per-commit verification and leaf/summary
+        // maintenance (grown-region presence, row lengths, summary
+        // coupling, root recombination) against the DURABLE prior
+        // state — after source resolution, so a missing grown row
+        // reports its precise MissingRow error rather than a root
+        // mismatch.
+        let mut leaf_pages = durable
+            .as_ref()
+            .map(|(l, _)| l.leaf_pages.clone())
+            .unwrap_or_default();
+        let mut leaf_exts = durable
+            .as_ref()
+            .map(|(l, _)| l.leaf_exts.clone())
+            .unwrap_or_default();
+        let mut leaf_frees = durable
+            .as_ref()
+            .map(|(l, _)| l.leaf_frees.clone())
+            .unwrap_or_default();
+        let mut edges = durable
+            .as_ref()
+            .map(|(l, _)| l.edges.clone())
+            .unwrap_or_default();
+        crate::store::apply_batch(
+            &mut leaf_pages,
+            &mut leaf_exts,
+            &mut leaf_frees,
+            &mut edges,
+            durable.as_ref().map(|(l, _)| &l.manifest),
+            batch,
+        )?;
+        let n_free_segs = crate::store::free_seg_count(batch.manifest.free_len) as usize;
+        let mut free_segs = durable
+            .as_ref()
+            .map(|(l, _)| l.free_segs.clone())
+            .unwrap_or_default();
+        free_segs.resize(n_free_segs, Vec::new());
+        for (seg, bytes) in &batch.free_segs {
+            if let Some(slot) = free_segs.get_mut(*seg as usize) {
+                *slot = bytes.clone();
+            }
+        }
+        free_segs.truncate(n_free_segs);
+        let free_bytes: u64 = 4 + free_segs.iter().map(|b| 4 + b.len() as u64).sum::<u64>()
+            + 32 * n_free_segs as u64;
+        let edges_bytes: u64 = edges.iter().map(|ts| 4 + 4 * ts.len() as u64).sum();
+
         // Lay the file out: header, manifest, small, counts, dirs,
         // blobs. Directory offsets are computable before writing.
         let manifest_bytes = batch.manifest.encode();
@@ -331,7 +508,10 @@ impl HeapStore for FileStore {
             + batch.small.len() as u64
             + 4
             + 4
-            + 12 * (n_pages as u64 + n_exts as u64);
+            + 12 * (n_pages as u64 + n_exts as u64)
+            + 32 * (n_pages as u64 + n_exts as u64)
+            + edges_bytes
+            + free_bytes;
         let mut offsets: Vec<u64> = Vec::with_capacity(lengths.len());
         let mut cursor = header_len;
         for len in &lengths {
@@ -348,47 +528,94 @@ impl HeapStore for FileStore {
             ));
             PathBuf::from(os)
         };
-        let mut tmp = File::create(&tmp_path).map_err(io_err)?;
-        tmp.write_all(&FILE_MAGIC).map_err(io_err)?;
-        tmp.write_all(&(manifest_bytes.len() as u32).to_be_bytes())
-            .map_err(io_err)?;
-        tmp.write_all(&manifest_bytes).map_err(io_err)?;
-        tmp.write_all(&(batch.small.len() as u32).to_be_bytes())
-            .map_err(io_err)?;
-        tmp.write_all(&batch.small).map_err(io_err)?;
-        tmp.write_all(&n_pages.to_be_bytes()).map_err(io_err)?;
-        tmp.write_all(&n_exts.to_be_bytes()).map_err(io_err)?;
-        for (offset, length) in offsets.iter().zip(&lengths) {
-            tmp.write_all(&offset.to_be_bytes()).map_err(io_err)?;
-            tmp.write_all(&length.to_be_bytes()).map_err(io_err)?;
-        }
-        for source in &sources {
-            match source {
-                Source::DirtyPage(i) => tmp.write_all(&batch.slot_pages[*i].1).map_err(io_err)?,
-                Source::DirtyExtent(i) => {
-                    tmp.write_all(&batch.chunk_extents[*i].1).map_err(io_err)?
-                }
-                Source::Prior(entry) => {
-                    // Stream the clean row from the durable previous file.
-                    let (_, file) = durable.as_ref().expect("prior row implies prior file");
-                    let mut f = file.borrow_mut();
-                    f.seek(SeekFrom::Start(entry.offset)).map_err(io_err)?;
-                    let mut buf = vec![0u8; entry.length as usize];
-                    f.read_exact(&mut buf).map_err(io_err)?;
-                    drop(f);
-                    tmp.write_all(&buf).map_err(io_err)?;
+        // Stage the whole new file; on ANY failure remove the temp so
+        // a flaky disk does not accumulate `.tmp-*` litter beside the
+        // store (leftovers are inert but unbounded — review nit).
+        let write_tmp = || -> Result<(), StoreError> {
+            let mut tmp = File::create(&tmp_path).map_err(io_err)?;
+            tmp.write_all(&FILE_MAGIC).map_err(io_err)?;
+            tmp.write_all(&(manifest_bytes.len() as u32).to_be_bytes())
+                .map_err(io_err)?;
+            tmp.write_all(&manifest_bytes).map_err(io_err)?;
+            tmp.write_all(&(batch.small.len() as u32).to_be_bytes())
+                .map_err(io_err)?;
+            tmp.write_all(&batch.small).map_err(io_err)?;
+            tmp.write_all(&n_pages.to_be_bytes()).map_err(io_err)?;
+            tmp.write_all(&n_exts.to_be_bytes()).map_err(io_err)?;
+            for (offset, length) in offsets.iter().zip(&lengths) {
+                tmp.write_all(&offset.to_be_bytes()).map_err(io_err)?;
+                tmp.write_all(&length.to_be_bytes()).map_err(io_err)?;
+            }
+            for l in &leaf_pages {
+                tmp.write_all(l).map_err(io_err)?;
+            }
+            for l in &leaf_exts {
+                tmp.write_all(l).map_err(io_err)?;
+            }
+            for ts in &edges {
+                tmp.write_all(&(ts.len() as u32).to_be_bytes()).map_err(io_err)?;
+                for t in ts {
+                    tmp.write_all(&t.to_be_bytes()).map_err(io_err)?;
                 }
             }
+            tmp.write_all(&(free_segs.len() as u32).to_be_bytes())
+                .map_err(io_err)?;
+            for b in &free_segs {
+                tmp.write_all(&(b.len() as u32).to_be_bytes()).map_err(io_err)?;
+                tmp.write_all(b).map_err(io_err)?;
+            }
+            for l in &leaf_frees {
+                tmp.write_all(l).map_err(io_err)?;
+            }
+            for source in &sources {
+                match source {
+                    Source::DirtyPage(i) => {
+                        tmp.write_all(&batch.slot_pages[*i].1).map_err(io_err)?
+                    }
+                    Source::DirtyExtent(i) => {
+                        tmp.write_all(&batch.chunk_extents[*i].1).map_err(io_err)?
+                    }
+                    Source::Prior(entry) => {
+                        // Stream the clean row from the durable previous file.
+                        let (_, file) = durable.as_ref().expect("prior row implies prior file");
+                        let mut f = file.borrow_mut();
+                        f.seek(SeekFrom::Start(entry.offset)).map_err(io_err)?;
+                        let mut buf = vec![0u8; entry.length as usize];
+                        f.read_exact(&mut buf).map_err(io_err)?;
+                        drop(f);
+                        tmp.write_all(&buf).map_err(io_err)?;
+                    }
+                }
+            }
+            tmp.sync_all().map_err(io_err)?;
+            Ok(())
+        };
+        if let Err(e) = write_tmp() {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(e);
         }
-        tmp.sync_all().map_err(io_err)?;
-        drop(tmp);
-        std::fs::rename(&tmp_path, &self.path).map_err(io_err)?;
+        if let Err(e) = std::fs::rename(&tmp_path, &self.path) {
+            // A failed RENAME must clean up like a failed write does:
+            // the tmp file is inert litter (opens ignore it) but
+            // unbounded across retries (wave-3 finding — the cleanup
+            // wrapped only the write stage while the comment above it
+            // promised "any failure").
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(io_err(e));
+        }
         // The rename is the commit point, and it is durable only once
         // the containing directory is synced (the review's power-loss
         // finding: an acked checkpoint must not roll back on crash).
-        if let Some(dir) = self.path.parent() {
-            File::open(dir).and_then(|d| d.sync_all()).map_err(io_err)?;
-        }
+        // `Path::parent()` returns `Some("")` for a bare relative
+        // filename, and opening "" fails ENOENT AFTER the rename — a
+        // durable commit misreported as failed, wedging the session
+        // one epoch behind its own file (the review's bare-filename
+        // finding). An empty parent means the current directory.
+        let dir = match self.path.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p,
+            _ => std::path::Path::new("."),
+        };
+        File::open(dir).and_then(|d| d.sync_all()).map_err(io_err)?;
 
         // Reopen and re-decode: the in-memory view always reflects the
         // durable file, never a shadow copy that could drift.
@@ -432,6 +659,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn failed_rename_removes_the_temp_file() {
+        // wave-3: the cleanup used to wrap only the WRITE stage, so a
+        // failed rename leaked its .tmp file — inert litter (opens
+        // ignore it) but unbounded across retries. Parking a
+        // non-empty directory at the store path makes the rename fail
+        // deterministically (EISDIR/ENOTEMPTY), which works under
+        // root too, where permission-bit tricks do not.
+        let dir = tmp_dir("failed-rename-cleanup");
+        let target = dir.join("heap.ihstore");
+        let mut store = FileStore::open(&target).unwrap();
+        std::fs::create_dir_all(target.join("occupier")).unwrap();
+        let image = ran_image();
+        assert!(
+            store.commit(&image_to_batch(&image, 1, "")).is_err(),
+            "renaming a file onto a non-empty directory fails"
+        );
+        let leftovers: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp-"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no temp litter after a failed rename: {leftovers:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -490,6 +747,13 @@ mod tests {
                 .cloned()
                 .collect(),
             chunk_extents: Vec::new(),
+            free_segs: full.free_segs.clone(),
+            page_edges: full
+                .page_edges
+                .iter()
+                .filter(|(p, _)| *p == 0)
+                .cloned()
+                .collect(),
         };
         // The dirty-only batch seals over exactly its own rows (the
         // legitimate producer's shape); the full batch's seal covered

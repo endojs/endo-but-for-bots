@@ -72,10 +72,10 @@
     "test:live": "ava --config ava-live.config.js"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "^0.84.0",
-    "@earendil-works/pi-ai": "^0.84.0",
-    "@earendil-works/pi-coding-agent": "^0.84.0",
-    "@earendil-works/pi-tui": "^0.84.0",
+    "@earendil-works/pi-agent-core": "^0.84.1",
+    "@earendil-works/pi-ai": "^0.84.1",
+    "@earendil-works/pi-coding-agent": "^0.84.1",
+    "@earendil-works/pi-tui": "^0.84.1",
     "@endo/agent-tools": "workspace:^",
     "@endo/cancel": "workspace:^",
     "@endo/daemon": "workspace:^",
@@ -85,6 +85,7 @@
     "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/marshal": "workspace:^",
+    "@endo/platform": "workspace:^",
     "@endo/where": "workspace:^",
     "ses": "workspace:^"
   },

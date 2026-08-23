@@ -1,6 +1,6 @@
 {
   "name": "@endo/pass-style",
-  "version": "1.8.1",
+  "version": "2.0.1",
   "description": "Defines the taxonomy of Passable objects.",
   "keywords": [],
   "author": "Endo contributors",
@@ -54,7 +54,7 @@
     "eslint-plugin-eslint-comments": "catalog:dev",
     "eslint-plugin-import": "catalog:dev",
     "expect-type": "^1.4.0",
-    "prettier": "^3.5.3",
+    "prettier": "^3.9.6",
     "ses": "workspace:^",
     "typescript": "catalog:dev"
   },

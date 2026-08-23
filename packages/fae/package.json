@@ -62,7 +62,9 @@
     "@endo/marshal": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
-    "@endo/promise-kit": "workspace:^"
+    "@endo/platform": "workspace:^",
+    "@endo/promise-kit": "workspace:^",
+    "safe-regex2": "^5.1.1"
   },
   "devDependencies": {
     "@endo/cli": "workspace:^",

@@ -3,15 +3,17 @@
 
 /** @import { EndoGuest, EndoHost, EndoMount } from '@endo/daemon' */
 /** @import { GitRemote, GitRemoteController } from '@endo/exo-git' */
-/** @import { EndoProvisionPersistence } from './code-mode-provisioning-types.js' */
+/** @import { EndoProvisionForkOptions, EndoProvisionPersistence } from './code-mode-provisioning-types.js' */
 
 import { makeError, q, X } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 
 import {
   equalEndoProvisionPersistence,
+  projectEndoProvisionRuntimeAuthority,
   validateEndoProvisionPersistence,
 } from './code-mode-provision-policy.js';
+import { registerProvisionedGuest } from './code-mode-grants.js';
 
 /** @typedef {{ audience(): Promise<string> }} GitCredential */
 /** @typedef {{ inspect(): Promise<{ available: boolean, revoked?: boolean }> }} GitCredentialController */
@@ -168,12 +170,168 @@ const reprovisionCredentialedRemote = async (
 };
 
 /**
+ * Resolve each requested grant once and retain its exact formula identifier.
+ * Reusing that identifier prevents a concurrent host-name change from
+ * substituting a different capability between resolution and retention.
+ *
+ * @param {EndoHost} host
+ * @param {EndoProvisionPersistence} persistence
+ * @returns {Promise<Map<string, string>>}
+ */
+const resolveGrantIdentifiers = async (host, persistence) => {
+  await null;
+  const identifiers = new Map();
+  for (const [name, grant] of Object.entries(persistence.policy.grants ?? {})) {
+    // eslint-disable-next-line no-await-in-loop
+    const id = await E(host).identify(...grant.from);
+    if (typeof id !== 'string') {
+      throw makeError(
+        X`Grant ${q(name)} source ${q(grant.from.join('/'))} is not available on the host`,
+      );
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await E(host).lookupById(id);
+    identifiers.set(name, id);
+  }
+  return identifiers;
+};
+
+/**
+ * @param {EndoHost} host
+ * @param {EndoProvisionPersistence} persistence
+ * @returns {Promise<void>}
+ */
+const assertRetainedGrantAliases = async (host, persistence) => {
+  await null;
+  const controllerPath = persistence.guestHandlePath.slice(0, -1);
+  for (const name of Object.keys(persistence.policy.grants ?? {})) {
+    const alias = harden([...controllerPath, 'grants', name]);
+    // eslint-disable-next-line no-await-in-loop
+    if (!(await hasNamePath(host, alias))) {
+      throw makeError(
+        X`Retained code-mode grant ${q(name)} is missing; refusing to re-resolve its host source`,
+      );
+    }
+  }
+};
+
+/**
+ * Resolve formula identifiers only after retained aliases have been checked.
+ * This is used for forks, where the identifiers are copied into a new
+ * controller namespace instead of resolving the parent's source paths.
+ *
+ * @param {EndoHost} host
+ * @param {EndoProvisionPersistence} persistence
+ * @returns {Promise<Map<string, string>>}
+ */
+const resolveRetainedGrantIdentifiers = async (host, persistence) => {
+  await assertRetainedGrantAliases(host, persistence);
+  const controllerPath = persistence.guestHandlePath.slice(0, -1);
+  const identifiers = new Map();
+  for (const name of Object.keys(persistence.policy.grants ?? {})) {
+    const alias = harden([...controllerPath, 'grants', name]);
+    // eslint-disable-next-line no-await-in-loop
+    const id = await E(host).identify(...alias);
+    if (typeof id !== 'string') {
+      throw makeError(
+        X`Retained code-mode grant ${q(name)} has no formula identifier`,
+      );
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await E(host).lookupById(id);
+    identifiers.set(name, id);
+  }
+  return identifiers;
+};
+
+/**
+ * Validate a retained parent session and obtain the exact formula identifiers
+ * retained by its controller aliases for a child fork.
+ *
+ * @param {EndoHost} host
+ * @param {EndoProvisionPersistence} parent
+ * @param {EndoProvisionPersistence} child
+ * @returns {Promise<Map<string, string>>}
+ */
+const resolveForkGrantIdentifiers = async (host, parent, child) => {
+  await null;
+  const normalizedParent = await validateEndoProvisionPersistence(parent);
+  const normalizedChild = await validateEndoProvisionPersistence(child);
+  if (
+    equalEndoProvisionPersistence(
+      normalizedParent.guestHandlePath,
+      normalizedChild.guestHandlePath,
+    )
+  ) {
+    throw makeError(
+      X`Fork target must use a distinct retained guest namespace`,
+    );
+  }
+
+  const parentControllerPath = normalizedParent.guestHandlePath.slice(0, -1);
+  const parentPersistencePath = harden([
+    ...parentControllerPath,
+    'persistence',
+  ]);
+  if (!(await hasNamePath(host, parentPersistencePath))) {
+    throw makeError(
+      X`Fork parent has no retained code-mode policy; refusing to copy grants`,
+    );
+  }
+  const storedParent = await E(host).lookup(parentPersistencePath);
+  const normalizedStoredParent =
+    await validateEndoProvisionPersistence(storedParent);
+  if (
+    !equalEndoProvisionPersistence(normalizedStoredParent, normalizedParent)
+  ) {
+    throw makeError(
+      X`Fork parent retained policy does not match the requested parent`,
+    );
+  }
+
+  const childControllerPath = normalizedChild.guestHandlePath.slice(0, -1);
+  const childPersistencePath = harden([...childControllerPath, 'persistence']);
+  if (await hasNamePath(host, childPersistencePath)) {
+    throw makeError(
+      X`Fork target already has retained code-mode policy; refusing to copy grants`,
+    );
+  }
+
+  if (
+    !equalEndoProvisionPersistence(
+      projectEndoProvisionRuntimeAuthority(normalizedParent),
+      projectEndoProvisionRuntimeAuthority(normalizedChild),
+    )
+  ) {
+    throw makeError(
+      X`Fork provision policies select different runtime authority`,
+    );
+  }
+  if (
+    !equalEndoProvisionPersistence(
+      normalizedParent.policy,
+      normalizedChild.policy,
+    )
+  ) {
+    throw makeError(X`Fork provision policies have different session context`);
+  }
+
+  return resolveRetainedGrantIdentifiers(host, normalizedParent);
+};
+
+/**
  * @param {EndoHost} host
  * @param {EndoProvisionPersistence} persistence
  * @param {Map<string, GitCredential>} credentials
+ * @param {Map<string, string> | undefined} grantIdentifiersToInstall
  * @returns {Promise<EndoGuest>}
  */
-const realizeProvisionResources = async (host, persistence, credentials) => {
+const realizeProvisionResources = async (
+  host,
+  persistence,
+  credentials,
+  grantIdentifiersToInstall,
+) => {
   const controllerPath = persistence.guestHandlePath.slice(0, -1);
   const guestAgentPath = harden([...controllerPath, 'guest-agent']);
   const persistencePath = harden([...controllerPath, 'persistence']);
@@ -190,40 +348,82 @@ const realizeProvisionResources = async (host, persistence, credentials) => {
 
   /** @type {Array<[string, string[]]>} */
   const guestBindings = [];
-  if (persistence.policy.fs !== undefined) {
-    const workspaceAlias = harden([...controllerPath, 'workspace']);
-    await provideOrLookup(host, workspaceAlias, () =>
-      E(host).provideMount(persistence.workspacePath, workspaceAlias, {
-        readOnly: persistence.policy.fs === 'readOnly',
-        deniedSegments: persistence.policy.workspace.deniedSegments,
-      }),
-    );
-    guestBindings.push(['workspace', workspaceAlias]);
-  }
-
-  if (persistence.policy.git !== undefined) {
-    const gitMountAlias = harden([...controllerPath, 'git-workspace']);
-    const gitAlias = harden([...controllerPath, 'git']);
-    const gitMount = /** @type {EndoMount} */ (
-      await provideOrLookup(host, gitMountAlias, () =>
-        E(host).provideMount(persistence.workspacePath, gitMountAlias, {
-          readOnly: persistence.policy.git === 'readOnly',
-          deniedSegments: persistence.policy.workspace.deniedSegments,
+  const mountsPath = harden([...controllerPath, 'mounts']);
+  await ensureNameDirectory(host, mountsPath);
+  /** @type {Map<string, EndoMount>} */
+  const mounts = new Map();
+  for (const [name, grant] of Object.entries(persistence.policy.mounts)) {
+    const mountPath = harden([...mountsPath, name]);
+    const mountAlias = harden([...mountPath, 'mount']);
+    // eslint-disable-next-line no-await-in-loop
+    await ensureNameDirectory(host, mountPath);
+    const mount = /** @type {EndoMount} */ (
+      // eslint-disable-next-line no-await-in-loop
+      await provideOrLookup(host, mountAlias, () =>
+        E(host).provideMount(grant.root, mountAlias, {
+          readOnly: grant.mode === 'readOnly',
+          deniedSegments: grant.deniedSegments,
         }),
       )
     );
+    mounts.set(name, mount);
+    if (grant.guestBinding) {
+      guestBindings.push([name, mountAlias]);
+    }
+  }
+
+  const gitsPath = harden([...controllerPath, 'gits']);
+  /** @type {Map<string, unknown>} */
+  const gits = new Map();
+  await ensureNameDirectory(host, gitsPath);
+  for (const [name, grant] of Object.entries(persistence.policy.gits ?? {})) {
+    const grantPath = harden([...gitsPath, name]);
+    const gitMountAlias = harden([...grantPath, 'mount']);
+    const gitAlias = harden([...grantPath, 'git']);
+    // eslint-disable-next-line no-await-in-loop
+    await ensureNameDirectory(host, grantPath);
+    const selectedMount = mounts.get(grant.mount);
+    if (selectedMount === undefined) {
+      throw makeError(
+        X`Git grant ${q(name)} selects a mount that was not realized`,
+      );
+    }
+    const gitMount = /** @type {EndoMount} */ (
+      // A Git grant gets a fresh exact-root mount. The selected named mount is
+      // the authority ceiling; this derived mount prevents a Git capability
+      // from silently covering unrelated paths in that mount.
+      // eslint-disable-next-line no-await-in-loop
+      await provideOrLookup(host, gitMountAlias, () =>
+        E(host).provideMount(grant.root, gitMountAlias, {
+          readOnly: grant.mode === 'readOnly',
+          deniedSegments: persistence.policy.mounts[grant.mount].deniedSegments,
+        }),
+      )
+    );
+    // eslint-disable-next-line no-await-in-loop
     const git = await provideOrLookup(host, gitAlias, () =>
       E(host).provideGit(gitMount, gitAlias, {
-        allowHistoryRewrite: persistence.policy.git === 'historyRewrite',
-        readOnly: persistence.policy.git === 'readOnly',
+        allowHistoryRewrite: grant.mode === 'historyRewrite',
+        readOnly: grant.mode === 'readOnly',
       }),
     );
-    guestBindings.push(['git', gitAlias]);
+    gits.set(name, git);
+    guestBindings.push([name, gitAlias]);
+  }
 
+  const rootGit = gits.get('git');
+  if (rootGit !== undefined) {
+    // Git remotes live under their own namespace container so a remote name
+    // can never resolve to a trusted infrastructure sibling of controllerPath
+    // (the persistence record, guest handle, or guest agent). A flat sibling
+    // alias would otherwise let a remote named `persistence` substitute the
+    // stored persistence record for a minted GitRemote.
+    const remotesPath = harden([...controllerPath, 'remotes']);
+    await ensureNameDirectory(host, remotesPath);
     for (const [name, remote] of Object.entries(
       persistence.policy.gitRemotes ?? {},
     )) {
-      const remoteAlias = harden([...controllerPath, name]);
+      const remoteAlias = harden([...remotesPath, name]);
       const remoteOptions = {
         name,
         url: remote.url,
@@ -244,19 +444,50 @@ const realizeProvisionResources = async (host, persistence, credentials) => {
       if (remote.credential === undefined) {
         // eslint-disable-next-line no-await-in-loop
         await provideOrLookup(host, remoteAlias, () =>
-          E(host).provideGitRemote(git, remoteAlias, remoteOptions),
+          E(host).provideGitRemote(rootGit, remoteAlias, remoteOptions),
         );
       } else {
         // eslint-disable-next-line no-await-in-loop
         await reprovisionCredentialedRemote(
           host,
-          git,
+          rootGit,
           remoteAlias,
           remoteOptions,
         );
       }
       guestBindings.push([name, remoteAlias]);
     }
+  } else if (Object.keys(persistence.policy.gitRemotes ?? {}).length > 0) {
+    throw makeError(X`Git remotes have no retained root Git grant`);
+  }
+
+  const grantEntries = Object.entries(persistence.policy.grants ?? {});
+  if (grantEntries.length > 0) {
+    const grantsPath = harden([...controllerPath, 'grants']);
+    await ensureNameDirectory(host, grantsPath);
+  }
+  for (const [name] of grantEntries) {
+    const grantAlias = harden([...controllerPath, 'grants', name]);
+    if (grantIdentifiersToInstall !== undefined) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await hasNamePath(host, grantAlias)) {
+        throw makeError(
+          X`Retained code-mode grant ${q(name)} exists without a retained policy`,
+        );
+      }
+      const id = grantIdentifiersToInstall.get(name);
+      if (id === undefined) {
+        throw makeError(X`No resolved formula for grant ${q(name)}`);
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await E(host).storeIdentifier(grantAlias, id);
+      // eslint-disable-next-line no-await-in-loop
+    } else if (!(await hasNamePath(host, grantAlias))) {
+      throw makeError(
+        X`Retained code-mode grant ${q(name)} is missing; refusing to re-resolve its host source`,
+      );
+    }
+    guestBindings.push([name, grantAlias]);
   }
 
   const hasHandle = await hasNamePath(host, persistence.guestHandlePath);
@@ -288,6 +519,7 @@ const realizeProvisionResources = async (host, persistence, credentials) => {
     await E(guest).storeIdentifier(guestName, id);
   }
 
+  registerProvisionedGuest(guest);
   return guest;
 };
 
@@ -296,22 +528,51 @@ const realizeProvisionResources = async (host, persistence, credentials) => {
  *
  * @param {EndoHost} host
  * @param {EndoProvisionPersistence} persistence
+ * @param {EndoProvisionForkOptions} [options]
  * @returns {Promise<EndoGuest>}
  */
-export const realizeEndoProvisionOnHost = async (host, persistence) => {
-  const controllerPath = persistence.guestHandlePath.slice(0, -1);
+export const realizeEndoProvisionOnHost = async (
+  host,
+  persistence,
+  options = {},
+) => {
+  const normalizedPersistence =
+    await validateEndoProvisionPersistence(persistence);
+  const controllerPath = normalizedPersistence.guestHandlePath.slice(0, -1);
   const persistencePath = harden([...controllerPath, 'persistence']);
   const hasPersistence = await hasNamePath(host, persistencePath);
-  if (hasPersistence) {
+  /** @type {Map<string, string> | undefined} */
+  let grantIdentifiersToInstall;
+  if (options.forkFrom !== undefined) {
+    grantIdentifiersToInstall = await resolveForkGrantIdentifiers(
+      host,
+      options.forkFrom,
+      normalizedPersistence,
+    );
+  } else if (hasPersistence) {
     const stored = await E(host).lookup(persistencePath);
     const normalizedStored = await validateEndoProvisionPersistence(stored);
-    if (!equalEndoProvisionPersistence(normalizedStored, persistence)) {
+    if (
+      !equalEndoProvisionPersistence(normalizedStored, normalizedPersistence)
+    ) {
       throw makeError(
         X`Reconstruction cannot widen or change a retained code-mode provision policy`,
       );
     }
+    await assertRetainedGrantAliases(host, normalizedPersistence);
+  } else {
+    await null;
+    grantIdentifiersToInstall = await resolveGrantIdentifiers(
+      host,
+      normalizedPersistence,
+    );
   }
-  const credentials = await resolveGitCredentials(host, persistence);
-  return realizeProvisionResources(host, persistence, credentials);
+  const credentials = await resolveGitCredentials(host, normalizedPersistence);
+  return realizeProvisionResources(
+    host,
+    normalizedPersistence,
+    credentials,
+    grantIdentifiersToInstall,
+  );
 };
 harden(realizeEndoProvisionOnHost);

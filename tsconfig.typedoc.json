@@ -1,0 +1,41 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "packages/*/*.js",
+    "packages/*/**/*.ts",
+    "packages/*/src/**/*.js"
+  ],
+  "exclude": [
+    "packages/*/test/**",
+    "packages/*/tests/**",
+    "packages/*/demo/**",
+    "**/*.test.js",
+    "**/*.test.ts",
+    "**/*.test-d.ts",
+    "packages/daemon/**",
+    "packages/eslint-plugin",
+    "packages/ses-integration-test",
+    "packages/module-source",
+    "packages/ocapn",
+    "packages/ocapn-noise",
+    "packages/test262-runner",
+    "packages/hardened262",
+    "packages/conversation-tree",
+    "packages/demo",
+    "packages/fae",
+    "packages/familiar",
+    "packages/eventual-send-test",
+    "packages/harden-test",
+    "packages/hex-test",
+    "packages/ses-test",
+    "packages/jaine",
+    "packages/lal",
+    "packages/monaco-wrapper",
+    "packages/preact-container",
+    "packages/c",
+    "packages/**/dist",
+    "packages/**/build",
+    "packages/**/docs",
+    "**/node_modules/**"
+  ]
+}

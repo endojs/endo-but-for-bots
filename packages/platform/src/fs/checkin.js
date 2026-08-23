@@ -27,9 +27,10 @@ export const checkinTree = async (remoteTree, store, options = {}) => {
    * @param {unknown} remoteNode
    * @param {boolean} isTree
    * @param {number} depth
+   * @param {boolean} kindProtocol
    * @returns {Promise<{type: string, sha256: string}>}
    */
-  const checkinNode = async (remoteNode, isTree, depth) => {
+  const checkinNode = async (remoteNode, isTree, depth, kindProtocol) => {
     if (depth > maxDepth) {
       throw new TypeError(`Maximum checkin depth (${maxDepth}) exceeded`);
     }
@@ -52,13 +53,24 @@ export const checkinTree = async (remoteTree, store, options = {}) => {
       const child = await E(/** @type {SnapshotTree} */ (remoteNode)).lookup(
         name,
       );
-      // Use __getMethodNames__ (available on Exos and conforming Far objects)
-      // to detect the node type without calling a method that may not exist,
-      // which would cause CapTP to log a noisy error.
-      // eslint-disable-next-line no-underscore-dangle
-      const methods = await E(child).__getMethodNames__();
-      const childIsTree = methods.includes('list');
-      const result = await checkinNode(child, childIsTree, depth + 1);
+      let childIsTree;
+      if (kindProtocol) {
+        childIsTree = (await E(child).kind()) === 'directory';
+      } else {
+        // Older ReadableTree / ReadableBlob capabilities need method
+        // introspection to avoid a noisy missing-method send.
+        // eslint-disable-next-line no-underscore-dangle
+        const methods = await E(child).__getMethodNames__();
+        childIsTree = methods.includes('kind')
+          ? (await E(child).kind()) === 'directory'
+          : methods.includes('list');
+      }
+      const result = await checkinNode(
+        child,
+        childIsTree,
+        depth + 1,
+        kindProtocol,
+      );
       treeEntries.push([name, result.type, result.sha256]);
     }
 
@@ -75,6 +87,14 @@ export const checkinTree = async (remoteTree, store, options = {}) => {
     return { type: 'tree', sha256 };
   };
 
-  return checkinNode(remoteTree, true, 0);
+  // A daemon mount guarantees that every lookup result carries `kind()`, so
+  // discover that protocol once and avoid an introspection round trip per
+  // descendant. Older trees retain the per-child compatibility fallback.
+  // eslint-disable-next-line no-underscore-dangle
+  const rootMethods = await E(
+    /** @type {{ __getMethodNames__: () => Promise<string[]> }} */ (remoteTree),
+  ).__getMethodNames__();
+  const kindProtocol = rootMethods.includes('kind');
+  return checkinNode(remoteTree, true, 0, kindProtocol);
 };
 harden(checkinTree);

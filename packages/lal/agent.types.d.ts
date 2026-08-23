@@ -41,6 +41,12 @@ export type ToolCallArgs = {
   resultName?: NameOrPath;
   fileName?: string;
   content?: string;
+  // Arguments to the `glob`/`grep` search tools: a glob or regexp `pattern`,
+  // an optional `glob` filter restricting `grep` to matching paths, and an
+  // optional `maxResults` cap on returned matches.
+  pattern?: string;
+  glob?: string;
+  maxResults?: number;
   slots?: Record<string, { label: string }>;
 };
 

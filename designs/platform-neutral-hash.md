@@ -3,8 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-07-22 |
+| **Updated** | 2026-08-12 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | In Progress |
 
 ## Problem
 
@@ -51,10 +52,8 @@ Two conclusions drive the whole design:
    `@endo/sha512` is required now.** (Leave the naming room for one later; do not
    build it.)
 2. **Streaming SHA-256 is already solved and is *not* a bundler blocker.** The
-   runtime `CryptoPowers` on the XS daemon — `makeXsCryptoPowers` in
-   `bus-manager-rust-xs-powers.js` — is *injected* and already backed by Rust
-   host functions (`hostSha256Init` → `hostSha256UpdateBytes` →
-   `hostSha256Finish`). The bundler never sees `node:crypto` for those, because
+   runtime `CryptoPowers` on the XS daemon is *injected* and already backed by
+   Rust host functions. The bundler never sees `node:crypto` for those, because
    nothing *statically imports* it. The blocker is specifically the
    **module-scope static import** in modules that hash inline instead of
    receiving an injected power — today just `blobref.js` (and `native-git-backend`
@@ -117,7 +116,7 @@ export const sha256Into = (out, bytes, offset = 0) => { /* ... */ };
   "type": "module",
   "exports": {
     ".": {
-      "xs": "./src/sha256-xs.js",
+      "xs": "./src/sha256-endor.js",
       "browser": "./src/sha256-browser.js",
       "node": "./src/sha256-node.js",
       "default": "./src/sha256-browser.js"
@@ -131,7 +130,7 @@ export const sha256Into = (out, bytes, offset = 0) => { /* ... */ };
 flowchart TD
   C["import { sha256 } from '@endo/sha256'"] --> R{condition}
   R -->|node| N["sha256-node.js<br/>node:crypto createHash('sha256')"]
-  R -->|xs| X["sha256-xs.js<br/>globalThis.hostSha256* (Rust native)"]
+  R -->|xs| X["sha256-endor.js<br/>globalThis.hostSha256Bytes"]
   R -->|browser / default| J["sha256-browser.js<br/>pure-JS SHA-256 (sync)"]
 ```
 
@@ -143,48 +142,27 @@ flowchart TD
   stand-in that `@endo/platform/fs/extended` reaches through Vite's `node:crypto`
   alias. `@endo/sha256`'s JS implementation is the canonical home for that code;
   the chat shim should then re-export from here rather than carry its own copy.
-- **xs** → the **Endor-provided Rust-native host function** (next section). This
-  is the condition the bundler follows, which is why the bundle stops importing
-  `node:crypto` once `blobref.js` imports `@endo/sha256`.
+- **xs** -> the **Endor host contract** (next section). This is the condition
+  the current Endor/XS bundler follows. The target is named `sha256-endor.js`
+  because the same contract applies when Endor runs IronHorse.
 
 The `default` maps to the pure-JS build so the package is safe under any
 bundler/condition that does not set `node`/`xs`/`browser` (and so `test:rust`'s
 own Node-side tests can compare the pure-JS output against `node:crypto`).
 
-## XS host-function ⇄ Endor Rust-native interface contract
+## Endor host interface contract
 
-The XS runtime already exposes SHA-256 host functions on `globalThis`,
-registered from Rust and backed by the `sha2` crate — so **no new Rust is
-strictly required**; `sha256-xs.js` composes the existing streaming triple.
+Endor provides `hostSha256Bytes(bytes) -> ArrayBuffer` on `globalThis` before
+application modules evaluate. The contract belongs to Endor, not to XS:
+Endor/XS registers it from `rust/endo/xsnap/src/powers/crypto.rs`, and
+Endor/IronHorse provides the same global at its engine boundary.
 
-**Existing surface** (declared in `packages/daemon/src/bus-xs-host-globals.d.ts`,
-registered from `rust/endo/xsnap/src/powers/crypto.rs` via `CALLBACKS`):
-
-| Global | Rust fn | Signature | Notes |
-|---|---|---|---|
-| `hostSha256` | `host_sha256` | `(utf8String) → hexString` | **String input — NOT binary-safe; do not use for blob bytes** |
-| `hostSha256Init` | `host_sha256_init` | `() → handle:number` | opens an incremental hasher |
-| `hostSha256UpdateBytes` | `host_sha256_update_bytes` | `(handle, Uint8Array) → undefined` | binary fast path |
-| `hostSha256Update` | `host_sha256_update` | `(handle, utf8String) → undefined` | text path |
-| `hostSha256Finish` | `host_sha256_finish` | `(handle) → hexString` | consumes the handle |
-
-The critical constraint: the one-shot `hostSha256` takes a **UTF-8 string** and
-hashes its bytes, so it corrupts any input byte `> 0x7F`. It is unusable for
-binary blob content. The binary-safe path is the streaming triple with
-`hostSha256UpdateBytes`.
-
-**`sha256-xs.js` (no new Rust):**
+**`sha256-endor.js`:**
 
 ```js
-/* global globalThis */
-import { decodeHex } from '@endo/hex';
-
-const { hostSha256Init, hostSha256UpdateBytes, hostSha256Finish } = globalThis;
-
 export const sha256 = bytes => {
-  const handle = hostSha256Init();
-  hostSha256UpdateBytes(handle, bytes);
-  return decodeHex(hostSha256Finish(handle)); // 32 bytes
+  const digest = globalThis.hostSha256Bytes(bytes);
+  return new Uint8Array(digest).slice();
 };
 
 export const sha256Into = (out, bytes, offset = 0) => {
@@ -195,12 +173,11 @@ export const sha256Into = (out, bytes, offset = 0) => {
 };
 ```
 
-This is the **first buildable increment** and requires zero engine changes: it
-reuses the exact host functions `makeXsCryptoPowers` already depends on.
+The implementation validates the input and the host's result, including the
+32-byte digest length. It has no pure-JavaScript or streaming fallback:
+selecting the Endor build without this host contract is a configuration error.
 
-**Optional Rust optimization (deferred):** add a one-shot binary host function
-so the common path is a single FFI call and avoids the init/finish handle churn
-plus the hex round-trip:
+The XS host adds the one-shot binary function as follows:
 
 - **Rust:** `host_sha256_bytes(the: *mut XsMachine)` in
   `powers/crypto.rs` — read the argument `Uint8Array` as a byte slice, compute
@@ -209,8 +186,7 @@ plus the hex round-trip:
   order and add the snapshot-table entry.
 - **Global:** expose as `globalThis.hostSha256Bytes`; declare it in
   `bus-xs-host-globals.d.ts`.
-- **JS:** `sha256-xs.js` prefers `hostSha256Bytes` when present, else falls back
-  to the streaming triple above.
+- **JS:** `sha256-endor.js` requires `hostSha256Bytes`.
 
 Registration-order and snapshot-table discipline (the `CALLBACKS` array) is the
 one sharp edge: a new callback must be appended (never inserted) so existing
@@ -257,11 +233,11 @@ filed against `endojs/endo-but-for-bots`), **not** a prerequisite for generating
 
 ## Phased build plan
 
-1. **`@endo/sha256` package, JS + node + xs conditions, no new Rust.** Author
+1. **`@endo/sha256` package, browser + node + Endor builds.** Author
    `sha256-browser.js` (lift `node-crypto-shim.js`'s pure-JS core), `sha256-node.js`,
-   `sha256-xs.js` (streaming-triple composition). Unit tests cross-check all
-   three against `node:crypto` vectors. **This alone unblocks the bundle** once
-   step 2 lands. *First buildable increment.*
+   and `sha256-endor.js` (one-shot `hostSha256Bytes`). Unit tests cross-check
+   all three against `node:crypto` vectors. **This alone unblocks the bundle**
+   once step 2 lands. *First buildable increment.*
 2. **Point `blobref.js` at `@endo/sha256`;** add the dependency; run
    `blobref.test.js` / `local-blob.test.js`.
 3. **Regenerate the bundle:** `node
@@ -271,8 +247,8 @@ filed against `endojs/endo-but-for-bots`), **not** a prerequisite for generating
    the graph" fix.) Then `yarn --cwd packages/daemon test:rust`.
 4. **Fold `packages/chat/node-crypto-shim.js` into `@endo/sha256`** — chat
    re-exports the browser build; delete the duplicate pure-JS SHA-256.
-5. *(Deferred, optional)* Add `host_sha256_bytes` Rust host function + prefer it
-   in `sha256-xs.js`; migrate `native-git-backend.js`'s two sites.
+5. Add the `host_sha256_bytes` Rust host function; migrate
+   `native-git-backend.js`'s two sites.
 
 The follow-on implementation wants the **dedicated builder** the topic-11 xs2rust
 press has been recommending, not the hourly press.
@@ -290,27 +266,45 @@ press has been recommending, not the hourly press.
 - **Ship an `@endo/sha512` alongside.** Rejected as premature: no SHA-512 site is
   on the XS daemon bundle graph. Reserve the name; do not build it.
 
-## Open questions
+## Implementation status
 
-- **How should the WebCrypto async shape be reconciled with the sync API?** The
-  charter asks the browser condition to use `crypto.subtle.digest`, which is
-  **async** (`Promise<ArrayBuffer>`) and cannot back a synchronous
-  `sha256(bytes) → bytes`. The in-tree browser stand-in
-  (`node-crypto-shim.js`) already sidesteps this with **synchronous pure-JS**
-  SHA-256, and the only in-graph consumer (`blobref.js`) is synchronous. This
-  design therefore proposes **pure-JS (sync) as the browser default** and treats
-  WebCrypto as an optional, separately-named **async** export (e.g.
-  `sha256Async` under a `"webcrypto"`/subpath condition) for callers that can
-  await — rather than making the core API async and rippling through
-  `makeBlobRefExo`. Confirm this is the intended resolution, or state that the
-  browser build must use WebCrypto (which would force the whole `BlobRef`
-  construction path async).
-- **One-shot binary host function now or later?** Is `host_sha256_bytes` worth
-  adding in the first increment for the FFI/allocation win, or is the
-  streaming-triple composition acceptable until profiling on the daemon-CAS hot
-  path (`daemon-rust-xs-performance.md`) says otherwise?
-- **`native-git-backend.js` migration scope.** Fold its two `createHash` sites
-  into `@endo/sha256` in the same arc, or leave them until the git-injectability
-  work lands? (They exit the XS bundle by exclusion regardless.)
-</content>
-</invoke>
+All five phases land in
+[#903](https://github.com/endojs/endo-but-for-bots/pull/903). The Endor build
+requires `hostSha256Bytes`, and `native-git-backend.js` uses the package for
+both of its SHA-256 sites.
+
+Two things the survey above did not anticipate, both found by running the
+bundler and both fixed in the same pull request, because `@endo/sha256` alone
+left the bundle failing on fifteen further `node:` imports:
+
+- `@endo/exo-git` reached `readOnly` and `wrapBackend` through the
+  `@endo/platform/fs/extended` **index**, which also re-exports
+  `makeNodeFilesystem` / `makeNodeFsBackend` and so pulled `node:fs`,
+  `node:fs/promises`, and `node:path` onto the graph. It now imports those two
+  modules by their own specifiers.
+- The `@endo/git` exclusion this document deferred turned out to be a
+  prerequisite after all, together with `@endo/host-spawner`: both are
+  statically imported by `manager.js` / `host.js`. They are now injected as
+  `DaemonicPowers.hostTools`, mirroring the injected `better-sqlite3`
+  `Database`, and both packages are excluded from the bundle.
+
+The bundler also now passes the `xs` condition. Without it `@endo/sha256`
+resolves its `default` arm, so the bundle would have carried the pure-JS digest
+rather than binding to the Rust host.
+
+## Resolved questions
+
+- **How should the WebCrypto async shape be reconciled with the sync API?**
+  The charter asked the browser condition to use `crypto.subtle.digest`, which
+  is async (`Promise<ArrayBuffer>`) and cannot back a synchronous
+  `sha256(bytes) -> bytes`. *Resolved as this design proposed:* the browser
+  build is synchronous pure JS, and a WebCrypto `sha256Async` is left as a
+  separately named future export rather than built speculatively. Making the
+  core API async would have rippled through every `Filesystem` implementation
+  that mints a `BlobRef`.
+- **One-shot binary host function now or later?** *Resolved: now.* Endor's
+  platform contract exposes `hostSha256Bytes` regardless of whether XS or
+  IronHorse executes the JavaScript.
+- **`native-git-backend.js` migration scope?** *Resolved: included.* Its two
+  `createHash` sites now use `@endo/sha256`; text is encoded with
+  `@endo/bytes`'s `bytesFromText`.

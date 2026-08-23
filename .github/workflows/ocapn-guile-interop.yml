@@ -49,7 +49,7 @@ jobs:
 
     steps:
       - name: Checkout Endo
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: endo
           persist-credentials: false
@@ -71,7 +71,7 @@ jobs:
         working-directory: endo
 
       - name: Use Node.js 20.17.x
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20.17.x
           cache: yarn
@@ -99,7 +99,7 @@ jobs:
         run: echo LANG=en_US.utf8 >> $GITHUB_ENV
       - name: Restore Guix tarball cache
         id: guix-cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: guix-binary.x86_64-linux.tar.xz
           # Cache key includes the version and sha256 so a version

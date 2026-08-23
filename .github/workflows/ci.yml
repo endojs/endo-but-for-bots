@@ -1,11 +1,11 @@
 name: CI
 
-# run CI on pushes to master, and on all PRs (even the ones that target other
-# branches)
+# run CI on pushes to the repository trunks, and on all PRs (even the ones that
+# target other branches)
 
 on:
   push:
-    branches: [master]
+    branches: [master, llm]
   pull_request:
     # `paths-ignore` causes this workflow not to run at all when every
     # changed path matches one of these patterns. The sister workflow
@@ -53,7 +53,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -61,7 +61,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .node-version
           cache: yarn
@@ -135,7 +135,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -143,7 +143,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.x
           cache: yarn
@@ -163,7 +163,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22.x, 24.x]
+        # Temporarily pin Node 24: Node 24.19 triggers the better-sqlite3@11.10.0
+        # legacy node::ObjectWrap cleanup abort; see
+        # https://github.com/nodejs/node/pull/65042.
+        node-version: [22.x, 24.18.0]
         platform: [ubuntu-latest, macos-15]
         # windows-latest exhibited flakey tests that are not yet worth the
         # trouble to investigate, and blocked us from upgrading yarn from 1 to
@@ -171,7 +174,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Fetch full history so turbo can compute the affected set against
           # `origin/llm` for the `--filter='...[origin/llm]'` invocation below.
@@ -182,7 +185,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: yarn
@@ -230,7 +233,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -238,7 +241,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js 22.x
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.x
           cache: yarn
@@ -295,7 +298,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -303,7 +306,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: yarn
@@ -329,12 +332,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22.x, 24.x]
+        # Temporarily pin Node 24: Node 24.19 triggers the better-sqlite3@11.10.0
+        # legacy node::ObjectWrap cleanup abort; see
+        # https://github.com/nodejs/node/pull/65042.
+        node-version: [22.x, 24.18.0]
         platform: [ubuntu-latest]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Fetch full history so turbo can compute the affected set against
           # `origin/llm` for the `--filter='...[origin/llm]'` invocation below.
@@ -345,7 +351,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: yarn
@@ -371,12 +377,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22.x, 24.x]
+        # Temporarily pin Node 24: Node 24.19 triggers the better-sqlite3@11.10.0
+        # legacy node::ObjectWrap cleanup abort; see
+        # https://github.com/nodejs/node/pull/65042.
+        node-version: [22.x, 24.18.0]
         platform: [ubuntu-latest]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -384,7 +393,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: yarn
@@ -409,7 +418,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -417,7 +426,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .node-version
           cache: yarn
@@ -440,7 +449,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -448,7 +457,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .node-version
           cache: yarn
@@ -458,7 +467,7 @@ jobs:
 
       - name: Detect workflow changes
         id: paths
-        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: |
             workflows:
@@ -477,12 +486,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22.x, 24.x]
+        # Temporarily pin Node 24: Node 24.19 triggers the better-sqlite3@11.10.0
+        # legacy node::ObjectWrap cleanup abort; see
+        # https://github.com/nodejs/node/pull/65042.
+        node-version: [22.x, 24.18.0]
         platform: [ubuntu-latest]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -490,7 +502,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: yarn
@@ -531,7 +543,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: endo
           persist-credentials: false
@@ -542,7 +554,7 @@ jobs:
 
       # The tests run on the XS engine; Node is just driving the harness.
       - name: Use Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: endo/.node-version
           cache: yarn
@@ -564,7 +576,7 @@ jobs:
 
       - name: Restore XS binary cache
         id: restore-xs
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: bin/xst
           key: xst-lin64-${{ env.MODDABLE_VERSION }}
@@ -590,7 +602,7 @@ jobs:
 
       - name: Checkout XS
         if: steps.check-release.outputs.release == 'build'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: moddable-OpenSource/moddable
           ref: ${{ env.MODDABLE_VERSION }}
@@ -618,7 +630,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: true
@@ -626,7 +638,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .node-version
           cache: yarn
@@ -635,7 +647,7 @@ jobs:
         run: yarn install --immutable
 
       - name: Cache Cargo + target
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -648,21 +660,40 @@ jobs:
       - name: Generate XS bootstraps
         run: |
           yarn workspace @endo/thixotrope run build:xs-bundles
-          node packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.mjs
-          node packages/daemon/scripts/bundle-bus-worker-xs.mjs
+          # The daemon bundle is the one that fails when a `node:`
+          # builtin re-enters the daemon's compartment graph, and it is
+          # gitignored, so without this step that regression reddens
+          # nothing.
+          yarn bundle:xs
 
       - name: Build xsnap crate
         run: cargo check --manifest-path rust/endo/xsnap/Cargo.toml
+
+      - name: Test the store-backed worker lifecycle (endo crate)
+        # The supervisor's Ironhorse heap-persistence option
+        # (HeapStoreOptions + PersistentMachine + mark_suspended_store,
+        # designs/ironhorse-snapshot-store-seam.md § supervisor wiring)
+        # lives in the endo crate, which links xsnap and therefore
+        # needs the bundles generated above — so its integration test
+        # runs here rather than in test-ironhorse, which deliberately
+        # avoids the XS C toolchain.
+        # --features pinned explicitly: the test file is gated on
+        # cfg(feature = "ironhorse-engine"), so without the pin a
+        # default-feature flip would turn this step into a 0-test
+        # green pass with no error (wave-3 finding).
+        run: cargo test -p endo --features ironhorse-engine --test ironhorse_store_worker
 
   # The pure-Rust ironhorse crates: the engine's zero-C members
   # (ironhorse-vm, ironhorse-snapshot — including the store seam's
   # metamorphic determinism and checkpoint acceptance suites) plus the
   # daemon-side SQLite heap-store backend in the root workspace. The
   # oracle-linked engine crates (xs-oracle, ironhorse-compile,
-  # ironhorse-regexp, ironhorse-262, ironhorse-fuzz) are excluded: their
-  # dev-dependencies compile the Moddable XS C sources, which need the
-  # c/moddable submodule and its toolchain; they remain local/manual
-  # until a job provisions that.
+  # ironhorse-regexp, ironhorse-262, ironhorse-fuzz) are excluded from
+  # TESTING: their dev-dependencies compile the Moddable XS C sources,
+  # which need the c/moddable submodule and its toolchain, so their own
+  # test targets remain local/manual until a job provisions that.
+  # (ironhorse-compile still builds here as a library dependency of the
+  # tested crates — dev-dependencies of dependencies do not build.)
   #
   # On pull requests the expensive steps self-skip unless the PR
   # touches these crates or their inputs (the engine workspace, the
@@ -678,7 +709,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           # Depth 2 so the pull_request merge commit's parents exist
@@ -704,7 +735,7 @@ jobs:
 
       - name: Cache Cargo + targets
         if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -724,6 +755,149 @@ jobs:
         if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         run: cargo test -p ironhorse-store-sqlite
 
+  # Fuzz smoke for the ironhorse engine (design § Fuzzability; the
+  # store seam's CI lane): a short libFuzzer pass over the decoder and
+  # round-trip targets on every ironhorse-relevant change, so decoder
+  # regressions of the kind the first runs caught (an out-of-range
+  # free-list index panicking the arena rebuild; a hostile suspend
+  # below an async run's stack base) fail the PR instead of waiting
+  # for someone to fuzz locally. Thirty seconds per target is a
+  # regression tripwire, not a search — deep fuzzing stays a
+  # local/scheduled concern. The toolchain is a PINNED nightly (bump
+  # deliberately): a floating nightly reddens every ironhorse PR at
+  # upstream's whim, which for a tripwire lane buys nothing (review
+  # finding). The corpus rides its own run-unique cache key so it
+  # genuinely accretes (an exact-key hit never re-saves — the review's
+  # cache finding, and the constraint ironhorse-full-test262.yml
+  # already documents); the build cache is keyed by toolchain + lock
+  # so a pin bump starts a fresh blob instead of layering stale
+  # fingerprints.
+  fuzz-ironhorse:
+    name: fuzz-ironhorse
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      # The toolchain the fuzz targets build with. Locally validated
+      # against the whole target set before each bump.
+      FUZZ_TOOLCHAIN: nightly-2026-08-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          # Depth 2 so the pull_request merge commit's parents exist
+          # for the change probe below.
+          fetch-depth: 2
+
+      - name: Detect ironhorse-relevant changes
+        id: changes
+        if: github.event_name == 'pull_request'
+        run: |
+          # test-ironhorse's probe plus this job's extra inputs: the
+          # fuzz build links the XS oracle, so the moddable gitlink,
+          # .gitmodules, and the shared xsnap platform sources are
+          # fuzz-relevant even though the test job ignores them
+          # (review finding: an oracle-input change skipping the lane
+          # detonates on the next unrelated PR). The merge commit's
+          # first parent is the base branch head, so this diff is
+          # exactly the PR's change set; fail open if that shape ever
+          # doesn't hold.
+          if ! git rev-parse -q --verify HEAD^2 >/dev/null; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only HEAD^1 HEAD \
+            | grep -qE '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^\.github/workflows/ci\.yml$|^c/moddable|^\.gitmodules$|^rust/endo/xsnap/xsnap-platform\.'; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fetch XS oracle submodule
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        # The ironhorse-fuzz lib links the XS oracle for its
+        # differential targets, so the fuzz build needs the pinned
+        # moddable sources even though this smoke set is decode-only.
+        # Anonymous shallow fetch can hit transient throttling on
+        # shared runner egress; retry before failing, and fail LOUD if
+        # all attempts leave the sources absent (a bare `|| sleep`
+        # loop would swallow the failure).
+        run: |
+          for i in 1 2 3; do
+            git submodule update --init --depth 1 c/moddable && break
+            sleep $((10 * i))
+          done
+          test -f c/moddable/xs/sources/xsAll.h
+
+      - name: Cache Cargo + fuzz build
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            rust/engine/ironhorse-fuzz/fuzz/target
+          key: ${{ runner.os }}-ironhorse-fuzz-build-${{ env.FUZZ_TOOLCHAIN }}-${{ hashFiles('rust/engine/ironhorse-fuzz/fuzz/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-fuzz-build-${{ env.FUZZ_TOOLCHAIN }}-
+
+      - name: Cache fuzz corpus
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: rust/engine/ironhorse-fuzz/fuzz/corpus
+          # Run-unique primary key: never an exact hit, so every run
+          # SAVES its grown corpus; the prefix restore pulls the
+          # newest prior corpus in scope. Fork-PR poisoning is fenced
+          # by GitHub's cache scoping (PR-scoped saves are invisible
+          # to base-branch runs), and crashing inputs land in
+          # artifacts/, never corpus/.
+          key: ${{ runner.os }}-ironhorse-fuzz-corpus-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-fuzz-corpus-
+
+      - name: Install pinned nightly toolchain and cargo-fuzz
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        run: |
+          rustup toolchain install "$FUZZ_TOOLCHAIN" --profile minimal
+          command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked
+
+      - name: Check fuzz lockfile freshness
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        working-directory: rust/engine/ironhorse-fuzz
+        # `cargo fuzz run` itself does not take --locked, so a stale
+        # committed fuzz/Cargo.lock would silently float new registry
+        # deps at build time (review finding). Fail the PR that made
+        # it stale instead, with the fix in the error message.
+        run: |
+          cargo +"$FUZZ_TOOLCHAIN" fetch --locked --manifest-path fuzz/Cargo.toml || {
+            echo "::error::fuzz/Cargo.lock is stale — run 'cargo update --workspace' in rust/engine/ironhorse-fuzz/fuzz and commit the lock"
+            exit 1
+          }
+
+      - name: Fuzz smoke (30s per target)
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        working-directory: rust/engine/ironhorse-fuzz
+        # Accumulate failures instead of stopping at the first
+        # crashing target, so one red run surfaces every crashing
+        # target's artifact at once.
+        run: |
+          rc=0
+          for t in snapshot_decoder snapshot_roundtrip bytecode_decoder parser; do
+            cargo +"$FUZZ_TOOLCHAIN" fuzz run "$t" -- -max_total_time=30 -print_final_stats=1 || rc=1
+          done
+          exit "$rc"
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ironhorse-fuzz-artifacts
+          path: rust/engine/ironhorse-fuzz/fuzz/artifacts/
+          if-no-files-found: ignore
+
   test-ocapn-python:
     name: test-ocapn-python
 
@@ -731,13 +905,13 @@ jobs:
 
     steps:
       - name: Checkout Endo
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: endo
           persist-credentials: false
 
       - name: Checkout OCapN Test Suite
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # https://github.com/ocapn/ocapn-test-suite/ (main branch)
           repository: ocapn/ocapn-test-suite
@@ -749,14 +923,14 @@ jobs:
         working-directory: endo
 
       - name: Use Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: endo/.node-version
           cache: yarn
           cache-dependency-path: endo/yarn.lock
 
       - name: Set up Python 3.10
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.10'
 
@@ -811,12 +985,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Cache Cargo + target
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry

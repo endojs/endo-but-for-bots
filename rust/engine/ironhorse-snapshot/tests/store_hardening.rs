@@ -158,7 +158,12 @@ impl Machine {
 /// Build the incremental batch for the machine's current state from
 /// public pieces only — the same construction the machine surface
 /// performs, exercised here under arbitrary schedules.
-fn incremental_batch(m: &Machine, epoch: u64, prev_seal: &str) -> CheckpointBatch {
+fn incremental_batch(
+    m: &Machine,
+    store: &dyn HeapStore,
+    epoch: u64,
+    prev_seal: &str,
+) -> CheckpointBatch {
     let slots = &m.heap.slots;
     let chunks = &m.heap.chunks;
     let manifest = StoreManifest {
@@ -175,7 +180,9 @@ fn incremental_batch(m: &Machine, epoch: u64, prev_seal: &str) -> CheckpointBatc
         slot_count: slots.capacity(),
         slot_live: slots.live_count(),
         chunk_len: chunks.byte_size() as u64,
+        free_len: slots.free_list().len() as u32,
         epoch,
+        root: String::new(),
         seal: String::new(),
     };
     let small = SmallState {
@@ -186,13 +193,19 @@ fn incremental_batch(m: &Machine, epoch: u64, prev_seal: &str) -> CheckpointBatc
         symbols: Vec::new(),
         meter: MeterImage::current(),
     };
+    let mut page_edges: Vec<(u32, Vec<u32>)> = Vec::new();
     let slot_pages: Vec<(u32, Vec<u8>)> = slots
         .dirty_pages()
         .into_iter()
         .map(|page| {
+            let records = slots.page_records(page);
+            page_edges.push((
+                page,
+                ironhorse_snapshot::store::derive_page_edges(page, &records),
+            ));
             let mut bytes = Vec::new();
-            for s in slots.page_records(page) {
-                ironhorse_snapshot::encode_slot(&s, &mut bytes);
+            for s in &records {
+                ironhorse_snapshot::encode_slot(s, &mut bytes);
             }
             (page, bytes)
         })
@@ -205,14 +218,74 @@ fn incremental_batch(m: &Machine, epoch: u64, prev_seal: &str) -> CheckpointBatc
         .map(|e| (e, chunks.extent_bytes(e)))
         .collect();
     let small_bytes = small.encode();
+    // Free segments: diff against stored leaves, exactly as the
+    // machine surface does.
+    let prior_frees = store.free_leaf_hashes().unwrap_or_default();
+    let free_segs: Vec<(u32, Vec<u8>)> =
+        ironhorse_snapshot::store::encode_all_free_segs(slots.free_list())
+            .into_iter()
+            .filter(|(i, bytes)| {
+                prior_frees.get(*i as usize).copied()
+                    != Some(ironhorse_snapshot::store::leaf_hash(
+                        ironhorse_snapshot::store::LEAF_FREE,
+                        *i,
+                        bytes,
+                    ))
+            })
+            .collect();
     let mut manifest = manifest;
-    manifest.seal = seal_commit(prev_seal, &manifest, &small_bytes, &slot_pages, &chunk_extents);
+    // Root maintenance exactly as checkpoint_to_store performs it:
+    // prior stored leaves/summaries + this batch's dirty ones (v5:
+    // the summaries are part of the root).
+    let (mut lp, mut le) = store.leaf_hashes().unwrap_or_default();
+    let mut lf = prior_frees.clone();
+    let mut edges_all = store.page_edges().unwrap_or_default();
+    lp.resize(ironhorse_snapshot::store::slot_page_count(manifest.slot_count) as usize, [0u8; 32]);
+    le.resize(chunk_extent_count(manifest.chunk_len) as usize, [0u8; 32]);
+    lf.resize(
+        ironhorse_snapshot::store::free_seg_count(manifest.free_len) as usize,
+        [0u8; 32],
+    );
+    for (i, bytes) in &slot_pages {
+        lp[*i as usize] = ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_PAGE, *i, bytes);
+    }
+    for (i, bytes) in &chunk_extents {
+        le[*i as usize] = ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_EXT, *i, bytes);
+    }
+    for (i, bytes) in &free_segs {
+        lf[*i as usize] = ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_FREE, *i, bytes);
+    }
+    edges_all.resize(
+        ironhorse_snapshot::store::slot_page_count(manifest.slot_count) as usize,
+        Vec::new(),
+    );
+    for (i, targets) in &page_edges {
+        edges_all[*i as usize] = targets.clone();
+    }
+    manifest.root = ironhorse_snapshot::store::combine_root(
+        &ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_SMALL, 0, &small_bytes),
+        &lp,
+        &le,
+        &lf,
+        &edges_all,
+    );
+    manifest.seal = seal_commit(
+        prev_seal,
+        &manifest,
+        &small_bytes,
+        &slot_pages,
+        &chunk_extents,
+        &free_segs,
+        &page_edges,
+    );
     CheckpointBatch {
         prev_seal: prev_seal.to_string(),
         manifest,
         small: small_bytes,
         slot_pages,
         chunk_extents,
+        free_segs,
+        page_edges,
     }
 }
 
@@ -252,7 +325,7 @@ fn randomized_schedules_keep_store_equal_to_live_arenas() {
             }
             epoch += 1;
             let prev = mem_store.manifest().unwrap().seal;
-            let batch = incremental_batch(&m, epoch, &prev);
+            let batch = incremental_batch(&m, &mem_store, epoch, &prev);
             m.heap.slots.clear_dirty();
             m.heap.chunks.clear_dirty();
             mem_store.commit(&batch).unwrap();
@@ -347,10 +420,13 @@ fn randomized_fault_schedules_reify_identically() {
 }
 
 /// Arm 1: single-byte corruptions and truncations of a committed store
-/// file never panic: they fail closed with a structured error, or —
-/// for flips inside undecoded content bytes — decode to a different
-/// but well-formed state. (Row-content integrity hashing is the
-/// design's named open question; this arm pins decode safety.)
+/// file never panic: they fail closed with a structured error. Since
+/// phase 5 (row leaves) and v5 (small state and page-edge summaries in
+/// the root), content flips refuse at validate/read rather than
+/// decoding to a different machine — the "decoded" outcome is reserved
+/// for flips in the handful of open-time-unverifiable manifest bytes
+/// (the stored seal string, the epoch), which the seal chain catches
+/// at the next commit instead.
 #[test]
 fn corrupted_store_files_never_panic() {
     let mut rng = Lcg(0xDEAD);
@@ -446,7 +522,7 @@ fn dirty_fraction_sweep_commits_exactly_the_touched_pages() {
             live: Vec::new(),
         };
         let prev = store.manifest().unwrap().seal;
-        let batch = incremental_batch(&m, epoch, &prev);
+        let batch = incremental_batch(&m, &store, epoch, &prev);
         slots = m.heap.slots;
         slots.clear_dirty();
         store.commit(&batch).unwrap();
@@ -462,4 +538,175 @@ fn dirty_fraction_sweep_commits_exactly_the_touched_pages() {
     chunks.alloc(&vec![7u8; CHUNK_EXTENT_BYTES as usize / 2]);
     assert_eq!(chunks.dirty_extents(), vec![0]);
     let _ = SLOT_RECORD_BYTES; // geometry sanity anchor
+}
+
+/// The random sweep above is dominated by blob-content bytes, which
+/// under-samples the decode paths an attacker actually targets
+/// (collaborator-review follow-up). This arm concentrates every
+/// mutation on the header/manifest/directory span — the first bytes
+/// of the file, where the magic, the length-prefixed manifest and
+/// small-state blocks, the row counts, and the directories live — and
+/// requires the same taxonomy: a structured error or a clean decode,
+/// never a panic, never an allocation blow-up.
+#[test]
+fn corrupted_store_headers_never_panic() {
+    let mut rng = Lcg(0xBEEF);
+    let mut m = Machine::new();
+    for _ in 0..800 {
+        m.step(&mut rng);
+    }
+    let dir = std::env::temp_dir().join("ironhorse-hardening-corrupt-header");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("heap.ihstore");
+    let mut store = FileStore::open(&path).unwrap();
+    store.commit(&image_to_batch(&m.image(&[]), 1, "")).unwrap();
+    drop(store);
+    let pristine = std::fs::read(&path).unwrap();
+
+    // The whole structural span, computed by walking the actual
+    // layout: magic, manifest block, small-state block (v5 put the
+    // small state under its leaf and the root, so flips there now
+    // REFUSE rather than legitimately decode), counts, directories,
+    // leaf-hash blocks, page-edge summaries (v5: root-verified, and
+    // their nested length fields get the hostile-count treatment the
+    // review found untested), free segments, and free-leaf hashes.
+    // Only blob content is out of scope here — arm 1 samples it, and
+    // its flips refuse at read via the row leaves.
+    let be32 = |b: &[u8], at: usize| u32::from_be_bytes(b[at..at + 4].try_into().unwrap()) as usize;
+    let mlen = be32(&pristine, 8);
+    let manifest_end = 12 + mlen;
+    let small_len = be32(&pristine, manifest_end);
+    let small_end = manifest_end + 4 + small_len;
+    let n_pages = be32(&pristine, small_end);
+    let n_exts = be32(&pristine, small_end + 4);
+    let dir_end = small_end + 8 + 12 * (n_pages + n_exts);
+    let mut cursor = dir_end + 32 * (n_pages + n_exts);
+    for _ in 0..n_pages {
+        let len = be32(&pristine, cursor);
+        cursor += 4 + 4 * len;
+    }
+    let n_frees = be32(&pristine, cursor);
+    cursor += 4;
+    for _ in 0..n_frees {
+        let len = be32(&pristine, cursor);
+        cursor += 4 + len;
+    }
+    cursor += 32 * n_frees;
+    let structural = cursor; // everything before the first blob
+
+    let mut outcomes = [0usize; 3];
+    for i in 0..400u64 {
+        let mut bytes = pristine.clone();
+        let pos = rng.below(structural as u64) as usize;
+        if i % 4 == 3 {
+            // Overwrite with a hostile length-shaped value.
+            let hostile = [0xFFu8, 0xFF, 0xFF, 0xFF];
+            let end = (pos + 4).min(bytes.len());
+            bytes[pos..end].copy_from_slice(&hostile[..end - pos]);
+        } else {
+            let flip = 1u8 << rng.below(8);
+            bytes[pos] ^= flip;
+        }
+        std::fs::write(&path, &bytes).unwrap();
+        match FileStore::open(&path) {
+            Err(_) => outcomes[0] += 1,
+            Ok(s) => match validate_store(&s, &sig()) {
+                Err(_) => outcomes[1] += 1,
+                Ok(_) => match store_to_image(&s) {
+                    Err(_) => outcomes[1] += 1,
+                    Ok(_) => outcomes[2] += 1,
+                },
+            },
+        }
+    }
+    // Sanity: the arm actually exercises refusal paths. The clean
+    // remainder is real and bounded: flips inside the stored seal
+    // string or the epoch decode as a structurally valid store at
+    // open — the seal is a chain link, verifiable only against the
+    // NEXT commit's `prev_seal` (where `check_succession` enforces
+    // it), never against the store's own content at open. Everything
+    // the root covers (leaves, summaries, small state) refuses here.
+    assert!(
+        outcomes[0] + outcomes[1] > 250,
+        "structural corruption should overwhelmingly refuse: {outcomes:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// v5 deterministic lock: a flip inside the stored page-edge section
+/// refuses at open or validation — never a silent reachability shrink.
+/// The summaries decide what `partial_collect` FREES, so they sit
+/// under the root exactly like row leaves; before v5 this flip passed
+/// every gate (the review's fail-open finding).
+#[test]
+fn edge_summary_flip_at_rest_fails_closed() {
+    // A reference chain crossing three pages, so the summaries are
+    // genuinely nonempty (the random Machine allocates only integers
+    // and strings — no arena edges).
+    let mut slots = SlotArena::new();
+    let n = 3 * ironhorse_vm::SLOTS_PER_PAGE;
+    for i in 0..n {
+        let next = if i + 1 < n {
+            SlotIndex(i + 1)
+        } else {
+            SlotIndex::NULL
+        };
+        slots.alloc(Slot::of(Kind::Reference, Payload::Reference(next)));
+    }
+    let image = MachineImage::from_arenas(
+        sig(),
+        &slots,
+        &ironhorse_vm::ChunkArena::new(),
+        &[],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    let dir = std::env::temp_dir().join("ironhorse-hardening-edge-flip");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("heap.ihstore");
+    let mut store = FileStore::open(&path).unwrap();
+    store.commit(&image_to_batch(&image, 1, "")).unwrap();
+    drop(store);
+    let pristine = std::fs::read(&path).unwrap();
+
+    // Walk the layout to the edge section (same arithmetic as the
+    // header arm above).
+    let be32 = |b: &[u8], at: usize| u32::from_be_bytes(b[at..at + 4].try_into().unwrap()) as usize;
+    let mlen = be32(&pristine, 8);
+    let manifest_end = 12 + mlen;
+    let small_len = be32(&pristine, manifest_end);
+    let small_end = manifest_end + 4 + small_len;
+    let n_pages = be32(&pristine, small_end);
+    let n_exts = be32(&pristine, small_end + 4);
+    let dir_end = small_end + 8 + 12 * (n_pages + n_exts);
+    let edges_start = dir_end + 32 * (n_pages + n_exts);
+    let mut edges_end = edges_start;
+    for _ in 0..n_pages {
+        let len = be32(&pristine, edges_end);
+        edges_end += 4 + 4 * len;
+    }
+    assert!(
+        edges_end > edges_start + 4 * n_pages,
+        "fixture must have at least one nonempty summary"
+    );
+
+    // Flip one byte at every word boundary across the section (both
+    // length prefixes and target words): every flip must refuse.
+    let mut tried = 0;
+    for pos in (edges_start..edges_end).step_by(4) {
+        let mut bytes = pristine.clone();
+        bytes[pos] ^= 0x01;
+        std::fs::write(&path, &bytes).unwrap();
+        let refused = match FileStore::open(&path) {
+            Err(_) => true,
+            Ok(s) => validate_store(&s, &sig()).is_err(),
+        };
+        assert!(refused, "edge-section flip at byte {pos} must fail closed");
+        tried += 1;
+    }
+    assert!(tried >= 4, "the sweep must cover a real section, got {tried}");
+    let _ = std::fs::remove_dir_all(&dir);
 }

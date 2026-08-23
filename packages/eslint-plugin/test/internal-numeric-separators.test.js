@@ -42,7 +42,7 @@ assert.deepStrictEqual(
   ruleConfig[1],
   {
     onlyIfContainsSeparator: false,
-    number: { minimumDigits: 5, groupLength: 3 },
+    number: { minimumDigits: 5, groupLength: 3, fractionGroupLength: 3 },
     binary: { minimumDigits: 0, groupLength: 4 },
     octal: { minimumDigits: 0, groupLength: 4 },
     hexadecimal: { minimumDigits: 0, groupLength: 4 },
@@ -76,6 +76,16 @@ tester.run('internal preset: unicorn/numeric-separators-style options', rule, {
     { code: 'const n = 0xAB_CDEF;', options: [ruleOptions] },
     { code: 'const n = 0b1111_0000;', options: [ruleOptions] },
     { code: 'const n = 0o1234_5670;', options: [ruleOptions] },
+    // Fractional parts group from the left in threes, per
+    // `fractionGroupLength`. Dropping that key from the preset makes the rule
+    // fall back to its `Infinity` default (no fractional grouping at all) and
+    // reports every one of these as an invalid group.
+    { code: 'const n = 3.141_59;', options: [ruleOptions] },
+    { code: 'const n = 0.202_492_713_878_710_48;', options: [ruleOptions] },
+    { code: 'const n = 1.110_223_024_625_156_5e-16;', options: [ruleOptions] },
+    // Short fractional parts stay bare, like short integer ones.
+    { code: 'const n = 1.5;', options: [ruleOptions] },
+    { code: 'const n = 0.1234;', options: [ruleOptions] },
   ],
   invalid: [
     // Decimal: groupLength 3 from the right, kicks in at five digits.
@@ -130,6 +140,26 @@ tester.run('internal preset: unicorn/numeric-separators-style options', rule, {
       options: [ruleOptions],
       errors: [{ messageId: 'numeric-separators-style' }],
       output: 'const n = 0o1234_5670;',
+    },
+    // Fractional: fractionGroupLength 3, grouped from the left.
+    {
+      code: 'const n = 3.14159;',
+      options: [ruleOptions],
+      errors: [{ messageId: 'numeric-separators-style' }],
+      output: 'const n = 3.141_59;',
+    },
+    {
+      code: 'const n = 0.20249271387871048;',
+      options: [ruleOptions],
+      errors: [{ messageId: 'numeric-separators-style' }],
+      output: 'const n = 0.202_492_713_878_710_48;',
+    },
+    // The exponent is separate from the fractional part it follows.
+    {
+      code: 'const n = 1.1102230246251565e-16;',
+      options: [ruleOptions],
+      errors: [{ messageId: 'numeric-separators-style' }],
+      output: 'const n = 1.110_223_024_625_156_5e-16;',
     },
   ],
 });

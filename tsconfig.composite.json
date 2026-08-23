@@ -9,6 +9,9 @@
       "path": "packages/agentry/tsconfig.composite.json"
     },
     {
+      "path": "packages/ascii/tsconfig.composite.json"
+    },
+    {
       "path": "packages/base64/tsconfig.composite.json"
     },
     {
@@ -93,6 +96,12 @@
       "path": "packages/exo-http-client/tsconfig.composite.json"
     },
     {
+      "path": "packages/exo-npm/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/exo-package-manager/tsconfig.composite.json"
+    },
+    {
       "path": "packages/exo-playwright/tsconfig.composite.json"
     },
     {
@@ -124,6 +133,12 @@
     },
     {
       "path": "packages/harden/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/hardened262/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/helpdown/tsconfig.composite.json"
     },
     {
       "path": "packages/hex/tsconfig.composite.json"
@@ -159,6 +174,9 @@
       "path": "packages/marshal/tsconfig.composite.json"
     },
     {
+      "path": "packages/mem-cas/tsconfig.composite.json"
+    },
+    {
       "path": "packages/memoize/tsconfig.composite.json"
     },
     {
@@ -181,6 +199,9 @@
     },
     {
       "path": "packages/panic/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/parser-pipeline/tsconfig.composite.json"
     },
     {
       "path": "packages/pass-style/tsconfig.composite.json"
@@ -208,6 +229,9 @@
     },
     {
       "path": "packages/ses-ava/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/sha256/tsconfig.composite.json"
     },
     {
       "path": "packages/skel/tsconfig.composite.json"

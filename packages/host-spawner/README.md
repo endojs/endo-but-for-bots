@@ -1,9 +1,10 @@
 # @endo/host-spawner
 
-The host-side `Spawner` seam, extracted from `@endo/genie` so daemon-side
-capabilities (notably the Shell formula in `@endo/daemon`) can reach the same
-process-execution engine without depending on the agent framework. `@endo/genie`
-depends on `@endo/daemon`, so the daemon cannot depend back on genie.
+The host-side `Spawner` seam, so daemon-side capabilities (notably the Shell
+formula in `@endo/daemon`) can reach a shared process-execution engine without
+depending on an agent framework. It stands alone: the daemon can wrap
+`child_process.spawn` behind this seam without pulling in any agent-host layer
+that would depend on `@endo/daemon` in turn.
 
 A `Spawner` is a single-method contract:
 
@@ -25,5 +26,6 @@ const spawn = makeHostSpawner({ searchPath: '/usr/bin:/bin', defaultEnv: {} });
 const proc = await spawn(['echo', 'hello'], { cwd: '/tmp', env: { CI: 'true' } });
 ```
 
-`@endo/genie` re-exports `makeHostSpawner` from here (its `src/tools/spawner.js`
-is now a thin re-export shim), so existing genie code is unchanged.
+An agent host that already speaks the `Spawner` seam can re-export
+`makeHostSpawner` from here, so its own command tools reach the same engine as
+the daemon without duplicating the process-execution logic.

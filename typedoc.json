@@ -30,7 +30,6 @@
     "packages/eventual-send-test",
     "packages/fae",
     "packages/familiar",
-    "packages/genie",
     "packages/harden-test",
     "packages/hex-test",
     "packages/space-chat",
@@ -44,8 +43,10 @@
     "packages/netstring",
     "packages/ocapn",
     "packages/ocapn-noise",
+    "packages/parser-pipeline",
     "packages/platform",
     "packages/preact-container",
+    "packages/preact-social",
     "packages/relay-server",
     "packages/skel",
     "packages/stream-types-test",
@@ -63,7 +64,7 @@
   "entryPointStrategy": "packages",
   "customCss": "docs/assets/custom.css",
   "useTsLinkResolution": true,
-  "tsconfig": "./tsconfig.json",
+  "tsconfig": "./tsconfig.typedoc.json",
   "out": "api-docs",
   "includeVersion": true
 }

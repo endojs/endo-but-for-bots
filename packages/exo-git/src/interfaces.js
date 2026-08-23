@@ -2,6 +2,12 @@
 
 import { M } from '@endo/patterns';
 
+import {
+  DEFAULT_REMOTE_REF_STRING_LIMIT,
+  DEFAULT_REMOTE_TEXT_LIMIT,
+  DEFAULT_REMOTE_UPDATED_REFS_LIMIT,
+} from './result-bounds.js';
+
 // #region Shape primitives
 
 const GitDirectionShape = M.or(M.eq('fetch'), M.eq('push'));
@@ -25,23 +31,46 @@ const GitWorktreeStatusShape = M.or(
   'untracked',
 );
 
-const GitStatusOptionsShape = M.splitRecord(
-  {},
-  { untracked: M.or('all', 'normal', 'no') },
-  harden({}),
-);
-
 const GitStatusEntryShape = M.splitRecord(
   {
-    entry: M.remotable(),
     index: GitIndexStatusShape,
     path: M.string(),
     worktree: GitWorktreeStatusShape,
   },
   {
-    node: M.remotable(),
     renamedFrom: M.string(),
   },
+);
+
+const GitStatusOptionsShape = M.splitRecord(
+  {},
+  {
+    maxCount: M.number(),
+    untracked: M.or('all', 'normal', 'no'),
+  },
+  harden({}),
+);
+
+const GitStatusResultShape = M.splitRecord(
+  {
+    entries: M.arrayOf(GitStatusEntryShape),
+    truncated: M.boolean(),
+  },
+  {},
+  harden({}),
+);
+
+const GitTrackingStatusShape = M.splitRecord(
+  {
+    ahead: M.number(),
+    behind: M.number(),
+    detached: M.boolean(),
+  },
+  {
+    branch: M.string(),
+    upstream: M.string(),
+  },
+  harden({}),
 );
 
 const GitRefKindShape = M.or('branch', 'commit', 'detached', 'tag');
@@ -49,10 +78,14 @@ const GitRefKindShape = M.or('branch', 'commit', 'detached', 'tag');
 const GitRefShape = M.splitRecord(
   {
     kind: GitRefKindShape,
-    name: M.string(),
+    name: M.string(
+      harden({ stringLengthLimit: DEFAULT_REMOTE_REF_STRING_LIMIT }),
+    ),
   },
   {
-    oid: M.string(),
+    oid: M.string(
+      harden({ stringLengthLimit: DEFAULT_REMOTE_REF_STRING_LIMIT }),
+    ),
   },
 );
 const RefArgShape = M.or(M.string(), GitRefShape);
@@ -66,6 +99,30 @@ const GitCommitShape = M.splitRecord(
     author: M.string(),
     committedAt: M.number(),
   },
+);
+
+const GitWorktreeEntryShape = M.splitRecord(
+  {
+    path: M.string(),
+    bare: M.boolean(),
+    detached: M.boolean(),
+    locked: M.boolean(),
+    prunable: M.boolean(),
+  },
+  {
+    head: M.string(),
+    branch: M.string(),
+  },
+  harden({}),
+);
+
+const GitWorktreeAddOptionsShape = M.splitRecord(
+  {},
+  {
+    ref: RefArgShape,
+    newBranch: M.string(),
+  },
+  harden({}),
 );
 
 const GitCommitOptionsShape = M.splitRecord(
@@ -114,19 +171,32 @@ const GitRefUpdateResultShape = M.or(
 
 const RemoteRefUpdateShape = M.splitRecord(
   {
-    remote: M.string(),
+    remote: M.string(
+      harden({ stringLengthLimit: DEFAULT_REMOTE_REF_STRING_LIMIT }),
+    ),
     result: GitRefUpdateResultShape,
   },
   { local: GitRefShape },
   harden({}),
 );
 
+// `updatedRefs` and `text` are network-sourced: a fetch/push result
+// originates from the remote (see `native-git-backend.js`'s `remoteFetch` /
+// `remotePush`), and `git-remote.js` retains the result in `GitRemote`'s
+// durable audit log.  The bounds below are the hard structural ceiling; a
+// malformed or oversized result is rejected here regardless of which backend
+// produced it.  `makeGitRemote`'s `resultLimits` option transparently
+// truncates a legitimately large result to fit under this ceiling before it
+// ever reaches this guard (see `result-bounds.js`).
 const RemoteOperationResultShape = M.splitRecord(
   {
-    updatedRefs: M.arrayOf(RemoteRefUpdateShape),
-    text: M.string(),
+    updatedRefs: M.arrayOf(
+      RemoteRefUpdateShape,
+      harden({ arrayLengthLimit: DEFAULT_REMOTE_UPDATED_REFS_LIMIT }),
+    ),
+    text: M.string(harden({ stringLengthLimit: DEFAULT_REMOTE_TEXT_LIMIT })),
   },
-  {},
+  { droppedUpdatedRefsCount: M.number() },
   harden({}),
 );
 
@@ -201,6 +271,8 @@ const GitReaderScopeNameShape = M.eq('reader');
 const GitWriterScopeNameShape = M.or('reader', 'writer');
 const GitRewriterScopeNameShape = M.or('reader', 'writer', 'rewriter');
 
+const HelpMethod = M.call().optional(M.string()).returns(M.string());
+
 // #endregion
 
 /**
@@ -218,10 +290,12 @@ const GitRewriterScopeNameShape = M.or('reader', 'writer', 'rewriter');
  * has exactly one guard shared by every facet that carries it.
  */
 export const GIT_METHOD_GUARDS = harden({
-  add: M.callWhen(M.arrayOf(M.remotable())).returns(M.undefined()),
+  add: M.callWhen(M.arrayOf(M.or(M.remotable(), M.string()))).returns(
+    M.undefined(),
+  ),
   branches: M.callWhen().returns(M.arrayOf(GitRefShape)),
   checkoutConflict: M.callWhen(
-    M.arrayOf(M.remotable()),
+    M.arrayOf(M.or(M.remotable(), M.string())),
     GitConflictSideShape,
   ).returns(M.undefined()),
   cherryPick: M.callWhen(RefArgShape)
@@ -245,6 +319,7 @@ export const GIT_METHOD_GUARDS = harden({
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.string()),
   filesystemAt: M.callWhen(RefArgShape).returns(M.remotable('Filesystem')),
+  help: HelpMethod,
   log: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.arrayOf(GitCommitShape)),
@@ -254,7 +329,7 @@ export const GIT_METHOD_GUARDS = harden({
   rebase: M.callWhen(GitRebaseInputShape).returns(M.string()),
   readOnly: M.call().returns(M.remotable('Git')),
   renameBranch: M.callWhen(M.string(), M.string()).returns(M.undefined()),
-  restore: M.callWhen(M.arrayOf(M.remotable()))
+  restore: M.callWhen(M.arrayOf(M.or(M.remotable(), M.string())))
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.undefined()),
   reword: M.callWhen(RefArgShape, M.string()).returns(GitCommitShape),
@@ -273,15 +348,20 @@ export const GIT_METHOD_GUARDS = harden({
   stashShow: M.callWhen().optional(M.number()).returns(M.string()),
   status: M.callWhen()
     .optional(GitStatusOptionsShape)
-    .returns(M.arrayOf(GitStatusEntryShape)),
+    .returns(GitStatusResultShape),
   switch: M.callWhen(RefArgShape).returns(M.undefined()),
   switchBranch: M.callWhen(M.string()).returns(M.undefined()),
   tree: M.callWhen(RefArgShape).returns(M.remotable()),
+  trackingStatus: M.callWhen().returns(GitTrackingStatusShape),
   // `callWhen` so a read-only Git may resolve its worktree authority
   // through `mount.readOnly()` (which yields a promise of the
   // structural read-only view) before the return shape is matched; a
   // writable Git returns its mount synchronously and is unaffected.
   worktree: M.callWhen().returns(M.remotable()),
+  worktreeAdd: M.callWhen(M.remotable())
+    .optional(GitWorktreeAddOptionsShape)
+    .returns(M.remotable('Git')),
+  worktreeList: M.callWhen().returns(M.arrayOf(GitWorktreeEntryShape)),
 });
 
 /**
@@ -295,6 +375,7 @@ export const GIT_READER_METHODS = harden([
   'currentBranch',
   'diff',
   'filesystemAt',
+  'help',
   'log',
   'readOnly',
   'revParse',
@@ -303,8 +384,10 @@ export const GIT_READER_METHODS = harden([
   'stashList',
   'stashShow',
   'status',
+  'trackingStatus',
   'tree',
   'worktree',
+  'worktreeList',
 ]);
 
 export const GIT_WRITER_ONLY_METHODS = harden([
@@ -322,6 +405,7 @@ export const GIT_WRITER_ONLY_METHODS = harden([
   'stashPush',
   'switch',
   'switchBranch',
+  'worktreeAdd',
 ]);
 export const GIT_WRITER_METHODS = harden([
   ...GIT_READER_METHODS,
@@ -400,6 +484,7 @@ export const GitTreeInterface = M.interface('EndoGitTree', {
   archiveLossless: M.callWhen().returns(M.boolean()),
   archiveTar: M.call().returns(M.remotable()),
   has: M.callWhen().rest(M.arrayOf(M.string())).returns(M.boolean()),
+  help: HelpMethod,
   list: M.callWhen().rest(M.arrayOf(M.string())).returns(M.arrayOf(M.string())),
   lookup: M.callWhen(M.or(M.string(), M.arrayOf(M.string()))).returns(
     M.remotable(),
@@ -410,6 +495,7 @@ export const GitRemoteInterface = M.interface('GitRemote', {
   fetch: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
     .returns(RemoteOperationResultShape),
+  help: HelpMethod,
   inspect: M.callWhen().returns(RemoteSnapshotShape),
   pull: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
@@ -421,6 +507,7 @@ export const GitRemoteInterface = M.interface('GitRemote', {
 
 export const GitRemoteControllerInterface = M.interface('GitRemoteController', {
   audit: M.call().returns(M.promise()),
+  help: HelpMethod,
   inspect: M.callWhen().returns(RemoteControllerSnapshotShape),
   revoke: M.call().returns(M.promise()),
   setAllowedBranches: M.call(M.arrayOf(M.string())).returns(M.promise()),
@@ -437,6 +524,7 @@ export const GitRemoteControllerInterface = M.interface('GitRemoteController', {
 export const GitCredentialControllerInterface = M.interface(
   'GitCredentialController',
   {
+    help: HelpMethod,
     inspect: M.callWhen().returns(GitCredentialSnapshotShape),
     revoke: M.call().returns(M.promise()),
     rotate: M.call(M.recordOf(M.string(), M.any())).returns(M.promise()),
@@ -445,8 +533,10 @@ export const GitCredentialControllerInterface = M.interface(
 
 export const BearerCredentialInterface = M.interface('BearerCredential', {
   audience: M.call().returns(M.string()),
+  help: HelpMethod,
 });
 
 export const BasicCredentialInterface = M.interface('BasicCredential', {
   audience: M.call().returns(M.string()),
+  help: HelpMethod,
 });

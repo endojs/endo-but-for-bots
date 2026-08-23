@@ -11,6 +11,10 @@ import {
   SandboxFactoryInterface,
 } from '../src/interfaces.js';
 
+const lifecycleProbe = harden({
+  lifecycle: harden({ available: true }),
+});
+
 const stubScratchProvider = harden({
   provideScratchMount: async () => {
     throw new Error('scratchProvider not used in Phase 0');
@@ -69,7 +73,12 @@ test('make() reports the requested backend selector in its error', async t => {
 test('listBackends reports a registered driver as available', async t => {
   const stubDriver = harden({
     name: /** @type {const} */ ('bwrap'),
-    probe: async () => harden({ available: true, version: 'stub-1.0' }),
+    probe: async () =>
+      harden({
+        available: true,
+        version: 'stub-1.0',
+        details: lifecycleProbe,
+      }),
     prepareSlice: async () => {
       throw new Error('not implemented');
     },
@@ -92,6 +101,7 @@ test('listBackends reports a registered driver as available', async t => {
     name: 'bwrap',
     available: true,
     version: 'stub-1.0',
+    details: lifecycleProbe,
   });
   t.true(
     matches(backends[0], BackendProbeShape),
@@ -173,6 +183,120 @@ test('NetworkProfileShape accepts the documented profiles and rejects others', t
   }
   t.false(matches('host-internet', NetworkProfileShape));
   t.false(matches('', NetworkProfileShape));
+});
+
+/**
+ * Driver stub whose signal handling is chosen per process by argv: a
+ * `/bin/stubborn` process refuses every signal and never exits, so
+ * cleanup has to fall through to the slice-wide forced teardown. Any
+ * other process exits on the first signal it is sent.
+ */
+const makeContainmentFixture = () => {
+  let spawnCalls = 0;
+  let teardownCalls = 0;
+
+  const driver = harden({
+    name: /** @type {const} */ ('bwrap'),
+    probe: async () => harden({ available: true, details: lifecycleProbe }),
+    prepareSlice: async () => harden({}),
+    /**
+     * @param {unknown} _slice
+     * @param {string[]} argv
+     */
+    spawn: async (_slice, argv) => {
+      await null;
+      spawnCalls += 1;
+      const stubborn = argv[0] === '/bin/stubborn';
+      /** @type {(status: { code: number | null, signal: string | null }) => void} */
+      let reportExit = () => undefined;
+      /** @type {Promise<{ code: number | null, signal: string | null }>} */
+      const exit = new Promise(resolve => {
+        reportExit = resolve;
+      });
+      return harden({
+        pid: 4242,
+        stdin: null,
+        stdout: null,
+        stderr: null,
+        wait: () => exit,
+        /** @param {string} [signal] */
+        kill: async signal => {
+          await null;
+          if (stubborn) {
+            throw new Error(`synthetic signal refusal (${signal ?? 'none'})`);
+          }
+          reportExit(harden({ code: null, signal: String(signal ?? 'none') }));
+        },
+      });
+    },
+    teardown: async () => {
+      teardownCalls += 1;
+    },
+  });
+
+  const factory = makeSandboxFactory({
+    drivers: /** @type {any} */ (harden([driver])),
+    scratchProvider: /** @type {any} */ (stubScratchProvider),
+  });
+
+  return harden({
+    factory,
+    counts: () => harden({ spawnCalls, teardownCalls }),
+  });
+};
+
+test('a containment failure fails the whole slice, not just one process', async t => {
+  // Guards a hang as well as a silent-continuation regression: the kill
+  // ladder is bounded by KILL_GRACE_MS / DRAIN_GRACE_MS, so a few
+  // seconds is ample and an unbounded wait fails fast.
+  t.timeout(20_000);
+  const fixture = makeContainmentFixture();
+  const handle = await E(fixture.factory).make(
+    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+  );
+  t.teardown(() =>
+    E(handle)
+      .dispose()
+      .catch(() => undefined),
+  );
+
+  const stubborn = await E(handle).spawn(harden(['/bin/stubborn']));
+  const sibling = await E(handle).spawn(harden(['/bin/sleep', 'forever']));
+  const siblingWait = E(sibling).wait();
+  siblingWait.catch(() => undefined);
+
+  // Neither signal lands, so cleanup forces a slice-wide teardown and
+  // reports that it could not prove containment.
+  await t.throwsAsync(() => E(stubborn).kill(), {
+    message: /could not prove containment.*synthetic signal refusal/,
+  });
+  t.true(
+    fixture.counts().teardownCalls >= 1,
+    'forced backend teardown must have run',
+  );
+
+  // The slice was torn down under everyone on it, so it must stop
+  // accepting work rather than run the next spawn without the
+  // confinement the caller asked for.
+  await t.throwsAsync(() => E(handle).spawn(harden(['/bin/echo', 'hi'])), {
+    message: /disposed/,
+  });
+  await t.throwsAsync(() => E(handle).scratch('/tmp/work'), {
+    message: /disposed/,
+  });
+  t.is(
+    fixture.counts().spawnCalls,
+    2,
+    'no process is admitted after containment fails',
+  );
+
+  // The owner of a sibling process learns why its process died.
+  await t.throwsAsync(() => siblingWait, {
+    message: /torn down after a containment failure/,
+  });
+  await t.throwsAsync(() => E(handle).dispose(), {
+    message: /dispose could not prove containment/,
+  });
 });
 
 test('factory.help() returns descriptive text', async t => {

@@ -52,10 +52,10 @@ export const readableTreeMethodGuards = harden({
 // `readableNameHubMethodGuards` is the read surface of a *mutable* name hub /
 // directory: the readable-tree read methods plus `maybeLookup`
 // (lookup-or-undefined). It is the portable contract that the daemon's
-// `EndoDirectory` / `EndoGuest` / `EndoHost` / `EndoMount` and genie's
+// `EndoDirectory` / `EndoGuest` / `EndoHost` / `EndoMount` and an agent host's
 // `LocalMount` all satisfy by method name (the daemon's full registry hub adds
 // locator/identifier methods on top, which stay daemon-side). Lives here, not
-// in `@endo/daemon`, so non-daemon hosts (genie, a browser/Go/Rust client) can
+// in `@endo/daemon`, so non-daemon hosts (a browser/Go/Rust client) can
 // consume it without depending on the daemon. See
 // designs/fs-interface-consolidation.md § C1.
 export const readableNameHubMethodGuards = harden({
@@ -65,7 +65,7 @@ export const readableNameHubMethodGuards = harden({
 
 // `directoryFileMethodGuards` is the live read/write surface a directory or
 // mount adds on top of the read contract: directory creation plus text I/O.
-// Shared by `EndoDirectory` / `EndoGuest` / `EndoHost` and genie's `LocalMount`
+// Shared by `EndoDirectory` / `EndoGuest` / `EndoHost` and an agent host's `LocalMount`
 // (all on `NameOrPathShape`); `EndoMount` widens these to its entry-accepting
 // shape in its own guard.
 export const directoryFileMethodGuards = harden({
@@ -103,7 +103,7 @@ export const rangeReadMethodGuards = harden({
 
 // Whole-value range-read conveniences, layered on top of the streaming
 // `fetch` primitive. These consolidate the windowed-read features that
-// previously lived in the genie / lal / fae agent toolkits into the
+// previously lived in the lal / fae agent toolkits into the
 // platform's own readable-blob surface (those toolkits are being retired in
 // favour of the platform). See designs/platform-range-and-tree-reads.md.
 //
@@ -130,7 +130,7 @@ export const rangeReadConvenienceMethodGuards = harden({
 // `listTree` walks the whole subtree in one round-trip and returns every
 // descendant as a `{ path: string[], type: 'file' | 'directory' }` record,
 // lexically sorted, parents before children. It consolidates the
-// recursive-list feature of the genie / lal / fae toolkits. The record omits
+// recursive-list feature of the lal / fae toolkits. The record omits
 // size and any host stat fields for the same security reason `stat` is
 // omitted from the blob surface — `type` is structural, not an
 // implementation-detail leak. See designs/platform-range-and-tree-reads.md.

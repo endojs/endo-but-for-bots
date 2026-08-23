@@ -1,5 +1,5 @@
 // @ts-nocheck
-/* eslint-disable no-bitwise, @endo/restrict-comparison-operands */
+/* eslint-disable no-bitwise */
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
@@ -415,7 +415,10 @@ const testBigInt = test.macro(async (t, pickEncode) => {
     fc.property(fc.bigInt(), fc.bigInt(), (x, y) => {
       const ex = encodePassable(x);
       const ey = encodePassable(y);
+      // This test intentionally compares arbitrary BigInts and their encodings.
+      // eslint-disable-next-line @endo/restrict-comparison-operands
       t.is(x < y, ex < ey);
+      // eslint-disable-next-line @endo/restrict-comparison-operands
       t.is(x > y, ex > ey);
     }),
   );

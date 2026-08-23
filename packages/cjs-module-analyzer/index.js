@@ -249,23 +249,17 @@ function parseSource(cjsSource) {
           if (
             (isExpressionPunctuator(lastToken) &&
               !(
-                (
-                  lastToken === 46 /* . */ &&
-                  source.charCodeAt(lastTokenPos - 1) >= 48 /* 0 */ &&
-                  source.charCodeAt(lastTokenPos - 1) <= 57
-                ) /* 9 */
+                lastToken === 46 /* . */ &&
+                source.charCodeAt(lastTokenPos - 1) >= 48 /* 0 */ &&
+                source.charCodeAt(lastTokenPos - 1) <= 57 /* 9 */
               ) &&
               !(
-                (
-                  lastToken === 43 /*+*/ &&
-                  source.charCodeAt(lastTokenPos - 1) === 43
-                ) /*+*/
+                lastToken === 43 /*+*/ &&
+                source.charCodeAt(lastTokenPos - 1) === 43 /*+*/
               ) &&
               !(
-                (
-                  lastToken === 45 /*-*/ &&
-                  source.charCodeAt(lastTokenPos - 1) === 45
-                ) /*-*/
+                lastToken === 45 /*-*/ &&
+                source.charCodeAt(lastTokenPos - 1) === 45 /*-*/
               )) ||
             (lastToken === 41 /* ) */ &&
               isParenKeyword(openTokenPosStack[openTokenDepth])) ||
@@ -1490,7 +1484,7 @@ function regularExpression() {
  * @param {number} c
  */
 function isBr(c) {
-  return c === 13 /* \r */ || c === 10 /* \n */;
+  return c === 13 /* \r */ || c === 10; /* \n */
 }
 
 /**
@@ -1674,7 +1668,7 @@ function isExpressionTerminator(curPos) {
   // as all of these followed by a { will indicate a statement brace
   switch (source.charCodeAt(curPos)) {
     case 62 /* > */:
-      return source.charCodeAt(curPos - 1) === 61 /*=*/;
+      return source.charCodeAt(curPos - 1) === 61; /*=*/
     case 59 /* ; */:
     case 41 /* ) */:
       return true;

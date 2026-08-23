@@ -8,7 +8,6 @@ import { join } from 'node:path';
 
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
-import { makeOcapn } from '@endo/ocapn';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
@@ -16,6 +15,7 @@ import { makeThixotropeDaemon } from '../src/daemon.js';
 import { makeDurableNetLayer } from '../src/durable-netlayer.js';
 import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
 import { makeFsStore } from '../src/store-fs.js';
+import { makeTestOcapn } from './_util.js';
 
 const COUNTER_SOURCE = `
 (() => {
@@ -53,7 +53,7 @@ const makeDaemon = (statePath, port, resources = {}) =>
 
 /** @param {string} label */
 const makeDurableClient = label =>
-  makeOcapn({
+  makeTestOcapn({
     codec: syrupCodec,
     debugLabel: label,
     network: (handlers, logger) =>

@@ -87,7 +87,7 @@ export const makeLockTable = () => {
         if (method === undefined) {
           return 'Lock: in-process advisory range lock on an OpenFile.';
         }
-        return `No documentation for method ${q(method)}.`;
+        return `No documentation available for method ${q(method)}.`;
       },
     });
   };

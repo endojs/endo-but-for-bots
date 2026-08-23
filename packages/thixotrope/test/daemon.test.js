@@ -14,7 +14,6 @@ import { join } from 'node:path';
 
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
-import { makeOcapn } from '@endo/ocapn';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
@@ -22,6 +21,7 @@ import { makeThixotropeDaemon } from '../src/daemon.js';
 import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
 import { makeTimerResource } from '../src/resources.js';
 import { makeFsStore } from '../src/store-fs.js';
+import { makeTestOcapn } from './_util.js';
 
 const COUNTER_SOURCE = `
 (() => {
@@ -205,7 +205,7 @@ test('a third-party gift routes through the hub bootstrap', async t => {
   const receiverLocator = new Map();
   /** @type {any} */
   let receiverNetlayer;
-  const receiver = await makeOcapn({
+  const receiver = await makeTestOcapn({
     codec: syrupCodec,
     debugLabel: 'gift-receiver',
     locator: receiverLocator,
@@ -228,7 +228,7 @@ test('a third-party gift routes through the hub bootstrap', async t => {
   );
 
   // The gifter: another TCP peer, holding the daemon-fronted counter.
-  const gifter = await makeOcapn({
+  const gifter = await makeTestOcapn({
     codec: syrupCodec,
     debugLabel: 'gifter',
     network: (/** @type {any} */ handlers, /** @type {any} */ logger) =>
@@ -280,7 +280,7 @@ test('the hub redeems an inbound gift on behalf of a worker', async t => {
   const exporterLocator = new Map();
   /** @type {any} */
   let exporterNetlayer;
-  const exporter = await makeOcapn({
+  const exporter = await makeTestOcapn({
     codec: syrupCodec,
     debugLabel: 'exporter',
     locator: exporterLocator,
@@ -307,7 +307,7 @@ test('the hub redeems an inbound gift on behalf of a worker', async t => {
   // hand the give to the worker (workers cannot dial), so it redeems
   // the gift itself — dialing the exporter, withdrawing, and giving
   // the worker an ordinary promise for the gadget.
-  const gifter = await makeOcapn({
+  const gifter = await makeTestOcapn({
     codec: syrupCodec,
     debugLabel: 'redeeming-gifter',
     network: (/** @type {any} */ handlers, /** @type {any} */ logger) =>
