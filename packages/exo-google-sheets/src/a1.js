@@ -67,10 +67,9 @@ export const parseA1 = value => {
   ) {
     return undefined;
   }
-  const sheet =
-    quotedSheet
-      ? sheetPart.slice(1, -1).replace(/''/g, "'")
-      : sheetPart;
+  const sheet = quotedSheet
+    ? sheetPart.slice(1, -1).replace(/''/g, "'")
+    : sheetPart;
   if (sheet === '') return undefined;
   return harden({
     sheet,
