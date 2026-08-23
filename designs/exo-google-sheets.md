@@ -267,9 +267,10 @@ type RangeChange = { range: string, values: CellValue[][], revision: string };
   facet minted by `sheet('Tasks')` rejects ranges naming any other tab and
   treats bare ranges (`'A1:C10'`) as scoped to its tab.
   A facet minted by `range()` uses a bounded rectangle because confinement
-  must be structurally comparable; whole-row, whole-column, and named ranges
-  remain valid selectors for root- or sheet-scoped facets but cannot establish
-  a narrower range boundary.
+  must be structurally comparable. Reads always require bounded rectangles so
+  `maxCellsPerRead` can reject oversized requests before fetching. Mutating
+  root- or sheet-scoped facets may still use whole-row, whole-column, or named
+  selectors, but those selectors cannot establish a narrower range boundary.
 - **Rectangles** are `CellValue[][]` (rows of columns), hardened copyable
   arrays: the same shape the REST API uses, cheap to marshal.
 - **Records** (`readRecords`) treat row 1 of the range as a header row and

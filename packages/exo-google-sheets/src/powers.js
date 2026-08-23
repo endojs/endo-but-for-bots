@@ -103,7 +103,7 @@ const arraySome = (array, callback) => apply(some, array, [callback]);
  * @param {Scope} patch
  * @returns {Scope}
  */
-const narrowScope = (scope, patch) => {
+export const narrowScope = (scope, patch) => {
   if (patch.sheet !== undefined && patch.sheet.length === 0)
     throw new Error('Sheet must be non-empty');
   const scopeRange = scope.range ? parseA1(scope.range) : undefined;
@@ -133,6 +133,46 @@ const narrowScope = (scope, patch) => {
   });
 };
 harden(narrowScope);
+
+/** @param {any[][]} rows */
+const payloadWidth = rows =>
+  arrayReduce(rows, (width, row) => Math.max(width, row.length), 0);
+
+/**
+ * A values update expands from the selector's top-left cell. Ensure that
+ * expansion remains inside a range-scoped facet before spending a token.
+ * @param {string} selector
+ * @param {any[][]} values
+ * @param {Scope} scope
+ */
+const assertWriteFitsScope = (selector, values, scope) => {
+  if (!scope.range || values.length === 0) return;
+  const boundary = parseA1(scope.range);
+  const target = parseA1(selector);
+  const width = payloadWidth(values);
+  if (!boundary || !target || width === 0) return;
+  const expanded = {
+    ...target,
+    right: target.left + width - 1,
+    bottom: target.top + values.length - 1,
+  };
+  if (!contains(boundary, expanded))
+    throw new Error('Write payload escapes the range scope');
+};
+harden(assertWriteFitsScope);
+
+/**
+ * Sheets append chooses the destination row, but the payload must not exceed
+ * the designated table's columns.
+ * @param {string} selector
+ * @param {any[][]} rows
+ */
+const assertAppendFitsRange = (selector, rows) => {
+  const target = parseA1(selector);
+  if (target && payloadWidth(rows) > target.right - target.left + 1)
+    throw new Error('Append payload escapes the range scope');
+};
+harden(assertAppendFitsRange);
 
 /**
  * The host-retained policy: the allowlists and the caps, plus the token bucket
@@ -451,6 +491,7 @@ export const makeAppendPowers = ({ appendValues, access }) => {
        * @param {any[][]} rows
        */
       append: async (selector, rows) => {
+        assertAppendFitsRange(selector, rows);
         const result = await appendValues(access.admit(selector, scope), rows);
         return harden({
           updatedRange: result.updates.updatedRange,
@@ -483,6 +524,7 @@ export const makeWritePowers = ({ updateValues, clearValues, access }) => {
        * @param {any[][]} values
        */
       update: async (selector, values) => {
+        assertWriteFitsScope(selector, values, scope);
         const result = await updateValues(
           access.admit(selector, scope),
           values,

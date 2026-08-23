@@ -7,7 +7,7 @@ import harden from '@endo/harden';
 import { makeExoSpreadsheet } from '../index.js';
 import { contains, parseA1, sheetPrefix } from '../src/a1.js';
 import { makeReader } from '../src/facets.js';
-import { makeReadPowers } from '../src/powers.js';
+import { makeReadPowers, narrowScope } from '../src/powers.js';
 
 const makeClient = () => {
   const calls = [];
@@ -171,6 +171,18 @@ test('part() narrows the whole and composes, on every authority class', async t 
   await t.throwsAsync(writer.part('Tasks!A1:B2').writeOnly().write('C1', []), {
     message: /escapes/,
   });
+  const boundedWriter = writer.part('Tasks!A1:B2');
+  await t.throwsAsync(
+    boundedWriter.write('A1', [
+      [1, 2, 3],
+      [4, 5, 6],
+    ]),
+    { message: /payload escapes/ },
+  );
+  await t.throwsAsync(
+    boundedWriter.appendOnly().append('A1:B2', [[1, 2, 3]]),
+    { message: /payload escapes/ },
+  );
   t.is(client.calls.filter(([verb]) => verb === 'update').length, 0);
 });
 
@@ -276,6 +288,43 @@ test('rectangle containment is reflexive and transitive', t => {
       }
     }
   }
+});
+
+test('successful scope narrowing never widens its rectangle', t => {
+  const rectangle = fc
+    .tuple(
+      fc.integer({ min: 1, max: 20 }),
+      fc.integer({ min: 1, max: 20 }),
+      fc.integer({ min: 1, max: 20 }),
+      fc.integer({ min: 1, max: 20 }),
+    )
+    .map(([columnA, rowA, columnB, rowB]) => ({
+      sheet: undefined,
+      left: Math.min(columnA, columnB),
+      top: Math.min(rowA, rowB),
+      right: Math.max(columnA, columnB),
+      bottom: Math.max(rowA, rowB),
+    }));
+  /** @param {number} number */
+  const column = number => String.fromCharCode(64 + number);
+  /** @param {{ left: number, top: number, right: number, bottom: number }} range */
+  const notation = range =>
+    `${column(range.left)}${range.top}:${column(range.right)}${range.bottom}`;
+  fc.assert(
+    fc.property(rectangle, rectangle, (outer, patch) => {
+      try {
+        const narrowed = narrowScope(
+          { sheet: 'Tasks', range: `Tasks!${notation(outer)}` },
+          { range: notation(patch) },
+        );
+        const result = narrowed.range ? parseA1(narrowed.range) : undefined;
+        return result !== undefined && contains(outer, result);
+      } catch {
+        return !contains(outer, patch);
+      }
+    }),
+  );
+  t.pass();
 });
 
 test('range narrowing accepts only bounded rectangles', async t => {
