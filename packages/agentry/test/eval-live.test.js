@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt: ENDO_EVAL_ARTIFACT_DIR is the established environment variable.
 
 // The live-model git code-mode eval: the SAME scenarios and SAME outcome scorers
 // as the no-LLM tests, but driven by a real provider. It runs ONLY via its own
@@ -45,7 +46,7 @@ const env =
 const live = resolveEvalModelFromEnv(env);
 const liveTest = live ? test : test.skip;
 
-const artifactDir = env.ENDO_EVAL_ARTIFACT_DIR;
+const artifactDirectory = env.ENDO_EVAL_ARTIFACT_DIR;
 
 /**
  * The git and filesystem tools already cap ordinary text output at 50,000
@@ -107,11 +108,11 @@ const joinTextParts = content => {
  * @param {unknown} record
  */
 const appendArtifact = (fileName, record) => {
-  if (artifactDir === undefined) {
+  if (artifactDirectory === undefined) {
     return;
   }
   fs.appendFileSync(
-    path.join(artifactDir, fileName),
+    path.join(artifactDirectory, fileName),
     `${JSON.stringify(record)}\n`,
   );
 };
@@ -234,7 +235,7 @@ liveTest(
       repeats: 1,
       readText,
       onEvent:
-        artifactDir === undefined
+        artifactDirectory === undefined
           ? undefined
           : (event, context) =>
               appendArtifact('events.jsonl', {
@@ -244,7 +245,7 @@ liveTest(
               }),
     });
 
-    if (artifactDir !== undefined) {
+    if (artifactDirectory !== undefined) {
       for (const row of result.rows) {
         appendArtifact('results.jsonl', {
           scenario: row.scenario,
@@ -274,7 +275,7 @@ liveTest('a live model performs stack surgery (outcome assertion)', async t => {
   const repo = await provisionStackSurgeryRepo(t);
   const scenario = makeStackSurgeryScenario();
   const onEvent =
-    artifactDir === undefined
+    artifactDirectory === undefined
       ? undefined
       : event =>
           appendArtifact('events.jsonl', {

@@ -16,6 +16,7 @@ import {
 import { initRepo, makePowersOver } from '../_eval-fixture.js';
 
 /** @import { CodeModePower } from '@endo/agent-tools/code-mode/types.js' */
+/** @import { ExecutionContext } from 'ava' */
 
 export { EXPECTED_STACK_SURGERY_FILES, EXPECTED_STACK_SURGERY_SUMMARIES };
 
@@ -33,7 +34,7 @@ export const writeRepoFile = async (repoRoot, filePath, content) => {
 harden(writeRepoFile);
 
 /**
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @returns {Promise<{
  *   repoRoot: string,
  *   workspace: CodeModePower,

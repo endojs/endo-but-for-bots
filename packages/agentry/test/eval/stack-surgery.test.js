@@ -27,11 +27,12 @@ import {
   writeRepoFile,
 } from './_stack-surgery-repo.js';
 
-/** @import { Model } from '@earendil-works/pi-ai' */
+/** @import { AssistantMessage, Model } from '@earendil-works/pi-ai' */
+/** @import { ExecutionContext } from 'ava' */
 
 /**
- * @param {import('ava').ExecutionContext} t
- * @param {import('@earendil-works/pi-ai').AssistantMessage[]} responses
+ * @param {ExecutionContext} t
+ * @param {AssistantMessage[]} responses
  * @returns {Model<string>}
  */
 const fauxModel = (t, responses) => {
@@ -45,7 +46,7 @@ const fauxModel = (t, responses) => {
 };
 
 /**
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @param {string} source
  * @returns {Model<string>}
  */
