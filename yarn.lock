@@ -1913,11 +1913,13 @@ __metadata:
   dependencies:
     "@endo/captp": "workspace:^"
     "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
     "@endo/google-sheets": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@fast-check/ava": "catalog:dev"
     ava: "catalog:dev"
     eslint: "catalog:dev"
     typescript: "catalog:dev"
