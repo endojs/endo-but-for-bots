@@ -365,7 +365,7 @@ test('matrix provisioner contains paths and creates parent directories', async t
   t.teardown(repo.cleanup);
 
   const status = await E(repo.git).status();
-  t.true(status.some(row => row.path === 'nested/target.txt'));
+  t.true(status.entries.some(row => row.path === 'nested/target.txt'));
 
   await t.throwsAsync(
     () => provisionMatrixRepo({ path: '../escaped.txt', content: 'nope\n' }),
