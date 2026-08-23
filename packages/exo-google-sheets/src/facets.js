@@ -33,7 +33,7 @@ import {
   SpreadsheetWriteOnlyInterface,
   SpreadsheetWriterInterface,
 } from './interfaces.js';
-import { partScope } from './a1.js';
+import { partScope, rangeScope } from './a1.js';
 
 /**
  * @import { Scope } from './a1.js'
@@ -180,7 +180,7 @@ export const makeReader = powers =>
       /** @param {string} name */
       sheet: name => makeReader(powers.narrow({ sheet: name })),
       /** @param {string} selector */
-      range: selector => makeReader(powers.narrow({ range: selector })),
+      range: selector => makeReader(powers.narrow(rangeScope(selector))),
       help: () => 'Spreadsheet: confined read-only Google Sheets capability.',
     }),
   );
@@ -203,7 +203,7 @@ export const makeAppender = powers =>
       /** @param {string} name */
       sheet: name => makeAppender(powers.narrow({ sheet: name })),
       /** @param {string} selector */
-      range: selector => makeAppender(powers.narrow({ range: selector })),
+      range: selector => makeAppender(powers.narrow(rangeScope(selector))),
       help: () =>
         'SpreadsheetAppender: confined append-only Google Sheets capability.',
     }),
@@ -227,7 +227,7 @@ export const makeWriteOnly = powers =>
       /** @param {string} name */
       sheet: name => makeWriteOnly(powers.narrow({ sheet: name })),
       /** @param {string} selector */
-      range: selector => makeWriteOnly(powers.narrow({ range: selector })),
+      range: selector => makeWriteOnly(powers.narrow(rangeScope(selector))),
       help: () =>
         'SpreadsheetWriteOnly: confined write-only Google Sheets capability.',
     }),
@@ -267,7 +267,7 @@ export const makeWriter = powers => {
       /** @param {string} name */
       sheet: name => makeWriter(narrow({ sheet: name })),
       /** @param {string} selector */
-      range: selector => makeWriter(narrow({ range: selector })),
+      range: selector => makeWriter(narrow(rangeScope(selector))),
       readOnly: () => makeReader(powers.read),
       appendOnly: () => makeAppender(powers.append),
       writeOnly: () => makeWriteOnly(powers.write),

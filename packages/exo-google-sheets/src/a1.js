@@ -50,15 +50,33 @@ export const parseA1 = value => {
   const match = /^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/i.exec(cells);
   if (!match) return undefined;
   const [, startColumn, startRow, endColumn, endRow] = match;
+  const firstColumn = columnNumber(startColumn);
+  const firstRow = Number(startRow);
+  const lastColumn = columnNumber(endColumn || startColumn);
+  const lastRow = Number(endRow || startRow);
+  if (
+    !Number.isSafeInteger(firstColumn) ||
+    !Number.isSafeInteger(firstRow) ||
+    !Number.isSafeInteger(lastColumn) ||
+    !Number.isSafeInteger(lastRow) ||
+    firstColumn < 1 ||
+    firstRow < 1 ||
+    lastColumn < 1 ||
+    lastRow < 1
+  ) {
+    return undefined;
+  }
+  const sheet =
+    sheetPart && sheetPart.startsWith("'") && sheetPart.endsWith("'")
+      ? sheetPart.slice(1, -1).replace(/''/g, "'")
+      : sheetPart;
+  if (sheet === '') return undefined;
   return harden({
-    sheet:
-      sheetPart && sheetPart.startsWith("'") && sheetPart.endsWith("'")
-        ? sheetPart.slice(1, -1).replace(/''/g, "'")
-        : sheetPart,
-    left: columnNumber(startColumn),
-    top: Number(startRow),
-    right: columnNumber(endColumn || startColumn),
-    bottom: Number(endRow || startRow),
+    sheet,
+    left: Math.min(firstColumn, lastColumn),
+    top: Math.min(firstRow, lastRow),
+    right: Math.max(firstColumn, lastColumn),
+    bottom: Math.max(firstRow, lastRow),
   });
 };
 harden(parseA1);
@@ -116,3 +134,24 @@ export const partScope = designation => {
     : harden({ range: designation });
 };
 harden(partScope);
+
+/**
+ * Read a range designation as a structurally comparable scope. Unlike
+ * `partScope`, this never interprets a non-A1 string as a tab name: callers of
+ * the explicit `range()` method asked to narrow cells, so an unbounded, named,
+ * or malformed selector cannot safely establish that boundary.
+ *
+ * @param {string} designation
+ * @returns {Scope}
+ */
+export const rangeScope = designation => {
+  if (typeof designation !== 'string' || designation.length === 0)
+    throw new TypeError('range must be a non-empty A1 rectangle');
+  const parsed = parseA1(designation);
+  if (!parsed)
+    throw new TypeError('range scope must be a bounded A1 rectangle');
+  return parsed.sheet
+    ? harden({ sheet: parsed.sheet, range: designation })
+    : harden({ range: designation });
+};
+harden(rangeScope);

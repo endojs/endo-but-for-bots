@@ -22,16 +22,35 @@
 
 import { M } from '@endo/patterns';
 
-const CellValuesShape = M.arrayOf(M.arrayOf(M.scalar()));
+const CellValueShape = M.or(M.string(), M.number(), M.boolean(), M.null());
+const CellValuesShape = M.arrayOf(M.arrayOf(CellValueShape));
 const UpdateShape = M.splitRecord(
   { range: M.string(), values: CellValuesShape },
+  {},
+);
+const SheetInfoShape = M.splitRecord(
+  {
+    sheetId: M.number(),
+    title: M.string(),
+    index: M.number(),
+    rowCount: M.number(),
+    columnCount: M.number(),
+  },
+  {},
+);
+const UpdatedCellsShape = M.splitRecord(
+  { updatedRange: M.string(), updatedCells: M.number() },
+  {},
+);
+const AppendedRowsShape = M.splitRecord(
+  { updatedRange: M.string(), appendedRows: M.number() },
   {},
 );
 
 /** The read-only surface: no method here can change a cell. */
 export const SpreadsheetInterface = M.interface('Spreadsheet', {
   title: M.callWhen().returns(M.string()),
-  sheets: M.callWhen().returns(M.arrayOf(M.record())),
+  sheets: M.callWhen().returns(M.arrayOf(SheetInfoShape)),
   part: M.call(M.string()).returns(M.remotable('Spreadsheet')),
   sheet: M.call(M.string()).returns(M.remotable('Spreadsheet')),
   range: M.call(M.string()).returns(M.remotable('Spreadsheet')),
@@ -55,7 +74,7 @@ export const SpreadsheetInterface = M.interface('Spreadsheet', {
  */
 export const SpreadsheetWriterInterface = M.interface('SpreadsheetWriter', {
   title: M.callWhen().returns(M.string()),
-  sheets: M.callWhen().returns(M.arrayOf(M.record())),
+  sheets: M.callWhen().returns(M.arrayOf(SheetInfoShape)),
   part: M.call(M.string()).returns(M.remotable('SpreadsheetWriter')),
   sheet: M.call(M.string()).returns(M.remotable('SpreadsheetWriter')),
   range: M.call(M.string()).returns(M.remotable('SpreadsheetWriter')),
@@ -70,9 +89,11 @@ export const SpreadsheetWriterInterface = M.interface('SpreadsheetWriter', {
   // reject every call, since a result checked as Passable cannot be one.
   follow: M.call(M.string()).returns(M.raw()),
   help: M.call().returns(M.string()),
-  write: M.callWhen(M.string(), CellValuesShape).returns(M.record()),
-  writeBatch: M.callWhen(M.arrayOf(UpdateShape)).returns(M.arrayOf(M.record())),
-  append: M.callWhen(M.string(), CellValuesShape).returns(M.record()),
+  write: M.callWhen(M.string(), CellValuesShape).returns(UpdatedCellsShape),
+  writeBatch: M.callWhen(M.arrayOf(UpdateShape)).returns(
+    M.arrayOf(UpdatedCellsShape),
+  ),
+  append: M.callWhen(M.string(), CellValuesShape).returns(AppendedRowsShape),
   clear: M.callWhen(M.string()).returns(),
   readOnly: M.call().returns(M.remotable('Spreadsheet')),
   appendOnly: M.call().returns(M.remotable('SpreadsheetAppender')),
@@ -97,7 +118,7 @@ export const SpreadsheetControlInterface = M.interface('SpreadsheetControl', {
 
 /** Append is its own authority class: it may add rows and read nothing. */
 export const SpreadsheetAppenderInterface = M.interface('SpreadsheetAppender', {
-  append: M.callWhen(M.string(), CellValuesShape).returns(M.record()),
+  append: M.callWhen(M.string(), CellValuesShape).returns(AppendedRowsShape),
   part: M.call(M.string()).returns(M.remotable('SpreadsheetAppender')),
   sheet: M.call(M.string()).returns(M.remotable('SpreadsheetAppender')),
   range: M.call(M.string()).returns(M.remotable('SpreadsheetAppender')),
@@ -108,7 +129,7 @@ export const SpreadsheetAppenderInterface = M.interface('SpreadsheetAppender', {
 export const SpreadsheetWriteOnlyInterface = M.interface(
   'SpreadsheetWriteOnly',
   {
-    write: M.callWhen(M.string(), CellValuesShape).returns(M.record()),
+    write: M.callWhen(M.string(), CellValuesShape).returns(UpdatedCellsShape),
     clear: M.callWhen(M.string()).returns(),
     part: M.call(M.string()).returns(M.remotable('SpreadsheetWriteOnly')),
     sheet: M.call(M.string()).returns(M.remotable('SpreadsheetWriteOnly')),

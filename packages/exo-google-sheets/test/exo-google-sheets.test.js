@@ -3,6 +3,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E, makeLoopback } from '@endo/captp';
 import harden from '@endo/harden';
 import { makeExoSpreadsheet } from '../index.js';
+import { parseA1, sheetPrefix } from '../src/a1.js';
 import { makeReader } from '../src/facets.js';
 import { makeReadPowers } from '../src/powers.js';
 
@@ -38,7 +39,27 @@ const makeClient = () => {
       },
     },
     spreadsheets: {
-      get: async () => ({ properties: { title: 'Tasks' }, sheets: [] }),
+      get: async () => ({
+        properties: { title: 'Tasks' },
+        sheets: [
+          {
+            properties: {
+              sheetId: 1,
+              title: 'Tasks',
+              index: 0,
+              gridProperties: { rowCount: 100, columnCount: 10 },
+            },
+          },
+          {
+            properties: {
+              sheetId: 2,
+              title: 'Secrets',
+              index: 1,
+              gridProperties: { rowCount: 50, columnCount: 5 },
+            },
+          },
+        ],
+      }),
     },
   };
 };
@@ -63,8 +84,15 @@ test('facets attenuate permissions and range scope over loopback CapTP', async t
   t.is(reader.write, undefined);
   t.is(appender.read, undefined);
   await E(E(writer).range('Tasks!A1:B2')).write('A1', [['x']]);
+  await t.throwsAsync(
+    E(E(writer).range('Tasks!A1:B2')).write('Other!A1', [['x']]),
+    { message: /sheet scope/ },
+  );
   await t.throwsAsync(E(E(writer).range('Tasks!A1:B2')).write('C1', [['x']]), {
     message: /escapes/,
+  });
+  await t.throwsAsync(E(E(writer).range('Tasks!A1:B2')).write('A:A', [['x']]), {
+    message: /confined/,
   });
   await E(control).setAllowedSheets(['Tasks']);
   await t.throwsAsync(E(writer).write('Other!A1', [['x']]), {
@@ -104,7 +132,7 @@ test('part() narrows the whole and composes, on every authority class', async t 
     ['name', 'done'],
     ['one', false],
   ]);
-  // …and parts compose.
+  // ...and parts compose.
   const cells = tab.part('A1:B2');
   t.deepEqual(await cells.read('A1:B2'), [
     ['name', 'done'],
@@ -119,7 +147,7 @@ test('part() narrows the whole and composes, on every authority class', async t 
   // reader, and narrowing a write-only facet yields a write-only facet.
   t.is(cells.write, undefined);
   t.is(writer.writeOnly().part('Tasks').read, undefined);
-  // …nor the reverse: attenuating a narrowed writer keeps the narrowing.
+  // ...nor the reverse: attenuating a narrowed writer keeps the narrowing.
   await t.throwsAsync(writer.part('Tasks!A1:B2').writeOnly().write('C1', []), {
     message: /escapes/,
   });
@@ -155,6 +183,43 @@ test('revoke stops metadata reads too', async t => {
   await t.throwsAsync(spreadsheet.title(), { message: /revoked/ });
   await t.throwsAsync(spreadsheet.sheets(), { message: /revoked/ });
   await t.throwsAsync(spreadsheet.read('Tasks!A1:B2'), { message: /revoked/ });
+});
+
+test('sheet metadata obeys facet and host scope', async t => {
+  const client = makeClient();
+  const { spreadsheet, control } = makeExoSpreadsheet(client);
+  await null;
+  const scopedSheets = await spreadsheet.sheet('Tasks').sheets();
+  t.deepEqual(
+    scopedSheets.map(({ title }) => title),
+    ['Tasks'],
+  );
+  control.setAllowedSheets(['Secrets']);
+  const allowedSheets = await spreadsheet.sheets();
+  t.deepEqual(
+    allowedSheets.map(({ title }) => title),
+    ['Secrets'],
+  );
+});
+
+test('A1 rectangles normalize corners and reject unsafe coordinates', t => {
+  t.deepEqual(parseA1('Tasks!Z9:A1'), parseA1('Tasks!A1:Z9'));
+  t.is(parseA1('A0'), undefined);
+  t.is(parseA1(`A${Number.MAX_SAFE_INTEGER + 1}`), undefined);
+  t.is(parseA1("''!A1"), undefined);
+  const quoted = parseA1(`${sheetPrefix("It's work!")}!A1`);
+  t.truthy(quoted);
+  t.is(quoted && quoted.sheet, "It's work!");
+});
+
+test('range narrowing accepts only bounded rectangles', async t => {
+  const { spreadsheet } = makeExoSpreadsheet(makeClient());
+  await null;
+  t.throws(() => spreadsheet.range('A:A'), { message: /bounded/ });
+  t.throws(() => spreadsheet.range('named-range'), { message: /bounded/ });
+  await t.throwsAsync(spreadsheet.range('A1:B2').read('Z1:A1'), {
+    message: /escapes/,
+  });
 });
 
 test('follow() polls on a granted timer, never an ambient one', async t => {
@@ -195,6 +260,34 @@ test('follow() polls on a granted timer, never an ambient one', async t => {
   ]);
   t.deepEqual(waits, [7000]);
   t.deepEqual(await follower.return(), { done: true, value: undefined });
+});
+
+test('a zero poll interval is preserved', async t => {
+  const client = makeClient();
+  const waits = [];
+  const { spreadsheet } = makeExoSpreadsheet(client, {
+    pollIntervalMs: 0,
+    setTimeout: (callback, ms) => {
+      waits.push(ms);
+      client.values.update('Tasks!A1:B2', [['changed']]);
+      callback();
+    },
+  });
+  const follower = spreadsheet.follow('Tasks!A1:B2');
+  await follower.next();
+  await follower.next();
+  t.deepEqual(waits, [0]);
+  await follower.return();
+});
+
+test('constructor limits reject invalid zero values', t => {
+  t.throws(() => makeExoSpreadsheet(makeClient(), { maxCellsPerRead: 0 }), {
+    message: /max cells/,
+  });
+  t.throws(
+    () => makeExoSpreadsheet(makeClient(), { maxRequestsPerMinute: 0 }),
+    { message: /request limit/ },
+  );
 });
 
 test('a host that grants no timer grants no polling', async t => {
@@ -242,6 +335,7 @@ test('a facet builds over powers alone, with no client in reach', async t => {
         /** @param {any[][]} values */
         boundCells: values => harden(values.map(row => harden([...row]))),
         pollIntervalMs: () => 0,
+        boundSheets: sheets => harden(sheets),
       }),
       delay: async () => {},
     }),
@@ -250,7 +344,7 @@ test('a facet builds over powers alone, with no client in reach', async t => {
   t.deepEqual(await reader.part('Tasks').read('A1'), [['Tasks!A1']]);
   // Every read went out through the forwarder, carrying the facet's scope.
   t.deepEqual(admitted, [['A1', 'Tasks']]);
-  // …and there is still no write vocabulary to find, because none was passed.
+  // ...and there is still no write vocabulary to find, because none was passed.
   t.is(reader.write, undefined);
 });
 
@@ -262,4 +356,25 @@ test('the throttle bounds every request, metadata included', async t => {
   await spreadsheet.title();
   await spreadsheet.read('Tasks!A1:B2');
   await t.throwsAsync(spreadsheet.sheets(), { message: /throttle/ });
+});
+
+test('a rejected request does not spend the shared request budget', async t => {
+  const client = makeClient();
+  const { spreadsheet } = makeExoSpreadsheet(client, {
+    maxRequestsPerMinute: 1,
+  });
+  await t.throwsAsync(spreadsheet.sheet('Tasks').read('Other!A1'), {
+    message: /sheet scope/,
+  });
+  t.deepEqual(await spreadsheet.read('Tasks!A1:B2'), [
+    ['name', 'done'],
+    ['one', false],
+  ]);
+});
+
+test('cell guards reject capabilities and unsupported scalar types', async t => {
+  const { writer } = makeExoSpreadsheet(makeClient());
+  await t.throwsAsync(writer.write('Tasks!A1', [[1n]]), {
+    message: /Must match one of/,
+  });
 });

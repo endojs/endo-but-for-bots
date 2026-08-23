@@ -88,10 +88,16 @@ export const makePolicy = options => {
   let allowedSheets = null;
   /** @type {string[] | null} */
   let allowedRanges = null;
-  let maxCellsPerRead = options.maxCellsPerRead || DEFAULT_MAX_CELLS_PER_READ;
-  let pollIntervalMs = options.pollIntervalMs || DEFAULT_POLL_INTERVAL_MS;
+  let maxCellsPerRead = options.maxCellsPerRead ?? DEFAULT_MAX_CELLS_PER_READ;
+  let pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   let maxRequestsPerMinute =
-    options.maxRequestsPerMinute || DEFAULT_MAX_REQUESTS_PER_MINUTE;
+    options.maxRequestsPerMinute ?? DEFAULT_MAX_REQUESTS_PER_MINUTE;
+  if (!Number.isSafeInteger(maxCellsPerRead) || maxCellsPerRead < 1)
+    throw new TypeError('max cells must be positive');
+  if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 0)
+    throw new TypeError('poll interval must be non-negative');
+  if (!Number.isSafeInteger(maxRequestsPerMinute) || maxRequestsPerMinute < 1)
+    throw new TypeError('request limit must be positive');
   let tokens = maxRequestsPerMinute;
   let lastRefill = now();
 
@@ -119,11 +125,12 @@ export const makePolicy = options => {
       throw new TypeError('range must be a non-empty A1 string');
     const parsed = parseA1(selector);
     const scopeRange = scope.range ? parseA1(scope.range) : undefined;
-    const sheet =
-      parsed && parsed.sheet
-        ? parsed.sheet
-        : scope.sheet || (scopeRange && scopeRange.sheet);
-    if (scope.sheet && sheet && sheet !== scope.sheet)
+    if (scope.range && !scopeRange) throw new Error('Invalid range scope');
+    if (scopeRange && !parsed)
+      throw new Error('Range cannot be confined to the range scope');
+    const scopeSheet = scope.sheet || (scopeRange && scopeRange.sheet);
+    const sheet = parsed && parsed.sheet ? parsed.sheet : scopeSheet;
+    if (scopeSheet && sheet && sheet !== scopeSheet)
       throw new Error('Range escapes the sheet scope');
     if (allowedSheets && (!sheet || !allowedSheets.has(sheet)))
       throw new Error('Sheet is not allowed');
@@ -164,6 +171,26 @@ export const makePolicy = options => {
       return harden(values.map(row => harden([...row])));
     },
     pollIntervalMs: () => pollIntervalMs,
+    /**
+     * Keep metadata within both the facet's sheet designation and the host's
+     * current sheet allowlist.
+     *
+     * @param {any[]} sheets
+     * @param {Scope} scope
+     */
+    boundSheets: (sheets, scope) => {
+      const scopeRange = scope.range ? parseA1(scope.range) : undefined;
+      const scopeSheet = scope.sheet || (scopeRange && scopeRange.sheet);
+      return harden(
+        sheets.filter(({ properties }) => {
+          const title = properties && properties.title;
+          return (
+            (!scopeSheet || title === scopeSheet) &&
+            (!allowedSheets || allowedSheets.has(title))
+          );
+        }),
+      );
+    },
   });
 
   /** The host-side view: the knobs `SpreadsheetControl` turns. */
@@ -211,8 +238,11 @@ harden(makePolicy);
  */
 export const makeCaretaker = policy => {
   let revoked = false;
-  const enter = () => {
+  const assertActive = () => {
     if (revoked) throw new Error('Spreadsheet capability has been revoked');
+  };
+  const enter = () => {
+    assertActive();
     policy.charge();
   };
   return harden({
@@ -225,8 +255,10 @@ export const makeCaretaker = policy => {
      * @param {Scope} scope
      */
     admit: (selector, scope) => {
-      enter();
-      return policy.confine(selector, scope);
+      assertActive();
+      const confined = policy.confine(selector, scope);
+      policy.charge();
+      return confined;
     },
     revoke: () => {
       revoked = true;
@@ -271,9 +303,15 @@ export const makeReadPowers = ({
       /** @param {string} selector */
       designate: selector => access.admit(selector, scope),
       /** @param {object} fields */
-      describe: fields => {
+      describe: async fields => {
         access.enter();
-        return getSpreadsheet(fields);
+        const result = await getSpreadsheet(fields);
+        return harden({
+          ...result,
+          sheets: result.sheets
+            ? limits.boundSheets(result.sheets, scope)
+            : result.sheets,
+        });
       },
       /** @param {string} selector */
       read: async selector => {

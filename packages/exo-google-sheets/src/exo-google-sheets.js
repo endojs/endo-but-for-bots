@@ -32,6 +32,13 @@ import {
   makeWritePowers,
 } from './powers.js';
 
+/** @import { SheetsClient } from '@endo/google-sheets' */
+/**
+ * @typedef {object} ExoSheetsClient
+ * @property {Pick<SheetsClient['values'], 'get' | 'update' | 'append' | 'clear'>} values
+ * @property {Pick<SheetsClient['spreadsheets'], 'get'>} spreadsheets
+ */
+
 export {
   SpreadsheetAppenderInterface,
   SpreadsheetControlInterface,
@@ -51,7 +58,8 @@ export {
  * mutating classes, `revoke()` for all of them — which severs the caretakers
  * the facets reach the client through, and cannot be undone.
  *
- * @param {any} client A `@endo/google-sheets` client.
+ * @param {ExoSheetsClient} client The used subset of an
+ *   `@endo/google-sheets` client.
  * @param {object} [options]
  * @param {number} [options.maxRequestsPerMinute]
  * @param {number} [options.maxCellsPerRead]

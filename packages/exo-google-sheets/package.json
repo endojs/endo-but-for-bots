@@ -33,6 +33,7 @@
   },
   "devDependencies": {
     "@endo/captp": "workspace:^",
+    "@endo/google-sheets": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
