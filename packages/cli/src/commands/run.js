@@ -1,16 +1,11 @@
-import fs from 'fs';
 import url from 'url';
 import os from 'os';
 import path from 'path';
-import crypto from 'crypto';
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
-import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
-import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
-import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 
 import { withEndoAgent } from '../context.js';
@@ -141,15 +136,11 @@ export const run = async ({
         await runArchiveBytes(archiveBytes, powersP, args);
       } else {
         // Build a source-only archive on the fly from the file path.
-        const readPowers = makeReadPowers({ fs, url, crypto, path });
+        const { makeCliArchive } = await import('../cli-archive.js');
         const moduleLocation = url.pathToFileURL(
           path.resolve(/** @type {string} */ (filePath)),
         ).href;
-        const archiveBytes = await makeCompartmentArchive(
-          readPowers,
-          moduleLocation,
-          { parserForLanguage: sourceParserForLanguage },
-        );
+        const archiveBytes = await makeCliArchive(moduleLocation);
         await runArchiveBytes(archiveBytes, powersP, args);
       }
     },

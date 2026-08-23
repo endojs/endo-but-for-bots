@@ -339,6 +339,7 @@ export default defineConfig(
       'packages/bundle-source/scripts/',
       'packages/familiar/out/',
       'packages/module-source/test/fixtures/',
+      'packages/cli/test/fixtures/',
       'packages/module-source/src/external.types.js',
       'packages/parser-pipeline/test/fixture/*-error.js',
       'packages/pass-style/src/types.js',

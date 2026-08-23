@@ -10,6 +10,8 @@ import { netListenAllowed } from '../_net-permission.js';
 import * as counterExample from './counter-example.js';
 import * as doublerAgent from './doubler-agent.js';
 import * as confinedScript from './confined-script.js';
+import * as typescriptConfinedScript from './typescript-confined-script.js';
+import * as typescriptConfinedArtifacts from './typescript-confined-artifacts.js';
 import * as sendingMessages from './sending-messages.js';
 import * as namesInTransit from './names-in-transit.js';
 import * as mailboxesAreSymmetric from './mailboxes-are-symmetric.js';
@@ -98,6 +100,22 @@ testSerial(
   makeSectionTest(
     execaDemo,
     withContext(daemonContext)(confinedScript.section),
+  ),
+);
+
+testSerial(
+  'typescript-confined-script',
+  makeSectionTest(
+    execaDemo,
+    withContext(daemonContext)(typescriptConfinedScript.section),
+  ),
+);
+
+testSerial(
+  'typescript-confined-artifacts',
+  makeSectionTest(
+    execaDemo,
+    withContext(daemonContext)(typescriptConfinedArtifacts.section),
   ),
 );
 

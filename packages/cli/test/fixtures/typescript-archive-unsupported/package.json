@@ -1,0 +1,6 @@
+{
+  "name": "typescript-archive-unsupported-fixture",
+  "private": true,
+  "type": "module",
+  "main": "./main.js"
+}

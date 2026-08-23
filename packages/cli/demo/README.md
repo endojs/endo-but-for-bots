@@ -286,3 +286,17 @@ before exiting gracefully.
 Hello, World! [ 'a', 'b', 'c' ]
 42
 ```
+
+# TypeScript sources
+
+`endo run`, `endo make`, and `endo archive` all accept TypeScript sources.
+The CLI strips the types (it does not type-check) before confining the
+resulting JavaScript, so a caplet or runlet can be authored in `.ts`, `.mts`,
+or `.cts`.
+
+```
+> endo make typescript-counter.ts --name ts-counter
+Object [Alleged: Counter] {}
+> endo run typescript-runlet.ts a b c
+TypeScript confined: a, b, c
+```

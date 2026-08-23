@@ -47,6 +47,7 @@
     "@endo/promise-kit": "workspace:^",
     "@endo/stream-node": "workspace:^",
     "@endo/where": "workspace:^",
+    "amaro": "^1.1.11",
     "commander": "^5.0.0"
   },
   "devDependencies": {

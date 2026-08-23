@@ -1,0 +1,6 @@
+{
+  "name": "typescript-archive-commonjs-fixture",
+  "private": true,
+  "type": "commonjs",
+  "main": "./main.cjs"
+}

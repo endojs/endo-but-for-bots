@@ -1,14 +1,10 @@
-import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import url from 'url';
-import crypto from 'crypto';
 
-import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
-import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
-import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { E } from '@endo/eventual-send';
+import { makeCliArchive } from '../cli-archive.js';
 import { withEndoAgent } from '../context.js';
 import { parseOptionalPetNamePath } from '../pet-name.js';
 import { randomHex16 } from '../random.js';
@@ -61,13 +57,8 @@ export const makeCommand = async ({
       temporaryArchiveName = `tmp-archive-${await randomHex16()}`;
       archiveName = temporaryArchiveName;
     }
-    const readPowers = makeReadPowers({ fs, url, crypto, path });
     const moduleLocation = url.pathToFileURL(path.resolve(filePath)).href;
-    const archiveBytes = await makeCompartmentArchive(
-      readPowers,
-      moduleLocation,
-      { parserForLanguage: sourceParserForLanguage },
-    );
+    const archiveBytes = await makeCliArchive(moduleLocation);
     archiveReaderRef = bytesReaderFromIterator([archiveBytes]);
   }
 

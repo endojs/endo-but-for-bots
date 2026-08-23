@@ -1,24 +1,20 @@
 import os from 'os';
-import fs from 'fs';
 import url from 'url';
 import path from 'path';
-import crypto from 'crypto';
 import { E } from '@endo/eventual-send';
-import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
-import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
-import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
+import { makeCliArchive } from '../cli-archive.js';
 import { withEndoAgent } from '../context.js';
 import { parsePetNamePath } from '../pet-name.js';
+
+/** @import { ArchiveOptions } from '@endo/compartment-mapper' */
 
 /**
  * `endo archive <application-path>` command.
  *
- * Creates a source-only ZIP archive of the application at
- * `applicationPath` (a directory with a `package.json`) using
- * @endo/compartment-mapper's `makeArchive` with the source parsers
- * from `@endo/compartment-mapper/import-parsers.js`.  The archive is
- * stored as a readable blob on the specified agent.
+ * Creates a source-only ZIP archive of the application at `applicationPath`
+ * (a directory with a `package.json`) and stores it as a readable blob on the
+ * specified agent.
  *
  * @param {object} args
  * @param {string} args.applicationPath - Path to the application
@@ -26,8 +22,8 @@ import { parsePetNamePath } from '../pet-name.js';
  * @param {string | undefined} args.archiveName - Pet name to give the
  *   stored blob (optional).
  * @param {string[] | undefined} args.agentNames
- * @param {object} [args.archiveOptions] - Extra options passed to
- *   `makeArchive`.
+ * @param {ArchiveOptions} [args.archiveOptions] - Extra options augmenting the
+ *   defaults passed to `makeCliArchive`.
  */
 export const archiveCommand = async ({
   applicationPath,
@@ -35,18 +31,10 @@ export const archiveCommand = async ({
   agentNames,
   archiveOptions = {},
 }) => {
-  const readPowers = makeReadPowers({ fs, url, crypto, path });
   const moduleLocation = url.pathToFileURL(
     path.resolve(process.cwd(), applicationPath),
   ).href;
-  const archiveBytes = await makeCompartmentArchive(
-    readPowers,
-    moduleLocation,
-    {
-      ...archiveOptions,
-      parserForLanguage: sourceParserForLanguage,
-    },
-  );
+  const archiveBytes = await makeCliArchive(moduleLocation, archiveOptions);
   assert(archiveName === undefined || typeof archiveName === 'string');
   const archivePath = archiveName && parsePetNamePath(archiveName);
   const readerRef = bytesReaderFromIterator([archiveBytes]);
