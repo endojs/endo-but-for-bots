@@ -244,7 +244,7 @@ In this example, "alice" send the doubler back to us, their host.
 > endo send @host --as alice-agent 'This is the @doubler you sent me.'
 > endo inbox
 0. "alice" sent "This is the @doubler you sent me."
-> endo adopt 0 doubler doubler-from-alice
+> endo adopt 0 doubler --name doubler-from-alice
 > endo dismiss 0
 ```
 
