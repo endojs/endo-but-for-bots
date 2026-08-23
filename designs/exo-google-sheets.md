@@ -109,15 +109,28 @@ read and write authority can be separated all the way down.
 
 - **Scope axis (coarse → fine).** A *group of spreadsheets* (the account
   surface, a `SheetsService`) narrows to a *single spreadsheet*, which narrows
-  to a *single sheet/tab* (`sheet(title)`), which narrows to a *range within a
-  sheet* (`range('A1:C10')`). Root-level account authority exists and is
-  narrowed *electively*; the coarse handle is never derivable from a fine one.
+  to a *single sheet/tab*, which narrows to a *range within a sheet*. The verb
+  is mereological — `whole.part(designation)` returns a narrower whole of the
+  same authority class, so the steps compose (`part('Tasks').part('A1:C10')`)
+  and one designation may name both axes (`part('Tasks!A1:C10')`).
+  `sheet(title)` and `range(a1)` remain as the explicit spelling; `sheet` in
+  particular is the disambiguator for the one designation `part` cannot read on
+  its own, a tab whose title is itself A1-shaped. Root-level account authority
+  exists and is narrowed *electively*; the coarse handle is never derivable
+  from a fine one.
 - **Permission axis (read ⇄ write, mutually exclusive slices).** A read-write
   facet attenuates to `readOnly()` (observe, never mutate), `appendOnly()` (a
   blind producer that can add rows but neither read nor overwrite), or
   `writeOnly()` (overwrite without read-back). Splitting append/write/read into
   distinct facets lets two parties share one sheet as a queue — one appends,
   the other reads — without either holding the other's authority.
+
+The two axes are orthogonal in both directions, and structurally so: narrowing
+the part never widens the verbs, because a narrowed facet is minted by the same
+constructor; attenuating the verbs never widens the part, because `readOnly()`
+and its siblings pass along powers already bound to the current designation.
+`writer.part('Tasks').writeOnly()` and `writer.writeOnly().part('Tasks')` land
+in the same place.
 
 The per-spreadsheet facets, from broadest to narrowest authority:
 `SpreadsheetControl` (host-side caretaker), `SpreadsheetWriter` (read-write,
@@ -163,12 +176,13 @@ interface Spreadsheet {
   // Read-only facet. Default grant.
   title(): Promise<string>;
   sheets(): Promise<SheetInfo[]>;
+  part(designation: string): Spreadsheet;     // narrow to a tab and/or range
   sheet(title: string): Spreadsheet;          // narrow scope to one tab
   range(a1: string): Spreadsheet;             // narrow scope to one range
   read(range: string): Promise<CellValue[][]>;          // A1 notation
   readBatch(ranges: string[]): Promise<CellValue[][][]>;
   readRecords(range: string): Promise<Record<string, CellValue>[]>;
-  follow(range: string): AsyncIterableIterator<RangeChange>;
+  follow(range: string): PassableReader<RangeChange>;
   help(): string;
 }
 
@@ -184,6 +198,7 @@ interface SpreadsheetWriter /* extends Spreadsheet */ {
   appendOnly(): SpreadsheetAppender;          // add rows, no read, no overwrite
   writeOnly(): SpreadsheetWriteOnly;          // overwrite, no read-back
   // Scope-axis attenuators:
+  part(designation: string): SpreadsheetWriter;
   sheet(title: string): SpreadsheetWriter;    // tab-scoped writer
   range(a1: string): SpreadsheetWriter;       // range-scoped writer
 }
@@ -191,8 +206,8 @@ interface SpreadsheetWriter /* extends Spreadsheet */ {
 interface SpreadsheetAppender {
   // Blind producer — a queue's write end. Cannot read or overwrite.
   append(range: string, rows: CellValue[][]): Promise<AppendResult>;
+  part(sheet: string): SpreadsheetAppender;
   sheet(title: string): SpreadsheetAppender;
-  range(a1: string): SpreadsheetAppender;
   help(): string;
 }
 
@@ -200,6 +215,7 @@ interface SpreadsheetWriteOnly {
   // Overwrite without read-back; symmetric with readOnly.
   write(range: string, values: CellValue[][]): Promise<UpdateResult>;
   clear(range: string): Promise<void>;
+  part(designation: string): SpreadsheetWriteOnly;
   sheet(title: string): SpreadsheetWriteOnly;
   range(a1: string): SpreadsheetWriteOnly;
   help(): string;
@@ -218,15 +234,17 @@ interface SpreadsheetControl {
   // Host-side caretaker. Never granted to guests.
   setAllowedSheets(titles: string[] | null): void;  // null = all tabs
   setAllowedRanges(a1: string[] | null): void;       // null = whole tab(s)
-  setReadOnly(flag: boolean): void;
   setMaxCellsPerRead(n: number): void;
+  setMaxCellsPerWrite(n: number): void;
   setPollIntervalMs(ms: number): void;
-  revoke(): void;
+  setMaxRequestsPerMinute(n: number): void;
+  revokeWrites(): void;  // sever append+overwrite; reads survive
+  revoke(): void;        // sever everything
   help(): string;
 }
 
 type UpdateResult = { updatedRange: string, updatedCells: number };
-type AppendResult = { updatedRange: string, appendedRows: number };
+type AppendResult = { appendedRows: number };
 type RangeChange = { range: string, values: CellValue[][], revision: string };
 ```
 
@@ -248,6 +266,13 @@ type RangeChange = { range: string, values: CellValue[][], revision: string };
   `EndoMount` confines paths and `HttpClient` confines origins. A tab-scoped
   facet minted by `sheet('Tasks')` rejects ranges naming any other tab and
   treats bare ranges (`'A1:C10'`) as scoped to its tab.
+  A facet minted by `range()` uses a bounded rectangle because confinement
+  must be structurally comparable. Reads always require bounded rectangles so
+  `maxCellsPerRead` can reject oversized requests before fetching. Mutating
+  root-scoped mutating facets may still use whole-row, whole-column, or named
+  selectors. Sheet-scoped facets may use whole-row or whole-column selectors;
+  named ranges cannot be qualified with a sheet, so they cannot establish a
+  sheet or range boundary.
 - **Rectangles** are `CellValue[][]` (rows of columns), hardened copyable
   arrays: the same shape the REST API uses, cheap to marshal.
 - **Records** (`readRecords`) treat row 1 of the range as a header row and
@@ -263,8 +288,16 @@ host mints `{ spreadsheet, writer, control }` once; it typically grants
 `spreadsheet` by pet name (`budget`) and withholds `writer` unless the use
 case demands it (`budget-writer`). `writer.readOnly()` lets an agent that
 holds write authority delegate a read-only view onward, mirroring
-`EndoMount.readOnly()`. `control.setReadOnly(true)` is the caretaker's
-emergency brake over already-granted writers, on top of revocation.
+`EndoMount.readOnly()`. `control.revokeWrites()` is the caretaker's emergency
+brake over already-granted writers: it severs the revocable forwarder the
+append and overwrite facets reach the client through, leaving outstanding
+readers working. It is deliberately not a `setReadOnly(flag)` the host can
+toggle back — a boolean guarding a write path means the writer still *holds*
+write authority and is merely being asked not to use it, so a missed check
+anywhere reinstates it. Withholding or severing the authority is the whole
+enforcement; there is no mode for code to consult (see the attenuation
+discipline in [pola-io](https://www.npmjs.com/package/@agoric/pola-io), whose
+`FileRW.readOnly()` likewise mints a `FileRd` rather than setting a flag).
 
 The permission axis is a lattice, not a two-state switch, because different
 parties often need to touch one sheet without holding each other's authority:
@@ -272,16 +305,19 @@ parties often need to touch one sheet without holding each other's authority:
 - **`appendOnly()`** yields a `SpreadsheetAppender` — a *blind producer* that
   can add rows but can neither read existing contents nor overwrite them. This
   is the write end of a **Google Sheet used as a queue**: a producer holds an
-  appender, a consumer holds a `readOnly()` (or `follow()`) view, and neither
-  can do the other's job. A sheet-as-queue is the motivating use case for the
+  sheet-scoped appender, a consumer holds a `readOnly()` (or `follow()`) view,
+  and neither can do the other's job. A sheet-as-queue is the motivating use case for the
   push/pubsub follow-up (see Change notification and Open Question 2).
 - **`writeOnly()`** yields a `SpreadsheetWriteOnly` — overwrite without
   read-back, the symmetric partner of `readOnly()`, for a party that should set
   cells (a status board, a rendered report) without observing what was there.
 
-Because each attenuator narrows and never widens, a holder can always hand a
-peer a strictly smaller slice — a range-scoped appender for one tab — without
-the host re-minting anything.
+Because each attenuator narrows and never widens, a holder can hand a peer a
+sheet-scoped appender without the host re-minting anything. Range-scoped append
+is rejected because Google's append API chooses the destination row from live
+table contents and cannot guarantee a rectangular boundary before mutation.
+For the same reason, setting the host's `allowedRanges` policy disables append;
+hosts that grant append authority must confine it with `allowedSheets` instead.
 
 This is deliberately finer than what the underlying OAuth token can express:
 a Google token scoped `spreadsheets.readonly` cannot write anywhere, but a
@@ -303,8 +339,10 @@ carry `setAllowedPaths` patterns pinned to the granted spreadsheet ids.
 - **The exo throttles before Google does.** A token-bucket rate limit inside
   the exo (tunable via the control facet) keeps one enthusiastic agent from
   burning the whole project's quota and turns overrun into fast local
-  errors rather than remote 429s. `setMaxCellsPerRead` bounds response
-  sizes the same way `HttpClient.setMaxResponseBytes` does.
+  errors rather than remote 429s. The bucket is intentionally shared by all
+  facets from one host grant because they spend the same project quota.
+  `setMaxCellsPerRead` rejects unbounded or oversized ranges before fetching,
+  then checks the returned cell count defensively too.
 - **Batching is first-class.** `readBatch` and `writeBatch` map to
   `values.batchGet` / `values.batchUpdate`, one HTTP call each. Agents
   should batch; the interface makes the batched path as convenient as the
@@ -313,9 +351,9 @@ carry `setAllowedPaths` patterns pinned to the granted spreadsheet ids.
 
 ### Change notification
 
-`follow(range)` returns an async iterator of `RangeChange` events, following
-the daemon's established `followMessages` / `followNameChanges` subscription
-idiom. v1 implements it by **polling**: the host-side exo re-reads the range
+`follow(range)` returns a passable `@endo/exo-stream` reader of `RangeChange`
+events; consumers adapt it to a local async iterator with `iterateReader`.
+v1 implements it by **polling**: the host-side exo re-reads the range
 on the control-facet-configured interval (default 30s), compares against the
 last snapshot, and yields on difference. Polling costs read quota, which the
 built-in throttle already accounts for.
@@ -392,7 +430,7 @@ service through a credential it cannot see.
    opts)` minting the per-spreadsheet lattice with interface guards:
    `Spreadsheet`/`SpreadsheetWriter`/`SpreadsheetControl` plus the
    `readOnly()`/`appendOnly()`/`writeOnly()` permission attenuators and the
-   `sheet()`/`range()` scope attenuators; range confinement; token-bucket
+   `part()`/`sheet()`/`range()` scope attenuators; range confinement; token-bucket
    throttle; `readRecords`; polling `follow`. Tests drive the facets over a
    loopback CapTP connection against the stubbed client. (`SheetsService`
    group facet and `SpreadsheetStructure` land as thin follow-on layers over
@@ -427,7 +465,7 @@ block on any unimplemented dependency; the OAuth exo is stubbed as a bare
    a token, so there is nothing to audit for leaks and nothing to reinvent.
 3. **A full coarse-to-fine scope lattice.** Grants run from a group of
    spreadsheets (`SheetsService`, root account authority) → one spreadsheet →
-   one tab (`sheet`) → one range (`range`). Root-level authority *exists* and
+   one tab (`part` or `sheet`) → one range (`part` or `range`). Root-level authority *exists* and
    is narrowed *electively* rather than being synthesized bottom-up: this is
    the ocap-correct direction (hold broad, hand out narrow), and it keeps the
    common per-spreadsheet grant as just one rung of the same ladder rather than
@@ -446,7 +484,7 @@ block on any unimplemented dependency; the OAuth exo is stubbed as a bare
    guessed coercion.
 6. **Polling `follow` first, push later, same contract.** Push requires the
    webhook substrate and still needs a read to learn what changed; polling
-   ships value now and the async-iterator contract survives the swap.
+   ships value now and the passable-reader contract survives the swap.
 7. **Throttle and size-bound inside the exo.** Quota is a shared resource
    across every consumer of the host's Google project; the capability that
    spends it carries its own governor, adjustable from the control facet.

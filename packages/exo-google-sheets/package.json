@@ -1,0 +1,60 @@
+{
+  "name": "@endo/exo-google-sheets",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Attenuated CapTP facets for Google Sheets",
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/exo-google-sheets"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint:types": "tsc",
+    "lint:eslint": "eslint .",
+    "test": "ava"
+  },
+  "dependencies": {
+    "@endo/exo": "workspace:^",
+    "@endo/exo-stream": "workspace:^",
+    "@endo/harden": "workspace:^",
+    "@endo/patterns": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/captp": "workspace:^",
+    "@endo/google-sheets": "workspace:^",
+    "@endo/init": "workspace:^",
+    "@endo/ses-ava": "workspace:^",
+    "@fast-check/ava": "catalog:dev",
+    "ava": "catalog:dev",
+    "eslint": "catalog:dev",
+    "typescript": "catalog:dev"
+  },
+  "files": [
+    "./*.js",
+    "src",
+    "LICENSE*",
+    "SECURITY*"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.js"
+    ],
+    "timeout": "2m"
+  }
+}

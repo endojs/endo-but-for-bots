@@ -1907,6 +1907,25 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/exo-google-sheets@workspace:packages/exo-google-sheets":
+  version: 0.0.0-use.local
+  resolution: "@endo/exo-google-sheets@workspace:packages/exo-google-sheets"
+  dependencies:
+    "@endo/captp": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
+    "@endo/google-sheets": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    "@fast-check/ava": "catalog:dev"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/exo-http-client@workspace:^, @endo/exo-http-client@workspace:packages/exo-http-client":
   version: 0.0.0-use.local
   resolution: "@endo/exo-http-client@workspace:packages/exo-http-client"
@@ -2241,7 +2260,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/google-sheets@workspace:packages/google-sheets":
+"@endo/google-sheets@workspace:^, @endo/google-sheets@workspace:packages/google-sheets":
   version: 0.0.0-use.local
   resolution: "@endo/google-sheets@workspace:packages/google-sheets"
   dependencies:

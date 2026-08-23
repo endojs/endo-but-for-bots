@@ -34,6 +34,10 @@ export interface SheetsClient {
       values: unknown[][],
       options?: Record<string, unknown>,
     ): Promise<any>;
+    batchUpdate(
+      updates: { range: string; values: unknown[][] }[],
+      options?: Record<string, unknown>,
+    ): Promise<any>;
     append(
       range: string,
       values: unknown[][],
@@ -45,6 +49,7 @@ export interface SheetsClient {
   getValues: SheetsClient['values']['get'];
   batchGetValues: SheetsClient['values']['batchGet'];
   updateValues: SheetsClient['values']['update'];
+  batchUpdateValues: SheetsClient['values']['batchUpdate'];
   appendValues: SheetsClient['values']['append'];
   clearValues: SheetsClient['values']['clear'];
   getSpreadsheet: SheetsClient['spreadsheets']['get'];
