@@ -266,6 +266,10 @@ type RangeChange = { range: string, values: CellValue[][], revision: string };
   `EndoMount` confines paths and `HttpClient` confines origins. A tab-scoped
   facet minted by `sheet('Tasks')` rejects ranges naming any other tab and
   treats bare ranges (`'A1:C10'`) as scoped to its tab.
+  A facet minted by `range()` uses a bounded rectangle because confinement
+  must be structurally comparable; whole-row, whole-column, and named ranges
+  remain valid selectors for root- or sheet-scoped facets but cannot establish
+  a narrower range boundary.
 - **Rectangles** are `CellValue[][]` (rows of columns), hardened copyable
   arrays: the same shape the REST API uses, cheap to marshal.
 - **Records** (`readRecords`) treat row 1 of the range as a header row and
@@ -418,7 +422,7 @@ service through a credential it cannot see.
    opts)` minting the per-spreadsheet lattice with interface guards:
    `Spreadsheet`/`SpreadsheetWriter`/`SpreadsheetControl` plus the
    `readOnly()`/`appendOnly()`/`writeOnly()` permission attenuators and the
-   `sheet()`/`range()` scope attenuators; range confinement; token-bucket
+   `part()`/`sheet()`/`range()` scope attenuators; range confinement; token-bucket
    throttle; `readRecords`; polling `follow`. Tests drive the facets over a
    loopback CapTP connection against the stubbed client. (`SheetsService`
    group facet and `SpreadsheetStructure` land as thin follow-on layers over
@@ -453,7 +457,7 @@ block on any unimplemented dependency; the OAuth exo is stubbed as a bare
    a token, so there is nothing to audit for leaks and nothing to reinvent.
 3. **A full coarse-to-fine scope lattice.** Grants run from a group of
    spreadsheets (`SheetsService`, root account authority) → one spreadsheet →
-   one tab (`sheet`) → one range (`range`). Root-level authority *exists* and
+   one tab (`part` or `sheet`) → one range (`part` or `range`). Root-level authority *exists* and
    is narrowed *electively* rather than being synthesized bottom-up: this is
    the ocap-correct direction (hold broad, hand out narrow), and it keeps the
    common per-spreadsheet grant as just one rung of the same ladder rather than
