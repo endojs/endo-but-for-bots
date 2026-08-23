@@ -59,6 +59,7 @@ import { contains, parseA1, sheetPrefix } from './a1.js';
  */
 
 const DEFAULT_MAX_CELLS_PER_READ = 10_000;
+const DEFAULT_MAX_CELLS_PER_WRITE = 10_000;
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_REQUESTS_PER_MINUTE = 60;
 
@@ -190,6 +191,7 @@ harden(assertAppendFitsRange);
  * @param {() => number} options.now A monotonic-enough clock in milliseconds.
  * @param {number} [options.maxRequestsPerMinute]
  * @param {number} [options.maxCellsPerRead]
+ * @param {number} [options.maxCellsPerWrite]
  * @param {number} [options.pollIntervalMs]
  */
 export const makePolicy = options => {
@@ -201,20 +203,28 @@ export const makePolicy = options => {
   /** @type {string[] | null} */
   let allowedRanges = null;
   let maxCellsPerRead = options.maxCellsPerRead ?? DEFAULT_MAX_CELLS_PER_READ;
+  let maxCellsPerWrite =
+    options.maxCellsPerWrite ?? DEFAULT_MAX_CELLS_PER_WRITE;
   let pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   let maxRequestsPerMinute =
     options.maxRequestsPerMinute ?? DEFAULT_MAX_REQUESTS_PER_MINUTE;
   if (!Number.isSafeInteger(maxCellsPerRead) || maxCellsPerRead < 1)
     throw new TypeError('max cells must be positive');
+  if (!Number.isSafeInteger(maxCellsPerWrite) || maxCellsPerWrite < 1)
+    throw new TypeError('max write cells must be positive');
   if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 0)
     throw new TypeError('poll interval must be non-negative');
   if (!Number.isSafeInteger(maxRequestsPerMinute) || maxRequestsPerMinute < 1)
     throw new TypeError('request limit must be positive');
   let tokens = maxRequestsPerMinute;
   let lastRefill = now();
+  if (!Number.isFinite(lastRefill))
+    throw new TypeError('request clock must be finite');
 
   const charge = () => {
     const instant = now();
+    if (!Number.isFinite(instant) || instant < lastRefill)
+      throw new Error('request clock must be finite and monotonic');
     tokens = Math.min(
       maxRequestsPerMinute,
       tokens + ((instant - lastRefill) * maxRequestsPerMinute) / 60_000,
@@ -301,6 +311,17 @@ export const makePolicy = options => {
         throw new Error('Read exceeds maximum cell count');
       return harden(arrayMap(values, row => harden([...row])));
     },
+    /** @param {any[][]} values */
+    boundWriteCells: values => {
+      const count = arrayReduce(
+        values,
+        (total, row) => total + row.length,
+        0,
+      );
+      if (count > maxCellsPerWrite)
+        throw new Error('Write exceeds maximum cell count');
+      return harden(arrayMap(values, row => harden([...row])));
+    },
     pollIntervalMs: () => pollIntervalMs,
     /**
      * Keep metadata within both the facet's sheet designation and the host's
@@ -339,6 +360,12 @@ export const makePolicy = options => {
       if (!Number.isSafeInteger(value) || value < 1)
         throw new TypeError('max cells must be positive');
       maxCellsPerRead = value;
+    },
+    /** @param {number} value */
+    setMaxCellsPerWrite: value => {
+      if (!Number.isSafeInteger(value) || value < 1)
+        throw new TypeError('max write cells must be positive');
+      maxCellsPerWrite = value;
     },
     /** @param {number} value */
     setPollIntervalMs: value => {
@@ -479,8 +506,9 @@ harden(makeReadPowers);
  * @param {object} authority
  * @param {(range: string, rows: any[][]) => Promise<any>} authority.appendValues
  * @param {ReturnType<typeof makeCaretaker>} authority.access
+ * @param {ReturnType<typeof makePolicy>['limits']} authority.limits
  */
-export const makeAppendPowers = ({ appendValues, access }) => {
+export const makeAppendPowers = ({ appendValues, access, limits }) => {
   /** @param {Scope} scope */
   const at = scope =>
     harden({
@@ -493,8 +521,12 @@ export const makeAppendPowers = ({ appendValues, access }) => {
       append: async (selector, rows) => {
         if (scope.range)
           throw new Error('Append is not available on a range-scoped facet');
-        assertAppendFitsRange(selector, rows);
-        const result = await appendValues(access.admit(selector, scope), rows);
+        const boundedRows = limits.boundWriteCells(rows);
+        assertAppendFitsRange(selector, boundedRows);
+        const result = await appendValues(
+          access.admit(selector, scope),
+          boundedRows,
+        );
         return harden({
           updatedRange: result.updates.updatedRange,
           appendedRows: result.updates.updatedRows,
@@ -514,8 +546,9 @@ harden(makeAppendPowers);
  * @param {(range: string, values: any[][]) => Promise<any>} authority.updateValues
  * @param {(range: string) => Promise<any>} authority.clearValues
  * @param {ReturnType<typeof makeCaretaker>} authority.access
+ * @param {ReturnType<typeof makePolicy>['limits']} authority.limits
  */
-export const makeWritePowers = ({ updateValues, clearValues, access }) => {
+export const makeWritePowers = ({ updateValues, clearValues, access, limits }) => {
   /** @param {Scope} scope */
   const at = scope =>
     harden({
@@ -526,10 +559,11 @@ export const makeWritePowers = ({ updateValues, clearValues, access }) => {
        * @param {any[][]} values
        */
       update: async (selector, values) => {
-        assertWriteFitsScope(selector, values, scope);
+        const boundedValues = limits.boundWriteCells(values);
+        assertWriteFitsScope(selector, boundedValues, scope);
         const result = await updateValues(
           access.admit(selector, scope),
-          values,
+          boundedValues,
         );
         return harden({
           updatedRange: result.updatedRange,

@@ -9,6 +9,18 @@ import { contains, parseA1, sheetPrefix } from '../src/a1.js';
 import { cellRevision, makeReader } from '../src/facets.js';
 import { makePolicy, makeReadPowers, narrowScope } from '../src/powers.js';
 
+/** @param {number} number */
+const columnLetters = number => {
+  let current = number;
+  let letters = '';
+  while (current > 0) {
+    current -= 1;
+    letters = String.fromCharCode(65 + (current % 26)) + letters;
+    current = Math.floor(current / 26);
+  }
+  return letters;
+};
+
 const makeClient = () => {
   const calls = [];
   const values = new Map([
@@ -187,6 +199,11 @@ test('part() narrows the whole and composes, on every authority class', async t 
     boundedWriter.appendOnly().append('A1:B2', [[1, 2]]),
     { message: /not available/ },
   );
+  await t.throwsAsync(
+    writer.appendOnly().append('Tasks!A1:B2', [[1, 2, 3]]),
+    { message: /payload escapes/ },
+  );
+  await writer.appendOnly().append('Tasks!A1:B2', [[1, 2]]);
   t.is(client.calls.filter(([verb]) => verb === 'update').length, 0);
 });
 
@@ -297,9 +314,9 @@ test('rectangle containment is reflexive and transitive', t => {
 test('successful scope narrowing never widens its rectangle', t => {
   const rectangle = fc
     .tuple(
+      fc.integer({ min: 1, max: 700 }),
       fc.integer({ min: 1, max: 20 }),
-      fc.integer({ min: 1, max: 20 }),
-      fc.integer({ min: 1, max: 20 }),
+      fc.integer({ min: 1, max: 700 }),
       fc.integer({ min: 1, max: 20 }),
     )
     .map(([columnA, rowA, columnB, rowB]) => ({
@@ -309,11 +326,9 @@ test('successful scope narrowing never widens its rectangle', t => {
       right: Math.max(columnA, columnB),
       bottom: Math.max(rowA, rowB),
     }));
-  /** @param {number} number */
-  const column = number => String.fromCharCode(64 + number);
   /** @param {{ left: number, top: number, right: number, bottom: number }} range */
   const notation = range =>
-    `${column(range.left)}${range.top}:${column(range.right)}${range.bottom}`;
+    `${columnLetters(range.left)}${range.top}:${columnLetters(range.right)}${range.bottom}`;
   fc.assert(
     fc.property(rectangle, rectangle, (outer, patch) => {
       try {
@@ -334,9 +349,9 @@ test('successful scope narrowing never widens its rectangle', t => {
 test('confine never resolves a target outside its scope', t => {
   const rectangle = fc
     .tuple(
+      fc.integer({ min: 1, max: 700 }),
       fc.integer({ min: 1, max: 20 }),
-      fc.integer({ min: 1, max: 20 }),
-      fc.integer({ min: 1, max: 20 }),
+      fc.integer({ min: 1, max: 700 }),
       fc.integer({ min: 1, max: 20 }),
     )
     .map(([columnA, rowA, columnB, rowB]) => ({
@@ -346,11 +361,9 @@ test('confine never resolves a target outside its scope', t => {
       right: Math.max(columnA, columnB),
       bottom: Math.max(rowA, rowB),
     }));
-  /** @param {number} number */
-  const column = number => String.fromCharCode(64 + number);
   /** @param {{ left: number, top: number, right: number, bottom: number }} range */
   const notation = range =>
-    `${column(range.left)}${range.top}:${column(range.right)}${range.bottom}`;
+    `${columnLetters(range.left)}${range.top}:${columnLetters(range.right)}${range.bottom}`;
   const policy = makePolicy({ now: () => 0 });
   fc.assert(
     fc.property(rectangle, rectangle, (scopeRange, targetRange) => {
@@ -454,10 +467,55 @@ test('constructor limits reject invalid zero values', t => {
   t.throws(() => makeExoSpreadsheet(makeClient(), { maxCellsPerRead: 0 }), {
     message: /max cells/,
   });
+  t.throws(() => makeExoSpreadsheet(makeClient(), { maxCellsPerWrite: 0 }), {
+    message: /max write cells/,
+  });
   t.throws(
     () => makeExoSpreadsheet(makeClient(), { maxRequestsPerMinute: 0 }),
     { message: /request limit/ },
   );
+});
+
+test('mutation payloads obey the host cell cap', async t => {
+  const client = makeClient();
+  const { writer } = makeExoSpreadsheet(client, { maxCellsPerWrite: 2 });
+  await t.throwsAsync(writer.write('Tasks!A1:C1', [[1, 2, 3]]), {
+    message: /maximum cell count/,
+  });
+  await t.throwsAsync(writer.append('Tasks!A1:C1', [[1, 2, 3]]), {
+    message: /maximum cell count/,
+  });
+  t.deepEqual(client.calls, []);
+});
+
+test('the request clock must stay finite and monotonic', async t => {
+  let instant = 1;
+  const { spreadsheet } = makeExoSpreadsheet(makeClient(), {
+    now: () => instant,
+  });
+  instant = NaN;
+  await t.throwsAsync(spreadsheet.read('Tasks!A1'), {
+    message: /finite and monotonic/,
+  });
+  t.throws(() => makeExoSpreadsheet(makeClient(), { now: () => Infinity }), {
+    message: /clock must be finite/,
+  });
+  instant = 1;
+  const second = makeExoSpreadsheet(makeClient(), { now: () => instant });
+  instant = 0;
+  await t.throwsAsync(second.spreadsheet.read('Tasks!A1'), {
+    message: /finite and monotonic/,
+  });
+});
+
+test('column letters round-trip across the Z to AA boundary', t => {
+  fc.assert(
+    fc.property(fc.integer({ min: 1, max: 700 }), number => {
+      const parsed = parseA1(`${columnLetters(number)}1`);
+      return parsed !== undefined && parsed.left === number;
+    }),
+  );
+  t.pass();
 });
 
 test('bounded reads are rejected before fetching when they exceed the cap', async t => {
@@ -537,6 +595,8 @@ test('a facet builds over powers alone, with no client in reach', async t => {
         boundRange: selector => selector,
         /** @param {any[][]} values */
         boundCells: values => harden(values.map(row => harden([...row]))),
+        /** @param {any[][]} values */
+        boundWriteCells: values => harden(values),
         pollIntervalMs: () => 0,
         boundSheets: sheets => harden(sheets),
       }),

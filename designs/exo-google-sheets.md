@@ -236,6 +236,7 @@ interface SpreadsheetControl {
   setAllowedSheets(titles: string[] | null): void;  // null = all tabs
   setAllowedRanges(a1: string[] | null): void;       // null = whole tab(s)
   setMaxCellsPerRead(n: number): void;
+  setMaxCellsPerWrite(n: number): void;
   setPollIntervalMs(ms: number): void;
   setMaxRequestsPerMinute(n: number): void;
   revokeWrites(): void;  // sever append+overwrite; reads survive
@@ -303,16 +304,17 @@ parties often need to touch one sheet without holding each other's authority:
 - **`appendOnly()`** yields a `SpreadsheetAppender` — a *blind producer* that
   can add rows but can neither read existing contents nor overwrite them. This
   is the write end of a **Google Sheet used as a queue**: a producer holds an
-  sheet-scoped appender, a consumer holds a `readOnly()` (or `follow()`) view, and neither
-  can do the other's job. A sheet-as-queue is the motivating use case for the
+  sheet-scoped appender, a consumer holds a `readOnly()` (or `follow()`) view,
+  and neither can do the other's job. A sheet-as-queue is the motivating use case for the
   push/pubsub follow-up (see Change notification and Open Question 2).
 - **`writeOnly()`** yields a `SpreadsheetWriteOnly` — overwrite without
   read-back, the symmetric partner of `readOnly()`, for a party that should set
   cells (a status board, a rendered report) without observing what was there.
 
-Because each attenuator narrows and never widens, a holder can always hand a
-peer a strictly smaller slice — a range-scoped appender for one tab — without
-the host re-minting anything.
+Because each attenuator narrows and never widens, a holder can hand a peer a
+sheet-scoped appender without the host re-minting anything. Range-scoped append
+is rejected because Google's append API chooses the destination row from live
+table contents and cannot guarantee a rectangular boundary before mutation.
 
 This is deliberately finer than what the underlying OAuth token can express:
 a Google token scoped `spreadsheets.readonly` cannot write anywhere, but a

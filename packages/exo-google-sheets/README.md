@@ -5,6 +5,8 @@
 The default `spreadsheet` facet reads only.
 The separately minted `writer` facet can delegate read-only, append-only, and write-only facets, each of which can narrow to one tab or A1 range.
 The host retains `control` to constrain scopes, adjust limits and polling, sever write authority (`revokeWrites()`), or revoke every facet (`revoke()`).
+Read and mutation payload limits are independently adjustable with
+`setMaxCellsPerRead()` and `setMaxCellsPerWrite()`.
 
 Interface guards: `SpreadsheetInterface`, `SpreadsheetWriterInterface`,
 `SpreadsheetAppenderInterface`, `SpreadsheetWriteOnlyInterface`, and

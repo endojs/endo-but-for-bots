@@ -63,6 +63,7 @@ export {
  * @param {object} [options]
  * @param {number} [options.maxRequestsPerMinute]
  * @param {number} [options.maxCellsPerRead]
+ * @param {number} [options.maxCellsPerWrite]
  * @param {number} [options.pollIntervalMs]
  * @param {() => number} [options.now] Clock for the request throttle.
  * @param {((callback: () => void, ms: number) => unknown) | null} [options.setTimeout]
@@ -109,11 +110,13 @@ export const makeExoSpreadsheet = (client, options = {}) => {
   const append = makeAppendPowers({
     appendValues: (range, rows) => client.values.append(range, rows),
     access: mutateAccess,
+    limits: policy.limits,
   });
   const write = makeWritePowers({
     updateValues: (range, values) => client.values.update(range, values),
     clearValues: range => client.values.clear(range),
     access: mutateAccess,
+    limits: policy.limits,
   });
 
   // The default facet is built from the read powers alone, not attenuated down

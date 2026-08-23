@@ -105,6 +105,7 @@ export const SpreadsheetControlInterface = M.interface('SpreadsheetControl', {
   setAllowedSheets: M.call(M.or(M.arrayOf(M.string()), M.null())).returns(),
   setAllowedRanges: M.call(M.or(M.arrayOf(M.string()), M.null())).returns(),
   setMaxCellsPerRead: M.call(M.number()).returns(),
+  setMaxCellsPerWrite: M.call(M.number()).returns(),
   setPollIntervalMs: M.call(M.number()).returns(),
   setMaxRequestsPerMinute: M.call(M.number()).returns(),
   revokeWrites: M.call().returns(),
