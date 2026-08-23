@@ -35,7 +35,7 @@ import {
 /** @import { SheetsClient } from '@endo/google-sheets' */
 /**
  * @typedef {object} ExoSheetsClient
- * @property {Pick<SheetsClient['values'], 'get' | 'update' | 'append' | 'clear'>} values
+ * @property {Pick<SheetsClient['values'], 'get' | 'batchGet' | 'update' | 'batchUpdate' | 'append' | 'clear'>} values
  * @property {Pick<SheetsClient['spreadsheets'], 'get'>} spreadsheets
  */
 
@@ -102,6 +102,7 @@ export const makeExoSpreadsheet = (client, options = {}) => {
   // statement of what facets built over it can reach.
   const read = makeReadPowers({
     getValues: range => client.values.get(range),
+    batchGetValues: ranges => client.values.batchGet(ranges),
     getSpreadsheet: fields => client.spreadsheets.get(fields),
     access: readAccess,
     limits: policy.limits,
@@ -114,6 +115,7 @@ export const makeExoSpreadsheet = (client, options = {}) => {
   });
   const write = makeWritePowers({
     updateValues: (range, values) => client.values.update(range, values),
+    batchUpdateValues: updates => client.values.batchUpdate(updates),
     clearValues: range => client.values.clear(range),
     access: mutateAccess,
     limits: policy.limits,

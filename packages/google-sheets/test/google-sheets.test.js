@@ -51,6 +51,7 @@ test('values methods construct REST requests and parse responses', async t => {
     response(200, { values: [[1, 2]] }),
     response(200, { valueRanges: [] }),
     response(200, { updatedCells: 2 }),
+    response(200, { responses: [{ updatedCells: 2 }] }),
     response(200, { updates: { updatedRows: 1 } }),
     response(200, { clearedRange: 'Tasks!A1:C10' }),
     response(200, { properties: { title: 'Tasks' } }),
@@ -61,6 +62,12 @@ test('values methods construct REST requests and parse responses', async t => {
     valueRanges: [],
   });
   await client.values.update('Tasks!A1', [[1, 2]]);
+  t.deepEqual(
+    await client.values.batchUpdate([
+      { range: 'Tasks!A2:B2', values: [[3, 4]] },
+    ]),
+    { responses: [{ updatedCells: 2 }] },
+  );
   await client.values.append('Tasks!A1', [[3, 4]]);
   await client.values.clear('Tasks!A1:C10');
   await client.spreadsheets.get({ includeGridData: false });
@@ -75,9 +82,17 @@ test('values methods construct REST requests and parse responses', async t => {
   t.is(fixture.calls[2].init.method, 'PUT');
   t.is(JSON.parse(fixture.calls[2].init.body).majorDimension, 'ROWS');
   t.is(fixture.calls[3].init.method, 'POST');
-  t.regex(fixture.calls[3].url, /values\/Tasks%21A1:append/);
-  t.regex(fixture.calls[4].url, /values\/Tasks%21A1%3AC10:clear$/);
-  t.regex(fixture.calls[5].url, /includeGridData=false$/);
+  t.regex(fixture.calls[3].url, /values:batchUpdate$/);
+  t.deepEqual(JSON.parse(fixture.calls[3].init.body).data, [
+    {
+      range: 'Tasks!A2:B2',
+      majorDimension: 'ROWS',
+      values: [[3, 4]],
+    },
+  ]);
+  t.regex(fixture.calls[4].url, /values\/Tasks%21A1:append/);
+  t.regex(fixture.calls[5].url, /values\/Tasks%21A1%3AC10:clear$/);
+  t.regex(fixture.calls[6].url, /includeGridData=false$/);
 });
 
 test('returns a hardened client interface', t => {

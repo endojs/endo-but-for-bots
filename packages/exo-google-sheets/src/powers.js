@@ -170,7 +170,8 @@ harden(assertWriteFitsScope);
  */
 const assertAppendFitsRange = (selector, rows) => {
   const target = parseA1(selector);
-  if (target && payloadWidth(rows) > target.right - target.left + 1)
+  if (!target) throw new Error('Append requires a bounded A1 range');
+  if (payloadWidth(rows) > target.right - target.left + 1)
     throw new Error('Append payload escapes the range scope');
 };
 harden(assertAppendFitsRange);
@@ -223,13 +224,14 @@ export const makePolicy = options => {
 
   const charge = () => {
     const instant = now();
-    if (!Number.isFinite(instant) || instant < lastRefill)
-      throw new Error('request clock must be finite and monotonic');
+    if (!Number.isFinite(instant))
+      throw new Error('request clock must be finite');
+    const elapsed = Math.max(0, instant - lastRefill);
     tokens = Math.min(
       maxRequestsPerMinute,
-      tokens + ((instant - lastRefill) * maxRequestsPerMinute) / 60_000,
+      tokens + (elapsed * maxRequestsPerMinute) / 60_000,
     );
-    lastRefill = instant;
+    lastRefill = Math.max(lastRefill, instant);
     if (tokens < 1) throw new Error('Spreadsheet request throttle exceeded');
     tokens -= 1;
   };
@@ -275,9 +277,9 @@ export const makePolicy = options => {
         const candidate = parseA1(full);
         return Boolean(
           allowed &&
-            candidate &&
-            allowed.sheet === candidate.sheet &&
-            contains(allowed, candidate),
+          candidate &&
+          allowed.sheet === candidate.sheet &&
+          contains(allowed, candidate),
         );
       })
     )
@@ -302,25 +304,31 @@ export const makePolicy = options => {
     },
     /** @param {any[][]} values */
     boundCells: values => {
-      const count = arrayReduce(
-        values,
-        (total, row) => total + row.length,
-        0,
-      );
+      const count = arrayReduce(values, (total, row) => total + row.length, 0);
       if (count > maxCellsPerRead)
         throw new Error('Read exceeds maximum cell count');
       return harden(arrayMap(values, row => harden([...row])));
     },
     /** @param {any[][]} values */
     boundWriteCells: values => {
-      const count = arrayReduce(
-        values,
-        (total, row) => total + row.length,
-        0,
-      );
+      const count = arrayReduce(values, (total, row) => total + row.length, 0);
       if (count > maxCellsPerWrite)
         throw new Error('Write exceeds maximum cell count');
       return harden(arrayMap(values, row => harden([...row])));
+    },
+    /** @param {{ range: string, values: any[][] }[]} updates */
+    boundWriteBatch: updates => {
+      let count = 0;
+      const bounded = arrayMap(updates, ({ range, values }) => {
+        count = arrayReduce(values, (total, row) => total + row.length, count);
+        return harden({
+          range,
+          values: harden(arrayMap(values, row => harden([...row]))),
+        });
+      });
+      if (count > maxCellsPerWrite)
+        throw new Error('Write exceeds maximum cell count');
+      return harden(bounded);
     },
     pollIntervalMs: () => pollIntervalMs,
     /**
@@ -419,6 +427,19 @@ export const makeCaretaker = policy => {
       return confined;
     },
     /**
+     * Confine a group of selectors, then spend one token for its one RPC.
+     * @param {string[]} selectors
+     * @param {Scope} scope
+     */
+    admitBatch: (selectors, scope) => {
+      assertActive();
+      const confined = arrayMap(selectors, selector =>
+        policy.confine(selector, scope),
+      );
+      policy.charge();
+      return harden(confined);
+    },
+    /**
      * Validate and resolve a designation without spending a request token.
      * @param {string} selector
      * @param {Scope} scope
@@ -448,6 +469,7 @@ harden(makeCaretaker);
  *
  * @param {object} authority
  * @param {(range: string) => Promise<any>} authority.getValues
+ * @param {(ranges: string[]) => Promise<any>} authority.batchGetValues
  * @param {(options: object) => Promise<any>} authority.getSpreadsheet
  * @param {ReturnType<typeof makeCaretaker>} authority.access
  * @param {ReturnType<typeof makePolicy>['limits']} authority.limits
@@ -455,6 +477,7 @@ harden(makeCaretaker);
  */
 export const makeReadPowers = ({
   getValues,
+  batchGetValues,
   getSpreadsheet,
   access,
   limits,
@@ -485,6 +508,18 @@ export const makeReadPowers = ({
         const target = access.admit(limits.boundRange(selector), scope);
         const result = await getValues(target);
         return limits.boundCells(result.values || []);
+      },
+      /** @param {string[]} selectors */
+      readBatch: async selectors => {
+        if (selectors.length === 0) return harden([]);
+        const bounded = arrayMap(selectors, limits.boundRange);
+        const targets = access.admitBatch(bounded, scope);
+        const result = await batchGetValues(targets);
+        return harden(
+          arrayMap(result.valueRanges || [], valueRange =>
+            limits.boundCells(valueRange.values || []),
+          ),
+        );
       },
       /** Wait one poll interval, as the host currently sets it. */
       pollDelay: () => {
@@ -544,11 +579,18 @@ harden(makeAppendPowers);
  *
  * @param {object} authority
  * @param {(range: string, values: any[][]) => Promise<any>} authority.updateValues
+ * @param {(updates: { range: string, values: any[][] }[]) => Promise<any>} authority.batchUpdateValues
  * @param {(range: string) => Promise<any>} authority.clearValues
  * @param {ReturnType<typeof makeCaretaker>} authority.access
  * @param {ReturnType<typeof makePolicy>['limits']} authority.limits
  */
-export const makeWritePowers = ({ updateValues, clearValues, access, limits }) => {
+export const makeWritePowers = ({
+  updateValues,
+  batchUpdateValues,
+  clearValues,
+  access,
+  limits,
+}) => {
   /** @param {Scope} scope */
   const at = scope =>
     harden({
@@ -569,6 +611,30 @@ export const makeWritePowers = ({ updateValues, clearValues, access, limits }) =
           updatedRange: result.updatedRange,
           updatedCells: result.updatedCells,
         });
+      },
+      /** @param {{ range: string, values: any[][] }[]} updates */
+      updateBatch: async updates => {
+        if (updates.length === 0) return harden([]);
+        const bounded = limits.boundWriteBatch(updates);
+        for (const { range, values } of bounded)
+          assertWriteFitsScope(range, values, scope);
+        const targets = access.admitBatch(
+          arrayMap(bounded, ({ range }) => range),
+          scope,
+        );
+        const result = await batchUpdateValues(
+          arrayMap(bounded, ({ values }, index) =>
+            harden({ range: targets[index], values }),
+          ),
+        );
+        return harden(
+          arrayMap(result.responses || [], response =>
+            harden({
+              updatedRange: response.updatedRange,
+              updatedCells: response.updatedCells,
+            }),
+          ),
+        );
       },
       /** @param {string} selector */
       clear: async selector => {

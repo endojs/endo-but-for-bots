@@ -182,6 +182,23 @@ export const makeSheetsClient = (
         query: { valueInputOption: 'USER_ENTERED', ...options },
         body: { range, majorDimension: 'ROWS', values: valuesToWrite },
       }),
+    batchUpdate: (updates, options = {}) => {
+      if (!Array.isArray(updates) || updates.length === 0) {
+        throw new TypeError('updates must be a non-empty array');
+      }
+      return call('/values:batchUpdate', {
+        method: 'POST',
+        body: {
+          valueInputOption: 'USER_ENTERED',
+          ...options,
+          data: updates.map(({ range, values: valuesToWrite }) => ({
+            range,
+            majorDimension: 'ROWS',
+            values: valuesToWrite,
+          })),
+        },
+      });
+    },
     append: (range, valuesToAppend, options = {}) =>
       call(`/values/${encodeA1Range(range)}:append`, {
         method: 'POST',
@@ -207,6 +224,7 @@ export const makeSheetsClient = (
       getValues: values.get,
       batchGetValues: values.batchGet,
       updateValues: values.update,
+      batchUpdateValues: values.batchUpdate,
       appendValues: values.append,
       clearValues: values.clear,
       getSpreadsheet: spreadsheets.get,

@@ -39,10 +39,28 @@ const makeClient = () => {
         calls.push(['get', range]);
         return { values: values.get(range) || [] };
       },
+      batchGet: async ranges => {
+        calls.push(['batchGet', ...ranges]);
+        return {
+          valueRanges: ranges.map(range => ({
+            range,
+            values: values.get(range) || [],
+          })),
+        };
+      },
       update: async (range, rows) => {
         calls.push(['update', range]);
         values.set(range, rows);
         return { updatedRange: range, updatedCells: rows.flat().length };
+      },
+      batchUpdate: async updates => {
+        calls.push(['batchUpdate', ...updates.map(({ range }) => range)]);
+        return {
+          responses: updates.map(({ range, values: rows }) => {
+            values.set(range, rows);
+            return { updatedRange: range, updatedCells: rows.flat().length };
+          }),
+        };
       },
       append: async (range, rows) => {
         calls.push(['append', range]);
@@ -191,18 +209,21 @@ test('part() narrows the whole and composes, on every authority class', async t 
     ]),
     { message: /payload escapes/ },
   );
-  await t.throwsAsync(
-    boundedWriter.appendOnly().append('A1:B2', [[1, 2, 3]]),
-    { message: /not available/ },
-  );
-  await t.throwsAsync(
-    boundedWriter.appendOnly().append('A1:B2', [[1, 2]]),
-    { message: /not available/ },
-  );
-  await t.throwsAsync(
-    writer.appendOnly().append('Tasks!A1:B2', [[1, 2, 3]]),
-    { message: /payload escapes/ },
-  );
+  await t.throwsAsync(boundedWriter.appendOnly().append('A1:B2', [[1, 2, 3]]), {
+    message: /not available/,
+  });
+  await t.throwsAsync(boundedWriter.appendOnly().append('A1:B2', [[1, 2]]), {
+    message: /not available/,
+  });
+  await t.throwsAsync(writer.appendOnly().append('Tasks!A1:B2', [[1, 2, 3]]), {
+    message: /payload escapes/,
+  });
+  await t.throwsAsync(writer.appendOnly().append('Tasks!A:B', [[1, 2]]), {
+    message: /bounded A1 range/,
+  });
+  await t.throwsAsync(writer.appendOnly().append('Tasks', [[1, 2]]), {
+    message: /bounded A1 range/,
+  });
   await writer.appendOnly().append('Tasks!A1:B2', [[1, 2]]);
   t.is(client.calls.filter(([verb]) => verb === 'update').length, 0);
 });
@@ -382,6 +403,48 @@ test('confine never resolves a target outside its scope', t => {
   t.pass();
 });
 
+test('host allowlists confine every generated target', t => {
+  const rectangle = fc
+    .tuple(
+      fc.integer({ min: 1, max: 700 }),
+      fc.integer({ min: 1, max: 20 }),
+      fc.integer({ min: 1, max: 700 }),
+      fc.integer({ min: 1, max: 20 }),
+    )
+    .map(([columnA, rowA, columnB, rowB]) => ({
+      sheet: undefined,
+      left: Math.min(columnA, columnB),
+      top: Math.min(rowA, rowB),
+      right: Math.max(columnA, columnB),
+      bottom: Math.max(rowA, rowB),
+    }));
+  /** @param {{ left: number, top: number, right: number, bottom: number }} range */
+  const notation = range =>
+    `${columnLetters(range.left)}${range.top}:${columnLetters(range.right)}${range.bottom}`;
+  fc.assert(
+    fc.property(
+      rectangle,
+      rectangle,
+      fc.boolean(),
+      (allowed, target, sheetAllowed) => {
+        const policy = makePolicy({ now: () => 0 });
+        policy.controls.setAllowedSheets(sheetAllowed ? ['Tasks'] : ['Other']);
+        policy.controls.setAllowedRanges([`Tasks!${notation(allowed)}`]);
+        try {
+          const full = policy.confine(`Tasks!${notation(target)}`, {});
+          const result = parseA1(full);
+          return (
+            sheetAllowed && result !== undefined && contains(allowed, result)
+          );
+        } catch {
+          return !sheetAllowed || !contains(allowed, target);
+        }
+      },
+    ),
+  );
+  t.pass();
+});
+
 test('follower revisions preserve numeric sentinel distinctions', t => {
   t.not(cellRevision([[0]]), cellRevision([[-0]]));
   t.not(cellRevision([[null]]), cellRevision([[NaN]]));
@@ -488,14 +551,51 @@ test('mutation payloads obey the host cell cap', async t => {
   t.deepEqual(client.calls, []);
 });
 
-test('the request clock must stay finite and monotonic', async t => {
+test('batch methods use one preflighted client request', async t => {
+  await null;
+  const client = makeClient();
+  const { spreadsheet, writer } = makeExoSpreadsheet(client, {
+    maxCellsPerWrite: 4,
+  });
+  t.deepEqual(await spreadsheet.readBatch(['Tasks!A1:B2', 'Tasks!C1:C1']), [
+    [
+      ['name', 'done'],
+      ['one', false],
+    ],
+    [],
+  ]);
+  t.deepEqual(
+    await writer.writeBatch([
+      { range: 'Tasks!A3:B3', values: [['two', true]] },
+      { range: 'Tasks!A4:B4', values: [['three', false]] },
+    ]),
+    [
+      { updatedRange: 'Tasks!A3:B3', updatedCells: 2 },
+      { updatedRange: 'Tasks!A4:B4', updatedCells: 2 },
+    ],
+  );
+  t.deepEqual(client.calls, [
+    ['batchGet', 'Tasks!A1:B2', 'Tasks!C1:C1'],
+    ['batchUpdate', 'Tasks!A3:B3', 'Tasks!A4:B4'],
+  ]);
+  await t.throwsAsync(
+    writer.sheet('Tasks').writeBatch([
+      { range: 'Tasks!A5:B5', values: [['four', false]] },
+      { range: 'Other!A1:B1', values: [['escape', false]] },
+    ]),
+    { message: /allowed|sheet scope/ },
+  );
+  t.is(client.calls.length, 2);
+});
+
+test('the request clock must stay finite and tolerate backsteps', async t => {
   let instant = 1;
   const { spreadsheet } = makeExoSpreadsheet(makeClient(), {
     now: () => instant,
   });
   instant = NaN;
   await t.throwsAsync(spreadsheet.read('Tasks!A1'), {
-    message: /finite and monotonic/,
+    message: /finite/,
   });
   t.throws(() => makeExoSpreadsheet(makeClient(), { now: () => Infinity }), {
     message: /clock must be finite/,
@@ -503,9 +603,7 @@ test('the request clock must stay finite and monotonic', async t => {
   instant = 1;
   const second = makeExoSpreadsheet(makeClient(), { now: () => instant });
   instant = 0;
-  await t.throwsAsync(second.spreadsheet.read('Tasks!A1'), {
-    message: /finite and monotonic/,
-  });
+  await second.spreadsheet.read('Tasks!A1');
 });
 
 test('column letters round-trip across the Z to AA boundary', t => {
@@ -576,6 +674,9 @@ test('a facet builds over powers alone, with no client in reach', async t => {
   const reader = makeReader(
     makeReadPowers({
       getValues: async range => ({ values: [[range]] }),
+      batchGetValues: async ranges => ({
+        valueRanges: ranges.map(range => ({ values: [[range]] })),
+      }),
       getSpreadsheet: async () => ({ properties: { title: 'Standalone' } }),
       access: harden({
         enter: () => {},
@@ -587,6 +688,10 @@ test('a facet builds over powers alone, with no client in reach', async t => {
           admitted.push([selector, scope.sheet]);
           return scope.sheet ? `${scope.sheet}!${selector}` : selector;
         },
+        admitBatch: (selectors, scope) =>
+          selectors.map(selector =>
+            scope.sheet ? `${scope.sheet}!${selector}` : selector,
+          ),
         designate: (selector, scope) =>
           scope.sheet ? `${scope.sheet}!${selector}` : selector,
         revoke: () => {},
@@ -597,6 +702,7 @@ test('a facet builds over powers alone, with no client in reach', async t => {
         boundCells: values => harden(values.map(row => harden([...row]))),
         /** @param {any[][]} values */
         boundWriteCells: values => harden(values),
+        boundWriteBatch: updates => harden(updates),
         pollIntervalMs: () => 0,
         boundSheets: sheets => harden(sheets),
       }),

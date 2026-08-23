@@ -154,8 +154,7 @@ const readMethods = powers => ({
   /** @param {string} selector */
   read: selector => powers.read(selector),
   /** @param {string[]} selectors */
-  readBatch: selectors =>
-    Promise.all(arrayMap(selectors, one => powers.read(one))),
+  readBatch: selectors => powers.readBatch(selectors),
   /** @param {string} selector */
   readRecords: async selector => {
     const [headers = [], ...rows] = await powers.read(selector);
@@ -290,12 +289,7 @@ export const makeWriter = powers => {
       ...appendMethods(powers.append),
       ...writes,
       /** @param {{ range: string, values: any[][] }[]} updates */
-      writeBatch: updates =>
-        Promise.all(
-          arrayMap(updates, ({ range, values }) =>
-            writes.write(range, values),
-          ),
-        ),
+      writeBatch: updates => powers.write.updateBatch(updates),
       /** @param {string} designation A tab name, an A1 range, or both. */
       part: designation => makeWriter(narrow(partScope(designation))),
       /** @param {string} name */
