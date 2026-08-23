@@ -1913,6 +1913,7 @@ __metadata:
   dependencies:
     "@endo/captp": "workspace:^"
     "@endo/exo": "workspace:^"
+    "@endo/google-sheets": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/patterns": "workspace:^"
@@ -2257,7 +2258,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/google-sheets@workspace:packages/google-sheets":
+"@endo/google-sheets@workspace:^, @endo/google-sheets@workspace:packages/google-sheets":
   version: 0.0.0-use.local
   resolution: "@endo/google-sheets@workspace:packages/google-sheets"
   dependencies:
