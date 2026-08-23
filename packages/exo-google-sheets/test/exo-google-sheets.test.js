@@ -6,8 +6,8 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import harden from '@endo/harden';
 import { makeExoSpreadsheet } from '../index.js';
 import { contains, parseA1, sheetPrefix } from '../src/a1.js';
-import { makeReader } from '../src/facets.js';
-import { makeReadPowers, narrowScope } from '../src/powers.js';
+import { cellRevision, makeReader } from '../src/facets.js';
+import { makePolicy, makeReadPowers, narrowScope } from '../src/powers.js';
 
 const makeClient = () => {
   const calls = [];
@@ -181,7 +181,11 @@ test('part() narrows the whole and composes, on every authority class', async t 
   );
   await t.throwsAsync(
     boundedWriter.appendOnly().append('A1:B2', [[1, 2, 3]]),
-    { message: /payload escapes/ },
+    { message: /not available/ },
+  );
+  await t.throwsAsync(
+    boundedWriter.appendOnly().append('A1:B2', [[1, 2]]),
+    { message: /not available/ },
   );
   t.is(client.calls.filter(([verb]) => verb === 'update').length, 0);
 });
@@ -325,6 +329,51 @@ test('successful scope narrowing never widens its rectangle', t => {
     }),
   );
   t.pass();
+});
+
+test('confine never resolves a target outside its scope', t => {
+  const rectangle = fc
+    .tuple(
+      fc.integer({ min: 1, max: 20 }),
+      fc.integer({ min: 1, max: 20 }),
+      fc.integer({ min: 1, max: 20 }),
+      fc.integer({ min: 1, max: 20 }),
+    )
+    .map(([columnA, rowA, columnB, rowB]) => ({
+      sheet: undefined,
+      left: Math.min(columnA, columnB),
+      top: Math.min(rowA, rowB),
+      right: Math.max(columnA, columnB),
+      bottom: Math.max(rowA, rowB),
+    }));
+  /** @param {number} number */
+  const column = number => String.fromCharCode(64 + number);
+  /** @param {{ left: number, top: number, right: number, bottom: number }} range */
+  const notation = range =>
+    `${column(range.left)}${range.top}:${column(range.right)}${range.bottom}`;
+  const policy = makePolicy({ now: () => 0 });
+  fc.assert(
+    fc.property(rectangle, rectangle, (scopeRange, targetRange) => {
+      try {
+        const full = policy.confine(notation(targetRange), {
+          sheet: 'Tasks',
+          range: `Tasks!${notation(scopeRange)}`,
+        });
+        const result = parseA1(full);
+        return result !== undefined && contains(scopeRange, result);
+      } catch {
+        return true;
+      }
+    }),
+  );
+  t.pass();
+});
+
+test('follower revisions preserve numeric sentinel distinctions', t => {
+  t.not(cellRevision([[0]]), cellRevision([[-0]]));
+  t.not(cellRevision([[null]]), cellRevision([[NaN]]));
+  t.not(cellRevision([[NaN]]), cellRevision([[Infinity]]));
+  t.not(cellRevision([[Infinity]]), cellRevision([[-Infinity]]));
 });
 
 test('range narrowing accepts only bounded rectangles', async t => {

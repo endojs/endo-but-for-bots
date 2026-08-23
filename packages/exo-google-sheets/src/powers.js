@@ -491,6 +491,8 @@ export const makeAppendPowers = ({ appendValues, access }) => {
        * @param {any[][]} rows
        */
       append: async (selector, rows) => {
+        if (scope.range)
+          throw new Error('Append is not available on a range-scoped facet');
         assertAppendFitsRange(selector, rows);
         const result = await appendValues(access.admit(selector, scope), rows);
         return harden({

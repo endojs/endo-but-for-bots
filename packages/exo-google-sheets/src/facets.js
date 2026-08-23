@@ -60,6 +60,23 @@ const SHEET_FIELDS = harden({
 });
 
 /**
+ * Stable change token for the cell-value domain. JSON alone collapses `-0`
+ * into `0` and non-finite numbers into `null`; nested marker arrays cannot
+ * collide with a cell because cells themselves are scalar.
+ * @param {any[][]} values
+ */
+export const cellRevision = values =>
+  JSON.stringify(values, (_key, value) => {
+    if (typeof value !== 'number') return value;
+    if (Number.isNaN(value)) return ['number', 'NaN'];
+    if (value === Infinity) return ['number', 'Infinity'];
+    if (value === -Infinity) return ['number', '-Infinity'];
+    if (Object.is(value, -0)) return ['number', '-0'];
+    return value;
+  });
+harden(cellRevision);
+
+/**
  * A polling async iterator over one range, yielding each time the contents
  * change.  It resolves the range once, against the scope of the powers that
  * minted it, then reads that fully qualified range through the unscoped
@@ -89,7 +106,7 @@ const makeFollower = (powers, selector) => {
         // eslint-disable-next-line no-await-in-loop
         const values = await unscoped.read(target);
         if (done) return { done: true, value: undefined };
-        const revision = JSON.stringify(values);
+        const revision = cellRevision(values);
         if (revision !== prior) {
           prior = revision;
           return {

@@ -303,7 +303,7 @@ parties often need to touch one sheet without holding each other's authority:
 - **`appendOnly()`** yields a `SpreadsheetAppender` — a *blind producer* that
   can add rows but can neither read existing contents nor overwrite them. This
   is the write end of a **Google Sheet used as a queue**: a producer holds an
-  appender, a consumer holds a `readOnly()` (or `follow()`) view, and neither
+  sheet-scoped appender, a consumer holds a `readOnly()` (or `follow()`) view, and neither
   can do the other's job. A sheet-as-queue is the motivating use case for the
   push/pubsub follow-up (see Change notification and Open Question 2).
 - **`writeOnly()`** yields a `SpreadsheetWriteOnly` — overwrite without
