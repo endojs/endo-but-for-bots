@@ -182,7 +182,7 @@ interface Spreadsheet {
   read(range: string): Promise<CellValue[][]>;          // A1 notation
   readBatch(ranges: string[]): Promise<CellValue[][][]>;
   readRecords(range: string): Promise<Record<string, CellValue>[]>;
-  follow(range: string): AsyncIterableIterator<RangeChange>;
+  follow(range: string): PassableReader<RangeChange>;
   help(): string;
 }
 
@@ -333,8 +333,10 @@ carry `setAllowedPaths` patterns pinned to the granted spreadsheet ids.
 - **The exo throttles before Google does.** A token-bucket rate limit inside
   the exo (tunable via the control facet) keeps one enthusiastic agent from
   burning the whole project's quota and turns overrun into fast local
-  errors rather than remote 429s. `setMaxCellsPerRead` bounds response
-  sizes the same way `HttpClient.setMaxResponseBytes` does.
+  errors rather than remote 429s. The bucket is intentionally shared by all
+  facets from one host grant because they spend the same project quota.
+  `setMaxCellsPerRead` rejects unbounded or oversized ranges before fetching,
+  then checks the returned cell count defensively too.
 - **Batching is first-class.** `readBatch` and `writeBatch` map to
   `values.batchGet` / `values.batchUpdate`, one HTTP call each. Agents
   should batch; the interface makes the batched path as convenient as the
@@ -343,9 +345,9 @@ carry `setAllowedPaths` patterns pinned to the granted spreadsheet ids.
 
 ### Change notification
 
-`follow(range)` returns an async iterator of `RangeChange` events, following
-the daemon's established `followMessages` / `followNameChanges` subscription
-idiom. v1 implements it by **polling**: the host-side exo re-reads the range
+`follow(range)` returns a passable `@endo/exo-stream` reader of `RangeChange`
+events; consumers adapt it to a local async iterator with `iterateReader`.
+v1 implements it by **polling**: the host-side exo re-reads the range
 on the control-facet-configured interval (default 30s), compares against the
 last snapshot, and yields on difference. Polling costs read quota, which the
 built-in throttle already accounts for.
@@ -476,7 +478,7 @@ block on any unimplemented dependency; the OAuth exo is stubbed as a bare
    guessed coercion.
 6. **Polling `follow` first, push later, same contract.** Push requires the
    webhook substrate and still needs a read to learn what changed; polling
-   ships value now and the async-iterator contract survives the swap.
+   ships value now and the passable-reader contract survives the swap.
 7. **Throttle and size-bound inside the exo.** Quota is a shared resource
    across every consumer of the host's Google project; the capability that
    spends it carries its own governor, adjustable from the control facet.

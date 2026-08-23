@@ -13,11 +13,7 @@
 
 import harden from '@endo/harden';
 
-/**
- * @typedef {object} Scope
- * @property {string} [sheet] Tab a power is confined to, if any.
- * @property {string} [range] A1 rectangle a power is confined to, if any.
- */
+/** @import { Scope } from './types.js' */
 
 /**
  * @typedef {object} A1Rectangle
@@ -46,6 +42,11 @@ const columnNumber = letters =>
 export const parseA1 = value => {
   const bang = value.lastIndexOf('!');
   const sheetPart = bang < 0 ? undefined : value.slice(0, bang);
+  const quotedSheet =
+    sheetPart !== undefined &&
+    sheetPart.startsWith("'") &&
+    sheetPart.endsWith("'");
+  if (sheetPart && sheetPart.includes('!') && !quotedSheet) return undefined;
   const cells = bang < 0 ? value : value.slice(bang + 1);
   const match = /^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/i.exec(cells);
   if (!match) return undefined;
@@ -67,7 +68,7 @@ export const parseA1 = value => {
     return undefined;
   }
   const sheet =
-    sheetPart && sheetPart.startsWith("'") && sheetPart.endsWith("'")
+    quotedSheet
       ? sheetPart.slice(1, -1).replace(/''/g, "'")
       : sheetPart;
   if (sheet === '') return undefined;

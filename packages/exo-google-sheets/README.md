@@ -10,7 +10,8 @@ Interface guards: `SpreadsheetInterface`, `SpreadsheetWriterInterface`,
 `SpreadsheetAppenderInterface`, `SpreadsheetWriteOnlyInterface`, and
 `SpreadsheetControlInterface`.
 
-`follow(range)` is a polling async iterator, and it polls on a timer the host granted rather than an ambient one — pass `{ setTimeout }` to supply it, or `{ setTimeout: null }` to hand out facets that can read but cannot poll.
+`follow(range)` returns an `@endo/exo-stream` passable reader that can cross CapTP; use `iterateReader(reader)` on the consumer side.
+It polls on a timer the host granted rather than an ambient one — pass `{ setTimeout }` to supply it, or `{ setTimeout: null }` to hand out facets that can read but cannot poll.
 Push/webhook delivery, `SheetsService`, and `SpreadsheetStructure` are deliberately deferred.
 
 ## Example
@@ -33,11 +34,11 @@ control.setMaxRequestsPerMinute(30);
 control.revokeWrites();
 ```
 
-`range()` establishes a bounded rectangle within an existing sheet scope and
-therefore rejects named, whole-row, and whole-column ranges; use `sheet()` to
-grant a whole tab. A
-`follow()` iterator is local to the process and should be closed with
-`return()` when its consumer is done.
+All reads use bounded A1 rectangles so `maxCellsPerRead` can reject oversized
+requests before they reach Google. `range()` establishes such a rectangle
+within an existing sheet scope; use `sheet()` to grant authority over one tab,
+then name a bounded rectangle for each read. Close the local iterator returned
+by `iterateReader(followReader)` with `return()` when its consumer is done.
 
 See [`designs/exo-google-sheets.md`](../../designs/exo-google-sheets.md) and the
 source module headers for the attenuation rationale and implementation layers.

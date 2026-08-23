@@ -55,7 +55,7 @@ import harden from '@endo/harden';
 import { contains, parseA1, sheetPrefix } from './a1.js';
 
 /**
- * @import { Scope } from './a1.js'
+ * @import { Scope } from './types.js'
  */
 
 const DEFAULT_MAX_CELLS_PER_READ = 10_000;
@@ -63,7 +63,7 @@ const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_REQUESTS_PER_MINUTE = 60;
 
 const { apply } = Reflect;
-const { filter, map, reduce } = Array.prototype;
+const { filter, map, reduce, some } = Array.prototype;
 /**
  * @template T
  * @param {T[]} array
@@ -87,6 +87,12 @@ const arrayMap = (array, callback) => apply(map, array, [callback]);
  */
 const arrayReduce = (array, callback, initial) =>
   apply(reduce, array, [callback, initial]);
+/**
+ * @template T
+ * @param {T[]} array
+ * @param {(value: T) => boolean} callback
+ */
+const arraySome = (array, callback) => apply(some, array, [callback]);
 
 /**
  * Intersect a power's current designation with a further narrowing. A second
@@ -214,14 +220,14 @@ export const makePolicy = options => {
         : selector;
     if (
       allowedRanges &&
-      !allowedRanges.some(range => {
+      !arraySome(allowedRanges, range => {
         const allowed = parseA1(range);
         const candidate = parseA1(full);
-        return (
+        return Boolean(
           allowed &&
-          candidate &&
-          allowed.sheet === candidate.sheet &&
-          contains(allowed, candidate)
+            candidate &&
+            allowed.sheet === candidate.sheet &&
+            contains(allowed, candidate),
         );
       })
     )
@@ -237,12 +243,11 @@ export const makePolicy = options => {
      */
     boundRange: selector => {
       const range = parseA1(selector);
-      if (range) {
-        const rows = range.bottom - range.top + 1;
-        const columns = range.right - range.left + 1;
-        if (rows > maxCellsPerRead / columns)
-          throw new Error('Read exceeds maximum cell count');
-      }
+      if (!range) throw new Error('Read requires a bounded A1 range');
+      const rows = range.bottom - range.top + 1;
+      const columns = range.right - range.left + 1;
+      if (rows > maxCellsPerRead / columns)
+        throw new Error('Read exceeds maximum cell count');
       return selector;
     },
     /** @param {any[][]} values */
@@ -346,6 +351,15 @@ export const makeCaretaker = policy => {
       policy.charge();
       return confined;
     },
+    /**
+     * Validate and resolve a designation without spending a request token.
+     * @param {string} selector
+     * @param {Scope} scope
+     */
+    designate: (selector, scope) => {
+      assertActive();
+      return policy.confine(selector, scope);
+    },
     revoke: () => {
       revoked = true;
     },
@@ -387,7 +401,7 @@ export const makeReadPowers = ({
       /** The powers as first minted, for a selector already fully qualified. */
       unscoped: () => root,
       /** @param {string} selector */
-      designate: selector => access.admit(selector, scope),
+      designate: selector => access.designate(selector, scope),
       /** @param {object} fields */
       describe: async fields => {
         access.enter();
@@ -401,7 +415,7 @@ export const makeReadPowers = ({
       },
       /** @param {string} selector */
       read: async selector => {
-        const target = limits.boundRange(access.admit(selector, scope));
+        const target = access.admit(limits.boundRange(selector), scope);
         const result = await getValues(target);
         return limits.boundCells(result.values || []);
       },

@@ -26,6 +26,7 @@
 
 import harden from '@endo/harden';
 import { makeExo } from '@endo/exo';
+import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 import {
   SpreadsheetAppenderInterface,
@@ -46,7 +47,7 @@ const { map } = Array.prototype;
 const arrayMap = (array, callback) => apply(map, array, [callback]);
 
 /**
- * @import { Scope } from './a1.js'
+ * @import { Scope } from './types.js'
  * @import { makeAppendPowers, makeReadPowers, makeWritePowers } from './powers.js'
  * @typedef {ReturnType<typeof makeReadPowers>} ReadPowers
  * @typedef {ReturnType<typeof makeAppendPowers>} AppendPowers
@@ -73,16 +74,17 @@ const SHEET_FIELDS = harden({
  * @param {string} selector
  */
 const makeFollower = (powers, selector) => {
-  const target = powers.designate(selector);
   const unscoped = powers.unscoped();
+  let target;
   let prior;
   let done = false;
-  return harden({
+  const iterator = harden({
     [Symbol.asyncIterator]() {
       return this;
     },
     async next() {
       await null;
+      target ||= powers.designate(selector);
       while (!done) {
         // eslint-disable-next-line no-await-in-loop
         const values = await unscoped.read(target);
@@ -105,6 +107,7 @@ const makeFollower = (powers, selector) => {
       return { done: true, value: undefined };
     },
   });
+  return readerFromIterator(iterator);
 };
 
 /**
@@ -272,7 +275,9 @@ export const makeWriter = powers => {
       /** @param {{ range: string, values: any[][] }[]} updates */
       writeBatch: updates =>
         Promise.all(
-          updates.map(({ range, values }) => writes.write(range, values)),
+          arrayMap(updates, ({ range, values }) =>
+            writes.write(range, values),
+          ),
         ),
       /** @param {string} designation A tab name, an A1 range, or both. */
       part: designation => makeWriter(narrow(partScope(designation))),

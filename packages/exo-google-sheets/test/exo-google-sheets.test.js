@@ -1,6 +1,8 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
+import { fc } from '@fast-check/ava';
 import { E, makeLoopback } from '@endo/captp';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import harden from '@endo/harden';
 import { makeExoSpreadsheet } from '../index.js';
 import { contains, parseA1, sheetPrefix } from '../src/a1.js';
@@ -103,6 +105,16 @@ test('facets attenuate permissions and range scope over loopback CapTP', async t
   await t.throwsAsync(E(writer).write('Tasks!C1', [['outside']]), {
     message: /allowed/,
   });
+  const remoteFollower = await E(spreadsheet).follow('Tasks!A1:B2');
+  const remoteIterator = iterateReader(remoteFollower);
+  const remoteFirst = await remoteIterator.next();
+  t.false(remoteFirst.done);
+  const remoteChange = /** @type {{ values: any[][] }} */ (remoteFirst.value);
+  t.deepEqual(remoteChange.values, [
+    ['name', 'done'],
+    ['one', false],
+  ]);
+  await remoteIterator.return();
 });
 
 test('attenuation is structural: a facet lacks the vocabulary it lacks authority for', async t => {
@@ -227,9 +239,20 @@ test('A1 rectangles normalize corners and reject unsafe coordinates', t => {
   t.is(parseA1('A0'), undefined);
   t.is(parseA1(`A${Number.MAX_SAFE_INTEGER + 1}`), undefined);
   t.is(parseA1("''!A1"), undefined);
+  t.is(parseA1('A!B!A1'), undefined);
   const quoted = parseA1(`${sheetPrefix("It's work!")}!A1`);
   t.truthy(quoted);
   t.is(quoted && quoted.sheet, "It's work!");
+});
+
+test('quoted sheet names round-trip through A1 notation', t => {
+  fc.assert(
+    fc.property(fc.string({ minLength: 1 }), sheet => {
+      const parsed = parseA1(`${sheetPrefix(sheet)}!A1`);
+      return parsed !== undefined && parsed.sheet === sheet;
+    }),
+  );
+  t.pass();
 });
 
 test('rectangle containment is reflexive and transitive', t => {
@@ -262,7 +285,9 @@ test('range narrowing accepts only bounded rectangles', async t => {
   t.throws(() => spreadsheet.range('A:A'), { message: /bounded/ });
   t.throws(() => spreadsheet.range('named-range'), { message: /bounded/ });
   t.throws(() => spreadsheet.range('A1:B2'), { message: /requires a sheet/ });
-  t.deepEqual(await spreadsheet.sheet('Tasks').read('Tasks'), []);
+  await t.throwsAsync(spreadsheet.sheet('Tasks').read('Tasks'), {
+    message: /bounded A1 range/,
+  });
 });
 
 test('follow() polls on a granted timer, never an ambient one', async t => {
@@ -285,9 +310,11 @@ test('follow() polls on a granted timer, never an ambient one', async t => {
       return undefined;
     },
   });
-  const follower = spreadsheet.follow('Tasks!A1:B2');
+  const follower = iterateReader(spreadsheet.follow('Tasks!A1:B2'));
   const first = await follower.next();
-  t.deepEqual(first.value.values, [
+  t.false(first.done);
+  const firstChange = /** @type {{ values: any[][] }} */ (first.value);
+  t.deepEqual(firstChange.values, [
     ['name', 'done'],
     ['one', false],
   ]);
@@ -297,7 +324,9 @@ test('follow() polls on a granted timer, never an ambient one', async t => {
   // the new one — the granted timer carries no interval of its own.
   control.setPollIntervalMs(7000);
   const second = await follower.next();
-  t.deepEqual(second.value.values, [
+  t.false(second.done);
+  const secondChange = /** @type {{ values: any[][] }} */ (second.value);
+  t.deepEqual(secondChange.values, [
     ['name', 'done'],
     ['two', true],
   ]);
@@ -316,7 +345,7 @@ test('a zero poll interval is preserved', async t => {
       callback();
     },
   });
-  const follower = spreadsheet.follow('Tasks!A1:B2');
+  const follower = iterateReader(spreadsheet.follow('Tasks!A1:B2'));
   await follower.next();
   await follower.next();
   t.deepEqual(waits, [0]);
@@ -339,7 +368,28 @@ test('bounded reads are rejected before fetching when they exceed the cap', asyn
   await t.throwsAsync(spreadsheet.read('Tasks!A1:C2'), {
     message: /maximum cell count/,
   });
+  await t.throwsAsync(spreadsheet.read('Tasks'), {
+    message: /bounded A1 range/,
+  });
   t.deepEqual(client.calls, []);
+});
+
+test('follow resolves its designation without spending a request token', async t => {
+  const { spreadsheet } = makeExoSpreadsheet(makeClient(), {
+    maxRequestsPerMinute: 1,
+  });
+  const follower = iterateReader(spreadsheet.follow('Tasks!A1:B2'));
+  const first = await follower.next();
+  t.false(first.done);
+  await follower.return();
+});
+
+test('follow rechecks revocation after it starts', async t => {
+  const { spreadsheet, control } = makeExoSpreadsheet(makeClient());
+  const follower = iterateReader(spreadsheet.follow('Tasks!A1:B2'));
+  await follower.next();
+  control.revoke();
+  await t.throwsAsync(follower.next(), { message: /revoked/ });
 });
 
 test('a host that grants no timer grants no polling', async t => {
@@ -355,7 +405,7 @@ test('a host that grants no timer grants no polling', async t => {
     ['name', 'done'],
     ['one', false],
   ]);
-  const follower = spreadsheet.follow('Tasks!A1:B2');
+  const follower = iterateReader(spreadsheet.follow('Tasks!A1:B2'));
   await follower.next();
   await t.throwsAsync(follower.next(), { message: /no timer/ });
 });
@@ -381,6 +431,8 @@ test('a facet builds over powers alone, with no client in reach', async t => {
           admitted.push([selector, scope.sheet]);
           return scope.sheet ? `${scope.sheet}!${selector}` : selector;
         },
+        designate: (selector, scope) =>
+          scope.sheet ? `${scope.sheet}!${selector}` : selector,
         revoke: () => {},
       }),
       limits: harden({
