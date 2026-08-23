@@ -30,6 +30,16 @@ export { makeFromMountBackend } from './backends/from-mount-backend.js';
 // Public porcelain helpers (free functions over the typed cap surface).
 export { walk, collectBytes, collectStream } from './helpers.js';
 
+// Streaming tree clone (designs/endo-app-sharing.md, Pillar 3c): ship a whole
+// tree as one ordered frame stream and recreate it under a destination
+// Directory.
+export {
+  cloneTree,
+  streamTree,
+  writeTreeStream,
+  CloneFrameShape,
+} from './clone.js';
+
 // PosixFs interface sketch — POSIX-shaped attrs / real OS locks /
 // native disk xattrs live in a future companion cap. Only the
 // guard is exported; backing-specific implementations come later.
