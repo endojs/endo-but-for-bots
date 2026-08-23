@@ -98,6 +98,11 @@ test('facets attenuate permissions and range scope over loopback CapTP', async t
   await t.throwsAsync(E(writer).write('Other!A1', [['x']]), {
     message: /allowed/,
   });
+  await E(control).setAllowedRanges(['Tasks!A1:B2']);
+  await E(writer).write('Tasks!A1', [['inside']]);
+  await t.throwsAsync(E(writer).write('Tasks!C1', [['outside']]), {
+    message: /allowed/,
+  });
 });
 
 test('attenuation is structural: a facet lacks the vocabulary it lacks authority for', async t => {
@@ -230,11 +235,11 @@ test('A1 rectangles normalize corners and reject unsafe coordinates', t => {
 test('range narrowing accepts only bounded rectangles', async t => {
   const { spreadsheet } = makeExoSpreadsheet(makeClient());
   await null;
+  t.throws(() => spreadsheet.sheet(''), { message: /non-empty/ });
   t.throws(() => spreadsheet.range('A:A'), { message: /bounded/ });
   t.throws(() => spreadsheet.range('named-range'), { message: /bounded/ });
-  await t.throwsAsync(spreadsheet.range('A1:B2').read('Z1:A1'), {
-    message: /escapes/,
-  });
+  t.throws(() => spreadsheet.range('A1:B2'), { message: /requires a sheet/ });
+  t.deepEqual(await spreadsheet.sheet('Tasks').read('Tasks'), []);
 });
 
 test('follow() polls on a granted timer, never an ambient one', async t => {

@@ -6,6 +6,10 @@ The default `spreadsheet` facet reads only.
 The separately minted `writer` facet can delegate read-only, append-only, and write-only facets, each of which can narrow to one tab or A1 range.
 The host retains `control` to constrain scopes, adjust limits and polling, sever write authority (`revokeWrites()`), or revoke every facet (`revoke()`).
 
+Interface guards: `SpreadsheetInterface`, `SpreadsheetWriterInterface`,
+`SpreadsheetAppenderInterface`, `SpreadsheetWriteOnlyInterface`, and
+`SpreadsheetControlInterface`.
+
 `follow(range)` is a polling async iterator, and it polls on a timer the host granted rather than an ambient one — pass `{ setTimeout }` to supply it, or `{ setTimeout: null }` to hand out facets that can read but cannot poll.
 Push/webhook delivery, `SheetsService`, and `SpreadsheetStructure` are deliberately deferred.
 
@@ -29,8 +33,9 @@ control.setMaxRequestsPerMinute(30);
 control.revokeWrites();
 ```
 
-`range()` establishes a bounded rectangle and therefore rejects named,
-whole-row, and whole-column ranges; use `sheet()` to grant a whole tab. A
+`range()` establishes a bounded rectangle within an existing sheet scope and
+therefore rejects named, whole-row, and whole-column ranges; use `sheet()` to
+grant a whole tab. A
 `follow()` iterator is local to the process and should be closed with
 `return()` when its consumer is done.
 

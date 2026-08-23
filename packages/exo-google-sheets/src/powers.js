@@ -72,6 +72,8 @@ const DEFAULT_MAX_REQUESTS_PER_MINUTE = 60;
  * @returns {Scope}
  */
 const narrowScope = (scope, patch) => {
+  if (patch.sheet !== undefined && patch.sheet.length === 0)
+    throw new Error('Sheet must be non-empty');
   const scopeRange = scope.range ? parseA1(scope.range) : undefined;
   const patchRange = patch.range ? parseA1(patch.range) : undefined;
   if (scope.range && !scopeRange) throw new Error('Invalid range scope');
@@ -79,6 +81,8 @@ const narrowScope = (scope, patch) => {
 
   const scopeSheet = scope.sheet || (scopeRange && scopeRange.sheet);
   const patchSheet = patch.sheet || (patchRange && patchRange.sheet);
+  if (patchRange && !scopeSheet && !patchSheet)
+    throw new Error('A range scope requires a sheet');
   if (scopeSheet && patchSheet && scopeSheet !== patchSheet)
     throw new Error('Part escapes the sheet scope');
   if (
@@ -178,7 +182,9 @@ export const makePolicy = options => {
       throw new Error('Range escapes the range scope');
     const full =
       sheet && !(parsed && parsed.sheet)
-        ? `${sheetPrefix(sheet)}!${selector}`
+        ? !parsed && selector === sheet
+          ? selector
+          : `${sheetPrefix(sheet)}!${selector}`
         : selector;
     if (
       allowedRanges &&
