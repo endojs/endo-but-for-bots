@@ -10,16 +10,12 @@ import { makeDaemonEvaluate } from '@endo/agent-tools/code-mode/daemon.js';
 import { makeEvaluateTool } from '@endo/agent-tools/code-mode/evaluate-tool.js';
 import { start } from '@endo/daemon';
 
-import { relative, sep } from 'node:path';
 import { exit, stderr } from 'node:process';
 
 import { makeCodeModeSystemPrompt } from './code-mode.js';
-import { codeModeGrantGlobals } from './code-mode-grants.js';
-import { EndoCredentialUnavailableError } from './code-mode-provision-host.js';
+import { makeEndoProvisionGlobals } from './code-mode-provision-globals.js';
 import {
   normalizeEndoProvisionSpec,
-  projectEndoProvisionContext,
-  projectEndoProvisionRuntimeAuthority,
   validateEndoProvisionPersistence,
 } from './code-mode-provision-policy.js';
 import { reconstructEndoCodeMode } from './code-mode-provisioning.js';
@@ -40,8 +36,8 @@ const NO_TOOL_NAMES = harden([]);
  * @property {string} message
  * @property {string} action
  *
- * @typedef {object} CredentialRehydrationRequest
- * @property {EndoCredentialUnavailableError} error
+ * @typedef {object} ProvisionFailureRecoveryRequest
+ * @property {unknown} error
  * @property {EndoProvisionPersistence} persistence
  * @property {boolean} hasUI
  *
@@ -50,7 +46,7 @@ const NO_TOOL_NAMES = harden([]);
  * @property {(persistence: unknown) => Promise<EndoProvisionPersistence>} [validatePersistence]
  * @property {(persistence: EndoProvisionPersistence, options: { onConnectionFailure: EndoConnectionFailureObserver, forkFrom?: EndoProvisionPersistence }) => Promise<EndoProvisionResult>} [reconstructProvision]
  * @property {() => Promise<void>} [startDaemon]
- * @property {(request: CredentialRehydrationRequest) => Promise<void>} [rehydrateCredential]
+ * @property {(request: ProvisionFailureRecoveryRequest) => Promise<boolean>} [recoverProvisionFailure]
  * @property {(problem: EndoCodeModePiProblem) => void} [writeDiagnostic]
  * @property {(status: number) => void} [terminate]
  */
@@ -106,34 +102,10 @@ harden(samePlainData);
  * @param {EndoProvisionPersistence} right
  * @returns {boolean}
  */
-const hasSameRuntimeAuthority = (left, right) =>
-  samePlainData(
-    projectEndoProvisionRuntimeAuthority(left),
-    projectEndoProvisionRuntimeAuthority(right),
-  );
+const hasSameRuntimeAuthority = (left, right) => samePlainData(left, right);
 
-/**
- * @param {EndoProvisionPersistence} left
- * @param {EndoProvisionPersistence} right
- * @returns {boolean}
- */
-const hasSameSessionContext = (left, right) =>
-  samePlainData(
-    projectEndoProvisionContext(left),
-    projectEndoProvisionContext(right),
-  );
-
-/**
- * Rebuild a Git selector from the pinned canonical roots in persistence.
- *
- * @param {string} mountRoot
- * @param {string} grantRoot
- * @returns {string[]}
- */
-const canonicalGitPath = (mountRoot, grantRoot) => {
-  const path = relative(mountRoot, grantRoot);
-  return path === '' ? [] : path.split(sep);
-};
+/** @param {EndoProvisionPersistence} value */
+const withoutGuestIdentity = ({ guestName, ...rest }) => rest;
 
 /**
  * Recreate inert input from validated persistence. This is used for forked
@@ -143,71 +115,7 @@ const canonicalGitPath = (mountRoot, grantRoot) => {
  * @param {EndoProvisionPersistence} persistence
  * @returns {EndoProvisionSpec}
  */
-const persistenceToSpec = persistence =>
-  harden({
-    ...(persistence.policy.piTools === undefined
-      ? {}
-      : { piTools: persistence.policy.piTools }),
-    workspace: harden({
-      path: persistence.workspacePath,
-      ...(persistence.policy.mounts.workspace === undefined
-        ? {}
-        : {
-            deniedSegments: harden([
-              ...persistence.policy.mounts.workspace.deniedSegments,
-            ]),
-          }),
-    }),
-    ...(persistence.policy.mounts.workspace?.guestBinding
-      ? { fs: persistence.policy.mounts.workspace.mode }
-      : {}),
-    ...(persistence.policy.gits?.git === undefined
-      ? {}
-      : { git: persistence.policy.gits.git.mode }),
-    ...(Object.keys(persistence.policy.mounts).some(
-      name => name !== 'workspace',
-    )
-      ? {
-          mounts: Object.fromEntries(
-            Object.entries(persistence.policy.mounts)
-              .filter(([name]) => name !== 'workspace')
-              .map(([name, grant]) => [
-                name,
-                {
-                  path: grant.root,
-                  mode: grant.mode,
-                  deniedSegments: grant.deniedSegments,
-                },
-              ]),
-          ),
-        }
-      : {}),
-    ...(persistence.policy.gits === undefined
-      ? {}
-      : {
-          gits: Object.fromEntries(
-            Object.entries(persistence.policy.gits)
-              .filter(([name]) => name !== 'git')
-              .map(([name, grant]) => [
-                name,
-                {
-                  mount: grant.mount,
-                  path: canonicalGitPath(
-                    persistence.policy.mounts[grant.mount].root,
-                    grant.root,
-                  ),
-                  mode: grant.mode,
-                },
-              ]),
-          ),
-        }),
-    ...(persistence.policy.gitRemotes === undefined
-      ? {}
-      : { gitRemotes: persistence.policy.gitRemotes }),
-    ...(persistence.policy.grants === undefined
-      ? {}
-      : { grants: persistence.policy.grants }),
-  });
+const persistenceToSpec = persistence => persistence.spec;
 
 /**
  * @param {readonly SessionEntry[]} entries
@@ -238,7 +146,7 @@ const parseProvisionFlag = raw => {
     throw new EndoPiLifecycleError(
       'ENDO_PROVISION_INVALID',
       '--endo-provision must be a JSON object.',
-      'Pass a JSON EndoProvisionSpec, for example --endo-provision=\'{"fs":"readOnly"}\'.',
+      'Pass a JSON EndoCodeModeProvisionSpec, for example --endo-provision=\'{"workspace":{"mode":"readOnly"}}\'.',
     );
   }
   try {
@@ -255,7 +163,7 @@ const parseProvisionFlag = raw => {
     throw new EndoPiLifecycleError(
       'ENDO_PROVISION_INVALID',
       '--endo-provision must be a JSON object.',
-      'Pass a JSON EndoProvisionSpec, for example --endo-provision=\'{"fs":"readOnly"}\'.',
+      'Pass a JSON EndoCodeModeProvisionSpec, for example --endo-provision=\'{"workspace":{"mode":"readOnly"}}\'.',
     );
   }
 };
@@ -298,15 +206,6 @@ const makeProblem = error => {
       code: error.code,
       message: error.message,
       action: error.action,
-    });
-  }
-  if (error instanceof EndoCredentialUnavailableError) {
-    return harden({
-      type: /** @type {const} */ ('endo_code_mode_error'),
-      code: error.code,
-      message: 'A configured remote credential is unavailable.',
-      action:
-        'Reprovision its host-side credential through a trusted non-echoing TUI or RPC hook, then resume or reload this session.',
     });
   }
   return harden({
@@ -353,9 +252,23 @@ const makeConnectionFailureError = context => {
 };
 
 /**
+ * Only an explicitly classified credential availability error may enter the
+ * interactive retry hook. Policy, integrity, and programming failures stay
+ * terminal and are never presented as a request for credentials.
+ * @param {unknown} error
+ */
+const isRecoverableProvisionFailure = error =>
+  typeof error === 'object' &&
+  error !== null &&
+  Object.hasOwn(error, 'code') &&
+  /** @type {{ code?: unknown }} */ (error).code ===
+    'ENDO_CREDENTIAL_UNAVAILABLE';
+harden(isRecoverableProvisionFailure);
+
+/**
  * Build a directly loadable Pi extension backed by the standard Endo daemon.
  * Dependency injection is limited to trusted host lifecycle seams so focused
- * tests and TUI/RPC credential rehydration do not need ambient secrets.
+ * tests and trusted TUI/RPC recovery hooks do not need ambient secrets.
  *
  * @param {EndoCodeModePiExtensionOptions} [options]
  * @returns {ExtensionFactory}
@@ -371,7 +284,7 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
         onConnectionFailure,
       }),
     startDaemon = () => start(),
-    rehydrateCredential,
+    recoverProvisionFailure,
     writeDiagnostic = problem => {
       stderr.write(`${JSON.stringify(problem)}\n`);
     },
@@ -471,20 +384,22 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
           );
         } catch (error) {
           if (
-            error instanceof EndoCredentialUnavailableError &&
             context.hasUI &&
-            rehydrateCredential !== undefined
+            recoverProvisionFailure !== undefined &&
+            isRecoverableProvisionFailure(error)
           ) {
-            await rehydrateCredential({
+            const recovered = await recoverProvisionFailure({
               error,
               persistence,
               hasUI: context.hasUI,
             });
-            return connectWithDaemonRecovery(
-              persistence,
-              onConnectionFailure,
-              forkFrom,
-            );
+            if (recovered) {
+              return connectWithDaemonRecovery(
+                persistence,
+                onConnectionFailure,
+                forkFrom,
+              );
+            }
           }
           throw error;
         }
@@ -493,7 +408,7 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
       pi.registerFlag(FLAG_NAME, {
         type: 'string',
         description:
-          'Inert EndoProvisionSpec JSON for this Pi session (never credential material)',
+          'Inert EndoCodeModeProvisionSpec JSON for this Pi session (never credential material)',
       });
 
       pi.registerCommand('endo-code-mode', {
@@ -578,6 +493,8 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
           let desired;
           /** @type {EndoProvisionPersistence | undefined} */
           let forkFrom;
+          /** @type {'preserve' | undefined} */
+          let desiredPiTools;
 
           if (storedData === undefined) {
             try {
@@ -586,17 +503,28 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
                 sessionId,
                 cwd: context.cwd,
               });
+              desiredPiTools = cliSpec?.piTools;
             } catch {
               throw new EndoPiLifecycleError(
                 'ENDO_PROVISION_INVALID',
-                '--endo-provision is not a valid EndoProvisionSpec.',
+                '--endo-provision is not a valid EndoCodeModeProvisionSpec.',
                 'Correct the inert policy JSON and start a new Pi session.',
               );
             }
           } else {
             let stored;
+            let storedPiTools;
             try {
-              stored = await validatePersistence(storedData);
+              const sessionRecord =
+                /** @type {Record<string, any> | undefined} */ (
+                  typeof storedData === 'object' && storedData !== null
+                    ? storedData
+                    : undefined
+                );
+              stored = await validatePersistence(
+                sessionRecord?.persistence ?? storedData,
+              );
+              storedPiTools = sessionRecord?.piTools;
             } catch {
               throw new EndoPiLifecycleError(
                 'ENDO_PROVISION_SESSION_INVALID',
@@ -611,12 +539,12 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
                 requested = await normalizeProvision(cliSpec, {
                   harness: 'pi',
                   sessionId,
-                  cwd: context.cwd,
+                  cwd: stored.internalGit?.path ?? context.cwd,
                 });
               } catch {
                 throw new EndoPiLifecycleError(
                   'ENDO_PROVISION_INVALID',
-                  '--endo-provision is not a valid EndoProvisionSpec.',
+                  '--endo-provision is not a valid EndoCodeModeProvisionSpec.',
                   'Correct the inert policy JSON and start a new Pi session.',
                 );
               }
@@ -627,7 +555,7 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
                   'Start a new session for different authority, or fork this session without changing --endo-provision.',
                 );
               }
-              if (!hasSameSessionContext(requested, stored)) {
+              if (cliSpec.piTools !== storedPiTools) {
                 throw new EndoPiLifecycleError(
                   'ENDO_PROVISION_CONTEXT_CONFLICT',
                   "--endo-provision conflicts with this session's retained prompt context.",
@@ -643,7 +571,7 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
                 {
                   harness: 'pi',
                   sessionId,
-                  cwd: stored.workspacePath,
+                  cwd: context.cwd,
                 },
               );
             } catch {
@@ -653,30 +581,32 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
                 'Start a new session from a valid inert provision policy.',
               );
             }
-            if (!hasSameRuntimeAuthority(normalizedDerived, stored)) {
+            if (
+              event.reason !== 'fork' &&
+              !hasSameRuntimeAuthority(normalizedDerived, stored)
+            ) {
+              const identityOnlyMismatch = samePlainData(
+                withoutGuestIdentity(normalizedDerived),
+                withoutGuestIdentity(stored),
+              );
               throw new EndoPiLifecycleError(
-                'ENDO_PROVISION_SESSION_INVALID',
-                'This session authority does not normalize to its persisted policy.',
-                'Start a new session; authority is never widened during recovery.',
+                identityOnlyMismatch
+                  ? 'ENDO_PROVISION_SESSION_MISMATCH'
+                  : 'ENDO_PROVISION_SESSION_INVALID',
+                identityOnlyMismatch
+                  ? 'The retained guest belongs to a different Pi session.'
+                  : 'This session authority does not normalize to its persisted policy.',
+                identityOnlyMismatch
+                  ? 'Resume the original session, or use Pi fork to create a new retained guest namespace.'
+                  : 'Start a new session; authority is never widened during recovery.',
               );
             }
-            if (!hasSameSessionContext(normalizedDerived, stored)) {
-              throw new EndoPiLifecycleError(
-                'ENDO_PROVISION_SESSION_INVALID',
-                'This session context does not normalize to its persisted policy.',
-                'Start a new session; prompt context is never changed during recovery.',
-              );
-            }
-            // Keep the persisted selector spelling after validating its
-            // canonical root, while retaining the normalized session context.
-            const derived = harden({
-              ...normalizedDerived,
-              policy: stored.policy,
-            });
+            const derived = normalizedDerived;
 
             if (event.reason === 'fork') {
               forkFrom = stored;
               desired = derived;
+              desiredPiTools = storedPiTools;
             } else {
               if (!samePlainData(derived, stored)) {
                 throw new EndoPiLifecycleError(
@@ -686,10 +616,11 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
                 );
               }
               desired = stored;
+              desiredPiTools = storedPiTools;
             }
           }
 
-          preservePiTools = desired.policy.piTools === 'preserve';
+          preservePiTools = desiredPiTools === 'preserve';
           const connected = await connect(
             desired,
             context,
@@ -708,14 +639,6 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
               'Start a new session; authority is never widened during recovery.',
             );
           }
-          if (!hasSameSessionContext(connected.persistence, desired)) {
-            await connected.cleanup();
-            throw new EndoPiLifecycleError(
-              'ENDO_PROVISION_RECOVERY_MISMATCH',
-              'The daemon returned different prompt context for this session.',
-              'Start a new session; prompt context is never changed during recovery.',
-            );
-          }
           if (!samePlainData(connected.persistence, desired)) {
             await connected.cleanup();
             throw new EndoPiLifecycleError(
@@ -728,8 +651,8 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
           phase = 'active';
 
           const evaluate = makeEvaluateTool(
-            makeDaemonEvaluate(connected.powers),
-            codeModeGrantGlobals(connected.grants),
+            makeDaemonEvaluate(connected.guest),
+            connected.globals,
           );
           pi.registerTool(
             toPiAgentTool(evaluate, {
@@ -745,7 +668,15 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
           } else {
             pi.setActiveTools(ACTIVE_TOOL_NAMES);
           }
-          pi.appendEntry(SESSION_ENTRY_TYPE, connected.persistence);
+          pi.appendEntry(
+            SESSION_ENTRY_TYPE,
+            desiredPiTools === undefined
+              ? connected.persistence
+              : harden({
+                  persistence: connected.persistence,
+                  piTools: desiredPiTools,
+                }),
+          );
         } catch (error) {
           phase = 'failed';
           await cleanupActive();
@@ -769,7 +700,7 @@ export const makeEndoCodeModePiExtension = (options = {}) => {
       pi.on('before_agent_start', event => {
         if (active !== undefined) {
           const codeModePrompt = makeCodeModeSystemPrompt(
-            codeModeGrantGlobals(active.grants),
+            makeEndoProvisionGlobals(active.persistence),
             {
               preserveTools: preservePiTools,
             },

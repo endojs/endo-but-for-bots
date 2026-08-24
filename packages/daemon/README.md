@@ -13,6 +13,86 @@ envelopes.
 The bootstrap provides the user agent API from which one can derive facets for
 other agents.
 
+## Named guest authority
+
+`EndoHost.provideGuest` can give a retained, host-named guest an immutable
+graph of attenuated mounts, Git capabilities, and Git remotes.
+The operation works on an existing `EndoHost`; opening and closing a client
+connection remains the caller's responsibility.
+
+```js
+import { E } from '@endo/eventual-send';
+
+const guest = await E(host).provideGuest('documentation-agent', {
+  authority: {
+    mount: {
+      workspace: {
+        path: '/repo',
+        deniedSegments: ['.env'],
+      },
+      docs: {
+        path: '/repo/docs',
+        readOnly: true,
+      },
+    },
+    git: {
+      repo: {
+        mount: 'workspace',
+        path: [],
+      },
+      docsHistory: {
+        mount: 'docs',
+        path: [],
+        readOnly: true,
+      },
+    },
+    gitRemote: {
+      originCap: {
+        git: 'repo',
+        name: 'origin',
+        url: 'https://github.com/endojs/endo.git',
+        credential: ['credentials', 'github'],
+      },
+    },
+  },
+  introducedNames: { 'calendar-service': 'calendar' },
+});
+```
+
+The singular collection names are categories, and each property key is the
+binding the guest receives.
+The example therefore gives the guest two mounts (`workspace` and `docs`), two
+Git capabilities (`repo` and `docsHistory`), and one remote capability
+(`originCap`).
+An object cannot repeat a property key, so duplicate bindings are structurally
+impossible and record order does not imply realization order.
+
+Every Git entry explicitly selects a mount binding, and every Git remote entry
+explicitly selects a Git binding.
+A remote's guest binding key is distinct from its Git protocol `name`, matching
+`provideGitRemote(gitCap, petName, options)`.
+Mount options align with `provideMount` (`readOnly` and `deniedSegments`), and
+Git options align with `provideGit` (`readOnly` and
+`allowHistoryRewrite`).
+Writable Git requires a writable selected mount, so Git cannot bypass the
+filesystem posture that bounds its worktree.
+
+Omitted categories grant no authority.
+The host resolves symlinks, retains canonical roots and credential formula
+identities privately, records the closed policy before minting aliases, and
+rejects a repeated `provideGuest` call if its authority differs.
+Reacquire the guest with an ordinary host lookup or repeat the same provide
+operation; callers do not persist a normalized authority record.
+Changing or widening a retained policy fails closed.
+
+`introducedNames` keeps the existing `provideGuest` direction and missing-source
+behavior: each host `Name` key maps to the guest pet name that receives it, and
+a missing host source is ignored.
+For an authority-bearing guest, the introduction map is also part of the
+immutable retained policy, so a repeated provide must supply the same map.
+Credential references use host pet names or name paths; credential material and
+live capabilities never enter the inert authority record.
+
 ## Debugging
 
 The daemon has structured logging and environment variable flags for

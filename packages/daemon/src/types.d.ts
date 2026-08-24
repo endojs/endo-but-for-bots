@@ -20,6 +20,7 @@ import type {
   TreeEntry,
 } from '@endo/platform/fs/lite/types';
 import type { ContentKind, ContentSourceHint } from './locator.js';
+import type { EndoGuestAuthority } from './provision/types.js';
 
 // Branded string types for pet names and special names
 declare const PetNameBrand: unique symbol;
@@ -1432,6 +1433,8 @@ export interface EndoWorker {}
 export type MakeHostOrGuestOptions = {
   agentName?: string | string[];
   introducedNames?: Record<string, string>;
+  /** Immutable named capability graph for a retained guest. */
+  authority?: EndoGuestAuthority;
 };
 
 export type MakeCapletOptions = {
@@ -1735,6 +1738,11 @@ export interface EndoHost extends EndoAgent {
    * attenuated guest or narrower powers object instead.
    */
   provideHostPath(cap: unknown): Promise<string>;
+  /**
+   * Provide or reacquire a retained named guest.
+   * If `authority` is supplied, the host canonicalizes and retains that policy
+   * on first creation and rejects any different policy on subsequent calls.
+   */
   provideGuest(
     petName?: string | string[],
     opts?: MakeHostOrGuestOptions,
@@ -2187,6 +2195,11 @@ export type FilePowers = {
   // Node powers omit it. Declared here so the XS factory's return value
   // structurally satisfies FilePowers without an excess-property error.
   readLink?: (path: string) => Promise<string | undefined>;
+  /**
+   * Optional, all-or-nothing path algebra used by named guest authority.
+   * A supervisor that omits it leaves authority provisioning failing closed.
+   */
+  provisionPathPowers?: import('./provision/types.js').ProvisionPathPowers;
   pathIdentity: (path: string) => Promise<string>;
   statPath: (path: string) => Promise<{
     kind: 'file' | 'directory' | 'symlink';

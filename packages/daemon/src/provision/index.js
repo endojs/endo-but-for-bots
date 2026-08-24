@@ -1,0 +1,590 @@
+// @ts-check
+/// <reference types="ses"/>
+
+/** @import { EndoGuestAuthority, EndoGuestAuthorityPolicy, HostProvisionPowers, NormalizedGitProvision, NormalizedGitRemoteProvision, NormalizedMountProvision, ResolvedCredential } from './types.js' */
+/** @import { EndoGuest, NameOrPath } from '../types.js' */
+/** @typedef {{ audience: () => string }} GitCredential */
+/** @typedef {{ inspect: () => Promise<{ available: boolean, revoked: boolean }> }} GitCredentialController */
+
+import { makeError, q, X } from '@endo/errors';
+import { E } from '@endo/eventual-send';
+import { normalizeGitRemotePolicy } from '@endo/exo-git';
+import { keyEQ, mustMatch } from '@endo/patterns';
+
+import { isPetName, namePathFrom } from '../pet-name.js';
+import { EndoGuestAuthorityShape } from './shapes.js';
+import {
+  allInOrder,
+  assertPathString,
+  assertProvisionBindingName,
+  normalizeDeniedSegments,
+} from './naming.js';
+
+const SECRET_QUERY_KEY_RE = harden(
+  /(?:api.?key|authorization|password|secret|token)/iu,
+);
+
+/** @param {string} binding */
+const makeCredentialUnavailable = binding =>
+  makeError(
+    X`ENDO_CREDENTIAL_UNAVAILABLE: Credential for Git remote binding ${q(binding)} is unavailable`,
+    Error,
+    { code: 'ENDO_CREDENTIAL_UNAVAILABLE' },
+  );
+
+export { EndoGuestAuthorityShape } from './shapes.js';
+
+/**
+ * @param {string} left
+ * @param {string} right
+ */
+const compareStrings = (left, right) =>
+  left < right ? -1 : left > right ? 1 : 0;
+
+/**
+ * @param {NameOrPath} value
+ * @param {string} label
+ */
+const normalizeNameOrPath = (value, label) => {
+  let path;
+  try {
+    path = namePathFrom(value);
+  } catch {
+    throw makeError(X`${q(label)} must be a pet name or name path`);
+  }
+  return typeof value === 'string' ? value : harden([...path]);
+};
+
+/**
+ * Construct the host-side authority provider used by `EndoHost.provideGuest`.
+ * The named guest remains the lifecycle anchor; this helper only validates,
+ * records, realizes, and binds its immutable capability graph.
+ *
+ * @param {HostProvisionPowers} powers
+ */
+export const makeGuestAuthorityProvider = powers => {
+  const {
+    pathPowers,
+    has,
+    identify,
+    lookup,
+    makeDirectory,
+    storeValue,
+    provideMount,
+    provideGit,
+    provideGitRemote,
+    getGitCredentialController,
+    bindGuest,
+    bindGuestIdentifier,
+  } = powers;
+
+  if (pathPowers === undefined) {
+    const unavailable = async () => {
+      throw makeError(X`Guest authority path powers are not available`);
+    };
+    return harden(unavailable);
+  }
+
+  const {
+    realPath,
+    isDirectory,
+    resolvePath,
+    relativePath,
+    isAbsolutePath,
+    pathSeparator,
+  } = pathPowers;
+
+  /**
+   * @param {string} candidate
+   * @param {string} label
+   */
+  const canonicalDirectory = async (candidate, label) => {
+    await null;
+    let canonical;
+    try {
+      canonical = await realPath(candidate);
+    } catch {
+      throw makeError(X`${q(label)} does not exist or cannot be resolved`);
+    }
+    if (!(await isDirectory(canonical))) {
+      throw makeError(X`${q(label)} must resolve to a directory`);
+    }
+    return canonical;
+  };
+
+  /**
+   * @param {string} root
+   * @param {string} candidate
+   */
+  const isWithinRoot = (root, candidate) => {
+    const relative = relativePath(root, candidate);
+    return (
+      relative === '' ||
+      (!isAbsolutePath(relative) &&
+        relative !== '..' &&
+        !relative.startsWith(`..${pathSeparator}`))
+    );
+  };
+
+  /** @param {string[]} namePath */
+  const hasNamePath = async namePath => {
+    for (let length = 1; length <= namePath.length; length += 1) {
+      // The directory walk must stop at the first missing ancestor.
+      // eslint-disable-next-line no-await-in-loop
+      if (!(await has(...namePath.slice(0, length)))) return false;
+    }
+    return true;
+  };
+
+  /** @param {string[]} namePath */
+  const ensureDirectory = async namePath => {
+    if (!(await hasNamePath(namePath))) await makeDirectory(namePath);
+  };
+
+  /**
+   * @param {string[]} namePath
+   * @param {() => Promise<unknown>} provide
+   */
+  const provideOrLookup = async (namePath, provide) =>
+    (await hasNamePath(namePath)) ? lookup(namePath) : provide();
+
+  /**
+   * @param {EndoGuestAuthority} authority
+   * @returns {Promise<EndoGuestAuthorityPolicy>}
+   */
+  const normalizeAuthority = async authority => {
+    mustMatch(authority, EndoGuestAuthorityShape, 'Endo guest authority');
+    /** @type {Array<[string, Promise<NormalizedMountProvision>]>} */
+    const mountJobs = Object.entries(authority.mount ?? {})
+      .sort(([left], [right]) => compareStrings(left, right))
+      .map(([name, grant]) => {
+        assertProvisionBindingName(name, `mount binding ${name}`);
+        const label = `authority.mount.${name}`;
+        const path = assertPathString(grant.path, `${label}.path`);
+        if (!isAbsolutePath(path)) {
+          throw makeError(X`${q(`${label}.path`)} must be absolute`);
+        }
+        return [
+          name,
+          canonicalDirectory(resolvePath(path), `${label}.path`).then(root =>
+            harden({
+              root,
+              readOnly: grant.readOnly ?? false,
+              deniedSegments: normalizeDeniedSegments(
+                grant.deniedSegments,
+                `${label}.deniedSegments`,
+              ),
+            }),
+          ),
+        ];
+      });
+    const mountValues = await allInOrder(mountJobs.map(([, job]) => job));
+    const mount = /** @type {Record<string, NormalizedMountProvision>} */ (
+      Object.fromEntries(
+        mountJobs.map(([name], index) => [name, mountValues[index]]),
+      )
+    );
+
+    /** @type {Array<[string, Promise<NormalizedGitProvision>]>} */
+    const gitJobs = Object.entries(authority.git ?? {})
+      .sort(([left], [right]) => compareStrings(left, right))
+      .map(([name, grant]) => {
+        assertProvisionBindingName(name, `git binding ${name}`);
+        const label = `authority.git.${name}`;
+        assertProvisionBindingName(grant.mount, `${label}.mount`);
+        const selectedMount = mount[grant.mount];
+        if (selectedMount === undefined) {
+          throw makeError(
+            X`${q(`${label}.mount`)} names an unavailable mount binding ${q(grant.mount)}`,
+          );
+        }
+        const readOnly = grant.readOnly ?? false;
+        const allowHistoryRewrite = grant.allowHistoryRewrite ?? false;
+        if (selectedMount.readOnly && !readOnly) {
+          throw makeError(
+            X`writable Git binding ${q(name)} requires a writable selected mount`,
+          );
+        }
+        if (readOnly && allowHistoryRewrite) {
+          throw makeError(
+            X`read-only Git binding ${q(name)} cannot allow history rewrite`,
+          );
+        }
+        const path = grant.path.map((segment, index) => {
+          if (
+            !isPetName(segment) ||
+            segment === '.' ||
+            segment === '..' ||
+            segment.includes('/') ||
+            segment.includes('\\') ||
+            selectedMount.deniedSegments.includes(segment.toLowerCase())
+          ) {
+            throw makeError(
+              X`${q(`${label}.path[${index}]`)} must be an allowed relative path segment`,
+            );
+          }
+          return segment;
+        });
+        const rootJob = canonicalDirectory(
+          resolvePath(selectedMount.root, ...path),
+          `${label}.path`,
+        ).then(root => {
+          if (!isWithinRoot(selectedMount.root, root)) {
+            throw makeError(
+              X`${q(`${label}.path`)} escapes selected mount ${q(grant.mount)}`,
+            );
+          }
+          return harden({
+            mount: grant.mount,
+            path: harden([...path]),
+            root,
+            readOnly,
+            allowHistoryRewrite,
+          });
+        });
+        return [name, rootJob];
+      });
+    const gitValues = await allInOrder(gitJobs.map(([, job]) => job));
+    const git = /** @type {Record<string, NormalizedGitProvision>} */ (
+      Object.fromEntries(
+        gitJobs.map(([name], index) => [name, gitValues[index]]),
+      )
+    );
+
+    const gitRemote =
+      /** @type {Record<string, NormalizedGitRemoteProvision>} */ (
+        Object.fromEntries(
+          Object.entries(authority.gitRemote ?? {})
+            .sort(([left], [right]) => compareStrings(left, right))
+            .map(([binding, remote]) => {
+              assertProvisionBindingName(
+                binding,
+                `gitRemote binding ${binding}`,
+              );
+              const label = `authority.gitRemote.${binding}`;
+              assertProvisionBindingName(remote.git, `${label}.git`);
+              const selectedGit = git[remote.git];
+              if (selectedGit === undefined) {
+                throw makeError(
+                  X`${q(`${label}.git`)} names an unavailable Git binding ${q(remote.git)}`,
+                );
+              }
+              if (selectedGit.readOnly) {
+                throw makeError(
+                  X`Git remote binding ${q(binding)} requires writable Git authority`,
+                );
+              }
+              const policy = normalizeGitRemotePolicy({
+                name: remote.name,
+                policy: /** @type {any} */ (remote),
+              });
+              const credential =
+                remote.credential === undefined
+                  ? undefined
+                  : normalizeNameOrPath(
+                      remote.credential,
+                      `${label}.credential`,
+                    );
+              const protocol = new URL(policy.url).protocol;
+              for (const key of new URL(policy.url).searchParams.keys()) {
+                if (SECRET_QUERY_KEY_RE.test(key)) {
+                  throw makeError(
+                    X`${q(`${label}.url`)} must not carry credential query fields`,
+                  );
+                }
+              }
+              if (protocol !== 'https:' && credential !== undefined) {
+                throw makeError(
+                  X`${q(`${label}.credential`)} is only valid for https remotes`,
+                );
+              }
+              return [
+                binding,
+                harden({
+                  ...policy,
+                  git: remote.git,
+                  name: remote.name,
+                  ...(credential === undefined ? {} : { credential }),
+                }),
+              ];
+            }),
+        )
+      );
+
+    const seen = new Set();
+    for (const [category, record] of Object.entries({
+      mount,
+      git,
+      gitRemote,
+    })) {
+      for (const name of Object.keys(record)) {
+        if (seen.has(name)) {
+          throw makeError(
+            X`Guest binding ${q(name)} occurs in more than one authority category`,
+          );
+        }
+        seen.add(name);
+      }
+      void category;
+    }
+    return harden({
+      mount: harden(mount),
+      git: harden(git),
+      gitRemote: harden(gitRemote),
+    });
+  };
+
+  /** @param {EndoGuestAuthorityPolicy} policy */
+  const resolveCredentials = async policy => {
+    /** @type {Map<string, ResolvedCredential>} */
+    const resolved = new Map();
+    await allInOrder(
+      Object.entries(policy.gitRemote).map(async ([binding, remote]) => {
+        if (remote.credential === undefined) return;
+        let value;
+        try {
+          value = await lookup(remote.credential);
+        } catch {
+          throw makeCredentialUnavailable(binding);
+        }
+        const path =
+          typeof remote.credential === 'string'
+            ? [remote.credential]
+            : remote.credential;
+        const identifier = await identify(...path);
+        if (identifier === undefined) {
+          throw makeCredentialUnavailable(binding);
+        }
+        let controller;
+        try {
+          controller = await getGitCredentialController(value);
+        } catch {
+          throw makeError(
+            X`Credential for Git remote binding ${q(binding)} is not daemon-minted`,
+          );
+        }
+        const inspection = await E(
+          /** @type {GitCredentialController} */ (controller),
+        ).inspect();
+        if (inspection.available !== true || inspection.revoked === true) {
+          throw makeCredentialUnavailable(binding);
+        }
+        const credential = /** @type {GitCredential} */ (value);
+        const audience = await E(credential).audience();
+        if (audience !== new URL(remote.url).origin) {
+          throw makeError(
+            X`Credential audience does not match Git remote binding ${q(binding)}`,
+          );
+        }
+        resolved.set(binding, harden({ credential, identifier }));
+      }),
+    );
+    return resolved;
+  };
+
+  /** @param {Record<string, string>} introducedNames */
+  const resolveIntroductions = async introducedNames =>
+    harden(
+      Object.fromEntries(
+        await allInOrder(
+          Object.keys(introducedNames)
+            .sort(compareStrings)
+            .map(async hostName => [
+              hostName,
+              (await identify(hostName)) ?? null,
+            ]),
+        ),
+      ),
+    );
+
+  /**
+   * @param {string[]} guestPath
+   * @param {EndoGuestAuthority} authority
+   * @param {Record<string, string>} introducedNames
+   * @param {() => Promise<EndoGuest>} makeGuest
+   */
+  const run = async (guestPath, authority, introducedNames, makeGuest) => {
+    const policy = await normalizeAuthority(authority);
+    const credentials = await resolveCredentials(policy);
+    const introductionIds = await resolveIntroductions(introducedNames);
+    const retainedIntroductions = harden(
+      Object.fromEntries(
+        Object.entries(introducedNames).sort(([left], [right]) =>
+          compareStrings(left, right),
+        ),
+      ),
+    );
+    const controllerPath = harden(['provisioned-guests', ...guestPath]);
+    const policyPath = harden([...controllerPath, 'authority']);
+    const credentialIds = harden(
+      Object.fromEntries(
+        [...credentials].map(([name, value]) => [name, value.identifier]),
+      ),
+    );
+    if (await hasNamePath(policyPath)) {
+      const retained = await lookup(policyPath);
+      if (
+        !keyEQ(
+          retained,
+          harden({
+            policy,
+            credentialIds,
+            introducedNames: retainedIntroductions,
+            introductionIds,
+          }),
+        )
+      ) {
+        throw makeError(
+          X`provideGuest cannot widen or change retained authority for ${q(guestPath.join('/'))}`,
+        );
+      }
+    } else {
+      if (await hasNamePath(guestPath)) {
+        throw makeError(
+          X`provideGuest cannot add authority to an existing unprovisioned guest ${q(guestPath.join('/'))}`,
+        );
+      }
+      for (let length = 1; length <= controllerPath.length; length += 1) {
+        // Directory ancestors must be created in order.
+        // eslint-disable-next-line no-await-in-loop
+        await ensureDirectory(controllerPath.slice(0, length));
+      }
+      // Persist immutable inert policy and credential identities before
+      // minting aliases, so interruption recovery never follows rebound names.
+      await storeValue(
+        harden({
+          policy,
+          credentialIds,
+          introducedNames: retainedIntroductions,
+          introductionIds,
+        }),
+        policyPath,
+      );
+    }
+
+    const mountsPath = harden([...controllerPath, 'mount']);
+    const gitsPath = harden([...controllerPath, 'git']);
+    const remotesPath = harden([...controllerPath, 'git-remote']);
+    await Promise.all([
+      ensureDirectory(mountsPath),
+      ensureDirectory(gitsPath),
+      ensureDirectory(remotesPath),
+    ]);
+
+    /** @type {Map<string, unknown>} */
+    const mounts = new Map();
+    for (const [name, mountPolicy] of Object.entries(policy.mount)) {
+      const alias = harden([...mountsPath, name]);
+      // Realization is intentionally ordered for deterministic recovery.
+      // eslint-disable-next-line no-await-in-loop
+      const mount = await provideOrLookup(alias, () =>
+        provideMount(mountPolicy.root, alias, {
+          readOnly: mountPolicy.readOnly,
+          deniedSegments: mountPolicy.deniedSegments,
+        }),
+      );
+      mounts.set(name, mount);
+    }
+
+    /** @type {Map<string, unknown>} */
+    const gits = new Map();
+    for (const [name, gitPolicy] of Object.entries(policy.git)) {
+      const entryPath = harden([...gitsPath, name]);
+      // Each Git binding depends on its directory and exact-root mount.
+      // eslint-disable-next-line no-await-in-loop
+      await ensureDirectory(entryPath);
+      const mountAlias = harden([...entryPath, 'mount']);
+      const gitAlias = harden([...entryPath, 'git']);
+      // eslint-disable-next-line no-await-in-loop
+      const exactMount = await provideOrLookup(mountAlias, () =>
+        provideMount(gitPolicy.root, mountAlias, {
+          readOnly: gitPolicy.readOnly,
+          deniedSegments: policy.mount[gitPolicy.mount].deniedSegments,
+        }),
+      );
+      // eslint-disable-next-line no-await-in-loop
+      const gitCap = await provideOrLookup(gitAlias, () =>
+        provideGit(/** @type {any} */ (exactMount), gitAlias, {
+          readOnly: gitPolicy.readOnly,
+          allowHistoryRewrite: gitPolicy.allowHistoryRewrite,
+        }),
+      );
+      gits.set(name, gitCap);
+    }
+
+    /** @type {Map<string, unknown>} */
+    const remotes = new Map();
+    for (const [binding, remote] of Object.entries(policy.gitRemote)) {
+      const alias = harden([...remotesPath, binding]);
+      const gitCap = gits.get(remote.git);
+      const credential = credentials.get(binding)?.credential;
+      // Git remotes depend on their named Git binding.
+      // eslint-disable-next-line no-await-in-loop
+      const remoteCap = await provideOrLookup(alias, () =>
+        provideGitRemote(/** @type {any} */ (gitCap), alias, {
+          name: remote.name,
+          url: remote.url,
+          allowedDirections: remote.allowedDirections,
+          fetchRefspecs: remote.fetchRefspecs,
+          pushRefspecs: remote.pushRefspecs,
+          ...(remote.defaultPullRef === undefined
+            ? {}
+            : { defaultPullRef: remote.defaultPullRef }),
+          allowForcePush: remote.allowForcePush,
+          allowTags: remote.allowTags,
+          allowDelete: remote.allowDelete,
+          allowLocalFileTransport: remote.allowLocalFileTransport,
+          ...(remote.allowedBranches === undefined
+            ? {}
+            : { allowedBranches: remote.allowedBranches }),
+          ...(credential === undefined ? {} : { credential }),
+        }),
+      );
+      remotes.set(binding, remoteCap);
+    }
+
+    const guest = await makeGuest();
+    for (const [hostName, guestName] of Object.entries(retainedIntroductions)) {
+      const id = introductionIds[hostName];
+      if (id !== null) {
+        // Introductions bind the retained identifier, never a later alias.
+        // eslint-disable-next-line no-await-in-loop
+        await bindGuestIdentifier(guest, guestName, id);
+      }
+    }
+    for (const name of mounts.keys()) {
+      // Bindings are installed in deterministic category order.
+      // eslint-disable-next-line no-await-in-loop
+      await bindGuest(guest, name, harden([...mountsPath, name]));
+    }
+    for (const name of gits.keys()) {
+      // eslint-disable-next-line no-await-in-loop
+      await bindGuest(guest, name, harden([...gitsPath, name, 'git']));
+    }
+    for (const name of remotes.keys()) {
+      // eslint-disable-next-line no-await-in-loop
+      await bindGuest(guest, name, harden([...remotesPath, name]));
+    }
+    return guest;
+  };
+
+  let tail = Promise.resolve();
+  /** @type {typeof run} */
+  const provideGuestAuthority = (
+    guestPath,
+    authority,
+    introducedNames,
+    makeGuest,
+  ) => {
+    const result = tail.then(() =>
+      run(guestPath, authority, introducedNames, makeGuest),
+    );
+    tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+  return harden(provideGuestAuthority);
+};
+harden(makeGuestAuthorityProvider);

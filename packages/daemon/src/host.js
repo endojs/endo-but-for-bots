@@ -22,6 +22,8 @@ import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import {
   assertPetName,
   assertPetNamePath,
+  isName,
+  isPetName,
   namePathFrom,
   petNamePathFrom,
 } from './pet-name.js';
@@ -50,6 +52,7 @@ import {
 } from './interfaces.js';
 import { hostHelp, makeHelp } from './help-text.js';
 import { assertValidTreeEntryName, getMountBacking } from './mount.js';
+import { makeGuestAuthorityProvider } from './provision/index.js';
 
 /**
  * @param {string} name
@@ -77,7 +80,7 @@ const assertPowersNameOrPath = nameOrPath => {
 /**
  * Normalizes host or guest options, providing default values.
  * @param {MakeHostOrGuestOptions | undefined} opts
- * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath }}
+ * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, authority?: import('./provision/types.js').EndoGuestAuthority }}
  */
 const normalizeHostOrGuestOptions = opts => {
   const agentName = /** @type {NameOrPath | undefined} */ (opts?.agentName);
@@ -86,6 +89,7 @@ const normalizeHostOrGuestOptions = opts => {
       opts?.introducedNames ?? Object.create(null)
     ),
     ...(agentName !== undefined && { agentName }),
+    ...(opts?.authority !== undefined && { authority: opts.authority }),
   };
 };
 
@@ -338,6 +342,11 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['getFormulaGraphSnapshot']} [args.getFormulaGraphSnapshot]
  * @param {DaemonCore['listRetentionPaths']} [args.listRetentionPaths]
  * @param {DaemonCore['followRetentionPaths']} [args.followRetentionPaths]
+ * @param {import('./provision/types.js').ProvisionPathPowers} [args.provisionPathPowers]
+ *   Filesystem and path operations for named guest authority.
+ *   Injected by the supervisor rather than imported here so the daemon core
+ *   stays free of `node:` builtins.
+ *   Without them, authority-bearing `provideGuest()` fails closed.
  * @param {ReturnType<typeof makeTraceAggregator>} [args.traceAggregator]
  *   Optional. When provided, `host.traces()` returns an Exo whose
  *   methods proxy to this aggregator. Without it, `host.traces()`
@@ -423,6 +432,7 @@ export const makeHostMaker = ({
   followRetentionPaths = async function* _follow(_id) {
     return undefined;
   },
+  provisionPathPowers = undefined,
   traceAggregator = undefined,
 }) => {
   /**
@@ -1896,7 +1906,12 @@ export const makeHostMaker = ({
       handleName,
       { introducedNames = Object.create(null), agentName = undefined } = {},
     ) => {
-      let guest = await getNamedAgent(handleName, 'guest');
+      // An explicit agent name is the stable capability identity; the handle
+      // name remains a separate lifecycle artifact.
+      let guest = await getNamedAgent(
+        /** @type {NameOrPath | undefined} */ (agentName ?? handleName),
+        'guest',
+      );
       if (guest === undefined) {
         const guestLabel = agentName
           ? `guest:${agentName}`
@@ -1934,6 +1949,51 @@ export const makeHostMaker = ({
         petNamePathFrom(petName);
       }
       const normalizedOpts = normalizeHostOrGuestOptions(opts);
+      if (normalizedOpts.authority !== undefined) {
+        if (petName === undefined) {
+          throw makeError(
+            X`provideGuest requires a host pet name when authority is supplied`,
+          );
+        }
+        const { namePath } = petNamePathFrom(petName);
+        const authorityBindings = new Set([
+          ...Object.keys(normalizedOpts.authority.mount ?? {}),
+          ...Object.keys(normalizedOpts.authority.git ?? {}),
+          ...Object.keys(normalizedOpts.authority.gitRemote ?? {}),
+        ]);
+        for (const [hostName, guestName] of Object.entries(
+          normalizedOpts.introducedNames,
+        )) {
+          if (!isName(hostName) || !isPetName(guestName)) {
+            throw makeError(
+              X`introducedNames must map host names to guest pet names`,
+            );
+          }
+          if (authorityBindings.has(guestName)) {
+            throw makeError(
+              X`Introduced name ${q(guestName)} conflicts with provisioned authority`,
+            );
+          }
+        }
+        return provideGuestAuthority(
+          namePath,
+          normalizedOpts.authority,
+          normalizedOpts.introducedNames,
+          async () => {
+            const { value } = await makeGuest(
+              /** @type {NameOrPath} */ (
+                harden(['provisioned-guests', ...namePath, 'guest-handle'])
+              ),
+              harden({
+                ...normalizedOpts,
+                introducedNames: {},
+                agentName: /** @type {NameOrPath} */ (petName),
+              }),
+            );
+            return value;
+          },
+        );
+      }
       const { value } = await makeGuest(
         /** @type {NameOrPath | undefined} */ (petName),
         normalizedOpts,
@@ -2327,6 +2387,35 @@ export const makeHostMaker = ({
      * @returns {Promise<unknown>} The value.
      */
     const lookupByLocator = async locator => provide(idFromLocator(locator));
+
+    // Named guest provisioning extends the existing provideGuest lifecycle.
+    // The host validates and retains immutable authority before minting any
+    // capability aliases. Path powers are injected by the supervisor.
+    const provideGuestAuthority = makeGuestAuthorityProvider({
+      pathPowers: provisionPathPowers,
+      has,
+      identify,
+      lookup,
+      makeDirectory: makeDirectoryLocal,
+      storeValue,
+      provideMount,
+      provideGit,
+      provideGitRemote,
+      getGitCredentialController,
+      bindGuest: async (guest, guestName, source) => {
+        const sourcePath = Array.isArray(source) ? source : [source];
+        const id = await identify(...sourcePath);
+        if (id === undefined) {
+          throw makeError(
+            X`Provisioned capability ${q(sourcePath.join('/'))} has no formula identifier`,
+          );
+        }
+        await E(guest).storeIdentifier(guestName, id);
+      },
+      bindGuestIdentifier: async (guest, guestName, id) => {
+        await E(guest).storeIdentifier(guestName, id);
+      },
+    });
 
     /** @type {EndoHost['endow']} */
     const endow = async (messageNumber, bindings, workerName, resultName) => {

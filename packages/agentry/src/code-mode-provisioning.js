@@ -2,155 +2,130 @@
 /// <reference types="ses"/>
 
 /** @import { EndoHost } from '@endo/daemon' */
-/** @import { EndoConnectionFailureObserver, EndoProvisionForkOptions, EndoProvisionPersistence, EndoProvisionResult, ProvisionEndoCodeModeOptions, ReconstructEndoCodeModeOptions } from './code-mode-provisioning-types.js' */
+/** @import { EndoCodeModeConnectionFailureObserver, EndoCodeModeProvisionForkOptions, EndoCodeModeProvisionPersistence, EndoCodeModeProvisionResult, ProvisionEndoCodeModeOptions, ReconstructEndoCodeModeOptions } from './code-mode-provisioning-types.js' */
 
 import { makeCancelKit } from '@endo/cancel';
 import { makeEndoClient } from '@endo/daemon';
-import { makeError, q, X } from '@endo/errors';
+import { makeError, X } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { whereEndoSock } from '@endo/where';
 
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { env, platform } from 'node:process';
 
-import { makeEndoProvisionGrants } from './code-mode-provision-globals.js';
-import { codeModeGrantGlobals } from './code-mode-grants.js';
+import { makeEndoProvisionGlobals } from './code-mode-provision-globals.js';
+import { provideEndoCodeModeGuest } from './code-mode-provision-host.js';
 import {
-  normalizeEndoProvisionSpec,
-  validateEndoProvisionPersistence,
+  normalizeEndoCodeModeProvisionSpec,
+  validateEndoCodeModeProvisionPersistence,
 } from './code-mode-provision-policy.js';
-import { realizeEndoProvisionOnHost } from './code-mode-provision-host.js';
 
-/**
- * @param {string | undefined} sockPath
- * @returns {string}
- */
+/** @param {string | undefined} sockPath */
 const selectSockPath = sockPath => {
-  if (sockPath !== undefined) {
-    if (typeof sockPath !== 'string' || sockPath.length === 0) {
-      throw makeError(X`${q('sockPath')} must be a non-empty string`);
-    }
-    if (sockPath.includes('\0')) {
-      throw makeError(X`${q('sockPath')} must not contain NUL bytes`);
-    }
-    return sockPath;
-  }
-  const user = userInfo().username;
+  if (sockPath !== undefined) return sockPath;
   return whereEndoSock(platform, env, {
     home: homedir(),
-    user,
+    user: userInfo().username,
     temp: tmpdir(),
   });
 };
 
-/**
- * Build the scoped CapTP presentation policy used by code-mode hosts.
- * Promise-delivered application failures remain owned by their awaiting
- * caller; only connection failures cross this host-owned observer boundary.
- *
- * Exported for focused policy tests, but intentionally omitted from the
- * package's public provisioning thunk.
- *
- * @param {EndoConnectionFailureObserver} onConnectionFailure
- */
-export const makeCodeModeCapTpOptions = onConnectionFailure =>
+/** @param {EndoCodeModeConnectionFailureObserver} observer */
+const makeCapTpOptions = observer =>
   harden({
     /**
      * @param {unknown} error
      * @param {{ kind: 'promise' | 'disconnect' | 'protocol' }} context
      */
     onReject: (error, context) => {
-      if (context.kind === 'promise') {
-        return;
+      if (context.kind !== 'promise') {
+        observer(error, harden({ kind: context.kind }));
       }
-      onConnectionFailure(error, harden({ kind: context.kind }));
     },
   });
-harden(makeCodeModeCapTpOptions);
+
+/** @param {unknown} error */
+const classifyProvisionError = error => {
+  if (
+    error instanceof Error &&
+    error.message.includes('ENDO_CREDENTIAL_UNAVAILABLE:')
+  ) {
+    return makeError(X`The configured Git credential is unavailable`, Error, {
+      cause: error,
+      code: 'ENDO_CREDENTIAL_UNAVAILABLE',
+    });
+  }
+  return error;
+};
 
 /**
- * @param {EndoProvisionPersistence} persistence
+ * @param {EndoCodeModeProvisionPersistence} persistence
  * @param {string | undefined} sockPath
- * @param {EndoConnectionFailureObserver | undefined} onConnectionFailure
- * @param {EndoProvisionForkOptions} [forkOptions]
- * @returns {Promise<EndoProvisionResult>}
+ * @param {EndoCodeModeConnectionFailureObserver | undefined} onConnectionFailure
+ * @param {EndoCodeModeProvisionForkOptions} [forkOptions]
+ * @returns {Promise<EndoCodeModeProvisionResult>}
  */
-const connectAndRealize = async (
+const connectAndProject = async (
   persistence,
   sockPath,
   onConnectionFailure,
   forkOptions,
 ) => {
-  await null;
   const { cancelled, cancel } = makeCancelKit();
   /** @type {Promise<void> | undefined} */
   let closed;
   let cleaned = false;
   const cleanup = async () => {
-    if (cleaned) {
-      return;
-    }
+    if (cleaned) return;
     cleaned = true;
-    cancel(makeError(X`Code-mode provisioning session closed`));
+    cancel(makeError(X`Endo code-mode session closed`));
     await closed?.catch(() => {});
   };
-
   try {
-    const harness = persistence.guestHandlePath[1];
-    const sessionKey = persistence.guestHandlePath[2];
-    const capTpOptions =
-      onConnectionFailure === undefined
-        ? undefined
-        : makeCodeModeCapTpOptions(onConnectionFailure);
     const client = await makeEndoClient(
-      `code-mode-${harness}-${sessionKey.slice('session-'.length, 'session-'.length + 12)}`,
+      persistence.guestName.slice(0, 80),
       selectSockPath(sockPath),
       cancelled,
       undefined,
-      capTpOptions,
+      onConnectionFailure === undefined
+        ? undefined
+        : makeCapTpOptions(onConnectionFailure),
     );
     closed = client.closed;
     closed.catch(() => {});
     const bootstrap = await client.getBootstrap();
     const host = /** @type {EndoHost} */ (await E(bootstrap).host());
-    const guest = await realizeEndoProvisionOnHost(
+    const guest = await provideEndoCodeModeGuest(
       host,
       persistence,
       forkOptions,
     );
-    const grants = await makeEndoProvisionGrants(guest, persistence);
     return harden({
-      powers: guest,
-      grants,
-      // Compatibility projection only.  All runtime and prompt consumers use
-      // `grants`; this field cannot be supplied by callers or persisted.
-      globals: codeModeGrantGlobals(grants),
+      guest,
+      globals: makeEndoProvisionGlobals(persistence),
       persistence,
       cleanup,
     });
   } catch (error) {
     await cleanup();
-    throw error;
+    throw classifyProvisionError(error);
   }
 };
 
 /**
- * Provision or recover one deterministic retained daemon guest from inert
- * caller policy. Filesystem and Git grants are selected independently, but a
- * writable Git grant requires a writable filesystem grant: the native Git
- * backend writes the same working tree at the OS level, so a read-only
- * filesystem view cannot coexist with writable Git.
+ * Provision or reacquire one named code-mode guest and project its inert
+ * lexical declarations.
  *
  * @param {ProvisionEndoCodeModeOptions} options
- * @returns {Promise<EndoProvisionResult>}
+ * @returns {Promise<EndoCodeModeProvisionResult>}
  */
 export const provisionEndoCodeMode = async options => {
-  const persistence = await normalizeEndoProvisionSpec(options?.spec, {
+  const persistence = await normalizeEndoCodeModeProvisionSpec(options?.spec, {
     harness: options?.harness,
     sessionId: options?.sessionId,
     cwd: options?.cwd,
   });
-  return connectAndRealize(
+  return connectAndProject(
     persistence,
     options?.sockPath,
     options?.onConnectionFailure,
@@ -159,24 +134,25 @@ export const provisionEndoCodeMode = async options => {
 harden(provisionEndoCodeMode);
 
 /**
- * Reconnect to a retained guest from its normalized, non-secret persistence
- * record. A host-retained copy of the original record is compared before any
- * capability is reused, so descriptor tampering cannot widen authority.
+ * Reacquire a retained code-mode guest by its small opaque guest name.
+ * Pi-specific fork and session context stay in this adapter.
  *
  * @param {ReconstructEndoCodeModeOptions} options
- * @returns {Promise<EndoProvisionResult>}
+ * @returns {Promise<EndoCodeModeProvisionResult>}
  */
 export const reconstructEndoCodeMode = async options => {
-  const persistence = await validateEndoProvisionPersistence(
+  const persistence = await validateEndoCodeModeProvisionPersistence(
     options?.persistence,
   );
-  return connectAndRealize(
+  const forkFrom =
+    options?.forkFrom === undefined
+      ? undefined
+      : await validateEndoCodeModeProvisionPersistence(options.forkFrom);
+  return connectAndProject(
     persistence,
     options?.sockPath,
     options?.onConnectionFailure,
-    options?.forkFrom === undefined
-      ? undefined
-      : { forkFrom: options.forkFrom },
+    forkFrom === undefined ? undefined : { forkFrom },
   );
 };
 harden(reconstructEndoCodeMode);

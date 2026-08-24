@@ -586,7 +586,10 @@ test('XS file powers expose every method the Node file powers expose', t => {
   // pathIdentity throwing "is not a function" before this fix.
   const nodePowers = makeFilePowers({ fs, path });
   const xsPowers = makeXsFilePowers();
-  const nodeMethods = Object.keys(nodePowers).sort();
+  const nodeMethods = Object.entries(nodePowers)
+    .filter(([, value]) => typeof value === 'function')
+    .map(([name]) => name)
+    .sort();
   const missingOnXs = nodeMethods.filter(
     name => typeof (/** @type {any} */ (xsPowers)[name]) !== 'function',
   );
@@ -595,6 +598,19 @@ test('XS file powers expose every method the Node file powers expose', t => {
     [],
     'every Node FilePowers method must also be a function on the XS powers',
   );
+  const nodePathPowers = nodePowers.provisionPathPowers;
+  const xsPathPowers = xsPowers.provisionPathPowers;
+  t.truthy(nodePathPowers);
+  t.truthy(xsPathPowers);
+  t.is(
+    xsPathPowers?.pathSeparator,
+    nodePathPowers?.pathSeparator,
+    'Node and XS provision path powers must use the same separator',
+  );
+  for (const name of ['resolvePath', 'relativePath', 'isAbsolutePath']) {
+    t.is(typeof nodePathPowers?.[name], 'function', `Node ${name}`);
+    t.is(typeof xsPathPowers?.[name], 'function', `XS ${name}`);
+  }
 });
 
 test('XS file powers expose the EndoMount call sites that regressed', t => {

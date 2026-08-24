@@ -18,6 +18,7 @@ import {
   NameOrPathShape,
   NamesOrPathsShape,
 } from './type-guards.js';
+import { MakeGuestOptionsShape } from './provision/shapes.js';
 
 // #region Patterns
 
@@ -409,9 +410,9 @@ export const HostInterface = M.interface('EndoHost', {
   // plugins); do not hand an EndoHost cap to code that should not be
   // able to recover host paths for daemon-minted top-level mounts.
   provideHostPath: M.call(M.any()).returns(M.promise()),
-  // Provide a guest
+  // Provide a retained guest, optionally with immutable named authority.
   provideGuest: M.call()
-    .optional(NameOrPathShape, M.record())
+    .optional(NameOrPathShape, MakeGuestOptionsShape)
     .returns(M.promise()),
   // Provide a host
   provideHost: M.call()

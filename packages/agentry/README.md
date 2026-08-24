@@ -20,9 +20,9 @@ Each surface is opt-in via its own subpath export.
 - `@endo/agentry/code-mode` — the complete Pi code-mode preset and prompt
   assembly (`makeCodeModeAgent`, `makeCodeModeGitLoopAgent`), built on
   `defineAgent` and `@endo/agent-tools`.
-- `@endo/agentry/code-mode-provisioning` — Pi-independent translation from a
-  plain provisioning policy to a retained daemon guest, matching lexical
-  global descriptors, and non-secret reconstruction data.
+- `@endo/agentry/code-mode-provisioning` — the code-mode adapter over a named
+  daemon guest, adding connection ownership, lexical declarations, prompt
+  globals, and Pi session context.
 - `@endo/agentry/endo-code-mode-pi-extension` — a directly loadable Pi extension that binds
   one retained daemon guest to each Pi session and exposes only `evaluate`.
 
@@ -98,10 +98,9 @@ The model-facing tool surface is intentionally one tool:
 storage authority.
 Workspace and Git operations happen inside the Endo Compartment through
 lexical caps (`workspace`, `git`, and any configured named powers).
-Each lexical cap is a `CodeModeGrant` pairing the live capability with its
-generated declaration.
-Runtime endowments, evaluator declarations, collision checks, and prompt text
-are all derived from that grant list.
+Each lexical cap is either a live local endowment or a daemon guest binding.
+Workspace and Git declarations are derived from recognized local posture;
+unknown capabilities remain `unknown` and cannot supply their own declaration.
 
 By default a code-mode session has no `@endo/exo-shell` Shell global: the
 example above only requests `workspace` and `git`, so no shell binding
@@ -164,10 +163,11 @@ An external MCP server is a separate consumer of that package.
 
 ## Daemon code-mode provisioning
 
-`@endo/agentry/code-mode-provisioning` owns the host-privileged lifecycle that
-maps inert session policy into daemon capabilities.
-It is independent of Pi and can feed any code-mode loop that accepts an
-`evaluate` implementation and lexical global descriptors.
+`EndoHost.provideGuest(name, { authority })` owns the host-privileged,
+idempotent lifecycle for a retained named guest.
+`@endo/agentry/code-mode-provisioning` owns the code-mode conveniences around
+that operation: socket discovery, one client per session, cleanup, relative
+workspace paths, lexical declarations, and Pi session context.
 
 ```js
 import { makeDaemonEvaluate } from '@endo/agent-tools/code-mode/daemon.js';
@@ -179,16 +179,20 @@ const session = await provisionEndoCodeMode({
   sessionId: conversationId, // stable across process restarts
   cwd: process.cwd(),
   spec: {
-    workspace: { path: '.', deniedSegments: ['.git', '.env'] },
-    fs: 'readWrite',
+    workspace: {
+      path: '.',
+      mode: 'readWrite',
+      deniedSegments: ['.git', '.env'],
+    },
     git: 'readWrite',
+    introducedNames: { 'calendar-service': 'calendar' },
   },
 });
 
 const { agent } = makeCodeModeAgent({
   model,
-  evaluate: makeDaemonEvaluate(session.powers),
-  powers: { grants: session.grants },
+  evaluate: makeDaemonEvaluate(session.guest),
+  globals: session.globals,
 });
 
 // Save this plain record, not the guest or any daemon capability.
@@ -202,43 +206,59 @@ try {
 }
 ```
 
-The `EndoProvisionSpec` fields are optional grants:
+The code-mode result contains the adapter's opaque retained guest name and
+inert prompt projection.
+The daemon itself needs no caller-held persistence record: an existing host can
+reacquire the guest by lookup or by repeating the same `provideGuest` call.
+Pi stores its own fork, recovery, and `piTools` context in its session entry.
+
+The `EndoCodeModeProvisionSpec` fields are optional adapter selections:
 
 - `piTools`: `'preserve'` keeps Pi's currently active standard and extension
   tools active alongside `evaluate`;
-- `fs`: `'readOnly'` or `'readWrite'`;
+- `workspace`: the compatibility filesystem binding, with `{ path?, mode,
+  deniedSegments? }` and a `readOnly` or `readWrite` mode;
 - `git`: `'readOnly'`, `'readWrite'`, or `'historyRewrite'`;
 - `mounts`: named filesystem roots, each `{ path, mode, deniedSegments? }`
   with a `'readOnly'` or `'readWrite'` mode;
-- `gits`: named Git grants, each `{ mount?, path, mode }` selecting a non-bare
+- `gits`: named Git grants, each `{ mount, path, mode }` selecting a non-bare
   Git worktree by mount-relative path segments; and
-- `grants`: named host pet-name paths, each `{ from, description? }`, bound as
-  opaque code-mode capabilities whose declarations are minted by the trusted
-  provisioning path; and
-- `gitRemotes`: remote policies normalized by `@endo/exo-git`, plus an optional
+- `introducedNames`: a record mapping each single-segment host `Name` to a
+  single-segment guest pet name, for example
+  `{ 'calendar-service': 'calendar' }`; and
+- `gitRemotes`: named remotes, each with an explicit `git` binding reference,
+  a distinct Git protocol `name`, normalized remote policy, and optional
   host-side credential pet name.
 
 There is no `shell` field: retained provisioning never provisions or includes
-a `@endo/exo-shell` Shell global, so `session.grants` above carries only
-the live `workspace` and Git capabilities selected by policy. A caller that
+a `@endo/exo-shell` Shell global, so `session.globals` above carries only
+the policy-derived lexical descriptors. A caller that
 wants Shell composes it separately with
 `makeShellGlobal` and its own capability, as shown in
 [Code mode](#code-mode); omitting it, as this example does, is the opt-out.
 
 Omission grants nothing.
-When either `fs` or `git` is present, `workspace.path` defaults to `cwd`.
-Filesystem and Git are selected independently, except that writable Git
-(`readWrite` or `historyRewrite`) requires a writable filesystem grant:
-`provideGit` builds Git on the same working tree, and the native Git backend
-writes that tree at the OS level, so a read-only `workspace` cannot coexist
-with writable Git. `fs: 'readOnly'` combined with `git: 'readWrite'` or
-`git: 'historyRewrite'` is rejected at provisioning time.
+When `workspace` is present, its path defaults to `cwd`.
+Relative workspace and named-mount selectors are resolved once and persisted
+canonically, so resuming from another process directory does not change
+authority.
+Writable or history-rewrite compatibility `git` requires a guest-visible
+`workspace` with `mode: 'readWrite'`.
+A read-only root Git binding may omit `workspace`; the adapter then retains an
+internal read-only mount as backing without granting a filesystem binding.
+Unlike the generic daemon method, which preserves `provideGuest`'s established
+missing-source behavior, this code-mode adapter requires every
+`introducedNames` source to exist and every guest binding to be unique.
+That keeps its generated lexical declarations consistent with the capabilities
+actually installed in the guest.
+`provideGit` builds Git on the selected mount, and the native backend cannot
+write outside that mount's posture.
 Git remotes therefore require writable Git.
 A remote may set `defaultPullRef` to the fully qualified source of one concrete
 fetch refspec. When omitted, an unqualified pull uses the first declared
 concrete fetch refspec, so declaration order is preserved.
-A remote credential is only a host-side pet name; tokens, passwords, embedded
-URL credentials, and secret-shaped fields are rejected.
+A remote credential is only a host-side pet name or name path; credential
+material is never a field in this inert graph.
 
 Named mounts and Git grants extend the same spec to a session that spans more
 than one filesystem root.
@@ -279,31 +299,28 @@ its grant.
 A Git grant's authority is capped by its selected mount: writable or
 history-rewrite Git requires a writable, guest-bound mount, so a read-only
 mount never leaks write authority through Git.
-The compatibility `workspace`, `fs`, and root `git` fields normalize into this
-same named authority graph, so the two styles compose in one spec.
+The compatibility `workspace` and root `git` fields normalize in agentry to the
+daemon bindings named `workspace` and `git`.
+The daemon contract itself has no code-mode lexical defaults.
 
-Provisioning derives deterministic controller aliases and retained guest handle
-and agent paths from `sessionId`.
-The host-side retained state for the Pi harness lives in the daemon pet store
-under `code-mode/pi/session-<hash>/`, as shown by `endo list`.
-The `code-mode/` root is harness-scoped, so future harnesses can keep their
-state beside `pi/` without sharing session namespaces.
-The host retains those aliases while the guest receives the same formula IDs as
-the simple pet names `workspace`, `git`, and each remote name.
+Agentry derives an opaque guest pet name from its harness and session context.
+The host retains the guest's validated authority privately while the guest
+receives the same formula IDs under each object-key binding name.
 Consequently, daemon evaluation with `resultName` stores the result in the guest
 petstore rather than the host petstore.
 `cleanup()` closes only the caller's CapTP connection and local operations; it
 does not delete the retained formulas or guest.
 
-To resume after disconnect or daemon restart, persist `session.persistence` and
-pass it to `reconstructEndoCodeMode({ persistence })`.
-The versioned record contains only the retained guest pet-name path, canonical
-workspace path, and normalized non-secret policy.
-It excludes capabilities, formula IDs, daemon endpoints, credential material,
-and host authority, and reconstruction rejects policy changes or widening.
+To resume after disconnect or daemon restart, persist the adapter's
+`session.persistence` and pass it to
+`reconstructEndoCodeMode({ persistence })`.
+The record contains the opaque guest name and inert code-mode context, not a
+daemon controller path, formula identifier, endpoint, live capability, or
+credential material.
+The host remains the source of truth for canonical policy and rejects changes
+or widening on repeated provide.
 Credential material is process-local today, so reconstruction after a daemon
-restart reports `EndoCredentialUnavailableError` until the named host credential
-is reprovisioned.
+restart fails until the named host credential is reprovisioned.
 
 ## Pi daemon code mode
 
@@ -313,71 +330,60 @@ it while forwarding every ordinary Pi argument:
 
 ```sh
 pi -e ./node_modules/@endo/agentry/endo-code-mode-pi-extension.js \
-  --endo-provision='{"fs":"readOnly","git":"readOnly"}'
+  --endo-provision='{"workspace":{"mode":"readOnly"},"git":"readOnly"}'
 
-endo-pi --endo-provision='{"fs":"readOnly","git":"readOnly"}'
+endo-pi --endo-provision='{"workspace":{"mode":"readOnly"},"git":"readOnly"}'
 ```
 
 `endo-pi` calls Pi's public `main` and does not add a second command framework.
 The extension registers one string flag, `--endo-provision`, whose value is an
-inert `EndoProvisionSpec`, not a live powers object.
+inert `EndoCodeModeProvisionSpec`, not a live powers object.
 An omitted flag or an empty object grants no filesystem, Git, or remote
 authority.
-When an explicit filesystem or Git grant omits `workspace.path`, the extension
-uses Pi's `cwd`.
+When an explicit workspace omits `workspace.path`, the extension uses Pi's
+`cwd`.
 It never searches the workspace for an authority-policy file.
 
 The following initial-session examples cover the supported local modes:
 
 ```sh
 # Read-only review.
-endo-pi --endo-provision='{"fs":"readOnly","git":"readOnly"}'
+endo-pi --endo-provision='{"workspace":{"mode":"readOnly"},"git":"readOnly"}'
 
 # Writable files with a separate read-only Git view.
-endo-pi --endo-provision='{"fs":"readWrite","git":"readOnly"}'
+endo-pi --endo-provision='{"workspace":{"mode":"readWrite"},"git":"readOnly"}'
 
 # Ordinary writable Git, without amend, reword, or force authority.
-endo-pi --endo-provision='{"git":"readWrite"}'
+endo-pi --endo-provision='{"workspace":{"mode":"readWrite"},"git":"readWrite"}'
 
 # Explicit history-rewrite authority.
-endo-pi --endo-provision='{"git":"historyRewrite"}'
+endo-pi --endo-provision='{"workspace":{"mode":"readWrite"},"git":"historyRewrite"}'
 
 # Keep Pi's standard tools active alongside evaluate.
-endo-pi --endo-provision='{"piTools":"preserve","fs":"readOnly"}'
+endo-pi --endo-provision='{"piTools":"preserve","workspace":{"mode":"readOnly"}}'
 ```
 
-Named grants resolve host pet-name paths once during initial provisioning and
-retain the resulting formula identifiers across restart.
-Their optional descriptions are prompt context only, and runs of three or more
-backticks are rejected so caller text cannot escape the generated TypeScript
-fence.
+Introductions use one host pet name and one guest pet name.
+They deliberately reuse `provideGuest`'s established `introducedNames`
+contract: a missing host source is ignored, and reacquisition applies the same
+host-name-to-guest-name mapping again.
 
 ```sh
 # Combine workspace, filesystem, Git, and a named host capability.
-# First name the capability in the host's pet store, nested under a directory:
-endo mkdir tools
-endo make packages/cli/demo/counter.js --name tools/counter
+# First name the capability in the host's pet store:
+endo make packages/cli/demo/counter.js --name counter
 
 endo-pi --endo-provision='{
-  "fs": "readWrite",
+  "workspace": { "mode": "readWrite" },
   "git": "readWrite",
-  "grants": {
-    "counter": {
-      "from": ["tools", "counter"],
-      "description": "A counter, incremented with E(counter).incr()"
-    }
-  }
+  "introducedNames": { "counter": "counter" }
 }'
 ```
 
 In this example, the counter name is the guest lexical binding and
-["tools","counter"] is a pet-name path in the connected host namespace.
+`counter` is the single-segment host pet name in the connected host namespace.
 The JSON is policy data only; it does not execute code or grant the guest a way
 to look up other host names.
-
-Descriptions are prompt context only.
-They are rendered as one-line comments on opaque declarations; trusted
-TypeScript declarations are selected by the minter, never supplied by policy.
 
 Named mounts and Git grants use the same JSON spec.
 Run from the parent directory of sibling checkouts, this grants a read-only
@@ -428,10 +434,13 @@ Tokens, passwords, authorization headers, credential objects, and embedded URL
 credentials must never be placed in JSON, argv, Pi history, logs, formulas, or
 model context.
 If process-local credential material is unavailable, a trusted TUI or RPC host
-may pass a `rehydrateCredential` option to `makeEndoCodeModePiExtension()`.
-That hook must obtain and reprovision the material through its own non-echoing
-channel; the extension passes it only the non-secret pet name and policy, never
-accepts a secret return value, and retries reconstruction once.
+may pass a `recoverProvisionFailure` option to
+`makeEndoCodeModePiExtension()`.
+That hook receives the failure and non-secret persistence record, decides
+whether it can recover, and must obtain and reprovision any credential material
+through its own non-echoing channel.
+The extension retries reconstruction once when the hook returns `true`; the
+hook never returns secret material.
 
 On every successful session start, the extension appends its latest versioned,
 non-secret persistence record to Pi's custom session entries.
@@ -465,11 +474,11 @@ Print and JSON modes use the same daemon lifecycle and the same single
 
 ```sh
 endo-pi -p \
-  --endo-provision='{"fs":"readOnly","git":"readOnly"}' \
+  --endo-provision='{"workspace":{"mode":"readOnly"},"git":"readOnly"}' \
   'Review the current branch without modifying it.'
 
 endo-pi --mode json \
-  --endo-provision='{"fs":"readWrite","git":"readOnly"}' \
+  --endo-provision='{"workspace":{"mode":"readWrite"},"git":"readOnly"}' \
   'Create NOTES.md from the repository README.'
 ```
 

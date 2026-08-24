@@ -7236,6 +7236,7 @@ const makeDaemonCore = async (
     getMountHostPath,
     getIdForRef,
     writeRemoteAgentKey: persistencePowers.writeRemoteAgentKey,
+    provisionPathPowers: filePowers.provisionPathPowers,
     traceAggregator,
   });
 

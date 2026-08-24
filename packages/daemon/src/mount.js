@@ -534,6 +534,12 @@ harden(resolvePhysicalPath);
  */
 
 /**
+ * @typedef {object} EndoMountControl
+ * @property {() => void} revoke
+ * @property {(method?: string) => string} help
+ */
+
+/**
  * Create a mount exo for a filesystem directory.
  *
  * @param {MountContext} ctx
@@ -1838,7 +1844,7 @@ harden(makeMount);
  * cancellation, and keep the `control` captive so only the daemon can revoke.
  *
  * @param {Parameters<typeof makeMount>[0]} opts
- * @returns {{ mount: object, control: object }}
+ * @returns {{ mount: EndoMount, control: EndoMountControl }}
  */
 export const makeRevocableMount = opts => {
   // `whenRevoked` settles the instant `revoke()` runs, so an open

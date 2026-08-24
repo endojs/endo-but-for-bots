@@ -88,8 +88,7 @@ test('agentry subpaths resolve through package exports', async t => {
   t.deepEqual(
     Object.keys(codeModeProvisioningModule).sort(),
     [
-      'EndoCredentialUnavailableError',
-      'normalizeEndoProvisionSpec',
+      'normalizeEndoCodeModeProvisionSpec',
       'provisionEndoCodeMode',
       'reconstructEndoCodeMode',
     ],
