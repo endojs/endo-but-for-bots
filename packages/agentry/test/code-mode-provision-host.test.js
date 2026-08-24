@@ -4,7 +4,7 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -101,7 +101,9 @@ test('adapter backs read-only root Git with an unintroduced internal mount', asy
   await provideEndoCodeModeGuest(fixture.host, persistence);
   await provideEndoCodeModeGuest(fixture.host, persistence);
 
-  t.deepEqual(mountCalls, [[root, internalGit.mountName, { readOnly: true }]]);
+  t.deepEqual(mountCalls, [
+    [await realpath(root), internalGit.mountName, { readOnly: true }],
+  ]);
   t.deepEqual(gitCalls, [
     [
       mount,

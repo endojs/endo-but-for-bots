@@ -2,7 +2,7 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -36,7 +36,7 @@ test('read-only root Git uses an internal mount without exposing filesystem auth
   t.deepEqual(persistence.authority, {});
   const { internalGit } = persistence;
   if (internalGit === undefined) throw Error('expected internal Git backing');
-  t.is(internalGit.path, root);
+  t.is(internalGit.path, await realpath(root));
   t.is(persistence.introducedNames[internalGit.gitName], 'git');
 });
 
