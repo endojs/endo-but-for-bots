@@ -175,7 +175,7 @@ test('release reports an unmount failure rather than rejecting', async t => {
   const projection = await projector.projectFilesystem(Far('Fs', {}), {
     mountPoint: '/run/endo/mnt/5',
   });
-  await t.notThrowsAsync(projection.release());
+  t.false(await projection.release());
 });
 
 test('a projector with no mounter refuses rather than degrading', async t => {

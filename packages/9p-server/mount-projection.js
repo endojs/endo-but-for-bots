@@ -36,8 +36,8 @@
  * @module
  */
 
-import { E } from '@endo/eventual-send';
 import { makeError, q, X } from '@endo/errors';
+import { E } from '@endo/eventual-send';
 
 import { mountAsFilesystem } from '@endo/platform/fs/extended/from-mount.js';
 
@@ -54,10 +54,10 @@ import { mountAsFilesystem } from '@endo/platform/fs/extended/from-mount.js';
  *   handle, absent on the physical branch. Exposed for callers that hand
  *   teardown to another component (`@endo/claude-sandbox` passes it to
  *   `makeClaudeClient`).
- * @property {() => Promise<void>} release Idempotent teardown of whatever
- *   this projection created. Best-effort: it reports failures on stderr
- *   rather than rejecting, so a teardown sweep is never derailed by one
- *   busy mount.
+ * @property {() => Promise<boolean>} release Idempotent teardown of whatever
+ *   this projection created. Resolves `true` only after a 9P mount has been
+ *   detached; a failed unmount is reported on stderr and resolves `false` so
+ *   callers can preserve any state that a live mount could still reach.
  */
 
 /**
@@ -146,16 +146,19 @@ export const makeMountProjector = ({
     let released = false;
     const release = async () => {
       await null;
-      if (released) return;
-      released = true;
+      if (released) return true;
       try {
         await E(mountHandle).unmount();
+        released = true;
+        return true;
       } catch (error) {
-        // Best-effort: a busy mount must not derail a teardown sweep.
+        // Best-effort: a busy mount must not derail a teardown sweep, but the
+        // false result lets a security-sensitive caller retain its state.
         console.error(
           `[mount-projection] unmount of ${mountPoint} failed`,
           error,
         );
+        return false;
       }
     };
 
@@ -166,11 +169,10 @@ export const makeMountProjector = ({
         mountCap = await provideMount(mountPoint);
       } catch (error) {
         // The kernel mount is live but unusable to the caller; drop it
-        // rather than leak a mount over a name nobody holds.
-        released = true;
-        await E(mountHandle)
-          .unmount()
-          .catch(() => {});
+        // rather than leak a mount over a name nobody holds. Go through the
+        // normal release path so a failed detach is diagnosed and remains
+        // retryable by the mounter's cancellation sweep.
+        await release();
         throw error;
       }
     }
@@ -202,7 +204,7 @@ export const makeMountProjector = ({
           kind: /** @type {const} */ ('physical'),
           hostPath,
           mountCap: mount,
-          release: async () => {},
+          release: async () => true,
         });
       }
     }

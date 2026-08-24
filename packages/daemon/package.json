@@ -56,6 +56,7 @@
     "test:types": "tsc --project tsconfig.test-types.json"
   },
   "dependencies": {
+    "@endo/9p-server": "workspace:^",
     "@endo/base64": "workspace:^",
     "@endo/bytes": "workspace:^",
     "@endo/cancel": "workspace:^",
@@ -84,6 +85,7 @@
     "@endo/platform": "workspace:^",
     "@endo/promise-kit": "workspace:^",
     "@endo/relay-server": "workspace:^",
+    "@endo/sandbox": "workspace:^",
     "@endo/stream": "workspace:^",
     "@endo/stream-node": "workspace:^",
     "@endo/tar": "workspace:^",

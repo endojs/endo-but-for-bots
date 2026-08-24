@@ -11,6 +11,7 @@ import type {
   ReadWriteEndoGit,
 } from '@endo/exo-git';
 import type { HttpClient, HttpClientControl } from '@endo/exo-http-client';
+import type { SandboxHandle } from '@endo/sandbox/types.js';
 import type {
   DirectoryWriteSource,
   PathEntry,
@@ -20,6 +21,8 @@ import type {
   TreeEntry,
 } from '@endo/platform/fs/lite/types';
 import type { ContentKind, ContentSourceHint } from './locator.js';
+
+export type { SandboxHandle };
 
 // Branded string types for pet names and special names
 declare const PetNameBrand: unique symbol;
@@ -408,6 +411,99 @@ export type ShellDeferredTaskParams = {
 };
 
 /**
+ * Why a caller needs a sandbox slice — authority the object-capability
+ * graph cannot describe.  Recorded on every mint and surfaced through
+ * `EndoDiagnostics.listSandboxEscalations()`.  See `src/sandbox.js`
+ * `sandboxEscalationReasons` for what each one means.
+ */
+export type SandboxEscalationReason =
+  'OS_EFFECT' | 'RESOURCE_LIMIT' | 'NATIVE_IMPLEMENTATION';
+
+export type SandboxEscalation = {
+  reason: SandboxEscalationReason;
+  /** The capability that asked for the slice, named by the requester. */
+  capability: string;
+};
+
+/** How a granted mount reached the driver's bind-mount surface. */
+export type SandboxMountProjection = 'physical' | '9p';
+
+/** Caller-facing mount grant: a daemon-minted mount cap and where it lands. */
+export type SandboxMountSpec = {
+  cap: unknown;
+  innerPath: string;
+  mode?: 'ro' | 'rw';
+};
+
+/**
+ * The profile a caller hands `EndoHost.provideSandbox`.  Mirrors
+ * `@endo/sandbox`'s `SandboxMakeOpts` with two differences: `escalation`
+ * is required, and a seccomp *blob* is not accepted (only `'default'` /
+ * `'unconfined'`), because a blob cannot be carried across a restart.
+ */
+export type SandboxProfile = {
+  rootfs: unknown;
+  mounts?: SandboxMountSpec[];
+  network?: 'none' | 'private' | 'host-loopback' | 'host-lan' | 'host-net';
+  backend?: 'auto' | 'bwrap' | 'podman' | 'lima' | 'containerization' | 'wsl';
+  seccomp?: 'default' | 'unconfined';
+  env?: Record<string, string>;
+  cwd?: string;
+  limits?: Record<string, number>;
+  escalation: SandboxEscalation;
+};
+
+/**
+ * The normalized, formula-owned profile persisted by a `sandbox`
+ * formula.  Mount capabilities have been resolved to formula
+ * identifiers, so the profile reconstitutes across a daemon restart
+ * against the same mounts — and re-mints a *fresh* slice, since no
+ * process, stream, or kernel mount survives the restart.
+ */
+export type SandboxFormulaProfile = {
+  rootfs:
+    | { kind: 'host-bind' }
+    | { kind: 'minimal' }
+    | { kind: 'oci'; ref: string }
+    | { kind: 'mount'; mountId: FormulaIdentifier };
+  mounts: Array<{
+    mountId: FormulaIdentifier;
+    innerPath: string;
+    mode: 'ro' | 'rw';
+  }>;
+  network: 'none' | 'private' | 'host-loopback' | 'host-lan' | 'host-net';
+  backend: 'auto' | 'bwrap' | 'podman' | 'lima' | 'containerization' | 'wsl';
+  seccomp: 'default' | 'unconfined';
+  env: Record<string, string>;
+  cwd?: string;
+  limits?: Record<string, number>;
+  escalation: SandboxEscalation;
+};
+
+export type SandboxFormula = {
+  type: 'sandbox';
+  profile: SandboxFormulaProfile;
+};
+
+export type SandboxDeferredTaskParams = {
+  sandboxId: FormulaIdentifier;
+};
+
+/**
+ * One slice mint, as reported by `EndoDiagnostics.listSandboxEscalations()`.
+ * A re-mint after a daemon restart appends a new record: the ledger counts
+ * escalations, not sandboxes.
+ */
+export type SandboxEscalationRecord = {
+  sandboxId: FormulaIdentifier;
+  reason: SandboxEscalationReason;
+  capability: string;
+  backend: string;
+  network: string;
+  projections: Array<{ innerPath: string; kind: SandboxMountProjection }>;
+};
+
+/**
  * The confinement mode a formula-owned HTTP policy can honor across a daemon
  * restart on its own. `tofu-prompt` / `tofu-attenuator` are excluded because
  * they need a live `policyAuthority` capability the formula does not carry.
@@ -665,6 +761,7 @@ export type Formula =
   | ScratchMountFormula
   | GitFormula
   | ShellFormula
+  | SandboxFormula
   | HttpClientFormula
   | GitCredentialFormula
   | GitRemoteFormula
@@ -845,7 +942,7 @@ export interface Context {
   /**
    * @param hook - A hook to run when the value is cancelled.
    */
-  onCancel: (hook: () => void | Promise<void>) => void;
+  onCancel: (hook: () => void | Promise<void>) => Promise<void>;
 }
 
 export interface FarContext {
@@ -1623,6 +1720,23 @@ export interface EndoHost extends EndoAgent {
     policy: ShellPolicy,
   ): Promise<EndoShell>;
   /**
+   * Mint a confined POSIX slice (`@endo/sandbox`) from a formula-owned
+   * profile and bind it to `petName`.  The granted mounts are resolved
+   * to formula identifiers at mint time, so the slice reconstitutes
+   * across a daemon restart against the same mounts — as a *fresh*
+   * slice: no process, stream, or kernel mount survives the restart and
+   * no interrupted work is replayed.
+   *
+   * The profile's `escalation` states why the work must leave the
+   * capability graph and which capability asked; every mint records it
+   * (`EndoDiagnostics.listSandboxEscalations`).  Host-only, like
+   * `provideShell`: a slice is OS-level authority no guest should mint.
+   */
+  provideSandbox(
+    petName: string | string[],
+    profile: SandboxProfile,
+  ): Promise<SandboxHandle>;
+  /**
    * Mint a confined outbound-HTTP `HttpClient`, persist its formula, and bind
    * the use-facing client to `petName`. Unlike `provideShell` / `provideGit`
    * it takes no mount cap — the Network tier is rooted in a host-owned `fetch`
@@ -1895,6 +2009,13 @@ export interface EndoDiagnostics {
   getFormula(identifier: FormulaIdentifier): Promise<FormulaRecord>;
   /** Returns a privileged Exo for inspecting the daemon's error-trace aggregate. */
   traces(): Promise<EndoTraces>;
+  /**
+   * The daemon's sandbox escalation ledger: one record per slice mint,
+   * most recent last, bounded to a recent window. A re-mint after a
+   * restart appends a new record, so the ledger counts escalations
+   * rather than sandboxes.
+   */
+  listSandboxEscalations(): Promise<SandboxEscalationRecord[]>;
 }
 
 export interface EndoTraces {
@@ -2388,9 +2509,39 @@ export type DaemonicControlPowers = {
  * `designs/platform-neutral-hash.md`.
  */
 export type HostToolPowers = {
+  /** A snapshot of the supervisor environment for host-side drivers. */
+  getEnvironment: () => Record<string, string>;
   gitClone: typeof import('@endo/git').gitClone;
   makeNativeGitBackend: typeof import('@endo/git').makeNativeGitBackend;
   makeHostSpawner: typeof import('@endo/host-spawner').makeHostSpawner;
+  /**
+   * `@endo/sandbox`'s entry point: registers every driver the host
+   * supports (bwrap, podman) and returns the factory that mints slices.
+   * Driver registration is probe-gated, so a host with neither binary
+   * still boots — `sandbox` formulas then fail at `make()` with the
+   * probe reasons.
+   */
+  makeSandboxFactory: (
+    // `any` rather than `unknown`: the implementation
+    // (`@endo/sandbox`'s `make`) names its own powers and context types,
+    // and the daemon core is deliberately not compiled against them.
+    powers: any,
+    context: any,
+    options?: { env?: Record<string, string>; ownerId?: string },
+  ) => Promise<any>;
+  /**
+   * `@endo/9p-server`'s mount projector: resolves a mount capability to
+   * a host path, standing up a 9P bridge and kernel mount when the
+   * capability has no local directory of its own.
+   */
+  makeMountProjector: (options: {
+    env?: Record<string, string>;
+    cancelled?: Promise<never> | null;
+    resolveHostPath?: (cap: unknown) => Promise<string | undefined>;
+  }) => {
+    projectMount: (cap: any, options: any) => Promise<any>;
+    projectFilesystem: (fs: any, options: any) => Promise<any>;
+  };
 };
 
 export type DaemonicPowers = {
@@ -2708,6 +2859,11 @@ export interface DaemonCore {
     policy: ShellPolicy,
     deferredTasks: DeferredTasks<ShellDeferredTaskParams>,
   ) => FormulateResult<EndoShell>;
+
+  formulateSandbox: (
+    profile: SandboxFormulaProfile,
+    deferredTasks: DeferredTasks<SandboxDeferredTaskParams>,
+  ) => FormulateResult<SandboxHandle>;
 
   formulateHttpClient: (
     policy: HttpClientPolicy,
