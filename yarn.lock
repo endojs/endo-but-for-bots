@@ -1872,6 +1872,20 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/crc32@workspace:^, @endo/crc32@workspace:packages/crc32":
+  version: 0.0.0-use.local
+  resolution: "@endo/crc32@workspace:packages/crc32"
+  dependencies:
+    "@endo/bytes": "workspace:^"
+    "@endo/harden": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    prettier: "npm:^3.9.6"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/daemon-cas@workspace:^, @endo/daemon-cas@workspace:packages/daemon-cas":
   version: 0.0.0-use.local
   resolution: "@endo/daemon-cas@workspace:packages/daemon-cas"
@@ -1898,6 +1912,7 @@ __metadata:
     "@endo/cancel": "workspace:^"
     "@endo/captp": "workspace:^"
     "@endo/compartment-mapper": "workspace:^"
+    "@endo/crc32": "workspace:^"
     "@endo/daemon-cas": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
@@ -1924,6 +1939,7 @@ __metadata:
     "@endo/promise-kit": "workspace:^"
     "@endo/relay-server": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/sha256": "workspace:^"
     "@endo/stream": "workspace:^"
     "@endo/stream-node": "workspace:^"
     "@endo/tar": "workspace:^"
@@ -3574,6 +3590,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/zip@workspace:packages/zip"
   dependencies:
+    "@endo/crc32": "workspace:^"
     "@endo/harden": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
