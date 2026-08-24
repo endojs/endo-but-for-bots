@@ -6,7 +6,7 @@
  */
 
 import type { ExecutionContext } from 'ava';
-import type { InspectOptionsStylized, inspect as nodeInspect } from 'util';
+import type { InspectContext, inspect as nodeInspect } from 'util';
 import type { makeReadPowers } from '../src/node-powers.js';
 import type {
   ArchiveOptions,
@@ -94,7 +94,7 @@ export type MakeProjectFixtureReadPowersOptions = Simplify<
  */
 export type FixedCustomInspectFunction = (
   depth: number,
-  options: InspectOptionsStylized,
+  options: InspectContext,
   inspect: typeof nodeInspect,
 ) => any;
 
@@ -113,10 +113,10 @@ export type CustomInspectStyles = Simplify<
 
 declare module 'node:util' {
   /**
-   * Augments the `stylize` method of `InspectOptionsStylized` to allow
+   * Augments the `stylize` method of `InspectContext` to allow
    * {@link CustomInspectStyles} to be applied.
    */
-  interface InspectOptionsStylized {
+  interface InspectContext {
     stylize(text: string, styleType: keyof CustomInspectStyles): string;
   }
 }
