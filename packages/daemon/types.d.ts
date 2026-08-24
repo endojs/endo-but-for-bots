@@ -30,6 +30,18 @@ import type {
   SpecialName,
   StampedMessage,
   ValueMessage,
+  HashlineAnchor,
+  HashlineEditOpKind,
+  HashlineEditOp,
+  HashlineEditPatch,
+  HashlineAnchorMismatch,
+  HashlineReapplyAmbiguity,
+  HashlineEditFailure,
+  HashlineAnchorRelocation,
+  HashlineEditResult,
+  HashlineSpliceOutcome,
+  Sha256HexFn,
+  HashlineApplyEditOptions,
 } from './src/types.js';
 
 export type {
@@ -62,6 +74,18 @@ export type {
   NameOrPath,
   StampedMessage,
   ValueMessage,
+  HashlineAnchor,
+  HashlineEditOpKind,
+  HashlineEditOp,
+  HashlineEditPatch,
+  HashlineAnchorMismatch,
+  HashlineReapplyAmbiguity,
+  HashlineEditFailure,
+  HashlineAnchorRelocation,
+  HashlineEditResult,
+  HashlineSpliceOutcome,
+  Sha256HexFn,
+  HashlineApplyEditOptions,
 };
 export function start(config?: Config): Promise<void>;
 export function stop(config?: Config): Promise<void>;

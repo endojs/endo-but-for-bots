@@ -32,6 +32,7 @@
     "./type-guards.js": "./src/type-guards.js",
     "./src/interfaces.js": "./src/interfaces.js",
     "./src/mount.js": "./src/mount.js",
+    "./src/hashline.js": "./src/hashline.js",
     "./src/manager-node-powers.js": "./src/manager-node-powers.js",
     "./package.json": "./package.json"
   },
@@ -61,6 +62,7 @@
     "@endo/cancel": "workspace:^",
     "@endo/captp": "workspace:^",
     "@endo/compartment-mapper": "workspace:^",
+    "@endo/crc32": "workspace:^",
     "@endo/daemon-cas": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
@@ -101,6 +103,7 @@
   "devDependencies": {
     "@endo/bundle-source": "workspace:^",
     "@endo/ses-ava": "workspace:^",
+    "@endo/sha256": "workspace:^",
     "@types/ws": "^8.18.1",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
