@@ -1,6 +1,6 @@
 // @ts-check
 
-import { crc32 } from './crc32.js';
+import { crc32 } from '@endo/crc32';
 import { BufferWriter } from './buffer-writer.js';
 import { writeZip as writeZipFormat } from './format-writer.js';
 import { STORE, DEFLATE } from './compression.js';

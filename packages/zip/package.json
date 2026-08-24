@@ -39,6 +39,7 @@
     "test:c8": "c8 ${C8_OPTIONS:-} yarn run -T ses-ava"
   },
   "dependencies": {
+    "@endo/crc32": "workspace:^",
     "@endo/harden": "workspace:^"
   },
   "devDependencies": {
