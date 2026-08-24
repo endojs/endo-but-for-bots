@@ -78,7 +78,7 @@ test('rejections are uncaught exceptions with unhandledRejectionTrapping: none',
         code = null;
       } else {
         // eslint-disable-next-line no-bitwise
-        code = ((err && err.code) || 0) & 0xff;
+        code = (err && typeof err.code === 'number' ? err.code : 0) & 0xff;
       }
       t.log({ stdout, stderr, code });
 
