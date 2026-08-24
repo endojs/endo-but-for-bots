@@ -38,9 +38,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@anthropic-ai/sdk@npm:^0.116.0":
-  version: 0.116.0
-  resolution: "@anthropic-ai/sdk@npm:0.116.0"
+"@anthropic-ai/sdk@npm:^0.117.1":
+  version: 0.117.1
+  resolution: "@anthropic-ai/sdk@npm:0.117.1"
   dependencies:
     json-schema-to-ts: "npm:^3.1.1"
     standardwebhooks: "npm:^1.0.0"
@@ -51,7 +51,7 @@ __metadata:
       optional: true
   bin:
     anthropic-ai-sdk: bin/cli
-  checksum: 10c0/ef3e712bbe7605404b96a4d3b1cf24e6ccdc13a44e58962af34ab4e049084a1683223b88c1106b34b541cf70ce3a7928fd507455c80428a5e631788babedbe78
+  checksum: 10c0/c9787f18b864195a049cf9c95e53211fbd392ad20dc251aa437f7eb400ebf6e40d528b47164466bf8ad2b795fa50004eca26efb26927c03a0441911028592806
   languageName: node
   linkType: hard
 
@@ -1063,60 +1063,59 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@earendil-works/pi-agent-core@npm:^0.84.1":
-  version: 0.84.1
-  resolution: "@earendil-works/pi-agent-core@npm:0.84.1"
+"@earendil-works/pi-agent-core@npm:^0.84.2":
+  version: 0.84.2
+  resolution: "@earendil-works/pi-agent-core@npm:0.84.2"
   dependencies:
-    "@earendil-works/pi-ai": "npm:^0.84.1"
-    "@earendil-works/pi-telemetry": "npm:^0.84.1"
+    "@earendil-works/pi-ai": "npm:^0.84.2"
+    "@earendil-works/pi-telemetry": "npm:^0.84.2"
     diff: "npm:8.0.4"
     ignore: "npm:7.0.5"
     typebox: "npm:1.3.7"
     yaml: "npm:2.9.0"
-  checksum: 10c0/4477fa53ba0daf35605aa75dd31b5ffab7a9df98c793475d320b256fecf08f71e9b27c018d9b76edfee470cd775c7e6239fa1b87ac177783daaa17bf1a624a7c
+  checksum: 10c0/40157dc44588cdf956b52c82ebc769a5dafa29c7c609c71b842c0ea18c5f436e02a812f1e94aa9aa320da779093027b26c3166febaa1d3e28357cb0923875499
   languageName: node
   linkType: hard
 
-"@earendil-works/pi-ai@npm:^0.84.1":
-  version: 0.84.1
-  resolution: "@earendil-works/pi-ai@npm:0.84.1"
+"@earendil-works/pi-ai@npm:^0.84.2":
+  version: 0.84.2
+  resolution: "@earendil-works/pi-ai@npm:0.84.2"
   dependencies:
     "@anthropic-ai/sdk": "npm:0.91.1"
     "@aws-sdk/client-bedrock-runtime": "npm:3.1048.0"
-    "@earendil-works/pi-telemetry": "npm:^0.84.1"
+    "@earendil-works/pi-telemetry": "npm:^0.84.2"
     "@google/genai": "npm:1.52.0"
-    "@mistralai/mistralai": "npm:2.2.6"
     "@opentelemetry/api": "npm:1.9.0"
     "@smithy/node-http-handler": "npm:4.7.3"
     http-proxy-agent: "npm:7.0.2"
     https-proxy-agent: "npm:7.0.6"
-    openai: "npm:6.26.0"
+    openai: "npm:6.40.0"
     partial-json: "npm:0.1.7"
     typebox: "npm:1.3.7"
   bin:
     pi-ai: dist/cli.js
-  checksum: 10c0/ea8ab47f4a19d217349f73e6dcacc91fbfb4d8f50c94298077318d90b4d6aa3d232f33c75600ceef91121f6f543febc8c4c5d1aec16518d94f580d275d4d1835
+  checksum: 10c0/a61672e695c976a50ee98224bb94dea393d4dd122110202b3a1e0dad2de4b35003491acc68427e1ef54df78453022b59ba3a11b5f56e4d39a5d5f72a9f961643
   languageName: node
   linkType: hard
 
-"@earendil-works/pi-client@npm:^0.84.1":
-  version: 0.84.1
-  resolution: "@earendil-works/pi-client@npm:0.84.1"
+"@earendil-works/pi-client@npm:^0.84.2":
+  version: 0.84.2
+  resolution: "@earendil-works/pi-client@npm:0.84.2"
   dependencies:
-    "@earendil-works/pi-protocol": "npm:^0.84.1"
-  checksum: 10c0/c229d059e3b1d0b8ccae9871ac6127eada3f7a45e2de2806518ce9ccf9e9724509e2963bac41feb12f9b737823ee5095f7c3f417e9a45c5bc2ea135a5823f2c0
+    "@earendil-works/pi-protocol": "npm:^0.84.2"
+  checksum: 10c0/5ab1bc06176ed7166f12202264c341c949e83c1f21481b71056f0a5182077dee87307220c0ca595e74608135c1037add11f3f432c1e6b7892463af56d8320011
   languageName: node
   linkType: hard
 
-"@earendil-works/pi-coding-agent@npm:^0.84.1":
-  version: 0.84.1
-  resolution: "@earendil-works/pi-coding-agent@npm:0.84.1"
+"@earendil-works/pi-coding-agent@npm:^0.84.2":
+  version: 0.84.2
+  resolution: "@earendil-works/pi-coding-agent@npm:0.84.2"
   dependencies:
-    "@earendil-works/pi-agent-core": "npm:^0.84.1"
-    "@earendil-works/pi-ai": "npm:^0.84.1"
-    "@earendil-works/pi-client": "npm:^0.84.1"
-    "@earendil-works/pi-protocol": "npm:^0.84.1"
-    "@earendil-works/pi-tui": "npm:^0.84.1"
+    "@earendil-works/pi-agent-core": "npm:^0.84.2"
+    "@earendil-works/pi-ai": "npm:^0.84.2"
+    "@earendil-works/pi-client": "npm:^0.84.2"
+    "@earendil-works/pi-protocol": "npm:^0.84.2"
+    "@earendil-works/pi-tui": "npm:^0.84.2"
     "@mariozechner/clipboard": "npm:0.3.9"
     "@silvia-odwyer/photon-node": "npm:0.3.4"
     chalk: "npm:5.6.2"
@@ -1139,33 +1138,33 @@ __metadata:
       optional: true
   bin:
     pi: dist/cli.js
-  checksum: 10c0/d38fc7db6fe5f7714c64b114f9ffc88e45da6d5663d989725c61bf7bd8786ef431b66c884bb6acc0a6be0256c6a4ce027daf6b082059da8760bc72b56eba31c5
+  checksum: 10c0/188ed2cca26dffe11ed15d612e8a1aebe834848c05019c0ae74aaf080fee39715675aa26603567ec213c97b537c264ea703df63d0fa1f83e5145008b04af6760
   languageName: node
   linkType: hard
 
-"@earendil-works/pi-protocol@npm:^0.84.1":
-  version: 0.84.1
-  resolution: "@earendil-works/pi-protocol@npm:0.84.1"
+"@earendil-works/pi-protocol@npm:^0.84.2":
+  version: 0.84.2
+  resolution: "@earendil-works/pi-protocol@npm:0.84.2"
   dependencies:
     typebox: "npm:1.3.7"
-  checksum: 10c0/6f26151aa3f2c801120393bff2e5485b9d37ba38fbd6a315a7c0e396aea85dc79809e0fd62136e136ffbce7d55b43c11b0f6e691cc5831513d893778d5e3d0e2
+  checksum: 10c0/03ab0f018226ed6525952d085667fa9b47225ee1000c359460a81d81594c44785723112bfa67fed499b6b488e661f4b457d50c32c57855fd6fbeebe8c32fbb69
   languageName: node
   linkType: hard
 
-"@earendil-works/pi-telemetry@npm:^0.84.1":
-  version: 0.84.1
-  resolution: "@earendil-works/pi-telemetry@npm:0.84.1"
-  checksum: 10c0/3b1832f77bf56e59c90d52c04e916b6dd5b63ae516660e02a61cbce80e382200137dbe66b47bb2432fa50db0664aa994c360ace3806f4fcc670386ecd795c106
+"@earendil-works/pi-telemetry@npm:^0.84.2":
+  version: 0.84.2
+  resolution: "@earendil-works/pi-telemetry@npm:0.84.2"
+  checksum: 10c0/195b396aba9c327de50c23c41fe98d5e220b2eb67380f7ecb6f2c97c68b0b708a25f416431dc855cc1b6f26fa2e0a23e64ff499d30c7bc996c1c43a9afe6dcb9
   languageName: node
   linkType: hard
 
-"@earendil-works/pi-tui@npm:^0.84.1":
-  version: 0.84.1
-  resolution: "@earendil-works/pi-tui@npm:0.84.1"
+"@earendil-works/pi-tui@npm:^0.84.2":
+  version: 0.84.2
+  resolution: "@earendil-works/pi-tui@npm:0.84.2"
   dependencies:
     get-east-asian-width: "npm:1.6.0"
     marked: "npm:18.0.5"
-  checksum: 10c0/bd9cf91baec69b7c61f4f33af619a0b5cf4e421c1695829c51993a9ff258068492c188a64c2a6b9f7adfe678e1334d09d07fb05fffaaa11f757bf51917377872
+  checksum: 10c0/d59860937633f6a1f1decf023b2bee1dcd33392cdf2121c938e17b417fb2efa03f4bc41367acfccd5ffd7e56e3f371d6cda32630f5529966e578d857d5854e70
   languageName: node
   linkType: hard
 
@@ -1384,8 +1383,8 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/agent-tools@workspace:packages/agent-tools"
   dependencies:
-    "@earendil-works/pi-agent-core": "npm:^0.84.1"
-    "@earendil-works/pi-ai": "npm:^0.84.1"
+    "@earendil-works/pi-agent-core": "npm:^0.84.2"
+    "@earendil-works/pi-ai": "npm:^0.84.2"
     "@endo/daemon": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo-git": "workspace:^"
@@ -1407,8 +1406,8 @@ __metadata:
     expect-type: "npm:^1.4.0"
     typescript: "catalog:dev"
   peerDependencies:
-    "@earendil-works/pi-agent-core": ^0.84.1
-    "@earendil-works/pi-ai": ^0.84.1
+    "@earendil-works/pi-agent-core": ^0.84.2
+    "@earendil-works/pi-ai": ^0.84.2
   peerDependenciesMeta:
     "@earendil-works/pi-agent-core":
       optional: true
@@ -1421,10 +1420,10 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/agentry@workspace:packages/agentry"
   dependencies:
-    "@earendil-works/pi-agent-core": "npm:^0.84.1"
-    "@earendil-works/pi-ai": "npm:^0.84.1"
-    "@earendil-works/pi-coding-agent": "npm:^0.84.1"
-    "@earendil-works/pi-tui": "npm:^0.84.1"
+    "@earendil-works/pi-agent-core": "npm:^0.84.2"
+    "@earendil-works/pi-ai": "npm:^0.84.2"
+    "@earendil-works/pi-coding-agent": "npm:^0.84.2"
+    "@earendil-works/pi-tui": "npm:^0.84.2"
     "@endo/agent-tools": "workspace:^"
     "@endo/cancel": "workspace:^"
     "@endo/daemon": "workspace:^"
@@ -1584,7 +1583,7 @@ __metadata:
     "@endo/ses-ava": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
-    capnweb: "npm:^0.10.0"
+    capnweb: "npm:^0.11.1"
     eslint: "catalog:dev"
     ses: "workspace:^"
     typescript: "catalog:dev"
@@ -2381,7 +2380,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/floot@workspace:packages/floot"
   dependencies:
-    "@anthropic-ai/sdk": "npm:^0.116.0"
+    "@anthropic-ai/sdk": "npm:^0.117.1"
     "@endo/cli": "workspace:^"
     "@endo/conversation-tree": "workspace:^"
     "@endo/eventual-send": "workspace:^"
@@ -2689,9 +2688,9 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/lal@workspace:packages/lal"
   dependencies:
-    "@anthropic-ai/sdk": "npm:^0.116.0"
-    "@earendil-works/pi-agent-core": "npm:^0.84.1"
-    "@earendil-works/pi-ai": "npm:^0.84.1"
+    "@anthropic-ai/sdk": "npm:^0.117.1"
+    "@earendil-works/pi-agent-core": "npm:^0.84.2"
+    "@earendil-works/pi-ai": "npm:^0.84.2"
     "@endo/agent-tools": "workspace:^"
     "@endo/agentry": "workspace:^"
     "@endo/cli": "workspace:^"
@@ -4638,23 +4637,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@mistralai/mistralai@npm:2.2.6":
-  version: 2.2.6
-  resolution: "@mistralai/mistralai@npm:2.2.6"
-  dependencies:
-    "@opentelemetry/semantic-conventions": "npm:^1.40.0"
-    ws: "npm:^8.18.0"
-    zod: "npm:^3.25.0 || ^4.0.0"
-    zod-to-json-schema: "npm:^3.25.0"
-  peerDependencies:
-    "@opentelemetry/api": ^1.9.0
-  peerDependenciesMeta:
-    "@opentelemetry/api":
-      optional: true
-  checksum: 10c0/056efabcbb8a6dc0d14a529fef92d021df0f6e485f2ef9786fbfd95a5c70f1359d1b4eb0aee727ad6e76195a0d158808d97d68a367431226db788f8c6863369d
-  languageName: node
-  linkType: hard
-
 "@napi-rs/lzma-linux-x64-gnu@npm:1.5.1":
   version: 1.5.1
   resolution: "@napi-rs/lzma-linux-x64-gnu@npm:1.5.1"
@@ -5410,13 +5392,6 @@ __metadata:
   version: 1.9.0
   resolution: "@opentelemetry/api@npm:1.9.0"
   checksum: 10c0/9aae2fe6e8a3a3eeb6c1fdef78e1939cf05a0f37f8a4fae4d6bf2e09eb1e06f966ece85805626e01ba5fab48072b94f19b835449e58b6d26720ee19a58298add
-  languageName: node
-  linkType: hard
-
-"@opentelemetry/semantic-conventions@npm:^1.40.0":
-  version: 1.41.1
-  resolution: "@opentelemetry/semantic-conventions@npm:1.41.1"
-  checksum: 10c0/c54b1edf845766e93026d30fd95e15da9dba8d7a5b58f8c320c5d36ab542c77b37868f3e8e3d78ec162da8ee2afd24781f0a65934c9bdbc1aea86b47b12f074c
   languageName: node
   linkType: hard
 
@@ -6413,44 +6388,44 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@turbo/darwin-64@npm:2.10.9":
-  version: 2.10.9
-  resolution: "@turbo/darwin-64@npm:2.10.9"
+"@turbo/darwin-64@npm:2.10.10":
+  version: 2.10.10
+  resolution: "@turbo/darwin-64@npm:2.10.10"
   conditions: os=darwin & cpu=x64
   languageName: node
   linkType: hard
 
-"@turbo/darwin-arm64@npm:2.10.9":
-  version: 2.10.9
-  resolution: "@turbo/darwin-arm64@npm:2.10.9"
+"@turbo/darwin-arm64@npm:2.10.10":
+  version: 2.10.10
+  resolution: "@turbo/darwin-arm64@npm:2.10.10"
   conditions: os=darwin & cpu=arm64
   languageName: node
   linkType: hard
 
-"@turbo/linux-64@npm:2.10.9":
-  version: 2.10.9
-  resolution: "@turbo/linux-64@npm:2.10.9"
+"@turbo/linux-64@npm:2.10.10":
+  version: 2.10.10
+  resolution: "@turbo/linux-64@npm:2.10.10"
   conditions: (os=android | os=linux) & cpu=x64
   languageName: node
   linkType: hard
 
-"@turbo/linux-arm64@npm:2.10.9":
-  version: 2.10.9
-  resolution: "@turbo/linux-arm64@npm:2.10.9"
+"@turbo/linux-arm64@npm:2.10.10":
+  version: 2.10.10
+  resolution: "@turbo/linux-arm64@npm:2.10.10"
   conditions: (os=android | os=linux) & cpu=arm64
   languageName: node
   linkType: hard
 
-"@turbo/windows-64@npm:2.10.9":
-  version: 2.10.9
-  resolution: "@turbo/windows-64@npm:2.10.9"
+"@turbo/windows-64@npm:2.10.10":
+  version: 2.10.10
+  resolution: "@turbo/windows-64@npm:2.10.10"
   conditions: os=win32 & cpu=x64
   languageName: node
   linkType: hard
 
-"@turbo/windows-arm64@npm:2.10.9":
-  version: 2.10.9
-  resolution: "@turbo/windows-arm64@npm:2.10.9"
+"@turbo/windows-arm64@npm:2.10.10":
+  version: 2.10.10
+  resolution: "@turbo/windows-arm64@npm:2.10.10"
   conditions: os=win32 & cpu=arm64
   languageName: node
   linkType: hard
@@ -8262,10 +8237,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"capnweb@npm:^0.10.0":
-  version: 0.10.0
-  resolution: "capnweb@npm:0.10.0"
-  checksum: 10c0/32c7a2a1533394e83ff960363fe1b85a490e7724fa52089328d2f704b19cb73076caf92b7a55e34102f6f800811202e39c423a20fad67cfa548514ce87a6c2ba
+"capnweb@npm:^0.11.1":
+  version: 0.11.1
+  resolution: "capnweb@npm:0.11.1"
+  checksum: 10c0/8077d8df97aea2a48de80eb51cb67144635f9c66e9b903f1d3b13a8bee73755065074427f05a3d8f8f44f24e7704617aaecd98c2914e64e1a09ad32ec8b83bc0
   languageName: node
   linkType: hard
 
@@ -10032,15 +10007,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"eslint-plugin-eslint-plugin@npm:^7.6.1":
-  version: 7.6.1
-  resolution: "eslint-plugin-eslint-plugin@npm:7.6.1"
+"eslint-plugin-eslint-plugin@npm:^7.6.2":
+  version: 7.6.2
+  resolution: "eslint-plugin-eslint-plugin@npm:7.6.2"
   dependencies:
     "@eslint-community/eslint-utils": "npm:^4.4.0"
     estraverse: "npm:^5.3.0"
   peerDependencies:
     eslint: ">=9.0.0"
-  checksum: 10c0/ccef0b2bf8ed2f3ef93545b970bc7f6cbebd546e2a931d8b7f73a884766de810b907934c9f67350badafa372109a19617c9c7d322a430f688787d7ccce6f9f90
+  checksum: 10c0/3a520ed4f2e75e08692be3e8813afdad9ac09670141d826d42c4816457f90336774badc27f73e75a67fb0e0948f30cd739a10cd7c85e0057a7c666a6a21ba3a8
   languageName: node
   linkType: hard
 
@@ -11304,10 +11279,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"globals@npm:^17.10.0":
-  version: 17.10.0
-  resolution: "globals@npm:17.10.0"
-  checksum: 10c0/b1035f63a1070ebb4361096bb8d0037d0d6bb5a023618ab6307ac1a635fd8daeafbd161f6ebbcc5e2f25b364919beed66788f374c46b07135a9abf3c7ac9a245
+"globals@npm:^17.11.0":
+  version: 17.11.0
+  resolution: "globals@npm:17.11.0"
+  checksum: 10c0/5e1be3d816e04d4d0d01b1cdd40e46b5fb6b5e9f15aece9a5919b060e0fb1b3f1b9e7327dce97ef19e05513a6d65872e0834999ddea251557556dddd0f5fde30
   languageName: node
   linkType: hard
 
@@ -12465,14 +12440,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"js-yaml@npm:^5.2.3":
-  version: 5.2.3
-  resolution: "js-yaml@npm:5.2.3"
+"js-yaml@npm:^5.3.0":
+  version: 5.3.0
+  resolution: "js-yaml@npm:5.3.0"
   dependencies:
     argparse: "npm:^2.0.1"
   bin:
     js-yaml: bin/js-yaml.mjs
-  checksum: 10c0/55cd6310c8eee88d432ae038d451ac9d6aa0eb9e5d38a94df3d6c4a4015d08c9dad7c18669e0e8854e4173a615d6b6b7448bd0aac408773f8a46122ffd863c69
+  checksum: 10c0/c67383a74026f3b550fe1131c6f0f56df11e227fc9b8b8c1c85154f106831a95a944f2dd4f505498d537790483aec7cd5e3d5e9913fe28fa2d131eeb894a0fd9
   languageName: node
   linkType: hard
 
@@ -14980,9 +14955,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"openai@npm:6.26.0":
-  version: 6.26.0
-  resolution: "openai@npm:6.26.0"
+"openai@npm:6.40.0":
+  version: 6.40.0
+  resolution: "openai@npm:6.40.0"
   peerDependencies:
     ws: ^8.18.0
     zod: ^3.25 || ^4.0
@@ -14991,9 +14966,7 @@ __metadata:
       optional: true
     zod:
       optional: true
-  bin:
-    openai: bin/cli
-  checksum: 10c0/dc045e8ed317dead468ecb342040eaee1e5388f2042f926dab4d0d0ec51b3dce41167edf16003ca850d594cbdbc8cc279a0529ec7820d8c86f3b8d33b6941b40
+  checksum: 10c0/fde60f66be934e52c61f0ef864817f4f4ee0bc76ac345599c29a6bfa4ffe5a4563a9e3af5fbc5b9c4bf36a3f06a8b3c0bd9f735f94b8019d6018c6b2ec43c0cf
   languageName: node
   linkType: hard
 
@@ -16831,12 +16804,12 @@ __metadata:
     eslint-config-jessie: "npm:^0.0.6"
     eslint-config-prettier: "npm:^10.1.8"
     eslint-import-resolver-exports: "npm:^1.0.0-beta.5"
-    eslint-plugin-eslint-plugin: "npm:^7.6.1"
+    eslint-plugin-eslint-plugin: "npm:^7.6.2"
     eslint-plugin-import: "catalog:dev"
     eslint-plugin-jsdoc: "npm:^62.5.5"
     eslint-plugin-unicorn: "npm:^73.0.0"
-    globals: "npm:^17.10.0"
-    js-yaml: "npm:^5.2.3"
+    globals: "npm:^17.11.0"
+    js-yaml: "npm:^5.3.0"
     lerna: "npm:^8.2.4"
     npm-packlist: "npm:^11.3.0"
     prettier: "npm:^3.9.6"
@@ -16846,7 +16819,7 @@ __metadata:
     source-map: "npm:^0.8.0"
     ts-node-pack: "npm:^0.3.5"
     tsd: "catalog:dev"
-    turbo: "npm:^2.10.9"
+    turbo: "npm:^2.10.10"
     type-coverage: "npm:^2.30.1"
     typedoc: "npm:^0.28.20"
     typedoc-plugin-mermaid: "npm:^1.12.0"
@@ -18203,16 +18176,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"turbo@npm:^2.10.9":
-  version: 2.10.9
-  resolution: "turbo@npm:2.10.9"
+"turbo@npm:^2.10.10":
+  version: 2.10.10
+  resolution: "turbo@npm:2.10.10"
   dependencies:
-    "@turbo/darwin-64": "npm:2.10.9"
-    "@turbo/darwin-arm64": "npm:2.10.9"
-    "@turbo/linux-64": "npm:2.10.9"
-    "@turbo/linux-arm64": "npm:2.10.9"
-    "@turbo/windows-64": "npm:2.10.9"
-    "@turbo/windows-arm64": "npm:2.10.9"
+    "@turbo/darwin-64": "npm:2.10.10"
+    "@turbo/darwin-arm64": "npm:2.10.10"
+    "@turbo/linux-64": "npm:2.10.10"
+    "@turbo/linux-arm64": "npm:2.10.10"
+    "@turbo/windows-64": "npm:2.10.10"
+    "@turbo/windows-arm64": "npm:2.10.10"
   dependenciesMeta:
     "@turbo/darwin-64":
       optional: true
@@ -18228,7 +18201,7 @@ __metadata:
       optional: true
   bin:
     turbo: bin/turbo
-  checksum: 10c0/0e60e745ae954cd1dfb6f263714ffa280651e2540aaa6d16b77dd3d8144f05a707c094623eb5540b75f62fee30af30636da18d9abdd5a68c31ee52f6892bbb71
+  checksum: 10c0/766b6f776b952d106567eaddd5948cf774b12ca5bbd8cd5fccde09a53ff30fd54403e8a28b5c51fff22af4bd80f3436c0ba821aa21dcd7f8cf2a9b07710e6010
   languageName: node
   linkType: hard
 
@@ -19610,22 +19583,6 @@ __metadata:
   version: 3.2.1
   resolution: "yoga-layout@npm:3.2.1"
   checksum: 10c0/9001e51be993c85e03757e5a04a2b61b8b30c9e5a7865d0156ca87a6431a3b717d51eb4990bfe588189fcfeac688dd9c3de707bbd50d1c344a84e63974cc54a8
-  languageName: node
-  linkType: hard
-
-"zod-to-json-schema@npm:^3.25.0":
-  version: 3.25.2
-  resolution: "zod-to-json-schema@npm:3.25.2"
-  peerDependencies:
-    zod: ^3.25.28 || ^4
-  checksum: 10c0/dd300554393903022487688af14fbda5c719ba8179702bb55b3aa86318830467f0f7beb7d654036975ac963dc4843b72e59636448bfff9a0608f277bb6a14939
-  languageName: node
-  linkType: hard
-
-"zod@npm:^3.25.0 || ^4.0.0":
-  version: 4.4.2
-  resolution: "zod@npm:4.4.2"
-  checksum: 10c0/aa5097464c41cf22d715cbc29873ae6feaaf56e687b81d140458d7c01201e7b9de1ee46c8567b5458ee3c0068b8a82b2652535b5d39589fcb5562d861c83ded3
   languageName: node
   linkType: hard
 
