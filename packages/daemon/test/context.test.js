@@ -107,17 +107,48 @@ test('onCancel hooks run during cancellation', async t => {
   t.true(hookRan);
 });
 
-test('onCancel after cancel is a no-op', async t => {
+test('onCancel after cancel runs the late hook', async t => {
   const { createContext } = setupContextMaker();
   const ctx = createContext(id('a:node'));
 
   await ctx.cancel(new Error('done'));
 
   let lateHookRan = false;
-  ctx.onCancel(() => {
+  await ctx.onCancel(() => {
     lateHookRan = true;
   });
-  t.false(lateHookRan, 'hook registered after cancel should not run');
+  t.true(lateHookRan, 'late resources must not escape cancellation');
+});
+
+test('a late hook registered during disposal delays disposed', async t => {
+  const { createContext } = setupContextMaker();
+  const ctx = createContext(id('a:node'));
+
+  let lateHookFinished = false;
+  const disposed = ctx.cancel(new Error('done'));
+  const lateHook = ctx.onCancel(async () => {
+    await null;
+    lateHookFinished = true;
+  });
+
+  await disposed;
+  await lateHook;
+  t.true(lateHookFinished);
+});
+
+test('onCancel after cancel reports a late hook failure', async t => {
+  const { createContext } = setupContextMaker();
+  const ctx = createContext(id('a:node'));
+
+  await ctx.cancel(new Error('done'));
+
+  await t.throwsAsync(
+    () =>
+      ctx.onCancel(() => {
+        throw new Error('late cleanup failed');
+      }),
+    { message: 'late cleanup failed' },
+  );
 });
 
 test('thatDiesIfThisDies after cancel cancels the dependent', async t => {

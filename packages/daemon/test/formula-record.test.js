@@ -98,3 +98,39 @@ test('makeFormulaRecord omits a scratch-mount path when unresolved', t => {
     readOnly: { kind: 'literal', value: false },
   });
 });
+
+test('makeFormulaRecord preserves OCI refs and repeated sandbox mounts', t => {
+  const firstMount =
+    /** @type {import('../src/types.js').FormulaIdentifier} */ ('first-mount');
+  const secondMount =
+    /** @type {import('../src/types.js').FormulaIdentifier} */ ('second-mount');
+  const formula = /** @type {Formula} */ (
+    /** @type {unknown} */ ({
+      type: 'sandbox',
+      profile: {
+        rootfs: { kind: 'oci', ref: 'docker.io/library/alpine:3.19' },
+        mounts: [
+          { mountId: firstMount, innerPath: '/workspace', mode: 'ro' },
+          { mountId: secondMount, innerPath: '/workspace', mode: 'rw' },
+        ],
+        backend: 'podman',
+        network: 'none',
+        escalation: { reason: 'OS_EFFECT', capability: 'test' },
+      },
+    })
+  );
+
+  const record = makeFormulaRecord(formula, aNumber);
+
+  t.deepEqual(record.properties.rootfs, {
+    kind: 'literal',
+    value: { kind: 'oci', ref: 'docker.io/library/alpine:3.19' },
+  });
+  t.deepEqual(record.properties.mounts, {
+    kind: 'reference-list',
+    entries: {
+      '0:/workspace': firstMount,
+      '1:/workspace': secondMount,
+    },
+  });
+});

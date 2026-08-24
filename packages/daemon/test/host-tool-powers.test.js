@@ -3,10 +3,8 @@
 // `provideHostToolPowers` is the seam that lets `manager.js` and
 // `host.js` carry no static import of `@endo/git` or
 // `@endo/host-spawner`, which is what lets the daemon bundle for XS.
-// No daemon test can reach its refusal branch, because every Node
-// supervisor supplies all three tools, so the refusal diagnostic (the
-// only diagnosis an XS-daemon user gets for a `git` or `shell`
-// formula) is pinned here directly.
+// The refusal diagnostics for host-side formulas and the no-host-tools
+// environment seam are pinned here directly.
 
 import '@endo/init/debug.js';
 
@@ -29,6 +27,7 @@ const provideLoosely = provided =>
 test('every tool refuses when the supervisor supplied none', t => {
   for (const provided of [undefined, {}]) {
     const tools = provideLoosely(provided);
+    t.deepEqual(tools.getEnvironment(), {});
     for (const name of toolNames) {
       t.throws(() => tools[name](), {
         message: new RegExp(`no host tool powers.*"${name}"`),
