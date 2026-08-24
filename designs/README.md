@@ -1,5 +1,21 @@
 # Endo Design Documents
 
+*Layered on 2026-08-24 (rolling index refresh): indexed six design files that had
+landed on `llm` without a summary-table row — the Ironhorse trio
+[ironhorse-engine](ironhorse-engine.md), [ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md),
+and [ironhorse-test262-convergence](ironhorse-test262-convergence.md) (the latter two joining
+`ironhorse-snapshot-store-seam` and `ironhorse-debugger-recovery-and-uncaught` in the M11
+Rust-daemon table), plus [platform-neutral-hash](platform-neutral-hash.md),
+[conservative-regexp-subset](conservative-regexp-subset.md), and
+[readableblob-range-attenuation](readableblob-range-attenuation.md) — and reconciled stale
+Status cells against each file's own header: the four-layer importLocation stack Proposed →
+Not Started (the 2026-07-10 flip the prose recorded but the table never carried), the git
+capability trio Proposed → In Progress, `daemon-agent-network-identity` /
+`daemon-locator-terminology` / `agentry-git-verb-gaps` / `endopi-edit-tool` advanced to their
+current in-progress state, and `endo-fs-seam-review-followups` Proposed → Complete. A fresh
+Status-column tally supersedes the drifted historical totals; see the 2026-08-24 current-totals
+line under the Summary table.*
+
 *Layered on 2026-08-16: added [endo-claude](endo-claude.md) to M6 (MCP Bridge
 Hosting): `@endo/claude`, a hermetically-sandboxed `claude -p` that provides an
 Endo guest its LLM inference from a Claude subscription, confined so its only
@@ -311,25 +327,25 @@ LLM-agent stack).*
 | [chat-spaces-inbox](chat-spaces-inbox.md) | 2026-02-21 | 2026-02-24 | **Complete** |
 | [chat-test-coverage](chat-test-coverage.md) | 2026-03-02 | 2026-03-02 | **Complete** |
 | [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md) | 2026-02-24 | 2026-03-02 | **Complete** |
-| [daemon-agent-network-identity](daemon-agent-network-identity.md) | 2026-03-02 | 2026-03-02 | Not Started |
+| [daemon-agent-network-identity](daemon-agent-network-identity.md) | 2026-03-02 | 2026-03-18 | In Progress |
 | [daemon-agent-tools](daemon-agent-tools.md) | 2026-03-02 | 2026-08-06 | In Progress |
 | [daemon-commands-as-messages](daemon-commands-as-messages.md) | 2026-03-11 | 2026-03-11 | Not Started |
 | [daemon-capability-bank](daemon-capability-bank.md) | 2026-02-15 | 2026-02-24 | Not Started |
 | [daemon-checkin-checkout](daemon-checkin-checkout.md) | 2026-03-17 | 2026-05-19 | **Complete** |
 | [daemon-capability-filesystem](daemon-capability-filesystem.md) | 2026-02-15 | 2026-05-19 | Reference |
 | [daemon-content-store-gc](daemon-content-store-gc.md) | 2026-03-20 | 2026-05-08 | **Complete** |
-| [daemon-git-capability](daemon-git-capability.md) | 2026-05-18 | 2026-07-06 | Proposed |
-| [daemon-git-remotes](daemon-git-remotes.md) | 2026-05-18 | 2026-05-29 | Proposed |
-| [daemon-git-next-steps](daemon-git-next-steps.md) | 2026-05-27 | 2026-06-03 | Proposed |
+| [daemon-git-capability](daemon-git-capability.md) | 2026-05-18 | 2026-07-06 | In Progress |
+| [daemon-git-remotes](daemon-git-remotes.md) | 2026-05-18 | 2026-05-29 | In Progress |
+| [daemon-git-next-steps](daemon-git-next-steps.md) | 2026-05-27 | 2026-06-03 | In Progress |
 | [endo-content-locators-magnet-urn](endo-content-locators-magnet-urn.md) | 2026-07-10 | 2026-07-10 | Not Started |
 | [endo-fs-from-git](endo-fs-from-git.md) | 2026-05-28 | 2026-05-28 | In Progress |
 | [daemon-message-streaming](daemon-message-streaming.md) | 2026-03-26 | 2026-07-22 | **Complete** (PR #125: `editMessage`, `messageHistory`, `done`; supersedes the retired `streamReply` sketch) |
 | [daemon-mount](daemon-mount.md) | 2026-03-20 | 2026-05-27 | In Progress |
 | [daemon-mount-capabilities](daemon-mount-capabilities.md) | 2026-05-18 | 2026-05-27 | **Complete** |
-| [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-06-02 | Proposed |
-| [registry-capability](registry-capability.md) | 2026-06-02 | 2026-06-02 | Proposed |
-| [mvs-resolver](mvs-resolver.md) | 2026-06-02 | 2026-06-02 | Proposed |
-| [snapshot-mapper](snapshot-mapper.md) | 2026-06-02 | 2026-06-02 | Proposed |
+| [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-06-02 | Not Started |
+| [registry-capability](registry-capability.md) | 2026-06-02 | 2026-06-02 | Not Started |
+| [mvs-resolver](mvs-resolver.md) | 2026-06-02 | 2026-06-02 | Not Started |
+| [snapshot-mapper](snapshot-mapper.md) | 2026-06-02 | 2026-06-02 | Not Started |
 | [filesystem-watchers](filesystem-watchers.md) | 2026-05-07 | 2026-05-07 | Not Started |
 | [platform-fs](platform-fs.md) | 2026-03-18 | 2026-05-19 | **Complete** |
 | [fs-interface-reconciliation](fs-interface-reconciliation.md) | 2026-06-18 | 2026-06-19 | In Progress |
@@ -356,6 +372,11 @@ LLM-agent stack).*
 | [endor-git-bindings](endor-git-bindings.md) | 2026-07-15 | 2026-08-14 | Proposed |
 | [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md) | 2026-08-06 | 2026-08-18 | In Progress |
 | [ironhorse-debugger-recovery-and-uncaught](ironhorse-debugger-recovery-and-uncaught.md) | 2026-08-12 | 2026-08-14 | Proposed |
+| [ironhorse-engine](ironhorse-engine.md) | 2026-07-02 | — | Approved |
+| [ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md) | 2026-07-05 | — | Not Started |
+| [ironhorse-test262-convergence](ironhorse-test262-convergence.md) | 2026-07-05 | — | In Progress |
+| [platform-neutral-hash](platform-neutral-hash.md) | 2026-07-22 | 2026-08-12 | In Progress |
+| [conservative-regexp-subset](conservative-regexp-subset.md) | 2026-07-10 | 2026-07-29 | Not Started |
 | [endor-run-expanded](endor-run-expanded.md) | 2026-04-17 | 2026-04-17 | In Progress |
 | [endor-npm-registry-proxy](endor-npm-registry-proxy.md) | 2026-04-17 | 2026-04-17 | In Progress |
 | [endor-registry-proxy-worker](endor-registry-proxy-worker.md) | 2026-08-06 | — | Proposed |
@@ -363,7 +384,7 @@ LLM-agent stack).*
 | [daemon-form-request](daemon-form-request.md) | 2026-02-25 | 2026-03-02 | **Complete** |
 | [endoclaw](endoclaw.md) | 2026-03-03 | 2026-03-03 | Reference |
 | [endopi](endopi.md) | 2026-05-15 | 2026-06-25 | Reference |
-| [endopi-edit-tool](endopi-edit-tool.md) | 2026-05-15 | 2026-05-15 | Proposed |
+| [endopi-edit-tool](endopi-edit-tool.md) | 2026-05-15 | 2026-07-10 | In Progress |
 | [endopi-jsonl-transcript-format](endopi-jsonl-transcript-format.md) | 2026-05-15 | 2026-05-15 | Proposed |
 | [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md) | 2026-05-15 | 2026-05-15 | Proposed (partially satisfied by `packages/genie`) |
 | [endopi-skills-markdown-format](endopi-skills-markdown-format.md) | 2026-05-15 | 2026-05-15 | Proposed |
@@ -383,7 +404,7 @@ LLM-agent stack).*
 | [endo-reminder](endo-reminder.md) | 2026-07-10 | 2026-07-10 | Not Started |
 | [endoclaw-voice](endoclaw-voice.md) | 2026-03-03 | 2026-03-03 | Not Started |
 | [endoclaw-webhooks](endoclaw-webhooks.md) | 2026-03-03 | 2026-03-03 | Not Started |
-| [daemon-locator-terminology](daemon-locator-terminology.md) | 2026-02-24 | 2026-02-24 | Not Started |
+| [daemon-locator-terminology](daemon-locator-terminology.md) | 2026-02-24 | 2026-05-10 | In Progress |
 | [daemon-os-sandbox-plugin](daemon-os-sandbox-plugin.md) | 2026-02-15 | 2026-03-19 | Superseded by [endo-posix-sandbox](endo-posix-sandbox.md) |
 | [endo-posix-sandbox](endo-posix-sandbox.md) | 2026-05-07 | 2026-05-07 | In Progress (Phase 3) |
 | [daemon-value-message](daemon-value-message.md) | 2026-03-02 | 2026-03-03 | **Complete** |
@@ -438,7 +459,7 @@ LLM-agent stack).*
 | [agent-tools-mount-fs-tools](agent-tools-mount-fs-tools.md) | 2026-06-01 | 2026-06-25 | Superseded |
 | [endo-agent-tools](endo-agent-tools.md) | 2026-06-03 | 2026-06-25 | In Progress |
 | [agentry-agent-builder](agentry-agent-builder.md) | 2026-06-03 | 2026-08-18 | In Progress |
-| [agentry-git-verb-gaps](agentry-git-verb-gaps.md) | 2026-07-08 | 2026-07-08 | Proposed |
+| [agentry-git-verb-gaps](agentry-git-verb-gaps.md) | 2026-07-08 | 2026-08-05 | In Progress |
 | [agentry-git-eval-scenarios](agentry-git-eval-scenarios.md) | 2026-07-08 | 2026-07-17 | Not Started |
 | [unhandled-rejection-display](unhandled-rejection-display.md) | 2026-05-10 | 2026-05-18 | **Complete** |
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
@@ -449,12 +470,13 @@ LLM-agent stack).*
 | [captp-error-identification](captp-error-identification.md) | 2026-07-02 | 2026-07-02 | Proposed |
 | [daemon-engo-supervisor](daemon-engo-supervisor.md) | 2026-02-25 | 2026-02-25 | Not Started |
 | [daemon-locator-reference](daemon-locator-reference.md) | 2026-03-18 | 2026-05-10 | Reference |
-| [endo-fs-seam-review-followups](endo-fs-seam-review-followups.md) | 2026-06-18 | 2026-06-18 | Proposed |
+| [endo-fs-seam-review-followups](endo-fs-seam-review-followups.md) | 2026-06-18 | 2026-06-18 | **Complete** |
 | [http-confine](http-confine.md) | 2026-07-08 | 2026-07-08 | Proposed |
 | [inter-package-plain-re-exports](inter-package-plain-re-exports.md) | 2026-06-27 | 2026-06-27 | Not Started |
 | [intra-package-plain-re-exports](intra-package-plain-re-exports.md) | 2026-06-26 | 2026-06-30 | Not Started |
 | [notifier-pubsub-migration](notifier-pubsub-migration.md) | 2026-06-23 | 2026-06-26 | Proposed |
 | [platform-range-and-tree-reads](platform-range-and-tree-reads.md) | 2026-07-12 | 2026-07-12 | In Progress |
+| [readableblob-range-attenuation](readableblob-range-attenuation.md) | 2026-07-22 | 2026-07-22 | Proposed |
 | [unredacted-stack-sanctioned-ses-api](unredacted-stack-sanctioned-ses-api.md) | 2026-07-02 | 2026-07-10 | Proposed |
 | [worker-rust-xs](worker-rust-xs.md) | 2026-03-23 | 2026-03-23 | Not Started |
 | [outliner-design-doc-2](outliner-design-doc-2.md) | 2026-07-22 | 2026-07-22 | Proposed (research note) |
@@ -471,6 +493,8 @@ LLM-agent stack).*
 | [ses-import-attributes](ses-import-attributes.md) | 2026-05-14 | 2026-05-15 | Draft |
 
 **Totals:** 44 Complete/Implemented, 27 In Progress, 41 Not Started, 26 Proposed, 2 Active, 7 Reference, 2 Deprecated, 1 Draft, 2 Superseded (152 designs). 2026-08-16 adds `endo-claude` (Not Started) to M6 (MCP Bridge Hosting): `@endo/claude`, a hermetic `claude -p` whose only capability surface is one guest facet's MCP projection, the inverse direction of the minion.town mcp-endo-guest / mcp-daemon-guest-tools companions; Not Started 40 to 41, total 151 to 152; summary table, M6 constituent note, dependency graph, and per-design estimate synced. 2026-07-13 adds `ocapn-iroh-netlayer` (**Complete**), the iroh 1.0 QUIC netlayer for `@endo/ocapn` shipped as `@endo/ocapn-iroh`. 2026-07-24 adds `buffered-channel-exo-stream-consolidation` (**Complete**), the PR #486 review follow-up that consolidates the floot and claude-sandbox buffered reply channels onto a new push-fed `@endo/exo-stream` export; phases 1–2 (the `makeBufferedReader` primitive plus both package migrations) landed together on the floot–claude-sandbox integration branch, with the buffer-option semantics specified in the doc (no producer-side bound; the initiator's `iterateReader` `buffer` is prefetch-only for this channel); phase 3 (consumer flips to `iterateReader`, chat's `makeTextFeed` folded in, and the legacy surface dropped) has since landed too, so the design is Complete. 2026-07-16 adds `ocapn-orthogonal-persistence` (In Progress: the `@endo/thixotrope` prototype and the `@endo/captp` `provideImport` seam landed with the design; the XS engine adapter and durable host exports remain), In Progress +1, total 147 → 148. 2026-07-10 accepts the four-layer daemon-worker `importLocation` stack (`registry-capability`, `mvs-resolver`, `snapshot-mapper`, `daemon-worker-import-from-mount`): all four flip Proposed to Not Started together, with the canonical dependency-ordered build plan in `daemon-worker-import-from-mount` § *Phased Implementation*; the same pass recounts the table by tallying the status column of the summary table (the prose totals had drifted two designs low, 145 → 147). The recount, independent of the flips, corrects the prior prose by In Progress +2, Not Started −1, and Proposed +1 (two designs previously uncounted); the four Proposed to Not Started flips then add Not Started +4 / Proposed −4, so the buckets net to In Progress 24 → 26, Not Started 37 → 40, and Proposed 29 → 26, each reproducible by the same tally. 2026-07-09 revises `agentry-git-eval-scenarios` (Not Started) into a three-scenario git code-mode eval set: `stage-and-commit`, buildable `conflict-rebase`, and `stack-surgery` with fixture/scorer work landing behind a pending row while live activation depends on agentry-git-verb-gaps. 2026-07-08 adds `agentry-git-verb-gaps` (Proposed), the narrow local-git history-editing surface for the agentry `stack-surgery` eval lane. 2026-07-06 flips `daemon-agent-tools` from Not Started to In Progress: the reconciliation pass replaced its pre-trio `Dir`/`Shell`/`Git` sketch with the landed vocabulary (the filesystem and local-git tool groups shipped via the mount/git trio and `@endo/agent-tools` #523/#524), and the doc now carries the phased remaining work — the mount-derived `Shell` capability, the remaining file tools, the push tier, and provisioning — as buildable spec. 2026-06-25 adds the #416 pair: `endo-agent-tools` (In Progress, since #523 and #524 landed its first tools and the code-mode declaration renderer) and `agentry-agent-builder` (In Progress, its `defineAgent` builder core landed in #517; the extended surface is aspirational), and flips `agent-tools-mount-fs-tools` to Superseded (its raw-mount read tool is replaced by the canonical `ToolRecord` filesystem read tool). 2026-06-19 recounts the summary table (the prose totals had drifted four designs low — `137/18/29` → the recounted `141/21/28` across designs/In Progress/Proposed — and folds in the `fs-interface-consolidation` progress below). 2026-06-18 adds `fs-interface-consolidation` (In Progress), the sequenced follow-up that reduces overlap across the fs/name-hub guards once `fs-interface-reconciliation` aligned their names; all five phases have now landed — C2 shared records, C3/C4 daemon read-surface convergence (including the cross-surface mount unification and the blob range-I/O alignment), C1 EndoNameHub+EndoDirectory unification, and C5 dead-guard removal. The early "retire `BlobRef`" framing was reversed: `BlobRef` is the richest blob shape, so the daemon/lite blobs aligned **up** to its `getInfo`/`fetch` range-I/O surface (the shared `rangeReadMethodGuards` / `ReadableBlobRangeInterface`) and every public hash accessor moved to base64. The 2026-06-15 pass flips `break-dev-dependency-cycles` from In Progress to Complete (on `llm`) on the strength of cycle-graph verification (combined dep+devDep SCC count is 0; self-loop count is 0). 2026-05-27 adds `daemon-git-next-steps` (Proposed) as the forward-looking roadmap over the canonical git trio. Refreshed 2026-06-02 by the daemon-worker-import-from-mount decomposition: three new Proposed designs (`registry-capability`, `mvs-resolver`, `snapshot-mapper`) land as siblings of the repurposed integration-layer doc. The 2026-06-01 pass adds the **Peer App Sharing** milestone (formerly "Milestone A"; now Milestone 8 after the 2026-06-03 renumbering pass) including `app-sharing-milestone` and its three new Proposed designs (`familiar-deep-link-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); see "Milestone 8: Peer App Sharing" below. Refreshed 2026-05-19 by a status-only sweep (consolidating the 2026-05-18 sweep with the 2026-05-19 batch update for 11 additional designs from closed PR #302) plus the patterns-diagnostic-feedback and ocapn-noise-session-reconnect Proposed entries; the 12-design jump in Complete/Implemented over the 2026-05-08 snapshot reflects shipped work whose Status field had not previously been updated, not new completions in that pass; see the corresponding "## Status" sections in each design file for evidence pointers (commit SHA or PR number). Totals reflect the 17 design files added on `llm` since the sweep's branch point (the endopi raft of `endopi` + 8 `endopi-*` gap-closing designs, `hardened-text-codecs-shim`, `hardened-url-shim`, namehub-interface-unification (Proposed) added by PR #117 on rebase, forge-gap-analysis (Reference) added 2026-05-20, the daemon mount and git capability trio: `daemon-mount-capabilities` + `daemon-git-capability` + `daemon-git-remotes`, `daemon-git-next-steps` (added 2026-05-27), and `gateway-package`, with the prior endo-gateway design folded into gateway-package and removed), plus the endo-gateway-mcp (Not Started) entry added 2026-05-29, the `daemon-worker-import-from-mount` (Proposed) entry added 2026-05-22, and the three layer-split designs from the 2026-06-02 refresh.
+
+**Current totals (2026-08-24, rolling index refresh):** 47 Complete/Implemented, 34 In Progress, 50 Not Started, 36 Proposed, 2 Active, 13 Reference, 2 Deprecated, 1 Draft, 4 Superseded, 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phase 1 implemented* (191 designs). This supersedes every count above, including the running **Totals:** line; the buckets are reproducible by tallying the Status column of the summary table. This pass added six previously-unindexed design files to the summary table: the Ironhorse trio [ironhorse-engine](ironhorse-engine.md) (Approved), [ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md) (Not Started), and [ironhorse-test262-convergence](ironhorse-test262-convergence.md) (In Progress) — also folded into the M11 (Rust Daemon `endor`) table alongside their `ironhorse-snapshot-store-seam` / `ironhorse-debugger-recovery-and-uncaught` siblings — plus [platform-neutral-hash](platform-neutral-hash.md) (In Progress), [conservative-regexp-subset](conservative-regexp-subset.md) (Not Started), and [readableblob-range-attenuation](readableblob-range-attenuation.md) (Proposed). It also reconciled stale Status cells against each design file's own Status field: the four-layer importLocation stack ([daemon-worker-import-from-mount](daemon-worker-import-from-mount.md), [registry-capability](registry-capability.md), [mvs-resolver](mvs-resolver.md), [snapshot-mapper](snapshot-mapper.md)) Proposed → Not Started (applying the 2026-07-10 flip the prose above already recorded but the table never carried); the git trio ([daemon-git-capability](daemon-git-capability.md), [daemon-git-remotes](daemon-git-remotes.md), [daemon-git-next-steps](daemon-git-next-steps.md)) Proposed → In Progress (accepted 2026-07-11, phases landed); [daemon-agent-network-identity](daemon-agent-network-identity.md) and [daemon-locator-terminology](daemon-locator-terminology.md) Not Started → In Progress; [agentry-git-verb-gaps](agentry-git-verb-gaps.md) and [endopi-edit-tool](endopi-edit-tool.md) Proposed → In Progress; and [endo-fs-seam-review-followups](endo-fs-seam-review-followups.md) Proposed → **Complete**.
 
 **Current totals (2026-08-16, post-2026-07-20-grooming rebase):** 43 Complete/Implemented, 22 In Progress, 40 Not Started, 32 Proposed, 2 Active, 7 Reference, 2 Deprecated, 3 Superseded (151 designs). This supersedes the counts in the historical summaries above. The 2026-08-16 pass adds [endo-claude](endo-claude.md) (Not Started), so Not Started goes 39 -> 40 and the design count 150 -> 151. The 2026-07-29 `pass-style-promise` rebase added [pass-style-promise](pass-style-promise.md) (Proposed), so Proposed went 31 → 32 and the design count 149 → 150; the 2026-07-20 grooming pass then flips [chat-pending-commands](chat-pending-commands.md) from In Progress to Complete (PR #133 merged to `llm` 2026-07-13), so Complete goes 42 → 43 and In Progress 23 → 22.
 
@@ -1248,6 +1272,9 @@ user interface move to Rust.
 | endor-tui | Not Started | TUI entry point for `endor`: Chat UI in terminal idiom, and an integrated stepping debugger for XS workers (XS `mxDebug` protocol) |
 | endor-bus-tui | Not Started | Bus-protocol verbs for worker-owned TUI regions, XS handle API, Exo/CapTP wrapper |
 | endor-native-zip-xs | Proposed | Raw-DEFLATE host functions selected by `@endo/zip` under `-C xs`, with bounded inflation and snapshot ABI update |
+| ironhorse-engine | Approved | Stage-1 design of the supervised `port-xs-to-rust-memory-safe-engine` program: feasibility, architecture, and a staged roadmap for porting the ~75 KLOC XS engine to a Rust crate the `endor` daemon embeds in-process, replacing the C engine behind the `Machine` API while preserving metering, the debugger protocol, and heap snapshots. Implementation accretes onto the same branch/PR (#600); all ten open questions resolved. The parent design that `ironhorse-snapshot-store-seam`, `ironhorse-meter-opcode-cost-instrumentation`, `ironhorse-test262-convergence`, and `ironhorse-debugger-recovery-and-uncaught` extend. |
+| ironhorse-meter-opcode-cost-instrumentation | Not Started | Sibling plan to `ironhorse-engine` § Metering: the opcode/builtin-step cost-calibration instrumentation that measures per-opcode real cost on a named reference platform, supplying the frozen integer weights for Ironhorse's release-versioned deterministic meter (accuracy-over-parity doctrine; determinism per release, recalibration across releases). |
+| ironhorse-test262-convergence | In Progress | Completion-phase milestone (per kriskowal's PR #600 directive): converge the bespoke per-stage corpus into test262-style cases and the dual-run harness into an `xst` analogue (`ironhorse-xst`). The bounded, resumable whole-tree reporting instrument has landed; language-surface convergence remains gated on the remaining `ironhorse-engine` build stages and promotes nothing ahead of them. |
 
 **Exit criterion:** `endor` runs as a second-seat daemon against the same
 state directory as the Node daemon, exposes a fully functional Chat TUI
