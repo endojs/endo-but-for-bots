@@ -8,6 +8,7 @@ import { isName, isPetName } from '@endo/daemon/pet-name.js';
 import { makeError, q, X } from '@endo/errors';
 
 import { createHash } from 'node:crypto';
+import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const HARNESS_KEY_RE = /^[a-z][a-z0-9-]{0,31}$/u;
@@ -205,6 +206,12 @@ export const normalizeEndoCodeModeProvisionSpec = async (
   const sessionHash = createHash('sha256')
     .update(options.sessionId)
     .digest('hex');
+  let canonicalCwd = options.cwd;
+  try {
+    canonicalCwd = await realpath(options.cwd);
+  } catch {
+    // Preserve the existing deferred path validation for missing workspaces.
+  }
 
   /** @type {Record<string, any>} */
   const mount = {};
@@ -219,7 +226,10 @@ export const normalizeEndoCodeModeProvisionSpec = async (
       mount,
       'workspace',
       harden({
-        path: resolve(options.cwd, workspace.path ?? '.'),
+        path:
+          workspace.path === undefined
+            ? canonicalCwd
+            : resolve(options.cwd, workspace.path),
         readOnly: mode === 'readOnly',
         ...(workspace.deniedSegments === undefined
           ? {}
@@ -275,7 +285,7 @@ export const normalizeEndoCodeModeProvisionSpec = async (
         );
       }
       internalGit = harden({
-        path: resolve(options.cwd),
+        path: canonicalCwd,
         mountName: `code-mode-internal-mount-${options.harness}-${sessionHash}`,
         gitName: `code-mode-internal-git-${options.harness}-${sessionHash}`,
       });
