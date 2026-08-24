@@ -4,8 +4,36 @@
 |---|---|
 | **Created** | 2026-05-08 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress (pure core landed [#796](https://github.com/endojs/endo-but-for-bots/pull/796)) |
 | **Source** | PR [#153](https://github.com/endojs/endo-but-for-bots/pull/153) inline review comment [discussion_r3212462309](https://github.com/endojs/endo-but-for-bots/pull/153#discussion_r3212462309) on `designs/cli-store-verb-text-modes.md:403` |
+
+## Status
+
+The pure edit-format core landed in [#796](https://github.com/endojs/endo-but-for-bots/pull/796)
+as `packages/daemon/src/hashline.js` (one canonical module in `@endo/daemon`,
+exported for `@endo/cli` to import when CLI wiring lands — not the two
+`packages/{cli,daemon}/src/hashline.js` copies this design's prose earlier
+implied): CRC32 per-line anchors, the SHA-256 whole-file CAS, the textual
+`hashline` parser and `hashline-json` validator, the read rendering, the
+deterministic splice, and the opt-in bounded `reapply` search. The
+daemon-side `EndoMount.edit` / `EndoGuest.edit` capability and the `endo edit`
+CLI verb remain follow-up work.
+
+Deviations from the prose below, as landed:
+
+- Same-line composition is realized as an insert-before / replace-or-delete /
+  insert-after splice per line, which is equivalent to but not literally the
+  "insert-after, insert-before, replace/delete" ordering named under
+  [Splice contract](#splice-contract).
+- `applyEditPatch`'s `EditResult` reports reapply relocations on success (an
+  `AnchorRelocation[]`) so a caller can tell a clean landing from a relocated
+  (possibly colliding) one, and carries `ambiguities` on `ambiguous-reapply`;
+  the [Result shape](#result-shape) prose predates both fields.
+- Reapply relocation is constrained for soundness beyond the bare
+  nearest-unique-match search: it requires a 4-char anchor, refuses blank-line
+  anchors, and requires both endpoints of a range op to relocate by the same
+  delta. See [Reapply search algorithm](#reapply-search-algorithm) §
+  Relocation soundness constraints.
 
 ## What is the Problem Being Solved?
 
@@ -372,10 +400,10 @@ The builder dispatch for this design should open with a
 prior-art review (one paragraph per evaluated package: license,
 maintenance status, surface fit) and a recommendation on which to
 imitate vs. depend on.
-The reference implementation lives in `packages/cli/src/hashline.js`
-and `packages/daemon/src/hashline.js` (a shared pure module so the
-agent's view and the daemon's view agree byte-for-byte) regardless of
-whether the algorithm code is original or vendored.
+The reference implementation lives in a single canonical module,
+`packages/daemon/src/hashline.js` (a shared pure module the CLI imports
+so the agent's view and the daemon's view agree byte-for-byte),
+regardless of whether the algorithm code is original or vendored.
 
 ## CLI verb shape (thin wrapper)
 
@@ -576,7 +604,7 @@ The only way the trailing-newline state changes across an `edit`
 is if the patch explicitly deletes the file's last line and that
 last line was the trailing `\n` carrier.
 
-`joinLines({ lines, trailingNewline })` is the inverse: lines
+`joinLines(lines, trailingNewline)` is the inverse: lines
 joined by LF, with a final LF appended only if `trailingNewline`
 is true.
 
@@ -747,14 +775,28 @@ the hash algorithm is part of the wire contract.
 
 - **Algorithm:** CRC32 (the IEEE polynomial as in `zlib.crc32`).
   Cheap, deterministic, JS-portable, well-known.
-- **Normalization:** strip trailing whitespace, normalize CRLF to LF,
-  but preserve leading whitespace (indentation is significant for
-  hashing because it's significant for the language).
+- **Normalization:** strip trailing whitespace — exactly the code points
+  U+0020 SPACE, U+0009 TAB, and U+000D CR (stripping CR subsumes
+  CRLF-to-LF normalization), and *only* these three; deliberately not the
+  wider Unicode whitespace set `String.prototype.trimEnd` removes (U+000B,
+  U+000C, U+00A0, U+2028, U+FEFF, ...), since the stripped set is part of
+  the wire contract and an independent implementer reaching for
+  `.trimEnd()` would anchor `"foo "` differently. Preserve leading
+  whitespace (indentation is significant for hashing because it's
+  significant for the language).
 - **Encoding:** 8 bits of the CRC, lowercase 2-char hex.
   16 bits (4-char hex) for files >4096 lines, to keep collision
   probability negligible.
 - **Empty / whitespace-only lines:** seed the hash with the line
   number so multiple blank lines do not all map to the same anchor.
+  The seed carries a leading LF (`\n${lineNumber}`) — a byte a
+  normalized content line can never contain, since lines are split on
+  LF — so the blank-line seed space is disjoint from all content and a
+  blank line at line `N` can never share a hash input with a content
+  line whose trimmed text is the bare digits `N` (a list marker or
+  index). Without the sentinel, that collision would be deterministic
+  rather than the hash's inherent 1/256, silently defeating both the
+  strict anchor check and the reapply ambiguity guard.
 - **Anchor-width selection on validate.** The patch's anchor hashes
   carry a width (the length of the hex string).
   Each anchor in a patch declares its own width; the validator
@@ -789,11 +831,10 @@ it currently is; mismatch fails the edit. This is independent of the
 per-line anchor algorithm and stays SHA-256 even if the per-line
 algorithm is later made selectable.
 
-A reference implementation lives in
-`packages/cli/src/hashline.js` and `packages/daemon/src/hashline.js`,
-both calling into a shared pure-function module to ensure the agent's
-view and the daemon's view agree byte-for-byte for every supported
-algorithm.
+A reference implementation lives in a single canonical module,
+`packages/daemon/src/hashline.js`, which the CLI imports as a shared
+pure-function module to ensure the agent's view and the daemon's view
+agree byte-for-byte for every supported algorithm.
 
 ## CAS (Compare-And-Swap) semantics
 
@@ -859,14 +900,14 @@ A patch without `expectedFileHash` is a syntax error.
 
 `--reapply` (CLI) or `{ reapply: true }` (API option) enables a
 bounded relocation search per anchor: when an anchor's hash mismatches
-the line at `LINE`, the daemon searches a small window (default ±20
+the line at `LINE`, the daemon searches a small window (default +/-20
 lines) for a line whose hash matches and, if exactly one candidate
 exists, relocates the operation to the new line.
 Multiple matches abort with `ambiguous-reapply`.
 
-### Reapply search algorithm (tentative pending kriskowal confirmation)
+### Reapply search algorithm
 
-The proposed v1 algorithm:
+The v1 algorithm, as landed in [#796](https://github.com/endojs/endo-but-for-bots/pull/796):
 
 1. Search the closed interval `[LINE - 20, LINE + 20]` clipped to
    the file's actual line range.
@@ -885,7 +926,31 @@ The proposed v1 algorithm:
    `hash-mismatch` (the same failure as strict mode would have
    produced).
 
-The window default of ±20 is configurable via the API option
+**Relocation soundness constraints** (landed with the algorithm; a
+relocation must MOVE an operation, never resize it or land it on a
+line the hash matched only by chance):
+
+- **A relocation requires a 4-char (16-bit) anchor.** An 8-bit
+  (2-char) anchor matches ~1/256 lines, so across a +/-20 window a
+  drifted narrow anchor finds a spurious unique match often enough
+  (~14%) to splice onto an unrelated line. A 2-char anchor that does
+  not match strictly is a `hash-mismatch` even under reapply; a caller
+  that wants relocation on a small file authors 4-char anchors (the
+  validator accepts either width at any file size).
+- **Blank-line anchors do not relocate.** A blank line's anchor is
+  seeded with its authored line number (`\n${LINE}`), so a moved blank
+  line can only match a new line by hash collision. A blank anchor
+  (detected as one whose hash equals the blank seed for its authored
+  line) that does not match strictly is a `hash-mismatch`, never
+  relocated.
+- **Both endpoints of a range op must relocate by the same delta.**
+  The search relocates each endpoint independently; requiring equal
+  deltas keeps a one-sided or unequal drift from silently growing or
+  shrinking the consumed span (deleting or replacing unnamed lines).
+  An unequal-delta relocation is a `patch-syntax` failure; this
+  subsumes the inverted-range case.
+
+The window default of +/-20 is configurable via the API option
 `{ reapplyWindow: <integer> }` (default 20, max 200).
 Larger windows are not free: every candidate is hashed during
 the scan, so a 200-line window costs 400 CRC32 computations per
@@ -904,12 +969,6 @@ If kriskowal prefers a different default (forward-first,
 breadth-first, or a fuzzy match through `diff-match-patch`),
 this section is the ratchet point.
 
-The implementation in PR #204 currently defers reapply
-(`{ reapply: true }` is accepted but behaves identically to
-strict).
-The behavior described here lands in phase 2 once the algorithm
-is confirmed.
-
 Default is strict (no relocation).
 Reapply is opt-in because for AI agent flows, abort-and-re-read is
 usually preferable to silent relocation; for human scripts mutating
@@ -921,6 +980,16 @@ A `file-rev-mismatch` fails regardless of `--reapply`; the agent
 must re-read.
 Reapply only addresses the per-line anchor case where the file
 otherwise matches but a few lines have shifted.
+
+Because the whole-file CAS gates anchor checking, reapply (and any
+per-line `hash-mismatch`) is reachable only when `expectedFileHash`
+already equals the current revision. The relocating scenario is
+therefore a caller that re-read the file — refreshing
+`expectedFileHash` to the current whole-file hash — yet is replaying
+anchors authored against an earlier revision whose line numbers have
+since drifted. A patch that keeps a *stale* `expectedFileHash`
+alongside stale anchors fails `file-rev-mismatch` first and never
+reaches relocation.
 
 ## Capability surface
 
@@ -1280,7 +1349,7 @@ Listing them here for kriskowal's bulk confirmation; the
 proposed answer is the section noted.
 
 5. **`--reapply` search algorithm.**
-   Best-guess proposal: nearest-by-line-distance within ±20
+   Best-guess proposal: nearest-by-line-distance within +/-20
    lines, ties broken lower-line-number-first; configurable
    via `{ reapplyWindow }`.
    Alternatives considered: forward-first (matches `diff -u`
@@ -1290,7 +1359,7 @@ proposed answer is the section noted.
    content-hash anchors).
    See "Reapply mode / Reapply search algorithm".
    Asks: confirm the nearest-distance + lower-first tiebreaker,
-   confirm the ±20 default, confirm the configurability.
+   confirm the +/-20 default, confirm the configurability.
 
 9. **No file-size cap.**
    Best-guess proposal: 16 MiB default, configurable per mount
@@ -1346,13 +1415,21 @@ re-deriving the design:
   assert the result is `failure: { reason: 'file-rev-mismatch',
   fileHashActual: H2 }`.
 - CAS test (per-line): read a file at SHA-256 H1, modify a single
-  line, attempt to apply a patch with `expectedFileHash: H1` and an
-  anchor on the modified line, assert the result is `failure: {
-  reason: 'hash-mismatch', mismatches: [...] }`.
-- Reapply test: insert two unrelated lines above an anchor (without
-  changing `expectedFileHash`), run `E(guest).edit(..., { reapply:
-  true })`, assert the operation relocates correctly (single-
-  candidate case) and aborts (multi-candidate case).
+  line to produce H2, apply a patch with `expectedFileHash: H2` (the
+  current revision, so the whole-file CAS passes) carrying a *stale*
+  anchor — the pre-modification hash — on the modified line, assert
+  the result is `failure: { reason: 'hash-mismatch', mismatches:
+  [...] }`. (With `expectedFileHash: H1` the whole-file CAS fails
+  first with `file-rev-mismatch`, before any per-line anchor is
+  checked, so the anchor mismatch is only reachable once the caller
+  has refreshed the whole-file hash.)
+- Reapply test: insert two unrelated lines above an anchor, refresh
+  `expectedFileHash` to the post-insert revision (the whole-file CAS
+  gates anchor checking — a stale hash fails `file-rev-mismatch`
+  before reapply runs) while keeping the anchor's original,
+  now-drifted line number, run `E(guest).edit(..., { reapply: true
+  })`, assert the operation relocates correctly (single-candidate
+  case) and aborts (multi-candidate case).
 - Multi-op atomicity: a patch with three operations, the middle one
   having a stale per-line anchor, must leave the file unmodified.
 - Concurrent-edit serialization: two simultaneous `E(guest).edit`
