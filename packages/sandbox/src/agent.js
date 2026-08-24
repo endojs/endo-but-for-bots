@@ -25,7 +25,7 @@ import { makeSandboxFactory } from './factory.js';
  *
  * @param {SandboxPowers} powers - guest powers from the daemon
  * @param {unknown} context - formula cancellation context
- * @param {{ env?: Record<string, string>, ownerId?: string }} [options]
+ * @param {{ env?: Record<string, string>, ownerId?: string, onHandleDisposed?: () => void | Promise<void> }} [options]
  * @returns {Promise<SandboxFactory>}
  */
 export const make = async (powers, context, options = {}) => {
@@ -62,6 +62,9 @@ export const make = async (powers, context, options = {}) => {
     drivers: harden(drivers),
     scratchProvider: powers,
     context: /** @type {any} */ (context),
+    ...(options.onHandleDisposed !== undefined && {
+      onHandleDisposed: options.onHandleDisposed,
+    }),
   });
 };
 harden(make);

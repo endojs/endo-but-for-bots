@@ -79,6 +79,7 @@ const allowEnvPass = key => {
     keepStdEnv.has(key) ||
     key.startsWith('ENDO_') ||
     key.startsWith('LOCKDOWN_') ||
+    key.startsWith('NINEP_') ||
     key.startsWith('XDG_')
   );
 };

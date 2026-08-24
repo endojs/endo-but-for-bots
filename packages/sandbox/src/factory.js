@@ -301,7 +301,7 @@ const resolveHostPath = async (scratchProvider, cap, context) => {
  * @returns {SandboxFactory}
  */
 export const makeSandboxFactory = (
-  { drivers, scratchProvider, context },
+  { drivers, scratchProvider, context, onHandleDisposed },
   { makeDelay = delay } = {},
 ) => {
   const driverList = harden([...drivers]);
@@ -556,6 +556,8 @@ export const makeSandboxFactory = (
     const containmentFailures = [];
     /** @type {Set<MountHandle>} */
     const liveMounts = new Set();
+    /** @type {Set<MountHandle>} */
+    const scratchMounts = new Set();
     /** @type {Promise<void> | undefined} */
     let disposePromise;
     /** @type {SandboxHandle | undefined} */
@@ -953,9 +955,10 @@ export const makeSandboxFactory = (
      * @param {MountCap} cap
      * @param {string} innerPath
      * @param {MountMode} [mode]
+     * @param {boolean} [scratch]
      * @returns {MountHandle}
      */
-    const makeMountHandle = (cap, innerPath, mode = 'ro') => {
+    const makeMountHandle = (cap, innerPath, mode = 'ro', scratch = false) => {
       let unmounted = false;
       /** @type {MountHandle} */
       const m = /** @type {any} */ (
@@ -967,11 +970,13 @@ export const makeSandboxFactory = (
           unmount: async () => {
             unmounted = true;
             liveMounts.delete(m);
+            scratchMounts.delete(m);
           },
         })
       );
       void unmounted;
       liveMounts.add(m);
+      if (scratch) scratchMounts.add(m);
       return m;
     };
 
@@ -1000,7 +1005,7 @@ export const makeSandboxFactory = (
           `sandbox-scratch-${innerPath.replace(/[^a-zA-Z0-9-]/g, '-')}`,
         )
       );
-      return makeMountHandle(scratchCap, innerPath, 'rw');
+      return makeMountHandle(scratchCap, innerPath, 'rw', true);
     };
 
     /**
@@ -1017,10 +1022,12 @@ export const makeSandboxFactory = (
     };
 
     const resetSlice = async () => {
+      assertRunning();
       const reason = makeError(X`sandbox handle reset`);
-      await Promise.all(
-        [...liveProcesses].map(lease => lease.killAndReap(reason)),
-      );
+      await Promise.all([
+        ...[...liveProcesses].map(lease => lease.killAndReap(reason)),
+        ...[...scratchMounts].map(m => E(m).unmount()),
+      ]);
     };
 
     /**
@@ -1067,6 +1074,13 @@ export const makeSandboxFactory = (
             containmentFailures.push(/** @type {Error} */ (e));
           } finally {
             if (handle !== undefined) liveHandles.delete(handle);
+          }
+          if (onHandleDisposed !== undefined) {
+            try {
+              await onHandleDisposed();
+            } catch (e) {
+              containmentFailures.push(/** @type {Error} */ (e));
+            }
           }
           if (containmentFailures.length > 0) {
             throw makeError(

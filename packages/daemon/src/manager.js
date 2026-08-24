@@ -52,6 +52,15 @@ import { makeGuestMaker } from './guest.js';
 import { makeChannelMaker } from './channel.js';
 import { makeHostMaker } from './host.js';
 import { provideHostToolPowers } from './host-tool-powers.js';
+import {
+  makeSandboxFormulaPath,
+  makeSandboxIncarnationPath,
+  makeSandboxSlice,
+} from './sandbox-slice.js';
+import {
+  assertSandboxMountGrant,
+  makeSandboxEscalationLog,
+} from './sandbox.js';
 import { makeRemoteControlProvider } from './remote-control.js';
 import {
   assertName,
@@ -489,12 +498,22 @@ const makeDaemonCore = async (
     hostTools,
   } = powers;
   const { randomHex256, generateEd25519Keypair } = cryptoPowers;
-  // `git` and `shell` formulas spawn host processes.  The supervisor
-  // injects the implementations rather than the daemon core importing
-  // them, so the core stays free of `node:` builtins; a supervisor that
-  // cannot spawn gets stand-ins that refuse.
-  const { gitClone, makeNativeGitBackend, makeHostSpawner } =
-    provideHostToolPowers(hostTools);
+  // `git`, `shell`, and `sandbox` formulas spawn host processes.  The
+  // supervisor injects the implementations rather than the daemon core
+  // importing them, so the core stays free of `node:` builtins; a
+  // supervisor that cannot spawn gets stand-ins that refuse.
+  const {
+    gitClone,
+    makeNativeGitBackend,
+    makeHostSpawner,
+    makeSandboxFactory,
+    makeMountProjector,
+    getEnvironment,
+  } = provideHostToolPowers(hostTools);
+  const sandboxEnvironment = getEnvironment();
+  // Held by the core, not the formula, so a restart's re-mints land in the
+  // same ledger as the mint they replace.
+  const sandboxEscalations = makeSandboxEscalationLog();
   const contentStore = persistencePowers.makeContentStore();
   /** @type {WeakMap<object, ERef<WorkerDaemonFacet>>} */
   const workerDaemonFacets = new WeakMap();
@@ -834,6 +853,19 @@ const makeDaemonCore = async (
         return [['mount', formula.mountId]];
       case 'shell':
         return [['mount', formula.mountId]];
+      case 'sandbox': {
+        // Every mount the slice binds — including a rootfs mount — keeps
+        // the slice alive and dies with it.
+        /** @type {Array<[string, FormulaIdentifier]>} */
+        const deps = [];
+        if (formula.profile.rootfs.kind === 'mount') {
+          deps.push(['rootfs', formula.profile.rootfs.mountId]);
+        }
+        for (const [index, mount] of formula.profile.mounts.entries()) {
+          deps.push([`mount${index}`, mount.mountId]);
+        }
+        return deps;
+      }
       case 'http-client':
         // The HTTP client is rooted in a host-owned `fetch` seam, not a mount
         // or any other daemon-minted capability, so it has no formula deps.
@@ -971,23 +1003,43 @@ const makeDaemonCore = async (
         }),
       );
 
-      // Reclaim daemon-local storage owned by collected formulas.
-      // Content-store blobs use sweep-time reference counting because
-      // multiple readable-blob and readable-tree formulas can dedupe
-      // on the same sha256.  Scratch-mount directories have a 1:1
-      // relationship with their formula and need no reference count.
-      // eslint-disable-next-line no-use-before-define
-      await reclaimCollectedStorage(collectedFormulas);
-
       // Cancel controllers and disconnect workers.
       const cancelReason = new Error(
         'became unreachable by any pet name path and was collected',
       );
-      await Promise.allSettled(
+      const cancellationResults = await Promise.allSettled(
         controllersToCancel.map(async ({ controller }) => {
           await null;
           await controller.context.cancel(cancelReason, '!');
         }),
+      );
+
+      // A rejected sandbox cancellation means its backend or a projection
+      // could still reach the incarnation tree. Never recursively traverse
+      // that formula directory during GC; preserve it for operator recovery.
+      /** @type {Set<FormulaIdentifier>} */
+      const sandboxIdsWithFailedCancellation = new Set();
+      for (let index = 0; index < cancellationResults.length; index += 1) {
+        const result = cancellationResults[index];
+        if (result.status === 'rejected') {
+          const { id } = controllersToCancel[index];
+          console.error(`Cancellation cleanup failed for ${id}`, result.reason);
+          if (collectedFormulas.get(id)?.type === 'sandbox') {
+            sandboxIdsWithFailedCancellation.add(id);
+          }
+        }
+      }
+
+      // Reclaim daemon-local storage only after cancellation hooks have
+      // disposed sandbox slices and released their 9P projections.
+      // Content-store blobs use sweep-time reference counting because
+      // multiple readable-blob and readable-tree formulas can dedupe
+      // on the same sha256.  Scratch directories have a 1:1 relationship
+      // with their formula and need no reference count.
+      // eslint-disable-next-line no-use-before-define
+      await reclaimCollectedStorage(
+        collectedFormulas,
+        sandboxIdsWithFailedCancellation,
       );
 
       // eslint-disable-next-line no-use-before-define
@@ -1088,12 +1140,18 @@ const makeDaemonCore = async (
    * hashes are protected).
    *
    * Scratch-mount cleanup unlinks `{statePath}/mounts/{formulaNumber}`
-   * for every collected `scratch-mount` formula.
+   * for every collected `scratch-mount` formula. Sandbox cleanup unlinks
+   * `{statePath}/sandboxes/{formulaNumber}` after the formula's cancellation
+   * hooks have released its slice and projections.
    *
    * @param {Map<FormulaIdentifier, Formula>} collectedFormulasByid
+   * @param {Set<FormulaIdentifier>} [sandboxIdsToPreserve]
    * @returns {Promise<void>}
    */
-  const reclaimCollectedStorage = async collectedFormulasByid => {
+  const reclaimCollectedStorage = async (
+    collectedFormulasByid,
+    sandboxIdsToPreserve = new Set(),
+  ) => {
     /** @type {Set<string>} */
     const candidateHashes = new Set();
     for (const formula of collectedFormulasByid.values()) {
@@ -1122,24 +1180,74 @@ const makeDaemonCore = async (
       );
     }
 
-    // Scratch-mount backing dirs are 1:1 with their formula; no
-    // reference count needed.
-    const scratchMountNumbers = [];
-    for (const [id, formula] of collectedFormulasByid) {
-      if (formula.type === 'scratch-mount') {
-        scratchMountNumbers.push(parseId(id).number);
+    // A failed sandbox cancellation leaves its live backend or projection
+    // attached to the sandbox state tree. Preserve every scratch-mount
+    // backing that the sandbox reaches, including a parent of a collected
+    // sub-mount, because the same GC batch can collect both formula types.
+    /** @type {Set<FormulaIdentifier>} */
+    const scratchMountIdsToPreserve = new Set();
+    for (const sandboxId of sandboxIdsToPreserve) {
+      const sandboxFormula = collectedFormulasByid.get(sandboxId);
+      if (sandboxFormula?.type === 'sandbox') {
+        /** @type {FormulaIdentifier[]} */
+        const pendingMountIds = [];
+        if (sandboxFormula.profile.rootfs.kind === 'mount') {
+          pendingMountIds.push(sandboxFormula.profile.rootfs.mountId);
+        }
+        for (const mount of sandboxFormula.profile.mounts) {
+          pendingMountIds.push(mount.mountId);
+        }
+        while (pendingMountIds.length > 0) {
+          const mountId = pendingMountIds.pop();
+          if (
+            mountId !== undefined &&
+            !scratchMountIdsToPreserve.has(mountId)
+          ) {
+            const mountFormula = collectedFormulasByid.get(mountId);
+            if (mountFormula?.type === 'scratch-mount') {
+              scratchMountIdsToPreserve.add(mountId);
+            } else if (
+              mountFormula?.type === 'mount' &&
+              mountFormula.parent !== undefined
+            ) {
+              pendingMountIds.push(mountFormula.parent);
+            }
+          }
+        }
       }
     }
-    await Promise.allSettled(
-      scratchMountNumbers.map(formulaNumber => {
-        const mountPath = filePowers.joinPath(
-          persistencePowers.statePath,
-          'mounts',
-          /** @type {string} */ (formulaNumber),
-        );
-        return filePowers.removeDirectory(mountPath);
-      }),
-    );
+
+    // Scratch-mount backing dirs are 1:1 with their formula; no
+    // reference count needed, except for the live dependencies above.
+    const scratchMountNumbers = [];
+    const sandboxNumbers = [];
+    for (const [id, formula] of collectedFormulasByid) {
+      if (
+        formula.type === 'scratch-mount' &&
+        !scratchMountIdsToPreserve.has(id)
+      ) {
+        scratchMountNumbers.push(parseId(id).number);
+      } else if (formula.type === 'sandbox' && !sandboxIdsToPreserve.has(id)) {
+        sandboxNumbers.push(parseId(id).number);
+      }
+    }
+    const scratchMountCleanup = scratchMountNumbers.map(formulaNumber => {
+      const mountPath = filePowers.joinPath(
+        persistencePowers.statePath,
+        'mounts',
+        /** @type {string} */ (formulaNumber),
+      );
+      return filePowers.removeDirectory(mountPath);
+    });
+    const sandboxCleanup = sandboxNumbers.map(formulaNumber => {
+      const sandboxPath = makeSandboxFormulaPath({
+        statePath: persistencePowers.statePath,
+        formulaNumber,
+        joinPath: filePowers.joinPath,
+      });
+      return filePowers.removeDirectory(sandboxPath);
+    });
+    await Promise.allSettled([...scratchMountCleanup, ...sandboxCleanup]);
   };
 
   const formulaGraph = makeFormulaGraph({
@@ -3333,6 +3441,79 @@ const makeDaemonCore = async (
         readOnly: false,
       });
     },
+    sandbox: async ({ profile }, context, id, formulaNumber) => {
+      // Register cleanup before the first allocation await. Cancellation can
+      // arrive while a slice is minting; its disposal barrier must wait for
+      // that mint attempt (including its failure cleanup) and release any
+      // successfully minted resources before GC removes the incarnation.
+      const { promise: mintSettled, resolve: resolveMintSettled } =
+        /** @type {PromiseKit<void>} */ (makePromiseKit());
+      /** @type {(() => Promise<void>) | undefined} */
+      let releaseSlice;
+      const cleanupRegistration = context.onCancel(async () => {
+        await mintSettled;
+        await releaseSlice?.();
+      });
+
+      await null;
+      try {
+        // The slice dies with any mount it binds: otherwise a container keeps
+        // writing into a directory the daemon no longer vouches for.
+        if (profile.rootfs.kind === 'mount') {
+          context.thisDiesIfThatDies(profile.rootfs.mountId);
+        }
+        for (const mount of profile.mounts) {
+          context.thisDiesIfThatDies(mount.mountId);
+        }
+
+        // Each evaluation owns a distinct state directory, keeping its scratch
+        // space, projection mount points, and recursive cleanup isolated from
+        // every other incarnation of this formula.
+        const statePath = await makeSandboxIncarnationPath({
+          statePath: persistencePowers.statePath,
+          formulaNumber,
+          randomHex256,
+          joinPath: filePowers.joinPath,
+        });
+
+        const projector = makeMountProjector({
+          env: sandboxEnvironment,
+          cancelled: context.cancelled,
+          // A kernel bind cannot constrain symlink traversal to the mount's
+          // confinement root. Leave the resolver absent so every mount uses
+          // the 9P chain, whose filesystem operations retain those checks.
+        });
+
+        const { slice, release } = await makeSandboxSlice({
+          profile,
+          sandboxId: id,
+          statePath,
+          provideMount: mountId => provide(mountId),
+          projector,
+          makeSandboxFactory,
+          makePath: filePowers.makePath,
+          removeDirectory: filePowers.removeDirectory,
+          joinPath: filePowers.joinPath,
+          escalations: sandboxEscalations,
+          // Validate the requested attenuation and the realized projection each
+          // time the formula evaluates.
+          assertMountGrant: assertSandboxMountGrant,
+          farContext: makeFarContext(context),
+          env: sandboxEnvironment,
+        });
+
+        // Terminal: no resume. Cancel kills the processes and releases the
+        // projections; the next `provide()` mints a new slice.
+        releaseSlice = release;
+        return slice;
+      } finally {
+        resolveMintSettled(undefined);
+        // This is already fulfilled for the normal pre-cancellation
+        // registration path. If cancellation preceded evaluation, it is the
+        // late hook itself and must finish before evaluation can escape.
+        await cleanupRegistration;
+      }
+    },
     'http-client': ({ policy }) => {
       // The Network (HTTP) tier is the deliberate exception to "everything
       // derives from the mount": there is no filesystem to root it in, so its
@@ -4751,6 +4932,32 @@ const makeDaemonCore = async (
         });
 
         return formulate(formulaNumber, formula);
+      })
+    );
+  };
+
+  /** @type {DaemonCore['formulateSandbox']} */
+  const formulateSandbox = async (profile, deferredTasks) => {
+    return /** @type {FormulateResult<import('@endo/sandbox/types.js').SandboxHandle>} */ (
+      withFormulaGraphLock(async () => {
+        await null;
+        const formulaNumber = /** @type {FormulaNumber} */ (
+          await randomHex256()
+        );
+
+        /** @type {import('./types.js').SandboxFormula} */
+        const formula = harden({
+          type: 'sandbox',
+          profile,
+        });
+
+        // Publish the durable pet name only after the formula is on disk and
+        // registered in the graph.
+        const result = await formulate(formulaNumber, formula);
+
+        await deferredTasks.execute({ sandboxId: result.id });
+
+        return result;
       })
     );
   };
@@ -7208,6 +7415,8 @@ const makeDaemonCore = async (
     formulateSubMount,
     formulateGit,
     formulateShell,
+    formulateSandbox,
+    listSandboxEscalations: sandboxEscalations.list,
     formulateHttpClient,
     getHttpClientControlForClient,
     formulateGitCredential,

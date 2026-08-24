@@ -517,4 +517,6 @@ export type MakeSandboxFactoryInput = {
   scratchProvider: SandboxPowers;
   /** Formula/daemon cancellation context that owns every minted handle. */
   context?: ERef<{ whenCancelled(): Promise<unknown> }>;
+  /** Notification after a handle tears down its backend resources. */
+  onHandleDisposed?: () => void | Promise<void>;
 };
