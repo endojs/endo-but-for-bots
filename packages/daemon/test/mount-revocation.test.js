@@ -311,6 +311,9 @@ test('revocation: propagates to a file handle opened before revoke', async t => 
   });
   await E(mount).writeText(['file.txt'], 'contents');
   const file = await E(mount).lookup('file.txt');
+  if (!('text' in file)) {
+    throw new TypeError('expected lookup to return a file');
+  }
   t.is(await E(file).text(), 'contents');
 
   E(control).revoke();
