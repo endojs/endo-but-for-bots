@@ -3,6 +3,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { EndoHost } from '@endo/daemon' */
+/** @import { IterateReaderOptions } from '@endo/exo-stream' */
 
 import harden from '@endo/harden';
 
@@ -203,7 +204,7 @@ harden(TokenAutocompleteRoot);
  * @param {HTMLElement} $menu - The autocomplete menu container
  * @param {object} options
  * @param {typeof import('@endo/eventual-send').E} options.E - Eventual send function
- * @param {(ref: unknown) => AsyncIterable<unknown>} options.iterateReader - Ref iterator factory
+ * @param {(ref: unknown, options?: IterateReaderOptions) => AsyncIterable<unknown>} options.iterateReader - Ref iterator factory
  * @param {ERef<EndoHost>} options.powers - Powers object for following name changes
  * @param {string[]} [options.externalPetNames] - Pre-managed pet names array (skips followNameChanges subscription)
  * @returns {TokenAutocompleteAPI}
@@ -248,7 +249,12 @@ export const tokenAutocompleteComponent = (
   // Subscribe to inventory changes (skip if external names are provided)
   if (!externalPetNames) {
     (async () => {
-      for await (const change of iterateReader(E(powers).followNameChanges())) {
+      for await (const change of iterateReader(
+        E(powers).followNameChanges(),
+        // Prefetch a window of values so the initial name backlog streams
+        // without a round-trip acknowledgement per name.
+        { buffer: 64 },
+      )) {
         if ('add' in /** @type {object} */ (change)) {
           petNames.push(/** @type {{ add: string }} */ (change).add);
           petNames.sort();
