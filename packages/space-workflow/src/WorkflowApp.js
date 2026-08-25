@@ -7,6 +7,7 @@ import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeRunSyncClient } from '@endo/workflow/src/sync.js';
 
+import { ApprovalPanel } from './ApprovalPanel.js';
 import { StatechartView } from './StatechartView.js';
 import { TimelineView } from './TimelineView.js';
 
@@ -23,10 +24,16 @@ import { TimelineView } from './TimelineView.js';
  * run surface it touches is the read-only `WorkflowRun` facet — the
  * space can watch, never steer.
  *
- * @param {{ service: any }} props
+ * `powers` is the VIEWER'S OWN agent, and is used for exactly one thing:
+ * answering an approval form the run has already sent to the viewer's
+ * inbox (see ApprovalPanel). That is the viewer's authority over their
+ * own mail, not the space's authority over the run — the invariant above
+ * is unchanged. Omit it and the space stays read-only.
+ *
+ * @param {{ service: any, powers?: unknown }} props
  * @returns {VNode}
  */
-export const WorkflowApp = ({ service }) => {
+export const WorkflowApp = ({ service, powers }) => {
   const [summaries, setSummaries] = useState(/** @type {any[]} */ ([]));
   const [selectedRunId, setSelectedRunId] = useState(
     /** @type {string | undefined} */ (undefined),
@@ -245,6 +252,16 @@ export const WorkflowApp = ({ service }) => {
                 { class: 'wf-stale' },
                 `⚠ journal hash chain broken at #${chain.badSeq}`,
               )
+            : null,
+          current !== undefined && scrubSeq === undefined
+            ? h(ApprovalPanel, {
+                // Keyed by run so one run's half-filled answer cannot
+                // carry into the next.
+                key: selectedRunId ?? 'none',
+                powers,
+                pending: current.pending ?? [],
+                runId: selectedRunId,
+              })
             : null,
           client !== undefined && lastSeq > 0
             ? h('div', { class: 'wf-scrubber' }, [
