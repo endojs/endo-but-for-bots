@@ -39,6 +39,10 @@ descriptor a second time to discover outbound references.
 The common case is a *dense* TypedArray with no expandos: every valid index from
 zero through `length - 1` is present, no index is a hole, and no property has been
 added beyond the elements.
+Such a view is *purely indexed*: dense **and** carrying no expando.
+The term is not a synonym for *dense* — a dense view can still carry an expando,
+which makes it dense but not purely indexed — and *purely indexed* is the exact
+class the fast path accepts.
 For such a view all own properties are integer-indexed elements.
 Their values are necessarily Number or BigInt primitives, and the
 integer-indexed exotic rules already fix their descriptors, so there is no
@@ -59,7 +63,7 @@ source, and that proves behavior unchanged for expandos, accessors, symbols, and
 holes.
 The ask as literally posed is not portably achievable — no standard JavaScript
 operation reveals total own-property cardinality in O(1) (§ Design spells out
-why, and *Alternatives Considered* covers the engine-intrinsic route) — so the
+why, and § Alternatives Considered covers the engine-intrinsic route) — so the
 linear `Reflect.ownKeys` materialization cannot be removed.
 This design delivers the closest portable thing: it keeps the one O(n)
 `Reflect.ownKeys` allocation but removes both O(n) *descriptor* passes for the
@@ -67,17 +71,25 @@ pure case.
 
 The cardinality-equality condition is nonetheless the right condition — it holds
 precisely when the view is purely indexed — but it need not be decided by
-counting.
+counting *alone*.
 Section 10.4.5.7 of ECMA-262 orders all integer indices of a TypedArray before
 any string or symbol key, and a genuine in-bounds TypedArray is dense, so a
 single `Reflect.ownKeys` result already answers the question at one instant: the
 view is purely indexed exactly when its **last own key is a canonical integer
 index** (or it has no own keys at all).
-This design adopts that single-instant ordering test as its primary mechanism.
-The equivalent counting formulation, which reads an O(1) intrinsic length as the
-prompt's literal framing suggests, is retained under *Alternatives Considered* as
-a behaviorally identical variant that trades a different lemma (see there, and
-*Open Questions*, for the tradeoff).
+This design adopts **both** tests, conjoined: the cardinality-equality count
+(`keys.length` equals the O(1) intrinsic index count) **and** the single-instant
+last-key ordering test.
+The two are not exclusive alternatives to choose between — because the key list
+is already materialized, the count conjunct costs one extra O(1) length-getter
+read and one comparison, and a conjunction is at least as strict as either
+conjunct, so it can only ever classify *fewer* views as pure, never more.
+That makes it strictly safer than either test alone: it survives non-conformance
+of *either* lemma (a mis-ordered or index-shaped-expando engine is caught by the
+count; a mis-counting engine is caught by the ordering), where each test on its
+own fails open under its own lemma's failure.
+§ Alternatives Considered records the count-only and last-key-only forms, and why
+neither on its own is preferred to the conjunction.
 
 Materializing the own keys still costs one O(n) `Reflect.ownKeys` allocation —
 the tension the prompt names — and this is a reduction in constant-factor work
@@ -100,23 +112,34 @@ TypedArrays continue through the generic path.
 
 ### The purely indexed decision
 
-`freezeTypedArray` materializes the own keys once and tests whether the last one
-is a canonical integer index, reusing `isCanonicalIntegerIndexString`, which the
-file already defines (`packages/harden/make-hardener.js:282`):
+`freezeTypedArray` reads the intrinsic index count, materializes the own keys
+once, and requires **both** that the two counts agree and that the last key is a
+canonical integer index, reusing `isCanonicalIntegerIndexString` (already defined
+in the file) and a `length` getter captured from `%TypedArray%.prototype` at
+module load (`getTypedArrayLength`; the file already captures that prototype's
+`Symbol.toStringTag` getter for its brand check, so this adds one sibling
+intrinsic):
 
 ```js
 /**
  * @template T
  * @param {ArrayLike<T>} array a genuine (brand-checked) TypedArray
- * @returns {boolean} true when the view is purely indexed, so the caller may
- *   skip its own-descriptor traversal for this object
+ * @returns {boolean} true when the view is purely indexed (see § Design for the
+ *   definition), so the caller may skip its own-descriptor traversal for this
+ *   object
  */
 const freezeTypedArray = array => {
   preventExtensions(array);
+  // Read the intrinsic length BEFORE the key list. With length read first,
+  // concurrent growth of a length-tracking view over a growable
+  // SharedArrayBuffer can only inflate `keys.length` relative to `len` and
+  // force the slow path, never mask an expando (see § Correctness Argument).
+  const len = apply(getTypedArrayLength, array, []);
   const keys = ownKeys(array);
   const purelyIndexed =
-    keys.length === 0 ||
-    isCanonicalIntegerIndexString(keys[keys.length - 1]);
+    keys.length === len &&
+    (keys.length === 0 ||
+      isCanonicalIntegerIndexString(keys[keys.length - 1]));
   if (purelyIndexed) {
     // No expando: every own key is a primitive-valued element. The
     // integer-indexed exotic rules keep in-range elements writable and
@@ -155,8 +178,8 @@ The two snippets below are **schematic**: the loop body is elided (the
 `enqueue(/* outbound refs of */ descs[key])` shorthand stands in for the real
 per-descriptor walk, which applies the `hasOwn(desc, 'value')`
 data-versus-accessor test), and the prototype enqueue differs between the two
-copies as § Implementation details.
-The `harden`-package copy (`packages/harden/make-hardener.js:375-409`) runs today:
+copies as described in § Implementation and Test Plan.
+The `harden`-package copy (`baseFreezeAndTraverse`) runs today:
 
 ```js
 if (isTypedArray(obj)) {
@@ -190,14 +213,16 @@ if (!purelyIndexed) {
 ```
 
 The prototype enqueue is hoisted above the now-guarded descriptor block so that it
-still runs for a purely indexed view: a TypedArray's prototype is an outbound
-reference that must be traversed whenever the object's prototype is traversed, and
-skipping the own-key pass must not skip it.
+still runs for a purely indexed view.
+The prototype is an outbound reference the walk must continue through — in the
+`harden` copy whenever `traversePrototypes` is enabled, in the SES copy
+unconditionally — so skipping the own-key pass must not also skip the prototype
+enqueue.
 Hoisting is safe because the prototype enqueue never read `descs`.
 In the SES copy the prototype enqueue is *unconditional* rather than gated on
-`traversePrototypes` (§ Implementation), so its edit hoists an unconditional
-`enqueue(proto)` above the same guard; the two copies therefore receive parallel
-but not character-identical edits.
+`traversePrototypes` (§ Implementation and Test Plan), so its edit hoists an
+unconditional `enqueue(proto)` above the same guard; the two copies therefore
+receive parallel but not character-identical edits.
 
 The polarity is deliberately `purelyIndexed`, not `hasExpandos`: the falsy
 default is the *fail-safe* one.
@@ -211,7 +236,7 @@ references — is reachable only by an explicit `true`, never by omission.
 The returned value is named `purelyIndexed` for the *classification* the helper
 directly computes — "no non-index own key" — not for the downstream fact the
 caller ultimately consumes ("no own outbound reference").
-The two coincide only through a lemma stated in the *Correctness Argument*: on a
+The two coincide only through a lemma stated in the § Correctness Argument: on a
 genuine dense TypedArray every own key is either a primitive-valued index or a
 downgraded expando, so a purely indexed view has no own outbound reference at all.
 Naming the boolean for what the helper locally observes, rather than for the
@@ -219,26 +244,18 @@ consequence the caller draws from it, keeps the helper's contract about its own
 check; the caller relies on the lemma to translate that classification into the
 skip-traversal decision.
 
-The boolean is deliberately not the list of keys, but the reason is minimality,
-not a descriptor-skew defense.
-An earlier draft justified the boolean by claiming that handing the key list back
-would let a later refinement feed it into `getOwnPropertyDescriptors` and
-reintroduce the GraalJS skew (below) that the per-key `getOwnPropertyDescriptor`
-re-derivation defends against.
-That rationale does not hold: `baseFreezeAndTraverse` already calls bulk
-`getOwnPropertyDescriptors(obj)` unconditionally on the traversal
-(`packages/harden/make-hardener.js:385`; SES copy
-`packages/ses/src/make-hardener.js:193`), so the caller already lives with that
-call and returning keys would not introduce it.
-The real reason to return a boolean is minimality: the caller consumes one bit,
-so the interface hands back one bit and nothing that invites a future caller to
-re-walk descriptors a third way.
+The boolean is deliberately not the list of keys: the reason is minimality. The
+caller consumes exactly one bit, so the interface hands back one bit and nothing
+that invites a future caller to re-walk descriptors a third way. (Returning the
+keys would introduce nothing new — `baseFreezeAndTraverse` already calls bulk
+`getOwnPropertyDescriptors(obj)` unconditionally on the traversal in both copies —
+but it would widen the contract past what the one consumer needs.)
 
-The GraalJS skew named above is a known non-conformance the file already guards:
-on GraalJS, `Object.getOwnPropertyDescriptor` can return `undefined` for a
-property that `Reflect.ownKeys` reports as present
-(`packages/harden/make-hardener.js:296`), so the slow path re-derives each
-descriptor per key and asserts it rather than trusting a bulk snapshot.
+The slow path re-derives each descriptor per key because of a known GraalJS
+non-conformance the file already guards: on GraalJS,
+`Object.getOwnPropertyDescriptor` can return `undefined` for a property that
+`Reflect.ownKeys` reports as present, so the per-key `assert(desc)` in
+`freezeTypedArray` guards against trusting a bulk snapshot.
 This design leaves that guard and its slow-path traversal untouched.
 
 Combining the expando-freezing pass and the outbound-reference traversal into a
@@ -246,7 +263,8 @@ single descriptor walk on the slow path is a possible later refinement, but it i
 out of scope here: the slow path is unchanged from today and does not depend on
 this optimization.
 
-Why the last key alone decides it: ECMA-262 section 10.4.5.7,
+Why the ordering conjunct decides it (on its own, on a conformant engine):
+ECMA-262 section 10.4.5.7,
 [TypedArray `[[OwnPropertyKeys]]`](https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-typedarray-exotic-objects-ownpropertykeys),
 emits every valid integer index from zero through `length - 1`, then ordinary
 string keys, then symbol keys.
@@ -259,8 +277,15 @@ Argument*, that no admissible expando key is a canonical integer index string.
 Given that lemma, if the final key is a canonical integer index there can be no
 trailing expando, and density rules out an interior gap, so the view is purely
 indexed.
-This is an O(1) decision over the already-materialized key list: the win is not
-"examine no keys"; it is "read no descriptors".
+Why the count conjunct decides it (on its own): a genuine view is dense, so
+`keys.length` equals the intrinsic index count exactly when no expando is
+present, regardless of how any expando is spelled — this is the engine-independent
+backstop the ordering conjunct lacks (it catches an index-shaped expando even on
+an engine that mis-classified its key form).
+The fast path requires **both**, so it engages only when both agree; either
+lemma's failure is caught by the other conjunct.
+This is an O(1) decision over the already-materialized key list plus one O(1)
+length read: the win is not "examine no keys"; it is "read no descriptors".
 
 `Reflect.ownKeys(array)` remains O(n): the tension the prompt names.
 No ordinary JavaScript operation exposes the total number of own properties in
@@ -281,13 +306,26 @@ provide.
 Safety therefore rests on the classification never reporting "purely indexed" in
 the presence of an expando.
 
-The decision reads a single `Reflect.ownKeys` snapshot.
-`[[OwnPropertyKeys]]` is one synchronous internal operation with no user-code
-interposition point (the brand check excludes Proxies, whose traps could
-otherwise run), so the returned list is a single-instant view of the object's
-keys.
-There is no second read to race against and no ordering to prove
-skew-conservative; the design reasons about exactly one key list.
+The decision reads two intrinsics: the `%TypedArray%.prototype` `length` getter
+first, then a `Reflect.ownKeys` snapshot.
+Each is one synchronous internal operation with no user-code interposition point
+(the brand check excludes Proxies, whose traps could otherwise run), so each is a
+single-instant read.
+The ordering conjunct reasons about exactly the one key list.
+The count conjunct compares that list's length against the separately-read
+`length`, so there is a second read, and its skew must be proved conservative.
+It is, by the read order: `length` is read *before* `ownKeys`, and the only
+concurrent mutation possible is another agent growing a length-tracking view over
+a growable `SharedArrayBuffer` (a `SharedArrayBuffer` can only grow, and no
+non-shared buffer has a concurrent writer between two synchronous reads).
+Growth between the two reads makes `ownKeys` expose *more* indices than `len`, so
+`keys.length > len` and the counts disagree, forcing the slow path.
+Skew can therefore only *reject* the fast path, never admit an expando — the safe
+direction.
+Because the two conjuncts are ANDed, even a mis-timed count that spuriously agreed
+would still leave the ordering conjunct to reject an expando on a conformant
+engine; the race is not load-bearing for safety, only the read order is, and it
+fails safe.
 
 The boolean is computed at the `ownKeys` instant but consumed slightly later, when
 the caller decides whether to run the descriptor pass, so the fact it reports must
@@ -315,7 +353,7 @@ carries no expando.
 The last-key test would be unsafe if a view could carry an own key that both *is*
 a canonical integer index string and *is not* a live element, because such a key
 would pass `isCanonicalIntegerIndexString` yet name an expando.
-`isCanonicalIntegerIndexString` (`packages/harden/make-hardener.js:282`) is
+`isCanonicalIntegerIndexString` (defined in the file) is
 looser than "valid index": it returns `true` for any canonical numeric index
 string regardless of range, so `"1e+21"` and `"9007199254740992"` (2^53) both
 classify `true` even though neither is a valid TypedArray index.
@@ -378,7 +416,9 @@ The behavior-preservation cases follow.
   does nothing; any expando makes the last key a non-index key, forcing the slow
   path.
   Length-tracking resizable views expose their current indices at the instant
-  `ownKeys` runs, and the same last-key test applies to that snapshot.
+  `ownKeys` runs, and the same conjoined test applies to that snapshot, with the
+  read-order argument above making concurrent growth select the slow path rather
+  than mask an expando.
 
 The proof depends on the genuine TypedArray density invariant.
 The fast path must not be generalized to Arrays, whose `length` is an own
@@ -386,21 +426,28 @@ property and whose indexed elements may have holes or accessor descriptors.
 Ordinary and emulated typed-array-like objects likewise retain the generic path,
 including all hole and accessor traversal.
 
-Both lemmas rest on engine conformance to sections 10.4.5.7 (ordering) and
-10.4.5.3 (definition rejection).
+The ordering conjunct rests on engine conformance to sections 10.4.5.7 (ordering)
+and 10.4.5.3 (definition rejection); the count conjunct rests only on density
+(genuine TypedArrays have no index holes), which does not depend on either
+clause.
 Under a non-conformant engine that mis-ordered keys or admitted an out-of-range
-numeric-index data property, the last-key test could in principle misclassify,
-whereas the cardinality-equality form (*Alternatives Considered*) would still
-catch the extra key by count.
-This is the one respect in which the two forms are *not* interchangeable, and it
-is why the equivalence claim in *Alternatives Considered* is scoped to conformant
-engines.
-The file already carries a GraalJS fail-safe on the *slow* path
-(`packages/harden/make-hardener.js:296`), but neither form's *fast*-path
-classification has an engine-independent backstop; the design accepts that for
-the adopted form on the ground that TypedArray key ordering and index-definition
-rejection are among the most uniformly implemented exotic behaviors, and it flags
-the divergence as the substance of the open question.
+numeric-index data property, the ordering conjunct could in principle
+misclassify — but the count conjunct still catches the extra key by count, and
+because the fast path requires *both*, the conjunction rejects the expando and
+fails safe.
+Conversely, an engine that mis-reported the intrinsic length (fooling the count)
+is caught by the ordering conjunct.
+This is exactly why the design conjoins the two rather than choosing one: each
+conjunct is the other's engine-independent backstop, so the fast-path
+classification — unlike either test alone — has no single lemma whose failure
+opens it.
+The file already carries a GraalJS fail-safe on the *slow* path (the per-key
+`assert(desc)` in `freezeTypedArray`); the conjoined fast path extends that
+belt-and-suspenders posture to the classification itself.
+The residual cost is one intrinsic captured from `%TypedArray%.prototype` (the
+`length` getter, a sibling of the toStringTag getter already captured for the
+brand check), which is negligible against silent loss of confinement — the
+weighting a security primitive should take.
 
 Note (out of scope): whether `Object.preventExtensions` should succeed at all on
 a length-tracking view over a resizable buffer (V8 allows it today, after which
@@ -419,19 +466,19 @@ Both carry their own `freezeTypedArray`; the optimization does not reach the
 
 The two copies are **not** identical at the exact site this change touches, and the
 edit must respect that drift rather than treat the pair as one place.
-In the `harden`-package copy the prototype enqueue is gated on `traversePrototypes`
-(`packages/harden/make-hardener.js:386`); in the SES copy the prototype enqueue is
-**unconditional** — it runs for every object regardless of `traversePrototypes`
-(`packages/ses/src/make-hardener.js:194-195`).
+The `harden`-package copy has a `traversePrototypes` option and gates its prototype
+enqueue on it; the SES copy has **no** such option — `traversePrototypes` does not
+appear in `packages/ses/src/make-hardener.js` at all — and its prototype enqueue is
+**unconditional**, running for every object.
 The fast-path edit is therefore *parallel but not character-identical*: each copy
 keeps its own prototype-enqueue placement and gating, and only the own-descriptor
 pass is wrapped in `!purelyIndexed` (the `harden` copy hoisting the guarded
 descriptor block below its `traversePrototypes`-gated enqueue, the SES copy below
 its unconditional one).
-The genuinely shared parts — the `freezeTypedArray` return contract, the last-key
-test, the Lemma-2 reasoning, and the regression matrix — are identical across the
-two; the surrounding control flow is copied verbatim from *each* file, not from the
-other.
+The genuinely shared parts — the `freezeTypedArray` return contract, the conjoined
+count-plus-last-key test, the Lemma-2 reasoning, and the regression matrix — are
+identical across the two; the surrounding control flow is copied verbatim from
+*each* file, not from the other.
 
 The two copies are expected to stay parallel indefinitely; there is no parity test
 today, and this design adds a new cross-file return-value contract to the
@@ -441,10 +488,10 @@ The regression tests live in `packages/harden/test/make-hardener.test.js` and th
 matching SES tests.
 
 Drive-by (its own commit, per changeset discipline): the `freezeTypedArray`
-comment at `packages/harden/make-hardener.js:304` (and its SES twin at
-`packages/ses/src/make-hardener.js:109`) says in-range indices are "permanently
-writable and non-configurable"; the "non-configurable" clause is a stale
-pre-ES2021 remark, since in-range indices are `configurable: true` today.
+comment (in both the `harden` and SES copies of `make-hardener.js`) says in-range
+indices are "permanently writable and non-configurable"; the "non-configurable"
+clause is a stale pre-ES2021 remark, since in-range indices are `configurable:
+true` today.
 Correct both comments in the same PR but as a separate commit from the
 optimization.
 
@@ -499,17 +546,24 @@ accessor expandos retain the baseline thrown outcome, not merely that the root
 becomes non-extensible.
 Tests that attempt to define an accessor at an in-range TypedArray index must
 confirm that the engine rejects the definition before `harden` runs.
-Every listed case is a deterministic single-instant assertion: because the design
-reads one key snapshot and never a second, there is no concurrent-mutation timing
-to reproduce, so no individual case is flaky, and the fast-path-engaged assertion
-above closes the aggregate-vacuity gap.
+Every listed case is a deterministic assertion: the design reads the intrinsic
+length and one key snapshot, each a synchronous intrinsic with no user-code
+interposition, and the read-order argument makes the count conjunct's only
+concurrent-mutation vector (SharedArrayBuffer growth, covered by the growable case
+above) fail toward the slow path, so no individual case is flaky, and the
+fast-path-engaged assertion above closes the aggregate-vacuity gap.
 
 Add a focused benchmark comparing the current and proposed hardener on large pure
 TypedArrays and on TypedArrays with one expando, run on the engines the
 portability claim rests on (at minimum V8; SpiderMonkey, JavaScriptCore, XS, and
 GraalJS where available in CI).
-Acceptance requires a repeatable reduction for the pure case without a material
-regression for the slow case.
+Acceptance requires a falsifiable threshold, not merely "a repeatable reduction":
+the median pure-case harden time on a large dense `Uint8Array` must fall by at
+least **2x** against the baseline (a smaller win does not justify a new cross-file
+boolean contract plus two lemmas across the two hand-mirrored copies), with no
+more than a 5% regression on the expando-bearing slow case. If the measured pure
+case does not clear that 2x bar — plausible if the retained O(n) `Reflect.ownKeys`
+materialization dominates on a multi-kilobyte buffer — the change is abandoned.
 The benchmark report must describe the remaining O(n) `Reflect.ownKeys`
 allocation so the result is not presented as an asymptotic improvement.
 
@@ -526,31 +580,29 @@ allocation so the result is not presented as an asymptotic improvement.
 
 ## Alternatives Considered
 
-- **Cardinality-equality via a captured intrinsic length getter.**
+- **Count-only cardinality-equality (the prompt's literal framing).**
   Capture the `length` getter from `%TypedArray%.prototype` at module load, read
   `apply(getTypedArrayLength, array, [])` as an O(1) indexed cardinality, and
-  compare it against `ownKeys(array).length`.
-  This is the prompt's literal framing: a genuine O(1) *count* source, with
-  equality recognizing the no-expando case.
-  It is behaviorally equivalent to the adopted last-key test on conformant
-  engines, but the two forms rest on *different* lemmas rather than one being
-  uniformly heavier.
-  The counting form needs no key-form reasoning at all — cardinality equality
-  catches an extra own key regardless of how it is spelled, so it is robust even
-  to an engine that admitted an index-shaped expando — but it adds a second
-  captured intrinsic to `harden`'s trusted base and, because the count and the
-  key list are two independent reads of a possibly growable view, its safety
-  rests on a read-ordering argument (read the length first, so concurrent growth
-  of a growable `SharedArrayBuffer` can only inflate the key count and select the
-  slow path, never mask an expando).
-  The adopted last-key form needs neither the second intrinsic nor the
-  read-ordering argument, but in exchange it relies on Lemma 2
-  (definition-rejection) to rule out an index-shaped expando, which the counting
-  form does not need.
-  The design prefers the last-key form for its smaller trusted-base surface and
-  single-instant reasoning, and treats the choice between one
-  ordering-plus-definition lemma and one counting lemma plus a captured intrinsic
-  as the open question below.
+  take purely-indexed to be `ownKeys(array).length === len` *alone*.
+  This is a genuine O(1) count source, and it needs no key-form reasoning —
+  cardinality equality catches an extra own key regardless of how it is spelled,
+  robust even to an engine that admitted an index-shaped expando.
+  Rejected *as a sole test* because it fails open under an engine that
+  mis-reported the intrinsic length, with no ordering backstop.
+- **Last-key ordering test alone.**
+  Take purely-indexed to be `keys.length === 0 || isCanonicalIntegerIndexString(keys[keys.length - 1])`
+  with no count.
+  It needs no second intrinsic and no read-ordering argument, but relies wholly on
+  Lemma 2 (definition-rejection) plus Lemma 1 (ordering); rejected *as a sole
+  test* because it fails open under an engine that mis-ordered keys or admitted an
+  out-of-range index-shaped data key.
+  The design adopts the **conjunction** of these two rather than either alone: the
+  count conjunct costs one extra O(1) length read over the already-materialized
+  key list, a conjunction only ever classifies *fewer* views as pure (so it is
+  never less safe than either conjunct), and each conjunct is the other's
+  engine-independent backstop. The one captured intrinsic and the read-ordering
+  argument are the price, weighed in § Correctness Argument as negligible against
+  silent loss of confinement for a security primitive.
 - **`TypedArray.prototype.byteLength` as the count source.**
   Rejected in favor of the direct length getter (were a count used at all)
   because it needs element-width recovery and offers no stronger guarantee.
@@ -567,26 +619,17 @@ allocation so the result is not presented as an asymptotic improvement.
 
 ## Open Questions
 
-- **Confirm the last-key ordering test (the committed mechanism), or revert to
-  cardinality-equality.**
-  The design does not leave the mechanism open: it **commits** to the
-  single-instant last-key ordering test and builds the whole Correctness Argument
-  on it, demoting the prompt's literal
-  cardinality-equality-with-O(1)-length-source formulation to *Alternatives
-  Considered*.
-  This is the one maintainer decision that would reverse that commitment, called
-  out because reversing it is not a local edit — it swaps which lemma is
-  load-bearing.
-  The two forms are behaviorally equivalent on conformant engines but rest on
-  different lemmas (see there): the adopted form trades a captured intrinsic and a
-  two-read race for reliance on the definition-rejection lemma (Lemma 2), while the
-  counting form catches an extra own key of any spelling by count and needs no
-  key-form reasoning.
-  The prompt asked specifically for the cardinality-equality shape.
-  Should the maintainer prefer it, the revert is scoped and spelled out: Lemma 2 is
-  replaced by the read-ordering proof of *Alternatives Considered*, and a captured
-  `%TypedArray%.prototype` `length` getter joins the trusted base.
-  Absent that decision, the implementation follows the last-key form as specified.
+None load-bearing. An earlier revision left the mechanism as a maintainer choice
+between the count-only (the prompt's literal cardinality-equality) and last-key
+forms; that choice is now resolved rather than escalated. The two forms are not
+exclusive — because the key list is already materialized, conjoining them costs
+one extra O(1) length read and one comparison, and a conjunction is at least as
+strict as either conjunct, so it can only be safer. The design therefore adopts
+**both**, and the prompt's cardinality-equality shape is honored as one of the two
+conjuncts rather than demoted. The only residual judgment calls are already
+localized to the implementation PR: the exact acceptance threshold if measurement
+lands near the 2x bar (§ Implementation and Test Plan), and whether the fast-path
+observability seam is a counter or a benchmark gate.
 
 ## Prompt
 
