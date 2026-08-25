@@ -8,6 +8,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { FlootApp } from '@endo/space-floot';
 import { h, renderConfined, unmount } from './setup-preact-container.js';
+import { makeScreenWakeLock } from './wake-lock.js';
 
 // The view's controller/state/message shapes are defined (and enforced at the
 // `h(FlootApp, …)` boundary) by `@endo/space-floot`'s own types; like the other
@@ -527,7 +528,12 @@ export const flootComponent = (
   // ── Subscription / snapshot plumbing ────────────────────────────────────────
   /** @type {Set<() => void>} */
   const listeners = new Set();
+  // Assigned for real further down, once every binding it reads exists (see
+  // "Screen wake lock"). A no-op until then, because `notify` runs during setup
+  // and reaching a `let` before its declaration would throw.
+  let updateWakeLock = () => {};
   const notify = () => {
+    updateWakeLock();
     for (const fn of [...listeners]) {
       try {
         fn();
@@ -1520,6 +1526,36 @@ export const flootComponent = (
   let ttsNextStart = 0;
   let ttsSpeaking = false;
 
+  // ── Screen wake lock ────────────────────────────────────────────────────────
+  // A voice session is long stretches with no touch input — the mic is open, a
+  // reply is being spoken, or a turn is running — which is exactly when a phone
+  // dims and locks. Hold the screen while the app is genuinely busy and release
+  // it the moment it is not: an always-on lock would trade a screen complaint
+  // for a battery one.
+  //
+  // Host-side on purpose. The confined space has no `navigator` by design and
+  // should not gain one; this component already owns the imperative half (mic,
+  // Web Audio, the VAD loop) and already sees every state change through
+  // `notify`. Declared below `busy`, `micActive` and `ttsSpeaking` so the reader
+  // never reaches them in their temporal dead zone.
+  const wakeLockDoc = $parent.ownerDocument;
+  const screenWakeLock = makeScreenWakeLock({
+    getApi: () => /** @type {any} */ (globalThis.navigator)?.wakeLock,
+    isVisible: () => wakeLockDoc.visibilityState === 'visible',
+  });
+
+  updateWakeLock = () => {
+    screenWakeLock.set(
+      !cancelled && Boolean(micActive || ttsSpeaking || busy),
+    );
+  };
+
+  // The browser drops the lock when the page is hidden and does not restore it.
+  const onVisibilityChange = () => {
+    screenWakeLock.refresh();
+  };
+  wakeLockDoc.addEventListener('visibilitychange', onVisibilityChange);
+
   // Create/resume the audio context synchronously from the user's Send gesture.
   // Browsers otherwise reject autoplay if the first resume happens only after a
   // remote capability round trip.
@@ -1925,6 +1961,9 @@ export const flootComponent = (
 
   return () => {
     cancelled = true;
+    wakeLockDoc.removeEventListener('visibilitychange', onVisibilityChange);
+    // `cancelled` is set, so this releases rather than re-requests.
+    updateWakeLock();
     // Leave any in-flight turn running in the background — just detach our view
     // (don't return the reader, which would abort the agent). The turn finishes
     // and persists; a later remount reattaches or falls back to history.
