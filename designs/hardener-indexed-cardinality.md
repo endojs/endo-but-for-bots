@@ -535,7 +535,10 @@ optimization.
 Tests must cover:
 
 - empty and large Number/BigInt TypedArrays;
-- string, symbol, and accessor expandos;
+- string, symbol, and accessor expandos, including a symbol whose description is
+  the last canonical index string (for example, a `Symbol("0")` expando on a
+  length-1 view): the symbol must still force the slow path and its value must be
+  hardened;
 - an own `length` expando;
 - an index-shaped but non-canonical string expando, `"1e21"` (canonical form
   `"1e+21"`), plus `"00"` and `"1.0"`: each must classify as an expando, sort last,
