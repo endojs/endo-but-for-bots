@@ -176,3 +176,28 @@ fn new_on_bound_function_constructs_target() {
     );
 }
 
+// -------------------------------------------------------------------------
+// §7  Primitive `thisArg` boxing through `call`/`apply` — a sloppy callee
+//     ToObject-boxes Number/Boolean; a strict callee keeps the primitive.
+// -------------------------------------------------------------------------
+
+#[test]
+fn primitive_this_boxing_via_call_apply() {
+    // Sloppy callee: a Number/Boolean `this` is boxed to an object wrapper.
+    agrees("function f() { return typeof this; } f.call(5)");
+    agrees("function f() { return typeof this; } f.call(true)");
+    agrees("function f() { return typeof this; } f.apply(42, [])");
+    // The wrapped primitive round-trips through `valueOf` / coercion.
+    agrees("function f(x) { return this.valueOf() + x; } f.call(10, 5)");
+    agrees("function f(a, b) { return typeof this + ':' + (a + b); } f.apply(5, [2, 3])");
+    agrees("function f() { return this instanceof Number; } f.call(7)");
+    agrees("function f() { return this instanceof Boolean; } f.call(false)");
+    // Strict callee: the primitive `this` is kept as-is (no boxing).
+    agrees("function f() { 'use strict'; return typeof this; } f.call(5)");
+    agrees("function f() { 'use strict'; return this; } f.call(5)");
+    agrees("function f() { 'use strict'; return typeof this; } f.apply(true, [])");
+    // `undefined` / `null` `this` in a sloppy callee binds to the global.
+    agrees("function f() { return this === globalThis; } f.call(undefined)");
+    agrees("function f() { return this === globalThis; } f.call(null)");
+}
+

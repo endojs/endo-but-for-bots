@@ -19812,16 +19812,14 @@ impl Interp {
             .copied()
             .unwrap_or_else(Slot::undefined);
         // A primitive `thisArg` is boxed to its wrapper object in a sloppy
-        // callee (XS's `fxToInstance`) but left as-is in a strict callee — a
-        // meter-affecting distinction ironhorse does not yet model, and the
-        // callee's strictness is not known until its `begin`. Self-name for a
-        // primitive `thisArg` rather than answer a `this`-dependent test
-        // wrongly; `undefined`/`null` (→ global / kept) and an object
-        // `thisArg` are handled.
-        if !matches!(
-            this_arg.kind,
-            Kind::Undefined | Kind::Null | Kind::Reference
-        ) {
+        // callee (XS's `fxToInstance`) but left as-is in a strict callee. The
+        // strictness is only known at the callee's `begin`, so the boxing (or
+        // pass-through) is deferred there via [`Self::bind_this_sloppy`] /
+        // `BEGIN_STRICT`: Number/Boolean box cleanly, `undefined`/`null` bind
+        // to the global (sloppy) or are kept (strict), and an object is used
+        // directly. Only a String/Symbol/BigInt `thisArg` self-names, whose
+        // wrapper's exotic own properties are not yet modeled.
+        if matches!(this_arg.kind, Kind::String | Kind::Symbol | Kind::BigInt) {
             return Err(Halt::Unsupported("call:primitive-this-boxing"));
         }
         let real_args: Vec<Slot> = if argc >= 1 {
@@ -19883,10 +19881,9 @@ impl Interp {
             .get(base + 4)
             .copied()
             .unwrap_or_else(Slot::undefined);
-        if !matches!(
-            this_arg.kind,
-            Kind::Undefined | Kind::Null | Kind::Reference
-        ) {
+        // See `enter_call_dot_call`: Number/Boolean/undefined/null/object are
+        // handled at the callee's `begin`; only String/Symbol/BigInt self-names.
+        if matches!(this_arg.kind, Kind::String | Kind::Symbol | Kind::BigInt) {
             return Err(Halt::Unsupported("apply:primitive-this-boxing"));
         }
         // The arguments array (the second argument). Absent/undefined/null is
@@ -30738,8 +30735,29 @@ impl Interp {
     }
 
     fn bind_this_sloppy(&mut self) {
-        if matches!(self.this_val.kind, Kind::Undefined | Kind::Null) {
-            self.this_val = Slot::of(Kind::Reference, Payload::Reference(self.global_obj));
+        match self.this_val.kind {
+            // `undefined`/`null` bind to the realm global (the sloppy default).
+            Kind::Undefined | Kind::Null => {
+                self.this_val = Slot::of(Kind::Reference, Payload::Reference(self.global_obj));
+            }
+            // A primitive `this` in a sloppy callee is ToObject-boxed to its
+            // wrapper object (XS's `fxToInstance`; ECMA-262 OrdinaryCallBindThis
+            // step 5 for non-strict code). Number/Boolean box cleanly — the
+            // wrapped primitive lives in the side table, so `typeof this` is
+            // `"object"` and value coercions round-trip through `valueOf`. A
+            // String/Symbol/BigInt wrapper's exotic own properties are not yet
+            // modeled, so those are left unboxed here (the `.call`/`.apply`
+            // trampolines self-name such a primitive `thisArg` before entry
+            // rather than hand back a mis-answering wrapper).
+            Kind::Boolean => {
+                let inst = self.box_primitive_to_instance(Native::Boolean, self.this_val);
+                self.this_val = Slot::of(Kind::Reference, Payload::Reference(inst));
+            }
+            Kind::Integer | Kind::Number => {
+                let inst = self.box_primitive_to_instance(Native::Number, self.this_val);
+                self.this_val = Slot::of(Kind::Reference, Payload::Reference(inst));
+            }
+            _ => {}
         }
     }
 
