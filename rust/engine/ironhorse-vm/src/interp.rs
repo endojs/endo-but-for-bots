@@ -1730,6 +1730,9 @@ pub enum MathId {
 /// user code — the `call`/`apply`/`bind` re-entrant methods are separate.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NativeMethod {
+    /// `Date` statics and prototype methods. The compact operation id keeps
+    /// the calendar implementation centralized; see `date_method`.
+    Date(u8),
     /// A method on one of the ISO Temporal plain families.  The first byte is
     /// the family (date, time, date-time, year-month, month-day, calendar),
     /// and the second is the operation.  Keeping this compact makes the
@@ -3167,6 +3170,7 @@ pub enum Native {
     Symbol,
     Number,
     String,
+    Date,
     Array,
     Error,
     EvalError,
@@ -3257,6 +3261,7 @@ impl Native {
             Native::Symbol => "Symbol",
             Native::Number => "Number",
             Native::String => "String",
+            Native::Date => "Date",
             Native::Array => "Array",
             Native::Error => "Error",
             Native::EvalError => "EvalError",
@@ -3313,6 +3318,7 @@ impl Native {
             | Native::AsyncGeneratorFunction => 1,
             Native::TypedArray(_) => 3,
             Native::DataView => 1,
+            Native::Date => 7,
             Native::Symbol | Native::Map | Native::Set | Native::WeakMap | Native::WeakSet => 0,
             Native::Object
             | Native::Function
@@ -3345,6 +3351,7 @@ impl Native {
             ("Symbol", Native::Symbol),
             ("Number", Native::Number),
             ("String", Native::String),
+            ("Date", Native::Date),
             ("Array", Native::Array),
             ("Error", Native::Error),
             ("EvalError", Native::EvalError),
@@ -3995,6 +4002,11 @@ pub struct Interp {
     /// The realm's `%Number.prototype%` (a boot object) — the box target for a
     /// primitive number's method access (`(42).toString(2)`, …).
     number_proto: crate::value::SlotIndex,
+    /// `%Date.prototype%` and the `[[DateValue]]` side table. A Date instance
+    /// remains an ordinary arena object for property/prototype behavior; its
+    /// time value is the one non-property internal slot recorded here.
+    date_proto: crate::value::SlotIndex,
+    dates: std::collections::HashMap<crate::value::SlotIndex, f64>,
     /// The realm's `%Symbol.prototype%` (a boot object) — the box target for a
     /// primitive symbol's method access (`Symbol("x").toString()`, …).
     symbol_proto: crate::value::SlotIndex,
@@ -4715,6 +4727,8 @@ impl Interp {
             string_proto: crate::value::SlotIndex::NULL,
             string_iterator_method: crate::value::SlotIndex::NULL,
             number_proto: crate::value::SlotIndex::NULL,
+            date_proto: crate::value::SlotIndex::NULL,
+            dates: std::collections::HashMap::new(),
             symbol_proto: crate::value::SlotIndex::NULL,
             symbol_registry: std::collections::HashMap::new(),
             symbol_registry_keys: std::collections::HashMap::new(),
@@ -4861,7 +4875,7 @@ impl Interp {
                 | Native::URIError
                 | Native::AggregateError => self.slots.alloc(Slot::instance(error_proto)),
                 Native::SuppressedError => self.slots.alloc(Slot::instance(error_proto)),
-                Native::Boolean | Native::Symbol | Native::Number | Native::String => {
+                Native::Boolean | Native::Symbol | Native::Number | Native::String | Native::Date => {
                     self.slots.alloc(Slot::instance(object_proto))
                 }
                 Native::DisposableStack | Native::AsyncDisposableStack => {
@@ -5639,6 +5653,7 @@ impl Interp {
         self.create_math();
         self.create_string_proto();
         self.create_number_globals();
+        self.create_date();
         self.create_json();
         self.create_atomics();
         self.create_reflect();
@@ -6220,6 +6235,42 @@ impl Interp {
         ] {
             let mf = self.alloc_method(m);
             self.intrinsics.insert(name, mf);
+        }
+    }
+
+    /// Register the `Date` statics and the bounded, deterministic UTC profile
+    /// of `%Date.prototype%`. The embedding supplies no time-zone database;
+    /// local-time operations therefore use UTC, matching the engine's existing
+    /// deterministic Intl/Temporal host profile.
+    fn create_date(&mut self) {
+        let Some(&ctor) = self.intrinsics.get("Date") else { return };
+        let Some(proto) = self.prototype_of(ctor) else { return };
+        self.date_proto = proto;
+        self.dates.insert(proto, f64::NAN);
+        for (name, op, arity) in [
+            ("parse", 0u8, 1u32), ("UTC", 1, 7), ("now", 2, 0),
+        ] {
+            let f = self.alloc_named_method(NativeMethod::Date(op), name, arity);
+            self.proto_methods.push((ctor, name, f));
+        }
+        for (name, op, arity) in [
+            ("getTime", 10u8, 0u32), ("valueOf", 11, 0),
+            ("getFullYear", 12, 0), ("getUTCFullYear", 12, 0),
+            ("getMonth", 13, 0), ("getUTCMonth", 13, 0),
+            ("getDate", 14, 0), ("getUTCDate", 14, 0),
+            ("getDay", 15, 0), ("getUTCDay", 15, 0),
+            ("getHours", 16, 0), ("getUTCHours", 16, 0),
+            ("getMinutes", 17, 0), ("getUTCMinutes", 17, 0),
+            ("getSeconds", 18, 0), ("getUTCSeconds", 18, 0),
+            ("getMilliseconds", 19, 0), ("getUTCMilliseconds", 19, 0),
+            ("getTimezoneOffset", 20, 0),
+            ("toISOString", 21, 0), ("toUTCString", 22, 0),
+            ("toGMTString", 22, 0), ("toString", 23, 0),
+            ("toDateString", 24, 0), ("toTimeString", 25, 0),
+            ("setTime", 26, 1), ("toJSON", 27, 1),
+        ] {
+            let f = self.alloc_named_method(NativeMethod::Date(op), name, arity);
+            self.proto_methods.push((proto, name, f));
         }
     }
 
@@ -13860,6 +13911,48 @@ impl Interp {
                 }
                 self.temporal_new_zoned(ns, time_zone, offset_ns)?
             }
+            Native::Date => {
+                let now = 0.0;
+                if !has_target {
+                    let text = date_local_string(now);
+                    let off = self.alloc_str_text(text.as_bytes());
+                    Slot::of(Kind::String, Payload::String(off))
+                } else {
+                    let time = if argc == 0 {
+                        now
+                    } else if argc == 1 {
+                        let value = arg(0);
+                        if let Payload::Reference(r) = value.value {
+                            if let Some(&date) = self.dates.get(&r) {
+                                date
+                            } else {
+                                let primitive = self.to_primitive(code, value, false)?;
+                                if primitive.kind == Kind::String {
+                                    let text = match primitive.value { Payload::String(o) => self.str_text(o), _ => String::new() };
+                                    parse_date_string(&text).unwrap_or(f64::NAN)
+                                } else {
+                                    time_clip(to_number(&self.to_number_value(code, primitive)?))
+                                }
+                            }
+                        } else if value.kind == Kind::String {
+                            let text = match value.value { Payload::String(o) => self.str_text(o), _ => String::new() };
+                            parse_date_string(&text).unwrap_or(f64::NAN)
+                        } else {
+                            time_clip(to_number(&self.to_number_value(code, value)?))
+                        }
+                    } else {
+                        let mut values = [0.0; 7];
+                        let inputs: Vec<Slot> = (0..7).map(|i| if i < argc { arg(i) } else if i == 2 { Slot::integer(1) } else { Slot::integer(0) }).collect();
+                        for (value, v) in values.iter_mut().zip(inputs) {
+                            *value = to_number(&self.to_number_value(code, v)?);
+                        }
+                        date_from_components(values)
+                    };
+                    let inst = self.slots.alloc(Slot::instance(self.date_proto));
+                    self.dates.insert(inst, time);
+                    Slot::of(Kind::Reference, Payload::Reference(inst))
+                }
+            }
             // `Boolean(value)` (`fx_Boolean`): ToBoolean(argument0), or
             // `false` when called with no argument. Measured against the pin,
             // the primitive coercion meters **no** built-in step beyond the
@@ -20836,6 +20929,60 @@ impl Interp {
         }
     }
 
+    fn date_method(&mut self, op: u8, this: Slot, base: usize, argc: usize, code: &[u8]) -> Result<Slot, Halt> {
+        let arg = |stack: &[Slot], i: usize| stack.get(base + 4 + i).copied().unwrap_or_else(Slot::undefined);
+        match op {
+            0 => {
+                let text = self.value_to_string(code, arg(&self.stack, 0))?;
+                Ok(Slot::number(parse_date_string(&text).unwrap_or(f64::NAN)))
+            }
+            1 => {
+                let inputs: Vec<Slot> = (0..7).map(|i| if i < argc { arg(&self.stack, i) } else if i == 2 { Slot::integer(1) } else { Slot::integer(0) }).collect();
+                let mut values = [0.0; 7];
+                for (value, input) in values.iter_mut().zip(inputs) {
+                    *value = to_number(&self.to_number_value(code, input)?);
+                }
+                Ok(Slot::number(date_from_components(values)))
+            }
+            2 => Ok(Slot::number(0.0)),
+            _ => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.dates.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let t = self.dates[&inst];
+                if op == 26 {
+                    let n = self.to_number_value(code, arg(&self.stack, 0))?;
+                    let clipped = time_clip(to_number(&n));
+                    self.dates.insert(inst, clipped);
+                    return Ok(Slot::number(clipped));
+                }
+                if op == 27 {
+                    return if t.is_finite() { Ok(self.intl_string(&date_iso_string(t))) } else { Ok(Slot::null()) };
+                }
+                if matches!(op, 10 | 11) { return Ok(Slot::number(t)); }
+                if !t.is_finite() {
+                    return match op {
+                        21 => Err(self.catchable_range_error()),
+                        22..=25 => Ok(self.intl_string("Invalid Date")),
+                        _ => Ok(Slot::number(f64::NAN)),
+                    };
+                }
+                let (year, month, day, weekday, hour, minute, second, millis) = civil_fields(t, 0);
+                Ok(match op {
+                    12 => Slot::number(year as f64), 13 => Slot::integer(month as i32 - 1),
+                    14 => Slot::integer(day as i32), 15 => Slot::integer(weekday as i32),
+                    16 => Slot::integer(hour as i32), 17 => Slot::integer(minute as i32),
+                    18 => Slot::integer(second as i32), 19 => Slot::integer(millis as i32),
+                    20 => Slot::integer(0), 21 => self.intl_string(&date_iso_string(t)),
+                    22 => self.intl_string(&date_utc_string(t)), 23 => self.intl_string(&date_local_string(t)),
+                    24 => self.intl_string(&date_only_string(t)), 25 => self.intl_string(&date_time_string(t)),
+                    _ => return Err(Halt::Unsupported("Date:method")),
+                })
+            }
+        }
+    }
+
     fn call_native_method(
         &mut self,
         m: NativeMethod,
@@ -20877,6 +21024,7 @@ impl Interp {
             }
         }
         let result: Slot = match m {
+            NativeMethod::Date(op) => self.date_method(op, this, base, argc, code)?,
             NativeMethod::TemporalPlain(kind, op) => {
                 let arg1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
                 self.temporal_plain_method(kind, op, this, arg0, arg1, code)?
@@ -34959,6 +35107,87 @@ fn civil_fields(t: f64, offset_minutes: i32) -> (i64, u32, u32, u32, u32, u32, u
     (year, m, d, weekday, hour, minute, second, millis)
 }
 
+fn time_clip(t: f64) -> f64 {
+    if !t.is_finite() || t.abs() > 8_640_000_000_000_000.0 { f64::NAN }
+    else { let clipped = t.trunc(); if clipped == 0.0 { 0.0 } else { clipped } }
+}
+
+fn date_from_components(v: [f64; 7]) -> f64 {
+    if v.iter().any(|n| !n.is_finite()) { return f64::NAN; }
+    let mut year = v[0].trunc();
+    if (0.0..=99.0).contains(&year) { year += 1900.0; }
+    if year < i64::MIN as f64 || year > i64::MAX as f64 { return f64::NAN; }
+    let month = v[1].trunc();
+    if month < i64::MIN as f64 || month > i64::MAX as f64 { return f64::NAN; }
+    let total_month = (year as i128) * 12 + month as i128;
+    let norm_year = total_month.div_euclid(12);
+    let norm_month = total_month.rem_euclid(12) as u32 + 1;
+    let Ok(norm_year) = i64::try_from(norm_year) else { return f64::NAN };
+    let Some(first) = days_from_civil(norm_year, norm_month, 1) else { return f64::NAN };
+    let days = first + v[2].trunc() as i128 - 1;
+    time_clip(days as f64 * 86_400_000.0 + v[3].trunc() * 3_600_000.0
+        + v[4].trunc() * 60_000.0 + v[5].trunc() * 1_000.0 + v[6].trunc())
+}
+
+fn parse_date_string(text: &str) -> Option<f64> {
+    let text = text.trim();
+    if let Some(ns) = parse_temporal_instant(text) {
+        return Some(time_clip((ns / 1_000_000) as f64));
+    }
+    let (date, clock) = match text.find(['T', 't']) {
+        Some(i) => (&text[..i], Some(&text[i + 1..])), None => (text, None),
+    };
+    let last = date.rfind('-')?;
+    let second = date[..last].rfind('-')?;
+    let year: i64 = date[..second].parse().ok()?;
+    let month: u32 = date[second + 1..last].parse().ok()?;
+    let day: u32 = date[last + 1..].parse().ok()?;
+    let mut v = [year as f64, month as f64 - 1.0, day as f64, 0.0, 0.0, 0.0, 0.0];
+    if let Some(clock) = clock {
+        let clock = clock.strip_suffix('Z').or_else(|| clock.strip_suffix('z')).unwrap_or(clock);
+        let mut parts = clock.split(':');
+        v[3] = parts.next()?.parse().ok()?;
+        v[4] = parts.next()?.parse().ok()?;
+        let sec = parts.next().unwrap_or("0");
+        if parts.next().is_some() { return None; }
+        let (seconds, fraction) = sec.split_once('.').unwrap_or((sec, ""));
+        v[5] = seconds.parse().ok()?;
+        if !fraction.is_empty() {
+            let digits = &fraction[..fraction.len().min(3)];
+            v[6] = format!("{digits:0<3}").parse().ok()?;
+        }
+    }
+    Some(date_from_components(v))
+}
+
+fn date_year_string(year: i64) -> String {
+    if (0..=9999).contains(&year) { format!("{year:04}") }
+    else if year < 0 { format!("-{:<06}", -year).replace(' ', "0") }
+    else { format!("+{year:06}") }
+}
+
+fn date_iso_string(t: f64) -> String {
+    let (y, m, d, _, h, min, s, ms) = civil_fields(t, 0);
+    format!("{}-{m:02}-{d:02}T{h:02}:{min:02}:{s:02}.{ms:03}Z", date_year_string(y))
+}
+
+fn date_utc_string(t: f64) -> String {
+    let (y, m, d, w, h, min, s, _) = civil_fields(t, 0);
+    format!("{}, {d:02} {} {} {h:02}:{min:02}:{s:02} GMT", EN_WEEKDAYS_SHORT[w as usize], EN_MONTHS_SHORT[m as usize - 1], date_year_string(y))
+}
+
+fn date_only_string(t: f64) -> String {
+    let (y, m, d, w, _, _, _, _) = civil_fields(t, 0);
+    format!("{} {} {d:02} {}", EN_WEEKDAYS_SHORT[w as usize], EN_MONTHS_SHORT[m as usize - 1], date_year_string(y))
+}
+
+fn date_time_string(t: f64) -> String {
+    let (_, _, _, _, h, min, s, _) = civil_fields(t, 0);
+    format!("{h:02}:{min:02}:{s:02} GMT+0000")
+}
+
+fn date_local_string(t: f64) -> String { format!("{} {}", date_only_string(t), date_time_string(t)) }
+
 const EN_MONTHS_LONG: [&str; 12] = [
     "January", "February", "March", "April", "May", "June", "July", "August",
     "September", "October", "November", "December",
@@ -36518,6 +36747,7 @@ fn native_unsupported_name(native: Native) -> &'static str {
         Native::Symbol => "native-call:Symbol",
         Native::Number => "native-call:Number",
         Native::String => "native-call:String",
+        Native::Date => "native-call:Date",
         Native::Array => "native-call:Array",
         Native::Error => "native-call:Error",
         Native::EvalError => "native-call:EvalError",
