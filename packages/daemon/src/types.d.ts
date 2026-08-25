@@ -941,6 +941,12 @@ export interface Context {
   thatDiesIfThisDies: (id: string) => void;
 
   /**
+   * Registers a hook to run when the value is cancelled. A hook registered
+   * after cancellation still runs: it may be the only release path for a
+   * resource whose minting raced the cancellation. The returned promise
+   * settles with that hook's outcome, so a caller that must not escape
+   * before its cleanup ran can await the registration.
+   *
    * @param hook - A hook to run when the value is cancelled.
    */
   onCancel: (hook: () => void | Promise<void>) => Promise<void>;

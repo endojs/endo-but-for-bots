@@ -139,6 +139,15 @@ export const makeContextMaker = ({
      */
     const onCancel = hook => {
       if (done) {
+        // A hook registered after cancellation always runs. Dropping it was
+        // safe only while every hook was registered synchronously with the
+        // resource it releases; a formula that mints a host resource (a
+        // sandbox slice, its projections) registers before the first await
+        // and cannot un-mint what it produced after cancellation began, so a
+        // dropped hook is a leaked slice rather than a no-op. Callers observe
+        // the hook through the returned promise — see `context.test.js`,
+        // "onCancel after cancel runs the late hook".
+        //
         // Cancellation may race an asynchronously minted resource. Queue a
         // late hook while disposal is still in progress so `disposed` cannot
         // fulfill before the resource cleanup it represents.
