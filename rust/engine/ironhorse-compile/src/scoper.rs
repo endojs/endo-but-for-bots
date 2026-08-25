@@ -59,6 +59,11 @@ pub mod dflags {
     /// `mxDeclareNodeDisposableFlag` — the synthetic `const` slot a
     /// `using` declaration adds for its disposal record.
     pub const DISPOSABLE: u32 = 1 << 14;
+    /// Ironhorse-only carry bit: the source declaration was `await using`.
+    /// XS keeps this on the declaration AST node; the flattened scope tree
+    /// needs it on the corresponding declare so reverse cleanup can emit
+    /// `AWAIT` after invoking the disposer.
+    pub const ASYNC_DISPOSABLE: u32 = 1 << 16;
     /// `mxDefineNodeBoundFlag` — a define node was already bound (guards
     /// the declare-list vs define-list double reach). Reserved for the
     /// deferred host-define scoping.
@@ -1351,7 +1356,10 @@ impl Scoper {
             if existing.is_some() {
                 return Err(err(node.line, "duplicate variable"));
             }
-            let d = self.new_declare(scope, node.token, Some(symbol), node.line);
+            let mut d = self.new_declare(scope, node.token, Some(symbol), node.line);
+            if node.token == Token::Using && node.flags & flags::AWAITING != 0 {
+                d.flags |= dflags::ASYNC_DISPOSABLE;
+            }
             self.scope_add_declare(scope, d);
         } else {
             // VAR

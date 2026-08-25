@@ -93,7 +93,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
 
     assert_eq!(
         hex_sha256(&session.machine().write_snapshot(&sig)),
-        "c36f161dea7e80c5144bc5b3134c5a38105b2e94e8150aa7a496bc1e927d3e2f",
+        "6089cc6b64da7b74e1dfbc7296c4fb64ce7a1e5753771a4c5e5c0ccd8d9fe765",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -102,11 +102,18 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     // (segmented free list: free_len in the manifest, free rows in
     // the seal), and v5 (summaries folded into the root; counts
     // header and length-prefixed edge entries in root and seal).
-    // The blob hash above was unchanged by ALL of them — exactly the
-    // container/store independence this vector exists to prove.
+    // Those container/store format changes left the blob hash
+    // unchanged — the independence this vector exists to prove. Both
+    // the blob AND the seal were re-pinned 2026-08-23 when the
+    // ironhorse-262 language-completion branch merged `llm` in: that
+    // branch grows the machine's live intrinsic/proto state, so the
+    // canonical snapshot blob legitimately differs (a MACHINE-STATE
+    // change, not a store-format one), and the seal derives from it.
+    // The seven-way metamorphic tests above still pass, so the new
+    // bytes remain deterministic and cross-host stable.
     assert_eq!(
         store.manifest().unwrap().seal,
-        "0a2751b718025257a83a58ce6447efa975fcc4e4d9c12ec2677602150488b051",
+        "fdb52dec8d312a7077bc3677e8e080132877a817c4c6149dca4b6291f13d6221",
         "epoch-3 seal chain"
     );
 }

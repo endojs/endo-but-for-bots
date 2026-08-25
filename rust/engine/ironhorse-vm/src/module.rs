@@ -4,13 +4,20 @@
 //! at the semantic level XS itself implements — the ECMAScript
 //! CyclicModuleRecord algorithms (ECMA-262 § 16.2.1.5) that
 //! `fxLinkModules`/`fxExecuteModules` realize — because the doctrine is
-//! **result agreement**, not bytecode parity, and because the oracle
-//! shim compiles the *script* goal only (`fxParseScript(...,
-//! mxProgramFlag | mxEvalFlag)`; the module goal / loader is not driven
-//! across the audited FFI seam). Module semantics are therefore
-//! certified by the ironhorse-side unit corpus in this file rather than by a
-//! `language/module-code/` dual-run; the differential gap is named
-//! honestly in `rust/engine/README.md`.
+//! **result agreement**, not bytecode parity. Module semantics are
+//! certified by the ironhorse-side unit corpus in this file — this record
+//! model is a `BodyOp` model, not driven from module bytecode, so it is
+//! not itself a dual-run.
+//!
+//! (Update, dynamic-`import()` child: the oracle CAN now execute a module
+//! graph — `xs_oracle::run_module_dir` links + evaluates over XS's
+//! filesystem loader, giving module execution / dynamic import /
+//! `import.meta` a real XS authority, locked by
+//! `ironhorse-262/tests/module_execution_oracle.rs`. What remains a named
+//! skip is the *ironhorse* side: this crate does not yet execute
+//! `XS_CODE_MODULE`/`XS_CODE_IMPORT` bytecode, so a positive module case
+//! is still not promoted to `covered`. The differential gap is named
+//! honestly in `rust/engine/README.md`.)
 //!
 //! What is modeled here (the "static half"):
 //!

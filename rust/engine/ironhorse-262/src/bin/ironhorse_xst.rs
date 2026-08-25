@@ -41,11 +41,14 @@
 
 use ironhorse_262::report::RunReport;
 use ironhorse_262::test262::{collect_js, collect_js_batch, collect_js_direct, locate_test262};
-use ironhorse_262::xst::{run_files, Config, SesMode};
+use ironhorse_262::xst::{run_files, Config, SesMode, DEFAULT_CASE_TIMEOUT_SECONDS};
 use std::path::PathBuf;
 
 fn main() {
     let mut cfg = Config::default();
+    // CLI policy: opt in to the per-case wall-clock bound the library leaves off
+    // by default (overridable with `--case-timeout`, `0` = unbounded).
+    cfg.per_case_timeout_seconds = DEFAULT_CASE_TIMEOUT_SECONDS;
     let mut test262_dir: Option<PathBuf> = None;
     let mut report_path: Option<PathBuf> = None;
     let mut json_path: Option<PathBuf> = None;
@@ -60,6 +63,12 @@ fn main() {
         match arg.as_str() {
             "--oracle" => cfg.oracle = true,
             "--no-oracle" => cfg.oracle = false,
+            "--case-timeout" => {
+                cfg.per_case_timeout_seconds =
+                    args.next().and_then(|n| n.parse().ok()).unwrap_or_else(|| {
+                        fail("--case-timeout needs a non-negative integer (seconds; 0 = unbounded)")
+                    });
+            }
             "--gate-meter-exact" => cfg.gate_meter_exact = true,
             "--repeat" => {
                 cfg.repeat = args
@@ -240,7 +249,7 @@ fn main() {
         rep.total - rep.covered - rep.failures.len(),
     );
     println!(
-        "  mode: sloppy-run={} strict-skipped-unimplemented={} ses-mode={}",
+        "  mode: sloppy-run={} strict-skipped-by-policy={} ses-mode={}",
         rep.sloppy_run,
         rep.strict_skipped,
         rep.ses_mode.short()
@@ -325,6 +334,10 @@ SUBTREE:
 OPTIONS:
     --oracle                 gate on XS oracle agreement (default on)
     --no-oracle              do not gate on oracle agreement
+    --case-timeout SECS      hard per-case wall-clock bound; an Ironhorse-only
+                             non-terminator is an ironhorse-hang failure, while
+                             an oracle-only one is an infrastructure skip
+                             (default 10; 0 = off)
     --gate-meter-exact       fail ironhorse-meter-exact cases on a computron drift
     --repeat N               re-run ironhorse N times; require identical computrons
     --features-include F[,F] opt features OUT of the skip set (e.g. ses-xs-parity)

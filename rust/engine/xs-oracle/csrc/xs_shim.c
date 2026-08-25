@@ -26,8 +26,10 @@
  */
 
 #include "xsAll.h"
+#include "xsScript.h"
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #define ENDOR_RESULT_MAX 1024
 #define ENDOR_ERROR_MAX 256
@@ -45,6 +47,145 @@ typedef struct {
 } EndorOracleResult;
 
 static int gEndorClusterReady = 0;
+
+static void fx_endor_detachArrayBuffer(txMachine *the)
+{
+	txSlot *slot = mxArgv(0);
+	if (slot->kind == XS_REFERENCE_KIND) {
+		txSlot *instance = slot->value.reference;
+		if (((slot = instance->next)) && (slot->flag & XS_INTERNAL_FLAG) &&
+			(slot->kind == XS_ARRAY_BUFFER_KIND) &&
+			(instance != mxArrayBufferPrototype.value.reference)) {
+			txSlot *bufferInfo = slot->next;
+			if (bufferInfo && (bufferInfo->flag & XS_INTERNAL_FLAG) &&
+				(bufferInfo->kind == XS_BUFFER_INFO_KIND)) {
+				slot->value.arrayBuffer.address = C_NULL;
+				slot->value.arrayBuffer.detachKey = C_NULL;
+				bufferInfo->value.bufferInfo.length = 0;
+				if (bufferInfo->value.bufferInfo.maxLength > 0)
+					bufferInfo->value.bufferInfo.maxLength = 0;
+				return;
+			}
+		}
+	}
+	mxTypeError("this is no ArrayBuffer instance");
+}
+
+/*
+ * Filesystem module loader for the executable-module oracle
+ * (xs_oracle_run_module). The xsnap platform's default loader resolves
+ * only baked-in archive/preparation scripts, so csrc/xsoracle-platform.h
+ * turns the defaults off and the shim supplies these — adapted verbatim
+ * from moddable's test runner xst.c (fxFindModule / fxLoadModule /
+ * fxLoadScript). They resolve a relative specifier against the referrer's
+ * path and read + parse each dependency from disk, exactly as `xst -m`
+ * runs a module. Only reached on the module-run path; the script / regexp
+ * / compile entries never load a second module.
+ */
+
+/* Resolve a specifier `slot` (against `moduleID`'s path when relative) to a
+ * canonical module id. Mirrors xst.c:fxFindModule. */
+txID fxFindModule(txMachine* the, txSlot* realm, txID moduleID, txSlot* slot)
+{
+	char name[C_PATH_MAX];
+	char path[C_PATH_MAX];
+	txInteger dot = 0;
+	txString slash;
+	(void)realm;
+	fxToStringBuffer(the, slot, name, sizeof(name));
+	if (name[0] == '.') {
+		if (name[1] == '/') {
+			dot = 1;
+		}
+		else if ((name[1] == '.') && (name[2] == '/')) {
+			dot = 2;
+		}
+	}
+	if (dot) {
+		if (moduleID == XS_NO_ID)
+			return XS_NO_ID;
+		c_strncpy(path, fxGetKeyName(the, moduleID), C_PATH_MAX - 1);
+		path[C_PATH_MAX - 1] = 0;
+		slash = c_strrchr(path, mxSeparator);
+		if (!slash)
+			return XS_NO_ID;
+		if (dot == 2) {
+			*slash = 0;
+			slash = c_strrchr(path, mxSeparator);
+			if (!slash)
+				return XS_NO_ID;
+		}
+	}
+	else
+		slash = path;
+	*slash = 0;
+	if ((c_strlen(path) + c_strlen(name + dot)) >= sizeof(path))
+		mxRangeError("path too long");
+	c_strcat(path, name + dot);
+	return fxNewNameC(the, path);
+}
+
+/* Parse a module file at `path` (parse + hoist + bind + code). Mirrors the
+ * core of xst.c:fxLoadScript (sans the source-map resolution branch, which
+ * the fixtures never trigger). */
+static txScript *fxEndorLoadScript(txMachine *the, txString path, txUnsigned flags)
+{
+	txParser _parser;
+	txParser *parser = &_parser;
+	txParserJump jump;
+	/* volatile: these locals are read after the c_setjmp landing pad, so a
+	 * longjmp out of fxParserTree must not leave them indeterminate (C99
+	 * §7.13.2.1). xst.c omits this; we keep the harness build warning-clean
+	 * and standard-correct. */
+	FILE *volatile file = C_NULL;
+	txString name = C_NULL;
+	txScript *volatile script = C_NULL;
+	fxInitializeParser(parser, the, the->parserBufferSize, the->parserTableModulo);
+	parser->firstJump = &jump;
+	file = fopen(path, "r");
+	if (c_setjmp(jump.jmp_buf) == 0) {
+		mxParserThrowElse(file);
+		parser->path = fxNewParserSymbol(parser, path);
+		fxParserTree(parser, file, (txGetter)fgetc, flags, &name);
+		fclose(file);
+		file = C_NULL;
+		fxParserHoist(parser);
+		fxParserBind(parser);
+		script = fxParserCode(parser);
+	}
+	if (file)
+		fclose(file);
+	fxTerminateParser(parser);
+	return script;
+}
+
+/* Load the module identified by `moduleID` (an absolute path) from disk and
+ * resolve it into the graph. Mirrors xst.c:fxLoadModule (sans bundle/debug).
+ * A `.json` file is a JSON module. A missing/unreadable file leaves the
+ * module unresolved, which the linker reports as a rejection. */
+void fxLoadModule(txMachine *the, txSlot *module, txID moduleID)
+{
+	char path[C_PATH_MAX];
+	char real[C_PATH_MAX];
+	txString dot;
+	txScript *script;
+	txUnsigned flags = 0;
+	c_strncpy(path, fxGetKeyName(the, moduleID), C_PATH_MAX - 1);
+	path[C_PATH_MAX - 1] = 0;
+	if (c_realpath(path, real)) {
+		struct stat a_stat;
+		if (stat(real, &a_stat) == 0) {
+			if (S_ISDIR(a_stat.st_mode))
+				return;
+		}
+		dot = c_strrchr(real, '.');
+		if (dot && !c_strcmp(dot, ".json"))
+			flags |= mxJSONModuleFlag;
+		script = fxEndorLoadScript(the, real, flags);
+		if (script)
+			fxResolveModule(the, module, moduleID, script, C_NULL, C_NULL);
+	}
+}
 
 /* Mirrors DEFAULT_CREATION in rust/endo/xsnap/src/lib.rs. */
 static txCreation gEndorCreation = {
@@ -126,6 +267,26 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 					fxID(the, "petrify"), XS_DONT_ENUM_FLAG);
 				slot = fxNextHostFunctionProperty(the, slot, fx_mutabilities, 1,
 					fxID(the, "mutabilities"), XS_DONT_ENUM_FLAG);
+				mxPop();
+			}
+
+			/* Install the test262 host hook used by detachArrayBuffer.js. */
+			{
+				txSlot *slot;
+				txSlot *global;
+				txSlot *host;
+				mxPush(mxGlobal);
+				global = the->stack;
+				mxPush(mxObjectPrototype);
+				slot = fxLastProperty(the, fxNewObjectInstance(the));
+				slot = fxNextHostFunctionProperty(the, slot,
+					fx_endor_detachArrayBuffer, 1,
+					fxID(the, "detachArrayBuffer"), XS_DONT_ENUM_FLAG);
+				host = the->stack;
+				slot = fxLastProperty(the, fxToInstance(the, global));
+				(void)fxNextSlotProperty(the, slot, host,
+					fxID(the, "$262"), XS_DONT_ENUM_FLAG);
+				mxPop();
 				mxPop();
 			}
 
@@ -330,6 +491,233 @@ int xs_oracle_compile_module(const char *source, txU4 sourceLen, EndorOracleResu
 			}
 		}
 	}
+	fxEndHost(the);
+	fxDeleteMachine(the);
+	return 0;
+}
+
+/*
+ * Reject handler for xs_oracle_run_module: latch the rejection reason
+ * into the slot the->rejection points at, exactly as xst.c's
+ * fxRejectModuleFile does. A fulfilled module needs no handler body (the
+ * completion is observed through the guest's `globalThis.result` and the
+ * absence of a latched rejection).
+ */
+/* The GC-tracked stack slot the reject handler latches the rejection
+ * reason into (xst.c uses a machine `rejection` field its platform adds;
+ * the xsnap platform this oracle links has no such field, so we hold the
+ * latch here). THREAD-LOCAL: each XS machine is thread-confined and the
+ * differential harness runs module cases in parallel across test threads,
+ * so a process-global latch would let one thread's reject handler write
+ * into another thread's machine. `__thread` scopes the latch to the
+ * running machine's thread. */
+static __thread txSlot *gEndorModuleLatch = C_NULL;
+
+static void xs_oracle_module_fulfilled(txMachine *the)
+{
+	(void)the;
+}
+
+static void xs_oracle_module_rejected(txMachine *the)
+{
+	if (gEndorModuleLatch)
+		*gEndorModuleLatch = *mxArgv(0);
+}
+
+/*
+ * Run `mainRel` as a MODULE-goal entry point on a fresh machine, linking
+ * and EVALUATING the whole graph — the executable counterpart of
+ * xs_oracle_compile_module (stage-5 fix2, executable module + dynamic
+ * import / import.meta oracle).
+ *
+ * compile_module proves byte-identity of the emitted module bytecode but
+ * cannot run it ("a module cannot fxRunScript without a linker"). This
+ * entry drives XS's real module loader over a DETERMINISTIC per-case host
+ * filesystem rooted at `dir` (the caller materializes the test262 module
+ * fixtures — the entry module plus every module it statically or
+ * dynamically imports — into that directory), using the same
+ * fxRunImport + job-drain shape xst.c's fxRunModuleFile uses. XS's
+ * default host resolve/load hooks (fxFindModule / fxLoadModule in
+ * xsPlatforms.c) resolve relative specifiers against the referrer's path
+ * and read each dependency from disk, so a multi-file graph, a cyclic
+ * graph, caching/identity (a specifier resolves to one module instance),
+ * top-level await, dynamic `import()`, `import.meta`, and import
+ * attributes all execute exactly as the shipped XS engine runs them.
+ *
+ * The differential contract mirrors xs_oracle_run's run half but keyed on
+ * the module graph's settled state:
+ *
+ *   out->ok == 1  the entry module's import promise FULFILLED (the whole
+ *                 graph linked and evaluated with no uncaught throw). The
+ *                 guest's observable result is read from `globalThis.result`
+ *                 (String()-coerced; "undefined" when the fixture set none),
+ *                 so a fixture asserts a concrete value — a namespace field,
+ *                 an identity boolean, a cycle-order string, `import.meta`
+ *                 shape — by assigning it there.
+ *   out->ok == 0  the import promise REJECTED (a throwing module body, an
+ *                 unresolved specifier, a host load failure, a rejected
+ *                 dynamic import): out->error carries the String()-coerced
+ *                 rejection reason.
+ *
+ * out->computrons is the meterIndex over the whole import+drain (parse of
+ * the graph is interleaved with evaluation and cannot be excluded the way
+ * the script entry excludes it, so this is a diagnostic total, not a
+ * run-only parity number). No bytecode is captured here — byte identity is
+ * the compile entry's job.
+ *
+ * Returns 0 on a normal outcome (fulfilled or rejected), negative only on
+ * a machine-level failure (out of memory creating the machine).
+ */
+int xs_oracle_run_module(const char *dir, const char *mainRel,
+	EndorOracleResult *out)
+{
+	txMachine *the;
+	memset(out, 0, sizeof(*out));
+
+	if (!gEndorClusterReady) {
+		fxInitializeSharedCluster(C_NULL);
+		gEndorClusterReady = 1;
+	}
+
+	the = fxCreateMachine(&gEndorCreation, "xs-oracle-run-module", C_NULL, 0);
+	if (!the)
+		return -1;
+
+	the = fxBeginHost(the);
+	{
+		txSlot *latch;
+
+		/* A GC-tracked stack slot the reject handler writes the rejection
+		 * reason into (xst.c uses xsVar(0) the same way). Its address is
+		 * stable across later pushes, so the raw pointer in the->rejection
+		 * stays valid for the whole run. */
+		mxPushUndefined();
+		latch = the->stack;
+		gEndorModuleLatch = latch;
+
+		mxTry(the) {
+			char path[C_PATH_MAX];
+			char real[C_PATH_MAX];
+			txSlot *module;
+			txSlot *realm;
+
+			/* Install the Hardened-JavaScript globals the run entry
+			 * installs, so a module body may reference them (parity with
+			 * xs_oracle_run; see its long comment). The global must be the
+			 * stack top during the install so each host function's HOME is
+			 * the global, not a stale frame. */
+			{
+				txSlot *slot;
+				mxPush(mxGlobal);
+				slot = fxLastProperty(the, fxToInstance(the, the->stack));
+				slot = fxNextHostFunctionProperty(the, slot, fx_harden, 1,
+					fxID(the, "harden"), XS_DONT_ENUM_FLAG);
+				slot = fxNextHostFunctionProperty(the, slot, fx_lockdown, 0,
+					fxID(the, "lockdown"), XS_DONT_ENUM_FLAG);
+				slot = fxNextHostFunctionProperty(the, slot, fx_petrify, 1,
+					fxID(the, "petrify"), XS_DONT_ENUM_FLAG);
+				slot = fxNextHostFunctionProperty(the, slot, fx_mutabilities, 1,
+					fxID(the, "mutabilities"), XS_DONT_ENUM_FLAG);
+				mxPop();
+			}
+
+			/* Resolve dir + '/' + mainRel to an absolute path so XS keys the
+			 * entry module (and every relative specifier off it) by a stable
+			 * canonical id. A missing file is a normal rejection below, not a
+			 * machine failure, so realpath failure falls through to a reject
+			 * with the unresolved path as the specifier. */
+			if ((c_strlen(dir) + 1 + c_strlen(mainRel)) >= sizeof(path))
+				mxRangeError("oracle module path too long");
+			c_strcpy(path, dir);
+			{
+				size_t n = c_strlen(path);
+				if (n && path[n - 1] != mxSeparator) {
+					path[n] = mxSeparator;
+					path[n + 1] = 0;
+				}
+			}
+			c_strcat(path, mainRel);
+			if (!c_realpath(path, real))
+				c_strcpy(real, path);
+
+			module = mxProgram.value.reference;
+			realm = mxModuleInstanceInternal(module)->value.module.realm;
+
+			the->meterIndex = 0;
+
+			/* fxRunImport(realm, referrer=NULL) with the specifier + a
+			 * placeholder referrer on the stack returns the entry module's
+			 * import promise; attach fulfill/reject handlers exactly as
+			 * fxRunModuleFile does, then drain the job queue so linking,
+			 * evaluation, top-level await, and any dynamic import settle. */
+			mxPushStringC(real);
+			mxPushUndefined();
+			fxRunImport(the, realm, C_NULL);
+			mxDub();
+			fxGetID(the, mxID(_then));
+			mxCall();
+			fxNewHostFunction(the, xs_oracle_module_fulfilled, 1, XS_NO_ID, XS_NO_ID);
+			fxNewHostFunction(the, xs_oracle_module_rejected, 1, XS_NO_ID, XS_NO_ID);
+			mxRunCount(2);
+			mxPop();
+
+			/* Drain the promise/module job queue (queue-neutral, so no timer
+			 * jobs and no exit-time unhandled-rejection abort), letting the
+			 * whole graph settle. */
+			while (the->promiseJobs) {
+				the->promiseJobs = 0;
+				fxRunPromiseJobs(the);
+			}
+
+			out->computrons = the->meterIndex >> 16;
+			out->meter_raw = (txU4)the->meterIndex;
+
+			if (latch->kind != XS_UNDEFINED_KIND) {
+				/* The import promise rejected: stringify the latched reason. */
+				out->ok = 0;
+				mxPushSlot(latch);
+				fxToString(the, the->stack);
+				if (the->stack->value.string) {
+					strncpy(out->error, the->stack->value.string,
+						ENDOR_ERROR_MAX - 1);
+					out->error[ENDOR_ERROR_MAX - 1] = 0;
+				}
+				mxPop();
+			}
+			else {
+				/* Fulfilled: the graph evaluated. Read the guest-observable
+				 * result the fixture published on globalThis.result. */
+				out->ok = 1;
+				mxPush(mxGlobal);
+				fxGetID(the, fxID(the, "result"));
+				fxToString(the, the->stack);
+				if (the->stack->value.string) {
+					strncpy(out->result, the->stack->value.string,
+						ENDOR_RESULT_MAX - 1);
+					out->result[ENDOR_RESULT_MAX - 1] = 0;
+				}
+				mxPop();
+			}
+		}
+		mxCatch(the) {
+			/* A synchronous throw escaping fxRunImport (before the promise
+			 * machinery caught it) is still a normal rejection outcome. */
+			out->computrons = the->meterIndex >> 16;
+			out->meter_raw = (txU4)the->meterIndex;
+			out->ok = 0;
+			if (mxException.kind != XS_UNDEFINED_KIND) {
+				mxPush(mxException);
+				fxToString(the, the->stack);
+				if (the->stack->value.string) {
+					strncpy(out->error, the->stack->value.string,
+						ENDOR_ERROR_MAX - 1);
+					out->error[ENDOR_ERROR_MAX - 1] = 0;
+				}
+				mxPop();
+			}
+		}
+	}
+	gEndorModuleLatch = C_NULL;
 	fxEndHost(the);
 	fxDeleteMachine(the);
 	return 0;

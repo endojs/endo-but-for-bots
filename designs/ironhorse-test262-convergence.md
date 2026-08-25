@@ -139,7 +139,7 @@ shared by both engines against the spec is still caught.
 |---|---|
 | One-line program, completion value checked against the oracle | Body with `assert.sameValue(<expr>, <expected>)`; expected value taken from the recorded oracle result at conversion time and reviewed against the spec |
 | Uncaught-throw programs (shared-abort arm, thrown-value string + computrons compared) | `negative: { phase: runtime, type: <ErrorConstructor> }` for real Error throws; primitive throws (`throw 7`) keep a `try`/`assert` body instead, since test262's `negative.type` is constructor-name-shaped (as in `xst262.c`'s verdict) and a bare `7` has none |
-| Parse-negative programs (today skipped as `parse-or-decode` — the oracle compiler rejects, Ironhorse cannot mirror until the stage-5 compiler) | `negative: { phase: parse, type: SyntaxError }` cases, checked in now, **activated when `ironhorse-compile` lands**; until then the runner skips them by that named reason |
+| Parse-negative programs | `negative: { phase: parse, type: SyntaxError }` cases, adjudicated from each engine's own compiler result; valid but unported syntax remains a named compiler gap |
 | Strict-mode-sensitive programs | standard `onlyStrict` / `noStrict` / (default both-modes) flags; `raw` for harness-free bodies (the meter micro-cases below are `raw` so no harness cost precedes the measured region) |
 | Stage attribution (`stage3b-promises.js`, …) | directory placement + `features:` markers; the stage name survives in `info:` prose, not in structure |
 
@@ -242,7 +242,7 @@ plus the one thing `xst` never had: a differential oracle.
 | Paths are test262 cases or directories; test262 mode auto-detected via `../harness` | Same: positional paths, harness dir located via the existing `locate_test262()` walk (defaulting to `packages/test262-runner/test262`), `--test262-dir` override |
 | Full YAML frontmatter (libyaml): `includes`, `negative` (`phase` + `type`), `flags`, `features` | Full YAML frontmatter (a real YAML dependency replaces `test262.rs`'s three-field hand parser; `#![forbid(unsafe_code)]` constrains the choice to a pure-Rust parser) |
 | `gxFeatures` 13-entry not-implemented skip list | An Ironhorse skip list with the same role (initially: everything the stage ladder has not landed — named per feature, reported per xst's `skip:` section) plus `--features-include` for opt-in sets like `ses-xs-parity`, matching the npm `test262-harness` idiom the repo already drives `xst` with |
-| Default sloppy + strict double-run; `onlyStrict` / `noStrict` / `raw` / `module` / `async` / `CanBlockIsFalse` flag semantics | Identical mode selection. Strict mode lands with the stage-5 compiler (mode is a compile-time flag, `mxStrictFlag`-equivalent); until then strict-only runs are named skips. `module` routes through the module machinery when stage 4 lands |
+| Default sloppy + strict double-run; `onlyStrict` / `noStrict` / `raw` / `module` / `async` / `CanBlockIsFalse` flag semantics | Identical sloppy/strict mode selection. The strict variant prepends its directive to the whole assembled Script. `module` routes through the module machinery when stage 4 lands |
 | Fresh machine per case per mode; `sta.js`, `assert.js`, includes; `$DONE` host function + did-not-run latch for `async`; `fxRunLoop` job drain; unhandled-rejection latch | Fresh `ironhorse-vm` machine per case per mode; same assembly order (already implemented in `assemble()`); `$DONE` registered through the host-function seam once the async surface lands (the stage-3b promise pump is the job-drain substrate); the unhandled-rejection latch mirrors `the->rejection` |
 | Negative verdict: thrown `constructor.name` vs `negative.type`; machine memory/stack-overflow exits accepted for expected `RangeError` | Same verdict, computed **per engine**; Ironhorse's stack-limit abort maps to the `RangeError` acceptance the same way (the stage-3 child-1 fixed stack limits make that abort deterministic) |
 | `-l` / `-lc` / `-c` lockdown & compartment modes | The same modes once stage 4 (Hardened JavaScript) lands — this is precisely the "Ironhorse as a third `test262-runner` host alongside `xst` and `node`" the engine design promises, so `ironhorse-xst` doubles as that host's engine-side entry point |
@@ -277,12 +277,9 @@ per-engine `xst` verdicts:
    determinism gate (identical Ironhorse computrons across runs — a red
    build on drift, since determinism-per-release is unconditional).
 
-Pre-stage-5 the oracle also remains the **compiler**: both engines
-run XS-emitted bytecode, exactly as `dual_run()` does today, so a
-divergence still has one suspect. When `ironhorse-compile` lands, the
-differential moves to source level (each engine compiles its own),
-the parse-phase negative cases activate, and bytecode byte-identity
-is separately enforced by the stage-5 bar.
+`ironhorse-compile` now moves the differential to the source boundary:
+each engine compiles its own source, parse-phase negative cases are active,
+and bytecode byte-identity is separately enforced by the stage-5 bar.
 
 The **honest-split discipline is retained as an Ironhorse extension**:
 where `xst` reports a skip only by feature or flag, `ironhorse-xst`

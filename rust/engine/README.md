@@ -427,9 +427,8 @@ carries a method only for program-referenced names, so it cannot tell an absent
 own read from an inherited built-in it never linked, and refuses rather than
 answer a wrong `undefined`/`false`. A fourth static, **`Object.defineProperty`**,
 lands the attribute-aware property model: `defineProperty(o, k, desc)` defines a
-new own data property on an ordinary object from the canonical four-field data
-descriptor (`{value, writable, enumerable, configurable}`, no `get`/`set` — the
-verifyProperty shape), storing the three booleans as XS's property flag byte
+ordinary own property from a partial data or accessor descriptor, including
+reconfiguration of an existing key, storing the attributes as XS's property flag byte
 (`XS_DONT_SET_FLAG`/`XS_DONT_ENUM_FLAG`/`XS_DONT_DELETE_FLAG`) so the attributes
 **ripple through** the other statics: `Object.keys` now filters non-enumerable
 properties (and still renders every enumerable one in creation order), and
@@ -444,12 +443,11 @@ tests, the computed-access `at`/`at_2` unlock, and the `in`-false answers now
 covered). The honest **named skips** are:
 `Object.keys`/`getOwnPropertyDescriptor` over an exotic receiver
 (array/typed-array/collection/wrapper/error — whose own-key set includes
-indices/length or internal names) or over an accessor property, an index-string
+indices/length or internal names), an index-string
 key, a computed read / `in` of a boot default-key name the program never
 referenced (the incomplete `%Object.prototype%` member set), a
-`defineProperty` with a partial or accessor descriptor / a redefine of an
-existing key / a non-object descriptor / a non-boolean attribute / an
-enumerable **novel** key `Object.keys` cannot render to a string.
+`defineProperty` on an exotic receiver, or an enumerable **novel** key
+`Object.keys` cannot render to a string.
 
 The stage-4 **object-integrity** child (1/8, harden's direct prerequisite)
 lands the property-attribute **integrity model** and the **descriptor-reflection
@@ -480,21 +478,16 @@ pairs, `66048` base + a per-key value-read residual — `3<<14` for `values`,
 `1<<16`). `built-ins/Object` whole-tree dual-run grows to **`covered=176
 divergent=0`** (from 63), with the per-section bars all `divergent=0`:
 `built-ins/Object/{freeze covered=12, seal 12, preventExtensions 12, isFrozen
-24, isSealed 19, isExtensible 25}`. The honest **named skips** are: the
-**strict-mode** integrity-violation *throw* — a rejected set/delete under a
-strict callee must throw a *catchable* native `TypeError`, which needs the
-native-error construction Ironhorse does not yet model (a wrong uncatchable
-host-abort would diverge from a `try`/`catch`), so it self-names
-`strict-set:integrity-violation` / `strict-delete:non-configurable` rather than
-answer wrongly; and an **exotic receiver** or an **accessor own property**
-across all these surfaces (the same class the object-statics child skips). The
-headline stage-4 surfaces this child does **not** reach — **accessor
-properties** (getter/setter slots, `get x()`/`set x()` object-literal opcodes,
-accessor-descriptor `defineProperty`) and the **full ValidateAndApplyProperty­
-Descriptor** reconfiguration path (`defineProperty` redefine / partial
-descriptors) — remain the reported **scope fold**, carried forward to a
-follow-up child as the honest named skips the object-statics child already
-lists.
+24, isSealed 19, isExtensible 25}`. Exotic receivers remain honest named
+skips across these surfaces.
+
+The stage-4 **ordinary-object MOP and descriptors** child completes the shared
+ordinary property seam. Data and accessor descriptors now use the full
+ValidateAndApplyPropertyDescriptor compatibility checks; `Object.create`,
+`Object.defineProperties`, symbol-key reflection, object spread, inherited
+getters/setters, and strict failed writes/deletes route through the same seam.
+Accessor getter/setter functions participate in harden's transitive walk, and
+rejected strict operations raise catchable realm-local `TypeError` objects.
 
 The stage-4 **classes** child (2/8) lands **`new.target`** (the `XS_CODE_TARGET`
 opcode, which already decoded but had no semantics), bit-exact (result AND
@@ -578,15 +571,16 @@ agree with **zero divergence**, every skip named:
 gen)` now driven, still `divergent=0`. The curated `stage4-generators.js` corpus
 is locked as `stage4_generators_corpus_is_bit_exact_against_oracle`, and the
 suspend/resume + allocation paths are exercised Miri-clean
-(`generator_suspend_resume_is_miri_clean`). The headline **scope fold** —
-carried forward as honest named skips (`Halt::Unsupported`, never a wrong value or
-a silent divergence): **`yield*` delegation** (`YIELD_STAR`), **`.throw(e)` and
-`.return(v)` into a *suspended* body** (throw-into-suspended and `finally`
-unwinding through the catch/finally jump chain — `generator:throw-into-suspended`/
-`generator:return-into-suspended`), a **`yield` inside a live `try`**
-(`generator:yield-in-try` — the jump-chain snapshot/rebase), a **`new`-constructed
-generator** (`generator:new-target`), and **async generators / `await`** (child 4,
-which resumes on this same `SavedFrame` machinery).
+(`generator_suspend_resume_is_miri_clean`). Synchronous generator control is now
+**complete**, each landed bit-exact against the oracle rather than named a skip:
+**`yield*` delegation** (`YIELD_STAR`, sharing the `YIELD` suspension machinery and
+carrying the delegate's iterator-result object as-is), **`.throw(e)` and `.return(v)`
+into a *suspended* body** (throw-into-suspended and `finally` unwinding through the
+catch/finally jump chain), and a **`yield` inside a live `try`** (the jump-chain
+snapshot/rebase). The remaining **scope fold** — carried forward as honest named
+skips (`Halt::Unsupported`, never a wrong value or a silent divergence): a
+**`new`-constructed generator** (`generator:new-target`) and **async generators /
+`await`** (child 4, which resumes on this same `SavedFrame` machinery).
 
 The stage-3b **promises** child (7/9) lands `Promise`, the promise **job
 queue**, and the **pump-loop latch** — the host-driven microtask drain the
@@ -773,6 +767,33 @@ bytecode to `ironhorse-vm` (blocked on the module-goal oracle seam above, so the
 async `import()`/`importHook` loader, and `import.meta`. GC roots were not touched
 (no run-loop/allocation-pressure wiring in this child), so the GC-roots ledger
 note carries forward untouched.
+
+**Update (executable-module oracle seam — dynamic-`import()` child).** The
+larger, separately-audited FFI seam the static child declined to open is now
+**partially open on the oracle side**: `xs-oracle` gained an executable
+Module-goal entry, `xs_oracle::run_module_dir` (backed by
+`xs_shim.c:xs_oracle_run_module`), that LINKS and EVALUATES a whole module graph
+over XS's **filesystem** resolve/load hooks — the same loader moddable's `xst -m`
+uses (the shim supplies `fxFindModule`/`fxLoadModule` adapted from `xst.c`, with
+`csrc/xsoracle-platform.h` flipping off xsnap's archive-only default loader). It
+returns a settled outcome (fulfilled result / rejection reason / computrons) for
+a per-case directory the caller materializes the fixtures into, so **module
+execution, cyclic graphs, caching/identity, namespaces, top-level await, dynamic
+`import()`, `import.meta`, and import attributes now have a real XS oracle
+authority** — the differential the manual-`xst` method previously could not
+automate. It is locked by `xs-oracle`'s own `run_module_*` unit tests and by
+`ironhorse-262/tests/module_execution_oracle.rs` (fulfillment, rejection,
+namespace key order/values, instance caching, cyclic evaluation order,
+`import.meta` shape + per-module identity, dynamic-import fulfillment/rejection,
+import-attributes JSON module, and a genuine test262 live-binding fixture).
+**Still a named skip (the remaining half of the arc):** `ironhorse-vm` does not
+yet EXECUTE module bytecode — `XS_CODE_IMPORT`/`XS_CODE_IMPORT_META` remain the
+honest interpreter skips `module:dynamic-import` / `module:import-meta`, and
+`XS_CODE_MODULE`/`XS_CODE_TRANSFER` are unimplemented — so a positive
+`module`-flagged test262 case is **still never promoted to `covered`**
+(`xst.rs:run_module_case` caps it at `module:evaluation`). Promoting the harness
+to a true module dual-run against this new oracle authority is the follow-up the
+seam now unblocks.
 
 The stage-4b **compartment** child (3/5) grows the stage-1 `Compartment.evaluate`
 seam into the full **native `Compartment`** the SES suites probe

@@ -16,11 +16,8 @@
 //! `…FromExpression` cover conversions); classes; and `import` / `export`
 //! in every form the pin supports.
 //!
-//! Two deliberate folds, documented for the coder child (byte-identity is
+//! One deliberate fold, documented for the coder child (byte-identity is
 //! its bar, not this child's):
-//!   * `using` / `await using` declarations — the pin builds with
-//!     `mxExplicitResourceManagement == 0`, so the oracle rejects them and
-//!     we do too; the productions are omitted.
 //!   * the class field / static-block → init-function surgery
 //!     (`fxClassExpression`'s second half) rearranges parsed members into
 //!     synthesized `constructorInit` / `instanceInit` function bodies via
@@ -30,7 +27,7 @@
 //!     desugaring moves to the coder.
 
 use crate::ast::{flags, Item, Node, Value};
-use crate::parser::{ParseError, Parser};
+use crate::parser::{ParseError, ParseErrorKind, Parser};
 use crate::token::{classify_word, Token};
 use crate::token_flags::{has_flag, BEGIN_BINDING, BEGIN_EXPRESSION, BEGIN_STATEMENT, END_STATEMENT, IDENTIFIER_NAME};
 
@@ -57,7 +54,15 @@ impl Parser {
         self.flags |= flags::PROGRAM;
         self.program()?;
         self.expect_eof()?;
-        Ok(self.pop())
+        let program = self.pop();
+        if let Some(line) = super::duplicate_proto_setter_line(&program) {
+            return Err(ParseError {
+                line,
+                kind: ParseErrorKind::Syntax,
+                message: "duplicate __proto__ property".into(),
+            });
+        }
+        Ok(program)
     }
 
     /// Parse a whole **Module** (`fxModule`), returning the `Module` node.
@@ -66,7 +71,15 @@ impl Parser {
         self.flags |= flags::STRICT | flags::ASYNC;
         self.module_program()?;
         self.expect_eof()?;
-        Ok(self.pop())
+        let module = self.pop();
+        if let Some(line) = super::duplicate_proto_setter_line(&module) {
+            return Err(ParseError {
+                line,
+                kind: ParseErrorKind::Syntax,
+                message: "duplicate __proto__ property".into(),
+            });
+        }
+        Ok(module)
     }
 
     // ================= program / module / body =================
@@ -293,18 +306,18 @@ impl Parser {
                 if block_it == 0 {
                     return Err(self.error("no block"));
                 }
-                self.variable_statement(Token::Const)?;
+                self.variable_statement(Token::Const, 0)?;
                 self.semicolon()?;
             }
             Token::Let => {
                 if block_it == 0 {
                     return Err(self.error("no block"));
                 }
-                self.variable_statement(Token::Let)?;
+                self.variable_statement(Token::Let, 0)?;
                 self.semicolon()?;
             }
             Token::Var => {
-                self.variable_statement(Token::Var)?;
+                self.variable_statement(Token::Var, 0)?;
                 self.semicolon()?;
             }
             Token::Do => self.do_statement()?,
@@ -331,6 +344,31 @@ impl Parser {
                     return Err(self.error("with (strict code)"));
                 }
                 self.with_statement()?;
+            }
+            Token::Await => {
+                self.look_ahead_once()?;
+                let is_await_using = !self.ahead_crlf()
+                    && self.ahead_token() == Token::Identifier
+                    && self.ahead.as_ref().and_then(|s| s.symbol.as_deref()) == Some("using")
+                    && !self.ahead.as_ref().is_some_and(|s| s.escaped);
+                if is_await_using {
+                    self.look_ahead_twice()?;
+                }
+                let has_binding = is_await_using
+                    && !self.ahead2.as_ref().is_some_and(|s| s.crlf)
+                    && matches!(self.ahead2_token(), Token::Identifier | Token::Await | Token::Yield);
+                if has_binding {
+                    self.get_next_token()?;
+                    self.cur.token = Token::Using;
+                    if block_it <= 0 {
+                        return Err(self.error("no block"));
+                    }
+                    self.variable_statement(Token::Using, flags::AWAITING)?;
+                    self.flags |= flags::AWAITING;
+                    self.semicolon()?;
+                } else {
+                    self.expression_statement(line)?;
+                }
             }
             Token::Identifier => self.identifier_statement(block_it, line)?,
             _ => self.expression_statement(line)?,
@@ -371,10 +409,23 @@ impl Parser {
                 if block_it == 0 {
                     return Err(self.error("no block"));
                 }
-                self.variable_statement(Token::Let)?;
+                self.variable_statement(Token::Let, 0)?;
                 self.semicolon()?;
                 return Ok(());
             }
+        }
+        if sym == "using"
+            && !escaped
+            && !self.ahead_crlf()
+            && matches!(self.ahead_token(), Token::Identifier | Token::Await | Token::Yield)
+        {
+            self.cur.token = Token::Using;
+            if block_it <= 0 {
+                return Err(self.error("no block"));
+            }
+            self.variable_statement(Token::Using, 0)?;
+            self.semicolon()?;
+            return Ok(());
         }
         self.expression_statement(line)
     }
@@ -607,14 +658,14 @@ impl Parser {
 
     /// `fxVariableStatement` — `var`/`let`/`const` binding list. Leaves the
     /// single binding node, or a `Statements` wrapping several.
-    pub(crate) fn variable_statement(&mut self, token: Token) -> PResult<()> {
+    pub(crate) fn variable_statement(&mut self, token: Token, binding_flags: u32) -> PResult<()> {
         let line = self.cur.line;
         let mut comma_flag = false;
         let mut count = 0usize;
         self.match_token(token)?;
         while has_flag(self.cur.token, BEGIN_BINDING) {
             comma_flag = false;
-            self.binding(token, 1)?;
+            self.binding(token, 1 | binding_flags)?;
             count += 1;
             if self.cur.token == Token::Comma {
                 self.flags &= !flags::FOR;
@@ -655,14 +706,48 @@ impl Parser {
         if self.cur.token == Token::Semicolon {
             self.push_null();
         } else if self.cur.token == Token::Const {
-            self.variable_statement(Token::Const)?;
+            self.variable_statement(Token::Const, 0)?;
         } else if self.cur.token == Token::Let {
-            self.variable_statement(Token::Let)?;
+            self.variable_statement(Token::Let, 0)?;
         } else if self.is_keyword("let")? && has_flag(self.ahead_token(), BEGIN_BINDING) {
             self.cur.token = Token::Let;
-            self.variable_statement(Token::Let)?;
+            self.variable_statement(Token::Let, 0)?;
+        } else if self.cur.token == Token::Identifier
+            && self.cur.symbol.as_deref() == Some("using")
+            && !self.cur.escaped
+            && !self.ahead_crlf()
+            && matches!(self.ahead_token(), Token::Identifier | Token::Await | Token::Yield)
+        {
+            self.look_ahead_twice()?;
+            if self.ahead.as_ref().and_then(|s| s.symbol.as_deref()) == Some("of")
+                && !self.ahead.as_ref().is_some_and(|s| s.escaped)
+                && self.ahead2_token() != Token::Assign
+            {
+                self.comma_expression()?;
+                expression_flag = true;
+            } else {
+                self.cur.token = Token::Using;
+                self.variable_statement(Token::Using, 0)?;
+            }
+        } else if self.cur.token == Token::Await {
+            self.look_ahead_twice()?;
+            let is_await_using = !self.ahead_crlf()
+                && self.ahead_token() == Token::Identifier
+                && self.ahead.as_ref().and_then(|s| s.symbol.as_deref()) == Some("using")
+                && !self.ahead.as_ref().is_some_and(|s| s.escaped)
+                && !self.ahead2.as_ref().is_some_and(|s| s.crlf)
+                && matches!(self.ahead2_token(), Token::Identifier | Token::Await | Token::Yield);
+            if is_await_using {
+                self.get_next_token()?;
+                self.cur.token = Token::Using;
+                self.variable_statement(Token::Using, flags::AWAITING)?;
+                self.flags |= flags::AWAITING;
+            } else {
+                self.comma_expression()?;
+                expression_flag = true;
+            }
         } else if self.cur.token == Token::Var {
-            self.variable_statement(Token::Var)?;
+            self.variable_statement(Token::Var, 0)?;
         } else {
             self.comma_expression()?;
             expression_flag = true;
@@ -680,6 +765,8 @@ impl Parser {
                 // A `for (const x = 1 in …)` head — an initializer on the
                 // loop binding is an early error.
                 return Err(self.error("invalid binding initializer"));
+            } else if self.cur.token == Token::In && self.top_token() == Some(Token::Using) {
+                return Err(self.error("invalid using in"));
             }
             let a_token = self.cur.token;
             self.get_next_token()?;
@@ -738,15 +825,24 @@ impl Parser {
         if self.cur.token == Token::Identifier {
             let sym = self.cur.symbol.clone().unwrap_or_default();
             self.check_strict_symbol(&sym)?;
-            if (token == Token::Const || token == Token::Let) && sym == "let" {
+            if matches!(token, Token::Const | Token::Let | Token::Using) && sym == "let" {
                 return Err(self.error("invalid identifier"));
             }
             self.push_symbol(sym);
             self.push_node_struct(1, token, line)?;
+            if flags_arg & flags::AWAITING != 0 {
+                self.set_top_flags(flags::AWAITING);
+            }
             self.get_next_token()?;
         } else if self.cur.token == Token::LeftBrace {
+            if token == Token::Using {
+                return Err(self.error("invalid using"));
+            }
             self.object_binding(token)?;
         } else if self.cur.token == Token::LeftBracket {
+            if token == Token::Using {
+                return Err(self.error("invalid using"));
+            }
             self.array_binding(token)?;
         } else {
             return Err(self.error("missing identifier"));
@@ -1421,6 +1517,10 @@ impl Parser {
         if self.cur.token == Token::Extends {
             self.match_token(Token::Extends)?;
             self.call_expression()?;
+            // ClassHeritage is a LeftHandSideExpression. A bare arrow is not
+            // one (`class extends () => {} {}`), while a parenthesized arrow
+            // remains valid because the outer group wraps it in Expressions.
+            self.check_arrow_function(1)?;
             constructor_flags |= flags::DERIVED;
             heritage_flag = true;
         } else {
@@ -1647,6 +1747,9 @@ impl Parser {
                         let l = self.cur.line;
                         self.push_string(s, l, false);
                         self.get_next_token()?;
+                        if self.cur.token == Token::With {
+                            return Err(self.unsupported_error("import attributes"));
+                        }
                         self.push_null(); // with-attributes (unsupported form → null)
                         self.push_node_struct(3, Token::Export, line)?;
                         self.semicolon()?;
@@ -1677,7 +1780,7 @@ impl Parser {
             Token::Const | Token::Let | Token::Var => {
                 let a_token = self.cur.token;
                 let before = self.stack.len();
-                self.variable_statement(a_token)?;
+                self.variable_statement(a_token, 0)?;
                 // Collect specifiers from the just-parsed declaration.
                 let decl = self.stack[before..].to_vec();
                 let mut specs = Vec::new();
@@ -1922,6 +2025,9 @@ impl Parser {
             self.get_next_token()?;
         } else {
             return Err(self.error("missing module"));
+        }
+        if self.cur.token == Token::With {
+            return Err(self.unsupported_error("import attributes"));
         }
         self.push_null(); // with-attributes
         let l = self.cur.line;

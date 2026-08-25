@@ -56,6 +56,11 @@ extern "C" {
         source_len: u32,
         out: *mut XsOracleResultRaw,
     ) -> c_int;
+    fn xs_oracle_run_module(
+        dir: *const c_char,
+        main_rel: *const c_char,
+        out: *mut XsOracleResultRaw,
+    ) -> c_int;
     fn xs_oracle_free(out: *mut XsOracleResultRaw);
     fn xs_oracle_regexp(
         pattern: *const c_char,
@@ -265,14 +270,14 @@ pub fn run(source: &str) -> Option<OracleOutcome> {
 /// The outcome of compiling one **Module** on XS (parse + code, no run).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleOutcome {
-    /// The exact XS module bytecode the XS compiler emitted, or empty on
-    /// a parse rejection.
+    /// The exact XS module bytecode the XS compiler emitted. In console mode a
+    /// parse rejection is a small SyntaxError throw stub rather than empty.
     pub bytecode: Vec<u8>,
     /// The serialized symbols atom.
     pub symbols: Vec<u8>,
     /// `true` if the module parsed and coded; `false` on a `SyntaxError`.
     pub compiled: bool,
-    /// The parse error message (valid when `!compiled`).
+    /// The parse error message when the C parser surfaced one directly.
     pub error: String,
 }
 
@@ -320,10 +325,20 @@ pub fn compile_module(source: &str) -> Option<ModuleOutcome> {
         }
     };
 
+    // In console mode XS represents a Module-goal syntax error as a small
+    // bytecode program that constructs and throws a SyntaxError.  The C entry
+    // therefore cannot use `script != NULL` as the acceptance signal.  A
+    // successfully coded module always ends in
+    // `MODULE <flags>; SET_RESULT; END`; the throw stub never does.  Recognize
+    // that pin-stable trailer so module early errors remain distinguishable
+    // from accepted modules without executing either one as a Script.
+    let emitted_module_record = bytecode
+        .get(bytecode.len().saturating_sub(4)..)
+        .is_some_and(|trailer| trailer[0] == 126 && trailer[2] == 187 && trailer[3] == 68);
     let outcome = ModuleOutcome {
         bytecode,
         symbols,
-        compiled: raw.ok != 0,
+        compiled: raw.ok != 0 && emitted_module_record,
         error: cstr_field(&raw.error),
     };
 
@@ -331,6 +346,73 @@ pub fn compile_module(source: &str) -> Option<ModuleOutcome> {
     // them into owned Vecs above.
     unsafe { xs_oracle_free(&mut raw as *mut _) };
 
+    Some(outcome)
+}
+
+/// The outcome of LINKING and EVALUATING a **Module** graph on XS: the
+/// executable counterpart of [`ModuleOutcome`]. Where [`compile_module`]
+/// proves byte-identity of the emitted bytecode without running it, this
+/// is the reference for module *execution* — a settled entry-module import
+/// promise — driven over a deterministic per-case host filesystem.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleRunOutcome {
+    /// `true` if the entry module's import promise fulfilled (the whole
+    /// graph linked and evaluated with no uncaught throw); `false` if it
+    /// rejected (a throwing body, an unresolved specifier, a host load
+    /// failure, a rejected dynamic import).
+    pub completed: bool,
+    /// The guest-observable result the fixture published on
+    /// `globalThis.result`, `String()`-coerced (valid when `completed`;
+    /// `"undefined"` when the fixture set none).
+    pub result: String,
+    /// The rejection reason stringified (valid when `!completed`).
+    pub error: String,
+    /// meterIndex over the whole import+drain. Parse of the graph is
+    /// interleaved with evaluation and cannot be excluded the way the
+    /// script entry excludes it, so this is a diagnostic total, not a
+    /// run-only parity number.
+    pub computrons: u64,
+    /// Raw meterIndex (16.16 fixed point).
+    pub meter_raw: u32,
+}
+
+/// Link and evaluate the module rooted at `dir`/`main_rel` on XS and
+/// return the entry module's settled outcome. `dir` is a directory the
+/// caller has materialized the module fixtures into (the entry module plus
+/// every module it statically or dynamically imports); `main_rel` is the
+/// entry module's path relative to `dir`. XS's default host resolve/load
+/// hooks read each dependency from that directory, so multi-file graphs,
+/// cyclic graphs, caching/identity, top-level await, dynamic `import()`,
+/// `import.meta`, and import attributes all execute as the shipped engine
+/// runs them.
+///
+/// A fixture publishes the value to assert on by assigning
+/// `globalThis.result` in the entry module's body (or a body it awaits);
+/// the returned [`ModuleRunOutcome::result`] is that value `String()`-coerced.
+///
+/// Returns `None` only on a machine-level failure (out of memory creating
+/// the machine); a rejection is a normal `ModuleRunOutcome` with
+/// `completed == false`.
+pub fn run_module_dir(dir: &std::path::Path, main_rel: &str) -> Option<ModuleRunOutcome> {
+    let dir_c = std::ffi::CString::new(dir.as_os_str().to_str()?).ok()?;
+    let main_c = std::ffi::CString::new(main_rel).ok()?;
+    let mut raw = XsOracleResultRaw::default();
+    // Safety: both C strings outlive the call; the C side writes only
+    // within `raw` and heap buffers it also frees on the module path
+    // (module runs capture no bytecode, so there is nothing for us to free).
+    let rc = unsafe { xs_oracle_run_module(dir_c.as_ptr(), main_c.as_ptr(), &mut raw as *mut _) };
+    if rc != 0 {
+        return None;
+    }
+    let outcome = ModuleRunOutcome {
+        completed: raw.ok != 0,
+        result: cstr_field(&raw.result),
+        error: cstr_field(&raw.error),
+        computrons: raw.computrons as u64,
+        meter_raw: raw.meter_raw,
+    };
+    // Safety: frees any heap buffers the shim allocated (none on this path).
+    unsafe { xs_oracle_free(&mut raw as *mut _) };
     Some(outcome)
 }
 
@@ -342,6 +424,75 @@ fn cstr_field(buf: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Materialize `files` into a unique temp dir, run `main` as a module
+    /// graph, and return the outcome (dir removed afterward). Unit tests do
+    /// not get CARGO_TARGET_TMPDIR, so key the dir on the case name.
+    fn run_module_graph(name: &str, files: &[(&str, &str)], main: &str) -> ModuleRunOutcome {
+        let dir = std::env::temp_dir().join(format!("xs-oracle-modtest-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (rel, body) in files {
+            std::fs::write(dir.join(rel), body).unwrap();
+        }
+        let o = run_module_dir(&dir, main).expect("oracle machine must start");
+        let _ = std::fs::remove_dir_all(&dir);
+        o
+    }
+
+    #[test]
+    fn run_module_links_and_evaluates_a_graph() {
+        // The executable-module entry links a two-file graph and evaluates
+        // it, publishing a concrete value on globalThis.result.
+        let o = run_module_graph(
+            "fulfill",
+            &[
+                ("dep.js", "export const x = 41; export function inc(n){ return n + 1; }"),
+                ("main.mjs", "import { x, inc } from './dep.js'; globalThis.result = inc(x);"),
+            ],
+            "main.mjs",
+        );
+        assert!(o.completed, "graph should fulfill, err={:?}", o.error);
+        assert_eq!(o.result, "42");
+        assert!(o.computrons > 0, "evaluating a graph costs computrons");
+    }
+
+    #[test]
+    fn run_module_rejection_is_not_a_machine_failure() {
+        // A throwing dependency rejects the entry import promise; the shim
+        // returns Some(..) with completed == false, not a machine failure.
+        let o = run_module_graph(
+            "reject",
+            &[
+                ("boom.js", "throw new Error('boom');"),
+                ("main.mjs", "import './boom.js';"),
+            ],
+            "main.mjs",
+        );
+        assert!(!o.completed, "throwing dependency must reject");
+        assert!(o.error.contains("boom"), "reason should carry the throw, got {:?}", o.error);
+    }
+
+    #[test]
+    fn run_module_dynamic_import_and_import_meta() {
+        // A single graph exercising both new opcodes at run time:
+        // `await import(...)` (XS_CODE_IMPORT) and `import.meta`
+        // (XS_CODE_IMPORT_META).
+        let o = run_module_graph(
+            "dyn-meta",
+            &[
+                ("dep.js", "export const v = 7;"),
+                (
+                    "main.mjs",
+                    "const ns = await import('./dep.js'); \
+                     globalThis.result = 'v'+ns.v+':'+(typeof import.meta);",
+                ),
+            ],
+            "main.mjs",
+        );
+        assert!(o.completed, "dynamic import + meta should fulfill, err={:?}", o.error);
+        assert_eq!(o.result, "v7:object");
+    }
 
     #[test]
     fn integer_arithmetic_result_and_bytecode() {
@@ -518,12 +669,10 @@ mod tests {
         // runs in console mode, so a syntax error emits a throw-`SyntaxError`
         // code sequence rather than a null script (the same shape the script
         // entry runs to observe its rejection) — so the module entry returns
-        // `Some(..)` and does not machine-fail. The byte-identity corpus only
-        // exercises VALID modules, where ironhorse and the oracle both accept; a
-        // truly-malformed module is out of the differential's scope.
+        // `Some(..)` and does not machine-fail. The acceptance classifier must
+        // still identify that throw stub as a parse rejection.
         let o = compile_module("export const = ;").expect("machine must not fail");
-        // Either a rejection or a throw-code module — never a process crash.
-        let _ = o.compiled;
+        assert!(!o.compiled, "the SyntaxError throw stub is not a module");
     }
 
     #[test]

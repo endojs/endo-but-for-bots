@@ -25,6 +25,7 @@ pub mod cost;
 pub mod default_keys;
 pub mod gc;
 pub mod interp;
+pub mod intl_number;
 pub mod meter;
 pub mod module;
 pub mod opcode;
@@ -35,7 +36,10 @@ pub use compartment::{
     Compartment, CompartmentId, CompartmentOptions, CompartmentSkip, Intrinsics, Machine,
 };
 pub use gc::{GcStats, Heap};
-pub use interp::{Halt, Interp, Native, RunOutcome, PROGRAM_INVOCATION_COMPUTRONS};
+pub use interp::{
+    CompiledSource, Halt, Interp, Native, RunOutcome, SourceCompileError, SourceCompiler,
+    PROGRAM_INVOCATION_COMPUTRONS,
+};
 pub use meter::{Meter, MeterCheck, MeterState, COST_TABLE_VERSION};
 pub use module::{
     BodyOp, ExportEntry, ImportEntry, ImportName, ModuleError, ModuleGraph, ModuleId,

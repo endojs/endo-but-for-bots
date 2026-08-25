@@ -137,6 +137,10 @@ impl Category {
 /// reason strings are the exact ones [`crate::xst`] emits; a prefix match keeps
 /// this robust as new sub-reasons are added under a known family.
 pub fn classify(outcome: Verdict, reason: &str) -> Category {
+    // A strict-mode-only skip/fail is reported as `strict:<reason>` by the
+    // sloppy+strict mode combiner (`run_case`); classify by the underlying
+    // reason so a strict-only gap scores identically to its sloppy twin.
+    let reason = reason.strip_prefix("strict:").unwrap_or(reason);
     match outcome {
         Verdict::Covered => Category::Covered,
         // Every `Verdict::Fail` is a bar-forbidden Ironhorse defect.
@@ -169,6 +173,9 @@ pub fn classify(outcome: Verdict, reason: &str) -> Category {
             }
         }
         Verdict::RunSkip => {
+            if reason == "oracle-host-missing-intl" || reason == "oracle-host-missing-temporal" {
+                return Category::Skipped;
+            }
             // Harness/oracle/infrastructure non-results — not an Ironhorse gap.
             const INFRASTRUCTURE_REASONS: &[&str] = &[
                 "oracle-machine-error",
@@ -191,11 +198,14 @@ pub fn classify(outcome: Verdict, reason: &str) -> Category {
                 || reason.starts_with("negative-")
                 || reason.starts_with("async:")
                 || reason == "shared-test262-failure"
+                || reason.starts_with("compiler-unimplemented:")
             {
                 // unsupported-opcode:*, parse-or-decode, non-primitive-completion,
                 // builtin-coercion-computron-gap, abort-value-differs,
                 // ironhorse-aborted*, negative-*:pending-compiler,
-                // negative-type-unmatched:*, async:* — all Ironhorse coverage gaps.
+                // negative-type-unmatched:*, async:*, and
+                // compiler-unimplemented:* (an ironhorse-compile construct not
+                // yet ported) — all Ironhorse coverage gaps.
                 Category::Unsupported
             } else {
                 // Unknown run skips must not be charged to Ironhorse. New
@@ -2233,10 +2243,10 @@ mod tests {
         // The convergence design's explicit Proxy check, as a committed,
         // reproducible, real-oracle-backed slice: run a bounded set of official
         // Proxy cases through the full runner and REPORT the observed result
-        // rather than assuming absence. Today the observed result is that no
-        // Proxy case runs end-to-end (every one is an honest unsupported gap,
-        // none a false covered/failure); this assertion flips the day Proxy
-        // lands, turning the report's Proxy row green.
+        // rather than assuming absence. Since the object-MOP child landed Proxy
+        // (garden issue 51), the observed result is that the slice runs
+        // end-to-end — covered cases with zero manufactured failures — turning
+        // the report's Proxy row green.
         use crate::test262::{collect_js, locate_test262};
         use crate::xst::{run_files, Config};
         let (root, harness) = match locate_test262() {
@@ -2278,18 +2288,20 @@ mod tests {
             eprintln!("    {:>4}  {}", n, reason);
         }
         assert!(report.total() > 0);
-        // Observed, not assumed: Proxy is not implemented.
-        assert_eq!(
-            category_counts.covered, 0,
-            "no Proxy case runs end-to-end today"
+        // Observed, not assumed: Proxy is now IMPLEMENTED (garden issue 51, the
+        // object-MOP child). The assertion flipped the day Proxy landed — the
+        // apply/revocable slice now runs end-to-end and the report's Proxy row is
+        // green. A residual of honest unsupported gaps remains (revocable's
+        // function-name/length descriptor attributes and the cross-realm `$262`
+        // cases lean on non-Proxy engine features), but no Proxy case is a
+        // manufactured failure.
+        assert!(
+            category_counts.covered > 0,
+            "Proxy cases now run end-to-end (apply/revocable slice)"
         );
         assert_eq!(
             category_counts.ironhorse_failure, 0,
             "the honest split never manufactures a Proxy failure"
-        );
-        assert!(
-            category_counts.unsupported > 0,
-            "Proxy cases are honest unsupported gaps, not infra non-results"
         );
     }
 }

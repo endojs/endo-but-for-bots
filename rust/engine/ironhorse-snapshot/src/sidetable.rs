@@ -44,6 +44,8 @@
 //! - `resume_status` — the generator/async resume signal, meaningful only
 //!   mid-`resume`; a *suspended* generator's state is the `generators` row
 //!   (tracked, Pending), not this register.
+//! - `callback_return_depth` — the return-depth sentinel while a property
+//!   accessor or other callback is executing; no callback spans a crank.
 //!
 //! **Boot-derived / program-symbol caches — re-derived, never stored.** These
 //! are pure functions of the boot procedure and the program's `symbol_names`,
@@ -109,6 +111,13 @@ pub enum SideTable {
     Functions,
     /// `bound_functions` — `Function.prototype.bind` target/`this`/args.
     BoundFunctions,
+    /// `proxies` (+ `proxy_revokers`) — each `Proxy` exotic's
+    /// `[[ProxyTarget]]`/`[[ProxyHandler]]` internal slots and the revoke-fn →
+    /// proxy back-links. Runtime-minted per `new Proxy`/`Proxy.revocable`, not
+    /// arena-recoverable and not boot-derived, so honestly `Pending` (like
+    /// `BoundFunctions`) until an atom carries it — a machine suspended holding
+    /// a live proxy cannot yet round-trip.
+    Proxies,
     /// `call_stack` — the suspended `CallerState` activations (scope,
     /// args, result) of the active call chain.
     CallStack,
@@ -121,6 +130,8 @@ pub enum SideTable {
     GlobalProps,
     /// `error_data` — per-instance Error name/message.
     ErrorData,
+    /// `accessors` — per-instance getter/setter function slots.
+    Accessors,
     /// `wrapper_data` — per-instance primitive-wrapper boxed value.
     WrapperData,
     /// `arrays` — exotic array length + item chunk.
@@ -160,6 +171,9 @@ pub enum SideTable {
     /// `regexps` — compiled RegExp program + source/flags (note:
     /// `lastIndex` is an ordinary own property, in the arena).
     RegExps,
+    /// `temporal_instants` + `temporal_durations` — exact immutable Temporal
+    /// internal-slot records keyed by their branded instance slots.
+    TemporalRecords,
     /// `ctor_prototype` — each constructor instance's `.prototype` object.
     /// The `.prototype` *object* is an arena slot, but the constructor→proto
     /// link is HashMap-only (never an own-property slot), so it is not
@@ -207,10 +221,12 @@ impl SideTable {
     pub const ALL: &'static [SideTable] = &[
         SideTable::Functions,
         SideTable::BoundFunctions,
+        SideTable::Proxies,
         SideTable::CallStack,
         SideTable::Jumps,
         SideTable::GlobalProps,
         SideTable::ErrorData,
+        SideTable::Accessors,
         SideTable::WrapperData,
         SideTable::Arrays,
         SideTable::Collections,
@@ -228,6 +244,7 @@ impl SideTable {
         SideTable::AsyncInstances,
         SideTable::AsyncRunStack,
         SideTable::RegExps,
+        SideTable::TemporalRecords,
         SideTable::CtorPrototype,
         SideTable::SymbolRegistry,
         SideTable::SymbolTables,
@@ -289,9 +306,11 @@ impl SideTable {
             // into dedicated atoms (child-3-adjacent; the honest remainder).
             SideTable::Functions => ("functions", Pending),
             SideTable::BoundFunctions => ("bound_functions", Pending),
+            SideTable::Proxies => ("proxies/proxy_revokers", Pending),
             SideTable::CallStack => ("call_stack", Pending),
             SideTable::Jumps => ("jumps", Pending),
             SideTable::ErrorData => ("error_data", Pending),
+            SideTable::Accessors => ("accessors", Pending),
             SideTable::WrapperData => ("wrapper_data", Pending),
             SideTable::Arrays => ("arrays", Pending),
             SideTable::Collections => ("collections", Pending),
@@ -309,6 +328,7 @@ impl SideTable {
             SideTable::AsyncInstances => ("async_instances", Pending),
             SideTable::AsyncRunStack => ("async_run_stack", Pending),
             SideTable::RegExps => ("regexps", Pending),
+            SideTable::TemporalRecords => ("temporal_instants/temporal_durations", Pending),
             SideTable::Modules => ("module::ModuleGraph", Pending),
             SideTable::HardenState => ("lockdown/harden state", Pending),
             // The metering state — carried by the METR atom (child 3).
@@ -354,7 +374,7 @@ mod tests {
     fn all_is_exhaustive() {
         // Count of variants, kept beside the enum. Bump when a variant is
         // added — the assertion below then forces the ALL entry too.
-        const VARIANT_COUNT: usize = 30;
+        const VARIANT_COUNT: usize = 33;
         assert_eq!(SideTable::ALL.len(), VARIANT_COUNT);
 
         // No duplicates: each field name appears once.

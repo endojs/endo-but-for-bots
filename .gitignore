@@ -31,6 +31,7 @@ bower_components
 
 # Rust
 target
+/test262-report/
 rust/endo/xsnap/src/ses_boot.js
 rust/endo/xsnap/src/worker_bootstrap.js
 rust/endo/xsnap/src/daemon_bootstrap.js

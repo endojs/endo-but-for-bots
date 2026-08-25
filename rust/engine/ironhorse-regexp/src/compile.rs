@@ -10,16 +10,17 @@
 //! bit-exact and the emitted graph is structurally identical, which in
 //! turn makes the matcher's per-step meter bit-exact.
 //!
-//! Honest scope (the stage bar names deferred surfaces): the `i`, `u`,
-//! and `v` flags, `\p{}`/`\P{}` unicode property escapes, named captures
-//! (`(?<name>)` / `\k<name>`), inline modifiers (`(?flags:...)`), and
-//! astral (`> 0xFFFF`) code points are compiled to a named
-//! [`CompileError::Unsupported`], never to a wrong meter or a wrong
-//! value.
+//! Honest scope (the stage bar names deferred surfaces): astral
+//! (`> 0xFFFF`) code points outside unicode mode are compiled to a
+//! named [`CompileError::Unsupported`], never to a wrong meter or a wrong
+//! value. Inline modifiers (`(?ims-ims:...)`), the `i` flag, and named
+//! captures (`(?<name>)` / `\k<name>`) ARE
+//! ported: a named group codegens identically to its numbered peer, plus a
+//! name-slot operand the matcher records into its runtime `names[]` array.
 
+use crate::encoding::{utf8_decode, C_EOF};
 use crate::flags::*;
 use crate::opcode::*;
-use crate::encoding::{utf8_decode, C_EOF};
 
 /// Why a pattern did not compile.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +50,11 @@ pub struct Program {
     /// Compile meter in raw 16.16 fixed point:
     /// `size_bytes * XS_PARSE_REGEXP_METERING`.
     pub compile_meter_raw: u64,
+    /// The declared named-capture groups in first-seen (name-slot) order:
+    /// `(name, capture_index)`. The JS `RegExp` surface reads this to build
+    /// the `.groups` object on an exec result (`fxCaptureName*`); the matcher
+    /// itself only needs the numeric slots in the code stream.
+    pub capture_group_names: Vec<(String, i32)>,
 }
 
 impl Program {
@@ -80,17 +86,43 @@ struct Node {
 enum Kind {
     /// A sorted list of half-open ranges: `chars[0]` = endpoint count,
     /// then `chars[1..=count]` = `[b0,e0), [b1,e1), ...`.
-    CharSet { chars: Vec<i32> },
+    CharSet {
+        chars: Vec<i32>,
+        /// Parser-only v-mode strings, sorted exactly as XS sorts them:
+        /// longest first, then descending UTF-8 byte order. Before measure,
+        /// [`Compiler::charset_strings_disjunction`] lowers these to ordinary
+        /// disjunction/sequence/charset nodes, so the emitted matcher program
+        /// remains byte-for-byte the XS shape.
+        strings: Vec<Vec<u32>>,
+    },
     Empty,
     LineBegin,
     LineEnd,
     WordBreak,
     WordContinue,
-    Disjunction { left: NodeId, right: NodeId },
-    Sequence { left: NodeId, right: NodeId },
-    Capture { term: NodeId, capture_index: i32 },
-    CaptureReference { capture_index: i32 },
-    Assertion { term: NodeId, not: bool, direction: i32, assertion_index: i32 },
+    Disjunction {
+        left: NodeId,
+        right: NodeId,
+    },
+    Sequence {
+        left: NodeId,
+        right: NodeId,
+    },
+    Capture {
+        term: NodeId,
+        capture_index: i32,
+        name_slot: i32,
+    },
+    CaptureReference {
+        capture_index: i32,
+        name_slot: i32,
+    },
+    Assertion {
+        term: NodeId,
+        not: bool,
+        direction: i32,
+        assertion_index: i32,
+    },
     Quantifier {
         term: NodeId,
         min: i32,
@@ -99,6 +131,18 @@ enum Kind {
         capture_index: i32,
         capture_count: i32,
         quantifier_index: i32,
+    },
+    /// An inline-modifier group `(?ims-ims:...)`. The scoped flags apply to
+    /// `disjunction` and are restored at the sequel step. `step` holds the
+    /// entry step block, `completion` the sequel (flag-restore) block.
+    /// `modified_flags` is `(outer | add) & ~remove`; `outer_flags` is the
+    /// ambient flags word restored when the group ends. Both are precomputed
+    /// at parse time (when the ambient flag word is naturally known), so the
+    /// code pass need not thread the running flags — matching `fxModifiersCode`.
+    Modifiers {
+        disjunction: NodeId,
+        modified_flags: i32,
+        outer_flags: i32,
     },
 }
 
@@ -118,15 +162,28 @@ struct Compiler {
     nodes: Vec<Node>,
     code: Vec<i32>,
     /// A pin feature whose SYNTAX this parser validates but whose matcher
-    /// code it does not emit yet (u/v flag, named captures, `\p`, inline
-    /// modifiers, astral). Set during the parse; when set, [`compile`]
+    /// code it does not emit yet (a non-unicode astral code point). Set
+    /// during the parse; when set, [`compile`]
     /// returns it as `Unsupported` *after* the full accept/reject decision,
     /// so a syntactically invalid such pattern is still a `Syntax` error
     /// (the lexer needs the accept/reject verdict; the matcher does not run).
     unsupported: Option<&'static str>,
-    /// Defined named-capture group names, in first-seen order — the
-    /// `firstCaptureName` chain. A repeat is `mxDuplicateCapture`.
+    /// The `fxCaptureNamePut` table: every UNIQUE named-capture name, in
+    /// first-seen order. A name slot (`code[5 + slot]`) is a name's position
+    /// here, so **duplicate** group names (legal across mutually-exclusive
+    /// disjunction alternatives, ES2025) share one slot — `nameIndex` counts
+    /// unique names. `fxCaptureNameGet` (the `\k<name>` resolver) searches it.
     capture_names: Vec<String>,
+    /// The `firstNamedCapture`/`lastNamedCapture` "participate" list — the name
+    /// slots live in the CURRENT scope — modeled as a linked arena so the
+    /// disjunction alternative-boundary detach/reattach (`fxDisjunctionParse`)
+    /// is the same pointer surgery. `participate_next[i]` is the next entry
+    /// (`-1` = none); `participate_first`/`participate_last` are the head/tail
+    /// (`-1` = empty). A slot already live here is `mxDuplicateCapture`.
+    participate_slot: Vec<i32>,
+    participate_next: Vec<i32>,
+    participate_first: i32,
+    participate_last: i32,
     /// `\k<name>` references collected during the parse; each must resolve
     /// to a defined name (`fxCaptureNameGet`, else `mxInvalidReferenceName`).
     named_refs: Vec<String>,
@@ -134,6 +191,14 @@ struct Compiler {
     /// (in the non-`UV` path) forces the second parse where `\k` becomes a
     /// named backreference.
     saw_named_group: bool,
+    /// The declared named groups in name-slot order: `(name, capture_index)`.
+    /// Slot `i` is `code[5 + i]` in XS; the matcher's runtime `names[]` array
+    /// resolves a `\k<name>` reference through it.
+    named_groups: Vec<(String, i32)>,
+    /// `(node, name)` for each `\k<name>` reference, resolved to its name slot
+    /// after the whole pattern is parsed (a forward reference is legal, so the
+    /// slot is not known at the point the reference is read).
+    pending_named_refs: Vec<(NodeId, String)>,
 }
 
 type PResult<T> = Result<T, CompileError>;
@@ -175,17 +240,18 @@ pub fn compile(pattern: &str, flags: &str) -> PResult<Program> {
         code: Vec::new(),
         unsupported: None,
         capture_names: Vec::new(),
+        participate_slot: Vec::new(),
+        participate_next: Vec::new(),
+        participate_first: -1,
+        participate_last: -1,
         named_refs: Vec::new(),
         saw_named_group: false,
+        named_groups: Vec::new(),
+        pending_named_refs: Vec::new(),
     };
-    // The `u`/`v` flags' match/compile machinery (CESU-8 surrogate walk,
-    // unicode property sets, V-mode string sets) is a named later
-    // increment, but the SYNTAX they accept/reject is validated here so the
-    // compile-time verdict matches the oracle: parse under the flag, then
-    // surface the unsupported matcher at the end.
-    if parser_flags & (XS_REGEXP_U | XS_REGEXP_V) != 0 {
-        c.unsupported = Some("u/v flag (unicode)");
-    }
+    // Core u/v scalar execution and character-valued Unicode properties run
+    // for real. Only syntax that actually uses v's string/set-expression
+    // extension is marked unsupported at its parse site.
     c.compile_pattern()
 }
 
@@ -213,7 +279,7 @@ impl Compiler {
         // number (e.g. `\11` with fewer than 11 groups; XS reads the whole
         // decimal greedily and rejects, it does not fall back to `\1`).
         for node in &self.nodes {
-            if let Kind::CaptureReference { capture_index } = &node.kind {
+            if let Kind::CaptureReference { capture_index, .. } = &node.kind {
                 if *capture_index >= 0 && *capture_index >= self.capture_index {
                     return Err(self.error("invalid reference number"));
                 }
@@ -227,9 +293,25 @@ impl Compiler {
                 return Err(self.error("invalid reference name"));
             }
         }
+        // Resolve each `\k<name>` reference to its group's name slot. The
+        // reference emits `capture_index = -1` and this slot as its name-id
+        // operand; the matcher's runtime `names[]` array (populated when the
+        // named group completes) maps the slot to the live capture index. A
+        // slot always exists here — the dangling-name check above already ran.
+        for (node_id, name) in std::mem::take(&mut self.pending_named_refs) {
+            let slot = self
+                .named_groups
+                .iter()
+                .position(|(n, _)| n == &name)
+                .expect("named reference resolved after the dangling-name check")
+                as i32;
+            if let Kind::CaptureReference { name_slot, .. } = &mut self.nodes[node_id].kind {
+                *name_slot = slot;
+            }
+        }
         // A syntactically valid pattern that uses a matcher surface this
-        // stage has not ported (u/v flag, named captures, `\p`, inline
-        // modifiers, astral) is accepted by the oracle at parse time; the
+        // stage has not ported (a non-unicode astral code point) is accepted by
+        // the oracle at parse time; the
         // lexer treats this `Unsupported` as accept. Bail here, AFTER the
         // full accept/reject decision, so an invalid such pattern is still
         // a `Syntax` error above.
@@ -267,6 +349,7 @@ impl Compiler {
             assertion_count: self.assertion_index as usize,
             quantifier_count: self.quantifier_index as usize,
             compile_meter_raw,
+            capture_group_names: std::mem::take(&mut self.named_groups),
         })
     }
 
@@ -302,7 +385,9 @@ impl Compiler {
     fn decimal(&self, value: &mut u32) -> bool {
         let c = self.character;
         if (b'0' as i64..=b'9' as i64).contains(&c) {
-            *value = value.wrapping_mul(10).wrapping_add((c - b'0' as i64) as u32);
+            *value = value
+                .wrapping_mul(10)
+                .wrapping_add((c - b'0' as i64) as u32);
             true
         } else {
             false
@@ -325,8 +410,14 @@ impl Compiler {
         self.quantifier_index = 0;
         self.nodes.clear();
         self.capture_names.clear();
+        self.participate_slot.clear();
+        self.participate_next.clear();
+        self.participate_first = -1;
+        self.participate_last = -1;
         self.named_refs.clear();
         self.saw_named_group = false;
+        self.named_groups.clear();
+        self.pending_named_refs.clear();
     }
 
     /// `fxCaptureNameParse`: read a `<name>` up to and including `>`,
@@ -452,8 +543,74 @@ impl Compiler {
         Some((character, end))
     }
 
+    /// `fxCaptureNamePut`: the slot for `name`, reusing an existing one when
+    /// the name repeats (duplicate group names share a slot). A brand-new name
+    /// advances `name_index` and records its `(name, capture_index)` in
+    /// name-slot order (the JS `.groups` key order). `capture_index` is this
+    /// group's ordinal, used only as the slot's representative index; the live
+    /// value is resolved through the matcher's runtime `names[]` array.
+    fn put_capture_name(&mut self, name: &str, capture_index: i32) -> i32 {
+        if let Some(pos) = self.capture_names.iter().position(|n| n == name) {
+            return pos as i32;
+        }
+        let slot = self.name_index;
+        self.capture_names.push(name.to_string());
+        self.named_groups.push((name.to_string(), capture_index));
+        self.name_index += 1;
+        slot
+    }
+
+    /// `fxCaptureNameParticipate`: register `slot` as live in the current
+    /// scope, erroring `mxDuplicateCapture` if it is already live. The
+    /// disjunction alternative boundary temporarily detaches a scope's live
+    /// slots so the same name may recur in a sibling alternative.
+    fn participate_capture_name(&mut self, slot: i32) -> PResult<()> {
+        let mut cur = self.participate_first;
+        while cur >= 0 {
+            let i = cur as usize;
+            if self.participate_slot[i] == slot {
+                return Err(self.error("duplicate capture"));
+            }
+            cur = self.participate_next[i];
+        }
+        let entry = self.participate_slot.len() as i32;
+        self.participate_slot.push(slot);
+        self.participate_next.push(-1);
+        if self.participate_last >= 0 {
+            self.participate_next[self.participate_last as usize] = entry;
+        } else {
+            self.participate_first = entry;
+        }
+        self.participate_last = entry;
+        Ok(())
+    }
+
+    /// Read the participate-list "address" — `-1` is the `firstNamedCapture`
+    /// head; otherwise the `nextNamedCapture` field of that arena node.
+    fn participate_read(&self, addr: i32) -> i32 {
+        if addr < 0 {
+            self.participate_first
+        } else {
+            self.participate_next[addr as usize]
+        }
+    }
+
+    /// Write the participate-list "address" (see [`Self::participate_read`]).
+    fn participate_write(&mut self, addr: i32, value: i32) {
+        if addr < 0 {
+            self.participate_first = value;
+        } else {
+            self.participate_next[addr as usize] = value;
+        }
+    }
+
     fn add_node(&mut self, kind: Kind) -> NodeId {
-        self.nodes.push(Node { kind, step: 0, completion: 0, loop_off: 0 });
+        self.nodes.push(Node {
+            kind,
+            step: 0,
+            completion: 0,
+            loop_off: 0,
+        });
         self.nodes.len() - 1
     }
 
@@ -462,6 +619,7 @@ impl Compiler {
     fn charset_single(&mut self, character: i64) -> NodeId {
         self.add_node(Kind::CharSet {
             chars: vec![2, character as i32, (character + 1) as i32],
+            strings: Vec::new(),
         })
     }
 
@@ -471,11 +629,13 @@ impl Compiler {
     /// is exactly one code point.
     fn charset_canonicalize_single(&mut self, id: NodeId) -> NodeId {
         if self.flags & XS_REGEXP_I != 0 {
-            if let Kind::CharSet { chars } = &self.nodes[id].kind {
+            if let Kind::CharSet { chars, .. } = &self.nodes[id].kind {
                 if chars[0] == 2 && chars[1] + 1 == chars[2] {
-                    // Non-`u`/`v` fold (flag == 0); `u`/`v` is rejected above.
-                    let c = crate::charcase::canonicalize(chars[1] as i64) as i32;
-                    if let Kind::CharSet { chars } = &mut self.nodes[id].kind {
+                    // `fxCharSetCanonicalizeSingle`: fold table is `Fold` under
+                    // `u`/`v` (flag == 1), `Ignore` otherwise.
+                    let fold = self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0;
+                    let c = crate::charcase::canonicalize(chars[1] as i64, fold) as i32;
+                    if let Kind::CharSet { chars, .. } = &mut self.nodes[id].kind {
                         chars[1] = c;
                         chars[2] = c + 1;
                     }
@@ -486,58 +646,124 @@ impl Compiler {
     }
 
     fn charset_empty(&mut self) -> NodeId {
-        self.add_node(Kind::CharSet { chars: vec![0] })
+        self.add_node(Kind::CharSet {
+            chars: vec![0],
+            strings: Vec::new(),
+        })
     }
 
     fn charset_any(&mut self) -> NodeId {
         let chars = if self.flags & XS_REGEXP_S != 0 {
             vec![2, 0x0000, 0x7FFF_FFFF]
         } else {
-            vec![8, 0x0000, 0x000A, 0x000B, 0x000D, 0x000E, 0x2028, 0x2030, 0x7FFF_FFFF]
+            vec![
+                8,
+                0x0000,
+                0x000A,
+                0x000B,
+                0x000D,
+                0x000E,
+                0x2028,
+                0x2030,
+                0x7FFF_FFFF,
+            ]
         };
-        self.add_node(Kind::CharSet { chars })
+        self.add_node(Kind::CharSet {
+            chars,
+            strings: Vec::new(),
+        })
     }
 
     fn charset_digits(&mut self) -> NodeId {
-        self.add_node(Kind::CharSet { chars: vec![2, b'0' as i32, b'9' as i32 + 1] })
+        self.add_node(Kind::CharSet {
+            chars: vec![2, b'0' as i32, b'9' as i32 + 1],
+            strings: Vec::new(),
+        })
     }
 
     fn charset_words(&mut self) -> NodeId {
-        // Under `i` (non-`u`/`v`), the subject char is canonicalized to
-        // its `A`..`Z` form at match time, so `\w` drops the `a`..`z`
-        // range (fxCharSetWords, the non-UV `I` branch).
+        // Under `i`, the subject char is canonicalized at match time, so one
+        // case of the ASCII letters suffices in the compiled `\w` set. The
+        // non-`u`/`v` `Ignore` fold maps toward the upper case, so `\w` keeps
+        // `A`..`Z` and drops `a`..`z`; the `u`/`v` `Fold` fold maps toward the
+        // lower case, so it keeps `a`..`z` and drops `A`..`Z`
+        // (`fxCharSetWords`, the two `I` branches). Endpoints stay sorted.
         let chars = if self.flags & XS_REGEXP_I != 0 {
-            vec![
-                6,
-                b'0' as i32, b'9' as i32 + 1,
-                b'A' as i32, b'Z' as i32 + 1,
-                b'_' as i32, b'_' as i32 + 1,
-            ]
+            if self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0 {
+                vec![
+                    6,
+                    b'0' as i32,
+                    b'9' as i32 + 1,
+                    b'_' as i32,
+                    b'_' as i32 + 1,
+                    b'a' as i32,
+                    b'z' as i32 + 1,
+                ]
+            } else {
+                vec![
+                    6,
+                    b'0' as i32,
+                    b'9' as i32 + 1,
+                    b'A' as i32,
+                    b'Z' as i32 + 1,
+                    b'_' as i32,
+                    b'_' as i32 + 1,
+                ]
+            }
         } else {
             vec![
                 8,
-                b'0' as i32, b'9' as i32 + 1,
-                b'A' as i32, b'Z' as i32 + 1,
-                b'_' as i32, b'_' as i32 + 1,
-                b'a' as i32, b'z' as i32 + 1,
+                b'0' as i32,
+                b'9' as i32 + 1,
+                b'A' as i32,
+                b'Z' as i32 + 1,
+                b'_' as i32,
+                b'_' as i32 + 1,
+                b'a' as i32,
+                b'z' as i32 + 1,
             ]
         };
-        self.add_node(Kind::CharSet { chars })
+        self.add_node(Kind::CharSet {
+            chars,
+            strings: Vec::new(),
+        })
     }
 
     fn charset_spaces(&mut self) -> NodeId {
         self.add_node(Kind::CharSet {
             chars: vec![
-                20, 0x0009, 0x000D + 1, 0x0020, 0x0020 + 1, 0x00A0, 0x00A0 + 1, 0x1680, 0x1680 + 1,
-                0x2000, 0x200A + 1, 0x2028, 0x2029 + 1, 0x202F, 0x202F + 1, 0x205F, 0x205F + 1,
-                0x3000, 0x3000 + 1, 0xFEFF, 0xFEFF + 1,
+                20,
+                0x0009,
+                0x000D + 1,
+                0x0020,
+                0x0020 + 1,
+                0x00A0,
+                0x00A0 + 1,
+                0x1680,
+                0x1680 + 1,
+                0x2000,
+                0x200A + 1,
+                0x2028,
+                0x2029 + 1,
+                0x202F,
+                0x202F + 1,
+                0x205F,
+                0x205F + 1,
+                0x3000,
+                0x3000 + 1,
+                0xFEFF,
+                0xFEFF + 1,
             ],
+            strings: Vec::new(),
         })
     }
 
     /// `fxCharSetNot`: complement over `[0, 0x7FFFFFFF)`.
     fn charset_not(&mut self, set: NodeId) -> PResult<NodeId> {
-        let src = self.charset_of(set)?;
+        let (src, strings) = self.charset_parts(set)?;
+        if !strings.is_empty() {
+            return Err(self.error("invalid pattern"));
+        }
         let mut out = vec![0i32];
         let mut character = 0i32;
         let mut i = 1usize;
@@ -557,15 +783,17 @@ impl Compiler {
             out.push(0x7FFF_FFFF);
         }
         out[0] = (out.len() - 1) as i32;
-        Ok(self.add_node(Kind::CharSet { chars: out }))
+        Ok(self.add_node(Kind::CharSet {
+            chars: out,
+            strings: Vec::new(),
+        }))
     }
 
-    /// `fxCharSetCombine` (character-set half only; the V-mode string
-    /// operands are the deferred increment). Merge two sorted endpoint
-    /// lists under a union/subtract/intersect op.
+    /// `fxCharSetCombine`: merge two sorted endpoint lists and their finite
+    /// string alternatives under a union/subtract/intersect operation.
     fn charset_combine(&mut self, set1: NodeId, set2: NodeId, op: i32) -> PResult<NodeId> {
-        let c1 = self.charset_of(set1)?.clone();
-        let c2 = self.charset_of(set2)?.clone();
+        let (c1, s1) = self.charset_parts(set1)?;
+        let (c2, s2) = self.charset_parts(set2)?;
         let count1 = c1[0] as usize;
         let count2 = c2[0] as usize;
         let mut i1 = 1usize;
@@ -606,13 +834,34 @@ impl Compiler {
             }
         }
         out[0] = (out.len() - 1) as i32;
-        Ok(self.add_node(Kind::CharSet { chars: out }))
+        let mut strings = match op {
+            MX_CHARSET_UNION_OP => s1.iter().chain(s2.iter()).cloned().collect::<Vec<_>>(),
+            MX_CHARSET_SUBTRACT_OP => s1
+                .iter()
+                .filter(|string| !s2.contains(string))
+                .cloned()
+                .collect::<Vec<_>>(),
+            MX_CHARSET_INTERSECTION_OP => s1
+                .iter()
+                .filter(|string| s2.contains(string))
+                .cloned()
+                .collect::<Vec<_>>(),
+            _ => unreachable!("known charset combine operation"),
+        };
+        Self::sort_strings(&mut strings);
+        Ok(self.add_node(Kind::CharSet {
+            chars: out,
+            strings,
+        }))
     }
 
     /// `fxCharSetRange`: build `[a-b]` from two singletons.
     fn charset_range(&mut self, set1: NodeId, set2: NodeId) -> PResult<NodeId> {
-        let c1 = self.charset_of(set1)?.clone();
-        let c2 = self.charset_of(set2)?.clone();
+        let (c1, s1) = self.charset_parts(set1)?;
+        let (c2, s2) = self.charset_parts(set2)?;
+        if !s1.is_empty() || !s2.is_empty() {
+            return Err(self.error("invalid pattern"));
+        }
         if c1[0] == 0 {
             return Ok(set2);
         }
@@ -630,33 +879,46 @@ impl Compiler {
         }
         if self.flags & XS_REGEXP_I != 0 {
             // Fold every code point in `[begin, end]` and union the
-            // canonical singletons (fxCharSetRange, the `I` branch).
+            // canonical singletons (fxCharSetRange, the `I` branch). The fold
+            // table is `Fold` under `u`/`v` (flag == 1), `Ignore` otherwise.
+            let fold = self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0;
             let begin = c1[1];
             let end = c2[1];
             let mut result = self.charset_empty();
             let mut ch = begin;
             while ch <= end {
-                let canon = crate::charcase::canonicalize(ch as i64) as i32;
-                let single = self.add_node(Kind::CharSet { chars: vec![2, canon, canon + 1] });
+                let canon = crate::charcase::canonicalize(ch as i64, fold) as i32;
+                let single = self.add_node(Kind::CharSet {
+                    chars: vec![2, canon, canon + 1],
+                    strings: Vec::new(),
+                });
                 result = self.charset_combine(result, single, MX_CHARSET_UNION_OP)?;
                 ch += 1;
             }
             return Ok(result);
         }
-        Ok(self.add_node(Kind::CharSet { chars: vec![2, c1[1], c2[2]] }))
+        Ok(self.add_node(Kind::CharSet {
+            chars: vec![2, c1[1], c2[2]],
+            strings: Vec::new(),
+        }))
     }
 
-    /// Borrow a node's charset endpoints, erroring if the node is not a
-    /// plain charset (e.g. a V-mode string set, which is deferred).
-    fn charset_of(&self, id: NodeId) -> PResult<&Vec<i32>> {
+    /// Borrow a node's character endpoints and finite string alternatives,
+    /// erroring if the node is not a character set.
+    fn charset_parts(&self, id: NodeId) -> PResult<(Vec<i32>, Vec<Vec<u32>>)> {
         match &self.nodes[id].kind {
-            Kind::CharSet { chars } => Ok(chars),
-            _ => Err(CompileError::Unsupported("non-charset operand")),
+            Kind::CharSet { chars, strings } => Ok((chars.clone(), strings.clone())),
+            _ => Err(self.error("invalid pattern")),
         }
     }
 
+    fn sort_strings(strings: &mut Vec<Vec<u32>>) {
+        strings.sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| right.cmp(left)));
+        strings.dedup();
+    }
+
     /// `fxCharSetParseEscape`: the `\`-escapes valid as a character set
-    /// (both bare and inside `[...]`). `\p`/`\P` are the named skip.
+    /// (both bare and inside `[...]`).
     fn charset_parse_escape(&mut self, punctuator: bool) -> PResult<NodeId> {
         let result = match self.character {
             c if c == C_EOF => return Err(self.error("invalid escape")),
@@ -693,9 +955,14 @@ impl Compiler {
                 self.next()?;
                 r
             }
-            c if c == b'p' as i64 || c == b'P' as i64 => {
-                return Err(CompileError::Unsupported("\\p / \\P unicode property escape"));
-            }
+            // `\p{…}` / `\P{…}` are Unicode property escapes in EVERY mode,
+            // not only `u`/`v`: XS's `fxCharSetParseEscape` dispatches `p`/`P`
+            // to `fxCharSetUnicodeProperty` unconditionally (the UV flag only
+            // gates the `v`-mode string-property table inside it). So in a
+            // legacy non-Unicode pattern `\p{Foo}` is a syntax error (unknown
+            // property), and `\pL` / `\p` / `\p{` are malformed-escape errors —
+            // XS never treats a bare `\p` as an identity escape of `p`.
+            c if c == b'p' as i64 || c == b'P' as i64 => self.charset_unicode_property()?,
             _ => {
                 self.pattern_escape(punctuator)?;
                 let r = self.charset_single(self.character);
@@ -703,6 +970,72 @@ impl Compiler {
                 r
             }
         };
+        Ok(result)
+    }
+
+    /// `fxCharSetUnicodeProperty`: parse the exact ECMAScript property alias
+    /// grammar and copy the XS endpoint table into a normal charset node.
+    fn charset_unicode_property(&mut self) -> PResult<NodeId> {
+        let negate = self.character == b'P' as i64;
+        self.next()?;
+        if self.character != b'{' as i64 {
+            return Err(self.error("invalid escape"));
+        }
+        self.next()?;
+        let name = self.property_identifier()?;
+        let value = if self.character == b'=' as i64 {
+            self.next()?;
+            Some(self.property_identifier()?)
+        } else {
+            None
+        };
+        if self.character != b'}' as i64 || name.is_empty() || value.as_deref() == Some("") {
+            return Err(self.error("invalid escape"));
+        }
+        let character_property = crate::unicode_property::lookup(&name, value.as_deref());
+        let string_property = if value.is_none() && self.flags & XS_REGEXP_V != 0 {
+            crate::unicode_property::lookup_string_property(&name)
+        } else {
+            None
+        };
+        let (endpoints, strings) = if let Some(endpoints) = character_property {
+            (endpoints, Vec::new())
+        } else if let Some((endpoints, strings)) = string_property {
+            (
+                endpoints,
+                strings
+                    .iter()
+                    .map(|string| string.chars().map(u32::from).collect())
+                    .collect(),
+            )
+        } else {
+            return Err(self.error("invalid escape"));
+        };
+        let mut chars = Vec::with_capacity(endpoints.len() + 1);
+        chars.push(endpoints.len() as i32);
+        chars.extend_from_slice(endpoints);
+        let set = self.add_node(Kind::CharSet { chars, strings });
+        self.next()?;
+        if negate {
+            self.charset_not(set)
+        } else {
+            Ok(set)
+        }
+    }
+
+    fn property_identifier(&mut self) -> PResult<String> {
+        let mut result = String::new();
+        while matches!(self.character, c if (b'a' as i64..=b'z' as i64).contains(&c)
+            || (b'A' as i64..=b'Z' as i64).contains(&c)
+            || (b'0' as i64..=b'9' as i64).contains(&c)
+            || c == b'_' as i64)
+        {
+            if result.len() == 127 {
+                return Err(self.error("property name overflow"));
+            }
+            result.push(self.character as u8 as char);
+            self.next()?;
+        }
         Ok(result)
     }
 
@@ -871,6 +1204,221 @@ impl Compiler {
         Ok(result)
     }
 
+    /// `fxCharSetStrings`: parse a v-mode `\q{...}` string disjunction.
+    /// Empty branches contribute nothing, singleton branches join the
+    /// character set, and longer branches are de-duplicated and sorted in
+    /// XS's longest-first order before set operations consume them.
+    fn charset_strings(&mut self) -> PResult<NodeId> {
+        self.next()?;
+        if self.character != b'{' as i64 {
+            return Err(self.error("invalid escape"));
+        }
+        self.next()?;
+        let mut result = self.charset_empty();
+        let mut strings = Vec::new();
+        let mut current = Vec::new();
+        loop {
+            match self.character {
+                C_EOF => return Err(self.error("invalid escape")),
+                c if c == b'}' as i64 || c == b'|' as i64 => {
+                    if current.len() == 1 {
+                        let single = self.charset_single(current[0] as i64);
+                        result = self.charset_combine(result, single, MX_CHARSET_UNION_OP)?;
+                    } else if current.len() > 1 {
+                        strings.push(std::mem::take(&mut current));
+                    }
+                    if c == b'}' as i64 {
+                        self.next()?;
+                        break;
+                    }
+                    current.clear();
+                    self.next()?;
+                }
+                _ => {
+                    if self.character == b'\\' as i64 {
+                        self.next()?;
+                        self.pattern_escape(true)?;
+                    }
+                    let mut character = self.character;
+                    if self.flags & XS_REGEXP_I != 0 {
+                        character = crate::charcase::canonicalize(character, true);
+                    }
+                    current.push(character as u32);
+                    self.next()?;
+                }
+            }
+        }
+        Self::sort_strings(&mut strings);
+        if let Kind::CharSet {
+            strings: target, ..
+        } = &mut self.nodes[result].kind
+        {
+            *target = strings;
+        }
+        Ok(result)
+    }
+
+    /// `fxCharSetExpression`: the v-mode nested-set grammar, including
+    /// subtraction, intersection, ordinary union/ranges, reserved doubled
+    /// punctuators, and the no-mixing rule for set operators.
+    fn charset_expression(&mut self) -> PResult<NodeId> {
+        let mut not = false;
+        if self.character == b'^' as i64 {
+            self.next()?;
+            not = true;
+        }
+        let (mut left, mut left_kind) = self.charset_operand()?;
+        let mut result: Option<NodeId> = None;
+        if self.character == b'-' as i64 && self.read8(self.offset) == b'-' {
+            loop {
+                self.next()?;
+                self.next()?;
+                let (right, _) = self.charset_operand()?;
+                result = Some(self.charset_combine(left, right, MX_CHARSET_SUBTRACT_OP)?);
+                if self.character == b']' as i64 {
+                    break;
+                }
+                if self.character == b'-' as i64 && self.read8(self.offset) == b'-' {
+                    left = result.expect("subtraction has a result");
+                    continue;
+                }
+                return Err(self.error("invalid range"));
+            }
+        } else if self.character == b'&' as i64 && self.read8(self.offset) == b'&' {
+            loop {
+                self.next()?;
+                self.next()?;
+                let (right, _) = self.charset_operand()?;
+                result = Some(self.charset_combine(left, right, MX_CHARSET_INTERSECTION_OP)?);
+                if self.character == b']' as i64 {
+                    break;
+                }
+                if self.character == b'&' as i64 && self.read8(self.offset) == b'&' {
+                    left = result.expect("intersection has a result");
+                    continue;
+                }
+                return Err(self.error("invalid range"));
+            }
+        } else {
+            loop {
+                if self.character == b'-' as i64 {
+                    self.next()?;
+                    let (right, right_kind) = self.charset_operand()?;
+                    if left_kind != 0 && right_kind != 0 {
+                        return Err(self.error("invalid range"));
+                    }
+                    left = self.charset_range(left, right)?;
+                }
+                result = Some(if let Some(former) = result {
+                    self.charset_combine(former, left, MX_CHARSET_UNION_OP)?
+                } else {
+                    left
+                });
+                if self.character == b']' as i64 {
+                    break;
+                }
+                (left, left_kind) = self.charset_operand()?;
+            }
+        }
+        let mut result = result.expect("a v set expression starts with an operand");
+        if not {
+            result = self.charset_not(result)?;
+        }
+        Ok(result)
+    }
+
+    /// `fxCharSetOperand`: one v-mode set operand and its range kind (zero
+    /// for a literal singleton, one for a class/string/nested set).
+    fn charset_operand(&mut self) -> PResult<(NodeId, i32)> {
+        match self.character {
+            C_EOF => Err(self.error("invalid range")),
+            c if c == b'[' as i64 => {
+                self.next()?;
+                let result = self.charset_expression()?;
+                if self.character != b']' as i64 {
+                    return Err(self.error("invalid range"));
+                }
+                self.next()?;
+                Ok((result, 1))
+            }
+            c if c == b'\\' as i64 => {
+                self.next()?;
+                if self.character == b'q' as i64 {
+                    Ok((self.charset_strings()?, 1))
+                } else {
+                    let class = matches!(
+                        self.character,
+                        c if c == b'd' as i64
+                            || c == b'D' as i64
+                            || c == b's' as i64
+                            || c == b'S' as i64
+                            || c == b'w' as i64
+                            || c == b'W' as i64
+                            || c == b'p' as i64
+                            || c == b'P' as i64
+                    );
+                    Ok((self.charset_parse_escape(true)?, i32::from(class)))
+                }
+            }
+            c if is_v_maybe_doubled_punctuator(c) => {
+                let character = self.character;
+                self.next()?;
+                if self.character == character {
+                    return Err(self.error("invalid range"));
+                }
+                Ok((self.charset_single(character), 0))
+            }
+            c if is_v_reserved_punctuator(c) => Err(self.error("invalid range")),
+            _ => {
+                let result = self.charset_single(self.character);
+                self.next()?;
+                Ok((result, 0))
+            }
+        }
+    }
+
+    /// Lower parser-only class strings into the same ordinary term tree XS
+    /// emits: longest alternatives first, each as a right-nested sequence,
+    /// followed by the character-set alternative when it is non-empty.
+    fn charset_strings_disjunction(&mut self, set: NodeId) -> PResult<NodeId> {
+        let (chars, strings) = self.charset_parts(set)?;
+        if strings.is_empty() {
+            return Ok(set);
+        }
+        let mut result: Option<NodeId> = None;
+        for string in strings {
+            let mut atoms = Vec::with_capacity(string.len());
+            for character in string {
+                let single = self.charset_single(character as i64);
+                atoms.push(self.charset_canonicalize_single(single));
+            }
+            let mut sequence = *atoms
+                .last()
+                .expect("v strings contain at least two scalars");
+            for &atom in atoms.iter().rev().skip(1) {
+                sequence = self.add_node(Kind::Sequence {
+                    left: atom,
+                    right: sequence,
+                });
+            }
+            result = Some(if let Some(left) = result {
+                self.add_node(Kind::Disjunction {
+                    left,
+                    right: sequence,
+                })
+            } else {
+                sequence
+            });
+        }
+        if chars[0] != 0 {
+            result = Some(self.add_node(Kind::Disjunction {
+                left: result.expect("string alternatives exist"),
+                right: set,
+            }));
+        }
+        Ok(result.expect("string alternatives exist"))
+    }
+
     // ---- quantifier parsing (fxQuantifierParse*) ----
 
     fn quantifier_parse(&mut self, term: NodeId, capture_index: i32) -> PResult<NodeId> {
@@ -973,12 +1521,26 @@ impl Compiler {
     // ---- the recursive-descent grammar (fxDisjunctionParse etc.) ----
 
     fn disjunction_parse(&mut self, character: i64) -> PResult<NodeId> {
+        // `fxDisjunctionParse`: the named-capture scope of each alternative is
+        // independent. Before parsing the left alternative, remember the tail
+        // of the live-name list; at the `|`, detach the left alternative's
+        // names so the right alternative does not see them (a name may recur
+        // across mutually-exclusive alternatives), then reattach both — the
+        // outer scope sees the left alternative's names, matching XS's pointer
+        // surgery exactly (the right's are dropped from the walkable head).
+        let left_addr = self.participate_last;
         let mut result = self.sequence_parse(character)?;
         if self.character == b'|' as i64 {
+            let right_addr = self.participate_last;
+            let left_named = self.participate_read(left_addr);
+            self.participate_write(left_addr, -1);
             self.next()?;
             let left = result;
             let right = self.disjunction_parse(character)?;
             result = self.add_node(Kind::Disjunction { left, right });
+            let after_left = self.participate_read(left_addr);
+            self.participate_write(right_addr, after_left);
+            self.participate_write(left_addr, left_named);
         }
         if self.character != character {
             return Err(self.error("invalid sequence"));
@@ -1007,7 +1569,10 @@ impl Compiler {
         }
         let mut result = *atoms.last().unwrap();
         for &atom in atoms.iter().rev().skip(1) {
-            result = self.add_node(Kind::Sequence { left: atom, right: result });
+            result = self.add_node(Kind::Sequence {
+                left: atom,
+                right: result,
+            });
         }
         Ok(result)
     }
@@ -1037,7 +1602,12 @@ impl Compiler {
             Err(self.error("invalid character"))
         } else if ch == b'[' as i64 {
             self.next()?;
-            let current = self.charset_parse_list()?;
+            let current = if self.flags & XS_REGEXP_V != 0 {
+                let set = self.charset_expression()?;
+                self.charset_strings_disjunction(set)?
+            } else {
+                self.charset_parse_list()?
+            };
             if self.character != b']' as i64 {
                 return Err(self.error("invalid range"));
             }
@@ -1082,7 +1652,9 @@ impl Compiler {
         } else if self.character == b'B' as i64 {
             self.next()?;
             Ok(self.add_node(Kind::WordContinue))
-        } else if self.character == b'k' as i64 && self.flags & (XS_REGEXP_U | XS_REGEXP_V | XS_REGEXP_N) != 0 {
+        } else if self.character == b'k' as i64
+            && self.flags & (XS_REGEXP_U | XS_REGEXP_V | XS_REGEXP_N) != 0
+        {
             // `\k<name>` named backreference (only when the pattern is `u`/`v`
             // or contains a named group — `XS_REGEXP_N`). Require `<`,
             // validate the name syntax, and record the reference for the
@@ -1096,9 +1668,15 @@ impl Compiler {
             self.flags |= XS_REGEXP_NAME;
             self.next()?;
             let name = self.capture_name_parse()?;
-            self.named_refs.push(name);
-            self.unsupported.get_or_insert("\\k<name> named backreference");
-            let node = self.add_node(Kind::CaptureReference { capture_index: -1 });
+            self.named_refs.push(name.clone());
+            // Emit a named reference: `capture_index = -1` with the name slot
+            // resolved after the whole pattern is parsed (forward references
+            // are legal). The matcher reads the live index out of `names[]`.
+            let node = self.add_node(Kind::CaptureReference {
+                capture_index: -1,
+                name_slot: -1,
+            });
+            self.pending_named_refs.push((node, name));
             self.quantifier_parse(node, current_index)
         } else if (b'1' as i64..=b'9' as i64).contains(&self.character) {
             let mut value: u32 = (self.character - b'0' as i64) as u32;
@@ -1106,12 +1684,20 @@ impl Compiler {
             while self.decimal(&mut value) {
                 self.next()?;
             }
-            let node = self.add_node(Kind::CaptureReference { capture_index: value as i32 });
+            let node = self.add_node(Kind::CaptureReference {
+                capture_index: value as i32,
+                name_slot: -1,
+            });
             self.quantifier_parse(node, current_index)
         } else {
             // \0, control, hex, \u, \d\w\s, identity escapes → a charset.
             let set = self.charset_parse_escape(false)?;
             let set = self.charset_canonicalize_single(set);
+            let set = if self.flags & XS_REGEXP_V != 0 {
+                self.charset_strings_disjunction(set)?
+            } else {
+                set
+            };
             self.quantifier_parse(set, current_index)
         }
     }
@@ -1128,14 +1714,24 @@ impl Compiler {
                 self.next()?;
                 let ai = self.assertion_index;
                 self.assertion_index += 1;
-                Ok(self.add_node(Kind::Assertion { term, not: false, direction: 1, assertion_index: ai }))
+                Ok(self.add_node(Kind::Assertion {
+                    term,
+                    not: false,
+                    direction: 1,
+                    assertion_index: ai,
+                }))
             } else if self.character == b'!' as i64 {
                 self.next()?;
                 let term = self.disjunction_parse(b')' as i64)?;
                 self.next()?;
                 let ai = self.assertion_index;
                 self.assertion_index += 1;
-                Ok(self.add_node(Kind::Assertion { term, not: true, direction: 1, assertion_index: ai }))
+                Ok(self.add_node(Kind::Assertion {
+                    term,
+                    not: true,
+                    direction: 1,
+                    assertion_index: ai,
+                }))
             } else if self.character == b':' as i64 {
                 self.next()?;
                 let current = self.disjunction_parse(b')' as i64)?;
@@ -1157,45 +1753,124 @@ impl Compiler {
                     self.next()?;
                     let ai = self.assertion_index;
                     self.assertion_index += 1;
-                    Ok(self.add_node(Kind::Assertion { term, not: false, direction: -1, assertion_index: ai }))
+                    Ok(self.add_node(Kind::Assertion {
+                        term,
+                        not: false,
+                        direction: -1,
+                        assertion_index: ai,
+                    }))
                 } else if self.character == b'!' as i64 {
                     self.next()?;
                     let term = self.disjunction_parse(b')' as i64)?;
                     self.next()?;
                     let ai = self.assertion_index;
                     self.assertion_index += 1;
-                    Ok(self.add_node(Kind::Assertion { term, not: true, direction: -1, assertion_index: ai }))
+                    Ok(self.add_node(Kind::Assertion {
+                        term,
+                        not: true,
+                        direction: -1,
+                        assertion_index: ai,
+                    }))
                 } else {
                     // `(?<name>…)` named capture. Validate the name
                     // (`fxCaptureNameParse`) and register it — a repeat is
                     // `mxDuplicateCapture` — then parse the body as a normal
-                    // capturing group. The matcher does not emit named
-                    // captures yet, so the pattern is `Unsupported`, but the
-                    // full accept/reject verdict is decided here first.
+                    // capturing group. It codegens exactly like a numbered
+                    // group; the only difference is the name-slot operand on
+                    // its completion, which the matcher records into `names[]`
+                    // so `\k<name>` and the JS `.groups` object can resolve it.
                     self.saw_named_group = true;
-                    self.unsupported.get_or_insert("(?<name>) named capture");
                     self.capture_index += 1;
                     current_index += 1;
                     let name = self.capture_name_parse()?;
-                    if self.capture_names.iter().any(|n| n == &name) {
-                        return Err(self.error("duplicate capture"));
-                    }
-                    self.capture_names.push(name);
-                    self.name_index += 1;
+                    // `fxCaptureNamePut` then `fxCaptureNameParticipate`: a
+                    // duplicate name shares its slot but is a SyntaxError only
+                    // when already live in this scope (same alternative), not
+                    // when it recurs across sibling disjunction alternatives.
+                    let slot = self.put_capture_name(&name, current_index);
+                    self.participate_capture_name(slot)?;
                     let term = self.disjunction_parse(b')' as i64)?;
                     self.next()?;
-                    let capture = self.add_node(Kind::Capture { term, capture_index: current_index });
+                    let capture = self.add_node(Kind::Capture {
+                        term,
+                        capture_index: current_index,
+                        name_slot: slot,
+                    });
                     self.quantifier_parse(capture, current_index - 1)
                 }
             } else {
-                Err(CompileError::Unsupported("(?flags:) inline modifiers"))
+                // `Modifiers` (`fxModifiersParse`) is `ModifierFlags`
+                // optionally followed by `- ModifierFlags`, where each side is
+                // a non-repeating run of i/m/s and the two sets are disjoint.
+                // The scoped flags apply to the enclosed disjunction and are
+                // restored at the sequel step (the runtime `cxModifiersStep`
+                // sets the matcher's live `flags` register), so case-folding
+                // (compile-time, baked into charsets) and dot-all/multiline
+                // (runtime) both track the scoped flag word.
+                let mut add = 0u32;
+                let mut remove = 0u32;
+                let mut removing = false;
+                loop {
+                    let bit = match self.character {
+                        c if c == b'i' as i64 => Some(XS_REGEXP_I),
+                        c if c == b'm' as i64 => Some(XS_REGEXP_M),
+                        c if c == b's' as i64 => Some(XS_REGEXP_S),
+                        _ => None,
+                    };
+                    if let Some(bit) = bit {
+                        if add & bit != 0 || remove & bit != 0 {
+                            return Err(self.error("duplicate inline modifier"));
+                        }
+                        if removing {
+                            remove |= bit;
+                        } else {
+                            add |= bit;
+                        }
+                        self.next()?;
+                        continue;
+                    }
+                    if self.character == b'-' as i64 && !removing {
+                        removing = true;
+                        self.next()?;
+                        continue;
+                    }
+                    break;
+                }
+                // `(?:...)`-terminated, at least one flag total (`(?-:a)` — both
+                // empty — is `mxInvalidModifiers`), and disjoint add/remove
+                // (the per-flag duplicate check above already enforces that). An
+                // empty *remove* after `-` is legal (`(?i-:a)`), matching XS.
+                if self.character != b':' as i64 || (add | remove) == 0 {
+                    return Err(self.error("invalid inline modifiers"));
+                }
+                self.next()?;
+                let outer_flags = self.flags;
+                let modified_flags = (outer_flags | add) & !remove;
+                // Parse the enclosed disjunction under the scoped flags so its
+                // charsets fold (or not) per the modified `i`, then restore.
+                self.flags = modified_flags;
+                let disjunction = self.disjunction_parse(b')' as i64)?;
+                self.flags = outer_flags;
+                self.next()?;
+                // A modifier group is not itself quantifiable in XS
+                // (`fxModifiersParse` returns without `fxQuantifierParse`); a
+                // following quantifier is a "nothing to repeat" error.
+                Ok(self.add_node(Kind::Modifiers {
+                    disjunction,
+                    modified_flags: modified_flags as i32,
+                    outer_flags: outer_flags as i32,
+                }))
             }
         } else {
             self.capture_index += 1;
             current_index += 1;
             let term = self.disjunction_parse(b')' as i64)?;
             self.next()?;
-            let capture = self.add_node(Kind::Capture { term, capture_index: current_index });
+            let capture = self.add_node(Kind::Capture {
+                term,
+                capture_index: current_index,
+                name_slot: -1,
+            });
             self.quantifier_parse(capture, current_index - 1)
         }
     }
@@ -1244,7 +1919,11 @@ impl Compiler {
                 self.nodes[id].step = self.size as i32;
                 self.size += 16; // mxCaptureReferenceStepSize
             }
-            Shape::Assertion { term, not, direction: dir } => {
+            Shape::Assertion {
+                term,
+                not,
+                direction: dir,
+            } => {
                 self.nodes[id].step = self.size as i32;
                 self.size += if not { 16 } else { 12 };
                 self.measure(term, dir);
@@ -1259,6 +1938,15 @@ impl Compiler {
                 self.measure(term, direction);
                 self.nodes[id].completion = self.size as i32;
                 self.size += 24; // mxQuantifierCompletionSize
+            }
+            Shape::Modifiers(disj) => {
+                // fxModifiersMeasure: an entry step block, the disjunction, then
+                // a sequel step block — each `mxModifiersStepSize` (12 bytes).
+                self.nodes[id].step = self.size as i32;
+                self.size += 12; // mxModifiersStepSize
+                self.measure(disj, direction);
+                self.nodes[id].completion = self.size as i32;
+                self.size += 12; // mxModifiersStepSize
             }
         }
     }
@@ -1282,11 +1970,15 @@ impl Compiler {
             }
             Shape::CharSet(count) => {
                 let chars: Vec<i32> = match &self.nodes[id].kind {
-                    Kind::CharSet { chars } => chars.clone(),
+                    Kind::CharSet { chars, .. } => chars.clone(),
                     _ => unreachable!(),
                 };
                 let at = (self.nodes[id].step / 4) as usize;
-                self.code[at] = if direction == 1 { CX_CHARSET_FORWARD_STEP } else { CX_CHARSET_BACKWARD_STEP };
+                self.code[at] = if direction == 1 {
+                    CX_CHARSET_FORWARD_STEP
+                } else {
+                    CX_CHARSET_BACKWARD_STEP
+                };
                 self.code[at + 1] = sequel;
                 self.code[at + 2] = count;
                 for i in 0..count as usize {
@@ -1313,43 +2005,73 @@ impl Compiler {
                 }
             }
             Shape::Capture(term) => {
-                let (step, completion, capture_index) = {
+                let (step, completion, capture_index, name_slot) = {
                     let n = &self.nodes[id];
-                    let ci = match &n.kind {
-                        Kind::Capture { capture_index, .. } => *capture_index,
+                    let (ci, ns) = match &n.kind {
+                        Kind::Capture {
+                            capture_index,
+                            name_slot,
+                            ..
+                        } => (*capture_index, *name_slot),
                         _ => unreachable!(),
                     };
-                    (n.step, n.completion, ci)
+                    (n.step, n.completion, ci, ns)
                 };
                 let term_step = self.nodes[term].step;
                 let at = (step / 4) as usize;
-                self.code[at] = if direction == 1 { CX_CAPTURE_FORWARD_STEP } else { CX_CAPTURE_BACKWARD_STEP };
+                self.code[at] = if direction == 1 {
+                    CX_CAPTURE_FORWARD_STEP
+                } else {
+                    CX_CAPTURE_BACKWARD_STEP
+                };
                 self.code[at + 1] = term_step;
                 self.code[at + 2] = capture_index;
                 self.emit(term, direction, completion);
                 let ct = (completion / 4) as usize;
-                self.code[ct] = if direction == 1 { CX_CAPTURE_FORWARD_COMPLETION } else { CX_CAPTURE_BACKWARD_COMPLETION };
+                self.code[ct] = if direction == 1 {
+                    CX_CAPTURE_FORWARD_COMPLETION
+                } else {
+                    CX_CAPTURE_BACKWARD_COMPLETION
+                };
                 self.code[ct + 1] = sequel;
                 self.code[ct + 2] = capture_index;
-                // No name in this increment: the name-id operand is -1.
-                self.code[ct + 3] = -1;
+                // The name-id operand: the group's name slot for a named
+                // capture (so the matcher records `names[slot] = index` on
+                // completion), or -1 for a plain numbered group.
+                self.code[ct + 3] = name_slot;
             }
             Shape::CaptureReference => {
-                let capture_index = match &self.nodes[id].kind {
-                    Kind::CaptureReference { capture_index } => *capture_index,
+                let (capture_index, name_slot) = match &self.nodes[id].kind {
+                    Kind::CaptureReference {
+                        capture_index,
+                        name_slot,
+                    } => (*capture_index, *name_slot),
                     _ => unreachable!(),
                 };
                 let at = (self.nodes[id].step / 4) as usize;
-                self.code[at] = if direction == 1 { CX_CAPTURE_REFERENCE_FORWARD_STEP } else { CX_CAPTURE_REFERENCE_BACKWARD_STEP };
+                self.code[at] = if direction == 1 {
+                    CX_CAPTURE_REFERENCE_FORWARD_STEP
+                } else {
+                    CX_CAPTURE_REFERENCE_BACKWARD_STEP
+                };
                 self.code[at + 1] = sequel;
+                // A numbered `\N` reference carries its resolved index and a
+                // name-id of -1; a `\k<name>` reference carries index -1 and
+                // its name slot, resolved at match time through `names[]`.
                 self.code[at + 2] = capture_index;
-                self.code[at + 3] = -1; // nameIndex (numeric ref)
+                self.code[at + 3] = name_slot;
             }
-            Shape::Assertion { term, not, direction: dir } => {
+            Shape::Assertion {
+                term,
+                not,
+                direction: dir,
+            } => {
                 let (step, completion, ai) = {
                     let n = &self.nodes[id];
                     let ai = match &n.kind {
-                        Kind::Assertion { assertion_index, .. } => *assertion_index,
+                        Kind::Assertion {
+                            assertion_index, ..
+                        } => *assertion_index,
                         _ => unreachable!(),
                     };
                     (n.step, n.completion, ai)
@@ -1378,11 +2100,37 @@ impl Compiler {
                 }
             }
             Shape::Quantifier(term) => {
-                let (step, loop_off, completion, greedy, quantifier_index, capture_index, capture_count, min, max) = {
+                let (
+                    step,
+                    loop_off,
+                    completion,
+                    greedy,
+                    quantifier_index,
+                    capture_index,
+                    capture_count,
+                    min,
+                    max,
+                ) = {
                     let n = &self.nodes[id];
                     match &n.kind {
-                        Kind::Quantifier { min, max, greedy, capture_index, capture_count, quantifier_index, .. } => (
-                            n.step, n.loop_off, n.completion, *greedy, *quantifier_index, *capture_index, *capture_count, *min, *max,
+                        Kind::Quantifier {
+                            min,
+                            max,
+                            greedy,
+                            capture_index,
+                            capture_count,
+                            quantifier_index,
+                            ..
+                        } => (
+                            n.step,
+                            n.loop_off,
+                            n.completion,
+                            *greedy,
+                            *quantifier_index,
+                            *capture_index,
+                            *capture_count,
+                            *min,
+                            *max,
                         ),
                         _ => unreachable!(),
                     }
@@ -1395,7 +2143,11 @@ impl Compiler {
                 self.code[at + 3] = min;
                 self.code[at + 4] = max;
                 let lp = (loop_off / 4) as usize;
-                self.code[lp] = if greedy { CX_QUANTIFIER_GREEDY_LOOP } else { CX_QUANTIFIER_LAZY_LOOP };
+                self.code[lp] = if greedy {
+                    CX_QUANTIFIER_GREEDY_LOOP
+                } else {
+                    CX_QUANTIFIER_LAZY_LOOP
+                };
                 self.code[lp + 1] = term_step;
                 self.code[lp + 2] = quantifier_index;
                 self.code[lp + 3] = sequel;
@@ -1410,6 +2162,33 @@ impl Compiler {
                 self.code[ct + 4] = capture_index + 1;
                 self.code[ct + 5] = capture_index + capture_count;
             }
+            Shape::Modifiers(disj) => {
+                let (step, completion, modified_flags, outer_flags) = {
+                    let n = &self.nodes[id];
+                    let (mf, of) = match &n.kind {
+                        Kind::Modifiers {
+                            modified_flags,
+                            outer_flags,
+                            ..
+                        } => (*modified_flags, *outer_flags),
+                        _ => unreachable!(),
+                    };
+                    (n.step, n.completion, mf, of)
+                };
+                let disj_step = self.nodes[disj].step;
+                // Entry: switch the live flags to the scoped word, then flow
+                // into the disjunction (fxModifiersCode).
+                let at = (step / 4) as usize;
+                self.code[at] = CX_MODIFIERS_STEP;
+                self.code[at + 1] = disj_step;
+                self.code[at + 2] = modified_flags;
+                self.emit(disj, direction, completion);
+                // Sequel: restore the outer flags, then flow to the real sequel.
+                let ct = (completion / 4) as usize;
+                self.code[ct] = CX_MODIFIERS_STEP;
+                self.code[ct + 1] = sequel;
+                self.code[ct + 2] = outer_flags;
+            }
         }
     }
 
@@ -1417,18 +2196,28 @@ impl Compiler {
     /// charset count without holding a borrow across the recursive calls.
     fn child_shape(&self, id: NodeId) -> Shape {
         match &self.nodes[id].kind {
-            Kind::CharSet { chars } => Shape::CharSet(chars[0]),
-            Kind::Empty | Kind::LineBegin | Kind::LineEnd | Kind::WordBreak | Kind::WordContinue => {
-                Shape::Term
-            }
+            Kind::CharSet { chars, .. } => Shape::CharSet(chars[0]),
+            Kind::Empty
+            | Kind::LineBegin
+            | Kind::LineEnd
+            | Kind::WordBreak
+            | Kind::WordContinue => Shape::Term,
             Kind::Disjunction { left, right } => Shape::Disjunction(*left, *right),
             Kind::Sequence { left, right } => Shape::Sequence(*left, *right),
             Kind::Capture { term, .. } => Shape::Capture(*term),
             Kind::CaptureReference { .. } => Shape::CaptureReference,
-            Kind::Assertion { term, not, direction, .. } => {
-                Shape::Assertion { term: *term, not: *not, direction: *direction }
-            }
+            Kind::Assertion {
+                term,
+                not,
+                direction,
+                ..
+            } => Shape::Assertion {
+                term: *term,
+                not: *not,
+                direction: *direction,
+            },
             Kind::Quantifier { term, .. } => Shape::Quantifier(*term),
+            Kind::Modifiers { disjunction, .. } => Shape::Modifiers(*disjunction),
         }
     }
 }
@@ -1440,8 +2229,13 @@ enum Shape {
     Sequence(NodeId, NodeId),
     Capture(NodeId),
     CaptureReference,
-    Assertion { term: NodeId, not: bool, direction: i32 },
+    Assertion {
+        term: NodeId,
+        not: bool,
+        direction: i32,
+    },
     Quantifier(NodeId),
+    Modifiers(NodeId),
 }
 
 fn hex_digit(c: u8) -> Option<u32> {
@@ -1483,4 +2277,37 @@ fn is_syntax_char(c: i64) -> bool {
         c as u8 as char,
         '^' | '$' | '\\' | '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '/'
     ) && (0..=0x7F).contains(&c)
+}
+
+fn is_v_maybe_doubled_punctuator(c: i64) -> bool {
+    (0..=0x7f).contains(&c)
+        && matches!(
+            c as u8 as char,
+            '&' | '!'
+                | '#'
+                | '$'
+                | '%'
+                | '*'
+                | '+'
+                | ','
+                | '.'
+                | ':'
+                | ';'
+                | '<'
+                | '='
+                | '>'
+                | '?'
+                | '@'
+                | '^'
+                | '`'
+                | '~'
+        )
+}
+
+fn is_v_reserved_punctuator(c: i64) -> bool {
+    (0..=0x7f).contains(&c)
+        && matches!(
+            c as u8 as char,
+            '(' | ')' | '[' | ']' | '{' | '}' | '/' | '-' | '\\' | '|'
+        )
 }

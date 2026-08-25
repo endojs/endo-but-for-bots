@@ -79,16 +79,51 @@ impl From<LexError> for ParseError {
 
 type PResult<T> = Result<T, ParseError>;
 
+/// Return the line of the second `__proto__:` setter in an object literal.
+/// Converted assignment/parameter covers are `ObjectBinding` nodes, so only
+/// nodes that remain `Object` are subject to Annex B.3.1.
+fn duplicate_proto_setter_line(item: &Item) -> Option<u32> {
+    match item {
+        Item::Node(node) => {
+            if node.token == Token::Object {
+                let mut found = false;
+                if let Some(Item::List(properties)) = node.children.first() {
+                    for property in properties {
+                        if let Item::Node(property) = property {
+                            let is_proto_setter = property.token == Token::Property
+                                && property.flags & flags::SHORTHAND == 0
+                                && matches!(
+                                    property.children.first(),
+                                    Some(Item::Symbol(symbol)) if symbol == "__proto__"
+                                );
+                            if is_proto_setter {
+                                if found {
+                                    return Some(property.line);
+                                }
+                                found = true;
+                            }
+                        }
+                    }
+                }
+            }
+            node.children.iter().find_map(duplicate_proto_setter_line)
+        }
+        Item::List(items) => items.iter().find_map(duplicate_proto_setter_line),
+        Item::Symbol(_) | Item::Null => None,
+    }
+}
+
 /// The parser: the token window (`states[0]`/`states[1]`), the mode-flag
 /// word (`parser->flags`), and the node-build stack (`parser->root`).
 pub struct Parser {
     lexer: Lexer,
     /// `parser->states[0]` — the current token.
     cur: Lexeme,
-    /// `parser->states[1]` — the one-token lookahead, present only after
-    /// an explicit `fxLookAheadOnce` (XS's `ahead` counter as an
-    /// `Option`).
+    /// `parser->states[1..=2]` — the token lookahead window. Most grammar
+    /// productions need one token; explicit-resource-management's
+    /// `for (using of of iterable)` disambiguation needs two.
     ahead: Option<Lexeme>,
+    ahead2: Option<Lexeme>,
     /// `parser->flags` (mode bits; see [`crate::ast::flags`]).
     flags: u32,
     /// The node-build stack (`parser->root`, top = last pushed).
@@ -119,7 +154,15 @@ impl Parser {
         // the first token, for both the program and module goals.
         lexer.skip_shebang();
         let cur = lexer.next()?;
-        Ok(Parser { lexer, cur, ahead: None, flags, stack: Vec::new(), property_name_async_flag: 0 })
+        Ok(Parser {
+            lexer,
+            cur,
+            ahead: None,
+            ahead2: None,
+            flags,
+            stack: Vec::new(),
+            property_name_async_flag: 0,
+        })
     }
 
     /// Parse a single expression (an `AssignmentExpression` — XS's
@@ -158,11 +201,20 @@ impl Parser {
         ParseError { line: self.cur.line, kind: ParseErrorKind::Syntax, message: message.to_string() }
     }
 
+    fn unsupported_error(&self, message: &str) -> ParseError {
+        ParseError {
+            line: self.cur.line,
+            kind: ParseErrorKind::Unsupported,
+            message: format!("unsupported: {message}"),
+        }
+    }
+
     // --- token window (fxGetNextToken / fxLookAheadOnce / fxMatchToken) ---
 
     fn get_next_token(&mut self) -> PResult<()> {
         if let Some(next) = self.ahead.take() {
             self.cur = next;
+            self.ahead = self.ahead2.take();
         } else {
             self.sync_lexer_flags();
             self.cur = self.lexer.next()?;
@@ -174,6 +226,15 @@ impl Parser {
         if self.ahead.is_none() {
             self.sync_lexer_flags();
             self.ahead = Some(self.lexer.next()?);
+        }
+        Ok(())
+    }
+
+    fn look_ahead_twice(&mut self) -> PResult<()> {
+        self.look_ahead_once()?;
+        if self.ahead2.is_none() {
+            self.sync_lexer_flags();
+            self.ahead2 = Some(self.lexer.next()?);
         }
         Ok(())
     }
@@ -397,6 +458,10 @@ impl Parser {
         self.ahead.as_ref().map(|s| s.crlf).unwrap_or(false)
     }
 
+    fn ahead2_token(&self) -> Token {
+        self.ahead2.as_ref().map(|s| s.token).unwrap_or(Token::NoToken)
+    }
+
     /// The symbol of the top-of-stack `Access` node (its `child[0]`), if
     /// any.
     fn top_access_symbol(&self) -> Option<String> {
@@ -433,6 +498,13 @@ impl Parser {
         let t = self.top_token();
         match t {
             Some(Token::Access) => {
+                // Static Semantics: it is an early Syntax Error to delete an
+                // IdentifierReference from strict-mode code. Parenthesized
+                // identifiers have already been unwrapped above, so the same
+                // check covers `delete ((name))` recursively.
+                if token == Token::Delete && self.flags & flags::STRICT != 0 {
+                    return Err(self.error("invalid delete (strict mode)"));
+                }
                 if let Some(sym) = self.top_access_symbol() {
                     self.check_strict_symbol(&sym)?;
                 }
@@ -1096,6 +1168,12 @@ impl Parser {
             self.push_node_struct(2, Token::ImportCall, line)?;
         } else if self.cur.token == Token::Dot {
             self.get_next_token()?;
+            if self.cur.token == Token::Identifier
+                && self.cur.symbol.as_deref() == Some("source")
+                && !self.cur.escaped
+            {
+                return Err(self.unsupported_error("source-phase import"));
+            }
             if self.cur.token == Token::Identifier
                 && self.cur.symbol.as_deref() == Some("meta")
                 && !self.cur.escaped

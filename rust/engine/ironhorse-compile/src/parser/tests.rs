@@ -269,6 +269,28 @@ fn object_literals() {
 }
 
 #[test]
+fn duplicate_proto_setters_are_an_early_error() {
+    let invalid = "({ __proto__: null, other: 1, '__proto__': null })";
+    let mut parser = Parser::new(invalid, false, false).expect("lexes");
+    let error = parser
+        .parse_program(false)
+        .expect_err("two prototype setters must be rejected");
+    assert!(error.message.contains("duplicate __proto__"), "{error}");
+
+    for valid in [
+        "({ __proto__: null, ['__proto__']: null })",
+        "({ __proto__, '__proto__': null })",
+        "({ __proto__() {}, '__proto__': null })",
+        "({ __proto__: x, __proto__: y } = value)",
+        "({ __proto__: x, __proto__: y }) => 0",
+        "for ({ __proto__: x, __proto__: y } of []) {}",
+        "function f({ __proto__: x, __proto__: y }) {}",
+    ] {
+        prog(valid);
+    }
+}
+
+#[test]
 fn templates() {
     check(&[
         ("`abc`", "(Template () [(TemplateItem (String \"abc\") (String \"abc\"))])"),
@@ -310,6 +332,16 @@ fn formerly_deferred_constructs_now_parse() {
         let mut p = Parser::new(src, false, false).unwrap();
         let item = p.parse_assignment_expression().unwrap_or_else(|e| panic!("parse {src:?}: {e}"));
         let _ = dump(&item);
+    }
+}
+
+#[test]
+fn valid_unported_import_attributes_are_unsupported() {
+    for source in ["import value from 'm' with { type: 'json' };", "export * from 'm' with { type: 'json' };"] {
+        let mut parser = Parser::new(source, true, false).unwrap();
+        let error = parser.parse_module().expect_err("import attributes are not yet ported");
+        assert_eq!(error.kind, ParseErrorKind::Unsupported);
+        assert!(error.message.contains("import attributes"));
     }
 }
 
@@ -524,6 +556,23 @@ fn class_declaration() {
 }
 
 #[test]
+fn bare_arrow_is_not_a_class_heritage_left_hand_side_expression() {
+    for invalid in [
+        "class C extends () => {} {}",
+        "var C = class extends () => {} {};",
+    ] {
+        let mut parser = Parser::new(invalid, false, false).expect("lexes");
+        let error = parser
+            .parse_program(false)
+            .expect_err("bare arrow heritage must be rejected");
+        assert!(error.message.contains("invalid arrow function"), "{error}");
+    }
+
+    // Parentheses turn the arrow into the permitted LeftHandSideExpression.
+    prog("class C extends (() => {}) {}");
+}
+
+#[test]
 fn object_methods_and_accessors() {
     check_prog(&[(
         "({ get x() { return 1; }, *gen() {}, async af() {} })",
@@ -602,6 +651,20 @@ fn statement_level_early_errors() {
         let err = p.parse_program(false).unwrap_err();
         assert_eq!(err.kind, ParseErrorKind::Syntax, "src {src:?}");
     }
+}
+
+#[test]
+fn strict_delete_identifier_is_an_early_error() {
+    for src in [
+        r#""use strict"; delete name;"#,
+        r#""use strict"; delete ((name));"#,
+    ] {
+        let err = prog_err(src);
+        assert_eq!(err.kind, ParseErrorKind::Syntax, "src {src:?}");
+        assert!(err.message.contains("invalid delete"), "{src:?}: {}", err.message);
+    }
+    prog_ok("delete name;");
+    prog_ok(r#""use strict"; delete object.name;"#);
 }
 
 #[test]
