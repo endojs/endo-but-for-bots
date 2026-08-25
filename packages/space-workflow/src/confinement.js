@@ -28,6 +28,9 @@ export const WORKFLOW_SPACE_TAGS = harden([
   'li',
   'button',
   'input',
+  // The approval panel labels its checkbox and text fields; `label` is inert
+  // markup and makes the label text a click target for the control.
+  'label',
   'pre',
   // statechart
   'svg',

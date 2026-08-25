@@ -61,7 +61,7 @@ export const workflowComponent = (
   // renderer's default set (which admits no SVG — the statechart would
   // flatten to text), so the space exports the exact tags it renders
   // plus the SVG geometry attributes to add.
-  renderConfined(h(WorkflowApp, { service }), $mount, {
+  renderConfined(h(WorkflowApp, { service, powers: resolvedPowers }), $mount, {
     allowedTags: WORKFLOW_SPACE_TAGS,
     allowedAttrs: WORKFLOW_SPACE_ATTRS,
   });

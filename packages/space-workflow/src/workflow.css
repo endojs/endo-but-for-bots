@@ -253,3 +253,79 @@
   flex: 1;
   opacity: 0.6;
 }
+
+/* ── Approval panel ─────────────────────────────────────────────────────────
+   Shown when the selected run is waiting on a form ask AND that form is in the
+   viewer's own inbox. Answering it is the viewer's authority over their mail;
+   the space never touches the run. */
+.wf-approval {
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  border: 1px solid #3a3a55;
+  border-left: 3px solid #fbbf24;
+  border-radius: 8px;
+  background: #1a1a2e;
+}
+.wf-approval-title {
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+.wf-approval-desc {
+  margin: 0 0 0.6rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  opacity: 0.85;
+}
+.wf-approval-note {
+  margin: 0;
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+.wf-approval-elsewhere {
+  border-left-color: #4a4a6a;
+}
+.wf-approval-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.wf-approval-check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+.wf-approval-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.8rem;
+}
+.wf-approval-text input {
+  padding: 0.3rem 0.4rem;
+  border: 1px solid #3a3a55;
+  border-radius: 6px;
+  background: #12121f;
+  color: inherit;
+  font: inherit;
+}
+.wf-approval-actions {
+  margin-top: 0.6rem;
+}
+.wf-approval-submit {
+  padding: 0.35rem 0.8rem;
+  border: 1px solid #3a3a55;
+  border-radius: 6px;
+  background: #24243c;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.wf-approval-submit:hover {
+  background: #2e2e4a;
+}
+.wf-approval-error {
+  margin-top: 0.5rem;
+  color: #f87171;
+  font-size: 0.8rem;
+}

@@ -35,6 +35,7 @@
     "@endo/eventual-send": "workspace:^",
     "@endo/exo-stream": "workspace:^",
     "@endo/harden": "workspace:^",
+    "@endo/spaces-util": "workspace:^",
     "@endo/workflow": "workspace:^",
     "preact": "^10.29.2"
   },
