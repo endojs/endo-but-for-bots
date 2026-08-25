@@ -90,3 +90,33 @@ fn empty_with_chain_matches_no_with() {
     // The environment-instance allocation and teardown meter exactly (empty body).
     exact("var o = {a: 1}; with (o) {} o.a");
 }
+
+// ---- `with (primitive)`: ToObject boxing (`XS_CODE_TO_INSTANCE`) ----------
+// A `with` head that is a Number/Boolean primitive is `ToObject`-coerced to its
+// wrapper (XS's `fxToInstance` → `fxNewNumberInstance`/`fxNewBooleanInstance`).
+// The wrapper carries no exotic own property, so a name absent from it (and its
+// `%<Type>.prototype%`) falls through outward, bit-exact including the two
+// `fxNewSlot` allocations the coercion meters (test262 `12.10-2-1`/`12.10-2-2`).
+
+#[test]
+fn with_number_primitive_boxes_and_falls_through() {
+    exact("var o = 2; var foo = 1; with (o) { foo = 42; } foo");
+}
+
+#[test]
+fn with_boolean_primitive_boxes_and_falls_through() {
+    exact("var o = true; var foo = 1; with (o) { foo = 42; } foo");
+}
+
+#[test]
+fn with_number_primitive_write_falls_through_to_outer() {
+    // A name the wrapper does not bind is assigned in the outer scope even when
+    // the `with` head is a boxed number (test262 `12.10-2-1`, the write form).
+    exact("var x = 9; with (2.5) { x = 3; } x");
+}
+
+#[test]
+fn with_integer_and_negative_primitives_box() {
+    exact("var foo = 1; with (0) { foo = 42; } foo");
+    exact("var foo = 1; with (-7) { foo = 42; } foo");
+}

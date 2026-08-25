@@ -8394,19 +8394,48 @@ impl Interp {
                                 Err(halt) => return halt,
                             }
                         }
-                        // Every other primitive's ToObject boxes to its
-                        // `%<Type>.prototype%` wrapper. The wrapper's *exotic*
-                        // own properties (a String wrapper's `length` and
-                        // indexed characters, in particular) are not yet
-                        // materialized on the boxed instance, so a subsequent
-                        // own-property read would silently diverge from the
-                        // oracle. Name the gap honestly as an `Unsupported`
-                        // skip rather than hand back a mis-answering wrapper —
-                        // the boxed-primitive ToObject surface (string/number
-                        // destructuring, `with(primitive)`) is a later child's
-                        // work. The hot in-scope paths (a base-class
-                        // constructor and object destructuring of an object
-                        // RHS) take the identity arm above and never reach here.
+                        // A `Number`/`Integer`/`Boolean` primitive's ToObject
+                        // boxes to its `%Number.prototype%`/`%Boolean.prototype%`
+                        // wrapper. These wrappers carry **no exotic own
+                        // property** (the wrapped primitive is the internal
+                        // `[[NumberData]]`/`[[BooleanData]]` slot), so a name
+                        // resolved against the wrapper — the `with(primitive)`
+                        // scopable walk — finds nothing own, falls through the
+                        // prototype chain outward, and matches the oracle
+                        // exactly. Boxing meters `fxToInstance`'s two `fxNewSlot`
+                        // allocations (see [`Self::box_primitive_to_instance`]).
+                        // The opcode replaces the top-of-stack primitive with the
+                        // wrapper reference in place (XS's `mxToInstance(mxStack)`).
+                        Kind::Boolean => {
+                            let inst =
+                                self.box_primitive_to_instance(Native::Boolean, top);
+                            let head =
+                                Slot::of(Kind::Reference, Payload::Reference(inst));
+                            if let Some(t) = self.stack.last_mut() {
+                                *t = head;
+                            } else {
+                                self.push(head);
+                            }
+                        }
+                        Kind::Integer | Kind::Number => {
+                            let inst =
+                                self.box_primitive_to_instance(Native::Number, top);
+                            let head =
+                                Slot::of(Kind::Reference, Payload::Reference(inst));
+                            if let Some(t) = self.stack.last_mut() {
+                                *t = head;
+                            } else {
+                                self.push(head);
+                            }
+                        }
+                        // A `String` wrapper's *exotic* own properties (its
+                        // `length` and indexed characters) are not materialized
+                        // in the side-table wrapper model, so a subsequent
+                        // own-property read (`with("ab") { length }`, string
+                        // destructuring) would silently diverge from the oracle;
+                        // a `Symbol`/`BigInt` wrapper is likewise unmodeled. Name
+                        // the gap honestly as an `Unsupported` skip rather than
+                        // hand back a mis-answering wrapper.
                         _ => return Halt::Unsupported("to_instance:primitive-box"),
                     }
                     pc += size as usize;
@@ -19278,6 +19307,52 @@ impl Interp {
     /// `Object` empty-object cost plus [`WRAPPER_CONSTRUCT_EXTRA`], chains the
     /// wrapper to the constructor's `%X.prototype%` (so it is `instanceof X`),
     /// and records the wrapped primitive so it stringifies as the primitive.
+    /// `fxToInstance` boxing of a primitive for the `XS_CODE_TO_INSTANCE`
+    /// opcode (`with(primitive)`, object-destructuring of a primitive RHS) —
+    /// XS's `fxNewBooleanInstance`/`fxNewNumberInstance` (`xsType.c`
+    /// `fxToInstance`). Distinct from [`Self::build_wrapper`], which is the
+    /// `new Number()`/`new Boolean()` **constructor** path (a native dispatch
+    /// plus the calibrated [`WRAPPER_CONSTRUCT_EXTRA`]): the bare coercion is
+    /// two `fxNewSlot` allocations only — `fxNewObjectInstance` (the wrapper
+    /// head) and `fxNext<Type>Property` (the internal `[[NumberData]]`/
+    /// `[[BooleanData]]` slot) — with no constructor call frame, so it meters
+    /// exactly `2 × SLOT_ALLOCATION_METERING` beyond the opcode dispatch. The
+    /// wrapped primitive lives in [`Self::wrapper_data`] (where `valueOf`/
+    /// `toString`/the bare completion read it); the wrapper carries no own
+    /// enumerable property, so a name resolved against it (the `with`
+    /// scopable walk) falls through to `%Number.prototype%`/`%Boolean.prototype%`
+    /// and then outward, matching the oracle. In strict code XS stamps the
+    /// wrapper `XS_DONT_PATCH_FLAG` (non-extensible); `with` is a strict-mode
+    /// SyntaxError so that arm only matters to a strict destructuring temporary,
+    /// but it is set faithfully. Only the primitives with **no exotic own
+    /// properties** route here — a `String` wrapper's `length`/indexed
+    /// characters are not materialized in the side-table model, so a `String`
+    /// (and `Symbol`/`BigInt`, unmodeled wrappers) stays an honest
+    /// `to_instance:primitive-box` skip in the caller.
+    fn box_primitive_to_instance(
+        &mut self,
+        native: Native,
+        prim: Slot,
+    ) -> crate::value::SlotIndex {
+        // fxNewObjectInstance: one fxNewSlot for the wrapper head.
+        let proto = self
+            .intrinsics
+            .get(native.display_name())
+            .and_then(|&c| self.prototype_of(c))
+            .unwrap_or(self.object_proto);
+        let inst = self.slots.alloc(Slot::instance(proto));
+        self.meter.tick_slot_alloc();
+        // fxNext<Type>Property: one fxNewSlot for the internal [[XxxData]]
+        // slot. ironhorse holds the wrapped primitive in the side table, so
+        // the slot's cost is metered here explicitly.
+        self.meter.tick_slot_alloc();
+        self.wrapper_data.insert(inst, prim);
+        if self.strict {
+            self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG;
+        }
+        inst
+    }
+
     fn build_wrapper(&mut self, native: Native, prim: Slot) -> Slot {
         self.meter.tick_builtin();
         let inst = self.new_object();
