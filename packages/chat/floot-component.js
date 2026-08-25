@@ -985,7 +985,17 @@ export const flootComponent = (
     }
     notify();
     submitChain = submitChain.then(() => {
-      turnPromise = runConverse(text, queuedId).finally(() => {
+      // Read the text back off the placeholder at the moment the turn starts,
+      // rather than closing over what was typed: a queued message can be edited
+      // or deleted while it waits, and the edit has to be what actually runs.
+      // A missing placeholder means it was deleted — skip the turn entirely.
+      let queuedText = text;
+      if (queuedId) {
+        const queued = queuedSends.find(q => q.id === queuedId);
+        if (!queued) return undefined;
+        queuedText = queued.text;
+      }
+      turnPromise = runConverse(queuedText, queuedId).finally(() => {
         // Defensive: if the turn failed before adopting the placeholder,
         // drop it rather than leave a ghost message.
         if (queuedId) queuedSends = queuedSends.filter(q => q.id !== queuedId);
@@ -993,6 +1003,35 @@ export const flootComponent = (
       return turnPromise.catch(() => {});
     });
     return submitChain;
+  };
+
+  /**
+   * Rewrite a queued submission while it waits. No effect once its turn has
+   * started (the placeholder is gone by then).
+   *
+   * @param {number} id
+   * @param {string} raw
+   */
+  const editPending = (id, raw) => {
+    const text = (raw || '').trim();
+    if (!text) return;
+    const queued = queuedSends.find(q => q.id === id);
+    if (!queued) return;
+    queuedSends = queuedSends.map(q => (q.id === id ? { ...q, text } : q));
+    notify();
+  };
+
+  /**
+   * Drop a queued submission before it runs. The chain entry is already
+   * scheduled, so removing the placeholder is what cancels it: the chain finds
+   * nothing and skips its turn.
+   *
+   * @param {number} id
+   */
+  const cancelPending = id => {
+    if (!queuedSends.some(q => q.id === id)) return;
+    queuedSends = queuedSends.filter(q => q.id !== id);
+    notify();
   };
 
   // ── Session actions (controller callbacks) ──────────────────────────────────
@@ -1756,6 +1795,12 @@ export const flootComponent = (
     sendPendingNow(/** @type {number} */ id) {
       if (!queuedSends.some(q => q.id === id)) return;
       cancelTurn();
+    },
+    editPending(/** @type {number} */ id, /** @type {string} */ text) {
+      editPending(id, text);
+    },
+    cancelPending(/** @type {number} */ id) {
+      cancelPending(id);
     },
     selectSession(/** @type {string} */ id) {
       selectSession(id);

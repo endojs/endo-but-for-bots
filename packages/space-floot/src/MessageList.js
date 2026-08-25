@@ -288,17 +288,13 @@ const ActionGroup = ({ actions }) => {
 
 /**
  * @param {{ msg: FlootMessage, canReplay: boolean,
- *   onReplay: (text: string) => void, replaying: boolean,
- *   onSendNow?: (id: number) => void }} props
+ *   onReplay: (text: string) => void, replaying: boolean }} props
  * @returns {VNode}
  */
-const Bubble = ({ msg, canReplay, onReplay, replaying, onSendNow }) => {
+const Bubble = ({ msg, canReplay, onReplay, replaying }) => {
   const text = msg.text || '';
   const mailFrom = msg.meta && msg.meta.mail && msg.meta.mail.from;
-  const pending = Boolean(msg.pending);
-  const rowClass = `floot-msg-row ${msg.role}${mailFrom ? ' mail' : ''}${
-    pending ? ' pending' : ''
-  }`;
+  const rowClass = `floot-msg-row ${msg.role}${mailFrom ? ' mail' : ''}`;
   const caption = mailFrom
     ? h(
         'div',
@@ -308,32 +304,6 @@ const Bubble = ({ msg, canReplay, onReplay, replaying, onSendNow }) => {
       )
     : null;
   const bubble = h('div', { class: 'floot-msg' }, ...linkify(text));
-  // A queued submission is not in the transcript yet: it runs after the turn
-  // in flight. Say so, and offer to cut the current turn short and send it now.
-  if (pending) {
-    return h(
-      'div',
-      { class: rowClass },
-      h(
-        'div',
-        { class: 'floot-pending-caption' },
-        h('span', { class: 'floot-pending-badge' }, 'Pending'),
-        'sends when this turn ends',
-        onSendNow
-          ? h(
-              'button',
-              {
-                type: 'button',
-                class: 'floot-send-now',
-                onClick: () => onSendNow(/** @type {number} */ (msg.pendingId)),
-              },
-              'Send now',
-            )
-          : null,
-      ),
-      bubble,
-    );
-  }
   // A finished assistant message offers a replay button when TTS is wired.
   if (msg.role === 'assistant' && canReplay && text.trim()) {
     return h(
@@ -360,6 +330,119 @@ const Bubble = ({ msg, canReplay, onReplay, replaying, onSendNow }) => {
   return h('div', { class: rowClass }, caption, bubble);
 };
 harden(Bubble);
+
+/**
+ * A submission that has been accepted but not yet run, shown after the live
+ * turn it is queued behind. It reads as greyed-out rather than labelled: the
+ * position (below the thinking indicator) and the muted styling already say
+ * "not sent yet", and a badge on every queued line is noise.
+ *
+ * @param {{ msg: FlootMessage, onSendNow?: (id: number) => void,
+ *   onEdit?: (id: number, text: string) => void,
+ *   onDelete?: (id: number) => void }} props
+ * @returns {VNode}
+ */
+const PendingBubble = ({ msg, onSendNow, onEdit, onDelete }) => {
+  const text = msg.text || '';
+  const id = /** @type {number} */ (msg.pendingId);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(text);
+
+  const save = () => {
+    const next = draft.trim();
+    setEditing(false);
+    // An empty edit is a no-op, not a delete: deleting has its own button, and
+    // silently discarding a message because the box was cleared would be a
+    // surprising way to lose one.
+    if (next && next !== text && onEdit) onEdit(id, next);
+    else setDraft(text);
+  };
+
+  if (editing) {
+    return h(
+      'div',
+      { class: 'floot-msg-row user pending editing' },
+      h('textarea', {
+        class: 'floot-pending-input',
+        value: draft,
+        onInput: e => setDraft(e.target.value),
+        onKeyDown: e => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            save();
+          }
+        },
+      }),
+      h(
+        'div',
+        { class: 'floot-pending-actions' },
+        h(
+          'button',
+          { type: 'button', class: 'floot-pending-action', onClick: save },
+          'Save',
+        ),
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'floot-pending-action',
+            onClick: () => {
+              setDraft(text);
+              setEditing(false);
+            },
+          },
+          'Cancel',
+        ),
+      ),
+    );
+  }
+
+  return h(
+    'div',
+    { class: 'floot-msg-row user pending' },
+    h('div', { class: 'floot-msg' }, ...linkify(text)),
+    h(
+      'div',
+      { class: 'floot-pending-actions' },
+      onSendNow
+        ? h(
+            'button',
+            {
+              type: 'button',
+              class: 'floot-pending-action',
+              onClick: () => onSendNow(id),
+            },
+            'Send now',
+          )
+        : null,
+      onEdit
+        ? h(
+            'button',
+            {
+              type: 'button',
+              class: 'floot-pending-action',
+              onClick: () => {
+                setDraft(text);
+                setEditing(true);
+              },
+            },
+            'Edit',
+          )
+        : null,
+      onDelete
+        ? h(
+            'button',
+            {
+              type: 'button',
+              class: 'floot-pending-action floot-pending-delete',
+              onClick: () => onDelete(id),
+            },
+            'Delete',
+          )
+        : null,
+    ),
+  );
+};
 
 const ThinkingRow = () =>
   h(
@@ -401,10 +484,19 @@ export const MessageList = ({ state, controller, debug = false }) => {
   const { messages, streamingText, busy, loaded, voice } = state;
   const canReplay = Boolean(voice && voice.hasTts);
   const replayingText = voice && voice.replayingText;
-  // Older hosts have no queue-jump callback; the badge still renders without it.
+  // Older hosts may not offer these; each control simply does not render.
   const onSendNow =
     typeof controller.sendPendingNow === 'function'
       ? (/** @type {number} */ id) => controller.sendPendingNow(id)
+      : undefined;
+  const onEditPending =
+    typeof controller.editPending === 'function'
+      ? (/** @type {number} */ id, /** @type {string} */ text) =>
+          controller.editPending(id, text)
+      : undefined;
+  const onDeletePending =
+    typeof controller.cancelPending === 'function'
+      ? (/** @type {number} */ id) => controller.cancelPending(id)
       : undefined;
 
   if (!loaded) {
@@ -446,9 +538,19 @@ export const MessageList = ({ state, controller, debug = false }) => {
   }
 
   const rows = [];
+  // Queued submissions are collected out of the transcript and rendered after
+  // the live turn's output, below the thinking indicator: they run after it,
+  // and showing them above reads as though they had already been sent.
+  /** @type {FlootMessage[]} */
+  const pendingMessages = [];
   let i = 0;
   while (i < messages.length) {
     const msg = messages[i];
+    if (msg.pending) {
+      pendingMessages.push(msg);
+      i += 1;
+      continue;
+    }
     // Keys are positional: the transcript is append-mostly, so an index key is
     // stable and lets Preact reuse rows across streaming re-renders.
     if (msg.role === 'tool') {
@@ -471,7 +573,6 @@ export const MessageList = ({ state, controller, debug = false }) => {
         canReplay,
         replaying: canReplay && replayingText === (msg.text || ''),
         onReplay: text => controller.replayMessage(text),
-        onSendNow,
       }),
     );
     i += 1;
@@ -487,6 +588,20 @@ export const MessageList = ({ state, controller, debug = false }) => {
     );
   } else if (busy) {
     rows.push(h(ThinkingRow, { key: 'thinking' }));
+  }
+  // After the live turn, in the order they will run.
+  for (const msg of pendingMessages) {
+    rows.push(
+      h(PendingBubble, {
+        // Keyed by the placeholder's own id so an edit re-renders in place and
+        // deleting one does not reset the edit state of the next.
+        key: `pending-${msg.pendingId}`,
+        msg,
+        onSendNow,
+        onEdit: onEditPending,
+        onDelete: onDeletePending,
+      }),
+    );
   }
 
   return h('div', { class: 'floot-messages' }, rows);

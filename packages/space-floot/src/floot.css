@@ -762,42 +762,48 @@
 }
 
 /* ── Pending submissions ───────────────────────────────────────────────────
-   A queued message is accepted but not yet running; mark it plainly and offer
-   to cut the current turn short rather than leaving the reader to guess. */
+   A queued message renders after the live turn, below the thinking indicator.
+   Position and muting carry the meaning — it is visibly not sent yet — so it
+   needs no badge; a label on every queued line would just be noise. */
 .floot-msg-row.pending .floot-msg {
-  opacity: 0.75;
-  border: 1px dashed #4a4a6a;
+  opacity: 0.55;
+  background: #2a2a3e;
+  color: #b8b8cc;
 }
-.floot-pending-caption {
+.floot-pending-actions {
   display: flex;
-  align-items: center;
   justify-content: flex-end;
-  gap: 0.4rem;
-  margin-bottom: 0.2rem;
-  font-size: 0.7rem;
-  color: #7c6fbf;
+  gap: 0.35rem;
+  margin-top: 0.2rem;
 }
-.floot-pending-badge {
-  padding: 0 0.3rem;
-  border: 1px solid #7c5f1a;
-  border-radius: 6px;
-  color: #fbbf24;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-.floot-send-now {
+.floot-pending-action {
   padding: 0 0.4rem;
   background: none;
   border: 1px solid #2a2a3e;
   border-radius: 6px;
-  color: #c4b5fd;
+  color: #7c6fbf;
   cursor: pointer;
   font: inherit;
   font-size: 0.7rem;
 }
-.floot-send-now:hover {
+.floot-pending-action:hover {
   background: #1e1e36;
-  color: #fff;
+  color: #c4b5fd;
+}
+.floot-pending-delete:hover {
+  border-color: #7c2a2a;
+  color: #f87171;
+}
+.floot-pending-input {
+  width: min(80%, 32rem);
+  min-height: 3.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #4a4a6a;
+  border-radius: 12px;
+  background: #1a1a2e;
+  color: var(--fl-user-text);
+  font: inherit;
+  resize: vertical;
 }
 
 .floot-backdrop {

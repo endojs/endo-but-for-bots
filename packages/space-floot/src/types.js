@@ -133,6 +133,8 @@ export {};
  * @property {(text?: string) => void} send
  * @property {() => void} stop
  * @property {(pendingId: number) => void} [sendPendingNow]
+ * @property {(pendingId: number, text: string) => void} [editPending]
+ * @property {(pendingId: number) => void} [cancelPending]
  * @property {(id: string) => void} selectSession
  * @property {(presetId?: string, model?: string, runtime?: string) => void} newSession
  * @property {(id: string, title: string) => void} renameSession

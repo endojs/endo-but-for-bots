@@ -160,13 +160,18 @@ test.serial(
       bodyText().includes('second question'),
       'the queued message renders in the transcript',
     );
-    t.true(
+    // Queued messages read as pending by position and muting, not by a label.
+    t.false(
       bodyText().includes('Pending'),
-      'the queued message is marked pending rather than looking sent',
+      'no badge: the styling and position carry it',
     );
     t.true(
       bodyText().includes('Send now'),
       'the queued message offers to jump the queue',
+    );
+    t.true(
+      bodyText().includes('Edit') && bodyText().includes('Delete'),
+      'a queued message can be rewritten or dropped before it runs',
     );
 
     // Finish the first turn; the queued message starts its own turn and stays
