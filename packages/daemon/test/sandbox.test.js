@@ -279,7 +279,11 @@ test('normalizeSandboxProfile accepts zero and rejects non-integer limits', t =>
           },
           resolveFakeMountId,
         ),
-      { message: /profile\.limits\[.as.\] must be a non-negative integer/ },
+      // The label quotes the limit key, and the message quotes the label,
+      // so the key arrives doubly quoted.
+      {
+        message: /profile\.limits\[\\"as\\"\]" must be a non-negative integer/,
+      },
     );
   }
 });

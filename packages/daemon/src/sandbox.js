@@ -11,7 +11,7 @@
  * so the profile carries an explicit `escalation` that every mint records.
  */
 
-import { makeError, q, X } from '@endo/errors';
+import { Fail, makeError, q, X } from '@endo/errors';
 import { M, mustMatch } from '@endo/patterns';
 import {
   BackendSelectorShape,
@@ -76,35 +76,35 @@ export const SandboxEscalationRecordShape = M.splitRecord({
 harden(SandboxEscalationRecordShape);
 
 /**
- * Assert a numeric limit while retaining the caller-facing distinction
- * between JavaScript integers and safe integers. The sandbox and shell
- * policies use the former; the HTTP client policy uses the latter because its
- * exo contract does.
+ * Test a numeric limit while retaining the caller-facing distinction between
+ * JavaScript integers and safe integers. The sandbox and shell policies use
+ * the former; the HTTP client policy uses the latter because its exo contract
+ * does.
+ *
+ * The description of what a value must be stays a literal at each assertion
+ * below rather than travelling as a parameter: `q()` is for the data in a
+ * message, and quoting a fragment of the message itself reads as if the
+ * phrase were the caller's value.
  *
  * @param {unknown} value
- * @param {string} label
  * @param {number} minimum
  * @param {boolean} safe
- * @param {string} description
- * @returns {number}
+ * @returns {boolean}
  */
-const assertInteger = (value, label, minimum, safe, description) => {
-  const isInteger = safe
-    ? Number.isSafeInteger(value)
-    : Number.isInteger(value);
-  if (!isInteger || /** @type {number} */ (value) < minimum) {
-    throw makeError(`${label} must be ${description}`);
-  }
-  return /** @type {number} */ (value);
-};
+const isIntegerAtLeast = (value, minimum, safe) =>
+  (safe ? Number.isSafeInteger(value) : Number.isInteger(value)) &&
+  /** @type {number} */ (value) >= minimum;
 
 /**
  * @param {unknown} value
  * @param {string} label
  * @returns {number}
  */
-export const assertNonNegativeInteger = (value, label) =>
-  assertInteger(value, label, 0, false, 'a non-negative integer');
+export const assertNonNegativeInteger = (value, label) => {
+  isIntegerAtLeast(value, 0, false) ||
+    Fail`${q(label)} must be a non-negative integer`;
+  return /** @type {number} */ (value);
+};
 harden(assertNonNegativeInteger);
 
 /**
@@ -113,14 +113,16 @@ harden(assertNonNegativeInteger);
  * @param {{ safe?: boolean }} [options]
  * @returns {number}
  */
-export const assertPositiveInteger = (value, label, { safe = false } = {}) =>
-  assertInteger(
-    value,
-    label,
-    1,
-    safe,
-    safe ? 'a positive safe integer' : 'a positive integer',
-  );
+export const assertPositiveInteger = (value, label, { safe = false } = {}) => {
+  if (safe) {
+    isIntegerAtLeast(value, 1, true) ||
+      Fail`${q(label)} must be a positive safe integer`;
+  } else {
+    isIntegerAtLeast(value, 1, false) ||
+      Fail`${q(label)} must be a positive integer`;
+  }
+  return /** @type {number} */ (value);
+};
 harden(assertPositiveInteger);
 
 /**
