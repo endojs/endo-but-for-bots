@@ -995,12 +995,14 @@ bar pass.
 
 **SES conformance (`ses-xs-parity`) tally.** The repo's `ses-xs-parity` feature
 set — the exact tests `packages/test262-runner` runs `xst` against with
-`--features-include ses-xs-parity` — is **2 files**, both under
+`--features-include ses-xs-parity` — is **3 files**: two under
 `built-ins/Compartment/prototype` (`Symbol.toStringTag.js`,
-`Symbol.toStringTag-lockdown.js`). The bar
+`Symbol.toStringTag-lockdown.js`) and the async-generator hardened-intrinsic
+scenario under `built-ins/AsyncGeneratorPrototype`. The bar
 (`ironhorse-262::test262::tests::ses_xs_parity_suite_has_zero_divergence`, locked in
 `cargo test`) runs them against Ironhorse with **zero RESULT divergence**:
-`total=2 covered=0 divergent=0`, each skip named — `1 ironhorse-aborted` (the
+`total=3 covered=1 divergent=0`, with each remaining skip named — `1
+ironhorse-aborted` (the
 non-lockdown file references the `Compartment` **intrinsic global**, which Ironhorse
 does not bind as a JS intrinsic — the Compartment child's
 `compartment:intrinsic-surface` fold; Ironhorse's `Compartment` is a Rust host type),
@@ -1011,9 +1013,8 @@ on `lockdown()` — that abort was the garbage-home shim-install bug the harden
 child's crash-fix above resolved (`lockdown()` now completes cleanly on the
 oracle) — but the file stays pre-partitioned because Ironhorse still folds `lockdown`
 as an honest `Halt::Unsupported`, so a dual-run would name-skip on the Ironhorse side
-regardless. Ironhorse reaches none of the SES-parity surface end-to-end today, but
-lies about none of it; the tally grows as the `Compartment`/`lockdown` intrinsic
-globals land.
+regardless. Ironhorse reaches the async-generator metadata scenario end-to-end
+today and names the two unavailable `Compartment`/`lockdown` surfaces honestly.
 
 **Consolidated fold ledger for s10 (each verified STILL an honest named skip at
 this closure point).**

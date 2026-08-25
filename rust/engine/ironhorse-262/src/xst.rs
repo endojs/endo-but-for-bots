@@ -1635,8 +1635,9 @@ mod tests {
 
     #[test]
     fn guest_lockdown_and_compartment_are_skip_features() {
-        // The two real `ses-xs-parity` tests in the subset declare
-        // `Compartment` / `lockdown` features; ironhorse lacks the guest surface,
+        // Two of the real `ses-xs-parity` tests in the subset declare
+        // `Compartment` and/or `lockdown` features; ironhorse lacks the guest
+        // surface,
         // so they are named `feature:*` skips (the `gxFeatures` analogue) even
         // when `ses-xs-parity` itself is opted in.
         let mut cfg = Config::default();
