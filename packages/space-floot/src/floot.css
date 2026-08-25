@@ -654,6 +654,152 @@
   color: #bbf7d0;
 }
 
+/* ── Agent actions ──────────────────────────────────────────────────────────
+   Every action between two replies collapses into one group, and each action
+   inside it collapses its call and result together. Both are closed by default
+   so the transcript reads as conversation, with the machinery one click away. */
+.floot-actions {
+  max-width: 80%;
+  background: #16162a;
+  border: 1px solid #2a2a3e;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: var(--fl-tool);
+  overflow: hidden;
+  animation: floot-fade 0.15s ease;
+}
+.floot-actions-head,
+.floot-action-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.7rem;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.floot-actions-head:hover,
+.floot-action-head:hover {
+  background: #1e1e36;
+}
+.floot-caret {
+  flex: none;
+  color: #7c6fbf;
+}
+.floot-actions-count {
+  flex: none;
+  color: #c4b5fd;
+  font-weight: 600;
+}
+.floot-actions-detail,
+.floot-action-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #7c6fbf;
+}
+.floot-action-preview {
+  color: #6b6b8c;
+}
+.floot-actions-body {
+  border-top: 1px solid #2a2a3e;
+}
+.floot-action + .floot-action {
+  border-top: 1px solid #23233a;
+}
+.floot-action-name {
+  flex: none;
+  color: #a5b4fc;
+}
+.floot-action-running {
+  flex: none;
+  margin-left: auto;
+  color: var(--fl-green);
+}
+.floot-action-body {
+  padding: 0 0.7rem 0.6rem 1.5rem;
+}
+.floot-action-section + .floot-action-section {
+  margin-top: 0.5rem;
+}
+.floot-action-section.result .floot-tool-label {
+  color: #4ade80;
+}
+.floot-action-section.result .floot-tool-pre {
+  color: #bbf7d0;
+}
+
+/* JavaScript tokens for the exec-family entries. */
+.floot-code {
+  color: #d8d8f0;
+}
+.floot-tok-keyword {
+  color: #c792ea;
+}
+.floot-tok-literal,
+.floot-tok-number {
+  color: #f78c6c;
+}
+.floot-tok-string,
+.floot-tok-template {
+  color: #c3e88d;
+}
+.floot-tok-regexp,
+.floot-tok-punctuation {
+  color: #89ddff;
+}
+.floot-tok-comment {
+  color: #676e95;
+  font-style: italic;
+}
+.floot-tok-identifier {
+  color: #d8d8f0;
+}
+
+/* ── Pending submissions ───────────────────────────────────────────────────
+   A queued message is accepted but not yet running; mark it plainly and offer
+   to cut the current turn short rather than leaving the reader to guess. */
+.floot-msg-row.pending .floot-msg {
+  opacity: 0.75;
+  border: 1px dashed #4a4a6a;
+}
+.floot-pending-caption {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  margin-bottom: 0.2rem;
+  font-size: 0.7rem;
+  color: #7c6fbf;
+}
+.floot-pending-badge {
+  padding: 0 0.3rem;
+  border: 1px solid #7c5f1a;
+  border-radius: 6px;
+  color: #fbbf24;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.floot-send-now {
+  padding: 0 0.4rem;
+  background: none;
+  border: 1px solid #2a2a3e;
+  border-radius: 6px;
+  color: #c4b5fd;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.7rem;
+}
+.floot-send-now:hover {
+  background: #1e1e36;
+  color: #fff;
+}
+
 .floot-backdrop {
   display: none;
   position: absolute;

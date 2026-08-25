@@ -160,6 +160,14 @@ test.serial(
       bodyText().includes('second question'),
       'the queued message renders in the transcript',
     );
+    t.true(
+      bodyText().includes('Pending'),
+      'the queued message is marked pending rather than looking sent',
+    );
+    t.true(
+      bodyText().includes('Send now'),
+      'the queued message offers to jump the queue',
+    );
 
     // Finish the first turn; the queued message starts its own turn and stays
     // visible through the handoff (queued placeholder → session transcript).

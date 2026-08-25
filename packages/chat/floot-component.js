@@ -671,6 +671,16 @@ export const flootComponent = (
               ? { meta: /** @type {{ meta?: unknown }} */ (m).meta }
               : {}
           ),
+          // Queued submissions carry their placeholder identity through to the
+          // view so it can mark them pending and offer to jump the queue.
+          .../** @type {any} */ (
+            /** @type {{ pending?: boolean }} */ (m).pending
+              ? {
+                  pending: true,
+                  pendingId: /** @type {{ pendingId?: number }} */ (m).pendingId,
+                }
+              : {}
+          ),
         };
 
   const getState = () => {
@@ -682,7 +692,12 @@ export const flootComponent = (
     const queued = session
       ? queuedSends
           .filter(q => q.sessionId === session.id)
-          .map(q => ({ role: /** @type {const} */ ('user'), text: q.text }))
+          .map(q => ({
+            role: /** @type {const} */ ('user'),
+            text: q.text,
+            pending: true,
+            pendingId: q.id,
+          }))
       : [];
     const allMessages = [
       ...base,
@@ -1697,6 +1712,13 @@ export const flootComponent = (
       submit(typeof text === 'string' ? text : inputText);
     },
     stop() {
+      cancelTurn();
+    },
+    // Queue-jump for a pending submission. It is already scheduled on
+    // submitChain behind the turn in flight, so "send now" is precisely "cut
+    // that turn short": cancelling it releases the queued send immediately.
+    sendPendingNow(/** @type {number} */ id) {
+      if (!queuedSends.some(q => q.id === id)) return;
       cancelTurn();
     },
     selectSession(/** @type {string} */ id) {

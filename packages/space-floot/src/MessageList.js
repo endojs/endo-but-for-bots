@@ -2,12 +2,15 @@
 
 import harden from '@endo/harden';
 import { h } from 'preact';
+import { useState } from 'preact/hooks';
+
+import { tokenizeJs } from './highlight.js';
 
 /** @import { VNode } from 'preact' */
 /** @import { FlootMessage, FlootState, FlootController } from './types.js' */
 
-// Transcript renderer: history + the live turn, as discrete bubbles and tool
-// rows. Pure view — `messages` and `streamingText` come from the host
+// Transcript renderer: history + the live turn, as discrete bubbles and action
+// groups. Pure view — `messages` and `streamingText` come from the host
 // controller's snapshot; nothing here touches the DOM or audio.
 
 // Match http(s) URLs. Deliberately narrow (only http/https) so nothing else in
@@ -64,35 +67,238 @@ export const linkify = text => {
 };
 harden(linkify);
 
-const ToolBlock = (
-  /** @type {string} */ key,
-  /** @type {string} */ name,
-  /** @type {string} */ content,
-  /** @type {boolean} */ isResult,
-) =>
-  h(
-    'div',
-    { key, class: 'floot-msg-row assistant' },
-    h(
-      'div',
-      { class: `floot-tool${isResult ? ' result' : ''}` },
-      h(
-        'div',
-        { class: 'floot-tool-label' },
-        `${name || 'tool'}${isResult ? ' result' : ''}`,
-      ),
-      h('pre', { class: 'floot-tool-pre' }, content),
-    ),
-  );
+// ── Agent actions ────────────────────────────────────────────────────────────
 
 /**
- * @param {{ msg: FlootMessage, canReplay: boolean, onReplay: (text: string) => void, replaying: boolean }} props
+ * Tools whose arguments are a JavaScript body worth colouring: the daemon's own
+ * `exec`, and its MCP aliases (`mcp__endo__exec`, and any future
+ * `mcp__<server>__exec`).
+ *
+ * @param {string | undefined} name
+ * @returns {boolean}
+ */
+export const isJsTool = name => /(^|_)exec$/i.test(`${name || ''}`);
+harden(isJsTool);
+
+/**
+ * Pretty-print a tool payload. Tool args and results arrive as strings that are
+ * usually JSON; re-serializing an object payload with indentation is the single
+ * biggest readability win, and anything that isn't JSON is shown verbatim.
+ *
+ * @param {string | null | undefined} payload
+ * @returns {string}
+ */
+export const formatPayload = payload => {
+  const source = `${payload == null ? '' : payload}`;
+  const trimmed = source.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return source;
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2);
+  } catch {
+    return source;
+  }
+};
+harden(formatPayload);
+
+/**
+ * The JavaScript an `exec`-family call actually runs. Its args are a JSON
+ * record whose `code` field holds the source; showing that source directly
+ * (rather than the JSON envelope with its escaped newlines) is what makes the
+ * entry readable.
+ *
+ * @param {string | undefined} args
+ * @returns {string}
+ */
+export const extractExecCode = args => {
+  const source = `${args || ''}`;
+  const trimmed = source.trim();
+  if (!trimmed.startsWith('{')) return source;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed.code === 'string') return parsed.code;
+  } catch {
+    // Not JSON (or not the shape we expect) — show the args as they came.
+  }
+  return source;
+};
+harden(extractExecCode);
+
+/**
+ * Collapse a run of actions into the summary its closed header shows: how many
+ * ran in total, and how many of each tool.
+ *
+ * @param {FlootMessage[]} actions
+ * @returns {{ total: number, counts: Array<{ name: string, count: number }>,
+ *   label: string, detail: string }}
+ */
+export const summarizeActions = actions => {
+  /** @type {Map<string, number>} */
+  const tally = new Map();
+  for (const action of actions) {
+    const name = action.name || 'tool';
+    tally.set(name, (tally.get(name) || 0) + 1);
+  }
+  const counts = [...tally.entries()].map(([name, count]) => ({ name, count }));
+  const total = actions.length;
+  return {
+    total,
+    counts,
+    label: `${total} action${total === 1 ? '' : 's'}`,
+    detail: counts
+      .map(({ name, count }) => (count > 1 ? `${name} ×${count}` : name))
+      .join(', '),
+  };
+};
+harden(summarizeActions);
+
+// One line of context for a collapsed action, so a closed entry still says what
+// it did.
+const previewOf = (/** @type {string} */ text) => {
+  const line = `${text || ''}`.split('\n').find(l => l.trim()) || '';
+  const trimmed = line.trim();
+  return trimmed.length > 80 ? `${trimmed.slice(0, 79)}…` : trimmed;
+};
+
+/**
+ * A `<pre>` of source, colourised when it is JavaScript. Token spans are built
+ * from the tokenizer's output, so the rendered text always concatenates back to
+ * the original.
+ *
+ * @param {{ code: string, language: 'js' | 'text' }} props
  * @returns {VNode}
  */
-const Bubble = ({ msg, canReplay, onReplay, replaying }) => {
+const CodeBlock = ({ code, language }) => {
+  if (language !== 'js') return h('pre', { class: 'floot-tool-pre' }, code);
+  const spans = tokenizeJs(code).map((token, index) =>
+    token.type === 'plain'
+      ? token.text
+      : h(
+          'span',
+          { key: `tok-${index}`, class: `floot-tok floot-tok-${token.type}` },
+          token.text,
+        ),
+  );
+  return h('pre', { class: 'floot-tool-pre floot-code' }, ...spans);
+};
+
+/**
+ * One agent action — the call and its result as a single entry, collapsed by
+ * default.
+ *
+ * @param {{ msg: FlootMessage }} props
+ * @returns {VNode}
+ */
+const ActionEntry = ({ msg }) => {
+  const [open, setOpen] = useState(false);
+  const name = msg.name || 'tool';
+  const js = isJsTool(name);
+  const argsText = js ? extractExecCode(msg.args) : formatPayload(msg.args);
+  const hasResult = msg.result != null;
+  return h(
+    'div',
+    { class: `floot-action${open ? ' open' : ''}` },
+    h(
+      'button',
+      {
+        type: 'button',
+        class: 'floot-action-head',
+        'aria-expanded': open ? 'true' : 'false',
+        onClick: () => setOpen(!open),
+      },
+      h('span', { class: 'floot-caret' }, open ? '▾' : '▸'),
+      h('span', { class: 'floot-action-name' }, name),
+      h('span', { class: 'floot-action-preview' }, previewOf(argsText)),
+      hasResult
+        ? null
+        : h('span', { class: 'floot-action-running' }, 'running…'),
+    ),
+    open
+      ? h(
+          'div',
+          { class: 'floot-action-body' },
+          h(
+            'div',
+            { class: 'floot-action-section' },
+            h(
+              'div',
+              { class: 'floot-tool-label' },
+              js ? 'javascript' : 'arguments',
+            ),
+            h(CodeBlock, { code: argsText, language: js ? 'js' : 'text' }),
+          ),
+          hasResult
+            ? h(
+                'div',
+                { class: 'floot-action-section result' },
+                h('div', { class: 'floot-tool-label' }, 'result'),
+                h(
+                  'pre',
+                  { class: 'floot-tool-pre' },
+                  formatPayload(msg.result),
+                ),
+              )
+            : null,
+        )
+      : null,
+  );
+};
+
+/**
+ * Every action between two assistant replies, as one collapsible group that is
+ * closed by default and summarised in its header.
+ *
+ * @param {{ actions: FlootMessage[] }} props
+ * @returns {VNode}
+ */
+const ActionGroup = ({ actions }) => {
+  const [open, setOpen] = useState(false);
+  const summary = summarizeActions(actions);
+  return h(
+    'div',
+    { class: 'floot-msg-row assistant' },
+    h(
+      'div',
+      { class: `floot-actions${open ? ' open' : ''}` },
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'floot-actions-head',
+          'aria-expanded': open ? 'true' : 'false',
+          onClick: () => setOpen(!open),
+        },
+        h('span', { class: 'floot-caret' }, open ? '▾' : '▸'),
+        h('span', { class: 'floot-actions-count' }, summary.label),
+        summary.detail
+          ? h('span', { class: 'floot-actions-detail' }, summary.detail)
+          : null,
+      ),
+      open
+        ? h(
+            'div',
+            { class: 'floot-actions-body' },
+            actions.map((action, index) =>
+              h(ActionEntry, { key: `action-${index}`, msg: action }),
+            ),
+          )
+        : null,
+    ),
+  );
+};
+
+/**
+ * @param {{ msg: FlootMessage, canReplay: boolean,
+ *   onReplay: (text: string) => void, replaying: boolean,
+ *   onSendNow?: (id: number) => void }} props
+ * @returns {VNode}
+ */
+const Bubble = ({ msg, canReplay, onReplay, replaying, onSendNow }) => {
   const text = msg.text || '';
   const mailFrom = msg.meta && msg.meta.mail && msg.meta.mail.from;
-  const rowClass = `floot-msg-row ${msg.role}${mailFrom ? ' mail' : ''}`;
+  const pending = Boolean(msg.pending);
+  const rowClass = `floot-msg-row ${msg.role}${mailFrom ? ' mail' : ''}${
+    pending ? ' pending' : ''
+  }`;
   const caption = mailFrom
     ? h(
         'div',
@@ -102,6 +308,32 @@ const Bubble = ({ msg, canReplay, onReplay, replaying }) => {
       )
     : null;
   const bubble = h('div', { class: 'floot-msg' }, ...linkify(text));
+  // A queued submission is not in the transcript yet: it runs after the turn
+  // in flight. Say so, and offer to cut the current turn short and send it now.
+  if (pending) {
+    return h(
+      'div',
+      { class: rowClass },
+      h(
+        'div',
+        { class: 'floot-pending-caption' },
+        h('span', { class: 'floot-pending-badge' }, 'Pending'),
+        'sends when this turn ends',
+        onSendNow
+          ? h(
+              'button',
+              {
+                type: 'button',
+                class: 'floot-send-now',
+                onClick: () => onSendNow(/** @type {number} */ (msg.pendingId)),
+              },
+              'Send now',
+            )
+          : null,
+      ),
+      bubble,
+    );
+  }
   // A finished assistant message offers a replay button when TTS is wired.
   if (msg.role === 'assistant' && canReplay && text.trim()) {
     return h(
@@ -169,6 +401,11 @@ export const MessageList = ({ state, controller, debug = false }) => {
   const { messages, streamingText, busy, loaded, voice } = state;
   const canReplay = Boolean(voice && voice.hasTts);
   const replayingText = voice && voice.replayingText;
+  // Older hosts have no queue-jump callback; the badge still renders without it.
+  const onSendNow =
+    typeof controller.sendPendingNow === 'function'
+      ? (/** @type {number} */ id) => controller.sendPendingNow(id)
+      : undefined;
 
   if (!loaded) {
     return h(
@@ -209,28 +446,35 @@ export const MessageList = ({ state, controller, debug = false }) => {
   }
 
   const rows = [];
-  for (let i = 0; i < messages.length; i += 1) {
+  let i = 0;
+  while (i < messages.length) {
     const msg = messages[i];
     // Keys are positional: the transcript is append-mostly, so an index key is
     // stable and lets Preact reuse rows across streaming re-renders.
     if (msg.role === 'tool') {
-      rows.push(ToolBlock(`tool-${i}`, msg.name || '', msg.args || '', false));
-      if (msg.result != null) {
-        rows.push(
-          ToolBlock(`tool-${i}-result`, msg.name || '', msg.result, true),
-        );
+      // Consecutive tool messages are one turn's worth of actions — the run
+      // between two replies — so they collapse together.
+      const actions = [];
+      let j = i;
+      while (j < messages.length && messages[j].role === 'tool') {
+        actions.push(messages[j]);
+        j += 1;
       }
-    } else {
-      rows.push(
-        h(Bubble, {
-          key: `msg-${i}`,
-          msg,
-          canReplay,
-          replaying: canReplay && replayingText === (msg.text || ''),
-          onReplay: text => controller.replayMessage(text),
-        }),
-      );
+      rows.push(h(ActionGroup, { key: `actions-${i}`, actions }));
+      i = j;
+      continue;
     }
+    rows.push(
+      h(Bubble, {
+        key: `msg-${i}`,
+        msg,
+        canReplay,
+        replaying: canReplay && replayingText === (msg.text || ''),
+        onReplay: text => controller.replayMessage(text),
+        onSendNow,
+      }),
+    );
+    i += 1;
   }
   // The in-progress assistant bubble, or a thinking indicator before any text.
   if (streamingText) {
