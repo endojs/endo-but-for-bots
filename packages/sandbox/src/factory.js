@@ -1028,7 +1028,7 @@ export const makeSandboxFactory = (
     };
 
     const resetSlice = async () => {
-      assertRunning();
+      if (disposePromise !== undefined) return;
       const reason = makeError(X`sandbox handle reset`);
       await Promise.all([
         ...[...liveProcesses].map(lease => lease.killAndReap(reason)),

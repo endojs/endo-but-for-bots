@@ -19,8 +19,8 @@
 import { makeError, q, X } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
-import { M } from '@endo/patterns';
 import { Far } from '@endo/pass-style';
+import { M } from '@endo/patterns';
 import { SandboxHandleInterface } from '@endo/sandbox/interfaces.js';
 
 import { throwFailures } from './context.js';
@@ -229,6 +229,11 @@ export const makeSandboxSlice = async ({
     await removeDirectory(statePath);
     await makePath(statePath);
 
+    // The writable upper layer depends only on the state root, so create it
+    // concurrently with the mount projections below.
+    const scratchPath = joinPath(statePath, 'scratch');
+    const scratchPathPromise = makePath(scratchPath);
+
     // Project each granted mount to a bindable host path: its own directory
     // when eligible, a 9P projection otherwise.
     /**
@@ -288,10 +293,14 @@ export const makeSandboxSlice = async ({
         }),
       );
     });
-    const projectionResults = await Promise.allSettled([
+    const [scratchPathResult, ...projectionResults] = await Promise.allSettled([
+      scratchPathPromise,
       rootfsPromise,
       ...mountPromises,
     ]);
+    if (scratchPathResult.status === 'rejected') {
+      throw scratchPathResult.reason;
+    }
     const projectionFailure = projectionResults.find(
       result => result.status === 'rejected',
     );
@@ -305,26 +314,46 @@ export const makeSandboxSlice = async ({
       return result.value;
     });
 
-    // The slice's writable upper layer. Ephemeral like the slice itself:
-    // it is re-created empty when the formula reincarnates.
-    const scratchPath = joinPath(statePath, 'scratch');
-    await makePath(scratchPath);
+    // Scratch capability tokens are invalidated at every reset, but the
+    // name-to-path assignments remain stable because a backend may retain a
+    // bind to one of these directory inodes for the lifetime of the slice.
     const scratchPathForToken = new Map();
     const scratchTokenForName = new Map();
+    const scratchPathForName = new Map();
 
-    const resetScratch = async () => {
-      // Keep each scratch root directory itself intact because the backend
-      // may still hold a bind mount to that inode after its processes stop.
-      // Clear its children, then discard the daemon-side token memo so a
-      // subsequent request cannot reuse an old capability token.
-      if (clearDirectory !== undefined) {
-        await Promise.all(
-          [...new Set(scratchPathForToken.values())].map(clearDirectory),
-        );
-      }
-      scratchTokenForName.clear();
-      scratchPathForToken.clear();
+    /** @type {Promise<void>} */
+    let scratchOperation = Promise.resolve();
+    /**
+     * Serialize scratch allocation and reset so neither can observe or erase
+     * the other's partially updated bookkeeping across an await.
+     *
+     * @template T
+     * @param {() => Promise<T>} operation
+     * @returns {Promise<T>}
+     */
+    const withScratchLock = operation => {
+      const result = scratchOperation.then(operation);
+      scratchOperation = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
     };
+
+    const resetScratch = () =>
+      withScratchLock(async () => {
+        // Keep each scratch root directory itself intact because the backend
+        // may still hold a bind mount to that inode after its processes stop.
+        // Retain the path memo across resets so later resets also clear files
+        // written through those still-bound directories.
+        if (clearDirectory !== undefined) {
+          await Promise.all(
+            [...scratchPathForName.values()].map(clearDirectory),
+          );
+        }
+        scratchTokenForName.clear();
+        scratchPathForToken.clear();
+      });
 
     // The factory's privileged surface, narrowed to this slice: the mounts
     // this formula declared and its own scratch, nothing else.
@@ -333,16 +362,21 @@ export const makeSandboxSlice = async ({
       SandboxMountResolverInterface,
       {
         /** @param {string} name */
-        provideScratchMount: async name => {
-          const existing = scratchTokenForName.get(name);
-          if (existing !== undefined) return existing;
-          const token = Far('SandboxScratch', {});
-          const hostPath = joinPath(scratchPath, `${scratchTokenForName.size}`);
-          await makePath(hostPath);
-          scratchTokenForName.set(name, token);
-          scratchPathForToken.set(token, hostPath);
-          return token;
-        },
+        provideScratchMount: name =>
+          withScratchLock(async () => {
+            const existing = scratchTokenForName.get(name);
+            if (existing !== undefined) return existing;
+            const token = Far('SandboxScratch', {});
+            let hostPath = scratchPathForName.get(name);
+            if (hostPath === undefined) {
+              hostPath = joinPath(scratchPath, `${scratchPathForName.size}`);
+              await makePath(hostPath);
+              scratchPathForName.set(name, hostPath);
+            }
+            scratchTokenForName.set(name, token);
+            scratchPathForToken.set(token, hostPath);
+            return token;
+          }),
         /** @param {unknown} cap */
         provideHostPath: async cap => {
           const tokenPath = scratchPathForToken.get(cap);
@@ -387,7 +421,9 @@ export const makeSandboxSlice = async ({
     /** @type {Promise<void> | undefined} */
     let releasePromise;
     let wrapperDisposing = false;
+    let backendDisposed = false;
     const releaseAfterBackendDisposal = async () => {
+      backendDisposed = true;
       if (wrapperDisposing) return;
       const failures = await cleanupResources();
       if (failures.length > 0) {
@@ -406,11 +442,15 @@ export const makeSandboxSlice = async ({
           await null;
           /** @type {unknown[]} */
           const failures = [];
-          try {
-            await E(slice).dispose();
-          } catch (error) {
-            failures.push(error);
-          } finally {
+          if (!backendDisposed) {
+            try {
+              await E(slice).dispose();
+            } catch (error) {
+              failures.push(error);
+            } finally {
+              wrapperDisposing = false;
+            }
+          } else {
             wrapperDisposing = false;
           }
           failures.push(...(await cleanupResources()));

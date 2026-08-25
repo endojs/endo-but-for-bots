@@ -135,7 +135,7 @@ import { getUnredactedStackString } from './unredacted-stack.js';
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { ReadableBlobRange, SnapshotTree } from '@endo/platform/fs/lite/types' */
 /** @import { ArchiveTreeMethods } from './tar-checkin.js' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableTreeDeferredTaskParams, ResolverFormula, SandboxFormulaProfile, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * @typedef {{ kind: 'bearer', token: string } | { kind: 'basic', username: string, password: string }} GitCredentialMaterial
@@ -709,6 +709,26 @@ const makeDaemonCore = async (
   };
 
   /**
+   * Return every mount a sandbox profile depends on, in profile order.
+   * Keeping this walk in one place ensures graph edges, cancellation links,
+   * and failed-cleanup preservation all cover the same mount set.
+   *
+   * @param {SandboxFormulaProfile} profile
+   * @returns {Array<[string, FormulaIdentifier]>}
+   */
+  const sandboxMountDependencies = profile => {
+    /** @type {Array<[string, FormulaIdentifier]>} */
+    const dependencies = [];
+    if (profile.rootfs.kind === 'mount') {
+      dependencies.push(['rootfs', profile.rootfs.mountId]);
+    }
+    for (const [index, mount] of profile.mounts.entries()) {
+      dependencies.push([`mount${index}`, mount.mountId]);
+    }
+    return dependencies;
+  };
+
+  /**
    * Returns [label, id] pairs for each dependency of a formula,
    * providing meaningful edge labels (e.g. "worker", "handle") for the
    * graph snapshot.
@@ -853,19 +873,10 @@ const makeDaemonCore = async (
         return [['mount', formula.mountId]];
       case 'shell':
         return [['mount', formula.mountId]];
-      case 'sandbox': {
+      case 'sandbox':
         // Every mount the slice binds — including a rootfs mount — keeps
         // the slice alive and dies with it.
-        /** @type {Array<[string, FormulaIdentifier]>} */
-        const deps = [];
-        if (formula.profile.rootfs.kind === 'mount') {
-          deps.push(['rootfs', formula.profile.rootfs.mountId]);
-        }
-        for (const [index, mount] of formula.profile.mounts.entries()) {
-          deps.push([`mount${index}`, mount.mountId]);
-        }
-        return deps;
-      }
+        return sandboxMountDependencies(formula.profile);
       case 'http-client':
         // The HTTP client is rooted in a host-owned `fetch` seam, not a mount
         // or any other daemon-minted capability, so it has no formula deps.
@@ -1189,14 +1200,9 @@ const makeDaemonCore = async (
     for (const sandboxId of sandboxIdsToPreserve) {
       const sandboxFormula = collectedFormulasByid.get(sandboxId);
       if (sandboxFormula?.type === 'sandbox') {
-        /** @type {FormulaIdentifier[]} */
-        const pendingMountIds = [];
-        if (sandboxFormula.profile.rootfs.kind === 'mount') {
-          pendingMountIds.push(sandboxFormula.profile.rootfs.mountId);
-        }
-        for (const mount of sandboxFormula.profile.mounts) {
-          pendingMountIds.push(mount.mountId);
-        }
+        const pendingMountIds = sandboxMountDependencies(
+          sandboxFormula.profile,
+        ).map(([, mountId]) => mountId);
         while (pendingMountIds.length > 0) {
           const mountId = pendingMountIds.pop();
           if (
@@ -3459,11 +3465,8 @@ const makeDaemonCore = async (
       try {
         // The slice dies with any mount it binds: otherwise a container keeps
         // writing into a directory the daemon no longer vouches for.
-        if (profile.rootfs.kind === 'mount') {
-          context.thisDiesIfThatDies(profile.rootfs.mountId);
-        }
-        for (const mount of profile.mounts) {
-          context.thisDiesIfThatDies(mount.mountId);
+        for (const [, mountId] of sandboxMountDependencies(profile)) {
+          context.thisDiesIfThatDies(mountId);
         }
 
         // Each evaluation owns a distinct state directory, keeping its scratch

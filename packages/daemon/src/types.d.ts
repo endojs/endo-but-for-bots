@@ -2528,7 +2528,12 @@ export type HostToolPowers = {
     // and the daemon core is deliberately not compiled against them.
     powers: any,
     context: any,
-    options?: { env?: Record<string, string>; ownerId?: string },
+    options?: {
+      env?: Record<string, string>;
+      ownerId?: string;
+      onHandleDisposed?: () => void | Promise<void>;
+      resetScratch?: () => void | Promise<void>;
+    },
   ) => Promise<any>;
   /**
    * `@endo/9p-server`'s mount projector: resolves a mount capability to
