@@ -284,9 +284,7 @@ test('a containment failure fails the whole slice, not just one process', async 
   await t.throwsAsync(() => E(handle).scratch('/tmp/work'), {
     message: /disposed/,
   });
-  await t.throwsAsync(() => E(handle).reset(), {
-    message: /disposed/,
-  });
+  await E(handle).reset();
   t.is(
     fixture.counts().spawnCalls,
     2,

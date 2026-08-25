@@ -24,6 +24,7 @@ import path from 'node:path';
 import { makeMountProjector } from '@endo/9p-server/mount-projection.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
+import { makePromiseKit } from '@endo/promise-kit';
 import { probeBwrapUserns } from '@endo/sandbox/probe-bwrap-userns.js';
 
 import { makeFilePowers } from '../src/manager-node-powers.js';
@@ -320,6 +321,34 @@ test('normalizeSandboxProfile rejects malformed grants before a formula exists',
       { rootfs: { kind: 'minimal' }, mounts, escalation: baseEscalation },
       resolve,
     );
+  for (const profile of [{}, { rootfs: null, escalation: baseEscalation }]) {
+    t.throws(() => normalizeSandboxProfile(profile, resolve), {
+      message: /profile.rootfs is required/,
+    });
+  }
+  t.throws(
+    () =>
+      normalizeSandboxProfile(
+        {
+          rootfs: { kind: 'unknown' },
+          escalation: baseEscalation,
+        },
+        resolve,
+      ),
+    { message: /profile.rootfs.kind must be one of/ },
+  );
+  t.throws(
+    () =>
+      normalizeSandboxProfile(
+        {
+          rootfs: { kind: 'minimal' },
+          mounts: {},
+          escalation: baseEscalation,
+        },
+        resolve,
+      ),
+    { message: /profile.mounts must be an array/ },
+  );
   t.throws(() => withMounts([{ cap: {}, innerPath: 'workspace' }]), {
     message: /must be an absolute path inside the slice/,
   });
@@ -408,6 +437,24 @@ test('host normalization rejects a daemon cap whose formula is not a mount', asy
       },
     ),
     { message: /must name a mount formula.*http-client/ },
+  );
+});
+
+test('host normalization rejects a cap the daemon did not mint', async t => {
+  const unknownMount = Far('UnknownMount', {});
+  await t.throwsAsync(
+    normalizeSandboxProfileForHost(
+      {
+        rootfs: { kind: 'minimal' },
+        mounts: [{ cap: unknownMount, innerPath: '/workspace' }],
+        escalation: baseEscalation,
+      },
+      {
+        getIdForRef: () => undefined,
+        getTypeForId: async () => 'mount',
+      },
+    ),
+    { message: /must be a daemon-minted mount cap/ },
   );
 });
 
@@ -587,6 +634,71 @@ test('reset clears scratch contents and invalidates scratch tokens', async t => 
 
   const freshToken = await E(powers).provideScratchMount('reset-test');
   t.not(freshToken, oldToken);
+  const reboundMarker = path.join(oldPath, 'written-through-retained-bind');
+  await fs.promises.writeFile(reboundMarker, 'stale');
+  await E(/** @type {any} */ (minted.slice)).reset();
+  t.false(fs.existsSync(reboundMarker));
+  await minted.release();
+});
+
+test('scratch allocation is atomic with reset', async t => {
+  const profile = /** @type {SandboxFormulaProfile} */ (
+    harden({
+      rootfs: { kind: 'minimal' },
+      mounts: [],
+      network: 'none',
+      backend: 'auto',
+      seccomp: 'default',
+      env: {},
+      escalation: baseEscalation,
+    })
+  );
+  const clearStarted = makePromiseKit();
+  const continueClear = makePromiseKit();
+  let pauseClear = true;
+  let fastScratchAllocation = false;
+  const minted = await mintSlice(t, profile, {
+    slice: {
+      makePath: async directory => {
+        if (!fastScratchAllocation) {
+          await fs.promises.mkdir(directory, { recursive: true });
+        }
+      },
+      clearDirectory: async directory => {
+        if (pauseClear) {
+          pauseClear = false;
+          clearStarted.resolve(undefined);
+          await continueClear.promise;
+        }
+        const entries = await fs.promises.readdir(directory);
+        await Promise.all(
+          entries.map(entry =>
+            fs.promises.rm(path.join(directory, entry), {
+              recursive: true,
+              force: true,
+            }),
+          ),
+        );
+      },
+    },
+  });
+  const { powers } = minted.backend.calls.factories[0];
+  const racingPath = path.join(minted.statePath, 'scratch', '1');
+  await fs.promises.mkdir(racingPath, { recursive: true });
+  fastScratchAllocation = true;
+
+  const firstReset = E(/** @type {any} */ (minted.slice)).reset();
+  await clearStarted.promise;
+  const racingAllocation = E(powers).provideScratchMount('racing');
+  await null;
+  await null;
+  continueClear.resolve(undefined);
+  await Promise.all([firstReset, racingAllocation]);
+
+  const marker = path.join(racingPath, 'stale-after-race');
+  await fs.promises.writeFile(marker, 'stale');
+  await E(/** @type {any} */ (minted.slice)).reset();
+  t.false(fs.existsSync(marker));
   await minted.release();
 });
 
@@ -831,9 +943,9 @@ test('what 9P serves for such a mount denies the restricted segments', async t =
 });
 
 test('a persisted profile cannot smuggle a direct bind past the gate', async t => {
-  // A rogue projector reaches a direct bind the installed resolver never
-  // would: the gate refuses it and releases what it stood up.
-  const { root, mount } = await provisionMount(t);
+  // Even a mount with no name restrictions needs the 9P confinement boundary:
+  // a raw bind would expose pre-existing symlinks that leave the mount root.
+  const { root, mount } = await provisionMount(t, { deniedSegments: [] });
   const profile = /** @type {SandboxFormulaProfile} */ (
     harden({
       rootfs: { kind: 'minimal' },
@@ -1302,6 +1414,31 @@ test('backend self-disposal releases daemon-owned state', async t => {
 
   await E(minted.backend.calls.slices[0].backendHandle).dispose();
   t.false(fs.existsSync(minted.statePath));
+});
+
+test('release does not replay a completed backend disposal failure', async t => {
+  const profile = /** @type {SandboxFormulaProfile} */ (
+    harden({
+      rootfs: { kind: 'minimal' },
+      mounts: [],
+      network: 'none',
+      backend: 'auto',
+      seccomp: 'default',
+      env: {},
+      escalation: baseEscalation,
+    })
+  );
+  const minted = await mintSlice(t, profile, {
+    backend: { disposeError: new Error('containment failed') },
+  });
+
+  await t.throwsAsync(
+    E(minted.backend.calls.slices[0].backendHandle).dispose(),
+    { message: /containment failed/ },
+  );
+  t.false(fs.existsSync(minted.statePath));
+  await minted.release();
+  t.is(minted.backend.calls.disposed, 1);
 });
 
 test('a failed 9P detach preserves state for a later retry', async t => {
