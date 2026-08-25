@@ -5398,16 +5398,27 @@ impl Interp {
         // generators, but each returns a promise and requests are serialized.
         let async_generator_proto = self.slots.alloc(Slot::instance(self.object_proto));
         self.async_generator_proto = async_generator_proto;
-        for (name, m) in [
-            ("next", NativeMethod::AsyncGeneratorNext),
-            ("return", NativeMethod::AsyncGeneratorReturn),
-            ("throw", NativeMethod::AsyncGeneratorThrow),
+        for (name, arity, m) in [
+            ("next", 1, NativeMethod::AsyncGeneratorNext),
+            ("return", 1, NativeMethod::AsyncGeneratorReturn),
+            ("throw", 1, NativeMethod::AsyncGeneratorThrow),
         ] {
-            let mf = self.alloc_method(m);
+            let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((async_generator_proto, name, mf));
         }
         self.async_iterator_identity = self.alloc_method(NativeMethod::AsyncIteratorIdentity);
         self.async_generator_function_proto = self.slots.alloc(Slot::instance(self.function_proto));
+        // `%AsyncGenerator%` (the common prototype of async-generator
+        // functions) exposes `%AsyncGeneratorPrototype%` through its own
+        // non-writable `prototype` property.  Per-function `.prototype`
+        // objects still live in `ctor_prototype`; `ordinary_set` recognizes
+        // those exotic own properties before consulting this inherited boot
+        // property, so assigning `g.prototype` remains valid.
+        self.proto_methods.push((
+            self.async_generator_function_proto,
+            "prototype",
+            async_generator_proto,
+        ));
         // `%GeneratorFunction.prototype%` (XS's `mxGeneratorFunctionPrototype`,
         // `fxBuildFunction`): a plain object off `%Function.prototype%`. A
         // generator function's instance `[[Prototype]]` chains here (see
@@ -6891,6 +6902,21 @@ impl Interp {
             }
         }
         self.proto_methods = methods;
+        // `%AsyncGeneratorPrototype%.constructor` points to `%AsyncGenerator%`
+        // (the common function prototype object), not to the dynamic
+        // `%AsyncGeneratorFunction%` constructor.  Its descriptor is
+        // non-writable, non-enumerable, and configurable.
+        if let Some(cid) = self.constructor_id {
+            self.set_own_unmetered_with_flag(
+                self.async_generator_proto,
+                cid,
+                Slot::of(
+                    Kind::Reference,
+                    Payload::Reference(self.async_generator_function_proto),
+                ),
+                XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG,
+            );
+        }
         // Inherited prototype data (Error `name`/`message`).
         let data = std::mem::take(&mut self.proto_data);
         for (proto, pname, value) in &data {
@@ -6962,6 +6988,7 @@ impl Interp {
                 (self.dataview_proto, "DataView"),
                 (self.map_iterator_proto, "Map Iterator"),
                 (self.set_iterator_proto, "Set Iterator"),
+                (self.async_generator_proto, "AsyncGenerator"),
             ] {
                 if proto.is_null() {
                     continue;
@@ -32324,7 +32351,13 @@ impl Interp {
         value: Slot,
         receiver: Slot,
     ) -> Result<bool, Halt> {
-        let own = self.ordinary_get_own_descriptor(inst, id);
+        // Functions keep their `length`, `name`, and (when constructable)
+        // `prototype` own properties in side tables.  They participate in
+        // OrdinarySet exactly like materialized own descriptors and must be
+        // considered before an inherited non-writable property.
+        let own = self
+            .ordinary_get_own_descriptor(inst, id)
+            .or_else(|| self.exotic_own_descriptor(inst, id));
         if let Some(descriptor) = own {
             if descriptor.is_accessor() {
                 let setter = descriptor.set.unwrap_or_else(Slot::undefined);

@@ -68,3 +68,33 @@ fn async_generator_next_expression_returns_a_promise_with_custom_argument_iterat
     assert_eq!(run.ironhorse_result, "[object Promise]", "{run:?}");
     assert!(run.result_agrees, "{run:?}");
 }
+
+#[test]
+fn async_generator_intrinsic_metadata() {
+    let run = dual_run(
+        "async function* g(){}; \
+         var AG=Object.getPrototypeOf(g); var p=AG.prototype; \
+         [p.constructor===AG, p.next.name, p.next.length, p.return.name, \
+          p.return.length, p.throw.name, p.throw.length, \
+          Object.prototype.toString.call(Object.getPrototypeOf(Object.getPrototypeOf(g())))].join('|')",
+    )
+    .expect("XS oracle machine");
+    assert_eq!(run.agreement, Agreement::BothComplete, "{run:?}");
+    assert!(run.result_agrees, "{run:?}");
+    assert_eq!(
+        run.ironhorse_result,
+        "true|next|1|return|1|throw|1|[object AsyncGenerator]"
+    );
+}
+
+#[test]
+fn async_generator_function_prototype_remains_assignable() {
+    let run = dual_run(
+        "'use strict'; async function* g(){}; var p={tag:1}; \
+         g.prototype=p; g.prototype===p",
+    )
+    .expect("XS oracle machine");
+    assert_eq!(run.agreement, Agreement::BothComplete, "{run:?}");
+    assert!(run.result_agrees, "{run:?}");
+    assert_eq!(run.ironhorse_result, "true");
+}
