@@ -10,6 +10,7 @@ import net from 'node:net';
 import harden from '@endo/harden';
 import { makeNodeReader } from '@endo/stream-node/reader.js';
 import { makeNodeWriter } from '@endo/stream-node/writer.js';
+import { makeGracefulReader } from '@endo/stream-node/graceful-reader.js';
 import { makeNetstringReader, makeNetstringWriter } from '@endo/netstring';
 
 const { isNaN } = Number;
@@ -23,41 +24,12 @@ const { isNaN } = Number;
  */
 const MAX_FRAME_LENGTH = 65_551;
 
-/**
- * Wrap a byte reader so an abrupt socket teardown surfaces as a clean
- * end-of-stream (`{ done: true }`) instead of an unhandled
- * `ERR_STREAM_PREMATURE_CLOSE` rejection. Destroying a socket (which
- * `shutdown()` does, and which a peer crash produces) rejects any
- * pending `reader.next()`; a destroyed socket *is* a closed stream, so
- * the session layer above should observe an orderly end and tear its
- * session down rather than catch a stray throw.
- *
- * @param {import('@endo/stream').Reader<Uint8Array>} reader
- * @returns {import('@endo/stream').Reader<Uint8Array>}
- */
-const makeGracefulReader = reader => {
-  /** @type {import('@endo/stream').Reader<Uint8Array>} */
-  const graceful = {
-    next: async value => {
-      try {
-        return await reader.next(value);
-      } catch (err) {
-        if (
-          err != null &&
-          /** @type {{ code?: string }} */ (err).code ===
-            'ERR_STREAM_PREMATURE_CLOSE'
-        ) {
-          return harden({ value: undefined, done: true });
-        }
-        throw err;
-      }
-    },
-    return: value => reader.return(value),
-    throw: err => reader.throw(err),
-    [Symbol.asyncIterator]: () => graceful,
-  };
-  return harden(graceful);
-};
+// A destroyed socket (which `shutdown()` does, and which a peer crash
+// produces) rejects any pending `reader.next()` with
+// `ERR_STREAM_PREMATURE_CLOSE`; a destroyed socket *is* a closed stream, so
+// `makeGracefulReader` converts that rejection into an orderly
+// `{ done: true }` for the session layer above. See
+// `@endo/stream-node/graceful-reader.js`.
 
 /**
  * TCP byte-stream transport.
