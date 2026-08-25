@@ -28,7 +28,7 @@ The projection retains the mount's realpath confinement checks, including for
 mounts whose effective denied set is empty, because a kernel bind cannot
 constrain symlink traversal to the mount's confinement root.
 
-Every mint records an explicit escalation — `OS_EFFECT`, `RESOURCE_LIMIT`, or
+Every slice-mint attempt records an explicit escalation — `OS_EFFECT`, `RESOURCE_LIMIT`, or
 `NATIVE_IMPLEMENTATION` — plus the capability that asked, on stderr and in the
 new `EndoDiagnostics.listSandboxEscalations()`. The `getFormula` record for a
 `sandbox` formula surfaces the same fields.

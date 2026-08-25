@@ -549,7 +549,7 @@ export const DiagnosticsInterface = M.interface('EndoDiagnostics', {
   getFormula: M.call(IdShape).returns(M.promise()),
   // Access the privileged error-trace aggregator.
   traces: M.call().returns(M.promise()),
-  // The sandbox escalation ledger: one record per slice mint.
+  // The sandbox escalation ledger: one record per slice mint attempt.
   listSandboxEscalations: M.call().returns(M.promise()),
 });
 

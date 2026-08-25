@@ -52,7 +52,7 @@ import {
 } from './interfaces.js';
 import { hostHelp, makeHelp } from './help-text.js';
 import { assertValidTreeEntryName, getMountBacking } from './mount.js';
-import { normalizeSandboxProfile } from './sandbox.js';
+import { assertPositiveInteger, normalizeSandboxProfile } from './sandbox.js';
 
 const sandboxMountMethodNames = harden(getInterfaceMethodKeys(MountInterface));
 
@@ -63,8 +63,11 @@ const sandboxMountMethodNames = harden(getInterfaceMethodKeys(MountInterface));
  * they must advertise the complete canonical EndoMount interface instead.
  *
  * Profile normalization is synchronous, while formula-type validation may be
- * asynchronous. Normalize once with temporary identifiers, then substitute
- * the validated identifiers into that already-normalized record.
+ * asynchronous. Normalize once with unique temporary identifiers, then
+ * substitute the validated identifiers through those identifiers in the
+ * already-normalized record. The temporary identifiers preserve the
+ * association between each normalized mount field and the grant that created
+ * it; do not rely on replaying the normalizer's call order here.
  *
  * @param {unknown} profile
  * @param {object} powers
@@ -77,12 +80,19 @@ export const normalizeSandboxProfileForHost = async (
   { getIdForRef, getTypeForId },
 ) => {
   await null;
-  /** @type {Array<{ cap: unknown, label: string, mode: 'ro' | 'rw' }>} */
+  /** @type {Array<{ provisionalId: FormulaIdentifier, cap: unknown, label: string, mode: 'ro' | 'rw' }>} */
   const grants = [];
+  /** @type {Map<FormulaIdentifier, { provisionalId: FormulaIdentifier, cap: unknown, label: string, mode: 'ro' | 'rw' }>} */
+  const grantForProvisionalId = new Map();
   const provisionalProfile = normalizeSandboxProfile(profile, {
     resolveMountId: (cap, label, mode) => {
-      grants.push({ cap, label, mode });
-      return /** @type {FormulaIdentifier} */ ('validation-only');
+      const provisionalId = /** @type {FormulaIdentifier} */ (
+        `validation-only-${grants.length}`
+      );
+      const grant = { provisionalId, cap, label, mode };
+      grants.push(grant);
+      grantForProvisionalId.set(provisionalId, grant);
+      return provisionalId;
     },
   });
 
@@ -147,10 +157,14 @@ export const normalizeSandboxProfileForHost = async (
    * project read-only through 9P, but a read-write grant must fail closed
    * because the peer's read-only attenuation cannot be proven here.
    *
-   * @param {{ cap: unknown, label: string, mode: 'ro' | 'rw' }} grant
+   * @param {FormulaIdentifier} provisionalId
    * @returns {FormulaIdentifier}
    */
-  const resolveValidatedMountId = grant => {
+  const resolveValidatedMountId = provisionalId => {
+    const grant = grantForProvisionalId.get(provisionalId);
+    if (grant === undefined) {
+      throw makeError(X`provideSandbox: mount grant accounting failed`);
+    }
     const { cap, label, mode } = grant;
     const mountId = mountIdForCap.get(cap);
     if (mountId === undefined) {
@@ -174,26 +188,19 @@ export const normalizeSandboxProfileForHost = async (
     return mountId;
   };
 
-  let grantIndex = 0;
-  const nextMountId = () => {
-    const grant = grants[grantIndex];
-    grantIndex += 1;
-    if (grant === undefined) {
-      throw makeError(X`provideSandbox: mount grant accounting failed`);
-    }
-    return resolveValidatedMountId(grant);
-  };
-
   const rootfs =
     provisionalProfile.rootfs.kind === 'mount'
       ? harden({
           kind: /** @type {'mount'} */ ('mount'),
-          mountId: nextMountId(),
+          mountId: resolveValidatedMountId(provisionalProfile.rootfs.mountId),
         })
       : provisionalProfile.rootfs;
   const mounts = harden(
     provisionalProfile.mounts.map(mount =>
-      harden({ ...mount, mountId: nextMountId() }),
+      harden({
+        ...mount,
+        mountId: resolveValidatedMountId(mount.mountId),
+      }),
     ),
   );
   return harden({ ...provisionalProfile, rootfs, mounts });
@@ -261,19 +268,14 @@ export const normalizeShellPolicy = policy => {
       X`provideShell: policy.allowedCommands must be a non-empty array of command-name strings`,
     );
   }
-  if (!Number.isInteger(timeoutMs) || /** @type {number} */ (timeoutMs) <= 0) {
-    throw makeError(
-      X`provideShell: policy.timeoutMs must be a positive integer`,
-    );
-  }
-  if (
-    !Number.isInteger(maxOutputBytes) ||
-    /** @type {number} */ (maxOutputBytes) <= 0
-  ) {
-    throw makeError(
-      X`provideShell: policy.maxOutputBytes must be a positive integer`,
-    );
-  }
+  const timeoutMsValue = assertPositiveInteger(
+    timeoutMs,
+    'provideShell: policy.timeoutMs',
+  );
+  const maxOutputBytesValue = assertPositiveInteger(
+    maxOutputBytes,
+    'provideShell: policy.maxOutputBytes',
+  );
   /** @type {Record<string, string>} */
   const normalizedEnv = {};
   if (env !== undefined) {
@@ -296,8 +298,6 @@ export const normalizeShellPolicy = policy => {
   if (typeof normalizedSearchPath !== 'string') {
     throw makeError(X`provideShell: policy.searchPath must be a string`);
   }
-  const timeoutMsValue = /** @type {number} */ (timeoutMs);
-  const maxOutputBytesValue = /** @type {number} */ (maxOutputBytes);
   return harden({
     allowedCommands: harden([...allowedCommands]),
     timeoutMs: timeoutMsValue,
@@ -389,27 +389,17 @@ export const normalizeHttpClientPolicy = policy => {
 
   // Default to the exo's own defaults (60 / 1 MiB) when unspecified, but bake an
   // explicit number so the formula record is self-describing across a restart.
-  const normalizedMaxRequestsPerMinute =
-    maxRequestsPerMinute === undefined ? 60 : maxRequestsPerMinute;
-  if (
-    !Number.isSafeInteger(normalizedMaxRequestsPerMinute) ||
-    /** @type {number} */ (normalizedMaxRequestsPerMinute) <= 0
-  ) {
-    throw makeError(
-      X`provideHttpClient: policy.maxRequestsPerMinute must be a positive safe integer`,
-    );
-  }
+  const normalizedMaxRequestsPerMinute = assertPositiveInteger(
+    maxRequestsPerMinute === undefined ? 60 : maxRequestsPerMinute,
+    'provideHttpClient: policy.maxRequestsPerMinute',
+    { safe: true },
+  );
 
-  const normalizedMaxResponseBytes =
-    maxResponseBytes === undefined ? 1024 * 1024 : maxResponseBytes;
-  if (
-    !Number.isSafeInteger(normalizedMaxResponseBytes) ||
-    /** @type {number} */ (normalizedMaxResponseBytes) <= 0
-  ) {
-    throw makeError(
-      X`provideHttpClient: policy.maxResponseBytes must be a positive safe integer`,
-    );
-  }
+  const normalizedMaxResponseBytes = assertPositiveInteger(
+    maxResponseBytes === undefined ? 1024 * 1024 : maxResponseBytes,
+    'provideHttpClient: policy.maxResponseBytes',
+    { safe: true },
+  );
 
   const normalizedPolicyMode = policyMode === undefined ? 'strict' : policyMode;
   if (
@@ -425,10 +415,8 @@ export const normalizeHttpClientPolicy = policy => {
 
   return harden({
     allowedOrigins: harden(normalizedOrigins),
-    maxRequestsPerMinute: /** @type {number} */ (
-      normalizedMaxRequestsPerMinute
-    ),
-    maxResponseBytes: /** @type {number} */ (normalizedMaxResponseBytes),
+    maxRequestsPerMinute: normalizedMaxRequestsPerMinute,
+    maxResponseBytes: normalizedMaxResponseBytes,
     policyMode: /** @type {import('./types.js').HttpClientPolicyMode} */ (
       normalizedPolicyMode
     ),

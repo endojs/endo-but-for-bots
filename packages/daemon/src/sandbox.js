@@ -76,6 +76,54 @@ export const SandboxEscalationRecordShape = M.splitRecord({
 harden(SandboxEscalationRecordShape);
 
 /**
+ * Assert a numeric limit while retaining the caller-facing distinction
+ * between JavaScript integers and safe integers. The sandbox and shell
+ * policies use the former; the HTTP client policy uses the latter because its
+ * exo contract does.
+ *
+ * @param {unknown} value
+ * @param {string} label
+ * @param {number} minimum
+ * @param {boolean} safe
+ * @param {string} description
+ * @returns {number}
+ */
+const assertInteger = (value, label, minimum, safe, description) => {
+  const isInteger = safe
+    ? Number.isSafeInteger(value)
+    : Number.isInteger(value);
+  if (!isInteger || /** @type {number} */ (value) < minimum) {
+    throw makeError(`${label} must be ${description}`);
+  }
+  return /** @type {number} */ (value);
+};
+
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @returns {number}
+ */
+export const assertNonNegativeInteger = (value, label) =>
+  assertInteger(value, label, 0, false, 'a non-negative integer');
+harden(assertNonNegativeInteger);
+
+/**
+ * @param {unknown} value
+ * @param {string} label
+ * @param {{ safe?: boolean }} [options]
+ * @returns {number}
+ */
+export const assertPositiveInteger = (value, label, { safe = false } = {}) =>
+  assertInteger(
+    value,
+    label,
+    1,
+    safe,
+    safe ? 'a positive safe integer' : 'a positive integer',
+  );
+harden(assertPositiveInteger);
+
+/**
  * `mustMatch`, but returning the specimen so a checked value reads as an
  * expression. `@endo/patterns` offers no value-returning form.
  *
@@ -146,15 +194,10 @@ const normalizeLimits = limits => {
   const normalized = {};
   for (const [key, value] of Object.entries(limits)) {
     checked(key, LimitKeyShape, `provideSandbox: profile.limits[${q(key)}]`);
-    // `M.nat()` is bigint-valued and `@endo/patterns` has no integer matcher
-    // for `number`, so a cap's integrality stays hand-rolled: the available
-    // `M.and(M.number(), M.gte(0))` would admit `1.5`.
-    if (!Number.isInteger(value) || /** @type {number} */ (value) < 0) {
-      throw makeError(
-        X`provideSandbox: profile.limits[${q(key)}] must be a non-negative integer`,
-      );
-    }
-    normalized[key] = /** @type {number} */ (value);
+    normalized[key] = assertNonNegativeInteger(
+      value,
+      `provideSandbox: profile.limits[${q(key)}]`,
+    );
   }
   return normalized;
 };
@@ -324,9 +367,9 @@ export const normalizeSandboxProfile = (profile, { resolveMountId }) => {
 harden(normalizeSandboxProfile);
 
 /**
- * One record per slice mint, plus one line on stderr. A mint is the moment
- * the daemon hands out authority the capability graph cannot describe, so it
- * earns a line even though library code is otherwise silent.
+ * One record per slice mint attempt, plus one line on stderr. A mint attempt
+ * is the moment the daemon assembles authority the capability graph cannot
+ * describe, so it earns a line even when backend creation later fails.
  *
  * @param {object} [options]
  * @param {number} [options.limit] Records retained; older ones are
@@ -341,6 +384,7 @@ export const makeSandboxEscalationLog = ({ limit = 128 } = {}) => {
    * @returns {SandboxEscalationRecord}
    */
   const record = entry => {
+    mustMatch(entry, SandboxEscalationRecordShape, 'sandbox escalation record');
     const frozen = harden({ ...entry });
     records.push(frozen);
     while (records.length > limit) {
@@ -350,7 +394,7 @@ export const makeSandboxEscalationLog = ({ limit = 128 } = {}) => {
       .map(({ innerPath, kind }) => `${innerPath}=${kind}`)
       .join(' ');
     console.error(
-      `[endo sandbox] ${frozen.sandboxId} minted a slice: escalation ${frozen.reason} requested by ${frozen.capability}; backend ${frozen.backend}; network ${frozen.network}; mounts ${projections || '(none)'}`,
+      `[endo sandbox] ${frozen.sandboxId} attempted a slice mint: escalation ${frozen.reason} requested by ${frozen.capability}; backend ${frozen.backend}; network ${frozen.network}; mounts ${projections || '(none)'}`,
     );
     return frozen;
   };

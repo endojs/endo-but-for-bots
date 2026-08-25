@@ -490,9 +490,10 @@ export type SandboxDeferredTaskParams = {
 };
 
 /**
- * One slice mint, as reported by `EndoDiagnostics.listSandboxEscalations()`.
+ * One slice mint attempt, as reported by
+ * `EndoDiagnostics.listSandboxEscalations()`.
  * A re-mint after a daemon restart appends a new record: the ledger counts
- * escalations, not sandboxes.
+ * escalation attempts, not sandboxes.
  */
 export type SandboxEscalationRecord = {
   sandboxId: FormulaIdentifier;
@@ -2010,7 +2011,7 @@ export interface EndoDiagnostics {
   /** Returns a privileged Exo for inspecting the daemon's error-trace aggregate. */
   traces(): Promise<EndoTraces>;
   /**
-   * The daemon's sandbox escalation ledger: one record per slice mint,
+   * The daemon's sandbox escalation ledger: one record per slice mint attempt,
    * most recent last, bounded to a recent window. A re-mint after a
    * restart appends a new record, so the ledger counts escalations
    * rather than sandboxes.
