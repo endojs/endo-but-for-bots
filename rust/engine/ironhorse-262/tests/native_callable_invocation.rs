@@ -243,3 +243,41 @@ fn calling_bound_native_dispatches_native() {
     agrees("var pi = parseInt.bind(null, '101'); pi(2)");
 }
 
+// -------------------------------------------------------------------------
+// §10  `apply` with an **array-like** argArray (CreateListFromArrayLike):
+//      read `length` then each index; propagate a getter's abrupt throw.
+// -------------------------------------------------------------------------
+
+#[test]
+fn apply_array_like_arg_array() {
+    // A plain array-like object forwards its indexed elements.
+    agrees(
+        "function f(a, b, c) { return a + b + c; } \
+         f.apply(null, {length: 3, 0: 1, 1: 2, 2: 3})",
+    );
+    // `length` is ToLength-coerced; missing indices read `undefined`.
+    agrees(
+        "function f() { return arguments.length; } \
+         f.apply(null, {length: 4, 0: 'x'})",
+    );
+    agrees(
+        "function f() { return String(arguments[0]) + '/' + arguments.length; } \
+         f.apply(null, {length: 2})",
+    );
+    // The `arguments` object of another call forwards through apply.
+    agrees(
+        "function g() { return function () { return arguments[0] + arguments[1]; }.apply(null, arguments); } \
+         g(4, 5)",
+    );
+    // An abrupt `length` getter propagates.
+    agrees(
+        "function f() {} var o = { get length() { throw new RangeError('L'); } }; \
+         var ok; try { f.apply(null, o); ok = false; } catch (e) { ok = e instanceof RangeError; } ok",
+    );
+    // An abrupt index getter propagates.
+    agrees(
+        "function f() {} var o = { length: 1, get 0() { throw new TypeError('I'); } }; \
+         var ok; try { f.apply(null, o); ok = false; } catch (e) { ok = e instanceof TypeError; } ok",
+    );
+}
+

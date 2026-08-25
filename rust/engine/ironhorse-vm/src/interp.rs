@@ -10278,7 +10278,7 @@ impl Interp {
                                 }
                                 pc = ret_pc;
                             }
-                            false => match self.enter_call_dot_apply(base, argc, ret_pc) {
+                            false => match self.enter_call_dot_apply(base, argc, ret_pc, code) {
                                 Ok(body_start) => {
                                     if self.check_meter() == MeterCheck::Abort {
                                         return Halt::MeterAbort;
@@ -19907,6 +19907,7 @@ impl Interp {
         base: usize,
         _argc: usize,
         ret_pc: usize,
+        code: &[u8],
     ) -> Result<usize, Halt> {
         let f = self
             .stack
@@ -19966,10 +19967,14 @@ impl Interp {
                 (args, meter)
             }
             // A non-dense-array **object** argArray (array-like / `arguments` /
-            // sparse array): `CreateListFromArrayLike` reads `length` then each
-            // index — not yet modeled, so keep the honest skip.
+            // sparse array): `CreateListFromArrayLike` (ECMA-262 7.3.18) reads
+            // `length` (`ToLength`) then each indexed element, with any getter
+            // throw propagated. The per-property reads meter themselves, so no
+            // extra array meter is added here.
             Some((Kind::Reference, _)) | Some((Kind::Instance, _)) => {
-                return Err(Halt::Unsupported("apply:arguments-array"));
+                let arg_slot = arg_array.unwrap_or_else(Slot::undefined);
+                let args = self.arraylike_to_vec(code, arg_slot)?;
+                (args, 0)
             }
             // A non-object, non-nullish argArray (a Boolean/Number/String/
             // Symbol/BigInt primitive): `CreateListFromArrayLike` step 2
