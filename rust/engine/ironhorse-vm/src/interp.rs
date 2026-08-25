@@ -10263,16 +10263,30 @@ impl Interp {
                             pc = ret_pc;
                             continue;
                         }
-                        // (no-array subset): re-enter the target with the
-                        // rebound `this` and no arguments.
-                        match self.enter_call_dot_apply(base, argc, ret_pc) {
-                            Ok(body_start) => {
+                        // A native receiver dispatches in place (dense-array or
+                        // no-array argument shapes); a user receiver re-enters
+                        // its bytecode frame through the trampoline.
+                        match dispatch_result!(
+                            self.call_dot_apply_native(base, code),
+                            pc,
+                            self,
+                            return_depth
+                        ) {
+                            true => {
                                 if self.check_meter() == MeterCheck::Abort {
                                     return Halt::MeterAbort;
                                 }
-                                pc = body_start;
+                                pc = ret_pc;
                             }
-                            Err(h) => return h,
+                            false => match self.enter_call_dot_apply(base, argc, ret_pc) {
+                                Ok(body_start) => {
+                                    if self.check_meter() == MeterCheck::Abort {
+                                        return Halt::MeterAbort;
+                                    }
+                                    pc = body_start;
+                                }
+                                Err(h) => return h,
+                            },
                         }
                     } else if let Some((m, base)) = method {
                         // A native prototype method: the call's receiver is
@@ -19628,6 +19642,78 @@ impl Interp {
         }
         self.meter
             .tick_raw(CALL_TRAMPOLINE_METERING + forwarded_len as u64 * CALL_TRAMPOLINE_PER_ARG);
+        if let Some(native) = native {
+            self.call_native(native, base, forwarded_len, false, code)?;
+        } else if let Some(method) = method {
+            self.call_native_method(method, base, forwarded_len, code)?;
+        }
+        Ok(true)
+    }
+
+    /// Dispatch `native.apply(thisArg, argsArray)` without entering a bytecode
+    /// frame — the `.apply` analog of [`Self::call_dot_call_native`]. Returns
+    /// `Ok(false)` when the receiver is not a native constructor/method (the
+    /// ordinary user-function trampoline then runs), or when the arguments
+    /// array is a shape not yet forwarded (a sparse array / array-like), so
+    /// [`Self::enter_call_dot_apply`] keeps its honest self-name. A dense Array
+    /// instance (or absent/undefined/null → no args) forwards its elements as
+    /// the call arguments, exactly as the user-receiver path does.
+    fn call_dot_apply_native(
+        &mut self,
+        base: usize,
+        code: &[u8],
+    ) -> Result<bool, Halt> {
+        let target = self
+            .stack
+            .get(base)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let target_ref = match target.value {
+            Payload::Reference(r) => r,
+            _ => return Ok(false),
+        };
+        let native = self.native_of(target_ref);
+        let method = self.method_of(target_ref);
+        if native.is_none() && method.is_none() {
+            return Ok(false);
+        }
+        let this_arg = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        // Expand the arguments array (arg 1 of `.apply`) into the forwarded
+        // slice — the same dense-only reading as the user-receiver path. A
+        // sparse array or a non-array object is not yet forwarded: return
+        // `Ok(false)` so `enter_call_dot_apply` self-names it rather than
+        // dropping arguments silently.
+        let arg_array = self.stack.get(base + 5).copied();
+        let (forwarded, array_read_meter) = match arg_array.map(|s| (s.kind, s.value)) {
+            None | Some((Kind::Undefined, _)) | Some((Kind::Null, _)) => (Vec::new(), 0),
+            Some((Kind::Reference, Payload::Reference(arr))) if self.arrays.contains_key(&arr) => {
+                let data = &self.arrays[&arr];
+                let len = data.length;
+                if (0..len).any(|i| !data.items.contains_key(&i)) {
+                    return Ok(false);
+                }
+                let args: Vec<Slot> = (0..len).map(|i| data.items[&i]).collect();
+                let meter =
+                    APPLY_ARRAY_BASE_METERING + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
+                (args, meter)
+            }
+            _ => return Ok(false),
+        };
+        let forwarded_len = forwarded.len();
+        self.stack.truncate(base);
+        self.push(this_arg);
+        self.push(target);
+        self.push(Slot::undefined());
+        self.push(Slot::of(Kind::Uninitialized, Payload::None));
+        for arg in forwarded {
+            self.push(arg);
+        }
+        self.meter
+            .tick_raw(CALL_TRAMPOLINE_METERING + array_read_meter);
         if let Some(native) = native {
             self.call_native(native, base, forwarded_len, false, code)?;
         } else if let Some(method) = method {
