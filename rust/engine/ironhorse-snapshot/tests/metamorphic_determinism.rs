@@ -93,7 +93,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
 
     assert_eq!(
         hex_sha256(&session.machine().write_snapshot(&sig)),
-        "b1074ffc28ea3d330a2df92516d14997e4a962e3d56d7f4d896a1e9e70d64908",
+        "667ae48e8d6ade6df3138e5fa135698e60ee7b6ad6a835f13225240f98920bd8",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -113,10 +113,11 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     // bytes remain deterministic and cross-host stable. Re-pinned again for
     // the Date intrinsic's new constructor/prototype boot state, then for the
     // collection methods' specified name/length metadata and their distinct
-    // Map/Set iterator-prototype boot state.
+    // Map/Set iterator-prototype boot state, then for the Iterator constructor
+    // and helper-method prototype surface.
     assert_eq!(
         store.manifest().unwrap().seal,
-        "69c6cb6256ed54d54771df23998a0f6eb2b707fac0e50e6f8b76b710464a2659",
+        "e7e2603b07e7dce123a9cb851da950e32e0ee3fa7ce4d30072528d69804d3e81",
         "epoch-3 seal chain"
     );
 }

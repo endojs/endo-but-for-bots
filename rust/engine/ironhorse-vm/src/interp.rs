@@ -2492,6 +2492,10 @@ pub enum NativeMethod {
     /// brand check even though both advance the shared `IterState` layout.
     MapIteratorNext,
     SetIteratorNext,
+    IteratorFrom,
+    /// One of the Iterator Helper prototype methods, indexed in the order
+    /// installed by `create_intrinsics`.
+    IteratorHelper(u8),
 }
 
 impl Default for FuncInfo {
@@ -3192,6 +3196,8 @@ pub enum Native {
     Set,
     WeakMap,
     WeakSet,
+    /// The abstract `Iterator` constructor and its helper-method prototype.
+    Iterator,
     /// `ArrayBuffer` — the raw byte-buffer constructor (`xsDataView.c`
     /// `fx_ArrayBuffer`). Its per-instance backing store lives in the
     /// [`Interp::array_buffers`] side table.
@@ -3283,6 +3289,7 @@ impl Native {
             Native::Set => "Set",
             Native::WeakMap => "WeakMap",
             Native::WeakSet => "WeakSet",
+            Native::Iterator => "Iterator",
             Native::ArrayBuffer => "ArrayBuffer",
             Native::SharedArrayBuffer => "SharedArrayBuffer",
             Native::TypedArray(i) => TYPED_ARRAY_TYPES[i as usize].name,
@@ -3324,7 +3331,12 @@ impl Native {
             Native::TypedArray(_) => 3,
             Native::DataView => 1,
             Native::Date => 7,
-            Native::Symbol | Native::Map | Native::Set | Native::WeakMap | Native::WeakSet => 0,
+            Native::Symbol
+            | Native::Map
+            | Native::Set
+            | Native::WeakMap
+            | Native::WeakSet
+            | Native::Iterator => 0,
             Native::Object
             | Native::Function
             | Native::Boolean
@@ -3373,6 +3385,7 @@ impl Native {
             ("Set", Native::Set),
             ("WeakMap", Native::WeakMap),
             ("WeakSet", Native::WeakSet),
+            ("Iterator", Native::Iterator),
             ("ArrayBuffer", Native::ArrayBuffer),
             ("SharedArrayBuffer", Native::SharedArrayBuffer),
         ];
@@ -3990,6 +4003,7 @@ pub struct Interp {
     /// `arr[Symbol.iterator]()` produce. Carries `next` and a
     /// `Symbol.iterator` returning the iterator itself.
     array_iterator_proto: crate::value::SlotIndex,
+    iterator_proto: crate::value::SlotIndex,
     map_iterator_proto: crate::value::SlotIndex,
     set_iterator_proto: crate::value::SlotIndex,
     /// The realm's `Math` namespace object (XS's `mxMathObject`) — a boot
@@ -4730,6 +4744,7 @@ impl Interp {
             length_id: None,
             name_id: None,
             array_iterator_proto: crate::value::SlotIndex::NULL,
+            iterator_proto: crate::value::SlotIndex::NULL,
             map_iterator_proto: crate::value::SlotIndex::NULL,
             set_iterator_proto: crate::value::SlotIndex::NULL,
             math_object: crate::value::SlotIndex::NULL,
@@ -4903,6 +4918,7 @@ impl Interp {
                 Native::Map | Native::Set | Native::WeakMap | Native::WeakSet => {
                     self.slots.alloc(Slot::instance(object_proto))
                 }
+                Native::Iterator => self.slots.alloc(Slot::instance(object_proto)),
                 // `%ArrayBuffer.prototype%`: a plain boot object chaining to
                 // %Object.prototype%, carrying the `byteLength` accessor and
                 // the `slice` method bound below. The per-instance backing
@@ -4996,6 +5012,38 @@ impl Interp {
             .get("Array")
             .and_then(|&c| self.ctor_prototype.get(&c).copied())
             .unwrap_or(crate::value::SlotIndex::NULL);
+        self.iterator_proto = self
+            .intrinsics
+            .get("Iterator")
+            .and_then(|&c| self.ctor_prototype.get(&c).copied())
+            .unwrap_or(crate::value::SlotIndex::NULL);
+        if let Some(&iterator_ctor) = self.intrinsics.get("Iterator") {
+            let from = self.alloc_named_method(NativeMethod::IteratorFrom, "from", 1);
+            self.proto_methods.push((iterator_ctor, "from", from));
+            for (op, (name, arity)) in [
+                ("map", 1u32),
+                ("filter", 1),
+                ("take", 1),
+                ("drop", 1),
+                ("flatMap", 1),
+                ("reduce", 1),
+                ("toArray", 0),
+                ("forEach", 1),
+                ("some", 1),
+                ("every", 1),
+                ("find", 1),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let method = self.alloc_named_method(
+                    NativeMethod::IteratorHelper(op as u8),
+                    name,
+                    arity,
+                );
+                self.proto_methods.push((self.iterator_proto, name, method));
+            }
+        }
         // The `Array.prototype` methods ironhorse models (dense fast paths), bound
         // as own properties of `%Array.prototype%` at link time only when the
         // program references the method name.
@@ -5067,7 +5115,7 @@ impl Interp {
         // `%Array Iterator.prototype%`: a boot object chaining to
         // %Object.prototype%, carrying `next` (the iterators produced by
         // `values`/`keys`/`entries` chain to it).
-        let array_iter_proto = self.slots.alloc(Slot::instance(object_proto));
+        let array_iter_proto = self.slots.alloc(Slot::instance(self.iterator_proto));
         self.array_iterator_proto = array_iter_proto;
         let next_mf = self.alloc_method(NativeMethod::ArrayIteratorNext);
         self.proto_methods.push((array_iter_proto, "next", next_mf));
@@ -5075,8 +5123,8 @@ impl Interp {
         // function identities.  They share the iterator-state representation
         // with Array iterators, but the methods must reject an iterator of the
         // other collection family (the spec's [[Map]]/[[Set]] brand check).
-        self.map_iterator_proto = self.slots.alloc(Slot::instance(array_iter_proto));
-        self.set_iterator_proto = self.slots.alloc(Slot::instance(array_iter_proto));
+        self.map_iterator_proto = self.slots.alloc(Slot::instance(self.iterator_proto));
+        self.set_iterator_proto = self.slots.alloc(Slot::instance(self.iterator_proto));
         let map_next = self.alloc_named_method(NativeMethod::MapIteratorNext, "next", 0);
         let set_next = self.alloc_named_method(NativeMethod::SetIteratorNext, "next", 0);
         self.proto_methods
@@ -6757,6 +6805,23 @@ impl Interp {
                 self.done_id = Some(self.intern_key("done"));
             }
         }
+        let iterator_helpers_used = [
+            "map", "filter", "take", "drop", "flatMap", "reduce", "toArray",
+            "forEach", "some", "every", "find",
+        ]
+        .iter()
+        .any(|name| self.symbol_ids.contains_key(*name));
+        if iterator_helpers_used {
+            for name in ["next", "done", "value", "return"] {
+                self.intern_key(name);
+            }
+            if self.value_id.is_none() {
+                self.value_id = Some(self.intern_key("value"));
+            }
+            if self.done_id.is_none() {
+                self.done_id = Some(self.intern_key("done"));
+            }
+        }
         // `Map.groupBy` / `Object.groupBy` drive `GetIterator(items)` from Rust,
         // reading the produced result object's `next`/`value`/`done` — even when
         // the program never spells them (e.g. `Map.groupBy([1,2,3], fn)`). Mirror
@@ -6922,6 +6987,17 @@ impl Interp {
             );
         }
         if let Some(id) = self.well_known_symbol_property_id("iterator") {
+            let identity = self.alloc_named_method(
+                NativeMethod::AsyncIteratorIdentity,
+                "[Symbol.iterator]",
+                0,
+            );
+            self.set_own_unmetered_with_flag(
+                self.iterator_proto,
+                id,
+                Slot::of(Kind::Reference, Payload::Reference(identity)),
+                XS_DONT_ENUM_FLAG,
+            );
             self.set_own_unmetered_with_flag(
                 self.string_proto,
                 id,
@@ -14323,6 +14399,10 @@ impl Interp {
                 self.meter.tick_raw(SYMBOL_CREATE_METERING);
                 Slot::of(Kind::Symbol, Payload::Reference(d))
             }
+            // The intrinsic Iterator constructor is abstract. Direct call and
+            // direct construction both throw; derived construction is left as
+            // an explicit later increment.
+            Native::Iterator => return Err(self.catchable_type_error()),
             // `Array(...)` / `new Array(...)` (`fx_Array`): both forms build the
             // same array. A single number argument is the length (a holey
             // array of that length); a single non-number, or two-or-more
@@ -24490,6 +24570,19 @@ impl Interp {
                 };
                 self.collection_iterator_next(iter)
             }
+            NativeMethod::IteratorFrom => {
+                let value = arg0;
+                match value.value {
+                    Payload::Reference(i)
+                        if self.iterators.contains_key(&i)
+                            || self.generators.contains_key(&i) => value,
+                    _ => return Err(Halt::Unsupported("Iterator.from:wrapper")),
+                }
+            }
+            NativeMethod::IteratorHelper(6) => self.iterator_to_array(this)?,
+            NativeMethod::IteratorHelper(_) => {
+                return Err(Halt::Unsupported("Iterator.helper"));
+            }
             NativeMethod::Math(id) => self.call_math(id, base, argc)?,
             NativeMethod::ReflectGetPrototypeOf
             | NativeMethod::ReflectSetPrototypeOf
@@ -27595,6 +27688,44 @@ impl Interp {
             },
         );
         Slot::of(Kind::Reference, Payload::Reference(iter))
+    }
+
+    /// `Iterator.prototype.toArray` for the intrinsic iterator families. The
+    /// generic user-defined `next` protocol remains an honest named gap; this
+    /// path advances the same native iterator state used by ordinary `.next()`
+    /// calls and appends each yielded value to a fresh Array.
+    fn iterator_to_array(&mut self, this: Slot) -> Result<Slot, Halt> {
+        let iter = match this.value {
+            Payload::Reference(i) if self.iterators.contains_key(&i) => i,
+            Payload::Reference(_) => return Err(Halt::Unsupported("Iterator.toArray:generic")),
+            _ => return Err(self.catchable_type_error()),
+        };
+        let array = self.new_array();
+        let mut length = 0u32;
+        loop {
+            let result = self.array_iterator_next(iter)?;
+            let Payload::Reference(result_obj) = result.value else {
+                return Err(Halt::Unsupported("Iterator.toArray:bad-result"));
+            };
+            let done = self
+                .done_id
+                .map(|id| self.instance_get(result_obj, id))
+                .is_some_and(|value| self.truthy(&value));
+            if done {
+                break;
+            }
+            let value = self
+                .value_id
+                .map(|id| self.instance_get(result_obj, id))
+                .unwrap_or_else(Slot::undefined);
+            self.arrays.get_mut(&array).unwrap().items.insert(length, value);
+            length += 1;
+        }
+        self.arrays.get_mut(&array).unwrap().length = length;
+        if length != 0 {
+            self.meter.tick_raw(self.array_chunk_size_metering(length));
+        }
+        Ok(Slot::of(Kind::Reference, Payload::Reference(array)))
     }
 
     /// `fx_MapIterator_prototype_next` / `fx_SetIterator_prototype_next`: yield
@@ -37164,6 +37295,7 @@ fn native_unsupported_name(native: Native) -> &'static str {
         Native::Set => "native-call:Set",
         Native::WeakMap => "native-call:WeakMap",
         Native::WeakSet => "native-call:WeakSet",
+        Native::Iterator => "native-call:Iterator",
         Native::ArrayBuffer => "native-call:ArrayBuffer",
         Native::SharedArrayBuffer => "native-call:SharedArrayBuffer",
         Native::TypedArray(_) => "native-call:TypedArray",
@@ -39388,6 +39520,7 @@ impl Interp {
             self.arraybuffer_proto,
             self.dataview_proto,
             self.array_iterator_proto,
+            self.iterator_proto,
             self.map_iterator_proto,
             self.set_iterator_proto,
             self.string_proto,
