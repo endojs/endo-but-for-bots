@@ -68,7 +68,10 @@ export const WorkflowApp = ({ service, powers }) => {
       setSummaries(initial);
       setStale(false);
       const reader = await E(service).followRuns();
-      iterator = iterateReader(reader);
+      // Prefetch a window of summaries so the initial run backlog streams
+      // without a round-trip acknowledgement per run, matching the inventory
+      // and message views.
+      iterator = iterateReader(reader, { buffer: 64 });
       // Cleanup may have run while followRuns() was in flight; close the
       // iterator we just made rather than parking on it forever.
       if (disposed) {
@@ -123,7 +126,10 @@ export const WorkflowApp = ({ service, powers }) => {
       setChart(runChart);
       setStale(false);
       syncClient = makeRunSyncClient(run, {
-        iterateEntries: iterateReader,
+        // Same prefetch for the journal: a run's entries arrive as a backlog
+        // on selection, and one acknowledgement per entry is what makes a long
+        // journal crawl into view.
+        iterateEntries: reader => iterateReader(reader, { buffer: 64 }),
         onEntry: () => {
           if (!disposed) setEntryCount(count => count + 1);
         },
