@@ -1430,9 +1430,12 @@ export interface EndoMount extends PathEntryIssuer {
 
 export interface EndoWorker {}
 
-export type MakeHostOrGuestOptions = {
+export type MakeHostOptions = {
   agentName?: string | string[];
   introducedNames?: Record<string, string>;
+};
+
+export type MakeGuestOptions = MakeHostOptions & {
   /** Immutable named capability graph for a retained guest. */
   authority?: EndoGuestAuthority;
 };
@@ -1745,11 +1748,11 @@ export interface EndoHost extends EndoAgent {
    */
   provideGuest(
     petName?: string | string[],
-    opts?: MakeHostOrGuestOptions,
+    opts?: MakeGuestOptions,
   ): Promise<EndoGuest>;
   provideHost(
     petName?: string | string[],
-    opts?: MakeHostOrGuestOptions,
+    opts?: MakeHostOptions,
   ): Promise<EndoHost>;
   makeDirectory(petNamePath: string | string[]): Promise<EndoDirectory>;
   provideWorker(petNamePath: string | string[]): Promise<EndoWorker>;

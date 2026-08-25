@@ -2,7 +2,6 @@ export {
   provisionEndoCodeMode,
   reconstructEndoCodeMode,
 } from './src/code-mode-provisioning.js';
-export { normalizeEndoCodeModeProvisionSpec } from './src/code-mode-provision-policy.js';
 export type {
   EndoCodeModeConnectionOptions,
   EndoCodeModeConnectionFailureContext,
@@ -15,7 +14,6 @@ export type {
   EndoCodeModeProvisionPersistence,
   EndoCodeModeProvisionResult,
   EndoCodeModeProvisionSpec,
-  EndoCodeModeWorkspace,
   NormalizeEndoCodeModeProvisionOptions,
   ProvisionEndoCodeModeOptions,
   ReconstructEndoCodeModeOptions,

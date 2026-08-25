@@ -1,7 +1,7 @@
 // @ts-check
 
 /** @import { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from '@earendil-works/pi-coding-agent' */
-/** @import { EndoConnectionFailureContext, EndoConnectionFailureObserver, EndoProvisionPersistence, EndoProvisionResult, EndoProvisionSpec } from '../src/code-mode-provisioning-types.js' */
+/** @import { EndoConnectionFailureContext, EndoConnectionFailureObserver, EndoProvisionPersistence, EndoProvisionRequest, EndoProvisionResult, EndoProvisionSpec } from '../src/code-mode-provisioning-types.js' */
 /** @import { Name } from '@endo/daemon' */
 
 import { initTheme } from '@earendil-works/pi-coding-agent';
@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execPath } from 'node:process';
 
-import { normalizeEndoCodeModeProvisionSpec as normalizeEndoProvisionSpec } from '../code-mode-provisioning.js';
+import { normalizeEndoCodeModeProvisionSpec as normalizeEndoProvisionSpec } from '../src/code-mode-provision-policy.js';
 import { makeEndoCodeModePiExtension } from '../endo-code-mode-pi-extension.js';
 import { makeEndoProvisionGlobals } from '../src/code-mode-provision-globals.js';
 import { samePlainData } from '../src/endo-code-mode-pi-extension.js';
@@ -61,7 +61,7 @@ const runLauncher = (args, cwd) =>
  * @property {string} [flag]
  * @property {string[]} [activeToolNames]
  * @property {'tui' | 'rpc' | 'json' | 'print'} [mode]
- * @property {(persistence: EndoProvisionPersistence, options: { onConnectionFailure: EndoConnectionFailureObserver, forkFrom?: EndoProvisionPersistence }) => Promise<EndoProvisionResult>} [reconstructProvision]
+ * @property {(persistence: EndoProvisionPersistence, options: { onConnectionFailure: EndoConnectionFailureObserver, forkFrom?: EndoProvisionPersistence, request?: EndoProvisionRequest }) => Promise<EndoProvisionResult>} [reconstructProvision]
  * @property {() => Promise<void>} [startDaemon]
  * @property {import('../src/endo-code-mode-pi-extension.js').EndoCodeModePiExtensionOptions['recoverProvisionFailure']} [recoverProvisionFailure]
  * @property {import('../src/endo-code-mode-pi-extension.js').EndoCodeModePiExtensionOptions['validatePersistence']} [validatePersistence]
@@ -112,15 +112,20 @@ const makeHarness = options => {
   const reconstructions = [];
   /** @type {Array<EndoProvisionPersistence | undefined>} */
   const forkSources = [];
+  /** @type {Array<EndoProvisionRequest | undefined>} */
+  const requests = [];
   let cleanupCount = 0;
   /** @type {EndoConnectionFailureObserver | undefined} */
   let onConnectionFailure;
 
-  const defaultReconstruct = async persistence => {
+  const defaultReconstruct = async (persistence, connectionOptions) => {
     reconstructions.push(persistence);
     return harden({
       guest: FAKE_GUEST,
-      globals: makeEndoProvisionGlobals(persistence),
+      globals:
+        connectionOptions.request === undefined
+          ? harden([])
+          : makeEndoProvisionGlobals(connectionOptions.request),
       persistence,
       cleanup: async () => {
         cleanupCount += 1;
@@ -132,6 +137,7 @@ const makeHarness = options => {
   const reconstructProvision = async (persistence, connectionOptions) => {
     onConnectionFailure = connectionOptions.onConnectionFailure;
     forkSources.push(connectionOptions.forkFrom);
+    requests.push(connectionOptions.request);
     return selectedReconstruct(persistence, connectionOptions);
   };
 
@@ -217,6 +223,7 @@ const makeHarness = options => {
     flags,
     notifications,
     reconstructions,
+    requests,
     forkSources,
     terminations,
     tools,
@@ -403,7 +410,7 @@ test('invalid secret-shaped input is never echoed or persisted', async t => {
   t.false(observable.includes('token'));
 });
 
-test('startup with an omitted grant uses cwd and activates only evaluate', async t => {
+test('startup with an omitted grant persists only opaque identity', async t => {
   const cwd = await makeWorkspace(t);
   const canonicalCwd = await realpath(cwd);
   const harness = makeHarness({ cwd });
@@ -415,7 +422,8 @@ test('startup with an omitted grant uses cwd and activates only evaluate', async
 
   t.is(harness.reconstructions.length, 1);
   const [persistence] = harness.reconstructions;
-  t.deepEqual(persistence.authority, {});
+  t.deepEqual(Object.keys(persistence), ['version', 'guestName']);
+  t.deepEqual(harness.requests[0]?.authority, {});
   t.deepEqual(harness.activeTools, [[], ['evaluate']]);
   t.is(harness.tools.length, 1);
   const [evaluateTool] =
@@ -438,7 +446,7 @@ test('startup with an omitted grant uses cwd and activates only evaluate', async
     .systemPrompt;
   t.regex(prompt, /exactly one tool: evaluate/);
   t.false(prompt.includes(canonicalCwd));
-  t.false(prompt.includes(JSON.stringify(persistence.authority)));
+  t.false(prompt.includes('authority'));
 });
 
 test('piTools preserve keeps active Pi tools and composes the system prompt', async t => {
@@ -493,13 +501,15 @@ test('piTools preserve keeps active Pi tools and composes the system prompt', as
   t.deepEqual(resumed.currentActiveTools, [...standardTools, 'evaluate']);
 });
 
-test('explicit filesystem and Git grants default their workspace to cwd', async t => {
+test('singular filesystem and Git objects resolve relative paths from cwd', async t => {
   const cwd = await makeWorkspace(t);
   const harness = makeHarness({
     cwd,
     flag: JSON.stringify({
-      workspace: { mode: 'readWrite' },
-      git: 'readOnly',
+      mount: { workspace: { path: '.', mode: 'readWrite' } },
+      git: {
+        git: { mount: 'workspace', path: [], mode: 'readOnly' },
+      },
     }),
   });
 
@@ -508,12 +518,13 @@ test('explicit filesystem and Git grants default their workspace to cwd', async 
     reason: 'startup',
   });
 
-  const [persistence] = harness.reconstructions;
-  t.is(persistence.authority.mount?.workspace.path, await realpath(cwd));
-  t.is(persistence.authority.mount?.workspace.readOnly, false);
-  t.is(persistence.authority.git?.git.readOnly, true);
+  const [request] = harness.requests;
+  if (request === undefined) throw Error('expected normalized request');
+  t.is(request.authority.mount?.workspace.path, await realpath(cwd));
+  t.is(request.authority.mount?.workspace.readOnly, false);
+  t.is(request.authority.git?.git.readOnly, true);
   t.deepEqual(
-    makeEndoProvisionGlobals(persistence).map(({ name }) => name),
+    makeEndoProvisionGlobals(request).map(({ name }) => name),
     ['workspace', 'git'],
   );
 });
@@ -521,8 +532,8 @@ test('explicit filesystem and Git grants default their workspace to cwd', async 
 for (const reason of ['resume', 'reload']) {
   test(`${reason} reconnects the same retained guest from session data`, async t => {
     const cwd = await makeWorkspace(t);
-    const persistence = await normalizeEndoProvisionSpec(
-      { workspace: { mode: 'readOnly' } },
+    const { persistence } = await normalizeEndoProvisionSpec(
+      { mount: { workspace: { path: '.', mode: 'readOnly' } } },
       { harness: 'pi', sessionId: 'retained-session', cwd },
     );
     const harness = makeHarness({
@@ -545,15 +556,18 @@ for (const reason of ['resume', 'reload']) {
 
 test('new and fork create distinct retained namespaces; fork inherits policy', async t => {
   const cwd = await makeWorkspace(t);
-  const parent = await normalizeEndoProvisionSpec(
+  const parentRequest = await normalizeEndoProvisionSpec(
     {
-      workspace: { mode: 'readWrite' },
-      git: 'readOnly',
+      mount: { workspace: { path: '.', mode: 'readWrite' } },
+      git: {
+        git: { mount: 'workspace', path: [], mode: 'readOnly' },
+      },
       piTools: 'preserve',
       introducedNames: { 'calendar-service': 'calendar' },
     },
     { harness: 'pi', sessionId: 'parent-session', cwd },
   );
+  const { persistence: parent } = parentRequest;
   const fresh = makeHarness({ cwd, sessionId: 'new-session' });
   const fork = makeHarness({
     cwd,
@@ -574,7 +588,6 @@ test('new and fork create distinct retained namespaces; fork inherits policy', a
   const [forkPersistence] = fork.reconstructions;
   t.notDeepEqual(freshPersistence.guestName, parent.guestName);
   t.notDeepEqual(forkPersistence.guestName, parent.guestName);
-  t.deepEqual(forkPersistence.authority, parent.authority);
   t.deepEqual(fork.forkSources, [parent]);
   t.deepEqual(fork.activeTools, [
     [],
@@ -584,15 +597,20 @@ test('new and fork create distinct retained namespaces; fork inherits policy', a
 
 test('resume rejects a conflicting CLI policy with fork/new guidance', async t => {
   const cwd = await makeWorkspace(t);
-  const stored = await normalizeEndoProvisionSpec(
-    { workspace: { mode: 'readOnly' } },
+  const { persistence: stored } = await normalizeEndoProvisionSpec(
+    { mount: { workspace: { path: '.', mode: 'readOnly' } } },
     { harness: 'pi', sessionId: 'retained-session', cwd },
   );
   const harness = makeHarness({
     cwd,
     sessionId: 'retained-session',
     entries: [persistenceEntry(stored)],
-    flag: JSON.stringify({ workspace: { mode: 'readWrite' } }),
+    flag: JSON.stringify({
+      mount: { workspace: { path: '.', mode: 'readWrite' } },
+    }),
+    reconstructProvision: async () => {
+      throw Error('provideGuest cannot widen or change retained authority');
+    },
   });
 
   await harness.emit('session_start', {
@@ -603,7 +621,7 @@ test('resume rejects a conflicting CLI policy with fork/new guidance', async t =
   t.deepEqual(harness.reconstructions, []);
   t.deepEqual(harness.appended, []);
   t.regex(harness.notifications[0].message, /conflicts/);
-  t.regex(harness.notifications[0].message, /new session.*fork/s);
+  t.regex(harness.notifications[0].message, /new session/);
 });
 
 for (const [label, requestedIntroductions] of [
@@ -614,14 +632,18 @@ for (const [label, requestedIntroductions] of [
 ]) {
   test(`resume rejects ${label} introduced-name authority`, async t => {
     const cwd = await makeWorkspace(t);
-    const stored = await normalizeEndoProvisionSpec(
+    const { persistence: stored } = await normalizeEndoProvisionSpec(
       { introducedNames: { 'calendar-service': 'calendar' } },
       { harness: 'pi', sessionId: 'retained-session', cwd },
     );
     const harness = makeHarness({
       cwd,
+      sessionId: 'retained-session',
       entries: [persistenceEntry(stored)],
       flag: JSON.stringify({ introducedNames: requestedIntroductions }),
+      reconstructProvision: async () => {
+        throw Error('provideGuest cannot widen or change retained authority');
+      },
     });
 
     await harness.emit('session_start', {
@@ -644,14 +666,18 @@ const preservationConflicts =
 for (const [label, storedSpec, flag] of preservationConflicts) {
   test(`resume rejects ${label} pi tool preservation`, async t => {
     const cwd = await makeWorkspace(t);
-    const stored = await normalizeEndoProvisionSpec(storedSpec, {
-      harness: 'pi',
-      sessionId: 'retained-session',
-      cwd,
-    });
+    const { persistence: stored } = await normalizeEndoProvisionSpec(
+      storedSpec,
+      {
+        harness: 'pi',
+        sessionId: 'retained-session',
+        cwd,
+      },
+    );
     const harness = makeHarness({
       cwd,
-      entries: [persistenceEntry(stored)],
+      sessionId: 'retained-session',
+      entries: [persistenceEntry(stored, storedSpec?.piTools)],
       flag: JSON.stringify(flag),
     });
 
@@ -668,8 +694,8 @@ for (const [label, storedSpec, flag] of preservationConflicts) {
 
 test('resume with unparseable stored persistence is rejected as invalid', async t => {
   const cwd = await makeWorkspace(t);
-  const stored = await normalizeEndoProvisionSpec(
-    { workspace: { mode: 'readOnly' } },
+  const { persistence: stored } = await normalizeEndoProvisionSpec(
+    { mount: { workspace: { path: '.', mode: 'readOnly' } } },
     { harness: 'pi', sessionId: 'retained-session', cwd },
   );
   const harness = makeHarness({
@@ -698,7 +724,7 @@ test('resume with unparseable stored persistence is rejected as invalid', async 
   t.is(harness.diagnostics[0].code, 'ENDO_PROVISION_SESSION_INVALID');
   t.regex(
     harness.diagnostics[0].message,
-    /missing or invalid Endo code-mode authority/,
+    /missing or invalid Endo code-mode identity/,
   );
 });
 
@@ -708,8 +734,8 @@ test("resume with another session's retained guest is rejected as mismatched", a
   // guest identity; resuming it from this session re-derives the same
   // workspace/policy authority (same cwd, same spec) but a different
   // guest identity, which is the "wrong session" signal.
-  const stored = await normalizeEndoProvisionSpec(
-    { workspace: { mode: 'readOnly' } },
+  const { persistence: stored } = await normalizeEndoProvisionSpec(
+    { mount: { workspace: { path: '.', mode: 'readOnly' } } },
     { harness: 'pi', sessionId: 'other-session', cwd },
   );
   const harness = makeHarness({
@@ -901,9 +927,8 @@ test('a daemon that returns different persistence than requested is rejected and
     reconstructProvision: async persistence =>
       harden({
         guest: FAKE_GUEST,
-        globals: makeEndoProvisionGlobals(persistence),
-        // The daemon is trusted to echo back the persistence it was asked to
-        // provision; simulate it returning a workspace other than requested.
+        globals: harden([]),
+        // Simulate the daemon returning a different opaque guest identity.
         persistence: {
           ...persistence,
           guestName: `${persistence.guestName}-other`,
@@ -922,28 +947,31 @@ test('a daemon that returns different persistence than requested is rejected and
   t.is(cleanupCount, 1);
   t.deepEqual(harness.appended, []);
   t.is(harness.diagnostics[0].code, 'ENDO_PROVISION_RECOVERY_MISMATCH');
-  t.regex(harness.diagnostics[0].message, /different runtime authority/);
+  t.regex(harness.diagnostics[0].message, /different session persistence/);
 });
 
 test('trusted interactive hook can recover a provisioning failure and request one retry', async t => {
   const cwd = await makeWorkspace(t);
   const credentials = /** @type {Name} */ ('credentials');
   const origin = /** @type {Name} */ ('origin');
-  const credentialPersistence = await normalizeEndoProvisionSpec(
-    {
-      workspace: { mode: 'readWrite' },
-      git: 'readWrite',
-      gitRemotes: {
-        origin: {
-          git: 'git',
-          name: 'origin',
-          url: 'https://example.test/repository.git',
-          credential: [credentials, origin],
+  const { persistence: credentialPersistence } =
+    await normalizeEndoProvisionSpec(
+      {
+        mount: { workspace: { path: '.', mode: 'readWrite' } },
+        git: {
+          git: { mount: 'workspace', path: [], mode: 'readWrite' },
+        },
+        gitRemote: {
+          origin: {
+            git: 'git',
+            name: 'origin',
+            url: 'https://example.test/repository.git',
+            credential: [credentials, origin],
+          },
         },
       },
-    },
-    { harness: 'pi', sessionId: 'credential-session', cwd },
-  );
+      { harness: 'pi', sessionId: 'credential-session', cwd },
+    );
   let attempts = 0;
   let hookCount = 0;
   const failure = Object.assign(Error('host credential is unavailable'), {
@@ -960,7 +988,7 @@ test('trusted interactive hook can recover a provisioning failure and request on
       }
       return harden({
         guest: FAKE_GUEST,
-        globals: makeEndoProvisionGlobals(persistence),
+        globals: harden([]),
         persistence,
         cleanup: async () => {},
       });

@@ -13,5 +13,9 @@ persistence and reject policy changes or widening.
 
 Keep `@endo/agentry/code-mode-provisioning` as the connection- and Pi-aware
 adapter that returns the authority-bearing guest and policy-derived inert
-code-mode globals.
+code-mode globals, using the same singular `mount`, `git`, and `gitRemote`
+object-key convention.
+Caller reconstruction state is now only a schema version and opaque guest
+name; the owning host retains the policy and introduction map needed to rebuild
+the projection for recovery and forks.
 Remove the repository-local capability-plus-declaration grant abstraction.

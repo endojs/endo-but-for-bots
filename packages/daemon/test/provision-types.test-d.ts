@@ -37,3 +37,9 @@ declare const host: EndoHost;
 expectTypeOf(host.provideGuest('session', { authority })).toEqualTypeOf<
   Promise<EndoGuest>
 >();
+
+// Host creation does not accept the guest-only authority option.
+// @ts-expect-error authority is not a MakeHostOptions field
+host.provideHost('child', { authority });
+
+host.provideGit({} as never, 'read-only', { readOnly: true });

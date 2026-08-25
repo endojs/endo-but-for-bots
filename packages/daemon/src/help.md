@@ -359,7 +359,9 @@ Store a passable value (number, string, array, record, etc.) with a name.
 Create or retrieve a confined guest agent.
 - provideGuest() creates an anonymous guest
 - provideGuest("my-guest") creates/retrieves a named guest
-Options: { introducedNames: { guestName: hostName } }
+Options: { introducedNames: { hostName: guestName }, authority?: { mount, git, gitRemote } }
+Each singular authority category is an object whose keys become guest binding
+names. Missing introduced host names are ignored.
 
 ## provideHost(petName?, options?) -> Promise<EndoHost>
 

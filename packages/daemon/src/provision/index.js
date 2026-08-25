@@ -20,10 +20,6 @@ import {
   normalizeDeniedSegments,
 } from './naming.js';
 
-const SECRET_QUERY_KEY_RE = harden(
-  /(?:api.?key|authorization|password|secret|token)/iu,
-);
-
 /** @param {string} binding */
 const makeCredentialUnavailable = binding =>
   makeError(
@@ -82,7 +78,10 @@ export const makeGuestAuthorityProvider = powers => {
     const unavailable = async () => {
       throw makeError(X`Guest authority path powers are not available`);
     };
-    return harden(unavailable);
+    return harden({
+      hasGuestAuthority: async () => false,
+      provideGuestAuthority: unavailable,
+    });
   }
 
   const {
@@ -285,14 +284,13 @@ export const makeGuestAuthorityProvider = powers => {
                       remote.credential,
                       `${label}.credential`,
                     );
-              const protocol = new URL(policy.url).protocol;
-              for (const key of new URL(policy.url).searchParams.keys()) {
-                if (SECRET_QUERY_KEY_RE.test(key)) {
-                  throw makeError(
-                    X`${q(`${label}.url`)} must not carry credential query fields`,
-                  );
-                }
+              const parsedUrl = new URL(policy.url);
+              if (parsedUrl.username !== '' || parsedUrl.password !== '') {
+                throw makeError(
+                  X`${q(`${label}.url`)} must not embed credentials`,
+                );
               }
+              const { protocol } = parsedUrl;
               if (protocol !== 'https:' && credential !== undefined) {
                 throw makeError(
                   X`${q(`${label}.credential`)} is only valid for https remotes`,
@@ -383,8 +381,9 @@ export const makeGuestAuthorityProvider = powers => {
   };
 
   /** @param {Record<string, string>} introducedNames */
-  const resolveIntroductions = async introducedNames =>
-    harden(
+  const resolveIntroductions = async introducedNames => {
+    await null;
+    return harden(
       Object.fromEntries(
         await allInOrder(
           Object.keys(introducedNames)
@@ -396,33 +395,49 @@ export const makeGuestAuthorityProvider = powers => {
         ),
       ),
     );
+  };
 
   /**
    * @param {string[]} guestPath
-   * @param {EndoGuestAuthority} authority
-   * @param {Record<string, string>} introducedNames
+   * @param {EndoGuestAuthority | undefined} authority
+   * @param {Record<string, string> | undefined} introducedNames
    * @param {() => Promise<EndoGuest>} makeGuest
    */
   const run = async (guestPath, authority, introducedNames, makeGuest) => {
-    const policy = await normalizeAuthority(authority);
-    const credentials = await resolveCredentials(policy);
-    const introductionIds = await resolveIntroductions(introducedNames);
-    const retainedIntroductions = harden(
-      Object.fromEntries(
-        Object.entries(introducedNames).sort(([left], [right]) =>
-          compareStrings(left, right),
-        ),
-      ),
-    );
+    await null;
     const controllerPath = harden(['provisioned-guests', ...guestPath]);
     const policyPath = harden([...controllerPath, 'authority']);
-    const credentialIds = harden(
-      Object.fromEntries(
-        [...credentials].map(([name, value]) => [name, value.identifier]),
-      ),
-    );
+    /** @type {EndoGuestAuthorityPolicy} */
+    let policy;
+    /** @type {Map<string, ResolvedCredential>} */
+    let credentials;
+    /** @type {Record<string, string>} */
+    let retainedIntroductions;
     if (await hasNamePath(policyPath)) {
-      const retained = await lookup(policyPath);
+      const retained =
+        /** @type {{ policy: EndoGuestAuthorityPolicy, credentialIds: Record<string, string>, introducedNames: Record<string, string> }} */ (
+          await lookup(policyPath)
+        );
+      policy =
+        authority === undefined
+          ? retained.policy
+          : await normalizeAuthority(authority);
+      credentials = await resolveCredentials(policy);
+      const credentialIds = harden(
+        Object.fromEntries(
+          [...credentials].map(([name, value]) => [name, value.identifier]),
+        ),
+      );
+      retainedIntroductions =
+        introducedNames === undefined
+          ? retained.introducedNames
+          : harden(
+              Object.fromEntries(
+                Object.entries(introducedNames).sort(([left], [right]) =>
+                  compareStrings(left, right),
+                ),
+              ),
+            );
       if (
         !keyEQ(
           retained,
@@ -430,7 +445,6 @@ export const makeGuestAuthorityProvider = powers => {
             policy,
             credentialIds,
             introducedNames: retainedIntroductions,
-            introductionIds,
           }),
         )
       ) {
@@ -439,11 +453,30 @@ export const makeGuestAuthorityProvider = powers => {
         );
       }
     } else {
+      if (authority === undefined) {
+        throw makeError(
+          X`No retained authority for guest ${q(guestPath.join('/'))}`,
+        );
+      }
       if (await hasNamePath(guestPath)) {
         throw makeError(
           X`provideGuest cannot add authority to an existing unprovisioned guest ${q(guestPath.join('/'))}`,
         );
       }
+      policy = await normalizeAuthority(authority);
+      credentials = await resolveCredentials(policy);
+      const credentialIds = harden(
+        Object.fromEntries(
+          [...credentials].map(([name, value]) => [name, value.identifier]),
+        ),
+      );
+      retainedIntroductions = harden(
+        Object.fromEntries(
+          Object.entries(introducedNames ?? {}).sort(([left], [right]) =>
+            compareStrings(left, right),
+          ),
+        ),
+      );
       for (let length = 1; length <= controllerPath.length; length += 1) {
         // Directory ancestors must be created in order.
         // eslint-disable-next-line no-await-in-loop
@@ -456,11 +489,11 @@ export const makeGuestAuthorityProvider = powers => {
           policy,
           credentialIds,
           introducedNames: retainedIntroductions,
-          introductionIds,
         }),
         policyPath,
       );
     }
+    const introductionIds = await resolveIntroductions(retainedIntroductions);
 
     const mountsPath = harden([...controllerPath, 'mount']);
     const gitsPath = harden([...controllerPath, 'git']);
@@ -547,7 +580,8 @@ export const makeGuestAuthorityProvider = powers => {
     for (const [hostName, guestName] of Object.entries(retainedIntroductions)) {
       const id = introductionIds[hostName];
       if (id !== null) {
-        // Introductions bind the retained identifier, never a later alias.
+        // Reapply provideGuest's established introduction behavior using the
+        // source currently bound in the host namespace.
         // eslint-disable-next-line no-await-in-loop
         await bindGuestIdentifier(guest, guestName, id);
       }
@@ -585,6 +619,9 @@ export const makeGuestAuthorityProvider = powers => {
     );
     return result;
   };
-  return harden(provideGuestAuthority);
+  /** @param {string[]} guestPath */
+  const hasGuestAuthority = guestPath =>
+    hasNamePath(['provisioned-guests', ...guestPath, 'authority']);
+  return harden({ hasGuestAuthority, provideGuestAuthority });
 };
 harden(makeGuestAuthorityProvider);

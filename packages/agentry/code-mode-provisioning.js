@@ -6,4 +6,3 @@ export {
   provisionEndoCodeMode,
   reconstructEndoCodeMode,
 } from './src/code-mode-provisioning.js';
-export { normalizeEndoCodeModeProvisionSpec } from './src/code-mode-provision-policy.js';

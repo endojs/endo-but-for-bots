@@ -2,7 +2,7 @@
 /// <reference types="ses"/>
 
 /** @import { EndoHost } from '@endo/daemon' */
-/** @import { EndoCodeModeConnectionFailureObserver, EndoCodeModeProvisionForkOptions, EndoCodeModeProvisionPersistence, EndoCodeModeProvisionResult, ProvisionEndoCodeModeOptions, ReconstructEndoCodeModeOptions } from './code-mode-provisioning-types.js' */
+/** @import { EndoCodeModeConnectionFailureObserver, EndoCodeModeProvisionForkOptions, EndoCodeModeProvisionPersistence, EndoCodeModeProvisionRequest, EndoCodeModeProvisionResult, ProvisionEndoCodeModeOptions, ReconstructEndoCodeModeOptions } from './code-mode-provisioning-types.js' */
 
 import { makeCancelKit } from '@endo/cancel';
 import { makeEndoClient } from '@endo/daemon';
@@ -13,7 +13,6 @@ import { whereEndoSock } from '@endo/where';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { env, platform } from 'node:process';
 
-import { makeEndoProvisionGlobals } from './code-mode-provision-globals.js';
 import { provideEndoCodeModeGuest } from './code-mode-provision-host.js';
 import {
   normalizeEndoCodeModeProvisionSpec,
@@ -63,6 +62,7 @@ const classifyProvisionError = error => {
  * @param {string | undefined} sockPath
  * @param {EndoCodeModeConnectionFailureObserver | undefined} onConnectionFailure
  * @param {EndoCodeModeProvisionForkOptions} [forkOptions]
+ * @param {EndoCodeModeProvisionRequest} [request]
  * @returns {Promise<EndoCodeModeProvisionResult>}
  */
 const connectAndProject = async (
@@ -70,7 +70,9 @@ const connectAndProject = async (
   sockPath,
   onConnectionFailure,
   forkOptions,
+  request,
 ) => {
+  await null;
   const { cancelled, cancel } = makeCancelKit();
   /** @type {Promise<void> | undefined} */
   let closed;
@@ -95,14 +97,14 @@ const connectAndProject = async (
     closed.catch(() => {});
     const bootstrap = await client.getBootstrap();
     const host = /** @type {EndoHost} */ (await E(bootstrap).host());
-    const guest = await provideEndoCodeModeGuest(
+    const projection = await provideEndoCodeModeGuest(
       host,
       persistence,
-      forkOptions,
+      harden({ ...forkOptions, ...(request === undefined ? {} : { request }) }),
     );
     return harden({
-      guest,
-      globals: makeEndoProvisionGlobals(persistence),
+      guest: projection.guest,
+      globals: projection.globals,
       persistence,
       cleanup,
     });
@@ -113,6 +115,23 @@ const connectAndProject = async (
 };
 
 /**
+ * Connect an already-normalized ephemeral request. Internal adapter seam; the
+ * public API accepts an inert spec through `provisionEndoCodeMode`.
+ *
+ * @param {EndoCodeModeProvisionRequest} request
+ * @param {import('./code-mode-provisioning-types.js').EndoCodeModeConnectionOptions} [options]
+ */
+export const provisionEndoCodeModeRequest = (request, options = {}) =>
+  connectAndProject(
+    request.persistence,
+    options.sockPath,
+    options.onConnectionFailure,
+    undefined,
+    request,
+  );
+harden(provisionEndoCodeModeRequest);
+
+/**
  * Provision or reacquire one named code-mode guest and project its inert
  * lexical declarations.
  *
@@ -120,16 +139,12 @@ const connectAndProject = async (
  * @returns {Promise<EndoCodeModeProvisionResult>}
  */
 export const provisionEndoCodeMode = async options => {
-  const persistence = await normalizeEndoCodeModeProvisionSpec(options?.spec, {
+  const request = await normalizeEndoCodeModeProvisionSpec(options?.spec, {
     harness: options?.harness,
     sessionId: options?.sessionId,
     cwd: options?.cwd,
   });
-  return connectAndProject(
-    persistence,
-    options?.sockPath,
-    options?.onConnectionFailure,
-  );
+  return provisionEndoCodeModeRequest(request, options);
 };
 harden(provisionEndoCodeMode);
 

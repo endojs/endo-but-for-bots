@@ -1,11 +1,12 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { EndoCodeModeGitAccess, EndoCodeModeProvisionPersistence, EndoCodeModeProvisionSpec, NormalizeEndoCodeModeProvisionOptions } from './code-mode-provisioning-types.js' */
+/** @import { EndoCodeModeGitAccess, EndoCodeModeProvisionPersistence, EndoCodeModeProvisionRequest, EndoCodeModeProvisionSpec, NormalizeEndoCodeModeProvisionOptions } from './code-mode-provisioning-types.js' */
 /** @import { EndoGuestAuthority } from '@endo/daemon/provision.js' */
 
-import { isName, isPetName } from '@endo/daemon/pet-name.js';
+import { isName, isPetName, namePathFrom } from '@endo/daemon/pet-name.js';
 import { makeError, q, X } from '@endo/errors';
+import { normalizeGitRemotePolicy } from '@endo/exo-git';
 
 import { createHash } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
@@ -13,9 +14,6 @@ import { resolve } from 'node:path';
 
 const HARNESS_KEY_RE = /^[a-z][a-z0-9-]{0,31}$/u;
 const IDENTIFIER_RE = /^[A-Za-z_$][0-9A-Za-z_$]*$/u;
-const SECRET_QUERY_KEY_RE = harden(
-  /(?:api.?key|authorization|password|secret|token)/iu,
-);
 const ACCESS = harden(['readOnly', 'readWrite', 'historyRewrite']);
 const RESERVED_BINDINGS = harden([
   'E',
@@ -40,8 +38,6 @@ const RESERVED_BINDINGS = harden([
   'finally',
   'for',
   'function',
-  'git',
-  'gits',
   'if',
   'implements',
   'import',
@@ -49,7 +45,6 @@ const RESERVED_BINDINGS = harden([
   'instanceof',
   'interface',
   'let',
-  'mounts',
   'new',
   'null',
   'package',
@@ -68,7 +63,6 @@ const RESERVED_BINDINGS = harden([
   'var',
   'void',
   'while',
-  'workspace',
   'with',
   'yield',
 ]);
@@ -159,18 +153,10 @@ const stringList = (value, label) => {
 };
 
 /**
- * Translate code-mode conveniences into the daemon's neutral named graph.
- * Relative paths and compatibility binding names stop at this adapter.
- *
- * @param {EndoCodeModeProvisionSpec | undefined} specInput
- * @param {NormalizeEndoCodeModeProvisionOptions} options
- * @returns {Promise<EndoCodeModeProvisionPersistence>}
+ * @param {Pick<NormalizeEndoCodeModeProvisionOptions, 'harness' | 'sessionId'>} options
+ * @returns {EndoCodeModeProvisionPersistence}
  */
-export const normalizeEndoCodeModeProvisionSpec = async (
-  specInput,
-  options,
-) => {
-  await null;
+export const makeEndoCodeModeProvisionPersistence = options => {
   if (
     typeof options?.harness !== 'string' ||
     !HARNESS_KEY_RE.test(options.harness)
@@ -183,89 +169,79 @@ export const normalizeEndoCodeModeProvisionSpec = async (
   ) {
     throw makeError(X`sessionId must be a non-empty string`);
   }
+  const sessionHash = createHash('sha256')
+    .update(options.sessionId)
+    .digest('hex');
+  return harden({
+    version: /** @type {4} */ (4),
+    guestName: `code-mode-${options.harness}-${sessionHash}`,
+  });
+};
+harden(makeEndoCodeModeProvisionPersistence);
+
+/**
+ * Translate code-mode conveniences into the daemon's neutral named graph.
+ * Relative paths stop at this adapter. The returned request is ephemeral;
+ * callers persist only its opaque `persistence` identity.
+ *
+ * @param {EndoCodeModeProvisionSpec | undefined} specInput
+ * @param {NormalizeEndoCodeModeProvisionOptions} options
+ * @returns {Promise<EndoCodeModeProvisionRequest>}
+ */
+export const normalizeEndoCodeModeProvisionSpec = async (
+  specInput,
+  options,
+) => {
+  await null;
+  const persistence = makeEndoCodeModeProvisionPersistence(options);
   if (typeof options?.cwd !== 'string' || options.cwd.length === 0) {
     throw makeError(X`cwd must be a non-empty string`);
   }
   const spec = plainRecord(specInput ?? {}, 'EndoCodeModeProvisionSpec');
   assertFields(
     spec,
-    [
-      'workspace',
-      'git',
-      'mounts',
-      'gits',
-      'gitRemotes',
-      'introducedNames',
-      'piTools',
-    ],
+    ['mount', 'git', 'gitRemote', 'introducedNames', 'piTools'],
     'EndoCodeModeProvisionSpec',
   );
   if (spec.piTools !== undefined && spec.piTools !== 'preserve') {
     throw makeError(X`piTools must be preserve`);
   }
-  const sessionHash = createHash('sha256')
-    .update(options.sessionId)
-    .digest('hex');
   let canonicalCwd = options.cwd;
   try {
     canonicalCwd = await realpath(options.cwd);
   } catch {
-    // Preserve the existing deferred path validation for missing workspaces.
+    // Preserve deferred daemon validation for an absent selected path.
   }
 
   /** @type {Record<string, any>} */
   const mount = {};
-  if (spec.workspace !== undefined) {
-    const workspace = plainRecord(spec.workspace, 'workspace');
-    assertFields(workspace, ['path', 'mode', 'deniedSegments'], 'workspace');
-    const mode = accessMode(workspace.mode, 'workspace.mode');
-    if (mode === 'historyRewrite') {
-      throw makeError(X`workspace.mode must be readOnly or readWrite`);
-    }
-    defineEntry(
-      mount,
-      'workspace',
-      harden({
-        path:
-          workspace.path === undefined
-            ? canonicalCwd
-            : resolve(options.cwd, workspace.path),
-        readOnly: mode === 'readOnly',
-        ...(workspace.deniedSegments === undefined
-          ? {}
-          : {
-              deniedSegments: stringList(
-                workspace.deniedSegments,
-                'workspace.deniedSegments',
-              ),
-            }),
-      }),
-    );
-  }
   for (const [name, value] of Object.entries(
-    spec.mounts === undefined ? {} : plainRecord(spec.mounts, 'mounts'),
+    spec.mount === undefined ? {} : plainRecord(spec.mount, 'mount'),
   )) {
-    assertBinding(name, `mounts.${name}`);
-    const grant = plainRecord(value, `mounts.${name}`);
-    assertFields(grant, ['path', 'mode', 'deniedSegments'], `mounts.${name}`);
-    const mode = accessMode(grant.mode, `mounts.${name}.mode`);
+    assertBinding(name, `mount.${name}`);
+    const grant = plainRecord(value, `mount.${name}`);
+    assertFields(grant, ['path', 'mode', 'deniedSegments'], `mount.${name}`);
+    if (typeof grant.path !== 'string') {
+      throw makeError(X`${q(`mount.${name}.path`)} must be a string`);
+    }
+    const mode = accessMode(grant.mode, `mount.${name}.mode`);
     if (mode === 'historyRewrite') {
       throw makeError(
-        X`${q(`mounts.${name}.mode`)} must be readOnly or readWrite`,
+        X`${q(`mount.${name}.mode`)} must be readOnly or readWrite`,
       );
     }
     defineEntry(
       mount,
       name,
       harden({
-        path: resolve(options.cwd, grant.path),
+        path: resolve(canonicalCwd, grant.path),
         readOnly: mode === 'readOnly',
         ...(grant.deniedSegments === undefined
           ? {}
           : {
               deniedSegments: stringList(
                 grant.deniedSegments,
-                `mounts.${name}.deniedSegments`,
+                `mount.${name}.deniedSegments`,
               ),
             }),
       }),
@@ -274,52 +250,22 @@ export const normalizeEndoCodeModeProvisionSpec = async (
 
   /** @type {Record<string, any>} */
   const git = {};
-  /** @type {EndoCodeModeProvisionPersistence['internalGit']} */
-  let internalGit;
-  if (spec.git !== undefined) {
-    const mode = accessMode(spec.git, 'git');
-    if (mount.workspace === undefined) {
-      if (mode !== 'readOnly') {
-        throw makeError(
-          X`writable compatibility git requires a guest-visible workspace`,
-        );
-      }
-      internalGit = harden({
-        path: canonicalCwd,
-        mountName: `code-mode-internal-mount-${options.harness}-${sessionHash}`,
-        gitName: `code-mode-internal-git-${options.harness}-${sessionHash}`,
-      });
-    } else {
-      defineEntry(
-        git,
-        'git',
-        harden({
-          mount: 'workspace',
-          path: harden([]),
-          readOnly: mode === 'readOnly',
-          allowHistoryRewrite: mode === 'historyRewrite',
-        }),
-      );
-    }
-  }
   for (const [name, value] of Object.entries(
-    spec.gits === undefined ? {} : plainRecord(spec.gits, 'gits'),
+    spec.git === undefined ? {} : plainRecord(spec.git, 'git'),
   )) {
-    assertBinding(name, `gits.${name}`);
-    const grant = plainRecord(value, `gits.${name}`);
-    assertFields(grant, ['mount', 'path', 'mode'], `gits.${name}`);
+    assertBinding(name, `git.${name}`);
+    const grant = plainRecord(value, `git.${name}`);
+    assertFields(grant, ['mount', 'path', 'mode'], `git.${name}`);
     if (typeof grant.mount !== 'string') {
-      throw makeError(
-        X`${q(`gits.${name}.mount`)} must select a mount binding`,
-      );
+      throw makeError(X`${q(`git.${name}.mount`)} must select a mount binding`);
     }
-    const mode = accessMode(grant.mode, `gits.${name}.mode`);
+    const mode = accessMode(grant.mode, `git.${name}.mode`);
     defineEntry(
       git,
       name,
       harden({
         mount: grant.mount,
-        path: stringList(grant.path, `gits.${name}.path`),
+        path: stringList(grant.path, `git.${name}.path`),
         readOnly: mode === 'readOnly',
         allowHistoryRewrite: mode === 'historyRewrite',
       }),
@@ -329,33 +275,108 @@ export const normalizeEndoCodeModeProvisionSpec = async (
   /** @type {Record<string, any>} */
   const gitRemote = {};
   for (const [binding, value] of Object.entries(
-    spec.gitRemotes === undefined
+    spec.gitRemote === undefined
       ? {}
-      : plainRecord(spec.gitRemotes, 'gitRemotes'),
+      : plainRecord(spec.gitRemote, 'gitRemote'),
   )) {
-    assertBinding(binding, `gitRemotes.${binding}`);
-    const remote = plainRecord(value, `gitRemotes.${binding}`);
+    assertBinding(binding, `gitRemote.${binding}`);
+    const remote = plainRecord(value, `gitRemote.${binding}`);
+    assertFields(
+      remote,
+      [
+        'git',
+        'name',
+        'url',
+        'allowedDirections',
+        'fetchRefspecs',
+        'pushRefspecs',
+        'defaultPullRef',
+        'allowedBranches',
+        'allowForcePush',
+        'allowTags',
+        'allowDelete',
+        'allowLocalFileTransport',
+        'credential',
+      ],
+      `gitRemote.${binding}`,
+    );
     if (typeof remote.git !== 'string' || typeof remote.name !== 'string') {
       throw makeError(
-        X`${q(`gitRemotes.${binding}`)} must select git and name its protocol remote`,
+        X`${q(`gitRemote.${binding}`)} must select git and name its protocol remote`,
       );
     }
-    if (typeof remote.url === 'string') {
-      let parsed;
-      try {
-        parsed = new URL(remote.url);
-      } catch {
-        throw makeError(X`${q(`gitRemotes.${binding}.url`)} must be a URL`);
-      }
-      for (const key of parsed.searchParams.keys()) {
-        if (SECRET_QUERY_KEY_RE.test(key)) {
-          throw makeError(
-            X`${q(`gitRemotes.${binding}.url`)} must not carry credential query fields`,
-          );
-        }
-      }
+    if (typeof remote.url !== 'string') {
+      throw makeError(X`${q(`gitRemote.${binding}.url`)} must be a URL`);
     }
-    defineEntry(gitRemote, binding, harden({ ...remote }));
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(remote.url);
+    } catch {
+      throw makeError(X`${q(`gitRemote.${binding}.url`)} must be a URL`);
+    }
+    if (parsedUrl.username !== '' || parsedUrl.password !== '') {
+      throw makeError(
+        X`${q(`gitRemote.${binding}.url`)} must not embed credentials`,
+      );
+    }
+    const policy = normalizeGitRemotePolicy({
+      name: remote.name,
+      policy: /** @type {any} */ ({
+        url: remote.url,
+        ...(remote.allowedDirections === undefined
+          ? {}
+          : { allowedDirections: remote.allowedDirections }),
+        ...(remote.fetchRefspecs === undefined
+          ? {}
+          : { fetchRefspecs: remote.fetchRefspecs }),
+        ...(remote.pushRefspecs === undefined
+          ? {}
+          : { pushRefspecs: remote.pushRefspecs }),
+        ...(remote.defaultPullRef === undefined
+          ? {}
+          : { defaultPullRef: remote.defaultPullRef }),
+        ...(remote.allowedBranches === undefined
+          ? {}
+          : { allowedBranches: remote.allowedBranches }),
+        ...(remote.allowForcePush === undefined
+          ? {}
+          : { allowForcePush: remote.allowForcePush }),
+        ...(remote.allowTags === undefined
+          ? {}
+          : { allowTags: remote.allowTags }),
+        ...(remote.allowDelete === undefined
+          ? {}
+          : { allowDelete: remote.allowDelete }),
+        ...(remote.allowLocalFileTransport === undefined
+          ? {}
+          : { allowLocalFileTransport: remote.allowLocalFileTransport }),
+      }),
+    });
+    let credential;
+    if (remote.credential !== undefined) {
+      let path;
+      try {
+        path = namePathFrom(remote.credential);
+      } catch {
+        throw makeError(
+          X`${q(`gitRemote.${binding}.credential`)} must be a host pet name or name path`,
+        );
+      }
+      credential =
+        typeof remote.credential === 'string'
+          ? remote.credential
+          : harden([...path]);
+    }
+    defineEntry(
+      gitRemote,
+      binding,
+      harden({
+        ...policy,
+        git: remote.git,
+        name: remote.name,
+        ...(credential === undefined ? {} : { credential }),
+      }),
+    );
   }
 
   const introducedInput =
@@ -363,7 +384,7 @@ export const normalizeEndoCodeModeProvisionSpec = async (
       ? {}
       : plainRecord(spec.introducedNames, 'introducedNames');
   const introducedGuestNames = new Set();
-  const userIntroducedNames = harden(
+  const introducedNames = harden(
     Object.fromEntries(
       Object.entries(introducedInput)
         .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
@@ -384,10 +405,6 @@ export const normalizeEndoCodeModeProvisionSpec = async (
         }),
     ),
   );
-  const introducedNames = harden({
-    ...userIntroducedNames,
-    ...(internalGit === undefined ? {} : { [internalGit.gitName]: 'git' }),
-  });
 
   const authority = /** @type {EndoGuestAuthority} */ (
     harden({
@@ -398,43 +415,7 @@ export const normalizeEndoCodeModeProvisionSpec = async (
         : { gitRemote: harden(gitRemote) }),
     })
   );
-  const canonicalWorkspace =
-    spec.workspace === undefined
-      ? undefined
-      : harden({ ...spec.workspace, path: mount.workspace.path });
-  const canonicalMounts =
-    spec.mounts === undefined
-      ? undefined
-      : harden(
-          Object.fromEntries(
-            Object.entries(spec.mounts).map(([name, grant]) => [
-              name,
-              harden({ ...grant, path: mount[name].path }),
-            ]),
-          ),
-        );
-  const normalizedSpec = harden({
-    ...spec,
-    ...(canonicalWorkspace === undefined
-      ? {}
-      : { workspace: canonicalWorkspace }),
-    ...(canonicalMounts === undefined ? {} : { mounts: canonicalMounts }),
-    ...(spec.gits === undefined ? {} : { gits: harden({ ...spec.gits }) }),
-    ...(spec.gitRemotes === undefined
-      ? {}
-      : { gitRemotes: harden({ ...spec.gitRemotes }) }),
-    ...(Object.keys(userIntroducedNames).length === 0
-      ? {}
-      : { introducedNames: userIntroducedNames }),
-  });
-  return harden({
-    version: /** @type {3} */ (3),
-    guestName: `code-mode-${options.harness}-${sessionHash}`,
-    authority,
-    introducedNames,
-    ...(internalGit === undefined ? {} : { internalGit }),
-    spec: /** @type {EndoCodeModeProvisionSpec} */ (normalizedSpec),
-  });
+  return harden({ persistence, authority, introducedNames });
 };
 harden(normalizeEndoCodeModeProvisionSpec);
 
@@ -447,54 +428,15 @@ export const validateEndoCodeModeProvisionPersistence = async value => {
   const record = plainRecord(value, 'EndoCodeModeProvisionPersistence');
   assertFields(
     record,
-    [
-      'version',
-      'guestName',
-      'authority',
-      'introducedNames',
-      'internalGit',
-      'spec',
-    ],
+    ['version', 'guestName'],
     'EndoCodeModeProvisionPersistence',
   );
-  if (record.version !== 3 || !isPetName(record.guestName)) {
+  if (record.version !== 4 || !isPetName(record.guestName)) {
     throw makeError(X`EndoCodeModeProvisionPersistence is invalid`);
   }
-  plainRecord(record.authority, 'persisted authority');
-  const introducedNames = plainRecord(
-    record.introducedNames,
-    'introducedNames',
-  );
-  const spec = plainRecord(record.spec, 'spec');
-  /** @type {EndoCodeModeProvisionPersistence['internalGit']} */
-  let internalGit;
-  if (record.internalGit !== undefined) {
-    const internalGitRecord = plainRecord(record.internalGit, 'internalGit');
-    assertFields(
-      internalGitRecord,
-      ['path', 'mountName', 'gitName'],
-      'internalGit',
-    );
-    if (
-      typeof internalGitRecord.path !== 'string' ||
-      !isPetName(internalGitRecord.mountName) ||
-      !isPetName(internalGitRecord.gitName)
-    ) {
-      throw makeError(X`internalGit is invalid`);
-    }
-    internalGit = harden({
-      path: internalGitRecord.path,
-      mountName: internalGitRecord.mountName,
-      gitName: internalGitRecord.gitName,
-    });
-  }
   return harden({
-    version: /** @type {3} */ (3),
+    version: /** @type {4} */ (4),
     guestName: record.guestName,
-    authority: record.authority,
-    introducedNames: harden({ ...introducedNames }),
-    ...(internalGit === undefined ? {} : { internalGit }),
-    spec: harden({ ...spec }),
   });
 };
 harden(validateEndoCodeModeProvisionPersistence);
@@ -503,6 +445,9 @@ harden(validateEndoCodeModeProvisionPersistence);
 // exports only the EndoCodeMode-prefixed names.
 export const normalizeEndoProvisionSpec = normalizeEndoCodeModeProvisionSpec;
 harden(normalizeEndoProvisionSpec);
+export const makeEndoProvisionPersistence =
+  makeEndoCodeModeProvisionPersistence;
+harden(makeEndoProvisionPersistence);
 export const validateEndoProvisionPersistence =
   validateEndoCodeModeProvisionPersistence;
 harden(validateEndoProvisionPersistence);

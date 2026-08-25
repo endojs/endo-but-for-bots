@@ -179,12 +179,16 @@ const session = await provisionEndoCodeMode({
   sessionId: conversationId, // stable across process restarts
   cwd: process.cwd(),
   spec: {
-    workspace: {
-      path: '.',
-      mode: 'readWrite',
-      deniedSegments: ['.git', '.env'],
+    mount: {
+      workspace: {
+        path: '.',
+        mode: 'readWrite',
+        deniedSegments: ['.git', '.env'],
+      },
     },
-    git: 'readWrite',
+    git: {
+      repo: { mount: 'workspace', path: [], mode: 'readWrite' },
+    },
     introducedNames: { 'calendar-service': 'calendar' },
   },
 });
@@ -212,23 +216,27 @@ The daemon itself needs no caller-held persistence record: an existing host can
 reacquire the guest by lookup or by repeating the same `provideGuest` call.
 Pi stores its own fork, recovery, and `piTools` context in its session entry.
 
-The `EndoCodeModeProvisionSpec` fields are optional adapter selections:
+`EndoCodeModeProvisionSpec` uses the same singular object-valued authority
+categories as the daemon:
 
 - `piTools`: `'preserve'` keeps Pi's currently active standard and extension
   tools active alongside `evaluate`;
-- `workspace`: the compatibility filesystem binding, with `{ path?, mode,
-  deniedSegments? }` and a `readOnly` or `readWrite` mode;
-- `git`: `'readOnly'`, `'readWrite'`, or `'historyRewrite'`;
-- `mounts`: named filesystem roots, each `{ path, mode, deniedSegments? }`
-  with a `'readOnly'` or `'readWrite'` mode;
-- `gits`: named Git grants, each `{ mount, path, mode }` selecting a non-bare
-  Git worktree by mount-relative path segments; and
+- `mount`: named filesystem roots, each complete declaration having `path`,
+  `mode`, and optional `deniedSegments`;
+- `git`: named Git grants, each `{ mount, path, mode }` selecting a non-bare
+  Git worktree by mount-relative path segments;
+- `gitRemote`: named remotes, each with an explicit `git` binding reference,
+  a distinct Git protocol `name`, a URL, closed remote policy fields, and an
+  optional host-side credential pet name or name path; and
 - `introducedNames`: a record mapping each single-segment host `Name` to a
   single-segment guest pet name, for example
-  `{ 'calendar-service': 'calendar' }`; and
-- `gitRemotes`: named remotes, each with an explicit `git` binding reference,
-  a distinct Git protocol `name`, normalized remote policy, and optional
-  host-side credential pet name.
+  `{ 'calendar-service': 'calendar' }`.
+
+The categories are singular because each value is already an object of named
+grants.
+Every object key becomes the guest lexical binding name, so multiple grants are
+multiple keys: `git: { source: {...}, docs: {...} }` gives the guest `source`
+and `docs`.
 
 There is no `shell` field: retained provisioning never provisions or includes
 a `@endo/exo-shell` Shell global, so `session.globals` above carries only
@@ -238,19 +246,15 @@ wants Shell composes it separately with
 [Code mode](#code-mode); omitting it, as this example does, is the opt-out.
 
 Omission grants nothing.
-When `workspace` is present, its path defaults to `cwd`.
-Relative workspace and named-mount selectors are resolved once and persisted
-canonically, so resuming from another process directory does not change
-authority.
-Writable or history-rewrite compatibility `git` requires a guest-visible
-`workspace` with `mode: 'readWrite'`.
-A read-only root Git binding may omit `workspace`; the adapter then retains an
-internal read-only mount as backing without granting a filesystem binding.
-Unlike the generic daemon method, which preserves `provideGuest`'s established
-missing-source behavior, this code-mode adapter requires every
-`introducedNames` source to exist and every guest binding to be unique.
-That keeps its generated lexical declarations consistent with the capabilities
-actually installed in the guest.
+Every mount has an explicit path; relative mount paths resolve against `cwd`
+before the daemon validates and retains their canonical roots.
+There is no scalar `git` form and no separate filesystem selector, so one field
+never carries two meanings.
+Agentry follows `provideGuest`'s established introduction behavior: a missing
+host source is ignored, and Agentry omits the absent lexical name from generated
+globals.
+Guest binding names must remain unique across authority categories and
+introductions.
 `provideGit` builds Git on the selected mount, and the native backend cannot
 write outside that mount's posture.
 Git remotes therefore require writable Git.
@@ -282,26 +286,37 @@ const session = await provisionEndoCodeMode({
   sessionId: conversationId,
   cwd: '/home/user/src',
   spec: {
-    mounts: {
+    mount: {
       src: { path: '.', mode: 'readWrite' },
+      docs: { path: './endo/docs', mode: 'readOnly' },
     },
-    gits: {
+    git: {
       trunk: { mount: 'src', path: ['endo'], mode: 'readOnly' },
       feature: { mount: 'src', path: ['endo-pr-958'], mode: 'readWrite' },
+    },
+    gitRemote: {
+      originCap: {
+        git: 'feature',
+        name: 'origin',
+        url: 'https://github.com/endojs/endo.git',
+      },
+      mirrorCap: {
+        git: 'feature',
+        name: 'mirror',
+        url: 'https://example.com/endo-mirror.git',
+      },
     },
   },
 });
 ```
 
-The compartment then carries a writable `src` filesystem capability plus a
-read-only `trunk` and a writable `feature` Git capability, each named after
-its grant.
+The object keys become lexical names: the compartment receives two mounts
+(`src` and `docs`), two Git capabilities (`trunk` and `feature`), and two
+remotes (`originCap` and `mirrorCap`).
 A Git grant's authority is capped by its selected mount: writable or
 history-rewrite Git requires a writable, guest-bound mount, so a read-only
 mount never leaks write authority through Git.
-The compatibility `workspace` and root `git` fields normalize in agentry to the
-daemon bindings named `workspace` and `git`.
-The daemon contract itself has no code-mode lexical defaults.
+The daemon contract and Agentry adapter have no code-mode lexical defaults.
 
 Agentry derives an opaque guest pet name from its harness and session context.
 The host retains the guest's validated authority privately while the guest
@@ -314,8 +329,9 @@ does not delete the retained formulas or guest.
 To resume after disconnect or daemon restart, persist the adapter's
 `session.persistence` and pass it to
 `reconstructEndoCodeMode({ persistence })`.
-The record contains the opaque guest name and inert code-mode context, not a
-daemon controller path, formula identifier, endpoint, live capability, or
+The record contains only a schema version and the opaque guest name, not the
+authority graph, introduced names, filesystem layout, policy, daemon controller
+path, formula identifier, endpoint, live capability, session context, or
 credential material.
 The host remains the source of truth for canonical policy and rejects changes
 or widening on repeated provide.
@@ -330,9 +346,9 @@ it while forwarding every ordinary Pi argument:
 
 ```sh
 pi -e ./node_modules/@endo/agentry/endo-code-mode-pi-extension.js \
-  --endo-provision='{"workspace":{"mode":"readOnly"},"git":"readOnly"}'
+  --endo-provision='{"mount":{"workspace":{"path":".","mode":"readOnly"}},"git":{"repo":{"mount":"workspace","path":[],"mode":"readOnly"}}}'
 
-endo-pi --endo-provision='{"workspace":{"mode":"readOnly"},"git":"readOnly"}'
+endo-pi --endo-provision='{"mount":{"workspace":{"path":".","mode":"readOnly"}}}'
 ```
 
 `endo-pi` calls Pi's public `main` and does not add a second command framework.
@@ -340,27 +356,26 @@ The extension registers one string flag, `--endo-provision`, whose value is an
 inert `EndoCodeModeProvisionSpec`, not a live powers object.
 An omitted flag or an empty object grants no filesystem, Git, or remote
 authority.
-When an explicit workspace omits `workspace.path`, the extension uses Pi's
-`cwd`.
+Relative `mount.*.path` values resolve from Pi's `cwd`.
 It never searches the workspace for an authority-policy file.
 
 The following initial-session examples cover the supported local modes:
 
 ```sh
 # Read-only review.
-endo-pi --endo-provision='{"workspace":{"mode":"readOnly"},"git":"readOnly"}'
+endo-pi --endo-provision='{"mount":{"workspace":{"path":".","mode":"readOnly"}},"git":{"repo":{"mount":"workspace","path":[],"mode":"readOnly"}}}'
 
 # Writable files with a separate read-only Git view.
-endo-pi --endo-provision='{"workspace":{"mode":"readWrite"},"git":"readOnly"}'
+endo-pi --endo-provision='{"mount":{"workspace":{"path":".","mode":"readWrite"}},"git":{"repo":{"mount":"workspace","path":[],"mode":"readOnly"}}}'
 
 # Ordinary writable Git, without amend, reword, or force authority.
-endo-pi --endo-provision='{"workspace":{"mode":"readWrite"},"git":"readWrite"}'
+endo-pi --endo-provision='{"mount":{"workspace":{"path":".","mode":"readWrite"}},"git":{"repo":{"mount":"workspace","path":[],"mode":"readWrite"}}}'
 
 # Explicit history-rewrite authority.
-endo-pi --endo-provision='{"workspace":{"mode":"readWrite"},"git":"historyRewrite"}'
+endo-pi --endo-provision='{"mount":{"workspace":{"path":".","mode":"readWrite"}},"git":{"repo":{"mount":"workspace","path":[],"mode":"historyRewrite"}}}'
 
 # Keep Pi's standard tools active alongside evaluate.
-endo-pi --endo-provision='{"piTools":"preserve","workspace":{"mode":"readOnly"}}'
+endo-pi --endo-provision='{"piTools":"preserve","mount":{"workspace":{"path":".","mode":"readOnly"}}}'
 ```
 
 Introductions use one host pet name and one guest pet name.
@@ -371,30 +386,37 @@ host-name-to-guest-name mapping again.
 ```sh
 # Combine workspace, filesystem, Git, and a named host capability.
 # First name the capability in the host's pet store:
-endo make packages/cli/demo/counter.js --name counter
+endo make packages/cli/demo/counter.js --name counter-service
 
 endo-pi --endo-provision='{
-  "workspace": { "mode": "readWrite" },
-  "git": "readWrite",
-  "introducedNames": { "counter": "counter" }
+  "mount": { "workspace": { "path": ".", "mode": "readWrite" } },
+  "git": { "repo": { "mount": "workspace", "path": [], "mode": "readWrite" } },
+  "introducedNames": { "counter-service": "counter" }
 }'
 ```
 
-In this example, the counter name is the guest lexical binding and
-`counter` is the single-segment host pet name in the connected host namespace.
+In this example, `counter` is the guest lexical binding and `counter-service`
+is the single-segment host pet name in the connected host namespace.
 The JSON is policy data only; it does not execute code or grant the guest a way
 to look up other host names.
 
-Named mounts and Git grants use the same JSON spec.
+Named mounts, Git grants, and remotes use the same JSON spec.
 Run from the parent directory of sibling checkouts, this grants a read-only
 view of the primary clone and a writable linked worktree:
 
 ```sh
 endo-pi --endo-provision='{
-  "mounts":{"src":{"path":".","mode":"readWrite"}},
-  "gits":{
+  "mount":{
+    "src":{"path":".","mode":"readWrite"},
+    "docs":{"path":"./endo/docs","mode":"readOnly"}
+  },
+  "git":{
     "trunk":{"mount":"src","path":["endo"],"mode":"readOnly"},
     "feature":{"mount":"src","path":["endo-pr-958"],"mode":"readWrite"}
+  },
+  "gitRemote":{
+    "originCap":{"git":"feature","name":"origin","url":"https://github.com/endojs/endo.git"},
+    "mirrorCap":{"git":"feature","name":"mirror","url":"https://example.com/endo-mirror.git"}
   }
 }'
 ```
@@ -416,9 +438,12 @@ A configured remote names only policy and a host-side credential capability:
 
 ```sh
 endo-pi --endo-provision='{
-  "git":"readWrite",
-  "gitRemotes":{
-    "origin":{
+  "mount":{"workspace":{"path":".","mode":"readWrite"}},
+  "git":{"repo":{"mount":"workspace","path":[],"mode":"readWrite"}},
+  "gitRemote":{
+    "originCap":{
+      "git":"repo",
+      "name":"origin",
       "url":"https://github.com/endojs/endo.git",
       "allowedDirections":["fetch","push"],
       "allowedBranches":["main"],
@@ -474,11 +499,11 @@ Print and JSON modes use the same daemon lifecycle and the same single
 
 ```sh
 endo-pi -p \
-  --endo-provision='{"workspace":{"mode":"readOnly"},"git":"readOnly"}' \
+  --endo-provision='{"mount":{"workspace":{"path":".","mode":"readOnly"}},"git":{"repo":{"mount":"workspace","path":[],"mode":"readOnly"}}}' \
   'Review the current branch without modifying it.'
 
 endo-pi --mode json \
-  --endo-provision='{"workspace":{"mode":"readWrite"},"git":"readOnly"}' \
+  --endo-provision='{"mount":{"workspace":{"path":".","mode":"readWrite"}},"git":{"repo":{"mount":"workspace","path":[],"mode":"readOnly"}}}' \
   'Create NOTES.md from the repository README.'
 ```
 

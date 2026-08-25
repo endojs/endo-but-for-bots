@@ -53,6 +53,11 @@ const guest = await E(host).provideGuest('documentation-agent', {
         url: 'https://github.com/endojs/endo.git',
         credential: ['credentials', 'github'],
       },
+      mirrorCap: {
+        git: 'repo',
+        name: 'mirror',
+        url: 'https://example.com/endo-mirror.git',
+      },
     },
   },
   introducedNames: { 'calendar-service': 'calendar' },
@@ -62,8 +67,8 @@ const guest = await E(host).provideGuest('documentation-agent', {
 The singular collection names are categories, and each property key is the
 binding the guest receives.
 The example therefore gives the guest two mounts (`workspace` and `docs`), two
-Git capabilities (`repo` and `docsHistory`), and one remote capability
-(`originCap`).
+Git capabilities (`repo` and `docsHistory`), and two remote capabilities
+(`originCap` and `mirrorCap`).
 An object cannot repeat a property key, so duplicate bindings are structurally
 impossible and record order does not imply realization order.
 
@@ -81,8 +86,9 @@ Omitted categories grant no authority.
 The host resolves symlinks, retains canonical roots and credential formula
 identities privately, records the closed policy before minting aliases, and
 rejects a repeated `provideGuest` call if its authority differs.
-Reacquire the guest with an ordinary host lookup or repeat the same provide
-operation; callers do not persist a normalized authority record.
+Reacquire the guest with `provideGuest('documentation-agent')`; the host reloads
+the retained policy and revalidates credential references and audiences.
+Callers do not persist or resubmit a normalized authority record.
 Changing or widening a retained policy fails closed.
 
 `introducedNames` keeps the existing `provideGuest` direction and missing-source

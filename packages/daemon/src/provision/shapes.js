@@ -54,6 +54,16 @@ export const EndoGuestAuthorityShape = M.splitRecord(
 );
 harden(EndoGuestAuthorityShape);
 
+export const MakeHostOptionsShape = M.splitRecord(
+  {},
+  {
+    agentName: NameOrPathShape,
+    introducedNames: M.recordOf(M.string(), M.string()),
+  },
+  {},
+);
+harden(MakeHostOptionsShape);
+
 export const MakeGuestOptionsShape = M.splitRecord(
   {},
   {

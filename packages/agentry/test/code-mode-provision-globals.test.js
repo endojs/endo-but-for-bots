@@ -1,84 +1,63 @@
 // @ts-check
 
-/** @import { EndoCodeModeProvisionPersistence } from '../src/code-mode-provisioning-types.js' */
-
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { makeEndoProvisionGlobals } from '../src/code-mode-provision-globals.js';
 
-/**
- * @param {EndoCodeModeProvisionPersistence['authority']} authority
- * @param {Record<string, string>} [introducedNames]
- * @param {EndoCodeModeProvisionPersistence['internalGit']} [internalGit]
- * @returns {EndoCodeModeProvisionPersistence}
- */
-const makePersistence = (
-  authority,
-  introducedNames = {},
-  internalGit = undefined,
-) =>
-  harden({
-    version: /** @type {3} */ (3),
-    guestName: 'code-mode-test-session',
-    authority,
-    introducedNames,
-    ...(internalGit === undefined ? {} : { internalGit }),
-    spec: {},
-  });
-
-test('globals project validated policy without looking up guest bindings', t => {
+test('globals project every singular object-key binding', t => {
   const globals = makeEndoProvisionGlobals(
-    makePersistence(
-      {
+    harden({
+      authority: {
         mount: {
           workspace: {
             path: '/workspace',
             readOnly: false,
-            deniedSegments: [],
           },
+          docs: { path: '/workspace/docs', readOnly: true },
         },
         git: {
-          git: {
-            mount: 'workspace',
-            path: [],
-            readOnly: false,
+          repo: { mount: 'workspace', path: [], readOnly: false },
+          docsHistory: { mount: 'docs', path: [], readOnly: true },
+        },
+        gitRemote: {
+          originCap: {
+            git: 'repo',
+            name: 'origin',
+            url: 'https://example.test/repo.git',
+          },
+          mirrorCap: {
+            git: 'repo',
+            name: 'mirror',
+            url: 'https://mirror.example.test/repo.git',
           },
         },
       },
-      { 'calendar-service': 'calendar' },
-    ),
+      introducedNames: { 'calendar-service': 'calendar' },
+    }),
   );
   t.deepEqual(
     globals.map(({ name }) => name),
-    ['workspace', 'git', 'calendar'],
+    [
+      'workspace',
+      'docs',
+      'repo',
+      'docsHistory',
+      'originCap',
+      'mirrorCap',
+      'calendar',
+    ],
   );
-  t.truthy(globals[0].declaration);
-  t.truthy(globals[1].declaration);
-  t.is(globals[2].declaration, undefined);
+  for (const global of globals.slice(0, 6)) {
+    t.truthy(global.declaration);
+  }
+  t.is(globals[6].declaration, undefined);
 });
 
 test('introduced names retain host-key to guest-value direction', t => {
   const globals = makeEndoProvisionGlobals(
-    makePersistence({}, { service: 'calendar' }),
+    harden({ authority: {}, introducedNames: { service: 'calendar' } }),
   );
   t.deepEqual(globals, [
     { name: 'calendar', petName: 'calendar', description: undefined },
   ]);
-});
-
-test('internal read-only Git projects its typed compatibility global', t => {
-  const internalGit = harden({
-    path: '/workspace',
-    mountName: 'internal-mount',
-    gitName: 'internal-git',
-  });
-  const globals = makeEndoProvisionGlobals(
-    makePersistence({}, { 'internal-git': 'git' }, internalGit),
-  );
-  t.is(globals.length, 1);
-  t.is(globals[0].name, 'git');
-  const { description } = globals[0];
-  if (description === undefined) throw Error('expected Git description');
-  t.regex(description, /Read-only .*Git capability/);
-  t.truthy(globals[0].declaration);
 });

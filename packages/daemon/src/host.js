@@ -5,7 +5,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
-/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeGuestOptions, MakeHostOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 
 import { E } from '@endo/eventual-send';
@@ -79,7 +79,7 @@ const assertPowersNameOrPath = nameOrPath => {
 
 /**
  * Normalizes host or guest options, providing default values.
- * @param {MakeHostOrGuestOptions | undefined} opts
+ * @param {MakeGuestOptions | undefined} opts
  * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, authority?: import('./provision/types.js').EndoGuestAuthority }}
  */
 const normalizeHostOrGuestOptions = opts => {
@@ -1842,7 +1842,7 @@ export const makeHostMaker = ({
 
     /**
      * @param {NameOrPath} [petName]
-     * @param {MakeHostOrGuestOptions} [opts]
+     * @param {MakeHostOptions} [opts]
      * @returns {Promise<{id: FormulaIdentifier, value: Promise<EndoHost>}>}
      */
     const makeChildHost = async (
@@ -1899,7 +1899,7 @@ export const makeHostMaker = ({
 
     /**
      * @param {NameOrPath} [handleName]
-     * @param {MakeHostOrGuestOptions} [opts]
+     * @param {MakeGuestOptions} [opts]
      * @returns {Promise<{id: FormulaIdentifier, value: Promise<EndoGuest>}>}
      */
     const makeGuest = async (
@@ -1945,54 +1945,77 @@ export const makeHostMaker = ({
 
     /** @type {EndoHost['provideGuest']} */
     const provideGuest = async (petName, opts) => {
+      await null;
       if (petName !== undefined) {
         petNamePathFrom(petName);
       }
       const normalizedOpts = normalizeHostOrGuestOptions(opts);
-      if (normalizedOpts.authority !== undefined) {
-        if (petName === undefined) {
+      if (petName === undefined) {
+        if (normalizedOpts.authority !== undefined) {
           throw makeError(
             X`provideGuest requires a host pet name when authority is supplied`,
           );
         }
+      } else {
         const { namePath } = petNamePathFrom(petName);
-        const authorityBindings = new Set([
-          ...Object.keys(normalizedOpts.authority.mount ?? {}),
-          ...Object.keys(normalizedOpts.authority.git ?? {}),
-          ...Object.keys(normalizedOpts.authority.gitRemote ?? {}),
-        ]);
-        for (const [hostName, guestName] of Object.entries(
-          normalizedOpts.introducedNames,
-        )) {
-          if (!isName(hostName) || !isPetName(guestName)) {
+        const retainedAuthority = await hasGuestAuthority(namePath);
+        if (
+          (normalizedOpts.authority !== undefined || retainedAuthority) &&
+          normalizedOpts.agentName !== undefined
+        ) {
+          const { namePath: agentNamePath } = petNamePathFrom(
+            normalizedOpts.agentName,
+          );
+          if (
+            agentNamePath.length !== namePath.length ||
+            agentNamePath.some((name, index) => name !== namePath[index])
+          ) {
             throw makeError(
-              X`introducedNames must map host names to guest pet names`,
-            );
-          }
-          if (authorityBindings.has(guestName)) {
-            throw makeError(
-              X`Introduced name ${q(guestName)} conflicts with provisioned authority`,
+              X`provideGuest authority requires agentName to match the host pet name`,
             );
           }
         }
-        return provideGuestAuthority(
-          namePath,
-          normalizedOpts.authority,
-          normalizedOpts.introducedNames,
-          async () => {
-            const { value } = await makeGuest(
-              /** @type {NameOrPath} */ (
-                harden(['provisioned-guests', ...namePath, 'guest-handle'])
-              ),
-              harden({
-                ...normalizedOpts,
-                introducedNames: {},
-                agentName: /** @type {NameOrPath} */ (petName),
-              }),
-            );
-            return value;
-          },
-        );
+        if (normalizedOpts.authority !== undefined || retainedAuthority) {
+          const authorityBindings = new Set([
+            ...Object.keys(normalizedOpts.authority?.mount ?? {}),
+            ...Object.keys(normalizedOpts.authority?.git ?? {}),
+            ...Object.keys(normalizedOpts.authority?.gitRemote ?? {}),
+          ]);
+          for (const [hostName, guestName] of Object.entries(
+            normalizedOpts.introducedNames,
+          )) {
+            if (!isName(hostName) || !isPetName(guestName)) {
+              throw makeError(
+                X`introducedNames must map host names to guest pet names`,
+              );
+            }
+            if (authorityBindings.has(guestName)) {
+              throw makeError(
+                X`Introduced name ${q(guestName)} conflicts with provisioned authority`,
+              );
+            }
+          }
+          return provideGuestAuthority(
+            namePath,
+            normalizedOpts.authority,
+            opts?.introducedNames,
+            async () => {
+              const { value } = await makeGuest(
+                /** @type {NameOrPath} */ (
+                  harden(['provisioned-guests', ...namePath, 'guest-handle'])
+                ),
+                harden({
+                  ...normalizedOpts,
+                  introducedNames: {},
+                  agentName:
+                    normalizedOpts.agentName ??
+                    /** @type {NameOrPath} */ (petName),
+                }),
+              );
+              return value;
+            },
+          );
+        }
       }
       const { value } = await makeGuest(
         /** @type {NameOrPath | undefined} */ (petName),
@@ -2391,31 +2414,32 @@ export const makeHostMaker = ({
     // Named guest provisioning extends the existing provideGuest lifecycle.
     // The host validates and retains immutable authority before minting any
     // capability aliases. Path powers are injected by the supervisor.
-    const provideGuestAuthority = makeGuestAuthorityProvider({
-      pathPowers: provisionPathPowers,
-      has,
-      identify,
-      lookup,
-      makeDirectory: makeDirectoryLocal,
-      storeValue,
-      provideMount,
-      provideGit,
-      provideGitRemote,
-      getGitCredentialController,
-      bindGuest: async (guest, guestName, source) => {
-        const sourcePath = Array.isArray(source) ? source : [source];
-        const id = await identify(...sourcePath);
-        if (id === undefined) {
-          throw makeError(
-            X`Provisioned capability ${q(sourcePath.join('/'))} has no formula identifier`,
-          );
-        }
-        await E(guest).storeIdentifier(guestName, id);
-      },
-      bindGuestIdentifier: async (guest, guestName, id) => {
-        await E(guest).storeIdentifier(guestName, id);
-      },
-    });
+    const { hasGuestAuthority, provideGuestAuthority } =
+      makeGuestAuthorityProvider({
+        pathPowers: provisionPathPowers,
+        has,
+        identify,
+        lookup,
+        makeDirectory: makeDirectoryLocal,
+        storeValue,
+        provideMount,
+        provideGit,
+        provideGitRemote,
+        getGitCredentialController,
+        bindGuest: async (guest, guestName, source) => {
+          const sourcePath = Array.isArray(source) ? source : [source];
+          const id = await identify(...sourcePath);
+          if (id === undefined) {
+            throw makeError(
+              X`Provisioned capability ${q(sourcePath.join('/'))} has no formula identifier`,
+            );
+          }
+          await E(guest).storeIdentifier(guestName, id);
+        },
+        bindGuestIdentifier: async (guest, guestName, id) => {
+          await E(guest).storeIdentifier(guestName, id);
+        },
+      });
 
     /** @type {EndoHost['endow']} */
     const endow = async (messageNumber, bindings, workerName, resultName) => {

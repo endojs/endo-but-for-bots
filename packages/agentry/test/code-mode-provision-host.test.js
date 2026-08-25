@@ -4,25 +4,27 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { normalizeEndoProvisionSpec } from '../src/code-mode-provision-policy.js';
 import { provideEndoCodeModeGuest } from '../src/code-mode-provision-host.js';
+import { normalizeEndoProvisionSpec } from '../src/code-mode-provision-policy.js';
 
 /**
- * The host adapter only needs the daemon host's `provision` exo method; all
- * realization internals (alias pinning, retained-policy checks, recovery)
- * are daemon-owned and covered by the daemon's own tests.
- *
+ * @param {string[]} [presentNames]
  * @param {Partial<EndoHost>} [overrides]
  */
-const makeHost = (overrides = {}) => {
+const makeHost = (presentNames = [], overrides = {}) => {
   /** @type {Array<{ name: any, options: any }>} */
   const provideCalls = [];
+  const values = new Map();
   const guest = /** @type {EndoGuest} */ (
-    /** @type {unknown} */ (harden({ fake: 'guest' }))
+    /** @type {unknown} */ (
+      harden({
+        has: async (...path) => presentNames.includes(path.join('/')),
+      })
+    )
   );
   const host = /** @type {EndoHost} */ (
     /** @type {unknown} */ ({
@@ -30,12 +32,16 @@ const makeHost = (overrides = {}) => {
         provideCalls.push({ name, options });
         return guest;
       },
-      has: async () => true,
-      lookup: async () => harden({}),
+      has: async (...path) => values.has(path.join('/')),
+      lookup: async path =>
+        values.get((Array.isArray(path) ? path : [path]).join('/')),
+      storeValue: async (value, path) => {
+        values.set((Array.isArray(path) ? path : [path]).join('/'), value);
+      },
       ...overrides,
     })
   );
-  return { host, guest, provideCalls };
+  return { host, guest, provideCalls, values };
 };
 
 /** @param {import('ava').ExecutionContext} t */
@@ -45,159 +51,148 @@ const makeWorkspace = async t => {
   return root;
 };
 
-test('adapter provides named authority on an existing host', async t => {
+test('adapter stores policy projection in host state, not caller persistence', async t => {
   const root = await makeWorkspace(t);
-  const fixture = makeHost();
-  const persistence = await normalizeEndoProvisionSpec(
+  const fixture = makeHost(['workspace', 'repo', 'calendar']);
+  const request = await normalizeEndoProvisionSpec(
     {
+      mount: { workspace: { path: '.', mode: 'readWrite' } },
+      git: {
+        repo: { mount: 'workspace', path: [], mode: 'readWrite' },
+      },
       introducedNames: { 'calendar-service': 'calendar' },
     },
     { harness: 'test', sessionId: 'pinned-grant', cwd: root },
   );
 
-  const guest = await provideEndoCodeModeGuest(fixture.host, persistence);
-
-  t.is(guest, fixture.guest);
-  t.is(fixture.provideCalls.length, 1);
-  const [{ name, options }] = fixture.provideCalls;
-  t.is(name, persistence.guestName);
-  t.deepEqual(options.authority, persistence.authority);
-  t.deepEqual(options.introducedNames, {
-    'calendar-service': 'calendar',
-  });
-  // Code-mode prompt context never enters the daemon policy record.
-});
-
-test('adapter backs read-only root Git with an unintroduced internal mount', async t => {
-  const root = await makeWorkspace(t);
-  /** @type {unknown[][]} */
-  const mountCalls = [];
-  /** @type {unknown[][]} */
-  const gitCalls = [];
-  const mount = harden({});
-  const names = new Set();
-  const fixture = makeHost({
-    has: async name => names.has(/** @type {string} */ (name)),
-    provideMount: async (...args) => {
-      mountCalls.push(args);
-      names.add(/** @type {string} */ (args[1]));
-      return /** @type {any} */ (mount);
-    },
-    provideGit: async (...args) => {
-      gitCalls.push(args);
-      names.add(/** @type {string} */ (args[1]));
-      return /** @type {any} */ (harden({}));
-    },
-  });
-  const persistence = await normalizeEndoProvisionSpec(
-    { git: 'readOnly' },
-    { harness: 'test', sessionId: 'git-only-host', cwd: root },
+  const projection = await provideEndoCodeModeGuest(
+    fixture.host,
+    request.persistence,
+    { request },
   );
-  const { internalGit } = persistence;
-  if (internalGit === undefined) {
-    throw Error('expected internal Git backing');
-  }
 
-  await provideEndoCodeModeGuest(fixture.host, persistence);
-  await provideEndoCodeModeGuest(fixture.host, persistence);
-
-  t.deepEqual(mountCalls, [
-    [await realpath(root), internalGit.mountName, { readOnly: true }],
-  ]);
-  t.deepEqual(gitCalls, [
-    [
-      mount,
-      internalGit.gitName,
-      {
-        readOnly: true,
-        allowHistoryRewrite: false,
+  t.is(projection.guest, fixture.guest);
+  t.deepEqual(
+    projection.globals.map(({ name }) => name),
+    ['workspace', 'repo', 'calendar'],
+  );
+  t.deepEqual(fixture.provideCalls, [
+    {
+      name: request.persistence.guestName,
+      options: {
+        authority: request.authority,
+        introducedNames: { 'calendar-service': 'calendar' },
       },
-    ],
+    },
   ]);
-  t.deepEqual(fixture.provideCalls[0].options.introducedNames, {
-    [internalGit.gitName]: 'git',
-  });
-  t.is(fixture.provideCalls.length, 2);
+  t.deepEqual(Object.keys(request.persistence), ['version', 'guestName']);
+  t.is(fixture.values.size, 1);
+  t.deepEqual(Object.keys([...fixture.values.values()][0]), [
+    'version',
+    'authority',
+    'introducedNames',
+  ]);
 });
 
-test('fork options project the parent record and pin session context', async t => {
+test('opaque reconstruction reacquires guest and host-owned globals', async t => {
   const root = await makeWorkspace(t);
-  const fixture = makeHost();
-  const spec = {
-    introducedNames: { service: 'calendar' },
-  };
-  const parent = await normalizeEndoProvisionSpec(spec, {
-    harness: 'test',
-    sessionId: 'fork-parent',
-    cwd: root,
+  const fixture = makeHost(['workspace']);
+  const request = await normalizeEndoProvisionSpec(
+    { mount: { workspace: { path: '.', mode: 'readOnly' } } },
+    { harness: 'test', sessionId: 'reconstruct', cwd: root },
+  );
+  const first = await provideEndoCodeModeGuest(
+    fixture.host,
+    request.persistence,
+    { request },
+  );
+  const reconstructed = await provideEndoCodeModeGuest(
+    fixture.host,
+    request.persistence,
+  );
+
+  t.deepEqual(reconstructed.globals, first.globals);
+  t.deepEqual(fixture.provideCalls[1], {
+    name: request.persistence.guestName,
+    options: undefined,
   });
-  const child = await normalizeEndoProvisionSpec(spec, {
+});
+
+test('missing introduced sources are ignored and projected when later present', async t => {
+  const root = await makeWorkspace(t);
+  const presentNames = [];
+  const fixture = makeHost(presentNames);
+  const request = await normalizeEndoProvisionSpec(
+    { introducedNames: { missing: 'optionalTool' } },
+    { harness: 'test', sessionId: 'missing-source', cwd: root },
+  );
+
+  const projection = await provideEndoCodeModeGuest(
+    fixture.host,
+    request.persistence,
+    { request },
+  );
+
+  t.deepEqual(projection.globals, []);
+  t.deepEqual(fixture.provideCalls[0].options.introducedNames, {
+    missing: 'optionalTool',
+  });
+
+  presentNames.push('optionalTool');
+  const reconstructed = await provideEndoCodeModeGuest(
+    fixture.host,
+    request.persistence,
+  );
+  t.deepEqual(
+    reconstructed.globals.map(({ name }) => name),
+    ['optionalTool'],
+  );
+});
+
+test('fork inherits daemon-owned parent state under a new opaque name', async t => {
+  const root = await makeWorkspace(t);
+  const fixture = makeHost(['workspace']);
+  const parent = await normalizeEndoProvisionSpec(
+    { mount: { workspace: { path: '.', mode: 'readOnly' } } },
+    { harness: 'test', sessionId: 'fork-parent', cwd: root },
+  );
+  const child = await normalizeEndoProvisionSpec(undefined, {
     harness: 'test',
     sessionId: 'fork-child',
     cwd: root,
   });
-
-  await provideEndoCodeModeGuest(fixture.host, child, { forkFrom: parent });
-  t.is(fixture.provideCalls.length, 1);
-  t.is(fixture.provideCalls[0].name, child.guestName);
-
-  await provideEndoCodeModeGuest(fixture.host, child, {
-    forkFrom: parent,
+  await provideEndoCodeModeGuest(fixture.host, parent.persistence, {
+    request: parent,
   });
-  t.is(fixture.provideCalls.length, 2);
+  const forked = await provideEndoCodeModeGuest(
+    fixture.host,
+    child.persistence,
+    { forkFrom: parent.persistence },
+  );
+
+  t.deepEqual(
+    forked.globals.map(({ name }) => name),
+    ['workspace'],
+  );
+  t.deepEqual(fixture.provideCalls[1].options.authority, parent.authority);
 });
 
 test('host provisioning failures pass through untouched', async t => {
   const root = await makeWorkspace(t);
   const failure = Error('daemon rejected the record');
-  const fixture = makeHost({
+  const fixture = makeHost([], {
     provideGuest: async () => {
       throw failure;
     },
   });
-  const persistence = await normalizeEndoProvisionSpec(undefined, {
+  const request = await normalizeEndoProvisionSpec(undefined, {
     harness: 'test',
     sessionId: 'provision-failure',
     cwd: root,
   });
 
   const error = await t.throwsAsync(() =>
-    provideEndoCodeModeGuest(fixture.host, persistence),
+    provideEndoCodeModeGuest(fixture.host, request.persistence, { request }),
   );
   t.is(error, failure);
-});
-
-test('adapter classifies daemon credential availability failures', async t => {
-  const root = await makeWorkspace(t);
-  const fixture = makeHost({
-    provideGuest: async () => {
-      throw Error('ENDO_CREDENTIAL_UNAVAILABLE: credential is unavailable');
-    },
-  });
-  const persistence = await normalizeEndoProvisionSpec(undefined, {
-    harness: 'test',
-    sessionId: 'credential-failure',
-    cwd: root,
-  });
-  const error = await t.throwsAsync(() =>
-    provideEndoCodeModeGuest(fixture.host, persistence),
-  );
-  t.is(
-    /** @type {{ code?: string }} */ (error).code,
-    'ENDO_CREDENTIAL_UNAVAILABLE',
-  );
-});
-
-test('adapter requires introduced sources before retaining the guest', async t => {
-  const root = await makeWorkspace(t);
-  const fixture = makeHost({ has: async () => false });
-  const persistence = await normalizeEndoProvisionSpec(
-    { introducedNames: { missing: 'tool' } },
-    { harness: 'test', sessionId: 'missing-source', cwd: root },
-  );
-  await t.throwsAsync(
-    () => provideEndoCodeModeGuest(fixture.host, persistence),
-    { message: /introduced source.*is unavailable/ },
-  );
-  t.deepEqual(fixture.provideCalls, []);
 });

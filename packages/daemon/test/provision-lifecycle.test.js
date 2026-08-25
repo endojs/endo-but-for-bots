@@ -104,6 +104,29 @@ test.serial('provideGuest retains a neutral named authority graph', async t => {
   t.deepEqual(originPolicy.allowedBranches, ['main']);
   t.is(await E(await E(guest).lookup('calendar')).lookup('value'), 'original');
 
+  await t.throwsAsync(
+    E(host).provideGit(workspace, 'unknown-git-option', {
+      ignored: true,
+    }),
+    { message: /provideGit.*Must be|must not have properties:.*ignored/i },
+  );
+  await t.throwsAsync(
+    E(host).provideGitRemote(repo, 'unknown-remote-option', {
+      name: 'upstream',
+      url: 'https://example.test/repo.git',
+      ignored: true,
+    }),
+    {
+      message: /provideGitRemote.*Must be|must not have properties:.*ignored/i,
+    },
+  );
+  await t.throwsAsync(
+    E(host).provideHost('authority-is-guest-only', {
+      authority: {},
+    }),
+    { message: /provideHost.*Must be|must not have properties:.*authority/i },
+  );
+
   const guestId = await E(host).identify('coding-session');
   const repoId = await E(guest).identify('repo');
   const repeated = await E(host).provideGuest('coding-session', {
@@ -135,10 +158,7 @@ test.serial('provideGuest retains a neutral named authority graph', async t => {
 
   await fixture.restartDaemon();
   const restartedHost = await fixture.connectHost('named-authority-restart');
-  const recovered = await E(restartedHost).provideGuest('coding-session', {
-    authority,
-    introducedNames: { calendar: 'calendar' },
-  });
+  const recovered = await E(restartedHost).provideGuest('coding-session');
   t.is(await E(restartedHost).identify('coding-session'), guestId);
   t.is(await E(recovered).identify('repo'), repoId);
 });
@@ -201,22 +221,81 @@ test.serial(
       { message: /unavailable Git binding/ },
     );
     await t.throwsAsync(
-      E(host).provideGuest('secret-query', {
+      E(host).provideGuest('incompatible-agent-name', {
+        agentName: 'different-agent-name',
+        authority: {},
+      }),
+      { message: /agentName to match the host pet name/ },
+    );
+    const matchingAgentName = await E(host).provideGuest(
+      'matching-agent-name',
+      {
+        agentName: 'matching-agent-name',
+        authority: {},
+      },
+    );
+    t.is(typeof (await E(matchingAgentName).help()), 'string');
+
+    await execFileAsync('git', ['init', '-q', '-b', 'main'], {
+      cwd: fixture.workspace,
+    });
+    const harmlessQueryRemote = join(fixture.root, 'harmless-query.git');
+    await execFileAsync('git', ['init', '--bare', '-q', harmlessQueryRemote]);
+    const harmlessQueryGuest = await E(host).provideGuest('harmless-query', {
+      authority: {
+        mount: { workspace: { path: fixture.workspace } },
+        git: {
+          repo: { mount: 'workspace', path: [] },
+        },
+        gitRemote: {
+          origin: {
+            git: 'repo',
+            name: 'origin',
+            url: `${new URL(`file://${harmlessQueryRemote}`).href}?password_policy=strict&token_count=2`,
+            allowLocalFileTransport: true,
+          },
+        },
+      },
+    });
+    t.true(await E(harmlessQueryGuest).has('origin'));
+    await t.throwsAsync(
+      E(host).provideGuest('embedded-remote-credential', {
         authority: {
           mount: { workspace: { path: fixture.workspace } },
-          git: {
-            repo: { mount: 'workspace', path: [] },
-          },
+          git: { repo: { mount: 'workspace', path: [] } },
           gitRemote: {
             origin: {
               git: 'repo',
               name: 'origin',
-              url: 'https://example.test/repo?access_token=secret',
+              url: 'https://user:password@example.test/repo.git',
             },
           },
         },
       }),
-      { message: /must not carry credential query fields/ },
+      { message: /must not (?:include embedded|embed) credentials/ },
+    );
+
+    const missingIntroduction = await E(host).provideGuest(
+      'missing-introduction',
+      {
+        authority: {},
+        introducedNames: { absent: 'optionalTool' },
+      },
+    );
+    t.false(await E(missingIntroduction).has('optionalTool'));
+    await E(host).provideGuest('absent');
+    const reappliedIntroduction = await E(host).provideGuest(
+      'missing-introduction',
+    );
+    t.true(await E(reappliedIntroduction).has('optionalTool'));
+
+    await t.throwsAsync(
+      E(host).provideGuest('unknown-authority-field', {
+        authority: {
+          mounts: {},
+        },
+      }),
+      { message: /provideGuest.*Must be|must not have properties:.*mounts/i },
     );
   },
 );

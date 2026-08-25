@@ -18,7 +18,10 @@ import {
   NameOrPathShape,
   NamesOrPathsShape,
 } from './type-guards.js';
-import { MakeGuestOptionsShape } from './provision/shapes.js';
+import {
+  MakeGuestOptionsShape,
+  MakeHostOptionsShape,
+} from './provision/shapes.js';
 
 // #region Patterns
 
@@ -41,6 +44,38 @@ const MessageNumberShape = M.bigint();
 
 // Environment variables as string-to-string record
 const EnvShape = M.recordOf(M.string(), M.string());
+
+const StringListShape = M.arrayOf(M.string());
+const GitCommitIdentityShape = M.splitRecord(
+  { authorName: M.string(), authorEmail: M.string() },
+  { committerName: M.string(), committerEmail: M.string() },
+  {},
+);
+const GitProvisionOptionsShape = M.splitRecord(
+  {},
+  {
+    allowHistoryRewrite: M.boolean(),
+    identity: GitCommitIdentityShape,
+    readOnly: M.boolean(),
+  },
+  {},
+);
+const GitRemoteProvisionOptionsShape = M.splitRecord(
+  { name: M.string(), url: M.string() },
+  {
+    allowedDirections: M.arrayOf(M.or('fetch', 'push')),
+    fetchRefspecs: StringListShape,
+    pushRefspecs: StringListShape,
+    defaultPullRef: M.string(),
+    allowedBranches: StringListShape,
+    allowForcePush: M.boolean(),
+    allowTags: M.boolean(),
+    allowDelete: M.boolean(),
+    allowLocalFileTransport: M.boolean(),
+    credential: M.any(),
+  },
+  {},
+);
 
 // Options for makeUnconfined and makeArchive
 const MakeCapletOptionsShape = M.splitRecord(
@@ -346,18 +381,7 @@ export const HostInterface = M.interface('EndoHost', {
   // `identity` pins the formula-owned, guest-immutable commit author/committer;
   // omitted, commits default to `Endo <endo@invalid.local>`.
   provideGit: M.callWhen(M.remotable(), NameOrPathShape)
-    .optional(
-      M.splitRecord(
-        {},
-        {
-          allowHistoryRewrite: M.boolean(),
-          identity: M.splitRecord(
-            { authorName: M.string(), authorEmail: M.string() },
-            { committerName: M.string(), committerEmail: M.string() },
-          ),
-        },
-      ),
-    )
+    .optional(GitProvisionOptionsShape)
     .returns(M.remotable('Git')),
   // Derive an allowlisted command-execution Shell from a writable mount.
   provideShell: M.callWhen(
@@ -381,7 +405,7 @@ export const HostInterface = M.interface('EndoHost', {
   provideGitRemote: M.callWhen(
     M.remotable(),
     NameOrPathShape,
-    M.recordOf(M.string(), M.any()),
+    GitRemoteProvisionOptionsShape,
   ).returns(M.remotable('GitRemote')),
   // Host-only constructive clone. The endpoint is a repo-less remote
   // authority; destMount is an empty daemon-minted destination mount.
@@ -416,7 +440,7 @@ export const HostInterface = M.interface('EndoHost', {
     .returns(M.promise()),
   // Provide a host
   provideHost: M.call()
-    .optional(NameOrPathShape, M.record())
+    .optional(NameOrPathShape, MakeHostOptionsShape)
     .returns(M.promise()),
   // Provide a worker
   provideWorker: M.call(NameOrPathShape).returns(M.promise()),

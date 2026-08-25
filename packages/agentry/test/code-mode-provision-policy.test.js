@@ -8,55 +8,94 @@ import { join } from 'node:path';
 
 import { normalizeEndoProvisionSpec } from '../src/code-mode-provision-policy.js';
 
-const workspace = async t => {
+/** @param {import('ava').ExecutionContext} t */
+const makeWorkspace = async t => {
   const root = await mkdtemp(join(tmpdir(), 'endo-provision-policy-'));
   t.teardown(() => rm(root, { recursive: true, force: true }));
-  await mkdir(join(root, 'child'));
+  await mkdir(join(root, 'docs'));
   return root;
 };
 
-test('normalization translates compatibility bindings into a named graph', async t => {
-  const root = await workspace(t);
-  const persistence = await normalizeEndoProvisionSpec(
-    { workspace: { mode: 'readWrite' }, git: 'readWrite' },
+test('normalization uses singular object-keyed authority categories', async t => {
+  const root = await makeWorkspace(t);
+  const request = await normalizeEndoProvisionSpec(
+    {
+      mount: {
+        workspace: { path: '.', mode: 'readWrite' },
+        docs: { path: 'docs', mode: 'readOnly' },
+      },
+      git: {
+        repo: { mount: 'workspace', path: [], mode: 'readWrite' },
+        docsHistory: { mount: 'docs', path: [], mode: 'readOnly' },
+      },
+      gitRemote: {
+        originCap: {
+          git: 'repo',
+          name: 'origin',
+          url: 'https://example.test/repo.git',
+        },
+        mirrorCap: {
+          git: 'repo',
+          name: 'mirror',
+          url: 'https://mirror.example.test/repo.git',
+        },
+      },
+    },
     { harness: 'test', sessionId: 'stable', cwd: root },
   );
-  t.is(persistence.version, 3);
-  t.is(persistence.authority.mount?.workspace.readOnly, false);
-  t.is(persistence.authority.git?.git.mount, 'workspace');
-  t.is(persistence.authority.git?.git.readOnly, false);
+
+  t.deepEqual(Object.keys(request.authority.mount ?? {}), [
+    'workspace',
+    'docs',
+  ]);
+  t.deepEqual(Object.keys(request.authority.git ?? {}), [
+    'repo',
+    'docsHistory',
+  ]);
+  t.deepEqual(Object.keys(request.authority.gitRemote ?? {}), [
+    'originCap',
+    'mirrorCap',
+  ]);
+  t.is(request.authority.mount?.workspace.path, await realpath(root));
+  t.true(request.authority.mount?.docs.readOnly);
+  t.is(request.authority.git?.repo.mount, 'workspace');
 });
 
-test('read-only root Git uses an internal mount without exposing filesystem authority', async t => {
-  const root = await workspace(t);
-  const persistence = await normalizeEndoProvisionSpec(
+test('normalization rejects removed compatibility and plural fields', async t => {
+  const root = await makeWorkspace(t);
+  for (const spec of [
+    { workspace: { path: '.', mode: 'readOnly' } },
+    { mounts: {} },
+    { gits: {} },
+    { gitRemotes: {} },
     { git: 'readOnly' },
-    { harness: 'test', sessionId: 'git-only', cwd: root },
-  );
-  t.deepEqual(persistence.authority, {});
-  const { internalGit } = persistence;
-  if (internalGit === undefined) throw Error('expected internal Git backing');
-  t.is(internalGit.path, await realpath(root));
-  t.is(persistence.introducedNames[internalGit.gitName], 'git');
+  ]) {
+    // Each legacy form must fail independently.
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        normalizeEndoProvisionSpec(/** @type {any} */ (spec), {
+          harness: 'test',
+          sessionId: JSON.stringify(spec),
+          cwd: root,
+        }),
+      { message: /unknown field|ordinary copy record/ },
+    );
+  }
 });
 
-test('introducedNames preserves host-key to guest-value direction', async t => {
-  const root = await workspace(t);
-  const persistence = await normalizeEndoProvisionSpec(
-    {
-      introducedNames: { 'calendar-service': 'calendar', '@endo': 'endo' },
-    },
+test('introducedNames validates direction but leaves missing-source behavior to provideGuest', async t => {
+  const root = await makeWorkspace(t);
+  const request = await normalizeEndoProvisionSpec(
+    { introducedNames: { 'calendar-service': 'calendar', absent: 'optional' } },
     { harness: 'test', sessionId: 'introduced', cwd: root },
   );
-  t.deepEqual(persistence.introducedNames, {
+  t.deepEqual(request.introducedNames, {
     'calendar-service': 'calendar',
-    '@endo': 'endo',
+    absent: 'optional',
   });
-  t.true(Object.isFrozen(persistence.introducedNames));
-});
+  t.true(Object.isFrozen(request.introducedNames));
 
-test('introducedNames rejects paths and invalid guest bindings', async t => {
-  const root = await workspace(t);
   await t.throwsAsync(
     () =>
       normalizeEndoProvisionSpec(
@@ -68,14 +107,6 @@ test('introducedNames rejects paths and invalid guest bindings', async t => {
   await t.throwsAsync(
     () =>
       normalizeEndoProvisionSpec(
-        { introducedNames: { service: 'not-a valid-binding' } },
-        { harness: 'test', sessionId: 'bad-guest', cwd: root },
-      ),
-    { message: /JavaScript binding/ },
-  );
-  await t.throwsAsync(
-    () =>
-      normalizeEndoProvisionSpec(
         { introducedNames: { first: 'tool', second: 'tool' } },
         { harness: 'test', sessionId: 'duplicate-guest', cwd: root },
       ),
@@ -83,65 +114,102 @@ test('introducedNames rejects paths and invalid guest bindings', async t => {
   );
 });
 
-test('normalization rejects reserved bindings and credential-shaped URL queries', async t => {
-  const root = await workspace(t);
+test('closed grant schemas reject unknown fields and embedded credentials', async t => {
+  const root = await makeWorkspace(t);
   await t.throwsAsync(
     () =>
       normalizeEndoProvisionSpec(
-        { mounts: { class: { path: '.', mode: 'readOnly' } } },
-        { harness: 'test', sessionId: 'reserved', cwd: root },
+        {
+          mount: {
+            workspace: /** @type {any} */ ({
+              path: '.',
+              mode: 'readOnly',
+              ignored: true,
+            }),
+          },
+        },
+        { harness: 'test', sessionId: 'unknown', cwd: root },
       ),
-    { message: /non-reserved JavaScript binding/ },
+    { message: /unknown field.*ignored/ },
   );
   await t.throwsAsync(
     () =>
       normalizeEndoProvisionSpec(
         {
-          gitRemotes: {
+          gitRemote: {
             origin: {
               git: 'repo',
               name: 'origin',
-              url: 'https://example.test/repo?access_token=secret',
+              url: 'https://user:password@example.test/repo.git',
             },
           },
         },
-        { harness: 'test', sessionId: 'secret-url', cwd: root },
+        { harness: 'test', sessionId: 'embedded-credential', cwd: root },
       ),
-    { message: /must not carry credential query fields/ },
+    { message: /must not embed credentials/ },
+  );
+  await t.throwsAsync(
+    () =>
+      normalizeEndoProvisionSpec(
+        {
+          gitRemote: {
+            origin: /** @type {any} */ ({
+              git: 'repo',
+              name: 'origin',
+              url: 'https://example.test/repo.git',
+              allowedDirections: ['clone'],
+            }),
+          },
+        },
+        { harness: 'test', sessionId: 'bad-direction', cwd: root },
+      ),
+    { message: /allowedDirections/ },
+  );
+  await t.throwsAsync(
+    () =>
+      normalizeEndoProvisionSpec(
+        {
+          gitRemote: {
+            origin: /** @type {any} */ ({
+              git: 'repo',
+              name: 'origin',
+              url: 'https://example.test/repo.git',
+              credential: { token: 'not-a-reference' },
+            }),
+          },
+        },
+        { harness: 'test', sessionId: 'credential-record', cwd: root },
+      ),
+    { message: /credential.*host pet name or name path/ },
   );
 });
 
-test('normalization preserves own __proto__ bindings and canonicalizes relative roots', async t => {
-  const root = await workspace(t);
-  const mounts = JSON.parse('{"__proto__":{"path":"child","mode":"readOnly"}}');
-  const persistence = await normalizeEndoProvisionSpec(
+test('harmless secret-like query keys remain valid metadata', async t => {
+  const root = await makeWorkspace(t);
+  const request = await normalizeEndoProvisionSpec(
     {
-      workspace: { path: 'child', mode: 'readOnly' },
-      mounts,
+      gitRemote: {
+        origin: {
+          git: 'repo',
+          name: 'origin',
+          url: 'https://example.test/repo?token_count=2&password_policy=strict',
+        },
+      },
     },
+    { harness: 'test', sessionId: 'query-metadata', cwd: root },
+  );
+  t.regex(
+    request.authority.gitRemote?.origin.url ?? '',
+    /token_count=2&password_policy=strict/,
+  );
+});
+
+test('normalization preserves an own __proto__ binding', async t => {
+  const root = await makeWorkspace(t);
+  const mount = JSON.parse('{"__proto__":{"path":"docs","mode":"readOnly"}}');
+  const request = await normalizeEndoProvisionSpec(
+    { mount },
     { harness: 'test', sessionId: 'own-proto', cwd: root },
   );
-  const authorityMount = persistence.authority.mount;
-  const specWorkspace = persistence.spec.workspace;
-  const specMounts = persistence.spec.mounts;
-  if (
-    authorityMount === undefined ||
-    specWorkspace === undefined ||
-    specMounts === undefined
-  ) {
-    throw Error('expected normalized mounts');
-  }
-  t.true(Object.hasOwn(authorityMount, '__proto__'));
-  t.is(specWorkspace.path, join(root, 'child'));
-  t.is(
-    /** @type {{ path: string }} */ (Reflect.get(specMounts, '__proto__')).path,
-    join(root, 'child'),
-  );
-
-  const resumed = await normalizeEndoProvisionSpec(persistence.spec, {
-    harness: 'test',
-    sessionId: 'own-proto',
-    cwd: tmpdir(),
-  });
-  t.deepEqual(resumed.authority, persistence.authority);
+  t.true(Object.hasOwn(request.authority.mount ?? {}, '__proto__'));
 });
