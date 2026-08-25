@@ -60,7 +60,11 @@ const HEX40 = M.string();
  */
 export const endoReleaseChart = harden({
   name: 'endo-release',
-  version: 1,
+  // v2 adds `prebuild` between `pin` and `build`: the release is built before
+  // the operator is asked, so approving an apply no longer means approving an
+  // unbuilt revision, and the apply itself is a symlink flip rather than a cold
+  // build inside activation. See floot/endo#4.
+  version: 2,
   params: M.splitRecord(
     {
       title: M.string(), // commit-message-grade, becomes the apply message
@@ -86,11 +90,40 @@ export const endoReleaseChart = harden({
       on: {
         staged: [
           {
-            target: 'build',
+            target: 'prebuild',
             assign: { previous: { $event: 'value.previous' } },
           },
         ],
         'stage-failed': [{ target: 'failed' }],
+      },
+    },
+    // Build the RELEASE (fetch + yarn install + package builds) without
+    // activating anything. Failure here costs nothing: no generation was
+    // switched and no operator was interrupted, so it compensates by unpinning
+    // exactly like a rejected config build.
+    prebuild: {
+      entry: [
+        {
+          kind: 'invoke',
+          target: 'performer',
+          method: 'prebuildRev',
+          args: [{ $params: 'rev' }],
+          outcome: 'prebuilt',
+          failure: 'prebuild-failed',
+        },
+        { kind: 'after', ms: HOUR_MS, emit: { type: 'prebuild-timed-out' } },
+      ],
+      on: {
+        prebuilt: [
+          { when: okValue, target: 'build' },
+          { target: 'unpinning', assign: { reason: 'prebuild-rejected' } },
+        ],
+        'prebuild-failed': [
+          { target: 'unpinning', assign: { reason: 'prebuild-error' } },
+        ],
+        'prebuild-timed-out': [
+          { target: 'unpinning', assign: { reason: 'prebuild-timed-out' } },
+        ],
       },
     },
     build: {
