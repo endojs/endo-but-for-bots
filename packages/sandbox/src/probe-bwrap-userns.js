@@ -2,6 +2,10 @@
 
 import { spawn } from 'node:child_process';
 
+import { spawnAndCollect } from './drivers/child-process.js';
+
+const PROBE_TIMEOUT_MS = 30_000;
+
 /**
  * Confirm that bwrap can create the user namespace a real slice uses.
  *
@@ -10,7 +14,8 @@ import { spawn } from 'node:child_process';
 export const probeBwrapUserns = async () => {
   await null;
   try {
-    const proc = spawn(
+    const result = await spawnAndCollect(
+      { spawn },
       'bwrap',
       [
         '--unshare-all',
@@ -37,38 +42,23 @@ export const probeBwrapUserns = async () => {
         '--',
         '/bin/true',
       ],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
+      { timeoutMs: PROBE_TIMEOUT_MS },
     );
-    /** @type {string[]} */
-    const stderrChunks = [];
-    proc.stderr?.setEncoding('utf8');
-    proc.stderr?.on('data', chunk => stderrChunks.push(chunk));
-    return await new Promise(resolve => {
-      proc.once('error', error =>
-        resolve({
-          available: false,
-          reason: `failed to spawn bwrap: ${error.message}`,
-        }),
-      );
-      proc.once('close', code => {
-        if (code === 0) {
-          resolve({ available: true });
-          return;
-        }
-        const stderr = stderrChunks.join('').trim();
-        resolve({
-          available: false,
-          reason:
-            stderr === ''
-              ? `bwrap user-namespace smoke test exit ${code}`
-              : `bwrap user-namespace smoke test exit ${code}: ${stderr}`,
-        });
-      });
-    });
+    if (result.code === 0) {
+      return { available: true };
+    }
+    const stderr = result.stderr.trim();
+    return {
+      available: false,
+      reason:
+        stderr === ''
+          ? `bwrap user-namespace smoke test exit ${result.code}`
+          : `bwrap user-namespace smoke test exit ${result.code}: ${stderr}`,
+    };
   } catch (error) {
     return {
       available: false,
-      reason: /** @type {Error} */ (error).message,
+      reason: `failed to spawn bwrap: ${/** @type {Error} */ (error).message}`,
     };
   }
 };

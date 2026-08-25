@@ -24,7 +24,7 @@ import { makeError, q, X } from '@endo/errors';
  * the child is hard-killed and the promise rejects with a structured
  * error.
  *
- * @param {typeof import('child_process')} cpModule
+ * @param {Pick<typeof import('child_process'), 'spawn'>} cpModule
  * @param {string} command
  * @param {string[]} args
  * @param {{ timeoutMs?: number, cancelled?: import('@endo/cancel').Cancelled, isCancelled?: import('@endo/cancel').IsCancelled }} [options]
