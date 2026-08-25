@@ -151,6 +151,21 @@ test('onCancel after cancel reports a late hook failure', async t => {
   );
 });
 
+test('late async hook failures remain observable without an unhandled rejection', async t => {
+  const { createContext } = setupContextMaker();
+  const ctx = createContext(id('a:node'));
+
+  await ctx.cancel(new Error('done'));
+
+  await t.throwsAsync(
+    () =>
+      ctx.onCancel(async () => {
+        throw new Error('late async cleanup failed');
+      }),
+    { message: 'late async cleanup failed' },
+  );
+});
+
 test('thatDiesIfThisDies after cancel cancels the dependent', async t => {
   const { createContext } = setupContextMaker();
   const parent = createContext(id('parent:node'));

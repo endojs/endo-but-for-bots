@@ -115,8 +115,11 @@ const makeFakeProjector = ({ prepare = async () => {} } = {}) => {
  * mounts through the powers it was handed, exactly as the real factory
  * does, and records what it saw.
  */
-/** @param {{ disposeError?: unknown }} [opts] */
-const makeFakeBackend = ({ disposeError = undefined } = {}) => {
+/** @param {{ disposeError?: unknown, makeError?: unknown }} [opts] */
+const makeFakeBackend = ({
+  disposeError = undefined,
+  makeError = undefined,
+} = {}) => {
   const calls = {
     /** @type {any[]} */ factories: [],
     /** @type {any[]} */ slices: [],
@@ -144,7 +147,13 @@ const makeFakeBackend = ({ disposeError = undefined } = {}) => {
             mode: mount.mode,
           });
         }
+        if (makeError !== undefined) {
+          throw makeError;
+        }
         const backendHandle = Far('FakeSandboxHandle', {
+          reset: async () => {
+            await options?.resetScratch?.();
+          },
           dispose: async () => {
             calls.disposed += 1;
             await options?.onHandleDisposed?.();
@@ -171,7 +180,7 @@ const mintSlice = async (t, profile, overrides = {}) => {
   const filePowers = makeFilePowers({ fs, path });
   const { projector, projections } = makeFakeProjector();
   const backend = makeFakeBackend(overrides.backend);
-  const escalations = makeSandboxEscalationLog();
+  const escalations = overrides.escalations ?? makeSandboxEscalationLog();
   const minted = await makeSandboxSlice({
     profile,
     sandboxId: fakeSandboxId,
@@ -181,6 +190,14 @@ const mintSlice = async (t, profile, overrides = {}) => {
     makeSandboxFactory: backend.makeSandboxFactory,
     makePath: filePowers.makePath,
     removeDirectory: filePowers.removeDirectory,
+    clearDirectory: async directory => {
+      const entries = await filePowers.readDirectory(directory);
+      await Promise.all(
+        entries.map(entry =>
+          filePowers.removeDirectory(filePowers.joinPath(directory, entry)),
+        ),
+      );
+    },
     joinPath: filePowers.joinPath,
     escalations,
     assertMountGrant: assertSandboxMountGrant,
@@ -237,6 +254,33 @@ test('normalizeSandboxProfile defaults to the confined end of every ladder', t =
   t.deepEqual(profile.mounts, []);
   t.deepEqual(profile.env, {});
   t.is(profile.cwd, undefined);
+});
+
+test('normalizeSandboxProfile accepts zero and rejects non-integer limits', t => {
+  const profile = normalizeSandboxProfile(
+    {
+      rootfs: { kind: 'minimal' },
+      limits: { as: 0, cpu: 10 },
+      escalation: baseEscalation,
+    },
+    resolveFakeMountId,
+  );
+  t.deepEqual(profile.limits, { as: 0, cpu: 10 });
+
+  for (const value of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    t.throws(
+      () =>
+        normalizeSandboxProfile(
+          {
+            rootfs: { kind: 'minimal' },
+            limits: { as: value },
+            escalation: baseEscalation,
+          },
+          resolveFakeMountId,
+        ),
+      { message: /profile\.limits\[.as.\] must be a non-negative integer/ },
+    );
+  }
 });
 
 test('normalizeSandboxProfile requires an escalation reason and requester', t => {
@@ -383,6 +427,40 @@ test('host normalization verifies a remote mount by its canonical interface', as
   t.is(profile.mounts[0].mountId, fakeMountId);
 });
 
+test('host normalization preserves each mount grant’s structural association', async t => {
+  const { mount: rootMount } = await provisionMount(t);
+  const { mount: childMount } = await provisionMount(t);
+  const rootMountId = /** @type {FormulaIdentifier} */ ('root-mount-id');
+  const childMountId = /** @type {FormulaIdentifier} */ ('child-mount-id');
+  const typeChecks = [];
+
+  const profile = await normalizeSandboxProfileForHost(
+    {
+      rootfs: rootMount,
+      mounts: [{ cap: childMount, innerPath: '/workspace', mode: 'rw' }],
+      escalation: baseEscalation,
+    },
+    {
+      getIdForRef: cap =>
+        cap === rootMount
+          ? rootMountId
+          : cap === childMount
+            ? childMountId
+            : undefined,
+      getTypeForId: async id => {
+        typeChecks.push(id);
+        return 'mount';
+      },
+    },
+  );
+
+  t.deepEqual(profile.rootfs, { kind: 'mount', mountId: rootMountId });
+  t.deepEqual(profile.mounts, [
+    { mountId: childMountId, innerPath: '/workspace', mode: 'rw' },
+  ]);
+  t.deepEqual(typeChecks.sort(), [rootMountId, childMountId].sort());
+});
+
 test('host normalization rejects a remote mount with unknown write authority', async t => {
   const { mount } = await provisionMount(t);
   // eslint-disable-next-line no-underscore-dangle
@@ -480,6 +558,36 @@ test('a physically-backed grant is projected through 9P', async t => {
   // release is idempotent across both paths.
   await release();
   t.is(backend.calls.disposed, 1);
+});
+
+test('reset clears scratch contents and invalidates scratch tokens', async t => {
+  const profile = /** @type {SandboxFormulaProfile} */ (
+    harden({
+      rootfs: { kind: 'minimal' },
+      mounts: [],
+      network: 'none',
+      backend: 'auto',
+      seccomp: 'default',
+      env: {},
+      escalation: baseEscalation,
+    })
+  );
+  const minted = await mintSlice(t, profile, { capForId: {} });
+  const powers = minted.backend.calls.factories[0].powers;
+  const oldToken = await E(powers).provideScratchMount('reset-test');
+  const oldPath = await E(powers).provideHostPath(oldToken);
+  const marker = path.join(oldPath, 'stale-after-reset');
+  await fs.promises.writeFile(marker, 'stale');
+
+  await E(/** @type {any} */ (minted.slice)).reset();
+  t.false(fs.existsSync(marker));
+  await t.throwsAsync(() => E(powers).provideHostPath(oldToken), {
+    message: /was not granted|unknown|not found/i,
+  });
+
+  const freshToken = await E(powers).provideScratchMount('reset-test');
+  t.not(freshToken, oldToken);
+  await minted.release();
 });
 
 test('repeated grants of one mount retain distinct projections', async t => {
@@ -885,12 +993,36 @@ test('the escalation ledger is bounded and ordered oldest-first', t => {
   );
 });
 
-test('a failed mint releases the projections it had already made', async t => {
+test('the escalation ledger validates records at runtime', t => {
+  const escalations = makeSandboxEscalationLog();
+  t.throws(
+    () =>
+      escalations.record(
+        /** @type {any} */ (
+          harden({
+            sandboxId: fakeSandboxId,
+            reason: 'OS_EFFECT',
+            capability: 'pi-session',
+            backend: 'auto',
+            network: 'none',
+            projections: [{ innerPath: '/workspace', kind: 'unexpected' }],
+          })
+        ),
+      ),
+    { message: /sandbox escalation record/ },
+  );
+  t.deepEqual(escalations.list(), []);
+});
+
+test('a failed factory mint records realized projections before cleanup', async t => {
   const opaqueMount = Far('RemoteMount', {});
   const profile = /** @type {SandboxFormulaProfile} */ (
     harden({
       rootfs: { kind: 'minimal' },
-      mounts: [{ mountId: fakeMountId, innerPath: '/remote', mode: 'ro' }],
+      mounts: [
+        { mountId: fakeMountId, innerPath: '/first', mode: 'ro' },
+        { mountId: fakeMountId, innerPath: '/second', mode: 'ro' },
+      ],
       network: 'none',
       backend: 'auto',
       seccomp: 'default',
@@ -901,6 +1033,9 @@ test('a failed mint releases the projections it had already made', async t => {
   const statePath = await provisionStatePath(t);
   const filePowers = makeFilePowers({ fs, path });
   const { projector, projections } = makeFakeProjector();
+  const factoryError = new Error('factory make failed');
+  const backend = makeFakeBackend({ makeError: factoryError });
+  const escalations = makeSandboxEscalationLog();
   await t.throwsAsync(
     makeSandboxSlice({
       profile,
@@ -908,18 +1043,160 @@ test('a failed mint releases the projections it had already made', async t => {
       statePath,
       provideMount: async () => opaqueMount,
       projector,
-      makeSandboxFactory: async () => {
-        throw new Error('no backend available for "auto"');
-      },
+      makeSandboxFactory: backend.makeSandboxFactory,
       makePath: filePowers.makePath,
       removeDirectory: filePowers.removeDirectory,
       joinPath: filePowers.joinPath,
-      escalations: makeSandboxEscalationLog(),
+      escalations,
     }),
-    { message: /no backend available/ },
+    { message: /factory make failed/ },
   );
-  t.is(projections.length, 1);
-  t.true(projections[0].released);
+  t.is(projections.length, 2);
+  t.true(projections.every(projection => projection.released));
+  t.deepEqual(escalations.list(), [
+    {
+      sandboxId: 'sandbox-id',
+      reason: 'OS_EFFECT',
+      capability: 'pi-session',
+      backend: 'auto',
+      network: 'none',
+      projections: [
+        { innerPath: '/first', kind: '9p' },
+        { innerPath: '/second', kind: '9p' },
+      ],
+    },
+  ]);
+});
+
+test('independent projections mint concurrently in profile order', async t => {
+  const opaqueMount = Far('RemoteMount', {});
+  const profile = /** @type {SandboxFormulaProfile} */ (
+    harden({
+      rootfs: { kind: 'minimal' },
+      mounts: [
+        { mountId: fakeMountId, innerPath: '/first', mode: 'ro' },
+        { mountId: fakeMountId, innerPath: '/second', mode: 'ro' },
+      ],
+      network: 'none',
+      backend: 'auto',
+      seccomp: 'default',
+      env: {},
+      escalation: baseEscalation,
+    })
+  );
+  let releaseFirst = () => {};
+  const firstProjectionGate = new Promise(resolve => {
+    releaseFirst = () => resolve(undefined);
+  });
+  /** @type {string[]} */
+  const started = [];
+  const projector = harden({
+    projectMount: async (_cap, options) => {
+      started.push(options.label);
+      if (options.label === '/first') {
+        await firstProjectionGate;
+      }
+      return harden({
+        kind: '9p',
+        hostPath: options.mountPoint,
+        release: async () => true,
+      });
+    },
+  });
+  const backend = makeFakeBackend();
+  const escalations = makeSandboxEscalationLog();
+  const statePath = '/sandbox-state';
+  const mintPromise = makeSandboxSlice({
+    profile,
+    sandboxId: fakeSandboxId,
+    statePath,
+    provideMount: async () => opaqueMount,
+    projector,
+    makeSandboxFactory: backend.makeSandboxFactory,
+    makePath: async () => {},
+    removeDirectory: async () => {},
+    joinPath: path.join,
+    escalations,
+  });
+
+  await new Promise(resolve => setTimeout(resolve, 0));
+  t.deepEqual(started, ['/first', '/second']);
+  releaseFirst();
+  const minted = await mintPromise;
+  t.deepEqual(backend.calls.slices[0].mounts, [
+    {
+      hostPath: path.join(statePath, 'mnt', '0'),
+      innerPath: '/first',
+      mode: 'ro',
+    },
+    {
+      hostPath: path.join(statePath, 'mnt', '1'),
+      innerPath: '/second',
+      mode: 'ro',
+    },
+  ]);
+  t.deepEqual(escalations.list()[0].projections, [
+    { innerPath: '/first', kind: '9p' },
+    { innerPath: '/second', kind: '9p' },
+  ]);
+  await minted.release();
+});
+
+test('independent projections release concurrently in reverse profile order', async t => {
+  const opaqueMount = Far('RemoteMount', {});
+  const profile = /** @type {SandboxFormulaProfile} */ (
+    harden({
+      rootfs: { kind: 'minimal' },
+      mounts: [
+        { mountId: fakeMountId, innerPath: '/first', mode: 'ro' },
+        { mountId: fakeMountId, innerPath: '/second', mode: 'ro' },
+      ],
+      network: 'none',
+      backend: 'auto',
+      seccomp: 'default',
+      env: {},
+      escalation: baseEscalation,
+    })
+  );
+  let releaseSecond = () => {};
+  const secondReleaseGate = new Promise(resolve => {
+    releaseSecond = () => resolve(undefined);
+  });
+  /** @type {string[]} */
+  const releaseStarts = [];
+  const projector = harden({
+    projectMount: async (_cap, options) =>
+      harden({
+        kind: '9p',
+        hostPath: options.mountPoint,
+        release: async () => {
+          releaseStarts.push(options.label);
+          if (options.label === '/second') {
+            await secondReleaseGate;
+          }
+          return true;
+        },
+      }),
+  });
+  const backend = makeFakeBackend();
+  const minted = await makeSandboxSlice({
+    profile,
+    sandboxId: fakeSandboxId,
+    statePath: '/sandbox-state',
+    provideMount: async () => opaqueMount,
+    projector,
+    makeSandboxFactory: backend.makeSandboxFactory,
+    makePath: async () => {},
+    removeDirectory: async () => {},
+    joinPath: path.join,
+    escalations: makeSandboxEscalationLog(),
+  });
+
+  const releasePromise = minted.release();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  t.deepEqual(releaseStarts, ['/second', '/first']);
+  releaseSecond();
+  await releasePromise;
 });
 
 test('cleanup reports the directory failure instead of mutating a frozen array', async t => {

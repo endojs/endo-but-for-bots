@@ -302,6 +302,33 @@ test('a containment failure fails the whole slice, not just one process', async 
   });
 });
 
+test('reset invokes the injected scratch cleanup hook', async t => {
+  let resetCalls = 0;
+  const driver = harden({
+    name: /** @type {const} */ ('bwrap'),
+    probe: async () => harden({ available: true, details: lifecycleProbe }),
+    prepareSlice: async () => harden({}),
+    spawn: async () => {
+      throw new Error('spawn not used');
+    },
+    teardown: async () => {},
+  });
+  const factory = makeSandboxFactory({
+    drivers: harden([driver]),
+    scratchProvider: /** @type {any} */ (stubScratchProvider),
+    resetScratch: async () => {
+      resetCalls += 1;
+    },
+  });
+  const handle = await E(factory).make(
+    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+  );
+
+  await E(handle).reset();
+  t.is(resetCalls, 1);
+  await E(handle).dispose();
+});
+
 test('factory.help() returns descriptive text', async t => {
   const factory = makeSandboxFactory({
     drivers: harden([]),
