@@ -10203,9 +10203,27 @@ impl Interp {
                         }
                         pc = ret_pc;
                     } else if let Some((NativeMethod::FunctionCall, base)) = method {
-                        // `Function.prototype.call`: a native receiver can be
-                        // dispatched in place; a user receiver re-enters its
-                        // bytecode frame through the trampoline.
+                        // `Function.prototype.call` is a built-in that is **not**
+                        // a constructor (ECMA-262: built-ins lack [[Construct]]
+                        // unless specified). `new fn.call()` must therefore
+                        // throw a catchable TypeError, not trampoline.
+                        let _ = base;
+                        if has_target {
+                            dispatch_result!(
+                                Err::<(), Halt>(self.catchable_type_error()),
+                                pc,
+                                self,
+                                return_depth
+                            );
+                            if self.check_meter() == MeterCheck::Abort {
+                                return Halt::MeterAbort;
+                            }
+                            pc = ret_pc;
+                            continue;
+                        }
+                        // A native receiver can be dispatched in place; a user
+                        // receiver re-enters its bytecode frame through the
+                        // trampoline.
                         match dispatch_result!(
                             self.call_dot_call_native(base, argc, code),
                             pc,
@@ -10229,8 +10247,24 @@ impl Interp {
                             },
                         }
                     } else if let Some((NativeMethod::FunctionApply, base)) = method {
-                        // `Function.prototype.apply` (no-array subset): re-enter
-                        // the target with the rebound `this` and no arguments.
+                        // `Function.prototype.apply` is a built-in that is **not**
+                        // a constructor: `new fn.apply()` throws a catchable
+                        // TypeError rather than trampolining.
+                        if has_target {
+                            dispatch_result!(
+                                Err::<(), Halt>(self.catchable_type_error()),
+                                pc,
+                                self,
+                                return_depth
+                            );
+                            if self.check_meter() == MeterCheck::Abort {
+                                return Halt::MeterAbort;
+                            }
+                            pc = ret_pc;
+                            continue;
+                        }
+                        // (no-array subset): re-enter the target with the
+                        // rebound `this` and no arguments.
                         match self.enter_call_dot_apply(base, argc, ret_pc) {
                             Ok(body_start) => {
                                 if self.check_meter() == MeterCheck::Abort {
