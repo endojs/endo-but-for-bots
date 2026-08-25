@@ -38,7 +38,6 @@
 
 import { makeError, q, X } from '@endo/errors';
 import { E } from '@endo/eventual-send';
-
 import { mountAsFilesystem } from '@endo/platform/fs/extended/from-mount.js';
 
 /** @import { ERef } from '@endo/eventual-send' */
