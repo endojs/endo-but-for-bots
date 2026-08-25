@@ -10285,6 +10285,18 @@ impl Interp {
                                     }
                                     pc = body_start;
                                 }
+                                // A non-object argArray raises a **catchable**
+                                // TypeError: resume a caller's handler (or escape
+                                // to the host if uncaught) rather than propagate
+                                // the raw `Resume`.
+                                Err(Halt::Resume(target))
+                                    if self.call_stack.len() < return_depth =>
+                                {
+                                    return Halt::Resume(target);
+                                }
+                                Err(Halt::Resume(target)) => {
+                                    pc = target;
+                                }
                                 Err(h) => return h,
                             },
                         }
@@ -10371,6 +10383,49 @@ impl Interp {
                                     args.len().saturating_sub(1),
                                     code,
                                 ),
+                                pc,
+                                self,
+                                return_depth
+                            );
+                            if self.check_meter() == MeterCheck::Abort {
+                                return Halt::MeterAbort;
+                            }
+                            pc = ret_pc;
+                            continue;
+                        }
+                        // A bound function whose target is a native callable or
+                        // prototype method (`Number.bind(null)`, `[].push.bind(a)`,
+                        // …): dispatch the native in place with the bound `this`
+                        // and the bound leading args prepended, rather than
+                        // entering a (nonexistent) bytecode body.
+                        let tgt_native = self.native_of(bound_data.target);
+                        let tgt_method = self.method_of(bound_data.target);
+                        if tgt_native.is_some() || tgt_method.is_some() {
+                            let mut args = bound_data.args.clone();
+                            args.extend_from_slice(&self.stack[base + 4..base + 4 + argc]);
+                            let n = args.len();
+                            let this = bound_data.this_arg;
+                            let target_slot = Slot::of(
+                                Kind::Reference,
+                                Payload::Reference(bound_data.target),
+                            );
+                            self.stack.truncate(base);
+                            self.push(this);
+                            self.push(target_slot);
+                            self.push(Slot::undefined());
+                            self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                            for a in args {
+                                self.push(a);
+                            }
+                            self.meter.tick_raw(
+                                BIND_CALL_METERING + n as u64 * BIND_CALL_PER_ARG,
+                            );
+                            dispatch_result!(
+                                if let Some(nat) = tgt_native {
+                                    self.call_native(nat, base, n, false, code)
+                                } else {
+                                    self.call_native_method(tgt_method.unwrap(), base, n, code)
+                                },
                                 pc,
                                 self,
                                 return_depth
@@ -19910,7 +19965,16 @@ impl Interp {
                     APPLY_ARRAY_BASE_METERING + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
                 (args, meter)
             }
-            _ => return Err(Halt::Unsupported("apply:arguments-array")),
+            // A non-dense-array **object** argArray (array-like / `arguments` /
+            // sparse array): `CreateListFromArrayLike` reads `length` then each
+            // index — not yet modeled, so keep the honest skip.
+            Some((Kind::Reference, _)) | Some((Kind::Instance, _)) => {
+                return Err(Halt::Unsupported("apply:arguments-array"));
+            }
+            // A non-object, non-nullish argArray (a Boolean/Number/String/
+            // Symbol/BigInt primitive): `CreateListFromArrayLike` step 2
+            // (ECMA-262 7.3.18) throws a catchable TypeError.
+            Some(_) => return Err(self.catchable_type_error()),
         };
         let n = real_args.len();
         self.stack.truncate(base);

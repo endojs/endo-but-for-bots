@@ -201,3 +201,45 @@ fn primitive_this_boxing_via_call_apply() {
     agrees("function f() { return this === globalThis; } f.call(null)");
 }
 
+// -------------------------------------------------------------------------
+// §8  `apply` with a non-object argArray throws TypeError
+//     (CreateListFromArrayLike step 2).
+// -------------------------------------------------------------------------
+
+#[test]
+fn apply_non_object_arg_array_throws() {
+    agrees(
+        "function fn() {} var ok; \
+         try { fn.apply(null, true); ok = false; } catch (e) { ok = e instanceof TypeError; } ok",
+    );
+    agrees(
+        "function fn() {} var ok; \
+         try { fn.apply(null, 42); ok = false; } catch (e) { ok = e instanceof TypeError; } ok",
+    );
+    agrees(
+        "function fn() {} var ok; \
+         try { fn.apply(null, 'str'); ok = false; } catch (e) { ok = e instanceof TypeError; } ok",
+    );
+    // undefined / null argArray remain the zero-argument subset (no throw).
+    agrees("function fn() { return arguments.length; } fn.apply(null)");
+    agrees("function fn() { return arguments.length; } fn.apply(null, undefined)");
+    agrees("function fn() { return arguments.length; } fn.apply(null, null)");
+}
+
+// -------------------------------------------------------------------------
+// §9  Calling a bound **native** function dispatches the native in place.
+// -------------------------------------------------------------------------
+
+#[test]
+fn calling_bound_native_dispatches_native() {
+    // `Number.bind(null)` / `Boolean.bind(null)` called (not constructed).
+    agrees("var bnc = Number.bind(null); bnc(42)");
+    agrees("var bbc = Boolean.bind(null); bbc(true)");
+    agrees("var bsc = String.bind(null); bsc(99)");
+    // A native prototype method bound to its receiver, then called.
+    agrees("var p = [1, 2]; var push = Array.prototype.push.bind(p); push(3); p.join(',')");
+    agrees("var mx = Math.max.bind(null, 3); mx(1, 9, 2)");
+    // Bound leading args prepend to the call args for a native.
+    agrees("var pi = parseInt.bind(null, '101'); pi(2)");
+}
+
