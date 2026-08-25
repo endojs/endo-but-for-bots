@@ -384,6 +384,9 @@ export const PeersView = ({ powers, onProfileChange }) => {
           /** @type {Parameters<typeof iterateReader>[0]} */ (
             /** @type {unknown} */ (E(host).followPeerChanges())
           ),
+          // Prefetch a window of changes so a burst does not cost a round-trip
+          // acknowledgement each, matching the other follow views.
+          { buffer: 64 },
         );
         // The change payload itself is unused; any change triggers a reload.
         // eslint-disable-next-line no-unused-vars
