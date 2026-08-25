@@ -1014,6 +1014,25 @@ const makeDaemonCore = async (
         }),
       );
 
+      // Only storage a collected sandbox can still reach has to wait for
+      // that sandbox's cancellation hooks; the rest of the batch reclaims
+      // now, as every collected formula did before sandboxes existed, so one
+      // slow slice does not hold unrelated disk space.
+      /** @type {Set<FormulaIdentifier>} */
+      const collectedSandboxIds = new Set();
+      for (const [id, formula] of collectedFormulas) {
+        if (formula.type === 'sandbox') {
+          collectedSandboxIds.add(id);
+        }
+      }
+      // eslint-disable-next-line no-use-before-define
+      const sandboxReachableIds = sandboxReachableStorageIds(
+        collectedFormulas,
+        collectedSandboxIds,
+      );
+      // eslint-disable-next-line no-use-before-define
+      await reclaimCollectedStorage(collectedFormulas, sandboxReachableIds);
+
       // Cancel controllers and disconnect workers.
       const cancelReason = new Error(
         'became unreachable by any pet name path and was collected',
@@ -1041,16 +1060,18 @@ const makeDaemonCore = async (
         }
       }
 
-      // Reclaim daemon-local storage only after cancellation hooks have
-      // disposed sandbox slices and released their 9P projections.
-      // Content-store blobs use sweep-time reference counting because
-      // multiple readable-blob and readable-tree formulas can dedupe
-      // on the same sha256.  Scratch directories have a 1:1 relationship
-      // with their formula and need no reference count.
+      // Now that cancellation hooks have disposed the slices and released
+      // their 9P projections, reclaim the storage held back above — minus
+      // whatever a sandbox that failed to cancel can still reach.
       // eslint-disable-next-line no-use-before-define
-      await reclaimCollectedStorage(
+      const preservedIds = sandboxReachableStorageIds(
         collectedFormulas,
         sandboxIdsWithFailedCancellation,
+      );
+      // eslint-disable-next-line no-use-before-define
+      await reclaimCollectedDirectories(
+        collectedFormulas,
+        [...sandboxReachableIds].filter(id => !preservedIds.has(id)),
       );
 
       // eslint-disable-next-line no-use-before-define
@@ -1137,6 +1158,94 @@ const makeDaemonCore = async (
   };
 
   /**
+   * Return the collected formulas whose on-disk storage a collected sandbox
+   * can still reach: the sandboxes themselves and every `scratch-mount`
+   * backing under them, following a collected sub-mount up to the
+   * scratch-mount it is rooted in, because one GC batch can collect both
+   * formula types.
+   *
+   * These are the only formulas whose reclamation has to wait for
+   * cancellation; every other collected formula owns storage no live slice
+   * can name.
+   *
+   * @param {Map<FormulaIdentifier, Formula>} collectedFormulasByid
+   * @param {Iterable<FormulaIdentifier>} sandboxIds
+   * @returns {Set<FormulaIdentifier>}
+   */
+  const sandboxReachableStorageIds = (collectedFormulasByid, sandboxIds) => {
+    /** @type {Set<FormulaIdentifier>} */
+    const reachable = new Set();
+    for (const sandboxId of sandboxIds) {
+      const sandboxFormula = collectedFormulasByid.get(sandboxId);
+      if (sandboxFormula?.type === 'sandbox') {
+        reachable.add(sandboxId);
+        /** @type {Set<FormulaIdentifier>} */
+        const visited = new Set();
+        const pendingMountIds = sandboxMountDependencies(
+          sandboxFormula.profile,
+        ).map(([, mountId]) => mountId);
+        while (pendingMountIds.length > 0) {
+          const mountId = pendingMountIds.pop();
+          if (mountId !== undefined && !visited.has(mountId)) {
+            visited.add(mountId);
+            const mountFormula = collectedFormulasByid.get(mountId);
+            if (mountFormula?.type === 'scratch-mount') {
+              reachable.add(mountId);
+            } else if (
+              mountFormula?.type === 'mount' &&
+              mountFormula.parent !== undefined
+            ) {
+              pendingMountIds.push(mountFormula.parent);
+            }
+          }
+        }
+      }
+    }
+    return reachable;
+  };
+
+  /**
+   * Unlink the backing directory of each collected `scratch-mount`
+   * (`{statePath}/mounts/{formulaNumber}`) and `sandbox`
+   * (`{statePath}/sandboxes/{formulaNumber}`) named by `ids`. Both are 1:1
+   * with their formula, so no reference count is needed.
+   *
+   * @param {Map<FormulaIdentifier, Formula>} collectedFormulasByid
+   * @param {Iterable<FormulaIdentifier>} ids
+   * @returns {Promise<void>}
+   */
+  const reclaimCollectedDirectories = async (collectedFormulasByid, ids) => {
+    /** @type {Array<Promise<unknown>>} */
+    const removals = [];
+    for (const id of ids) {
+      const formula = collectedFormulasByid.get(id);
+      const formulaNumber = parseId(id).number;
+      if (formula?.type === 'scratch-mount') {
+        removals.push(
+          filePowers.removeDirectory(
+            filePowers.joinPath(
+              persistencePowers.statePath,
+              'mounts',
+              /** @type {string} */ (formulaNumber),
+            ),
+          ),
+        );
+      } else if (formula?.type === 'sandbox') {
+        removals.push(
+          filePowers.removeDirectory(
+            makeSandboxFormulaPath({
+              statePath: persistencePowers.statePath,
+              formulaNumber,
+              joinPath: filePowers.joinPath,
+            }),
+          ),
+        );
+      }
+    }
+    await Promise.allSettled(removals);
+  };
+
+  /**
    * Reclaim daemon-local on-disk storage owned by a batch of just-
    * collected formulas: orphaned content-store blobs and scratch-mount
    * backing directories.
@@ -1150,18 +1259,18 @@ const makeDaemonCore = async (
    * formula added concurrently is honored as a survivor and its
    * hashes are protected).
    *
-   * Scratch-mount cleanup unlinks `{statePath}/mounts/{formulaNumber}`
-   * for every collected `scratch-mount` formula. Sandbox cleanup unlinks
-   * `{statePath}/sandboxes/{formulaNumber}` after the formula's cancellation
-   * hooks have released its slice and projections.
+   * Directory cleanup covers every collected formula except the ones in
+   * `deferredIds`, whose storage a collected sandbox can still reach and
+   * which `reclaimSandboxReachableStorage` picks up once cancellation has
+   * released the slices.
    *
    * @param {Map<FormulaIdentifier, Formula>} collectedFormulasByid
-   * @param {Set<FormulaIdentifier>} [sandboxIdsToPreserve]
+   * @param {Set<FormulaIdentifier>} [deferredIds]
    * @returns {Promise<void>}
    */
   const reclaimCollectedStorage = async (
     collectedFormulasByid,
-    sandboxIdsToPreserve = new Set(),
+    deferredIds = new Set(),
   ) => {
     /** @type {Set<string>} */
     const candidateHashes = new Set();
@@ -1191,69 +1300,10 @@ const makeDaemonCore = async (
       );
     }
 
-    // A failed sandbox cancellation leaves its live backend or projection
-    // attached to the sandbox state tree. Preserve every scratch-mount
-    // backing that the sandbox reaches, including a parent of a collected
-    // sub-mount, because the same GC batch can collect both formula types.
-    /** @type {Set<FormulaIdentifier>} */
-    const scratchMountIdsToPreserve = new Set();
-    for (const sandboxId of sandboxIdsToPreserve) {
-      const sandboxFormula = collectedFormulasByid.get(sandboxId);
-      if (sandboxFormula?.type === 'sandbox') {
-        const pendingMountIds = sandboxMountDependencies(
-          sandboxFormula.profile,
-        ).map(([, mountId]) => mountId);
-        while (pendingMountIds.length > 0) {
-          const mountId = pendingMountIds.pop();
-          if (
-            mountId !== undefined &&
-            !scratchMountIdsToPreserve.has(mountId)
-          ) {
-            const mountFormula = collectedFormulasByid.get(mountId);
-            if (mountFormula?.type === 'scratch-mount') {
-              scratchMountIdsToPreserve.add(mountId);
-            } else if (
-              mountFormula?.type === 'mount' &&
-              mountFormula.parent !== undefined
-            ) {
-              pendingMountIds.push(mountFormula.parent);
-            }
-          }
-        }
-      }
-    }
-
-    // Scratch-mount backing dirs are 1:1 with their formula; no
-    // reference count needed, except for the live dependencies above.
-    const scratchMountNumbers = [];
-    const sandboxNumbers = [];
-    for (const [id, formula] of collectedFormulasByid) {
-      if (
-        formula.type === 'scratch-mount' &&
-        !scratchMountIdsToPreserve.has(id)
-      ) {
-        scratchMountNumbers.push(parseId(id).number);
-      } else if (formula.type === 'sandbox' && !sandboxIdsToPreserve.has(id)) {
-        sandboxNumbers.push(parseId(id).number);
-      }
-    }
-    const scratchMountCleanup = scratchMountNumbers.map(formulaNumber => {
-      const mountPath = filePowers.joinPath(
-        persistencePowers.statePath,
-        'mounts',
-        /** @type {string} */ (formulaNumber),
-      );
-      return filePowers.removeDirectory(mountPath);
-    });
-    const sandboxCleanup = sandboxNumbers.map(formulaNumber => {
-      const sandboxPath = makeSandboxFormulaPath({
-        statePath: persistencePowers.statePath,
-        formulaNumber,
-        joinPath: filePowers.joinPath,
-      });
-      return filePowers.removeDirectory(sandboxPath);
-    });
-    await Promise.allSettled([...scratchMountCleanup, ...sandboxCleanup]);
+    await reclaimCollectedDirectories(
+      collectedFormulasByid,
+      [...collectedFormulasByid.keys()].filter(id => !deferredIds.has(id)),
+    );
   };
 
   const formulaGraph = makeFormulaGraph({
