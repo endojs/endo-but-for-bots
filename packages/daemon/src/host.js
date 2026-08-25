@@ -52,7 +52,11 @@ import {
 } from './interfaces.js';
 import { hostHelp, makeHelp } from './help-text.js';
 import { assertValidTreeEntryName, getMountBacking } from './mount.js';
-import { assertPositiveInteger, normalizeSandboxProfile } from './sandbox.js';
+import {
+  assertPositiveInteger,
+  assertSandboxMountGrant,
+  normalizeSandboxProfile,
+} from './sandbox.js';
 
 const sandboxMountMethodNames = harden(getInterfaceMethodKeys(MountInterface));
 
@@ -172,19 +176,7 @@ export const normalizeSandboxProfileForHost = async (
         X`provideSandbox: ${q(label)} must be a daemon-minted mount cap`,
       );
     }
-    if (mode === 'rw') {
-      const backing = getMountBacking(cap);
-      if (backing === undefined) {
-        throw makeError(
-          X`provideSandbox: ${q(label)} has unknown write authority and cannot be bound read-write`,
-        );
-      }
-      if (backing.readOnly) {
-        throw makeError(
-          X`provideSandbox: ${q(label)} is a read-only mount and cannot be bound read-write`,
-        );
-      }
-    }
+    assertSandboxMountGrant(cap, mode, label);
     return mountId;
   };
 
