@@ -1028,7 +1028,11 @@ export const makeSandboxFactory = (
     };
 
     const resetSlice = async () => {
-      if (disposePromise !== undefined) return;
+      // Reset is admission-controlled like spawn, mount, and scratch: a
+      // disposed handle has no processes to stop and no scratch to clear, so
+      // reporting success would tell the caller its slice was reset when
+      // nothing was.
+      assertRunning();
       const reason = makeError(X`sandbox handle reset`);
       await Promise.all([
         ...[...liveProcesses].map(lease => lease.killAndReap(reason)),

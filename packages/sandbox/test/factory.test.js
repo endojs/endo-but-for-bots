@@ -284,7 +284,11 @@ test('a containment failure fails the whole slice, not just one process', async 
   await t.throwsAsync(() => E(handle).scratch('/tmp/work'), {
     message: /disposed/,
   });
-  await E(handle).reset();
+  // Reset is admission-controlled like the two above: a disposed slice has
+  // nothing left to reset, so reporting success would misrepresent it.
+  await t.throwsAsync(() => E(handle).reset(), {
+    message: /disposed/,
+  });
   t.is(
     fixture.counts().spawnCalls,
     2,
