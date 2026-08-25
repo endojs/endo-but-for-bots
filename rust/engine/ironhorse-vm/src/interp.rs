@@ -5113,42 +5113,42 @@ impl Interp {
                 2 => self.weakmap_proto = proto,
                 _ => self.weakset_proto = proto,
             }
-            let methods: &[(&'static str, NativeMethod)] = match cache {
+            let methods: &[(&'static str, u32, NativeMethod)] = match cache {
                 0 => &[
-                    ("set", NativeMethod::MapSet),
-                    ("get", NativeMethod::MapGet),
-                    ("has", NativeMethod::MapHas),
-                    ("delete", NativeMethod::MapDelete),
-                    ("forEach", NativeMethod::CollForEach),
-                    ("entries", NativeMethod::CollEntries),
-                    ("keys", NativeMethod::CollKeys),
-                    ("values", NativeMethod::CollValues),
-                    ("clear", NativeMethod::CollClear),
+                    ("set", 2, NativeMethod::MapSet),
+                    ("get", 1, NativeMethod::MapGet),
+                    ("has", 1, NativeMethod::MapHas),
+                    ("delete", 1, NativeMethod::MapDelete),
+                    ("forEach", 1, NativeMethod::CollForEach),
+                    ("entries", 0, NativeMethod::CollEntries),
+                    ("keys", 0, NativeMethod::CollKeys),
+                    ("values", 0, NativeMethod::CollValues),
+                    ("clear", 0, NativeMethod::CollClear),
                 ],
                 1 => &[
-                    ("add", NativeMethod::SetAdd),
-                    ("has", NativeMethod::SetHas),
-                    ("delete", NativeMethod::SetDelete),
-                    ("forEach", NativeMethod::CollForEach),
-                    ("entries", NativeMethod::CollEntries),
+                    ("add", 1, NativeMethod::SetAdd),
+                    ("has", 1, NativeMethod::SetHas),
+                    ("delete", 1, NativeMethod::SetDelete),
+                    ("forEach", 1, NativeMethod::CollForEach),
+                    ("entries", 0, NativeMethod::CollEntries),
                     // Set's `keys`/`values` are bound after this loop as a
                     // single shared function object (see below).
-                    ("clear", NativeMethod::CollClear),
+                    ("clear", 0, NativeMethod::CollClear),
                 ],
                 2 => &[
-                    ("set", NativeMethod::WeakMapSet),
-                    ("get", NativeMethod::WeakMapGet),
-                    ("has", NativeMethod::WeakMapHas),
-                    ("delete", NativeMethod::WeakMapDelete),
+                    ("set", 2, NativeMethod::WeakMapSet),
+                    ("get", 1, NativeMethod::WeakMapGet),
+                    ("has", 1, NativeMethod::WeakMapHas),
+                    ("delete", 1, NativeMethod::WeakMapDelete),
                 ],
                 _ => &[
-                    ("add", NativeMethod::WeakSetAdd),
-                    ("has", NativeMethod::WeakSetHas),
-                    ("delete", NativeMethod::WeakSetDelete),
+                    ("add", 1, NativeMethod::WeakSetAdd),
+                    ("has", 1, NativeMethod::WeakSetHas),
+                    ("delete", 1, NativeMethod::WeakSetDelete),
                 ],
             };
-            for &(m_name, m) in methods {
-                let mf = self.alloc_method(m);
+            for &(m_name, arity, m) in methods {
+                let mf = self.alloc_named_method(m, m_name, arity);
                 self.proto_methods.push((proto, m_name, mf));
             }
             // The two upsert-proposal methods on `Map.prototype` (cache == 0)

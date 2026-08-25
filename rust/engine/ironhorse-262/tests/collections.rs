@@ -94,3 +94,17 @@ fn iteration_is_live_across_deletion_and_append() {
          out.join(',')",
     );
 }
+
+#[test]
+fn collection_builtin_function_metadata_is_reflective() {
+    for source in [
+        "var f = Map.prototype.set; f.name + ':' + f.length",
+        "var f = Set.prototype.add; f.name + ':' + f.length",
+        "var f = Map.prototype.entries; f.name + ':' + f.length",
+        "var f = Set.prototype.forEach; f.name + ':' + f.length",
+        "var f = Map.prototype.get; delete f.name; Object.defineProperty(f, 'name', { value: 'again' }); f.name",
+        "var f = Set.prototype.delete; delete f.length; Object.defineProperty(f, 'length', { value: 7 }); f.length",
+    ] {
+        agrees(source);
+    }
+}
