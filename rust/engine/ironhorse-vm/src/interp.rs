@@ -12709,11 +12709,31 @@ impl Interp {
                         Err(h)
                     }
                 };
-            } else if self.functions[&f].native.is_some() {
-                // A native *constructor/callable* (`parseInt`, …) reaches a
-                // different seam (`call_native`, not `call_native_method`); still
-                // outside the callback subset.
-                return Err(Halt::Unsupported("callback:non-user-function"));
+            } else if let Some(native) = self.functions[&f].native {
+                // A native *callable* callback (`[..].map(parseInt)`,
+                // `[..].forEach(print)`, `arr.filter(Boolean)`, …). It reaches
+                // the `call_native` seam rather than `call_native_method`; drive
+                // it through the same in-place frame the native-method branch
+                // uses. A native *constructor* invoked as a callback (no `new`,
+                // so `has_target = false`) either produces its call-completion
+                // or throws a catchable TypeError inside `call_native`, matching
+                // the oracle. On a throw `call_native` may return WITHOUT
+                // truncating, so restore the stack to `base` before propagating.
+                let base = self.stack.len();
+                self.push(this);
+                self.push(func);
+                self.push(Slot::undefined());
+                self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                for a in args {
+                    self.push(*a);
+                }
+                return match self.call_native(native, base, args.len(), false, code) {
+                    Ok(()) => Ok(self.pop()),
+                    Err(h) => {
+                        self.stack.truncate(base);
+                        Err(h)
+                    }
+                };
             } else {
                 (this, func, args.to_vec())
             };

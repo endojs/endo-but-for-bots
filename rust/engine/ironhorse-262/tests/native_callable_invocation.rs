@@ -106,3 +106,26 @@ fn new_on_call_apply_throws_type_error() {
          catch (e) { ok = e instanceof TypeError; } ok",
     );
 }
+
+// -------------------------------------------------------------------------
+// §5  A **native callable** passed as an Array-method callback — routed
+//     through `call_native` (previously `callback:non-user-function`).
+// -------------------------------------------------------------------------
+
+#[test]
+fn native_callable_as_array_callback() {
+    // `String`/`Number` as a mapper — the callback receives (value, index, O).
+    agrees("[1, 2, 3].map(String).join(',')");
+    agrees("['1', '2', '3'].map(Number).join(',')");
+    // `Boolean` as a filter predicate.
+    agrees("[0, 1, '', 'a', null, 2].filter(Boolean).join(',')");
+    // The canonical `map(parseInt)` foot-gun: radix is the element index, so
+    // parseInt('10',0)=10, parseInt('10',1)=NaN, parseInt('10',2)=2. This
+    // exercises full (element, index, array) argument forwarding to the native.
+    agrees("['10', '10', '10'].map(parseInt).join(',')");
+    // `forEach` with a native callable (its completion is undefined).
+    agrees("var n = 0; [1, 2, 3].forEach(String); typeof [1,2,3].forEach(String)");
+    // `some`/`every` predicates over a native callable.
+    agrees("[0, 0, 0].some(Boolean)");
+    agrees("[1, 2, 3].every(Boolean)");
+}
