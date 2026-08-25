@@ -3493,6 +3493,16 @@ const makeDaemonCore = async (
           makeSandboxFactory,
           makePath: filePowers.makePath,
           removeDirectory: filePowers.removeDirectory,
+          clearDirectory: async directory => {
+            const entries = await filePowers.readDirectory(directory);
+            await Promise.all(
+              entries.map(entry =>
+                filePowers.removeDirectory(
+                  filePowers.joinPath(directory, entry),
+                ),
+              ),
+            );
+          },
           joinPath: filePowers.joinPath,
           escalations: sandboxEscalations,
           // Validate the requested attenuation and the realized projection each

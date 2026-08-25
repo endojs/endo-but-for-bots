@@ -241,9 +241,11 @@ host tools refuses to mint a slice with a diagnosis.
 
 Every grant is projected to a host path through
 [`@endo/9p-server/mount-projection.js`](../9p-server/mount-projection.js):
-a mount the daemon minted over a real directory binds that directory
-directly, and a mount with no local directory (a peer-hosted one, say)
-is served over 9P and attached to a per-slice mountpoint.
+the daemon's sandbox formula intentionally omits the privileged host-path
+resolver, so every granted mount is served over 9P and attached to a per-slice
+mountpoint. The lower-level projector can support a direct physical projection
+when an explicitly trusted caller supplies a resolver, but that path is not a
+general substitute for the confinement checks provided by 9P.
 The factory's privileged `provideHostPath` surface is narrowed to
 exactly the mounts the profile named plus the slice's own scratch, so a
 `sandbox` formula cannot recover the host path of any other

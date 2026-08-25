@@ -94,6 +94,7 @@ harden(makeSandboxFormulaPath);
  * @param {(powers: unknown, context: unknown, options?: object) => Promise<any>} args.makeSandboxFactory
  * @param {(path: string) => Promise<unknown>} args.makePath
  * @param {(path: string) => Promise<unknown>} args.removeDirectory
+ * @param {(path: string) => Promise<void>} [args.clearDirectory]
  * @param {(...components: string[]) => string} args.joinPath
  * @param {{ record: (entry: SandboxEscalationRecord) => unknown }} args.escalations
  * @param {(cap: unknown, mode: 'ro' | 'rw', innerPath: string, projection?: { kind: string }) => void} [args.assertMountGrant]
@@ -115,6 +116,7 @@ export const makeSandboxSlice = async ({
   makeSandboxFactory,
   makePath,
   removeDirectory,
+  clearDirectory,
   joinPath,
   escalations,
   assertMountGrant = () => {},
@@ -122,9 +124,26 @@ export const makeSandboxSlice = async ({
   env = {},
 }) => {
   await null;
-  /** @type {Array<{ innerPath: string, projection: any }>} */
+  /** @type {Array<{ innerPath: string, projection: any } | undefined>} */
   const projections = [];
   const hostPathForGrant = new Map();
+
+  /**
+   * Return the projections that have been realized, in profile order.
+   * Parallel minting may leave holes while sibling operations are in flight.
+   *
+   * @returns {Array<{ innerPath: string, projection: any }>}
+   */
+  const realizedProjections = () => {
+    /** @type {Array<{ innerPath: string, projection: any }>} */
+    const realized = [];
+    for (const entry of projections) {
+      if (entry !== undefined) {
+        realized.push(entry);
+      }
+    }
+    return realized;
+  };
 
   /**
    * Release this slice's projections, most recent first. `release()`
@@ -135,21 +154,23 @@ export const makeSandboxSlice = async ({
     /** @type {unknown[]} */
     const failures = [];
     let allDetached = true;
-    for (const { projection } of [...projections].reverse()) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const detached = await projection.release();
-        if (projection.kind === '9p' && detached !== true) {
-          allDetached = false;
-          failures.push(
-            makeError(
-              X`9P projection at ${q(projection.hostPath)} did not confirm detachment`,
-            ),
-          );
-        }
-      } catch (error) {
+    const releaseOrder = realizedProjections().reverse();
+    const releaseResults = await Promise.allSettled(
+      releaseOrder.map(async ({ projection }) => projection.release()),
+    );
+    for (let index = 0; index < releaseOrder.length; index += 1) {
+      const { projection } = releaseOrder[index];
+      const result = releaseResults[index];
+      if (result.status === 'rejected') {
         allDetached = false;
-        failures.push(error);
+        failures.push(result.reason);
+      } else if (projection.kind === '9p' && result.value !== true) {
+        allDetached = false;
+        failures.push(
+          makeError(
+            X`9P projection at ${q(projection.hostPath)} did not confirm detachment`,
+          ),
+        );
       }
     }
     if (allDetached) {
@@ -173,6 +194,35 @@ export const makeSandboxSlice = async ({
     return failures;
   };
 
+  /** @type {SandboxEscalationRecord | undefined} */
+  let escalationRecorded;
+  /**
+   * Record every mint attempt exactly once. A failed attempt is recorded
+   * before cleanup, so the entry describes the authority and projections
+   * that were actually assembled even when the backend cannot make a
+   * slice from them.
+   */
+  const recordEscalation = () => {
+    if (escalationRecorded !== undefined) return;
+    const record = harden({
+      sandboxId,
+      reason: profile.escalation.reason,
+      capability: profile.escalation.capability,
+      backend: profile.backend,
+      network: profile.network,
+      projections: harden(
+        realizedProjections().map(({ innerPath, projection }) =>
+          harden({
+            innerPath,
+            kind: /** @type {SandboxMountProjection} */ (projection.kind),
+          }),
+        ),
+      ),
+    });
+    escalationRecorded = record;
+    escalations.record(record);
+  };
+
   try {
     // The state path belongs exclusively to this incarnation. Initialize it
     // empty before exposing scratch space or projection mount points.
@@ -181,22 +231,21 @@ export const makeSandboxSlice = async ({
 
     // Project each granted mount to a bindable host path: its own directory
     // when eligible, a 9P projection otherwise.
-    let index = 0;
     /**
      * @param {FormulaIdentifier} mountId
      * @param {string} innerPath
      * @param {'ro' | 'rw'} mode
+     * @param {number} projectionIndex
      */
-    const project = async (mountId, innerPath, mode) => {
+    const project = async (mountId, innerPath, mode, projectionIndex) => {
       const cap = await provideMount(mountId);
       assertMountGrant(cap, mode, innerPath);
       const projection = await projector.projectMount(cap, {
-        mountPoint: joinPath(statePath, 'mnt', `${index}`),
+        mountPoint: joinPath(statePath, 'mnt', `${projectionIndex}`),
         readOnly: mode === 'ro',
         label: innerPath,
       });
-      index += 1;
-      projections.push({ innerPath, projection });
+      projections[projectionIndex] = { innerPath, projection };
       // Register the projection before validating its realized kind so
       // cleanup includes it if validation rejects.
       assertMountGrant(cap, mode, innerPath, projection);
@@ -208,25 +257,53 @@ export const makeSandboxSlice = async ({
       return grant;
     };
 
-    /** @type {unknown} */
-    let rootfsArg;
+    let projectionIndex = 0;
+    /** @type {Promise<unknown>} */
+    let rootfsPromise;
     if (profile.rootfs.kind === 'mount') {
-      rootfsArg = await project(profile.rootfs.mountId, '/', 'ro');
+      rootfsPromise = project(
+        profile.rootfs.mountId,
+        '/',
+        'ro',
+        projectionIndex,
+      );
+      projectionIndex += 1;
     } else {
-      rootfsArg = harden({ ...profile.rootfs });
+      rootfsPromise = Promise.resolve(harden({ ...profile.rootfs }));
     }
 
-    /** @type {Array<{ cap: unknown, innerPath: string, mode: 'ro' | 'rw' }>} */
-    const mountArgs = [];
-    for (const mount of profile.mounts) {
-      // Sequential: each projection may stand up a kernel mount, and a
-      // half-failed set must be unwindable, not raced.
-      // eslint-disable-next-line no-await-in-loop
-      const cap = await project(mount.mountId, mount.innerPath, mount.mode);
-      mountArgs.push(
-        harden({ cap, innerPath: mount.innerPath, mode: mount.mode }),
+    const mountPromises = profile.mounts.map(mount => {
+      const currentProjectionIndex = projectionIndex;
+      projectionIndex += 1;
+      return project(
+        mount.mountId,
+        mount.innerPath,
+        mount.mode,
+        currentProjectionIndex,
+      ).then(cap =>
+        harden({
+          cap,
+          innerPath: mount.innerPath,
+          mode: mount.mode,
+        }),
       );
+    });
+    const projectionResults = await Promise.allSettled([
+      rootfsPromise,
+      ...mountPromises,
+    ]);
+    const projectionFailure = projectionResults.find(
+      result => result.status === 'rejected',
+    );
+    if (projectionFailure?.status === 'rejected') {
+      throw projectionFailure.reason;
     }
+    const [rootfsArg, ...mountArgs] = projectionResults.map(result => {
+      if (result.status === 'rejected') {
+        throw result.reason;
+      }
+      return result.value;
+    });
 
     // The slice's writable upper layer. Ephemeral like the slice itself:
     // it is re-created empty when the formula reincarnates.
@@ -234,6 +311,20 @@ export const makeSandboxSlice = async ({
     await makePath(scratchPath);
     const scratchPathForToken = new Map();
     const scratchTokenForName = new Map();
+
+    const resetScratch = async () => {
+      // Keep each scratch root directory itself intact because the backend
+      // may still hold a bind mount to that inode after its processes stop.
+      // Clear its children, then discard the daemon-side token memo so a
+      // subsequent request cannot reuse an old capability token.
+      if (clearDirectory !== undefined) {
+        await Promise.all(
+          [...new Set(scratchPathForToken.values())].map(clearDirectory),
+        );
+      }
+      scratchTokenForName.clear();
+      scratchPathForToken.clear();
+    };
 
     // The factory's privileged surface, narrowed to this slice: the mounts
     // this formula declared and its own scratch, nothing else.
@@ -275,6 +366,7 @@ export const makeSandboxSlice = async ({
       env,
       ownerId: sandboxId,
       onHandleDisposed: () => handleBackendDisposal(),
+      resetScratch,
     });
 
     const slice = await E(factory).make(
@@ -290,23 +382,7 @@ export const makeSandboxSlice = async ({
       }),
     );
 
-    escalations.record(
-      harden({
-        sandboxId,
-        reason: profile.escalation.reason,
-        capability: profile.escalation.capability,
-        backend: profile.backend,
-        network: profile.network,
-        projections: harden(
-          projections.map(({ innerPath, projection }) =>
-            harden({
-              innerPath,
-              kind: /** @type {SandboxMountProjection} */ (projection.kind),
-            }),
-          ),
-        ),
-      }),
-    );
+    recordEscalation();
 
     /** @type {Promise<void> | undefined} */
     let releasePromise;
@@ -398,11 +474,22 @@ export const makeSandboxSlice = async ({
 
     return harden({ slice: publicSlice, release });
   } catch (error) {
+    /** @type {unknown | undefined} */
+    let escalationFailure;
+    try {
+      recordEscalation();
+    } catch (recordError) {
+      escalationFailure = recordError;
+    }
     // Unwind the projections this attempt stood up; a half-built slice
     // must not leave kernel mounts behind.
     const cleanupFailures = await cleanupResources();
     return throwFailures(
-      [error, ...cleanupFailures],
+      [
+        error,
+        ...(escalationFailure === undefined ? [] : [escalationFailure]),
+        ...cleanupFailures,
+      ],
       `Sandbox ${q(sandboxId)} mint cleanup failed`,
     );
   }

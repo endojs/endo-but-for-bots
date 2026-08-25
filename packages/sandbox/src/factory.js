@@ -301,7 +301,13 @@ const resolveHostPath = async (scratchProvider, cap, context) => {
  * @returns {SandboxFactory}
  */
 export const makeSandboxFactory = (
-  { drivers, scratchProvider, context, onHandleDisposed },
+  {
+    drivers,
+    scratchProvider,
+    context,
+    onHandleDisposed,
+    resetScratch = async () => {},
+  },
   { makeDelay = delay } = {},
 ) => {
   const driverList = harden([...drivers]);
@@ -1028,6 +1034,10 @@ export const makeSandboxFactory = (
         ...[...liveProcesses].map(lease => lease.killAndReap(reason)),
         ...[...scratchMounts].map(m => E(m).unmount()),
       ]);
+      // The daemon owns the scratch directory and its capability-token
+      // bookkeeping. Clear it only after every process has stopped, while
+      // preserving any directory inode still used as a bind source.
+      await resetScratch();
     };
 
     /**

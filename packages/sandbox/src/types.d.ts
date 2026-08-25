@@ -471,9 +471,9 @@ export type SandboxDriver = {
  * capability into a host filesystem path so the driver can issue a
  * bind-mount.
  *
- * Cap-to-path resolution is the *only* privileged operation the factory
- * performs; drivers never see Endo capabilities directly. The daemon's
- * `EndoHost` exposes both `provideScratchMount` and `provideHostPath`,
+ * Scratch allocation and cap-to-path resolution are privileged operations;
+ * drivers never see Endo capabilities directly. The daemon's `EndoHost`
+ * exposes both `provideScratchMount` and `provideHostPath`,
  * so a caller invoking `endo run --UNCONFINED packages/sandbox/src/agent.js`
  * with `--powers @host` (the default for `make-unconfined`) gets the
  * full `SandboxPowers` surface for free — no per-caller stub is
@@ -519,4 +519,6 @@ export type MakeSandboxFactoryInput = {
   context?: ERef<{ whenCancelled(): Promise<unknown> }>;
   /** Notification after a handle tears down its backend resources. */
   onHandleDisposed?: () => void | Promise<void>;
+  /** Clear this slice's scratch contents and invalidate scratch tokens. */
+  resetScratch?: () => void | Promise<void>;
 };

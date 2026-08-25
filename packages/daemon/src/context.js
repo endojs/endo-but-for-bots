@@ -161,7 +161,12 @@ export const makeContextMaker = ({
         // Once disposal has already settled, no existing promise can be
         // extended retroactively. Still run the hook and report its result to
         // the caller that registered it.
-        return Promise.resolve().then(hook);
+        const lateHook = Promise.resolve().then(hook);
+        // Existing callers register cleanup without awaiting the return
+        // value. Keep the rejection available to callers that do await it,
+        // while preventing an unhandled rejection when they do not.
+        lateHook.catch(() => {});
+        return lateHook;
       }
       hooks.push(hook);
       return Promise.resolve();
