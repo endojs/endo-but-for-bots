@@ -490,8 +490,8 @@ weighting a security primitive should take.
 Note (out of scope): whether `Object.preventExtensions` should succeed at all on
 a length-tracking view over a resizable buffer (V8 allows it today, after which
 growth still adds indices to a hardened array) is a pre-existing `harden`
-question this design does not create and does not absorb; it belongs on its own
-issue.
+question this design does not create and does not absorb; follow-up is tracked
+in [issue #1062](https://github.com/endojs/endo-but-for-bots/issues/1062).
 
 ## Implementation and Test Plan
 
