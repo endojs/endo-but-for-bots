@@ -129,3 +129,50 @@ fn native_callable_as_array_callback() {
     agrees("[0, 0, 0].some(Boolean)");
     agrees("[1, 2, 3].every(Boolean)");
 }
+
+// -------------------------------------------------------------------------
+// §6  `new` on a **bound** function — construct the ultimate target with the
+//     bound args prepended and `new.target` resolved to the target.
+// -------------------------------------------------------------------------
+
+#[test]
+fn new_on_bound_function_constructs_target() {
+    // Bound leading args form the former part of the construct arguments.
+    agrees(
+        "var func = function (x, y, z) { this.v = x + y + z; this.ok = arguments.length === 3; }; \
+         var NF = Function.prototype.bind.call(func, {}, 'a', 'b', 'c'); \
+         var i = new NF(); i.v + '/' + i.ok",
+    );
+    // Call args form the latter part.
+    agrees(
+        "var func = function (x, y, z) { this.v = x + y + z; this.ok = arguments.length === 3; }; \
+         var NF = Function.prototype.bind.call(func, {}); \
+         var i = new NF('a', 'b', 'c'); i.v + '/' + i.ok",
+    );
+    // Mixed: bound + call args concatenate in order.
+    agrees(
+        "function P(a, b, c, d) { this.s = a + b + c + d; } \
+         var B = P.bind(null, 1, 2); var p = new B(3, 4); p.s",
+    );
+    // The instance's prototype is the target's prototype (not the bound fn's).
+    // (Compared against a plain `new A()` rather than the `A.prototype` own
+    // property, which ironhorse does not yet materialize — a pre-existing gap
+    // orthogonal to bound construction.)
+    agrees(
+        "function A() {} var B = A.bind(); var b = new B(); \
+         Object.getPrototypeOf(b) === Object.getPrototypeOf(new A())",
+    );
+    agrees("function A() {} var B = A.bind(); (new B()) instanceof A");
+    // new.target chains through bound-of-bound to the innermost target.
+    agrees(
+        "var nt; function A() { nt = new.target; } \
+         var B = A.bind(); var C = B.bind(); var c = new C(); \
+         (nt === A) && (c instanceof A)",
+    );
+    // A constructor that returns an object overrides the constructed `this`.
+    agrees(
+        "function F() { return { tag: 'override' }; } \
+         var B = F.bind(); (new B()).tag",
+    );
+}
+

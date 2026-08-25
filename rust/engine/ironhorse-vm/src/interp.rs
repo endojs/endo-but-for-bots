@@ -10307,11 +10307,35 @@ impl Interp {
                     } else if let Some((bf, base)) = bound {
                         // A bound function (`fx_Function_prototype_bound`):
                         // re-enter the target with the bound `this` and the
-                        // bound args prepended to the call args. `new boundF()`
-                        // needs the construct-target geometry — a later
-                        // increment, so it self-names.
+                        // bound args prepended to the call args.
                         if has_target {
-                            return Halt::Unsupported("bind:new-bound");
+                            // `new boundF(...)`: a non-constructor target throws
+                            // a catchable TypeError; otherwise construct the
+                            // ultimate target with the bound args prepended
+                            // (`new.target` → the ultimate target).
+                            if !self.slot_is_constructor(bf) {
+                                dispatch_result!(
+                                    Err::<(), Halt>(self.catchable_type_error()),
+                                    pc,
+                                    self,
+                                    return_depth
+                                );
+                                if self.check_meter() == MeterCheck::Abort {
+                                    return Halt::MeterAbort;
+                                }
+                                pc = ret_pc;
+                                continue;
+                            }
+                            match self.enter_construct_bound(bf, base, argc, ret_pc) {
+                                Ok(body_start) => {
+                                    if self.check_meter() == MeterCheck::Abort {
+                                        return Halt::MeterAbort;
+                                    }
+                                    pc = body_start;
+                                    continue;
+                                }
+                                Err(h) => return h,
+                            }
                         }
                         // The test262 property harness captures uncurried
                         // primordials with
@@ -19957,6 +19981,70 @@ impl Interp {
         self.meter
             .tick_raw(BIND_CALL_METERING + total as u64 * BIND_CALL_PER_ARG);
         self.enter_call(total, ret_pc, false)
+    }
+
+    /// A bound function's **construct** (`new boundF(...)`, ECMA-262 10.4.1.2
+    /// `[[Construct]]`): construct the ultimate target with the bound leading
+    /// arguments prepended to the call arguments, and the fresh instance's
+    /// `new.target` resolved to that ultimate target. The stack at `base` holds
+    /// the construct frame `[THIS(uninit), FUNCTION(bound), RESULT, FRAME,
+    /// callArgs...]`; reshape it to the target's construct frame and enter.
+    ///
+    /// The bound chain is walked to its ultimate target, prepending each
+    /// level's bound args **inner-first** (`args = innerBound ++ … ++ outerBound
+    /// ++ callArgs`, the fold of step 1's `boundArgs ++ argumentsList` down the
+    /// chain). For the plain `new` operator the `new.target` supplied to the
+    /// outermost bound is the bound itself, and step 5 (`SameValue(F, newTarget)
+    /// → target`) applies at every level, so the effective `new.target` is the
+    /// ultimate target — its `.prototype` becomes the instance's prototype
+    /// (via [`Self::run_constructor`] reading `target_func`). A native or
+    /// non-constructor ultimate target is not yet modeled and self-names.
+    fn enter_construct_bound(
+        &mut self,
+        bf: crate::value::SlotIndex,
+        base: usize,
+        argc: usize,
+        ret_pc: usize,
+    ) -> Result<usize, Halt> {
+        let call_args: Vec<Slot> = if argc >= 1 {
+            self.stack[base + 4..base + 4 + argc].to_vec()
+        } else {
+            Vec::new()
+        };
+        let mut acc = call_args;
+        let mut cur = bf;
+        let target = loop {
+            let data = self.bound_functions[&cur].clone();
+            // Prepend this level's bound args ahead of the accumulated tail.
+            let mut prepended = data.args;
+            prepended.extend_from_slice(&acc);
+            acc = prepended;
+            let t = data.target;
+            if self.bound_functions.contains_key(&t) {
+                cur = t;
+                continue;
+            }
+            match self.functions.get(&t) {
+                Some(fi) if fi.native.is_none() && fi.method.is_none() => break t,
+                _ => return Err(Halt::Unsupported("bind:new-bound-target")),
+            }
+        };
+        let total = acc.len();
+        self.stack.truncate(base);
+        self.stack.push(Slot::uninitialized()); // THIS (construct placeholder)
+        self.stack
+            .push(Slot::of(Kind::Reference, Payload::Reference(target))); // FUNCTION
+        self.stack.push(Slot::undefined()); // RESULT
+        self.stack
+            .push(Slot::of(Kind::Uninitialized, Payload::None)); // FRAME
+        for a in acc {
+            self.stack.push(a);
+        }
+        // `new.target` resolves to the ultimate target (see the doc comment).
+        self.pending_new_target = Some(target);
+        self.meter
+            .tick_raw(BIND_CALL_METERING + total as u64 * BIND_CALL_PER_ARG);
+        self.enter_call(total, ret_pc, true)
     }
 
     /// `Error.prototype.toString` over an arbitrary object receiver. The
