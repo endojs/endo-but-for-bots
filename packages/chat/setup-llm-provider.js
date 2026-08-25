@@ -45,7 +45,11 @@ export const main = async agent => {
   }
 
   console.log(`Setting up LLM provider "${name}" (${host}, ${model})`);
-  const messages = iterateReader(E(agent).followMessages());
+  const messages = iterateReader(E(agent).followMessages(), {
+    // Prefetch a window so an existing mailbox is not walked one round trip
+    // per message at startup.
+    buffer: 64,
+  });
 
   console.log('Scanning inbox for form from llm-provider-factory-handle...');
 

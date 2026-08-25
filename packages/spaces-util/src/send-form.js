@@ -3,6 +3,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { EndoHost } from '@endo/daemon' */
+/** @import { IterateReaderOptions } from '@endo/exo-stream' */
 /** @import { HopPolicy, HopState, HeatEvent } from './composite-heat-engine.js' */
 
 /**
@@ -245,7 +246,7 @@ harden(ReplyContextBar);
  * @param {HTMLElement} options.$sendButton - Send button element
  * @param {HTMLElement} options.$chatBar - Chat bar element (for submitting class)
  * @param {typeof import('@endo/eventual-send').E} options.E - Eventual send function
- * @param {(ref: unknown) => AsyncIterable<unknown>} options.iterateReader - Ref iterator factory
+ * @param {(ref: unknown, options?: IterateReaderOptions) => AsyncIterable<unknown>} options.iterateReader - Ref iterator factory
  * @param {ERef<EndoHost>} options.powers - Powers object
  * @param {(value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>} [options.showValue] - Display a value
  * @param {() => boolean} [options.shouldHandleEnter] - Optional callback to check if Enter should be handled
@@ -442,6 +443,9 @@ export const sendFormComponent = ({
             /** @type {Parameters<typeof iterateReader>[0]} */ (
               /** @type {unknown} */ (eventsRef)
             ),
+            // Prefetch a window so a burst of heat events does not cost a
+            // round-trip acknowledgement each.
+            { buffer: 64 },
           );
           (async () => {
             for await (const event of eventIter) {
