@@ -651,7 +651,7 @@ export const createCommandExecutor = ({
               () =>
                 reject(
                   new Error(
-                    `Accept timed out after 60s. Ensure both nodes have networking enabled (/network or /network-iroh).`,
+                    `Accept timed out after 60s. Ensure both nodes have networking enabled (/network, /network-iroh, or /network-ocapn).`,
                   ),
                 ),
               60_000,
@@ -733,6 +733,45 @@ export const createCommandExecutor = ({
           return {
             success: true,
             message: `TCP network started on ${effectiveHostPort}`,
+          };
+        }
+
+        case 'network-ocapn': {
+          const effectiveModulePath =
+            String(params.modulePath || '') ||
+            // @ts-ignore Vite injects this at build time
+            (import.meta.env?.OCAPN_PATH ?? '');
+          const effectiveHost = String(params.host || '') || '127.0.0.1';
+          const effectivePort = String(params.port || '') || '0';
+          const effectiveHostPort = `${effectiveHost}:${effectivePort}`;
+
+          if (!effectiveModulePath) {
+            return {
+              success: false,
+              message:
+                'Module path required. Provide the file:// URL to networks/ocapn.js',
+            };
+          }
+
+          // Store the listen address before installing so the
+          // transport binds where the user asked. Port `0` lets the
+          // OS pick an ephemeral port; the transport persists the
+          // resolved `host:port` back to `ocapn-listen-addr` so it
+          // stays stable across restarts.
+          await E(powers).storeValue(effectiveHostPort, 'ocapn-listen-addr');
+          console.log(
+            `[Chat] /network-ocapn: loading module ${effectiveModulePath}`,
+          );
+          await E(powers).makeUnconfined('@main', effectiveModulePath, {
+            powersName: '@agent',
+            resultName: 'network-service-ocapn',
+          });
+          console.log(`[Chat] /network-ocapn: moving to @nets/ocapn`);
+          await E(powers).move(['network-service-ocapn'], ['@nets', 'ocapn']);
+          console.log(`[Chat] /network-ocapn: OCapN-Noise network ready`);
+          return {
+            success: true,
+            message: `OCapN-Noise network started on ${effectiveHostPort}`,
           };
         }
 

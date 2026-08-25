@@ -279,6 +279,7 @@ LLM-agent stack).*
 | [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md) | 2026-02-24 | 2026-03-02 | **Complete** |
 | [daemon-agent-network-identity](daemon-agent-network-identity.md) | 2026-03-02 | 2026-03-18 | In Progress |
 | [daemon-agent-tools](daemon-agent-tools.md) | 2026-03-02 | 2026-08-06 | In Progress |
+| [daemon-ocapn-external-connectivity](daemon-ocapn-external-connectivity.md) | 2026-05-21 | 2026-05-21 | In Progress |
 | [daemon-commands-as-messages](daemon-commands-as-messages.md) | 2026-03-11 | 2026-03-11 | Not Started |
 | [daemon-capability-bank](daemon-capability-bank.md) | 2026-02-15 | 2026-02-24 | Not Started |
 | [daemon-checkin-checkout](daemon-checkin-checkout.md) | 2026-03-17 | 2026-05-19 | **Complete** |
@@ -589,6 +590,7 @@ flowchart TD
         okey[ocapn-noise-key-only-session-boundary]
         oreconn[ocapn-noise-session-reconnect]
         oortho[ocapn-orthogonal-persistence<br/><i>IN PROGRESS</i>]
+        docapn[daemon-ocapn-external-connectivity<br/><i>IN PROGRESS</i>]
         onet --> otcp --> onoise
         orev --> onoise
         dnet --> onoise
@@ -599,6 +601,10 @@ flowchart TD
         orev --> oreconn
         onoise --> oortho
         oreconn --> oortho
+        onet --> docapn
+        onoise --> docapn
+        oreconn --> docapn
+        dnet --> docapn
     end
 
     subgraph Chat UX
@@ -867,6 +873,7 @@ finalized.
 | cbor-codec | Phase 1 implemented | Shared canonical-CBOR primitive codec (`@endo/cbor`) extracted from `packages/ocapn/src/cbor` and PR #124's `packages/slots/src/cbor.js`; also serves the M11 `endor` slot-machine line; complement of the framing package `@endo/cbor-frame` (impl PR #288; proposed as `@endo/cbors`) |
 | ocapn-noise-cryptographic-review | Not Started | External review coordination |
 | daemon-agent-network-identity | Not Started | Per-agent keypairs for network identity |
+| daemon-ocapn-external-connectivity | In Progress | Daemon adopts `@endo/ocapn` for the daemon-to-daemon peer edge; retires the bespoke `EndoNetwork`/`EndoGreeter`/`RemoteControl` CapTP peer stack. Worker, CLI, and web-gateway edges stay CapTP. Satisfies the daemon-integration half of the M4 exit criterion (implementation in-flight: PRs #340, #684, #688, #693) |
 | ~~ocapn-noise-network~~ | **Complete** | Noise IK netlayer for OCapN landed via PR #137 (merged 2026-05-08), consolidating the stacked PRs #111 (CBOR codec) + #112 (Noise IK netlayer) + #113 (transport tests) |
 | ~~ocapn-iroh-netlayer~~ | **Complete** | iroh 1.0 QUIC netlayer for `@endo/ocapn` (`@endo/ocapn-iroh`): dial-by-EndpointId with discovery/relays, netstring framing under the `ocapn/netstring/0` ALPN, standard `op:start-session`; implemented with the design |
 | ocapn-orthogonal-persistence | In Progress | Phases 1-4 landed and hardened 2026-07-17: `@endo/thixotrope` with resumable sessions at the export-table layer, real XS heap snapshots (`rust/thixotrope-xs-worker` + `makeXsEngine`), sleepy workers with delivered-watermark journals, durable host exports and cross-worker object/promise links, the worker controller, at-most-once host obligations, and post-ultrareview crash hardening. Vat-level GC landed ahead of schedule (collectVats mark-and-sweep, retireWorker with tombstoned links, unpublish, shared-snapshot-ref guard). Doc now also carries the accepted forward plans: Phase 7 name hub + upgrade-by-rebinding (pet-store-style indirection preserving orthogonal purity — no in-place code upgrade, succession + name rebinding instead) and vat-level GC with explicit retirement; Phase 8 resource vats; Phase 9 non-reifying (comms-vat) host adopting the tables records as c-lists. Remaining implementation: Phases 5-9 plus ses lockdown on XS |

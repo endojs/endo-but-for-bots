@@ -27,6 +27,7 @@
     ".": "./index.js",
     "./reader.js": "./reader.js",
     "./writer.js": "./writer.js",
+    "./graceful-reader.js": "./graceful-reader.js",
     "./package.json": "./package.json"
   },
   "scripts": {

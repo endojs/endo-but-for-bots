@@ -411,6 +411,8 @@ export const makeOcapn = async ({
     // network has already framed/decrypted.
     const runPump = async () => {
       await null;
+      /** @type {Error | undefined} */
+      let pumpError;
       try {
         for (;;) {
           // eslint-disable-next-line no-await-in-loop
@@ -429,12 +431,30 @@ export const makeOcapn = async ({
             } catch (_e) {
               // ignore secondary failures during teardown
             }
+            pumpError = /** @type {Error} */ (err);
             break;
           }
         }
+      } catch (err) {
+        pumpError = /** @type {Error} */ (err);
       } finally {
         if (!isDestroyed) {
           isDestroyed = true;
+          // Tear down the OCapN client first so every pending
+          // `op:deliver` answer rejects with a disconnect error,
+          // not just sits forever on the answer table; then drop
+          // the session from the session manager so subsequent
+          // `provideSession` calls open a new one instead of
+          // resurrecting this dead one. The legacy NetLayer path
+          // does the same dance in `handleConnectionClose`; the
+          // OcapnNetwork path needs to mirror it because the
+          // network's session lifecycle (transport shutdown, EOF
+          // on the reader, peer crash, …) all funnel through this
+          // `runPump` finally rather than through
+          // `handleConnectionClose`.
+          internalSession.ocapn.abort(
+            pumpError ?? Error('OCapN session ended'),
+          );
           sessionManager.endSession(internalSession);
         }
       }

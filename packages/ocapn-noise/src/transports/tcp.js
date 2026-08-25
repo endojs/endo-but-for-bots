@@ -10,6 +10,7 @@ import net from 'node:net';
 import harden from '@endo/harden';
 import { makeNodeReader } from '@endo/stream-node/reader.js';
 import { makeNodeWriter } from '@endo/stream-node/writer.js';
+import { makeGracefulReader } from '@endo/stream-node/graceful-reader.js';
 import { makeNetstringReader, makeNetstringWriter } from '@endo/netstring';
 
 const { isNaN } = Number;
@@ -22,6 +23,13 @@ const { isNaN } = Number;
  * reader.
  */
 const MAX_FRAME_LENGTH = 65_551;
+
+// A destroyed socket (which `shutdown()` does, and which a peer crash
+// produces) rejects any pending `reader.next()` with
+// `ERR_STREAM_PREMATURE_CLOSE`; a destroyed socket *is* a closed stream, so
+// `makeGracefulReader` converts that rejection into an orderly
+// `{ done: true }` for the session layer above. See
+// `@endo/stream-node/graceful-reader.js`.
 
 /**
  * TCP byte-stream transport.
@@ -84,12 +92,16 @@ export const makeTcpTransport = ({
     const rawWriter = makeNodeWriter(socket);
     if (framing === 'none') {
       return harden({
-        reader: /** @type {any} */ (rawReader),
+        reader: /** @type {any} */ (makeGracefulReader(rawReader)),
         writer: /** @type {any} */ (rawWriter),
       });
     }
     const reader = /** @type {any} */ (
-      makeNetstringReader(rawReader, { maxMessageLength: MAX_FRAME_LENGTH })
+      makeGracefulReader(
+        /** @type {any} */ (
+          makeNetstringReader(rawReader, { maxMessageLength: MAX_FRAME_LENGTH })
+        ),
+      )
     );
     const writer = /** @type {any} */ (makeNetstringWriter(rawWriter));
     return harden({ reader, writer });
