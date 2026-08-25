@@ -299,6 +299,9 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['formulateWorker']} args.formulateWorker
  * @param {DaemonCore['formulateHost']} args.formulateHost
  * @param {DaemonCore['formulateGuest']} args.formulateGuest
+ * @param {(agentId: FormulaIdentifier, nodeNumber?: NodeNumber) => Promise<FormulaIdentifier>} args.formulateHandle
+ *   Mint an additional handle formula for an already-incarnated guest or
+ *   host, so a second pet name can alias it.
  * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
  * @param {DaemonCore['formulateEval']} args.formulateEval
  * @param {DaemonCore['formulateUnconfined']} args.formulateUnconfined
@@ -359,6 +362,7 @@ export const makeHostMaker = ({
   formulateWorker,
   formulateHost,
   formulateGuest,
+  formulateHandle,
   formulateMarshalValue,
   formulateEval,
   formulateUnconfined,
@@ -1930,6 +1934,26 @@ export const makeHostMaker = ({
             guestLabel,
           );
         guest = { value: Promise.resolve(value), id };
+      } else if (handleName !== undefined) {
+        // Reusing an existing guest (found via agentName) under a new
+        // handle name still needs its own handle binding: the deferred
+        // tasks that would bind it only run when the guest formula itself
+        // is created, above.
+        const { namePath: handlePath, petName: handlePetName } =
+          petNamePathFrom(handleName);
+        const alreadyBound =
+          handlePath.length === 1
+            ? petStore.identifyLocal(handlePetName) !== undefined
+            : (await E(directory).identify(...handlePath)) !== undefined;
+        if (!alreadyBound) {
+          const { node: guestNodeNumber } = parseId(guest.id);
+          const newHandleId = await formulateHandle(guest.id, guestNodeNumber);
+          if (handlePath.length === 1) {
+            await petStore.storeIdentifier(handlePetName, newHandleId);
+          } else {
+            await E(directory).storeIdentifier(handlePath, newHandleId);
+          }
+        }
       }
 
       await introduceNamesToAgent(
@@ -1976,11 +2000,17 @@ export const makeHostMaker = ({
           }
         }
         if (normalizedOpts.authority !== undefined || retainedAuthority) {
-          const authorityBindings = new Set([
-            ...Object.keys(normalizedOpts.authority?.mount ?? {}),
-            ...Object.keys(normalizedOpts.authority?.git ?? {}),
-            ...Object.keys(normalizedOpts.authority?.gitRemote ?? {}),
-          ]);
+          const authorityBindings =
+            normalizedOpts.authority !== undefined
+              ? new Set([
+                  ...Object.keys(normalizedOpts.authority.mount ?? {}),
+                  ...Object.keys(normalizedOpts.authority.git ?? {}),
+                  ...Object.keys(normalizedOpts.authority.gitRemote ?? {}),
+                ])
+              : // Reconnecting without a new `authority` argument still binds
+                // the previously granted authority, so the collision guard
+                // must consult what was actually retained.
+                await retainedAuthorityBindings(namePath);
           for (const [hostName, guestName] of Object.entries(
             normalizedOpts.introducedNames,
           )) {
@@ -2414,7 +2444,7 @@ export const makeHostMaker = ({
     // Named guest provisioning extends the existing provideGuest lifecycle.
     // The host validates and retains immutable authority before minting any
     // capability aliases. Path powers are injected by the supervisor.
-    const { hasGuestAuthority, provideGuestAuthority } =
+    const { hasGuestAuthority, provideGuestAuthority, retainedAuthorityBindings } =
       makeGuestAuthorityProvider({
         pathPowers: provisionPathPowers,
         has,

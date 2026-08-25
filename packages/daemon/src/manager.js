@@ -5086,6 +5086,24 @@ const makeDaemonCore = async (
   };
 
   /**
+   * Mint an additional handle formula for an already-incarnated agent, so a
+   * second pet name can alias an existing guest or host without minting a
+   * duplicate agent.
+   *
+   * @param {FormulaIdentifier} agentId - The formula identifier of the handle's agent.
+   * @param {NodeNumber} [nodeNumber] - The node number to use (defaults to localNodeNumber).
+   * @returns {Promise<FormulaIdentifier>}
+   */
+  const formulateHandle = async (agentId, nodeNumber = localNodeNumber) => {
+    await null;
+    return formulateNumberedHandle(
+      /** @type {FormulaNumber} */ (await randomHex256()),
+      agentId,
+      nodeNumber,
+    );
+  };
+
+  /**
    * Formulates a `pet-store` formula and synchronously adds it to the formula graph.
    * The returned promise is resolved after the formula is persisted.
    *
@@ -7196,6 +7214,7 @@ const makeDaemonCore = async (
     formulateWorker,
     formulateHost,
     formulateGuest,
+    formulateHandle,
     formulateMarshalValue,
     formulateEval,
     formulateUnconfined,

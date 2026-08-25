@@ -1,4 +1,7 @@
-export { EndoGuestAuthorityShape } from './src/provision/index.js';
+export {
+  EndoGuestAuthorityShape,
+  assertNoSecretSearchParams,
+} from './src/provision/index.js';
 export type {
   EndoGuestAuthority,
   GitProvision,

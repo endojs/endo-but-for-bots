@@ -11,10 +11,12 @@ import { E } from '@endo/eventual-send';
 import { normalizeGitRemotePolicy } from '@endo/exo-git';
 import { keyEQ, mustMatch } from '@endo/patterns';
 
+import { isConfinedPath } from '../mount.js';
 import { isPetName, namePathFrom } from '../pet-name.js';
 import { EndoGuestAuthorityShape } from './shapes.js';
 import {
   allInOrder,
+  assertNoSecretSearchParams,
   assertPathString,
   assertProvisionBindingName,
   normalizeDeniedSegments,
@@ -29,6 +31,7 @@ const makeCredentialUnavailable = binding =>
   );
 
 export { EndoGuestAuthorityShape } from './shapes.js';
+export { assertNoSecretSearchParams } from './naming.js';
 
 /**
  * @param {string} left
@@ -81,17 +84,11 @@ export const makeGuestAuthorityProvider = powers => {
     return harden({
       hasGuestAuthority: async () => false,
       provideGuestAuthority: unavailable,
+      retainedAuthorityBindings: async () => new Set(),
     });
   }
 
-  const {
-    realPath,
-    isDirectory,
-    resolvePath,
-    relativePath,
-    isAbsolutePath,
-    pathSeparator,
-  } = pathPowers;
+  const { realPath, isDirectory, resolvePath, isAbsolutePath } = pathPowers;
 
   /**
    * @param {string} candidate
@@ -109,20 +106,6 @@ export const makeGuestAuthorityProvider = powers => {
       throw makeError(X`${q(label)} must resolve to a directory`);
     }
     return canonical;
-  };
-
-  /**
-   * @param {string} root
-   * @param {string} candidate
-   */
-  const isWithinRoot = (root, candidate) => {
-    const relative = relativePath(root, candidate);
-    return (
-      relative === '' ||
-      (!isAbsolutePath(relative) &&
-        relative !== '..' &&
-        !relative.startsWith(`..${pathSeparator}`))
-    );
   };
 
   /** @param {string[]} namePath */
@@ -227,8 +210,9 @@ export const makeGuestAuthorityProvider = powers => {
         const rootJob = canonicalDirectory(
           resolvePath(selectedMount.root, ...path),
           `${label}.path`,
-        ).then(root => {
-          if (!isWithinRoot(selectedMount.root, root)) {
+        ).then(async root => {
+          await null;
+          if (!(await isConfinedPath(root, selectedMount.root, pathPowers))) {
             throw makeError(
               X`${q(`${label}.path`)} escapes selected mount ${q(grant.mount)}`,
             );
@@ -290,6 +274,7 @@ export const makeGuestAuthorityProvider = powers => {
                   X`${q(`${label}.url`)} must not embed credentials`,
                 );
               }
+              assertNoSecretSearchParams(parsedUrl, `${label}.url`);
               const { protocol } = parsedUrl;
               if (protocol !== 'https:' && credential !== undefined) {
                 throw makeError(
@@ -332,6 +317,58 @@ export const makeGuestAuthorityProvider = powers => {
     });
   };
 
+  /**
+   * Re-verify that a retained policy's already-normalized roots still
+   * exist, are still directories, and remain within their confinement
+   * roots. A reconnect that supplies no new `authority` reuses the retained
+   * policy verbatim; without this, a root swapped out from under the daemon
+   * (e.g. its directory deleted and replaced with a symlink out of
+   * confinement) would go unchecked until first file access.
+   *
+   * @param {EndoGuestAuthorityPolicy} policy
+   */
+  const revalidateRetainedPolicy = async policy => {
+    await allInOrder(
+      Object.entries(policy.mount).map(([name, mountPolicy]) =>
+        canonicalDirectory(mountPolicy.root, `retained mount ${name}`).then(
+          canonical => {
+            if (canonical !== mountPolicy.root) {
+              throw makeError(
+                X`retained mount ${q(name)} no longer resolves to its recorded root`,
+              );
+            }
+          },
+        ),
+      ),
+    );
+    await allInOrder(
+      Object.entries(policy.git).map(([name, gitPolicy]) =>
+        canonicalDirectory(gitPolicy.root, `retained git ${name}`).then(
+          async canonical => {
+            await null;
+            if (canonical !== gitPolicy.root) {
+              throw makeError(
+                X`retained git ${q(name)} no longer resolves to its recorded root`,
+              );
+            }
+            if (
+              !(await isConfinedPath(
+                canonical,
+                policy.mount[gitPolicy.mount].root,
+                pathPowers,
+              ))
+            ) {
+              throw makeError(
+                X`retained git ${q(name)} escapes its selected mount`,
+              );
+            }
+          },
+        ),
+      ),
+    );
+  };
+  harden(revalidateRetainedPolicy);
+
   /** @param {EndoGuestAuthorityPolicy} policy */
   const resolveCredentials = async policy => {
     /** @type {Map<string, ResolvedCredential>} */
@@ -361,14 +398,24 @@ export const makeGuestAuthorityProvider = powers => {
             X`Credential for Git remote binding ${q(binding)} is not daemon-minted`,
           );
         }
-        const inspection = await E(
-          /** @type {GitCredentialController} */ (controller),
-        ).inspect();
+        let inspection;
+        try {
+          inspection = await E(
+            /** @type {GitCredentialController} */ (controller),
+          ).inspect();
+        } catch {
+          throw makeCredentialUnavailable(binding);
+        }
         if (inspection.available !== true || inspection.revoked === true) {
           throw makeCredentialUnavailable(binding);
         }
         const credential = /** @type {GitCredential} */ (value);
-        const audience = await E(credential).audience();
+        let audience;
+        try {
+          audience = await E(credential).audience();
+        } catch {
+          throw makeCredentialUnavailable(binding);
+        }
         if (audience !== new URL(remote.url).origin) {
           throw makeError(
             X`Credential audience does not match Git remote binding ${q(binding)}`,
@@ -418,10 +465,12 @@ export const makeGuestAuthorityProvider = powers => {
         /** @type {{ policy: EndoGuestAuthorityPolicy, credentialIds: Record<string, string>, introducedNames: Record<string, string> }} */ (
           await lookup(policyPath)
         );
-      policy =
-        authority === undefined
-          ? retained.policy
-          : await normalizeAuthority(authority);
+      if (authority === undefined) {
+        policy = retained.policy;
+        await revalidateRetainedPolicy(policy);
+      } else {
+        policy = await normalizeAuthority(authority);
+      }
       credentials = await resolveCredentials(policy);
       const credentialIds = harden(
         Object.fromEntries(
@@ -602,7 +651,10 @@ export const makeGuestAuthorityProvider = powers => {
     return guest;
   };
 
-  let tail = Promise.resolve();
+  // Keyed per guest path so unrelated guests provision concurrently; only
+  // calls for the *same* guest need to serialize against each other.
+  /** @type {Map<string, Promise<unknown>>} */
+  const tailByGuestPath = new Map();
   /** @type {typeof run} */
   const provideGuestAuthority = (
     guestPath,
@@ -610,18 +662,53 @@ export const makeGuestAuthorityProvider = powers => {
     introducedNames,
     makeGuest,
   ) => {
+    const key = guestPath.join('/');
+    const tail = tailByGuestPath.get(key) ?? Promise.resolve();
     const result = tail.then(() =>
       run(guestPath, authority, introducedNames, makeGuest),
     );
-    tail = result.then(
-      () => undefined,
-      () => undefined,
+    tailByGuestPath.set(
+      key,
+      result.then(
+        () => undefined,
+        () => undefined,
+      ),
     );
     return result;
   };
   /** @param {string[]} guestPath */
   const hasGuestAuthority = guestPath =>
     hasNamePath(['provisioned-guests', ...guestPath, 'authority']);
-  return harden({ hasGuestAuthority, provideGuestAuthority });
+
+  /**
+   * The guest binding names already granted by retained authority, used to
+   * extend the introduced-name collision guard to a reconnect that supplies
+   * no new `authority` (and so would otherwise see an empty binding set).
+   *
+   * @param {string[]} guestPath
+   * @returns {Promise<Set<string>>}
+   */
+  const retainedAuthorityBindings = async guestPath => {
+    await null;
+    const policyPath = harden(['provisioned-guests', ...guestPath, 'authority']);
+    if (!(await hasNamePath(policyPath))) {
+      return new Set();
+    }
+    const retained =
+      /** @type {{ policy: EndoGuestAuthorityPolicy }} */ (
+        await lookup(policyPath)
+      );
+    return new Set([
+      ...Object.keys(retained.policy.mount),
+      ...Object.keys(retained.policy.git),
+      ...Object.keys(retained.policy.gitRemote),
+    ]);
+  };
+
+  return harden({
+    hasGuestAuthority,
+    provideGuestAuthority,
+    retainedAuthorityBindings,
+  });
 };
 harden(makeGuestAuthorityProvider);

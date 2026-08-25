@@ -8,38 +8,10 @@
 
 import { E } from '@endo/eventual-send';
 import { makeError, X } from '@endo/errors';
+import { keyEQ } from '@endo/patterns';
 
 import { makeEndoProvisionGlobals } from './code-mode-provision-globals.js';
 import { validateEndoCodeModeProvisionPersistence } from './code-mode-provision-policy.js';
-
-/**
- * @param {unknown} left
- * @param {unknown} right
- */
-const sameData = (left, right) => {
-  if (Object.is(left, right)) return true;
-  if (Array.isArray(left) && Array.isArray(right)) {
-    return (
-      left.length === right.length &&
-      left.every((value, index) => sameData(value, right[index]))
-    );
-  }
-  if (
-    typeof left === 'object' &&
-    left !== null &&
-    typeof right === 'object' &&
-    right !== null
-  ) {
-    const leftRecord = /** @type {Record<string, unknown>} */ (left);
-    const rightRecord = /** @type {Record<string, unknown>} */ (right);
-    const keys = Object.keys(leftRecord).sort();
-    return (
-      keys.length === Object.keys(rightRecord).length &&
-      keys.every(key => sameData(leftRecord[key], rightRecord[key]))
-    );
-  }
-  return false;
-};
 
 /** @param {string} guestName */
 const statePathFor = guestName =>
@@ -129,7 +101,7 @@ export const provideEndoCodeModeGuest = async (
     const requestedIdentity = await validateEndoCodeModeProvisionPersistence(
       request.persistence,
     );
-    if (!sameData(requestedIdentity, identity)) {
+    if (!keyEQ(requestedIdentity, identity)) {
       throw makeError(X`Code-mode request identity does not match its guest`);
     }
   }
@@ -179,7 +151,7 @@ export const provideEndoCodeModeGuest = async (
     const statePath = statePathFor(identity.guestName);
     if (await E(host).has(...statePath)) {
       const retained = validateHostState(await E(host).lookup(statePath));
-      if (!sameData(retained, proposed)) {
+      if (!keyEQ(retained, proposed)) {
         throw makeError(X`Code-mode projection does not match retained state`);
       }
       return harden({ guest, globals });

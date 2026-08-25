@@ -71,6 +71,30 @@ export const normalizeDeniedSegments = (value, label) =>
   );
 harden(normalizeDeniedSegments);
 
+// Anchored to the end of the name so a compound identifier that merely
+// mentions a secret-sounding word earlier (e.g. `password_policy`,
+// `token_count`) is not flagged, while a field or query key that actually
+// *names* credential material (`token`, `apiKey`, `access_token`) is.
+const SECRET_NAME_RE = /(?:api.?key|authorization|password|secret|token)$/iu;
+
+/**
+ * Reject a URL whose query string carries a key that looks like credential
+ * material. Query parameters are never covered by the closed grant schemas'
+ * field allow-lists, so a caller can otherwise smuggle a credential through
+ * a URL that is otherwise syntactically unremarkable.
+ *
+ * @param {URL} parsedUrl
+ * @param {string} label
+ */
+export const assertNoSecretSearchParams = (parsedUrl, label) => {
+  for (const key of parsedUrl.searchParams.keys()) {
+    if (SECRET_NAME_RE.test(key)) {
+      throw makeError(X`${q(label)} must not carry credential query fields`);
+    }
+  }
+};
+harden(assertNoSecretSearchParams);
+
 /**
  * Await every job, then surface the first failure in declaration order so
  * diagnostics stay deterministic even though the jobs run concurrently.

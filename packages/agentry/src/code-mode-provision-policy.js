@@ -5,11 +5,12 @@
 /** @import { EndoGuestAuthority } from '@endo/daemon/provision.js' */
 
 import { isName, isPetName, namePathFrom } from '@endo/daemon/pet-name.js';
+import { assertNoSecretSearchParams } from '@endo/daemon/provision.js';
 import { makeError, q, X } from '@endo/errors';
 import { normalizeGitRemotePolicy } from '@endo/exo-git';
 
 import { createHash } from 'node:crypto';
-import { realpath } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const HARNESS_KEY_RE = /^[a-z][a-z0-9-]{0,31}$/u;
@@ -153,6 +154,30 @@ const stringList = (value, label) => {
 };
 
 /**
+ * Fail loud on an unresolvable or non-directory candidate, matching the
+ * daemon's own `canonicalDirectory` (`@endo/daemon/src/provision/index.js`)
+ * so a bad `cwd` is caught here instead of silently deferring to whichever
+ * daemon-side check happens to run against a stale, non-canonical path.
+ *
+ * @param {string} candidate
+ * @param {string} label
+ */
+const canonicalDirectory = async (candidate, label) => {
+  await null;
+  let canonical;
+  try {
+    canonical = await realpath(candidate);
+  } catch {
+    throw makeError(X`${q(label)} does not exist or cannot be resolved`);
+  }
+  const info = await stat(canonical);
+  if (!info.isDirectory()) {
+    throw makeError(X`${q(label)} must resolve to a directory`);
+  }
+  return canonical;
+};
+
+/**
  * @param {Pick<NormalizeEndoCodeModeProvisionOptions, 'harness' | 'sessionId'>} options
  * @returns {EndoCodeModeProvisionPersistence}
  */
@@ -206,12 +231,7 @@ export const normalizeEndoCodeModeProvisionSpec = async (
   if (spec.piTools !== undefined && spec.piTools !== 'preserve') {
     throw makeError(X`piTools must be preserve`);
   }
-  let canonicalCwd = options.cwd;
-  try {
-    canonicalCwd = await realpath(options.cwd);
-  } catch {
-    // Preserve deferred daemon validation for an absent selected path.
-  }
+  const canonicalCwd = await canonicalDirectory(options.cwd, 'cwd');
 
   /** @type {Record<string, any>} */
   const mount = {};
@@ -319,6 +339,7 @@ export const normalizeEndoCodeModeProvisionSpec = async (
         X`${q(`gitRemote.${binding}.url`)} must not embed credentials`,
       );
     }
+    assertNoSecretSearchParams(parsedUrl, `gitRemote.${binding}.url`);
     const policy = normalizeGitRemotePolicy({
       name: remote.name,
       policy: /** @type {any} */ ({

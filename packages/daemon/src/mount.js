@@ -453,13 +453,20 @@ harden(assertConfinedOrAncestor);
 
 /**
  * Check if a path is confined (returns boolean, does not throw).
+ * Narrowed to `realPath` alone so callers holding a lighter path-only power
+ * bundle (e.g. named guest authority's `ProvisionPathPowers`) can share this
+ * check instead of reimplementing confinement semantics.
  *
  * @param {string} candidatePath
  * @param {string} confinementRoot
- * @param {FilePowers} filePowers
+ * @param {Pick<FilePowers, 'realPath'>} filePowers
  * @returns {Promise<boolean>}
  */
-const isConfinedPath = async (candidatePath, confinementRoot, filePowers) => {
+export const isConfinedPath = async (
+  candidatePath,
+  confinementRoot,
+  filePowers,
+) => {
   try {
     const resolved = await filePowers.realPath(candidatePath);
     const rootResolved = await filePowers.realPath(confinementRoot);
