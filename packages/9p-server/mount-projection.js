@@ -142,6 +142,12 @@ export const makeMountProjector = ({
 
     const mountHandle = await E(mounter).mount(fs, mountPoint, kernelOptions);
 
+    // Not a restatement of `mount-caplet.js`'s own `unmounted` latch: the
+    // mounter is an injected seam whose handle is only required to have an
+    // `unmount()`, so idempotency is this layer's to promise (see
+    // `MountProjection.release`). It also keeps a repeat release from turning
+    // into an eventual-send to a handle whose mounter may since have been
+    // cancelled, which would report `false` for an already-detached mount.
     let released = false;
     const release = async () => {
       await null;
