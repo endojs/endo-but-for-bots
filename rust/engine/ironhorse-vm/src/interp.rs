@@ -2487,6 +2487,11 @@ pub enum NativeMethod {
     /// `String.prototype.split(separator[, limit])`
     /// (`fx_String_prototype_split`): split on a string-or-RegExp separator.
     StringSplit,
+    /// `%MapIteratorPrototype%.next()` and `%SetIteratorPrototype%.next()`.
+    /// Distinct identities enforce the collection-specific internal-slot
+    /// brand check even though both advance the shared `IterState` layout.
+    MapIteratorNext,
+    SetIteratorNext,
 }
 
 impl Default for FuncInfo {
@@ -3985,6 +3990,8 @@ pub struct Interp {
     /// `arr[Symbol.iterator]()` produce. Carries `next` and a
     /// `Symbol.iterator` returning the iterator itself.
     array_iterator_proto: crate::value::SlotIndex,
+    map_iterator_proto: crate::value::SlotIndex,
+    set_iterator_proto: crate::value::SlotIndex,
     /// The realm's `Math` namespace object (XS's `mxMathObject`) — a boot
     /// object carrying the `Math.*` functions and the numeric constants
     /// (`Math.PI`, …) as own properties, bound into the global object under
@@ -4723,6 +4730,8 @@ impl Interp {
             length_id: None,
             name_id: None,
             array_iterator_proto: crate::value::SlotIndex::NULL,
+            map_iterator_proto: crate::value::SlotIndex::NULL,
+            set_iterator_proto: crate::value::SlotIndex::NULL,
             math_object: crate::value::SlotIndex::NULL,
             string_proto: crate::value::SlotIndex::NULL,
             string_iterator_method: crate::value::SlotIndex::NULL,
@@ -5062,6 +5071,18 @@ impl Interp {
         self.array_iterator_proto = array_iter_proto;
         let next_mf = self.alloc_method(NativeMethod::ArrayIteratorNext);
         self.proto_methods.push((array_iter_proto, "next", next_mf));
+        // Collection iterators have distinct intrinsic prototypes and `next`
+        // function identities.  They share the iterator-state representation
+        // with Array iterators, but the methods must reject an iterator of the
+        // other collection family (the spec's [[Map]]/[[Set]] brand check).
+        self.map_iterator_proto = self.slots.alloc(Slot::instance(array_iter_proto));
+        self.set_iterator_proto = self.slots.alloc(Slot::instance(array_iter_proto));
+        let map_next = self.alloc_named_method(NativeMethod::MapIteratorNext, "next", 0);
+        let set_next = self.alloc_named_method(NativeMethod::SetIteratorNext, "next", 0);
+        self.proto_methods
+            .push((self.map_iterator_proto, "next", map_next));
+        self.proto_methods
+            .push((self.set_iterator_proto, "next", set_next));
         // `Array.isArray` — a static bound as an own property of the `Array`
         // constructor instance (not the prototype).
         if let Some(&array_ctor) = self.intrinsics.get("Array") {
@@ -6874,6 +6895,8 @@ impl Interp {
                 // "DataView" with the same non-writable/non-enumerable/
                 // configurable descriptor.
                 (self.dataview_proto, "DataView"),
+                (self.map_iterator_proto, "Map Iterator"),
+                (self.set_iterator_proto, "Set Iterator"),
             ] {
                 if proto.is_null() {
                     continue;
@@ -6908,6 +6931,28 @@ impl Interp {
                 ),
                 XS_DONT_ENUM_FLAG,
             );
+            // Map's @@iterator is `entries`; Set's is the shared `values`
+            // function. Locate the already-created boot methods directly so
+            // the aliases exist even when the source never spells those
+            // string keys (a Symbol.iterator-only test).
+            for (proto, method_name) in [
+                (self.map_proto, "entries"),
+                (self.set_proto, "values"),
+            ] {
+                if let Some((_, _, function)) = self
+                    .proto_methods
+                    .iter()
+                    .find(|(holder, name, _)| *holder == proto && *name == method_name)
+                    .copied()
+                {
+                    self.set_own_unmetered_with_flag(
+                        proto,
+                        id,
+                        Slot::of(Kind::Reference, Payload::Reference(function)),
+                        XS_DONT_ENUM_FLAG,
+                    );
+                }
+            }
             // `%Segments.prototype%[Symbol.iterator]` mints a `%SegmentIterator%`;
             // the iterator itself carries the identity `[Symbol.iterator]`
             // (`%IteratorPrototype%`) so it survives spread/`Array.from`.
@@ -22787,19 +22832,28 @@ impl Interp {
                 if !self.is_ordinary_object(inst) {
                     return Err(Halt::Unsupported("propertyIsEnumerable:exotic-object"));
                 }
-                let key = match arg0.value {
-                    Payload::String(off) if arg0.kind == Kind::String => self.str_text(off),
-                    _ => return Err(Halt::Unsupported("propertyIsEnumerable:non-string-key")),
+                let id = match (arg0.kind, arg0.value) {
+                    (Kind::String, Payload::String(off)) => {
+                        let key = self.str_text(off);
+                        if string_to_index(&key).is_some() {
+                            return Err(Halt::Unsupported("propertyIsEnumerable:index-key"));
+                        }
+                        if !self.symbol_ids.contains_key(&key)
+                            && self.default_keys.contains(key.as_str())
+                        {
+                            return Err(Halt::Unsupported(
+                                "propertyIsEnumerable:ambiguous-default-key",
+                            ));
+                        }
+                        self.intern_key(&key)
+                    }
+                    (Kind::Symbol, Payload::Reference(desc)) => self.intern_symbol_key(desc),
+                    _ => {
+                        return Err(Halt::Unsupported(
+                            "propertyIsEnumerable:non-string-key",
+                        ))
+                    }
                 };
-                if string_to_index(&key).is_some() {
-                    return Err(Halt::Unsupported("propertyIsEnumerable:index-key"));
-                }
-                if !self.symbol_ids.contains_key(&key) && self.default_keys.contains(key.as_str()) {
-                    return Err(Halt::Unsupported(
-                        "propertyIsEnumerable:ambiguous-default-key",
-                    ));
-                }
-                let id = self.intern_key(&key);
                 let r = match self.find_property(inst, id) {
                     Some(p) => self.slots.get(p).flag & XS_DONT_ENUM_FLAG == 0,
                     None => false,
@@ -24418,6 +24472,23 @@ impl Interp {
                     _ => return Err(Halt::Unsupported("array-iterator-next:non-iterator")),
                 };
                 self.array_iterator_next(iter)?
+            }
+            NativeMethod::MapIteratorNext | NativeMethod::SetIteratorNext => {
+                let expected = if m == NativeMethod::MapIteratorNext {
+                    CollKind::Map
+                } else {
+                    CollKind::Set
+                };
+                let iter = match this.value {
+                    Payload::Reference(i)
+                        if self
+                            .iterators
+                            .get(&i)
+                            .and_then(|state| self.collections.get(&state.iterable))
+                            .is_some_and(|collection| collection.kind == expected) => i,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                self.collection_iterator_next(iter)
             }
             NativeMethod::Math(id) => self.call_math(id, base, argc)?,
             NativeMethod::ReflectGetPrototypeOf
@@ -27505,7 +27576,12 @@ impl Interp {
         if let Some(did) = self.done_id {
             self.set_own_unmetered(result, did, Slot::boolean(false));
         }
-        let iter = self.slots.alloc(Slot::instance(self.array_iterator_proto));
+        let proto = match self.collections.get(&inst).map(|c| c.kind) {
+            Some(CollKind::Map) => self.map_iterator_proto,
+            Some(CollKind::Set) => self.set_iterator_proto,
+            _ => self.array_iterator_proto,
+        };
+        let iter = self.slots.alloc(Slot::instance(proto));
         self.iterators.insert(
             iter,
             IterState {
@@ -39312,6 +39388,8 @@ impl Interp {
             self.arraybuffer_proto,
             self.dataview_proto,
             self.array_iterator_proto,
+            self.map_iterator_proto,
+            self.set_iterator_proto,
             self.string_proto,
             self.number_proto,
             self.symbol_proto,
