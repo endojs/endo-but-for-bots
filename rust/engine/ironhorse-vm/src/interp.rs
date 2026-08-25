@@ -19326,10 +19326,19 @@ impl Interp {
             .unwrap_or_else(Slot::undefined);
         // Any callable may be bound. User functions use the ordinary bound
         // trampoline; the canonical bound `Function.prototype.call` native
-        // shape is handled directly by the call opcode.
+        // shape is handled directly by the call opcode. A **native** receiver
+        // (native constructor/method) is equally in `functions`, so it binds
+        // through the same record — its bound call re-dispatches the native.
+        // `Function.prototype.bind` step 2 (ECMA-262 20.2.3.2): if the target
+        // is **not callable**, throw a TypeError (catchable). A callable proxy
+        // is bindable per spec, but a bound-of-proxy call is not yet modeled,
+        // so keep the honest skip rather than throw wrongly.
         let target = match this.value {
             Payload::Reference(r) if self.functions.contains_key(&r) => r,
-            _ => return Err(Halt::Unsupported("bind:non-user-function-receiver")),
+            Payload::Reference(r) if self.slot_is_callable(r) => {
+                return Err(Halt::Unsupported("bind:non-user-function-receiver"));
+            }
+            _ => return Err(self.catchable_type_error()),
         };
         let this_arg = self
             .stack
