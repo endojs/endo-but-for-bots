@@ -2444,32 +2444,35 @@ export const makeHostMaker = ({
     // Named guest provisioning extends the existing provideGuest lifecycle.
     // The host validates and retains immutable authority before minting any
     // capability aliases. Path powers are injected by the supervisor.
-    const { hasGuestAuthority, provideGuestAuthority, retainedAuthorityBindings } =
-      makeGuestAuthorityProvider({
-        pathPowers: provisionPathPowers,
-        has,
-        identify,
-        lookup,
-        makeDirectory: makeDirectoryLocal,
-        storeValue,
-        provideMount,
-        provideGit,
-        provideGitRemote,
-        getGitCredentialController,
-        bindGuest: async (guest, guestName, source) => {
-          const sourcePath = Array.isArray(source) ? source : [source];
-          const id = await identify(...sourcePath);
-          if (id === undefined) {
-            throw makeError(
-              X`Provisioned capability ${q(sourcePath.join('/'))} has no formula identifier`,
-            );
-          }
-          await E(guest).storeIdentifier(guestName, id);
-        },
-        bindGuestIdentifier: async (guest, guestName, id) => {
-          await E(guest).storeIdentifier(guestName, id);
-        },
-      });
+    const {
+      hasGuestAuthority,
+      provideGuestAuthority,
+      retainedAuthorityBindings,
+    } = makeGuestAuthorityProvider({
+      pathPowers: provisionPathPowers,
+      has,
+      identify,
+      lookup,
+      makeDirectory: makeDirectoryLocal,
+      storeValue,
+      provideMount,
+      provideGit,
+      provideGitRemote,
+      getGitCredentialController,
+      bindGuest: async (guest, guestName, source) => {
+        const sourcePath = Array.isArray(source) ? source : [source];
+        const id = await identify(...sourcePath);
+        if (id === undefined) {
+          throw makeError(
+            X`Provisioned capability ${q(sourcePath.join('/'))} has no formula identifier`,
+          );
+        }
+        await E(guest).storeIdentifier(guestName, id);
+      },
+      bindGuestIdentifier: async (guest, guestName, id) => {
+        await E(guest).storeIdentifier(guestName, id);
+      },
+    });
 
     /** @type {EndoHost['endow']} */
     const endow = async (messageNumber, bindings, workerName, resultName) => {

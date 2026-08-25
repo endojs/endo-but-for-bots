@@ -690,14 +690,17 @@ export const makeGuestAuthorityProvider = powers => {
    */
   const retainedAuthorityBindings = async guestPath => {
     await null;
-    const policyPath = harden(['provisioned-guests', ...guestPath, 'authority']);
+    const policyPath = harden([
+      'provisioned-guests',
+      ...guestPath,
+      'authority',
+    ]);
     if (!(await hasNamePath(policyPath))) {
       return new Set();
     }
-    const retained =
-      /** @type {{ policy: EndoGuestAuthorityPolicy }} */ (
-        await lookup(policyPath)
-      );
+    const retained = /** @type {{ policy: EndoGuestAuthorityPolicy }} */ (
+      await lookup(policyPath)
+    );
     return new Set([
       ...Object.keys(retained.policy.mount),
       ...Object.keys(retained.policy.git),
