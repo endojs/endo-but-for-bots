@@ -115,6 +115,7 @@ const NixosAdminInterface = M.interface('NixosAdmin', {
     .optional(M.string())
     .returns(M.promise()),
   build: M.call().optional(M.string(), M.string()).returns(M.promise()),
+  prebuildRev: M.call(M.string()).optional(M.string()).returns(M.promise()),
   apply: M.call(M.string()).optional(M.string()).returns(M.promise()),
   rollback: M.call().optional(M.string()).returns(M.promise()),
   verify: M.call(M.string()).optional(M.string()).returns(M.promise()),
@@ -252,6 +253,34 @@ export const make = async (_powers, _context, options = {}) => {
   const statusPath = nixosDir ? join(nixosDir, 'apply-status.json') : '';
   const logPath = nixosDir ? join(nixosDir, 'apply.log') : '';
   const outcomesDir = nixosDir ? join(nixosDir, 'outcomes') : '';
+
+  // The DEPLOY spool is a separate, simpler spool belonging to the endo-deploy
+  // systemd unit, and it has no id echo. The one operation driven through it
+  // here is `prebuild`, whose success is a FACT ON DISK — the release marker —
+  // rather than a status claim, so the missing echo costs nothing: a stale or
+  // overwritten status can delay the answer but cannot fake one.
+  const stateDir =
+    readEnv('ENDO_NIXOS_STATE_DIR') || (nixosDir ? dirname(nixosDir) : '');
+  const deployDir = stateDir ? join(stateDir, 'deploy') : '';
+  const releasesDir = stateDir ? join(stateDir, 'releases') : '';
+  const deployRequestPath = deployDir ? join(deployDir, 'request.json') : '';
+  const deployStatusPath = deployDir ? join(deployDir, 'status.json') : '';
+
+  /**
+   * Has a release been built to completion? The marker is what the deploy unit
+   * touches only after a build finishes, so it distinguishes a finished tree
+   * from one an interrupted build left behind.
+   *
+   * @param {string} rev
+   * @returns {Promise<boolean>}
+   */
+  const releaseBuilt = async rev =>
+    releasesDir
+      ? readFile(join(releasesDir, rev, '.deploy-complete'), 'utf8').then(
+          () => true,
+          () => false,
+        )
+      : false;
 
   const config = harden({
     configDir,
@@ -804,6 +833,87 @@ export const make = async (_powers, _context, options = {}) => {
      */
     async build(note, key) {
       return submitAndAwait('build', (note && String(note)) || '', key);
+    },
+
+    /**
+     * Build a revision's release WITHOUT activating it: no `current` flip, no
+     * daemon restart, nothing the running system depends on. Settlement-shaped
+     * like the verbs above.
+     *
+     * This exists so an approval-gated deploy can establish that a revision
+     * BUILDS before anyone approves an apply, and so that the apply is then a
+     * symlink flip rather than a cold `yarn install` inside activation — the
+     * shape that has failed and rolled back every time it has been tried on
+     * this host, while the same revision applied cleanly once its release
+     * already existed. See floot/endo#4.
+     *
+     * Idempotent by construction rather than by key: the success condition is
+     * the release marker on disk, so a re-dispatch of an already-built
+     * revision returns at once without asking the applier for anything. That
+     * is also why an unfinished build is never mistaken for a finished one.
+     *
+     * @param {string} rev - full 40-character lowercase commit hash
+     * @param {string} [key] - workflow idempotency key, used as the request
+     *   nonce so two identical requests are distinguishable
+     */
+    async prebuildRev(rev, key) {
+      requireConfigured();
+      const trimmed = String(rev).trim();
+      if (!/^[0-9a-f]{40}$/.test(trimmed)) {
+        throw makeError(
+          X`prebuildRev needs a full 40-character lowercase commit hash, got ${q(rev)}`,
+        );
+      }
+      if (!deployRequestPath) {
+        throw makeError(
+          X`prebuildRev: this daemon has no deploy spool to build through.`,
+        );
+      }
+      if (await releaseBuilt(trimmed)) {
+        return harden({ ok: true, phase: 'ok', rev: trimmed, reused: true });
+      }
+      await writeFile(
+        deployRequestPath,
+        `${JSON.stringify({
+          action: 'prebuild',
+          rev: trimmed,
+          // The unit is triggered by PathModified, so a nonce keeps a repeated
+          // request from being indistinguishable from no change at all.
+          nonce: key !== undefined ? String(key) : mintId('prebuild'),
+        })}\n`,
+      );
+      const deadline = Date.now() + watchLimitMs;
+      for (;;) {
+        // eslint-disable-next-line no-await-in-loop
+        if (await releaseBuilt(trimmed)) {
+          return harden({ ok: true, phase: 'ok', rev: trimmed, reused: false });
+        }
+        // eslint-disable-next-line no-await-in-loop
+        const status = await readJsonFile(deployStatusPath);
+        if (
+          status.state === 'ok' &&
+          status.value &&
+          status.value.phase === 'error' &&
+          status.value.rev === trimmed
+        ) {
+          return harden({
+            ok: false,
+            phase: 'error',
+            rev: trimmed,
+            message: String(status.value.message || 'prebuild failed'),
+          });
+        }
+        if (Date.now() > deadline) {
+          return harden({
+            ok: false,
+            phase: 'timeout',
+            rev: trimmed,
+            message: `prebuild of ${trimmed} did not finish within the watch limit`,
+          });
+        }
+        // eslint-disable-next-line no-await-in-loop
+        await delay(pollMs);
+      }
     },
 
     /**

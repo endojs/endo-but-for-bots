@@ -35,6 +35,14 @@ const pendingOf = (sim, kind, method) =>
         (method === undefined || record.effect.method === method),
     );
 
+// The release chart (v2) builds the release BEFORE anyone is asked, so every
+// walk through it passes a `prebuildRev` step between `pin` and `build`.
+const settlePrebuild = (sim, outcome = harden({ ok: true, phase: 'ok' })) => {
+  const prebuild = pendingOf(sim, 'invoke', 'prebuildRev');
+  sim.settle(prebuild.effectId, 'fulfilled', outcome);
+  return prebuild;
+};
+
 test('both deploy charts pass diagnostics with no errors or warnings', t => {
   for (const chart of deployCharts) {
     const { errors, warnings } = chartDiagnostics(chart);
@@ -75,7 +83,7 @@ test('compensation-attention can only retry compensation, never complete', t => 
   }
 });
 
-test('endo-release walks pin, build, approval, apply, verify to done', t => {
+test('endo-release walks pin, prebuild, build, approval, apply, verify to done', t => {
   const sim = makeSimulator(endoReleaseChart, { params: releaseParams });
 
   t.is(sim.status().state, 'pin');
@@ -88,6 +96,12 @@ test('endo-release walks pin, build, approval, apply, verify to done', t => {
     'fulfilled',
     harden({ rev: REV, previous: PREVIOUS }),
   );
+
+  t.is(sim.status().state, 'prebuild');
+  const prebuild = pendingOf(sim, 'invoke', 'prebuildRev');
+  // The release is built from the revision itself, before anyone is asked.
+  t.deepEqual(prebuild.effect.args, [REV]);
+  settlePrebuild(sim);
 
   t.is(sim.status().state, 'build');
   const build = pendingOf(sim, 'invoke', 'build');
@@ -122,6 +136,7 @@ test('a declined release unpins the previous revision and abandons', t => {
     'fulfilled',
     harden({ rev: REV, previous: PREVIOUS }),
   );
+  settlePrebuild(sim);
   sim.settle(
     pendingOf(sim, 'invoke', 'build').effectId,
     'fulfilled',
@@ -146,6 +161,30 @@ test('a declined release unpins the previous revision and abandons', t => {
   t.deepEqual(final.output, { reason: 'declined' });
 });
 
+test('a revision that does not build never reaches the operator', t => {
+  // The point of prebuild: a broken revision costs an unpin, not an operator's
+  // attention and not an apply. Nothing was activated, so compensation is the
+  // same unpin a rejected config build takes.
+  const sim = makeSimulator(endoReleaseChart, { params: releaseParams });
+  sim.settle(
+    pendingOf(sim, 'invoke', 'stageRev').effectId,
+    'fulfilled',
+    harden({ rev: REV, previous: PREVIOUS }),
+  );
+
+  t.is(sim.status().state, 'prebuild');
+  settlePrebuild(sim, harden({ ok: false, phase: 'error', rev: REV }));
+
+  t.is(sim.status().state, 'unpinning');
+  t.is(
+    pendingOf(sim, 'ask'),
+    undefined,
+    'no operator was asked to approve an unbuildable revision',
+  );
+  const unpin = pendingOf(sim, 'invoke', 'stageRev');
+  t.deepEqual(unpin.effect.args, [PREVIOUS]);
+});
+
 test('a rejected build unpins without ever reaching approval', t => {
   const sim = makeSimulator(endoReleaseChart, { params: releaseParams });
   sim.settle(
@@ -153,6 +192,7 @@ test('a rejected build unpins without ever reaching approval', t => {
     'fulfilled',
     harden({ rev: REV, previous: PREVIOUS }),
   );
+  settlePrebuild(sim);
   sim.settle(
     pendingOf(sim, 'invoke', 'build').effectId,
     'fulfilled',
@@ -174,6 +214,7 @@ test('a build timeout prunes the pending invoke on its way out', t => {
     'fulfilled',
     harden({ rev: REV, previous: PREVIOUS }),
   );
+  settlePrebuild(sim);
   const build = pendingOf(sim, 'invoke', 'build');
   const timer = pendingOf(sim, 'after');
   const timed = sim.fireTimer(timer.effectId);
@@ -194,6 +235,7 @@ test('an unhealthy apply reports the auto-rollback and terminates', t => {
     'fulfilled',
     harden({ rev: REV, previous: PREVIOUS }),
   );
+  settlePrebuild(sim);
   sim.settle(
     pendingOf(sim, 'invoke', 'build').effectId,
     'fulfilled',
@@ -225,6 +267,7 @@ test('an apply error goes to the operator; attesting landed re-verifies', t => {
     'fulfilled',
     harden({ rev: REV, previous: PREVIOUS }),
   );
+  settlePrebuild(sim);
   sim.settle(
     pendingOf(sim, 'invoke', 'build').effectId,
     'fulfilled',
@@ -269,6 +312,7 @@ test('attesting not-landed abandons through compensation, never done', async t =
     'fulfilled',
     harden({ rev: REV, previous: PREVIOUS }),
   );
+  settlePrebuild(sim);
   sim.settle(
     pendingOf(sim, 'invoke', 'build').effectId,
     'fulfilled',
@@ -311,6 +355,7 @@ test('a first-pin decline un-pins to the empty previous and abandons', async t =
     'fulfilled',
     harden({ rev: REV, previous: '' }),
   );
+  settlePrebuild(sim);
   sim.settle(
     pendingOf(sim, 'invoke', 'build').effectId,
     'fulfilled',
@@ -340,6 +385,7 @@ test('a failed un-pin loops through compensation-attention until it lands', asyn
     'fulfilled',
     harden({ rev: REV, previous: PREVIOUS }),
   );
+  settlePrebuild(sim);
   sim.settle(
     pendingOf(sim, 'invoke', 'build').effectId,
     'fulfilled',
