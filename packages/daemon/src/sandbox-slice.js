@@ -24,9 +24,18 @@ import { M } from '@endo/patterns';
 import { SandboxHandleInterface } from '@endo/sandbox/interfaces.js';
 
 import { throwFailures } from './context.js';
+import { makeSerialJobs } from './serial-jobs.js';
 
 /** @import { FormulaIdentifier, FormulaNumber, SandboxEscalationRecord, SandboxFormulaProfile, SandboxMountProjection } from './types.js' */
 /** @import { MountCap, MountMode, SpawnOpts } from '@endo/sandbox/types.js' */
+
+/**
+ * One scratch name's bookkeeping: the host directory assigned to it for the
+ * life of the slice, and the capability token that currently names it. The
+ * token is `undefined` between a reset and the next allocation.
+ *
+ * @typedef {{ hostPath: string, token?: unknown }} ScratchEntry
+ */
 
 const SandboxMountResolverInterface = M.interface('SandboxMountResolver', {
   provideScratchMount: M.call(M.string()).returns(M.promise()),
@@ -194,6 +203,39 @@ export const makeSandboxSlice = async ({
     return failures;
   };
 
+  /** @type {Promise<unknown[]> | undefined} */
+  let cleanupInFlight;
+  /**
+   * The one teardown critical section. A backend that self-disposes after a
+   * containment failure and a context-driven `release()` can each reach
+   * cleanup, and either may win. Assigning the memo synchronously — before
+   * any await — makes the loser await the winner's sweep instead of running a
+   * second one concurrently over the same projections and state directory.
+   *
+   * A sweep that reports failures has left the projections registered and the
+   * state directory intact, so the memo is dropped and a later attempt
+   * retries.
+   *
+   * @returns {Promise<unknown[]>} The failures of the sweep both callers share.
+   */
+  const cleanupOnce = () => {
+    if (cleanupInFlight === undefined) {
+      cleanupInFlight = cleanupResources().then(
+        failures => {
+          if (failures.length > 0) {
+            cleanupInFlight = undefined;
+          }
+          return failures;
+        },
+        error => {
+          cleanupInFlight = undefined;
+          throw error;
+        },
+      );
+    }
+    return cleanupInFlight;
+  };
+
   /** @type {SandboxEscalationRecord | undefined} */
   let escalationRecorded;
   /**
@@ -317,42 +359,56 @@ export const makeSandboxSlice = async ({
     // Scratch capability tokens are invalidated at every reset, but the
     // name-to-path assignments remain stable because a backend may retain a
     // bind to one of these directory inodes for the lifetime of the slice.
-    const scratchPathForToken = new Map();
-    const scratchTokenForName = new Map();
-    const scratchPathForName = new Map();
+    /** @type {Map<string, ScratchEntry>} */
+    const scratchForName = new Map();
+    // Reverse index over the same entries, so a token resolves to a path in
+    // one step. Derived, never independently authoritative: `bindScratchName`
+    // is the only writer of either map, which is what keeps a retired token
+    // from surviving here and resolving to a live host path.
+    /** @type {Map<unknown, string>} */
+    const scratchNameForToken = new Map();
 
-    /** @type {Promise<void>} */
-    let scratchOperation = Promise.resolve();
     /**
-     * Serialize scratch allocation and reset so neither can observe or erase
-     * the other's partially updated bookkeeping across an await.
+     * Bind `name` to `hostPath` under `token`, retiring whatever token the
+     * name held. Omitting `token` retires the current one while retaining the
+     * name's path, which is what a reset wants.
      *
-     * @template T
-     * @param {() => Promise<T>} operation
-     * @returns {Promise<T>}
+     * @param {string} name
+     * @param {string} hostPath
+     * @param {unknown} [token]
      */
-    const withScratchLock = operation => {
-      const result = scratchOperation.then(operation);
-      scratchOperation = result.then(
-        () => undefined,
-        () => undefined,
-      );
-      return result;
+    const bindScratchName = (name, hostPath, token) => {
+      const previous = scratchForName.get(name);
+      if (previous !== undefined && previous.token !== undefined) {
+        scratchNameForToken.delete(previous.token);
+      }
+      scratchForName.set(name, harden({ hostPath, token }));
+      if (token !== undefined) {
+        scratchNameForToken.set(token, name);
+      }
     };
 
+    // One queue, not one per name: a reset rewrites every entry, so it has to
+    // exclude every allocation, and the only await an allocation holds the
+    // queue across is its own `makePath`.
+    const scratchJobs = makeSerialJobs();
+
     const resetScratch = () =>
-      withScratchLock(async () => {
+      scratchJobs.enqueue(async () => {
         // Keep each scratch root directory itself intact because the backend
         // may still hold a bind mount to that inode after its processes stop.
         // Retain the path memo across resets so later resets also clear files
         // written through those still-bound directories.
         if (clearDirectory !== undefined) {
           await Promise.all(
-            [...scratchPathForName.values()].map(clearDirectory),
+            [...scratchForName.values()].map(({ hostPath }) =>
+              clearDirectory(hostPath),
+            ),
           );
         }
-        scratchTokenForName.clear();
-        scratchPathForToken.clear();
+        for (const [name, { hostPath }] of scratchForName) {
+          bindScratchName(name, hostPath);
+        }
       });
 
     // The factory's privileged surface, narrowed to this slice: the mounts
@@ -363,25 +419,28 @@ export const makeSandboxSlice = async ({
       {
         /** @param {string} name */
         provideScratchMount: name =>
-          withScratchLock(async () => {
-            const existing = scratchTokenForName.get(name);
-            if (existing !== undefined) return existing;
-            const token = Far('SandboxScratch', {});
-            let hostPath = scratchPathForName.get(name);
-            if (hostPath === undefined) {
-              hostPath = joinPath(scratchPath, `${scratchPathForName.size}`);
-              await makePath(hostPath);
-              scratchPathForName.set(name, hostPath);
+          scratchJobs.enqueue(async () => {
+            const existing = scratchForName.get(name);
+            if (existing !== undefined && existing.token !== undefined) {
+              return existing.token;
             }
-            scratchTokenForName.set(name, token);
-            scratchPathForToken.set(token, hostPath);
+            let hostPath = existing?.hostPath;
+            if (hostPath === undefined) {
+              hostPath = joinPath(scratchPath, `${scratchForName.size}`);
+              // Record nothing until the directory exists, so a failed
+              // allocation leaves the name unclaimed for a later retry.
+              await makePath(hostPath);
+            }
+            const token = Far('SandboxScratch', {});
+            bindScratchName(name, hostPath, token);
             return token;
           }),
         /** @param {unknown} cap */
         provideHostPath: async cap => {
-          const tokenPath = scratchPathForToken.get(cap);
-          if (tokenPath !== undefined) {
-            return tokenPath;
+          const scratchName = scratchNameForToken.get(cap);
+          if (scratchName !== undefined) {
+            return /** @type {ScratchEntry} */ (scratchForName.get(scratchName))
+              .hostPath;
           }
           const hostPath = hostPathForGrant.get(cap);
           if (hostPath === undefined) {
@@ -424,8 +483,13 @@ export const makeSandboxSlice = async ({
     let backendDisposed = false;
     const releaseAfterBackendDisposal = async () => {
       backendDisposed = true;
+      // Re-entrancy, not mutual exclusion: when `release()` is the caller of
+      // `dispose()`, the backend runs this hook from inside that call, so
+      // awaiting the release path here would deadlock it. Cleanup belongs to
+      // the release that is already unwinding. Concurrent teardown from an
+      // unprompted backend disposal is excluded by `cleanupOnce` instead.
       if (wrapperDisposing) return;
-      const failures = await cleanupResources();
+      const failures = await cleanupOnce();
       if (failures.length > 0) {
         throwFailures(
           failures,
@@ -453,7 +517,7 @@ export const makeSandboxSlice = async ({
           } else {
             wrapperDisposing = false;
           }
-          failures.push(...(await cleanupResources()));
+          failures.push(...(await cleanupOnce()));
           if (failures.length > 0) {
             throwFailures(failures, `Sandbox ${q(sandboxId)} cleanup failed`);
           }
@@ -523,7 +587,7 @@ export const makeSandboxSlice = async ({
     }
     // Unwind the projections this attempt stood up; a half-built slice
     // must not leave kernel mounts behind.
-    const cleanupFailures = await cleanupResources();
+    const cleanupFailures = await cleanupOnce();
     return throwFailures(
       [
         error,
