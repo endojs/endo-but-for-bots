@@ -1323,6 +1323,9 @@ export const createSpacesGutter = ({
         /** @type {Parameters<typeof iterateReader>[0]} */ (
           /** @type {unknown} */ (changesRef)
         ),
+        // Prefetch a window of values so the space list arrives as a backlog
+        // rather than one space per round trip.
+        { buffer: 64 },
       );
 
       for await (const change of changes) {

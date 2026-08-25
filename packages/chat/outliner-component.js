@@ -367,6 +367,9 @@ export const outlinerComponent = async (
         /** @type {Parameters<typeof iterateReader>[0]} */ (
           /** @type {unknown} */ (changesRef)
         ),
+        // Prefetch a window of values so the initial name backlog streams
+        // without a round-trip acknowledgement per name.
+        { buffer: 64 },
       );
       nameChangesIterator = it;
       for await (const change of it) {
@@ -1781,6 +1784,10 @@ export const outlinerComponent = async (
       /** @type {Parameters<typeof iterateReader>[0]} */ (
         /** @type {unknown} */ (messagesRef)
       ),
+      // Prefetch a window of messages so the backlog streams without a
+      // round-trip acknowledgement per message — otherwise opening a channel
+      // fills it one message per round trip.
+      { buffer: 64 },
     );
     activeIterator = messageIterator;
     for await (const message of messageIterator) {

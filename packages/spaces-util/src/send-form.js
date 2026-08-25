@@ -442,6 +442,9 @@ export const sendFormComponent = ({
             /** @type {Parameters<typeof iterateReader>[0]} */ (
               /** @type {unknown} */ (eventsRef)
             ),
+            // Prefetch a window so a burst of heat events does not cost a
+            // round-trip acknowledgement each.
+            { buffer: 64 },
           );
           (async () => {
             for await (const event of eventIter) {
