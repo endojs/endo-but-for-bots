@@ -23,6 +23,7 @@ export { universalThis as globalThis };
 export const {
   Array,
   ArrayBuffer,
+  SharedArrayBuffer,
   Date,
   FinalizationRegistry,
   // Renamed to FERAL_* because it enables the NaN side-channel
@@ -148,6 +149,7 @@ export const {
 
 export const { isArray, prototype: arrayPrototype } = Array;
 export const { prototype: arrayBufferPrototype } = ArrayBuffer;
+export const sharedArrayBufferPrototype = SharedArrayBuffer?.prototype;
 export const { prototype: dataViewPrototype } = DataView;
 export const { prototype: mapPrototype } = Map;
 export const { revocable: proxyRevocable } = Proxy;
@@ -229,7 +231,30 @@ export const arrayBufferGetByteLength = uncurryThis(
   // @ts-expect-error we know it is there on all conforming platforms
   getOwnPropertyDescriptor(arrayBufferPrototype, 'byteLength').get,
 );
+const arrayBufferResizableGetter = getOwnPropertyDescriptor(
+  arrayBufferPrototype,
+  'resizable',
+)?.get;
+export const arrayBufferGetResizable =
+  typeof arrayBufferResizableGetter === 'function'
+    ? uncurryThis(arrayBufferResizableGetter)
+    : undefined;
+const sharedArrayBufferGrowableGetter =
+  sharedArrayBufferPrototype === undefined
+    ? undefined
+    : getOwnPropertyDescriptor(sharedArrayBufferPrototype, 'growable')?.get;
+export const sharedArrayBufferGetGrowable =
+  typeof sharedArrayBufferGrowableGetter === 'function'
+    ? uncurryThis(sharedArrayBufferGrowableGetter)
+    : undefined;
 //
+export const typedArrayGetBuffer =
+  /** @type {(array: object) => ArrayBufferLike} */ (
+    uncurryThis(
+      // @ts-expect-error the intrinsic TypedArray prototype has a buffer getter
+      getOwnPropertyDescriptor(typedArrayPrototype, 'buffer').get,
+    )
+  );
 export const typedArraySet = uncurryThis(typedArrayPrototype.set);
 //
 export const mapSet = uncurryThis(mapPrototype.set);
