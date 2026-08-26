@@ -70,6 +70,72 @@ struct SlotBacking {
     /// against (a short row must die loudly, not install placeholder
     /// records beside real ones).
     snapshot_count: u32,
+    /// SPARSE record storage (store seam H1): a lazily attached
+    /// arena's records live here, page-by-page, materialized on
+    /// first write — attaching a wide heap allocates a pages-table
+    /// of `None`s instead of the measured O(slot_count) dense
+    /// placeholder fill (40 ms at 4M slots). The arena's dense
+    /// `slots` vec stays EMPTY on a lazy machine, so the detached
+    /// hot path keeps its exact pre-H1 shape: one `lazy.is_some()`
+    /// branch, then a direct index — the dispatch-bench guard.
+    ///
+    /// The equivalence that makes this safe: reading a
+    /// never-materialized page answers `Slot::undefined()`, exactly
+    /// the record the dense placeholder held before its page
+    /// faulted, so every layer above observes identical values.
+    /// `RefCell` because materialization happens under `&self` (the
+    /// fault path installs through shared references); every borrow
+    /// here drops before control leaves the method.
+    pages: RefCell<Vec<Option<Box<[Cell<Slot>]>>>>,
+    /// The logical record count (the dense vec's `len()` analogue —
+    /// the empty dense vec cannot carry it).
+    count: Cell<u32>,
+}
+
+impl SlotBacking {
+    #[inline]
+    fn get(&self, i: usize) -> Slot {
+        assert!(i < self.count.get() as usize, "slot index {i} out of bounds");
+        let pages = self.pages.borrow();
+        match &pages[i / SLOTS_PER_PAGE as usize] {
+            Some(p) => p[i % SLOTS_PER_PAGE as usize].get(),
+            None => Slot::undefined(),
+        }
+    }
+
+    /// Write one record through `&self`, materializing its page.
+    fn set(&self, i: usize, s: Slot) {
+        assert!(i < self.count.get() as usize, "slot index {i} out of bounds");
+        let mut pages = self.pages.borrow_mut();
+        pages[i / SLOTS_PER_PAGE as usize]
+            .get_or_insert_with(materialized_page)[i % SLOTS_PER_PAGE as usize]
+            .set(s);
+    }
+
+    fn get_mut(&mut self, i: usize) -> &mut Slot {
+        assert!(i < self.count.get() as usize, "slot index {i} out of bounds");
+        let pages = self.pages.get_mut();
+        pages[i / SLOTS_PER_PAGE as usize]
+            .get_or_insert_with(materialized_page)[i % SLOTS_PER_PAGE as usize]
+            .get_mut()
+    }
+
+    fn push(&mut self, s: Slot) {
+        let i = self.count.get() as usize;
+        self.count.set(self.count.get() + 1);
+        let pages = self.pages.get_mut();
+        let page_no = i / SLOTS_PER_PAGE as usize;
+        if page_no >= pages.len() {
+            pages.push(None);
+        }
+        pages[page_no].get_or_insert_with(materialized_page)[i % SLOTS_PER_PAGE as usize].set(s);
+    }
+}
+
+/// One freshly materialized sparse page: every record the placeholder,
+/// exactly what dense storage held for a not-yet-faulted page.
+fn materialized_page() -> Box<[Cell<Slot>]> {
+    (0..SLOTS_PER_PAGE).map(|_| Cell::new(Slot::undefined())).collect()
 }
 
 /// Handle into the slot arena. `u32::MAX` is the null sentinel
@@ -317,6 +383,42 @@ impl Slot {
         }
     }
 
+    /// The property-key **id** this slot STORES, if any — the id whose
+    /// meaning has to survive a snapshot for the slot to still name the
+    /// same key on the other side.
+    ///
+    /// The `id` field is `XS_NO_ID` (`0`) on every slot that is not
+    /// keyed, and the only writes to it are a key (a property's key, a
+    /// closure scope slot's captured binding name) or a reset to `0`
+    /// when a property's value is copied out onto the stack. So a
+    /// non-zero `id` IS a key id, whatever the kind.
+    ///
+    /// Do not look for [`Kind::Property`] here. A property slot takes
+    /// the kind of the VALUE it holds (`create_global_property` and
+    /// `instance_put_raw` both overwrite it), so `Kind::Property` never
+    /// appears in a running heap — it survives as a decode tag and in
+    /// synthetic test fixtures. Keying off it finds nothing.
+    ///
+    /// A [`Payload::At`] computed key carries its resolved id inline
+    /// instead. Those are transient stack values, but the stack is
+    /// snapshotted and an `At` can be live across a suspend
+    /// (`o[k] = await f()` resolves the key before it awaits), so it
+    /// counts; its `XS_NO_ID` spelling means an integer index, not a
+    /// name, and is not a key id.
+    ///
+    /// This is deliberately the "stored" question and not the "minted"
+    /// one: minting an id costs nothing that has to be persisted, while
+    /// storing one puts a number in the heap whose meaning lives in a
+    /// table beside it.
+    #[inline]
+    pub fn stored_key_id(&self) -> Option<u16> {
+        let id = match self.value {
+            Payload::At(at, _) => at,
+            _ => self.id,
+        };
+        (id != 0).then_some(id)
+    }
+
     /// Rewrite this slot's chunk reference after compaction. A no-op on
     /// a slot that holds no chunk offset.
     #[inline]
@@ -351,11 +453,16 @@ impl Slot {
 /// a kind-checked logic bug, not undefined behavior.
 #[derive(Default)]
 pub struct SlotArena {
-    /// The record storage. `Cell` (identical layout to `Slot`, zero
-    /// runtime bookkeeping) is what lets the lazy fault path install a
-    /// page's records through `&self` in `forbid(unsafe_code)` code;
-    /// reads are by value (`Slot` is `Copy`), which after inlining
-    /// loads only the fields a caller actually touches.
+    /// The DENSE record storage of an eagerly built machine. `Cell`
+    /// (identical layout to `Slot`, zero runtime bookkeeping) is what
+    /// lets shared-reference paths write records in
+    /// `forbid(unsafe_code)` code; reads are by value (`Slot` is
+    /// `Copy`), which after inlining loads only the fields a caller
+    /// actually touches. On a LAZILY attached machine this vec stays
+    /// EMPTY and the records live page-sparse in the backing
+    /// ([`SlotBacking::pages`], store seam H1) — every accessor
+    /// dispatches on `lazy`, which the detached hot path already
+    /// branched on, so eager machines keep their exact pre-H1 path.
     slots: Vec<Cell<Slot>>,
     free: Vec<u32>,
     /// Twin of `free` as one bit per record, kept in exact sync by
@@ -383,6 +490,19 @@ pub struct SlotArena {
     /// travels in the checkpoint's small state, and mark bits are
     /// transient).
     dirty: Vec<bool>,
+    /// One bit per page: does this arena's lazy backing NOT hold the
+    /// page's current content?
+    ///
+    /// Distinct from `dirty`, which asks whether the next CHECKPOINT
+    /// owes the page. The two coincide only when every commit lands in
+    /// the pinned backing; a commit into a twin store answers `dirty`
+    /// (the twin has the bytes) without answering this one (the pinned
+    /// backing, which every fault reads, still holds the old bytes).
+    /// [`SlotArena::evict_page`] needs THIS question — dropping a page
+    /// from RAM is safe only when a re-fault reinstalls what was
+    /// dropped. Meaningless on a detached arena, which has no backing
+    /// and never reaches the check.
+    unbacked: Vec<bool>,
     /// Lazy-reification backing (store seam design, phase 3): `None`
     /// on every machine except one resumed lazily, so the detached hot
     /// path pays one always-false branch. Residency is **grow-only**:
@@ -399,6 +519,7 @@ impl SlotArena {
             marks: Vec::new(),
             live: 0,
             dirty: Vec::new(),
+            unbacked: Vec::new(),
             lazy: None,
         }
     }
@@ -422,16 +543,21 @@ impl SlotArena {
             free_marks[i as usize] = true;
         }
         SlotArena {
-            slots: (0..slot_count).map(|_| Cell::new(Slot::undefined())).collect(),
+            slots: Vec::new(),
             free,
             free_marks,
             marks: vec![false; slot_count as usize],
             live,
             dirty: vec![false; pages],
+            // Every backed page starts holding exactly what the source
+            // will serve for it.
+            unbacked: vec![false; pages],
             lazy: Some(SlotBacking {
                 source,
                 resident: (0..pages).map(|_| Cell::new(false)).collect(),
                 snapshot_count: slot_count,
+                pages: RefCell::new((0..pages).map(|_| None).collect()),
+                count: Cell::new(slot_count),
             }),
         }
     }
@@ -473,7 +599,7 @@ impl SlotArena {
             records.len(),
         );
         for (k, s) in records.into_iter().enumerate() {
-            self.slots[start + k].set(s);
+            backing.set(start + k, s);
         }
         bit.set(true);
     }
@@ -486,8 +612,9 @@ impl SlotArena {
     /// Content-identical by construction: a re-fault installs exactly
     /// the committed bytes, so any evict schedule is observably
     /// irrelevant — the adversarial-evict metamorphic arm locks it.
-    /// The dense record array keeps its RAM until sparse backing
-    /// (phase 9); eviction is the correctness machinery.
+    /// With the sparse backing (H1) an evict also DROPS the page's
+    /// materialized records, so eviction now returns the RAM the
+    /// phase-8 note promised it would once sparse storage landed.
     #[must_use = "a false return means the page was NOT evicted (dirty, unbacked, or non-resident)"]
     pub fn evict_page(&self, page: u32) -> bool {
         let Some(backing) = &self.lazy else {
@@ -504,7 +631,38 @@ impl SlotArena {
         if !bit.get() || self.dirty.get(page as usize).copied().unwrap_or(true) {
             return false;
         }
+        // Refuse a page whose CONTENT the backing does not hold. Clean
+        // is not the same as backed: a checkpoint into a non-pinned twin
+        // store clears the dirty bits while leaving the pinned backing —
+        // the one every fault reads — on the old bytes. Absent bit fails
+        // closed, as above (review wave 5).
+        if self.unbacked.get(page as usize).copied().unwrap_or(true) {
+            return false;
+        }
+        // Refuse a page holding records the store does NOT back. When
+        // the arena has grown past `snapshot_count` (clear_dirty ran,
+        // `advance_backing` did not — the twin-store commit and the
+        // `into_machine`→rebind path both do that), the records in
+        // `[snapshot_count, capacity)` live in NO store row, so dropping
+        // the box would lose them: the re-fault installs only
+        // `snapshot_count`-bounded records and the tail reads back
+        // `undefined`. Pre-H1 the dense vec retained them; this restores
+        // that (review wave 4, H1-a).
+        //
+        // Only the boundary page can hold such records and still be
+        // resident (pages wholly past the backed geometry are outside
+        // the residency bitmap and were already refused above), and only
+        // while the arena is actually ahead of its backing — a freshly
+        // resumed or just-advanced arena has `capacity == snapshot_count`
+        // and evicts everything, as before.
+        let page_end = (page as usize + 1).saturating_mul(SLOTS_PER_PAGE as usize);
+        if self.capacity() > backing.snapshot_count && page_end > backing.snapshot_count as usize {
+            return false;
+        }
         bit.set(false);
+        if let Some(slot) = backing.pages.borrow_mut().get_mut(page as usize) {
+            *slot = None;
+        }
         true
     }
 
@@ -523,13 +681,19 @@ impl SlotArena {
     /// tail page's expected fault length tracks the committed row
     /// rather than the attach-time one. No-op on a detached arena.
     pub fn advance_backing(&mut self) {
-        let count = self.slots.len() as u32;
+        let count = self.capacity();
+        let pages = count.div_ceil(SLOTS_PER_PAGE) as usize;
         if let Some(backing) = &mut self.lazy {
             backing.snapshot_count = count;
-            let pages = count.div_ceil(SLOTS_PER_PAGE) as usize;
             while backing.resident.len() < pages {
                 backing.resident.push(Cell::new(true));
             }
+        }
+        // Keep the content bitmap covering every page the residency
+        // bitmap does, so `evict_page`'s fail-closed default is reached
+        // only by a page outside the geometry entirely.
+        if self.unbacked.len() < pages {
+            self.unbacked.resize(pages, false);
         }
     }
 
@@ -571,6 +735,9 @@ impl SlotArena {
         if page >= self.dirty.len() {
             self.dirty.resize(page + 1, false);
         }
+        if page >= self.unbacked.len() {
+            self.unbacked.resize(page + 1, false);
+        }
         self.dirty[page] = true;
     }
 
@@ -583,17 +750,23 @@ impl SlotArena {
             // later fault clobber this fresh allocation with store
             // bytes.
             self.ensure_page_resident(i / SLOTS_PER_PAGE);
-            self.slots[i as usize].set(slot);
+            match &self.lazy {
+                Some(b) => b.set(i as usize, slot),
+                None => self.slots[i as usize].set(slot),
+            }
             self.free_marks[i as usize] = false;
             self.marks[i as usize] = false;
             self.mark_dirty_slot(i);
             SlotIndex(i)
         } else {
-            let i = self.slots.len() as u32;
+            let i = self.capacity();
             // A partial attach-time tail page must be faulted before
             // records are appended beside its stored ones.
             self.ensure_page_resident(i / SLOTS_PER_PAGE);
-            self.slots.push(Cell::new(slot));
+            match &mut self.lazy {
+                Some(b) => b.push(slot),
+                None => self.slots.push(Cell::new(slot)),
+            }
             self.free_marks.push(false);
             self.marks.push(false);
             self.mark_dirty_slot(i);
@@ -615,8 +788,9 @@ impl SlotArena {
     /// always-false branch.
     #[inline]
     pub fn get(&self, index: SlotIndex) -> Slot {
-        if self.lazy.is_some() {
+        if let Some(b) = &self.lazy {
             self.ensure_page_resident(index.0 / SLOTS_PER_PAGE);
+            return b.get(index.0 as usize);
         }
         self.slots[index.0 as usize].get()
     }
@@ -632,14 +806,20 @@ impl SlotArena {
         // costs a redundant page write at the next checkpoint, never a
         // missed one).
         self.mark_dirty_slot(index.0);
-        self.slots[index.0 as usize].get_mut()
+        match &mut self.lazy {
+            Some(b) => b.get_mut(index.0 as usize),
+            None => self.slots[index.0 as usize].get_mut(),
+        }
     }
 
     /// Total slot records ever allocated (live + free). The collector
     /// walks this range when sweeping.
     #[inline]
     pub fn capacity(&self) -> u32 {
-        self.slots.len() as u32
+        match &self.lazy {
+            Some(b) => b.count.get(),
+            None => self.slots.len() as u32,
+        }
     }
 
     // --- mark-sweep support (see `crate::gc`) ---
@@ -699,7 +879,7 @@ impl SlotArena {
     /// contract) — same deterministic index order as [`Self::sweep`].
     pub fn sweep_each(&mut self, swept: &mut dyn FnMut(SlotIndex)) -> u32 {
         let mut reclaimed = 0u32;
-        for i in 0..self.slots.len() as u32 {
+        for i in 0..self.capacity() {
             if !self.marks[i as usize] && !self.is_free(i) {
                 self.free.push(i);
                 self.free_marks[i as usize] = true;
@@ -722,7 +902,7 @@ impl SlotArena {
     /// question 5) so heap accounting stays comparable with XS.
     #[inline]
     pub fn byte_size(&self) -> usize {
-        self.slots.len() * 32
+        self.capacity() as usize * 32
     }
 
     // --- snapshot support (see `ironhorse-snapshot`) ---
@@ -744,7 +924,18 @@ impl SlotArena {
     /// [`SlotArena::page_records`] instead.
     pub fn records(&self) -> Vec<Slot> {
         self.ensure_all_resident();
-        self.slots.iter().map(|c| c.get()).collect()
+        (0..self.capacity() as usize).map(|i| self.read(i)).collect()
+    }
+
+    /// Read one record WITHOUT faulting (both storages answer the
+    /// placeholder for never-touched lazy records) — the whole-arena
+    /// readers' inner loop after their own residency step.
+    #[inline]
+    fn read(&self, i: usize) -> Slot {
+        match &self.lazy {
+            Some(b) => b.get(i),
+            None => self.slots[i].get(),
+        }
     }
 
     /// The records of one page (the incremental checkpoint's unit).
@@ -752,10 +943,20 @@ impl SlotArena {
     /// faults first), so this never reads the source for them; it
     /// still faults defensively for arbitrary callers.
     pub fn page_records(&self, page: u32) -> Vec<Slot> {
-        self.ensure_page_resident(page);
+        // A page past the arena's geometry is a caller bug, not an empty
+        // page. Pre-H1 the dense slice indexing panicked on it; the
+        // sparse rewrite made it silently return `[]`, which a
+        // checkpoint would then write as a zero-length row (review wave
+        // 4, H1-b). Assert rather than let the geometry error travel.
         let start = (page as usize) * SLOTS_PER_PAGE as usize;
-        let end = (start + SLOTS_PER_PAGE as usize).min(self.slots.len());
-        self.slots[start..end].iter().map(|c| c.get()).collect()
+        assert!(
+            start < self.capacity() as usize || self.capacity() == 0,
+            "page_records({page}) past the arena geometry ({} records)",
+            self.capacity(),
+        );
+        self.ensure_page_resident(page);
+        let end = (start + SLOTS_PER_PAGE as usize).min(self.capacity() as usize);
+        (start..end).map(|i| self.read(i)).collect()
     }
 
     /// The free list (indices returned to the arena, LIFO reuse order), so a
@@ -775,6 +976,7 @@ impl SlotArena {
     pub fn from_image(slots: Vec<Slot>, free: Vec<u32>, live: u32) -> SlotArena {
         let marks = vec![false; slots.len()];
         let dirty = vec![false; slots.len().div_ceil(SLOTS_PER_PAGE as usize)];
+        let unbacked = vec![false; dirty.len()];
         let mut free_marks = vec![false; slots.len()];
         for &i in &free {
             free_marks[i as usize] = true;
@@ -786,6 +988,7 @@ impl SlotArena {
             marks,
             live,
             dirty,
+            unbacked,
             lazy: None,
         }
     }
@@ -804,10 +1007,44 @@ impl SlotArena {
             .collect()
     }
 
-    /// Reset the dirty bitmap after a successful checkpoint commit.
+    /// Reset the dirty bitmap after a successful checkpoint commit
+    /// that did NOT write into this arena's own lazy backing — the
+    /// conservative reading, which leaves every cleared page unevictable
+    /// (see [`Self::clear_dirty_after_commit`]). Detached arenas, which
+    /// have no backing to be stale against, are unaffected.
     pub fn clear_dirty(&mut self) {
-        for d in self.dirty.iter_mut() {
-            *d = false;
+        self.clear_dirty_after_commit(false);
+    }
+
+    /// Reset the dirty bitmap after a successful checkpoint commit,
+    /// recording whether that commit's bytes landed in THIS arena's
+    /// lazy backing.
+    ///
+    /// The two bitmaps answer different questions and only coincide
+    /// when every commit is pinned. `dirty` asks "must the next
+    /// checkpoint ship this page?"; `unbacked` asks "would dropping
+    /// this page from RAM lose its content?" — the question
+    /// [`Self::evict_page`] needs. A commit into a NON-pinned twin
+    /// store answers the first (the twin has the bytes) but not the
+    /// second (the pinned backing, which every fault reads, still holds
+    /// the old ones). Clearing dirty alone therefore made a modified
+    /// page look evictable, and the re-fault silently reverted it
+    /// (review wave 5; the wave-4 guard covered the appended TAIL of
+    /// these same states and left the backed body).
+    ///
+    /// A page left unbacked stays that way until something rewrites it,
+    /// which is correct rather than pessimistic: a later PINNED commit
+    /// ships only its own dirty pages, so the backing is genuinely
+    /// still behind on this one.
+    pub fn clear_dirty_after_commit(&mut self, landed_in_backing: bool) {
+        if self.unbacked.len() < self.dirty.len() {
+            self.unbacked.resize(self.dirty.len(), false);
+        }
+        for (page, d) in self.dirty.iter_mut().enumerate() {
+            if *d {
+                self.unbacked[page] = !landed_in_backing;
+                *d = false;
+            }
         }
     }
 }
@@ -916,6 +1153,8 @@ pub struct ChunkArena {
     /// see the twin bitmap on [`SlotArena`]. Dirty extents are resident
     /// by construction: every dirtying path faults first.
     dirty: Vec<bool>,
+    /// Per-extent twin of [`SlotArena`]'s `unbacked`; see its doc.
+    unbacked: Vec<bool>,
 }
 
 impl ChunkArena {
@@ -923,6 +1162,7 @@ impl ChunkArena {
         ChunkArena {
             bytes: ChunkBytes::Plain(Vec::new()),
             dirty: Vec::new(),
+            unbacked: Vec::new(),
         }
     }
 
@@ -939,6 +1179,7 @@ impl ChunkArena {
                 snapshot_len,
             },
             dirty: vec![false; exts],
+            unbacked: vec![false; exts],
         }
     }
 
@@ -1002,6 +1243,10 @@ impl ChunkArena {
         };
         // Absent dirty bit fails closed, as on `evict_page`.
         if !bit.get() || self.dirty.get(ext as usize).copied().unwrap_or(true) {
+            return false;
+        }
+        // Clean is not the same as backed — see `SlotArena::evict_page`.
+        if self.unbacked.get(ext as usize).copied().unwrap_or(true) {
             return false;
         }
         // A live ChunkSlice guard borrows the cell; never evict under
@@ -1144,6 +1389,9 @@ impl ChunkArena {
         let last = (end - 1) / per;
         if last >= self.dirty.len() {
             self.dirty.resize(last + 1, false);
+        }
+        if last >= self.unbacked.len() {
+            self.unbacked.resize(last + 1, false);
         }
         for e in first..=last {
             self.dirty[e] = true;
@@ -1336,6 +1584,7 @@ impl ChunkArena {
             dirty.push(changed || was_dirty || tail_shrunk);
         }
         self.bytes = ChunkBytes::Plain(fresh);
+        self.unbacked = vec![false; dirty.len()];
         self.dirty = dirty;
         remap
     }
@@ -1381,6 +1630,7 @@ impl ChunkArena {
         ChunkArena {
             bytes: ChunkBytes::Plain(bytes),
             dirty: vec![false; exts],
+            unbacked: vec![false; exts],
         }
     }
 
@@ -1397,10 +1647,25 @@ impl ChunkArena {
             .collect()
     }
 
-    /// Reset the dirty bitmap after a successful checkpoint commit.
+    /// Reset the dirty bitmap after a commit that did NOT write into
+    /// this arena's lazy backing — see [`SlotArena::clear_dirty`].
     pub fn clear_dirty(&mut self) {
-        for d in self.dirty.iter_mut() {
-            *d = false;
+        self.clear_dirty_after_commit(false);
+    }
+
+    /// Reset the dirty bitmap after a successful checkpoint commit,
+    /// recording whether its bytes landed in THIS arena's lazy backing.
+    /// The slot-side [`SlotArena::clear_dirty_after_commit`] carries the
+    /// reasoning; this is the same property one extent at a time.
+    pub fn clear_dirty_after_commit(&mut self, landed_in_backing: bool) {
+        if self.unbacked.len() < self.dirty.len() {
+            self.unbacked.resize(self.dirty.len(), false);
+        }
+        for (ext, d) in self.dirty.iter_mut().enumerate() {
+            if *d {
+                self.unbacked[ext] = !landed_in_backing;
+                *d = false;
+            }
         }
     }
 }

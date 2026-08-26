@@ -101,11 +101,14 @@ fn symbol_tables_rebuilt_at_restore() {
     drop(m1);
     let m2 = from_snapshot_bytes(&bytes, &sig()).expect("machine restores from bytes");
 
-    // `symbol_names` round-trips …
+    // `symbol_names` round-trips — the MACHINE's table, which since the
+    // id-space unification includes any name the boot link appended
+    // (constructor `prototype`, iterator-protocol atoms) beyond the
+    // compiled `names1`. The compiled prefix must survive verbatim.
     assert_eq!(
-        m2.program_symbol_names(),
+        &m2.program_symbol_names()[..names1.len()],
         names1.as_slice(),
-        "the forward symbol_names table round-trips through the snapshot",
+        "the compiled name-table prefix round-trips through the snapshot",
     );
     // … and the *derived* inverse `symbol_ids` is rebuilt, so name-keyed
     // resolution works after resume. Before the fix this was `None` (empty

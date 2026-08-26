@@ -39,7 +39,8 @@ use ironhorse_snapshot::store::{export_to_container, store_to_image, StoreError}
 use ironhorse_snapshot::Signature;
 use ironhorse_store_sqlite::SqliteHeapStore;
 use ironhorse_vm::{parse_symbols, Interp, CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
-use std::path::PathBuf;
+
+mod common;
 
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
@@ -50,11 +51,8 @@ fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
     (bytecode, parse_symbols(&symbols))
 }
 
-fn tmp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ironhorse-sqlite-engine-{name}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn tmp_dir(name: &str) -> common::TempDir {
+    common::TempDir::new(&format!("ironhorse-sqlite-engine-{name}"))
 }
 
 /// Run `cranks` uninterrupted on one machine, then again with a full
@@ -140,7 +138,6 @@ fn run_scenario(name: &str, cranks: &[&str]) -> String {
         "[{name}] final store export byte-equals the never-suspended machine's blob"
     );
 
-    let _ = std::fs::remove_dir_all(&dir);
     baseline_outcomes.last().unwrap().result.clone()
 }
 
@@ -327,7 +324,6 @@ fn truncated_database_fails_closed_not_wrong() {
         Err(other) => panic!("unexpected error shape: {other:?}"),
         Ok(()) => panic!("a truncated database must not resume"),
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The single-writer-per-path model is enforced, not assumed
@@ -338,12 +334,10 @@ fn truncated_database_fails_closed_not_wrong() {
 /// racing the writer. ~5s: the second opener waits out busy_timeout.
 #[test]
 fn second_opener_fails_closed_under_exclusive_locking() {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = common::TempDir::new(&format!(
         "ironhorse-sqlite-exclusive-{}",
         std::process::id()
     ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("heap.sqlite");
 
     let first = ironhorse_store_sqlite::SqliteHeapStore::open(&path).expect("first opener");
@@ -352,5 +346,32 @@ fn second_opener_fails_closed_under_exclusive_locking() {
         Ok(_) => panic!("second opener must fail closed while the first holds the file"),
     }
     drop(first);
-    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Side-table ledger (G1) through SQLite: an array, a Map, and a
+/// `Symbol.for` registration built before the FIRST sleep keep
+/// answering — and keep MUTATING — across two more sleep cycles,
+/// tracking the uninterrupted baseline. Every crank opens with the
+/// same var/anchor prelude so all three compile to the identical
+/// symbol table (the bucket-ordered contract).
+#[test]
+fn side_tables_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "side-tables",
+        &[
+            "var arr = []; var m = new Map(); var sym = 0; var a = 0; var i = 0; var t = 0; var v = 0; \
+             m.set; m.get; arr.length; Symbol.for; \
+             a = { v: 1 }; sym = Symbol.for('led'); \
+             for (i = 0; i < 8; i = i + 1) { arr[i] = i + 1; } \
+             m.set(a, 50); m.set(sym, 500); t = 7;",
+            "var arr; var m; Map; var sym; var a; var i; var t; var v; \
+             m.set; m.get; arr.length; Symbol.for; \
+             arr[8] = 9; m.set(a, m.get(a) + 1); t = 7;",
+            "var arr; var m; Map; var sym; var a; var i; var t; var v; \
+             m.set; m.get; arr.length; Symbol.for; \
+             t = arr.length + arr[8] + m.get(a) + m.get(Symbol.for('led')); t",
+        ],
+    );
+    // 9 + 9 + 51 + 500
+    assert_eq!(last, "569");
 }

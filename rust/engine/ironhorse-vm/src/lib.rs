@@ -20,6 +20,7 @@
 //! `gxCodeSizes`) at the `c/moddable` pin, so opcode byte values,
 //! instruction sizes, and mnemonics match the oracle exactly.
 
+mod bulk;
 pub mod compartment;
 pub mod cost;
 pub mod default_keys;
@@ -37,7 +38,8 @@ pub use compartment::{
 };
 pub use gc::{GcStats, Heap};
 pub use interp::{
-    CompiledSource, Halt, Interp, Native, RunOutcome, SourceCompileError, SourceCompiler,
+    ArraySnapshot, CollectionSnapshot, CompiledSource, Halt, Interp, Native, RelinkError,
+    RunOutcome, SourceCompileError, SourceCompiler,
     PROGRAM_INVOCATION_COMPUTRONS,
 };
 pub use meter::{Meter, MeterCheck, MeterState, COST_TABLE_VERSION};

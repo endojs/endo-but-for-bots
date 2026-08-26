@@ -10,6 +10,8 @@ use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::store_file::FileStore;
 use ironhorse_snapshot::store_suite::{lazy_working_set_bound, metamorphic_suite};
 
+mod common;
+
 #[test]
 fn memory_store_agrees_seven_ways() {
     metamorphic_suite(MemoryStore::new);
@@ -24,22 +26,19 @@ fn memory_store_lazy_resume_faults_only_the_working_set() {
 /// the end (leaked temp dirs are the usual cause of local-only
 /// flakes).
 fn with_file_stores(name: &str, run: impl FnOnce(&mut dyn FnMut() -> FileStore)) {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = common::TempDir::new(&format!(
         "ironhorse-metamorphic-file-{name}-{}",
         std::process::id()
     ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
     let mut n = 0u32;
     let mut fresh = {
-        let dir = dir.clone();
+        let dir = dir.to_path_buf();
         move || {
             n += 1;
             FileStore::open(dir.join(format!("heap-{n}.ihstore"))).unwrap()
         }
     };
     run(&mut fresh);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

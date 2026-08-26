@@ -63,7 +63,7 @@ use crate::format::{Signature, SnapshotError};
 use crate::image::{read_machine, write_machine, MachineImage, MeterImage};
 use crate::sha256::{hex, Sha256};
 use crate::store::{
-    chunk_extent_count, combine_root, derive_page_edges, image_to_batch, leaf_hash, seal_commit,
+    chunk_extent_count, compute_root, derive_page_edges, image_to_batch, leaf_hash, seal_commit,
     slot_page_count, store_to_image, validate_store, CheckpointBatch, HeapStore, SmallState,
     StoreError, StoreLeaves, StoreManifest, LEAF_EXT, LEAF_PAGE, LEAF_SMALL,
     STORE_SCHEMA_VERSION,
@@ -169,9 +169,14 @@ pub trait MachineSnapshot {
 impl MachineSnapshot for Interp {
     fn snapshot_image(&self, signature: &Signature) -> MachineImage {
         // The carried atoms (see the suspend-point contract): arenas +
-        // stack + program symbol names + meter. Runtime-interned keys
-        // (KEYS) and well-known symbol identities (SYMB) are among the
-        // enumerated `Pending` remainder for now, so they travel empty.
+        // stack + the name table + meter, plus the side-table ledger's
+        // serialized rows (arrays, collections, `Symbol.for` registry)
+        // and the symbol-key id table (SYMB). String keys — program
+        // symbols and runtime-interned names alike — travel inside the
+        // NAME table since the id-space unification, so the KEYS atom
+        // is retired and travels empty.
+        let (arrays, collections, registry) = side_tables_of(self);
+        let (next_id, pairs) = self.symbol_key_table();
         MachineImage::from_arenas(
             signature.clone(),
             &self.slots,
@@ -179,10 +184,77 @@ impl MachineSnapshot for Interp {
             self.stack_slots(),
             self.program_symbol_names().to_vec(),
             Vec::new(),
-            Vec::new(),
+            crate::image::SymbolKeyImage { next_id, pairs },
         )
         .with_meter(self.meter_state())
+        .with_side_tables(arrays, collections, registry)
     }
+}
+
+/// The machine's three serialized side-table views (ledger rows
+/// `Arrays`/`Collections`/`SymbolRegistry`), converted from the vm's
+/// tuple snapshots into the image structs, in the vm's canonical
+/// (ascending) order.
+fn side_tables_of(
+    interp: &Interp,
+) -> (
+    Vec<crate::image::ArrayImage>,
+    Vec<crate::image::CollectionImage>,
+    Vec<crate::image::RegistryImage>,
+) {
+    let arrays = interp
+        .arrays_snapshot()
+        .into_iter()
+        .map(|(owner, length, items)| crate::image::ArrayImage {
+            owner,
+            length,
+            items,
+        })
+        .collect();
+    let collections = interp
+        .collections_snapshot()
+        .into_iter()
+        .map(
+            |(owner, kind, table_length, entries)| crate::image::CollectionImage {
+                owner,
+                kind,
+                table_length,
+                entries,
+            },
+        )
+        .collect();
+    let registry = interp
+        .symbol_registry_snapshot()
+        .into_iter()
+        .map(|(key, descriptor)| crate::image::RegistryImage { key, descriptor })
+        .collect();
+    (arrays, collections, registry)
+}
+
+/// Reinstate the ledger side tables on a restored machine from their
+/// image rows — [`Interp::restore_bulk_side_tables`]'s image-typed
+/// front door, shared by every resume path (container, eager store,
+/// lazy store). A malformed kind code was already refused at decode,
+/// so the restore cannot fail on validated input; the `false` return
+/// is a belt-and-braces corrupt signal.
+fn restore_side_tables(
+    interp: &mut Interp,
+    arrays: Vec<crate::image::ArrayImage>,
+    collections: Vec<crate::image::CollectionImage>,
+    registry: Vec<crate::image::RegistryImage>,
+) {
+    let ok = interp.restore_bulk_side_tables(
+        arrays
+            .into_iter()
+            .map(|a| (a.owner, a.length, a.items))
+            .collect(),
+        collections
+            .into_iter()
+            .map(|c| (c.owner, c.kind, c.table_length, c.entries))
+            .collect(),
+        registry.into_iter().map(|r| (r.key, r.descriptor)).collect(),
+    );
+    debug_assert!(ok, "validated image cannot carry an unknown kind code");
 }
 
 /// Rebuild a live [`Interp`] from a decoded [`MachineImage`]: a fresh
@@ -196,6 +268,22 @@ pub fn image_to_interp(image: MachineImage) -> Interp {
     let (slots, chunks) = image.to_arenas();
     let mut interp = Interp::new();
     interp.restore_snapshot_state(slots, chunks, image.stack, image.names, meter);
+    // The symbol-key id table (SYMB): re-bind each stored id to its
+    // descriptor slot and reinstate the top-down mint counter, so a
+    // symbol-keyed property reads back under the same id and a later
+    // mint cannot reuse a stored number. Shape was validated at decode;
+    // the `false` return is a belt-and-braces corrupt signal.
+    let ok = interp.restore_symbol_key_table(image.symbols.next_id, &image.symbols.pairs);
+    debug_assert!(ok, "validated symbol-key table cannot fail to restore");
+    // The side-table ledger rows (arrays, collections, registry):
+    // restored through the counted accessors so the side-ref page
+    // counts rebuild in lockstep.
+    restore_side_tables(
+        &mut interp,
+        image.arrays,
+        image.collections,
+        image.registry,
+    );
     interp
 }
 
@@ -304,6 +392,32 @@ pub struct StoreSession {
     /// is what lets the machine keep faulting after its own commits
     /// (its non-dirty rows are unchanged by its own checkpoint).
     pin: Option<std::rc::Rc<LazyPin>>,
+    /// Slot pages dirtied (or grown) since the last collection this
+    /// session ran — the generational collector's candidate set,
+    /// accumulated from each checkpoint's traveling page rows and
+    /// cleared when a collection consumes it. A fresh RESUME starts
+    /// empty (a generational pass right after resume frees nothing —
+    /// retention-only, sound).
+    gen_dirty: std::collections::BTreeSet<u32>,
+    /// The session's live copy of the store's root metadata (V6-c):
+    /// seeded from verified state at begin/resume and advanced by
+    /// each successful checkpoint, so the steady-state commit reads
+    /// NO stored metadata and re-hashes only the dirty leaves' root
+    /// paths. `None` after a failed commit (the owner-drops-on-failure
+    /// discipline [`RootLedger`] documents); the next checkpoint takes
+    /// the slow path — stored-metadata read, laundering pre-verify,
+    /// full recombination — and rebuilds it.
+    root_ledger: Option<crate::store::RootLedger>,
+    /// Total COMPLETED cranks the STORE has absorbed — the durable
+    /// counter the cadence schedule is derived from (store schema 8).
+    /// Seeded from the manifest at begin/resume and written back by
+    /// every checkpoint, so it survives a suspend and the schedule
+    /// cannot fork across one (review wave 5).
+    ///
+    /// The session does not advance this itself: it has no notion of a
+    /// crank. The caller that does — `PersistentMachine` — sets it with
+    /// [`StoreSession::set_cranks`] before checkpointing.
+    cranks: u64,
 }
 
 impl std::fmt::Debug for StoreSession {
@@ -319,6 +433,20 @@ impl StoreSession {
     /// The store epoch this session last committed or adopted.
     pub fn epoch(&self) -> u64 {
         self.epoch
+    }
+
+    /// Total COMPLETED cranks this store has absorbed — the durable
+    /// counter a cadence schedule must key off if it is to survive a
+    /// suspend (see [`StoreManifest::cranks`]).
+    pub fn cranks(&self) -> u64 {
+        self.cranks
+    }
+
+    /// Record the store's completed-crank total, to be written by the
+    /// next checkpoint. The session cannot derive this — it has no
+    /// notion of a crank — so the caller that does owns it.
+    pub fn set_cranks(&mut self, cranks: u64) {
+        self.cranks = cranks;
     }
 
     /// The bound machine.
@@ -342,7 +470,12 @@ impl StoreSession {
 /// formulas are exactly [`MachineImage::from_arenas`]'s, so a store
 /// checkpointed incrementally exports byte-identically to a blob
 /// written by [`MachineSnapshot::write_snapshot`].
-fn manifest_of(interp: &Interp, signature: &Signature, epoch: u64) -> StoreManifest {
+fn manifest_of(
+    interp: &Interp,
+    signature: &Signature,
+    epoch: u64,
+    cranks: u64,
+) -> StoreManifest {
     StoreManifest {
         version: crate::format::Version::current(),
         store_schema: STORE_SCHEMA_VERSION,
@@ -356,22 +489,30 @@ fn manifest_of(interp: &Interp, signature: &Signature, epoch: u64) -> StoreManif
         chunk_len: interp.chunks.byte_size() as u64,
         free_len: interp.slots.free_list().len() as u32,
         epoch,
+        cranks,
         root: String::new(),
         seal: String::new(),
     }
 }
 
 /// The machine's small state, mirroring [`MachineSnapshot::snapshot_image`]
-/// exactly (keys and well-known-symbol identities travel empty per the
-/// current side-table coverage).
+/// exactly (the KEYS section is retired — string keys travel inside the
+/// NAME table since the id-space unification; the ledger rows — arrays,
+/// collections, registry — travel since schema 7, and the symbol-key
+/// table travels in the symbols section).
 fn small_state_of(interp: &Interp) -> SmallState {
+    let (arrays, collections, registry) = side_tables_of(interp);
+    let (next_id, pairs) = interp.symbol_key_table();
     SmallState {
         stack: interp.stack_slots().to_vec(),
         slot_free: interp.slots.free_list().to_vec(),
         keys: Vec::new(),
         names: interp.program_symbol_names().to_vec(),
-        symbols: Vec::new(),
+        symbols: crate::image::SymbolKeyImage { next_id, pairs },
         meter: MeterImage::of(interp.meter_state()),
+        arrays,
+        collections,
+        registry,
     }
 }
 
@@ -389,7 +530,23 @@ pub fn begin_store_session(
         Ok(m) => return Err((interp, StoreError::NotEmpty { epoch: m.epoch })),
         Err(e) => return Err((interp, e)),
     }
-    let batch = image_to_batch(&interp.snapshot_image(signature), 1, "");
+    // The id-space audit (what remains of the wave-4 P1 gate): with
+    // string keys living in the NAME table and symbol keys traveling in
+    // the SYMB table, a LIVE machine cannot store an id outside both —
+    // ids only ever come from minting. Finding one here would mean this
+    // process corrupted its own tables; refuse rather than persist the
+    // contradiction. Asked of the IMAGE, which this path builds in full
+    // anyway, so the witness is what the store would actually hold.
+    let image = interp.snapshot_image(signature);
+    if image.stored_unregistered_key_id().is_some() {
+        return Err((
+            interp,
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "stored property id outside the name and symbol-key tables",
+            )),
+        ));
+    }
+    let batch = image_to_batch(&image, 1, "");
     if let Err(e) = store.commit(&batch) {
         // A failed commit hands the machine back with its dirt intact.
         return Err((interp, e));
@@ -398,12 +555,42 @@ pub fn begin_store_session(
     // forgets nothing and the next attempt re-offers the same dirt.
     interp.slots.clear_dirty();
     interp.chunks.clear_dirty();
+    // Seed the session's root ledger from the epoch-1 batch — it
+    // carries EVERY row, so an empty ledger advanced by it is the
+    // store's exact state (`root_ledger_tracks_real_batches`).
+    let root_ledger = {
+        let mut ledger =
+            crate::store::RootLedger::build(&batch.small, Vec::new(), Vec::new(), Vec::new(), &[]);
+        ledger
+            .apply(
+                &batch.manifest,
+                &batch.small,
+                &batch.slot_pages,
+                &batch.chunk_extents,
+                &batch.free_segs,
+                &batch.page_edges,
+            )
+            .ok()
+            .filter(|root| *root == batch.manifest.root)
+            .map(|_| ledger)
+    };
+    debug_assert!(root_ledger.is_some(), "epoch-1 ledger seed cannot diverge");
     let seal = batch.manifest.seal;
+    // The full write dirtied EVERY page: the first generational pass
+    // after a begin degenerates to a full partial collect, which is
+    // exactly right for a fresh store.
+    let gen_dirty: std::collections::BTreeSet<u32> =
+        (0..crate::store::slot_page_count(batch.manifest.slot_count)).collect();
     Ok(StoreSession {
+        gen_dirty,
         interp,
         epoch: 1,
         seal,
         pin: None,
+        root_ledger,
+        // A fresh store has absorbed no cranks; the first checkpoint
+        // records however many the caller reports.
+        cranks: 0,
     })
 }
 
@@ -421,6 +608,14 @@ pub fn checkpoint_to_store(
     signature: &Signature,
     store: &mut dyn HeapStore,
 ) -> Result<u64, StoreError> {
+    // The wave-4 P1 intern gate stood here — an O(dirty) refusal of any
+    // stored runtime-interned property id, because the id→name map did
+    // not travel. The id-space unification retired it: string keys live
+    // in the NAME table (persisted every checkpoint via the small
+    // state) and symbol keys travel in the SYMB table, so a live
+    // machine's stored ids are always resumable by construction, and
+    // `begin_store_session` / `resume_from_store` keep the full-image
+    // audit for adopted bytes.
     let stored = store.manifest()?;
     if stored.epoch != session.epoch {
         return Err(StoreError::EpochMismatch {
@@ -439,35 +634,74 @@ pub fn checkpoint_to_store(
     let epoch = session.epoch.checked_add(1).ok_or(StoreError::Snapshot(
         crate::format::SnapshotError::Corrupt("store epoch exhausted"),
     ))?;
-    // The stored metadata this commit builds on must itself cohere:
-    // leaves + summaries + small state recombine to the stored root
-    // (metadata-scale). A leaf edited at rest leaves the manifest
-    // untouched — so the pairing guard above still passes — and
-    // without this check the edit would be laundered into THIS
-    // commit's validly sealed root, surfacing only as a fault panic
-    // at the corrupted row's first read (the review's laundering
-    // finding).
-    let (mut leaf_pages, mut leaf_exts) = store.leaf_hashes()?;
-    let prior_frees = store.free_leaf_hashes()?;
-    let mut edges_all = store.page_edges()?;
-    {
-        let stored_small = store.read_small_state()?;
-        let recombined = combine_root(
-            &leaf_hash(LEAF_SMALL, 0, &stored_small),
-            &leaf_pages,
-            &leaf_exts,
-            &prior_frees,
-            &edges_all,
-        );
-        if recombined != stored.root {
-            return Err(StoreError::BaselineMismatch {
-                expected: recombined,
-                found: stored.root.clone(),
-            });
-        }
+    // Root maintenance takes one of two paths (V6-c). FAST: the
+    // session holds a live [`RootLedger`] — verified at seed time and
+    // advanced in lockstep with this session's own commits, which the
+    // pairing guard above proves are the only ones — so this commit
+    // reads NO stored metadata and re-hashes only the dirty leaves'
+    // root paths, O(dirty · log n). The ledger is TAKEN here: any
+    // error path FROM THIS POINT ON drops it and the next checkpoint
+    // rebuilds via the slow path (the drop-on-failure discipline).
+    //
+    // The guards ABOVE — runtime-interns, epoch, seal, epoch overflow,
+    // and a failed manifest read — return before the take, so a refusal
+    // there leaves the ledger in place (review wave 4, P3b: the prose
+    // said "any failed or refused commit drops it", which overstated
+    // it). That is correct rather than an oversight: those guards
+    // refuse before anything is written, so the ledger still describes
+    // exactly the store state it was advanced against and stays
+    // coherent. What must drop the ledger is a failure that could have
+    // left the store somewhere else, and every one of those is below.
+    // SLOW (no
+    // ledger: first checkpoint after a failure): read the stored
+    // metadata and verify it recombines to the stored root before
+    // building on it — a leaf edited at rest leaves the manifest
+    // untouched, so the pairing guard above still passes, and without
+    // this check the edit would be laundered into THIS commit's
+    // validly sealed root (the review's laundering finding). The fast
+    // path is immune to that laundering by construction — it never
+    // reads the edited bytes — and the edit stays detected by the
+    // backend's own recombination, every fault's row/leaf check, and
+    // the next open.
+    enum RootPath {
+        Fast(crate::store::RootLedger),
+        Slow {
+            leaf_pages: Vec<[u8; 32]>,
+            leaf_exts: Vec<[u8; 32]>,
+            prior_frees: Vec<[u8; 32]>,
+            edges_all: Vec<Vec<u32>>,
+        },
     }
+    let mut path = match session.root_ledger.take() {
+        Some(ledger) => RootPath::Fast(ledger),
+        None => {
+            let (leaf_pages, leaf_exts) = store.leaf_hashes()?;
+            let prior_frees = store.free_leaf_hashes()?;
+            let edges_all = store.page_edges()?;
+            let stored_small = store.read_small_state()?;
+            let recombined = compute_root(
+                &leaf_hash(LEAF_SMALL, 0, &stored_small),
+                &leaf_pages,
+                &leaf_exts,
+                &prior_frees,
+                &edges_all,
+            );
+            if recombined != stored.root {
+                return Err(StoreError::BaselineMismatch {
+                    expected: recombined,
+                    found: stored.root.clone(),
+                });
+            }
+            RootPath::Slow {
+                leaf_pages,
+                leaf_exts,
+                prior_frees,
+                edges_all,
+            }
+        }
+    };
     let interp = &mut session.interp;
-    let mut manifest = manifest_of(interp, signature, epoch);
+    let mut manifest = manifest_of(interp, signature, epoch, session.cranks);
 
     // Dirty rows only — never the whole heap. `page_records`/
     // `extent_bytes` copy one page/extent out of the arena (dirty rows
@@ -509,9 +743,15 @@ pub fn checkpoint_to_store(
         .collect();
 
     let small = small_state_of(interp).encode();
-    // Free-list segments (phase 9): diff against the stored segment
+    // Free-list segments (phase 9): diff against the prior segment
     // leaves so only CHANGED segments travel — LIFO churn touches the
     // tail segment, making per-commit free bytes O(1) in heap size.
+    // Both paths hold the prior free leaves: the ledger carries them
+    // live; the slow path just read them.
+    let prior_frees: &[[u8; 32]] = match &path {
+        RootPath::Fast(ledger) => ledger.free_leaves(),
+        RootPath::Slow { prior_frees, .. } => prior_frees,
+    };
     let free_all = crate::store::encode_all_free_segs(interp.slots.free_list());
     let free_segs: Vec<(u32, Vec<u8>)> = free_all
         .into_iter()
@@ -519,37 +759,55 @@ pub fn checkpoint_to_store(
             prior_frees.get(*i as usize).copied() != Some(leaf_hash(crate::store::LEAF_FREE, *i, bytes))
         })
         .collect();
-    // Row-hash tree + summary maintenance (phases 5-6, v5): prior
-    // state + this commit's dirty leaves/summaries → the new sealed
-    // root. Metadata-scale (32 bytes per row) and O(dirty) hashing of
-    // content.
-    let mut leaf_frees = prior_frees;
-    leaf_pages.resize(page_count as usize, [0u8; 32]);
-    leaf_exts.resize(chunk_extent_count(manifest.chunk_len) as usize, [0u8; 32]);
-    leaf_frees.resize(
-        crate::store::free_seg_count(manifest.free_len) as usize,
-        [0u8; 32],
-    );
-    for (i, bytes) in &slot_pages {
-        leaf_pages[*i as usize] = leaf_hash(LEAF_PAGE, *i, bytes);
-    }
-    for (i, bytes) in &chunk_extents {
-        leaf_exts[*i as usize] = leaf_hash(LEAF_EXT, *i, bytes);
-    }
-    for (i, bytes) in &free_segs {
-        leaf_frees[*i as usize] = leaf_hash(crate::store::LEAF_FREE, *i, bytes);
-    }
-    edges_all.resize(page_count as usize, Vec::new());
-    for (i, targets) in &page_edges {
-        edges_all[*i as usize] = targets.clone();
-    }
-    manifest.root = combine_root(
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &leaf_pages,
-        &leaf_exts,
-        &leaf_frees,
-        &edges_all,
-    );
+    // Root maintenance: prior state + this commit's dirty
+    // leaves/summaries → the new sealed root. Fast path: the ledger
+    // patches the traveling rows and recomputes only their tree
+    // paths. Slow path: patch the full vectors read above and
+    // recombine from scratch (also the ledger's rebuild material).
+    manifest.root = match &mut path {
+        RootPath::Fast(ledger) => ledger.apply(
+            &manifest,
+            &small,
+            &slot_pages,
+            &chunk_extents,
+            &free_segs,
+            &page_edges,
+        )?,
+        RootPath::Slow {
+            leaf_pages,
+            leaf_exts,
+            prior_frees,
+            edges_all,
+        } => {
+            let leaf_frees = prior_frees;
+            leaf_pages.resize(page_count as usize, [0u8; 32]);
+            leaf_exts.resize(chunk_extent_count(manifest.chunk_len) as usize, [0u8; 32]);
+            leaf_frees.resize(
+                crate::store::free_seg_count(manifest.free_len) as usize,
+                [0u8; 32],
+            );
+            for (i, bytes) in &slot_pages {
+                leaf_pages[*i as usize] = leaf_hash(LEAF_PAGE, *i, bytes);
+            }
+            for (i, bytes) in &chunk_extents {
+                leaf_exts[*i as usize] = leaf_hash(LEAF_EXT, *i, bytes);
+            }
+            for (i, bytes) in &free_segs {
+                leaf_frees[*i as usize] = leaf_hash(crate::store::LEAF_FREE, *i, bytes);
+            }
+            edges_all.resize(page_count as usize, Vec::new());
+            for (i, targets) in &page_edges {
+                edges_all[*i as usize] = targets.clone();
+            }
+            compute_root(
+                &leaf_hash(LEAF_SMALL, 0, &small),
+                leaf_pages,
+                leaf_exts,
+                leaf_frees,
+                edges_all,
+            )
+        }
+    };
     manifest.seal = seal_commit(
         &session.seal,
         &manifest,
@@ -570,30 +828,87 @@ pub fn checkpoint_to_store(
         page_edges,
     };
     store.commit(&batch)?;
-    session.interp.slots.clear_dirty();
-    session.interp.chunks.clear_dirty();
+    // The commit landed: hand the advanced ledger back to the session
+    // (fast path), or rebuild one from the slow path's freshly
+    // verified-and-patched vectors — either way the NEXT checkpoint
+    // is O(dirty · log n).
+    session.root_ledger = Some(match path {
+        RootPath::Fast(ledger) => ledger,
+        RootPath::Slow {
+            leaf_pages,
+            leaf_exts,
+            prior_frees,
+            edges_all,
+        } => crate::store::RootLedger::build(
+            &batch.small,
+            leaf_pages,
+            leaf_exts,
+            prior_frees,
+            &edges_all,
+        ),
+    });
+    // Accumulate the traveled slot pages into the generational
+    // candidate set (dirtied ∪ grown — exactly what this commit
+    // shipped); a collection consumes and clears it.
+    session
+        .gen_dirty
+        .extend(batch.slot_pages.iter().map(|(p, _)| *p));
+    // Did this commit land in the PINNED store — the one the machine's
+    // faults read from — decided by address identity (borrow-free, see
+    // [`LazyPin`])? A commit into an identical TWIN leaves the pin, and
+    // the pinned store's content, exactly where the faults need them.
+    //
+    // Taken BEFORE the dirty bits are cleared, because the arenas need
+    // the answer to decide which pages are still safe to evict: clean is
+    // not the same as backed, and a twin commit makes them differ
+    // (review wave 5).
+    let landed_in_backing = {
+        let committed: *const dyn HeapStore = &*store;
+        session
+            .pin
+            .as_ref()
+            .is_some_and(|pin| committed.cast::<()>() == pin.store_addr)
+    };
+    session
+        .interp
+        .slots
+        .clear_dirty_after_commit(landed_in_backing);
+    session
+        .interp
+        .chunks
+        .clear_dirty_after_commit(landed_in_backing);
     session.epoch = epoch;
     session.seal = seal.clone();
     if let Some(pin) = &session.pin {
-        // Advance only if this commit landed in the PINNED store,
-        // decided by address identity (borrow-free — see [`LazyPin`]);
-        // a commit into an identical twin leaves the pin — and the
-        // pinned store's content — exactly where the machine's faults
-        // need them.
-        let committed: *const dyn HeapStore = &*store;
-        if committed.cast::<()>() == pin.store_addr {
+        if landed_in_backing {
             pin.epoch.set(epoch);
             *pin.seal.borrow_mut() = seal;
             // The pinned store's rows just changed; the leaves every
             // future fault verifies against must follow (phase 8: a
             // committed-then-clean row is evictable, so it CAN fault
             // again — and must verify against the bytes this commit
-            // wrote, not the attach-time ones).
-            *pin.leaves.borrow_mut() = StoreLeaves {
-                pages: leaf_pages,
-                exts: leaf_exts,
-                frees: leaf_frees,
-            };
+            // wrote, not the attach-time ones). Patched in place from
+            // the batch's own rows — O(dirty), like the root ledger.
+            {
+                let mut leaves = pin.leaves.borrow_mut();
+                leaves.pages.resize(page_count as usize, [0u8; 32]);
+                leaves
+                    .exts
+                    .resize(chunk_extent_count(batch.manifest.chunk_len) as usize, [0u8; 32]);
+                leaves.frees.resize(
+                    crate::store::free_seg_count(batch.manifest.free_len) as usize,
+                    [0u8; 32],
+                );
+                for (i, bytes) in &batch.slot_pages {
+                    leaves.pages[*i as usize] = leaf_hash(LEAF_PAGE, *i, bytes);
+                }
+                for (i, bytes) in &batch.chunk_extents {
+                    leaves.exts[*i as usize] = leaf_hash(LEAF_EXT, *i, bytes);
+                }
+                for (i, bytes) in &batch.free_segs {
+                    leaves.frees[*i as usize] = leaf_hash(crate::store::LEAF_FREE, *i, bytes);
+                }
+            }
             // And the arenas' lazy backing advances to the committed
             // geometry: rows appended past the attach-time range are
             // now store-backed (evictable, re-faultable), and the
@@ -615,8 +930,32 @@ pub fn resume_from_store(
     store: &dyn HeapStore,
     expected_sig: &Signature,
 ) -> Result<StoreSession, StoreError> {
-    let (manifest, _small, _leaves) = validate_store(store, expected_sig)?;
+    let (manifest, _small, leaves) = validate_store(store, expected_sig)?;
+    // Ledger seed material (V6-c): validation just proved these
+    // leaves recombine to the stored root; the raw summaries and
+    // small bytes complete the picture. Read before the torn-read
+    // re-check below so the guard covers them too.
+    let edges = store.page_edges()?;
+    let small_bytes = store.read_small_state()?;
     let image = store_to_image(store)?;
+    // The eager resume reads every row, so it can afford the FULL
+    // id-space audit and is the one resume path that does. It closes
+    // the adoption hole: a store whose bytes carry a property id
+    // outside both key tables (crafted, torn, or written by a
+    // pre-unification build that let one through) is refused here
+    // rather than laundered into this session's checkpoints (review
+    // wave 5). `resume_from_store_lazy` deliberately reads no heap rows
+    // at open — that is the whole point of lazy resume — so it cannot
+    // ask this question, and does not pretend to; what protects it is
+    // that every WRITE path audits, so no store this code produces can
+    // hold one.
+    if image.stored_unregistered_key_id().is_some() {
+        return Err(StoreError::Snapshot(
+            crate::format::SnapshotError::Corrupt(
+                "stored property id outside the name and symbol-key tables",
+            ),
+        ));
+    }
     // Re-check the manifest after the row reads: the reads above are
     // not one atomic snapshot on every backend, so a concurrent commit
     // could otherwise hand us a chimera of two epochs (the SQLite
@@ -629,11 +968,22 @@ pub fn resume_from_store(
             found: after.seal,
         });
     }
+    let root_ledger = crate::store::RootLedger::build(
+        &small_bytes,
+        leaves.pages,
+        leaves.exts,
+        leaves.frees,
+        &edges,
+    );
+    debug_assert_eq!(root_ledger.root(), manifest.root, "seed from validated state");
     Ok(StoreSession {
+        gen_dirty: std::collections::BTreeSet::new(),
         interp: image_to_interp(image),
         epoch: manifest.epoch,
         seal: manifest.seal,
         pin: None,
+        root_ledger: Some(root_ledger),
+        cranks: manifest.cranks,
     })
 }
 
@@ -738,6 +1088,10 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     expected_sig: &Signature,
 ) -> Result<StoreSession, StoreError> {
     let (manifest, small, leaves) = validate_store(&*store.borrow(), expected_sig)?;
+    // Ledger seed material (V6-c), read before the torn-read re-check
+    // below so the guard covers it too.
+    let edges = store.borrow().page_edges()?;
+    let small_bytes = store.borrow().read_small_state()?;
     // Re-check the manifest after validation's separate reads, exactly
     // as eager resume does after its row reads: the manifest / small /
     // inventory reads are not one atomic snapshot on every backend, so
@@ -754,6 +1108,14 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
             });
         }
     }
+    let root_ledger = crate::store::RootLedger::build(
+        &small_bytes,
+        leaves.pages.clone(),
+        leaves.exts.clone(),
+        leaves.frees.clone(),
+        &edges,
+    );
+    debug_assert_eq!(root_ledger.root(), manifest.root, "seed from validated state");
     let pin = std::rc::Rc::new(LazyPin {
         epoch: std::cell::Cell::new(manifest.epoch),
         seal: std::cell::RefCell::new(manifest.seal.clone()),
@@ -782,11 +1144,22 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.names.clone(),
         small.meter.to_state(),
     );
+    // The symbol-key id table rides the small state too, restored
+    // before anything can mint.
+    let ok = interp.restore_symbol_key_table(small.symbols.next_id, &small.symbols.pairs);
+    debug_assert!(ok, "validated symbol-key table cannot fail to restore");
+    // The ledger side tables ride the small state, so a LAZY resume
+    // restores them eagerly like everything else small — only arena
+    // rows fault on demand.
+    restore_side_tables(&mut interp, small.arrays, small.collections, small.registry);
     Ok(StoreSession {
+        gen_dirty: std::collections::BTreeSet::new(),
         interp,
         epoch: manifest.epoch,
         seal: manifest.seal,
         pin: Some(pin),
+        root_ledger: Some(root_ledger),
+        cranks: manifest.cranks,
     })
 }
 
@@ -925,15 +1298,10 @@ mod tests {
         uninterrupted.run(&PROG_A);
         let ub = uninterrupted.run(&PROG_B);
 
-        let dir = std::env::temp_dir().join(format!(
-            "ironhorse-cas-test-{}",
-            // A per-run-unique subdir without Math.random/Date: the
-            // content hash of PROG_A's snapshot is itself unique enough,
-            // computed below; use a fixed name scoped by process temp dir.
-            "suspend-resume"
-        ));
-        // Clean any prior run's directory.
-        let _ = std::fs::remove_dir_all(&dir);
+        // A fixed name scoped by the process temp dir; the guard
+        // pre-cleans any prior run's leftover and removes the
+        // directory on drop, success or panic.
+        let dir = crate::test_dir::TempDir::new("ironhorse-cas-test-suspend-resume");
 
         let mut m1 = Interp::new();
         m1.run(&PROG_A);
@@ -950,7 +1318,6 @@ mod tests {
         assert_eq!(b2.result, ub.result);
         assert_eq!(b2.computrons, ub.computrons, "meter continued through the CAS round-trip");
 
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -1038,5 +1405,110 @@ pub fn partial_collect(
     let roots: Vec<u32> = root_pages.into_iter().collect();
     let reached = store.reachable_page_set(&roots)?;
     let dead: Vec<u32> = (0..total).filter(|p| !reached.contains(p)).collect();
-    Ok(session.machine_mut().free_pages(&dead))
+    let freed = session.machine_mut().free_pages(&dead);
+    // A full partial collect re-examines everything, so the
+    // generational candidate set restarts empty.
+    session.gen_dirty.clear();
+    Ok(freed)
+}
+
+/// **Summary-generational collection** (store seam phase 11): the
+/// steady-state variant of [`partial_collect`] whose work is bounded
+/// by the MUTATED region, not the live heap. Candidates are only the
+/// pages dirtied (or grown) since the last collection this session
+/// ran; a candidate survives when it is
+///
+/// 1. a current ROOT page (arena roots or side-table refs),
+/// 2. referenced from an UN-dirtied old page (whose stored edges are
+///    its current edges — the reverse-index seed), or
+/// 3. reachable from either seed class through summary edges WITHIN
+///    the dirty region (edges leaving the region land on old pages,
+///    which this pass never frees).
+///
+/// Old-generation garbage is deliberately retained — the periodic
+/// [`partial_collect`] (or the full in-memory collector) reclaims it;
+/// every page this pass frees, a full partial pass would also free
+/// (retention-only divergence, locked by test). Timing stays a pure
+/// function of store content and the session's own checkpoint
+/// history. Returns the number of slots freed.
+///
+/// # Not resume-invariant — do NOT wire this to `collect_every`
+///
+/// The candidate set is `gen_dirty`, which a resume seeds EMPTY while a
+/// continuous session keeps accumulating. Two replicas running the same
+/// program under the same `CadencePolicy` therefore free DIFFERENT pages
+/// if one suspends and resumes mid-window, and the free list is
+/// container-visible — so the replicas' bytes diverge (review wave 4,
+/// DET-5).
+///
+/// This is latent today and must stay that way: `PersistentMachine`'s
+/// scheduled collection calls [`partial_collect`], whose candidate set is
+/// the whole store and which is therefore resume-invariant, and this
+/// collector is reached only from tests. The `CadencePolicy` replica
+/// claim ("same policy ⟹ same bytes") assumes a resume-invariant
+/// collector. Anyone flipping `collect_every` to this one must first make
+/// the candidate set depend on durable state rather than session
+/// lifetime.
+pub fn generational_collect(
+    session: &mut StoreSession,
+    store: &dyn HeapStore,
+) -> Result<u32, StoreError> {
+    let interp = session.machine();
+    assert!(
+        interp.slots.dirty_pages().is_empty() && interp.chunks.dirty_extents().is_empty(),
+        "generational collect requires a clean checkpoint boundary (dirty rows present)"
+    );
+    let manifest = store.manifest()?;
+    if manifest.epoch != session.epoch || manifest.seal != session.seal {
+        return Err(StoreError::BaselineMismatch {
+            expected: session.seal.clone(),
+            found: manifest.seal,
+        });
+    }
+    let total = slot_page_count(manifest.slot_count);
+    let found = store.summary_page_count()?;
+    if found != total {
+        return Err(StoreError::SummaryCount {
+            expected: total,
+            found,
+        });
+    }
+    let dirty: Vec<u32> = session
+        .gen_dirty
+        .iter()
+        .copied()
+        .filter(|p| *p < total)
+        .collect();
+    if dirty.is_empty() {
+        return Ok(0);
+    }
+    let dirty_set: std::collections::BTreeSet<u32> = dirty.iter().copied().collect();
+
+    // Seed class 1: candidate pages that are current roots.
+    let mut seeds: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    let interp = session.machine();
+    for r in interp.gc_roots() {
+        if !r.is_null() {
+            let p = r.0 / crate::store::SLOTS_PER_PAGE;
+            if dirty_set.contains(&p) {
+                seeds.insert(p);
+            }
+        }
+    }
+    for (p, hit) in interp.side_table_ref_page_bits().into_iter().enumerate() {
+        if hit && dirty_set.contains(&(p as u32)) {
+            seeds.insert(p as u32);
+        }
+    }
+    // Seed class 2: candidates referenced from outside the region.
+    for t in store.externally_referenced(&dirty)? {
+        seeds.insert(t);
+    }
+    // Expansion within the region only.
+    let seed_vec: Vec<u32> = seeds.into_iter().collect();
+    let kept = store.reachable_within(&seed_vec, &dirty)?;
+    let dead: Vec<u32> = dirty.into_iter().filter(|p| !kept.contains(p)).collect();
+    let freed = session.machine_mut().free_pages(&dead);
+    session.gen_dirty.clear();
+    Ok(freed)
 }

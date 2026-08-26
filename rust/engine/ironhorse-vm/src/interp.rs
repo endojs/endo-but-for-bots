@@ -41,6 +41,7 @@
 //! No JIT, no code generation, no execution-count-dependent behavior
 //! (requirement 4): a straight `match` LLVM lowers to a jump table.
 
+use crate::bulk::{ArrayData, CollKind, CollectionData, SideRefCounts};
 use crate::meter::{Meter, MeterCheck};
 use crate::opcode::Opcode;
 use crate::value::{number_to_ecma_string, to_int32, ChunkArena, Kind, Payload, Slot, SlotArena};
@@ -114,6 +115,38 @@ pub trait SourceCompiler {
 /// `CATCH` resume's `mxBreak` meters the catch target exactly as ironhorse's
 /// dispatch does, so caught exceptions are bit-exact without it.
 pub const THROW_HOST_ESCAPE_METERING: u64 = 1 << 15;
+
+/// A throw unwinding to a handler that was live ACROSS a suspend (the
+/// `try` was entered before a `yield`/`await`, and the run resumed inside
+/// it) costs XS one extra bytecode dispatch beyond the ordinary caught
+/// throw — the re-establishment the resumed frame's handler needs, which
+/// a never-suspended `CATCH` already paid for in its own dispatch.
+///
+/// Traced to source (review wave 5), so the value is derived, not fitted.
+/// In `xsRun.c`, a longjmp into an IN-LOOP `CATCH` lands on
+/// `mxFirstCode(); mxBreak;` and meters ONCE (the `mxBreak`). A longjmp
+/// into a PROLOGUE-RESTORED jump instead `goto`s `XS_CODE_JUMP` and falls
+/// into the `for(;;)` dispatch loop, which meters TWICE: once at the loop
+/// top and once more in `mxSwitch`, which the computed-goto build
+/// `#define`s to `mxBreak`. The difference is exactly one
+/// `XS_CODE_METERING`, and it lands per THROW because `fxJump` always
+/// longjmps to `the->firstJump`.
+///
+/// NOTE this is a property of the COMPUTED-GOTO dispatch build (`xsRun.c`
+/// gates it on `__GNUC__ && __OPTIMIZE__`). In a plain-`switch` build both
+/// paths meter once and this surcharge would be WRONG. The oracle is
+/// built with gcc at `-O2`, mirroring xsnap, so the pin is correct — but a
+/// port to a non-computed-goto XS must revisit this constant.
+///
+/// Also measured against the oracle (review wave 4, DET-3, which is what
+/// surfaced it: the suspend-in-try arms asserted completion only, so a
+/// one-dispatch gap on exactly this path completed with the right value
+/// and passed). The attribution is per-THROW-through-a-rebased-handler,
+/// not per rebased handler nor per suspend: with two `try`s live across
+/// the suspend, one throw is one dispatch and two throws are two, while a
+/// `try` established AFTER the resume is bit-exact with no adjustment.
+/// Identical in the generator (`yield`) and async (`await`) resume paths.
+pub const RESUMED_HANDLER_THROW_METERING: u64 = crate::meter::CODE_METERING;
 
 /// XS's value stack is a fixed array of `stackCount` slots
 /// (`xs-oracle/csrc/xs_shim.c` and the endo `DEFAULT_CREATION`:
@@ -658,11 +691,15 @@ pub const CALL_TRAMPOLINE_PER_ARG: u64 = 1 << 14;
 /// per-element cost (the `mxGetIndex(i)` read plus the forwarded-argument copy
 /// through the tail-call). Both calibrated against the pin via the raw-gap:
 /// with a fixed callee, each element grows the run by exactly `3 << 14` and
-/// the array-argument base by a constant `98040` beyond
-/// `CALL_TRAMPOLINE_METERING` (a small ≤~272-raw context residual — the same
-/// sub-computron literal/var chunk-alignment noise the array corpus carries —
-/// stays below one computron).
-pub const APPLY_ARRAY_BASE_METERING: u64 = 98040;
+/// the array-argument base by a constant `98304` beyond
+/// `CALL_TRAMPOLINE_METERING`. That base is `XS_CODE_METERING + 2 *
+/// XS_BUILTIN_METERING` — an exact XS shape, not a fitted number. It read
+/// `98040` until review wave 5 measured the residual directly: an exact
+/// slope of `-264` raw per apply-with-array, independent of element count
+/// AND of receiver kind, which localizes the error entirely to the base.
+/// The `≤~272-raw context residual` previously recorded here WAS that
+/// error, mistaken for chunk-alignment noise.
+pub const APPLY_ARRAY_BASE_METERING: u64 = 98304;
 pub const APPLY_ARRAY_PER_ELEMENT_METERING: u64 = 3 << 14;
 
 /// `Function.prototype.bind` creation (`fx_Function_prototype_bind`): the
@@ -2551,18 +2588,6 @@ impl Default for FuncInfo {
     }
 }
 
-/// An exotic array's data (XS's `XS_ARRAY_KIND` internal slot). `length`
-/// is the array length (`fxArraySetLength` semantics); `items` holds the
-/// present elements sparsely by index (an absent index in `[0, length)` is
-/// a hole). A `BTreeMap` keeps the indices ordered so `for-in` enumeration
-/// and `Array.prototype` iteration visit them in ascending index order,
-/// matching XS's item-chunk order.
-#[derive(Clone, Debug, Default)]
-struct ArrayData {
-    length: u32,
-    items: std::collections::BTreeMap<u32, Slot>,
-}
-
 #[derive(Clone, Debug)]
 struct DisposalRecord {
     resource: Slot,
@@ -2575,39 +2600,6 @@ struct DisposableStackData {
     disposed: bool,
     asynchronous: bool,
     records: Vec<DisposalRecord>,
-}
-
-/// Which collection an instance is (XS's `XS_MAP_KIND`/`XS_SET_KIND`/
-/// `XS_WEAK_MAP_KIND`/`XS_WEAK_SET_KIND` internal slot).
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum CollKind {
-    Map,
-    Set,
-    WeakMap,
-    WeakSet,
-}
-
-/// A Map/Set/WeakMap/WeakSet instance's internal state (XS's exotic
-/// collection: the hash table + insertion-ordered entry list, or the
-/// weak-entry list). Kept in the [`Interp::collections`] side table like
-/// [`ArrayData`]; entry key/value slots are never swept underneath it (the
-/// stage-2 no-mid-run-GC contract). `entries` preserves insertion order
-/// (XS's `list` order, what `forEach`/iterators visit); Set/WeakSet ignore
-/// the value half.
-///
-/// Metering is purely allocation-driven — xsMapSet.c contains no `mxMeter`
-/// calls — so `table_length` tracks XS's power-of-two address-array length
-/// (`fxResizeEntries`) to charge the `fxNewChunk(length * 8)` on the exact
-/// rehash boundaries XS crosses. Weak collections have no table (their
-/// entries hang off the key object), so `table_length` is unused for them.
-#[derive(Clone, Debug)]
-struct CollectionData {
-    kind: CollKind,
-    /// Insertion-ordered entries. Deletion leaves a tombstone so live
-    /// iterators and `forEach` cursors do not skip the following entry; a
-    /// delete followed by re-add appends a new entry at the tail.
-    entries: Vec<Option<(Slot, Slot)>>,
-    table_length: u32,
 }
 
 /// An `ArrayBuffer` instance's internal state (XS's `XS_ARRAY_BUFFER_KIND`
@@ -3563,6 +3555,24 @@ pub struct RunOutcome {
 /// [`Halt::Unsupported`] naming themselves, so the differential harness
 /// reports exactly what to implement next rather than diverging
 /// silently.
+/// Why [`Interp::relink_crank`] refused (side-table ledger G2). Every
+/// variant is fail-closed: nothing ran, the machine is unchanged.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum RelinkError {
+    /// The crank's bytecode references an id beyond its own compiled
+    /// table, or the instruction walker could not decode it.
+    MalformedBytecode,
+    /// Extending the table would exhaust the 16-bit id space.
+    TableFull,
+}
+
+/// One serialized `arrays` row as [`Interp::arrays_snapshot`] hands it
+/// out: `(owner slot, spec length, items ascending by index)`.
+pub type ArraySnapshot = (u32, u32, Vec<(u32, Slot)>);
+/// One serialized `collections` row: `(owner slot, kind code,
+/// table_length, entries in insertion order)`.
+pub type CollectionSnapshot = (u32, u8, u32, Vec<(Slot, Slot)>);
+
 pub struct Interp {
     stack: Vec<Slot>,
     /// The program frame's scope slots. `NEW_LOCAL`/`NEW_TEMPORARY`
@@ -3928,11 +3938,17 @@ pub struct Interp {
     /// outside this set (and not a program symbol / not previously seen) is
     /// genuinely novel and meters one `fxNewSlot`. See [`Self::intern_key`].
     default_keys: std::collections::HashSet<&'static str>,
-    /// The next id [`Self::intern_key`] hands out for a genuinely-novel
-    /// runtime property name. Seeded past the compiler's program-symbol ids
-    /// (`link_intrinsics`), so a runtime-interned key never collides with a
-    /// program symbol or a linked intrinsic property.
-    next_intern_id: u16,
+    /// The next id [`Self::intern_symbol_key`] hands out for a symbol used
+    /// as a property key, allocated DOWNWARD from `u16::MAX` so the symbol
+    /// id space can never collide with the append-only name table growing
+    /// up from 1 (string keys — program symbols and runtime-interned names
+    /// alike — live in [`Self::symbol_names`], where they persist via the
+    /// NAME row). The two spaces meeting is the id-space-exhaustion
+    /// hazard: minting then saturates at the boundary and aliases, the
+    /// same failure class the old shared counter had at `u16::MAX`
+    /// (recorded in the design's Remaining ledger; a fail-closed
+    /// conversion needs fallible intern plumbing at ~50 call sites).
+    next_symbol_key_id: u16,
     /// The program's symbol names indexed by `id - 1` (the decoded symbols
     /// atom, verbatim), so a function definition can recover its own name
     /// string for `Function.prototype.toString`.
@@ -3982,6 +3998,12 @@ pub struct Interp {
     /// internal slots). Keyed by the collection instance's slot, like
     /// [`Self::arrays`]. See [`CollectionData`].
     collections: std::collections::HashMap<crate::value::SlotIndex, CollectionData>,
+    /// Per-page refcounts for the BULK side tables' references
+    /// (arrays' items, collections' entries) — the standing map the
+    /// partial collector's page projection reads instead of walking
+    /// entries. Maintained by every counted mutation in
+    /// [`crate::bulk`]; whole-row drops decrement via `drop_refs`.
+    side_refs: SideRefCounts,
     /// The realm's `%Map.prototype%`/`%Set.prototype%`/`%WeakMap.prototype%`/
     /// `%WeakSet.prototype%` (boot objects), so a `new Map()` instance chains
     /// to the right one and its methods resolve.
@@ -4088,7 +4110,7 @@ pub struct Interp {
     /// A symbol value's descriptor slot → the program-local property **id** it
     /// is interned under when used as a property key (XS's `mxID(symbol)`: a
     /// symbol IS an id there; here a symbol's descriptor-slot identity is
-    /// minted a stable key id on first key-use, from [`Self::next_intern_id`],
+    /// minted a stable key id on first key-use, from [`Self::next_symbol_key_id`],
     /// so `o[sym]` round-trips and two uses of the SAME symbol resolve the same
     /// property). Keyed by the descriptor `SlotIndex` (stable — "slots never
     /// move"), exactly like [`Self::symbol_registry_keys`]. A symbol-keyed
@@ -4483,6 +4505,12 @@ struct CatchJump {
     /// the surviving catch/finally code in the establishing frame.
     env: Slot,
     flag: u8,
+    /// This entry was RE-ESTABLISHED when a suspended run resumed (the
+    /// handler was live across a `yield`/`await`), rather than pushed by
+    /// a `CATCH` dispatch in the current run. A throw unwinding to such
+    /// an entry costs one extra dispatch in XS — see
+    /// [`RESUMED_HANDLER_THROW_METERING`].
+    rebased: bool,
 }
 
 /// The lifecycle state of a generator instance (`xsGenerator.c`'s `state`
@@ -4511,7 +4539,9 @@ enum GeneratorState {
 /// scope (`locals`/`id_map`), the call identity (`args`/`this_val`/
 /// `cur_func`/`cur_target`/`strict`/`result`), the generator's own value-stack
 /// temporaries (`stack_slice`, the slots above the frame base at the suspend
-/// point), its live exception handlers (`jumps`), and the resume cursor
+/// point), its live exception handlers (`jumps`, positions made RELATIVE to
+/// the frame base — a suspend inside a `try` snapshots its handlers here and
+/// the resume rebases them onto the live chain), and the resume cursor
 /// (`resume_pc`).
 struct SavedFrame {
     locals: Vec<Slot>,
@@ -4534,6 +4564,11 @@ struct SavedFrame {
     jumps: Vec<SavedJump>,
     resume_pc: usize,
 }
+
+/// A [`CatchJump`] as saved into a suspended frame: `stack_len` is
+/// RELATIVE to the run's frame base (the live chain records absolute
+/// positions), and `call_depth` is dropped — a run's own handlers all
+/// sit at the run's depth, which the resume re-derives.
 
 #[derive(Clone)]
 struct SavedJump {
@@ -4779,7 +4814,7 @@ impl Interp {
             well_known_symbols: Vec::new(),
             symbol_ids: std::collections::HashMap::new(),
             default_keys: crate::default_keys::DEFAULT_KEYS.iter().copied().collect(),
-            next_intern_id: 1,
+            next_symbol_key_id: u16::MAX,
             symbol_names: Vec::new(),
             error_data: std::collections::HashMap::new(),
             wrapper_data: std::collections::HashMap::new(),
@@ -4788,6 +4823,7 @@ impl Interp {
             arguments_objects: std::collections::HashSet::new(),
             disposable_stacks: std::collections::HashMap::new(),
             collections: std::collections::HashMap::new(),
+            side_refs: SideRefCounts::new(),
             map_proto: crate::value::SlotIndex::NULL,
             set_proto: crate::value::SlotIndex::NULL,
             weakmap_proto: crate::value::SlotIndex::NULL,
@@ -5814,6 +5850,52 @@ impl Interp {
         self.create_temporal();
         self.create_hardened_globals();
         self.create_test262_host();
+
+        // Every native function instance (constructor and
+        // alloc_method product alike) chains to %Function.prototype%
+        // the way a user function does, so a DETACHED native resolves
+        // `.call`/`.apply`/`.bind` through the same prototype walk
+        // (the deferred pass's .call-on-native fix — alloc_method
+        // used to leave the prototype NULL on the theory that native
+        // instances are "only ever dispatched, never re-inspected",
+        // which detachment falsified). alloc_method can run before
+        // %Function.prototype% exists, so the chain lands here once,
+        // at the end of the boot; only NULL prototypes are touched.
+        //
+        // BOOT ONLY, and therefore a version fork across restore: a heap
+        // checkpointed by a build that PREDATES this fixup keeps its
+        // NULL-proto natives forever, because restore replays stored
+        // records rather than re-booting and migration restamps schema
+        // and root, never content. Such a machine resumes cleanly
+        // (VERS/SIGN/cost-table all agree — none of them fingerprints
+        // intrinsic SHAPE) and then throws on `nativeF.call(...)` where
+        // a fresh boot succeeds (review wave 4, DET-6). Accepted for the
+        // same reason the whole migration item is: no pre-delta
+        // production heaps exist. If one ever must be resumed, the fix
+        // is a restore-time re-run of this fixup — the writes are
+        // idempotent by construction (only NULL prototypes are touched),
+        // so it is safe to call on any heap.
+        if let Some(fp) = self
+            .intrinsics
+            .get("Function")
+            .copied()
+            .and_then(|c| self.prototype_of(c))
+        {
+            let native_fns: Vec<crate::value::SlotIndex> = self
+                .functions
+                .iter()
+                .filter(|(f, fi)| (fi.method.is_some() || fi.native.is_some()) && **f != fp)
+                .map(|(f, _)| *f)
+                .collect();
+            for f in native_fns {
+                let s = self.slots.get_mut(f);
+                if let Payload::Reference(p) = s.value {
+                    if p.is_null() {
+                        s.value = Payload::Reference(fp);
+                    }
+                }
+            }
+        }
     }
 
     fn alloc_named_native(&mut self, native: Native) -> crate::value::SlotIndex {
@@ -6669,7 +6751,7 @@ impl Interp {
     /// Derive the program-symbol tables and every name-keyed lookup-id cache
     /// from `names` (the decoded `SYMB` atom, `names[k]` = the name of id
     /// `k + 1`): the forward `symbol_names`, the inverse `symbol_ids`, the
-    /// `next_intern_id` runtime-key counter (past the program symbols so a
+    /// name-keyed lookup-id caches (string keys append to the table itself, so a
     /// novel key never collides), and the cached ids
     /// (`length_id`/`name_id`/… and the RegExp getter/result clusters).
     ///
@@ -6683,10 +6765,11 @@ impl Interp {
     /// restore" claim true, and it keeps the two callers from drifting.
     fn bind_program_symbols(&mut self, names: &[String]) {
         self.symbol_names = names.to_vec();
-        // Runtime-interned keys number past the compiler's program symbols
-        // (ids `1..=names.len()`), so a novel runtime key can never collide
-        // with a program symbol or the intrinsic properties linked under one.
-        self.next_intern_id = (names.len() as u16).saturating_add(1);
+        // String keys interned at runtime APPEND to `symbol_names` (see
+        // `intern_key`), so `names` here — a restored NAME row included —
+        // already carries every string key the heap stores, and ids are
+        // always positions. Nothing to seed: the symbol-key counter is
+        // top-down and independent.
         // Cache the program-local id of `length` (XS's `mxID(_length)`) so an
         // `arr.length` get/set routes to the array length semantics.
         self.length_id = names
@@ -6797,25 +6880,37 @@ impl Interp {
         // restored `symbol_names` without re-linking intrinsics (the
         // SymbolTables ledger row's restore-time rebuild).
         self.bind_program_symbols(names);
-        self.install_intrinsic_bindings(names);
+        self.install_intrinsic_bindings(names, |_| true);
     }
 
-    /// Bind every intrinsic/value-global/`globalThis`/prototype-method/
-    /// prototype-data name in `names` into the realm, keyed by the symbol id
-    /// each name currently holds in [`Self::symbol_ids`]. Idempotent: a name
-    /// whose global property already exists is skipped, so it is safe to
-    /// re-run for a nested unit (the `eval`/`Function` bridge relinks the
-    /// eval program's fresh names, then calls this to bind any intrinsic the
-    /// outer program never referenced). Split from [`Self::link_intrinsics`]
-    /// so both the top-level link and the same-realm eval bridge share one
-    /// binding pass. Resolving the id through `symbol_ids` (rather than the
-    /// positional `k + 1`) is what lets it serve an eval unit whose names were
-    /// interned past the outer program's id range.
-    fn install_intrinsic_bindings(&mut self, names: &[String]) {
+    /// Install the global bindings, prototype methods/data, native
+    /// value data, and well-known symbols for the names that `keep`
+    /// admits — the reusable body of [`Self::link_intrinsics`] (called
+    /// there with `|_| true`). [`Self::relink_crank`] calls it with a
+    /// filter that admits only the APPENDED ids, so a relinked crank
+    /// that first references a built-in (`Math`, `arr.map`, a
+    /// well-known symbol) gets it bound (wave-4 P1) WITHOUT
+    /// re-installing crank-1's bindings — a re-install would clobber a
+    /// guest monkeypatch of an already-linked prototype method. The
+    /// `eval`/`Function` bridge relinks the eval program's fresh names,
+    /// then calls this with `|_| true` to bind any intrinsic the outer
+    /// program never referenced — idempotent for global bindings (a
+    /// name whose global property already exists is skipped). Resolving
+    /// the id through `symbol_ids` (rather than the positional `k + 1`)
+    /// is what lets one body serve the top-level link, the relink
+    /// filter, and an eval unit whose names were interned past the
+    /// outer program's id range. Requires `bind_program_symbols` (or
+    /// the relink) to have populated `symbol_ids` for the full name set
+    /// first. Unmetered: these bindings pre-exist any guest run exactly
+    /// as XS's realm does.
+    fn install_intrinsic_bindings(&mut self, names: &[String], keep: impl Fn(u16) -> bool) {
         for name in names.iter() {
             let Some(&id) = self.symbol_ids.get(name.as_str()) else {
                 continue;
             };
+            if !keep(id) {
+                continue;
+            }
             if self.global_props.contains_key(&id) {
                 continue;
             }
@@ -6980,6 +7075,9 @@ impl Interp {
                 None
             };
             if let Some(mid) = mid {
+                if !keep(mid) {
+                    continue;
+                }
                 let flag = if mname == "prototype" {
                     XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG
                 } else {
@@ -7013,8 +7111,10 @@ impl Interp {
         let data = std::mem::take(&mut self.proto_data);
         for (proto, pname, value) in &data {
             if let Some(&pid) = self.symbol_ids.get(*pname) {
-                let off = self.alloc_str_text(value.as_bytes());
-                self.set_own_unmetered(*proto, pid, Slot::of(Kind::String, Payload::String(off)));
+                if keep(pid) {
+                    let off = self.alloc_str_text(value.as_bytes());
+                    self.set_own_unmetered(*proto, pid, Slot::of(Kind::String, Payload::String(off)));
+                }
             }
         }
         self.proto_data = data;
@@ -7075,7 +7175,9 @@ impl Interp {
         let vdata = std::mem::take(&mut self.proto_value_data);
         for (owner, pname, value) in &vdata {
             if let Some(&pid) = self.symbol_ids.get(*pname) {
-                self.set_own_unmetered(*owner, pid, *value);
+                if keep(pid) {
+                    self.set_own_unmetered(*owner, pid, *value);
+                }
             }
         }
         self.proto_value_data = vdata;
@@ -7084,7 +7186,9 @@ impl Interp {
             let wks = std::mem::take(&mut self.well_known_symbols);
             for (name, value) in &wks {
                 if let Some(&wid) = self.symbol_ids.get(*name) {
-                    self.set_own_unmetered(symbol_ctor, wid, *value);
+                    if keep(wid) {
+                        self.set_own_unmetered(symbol_ctor, wid, *value);
+                    }
                 }
             }
             self.well_known_symbols = wks;
@@ -7372,7 +7476,7 @@ impl Interp {
             Some(code) => code,
             None => return Err(Halt::Unsupported("eval:relink")),
         };
-        self.install_intrinsic_bindings(&eval_names);
+        self.install_intrinsic_bindings(&eval_names, |_| true);
         // The unit may reference a well-known property name (`length`, `name`,
         // `then`, a RegExp getter, …) the outer program never used; its id is
         // now in the realm table, so refresh the exotic-property id caches that
@@ -7631,14 +7735,13 @@ impl Interp {
         self.stack = stack;
         self.meter.restore(meter);
         // SymbolTables ledger row: only `symbol_names` is serialized; the
-        // inverse `symbol_ids`, the `next_intern_id` counter, and the
+        // inverse `symbol_ids` and the
         // name-keyed lookup-id caches are *derived* from it — `link_intrinsics`
         // computes them at boot and never persists them, so restore re-derives
         // them here by the identical pure derivation. Without this a resumed
-        // machine's `symbol_ids` stays empty and `next_intern_id` stays at the
-        // fresh-boot `1`, colliding a novel runtime-interned key with a program
-        // symbol id. (Consumes `symbol_names`, so this both sets the forward
-        // table and rebuilds the rest.)
+        // machine's `symbol_ids` stays empty and every name lookup misses.
+        // (Consumes `symbol_names`, so this both sets the forward table and
+        // rebuilds the rest.)
         self.bind_program_symbols(&symbol_names);
         // GlobalProps ledger row: the global object's own-property slots
         // (intrinsic bindings and runtime-materialized `var`/sloppy globals
@@ -7648,6 +7751,304 @@ impl Interp {
         // state, and boot leaves it empty. Rebuild it by walking the restored
         // chain, so a global created in an earlier crank resolves after resume.
         self.rebuild_global_props();
+    }
+
+    /// Relink a later crank COMPILED AGAINST ITS OWN symbol table onto
+    /// this machine's persisted table (side-table ledger G2: the
+    /// per-crank relinking lift). Program-symbol ids are 1-based table
+    /// positions, so a crank whose compiled table differs from the
+    /// machine's would silently bind the wrong globals and properties;
+    /// before this, such a crank was refused outright. Relinking makes
+    /// it run correctly instead: each crank name resolves to its
+    /// existing machine id or extends the table (append-only — every
+    /// id already stored in heap slot records keeps its meaning), and
+    /// every ID operand in the bytecode is rewritten through that map
+    /// ([`crate::opcode::remap_ids`]; nested function bodies included).
+    /// On extension the derived caches re-bind exactly as boot does.
+    ///
+    /// Refused fail-closed when the crank would EXTEND the table and
+    /// the heap STORES a runtime-interned id (a novel dynamic property
+    /// key or a symbol key, minted past the program table): the
+    /// appended ids come out of the range those occupy, and re-keying
+    /// them is the heap-wide id remap XS performs at snapshot load —
+    /// the ledger's KEYS row, not this lift. A crank that only
+    /// REORDERS onto names the table already holds moves nothing in the
+    /// id space and is never refused. A crank referencing ids beyond
+    /// its own table, or bytecode the walker cannot decode, is refused
+    /// as malformed.
+    pub fn relink_crank(
+        &mut self,
+        bytecode: &[u8],
+        crank_names: &[String],
+    ) -> Result<Vec<u8>, RelinkError> {
+        if crank_names == self.symbol_names.as_slice() {
+            return Ok(bytecode.to_vec());
+        }
+        let old_len = self.symbol_names.len();
+        let mut extended = self.symbol_names.clone();
+        let mut map: Vec<u16> = Vec::with_capacity(crank_names.len());
+        for name in crank_names {
+            let id = match extended.iter().position(|n| n == name) {
+                Some(k) => (k + 1) as u16,
+                None => {
+                    if extended.len().saturating_add(1) >= self.next_symbol_key_id as usize {
+                        return Err(RelinkError::TableFull);
+                    }
+                    extended.push(name.clone());
+                    extended.len() as u16
+                }
+            };
+            map.push(id);
+        }
+        // Growing the table cannot alias any interned id: string keys
+        // live IN the table (appended at intern time, so a crank name
+        // equal to a runtime-minted name resolves to the minted id — the
+        // aliasing-free outcome), and symbol-key ids are allocated
+        // top-down from `u16::MAX`, far above any table position until
+        // the spaces meet — which the `TableFull` bound above refuses.
+        // The old shared-counter design had to refuse extension whenever
+        // a runtime-interned id was STORED; the split id space retires
+        // that refusal entirely.
+        let remapped = crate::opcode::remap_ids(bytecode, |id| {
+            if id == 0 {
+                // XS_NO_ID: the "no name" sentinel, never a table
+                // position.
+                return Some(0);
+            }
+            map.get(id as usize - 1).copied()
+        })
+        .ok_or(RelinkError::MalformedBytecode)?;
+        if extended.len() != old_len {
+            // The table grew: re-derive the inverse table, the intern
+            // counter, and every name-keyed lookup-id cache, then
+            // INSTALL the intrinsic bindings for the APPENDED ids — a
+            // crank that first references `Math`/`arr.map`/a well-known
+            // symbol must get it bound, exactly as a fresh link would
+            // (wave-4 P1). Only the appended ids are installed, so a
+            // guest monkeypatch of a crank-1 prototype method is not
+            // clobbered.
+            self.bind_program_symbols(&extended);
+            self.install_intrinsic_bindings(&extended, |id| (id as usize) > old_len);
+        }
+        Ok(remapped)
+    }
+
+    /// The first program-symbol id past this machine's table — every id
+    /// at or above it was RUNTIME-INTERNED (a string key minted past the
+    /// program table by `o[expr]`, `JSON.parse`, the reflection helpers,
+    /// or a symbol key by `o[sym]`).
+    pub fn first_runtime_intern_id(&self) -> u16 {
+        (self.symbol_names.len() as u16).saturating_add(1)
+    }
+
+    /// Whether this machine has ever MINTED a symbol-key property id.
+    /// `intern_symbol_key` lowers the top-down counter and nothing raises
+    /// it, so this is cheap and monotone.
+    ///
+    /// String keys no longer count: a runtime-interned NAME appends to the
+    /// persisted name table (`append_name_key`), so its id→name map
+    /// round-trips every snapshot and it is not a persistence hazard at
+    /// all. What remains is the SYMBOL-key map (`symbol_key_ids`, keyed by
+    /// descriptor slot), which does not yet travel — the ledger's SYMB
+    /// row. And minting alone is still NECESSARY, not sufficient, for the
+    /// hazard: interning happens on a LOOKUP, not a store (review wave 5's
+    /// mint-counter false-positive lesson). Ask
+    /// [`Self::stored_runtime_intern`] for the real answer; ask this first
+    /// only to skip that walk.
+    pub fn may_hold_runtime_interns(&self) -> bool {
+        self.next_symbol_key_id != u16::MAX
+    }
+
+    /// The first SYMBOL-KEY property id this machine actually STORES —
+    /// in a live heap slot, on the value stack, or in a side table — or
+    /// `None` if it stores none. (Ids past the name table are symbol-key
+    /// ids: string keys always live IN the table since the id-space
+    /// unification, so nothing else occupies that range.)
+    ///
+    /// This is what remains of the id-space hazard (wave-4 P1): the
+    /// symbol-key map (`symbol_key_ids`) does NOT travel in a snapshot,
+    /// yet the slots keyed by those ids do. A resumed machine re-mints
+    /// the same numeric ids for different symbols and silently reads and
+    /// writes the wrong slot. So a store must refuse to persist such a
+    /// machine rather than resume it corrupt, until the ledger's SYMB
+    /// row carries the map.
+    ///
+    /// A slot on the FREE LIST is skipped: its record is stale, nothing
+    /// reaches it, and its id names nothing. Counting it would refuse a
+    /// machine whose only offending key the collector has already
+    /// reclaimed.
+    ///
+    /// Cost is O(heap) when it walks, and on a lazily-attached machine
+    /// the walk faults every page in — but it walks only when this
+    /// machine has actually minted an id, so a program that never
+    /// interned (every boot machine, and every program using static keys
+    /// only) pays one comparison.
+    pub fn stored_runtime_intern(&self) -> Option<u16> {
+        if !self.may_hold_runtime_interns() {
+            return None;
+        }
+        let floor = self.first_runtime_intern_id();
+        let over = |s: &Slot| s.stored_key_id().filter(|&id| id >= floor);
+        for i in 0..self.slots.capacity() {
+            let idx = crate::value::SlotIndex(i);
+            if self.slots.is_free_index(idx) {
+                continue;
+            }
+            if let Some(id) = over(&self.slots.get(idx)) {
+                return Some(id);
+            }
+        }
+        self.stack_slots()
+            .iter()
+            .chain(self.arrays.values().flat_map(|a| a.items().values()))
+            .chain(
+                self.collections
+                    .values()
+                    .flat_map(|c| c.live_entries().flat_map(|(k, v)| [k, v])),
+            )
+            .find_map(over)
+    }
+
+    /// Quiescent snapshot of the `arrays` side table (side-table
+    /// ledger, `Arrays` row), ascending by owning slot for canonical
+    /// serialization: `(owner slot, spec length, items ascending by
+    /// index)`. Item values are ordinary [`Slot`]s — their slot/chunk
+    /// references round-trip with the arenas.
+    pub fn arrays_snapshot(&self) -> Vec<ArraySnapshot> {
+        let mut out: Vec<ArraySnapshot> = self
+            .arrays
+            .iter()
+            .map(|(owner, a)| {
+                (
+                    owner.0,
+                    a.length,
+                    a.items().iter().map(|(i, s)| (*i, *s)).collect(),
+                )
+            })
+            .collect();
+        out.sort_unstable_by_key(|(owner, _, _)| *owner);
+        out
+    }
+
+    /// Quiescent snapshot of the `collections` side table (ledger
+    /// `Collections` row), ascending by owning slot: `(owner slot,
+    /// kind code, table_length, entries in insertion order)`.
+    /// Tombstones (deleted entries whose physical index a live
+    /// iterator cursor may still hold) are COMPACTED out: iterator
+    /// state lives in the `iterators` side table, an honest `Pending`
+    /// ledger row that does not round-trip, so physical indices are
+    /// not observable across a suspend — while live-entry order,
+    /// `size`, and the rehash geometry (`table_length`) all are, and
+    /// all survive compaction unchanged.
+    pub fn collections_snapshot(&self) -> Vec<CollectionSnapshot> {
+        let mut out: Vec<CollectionSnapshot> = self
+            .collections
+            .iter()
+            .map(|(owner, c)| {
+                (
+                    owner.0,
+                    c.kind.code(),
+                    c.table_length,
+                    c.live_entries().copied().collect(),
+                )
+            })
+            .collect();
+        out.sort_unstable_by_key(|(owner, _, _, _)| *owner);
+        out
+    }
+
+    /// The symbol-key property-id table (ledger `SYMB` row): the
+    /// top-down mint counter and every `(id, descriptor slot)` pair,
+    /// ascending by id. [`Self::restore_symbol_key_table`] is the exact
+    /// inverse; persisting the pair of them is what lets a heap holding
+    /// symbol-KEYED properties round-trip a snapshot (the stored ids
+    /// re-bind to the same descriptor slots instead of aliasing).
+    pub fn symbol_key_table(&self) -> (u16, Vec<(u16, u32)>) {
+        let mut pairs: Vec<(u16, u32)> = self
+            .symbol_key_ids
+            .iter()
+            .map(|(desc, &id)| (id, desc.0))
+            .collect();
+        pairs.sort_unstable_by_key(|&(id, _)| id);
+        (self.next_symbol_key_id, pairs)
+    }
+
+    /// Reinstate the symbol-key id table from a snapshot (the ledger's
+    /// SYMB row; the exact inverse of [`Self::symbol_key_table`]). Runs
+    /// on a freshly restored machine whose map is empty. Validates the
+    /// decoded shape — ids strictly ascending and above the counter,
+    /// descriptors pairwise distinct — and returns `false` without
+    /// mutating anything on a violation (the caller fails its decode
+    /// closed); a well-formed table always restores fully.
+    pub fn restore_symbol_key_table(&mut self, next: u16, pairs: &[(u16, u32)]) -> bool {
+        let mut prev: Option<u16> = None;
+        let mut descs = std::collections::HashSet::new();
+        for &(id, desc) in pairs {
+            if id <= next || prev.is_some_and(|prev_id| id <= prev_id) || !descs.insert(desc) {
+                return false;
+            }
+            prev = Some(id);
+        }
+        for &(id, desc) in pairs {
+            self.symbol_key_ids.insert(crate::value::SlotIndex(desc), id);
+        }
+        self.next_symbol_key_id = next;
+        true
+    }
+
+    /// Quiescent snapshot of the `Symbol.for` registry (ledger
+    /// `SymbolRegistry` row), ascending by key bytes: `(key bytes,
+    /// descriptor slot)`.
+    pub fn symbol_registry_snapshot(&self) -> Vec<(Vec<u8>, u32)> {
+        let mut out: Vec<(Vec<u8>, u32)> = self
+            .symbol_registry
+            .iter()
+            .map(|(k, v)| (k.clone(), v.0))
+            .collect();
+        out.sort_unstable();
+        out
+    }
+
+    /// Reinstate the bulk side tables and the symbol registry from a
+    /// snapshot (the ledger's restore half; the exact inverse of the
+    /// three `*_snapshot` views). Runs on a freshly restored machine
+    /// whose tables are empty; every insert routes through the counted
+    /// accessors so the side-ref page counts the partial collector
+    /// reads are rebuilt in lockstep, and the registry's forward and
+    /// reverse maps are repopulated pairwise. An unknown collection
+    /// kind code is a corrupt image and returns `false` (the caller
+    /// fails its decode closed); a well-formed snapshot always
+    /// restores fully.
+    pub fn restore_bulk_side_tables(
+        &mut self,
+        arrays: Vec<ArraySnapshot>,
+        collections: Vec<CollectionSnapshot>,
+        registry: Vec<(Vec<u8>, u32)>,
+    ) -> bool {
+        for (owner, length, items) in arrays {
+            let mut a = crate::bulk::ArrayData::default();
+            a.length = length;
+            for (index, value) in items {
+                a.insert_item(index, value, &mut self.side_refs);
+            }
+            self.arrays.insert(crate::value::SlotIndex(owner), a);
+        }
+        for (owner, kind_code, table_length, entries) in collections {
+            let Some(kind) = crate::bulk::CollKind::from_code(kind_code) else {
+                return false;
+            };
+            let mut c = crate::bulk::CollectionData::new(kind, table_length);
+            for (key, value) in entries {
+                c.push_entry(key, value, &mut self.side_refs);
+            }
+            self.collections.insert(crate::value::SlotIndex(owner), c);
+        }
+        for (key, descriptor) in registry {
+            let desc = crate::value::SlotIndex(descriptor);
+            self.symbol_registry.insert(key.clone(), desc);
+            self.symbol_registry_keys.insert(desc, key);
+        }
+        true
     }
 
     /// Rebuild the [`Self::global_props`] id→slot fast index by walking the
@@ -7963,7 +8364,7 @@ impl Interp {
                         if i > 0 {
                             out.push(',');
                         }
-                        if let Some(item) = a.items.get(&i) {
+                        if let Some(item) = a.items().get(&i) {
                             if item.kind != Kind::Undefined && item.kind != Kind::Null {
                                 out.push_str(&self.render(item));
                             }
@@ -8455,7 +8856,7 @@ impl Interp {
                     if let Some(data) = self.arrays.get_mut(&array) {
                         data.length = values.len() as u32;
                         for (index, value) in values.into_iter().enumerate() {
-                            data.items.insert(index as u32, value);
+                            data.insert_item(index as u32, value, &mut self.side_refs);
                         }
                     }
                     // The `_SLOPPY`/`_STRICT` forms build the user-visible
@@ -9752,13 +10153,7 @@ impl Interp {
                             // accessor getter (`fx_Map_prototype_size`), reading
                             // the size slot. WeakMap/WeakSet have no `size`.
                             self.meter.tick_raw(COLLECTION_SIZE_GET_METERING);
-                            Slot::integer(
-                                self.collections[&inst]
-                                    .entries
-                                    .iter()
-                                    .filter(|entry| entry.is_some())
-                                    .count() as i32,
-                            )
+                            Slot::integer(self.collections[&inst].live_len() as i32)
                         }
                         Payload::Reference(inst)
                             if Some(id) == self.byte_length_id
@@ -10120,7 +10515,7 @@ impl Interp {
                             } else if let Some(index) =
                                 numeric_index.filter(|_| self.arrays.contains_key(&inst))
                             {
-                                self.arrays.get_mut(&inst).unwrap().items.remove(&index);
+                                self.arrays.get_mut(&inst).unwrap().remove_item(&index, &mut self.side_refs);
                                 true
                             } else if self.arrays.contains_key(&inst) && Some(id) == self.length_id
                             {
@@ -12282,6 +12677,12 @@ impl Interp {
                             (a.gen, a.stack_base, a.jumps_base, a.call_depth_base);
                         let resume_pc = pc + size as usize;
                         let yielded = self.pop();
+                        // Same hostile-bytecode refusal as the sync path
+                        // below: splitting past the stack end is a panic,
+                        // not a frame snapshot.
+                        if stack_base > self.stack.len() {
+                            return Halt::Unsupported("yield:stack-underflow");
+                        }
                         let stack_slice = self.stack.split_off(stack_base);
                         let jumps = self
                             .jumps
@@ -12467,15 +12868,19 @@ impl Interp {
                 // driver via [`Halt::Await`], carrying the awaited value (popped
                 // to the frame result). The per-suspend metering is the identical
                 // C code as `YIELD`, so it reuses [`GENERATOR_YIELD_METERING`].
-                // `await` inside a live `try` needs the jump-chain snapshot/rebase
-                // (the same increment generators defer for `yield-in-try`) — an
-                // honest named skip for now.
+                // `await` inside a live `try` travels like `yield`'s: the run's
+                // handlers ride the saved frame and the resume rebases them.
                 XS_CODE_AWAIT => {
                     if let Some(a) = self.async_gen_run_stack.last() {
                         let (gen, stack_base, jumps_base, call_depth_base) =
                             (a.gen, a.stack_base, a.jumps_base, a.call_depth_base);
                         let resume_pc = pc + size as usize;
                         let awaited = self.pop();
+                        // Same hostile-bytecode refusal as the plain-async
+                        // path below.
+                        if stack_base > self.stack.len() {
+                            return Halt::Unsupported("await:stack-underflow");
+                        }
                         let stack_slice = self.stack.split_off(stack_base);
                         let jumps = self
                             .jumps
@@ -12593,6 +12998,9 @@ impl Interp {
                         call_depth: self.call_stack.len(),
                         env: self.env,
                         flag: 1,
+                        // Pushed by this dispatch, not re-established on a
+                        // resume — no rebase surcharge.
+                        rebased: false,
                     });
                     pc += size as usize;
                 }
@@ -13634,6 +14042,12 @@ impl Interp {
             g.state = GeneratorState::Executing;
         }
         let return_depth = self.call_stack.len();
+        // Rebase the suspended run's jump handlers onto the live
+        // chain: relative stack positions anchor at the fresh frame
+        // base, and depths at the fresh run depth (the suspend-in-try
+        // fix — these entries sit above `jumps_base`, so run
+        // completion or a throw truncates them exactly as if the run
+        // had never suspended).
         self.jumps
             .extend(saved.jumps.into_iter().map(|jump| CatchJump {
                 target_pc: jump.target_pc,
@@ -13643,6 +14057,9 @@ impl Interp {
                 call_depth: return_depth + jump.call_depth_offset,
                 env: jump.env,
                 flag: jump.flag,
+                // Re-established on this resume: a throw reaching it pays
+                // [`RESUMED_HANDLER_THROW_METERING`].
+                rebased: true,
             }));
         self.gen_run_stack.push(GenRunFrame {
             gen,
@@ -13899,6 +14316,12 @@ impl Interp {
         };
         self.async_generators.get_mut(&gen).unwrap().state = AsyncGeneratorState::Executing;
         let return_depth = self.call_stack.len();
+        // Rebase the suspended run's jump handlers onto the live
+        // chain: relative stack positions anchor at the fresh frame
+        // base, and depths at the fresh run depth (the suspend-in-try
+        // fix — these entries sit above `jumps_base`, so run
+        // completion or a throw truncates them exactly as if the run
+        // had never suspended).
         self.jumps
             .extend(saved.jumps.into_iter().map(|jump| CatchJump {
                 target_pc: jump.target_pc,
@@ -13908,6 +14331,9 @@ impl Interp {
                 call_depth: return_depth + jump.call_depth_offset,
                 env: jump.env,
                 flag: jump.flag,
+                // Re-established on this resume: a throw reaching it pays
+                // [`RESUMED_HANDLER_THROW_METERING`].
+                rebased: true,
             }));
         self.async_gen_run_stack.push(AsyncGenRunFrame {
             gen,
@@ -14086,6 +14512,12 @@ impl Interp {
             status
         };
         let return_depth = self.call_stack.len();
+        // Rebase the suspended run's jump handlers onto the live
+        // chain: relative stack positions anchor at the fresh frame
+        // base, and depths at the fresh run depth (the suspend-in-try
+        // fix — these entries sit above `jumps_base`, so run
+        // completion or a throw truncates them exactly as if the run
+        // had never suspended).
         self.jumps
             .extend(saved.jumps.into_iter().map(|jump| CatchJump {
                 target_pc: jump.target_pc,
@@ -14095,6 +14527,9 @@ impl Interp {
                 call_depth: return_depth + jump.call_depth_offset,
                 env: jump.env,
                 flag: jump.flag,
+                // Re-established on this resume: a throw reaching it pays
+                // [`RESUMED_HANDLER_THROW_METERING`].
+                rebased: true,
             }));
         self.async_run_stack.push(AsyncRunFrame {
             inst,
@@ -14864,7 +15299,7 @@ impl Interp {
                             let mut v = a;
                             v.id = 0;
                             v.next = crate::value::SlotIndex::NULL;
-                            data.items.insert(0, v);
+                            data.insert_item(0, v, &mut self.side_refs);
                             data.length = 1;
                         }
                     }
@@ -14875,7 +15310,7 @@ impl Interp {
                         let mut v = arg(i);
                         v.id = 0;
                         v.next = crate::value::SlotIndex::NULL;
-                        data.items.insert(i as u32, v);
+                        data.insert_item(i as u32, v, &mut self.side_refs);
                     }
                     data.length = argc as u32;
                 }
@@ -14906,11 +15341,7 @@ impl Interp {
                 let inst = self.slots.alloc(Slot::instance(proto));
                 self.collections.insert(
                     inst,
-                    CollectionData {
-                        kind,
-                        entries: Vec::new(),
-                        table_length: MAP_MIN_TABLE_LENGTH,
-                    },
+                    CollectionData::new(kind, MAP_MIN_TABLE_LENGTH),
                 );
                 if argc >= 1 && a.kind != Kind::Undefined && a.kind != Kind::Null {
                     self.populate_collection_from_dense_array(code, inst, a)?;
@@ -14947,11 +15378,7 @@ impl Interp {
                 let inst = self.slots.alloc(Slot::instance(proto));
                 self.collections.insert(
                     inst,
-                    CollectionData {
-                        kind,
-                        entries: Vec::new(),
-                        table_length: 0,
-                    },
+                    CollectionData::new(kind, 0),
                 );
                 if argc >= 1 && a.kind != Kind::Undefined && a.kind != Kind::Null {
                     self.populate_collection_from_dense_array(code, inst, a)?;
@@ -15149,25 +15576,36 @@ impl Interp {
                     Payload::Reference(r)
                         if self.arrays.contains_key(&r) || self.typed_arrays.contains_key(&r) =>
                     {
-                        // The source element sequence, read directly (a dense
-                        // array's items / a source TypedArray's decoded
-                        // elements); a hole reads `undefined` (→ NaN → 0 for an
-                        // integer view), matching the default-iterator result.
-                        let elements: Vec<Slot> = if let Some(src) = self.arrays.get(&r) {
-                            let len = src.length;
-                            (0..len)
-                                .map(|i| src.items.get(&i).copied().unwrap_or_else(Slot::undefined))
-                                .collect()
+                        // The source LENGTH decides the allocation, so read it,
+                        // bound it, and charge for it BEFORE materializing
+                        // anything. This used to collect `0..len` into a
+                        // `Vec<Slot>` and sanity-check afterwards, which made
+                        // the source length an *unmetered allocation
+                        // instruction*: a sparse `a.length = 200_000_000` —
+                        // ordinary JS state, and ordinary snapshot bytes no
+                        // decoder can refuse, since a sparse array is legitimate
+                        // — reserved 32 bytes per declared element before any
+                        // bound and before any charge. What that costs depends
+                        // on the host and both outcomes are bad: where the
+                        // reservation fails, `handle_alloc_error` ABORTS THE
+                        // PROCESS, which no `catch_unwind` can contain; where
+                        // overcommit lets it succeed, the worker stalls filling
+                        // slots the meter never sees (measured: 132 seconds and
+                        // 8.6 GB for a two-call program — review wave 5).
+                        //
+                        // Ordered this way the from-source path is exposed
+                        // exactly as much as the length form `new TA(n)` it is
+                        // equivalent to, and no more: the bound rejects first,
+                        // and `alloc_array_buffer` charges
+                        // `tick_chunk_new(byte_length)` before it allocates.
+                        // `tests/typed_array_source_length.rs` holds the
+                        // deadline that keeps the order this way round.
+                        let (length, source_ta) = if let Some(src) = self.arrays.get(&r) {
+                            (src.length, None)
                         } else {
                             let src = self.typed_arrays[&r];
-                            (0..src.length)
-                                .map(|i| {
-                                    self.typed_array_element_get(src, i)
-                                        .unwrap_or_else(Slot::undefined)
-                                })
-                                .collect()
+                            (src.length, Some(src))
                         };
-                        let length = elements.len() as u32;
                         if length > (0x7FFF_FFFFu32 >> shift) {
                             return Err(Halt::Unsupported("native-call:TypedArray:bad-length"));
                         }
@@ -15182,8 +15620,26 @@ impl Interp {
                             length,
                         };
                         self.typed_arrays.insert(inst, ta);
-                        for (i, v) in elements.into_iter().enumerate() {
-                            self.typed_array_element_set(code, ta, i as u32, v)?;
+                        // Copy element by element rather than through an
+                        // intermediate vector, so the only length-proportional
+                        // allocation is the metered backing store itself. Source
+                        // and destination are distinct buffers, so interleaving
+                        // the reads with the writes is not aliasing. A hole (a
+                        // dense array's missing item / an unreadable source
+                        // element) reads `undefined` (→ NaN → 0 for an integer
+                        // view), matching the default-iterator result.
+                        for i in 0..length {
+                            let v = match source_ta {
+                                None => self
+                                    .arrays
+                                    .get(&r)
+                                    .and_then(|src| src.items().get(&i).copied())
+                                    .unwrap_or_else(Slot::undefined),
+                                Some(src) => self
+                                    .typed_array_element_get(src, i)
+                                    .unwrap_or_else(Slot::undefined),
+                            };
+                            self.typed_array_element_set(code, ta, i, v)?;
                             self.meter
                                 .tick_raw(TYPED_ARRAY_FROM_SOURCE_ELEMENT_METERING);
                         }
@@ -15442,7 +15898,7 @@ impl Interp {
                 return Ok(Some(locale.tag.clone()));
             }
             if let Some(array) = self.arrays.get(&r) {
-                let first = array.items.get(&0).copied();
+                let first = array.items().get(&0).copied();
                 return first
                     .map(|slot| self.intl_locale_argument(code, slot).map(Some))
                     .unwrap_or(Ok(None));
@@ -15458,7 +15914,7 @@ impl Interp {
         let values = if let Payload::Reference(r) = value.value {
             if let Some(array) = self.arrays.get(&r) {
                 (0..array.length)
-                    .filter_map(|i| array.items.get(&i).copied())
+                    .filter_map(|i| array.items().get(&i).copied())
                     .collect::<Vec<_>>()
             } else {
                 vec![value]
@@ -16069,7 +16525,7 @@ impl Interp {
             let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
             item.id = 0;
             item.next = crate::value::SlotIndex::NULL;
-            self.arrays.get_mut(&arr).unwrap().items.insert(i as u32, item);
+            self.arrays.get_mut(&arr).unwrap().insert_item(i as u32, item, &mut self.side_refs);
         }
         self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
         Slot::of(Kind::Reference, Payload::Reference(arr))
@@ -16088,7 +16544,7 @@ impl Interp {
             let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
             item.id = 0;
             item.next = crate::value::SlotIndex::NULL;
-            self.arrays.get_mut(&arr).unwrap().items.insert(i as u32, item);
+            self.arrays.get_mut(&arr).unwrap().insert_item(i as u32, item, &mut self.side_refs);
         }
         self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
         Slot::of(Kind::Reference, Payload::Reference(arr))
@@ -16147,7 +16603,7 @@ impl Interp {
                     let item = self
                         .arrays
                         .get(&obj)
-                        .and_then(|a| a.items.get(&i))
+                        .and_then(|a| a.items().get(&i))
                         .copied()
                         .unwrap_or_else(Slot::undefined);
                     let s = self.list_element_string(item)?;
@@ -16170,7 +16626,7 @@ impl Interp {
                         let item = self
                             .arrays
                             .get(&source)
-                            .and_then(|a| a.items.get(&i))
+                            .and_then(|a| a.items().get(&i))
                             .copied()
                             .unwrap_or_else(Slot::undefined);
                         let s = self.list_element_string(item)?;
@@ -16695,7 +17151,7 @@ impl Interp {
             let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
             item.id = 0;
             item.next = crate::value::SlotIndex::NULL;
-            self.arrays.get_mut(&arr).unwrap().items.insert(i as u32, item);
+            self.arrays.get_mut(&arr).unwrap().insert_item(i as u32, item, &mut self.side_refs);
         }
         self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
         Slot::of(Kind::Reference, Payload::Reference(arr))
@@ -17110,7 +17566,7 @@ impl Interp {
         {
             let a = self.arrays.get_mut(&result).unwrap();
             for (i, s) in items {
-                a.items.insert(i, s);
+                a.insert_item(i, s, &mut self.side_refs);
             }
             a.length = captures.len() as u32;
         }
@@ -17212,8 +17668,8 @@ impl Interp {
                 self.meter.tick_slot_alloc();
                 {
                     let a = self.arrays.get_mut(&pair).unwrap();
-                    a.items.insert(0, Slot::integer(from));
-                    a.items.insert(1, Slot::integer(to));
+                    a.insert_item(0, Slot::integer(from), &mut self.side_refs);
+                    a.insert_item(1, Slot::integer(to), &mut self.side_refs);
                     a.length = 2;
                 }
                 let s = Slot::of(Kind::Reference, Payload::Reference(pair));
@@ -17228,7 +17684,7 @@ impl Interp {
         {
             let a = self.arrays.get_mut(&arr).unwrap();
             for (i, s) in items {
-                a.items.insert(i, s);
+                a.insert_item(i, s, &mut self.side_refs);
             }
             a.length = captures.len() as u32;
         }
@@ -17436,7 +17892,7 @@ impl Interp {
             Payload::Reference(r) => r,
             _ => return None,
         };
-        let item = self.arrays.get(&r)?.items.get(&(idx as u32)).copied()?;
+        let item = self.arrays.get(&r)?.items().get(&(idx as u32)).copied()?;
         match item.value {
             Payload::String(off) if item.kind == Kind::String => {
                 Some(self.str_text(off).into_bytes())
@@ -17722,7 +18178,7 @@ impl Interp {
     fn array_index_slot(&self, arr: Slot, i: u32) -> Slot {
         if let Payload::Reference(r) = arr.value {
             if let Some(a) = self.arrays.get(&r) {
-                if let Some(s) = a.items.get(&i) {
+                if let Some(s) = a.items().get(&i) {
                     return *s;
                 }
             }
@@ -17736,7 +18192,7 @@ impl Interp {
         let n = segments.len() as u32;
         let a = self.arrays.get_mut(&array).unwrap();
         for (i, s) in segments.into_iter().enumerate() {
-            a.items.insert(i as u32, s);
+            a.insert_item(i as u32, s, &mut self.side_refs);
         }
         a.length = n;
         Slot::of(Kind::Reference, Payload::Reference(array))
@@ -17747,7 +18203,7 @@ impl Interp {
     fn regexp_whole_match_len(&self, result: Slot) -> usize {
         if let Payload::Reference(r) = result.value {
             if let Some(a) = self.arrays.get(&r) {
-                if let Some(s) = a.items.get(&0) {
+                if let Some(s) = a.items().get(&0) {
                     if let Payload::String(off) = s.value {
                         return self.str_len(off);
                     }
@@ -19508,7 +19964,7 @@ impl Interp {
                 let data = &self.arrays[&arr];
                 let len = data.length;
                 (0..len)
-                    .map(|i| data.items.get(&i).copied().unwrap_or_else(Slot::undefined))
+                    .map(|i| data.items().get(&i).copied().unwrap_or_else(Slot::undefined))
                     .collect()
             }
             Payload::String(off) if iterable.kind == Kind::String => {
@@ -19706,9 +20162,7 @@ impl Interp {
                         let errs: Vec<Slot> = {
                             let data = &self.arrays[&results];
                             (0..data.length)
-                                .map(|i| {
-                                    data.items.get(&i).copied().unwrap_or_else(Slot::undefined)
-                                })
+                                .map(|i| data.items().get(&i).copied().unwrap_or_else(Slot::undefined))
                                 .collect()
                         };
                         let agg = self.new_aggregate_error(errs);
@@ -19731,7 +20185,7 @@ impl Interp {
         v.id = 0;
         v.next = crate::value::SlotIndex::NULL;
         let data = self.arrays.get_mut(&inst).unwrap();
-        data.items.insert(i, v);
+        data.insert_item(i, v, &mut self.side_refs);
         if i + 1 > data.length {
             data.length = i + 1;
         }
@@ -19786,7 +20240,7 @@ impl Interp {
         for (i, mut v) in errors.into_iter().enumerate() {
             v.id = 0;
             v.next = crate::value::SlotIndex::NULL;
-            arr_data.items.insert(i as u32, v);
+            arr_data.insert_item(i as u32, v, &mut self.side_refs);
         }
         arr_data.length = n as u32;
         self.arrays.insert(arr_inst, arr_data);
@@ -19998,12 +20452,10 @@ impl Interp {
             Payload::Reference(arr) if self.arrays.contains_key(&arr) => {
                 let data = &self.arrays[&arr];
                 let len = data.length;
-                if (0..len).any(|i| !data.items.contains_key(&i)) {
-                    return Err(Halt::Unsupported(
-                        "native-call:AggregateError:sparse-errors",
-                    ));
+                if (0..len).any(|i| !data.items().contains_key(&i)) {
+                    return Err(Halt::Unsupported("native-call:AggregateError:sparse-errors"));
                 }
-                (0..len).map(|i| data.items[&i]).collect()
+                (0..len).map(|i| data.items()[&i]).collect()
             }
             _ => {
                 return Err(Halt::Unsupported(
@@ -20083,7 +20535,7 @@ impl Interp {
         for (i, mut v) in err_elems.into_iter().enumerate() {
             v.id = 0;
             v.next = crate::value::SlotIndex::NULL;
-            arr_data.items.insert(i as u32, v);
+            arr_data.insert_item(i as u32, v, &mut self.side_refs);
         }
         arr_data.length = n as u32;
         self.arrays.insert(arr_inst, arr_data);
@@ -20538,6 +20990,120 @@ impl Interp {
         self.enter_call(n, ret_pc, false)
     }
 
+    /// The `.call`/`.apply` receiver, when it is a NATIVE function
+    /// instance (a prototype method or an intrinsic constructor) — the
+    /// detached-native route the user-frame trampolines cannot take.
+    /// Returns None for user functions (the trampolines own those) and
+    /// for the Function.prototype re-dispatch methods themselves
+    /// (`f.call.call(...)` self-names in the caller).
+    fn dot_call_native_receiver(&self, base: usize) -> Option<crate::value::SlotIndex> {
+        let f = self.stack.get(base).copied()?;
+        let r = match f.value {
+            Payload::Reference(r) => r,
+            _ => return None,
+        };
+        let fi = self.functions.get(&r)?;
+        match fi.method {
+            Some(
+                NativeMethod::FunctionCall | NativeMethod::FunctionApply | NativeMethod::FunctionBind,
+            ) => None,
+            Some(_) => Some(r),
+            None if fi.native.is_some() => Some(r),
+            None => None,
+        }
+    }
+
+    /// `nativeF.call(thisArg, …args)` / `nativeF.apply(thisArg[, args])`:
+    /// reshape the `.call` window into the ordinary native-call geometry
+    /// `[THIS=thisArg, FUNCTION=nativeF, RESULT, FRAME, args…]` and
+    /// dispatch through the SAME native paths a pathful call takes —
+    /// callee identity decides, exactly like the direct detached call
+    /// (`var n = Object.keys; n(o)`) already does.
+    fn call_dot_call_on_native(
+        &mut self,
+        fref: crate::value::SlotIndex,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+        apply: bool,
+    ) -> Result<(), Halt> {
+        let f = self.stack.get(base).copied().unwrap_or_else(Slot::undefined);
+        let this_arg = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        if !matches!(this_arg.kind, Kind::Undefined | Kind::Null | Kind::Reference) {
+            return Err(Halt::Unsupported(if apply {
+                "apply:primitive-this-boxing"
+            } else {
+                "call:primitive-this-boxing"
+            }));
+        }
+        // The argument list, paired with the forwarding cost it accrues
+        // beyond [`CALL_TRAMPOLINE_METERING`]. `.call` and `.apply` reach
+        // the same native callee but pay DIFFERENT host costs to get
+        // there, and the cost belongs to the re-dispatch method, not the
+        // callee: `fx_Function_prototype_apply`'s array unpack
+        // (`fxToInstance`/`fxToLength`, the `_length` read, the
+        // per-element `mxGetIndex`) is callee-agnostic, so a native
+        // receiver charges the SAME apply-array constants the user
+        // receiver does in `enter_call_dot_apply` (review wave 4, DET-2 —
+        // this arm previously charged `.call`'s per-argument constant for
+        // both, undercharging every `nativeF.apply(t, [..])`).
+        let (real_args, forward_meter): (Vec<Slot>, u64) = if apply {
+            // The no-array subset plus a DENSE Array argument list —
+            // the same subsets the user-frame apply supports.
+            let arg_array = self.stack.get(base + 5).copied();
+            match arg_array.map(|s| (s.kind, s.value)) {
+                // No array: identical to `.call` with zero arguments,
+                // whose base is already folded into the trampoline.
+                None | Some((Kind::Undefined, _)) | Some((Kind::Null, _)) => (Vec::new(), 0),
+                Some((Kind::Reference, Payload::Reference(arr)))
+                    if self.arrays.contains_key(&arr) =>
+                {
+                    let data = &self.arrays[&arr];
+                    let len = data.length;
+                    let mut v = Vec::with_capacity(len as usize);
+                    for i in 0..len {
+                        match data.items().get(&i) {
+                            Some(s) => v.push(*s),
+                            None => return Err(Halt::Unsupported("apply:sparse-arguments")),
+                        }
+                    }
+                    let meter = APPLY_ARRAY_BASE_METERING
+                        + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
+                    (v, meter)
+                }
+                _ => return Err(Halt::Unsupported("apply:array-like-arguments")),
+            }
+        } else if argc >= 1 {
+            let v = self.stack[base + 5..base + 4 + argc].to_vec();
+            let meter = v.len() as u64 * CALL_TRAMPOLINE_PER_ARG;
+            (v, meter)
+        } else {
+            (Vec::new(), 0)
+        };
+        let n = real_args.len();
+        self.stack.truncate(base);
+        self.stack.push(this_arg); // THIS (the rebound receiver)
+        self.stack.push(f); // FUNCTION (the native)
+        self.stack.push(Slot::undefined()); // RESULT
+        self.stack.push(Slot::of(Kind::Uninitialized, Payload::None)); // FRAME
+        for a in real_args {
+            self.stack.push(a);
+        }
+        self.meter
+            .tick_raw(CALL_TRAMPOLINE_METERING + forward_meter);
+        if let Some(m) = self.method_of(fref) {
+            self.call_native_method(m, base, n, code)
+        } else if let Some(nat) = self.native_of(fref) {
+            self.call_native(nat, base, n, false, code)
+        } else {
+            Err(Halt::Unsupported("call:non-user-function-receiver"))
+        }
+    }
+
     /// `Function.prototype.apply` (no-array subset): invoke the receiver with
     /// the rebound `this` and **no** arguments — the case where the arguments
     /// array is absent, `undefined`, or `null`. An actual arguments array (a
@@ -20546,6 +21112,8 @@ impl Interp {
     fn enter_call_dot_apply(
         &mut self,
         base: usize,
+        // Kept for signature symmetry with `enter_call`: `.apply`'s
+        // own arity is immaterial — thisArg/argArray read positionally.
         _argc: usize,
         ret_pc: usize,
         code: &[u8],
@@ -20597,10 +21165,10 @@ impl Interp {
                 let len = data.length;
                 // Dense only: every index in `[0, length)` must be a present
                 // element (no holes), else the read walks the prototype.
-                if (0..len).any(|i| !data.items.contains_key(&i)) {
+                if (0..len).any(|i| !data.items().contains_key(&i)) {
                     return Err(Halt::Unsupported("apply:sparse-arguments-array"));
                 }
-                let args: Vec<Slot> = (0..len).map(|i| data.items[&i]).collect();
+                let args: Vec<Slot> = (0..len).map(|i| data.items()[&i]).collect();
                 // The array path's fixed setup plus the per-element read +
                 // forwarding (`mxGetID(_length)` + `mxGetIndex(i)` + copy).
                 let meter =
@@ -22125,7 +22693,7 @@ impl Interp {
                         let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
                         item.id = 0;
                         item.next = crate::value::SlotIndex::NULL;
-                        self.arrays.get_mut(&arr).unwrap().items.insert(i as u32, item);
+                        self.arrays.get_mut(&arr).unwrap().insert_item(i as u32, item, &mut self.side_refs);
                     }
                     self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
                     Slot::of(Kind::Reference, Payload::Reference(arr))
@@ -22237,7 +22805,7 @@ impl Interp {
                     let mut item = self.intl_string(cat);
                     item.id = 0;
                     item.next = crate::value::SlotIndex::NULL;
-                    self.arrays.get_mut(&arr).unwrap().items.insert(i as u32, item);
+                    self.arrays.get_mut(&arr).unwrap().insert_item(i as u32, item, &mut self.side_refs);
                 }
                 self.arrays.get_mut(&arr).unwrap().length = categories.len() as u32;
                 self.define_descriptor_field(
@@ -22915,8 +23483,7 @@ impl Interp {
                         .string_key_name(id)
                         .ok_or(Halt::Unsupported("Object.keys:unknown-key"))?;
                     let off = self.alloc_str_text(name.as_bytes());
-                    data.items
-                        .insert(i as u32, Slot::of(Kind::String, Payload::String(off)));
+                    data.insert_item(i as u32, Slot::of(Kind::String, Payload::String(off)), &mut self.side_refs);
                 }
                 self.arrays.insert(result, data);
                 Slot::of(Kind::Reference, Payload::Reference(result))
@@ -23061,8 +23628,7 @@ impl Interp {
                         })
                         .ok_or(Halt::Unsupported("getOwnPropertyNames:unknown-key"))?;
                     let off = self.alloc_str_text(name.as_bytes());
-                    data.items
-                        .insert(i as u32, Slot::of(Kind::String, Payload::String(off)));
+                    data.insert_item(i as u32, Slot::of(Kind::String, Payload::String(off)), &mut self.side_refs);
                 }
                 self.arrays.insert(result, data);
                 Slot::of(Kind::Reference, Payload::Reference(result))
@@ -23134,12 +23700,13 @@ impl Interp {
                     .filter(|id| self.is_symbol_key_id(*id))
                     .collect();
                 let result = self.new_array_unmetered();
-                let mut items = std::collections::BTreeMap::new();
+                let mut data = ArrayData::default();
                 for (index, id) in ids.into_iter().enumerate() {
-                    items.insert(index as u32, self.property_key_slot(id)?);
+                    let key_slot = self.property_key_slot(id)?;
+                    data.insert_item(index as u32, key_slot, &mut self.side_refs);
                 }
-                let length = items.len() as u32;
-                self.arrays.insert(result, ArrayData { length, items });
+                data.length = data.items().len() as u32;
+                self.arrays.insert(result, data);
                 Slot::of(Kind::Reference, Payload::Reference(result))
             }
             // `Object.defineProperty(o, k, descriptor)`: define a **new** own
@@ -23523,18 +24090,14 @@ impl Interp {
                         let pair = self.slots.alloc(Slot::instance(self.array_proto));
                         let mut pd = ArrayData::default();
                         pd.length = 2;
-                        pd.items
-                            .insert(0, Slot::of(Kind::String, Payload::String(off)));
-                        pd.items.insert(1, *val);
+                        pd.insert_item(0, Slot::of(Kind::String, Payload::String(off)), &mut self.side_refs);
+                        pd.insert_item(1, *val, &mut self.side_refs);
                         self.arrays.insert(pair, pd);
-                        data.items.insert(
-                            i as u32,
-                            Slot::of(Kind::Reference, Payload::Reference(pair)),
-                        );
+                        data.insert_item(i as u32, Slot::of(Kind::Reference, Payload::Reference(pair)), &mut self.side_refs);
                     } else {
                         self.meter.tick_raw(OBJECT_VALUES_PER_KEY_METERING);
                         self.meter.tick_slot_alloc();
-                        data.items.insert(i as u32, *val);
+                        data.insert_item(i as u32, *val, &mut self.side_refs);
                     }
                 }
                 self.arrays.insert(result, data);
@@ -23732,7 +24295,7 @@ impl Interp {
                     let mut v = a;
                     v.id = 0;
                     v.next = crate::value::SlotIndex::NULL;
-                    self.arrays.get_mut(&inst).unwrap().items.insert(idx, v);
+                    self.arrays.get_mut(&inst).unwrap().insert_item(idx, v, &mut self.side_refs);
                     self.meter.tick_builtin_some(5);
                 }
                 let a = self.arrays.get_mut(&inst).unwrap();
@@ -23755,8 +24318,7 @@ impl Interp {
                         .arrays
                         .get_mut(&inst)
                         .unwrap()
-                        .items
-                        .remove(&new_len)
+                        .remove_item(&new_len, &mut self.side_refs)
                         .unwrap_or_else(Slot::undefined);
                     // `fxSetIndexSize(length-1, XS_CHUNK)` reallocs the item
                     // chunk down; `mxMeterSome(8)`.
@@ -23788,7 +24350,7 @@ impl Interp {
                     let mut steps: u64 = 0;
                     for i in 0..a.length {
                         steps += 1;
-                        if let Some(item) = a.items.get(&i) {
+                        if let Some(item) = a.items().get(&i) {
                             if self.strict_equal(item, &target) {
                                 found = i as i32;
                                 break;
@@ -23824,7 +24386,7 @@ impl Interp {
                     let mut steps: u64 = 0;
                     for i in from..a.length {
                         steps += 1;
-                        let item = a.items.get(&i).copied().unwrap_or_else(Slot::undefined);
+                        let item = a.items().get(&i).copied().unwrap_or_else(Slot::undefined);
                         if self.same_value_zero(&item, &target) {
                             found = true;
                             break;
@@ -23859,7 +24421,7 @@ impl Interp {
                     while i > 0 {
                         i -= 1;
                         steps += 1;
-                        if let Some(item) = a.items.get(&i) {
+                        if let Some(item) = a.items().get(&i) {
                             if self.strict_equal(item, &target) {
                                 found = i as i32;
                                 break;
@@ -23894,7 +24456,7 @@ impl Interp {
                 v.id = 0;
                 v.next = crate::value::SlotIndex::NULL;
                 for i in start..end {
-                    self.arrays.get_mut(&inst).unwrap().items.insert(i, v);
+                    self.arrays.get_mut(&inst).unwrap().insert_item(i, v, &mut self.side_refs);
                     self.meter.tick_builtin_some(5);
                 }
                 this
@@ -23916,13 +24478,13 @@ impl Interp {
                 let mut lo = 0u32;
                 let mut hi = length.saturating_sub(1);
                 while lo < hi {
-                    let l = a.items.remove(&lo);
-                    let h = a.items.remove(&hi);
+                    let l = a.remove_item(&lo, &mut self.side_refs);
+                    let h = a.remove_item(&hi, &mut self.side_refs);
                     if let Some(h) = h {
-                        a.items.insert(lo, h);
+                        a.insert_item(lo, h, &mut self.side_refs);
                     }
                     if let Some(l) = l {
-                        a.items.insert(hi, l);
+                        a.insert_item(hi, l, &mut self.side_refs);
                     }
                     lo += 1;
                     hi -= 1;
@@ -23950,12 +24512,12 @@ impl Interp {
                     let items: Vec<(u32, Slot)> = {
                         let a = &self.arrays[&inst];
                         (0..count)
-                            .filter_map(|i| a.items.get(&(start + i)).map(|s| (i, *s)))
+                            .filter_map(|i| a.items().get(&(start + i)).map(|s| (i, *s)))
                             .collect()
                     };
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in items {
-                        a.items.insert(i, Slot::of(s.kind, s.value));
+                        a.insert_item(i, Slot::of(s.kind, s.value), &mut self.side_refs);
                     }
                     a.length = count;
                 }
@@ -24008,17 +24570,13 @@ impl Interp {
                         // path).
                         let (len, dense) = {
                             let a = &self.arrays[&r];
-                            (a.length, a.items.len() as u32 == a.length)
+                            (a.length, a.items().len() as u32 == a.length)
                         };
                         if !dense {
                             return Err(Halt::Unsupported("concat:sparse-arg"));
                         }
                         for i in 0..len {
-                            let s = self.arrays[&r]
-                                .items
-                                .get(&i)
-                                .copied()
-                                .unwrap_or_else(Slot::undefined);
+                            let s = self.arrays[&r].items().get(&i).copied().unwrap_or_else(Slot::undefined);
                             self.meter.tick_slot_alloc();
                             self.meter.tick_builtin_some(2);
                             self.meter.tick_raw(ARRAY_CONCAT_SPREAD_EXTRA_METERING);
@@ -24039,7 +24597,7 @@ impl Interp {
                 {
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in out.into_iter().enumerate() {
-                        a.items.insert(i as u32, s);
+                        a.insert_item(i as u32, s, &mut self.side_refs);
                     }
                     a.length = total;
                 }
@@ -24072,7 +24630,7 @@ impl Interp {
                     self.meter.tick_raw(ARRAY_AT_READ_METERING);
                     self.arrays
                         .get(&inst)
-                        .and_then(|a| a.items.get(&(idx as u32)).copied())
+                        .and_then(|a| a.items().get(&(idx as u32)).copied())
                         .map(|s| Slot::of(s.kind, s.value))
                         .unwrap_or_else(Slot::undefined)
                 } else {
@@ -24096,12 +24654,12 @@ impl Interp {
                     let new_len = length - 1;
                     let removed = {
                         let a = self.arrays.get_mut(&inst).unwrap();
-                        let first = a.items.remove(&0).unwrap_or_else(Slot::undefined);
+                        let first = a.remove_item(&0, &mut self.side_refs).unwrap_or_else(Slot::undefined);
                         let mut shifted = std::collections::BTreeMap::new();
-                        for (&k, &v) in a.items.iter() {
+                        for (&k, &v) in a.items().iter() {
                             shifted.insert(k - 1, v);
                         }
-                        a.items = shifted;
+                        a.replace_items(shifted, &mut self.side_refs);
                         a.length = new_len;
                         first
                     };
@@ -24141,7 +24699,7 @@ impl Interp {
                     self.meter.tick_builtin_some((length as u64) * 10);
                     let a = self.arrays.get_mut(&inst).unwrap();
                     let mut shifted = std::collections::BTreeMap::new();
-                    for (&k, &v) in a.items.iter() {
+                    for (&k, &v) in a.items().iter() {
                         shifted.insert(k + c, v);
                     }
                     for (i, mut v) in args.into_iter().enumerate() {
@@ -24150,7 +24708,7 @@ impl Interp {
                         shifted.insert(i as u32, v);
                         self.meter.tick_builtin_some(4);
                     }
-                    a.items = shifted;
+                    a.replace_items(shifted, &mut self.side_refs);
                     a.length = length + c;
                 }
                 self.meter.tick_builtin_some(2);
@@ -24179,17 +24737,17 @@ impl Interp {
                     // (memmove semantics — overlapping ranges are handled by the
                     // snapshot).
                     let src: Vec<Option<Slot>> = (0..count)
-                        .map(|i| self.arrays[&inst].items.get(&(from + i)).copied())
+                        .map(|i| self.arrays[&inst].items().get(&(from + i)).copied())
                         .collect();
                     let a = self.arrays.get_mut(&inst).unwrap();
                     for (i, s) in src.into_iter().enumerate() {
                         let dst = to + i as u32;
                         match s {
                             Some(v) => {
-                                a.items.insert(dst, v);
+                                a.insert_item(dst, v, &mut self.side_refs);
                             }
                             None => {
-                                a.items.remove(&dst);
+                                a.remove_item(&dst, &mut self.side_refs);
                             }
                         }
                     }
@@ -24233,7 +24791,7 @@ impl Interp {
                                 value
                             } else {
                                 self.arrays[&inst]
-                                    .items
+                                    .items()
                                     .get(&i)
                                     .copied()
                                     .unwrap_or_else(Slot::undefined)
@@ -24242,7 +24800,7 @@ impl Interp {
                         .collect();
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in items.into_iter().enumerate() {
-                        a.items.insert(i as u32, Slot::of(s.kind, s.value));
+                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
                     }
                     a.length = length;
                 }
@@ -24273,7 +24831,7 @@ impl Interp {
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_FOREACH_FRAME_METERING);
                 for i in 0..length {
-                    let item = self.arrays[&inst].items.get(&i).copied();
+                    let item = self.arrays[&inst].items().get(&i).copied();
                     if let Some(item) = item {
                         self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
                         let cb_args = [item, Slot::integer(i as i32), this];
@@ -24303,7 +24861,7 @@ impl Interp {
                     self.meter.tick_raw(self.array_chunk_size_metering(length));
                 }
                 for i in 0..length {
-                    let item = self.arrays[&inst].items.get(&i).copied();
+                    let item = self.arrays[&inst].items().get(&i).copied();
                     if let Some(item) = item {
                         self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
                         let cb_args = [item, Slot::integer(i as i32), this];
@@ -24312,7 +24870,7 @@ impl Interp {
                         let mut v = r;
                         v.id = 0;
                         v.next = crate::value::SlotIndex::NULL;
-                        self.arrays.get_mut(&result).unwrap().items.insert(i, v);
+                        self.arrays.get_mut(&result).unwrap().insert_item(i, v, &mut self.side_refs);
                     }
                 }
                 self.arrays.get_mut(&result).unwrap().length = length;
@@ -24342,7 +24900,7 @@ impl Interp {
                 self.meter.tick_raw(ARRAY_SOMEEVERY_FRAME_METERING);
                 let mut answer = is_every;
                 for i in 0..length {
-                    let item = self.arrays[&inst].items.get(&i).copied();
+                    let item = self.arrays[&inst].items().get(&i).copied();
                     if let Some(item) = item {
                         self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
                         let cb_args = [item, Slot::integer(i as i32), this];
@@ -24392,8 +24950,9 @@ impl Interp {
                 }
                 let mut found: Option<(u32, Slot)> = None;
                 for i in 0..length {
-                    let item = self.arrays[&inst]
-                        .items
+                    let item = self
+                        .arrays[&inst]
+                        .items()
                         .get(&i)
                         .copied()
                         .unwrap_or_else(Slot::undefined);
@@ -24442,7 +25001,7 @@ impl Interp {
                 self.meter.tick_raw(ARRAY_FILTER_FRAME_METERING);
                 let mut kept: Vec<Slot> = Vec::new();
                 for i in 0..length {
-                    let item = self.arrays[&inst].items.get(&i).copied();
+                    let item = self.arrays[&inst].items().get(&i).copied();
                     if let Some(item) = item {
                         self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
                         let cb_args = [item, Slot::integer(i as i32), this];
@@ -24464,7 +25023,7 @@ impl Interp {
                     for (i, mut v) in kept.into_iter().enumerate() {
                         v.id = 0;
                         v.next = crate::value::SlotIndex::NULL;
-                        a.items.insert(i as u32, v);
+                        a.insert_item(i as u32, v, &mut self.side_refs);
                     }
                     a.length = total;
                 }
@@ -24492,14 +25051,9 @@ impl Interp {
                 self.meter.tick_raw(ARRAY_REDUCE_FRAME_METERING);
                 // The present indices in fold order.
                 let order: Vec<u32> = if right {
-                    (0..length)
-                        .rev()
-                        .filter(|i| self.arrays[&inst].items.contains_key(i))
-                        .collect()
+                    (0..length).rev().filter(|i| self.arrays[&inst].items().contains_key(i)).collect()
                 } else {
-                    (0..length)
-                        .filter(|i| self.arrays[&inst].items.contains_key(i))
-                        .collect()
+                    (0..length).filter(|i| self.arrays[&inst].items().contains_key(i)).collect()
                 };
                 let mut it = order.into_iter();
                 let mut acc = if argc >= 2 {
@@ -24513,7 +25067,7 @@ impl Interp {
                             // The seed-finding scan (one iteration for a dense
                             // array — the first/last present element).
                             self.meter.tick_raw(ARRAY_REDUCE_INIT_SCAN_METERING);
-                            match self.arrays[&inst].items.get(&i) {
+                            match self.arrays[&inst].items().get(&i) {
                                 Some(s) => *s,
                                 None => {
                                     return Err(Halt::Unsupported("reduce:concurrent-mutation"))
@@ -24527,7 +25081,7 @@ impl Interp {
                     // A prior callback may have mutated the receiver (e.g. the
                     // test262 `delete arr[i]` pattern); a vanished snapshotted
                     // index self-names rather than panicking on a missing key.
-                    let item = match self.arrays[&inst].items.get(&i) {
+                    let item = match self.arrays[&inst].items().get(&i) {
                         Some(s) => *s,
                         None => return Err(Halt::Unsupported("reduce:concurrent-mutation")),
                     };
@@ -24567,8 +25121,9 @@ impl Interp {
                 }
                 let mut found: Option<(u32, Slot)> = None;
                 for i in (0..length).rev() {
-                    let item = self.arrays[&inst]
-                        .items
+                    let item = self
+                        .arrays[&inst]
+                        .items()
                         .get(&i)
                         .copied()
                         .unwrap_or_else(Slot::undefined);
@@ -24618,7 +25173,7 @@ impl Interp {
                         .map(|to| {
                             let from = length - 1 - to;
                             self.arrays[&inst]
-                                .items
+                                .items()
                                 .get(&from)
                                 .copied()
                                 .unwrap_or_else(Slot::undefined)
@@ -24626,7 +25181,7 @@ impl Interp {
                         .collect();
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (to, s) in items.into_iter().enumerate() {
-                        a.items.insert(to as u32, Slot::of(s.kind, s.value));
+                        a.insert_item(to as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
                     }
                     a.length = length;
                 }
@@ -24695,13 +25250,7 @@ impl Interp {
                 self.meter.tick_builtin_some(4);
                 // Perform the splice on a dense element vector.
                 let cur: Vec<Slot> = (0..length)
-                    .map(|i| {
-                        self.arrays[&inst]
-                            .items
-                            .get(&i)
-                            .copied()
-                            .unwrap_or_else(Slot::undefined)
-                    })
+                    .map(|i| self.arrays[&inst].items().get(&i).copied().unwrap_or_else(Slot::undefined))
                     .collect();
                 let removed: Vec<Slot> = cur[start as usize..(start + deletions) as usize].to_vec();
                 let inserted: Vec<Slot> = (0..insertions)
@@ -24718,16 +25267,16 @@ impl Interp {
                 rebuilt.extend_from_slice(&cur[(start + deletions) as usize..]);
                 {
                     let a = self.arrays.get_mut(&inst).unwrap();
-                    a.items.clear();
+                    a.clear_items(&mut self.side_refs);
                     for (i, s) in rebuilt.into_iter().enumerate() {
-                        a.items.insert(i as u32, Slot::of(s.kind, s.value));
+                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
                     }
                     a.length = length - deletions + insertions;
                 }
                 {
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in removed.into_iter().enumerate() {
-                        a.items.insert(i as u32, Slot::of(s.kind, s.value));
+                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
                     }
                     a.length = deletions;
                 }
@@ -24780,13 +25329,7 @@ impl Interp {
                 self.meter.tick_builtin_some(4);
                 // Build the result densely; the receiver stays untouched.
                 let cur: Vec<Slot> = (0..length)
-                    .map(|i| {
-                        self.arrays[&inst]
-                            .items
-                            .get(&i)
-                            .copied()
-                            .unwrap_or_else(Slot::undefined)
-                    })
+                    .map(|i| self.arrays[&inst].items().get(&i).copied().unwrap_or_else(Slot::undefined))
                     .collect();
                 let inserted: Vec<Slot> = (0..insertions)
                     .map(|k| {
@@ -24804,7 +25347,7 @@ impl Interp {
                 {
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in rebuilt.into_iter().enumerate() {
-                        a.items.insert(i as u32, Slot::of(s.kind, s.value));
+                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
                     }
                     a.length = result_len;
                 }
@@ -24840,7 +25383,7 @@ impl Interp {
                 {
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in out.into_iter().enumerate() {
-                        a.items.insert(i as u32, Slot::of(s.kind, s.value));
+                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
                     }
                     a.length = total;
                 }
@@ -24866,7 +25409,7 @@ impl Interp {
                 self.meter.tick_raw(ARRAY_FLAT_FRAME_METERING);
                 let mut out: Vec<Slot> = Vec::new();
                 for i in 0..length {
-                    let item = self.arrays[&inst].items.get(&i).copied();
+                    let item = self.arrays[&inst].items().get(&i).copied();
                     if let Some(item) = item {
                         self.meter.tick_raw(ARRAY_FLATMAP_CALLBACK_METERING);
                         let cb_args = [item, Slot::integer(i as i32), this];
@@ -24881,7 +25424,7 @@ impl Interp {
                             self.meter.tick_raw(ARRAY_FLAT_PER_ARRAY_METERING);
                             let sub_len = self.arrays[&sub].length;
                             for k in 0..sub_len {
-                                if let Some(e) = self.arrays[&sub].items.get(&k).copied() {
+                                if let Some(e) = self.arrays[&sub].items().get(&k).copied() {
                                     self.meter.tick_raw(ARRAY_FLAT_PER_LEAF_METERING);
                                     self.meter
                                         .tick_raw(self.array_item_grow_metering(out.len() as u64));
@@ -24901,7 +25444,7 @@ impl Interp {
                 {
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in out.into_iter().enumerate() {
-                        a.items.insert(i as u32, Slot::of(s.kind, s.value));
+                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
                     }
                     a.length = total;
                 }
@@ -24931,7 +25474,7 @@ impl Interp {
                 let length = self.arrays[&inst].length;
                 let items: Vec<Option<Slot>> = {
                     let a = &self.arrays[&inst];
-                    (0..length).map(|i| a.items.get(&i).copied()).collect()
+                    (0..length).map(|i| a.items().get(&i).copied()).collect()
                 };
                 self.meter.tick_raw(ARRAY_JOIN_FRAME_METERING);
                 self.meter.tick_slot_alloc(); // `fxNewInstance` (the key list)
@@ -24973,7 +25516,7 @@ impl Interp {
                 let length = self.arrays[&inst].length;
                 let items: Vec<Option<Slot>> = {
                     let a = &self.arrays[&inst];
-                    (0..length).map(|i| a.items.get(&i).copied()).collect()
+                    (0..length).map(|i| a.items().get(&i).copied()).collect()
                 };
                 self.meter.tick_raw(ARRAY_JOIN_FRAME_METERING);
                 self.meter.tick_slot_alloc();
@@ -25223,7 +25766,7 @@ impl Interp {
                     _ => return Err(Halt::Unsupported("collection-clear:weak")),
                 }
                 self.meter.tick_raw(COLLECTION_CLEAR_FRAME_METERING);
-                self.collections.get_mut(&inst).unwrap().entries.clear();
+                self.collections.get_mut(&inst).unwrap().clear_entries(&mut self.side_refs);
                 // `fxResizeEntries` with size 0 shrinks the address chunk back
                 // toward `mxTableMinLength`, charging the rehash chunk if the
                 // length changes (modeled by [`Self::collection_table_resize`]).
@@ -26018,7 +26561,7 @@ impl Interp {
                     let mut data = ArrayData::default();
                     data.length = n;
                     for (i, slot) in items.into_iter().enumerate() {
-                        data.items.insert(i as u32, slot);
+                        data.insert_item(i as u32, slot, &mut self.side_refs);
                     }
                     self.arrays.insert(result, data);
                     return Ok(Slot::of(Kind::Reference, Payload::Reference(result)));
@@ -26051,7 +26594,8 @@ impl Interp {
                 let mut data = ArrayData::default();
                 data.length = n;
                 for (i, &id) in ids.iter().enumerate() {
-                    data.items.insert(i as u32, self.property_key_slot(id)?);
+                    let key_slot = self.property_key_slot(id)?;
+                    data.insert_item(i as u32, key_slot, &mut self.side_refs);
                 }
                 self.arrays.insert(result, data);
                 Ok(Slot::of(Kind::Reference, Payload::Reference(result)))
@@ -26371,21 +26915,14 @@ impl Interp {
                 }
                 match self.collection_find(inst, &key) {
                     Some(p) => {
-                        self.collections.get_mut(&inst).unwrap().entries[p]
-                            .as_mut()
-                            .unwrap()
-                            .1 = val;
+                        self.collections.get_mut(&inst).unwrap().set_entry_value(p, val, &mut self.side_refs);
                     }
                     None => {
                         // `fxSetEntry`/`fxSetWeakEntry` new key: three slots
                         // (Map: key + value + entry; WeakMap: keyEntry +
                         // listEntry + closure).
                         self.charge_new_entry_slots(3);
-                        self.collections
-                            .get_mut(&inst)
-                            .unwrap()
-                            .entries
-                            .push(Some((key, val)));
+                        self.collections.get_mut(&inst).unwrap().push_entry(key, val, &mut self.side_refs);
                         self.collection_table_resize(inst);
                     }
                 }
@@ -26401,11 +26938,7 @@ impl Interp {
                     // `fxSetWeakEntry` → three (keyEntry + listEntry + closure).
                     let n = if weak { 3 } else { 2 };
                     self.charge_new_entry_slots(n);
-                    self.collections
-                        .get_mut(&inst)
-                        .unwrap()
-                        .entries
-                        .push(Some((key, Slot::undefined())));
+                    self.collections.get_mut(&inst).unwrap().push_entry(key, Slot::undefined(), &mut self.side_refs);
                     self.collection_table_resize(inst);
                 }
                 Ok(this)
@@ -26414,7 +26947,7 @@ impl Interp {
                 let key = self.normalize_coll_key(arg0);
                 let v = self
                     .collection_find(inst, &key)
-                    .map(|p| self.collections[&inst].entries[p].unwrap().1)
+                    .map(|p| self.collections[&inst].entries()[p].unwrap().1)
                     .unwrap_or_else(Slot::undefined);
                 Ok(v)
             }
@@ -26433,7 +26966,7 @@ impl Interp {
                 let key = self.normalize_coll_key(arg0);
                 match self.collection_find(inst, &key) {
                     Some(p) => {
-                        self.collections.get_mut(&inst).unwrap().entries[p] = None;
+                        self.collections.get_mut(&inst).unwrap().remove_entry(p, &mut self.side_refs);
                         // `fxDeleteEntry` calls `fxResizeEntries` (a Map/Set may
                         // shrink its address chunk; a weak unlink is
                         // allocation-free).
@@ -26470,10 +27003,10 @@ impl Interp {
             }
         }
         let data = &self.arrays[&array];
-        if (0..data.length).any(|index| !data.items.contains_key(&index)) {
+        if (0..data.length).any(|index| !data.items().contains_key(&index)) {
             return Err(Halt::Unsupported("collection-constructor:sparse-array"));
         }
-        let elements: Vec<Slot> = (0..data.length).map(|index| data.items[&index]).collect();
+        let elements: Vec<Slot> = (0..data.length).map(|index| data.items()[&index]).collect();
         let kind = self.collections[&inst].kind;
         let method_name = if matches!(kind, CollKind::Map | CollKind::WeakMap) {
             "set"
@@ -26535,12 +27068,12 @@ impl Interp {
                 };
                 let entry_data = &self.arrays[&entry];
                 if entry_data.length < 2
-                    || !entry_data.items.contains_key(&0)
-                    || !entry_data.items.contains_key(&1)
+                    || !entry_data.items().contains_key(&0)
+                    || !entry_data.items().contains_key(&1)
                 {
                     return Err(Halt::Unsupported("collection-constructor:sparse-map-entry"));
                 }
-                (entry_data.items[&0], entry_data.items[&1])
+                (entry_data.items()[&0], entry_data.items()[&1])
             } else {
                 (element, Slot::undefined())
             };
@@ -26565,10 +27098,7 @@ impl Interp {
             }
             if let Some(position) = self.collection_find(inst, &key) {
                 if matches!(kind, CollKind::Map | CollKind::WeakMap) {
-                    self.collections.get_mut(&inst).unwrap().entries[position]
-                        .as_mut()
-                        .unwrap()
-                        .1 = value;
+                    self.collections.get_mut(&inst).unwrap().set_entry_value(position, value, &mut self.side_refs);
                 }
             } else {
                 let slots = match kind {
@@ -26576,11 +27106,7 @@ impl Interp {
                     CollKind::Set => 2,
                 };
                 self.charge_new_entry_slots(slots);
-                self.collections
-                    .get_mut(&inst)
-                    .unwrap()
-                    .entries
-                    .push(Some((key, value)));
+                self.collections.get_mut(&inst).unwrap().push_entry(key, value, &mut self.side_refs);
                 self.collection_table_resize(inst);
             }
         }
@@ -27161,22 +27687,25 @@ impl Interp {
                     return Err(self.catchable_type_error());
                 }
                 visited.push(inst);
-                let out = if let Some(a) = self.arrays.get(&inst).cloned() {
+                let out = if let Some((a_length, a_items)) = self
+                    .arrays
+                    .get(&inst)
+                    .map(|a| (a.length, a.items().clone()))
+                {
                     // `fxIsArray` branch: enter cost, then one iteration body per
                     // index (paid for holes too — they serialize as `null`), plus
                     // the recursive child cost each element adds through `cost`.
                     *cost += JSON_STRINGIFY_ARRAY_ENTER_METERING;
-                    if a.length > 0 {
+                    if a_length > 0 {
                         *cost += JSON_STRINGIFY_ARRAY_NONEMPTY_METERING;
                     }
                     let mut buf = vec![b'['];
-                    for i in 0..a.length {
+                    for i in 0..a_length {
                         if i > 0 {
                             buf.push(b',');
                         }
                         *cost += JSON_STRINGIFY_ARRAY_ELEMENT_METERING;
-                        let elem = a
-                            .items
+                        let elem = a_items
                             .get(&i)
                             .map(|s| Slot::of(s.kind, s.value))
                             .unwrap_or_else(Slot::undefined);
@@ -27529,7 +28058,7 @@ impl Interp {
             self.json_parse_whitespace(input, pos);
             *cost += JSON_PARSE_ARRAY_ELEMENT_METERING;
             let v = self.json_parse_value(input, pos, cost)?;
-            self.arrays.get_mut(&inst).unwrap().items.insert(length, v);
+            self.arrays.get_mut(&inst).unwrap().insert_item(length, v, &mut self.side_refs);
             length += 1;
             self.json_parse_whitespace(input, pos);
             match input.get(*pos) {
@@ -28328,11 +28857,11 @@ impl Interp {
         let len = self
             .collections
             .get(&st.iterable)
-            .map(|c| c.entries.len() as u32)
+            .map(|c| c.entries().len() as u32)
             .unwrap_or(0);
         let mut live_index = st.index;
         while live_index < len
-            && self.collections[&st.iterable].entries[live_index as usize].is_none()
+            && self.collections[&st.iterable].entries()[live_index as usize].is_none()
         {
             live_index += 1;
         }
@@ -28345,7 +28874,7 @@ impl Interp {
             if st.kind == 7 {
                 self.meter.tick_raw(COLLECTION_ITERATOR_ENTRY_METERING);
             }
-            let (k, v) = self.collections[&st.iterable].entries[live_index as usize].unwrap();
+            let (k, v) = self.collections[&st.iterable].entries()[live_index as usize].unwrap();
             let is_set = matches!(self.collections[&st.iterable].kind, CollKind::Set);
             let value = match st.kind {
                 5 => k, // keys
@@ -28359,8 +28888,8 @@ impl Interp {
                     let pair = self.new_array();
                     let arr = self.arrays.get_mut(&pair).unwrap();
                     arr.length = 2;
-                    arr.items.insert(0, Slot::of(a.kind, a.value));
-                    arr.items.insert(1, Slot::of(b.kind, b.value));
+                    arr.insert_item(0, Slot::of(a.kind, a.value), &mut self.side_refs);
+                    arr.insert_item(1, Slot::of(b.kind, b.value), &mut self.side_refs);
                     self.meter.tick_raw(self.array_chunk_size_metering(2));
                     Slot::of(Kind::Reference, Payload::Reference(pair))
                 }
@@ -28423,7 +28952,7 @@ impl Interp {
         // additions append, matching XS's live linked-list walk.
         let mut i = 0u32;
         loop {
-            let entry = self.collections.get(&inst).and_then(|c| c.entries.get(i as usize));
+            let entry = self.collections.get(&inst).and_then(|c| c.entries().get(i as usize));
             let (k, v) = match entry {
                 Some(Some(kv)) => *kv,
                 Some(None) => {
@@ -28469,7 +28998,7 @@ impl Interp {
     fn collection_live_len(&self, inst: crate::value::SlotIndex) -> usize {
         self.collections
             .get(&inst)
-            .map(|c| c.entries.iter().filter(|e| e.is_some()).count())
+            .map(|c| c.entries().iter().filter(|e| e.is_some()).count())
             .unwrap_or(0)
     }
 
@@ -28478,7 +29007,7 @@ impl Interp {
     fn collection_live_keys(&self, inst: crate::value::SlotIndex) -> Vec<Slot> {
         self.collections
             .get(&inst)
-            .map(|c| c.entries.iter().filter_map(|e| e.map(|(k, _)| k)).collect())
+            .map(|c| c.entries().iter().filter_map(|e| e.map(|(k, _)| k)).collect())
             .unwrap_or_default()
     }
 
@@ -28644,19 +29173,11 @@ impl Interp {
         let inst = self.slots.alloc(Slot::instance(self.set_proto));
         self.collections.insert(
             inst,
-            CollectionData {
-                kind: CollKind::Set,
-                entries: Vec::new(),
-                table_length: MAP_MIN_TABLE_LENGTH,
-            },
+            CollectionData::new(CollKind::Set, MAP_MIN_TABLE_LENGTH),
         );
         for key in keys {
             self.charge_new_entry_slots(2);
-            self.collections
-                .get_mut(&inst)
-                .unwrap()
-                .entries
-                .push(Some((key, Slot::undefined())));
+            self.collections.get_mut(&inst).unwrap().push_entry(key, Slot::undefined(), &mut self.side_refs);
             self.collection_table_resize(inst);
         }
         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -28697,7 +29218,7 @@ impl Interp {
                     let mut i = 0u32;
                     loop {
                         let entry =
-                            self.collections.get(&inst).and_then(|c| c.entries.get(i as usize));
+                            self.collections.get(&inst).and_then(|c| c.entries().get(i as usize));
                         let k = match entry {
                             Some(Some((k, _))) => *k,
                             Some(None) => {
@@ -28778,7 +29299,7 @@ impl Interp {
                 let mut i = 0u32;
                 loop {
                     let entry =
-                        self.collections.get(&inst).and_then(|c| c.entries.get(i as usize));
+                        self.collections.get(&inst).and_then(|c| c.entries().get(i as usize));
                     let k = match entry {
                         Some(Some((k, _))) => *k,
                         Some(None) => {
@@ -28818,7 +29339,7 @@ impl Interp {
                     let mut i = 0u32;
                     loop {
                         let entry =
-                            self.collections.get(&inst).and_then(|c| c.entries.get(i as usize));
+                            self.collections.get(&inst).and_then(|c| c.entries().get(i as usize));
                         let k = match entry {
                             Some(Some((k, _))) => *k,
                             Some(None) => {
@@ -28901,14 +29422,10 @@ impl Interp {
                     .copied()
                     .unwrap_or_else(Slot::undefined);
                 if let Some(p) = self.collection_find(inst, &key) {
-                    return Ok(self.collections[&inst].entries[p].unwrap().1);
+                    return Ok(self.collections[&inst].entries()[p].unwrap().1);
                 }
                 self.charge_new_entry_slots(3);
-                self.collections
-                    .get_mut(&inst)
-                    .unwrap()
-                    .entries
-                    .push(Some((key, value)));
+                self.collections.get_mut(&inst).unwrap().push_entry(key, value, &mut self.side_refs);
                 self.collection_table_resize(inst);
                 Ok(value)
             }
@@ -28923,7 +29440,7 @@ impl Interp {
                     return Err(self.catchable_type_error());
                 }
                 if let Some(p) = self.collection_find(inst, &key) {
-                    return Ok(self.collections[&inst].entries[p].unwrap().1);
+                    return Ok(self.collections[&inst].entries()[p].unwrap().1);
                 }
                 // `Call(callbackfn, undefined, « key »)`. The callback may mutate
                 // the map (including inserting `key` itself); the computed value
@@ -28931,18 +29448,11 @@ impl Interp {
                 let value = self.run_callback(code, callbackfn, Slot::undefined(), &[key])?;
                 match self.collection_find(inst, &key) {
                     Some(p) => {
-                        self.collections.get_mut(&inst).unwrap().entries[p]
-                            .as_mut()
-                            .unwrap()
-                            .1 = value;
+                        self.collections.get_mut(&inst).unwrap().set_entry_value(p, value, &mut self.side_refs);
                     }
                     None => {
                         self.charge_new_entry_slots(3);
-                        self.collections
-                            .get_mut(&inst)
-                            .unwrap()
-                            .entries
-                            .push(Some((key, value)));
+                        self.collections.get_mut(&inst).unwrap().push_entry(key, value, &mut self.side_refs);
                         self.collection_table_resize(inst);
                     }
                 }
@@ -29058,7 +29568,7 @@ impl Interp {
                     let value = self
                         .arrays
                         .get(&i)
-                        .and_then(|a| a.items.get(&k))
+                        .and_then(|a| a.items().get(&k))
                         .copied()
                         .unwrap_or_else(Slot::undefined);
                     record!(value);
@@ -29169,20 +29679,12 @@ impl Interp {
         let inst = self.slots.alloc(Slot::instance(self.map_proto));
         self.collections.insert(
             inst,
-            CollectionData {
-                kind: CollKind::Map,
-                entries: Vec::new(),
-                table_length: MAP_MIN_TABLE_LENGTH,
-            },
+            CollectionData::new(CollKind::Map, MAP_MIN_TABLE_LENGTH),
         );
         for (key, values) in buckets {
             let array = self.group_array_from_values(values);
             self.charge_new_entry_slots(3);
-            self.collections
-                .get_mut(&inst)
-                .unwrap()
-                .entries
-                .push(Some((key, array)));
+            self.collections.get_mut(&inst).unwrap().push_entry(key, array, &mut self.side_refs);
             self.collection_table_resize(inst);
         }
         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -29241,7 +29743,7 @@ impl Interp {
             let mut v = v;
             v.id = 0;
             v.next = crate::value::SlotIndex::NULL;
-            self.arrays.get_mut(&inst).unwrap().items.insert(i as u32, v);
+            self.arrays.get_mut(&inst).unwrap().insert_item(i as u32, v, &mut self.side_refs);
         }
         self.arrays.get_mut(&inst).unwrap().length = n;
         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -29353,7 +29855,7 @@ impl Interp {
         while !cur.is_null() {
             // Array index keys first (ascending), then string keys.
             if let Some(a) = self.arrays.get(&cur) {
-                let mut idxs: Vec<u32> = a.items.keys().copied().collect();
+                let mut idxs: Vec<u32> = a.items().keys().copied().collect();
                 idxs.sort_unstable();
                 for i in idxs {
                     let k = (crate::value::XS_NO_ID, i);
@@ -29418,7 +29920,7 @@ impl Interp {
                     0 => self
                         .arrays
                         .get(&st.iterable)
-                        .and_then(|a| a.items.get(&st.index).copied())
+                        .and_then(|a| a.items().get(&st.index).copied())
                         .map(|s| Slot::of(s.kind, s.value))
                         .unwrap_or_else(Slot::undefined),
                     1 => Slot::integer(st.index as i32),
@@ -29427,14 +29929,14 @@ impl Interp {
                         let elem = self
                             .arrays
                             .get(&st.iterable)
-                            .and_then(|a| a.items.get(&st.index).copied())
+                            .and_then(|a| a.items().get(&st.index).copied())
                             .map(|s| Slot::of(s.kind, s.value))
                             .unwrap_or_else(Slot::undefined);
                         let pair = self.new_array();
                         let a = self.arrays.get_mut(&pair).unwrap();
                         a.length = 2;
-                        a.items.insert(0, Slot::integer(st.index as i32));
-                        a.items.insert(1, elem);
+                        a.insert_item(0, Slot::integer(st.index as i32), &mut self.side_refs);
+                        a.insert_item(1, elem, &mut self.side_refs);
                         self.meter.tick_raw(self.array_chunk_size_metering(2));
                         Slot::of(Kind::Reference, Payload::Reference(pair))
                     }
@@ -29518,7 +30020,7 @@ impl Interp {
             _ => return None,
         };
         let a = self.arrays.get(&inst)?;
-        if a.items.len() as u32 == a.length {
+        if a.items().len() as u32 == a.length {
             Some(inst)
         } else {
             None
@@ -31170,7 +31672,7 @@ impl Interp {
     /// The index of `key` among `inst`'s entries by SameValueZero, or `None`.
     fn collection_find(&self, inst: crate::value::SlotIndex, key: &Slot) -> Option<usize> {
         let data = self.collections.get(&inst)?;
-        data.entries
+        data.entries()
             .iter()
             .position(|entry| entry.is_some_and(|(k, _)| self.same_value_zero(&k, key)))
     }
@@ -31197,10 +31699,7 @@ impl Interp {
             if data.kind == CollKind::WeakMap || data.kind == CollKind::WeakSet {
                 return;
             }
-            (
-                data.table_length,
-                data.entries.iter().filter(|entry| entry.is_some()).count() as u32,
-            )
+            (data.table_length, data.live_len() as u32)
         };
         // mxTableThreshold(L) = (L>>1) + (L>>2); high = threshold, low = high>>1.
         let high = (former >> 1) + (former >> 2);
@@ -31332,6 +31831,13 @@ impl Interp {
     /// the caller yields `Halt::Throw`.
     fn unwind_to_jump(&mut self) -> Option<usize> {
         let jump = self.jumps.pop()?;
+        // A handler live across a suspend costs XS one extra dispatch to
+        // land in (see [`RESUMED_HANDLER_THROW_METERING`]); a handler
+        // pushed by a `CATCH` in this run costs nothing beyond the
+        // ordinary caught-throw modeling.
+        if jump.rebased {
+            self.meter.tick_raw(RESUMED_HANDLER_THROW_METERING);
+        }
         // Pop any callee activations opened since the catch was
         // established (a throw crossing called functions), restoring the
         // establishing frame's saved activation each time (XS restores
@@ -31652,11 +32158,7 @@ impl Interp {
         out: &mut Vec<Slot>,
     ) {
         for index in 0..len {
-            let item = match self
-                .arrays
-                .get(&src)
-                .and_then(|a| a.items.get(&index).copied())
-            {
+            let item = match self.arrays.get(&src).and_then(|a| a.items().get(&index).copied()) {
                 Some(it) => it,
                 None => continue, // a hole is skipped (fxHasIndex false)
             };
@@ -31711,14 +32213,33 @@ impl Interp {
         if let Some(&id) = self.symbol_ids.get(name) {
             return id;
         }
-        let id = self.next_intern_id;
-        self.next_intern_id = self.next_intern_id.saturating_add(1);
-        self.symbol_ids.insert(name.to_string(), id);
+        let id = self.append_name_key(name);
         if !self.default_keys.contains(name) {
             // A name absent from XS's boot key table misses `nameTable`, so
             // `fxNewNameX` calls `fxFindKey` → `fxNewSlot`: one metered slot.
             self.meter.tick_slot_alloc();
         }
+        id
+    }
+
+    /// Append a novel string key to the name table and hand out its id (the
+    /// new table position). The table IS the persisted id→name map (the NAME
+    /// row), so a key interned here round-trips a snapshot with its id — the
+    /// unification that retired the string-key half of the old runtime-intern
+    /// persistence refusal. Saturates at the symbol-key floor when the two id
+    /// spaces meet (the exhaustion hazard documented on
+    /// [`Self::next_symbol_key_id`]).
+    fn append_name_key(&mut self, name: &str) -> u16 {
+        let next = self.symbol_names.len().saturating_add(1);
+        if next >= self.next_symbol_key_id as usize {
+            debug_assert!(false, "property-key id space exhausted");
+            let id = self.next_symbol_key_id;
+            self.symbol_ids.insert(name.to_string(), id);
+            return id;
+        }
+        let id = next as u16;
+        self.symbol_names.push(name.to_string());
+        self.symbol_ids.insert(name.to_string(), id);
         id
     }
 
@@ -31730,10 +32251,7 @@ impl Interp {
         if let Some(&id) = self.symbol_ids.get(name) {
             return id;
         }
-        let id = self.next_intern_id;
-        self.next_intern_id = self.next_intern_id.saturating_add(1);
-        self.symbol_ids.insert(name.to_string(), id);
-        id
+        self.append_name_key(name)
     }
 
     /// The program-local property **id** a symbol value is keyed under (XS's
@@ -31743,14 +32261,20 @@ impl Interp {
     /// `o[sym]` round-trips and `sym1 === sym2` implies same key. No metering:
     /// the symbol was already allocated (its descriptor slot); using it as a
     /// key allocates no new name slot in XS (`mxID` is a field read). The id is
-    /// drawn from the shared [`Self::next_intern_id`] counter, so it never
+    /// drawn from the top-down [`Self::next_symbol_key_id`] counter, so it never
     /// collides with a string key or a program symbol.
     fn intern_symbol_key(&mut self, desc: crate::value::SlotIndex) -> u16 {
         if let Some(&id) = self.symbol_key_ids.get(&desc) {
             return id;
         }
-        let id = self.next_intern_id;
-        self.next_intern_id = self.next_intern_id.saturating_add(1);
+        if (self.next_symbol_key_id as usize) <= self.symbol_names.len().saturating_add(1) {
+            debug_assert!(false, "property-key id space exhausted");
+            let id = self.next_symbol_key_id;
+            self.symbol_key_ids.insert(desc, id);
+            return id;
+        }
+        let id = self.next_symbol_key_id;
+        self.next_symbol_key_id -= 1;
         self.symbol_key_ids.insert(desc, id);
         id
     }
@@ -31973,7 +32497,7 @@ impl Interp {
                 Ok(self
                     .arrays
                     .get(&inst)
-                    .and_then(|a| a.items.get(&index).copied())
+                    .and_then(|a| a.items().get(&index).copied())
                     .map(|s| Slot::of(s.kind, s.value))
                     .unwrap_or_else(Slot::undefined))
             } else {
@@ -32123,10 +32647,10 @@ impl Interp {
         let is_new = !self
             .arrays
             .get(&inst)
-            .map(|a| a.items.contains_key(&index))
+            .map(|a| a.items().contains_key(&index))
             .unwrap_or(false);
         if is_new {
-            let present = self.arrays[&inst].items.len() as u64;
+            let present = self.arrays[&inst].items().len() as u64;
             self.meter.tick_raw(self.array_item_grow_metering(present));
         }
         if define {
@@ -32136,7 +32660,7 @@ impl Interp {
             let mut v = value;
             v.id = 0;
             v.next = crate::value::SlotIndex::NULL;
-            a.items.insert(index, v);
+            a.insert_item(index, v, &mut self.side_refs);
             if index + 1 > a.length {
                 a.length = index + 1;
             }
@@ -32176,9 +32700,13 @@ impl Interp {
         let new_len = self.to_length_u32(value);
         if let Some(a) = self.arrays.get_mut(&inst) {
             if new_len < a.length {
-                let drop: Vec<u32> = a.items.range(new_len..).map(|(&k, _)| k).collect();
+                let drop: Vec<u32> = a
+                    .items()
+                    .range(new_len..)
+                    .map(|(&k, _)| k)
+                    .collect();
                 for k in drop {
-                    a.items.remove(&k);
+                    a.remove_item(&k, &mut self.side_refs);
                 }
             }
             a.length = new_len;
@@ -33256,7 +33784,7 @@ impl Interp {
             return Ok(self
                 .arrays
                 .get(&inst)
-                .and_then(|a| a.items.get(&(i as u32)).copied())
+                .and_then(|a| a.items().get(&(i as u32)).copied())
                 .map(|s| Slot::of(s.kind, s.value))
                 .unwrap_or_else(Slot::undefined));
         }
@@ -33483,7 +34011,7 @@ impl Interp {
                 return Ok(true);
             }
             if let Some(idx) = index {
-                if a.items.contains_key(&idx) {
+                if a.items().contains_key(&idx) {
                     return Ok(true);
                 }
             }
@@ -33651,7 +34179,7 @@ impl Interp {
             });
         }
         let idx = self.string_key_name(id).and_then(|n| string_to_index(&n))?;
-        let s = a.items.get(&idx).copied()?;
+        let s = a.items().get(&idx).copied()?;
         Some(OrdinaryDescriptor {
             value: Some(Slot::of(s.kind, s.value)),
             writable: Some(true),
@@ -33703,7 +34231,7 @@ impl Interp {
         // then the ordinary string keys, then symbol keys.
         if self.arrays.contains_key(&inst) {
             let mut out = Vec::new();
-            let mut idxs: Vec<u32> = self.arrays[&inst].items.keys().copied().collect();
+            let mut idxs: Vec<u32> = self.arrays[&inst].items().keys().copied().collect();
             idxs.sort_unstable();
             for i in idxs {
                 let id = self.intern_key(&i.to_string());
@@ -34446,7 +34974,7 @@ impl Interp {
         let mut data = ArrayData::default();
         data.length = items.len() as u32;
         for (i, s) in items.iter().enumerate() {
-            data.items.insert(i as u32, *s);
+            data.insert_item(i as u32, *s, &mut self.side_refs);
         }
         self.arrays.insert(inst, data);
         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -40169,20 +40697,16 @@ impl Interp {
         for (_, s) in &self.well_known_symbols {
             slot_roots(s, &mut roots);
         }
-        // Symbol identity tables. A symbol used as a property key is
-        // held BY ID in property records — no arena reference points
-        // back at its descriptor slot, and `symbol_key_ids` is the
-        // only descriptor→id link — so sweeping the descriptor while
-        // its id still lives in a chain makes `is_symbol_key_id`
-        // misclassify that property (the PR review's finding). And a
-        // `Symbol.for` registry entry must live as long as the
-        // registry itself (the spec's registry never drops entries).
-        // Both tables key by descriptor slot; their keys are roots.
-        // For `symbol_key_ids` this is deliberately conservative — a
-        // key whose last property died is retained until a precise
-        // trace-the-property-chains refinement — which is retention
-        // only, never misclassification.
-        roots.extend(self.symbol_key_ids.keys().copied());
+        // Symbol identity tables. A `Symbol.for` registry entry must
+        // live as long as the registry itself (the spec's registry
+        // never drops entries), so registry descriptors stay roots.
+        // Plain symbol-KEY descriptors (`symbol_key_ids`) are NOT
+        // roots any more: the full collector retains one precisely —
+        // via the ephemeron pass — exactly while its interned id sits
+        // on a marked property record or the descriptor is otherwise
+        // reachable, and prunes the intern when both die (the
+        // deferred-pass precision refinement; the partial collector
+        // stays page-conservative through the side-table visitor).
         roots.extend(self.symbol_registry_keys.keys().copied());
         for (idx, _, s) in &self.proto_value_data {
             roots.push(*idx);
@@ -40346,6 +40870,8 @@ impl Interp {
             well_known_symbols: &'a mut Vec<(&'static str, Slot)>,
             proto_value_data: &'a mut Vec<(SlotIndex, &'static str, Slot)>,
             promise_jobs: &'a mut std::collections::VecDeque<PromiseJob>,
+            side_refs: &'a mut SideRefCounts,
+            symbol_key_ids: &'a mut std::collections::HashMap<SlotIndex, u16>,
             combinators: &'a [CombinatorState],
             from_async: &'a [FromAsyncData],
             static_str: &'a mut StaticStrings,
@@ -40411,24 +40937,28 @@ impl Interp {
                     s.each_ref_slot(&mut *visit);
                 }
                 if let Some(a) = self.arrays.get(&idx) {
-                    for s in a.items.values() {
+                    for s in a.items().values() {
                         s.each_ref_slot(&mut *visit);
                     }
                 }
                 if let Some(c) = self.collections.get(&idx) {
-                    // Weak collections are DELIBERATELY marked strong
-                    // for now: ephemeron semantics (mark a WeakMap
-                    // value only while its key is live; drop
-                    // dead-keyed entries before compaction) need a
-                    // fixpoint pass this mark loop does not have.
-                    // Conservative direction only — weakly-held
-                    // objects are retained, never freed while live —
-                    // pinned by the gc_machine test
-                    // `weak_collection_entries_are_retained_conservatively`,
-                    // which flips when ephemerons land.
-                    for (k, v) in c.entries.iter().flatten() {
-                        k.each_ref_slot(&mut *visit);
-                        v.each_ref_slot(&mut *visit);
+                    match c.kind {
+                        CollKind::Map | CollKind::Set => {
+                            for (k, v) in c.live_entries() {
+                                k.each_ref_slot(&mut *visit);
+                                v.each_ref_slot(&mut *visit);
+                            }
+                        }
+                        // WEAK collections hold nothing strongly: a
+                        // key lives only through outside references,
+                        // and a WeakMap value only through the
+                        // ephemeron pass (marked while its key is
+                        // marked, `GcHooks::ephemeron_edges`);
+                        // dead-keyed entries are pruned before the
+                        // sweep. Locked by the gc_machine ephemeron
+                        // tests (the old conservative-retention pin
+                        // flipped when this landed).
+                        CollKind::WeakMap | CollKind::WeakSet => {}
                     }
                 }
                 if let Some(t) = self.typed_arrays.get(&idx) {
@@ -40516,8 +41046,13 @@ impl Interp {
                 self.bound_functions.remove(&idx);
                 self.ctor_prototype.remove(&idx);
                 self.wrapper_data.remove(&idx);
-                self.arrays.remove(&idx);
-                self.collections.remove(&idx);
+                if let Some(a) = self.arrays.remove(&idx) {
+                    a.drop_refs(&mut self.side_refs);
+                }
+                if let Some(c) = self.collections.remove(&idx) {
+                    c.drop_refs(&mut self.side_refs);
+                }
+                self.symbol_key_ids.remove(&idx);
                 self.array_buffers.remove(&idx);
                 self.typed_arrays.remove(&idx);
                 self.data_views.remove(&idx);
@@ -40531,6 +41066,98 @@ impl Interp {
                 // collection from this list — late pruning cannot
                 // leak chunk liveness there.
                 self.swept.push(idx);
+            }
+
+            fn ephemeron_edges(&self, slots: &SlotArena, visit: &mut dyn FnMut(SlotIndex)) {
+                // WeakMap values: an entry's value is reachable
+                // exactly while its MAP and its KEY both are. WeakSet
+                // entries add no edges (membership keeps nothing
+                // alive).
+                for (inst, c) in self.collections.iter() {
+                    if !slots.is_marked(*inst) || c.kind != CollKind::WeakMap {
+                        continue;
+                    }
+                    for (k, v) in c.live_entries() {
+                        let mut key_live = false;
+                        k.each_ref_slot(|r| {
+                            if slots.is_marked(r) {
+                                key_live = true;
+                            }
+                        });
+                        if key_live {
+                            v.each_ref_slot(&mut *visit);
+                        }
+                    }
+                }
+                // Symbol-key descriptors: a marked property record
+                // whose id is an interned symbol key keeps the
+                // descriptor (and its description chunk) alive — the
+                // precise replacement for rooting every intern.
+                //
+                // Deliberately CONSERVATIVE on two axes (review wave 4,
+                // GC-P3a), both retention-only — this pass can only keep
+                // a descriptor alive, never free one, so neither can
+                // cause a use-after-free or a wrong answer:
+                //
+                //  - it walks the whole arena per fixpoint round rather
+                //    than an index of property records, so the cost is
+                //    O(capacity) × rounds even when `wanted` is tiny;
+                //  - it compares `slot.id` on every marked slot without
+                //    filtering by kind, and `id` doubles as the argument
+                //    count on frame slots, so a frame with N arguments
+                //    where N equals a wanted key's id retains that
+                //    descriptor spuriously.
+                //
+                // Both want the same thing to fix properly: a reverse
+                // index from key id to the property records using it,
+                // maintained where properties are written. Until the
+                // ledger's KEYS row makes that index durable anyway,
+                // over-retaining a handful of descriptors is the cheaper
+                // trade.
+                let wanted: std::collections::HashMap<u16, SlotIndex> = self
+                    .symbol_key_ids
+                    .iter()
+                    .filter(|(d, _)| !slots.is_marked(**d))
+                    .map(|(d, id)| (*id, *d))
+                    .collect();
+                if !wanted.is_empty() {
+                    for i in 0..slots.capacity() {
+                        let idx = SlotIndex(i);
+                        if slots.is_marked(idx) {
+                            if let Some(&d) = wanted.get(&slots.get(idx).id) {
+                                visit(d);
+                            }
+                        }
+                    }
+                }
+            }
+
+            fn prune_dead_keyed(&mut self, slots: &SlotArena) {
+                // Dead-keyed weak entries leave their collections
+                // (counted decrements) before the sweep reclaims the
+                // targets.
+                let side_refs = &mut *self.side_refs;
+                for (inst, c) in self.collections.iter_mut() {
+                    if !slots.is_marked(*inst)
+                        || !matches!(c.kind, CollKind::WeakMap | CollKind::WeakSet)
+                    {
+                        continue;
+                    }
+                    c.prune_entries(side_refs, |k, _v| {
+                        let mut key_live = false;
+                        k.each_ref_slot(|r| {
+                            if slots.is_marked(r) {
+                                key_live = true;
+                            }
+                        });
+                        key_live
+                    });
+                }
+                // An intern whose descriptor stayed unmarked through
+                // the fixpoint has no live property using its id and
+                // no other reference: drop the mapping (the sweep
+                // reclaims the descriptor slot itself).
+                self.symbol_key_ids.retain(|d, _| slots.is_marked(*d));
             }
 
             fn external_chunk_refs(&mut self, visit: &mut dyn FnMut(&mut ChunkOffset)) {
@@ -40550,15 +41177,10 @@ impl Interp {
                     slot_chunk(s, visit);
                 }
                 for a in self.arrays.values_mut() {
-                    for s in a.items.values_mut() {
-                        slot_chunk(s, visit);
-                    }
+                    a.for_each_value_mut_chunk_remap(|s| slot_chunk(s, visit));
                 }
                 for c in self.collections.values_mut() {
-                    for (k, v) in c.entries.iter_mut().flatten() {
-                        slot_chunk(k, visit);
-                        slot_chunk(v, visit);
-                    }
+                    c.for_each_entry_mut_chunk_remap(|s| slot_chunk(s, visit));
                 }
                 for p in self.promises.values_mut() {
                     slot_chunk(&mut p.result, visit);
@@ -40683,6 +41305,8 @@ impl Interp {
             well_known_symbols: &mut self.well_known_symbols,
             proto_value_data: &mut self.proto_value_data,
             promise_jobs: &mut self.promise_jobs,
+            side_refs: &mut self.side_refs,
+            symbol_key_ids: &mut self.symbol_key_ids,
             combinators: &self.combinators,
             from_async: &self.from_async,
             static_str: &mut self.static_str,
@@ -40701,6 +41325,14 @@ impl Interp {
         self.regexps.retain(|k, _| !dead.contains(k));
         self.symbol_key_ids.retain(|k, _| !dead.contains(k));
         self.symbol_registry_keys.retain(|k, _| !dead.contains(k));
+        // The FORWARD map (`symbol_registry`: string → descriptor) is
+        // deliberately not pruned here. It is a GC ROOT — every
+        // registered descriptor is reachable from it — so no descriptor
+        // it names can ever be in `dead`, and a retain would be a no-op
+        // scan of the whole registry every sweep (review wave 4,
+        // GC-P3d). If the registry is ever made weak, this becomes a
+        // real omission and the reverse map's `retain` above shows the
+        // shape the fix takes.
 
         stats
     }
@@ -40747,8 +41379,21 @@ impl Interp {
         self.ctor_prototype.retain(|k, _| !dead.contains(k));
         self.wrapper_data.retain(|k, _| !dead.contains(k));
         self.error_data.retain(|k, _| !dead.contains(k));
-        self.arrays.retain(|k, _| !dead.contains(k));
-        self.collections.retain(|k, _| !dead.contains(k));
+        let refs = &mut self.side_refs;
+        self.arrays.retain(|k, a| {
+            let keep = !dead.contains(k);
+            if !keep {
+                a.drop_refs(refs);
+            }
+            keep
+        });
+        self.collections.retain(|k, c| {
+            let keep = !dead.contains(k);
+            if !keep {
+                c.drop_refs(refs);
+            }
+            keep
+        });
         self.array_buffers.retain(|k, _| !dead.contains(k));
         self.typed_arrays.retain(|k, _| !dead.contains(k));
         self.data_views.retain(|k, _| !dead.contains(k));
@@ -40760,6 +41405,14 @@ impl Interp {
         self.regexps.retain(|k, _| !dead.contains(k));
         self.symbol_key_ids.retain(|k, _| !dead.contains(k));
         self.symbol_registry_keys.retain(|k, _| !dead.contains(k));
+        // The FORWARD map (`symbol_registry`: string → descriptor) is
+        // deliberately not pruned here. It is a GC ROOT — every
+        // registered descriptor is reachable from it — so no descriptor
+        // it names can ever be in `dead`, and a retain would be a no-op
+        // scan of the whole registry every sweep (review wave 4,
+        // GC-P3d). If the registry is ever made weak, this becomes a
+        // real omission and the reverse map's `retain` above shows the
+        // shape the fix takes.
         freed.len() as u32
     }
 
@@ -40803,22 +41456,70 @@ impl Interp {
             .capacity()
             .div_ceil(crate::value::SLOTS_PER_PAGE) as usize;
         let mut bits = vec![false; pages];
-        self.each_side_table_ref(&mut |r| {
+        // The TAIL tables (functions, promises, iterators, …) stay an
+        // O(small) walk; the BULK tables (arrays' items, collections'
+        // entries) are read from the standing per-page refcounts the
+        // counted accessors maintain (design § Plan: counted
+        // side-table ref-page accessors) — O(pages-with-refs) instead
+        // of O(live entries).
+        self.each_side_table_ref_tail(&mut |r| {
             if !r.is_null() {
                 if let Some(b) = bits.get_mut((r.0 / crate::value::SLOTS_PER_PAGE) as usize) {
                     *b = true;
                 }
             }
         });
+        self.side_refs.or_into_bits(&mut bits);
+        // Parity net (debug builds): the standing counts must agree
+        // with a fresh enumeration of every side table — a missed
+        // counted mutation shows up HERE, before the collector can
+        // free a live page or pin a dead one.
+        #[cfg(debug_assertions)]
+        {
+            let mut walked = vec![false; pages];
+            self.each_side_table_ref(&mut |r| {
+                if !r.is_null() {
+                    if let Some(b) = walked.get_mut((r.0 / crate::value::SLOTS_PER_PAGE) as usize)
+                    {
+                        *b = true;
+                    }
+                }
+            });
+            debug_assert_eq!(
+                bits, walked,
+                "counted bulk pages diverge from the side-table enumeration"
+            );
+        }
         bits
     }
 
-    /// Visit every slot index held in a side-table VALUE — the single
-    /// enumeration body behind [`Self::side_table_ref_slots`] and
-    /// [`Self::side_table_ref_page_bits`]. Keeping one body is the
-    /// no-drift discipline: a new side table gets added here once and
-    /// every projection sees it.
+    /// Visit every slot index held in a side-table VALUE — the full
+    /// enumeration behind [`Self::side_table_ref_slots`] and the
+    /// debug parity net. Composes the tail walk with a walk of the
+    /// two BULK tables, so the tail body is shared with the counted
+    /// page projection and cannot drift from it.
     fn each_side_table_ref(&self, visit: &mut dyn FnMut(crate::value::SlotIndex)) {
+        self.each_side_table_ref_tail(visit);
+        for a in self.arrays.values() {
+            for s in a.items().values() {
+                s.each_ref_slot(&mut *visit);
+            }
+        }
+        for c in self.collections.values() {
+            for (k, v) in c.live_entries() {
+                k.each_ref_slot(&mut *visit);
+                v.each_ref_slot(&mut *visit);
+            }
+        }
+    }
+
+    /// The TAIL of the enumeration: every side table EXCEPT the two
+    /// bulk ones (arrays' items, collections' entries), whose pages
+    /// the standing [`crate::bulk::SideRefCounts`] map serves. The
+    /// page projection composes tail + counts; a new side table gets
+    /// added here once (or, if bulk-sized, behind counted accessors
+    /// in [`crate::bulk`]) and every projection sees it.
+    fn each_side_table_ref_tail(&self, visit: &mut dyn FnMut(crate::value::SlotIndex)) {
         use crate::value::SlotIndex;
         fn slot_refs(s: &Slot, visit: &mut dyn FnMut(SlotIndex)) {
             s.each_ref_slot(|e| visit(e));
@@ -40852,17 +41553,6 @@ impl Interp {
         }
         for s in self.wrapper_data.values() {
             slot_refs(s, visit);
-        }
-        for a in self.arrays.values() {
-            for s in a.items.values() {
-                slot_refs(s, visit);
-            }
-        }
-        for c in self.collections.values() {
-            for (k, v) in c.entries.iter().flatten() {
-                slot_refs(k, visit);
-                slot_refs(v, visit);
-            }
         }
         for t in self.typed_arrays.values() {
             visit(t.buffer);

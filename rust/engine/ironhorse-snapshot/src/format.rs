@@ -44,6 +44,23 @@ pub const SYMB: FourCc = FourCc(*b"SYMB");
 /// carries meter state differently), which the Ironhorse `VERS` discriminator
 /// already fences off.
 pub const METR: FourCc = FourCc(*b"METR");
+/// `ARRY` — the arrays side table (side-table ledger `Arrays` row):
+/// per-instance spec length + sparse item map. Ironhorse-specific (XS
+/// keeps array items in chunks); **emitted only when non-empty**, so
+/// side-table-free machines keep their exact pre-ledger container
+/// bytes — the CAS/blob identity every golden vector pins.
+pub const ARRY: FourCc = FourCc(*b"ARRY");
+/// `COLL` — the collections side table (ledger `Collections` row):
+/// Map/Set/WeakMap/WeakSet kind, table geometry, and insertion-ordered
+/// entries. Ironhorse-specific; emitted only when non-empty (see
+/// [`ARRY`]).
+pub const COLL: FourCc = FourCc(*b"COLL");
+/// `REGY` — the `Symbol.for` registry (ledger `SymbolRegistry` row):
+/// key bytes → descriptor slot, pairwise. Ironhorse-specific; emitted
+/// only when non-empty (see [`ARRY`]). Distinct from `KEYS`/`SYMB`,
+/// which keep their XS meanings (runtime-interned property keys /
+/// well-known symbol identities) for the ledger rows still pending.
+pub const REGY: FourCc = FourCc(*b"REGY");
 
 /// The Ironhorse discriminator embedded at the head of the `VERS` atom. An
 /// Ironhorse snapshot is never mistaken for an XS one and vice versa

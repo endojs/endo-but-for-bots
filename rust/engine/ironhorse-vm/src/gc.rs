@@ -77,6 +77,22 @@ pub trait GcHooks {
     /// Enumerate every chunk offset held outside the slot arena.
     /// Called twice: before compaction (liveness) and after (rewrite).
     fn external_chunk_refs(&mut self, visit: &mut dyn FnMut(&mut ChunkOffset));
+    /// One EPHEMERON round: report slots that become reachable only
+    /// because some already-marked state conditions them — a WeakMap
+    /// value whose key is marked, a symbol descriptor whose interned
+    /// key id sits on a marked property record. Called after the
+    /// strong worklist drains and repeated (with the marks advanced)
+    /// until a round marks nothing new; reporting an already-marked
+    /// slot is harmless. Default: no conditional edges.
+    fn ephemeron_edges(&self, slots: &SlotArena, visit: &mut dyn FnMut(SlotIndex)) {
+        let _ = (slots, visit);
+    }
+    /// After the mark fixpoint, before the sweep: drop weak state
+    /// whose condition died (dead-keyed WeakMap/WeakSet entries,
+    /// unused symbol-key interns). Default: nothing to prune.
+    fn prune_dead_keyed(&mut self, slots: &SlotArena) {
+        let _ = slots;
+    }
 }
 
 /// The full collection the machine wires (the side-table liveness fix
@@ -114,17 +130,39 @@ pub fn collect_full(
             worklist.push(r);
         }
     }
-    while let Some(idx) = worklist.pop() {
-        // Collect edges first (immutable borrow), then mark (mutable).
-        let mut edges: Vec<SlotIndex> = Vec::new();
-        slots.get(idx).each_ref_slot(|e| edges.push(e));
-        hooks.extra_edges(idx, &mut |e| edges.push(e));
-        for e in edges {
-            if slots.mark(e) {
-                worklist.push(e);
+    loop {
+        while let Some(idx) = worklist.pop() {
+            // Collect edges first (immutable borrow), then mark (mutable).
+            let mut edges: Vec<SlotIndex> = Vec::new();
+            slots.get(idx).each_ref_slot(|e| edges.push(e));
+            hooks.extra_edges(idx, &mut |e| edges.push(e));
+            for e in edges {
+                if slots.mark(e) {
+                    worklist.push(e);
+                }
             }
         }
+        // Ephemeron fixpoint: conditional edges whose condition may
+        // have been satisfied by the marks above (a WeakMap value's
+        // key, a symbol-key id on a marked record). Terminates: each
+        // productive round marks at least one new slot, and marks
+        // only grow.
+        let mut newly: Vec<SlotIndex> = Vec::new();
+        hooks.ephemeron_edges(&*slots, &mut |e| newly.push(e));
+        let mut progressed = false;
+        for e in newly {
+            if slots.mark(e) {
+                worklist.push(e);
+                progressed = true;
+            }
+        }
+        if !progressed {
+            break;
+        }
     }
+    // Dead-keyed weak state goes BEFORE the sweep, so the entries are
+    // gone by the time their targets are reclaimed.
+    hooks.prune_dead_keyed(&*slots);
 
     // --- sweep ---
     let slots_reclaimed = slots.sweep_each(&mut |idx| hooks.swept(idx));

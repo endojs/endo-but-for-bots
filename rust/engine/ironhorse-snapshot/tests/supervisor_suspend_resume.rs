@@ -51,6 +51,8 @@ use ironhorse_snapshot::machine::{resume_from_cas, MachineSnapshot};
 use ironhorse_vm::meter::MeterState;
 use ironhorse_vm::Interp;
 
+mod common;
+
 /// The host callback-table version the supervisor pins its workers to (the
 /// `SIGN` atom gate); a mismatch fails resume closed.
 fn worker_signature() -> Signature {
@@ -198,18 +200,18 @@ impl SupervisorHarness {
     }
 }
 
-/// A per-test CAS root under the process temp dir, cleaned before and after.
-/// Keyed by the test name and process id so parallel test binaries never
-/// collide (the run is `--test-threads=1`, but the isolation is cheap and
-/// correct regardless).
-fn cas_root(test_name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
+/// A per-test CAS root under the process temp dir — the guard
+/// pre-cleans any prior run's leftover and removes the directory on
+/// drop, success or panic. Keyed by the test name and process id so
+/// parallel test binaries never collide (the run is
+/// `--test-threads=1`, but the isolation is cheap and correct
+/// regardless).
+fn cas_root(test_name: &str) -> common::TempDir {
+    common::TempDir::new(&format!(
         "ironhorse-supervisor-it-{}-{}",
         std::process::id(),
         test_name
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    dir
+    ))
 }
 
 /// **The row-6 bar.** A worker that runs crank A, is suspended to the CAS
@@ -258,7 +260,6 @@ fn supervisor_suspend_resume_preserves_result_and_meter() {
         "meter continued (resumed total exceeds crank A alone)"
     );
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// The suspended blob is content-addressed and durable: the supervisor holds
@@ -268,7 +269,7 @@ fn supervisor_suspend_resume_preserves_result_and_meter() {
 #[test]
 fn supervisor_suspend_writes_content_addressed_blob() {
     let root = cas_root("content-addressed-blob");
-    let mut sup = SupervisorHarness::new(root.clone());
+    let mut sup = SupervisorHarness::new(root.to_path_buf());
     let w = sup.spawn();
     sup.deliver(w, &PROG_A);
 
@@ -288,7 +289,6 @@ fn supervisor_suspend_writes_content_addressed_blob() {
     sup.resume(w);
     assert!(sup.live.contains_key(&w), "resumed from the stored blob");
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// Multiple workers suspend and resume independently under one supervisor,
@@ -327,5 +327,4 @@ fn supervisor_suspends_multiple_workers_independently() {
     assert_eq!(bb.result, rb.result, "worker B crank matches its reference");
     assert_eq!(bb.computrons, rb.computrons);
 
-    let _ = std::fs::remove_dir_all(&root);
 }

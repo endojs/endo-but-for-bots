@@ -75,7 +75,23 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// geometry header and length-prefixed edge entries in both the root
 /// and the seal encodings), and commit verifies summaries against the
 /// rows they travel with.
-pub const STORE_SCHEMA_VERSION: u32 = 5;
+///
+/// v6: the flat root became per-class Merkle trees ([`compute_root`];
+/// same leaves, new combination), enabling O(dirty·log n) commit
+/// maintenance. v5→v6 migration verifies then restamps in place.
+///
+/// v7 (the side-table ledger): the small state grew three sections —
+/// arrays, collections, `Symbol.for` registry — so resumed machines
+/// keep their bulk side tables. v6→v7 migration appends the three
+/// sections EMPTY (a pure 12-byte suffix; a v6-era machine had
+/// nothing persisted in them by definition) and restamps the root for
+/// the changed small leaf.
+pub const STORE_SCHEMA_VERSION: u32 = 8;
+/// The oldest schema [`migrate_store`] can upgrade in place. Decode
+/// accepts the whole supported range; validation refuses an
+/// un-migrated older store with [`StoreError::NeedsMigration`], and
+/// anything newer than CURRENT fails closed (no downgrade path).
+pub const STORE_SCHEMA_MIN_SUPPORTED: u32 = 5;
 
 /// A store that cannot be used, or an operation on it that failed.
 /// Gate failures reuse the [`SnapshotError`] taxonomy so a foreign or
@@ -117,6 +133,11 @@ pub enum StoreError {
     /// already holds an epoch. Adopting existing content is the resume
     /// path's job; silently overwriting it would discard a heap.
     NotEmpty { epoch: u64 },
+    /// A decodable store written by an OLDER supported schema that
+    /// has not been migrated yet — the open paths run
+    /// [`migrate_store`] and never surface this; a read-only caller
+    /// that cannot migrate reports it by name.
+    NeedsMigration { found: u32 },
     /// A stored page-edge summary vector whose length disagrees with
     /// the manifest geometry. Refused before any reachability decision
     /// is made from the summaries: the partial collector FREES pages
@@ -169,6 +190,27 @@ pub struct StoreManifest {
     /// The checkpoint generation. 0 never appears in a committed
     /// manifest; the first commit is epoch 1.
     pub epoch: u64,
+    /// Total COMPLETED cranks this store has absorbed (store schema 8).
+    ///
+    /// The cadence schedule is derived from THIS, not from a session
+    /// counter, which is what makes it resume-invariant: a replica that
+    /// suspends mid-window resumes with the same absolute count and so
+    /// collects after exactly the same cranks as one that never
+    /// suspended. Review wave 5 measured the alternative — a
+    /// session-local `cranks_since_collect` that `open()` zeroed made an
+    /// ordinary suspend/resume fork the durable heap, with identical
+    /// per-crank results and computrons hiding it.
+    ///
+    /// Absolute rather than "since the last collection" so the schedule
+    /// cannot drift: two replicas at the same crank total agree on
+    /// whether a collection is due, whatever their suspend histories.
+    /// Advanced by exactly the number of cranks a commit makes durable,
+    /// so `epoch` counts checkpoints and this counts cranks — they
+    /// coincide only at `checkpoint_every: 1`.
+    ///
+    /// Reads 0 from a schema-7 store, which is correct: such a store
+    /// predates the counter, and 0 is where a fresh one starts.
+    pub cranks: u64,
     /// The **row-hash tree root** (store seam design, phase 5): SHA-256
     /// (hex) over the small-state leaf and every row leaf
     /// ([`combine_root`]). Unlike the seal — which chains commit
@@ -242,6 +284,15 @@ impl StoreManifest {
         let sb = self.seal.as_bytes();
         v.extend_from_slice(&(sb.len() as u32).to_be_bytes());
         v.extend_from_slice(sb);
+        // Schema 8 tail, appended AFTER the seal and ONLY when the
+        // stamp says 8 — symmetric with the decoder, which reads it
+        // under the same condition. The symmetry is load-bearing for
+        // the ladder: `migrate_v6_to_v7` writes a manifest stamped 7,
+        // and encoding a tail there would produce bytes its own decoder
+        // rejects as trailing garbage, breaking the intermediate step.
+        if self.store_schema >= 8 {
+            v.extend_from_slice(&self.cranks.to_be_bytes());
+        }
         v
     }
 
@@ -279,7 +330,7 @@ impl StoreManifest {
             Ok(a)
         };
         let store_schema = u32::from_be_bytes(take4(&mut i)?);
-        if store_schema != STORE_SCHEMA_VERSION {
+        if !(STORE_SCHEMA_MIN_SUPPORTED..=STORE_SCHEMA_VERSION).contains(&store_schema) {
             return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                 "unsupported store schema version",
             )));
@@ -324,6 +375,16 @@ impl StoreManifest {
             .map_err(|_| SnapshotError::Corrupt("store manifest seal not utf8"))?
             .to_string();
         i += seal_len;
+        // Schema 8 added the completed-crank counter as a tail field.
+        // An older store simply does not carry it, and 0 is the right
+        // reading: it predates the counter, and 0 is where a fresh
+        // store starts — so a migrated store's schedule begins from the
+        // migration rather than from a number it never recorded.
+        let cranks = if store_schema >= 8 {
+            u64::from_be_bytes(take8(&mut i)?)
+        } else {
+            0
+        };
         // Store contents are untrusted; a manifest that decodes but
         // carries extra bytes is malformed, not forward-compatible —
         // format evolution goes through the schema version gate above.
@@ -342,6 +403,7 @@ impl StoreManifest {
             chunk_len,
             free_len,
             epoch,
+            cranks,
             root,
             seal,
         })
@@ -534,22 +596,392 @@ pub fn leaf_hash(kind: u8, index: u32, bytes: &[u8]) -> [u8; 32] {
     h.finalize()
 }
 
-/// The row-hash tree root: SHA-256 (hex) over a section geometry
-/// header, the small-state leaf, every page, extent, and free-segment
-/// leaf in index order, and every page-edge summary (v5). Linear
-/// combine — the leaves are 32 bytes each and the summaries
-/// metadata-scale, so recombining stays cheap even for large heaps;
-/// an interior tree is the named upgrade if leaf counts ever make
-/// this measurable.
+// ---- The v6 ROOT TREE (store schema 6) --------------------------
+//
+// Schema 5's root was a FLAT hash over every leaf, so every commit
+// re-read every stored leaf to recombine it — the measured O(pages)
+// seal-metadata term. Schema 6 keeps the SAME leaves but combines
+// them through one binary Merkle tree per row class (slot pages,
+// chunk extents, free segments, page-edge summaries), with the
+// interior nodes PERSISTED beside the leaves: a commit recomputes
+// only the dirty leaves' root paths — O(dirty · log n) selective
+// reads — and the full recombination remains the open-time
+// validator. An odd node at any level is hashed with itself
+// (duplicate-last), and an empty class contributes a tagged empty
+// root, so widths are unambiguous given the counts the combined
+// root also covers.
+
+/// Class tags for the four leaf trees (also the node-hash domain
+/// separators).
+pub const TREE_PAGES: u8 = b'p';
+pub const TREE_EXTS: u8 = b'x';
+pub const TREE_FREES: u8 = b'f';
+pub const TREE_EDGES: u8 = b's';
+
+/// The page-edge summary row's LEAF hash (the other classes reuse
+/// [`leaf_hash`] over their raw bytes; summaries hash their decoded
+/// target list exactly as the v5 flat root did).
+pub fn edge_leaf_hash(index: u32, targets: &[u32]) -> [u8; 32] {
+    let mut h = crate::sha256::Sha256::new();
+    h.update(b"E");
+    h.update(&index.to_be_bytes());
+    h.update(&(targets.len() as u32).to_be_bytes());
+    for t in targets {
+        h.update(&t.to_be_bytes());
+    }
+    h.finalize()
+}
+
+fn tree_node_hash(tag: u8, level: u32, left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut h = crate::sha256::Sha256::new();
+    h.update(&[b'N', tag]);
+    h.update(&level.to_be_bytes());
+    h.update(left);
+    h.update(right);
+    h.finalize()
+}
+
+fn tree_empty_root(tag: u8) -> [u8; 32] {
+    let mut h = crate::sha256::Sha256::new();
+    h.update(&[b'0', tag]);
+    h.finalize()
+}
+
+/// Build every interior level of a class tree from its leaves —
+/// `levels[0]` is the level ABOVE the leaves; the last level has one
+/// node, the class root. Empty or single-leaf input builds no
+/// levels (the class root is [`tree_empty_root`] or the leaf).
+pub fn build_class_tree(tag: u8, leaves: &[[u8; 32]]) -> Vec<Vec<[u8; 32]>> {
+    let mut levels: Vec<Vec<[u8; 32]>> = Vec::new();
+    let mut level_no = 0u32;
+    loop {
+        let cur: &[[u8; 32]] = match levels.last() {
+            None => leaves,
+            Some(l) => l,
+        };
+        if cur.len() <= 1 {
+            break;
+        }
+        let mut next: Vec<[u8; 32]> = Vec::with_capacity(cur.len().div_ceil(2));
+        for pair in cur.chunks(2) {
+            let right = pair.get(1).unwrap_or(&pair[0]);
+            next.push(tree_node_hash(tag, level_no, &pair[0], right));
+        }
+        levels.push(next);
+        level_no += 1;
+    }
+    levels
+}
+
+/// The class root given its leaves and interior levels.
+pub fn class_tree_root(tag: u8, leaves: &[[u8; 32]], levels: &[Vec<[u8; 32]>]) -> [u8; 32] {
+    match (leaves.len(), levels.last()) {
+        (0, _) => tree_empty_root(tag),
+        (_, None) => leaves[0],
+        (_, Some(top)) => top[0],
+    }
+}
+
+/// Recompute the interior paths for `dirty` leaf indices in place —
+/// the O(dirty · log n) incremental maintenance a v6 commit performs.
+/// `levels` must describe the SAME leaf count as `leaves` (a commit
+/// that grows or shrinks a class rebuilds via [`build_class_tree`] —
+/// width changes reshape every level's tail, and rebuild cost is
+/// bounded by the growth the commit already paid for).
+pub fn update_class_tree(
+    tag: u8,
+    leaves: &[[u8; 32]],
+    levels: &mut [Vec<[u8; 32]>],
+    dirty: &[u32],
+) {
+    let mut touched: Vec<u32> = dirty.to_vec();
+    touched.sort_unstable();
+    touched.dedup();
+    for k in 0..levels.len() {
+        let (read_below, level): (&[[u8; 32]], &mut Vec<[u8; 32]>) = if k == 0 {
+            let (first, _) = levels.split_at_mut(1);
+            (leaves, &mut first[0])
+        } else {
+            let (below, above) = levels.split_at_mut(k);
+            (&below[k - 1][..], &mut above[0])
+        };
+        let width = read_below.len();
+        let mut parents: Vec<u32> = Vec::with_capacity(touched.len());
+        for &i in &touched {
+            let pair = i & !1;
+            let l = read_below[pair as usize];
+            let r = if ((pair + 1) as usize) < width {
+                read_below[(pair + 1) as usize]
+            } else {
+                l
+            };
+            level[(i / 2) as usize] = tree_node_hash(tag, k as u32, &l, &r);
+            if parents.last() != Some(&(i / 2)) {
+                parents.push(i / 2);
+            }
+        }
+        touched = parents;
+    }
+}
+
+/// The CURRENT-schema root over full leaf/summary vectors — schema
+/// 6's class-tree combination. The v5 flat formula stays available
+/// as [`combine_root`] for migration verification only.
+pub fn compute_root(
+    small_leaf: &[u8; 32],
+    pages: &[[u8; 32]],
+    exts: &[[u8; 32]],
+    frees: &[[u8; 32]],
+    edges: &[Vec<u32>],
+) -> String {
+    let edge_leaves: Vec<[u8; 32]> = edges
+        .iter()
+        .enumerate()
+        .map(|(i, t)| edge_leaf_hash(i as u32, t))
+        .collect();
+    let pr = class_tree_root(TREE_PAGES, pages, &build_class_tree(TREE_PAGES, pages));
+    let xr = class_tree_root(TREE_EXTS, exts, &build_class_tree(TREE_EXTS, exts));
+    let fr = class_tree_root(TREE_FREES, frees, &build_class_tree(TREE_FREES, frees));
+    let sr = class_tree_root(TREE_EDGES, &edge_leaves, &build_class_tree(TREE_EDGES, &edge_leaves));
+    combine_class_roots(
+        small_leaf,
+        [pages.len() as u32, exts.len() as u32, frees.len() as u32],
+        [&pr, &xr, &fr, &sr],
+    )
+}
+
+/// The v6 combined root: counts, the small-state leaf, and the four
+/// class-tree roots (page, extent, free, edge order). The counts bind
+/// the widths, exactly as the v5 flat root's count header did.
+pub fn combine_class_roots(
+    small_leaf: &[u8; 32],
+    counts: [u32; 3],
+    roots: [&[u8; 32]; 4],
+) -> String {
+    let mut h = crate::sha256::Sha256::new();
+    h.update(b"C6");
+    for n in counts {
+        h.update(&n.to_be_bytes());
+    }
+    h.update(small_leaf);
+    for r in roots {
+        h.update(r);
+    }
+    crate::sha256::hex(&h.finalize())
+}
+
+/// A live copy of the store's root metadata — the four leaf-hash
+/// vectors, the small-state leaf, and the class-tree interior levels.
+/// The levels are a DERIVED CACHE: only the leaves persist anywhere;
+/// a ledger rebuilds them at construction and maintains them
+/// incrementally. Holding one across commits is what turns per-commit
+/// root maintenance from "re-read and re-hash every stored leaf" into
+/// O(dirty · log n): [`RootLedger::apply`] patches exactly the
+/// traveling rows' leaves and recomputes only their root paths.
 ///
-/// The counts header makes the section boundaries structural: without
-/// it, two stores with different `(pages, exts, frees)` splits of one
-/// leaf sequence would share a root (unexploitable only through the
-/// leaves' own domain tags — the review asked for the property to be
-/// structural). The edge section (v5) puts the summaries under the
-/// same at-rest integrity as the rows: the partial collector FREES
-/// pages from them, so a flip in a stored summary must fail the
-/// open-time recombination rather than silently shrink reachability.
+/// Coherence discipline: build a ledger only from VERIFIED state (an
+/// open-time validation, or vectors a full [`apply_batch`] just
+/// recombined) and advance it only by the commits its owner performs;
+/// on ANY failed or refused commit the owner must DROP it and rebuild
+/// on the next slow path — never patch around a failure. The
+/// (epoch, seal) pairing guards refuse interleaved foreign commits,
+/// so a live ledger cannot silently diverge from the store it
+/// mirrors; what it deliberately trades away is [`apply_batch`]'s
+/// per-commit re-hash of untouched leaves, moving at-rest-edit
+/// detection to the open-time validator and the per-read row/leaf
+/// verification (the v6 design's stated discipline).
+pub struct RootLedger {
+    small_leaf: [u8; 32],
+    pages: Vec<[u8; 32]>,
+    exts: Vec<[u8; 32]>,
+    frees: Vec<[u8; 32]>,
+    edge_leaves: Vec<[u8; 32]>,
+    pages_levels: Vec<Vec<[u8; 32]>>,
+    exts_levels: Vec<Vec<[u8; 32]>>,
+    frees_levels: Vec<Vec<[u8; 32]>>,
+    edges_levels: Vec<Vec<[u8; 32]>>,
+}
+
+impl std::fmt::Debug for RootLedger {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RootLedger")
+            .field("widths", &self.widths())
+            .finish_non_exhaustive()
+    }
+}
+
+impl RootLedger {
+    /// Build from full leaf vectors and raw page-edge summaries
+    /// (hashing the edge leaves and every interior level once —
+    /// O(n), the constructor's price; commits then pay O(dirty·log)).
+    pub fn build(
+        small: &[u8],
+        pages: Vec<[u8; 32]>,
+        exts: Vec<[u8; 32]>,
+        frees: Vec<[u8; 32]>,
+        edges: &[Vec<u32>],
+    ) -> RootLedger {
+        let edge_leaves: Vec<[u8; 32]> = edges
+            .iter()
+            .enumerate()
+            .map(|(i, t)| edge_leaf_hash(i as u32, t))
+            .collect();
+        let pages_levels = build_class_tree(TREE_PAGES, &pages);
+        let exts_levels = build_class_tree(TREE_EXTS, &exts);
+        let frees_levels = build_class_tree(TREE_FREES, &frees);
+        let edges_levels = build_class_tree(TREE_EDGES, &edge_leaves);
+        RootLedger {
+            small_leaf: leaf_hash(LEAF_SMALL, 0, small),
+            pages,
+            exts,
+            frees,
+            edge_leaves,
+            pages_levels,
+            exts_levels,
+            frees_levels,
+            edges_levels,
+        }
+    }
+
+    /// The prior free-segment leaves — the checkpoint producer's
+    /// dirty-diff baseline, read before [`Self::apply`] advances them.
+    pub fn free_leaves(&self) -> &[[u8; 32]] {
+        &self.frees
+    }
+
+    /// Current class widths `[pages, exts, frees]` — the prior-length
+    /// argument [`check_batch`] wants.
+    pub fn widths(&self) -> [usize; 3] {
+        [self.pages.len(), self.exts.len(), self.frees.len()]
+    }
+
+    /// The combined root over the ledger's current state.
+    pub fn root(&self) -> String {
+        combine_class_roots(
+            &self.small_leaf,
+            [
+                self.pages.len() as u32,
+                self.exts.len() as u32,
+                self.frees.len() as u32,
+            ],
+            [
+                &class_tree_root(TREE_PAGES, &self.pages, &self.pages_levels),
+                &class_tree_root(TREE_EXTS, &self.exts, &self.exts_levels),
+                &class_tree_root(TREE_FREES, &self.frees, &self.frees_levels),
+                &class_tree_root(TREE_EDGES, &self.edge_leaves, &self.edges_levels),
+            ],
+        )
+    }
+
+    /// Advance the ledger by one commit's rows and return the new
+    /// root. Pure maintenance — admission is [`check_batch`]'s job
+    /// and root comparison is the caller's; an out-of-range row index
+    /// still fails closed here rather than panicking. A class whose
+    /// width changed rebuilds its levels (the reshape touches every
+    /// level's tail; the cost is bounded by the growth the commit
+    /// already shipped); an unchanged-width class updates only the
+    /// dirty leaves' paths.
+    pub fn apply(
+        &mut self,
+        manifest: &StoreManifest,
+        small: &[u8],
+        slot_pages: &[(u32, Vec<u8>)],
+        chunk_extents: &[(u32, Vec<u8>)],
+        free_segs: &[(u32, Vec<u8>)],
+        page_edges: &[(u32, Vec<u32>)],
+    ) -> Result<String, StoreError> {
+        fn patch_class(
+            tag: u8,
+            kind: &'static str,
+            leaves: &mut Vec<[u8; 32]>,
+            levels: &mut Vec<Vec<[u8; 32]>>,
+            new_width: usize,
+            dirty: &[(u32, [u8; 32])],
+        ) -> Result<(), StoreError> {
+            for (i, _) in dirty {
+                if *i as usize >= new_width {
+                    return Err(StoreError::MissingRow(kind, *i));
+                }
+            }
+            if new_width != leaves.len() {
+                leaves.resize(new_width, [0u8; 32]);
+                for (i, h) in dirty {
+                    leaves[*i as usize] = *h;
+                }
+                *levels = build_class_tree(tag, leaves);
+            } else if !dirty.is_empty() {
+                let mut indices: Vec<u32> = Vec::with_capacity(dirty.len());
+                for (i, h) in dirty {
+                    leaves[*i as usize] = *h;
+                    indices.push(*i);
+                }
+                update_class_tree(tag, leaves, levels, &indices);
+            }
+            Ok(())
+        }
+        let page_dirty: Vec<(u32, [u8; 32])> = slot_pages
+            .iter()
+            .map(|(i, b)| (*i, leaf_hash(LEAF_PAGE, *i, b)))
+            .collect();
+        let ext_dirty: Vec<(u32, [u8; 32])> = chunk_extents
+            .iter()
+            .map(|(i, b)| (*i, leaf_hash(LEAF_EXT, *i, b)))
+            .collect();
+        let free_dirty: Vec<(u32, [u8; 32])> = free_segs
+            .iter()
+            .map(|(i, b)| (*i, leaf_hash(LEAF_FREE, *i, b)))
+            .collect();
+        let edge_dirty: Vec<(u32, [u8; 32])> = page_edges
+            .iter()
+            .map(|(i, t)| (*i, edge_leaf_hash(*i, t)))
+            .collect();
+        let n_pages = slot_page_count(manifest.slot_count) as usize;
+        patch_class(
+            TREE_PAGES,
+            "slot page",
+            &mut self.pages,
+            &mut self.pages_levels,
+            n_pages,
+            &page_dirty,
+        )?;
+        patch_class(
+            TREE_EXTS,
+            "chunk extent",
+            &mut self.exts,
+            &mut self.exts_levels,
+            chunk_extent_count(manifest.chunk_len) as usize,
+            &ext_dirty,
+        )?;
+        patch_class(
+            TREE_FREES,
+            "free segment",
+            &mut self.frees,
+            &mut self.frees_levels,
+            free_seg_count(manifest.free_len) as usize,
+            &free_dirty,
+        )?;
+        patch_class(
+            TREE_EDGES,
+            "page-edge summary",
+            &mut self.edge_leaves,
+            &mut self.edges_levels,
+            n_pages,
+            &edge_dirty,
+        )?;
+        self.small_leaf = leaf_hash(LEAF_SMALL, 0, small);
+        Ok(self.root())
+    }
+}
+
+/// The v5 flat root, kept ONLY so migration can verify a v5 store
+/// against its own stored root before restamping: SHA-256 (hex) over
+/// a section geometry header, the small-state leaf, every page,
+/// extent, and free-segment leaf in index order, and every page-edge
+/// summary. The counts header makes the section boundaries structural
+/// (two stores with different `(pages, exts, frees)` splits of one
+/// leaf sequence must not share a root), and the edge section puts
+/// the summaries under the same at-rest integrity as the rows — both
+/// properties [`compute_root`] carries forward.
 pub fn combine_root(
     small_leaf: &[u8; 32],
     pages: &[[u8; 32]],
@@ -583,12 +1015,11 @@ pub fn combine_root(
     crate::sha256::hex(&h.finalize())
 }
 
-/// Apply a batch to a store's PRIOR leaf/summary state and return the
-/// new root — the shared per-commit maintenance and verification every
-/// backend runs BEFORE persisting anything, so all three refuse the
-/// same batches for the same reasons (the review's parity findings:
-/// free-segment grown-region and summary coupling were previously
-/// checked in some backends and not others):
+/// The batch admission checks — the shared per-commit verification
+/// every backend runs BEFORE persisting anything, so all three refuse
+/// the same batches for the same reasons (the review's parity
+/// findings: free-segment grown-region and summary coupling were
+/// previously checked in some backends and not others):
 ///
 /// 1. Grown-region presence: every row of a grown geometry region
 ///    (pages, extents, free segments alike) must travel in the batch
@@ -600,22 +1031,32 @@ pub fn combine_root(
 ///    the traveling page rows, and each equals
 ///    [`derive_page_edges`] of the row beside it — recomputed here,
 ///    so stored summaries are derivation-verified at every write.
-/// 4. Leaf/summary maintenance, then root recombination against
-///    `batch.manifest.root` — a mis-rooted batch fails closed.
 ///
-/// `pages`/`exts`/`frees`/`edges` are the PRIOR vectors (sized to the
-/// stored geometry by invariant); on success they hold the new state.
-pub fn apply_batch(
-    pages: &mut Vec<[u8; 32]>,
-    exts: &mut Vec<[u8; 32]>,
-    frees: &mut Vec<[u8; 32]>,
-    edges: &mut Vec<Vec<u32>>,
-    prior: Option<&StoreManifest>,
+/// Everything [`apply_batch`] verifies EXCEPT its item 4 (the root
+/// recombination), phrased against the prior state's leaf-vector
+/// LENGTHS (`[pages, exts, frees]`) rather than the vectors — the
+/// checks never read prior leaf contents, so the [`RootLedger`] fast
+/// path, holding only cached leaves, runs the identical gauntlet.
+///
+/// NOT a complete gate on its own: a row whose index is past the
+/// batch's geometry has an expected length of 0 (the length functions
+/// return 0 past the end) and an empty edge summary derives correctly,
+/// so a zero-length out-of-range row passes every check here (review
+/// wave 4, P3c). It is refused downstream — by the maintenance stage on
+/// both paths, `MissingRow` either way, probe-confirmed — so this is a
+/// note for a future backend, not a live hole: a backend that treats
+/// `check_batch` as the whole admission gate and then writes rows by
+/// index must range-check them itself, or this function must grow the
+/// index-range check.
+pub fn check_batch(
+    prior: Option<(&StoreManifest, [usize; 3])>,
     batch: &CheckpointBatch,
-) -> Result<String, StoreError> {
+) -> Result<(), StoreError> {
     let n_pages = slot_page_count(batch.manifest.slot_count) as usize;
     let n_exts = chunk_extent_count(batch.manifest.chunk_len) as usize;
     let n_frees = free_seg_count(batch.manifest.free_len) as usize;
+    let [prior_pages_len, prior_exts_len, prior_frees_len] =
+        prior.map(|(_, lens)| lens).unwrap_or([0, 0, 0]);
 
     // The grown-region checks below key off the PRIOR LEAF VECTORS'
     // lengths while the boundary checks key off the PRIOR MANIFEST's
@@ -624,10 +1065,10 @@ pub fn apply_batch(
     // baselines arrive through different arguments — assert the
     // coupling so a desynced caller fails closed HERE instead of
     // skewing which rows the two checks require (wave-3 finding).
-    if let Some(prev) = prior {
-        if pages.len() != slot_page_count(prev.slot_count) as usize
-            || exts.len() != chunk_extent_count(prev.chunk_len) as usize
-            || frees.len() != free_seg_count(prev.free_len) as usize
+    if let Some((prev, _)) = prior {
+        if prior_pages_len != slot_page_count(prev.slot_count) as usize
+            || prior_exts_len != chunk_extent_count(prev.chunk_len) as usize
+            || prior_frees_len != free_seg_count(prev.free_len) as usize
         {
             return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                 "prior leaf tables disagree with the prior manifest geometry",
@@ -641,17 +1082,17 @@ pub fn apply_batch(
         batch.chunk_extents.iter().map(|(e, _)| *e).collect();
     let batch_frees: std::collections::HashSet<u32> =
         batch.free_segs.iter().map(|(f, _)| *f).collect();
-    for page in pages.len() as u32..n_pages as u32 {
+    for page in prior_pages_len as u32..n_pages as u32 {
         if !batch_pages.contains(&page) {
             return Err(StoreError::MissingRow("slot page", page));
         }
     }
-    for ext in exts.len() as u32..n_exts as u32 {
+    for ext in prior_exts_len as u32..n_exts as u32 {
         if !batch_exts.contains(&ext) {
             return Err(StoreError::MissingRow("chunk extent", ext));
         }
     }
-    for seg in frees.len() as u32..n_frees as u32 {
+    for seg in prior_frees_len as u32..n_frees as u32 {
         if !batch_frees.contains(&seg) {
             return Err(StoreError::MissingRow("free segment", seg));
         }
@@ -669,7 +1110,7 @@ pub fn apply_batch(
     // Every legitimate producer already satisfies this: growth writes
     // the tail page, compaction rewrites the tail extent, free churn
     // ships the changed segments.
-    if let Some(prev) = prior {
+    if let Some((prev, _)) = prior {
         fn require_boundaries(
             kind: &'static str,
             count0: u32,
@@ -770,6 +1211,37 @@ pub fn apply_batch(
             return Err(StoreError::SummaryMismatch { page: *i });
         }
     }
+    Ok(())
+}
+
+/// Apply a batch to a store's PRIOR leaf/summary state and return the
+/// new root: [`check_batch`]'s admission gauntlet, then leaf/summary
+/// maintenance and a FULL from-scratch root recombination against
+/// `batch.manifest.root` — a mis-rooted batch fails closed, and a
+/// prior leaf edited at rest fails the recombination HERE rather than
+/// laundering into this commit's sealed root. This is the reference
+/// commit path (Memory and File stores always take it); a backend
+/// holding a live [`RootLedger`] may replace the recombination with
+/// the ledger's O(dirty · log n) maintenance, trading this check's
+/// at-rest-edit detection for the open-time validator's.
+///
+/// `pages`/`exts`/`frees`/`edges` are the PRIOR vectors (sized to the
+/// stored geometry by invariant); on success they hold the new state.
+pub fn apply_batch(
+    pages: &mut Vec<[u8; 32]>,
+    exts: &mut Vec<[u8; 32]>,
+    frees: &mut Vec<[u8; 32]>,
+    edges: &mut Vec<Vec<u32>>,
+    prior: Option<&StoreManifest>,
+    batch: &CheckpointBatch,
+) -> Result<String, StoreError> {
+    check_batch(
+        prior.map(|p| (p, [pages.len(), exts.len(), frees.len()])),
+        batch,
+    )?;
+    let n_pages = slot_page_count(batch.manifest.slot_count) as usize;
+    let n_exts = chunk_extent_count(batch.manifest.chunk_len) as usize;
+    let n_frees = free_seg_count(batch.manifest.free_len) as usize;
 
     pages.resize(n_pages, [0u8; 32]);
     exts.resize(n_exts, [0u8; 32]);
@@ -800,7 +1272,7 @@ pub fn apply_batch(
         *slot = targets.clone();
     }
     let small_leaf = leaf_hash(LEAF_SMALL, 0, &batch.small);
-    let root = combine_root(&small_leaf, pages, exts, frees, edges);
+    let root = compute_root(&small_leaf, pages, exts, frees, edges);
     if root != batch.manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: root,
@@ -811,34 +1283,51 @@ pub fn apply_batch(
 }
 
 /// The whole-on-every-commit remainder of the machine state: the value
-/// stack, the slot free list, the key/name/symbol tables, and the
-/// meter. Each section reuses its atom payload encoding verbatim.
+/// stack, the slot free list, the key/name/symbol tables, the meter,
+/// and (store schema 7, the side-table ledger) the bulk side tables
+/// and `Symbol.for` registry. Each section reuses its atom payload
+/// encoding verbatim.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SmallState {
     pub stack: Vec<Slot>,
     pub slot_free: Vec<u32>,
     pub keys: Vec<String>,
     pub names: Vec<String>,
-    pub symbols: Vec<u32>,
+    /// The symbol-key id table (see [`crate::image::SymbolKeyImage`]).
+    pub symbols: crate::image::SymbolKeyImage,
     pub meter: MeterImage,
+    /// The arrays side table (schema 7; the `ARRY` atom's encoding).
+    /// Whole-on-every-commit like the stack — O(side tables) bytes per
+    /// checkpoint; dirty-diffed side-table ROWS are the named upgrade
+    /// if attached machines carry bulk state wide enough to measure.
+    pub arrays: Vec<crate::image::ArrayImage>,
+    /// The collections side table (schema 7; the `COLL` encoding).
+    pub collections: Vec<crate::image::CollectionImage>,
+    /// The `Symbol.for` registry (schema 7; the `REGY` encoding).
+    pub registry: Vec<crate::image::RegistryImage>,
 }
 
 impl SmallState {
-    /// Serialize: six sections, each `u32` length-prefixed, in the
-    /// fixed order stack, free list, keys, names, symbols, meter.
-    /// Since store schema v4 the free-list section is always EMPTY in
-    /// stored small state — the list lives in dirty-diffed segment
-    /// rows (phase 9) — but the section slot stays so the layout is
-    /// stable; the atom container path still carries the list via the
-    /// image, not this encoding.
+    /// Serialize: nine sections, each `u32` length-prefixed, in the
+    /// fixed order stack, free list, keys, names, symbols, meter,
+    /// arrays, collections, registry (the last three since store
+    /// schema 7 — the side-table ledger; the 6→7 migration appends
+    /// them empty, a pure 12-byte suffix). Since store schema v4 the
+    /// free-list section is always EMPTY in stored small state — the
+    /// list lives in dirty-diffed segment rows (phase 9) — but the
+    /// section slot stays so the layout is stable; the atom container
+    /// path still carries the list via the image, not this encoding.
     pub fn encode(&self) -> Vec<u8> {
-        let sections: [Vec<u8>; 6] = [
+        let sections: [Vec<u8>; 9] = [
             encode_stack(&self.stack),
             encode_u32s(&[]),
             encode_strings(&self.keys),
             encode_strings(&self.names),
-            encode_u32s(&self.symbols),
+            crate::image::encode_symbol_keys(&self.symbols),
             self.meter.encode(),
+            crate::image::encode_arrays(&self.arrays),
+            crate::image::encode_collections(&self.collections),
+            crate::image::encode_registry(&self.registry),
         ];
         let mut v = Vec::new();
         for s in sections {
@@ -848,7 +1337,7 @@ impl SmallState {
         v
     }
 
-    /// Decode the six sections. Every section length is bounds-checked
+    /// Decode the nine sections. Every section length is bounds-checked
     /// against the remaining payload before it is sliced.
     pub fn decode(p: &[u8]) -> Result<SmallState, StoreError> {
         let mut i = 0usize;
@@ -869,9 +1358,33 @@ impl SmallState {
         let slot_free = decode_u32s(section("small state free-list section")?)?;
         let keys = decode_strings(section("small state keys section")?)?;
         let names = decode_strings(section("small state names section")?)?;
-        let symbols = decode_u32s(section("small state symbols section")?)?;
+        let symbols = crate::image::decode_symbol_keys(section("small state symbols section")?)
+            .map_err(StoreError::Snapshot)?;
         let meter = MeterImage::decode(section("small state meter section")?)?;
-        // Same exact-consumption rule as the manifest: six sections and
+        // Schema-7 sections (the side-table ledger). An EMPTY section
+        // (zero length, distinct from an empty LIST's 4-byte count
+        // header) is accepted as the empty table: it is exactly what
+        // the 6→7 migration appends, and it keeps that append a pure
+        // suffix rather than a re-encode of bytes the old root signed.
+        let arrays_bytes = section("small state arrays section")?;
+        let arrays = if arrays_bytes.is_empty() {
+            Vec::new()
+        } else {
+            crate::image::decode_arrays(arrays_bytes)?
+        };
+        let collections_bytes = section("small state collections section")?;
+        let collections = if collections_bytes.is_empty() {
+            Vec::new()
+        } else {
+            crate::image::decode_collections(collections_bytes)?
+        };
+        let registry_bytes = section("small state registry section")?;
+        let registry = if registry_bytes.is_empty() {
+            Vec::new()
+        } else {
+            crate::image::decode_registry(registry_bytes)?
+        };
+        // Same exact-consumption rule as the manifest: nine sections and
         // nothing after them, or the small state fails closed.
         if i != p.len() {
             return Err(StoreError::Snapshot(SnapshotError::Corrupt(
@@ -885,6 +1398,9 @@ impl SmallState {
             names,
             symbols,
             meter,
+            arrays,
+            collections,
+            registry,
         })
     }
 }
@@ -991,6 +1507,302 @@ pub trait HeapStore {
     ) -> Result<std::collections::BTreeSet<u32>, StoreError> {
         Ok(bfs_pages(&self.page_edges()?, roots.iter().copied()))
     }
+
+    /// Re-read the manifest from DURABLE state, bypassing any cached
+    /// view this handle holds.
+    ///
+    /// [`migrate_store`] decides each ladder step from this rather than
+    /// from [`Self::manifest`]. Since `open()` stopped migrating, the
+    /// gap between opening a store and upgrading it is caller-controlled
+    /// and unbounded, so a handle that cached a v5 header at open can
+    /// reach the ladder long after another handle upgraded the file —
+    /// and splice a stale intermediate manifest onto a newer body,
+    /// bricking it (review wave 5). Reading durably instead, that handle
+    /// sees the current schema and correctly reports nothing to do.
+    ///
+    /// The default is [`Self::manifest`], which is exact for a backend
+    /// that holds no cache — the in-memory and SQLite stores both read
+    /// their state on every call. `FileStore`, which caches its header,
+    /// overrides it.
+    ///
+    /// This narrows the window to the width of one ladder step; closing
+    /// it entirely needs a compare-and-swap in the write, which the
+    /// single-writer premise this seam documents does not pay for.
+    fn reread_manifest(&self) -> Result<StoreManifest, StoreError> {
+        self.manifest()
+    }
+
+    /// Replace the stored manifest VERBATIM — [`migrate_store`]'s
+    /// write surface and nothing else's: it bypasses succession
+    /// because a migration restamps the schema and root FORMULA of
+    /// unchanged content. Implementations persist atomically. The
+    /// default refuses, so read-only or exotic backends stay honest.
+    fn replace_manifest_for_migration(
+        &mut self,
+        manifest: &StoreManifest,
+    ) -> Result<(), StoreError> {
+        let _ = manifest;
+        Err(StoreError::Io(
+            "this backend does not support in-place migration".to_string(),
+        ))
+    }
+
+    /// Replace the stored manifest AND small state together, verbatim
+    /// — the write surface for ladder steps that rewrite the small
+    /// state (6→7's ledger-section append). One atomic write: a
+    /// manifest stamped v7 must never be paired with a v6 small (its
+    /// root would not recombine). Same contract and default refusal
+    /// as [`Self::replace_manifest_for_migration`].
+    fn replace_manifest_and_small_for_migration(
+        &mut self,
+        manifest: &StoreManifest,
+        small: &[u8],
+    ) -> Result<(), StoreError> {
+        let _ = (manifest, small);
+        Err(StoreError::Io(
+            "this backend does not support in-place migration".to_string(),
+        ))
+    }
+
+    /// The subset of `targets` with at least one inbound edge from a
+    /// page OUTSIDE `targets` — the generational collector's
+    /// old-generation seed query (an un-dirtied page's stored edges
+    /// are its current edges, so an inbound edge from one is a live
+    /// retention path). Dense default reads the whole edge table;
+    /// indexed backends answer from the reverse index with transfer
+    /// proportional to the ANSWER.
+    fn externally_referenced(&self, targets: &[u32]) -> Result<Vec<u32>, StoreError> {
+        let tset: std::collections::BTreeSet<u32> = targets.iter().copied().collect();
+        let edges = self.page_edges()?;
+        let mut hit: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+        for (page, outs) in edges.iter().enumerate() {
+            if tset.contains(&(page as u32)) {
+                continue;
+            }
+            for t in outs {
+                if tset.contains(t) {
+                    hit.insert(*t);
+                }
+            }
+        }
+        Ok(hit.into_iter().collect())
+    }
+
+    /// Reachability from `roots` RESTRICTED to the `within` set (the
+    /// generational collector's dirty-region expansion: edges leaving
+    /// the region land on old pages, which the generational pass
+    /// never frees, so the walk stops at the region boundary). Roots
+    /// outside `within` contribute nothing. Dense default; indexed
+    /// backends can serve it with a bounded recursive query.
+    fn reachable_within(
+        &self,
+        roots: &[u32],
+        within: &[u32],
+    ) -> Result<std::collections::BTreeSet<u32>, StoreError> {
+        let wset: std::collections::BTreeSet<u32> = within.iter().copied().collect();
+        let edges = self.page_edges()?;
+        let mut seen: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+        let mut frontier: Vec<u32> = roots
+            .iter()
+            .copied()
+            .filter(|r| wset.contains(r))
+            .collect();
+        for &r in &frontier {
+            seen.insert(r);
+        }
+        while let Some(p) = frontier.pop() {
+            if let Some(outs) = edges.get(p as usize) {
+                for &t in outs {
+                    if wset.contains(&t) && seen.insert(t) {
+                        frontier.push(t);
+                    }
+                }
+            }
+        }
+        Ok(seen)
+    }
+}
+
+/// Upgrade a decodable OLDER store in place to the current schema.
+/// Returns true when a migration ran, false when the store was
+/// already current (or empty). Forward only — validation refuses
+/// anything newer than current. v5 → v6: verify the stored FLAT
+/// root (the v5 formula) over the stored leaves, recompute the v6
+/// class-tree root over the SAME leaves, and stamp the manifest with
+/// schema 6 and the new root. The SEAL is left exactly as stored:
+/// historical seals are opaque chain links, and the next commit
+/// chains from the stored seal precisely as it would have.
+///
+/// Restamping is authorized by the SAME callback-table signature the
+/// resume path checks: a store whose signature is incompatible with
+/// `expected_sig` is refused HERE, before any bytes change, so a
+/// mis-pointed daemon can never one-way restamp a foreign store out
+/// from under its rightful owner (review wave 4, F2). Migration
+/// therefore lives with the caller that knows the signature — the
+/// raw `open()` no longer runs it — and this is the reason it takes
+/// `expected_sig` rather than reading only the store.
+pub fn migrate_store(
+    store: &mut dyn HeapStore,
+    expected_sig: &Signature,
+) -> Result<bool, StoreError> {
+    let manifest = match store.manifest() {
+        Ok(m) => m,
+        Err(StoreError::Empty) => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    if manifest.store_schema == STORE_SCHEMA_VERSION {
+        return Ok(false);
+    }
+    if !(STORE_SCHEMA_MIN_SUPPORTED..STORE_SCHEMA_VERSION).contains(&manifest.store_schema) {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "unsupported store schema version",
+        )));
+    }
+    // Signature gate BEFORE the first restamp: only a daemon that
+    // could actually resume this store (compatible callback table)
+    // may upgrade it. An incompatible signature fails closed with the
+    // same error `validate_store` would raise, leaving the store's
+    // bytes untouched for its rightful owner.
+    if !manifest.signature.is_compatible_with(expected_sig) {
+        return Err(StoreError::Snapshot(SnapshotError::SignatureMismatch {
+            expected: expected_sig.clone(),
+            found: manifest.signature.clone(),
+        }));
+    }
+    // The ladder: one verified in-place step at a time, each leaving a
+    // COMPLETE valid store of the intermediate schema — a crash
+    // between steps resumes the ladder at the next open, never a
+    // half-migrated hybrid.
+    let mut migrated = false;
+    let mut prev_schema = None;
+    loop {
+        // DURABLE, not the handle's cached view: another handle may have
+        // upgraded the store since this one opened it, and stepping from
+        // a stale schema would splice an older manifest onto a newer body
+        // (review wave 5). A backend with no cache answers identically.
+        let manifest = store.reread_manifest()?;
+        let schema = manifest.store_schema;
+        // Progress guard: every ladder step must ADVANCE the stored
+        // schema, strictly. A backend whose migration write silently
+        // no-ops (returns Ok without persisting) would otherwise spin
+        // here forever (review wave 4, F5) — and one that CYCLES,
+        // 5→6→5→6, evaded the equal-to-previous form this replaces
+        // while spinning just as hard (review wave 5). Strict advance
+        // over a bounded schema range also bounds the loop by
+        // construction, so no separate step counter is needed.
+        if prev_schema.is_some_and(|prev| schema <= prev) {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "migration did not advance the store schema",
+            )));
+        }
+        prev_schema = Some(schema);
+        match schema {
+            v if v == STORE_SCHEMA_VERSION => return Ok(migrated),
+            5 => migrate_v5_to_v6(store)?,
+            6 => migrate_v6_to_v7(store)?,
+            7 => migrate_v7_to_v8(store)?,
+            _ => {
+                return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "unsupported store schema version",
+                )))
+            }
+        }
+        migrated = true;
+    }
+}
+
+/// Ladder step 5→6: same leaves, new root FORMULA (flat combine →
+/// per-class trees). Verifies the v5 content against its OWN flat
+/// root first — never migrating what does not verify — then restamps
+/// schema + v6-formula root. Small state and every row are untouched.
+fn migrate_v5_to_v6(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    let small = store.read_small_state()?;
+    let small_leaf = leaf_hash(LEAF_SMALL, 0, &small);
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = combine_root(&small_leaf, &pages, &exts, &frees, &edges);
+    if old != manifest.root {
+        // Convention (matching validate_store / apply_batch): `expected`
+        // is the root recomputed from content, `found` the root the
+        // manifest claims (review wave 4, F4).
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root.clone(),
+        });
+    }
+    manifest.store_schema = 6;
+    manifest.root = compute_root(&small_leaf, &pages, &exts, &frees, &edges);
+    store.replace_manifest_for_migration(&manifest)
+}
+
+/// Ladder step 6→7 (the side-table ledger): the small state grows the
+/// three ledger sections EMPTY — a pure 12-byte suffix of zero-length
+/// section headers, provably content-preserving (nothing a v6-era
+/// machine persisted lives in them). Verifies the v6 content against
+/// its stored root first, then writes the new small and the restamped
+/// manifest (new small leaf → new root) through the backend's one
+/// atomic migration write.
+fn migrate_v6_to_v7(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    let small = store.read_small_state()?;
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    if old != manifest.root {
+        // `expected` = recomputed root, `found` = manifest's claim
+        // (review wave 4, F4).
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root.clone(),
+        });
+    }
+    let mut new_small = small;
+    new_small.extend_from_slice(&[0u8; 12]);
+    manifest.store_schema = 7;
+    manifest.root = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &new_small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
+}
+
+/// Ladder step 7→8 (the durable crank counter): the manifest grows one
+/// `u64` tail field and nothing else moves. Content-preserving by
+/// construction — the ROOT is computed over the small-state leaf and the
+/// row leaves, and the manifest is in neither, so the root this step
+/// writes is the root it read. The seal is left exactly as stored, like
+/// every other step: historical seals are opaque chain links.
+///
+/// `cranks` starts at 0, which is the honest reading of a store that
+/// predates the counter: it never recorded one, and a schedule derived
+/// from it begins at the migration rather than pretending to a history
+/// it cannot know.
+fn migrate_v7_to_v8(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    let small = store.read_small_state()?;
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    if old != manifest.root {
+        // `expected` = recomputed root, `found` = manifest's claim.
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root.clone(),
+        });
+    }
+    manifest.store_schema = 8;
+    manifest.cranks = 0;
+    // Same small state, same root — but the MANIFEST changes length, so
+    // this goes through the write that can shift the file's directory
+    // offsets rather than the same-length splice.
+    store.replace_manifest_and_small_for_migration(&manifest, &small)
 }
 
 /// The epoch discipline every [`HeapStore::commit`] enforces: the first
@@ -1111,6 +1923,9 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         chunk_len: image.chunks.len() as u64,
         free_len: image.slot_free.len() as u32,
         epoch,
+        // A container carries no crank history — importing one starts
+        // the cadence schedule from zero, exactly like a fresh store.
+        cranks: 0,
         root: String::new(),
         seal: String::new(),
     };
@@ -1121,6 +1936,9 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         names: image.names.clone(),
         symbols: image.symbols.clone(),
         meter: image.meter.clone(),
+        arrays: image.arrays.clone(),
+        collections: image.collections.clone(),
+        registry: image.registry.clone(),
     };
     let small_bytes = small.encode();
     let slot_pages = encode_all_slot_pages(&image.slots);
@@ -1150,7 +1968,7 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
     // A full batch's summaries are dense by construction — the root's
     // edge section (v5) combines over them in page order.
     let dense_edges: Vec<Vec<u32>> = page_edges.iter().map(|(_, t)| t.clone()).collect();
-    manifest.root = combine_root(
+    manifest.root = compute_root(
         &leaf_hash(LEAF_SMALL, 0, &small_bytes),
         &pages,
         &exts,
@@ -1182,6 +2000,22 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
 /// of [`image_to_batch`] + [`HeapStore::commit`].
 pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError> {
     let manifest = store.manifest()?;
+    // Schema gate FIRST. The root below is recomputed with the CURRENT
+    // formula, so a merely-old store fails the root check and gets
+    // reported as `BaselineMismatch` — "this store is corrupt" — when
+    // the truth is that it needs migrating. `root_hash` and
+    // `export_to_container` ride this path, so that misdiagnosis reached
+    // callers who had done nothing wrong (review wave 5).
+    if manifest.store_schema < STORE_SCHEMA_VERSION {
+        return Err(StoreError::NeedsMigration {
+            found: manifest.store_schema,
+        });
+    }
+    if manifest.store_schema > STORE_SCHEMA_VERSION {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "unsupported store schema version",
+        )));
+    }
     let small_bytes = store.read_small_state()?;
     let small = SmallState::decode(&small_bytes)?;
     if manifest.cost_gate_mismatch(&small) {
@@ -1190,6 +2024,10 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
             found: small.meter.cost_table_version.clone(),
         }));
     }
+    // NOTE the semantic bounds gate is NOT here: it lives in
+    // `validate_store`, which BOTH resume paths run (wave 5 —
+    // `store_to_image` serves only the eager path, so gating here left
+    // the lazy path, which is the one the daemon opens, ungated).
 
     // Row-content integrity (phase 5, completed by the review wave):
     // every row read below — INCLUDING the small state — is checked
@@ -1208,7 +2046,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         });
     }
     let small_leaf = leaf_hash(LEAF_SMALL, 0, &small_bytes);
-    let root = combine_root(&small_leaf, &leaf_pages, &leaf_exts, &leaf_frees_all, &edges);
+    let root = compute_root(&small_leaf, &leaf_pages, &leaf_exts, &leaf_frees_all, &edges);
     if root != manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: root,
@@ -1303,6 +2141,9 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         names: small.names,
         symbols: small.symbols,
         meter: small.meter,
+        arrays: small.arrays,
+        collections: small.collections,
+        registry: small.registry,
     })
 }
 
@@ -1344,7 +2185,16 @@ pub fn validate_store(
             "store version stamp mismatch",
         )));
     }
-    if manifest.store_schema != STORE_SCHEMA_VERSION {
+    if manifest.store_schema < STORE_SCHEMA_VERSION {
+        // Decodable but old: the opener runs [`migrate_store`] (with
+        // the signature that authorizes the restamp) before resuming;
+        // reaching here un-migrated is a caller bug or a read-only
+        // surface, and fails closed by name.
+        return Err(StoreError::NeedsMigration {
+            found: manifest.store_schema,
+        });
+    }
+    if manifest.store_schema > STORE_SCHEMA_VERSION {
         return Err(StoreError::Snapshot(SnapshotError::Corrupt(
             "unsupported store schema version",
         )));
@@ -1369,6 +2219,26 @@ pub fn validate_store(
             found: small.meter.cost_table_version.clone(),
         }));
     }
+    // Semantic bounds gate for everything the small state carries —
+    // stack, symbols, and the three side tables — against the
+    // manifest's geometry. It lives HERE, not in `store_to_image`,
+    // because `validate_store` is the one function BOTH resume paths
+    // run: gating the eager path alone left `resume_from_store_lazy`
+    // (the path `PersistentMachine` actually opens) accepting a crafted
+    // store that then panics the collector in release (review wave 5).
+    // The heap ROWS are not read at validation time by design — their
+    // records are bounds-checked as they fault.
+    crate::image::check_image_slot_bounds(
+        &[],
+        &small.stack,
+        &small.arrays,
+        &small.collections,
+        &small.registry,
+        &small.symbols,
+        manifest.slot_count,
+        manifest.chunk_len as usize,
+    )
+    .map_err(StoreError::Snapshot)?;
 
     // Accounting: every record is live or on the free list. The count
     // side uses the manifest's free_len (the list itself is segment
@@ -1443,7 +2313,7 @@ pub fn validate_store(
         });
     }
     let small_leaf = leaf_hash(LEAF_SMALL, 0, &small_bytes);
-    let root = combine_root(&small_leaf, &leaf_pages, &leaf_exts, &leaf_frees, &edges);
+    let root = compute_root(&small_leaf, &leaf_pages, &leaf_exts, &leaf_frees, &edges);
     if root != manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: root,
@@ -1532,6 +2402,16 @@ pub fn import_from_container(
     store: &mut dyn HeapStore,
 ) -> Result<(), StoreError> {
     let image = crate::image::read_machine(bytes, expected_sig)?;
+    // The blob half of the id-space audit: nothing may ADOPT a
+    // container whose heap stores a property id outside both key
+    // tables — crafted or torn bytes, or a pre-unification blob that
+    // persisted a then-unresumable intern (review wave 5). The scan is
+    // O(heap) and this path already decoded the whole image.
+    if image.stored_unregistered_key_id().is_some() {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "stored property id outside the name and symbol-key tables",
+        )));
+    }
     store.commit(&image_to_batch(&image, 1, ""))
 }
 
@@ -1592,6 +2472,24 @@ impl MemoryStore {
 impl HeapStore for MemoryStore {
     fn manifest(&self) -> Result<StoreManifest, StoreError> {
         self.manifest.clone().ok_or(StoreError::Empty)
+    }
+
+    fn replace_manifest_for_migration(
+        &mut self,
+        manifest: &StoreManifest,
+    ) -> Result<(), StoreError> {
+        self.manifest = Some(manifest.clone());
+        Ok(())
+    }
+
+    fn replace_manifest_and_small_for_migration(
+        &mut self,
+        manifest: &StoreManifest,
+        small: &[u8],
+    ) -> Result<(), StoreError> {
+        self.manifest = Some(manifest.clone());
+        self.small = small.to_vec();
+        Ok(())
     }
 
     fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
@@ -1779,11 +2677,14 @@ mod tests {
             chunk_len: 70_000,
             free_len: 5,
             epoch: 3,
+            cranks: 41,
             root: "r00t".to_string(),
             seal: "abc123".to_string(),
         };
         let bytes = m.encode();
-        assert_eq!(StoreManifest::decode(&bytes).unwrap(), m);
+        let back = StoreManifest::decode(&bytes).unwrap();
+        assert_eq!(back, m);
+        assert_eq!(back.cranks, 41, "the schema-8 crank counter round-trips");
 
         // A foreign VERS magic fails closed through the shared gate.
         let mut foreign = bytes.clone();
@@ -1823,8 +2724,14 @@ mod tests {
             slot_free: vec![9, 2, 5],
             keys: vec!["dyn".to_string()],
             names: vec!["Object".to_string(), "x".to_string()],
-            symbols: vec![11, 22],
+            symbols: crate::image::SymbolKeyImage {
+                next_id: u16::MAX - 2,
+                pairs: vec![(u16::MAX - 1, 11), (u16::MAX, 22)],
+            },
             meter: MeterImage::current(),
+            arrays: Vec::new(),
+            collections: Vec::new(),
+            registry: Vec::new(),
         };
         // Since schema v4 the free list does NOT ride in small state
         // (it lives in segment rows); the round-trip drops it.
@@ -1840,8 +2747,11 @@ mod tests {
             slot_free: vec![],
             keys: vec![],
             names: vec![],
-            symbols: vec![],
+            symbols: crate::image::SymbolKeyImage::default(),
             meter: MeterImage::current(),
+            arrays: Vec::new(),
+            collections: Vec::new(),
+            registry: Vec::new(),
         };
         let bytes = s.encode();
         for cut in [0, 3, 7, bytes.len() - 1] {
@@ -2116,6 +3026,219 @@ mod tests {
             Err(StoreError::MissingRow("chunk extent", tail_ext)),
             "the boundary row must travel when its expected length changes"
         );
+    }
+
+    #[test]
+    fn class_tree_incremental_equals_scratch() {
+        // The v6 property lock: updating dirty paths in place agrees
+        // with a from-scratch build, across widths (odd, power-of-two,
+        // single, empty) and dirt patterns — the equivalence every
+        // incremental commit rests on.
+        let leaf = |i: u32, salt: u8| -> [u8; 32] { leaf_hash(salt, i, &i.to_be_bytes()) };
+        for width in [0u32, 1, 2, 3, 4, 5, 7, 8, 9, 63, 64, 65, 200] {
+            let mut leaves: Vec<[u8; 32]> = (0..width).map(|i| leaf(i, b'a')).collect();
+            let mut levels = build_class_tree(TREE_PAGES, &leaves);
+            let scratch_root = class_tree_root(TREE_PAGES, &leaves, &levels);
+            // Deterministic pseudo-dirt: every third index, then the
+            // edges, then a single middle index.
+            for dirt in [
+                (0..width).step_by(3).collect::<Vec<u32>>(),
+                if width > 0 { vec![0, width - 1] } else { vec![] },
+                if width > 2 { vec![width / 2] } else { vec![] },
+            ] {
+                if dirt.is_empty() {
+                    continue;
+                }
+                for &i in &dirt {
+                    leaves[i as usize] = leaf(i, b'b');
+                }
+                update_class_tree(TREE_PAGES, &leaves, &mut levels, &dirt);
+                let expect_levels = build_class_tree(TREE_PAGES, &leaves);
+                assert_eq!(levels, expect_levels, "width {width}, dirt {dirt:?}");
+                assert_eq!(
+                    class_tree_root(TREE_PAGES, &leaves, &levels),
+                    class_tree_root(TREE_PAGES, &leaves, &expect_levels),
+                );
+            }
+            let _ = scratch_root;
+        }
+    }
+
+    #[test]
+    fn class_trees_are_domain_separated() {
+        let leaves: Vec<[u8; 32]> = (0..5).map(|i| leaf_hash(b'z', i, b"x")).collect();
+        let a = class_tree_root(TREE_PAGES, &leaves, &build_class_tree(TREE_PAGES, &leaves));
+        let b = class_tree_root(TREE_EXTS, &leaves, &build_class_tree(TREE_EXTS, &leaves));
+        assert_ne!(a, b, "same leaves, different class tags, different roots");
+        assert_ne!(
+            tree_empty_root(TREE_PAGES),
+            tree_empty_root(TREE_EXTS),
+            "empty roots are tagged too"
+        );
+    }
+
+    #[test]
+    fn root_ledger_apply_equals_scratch_recombination() {
+        // The V6-c lock: a ledger advanced by `apply` agrees with a
+        // from-scratch `compute_root` over hand-patched full vectors,
+        // across geometry changes (grow, shrink, stable width) and
+        // dirt in every class. The manifest is a real one with its
+        // geometry fields overridden — only the counts drive the math.
+        let mut m = Interp::new();
+        assert!(m.run(&PROG_A).completed);
+        let image = m.snapshot_image(&sig());
+        let template = image_to_batch(&image, 1, "").manifest;
+
+        let leaf_bytes = |i: u32, salt: u8| -> Vec<u8> { vec![salt, i as u8, (i >> 8) as u8] };
+        let mut small = b"small-0".to_vec();
+        let mut pages: Vec<[u8; 32]> = Vec::new();
+        let mut exts: Vec<[u8; 32]> = Vec::new();
+        let mut frees: Vec<[u8; 32]> = Vec::new();
+        let mut edges: Vec<Vec<u32>> = Vec::new();
+        let mut ledger = RootLedger::build(
+            &small,
+            pages.clone(),
+            exts.clone(),
+            frees.clone(),
+            &edges,
+        );
+
+        // (n_pages, n_exts, n_frees, salt): grow from empty, grow
+        // more, stable-width dirt, shrink, mixed.
+        for (step, &(n_pages, n_exts, n_frees, salt)) in [
+            (3u32, 2u32, 1u32, b'a'),
+            (8, 5, 4, b'b'),
+            (8, 5, 4, b'c'),
+            (2, 1, 1, b'd'),
+            (5, 5, 2, b'e'),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let mut manifest = template.clone();
+            manifest.slot_count = n_pages * SLOTS_PER_PAGE;
+            manifest.chunk_len = n_exts as u64 * CHUNK_EXTENT_BYTES as u64;
+            manifest.free_len = n_frees * FREE_SEG_ENTRIES;
+            small = format!("small-{salt}").into_bytes();
+
+            // Dirt: every grown row (the admission rule), plus row 0
+            // of each nonempty class on stable steps.
+            let dirty_rows = |prior: usize, n: u32| -> Vec<u32> {
+                let mut v: Vec<u32> = (prior as u32..n).collect();
+                if v.is_empty() && n > 0 {
+                    v.push(0);
+                }
+                v
+            };
+            let slot_rows: Vec<(u32, Vec<u8>)> = dirty_rows(pages.len().min(n_pages as usize), n_pages)
+                .into_iter()
+                .map(|i| (i, leaf_bytes(i, salt)))
+                .collect();
+            let ext_rows: Vec<(u32, Vec<u8>)> = dirty_rows(exts.len().min(n_exts as usize), n_exts)
+                .into_iter()
+                .map(|i| (i, leaf_bytes(i, salt ^ 1)))
+                .collect();
+            let free_rows: Vec<(u32, Vec<u8>)> = dirty_rows(frees.len().min(n_frees as usize), n_frees)
+                .into_iter()
+                .map(|i| (i, leaf_bytes(i, salt ^ 2)))
+                .collect();
+            let edge_rows: Vec<(u32, Vec<u32>)> = slot_rows
+                .iter()
+                .map(|(i, _)| (*i, vec![*i, i + salt as u32]))
+                .collect();
+
+            // Model: hand-patch the full vectors.
+            pages.resize(n_pages as usize, [0u8; 32]);
+            exts.resize(n_exts as usize, [0u8; 32]);
+            frees.resize(n_frees as usize, [0u8; 32]);
+            edges.resize(n_pages as usize, Vec::new());
+            for (i, b) in &slot_rows {
+                pages[*i as usize] = leaf_hash(LEAF_PAGE, *i, b);
+            }
+            for (i, b) in &ext_rows {
+                exts[*i as usize] = leaf_hash(LEAF_EXT, *i, b);
+            }
+            for (i, b) in &free_rows {
+                frees[*i as usize] = leaf_hash(LEAF_FREE, *i, b);
+            }
+            for (i, t) in &edge_rows {
+                edges[*i as usize] = t.clone();
+            }
+            let scratch = compute_root(
+                &leaf_hash(LEAF_SMALL, 0, &small),
+                &pages,
+                &exts,
+                &frees,
+                &edges,
+            );
+            let incremental = ledger
+                .apply(&manifest, &small, &slot_rows, &ext_rows, &free_rows, &edge_rows)
+                .unwrap();
+            assert_eq!(incremental, scratch, "step {step}");
+            assert_eq!(ledger.root(), scratch, "step {step} re-read");
+            assert_eq!(ledger.widths(), [
+                n_pages as usize,
+                n_exts as usize,
+                n_frees as usize
+            ]);
+        }
+
+        // An out-of-range row fails closed instead of panicking.
+        let manifest = {
+            let mut m2 = template.clone();
+            m2.slot_count = 2 * SLOTS_PER_PAGE;
+            m2.chunk_len = 0;
+            m2.free_len = 0;
+            m2
+        };
+        assert_eq!(
+            ledger.apply(&manifest, &small, &[(9, vec![1])], &[], &[], &[]),
+            Err(StoreError::MissingRow("slot page", 9)),
+        );
+    }
+
+    #[test]
+    fn root_ledger_tracks_real_batches() {
+        // Tie the ledger to the real pipeline: build from the epoch-1
+        // batch's rows, then apply the epoch-2 batch — the ledger's
+        // root must equal the root `image_to_batch` computed and the
+        // store accepted.
+        let mut m = Interp::new();
+        assert!(m.run(&PROG_A).completed);
+        let image1 = m.snapshot_image(&sig());
+        let mut store = MemoryStore::new();
+        let batch1 = image_to_batch(&image1, 1, "");
+        store.commit(&batch1).unwrap();
+
+        let mut ledger = RootLedger::build(&batch1.small, Vec::new(), Vec::new(), Vec::new(), &[]);
+        let root1 = ledger
+            .apply(
+                &batch1.manifest,
+                &batch1.small,
+                &batch1.slot_pages,
+                &batch1.chunk_extents,
+                &batch1.free_segs,
+                &batch1.page_edges,
+            )
+            .unwrap();
+        assert_eq!(root1, batch1.manifest.root);
+
+        assert!(m.run(&PROG_A).completed, "second crank grows the heap");
+        let image2 = m.snapshot_image(&sig());
+        let batch2 = image_to_batch(&image2, 2, &store.manifest().unwrap().seal);
+        store.commit(&batch2).unwrap();
+        let root2 = ledger
+            .apply(
+                &batch2.manifest,
+                &batch2.small,
+                &batch2.slot_pages,
+                &batch2.chunk_extents,
+                &batch2.free_segs,
+                &batch2.page_edges,
+            )
+            .unwrap();
+        assert_eq!(root2, batch2.manifest.root);
+        assert_eq!(root2, store.manifest().unwrap().root);
     }
 
     #[test]

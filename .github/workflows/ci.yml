@@ -692,9 +692,9 @@ jobs:
   # daemon-side SQLite heap-store backend in the root workspace. The
   # oracle-linked engine crates (xs-oracle, ironhorse-compile,
   # ironhorse-regexp, ironhorse-262, ironhorse-fuzz) are excluded from
-  # TESTING: their dev-dependencies compile the Moddable XS C sources,
-  # which need the c/moddable submodule and its toolchain, so their own
-  # test targets remain local/manual until a job provisions that.
+  # TESTING here — their dev-dependencies compile the Moddable XS C
+  # sources — and run in test-ironhorse-oracle below, which provisions
+  # the submodule (the deferred-work checklist's oracle-suites item).
   # (ironhorse-compile still builds here as a library dependency of the
   # tested crates — dev-dependencies of dependencies do not build.)
   #
@@ -758,6 +758,79 @@ jobs:
         if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         run: cargo test -p ironhorse-store-sqlite
 
+  # The oracle-linked ironhorse crate suites (ironhorse-compile,
+  # ironhorse-regexp, ironhorse-262's bounded fixtures, and the fuzz
+  # lib's unit tests — including the hostile-suspend trophies). Their
+  # dev-dependencies compile the Moddable XS C sources, so this job
+  # provisions the c/moddable submodule that test-ironhorse
+  # deliberately avoids; until this job existed those suites ran only
+  # locally (the store-seam ledger's oracle-suites item). The suites
+  # themselves are seconds; the C oracle build is the cost, and the
+  # cargo cache carries it between runs. Same self-skip probe as the
+  # fuzz lane (oracle inputs included), so unrelated PRs stay green
+  # without paying the C build.
+  test-ironhorse-oracle:
+    name: test-ironhorse-oracle
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Depth 2 so the pull_request merge commit's parents exist
+          # for the change probe below.
+          fetch-depth: 2
+
+      - name: Detect ironhorse-relevant changes
+        id: changes
+        if: github.event_name == 'pull_request'
+        run: |
+          # The fuzz lane's probe: these suites link the XS oracle,
+          # so the moddable gitlink, .gitmodules, and the shared
+          # xsnap platform sources are all inputs. The merge commit's
+          # first parent is the base branch head, so this diff is
+          # exactly the PR's change set; fail open if that shape ever
+          # doesn't hold.
+          if ! git rev-parse -q --verify HEAD^2 >/dev/null; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only HEAD^1 HEAD \
+            | grep -qE '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^\.github/workflows/ci\.yml$|^c/moddable|^\.gitmodules$|^rust/endo/xsnap/xsnap-platform\.'; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fetch XS oracle submodule
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        # Anonymous shallow fetch can hit transient throttling on
+        # shared runner egress; retry before failing, and fail LOUD
+        # if all attempts leave the sources absent.
+        run: |
+          for i in 1 2 3; do
+            git submodule update --init --depth 1 c/moddable && break
+            sleep $((10 * i))
+          done
+          test -f c/moddable/xs/sources/xsAll.h
+
+      - name: Cache Cargo + targets
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/engine/target
+          key: ${{ runner.os }}-ironhorse-oracle-${{ hashFiles('rust/engine/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-oracle-
+
+      - name: Test oracle-linked engine crates (rust/engine workspace)
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        working-directory: rust/engine
+        run: cargo test -p ironhorse-compile -p ironhorse-regexp -p ironhorse-262 -p ironhorse-fuzz
   test-ocapn-python:
     name: test-ocapn-python
 

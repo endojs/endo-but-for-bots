@@ -63,13 +63,20 @@ pub mod store_file;
 // support only, hence feature-gated.
 #[cfg(feature = "store-suite")]
 pub mod store_suite;
+// Scratch-dir guard for the src test modules only (integration
+// binaries carry their own copy in tests/common/).
+#[cfg(test)]
+pub(crate) mod test_dir;
 
 pub use atom::{Atom, AtomError, AtomReader, AtomWriter};
 pub use format::{
-    FourCc, Signature, SignatureError, SnapshotError, Version, VersionError, BLOC, CREA, HEAP,
-    KEYS, METR, NAME, SIGN, STAC, SYMB, VERS, XS_M,
+    FourCc, Signature, SignatureError, SnapshotError, Version, VersionError, ARRY, BLOC, COLL,
+    CREA, HEAP, KEYS, METR, NAME, REGY, SIGN, STAC, SYMB, VERS, XS_M,
 };
-pub use image::{read_machine, write_machine, CreationParams, MachineImage, MeterImage};
+pub use image::{
+    read_machine, write_machine, ArrayImage, CollectionImage, CreationParams, MachineImage,
+    MeterImage, RegistryImage,
+};
 pub use machine::{
     from_snapshot_bytes, from_snapshot_file, image_to_interp, resume_from_cas, MachineSnapshot,
     MachineSnapshotError,

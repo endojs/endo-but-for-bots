@@ -721,9 +721,14 @@ fn handle_resume(
     // its durable state is the heap database (`heap_store`), not a
     // CAS blob, and its `sha256` is empty — following the XS path
     // would hand the machine an empty snapshot path. Routed Ironhorse
-    // resume needs the worker envelope (a named gap), so fail loudly,
-    // answer a waiting sender with a named error, and leave the
-    // worker suspended intact (review finding).
+    // resume needs the worker envelope's deliver-payload side (the
+    // host-function surface — ironhorse-engine.md § Endor integration,
+    // the host-powers row — and the SES boot bundle, roadmap stage 4;
+    // the heap half is fully landed and a resume
+    // COULD reopen the machine, but a machine that must refuse every
+    // delivery would hold resources to serve nothing), so fail
+    // loudly, answer a waiting sender with a named error, and leave
+    // the worker suspended intact (review finding).
     if suspended.heap_store.is_some() {
         eprintln!(
             "endor: worker {handle} is store-backed ({}); routed resume needs the \

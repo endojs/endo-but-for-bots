@@ -84,3 +84,43 @@ fn wake_latency_eager_vs_lazy() {
     println!("lazy  wake median: {l:.3} ms");
     println!("lazy/eager ratio:  {:.3}", l / e);
 }
+
+/// The H1 gate instrument: what `SlotArena::lazy_from_parts` costs
+/// before any row is read. It measured the case FOR sparse attach —
+/// the O(slot_count) dense undefined-fill, 40 ms at 4M slots — and H1
+/// then removed that fill, so what this arm prices now is the
+/// remainder: the per-page bitmap allocations (3.28 ms / 0.8 ns per
+/// slot at 4M). Kept as the standing gate on attach cost, not as a
+/// measurement of the fill it retired.
+#[test]
+#[ignore]
+fn placeholder_alloc_cost_across_slot_counts() {
+    use ironhorse_vm::{PageSource, Slot, SlotArena};
+
+    struct NoFaults;
+    impl PageSource for NoFaults {
+        fn slot_page(&self, _page: u32) -> Vec<Slot> {
+            unreachable!("construction must not fault")
+        }
+        fn chunk_extent(&self, _ext: u32) -> Vec<u8> {
+            unreachable!("construction must not fault")
+        }
+    }
+
+    for &slots in &[120_320u32, 500_000, 1_000_000, 4_000_000] {
+        let mut ms = Vec::new();
+        for _ in 0..5 {
+            let source: Rc<dyn PageSource> = Rc::new(NoFaults);
+            let t0 = Instant::now();
+            let arena = SlotArena::lazy_from_parts(slots, Vec::new(), slots, source);
+            ms.push(t0.elapsed().as_secs_f64() * 1e3);
+            drop(arena);
+        }
+        ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        println!(
+            "slots={slots:>8} | placeholder alloc median {:>7.3} ms ({:.1} ns/slot)",
+            ms[2],
+            ms[2] * 1e6 / slots as f64,
+        );
+    }
+}

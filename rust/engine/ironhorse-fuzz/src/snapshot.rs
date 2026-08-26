@@ -96,7 +96,15 @@ pub struct RoundtripDivergence {
 
 fn pick_off(c: &mut Cursor, offs: &[ChunkOffset]) -> ChunkOffset {
     if offs.is_empty() {
-        ChunkOffset(0)
+        // The arena has no payloads, so there is no valid offset to
+        // point at. `ChunkOffset(0)` is NOT the way to say that: a
+        // payload always sits above its 4-byte header, so 0 is an
+        // offset the compactor rejects outright ("chunk offset below
+        // header"). `NULL` is the absence sentinel, and the bounds gate
+        // and `page_of` both skip it (review wave 5 — the widened gate
+        // caught this generator minting images that would have panicked
+        // at their first compaction).
+        ChunkOffset::NULL
     } else {
         offs[(c.byte() as usize) % offs.len()]
     }
@@ -207,8 +215,29 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
 
     let names = rand_string_list(&mut c);
     let keys = rand_string_list(&mut c);
-    let n_sym = (c.byte() % 5) as usize;
-    let symbols: Vec<u32> = (0..n_sym).map(|_| c.u32()).collect();
+    // Symbol-key table: generated VALID like the ledger rows below —
+    // ids strictly ascending above the counter, descriptors distinct
+    // and in-bounds — so write→read identity holds while the DECODER
+    // sees ill-formed tables from the raw-bytes fuzz lane.
+    let bound = (n_slots as u32).max(1);
+    // At most one pair per distinct in-bounds descriptor, or the
+    // dedup nudge below cannot terminate on a tiny arena.
+    let n_sym = ((c.byte() % 5) as usize).min(bound as usize);
+    let sym_next = u16::MAX - n_sym as u16 - (c.byte() % 4) as u16;
+    let mut seen = std::collections::BTreeSet::new();
+    let sym_pairs: Vec<(u16, u32)> = (0..n_sym)
+        .map(|k| {
+            let mut d = c.u32() % bound;
+            while !seen.insert(d) {
+                d = (d + 1) % bound;
+            }
+            (sym_next + 1 + k as u16, d)
+        })
+        .collect();
+    let symbols = ironhorse_snapshot::image::SymbolKeyImage {
+        next_id: sym_next,
+        pairs: sym_pairs,
+    };
 
     let meter = MeterState {
         index: ((c.u32() as u64) << 16) | c.u32() as u64,
@@ -216,8 +245,87 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         count: c.u32() as u64,
     };
 
+    // Side-table ledger rows (wave-4 fuzz gap): arrays, collections,
+    // and the `Symbol.for` registry. Generated VALID — owners/refs
+    // in-bounds (`< n_slots`), owners/keys strictly ascending — so the
+    // round-trip target's write→read identity holds while the
+    // byte-mutation target now has well-framed ARRY/COLL/REGY atoms to
+    // corrupt (before this the decoders were never exercised). A
+    // running counter keeps owners ascending-unique.
+    //
+    // "Valid" is whatever the decoders accept, so wave 5's new rules are
+    // generated here too: array item indices strictly ascending and
+    // below the row's declared length, and registry descriptors
+    // pairwise distinct. Generating rows the decoder refuses would turn
+    // the round-trip target into a decode-failure target and stop
+    // exercising the identity it exists for.
+    let cap = n_slots as u32;
+    let mut next_owner = 0u32;
+    let mut arrays: Vec<ironhorse_snapshot::image::ArrayImage> = Vec::new();
+    while next_owner < cap && (c.byte() & 3) != 0 {
+        let owner = next_owner;
+        next_owner += 1 + (c.byte() % 3) as u32;
+        let n_items = (c.byte() % 4) as usize;
+        // A running index, stepped by 1..3, gives ascending-unique item
+        // indices with fuzzer-chosen holes between them.
+        let mut next_index = 0u32;
+        let mut items = Vec::with_capacity(n_items);
+        for _ in 0..n_items {
+            let value = Slot::of(Kind::Reference, Payload::Reference(pick_ref(&mut c, &idxs)));
+            items.push((next_index, value));
+            next_index += 1 + (c.byte() % 3) as u32;
+        }
+        arrays.push(ironhorse_snapshot::image::ArrayImage {
+            owner,
+            // `next_index` already sits past the last item, so the
+            // declared length covers the row; the remainder is a
+            // fuzzer-chosen sparse tail.
+            length: next_index + c.u32() % 8,
+            items,
+        });
+    }
+    let mut next_owner = 0u32;
+    let mut collections: Vec<ironhorse_snapshot::image::CollectionImage> = Vec::new();
+    while next_owner < cap && (c.byte() & 3) != 0 {
+        let owner = next_owner;
+        next_owner += 1 + (c.byte() % 3) as u32;
+        let n_entries = (c.byte() % 4) as usize;
+        let entries = (0..n_entries)
+            .map(|_| {
+                (
+                    Slot::of(Kind::Reference, Payload::Reference(pick_ref(&mut c, &idxs))),
+                    Slot::of(Kind::Reference, Payload::Reference(pick_ref(&mut c, &idxs))),
+                )
+            })
+            .collect();
+        collections.push(ironhorse_snapshot::image::CollectionImage {
+            owner,
+            kind: c.byte() % 4,
+            table_length: c.u32() % 16,
+            entries,
+        });
+    }
+    let n_reg = (c.byte() % 4) as usize;
+    let mut registry: Vec<ironhorse_snapshot::image::RegistryImage> = Vec::new();
+    // Distinct ascending keys ("k0","k1",…) paired with in-bounds
+    // descriptors that a running counter keeps pairwise DISTINCT — two
+    // keys sharing a descriptor would make `Symbol.for('k0') ===
+    // Symbol.for('k1')` on restore, which is why the decoder refuses it.
+    let mut next_desc = 0u32;
+    for i in 0..n_reg {
+        if next_desc >= cap {
+            break;
+        }
+        registry.push(ironhorse_snapshot::image::RegistryImage {
+            key: format!("k{i}").into_bytes(),
+            descriptor: next_desc,
+        });
+        next_desc += 1 + (c.byte() % 3) as u32;
+    }
+
     MachineImage::from_arenas(fuzz_snapshot_sig(), &slots, &chunks, &stack, names, keys, symbols)
         .with_meter(meter)
+        .with_side_tables(arrays, collections, registry)
 }
 
 /// The core round-trip invariant over a built image: a freshly written
@@ -457,6 +565,14 @@ mod tests {
         let mut saw_stack = false;
         let mut saw_chunks = false;
         let mut saw_symbols = false;
+        // The side-table arms need witnesses too. Review wave 5 probed
+        // the generator and found it DOES produce all three today — but
+        // the four witnesses above exist precisely so a refactor cannot
+        // silently degrade an arm to empty, and the ledger arm shipped
+        // without that protection.
+        let mut saw_arrays = false;
+        let mut saw_collections = false;
+        let mut saw_registry = false;
         for seed in 0u32..3000 {
             let buf = seed_bytes(seed, 7);
             let img = gen_machine_image(&buf);
@@ -464,7 +580,10 @@ mod tests {
             saw_free |= !img.slot_free.is_empty();
             saw_stack |= !img.stack.is_empty();
             saw_chunks |= !img.chunks.is_empty();
-            saw_symbols |= !img.symbols.is_empty();
+            saw_symbols |= !img.symbols.pairs.is_empty();
+            saw_arrays |= !img.arrays.is_empty();
+            saw_collections |= !img.collections.is_empty();
+            saw_registry |= !img.registry.is_empty();
             if let Err(d) = roundtrip_image_is_invariant(&img) {
                 panic!("arena snapshot round-trip divergence at seed {seed}: {d:?}");
             }
@@ -474,6 +593,9 @@ mod tests {
         assert!(saw_stack, "value-stack arm never exercised");
         assert!(saw_chunks, "chunk-arena arm never exercised");
         assert!(saw_symbols, "symbol-table arm never exercised");
+        assert!(saw_arrays, "side-table ARRY arm never exercised");
+        assert!(saw_collections, "side-table COLL arm never exercised");
+        assert!(saw_registry, "side-table REGY arm never exercised");
     }
 
     #[test]
