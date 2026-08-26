@@ -1091,6 +1091,17 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => decode_symbol_keys(a.payload)?,
         None => SymbolKeyImage::default(),
     };
+    // The symbol-key counter must clear the name table (its ids mint
+    // DOWNWARD from u16::MAX; a counter at or below the table would
+    // alias a symbol id onto a string key at restore — see
+    // `Interp::restore_symbol_key_table`). Checked here where names
+    // and symbols are both in hand; `validate_store` mirrors it for
+    // the store path.
+    if (symbols.next_id as usize) <= names.len() {
+        return Err(SnapshotError::Corrupt(
+            "symbol-key table: counter inside the name table",
+        ));
+    }
 
     // METR (design row 6): decode the metering state and fail closed on a
     // cost-table version this engine did not produce — the metering

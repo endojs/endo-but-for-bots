@@ -258,6 +258,14 @@ pub(crate) struct CollectionData {
     pub(crate) kind: CollKind,
     entries: Vec<Option<(Slot, Slot)>>,
     pub(crate) table_length: u32,
+    /// Bumped by [`Self::clear_entries`] only. A live cursor captures
+    /// the generation at creation and dead-ends when it changes —
+    /// XS's observable `clear` semantics (its purge frees the list a
+    /// cursor's node pointer chains through, so the cursor never
+    /// reaches entries added after a clear). Not persisted: cursors
+    /// live in the non-round-tripping `iterators` row, so a resumed
+    /// machine's reset-to-zero generations are unobservable.
+    generation: u32,
 }
 
 impl CollectionData {
@@ -266,7 +274,14 @@ impl CollectionData {
             kind,
             entries: Vec::new(),
             table_length,
+            generation: 0,
         }
+    }
+
+    /// The clear-generation a cursor captures at creation; see the
+    /// field doc.
+    pub(crate) fn generation(&self) -> u32 {
+        self.generation
     }
 
     /// Read-only view of the physical entry list, tombstones included
@@ -302,22 +317,43 @@ impl CollectionData {
         refs.remove_slot(&old);
     }
 
-    /// Delete the live entry at physical index `at`, leaving a
-    /// tombstone in its place so live iterator cursors keep their
-    /// position (the physical list never shifts under them).
+    /// Delete the live entry at physical index `at`. Map/Set leave a
+    /// tombstone so live iterator cursors keep their position (the
+    /// physical list never shifts under them — ECMA-262's emptied-entry
+    /// model; note XS instead PURGES list nodes, so a cursor whose whole
+    /// remaining chain was deleted dead-ends in XS where this model can
+    /// still reach later appends — a deliberate spec-over-XS choice).
+    /// Weak collections have no iterators or `forEach` (both refuse), so
+    /// no cursor can ever index their physical list: they remove
+    /// physically, keeping `collection_find` O(live) instead of
+    /// O(ever-inserted).
     pub(crate) fn remove_entry(&mut self, at: usize, refs: &mut SideRefCounts) -> (Slot, Slot) {
         let (k, v) = self.entries[at].take().expect("remove_entry on tombstone");
         refs.remove_slot(&k);
         refs.remove_slot(&v);
+        if matches!(self.kind, CollKind::WeakMap | CollKind::WeakSet) {
+            self.entries.remove(at);
+        }
         (k, v)
     }
 
+    /// `Map.prototype.clear` / `Set.prototype.clear`: physically empty
+    /// the list (XS's purge — reclaiming the memory) and bump the
+    /// clear-generation so every live cursor dead-ends instead of
+    /// aliasing its old physical index into entries added afterward.
+    /// Before the latch, a cursor at index 1 over a cleared-then-
+    /// repopulated map yielded a wrong SUFFIX of the new entries
+    /// ("a,e,f" where the XS oracle answers "a" — review of the llm
+    /// rebase). Note where the deliberate XS-divergence axis lives:
+    /// plain DELETES tombstone (spec-over-XS; see
+    /// [`Self::remove_entry`]) while CLEAR follows XS exactly.
     pub(crate) fn clear_entries(&mut self, refs: &mut SideRefCounts) {
         for (k, v) in self.entries.iter().flatten() {
             refs.remove_slot(k);
             refs.remove_slot(v);
         }
         self.entries.clear();
+        self.generation = self.generation.wrapping_add(1);
     }
 
     /// Whole-row removal decrement; see [`ArrayData::drop_refs`].
@@ -330,25 +366,37 @@ impl CollectionData {
 
     /// Retain only the live entries `keep` accepts, decrementing
     /// everything dropped — the full collector's dead-keyed
-    /// weak-entry prune. Dead-keyed entries become tombstones (not
-    /// physical removals) for the same cursor-stability reason as
-    /// [`Self::remove_entry`]; existing tombstones are left alone and
-    /// not counted. Returns the number of entries dropped.
+    /// weak-entry prune. Its only callers are WEAK collections, which
+    /// no cursor can ever index (weak kinds have no iterators or
+    /// `forEach`), so pruned entries — and any tombstones from before
+    /// this model made weak deletes physical — are REMOVED, not
+    /// tombstoned: a long-lived machine cycling weak-keyed entries
+    /// must not grow its physical list by one slot per ever-inserted
+    /// entry (review of the llm rebase). Returns the number of live
+    /// entries dropped.
     pub(crate) fn prune_entries(
         &mut self,
         refs: &mut SideRefCounts,
         mut keep: impl FnMut(&Slot, &Slot) -> bool,
     ) -> u32 {
+        debug_assert!(
+            matches!(self.kind, CollKind::WeakMap | CollKind::WeakSet),
+            "prune_entries is the weak-collection dead-key sweep"
+        );
         let mut dropped = 0u32;
-        for entry in &mut self.entries {
-            let Some((k, v)) = entry else { continue };
-            if !keep(k, v) {
-                refs.remove_slot(k);
-                refs.remove_slot(v);
-                dropped += 1;
-                *entry = None;
+        self.entries.retain(|entry| match entry {
+            None => false,
+            Some((k, v)) => {
+                if keep(k, v) {
+                    true
+                } else {
+                    refs.remove_slot(k);
+                    refs.remove_slot(v);
+                    dropped += 1;
+                    false
+                }
             }
-        }
+        });
         dropped
     }
 

@@ -68,3 +68,65 @@ fn nested_tries_rebase_across_the_await() {
         "106",
     );
 }
+
+// ---- The async host-boundary fence (llm-rebase review) -------------
+//
+// XS's fxStepAsync / fxAsyncGeneratorStep run the body under their own
+// native mxTry: an uncaught throw BEFORE the first suspend rejects the
+// promise — it must NOT land in a `try` live around the synchronous
+// start. Unfenced, the mainline's cross-frame unwind consumed the
+// caller's handler (`g = 'caught:1'` where XS answers `'after'`) or
+// leaked an internal `Halt::Resume` out of `Interp::run`.
+
+#[test]
+fn async_body_throw_before_first_await_rejects_not_catches() {
+    drains_to(
+        "var g = 0; \
+         try { (async function () { throw 1; })(); g = 'after'; } \
+         catch (e) { g = 'caught:' + e; }",
+        "after",
+    );
+}
+
+#[test]
+fn async_generator_body_throw_before_first_yield_rejects_not_catches() {
+    // RESULT agreement is the fence's lock. The async-generator REJECT
+    // machinery's metering is not yet oracle-exact — a pre-existing
+    // mainline gap (fxAsyncGeneratorReject's request processing is
+    // uncalibrated; the drain-side twin measures -26): the deltas are
+    // PINNED here so any drift is a visible flip, and the calibration
+    // is recorded in the design's Remaining ledger rather than guessed.
+    let source = "var g = 0; var it = 0; \
+                  async function* ag() { throw 1; } \
+                  try { it = ag(); it.next(); g = 'after'; } \
+                  catch (e) { g = 'caught:' + e; }";
+    let a = dual_run_async(source, "g").expect("the XS oracle machine must start");
+    assert_eq!(a.run.agreement, Agreement::BothComplete, "{:?}", a.run.ironhorse_halt);
+    assert_eq!(a.ironhorse_signal.as_deref(), Some("after"));
+    assert_eq!(
+        a.run.ironhorse_computrons as i64 - a.run.oracle_computrons as i64,
+        -20,
+        "the pinned async-generator reject-metering divergence moved: \
+         re-measure and update the pin (or celebrate the calibration)"
+    );
+}
+
+// ---- The AWAAIT-owner selection (llm-rebase review) ----------------
+//
+// A plain async function called synchronously from an async generator
+// body must suspend ITSELF at its `await`, not the enclosing
+// generator: the AWAIT arm selects the innermost driver by
+// call-depth, exactly as the YIELD arm always did. Unselected, the
+// helper's activation was snapshotted into the GENERATOR's side-table
+// entry and the whole run aborted with `async:no-frame`.
+
+#[test]
+fn async_helper_awaiting_inside_async_generator_composes() {
+    drains_to(
+        "var g = 0; \
+         async function helper() { await 1; return 5; } \
+         async function drive() { g = await helper(); } \
+         drive();",
+        "5",
+    );
+}
