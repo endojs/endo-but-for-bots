@@ -55,6 +55,7 @@
  */
 
 import { makeError, q, X } from '@endo/errors';
+import { constantTimeBytesEqual } from '@endo/bytes/constant-time-equals.js';
 import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 import { encodeHex } from '@endo/hex';
@@ -194,20 +195,7 @@ export const constantTimeEqual = (a, b) => {
   ) {
     return false;
   }
-  const av = asUint8(a);
-  const bv = asUint8(b);
-  if (av.length !== bv.length) {
-    return false;
-  }
-  let diff = 0;
-  for (let i = 0; i < av.length; i += 1) {
-    // Constant-time byte comparison: bitwise OR over byte XORs.
-    // The constant-time property is the whole point of this
-    // helper; the `no-bitwise` rule is appropriately suppressed.
-    // eslint-disable-next-line no-bitwise
-    diff |= av[i] ^ bv[i];
-  }
-  return diff === 0;
+  return constantTimeBytesEqual(asUint8(a), asUint8(b));
 };
 harden(constantTimeEqual);
 
