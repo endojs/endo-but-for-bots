@@ -1957,6 +1957,384 @@ above, so a faithful per-commit replay would have manufactured
 intermediate states that never built and fixes that a later commit
 deletes. The tree, its locks, and this record are the review surface.
 
+### Post-rebase architecture review — wave 6 (2026-08-26): findings recorded, fixes pending
+
+Seven further independent reviews over the merged tree at 259882d6a,
+aimed at one question: the upstream mainline moved underneath the seam —
+does the architecture still hold, and what state or branches exist that
+nothing covers? The seven lenses: ledger-vs-struct reconciliation (all
+151 `Interp` fields machine-counted and classified), GC visitation (a
+four-obligation trace — mark edge, prune/reuse-safety, partial-collector
+enumeration, chunk remap — per table), snapshot/restore parity,
+relink/opcode reconciliation, the crank-boundary contract, an EMPIRICAL
+Pending-row blast-radius probe (executed suspend/resume twins per row
+class), and determinism vectors. Every finding below was re-verified
+against the tree before recording (line cites are to 259882d6a); per the
+wave-3 precedent this section records findings first, fixes land as
+their own pass.
+
+**The verdict in one paragraph.** The mechanisms designed as CLOSED
+systems verified sound: snapshot writer↔restorer symmetry on both blob
+and store paths (with a proof that boot slot layout is independent of
+the name table, so restore-onto-fresh-boot is correct by construction);
+canonical byte-ordering at every encode site; the relink walker
+reconciled against all 246 opcodes three independent ways (exactly 23
+carry ID operands, all covered, fail-closed on malformed streams, id
+conventions exact end to end); the async host-boundary fences (all
+three run stacks provably empty at completed boundaries);
+`SideRefCounts` delta commutativity; free-list and mark-set
+determinism; Intl/Temporal/RegExp full determinism (frozen data
+profile, no clock, no `Date`, no `Math.random`, no pointer or hasher
+leaks, one number-formatting path); module graph structurally
+unpersistable today (it lives on `Compartment`, not `Interp`); and the
+post-resume eval story a named refusal. What broke is the two places
+where soundness depends on ENUMERATION KEEPING UP WITH THE ENGINE —
+GC visitation of frame-adjacent state, and the coverage/gating stance —
+and the mainline doubled the thing being enumerated.
+
+**W6-1 (P1, GC, silent corruption) — the `with`/eval environment chain
+is invisible to both collectors.** Five holders carry it: `Interp.env`
+(interp.rs:3704), `CallerState.env` (:4398), `SavedFrame.env` (:4474),
+`CatchJump.env` (:4426), `SavedJump.env` (:4502). The collector region
+(:39330-40580) contains ZERO references to `env` (grep-verified):
+`gc_roots` roots `this_val`/`exception`/`result` but not `self.env` or
+any frame's; `saved_frame_slots` (:39576) visits
+locals/args/stack/this_val/result/cur_func and omits `f.env`,
+`f.target_func`, and `f.jumps[*].env`; the partial collector's
+`frame_refs` (:40406) has the identical omission. Nothing else keeps
+the environment alive: `XS_CODE_WITH` (:8636) allocates the 2-slot
+environment instance and the compiled `POP` discards the only stack
+reference, leaving `self.env` the sole holder; suspension copies it
+into `SavedFrame.env` (:12148, :12204) and resume reinstalls it
+(:13426). Repro: `function* g(o){ with(o){ yield o.x; return y; } }` —
+suspend at the yield, run the between-crank `collect_garbage`, resume:
+the environment slots are swept and reused, and `EVAL_REFERENCE`/
+`GET_VARIABLE` walk a recycled slot as the scope chain — silent wrong
+variable resolution or a kind-check panic. The same path exists through
+`AsyncData.frame.env` (await inside `with`) and
+`AsyncGeneratorData.frame.env`, and through live `jumps` at a
+mid-`try` suspension.
+
+**W6-2 (P1, GC, silent corruption) — `FuncInfo.home` (the `super` home
+object) is not a GC edge anywhere.** Populated for class
+methods/accessors (:9111, :9331, :9393, :10361, :10399), read by every
+`super` path (:11324-11410, :9453-9460); the functions mark arm visits
+only `f.closures` (:39617-39620), the partial tail likewise (:40420).
+Repro: extract `const m = C.prototype.m` and drop every other
+reference to `C`; when `C` dies its `ctor_prototype` entry is removed
+(:39818), leaving the method's home object edge-less; `C.prototype` is
+swept while `m` stays live, its slot is reused, and `m()`'s
+`super.greet()` resolves through the recycled instance — a silent
+wrong answer on both collectors.
+
+**W6-3 (P1, GC, silent corruption) — in-flight `Array.fromAsync` state
+is outside chunk compaction.** `FromAsyncData.{resolve, reject, mapfn,
+this_arg, iterator, next_method, array_like, close_error}` are stored
+`Slot` COPIES (:2945-2978); `this_arg`/`close_error` can carry raw
+`Payload::String(ChunkOffset)`. `external_chunk_refs` (:39944-40082)
+remaps every other holder and has no `from_async` loop — structurally
+it cannot: the `Hooks` struct borrows `from_async` immutably (:39571,
+:40124). Slot-mark coverage is fine (via queued jobs and pending
+promises' reactions); the hole is chunk RELOCATION. Repro: a
+`fromAsync(iterable, fn, "context")` pending across a crank boundary;
+compaction reclaims or slides the `"context"` chunk without rewriting
+the stored offset; the drain then reads a dangling `ChunkOffset` —
+garbage bytes or a length-header panic. The doc claim at :2941-2943
+("no mid-run collection sweeps under it") predates the full collector
+and covered only slots, never relocation.
+
+**W6-4 (P1, GC, silent corruption) — `proto_accessors`' pending getter
+is an unrooted boot anchor.** The boot-populated lazy-install list
+(:3857-3862, seeded with the `Intl.NumberFormat.prototype.format`
+getter at :5930-5933, consumed at every (re)link :6903-6925) is the
+ONE boot anchor not rooted: `gc_roots` roots `proto_methods`
+(:39424-39427) and `proto_data` (:39428-39430) but not
+`proto_accessors`. Repro: a program whose first crank never references
+`Intl`; the between-crank collection sweeps the pending getter
+function; a later unit that first names `NumberFormat` runs the
+install loop and stamps a Reference to the RECYCLED slot as
+`%NumberFormat.prototype%.format`'s getter. The asymmetry with its
+rooted siblings marks this as an oversight, not a policy.
+
+**W6-5 (P1, engine semantics, upstream) — sync `using` never looks up
+`@@dispose`.** In the `XS_CODE_USING | XS_CODE_USING_ASYNC` arm
+(:12527-12573) BOTH lookups — the `asyncDispose` primary and the
+`dispose` fallback — are gated `if op == XS_CODE_USING_ASYNC`. For
+plain `using` the disposer stays `undefined`, fails
+`is_callable_value`, and raises TypeError. `using x = {
+[Symbol.dispose]() {} };` throws at the declaration for every
+non-nullish resource: the sync half of explicit resource management is
+unusable. Fix shape: unconditional `dispose` lookup for the sync form.
+
+**W6-6 (P1, engine semantics, upstream) — the `strict` register
+latches across cranks.** `BEGIN_STRICT*` sets `self.strict = true`
+(:8474); no site resets it at `run` entry and the sloppy BEGIN arm
+never clears it (set-site inventory: :7233/:7261 eval save/restore,
+:8474, :13012 `enter_call` per-frame, :13430/:13703/:13898 resume
+restores, :30692 unwind restores — nothing at crank entry). Function
+bodies are safe (per-frame reset), so the blast radius is the
+TOP-LEVEL code of every subsequent crank on the same machine: after
+one strict crank, a later sloppy crank's top-level `delete o.x` on a
+non-configurable property or write to a readonly property throws where
+it should silently no-op (:9652 et al. branch on `self.strict`). The
+register is serialized nowhere, so a resumed machine boots
+`strict=false`: uninterrupted-vs-resumed twins DIVERGE on completely
+ordinary two-crank input — the highest-blast-radius seam finding of
+the wave, and simultaneously a live-engine bug.
+
+**W6-7 (P1, engine semantics, upstream) — the relink/eval `keep` gate
+has a semantic false negative for runtime-interned names.** The
+append-only filter (relink `|id| id > old_len` :7544; eval
+`> pre_eval_len` :7183-7192) treats "id existed before this unit" as
+"binding was already installed by a full link". But `resolve_at_key`
+(:31214-31247) interns ANY computed string key — `o["Math"] = 1`
+appends `Math` to the table WITHOUT any install having seen it. A
+later unit that first references `Math` textually maps onto the
+pre-existing id, `keep` refuses it, and the global is never bound:
+ReferenceError where a fresh machine answers. Reachable live via the
+eval bridge (`o["Math"]=1; eval("Math.floor(1.5)")`) and across
+cranks via relink; prototype methods (`o["map"]` then `[].map(...)`)
+the same. Fix shape: an installed-set predicate rather than an
+id-range proxy.
+
+**W6-8 (P1 latent, determinism) — Compartment endowment seeding
+iterates a `HashMap` into heap construction.** `globals_by_id:
+HashMap<u16, Slot>` (compartment.rs:147) is iterated at :296/:314 into
+`define_global_id` → `create_global_property`, which PREPENDS a
+property-chain slot per binding: with ≥2 endowments, per-process
+SipHash order decides global enumeration order (`for-in`,
+`Object.keys(globalThis)`) and slot-allocation order (snapshot bytes).
+In-tree callers seed zero endowments, so nothing diverges today. Fix
+shape: sort by id before seeding.
+
+**W6-9 (P2, coverage stance; the EMPIRICAL core finding) — four
+Pending rows are in the SILENT-WRONG class, and no gate refuses them.**
+Executed probes (suspend after crank 1 via `begin_store_session` /
+`checkpoint_to_store`, `resume_from_store`, relinked crank 2, against
+an uninterrupted twin):
+
+| Row held across the suspend | Uninterrupted | Resumed | Class |
+|---|---|---|---|
+| Proxy (empty handler), `p.x` | `5` | completes `undefined` | SILENT-WRONG |
+| Proxy (get trap), `p.x` | halts (`Decode`, by luck) | completes `undefined` | SILENT-WRONG — resumed COMPLETES where live halts |
+| `defineProperty` getter, `o.x` | halts (`Decode`, by luck) | completes `undefined` | SILENT-WRONG |
+| `Uint8Array` writes; element/length reads | `16` | completes `NaN` | SILENT-WRONG |
+| Error as completion value (render) | `Error: boom` | `[object Object]` | SILENT-WRONG |
+| `new RegExp` / literal, `.test` | works | `Unsupported("…non-regexp-this")` | visible-fail |
+| Set iterator `.next()` | works | `Unsupported("…non-iterator")` | visible-fail |
+| resolved promise, `.then` | works | `Unsupported("then:non-promise-this")` | visible-fail |
+| `new Number(5)`, `n + 1` | `6` | `Unsupported("to_primitive…")` | visible-fail |
+| class instance public state; `e.message` | works | works | identical (arena) |
+
+The mechanism: a resumed slot loses its side-table row and degrades to
+a PLAIN OBJECT; whether that is visible depends entirely on whether
+the consuming native guards its `this`. The visible-fail rows are
+protected by per-native guards — by luck of implementation, not by a
+persist gate; `begin_store_session`/`checkpoint_to_store` accepted
+every probed heap. The "honestly Pending" stance was calibrated when
+Pending-row state was rare; the language-completion sweep made
+proxies, accessors, and typed arrays COMMON. Decision required:
+refuse-on-hold (a content witness per row, the `Segments` precedent —
+honest and cheap, but refuses common heaps) versus carrying the atoms
+(proxies/accessors/error_data are small rows; typed arrays are the
+larger lift). Either way, the four silent-wrong rows must not stay
+silently wrong.
+
+**W6-10 (P2, contract) — a halted crank returns a NON-quiescent
+machine, and every persist verb accepts it.** `run` drains microtasks
+only on clean completion (:8297-8303); the `raise_js` host escape
+returns without unwinding (:30743-30752); after any
+Throw/MeterAbort/Unsupported halt the machine holds pending
+`promise_jobs`, a populated `call_stack`, live `jumps`, a set
+`exception`, and a mid-frame value stack. Neither
+`begin_store_session` (machine.rs:523-556) nor `checkpoint_to_store`
+(:614-650) nor the blob verbs check ANY of it; the one probe that
+exists, `has_pending_jobs` (interp.rs:17962), is dead code; and the
+contract prose (machine.rs:32-39, "returns to the host with the value
+stack unwound — the suspend point is that return") is false for the
+halt half of `run`'s return surface. A checkpoint there serializes the
+mid-frame STAC while silently dropping jobs/call_stack/jumps/
+exception: a resumed chimera. `PersistentMachine` rewinds every halt
+(ironhorse_engine.rs:584-597), which is why nothing burns on the
+managed path — one caller's discipline standing in for a three-field
+`is_quiescent()` gate. Related residue: post-halt leftover microtasks
+bleed into the NEXT crank's drain on a raw caller (:17972-17977), and
+the async-generator halt arm (:13792-13799) leaves its instance
+`Executing` with `frame: None` — a lifecycle state the state machine
+cannot otherwise produce.
+
+**W6-11 (P2, determinism) — boundary-live register residue creates an
+uninterrupted-vs-resumed ROOT-SET asymmetry.** `result` is rooted by
+design (:39366-39370 — "it survives past the crank … so it is a
+root"), `locals`/`id_map` are cleared only by the NEXT crank's
+prologue (:8591-8592) and are rooted meanwhile (:39358-39360) — yet
+none is a ledger row, a documented transient, or restored
+(`restore_snapshot_state` :7438-7467 touches none). An uninterrupted
+machine collecting at a boundary retains pages reachable only from the
+stale completion value; its resumed twin (registers at fresh-boot
+defaults) frees them — free-list content diverges, and free-list order
+feeds allocation, which the design itself declares replica-visible.
+The twins suites compare results and computrons, which this does not
+disturb, so they cannot see it.
+
+**W6-12 (P2, gating) — the blob-path verbs lack the dynamic-segments
+gate.** `write_snapshot`/`write_snapshot_to_file`/`suspend_to_cas`
+(machine.rs:117-166) perform no segment check; the store verbs refuse
+by name (:538-540, :633-635). An embedder that wires a
+`SourceCompiler` and suspends via the blob/CAS path silently persists
+exactly what the store path refuses. The `Segments` row's text scopes
+the refusal to "the store gates", so the hole is neither gated nor
+admitted.
+
+**W6-13 (P2, contract) — the armed-meter resume claim is false on the
+armed path.** `meter_host` is a host closure that cannot travel;
+`check_meter` no-ops when it is `None` (:7903-7908); the only re-arm
+API (`arm_meter` → `Meter::begin`, meter.rs:119-124) ZEROES the
+restored index. So a resumed "armed" machine either never meter-aborts
+(host not re-wired) or loses its restored computron count (re-wired
+through the only API) — the METR row's "a resumed machine continues
+its meter exactly" holds only for the unarmed counters. The suite's
+`armed_meter_state_survives_suspend` (machine.rs:1258-1271) asserts
+the restored STATE SHAPE and never runs the resumed machine armed.
+
+**W6-14 (P2, hardening asymmetry) — store-resume paths skip the
+heap-row bounds gate the container path enforces.** `read_machine`
+runs `check_image_slot_bounds` over the decoded heap
+(image.rs:1142-1151); `validate_store` passes an EMPTY heap
+(store.rs:2240-2250), `store_to_image` declines the gate by note
+(:2036-2039), and the lazy fault path verifies leaf hashes then
+decodes verbatim (machine.rs:1050-1070; value.rs:578-605). Leaf hashes
+prove bytes are authentic-to-commit, not in-arena: a tampered-at-rest
+store that recomputes hashes/root/seal passes both resume paths and
+panics deterministically at the first collection, where the identical
+container bytes are refused. `forbid(unsafe_code)` keeps this a
+crash, not memory unsafety.
+
+**W6-15..W6-25 (P2/P3 residue, recorded).** (15) a throw inside
+`super(...)` argument evaluation leaves `pending_new_target` set
+forever (:10465 sets; `unwind_to_jump` :30709-30737 restores
+stack/locals/env and never clears it; a LATER `new F()` takes the
+stale new.target). (16) `n_dispatched`/`step_limit` do not travel, and
+`run_bounded` latches `step_limit` onto all subsequent runs
+(:8276-8279). (17) `count_new_locals` mis-sizes `NEW_PROPERTY_AT` by
++2 (:37305 hard-codes 5 with a comment claiming dispatch advances 5;
+dispatch advances 3, the coder emits a 1-byte op plus a separate
+`INTEGER_1`), desynchronizing the `FUNCTION_LOCAL_METERING` scan —
+metering-only; `remap_ids` and the disassembler are unaffected. (18)
+the eval-bridge relink FAILS OPEN on ids beyond the unit's own atom
+(`relink_program_symbols` :7103-7126 `if let Some … get` with no else)
+where `relink_crank` refuses `MalformedBytecode` — the two walkers
+should agree. (19) `combinators`/`from_async` are append-only arenas
+never pruned, and `promise_guards` grows one flag per resolve pair
+forever — unbounded on a long-lived machine. (20)+(21) folded into
+W6-10. (22) a truncated trailing string/bigint payload relinks
+"successfully" (opcode.rs:1060-1117); the dispatch loop fails closed
+on the same bytes, so hardening-nit. (23) Math transcendentals call
+platform libm (:26041-26098) — the one genuine host-environment
+dependence; needs a decision-of-record: pin one binary/platform per
+release, or vendor a deterministic libm as XS does. (24) the two
+refusal probes select their witness from HashMap iteration
+(`stored_runtime_intern` fallback :7619-7627,
+`live_dynamic_segment_function` :7695-7698) — boolean-consumed today;
+sort or pin the contract before an id lands in an error message. (25)
+ledger doc drift: seven code-verified transients absent from the
+excluded-transients audit trail; nine boot artifacts unnamed by the
+BootDerived list; `side_refs` missing from the satellite registry; and
+the `HardenState` row points at a side table that does not exist while
+the real harden state (arena slot FLAGS, :31801-31861) already
+travels in HEAP — the one place the ledger UNDERSTATES coverage.
+
+#### Why the suites did not catch these
+
+1093 green tests missed every one of the above. The misses are not
+random; they fall into six patterns, each naming the test class that
+would have caught its findings.
+
+**1. Fixture bias toward well-behaved programs.** Test programs are
+written in the house style — no `with` (W6-1 needs a suspension inside
+one), no detached methods on dropped classes (W6-2 needs exactly the
+retention shape natural fixtures never produce, because fixtures store
+things in globals to read them back, which roots everything), no
+`o["Math"]` before a textual `Math` (W6-7), no throw inside `super`
+arguments (W6-15). Adversarial-RETENTION and adversarial-NAMING
+fixtures are a distinct genre from adversarial-input fixtures, and the
+suites have only the latter.
+
+**2. The strongest oracle is structurally single-crank.** `dual_run`
+compares one program per fresh machine against XS, so any property of
+the SECOND crank on one machine is outside its reach: the strict latch
+(W6-6) needs strict-then-sloppy on one machine; every suspend/resume
+semantic (W6-9, W6-11, W6-13) is invisible to it by construction. And
+sweep-era features that never got a fixture are invisible even
+single-crank: no oracle program exercises sync `using` with a
+`Symbol.dispose` method (W6-5) — XS disposes correctly, so ONE fixture
+would have caught it. A multi-crank oracle mode (drive XS through
+`xsSnapshot` the way ironhorse drives its own store) is the
+generalization.
+
+**3. Self-referential validation.** The GC debug parity net compares
+the counted page projection against a fresh enumeration BY THE SAME
+VISITOR — two views derived from one edge definition agree perfectly
+when the definition itself omits an edge (W6-1..4 pass every parity
+check). The ledger's `all_is_exhaustive` asserts the ENUM's internal
+consistency (count, no duplicates), not enum-versus-struct — the
+"verified against the struct" step is a hand convention that a
+30-field bulk merge overwhelmed (W6-25, and the register findings
+generally). Twin suites compare a resumed machine against its own
+lineage on results+computrons, so a shared omission (W6-11's root
+asymmetry surfaces only in free-list/layout, W6-9's dropped rows only
+in row-dependent reads the fixtures deliberately avoid) cancels out.
+The golden pin covers one machine's bytes, and the endowment path
+(W6-8) ships zero-endowment fixtures. The antidotes are mechanical
+ground truth: an enum-vs-struct reconciliation test (parse the struct
+field list from source in a build test and diff it against
+`SideTable::ALL` + documented satellite/transient name lists), and a
+GC net that checks against an INDEPENDENTLY DERIVED edge list rather
+than the visitor's own output.
+
+**4. Assertions that stop one step short of behavior.**
+`armed_meter_state_survives_suspend` asserts the restored MeterState
+fields and never runs the resumed machine armed (W6-13). The twins
+assert results, never post-boundary-collect heap layout (W6-11). The
+rule: a contract test must exercise the CONSUMER of the state it
+restores, not the state's shape.
+
+**5. Contracts by convention, without an enforcement point.**
+Quiescence is documented prose plus a dead probe (`has_pending_jobs`),
+enforced only by `PersistentMachine`'s rewind discipline (W6-10); the
+segments gate landed on the store verbs but not the verb FAMILY
+(W6-12); the bounds gate landed on the container decode path but not
+the store decode paths (W6-14). When a contract matters, it needs a
+gate at the seam — and then a test that VIOLATES the contract and
+asserts the refusal. There are no contract-violation tests anywhere in
+the suites: nothing checkpoints a halted machine, nothing suspends a
+Proxy-holding heap and asserts the failure mode. W6-9 exists because
+this wave finally ran that probe.
+
+**6. The coverage frontier is untested.** Every suite tests the
+INTERIOR of the supported region (covered state round-trips
+correctly); none tests its BOUNDARY (uncovered state fails VISIBLY).
+The Pending classification silently relied on per-native `this`
+guards for its safety story, and nobody had ever checked which rows
+actually had one (W6-9's silent-wrong four). Same genre: the store is
+fuzzed at the decoder but no harness forges a store with recomputed
+hashes (W6-14), the eval-bridge walker never sees a crafted unit
+(W6-18), and the metering walker's mis-size cancels out on every
+tested program (W6-17 — a divergence that only fires when a stray
+`0x86` lands in the over-stepped bytes, which no fixture produces).
+
+**The meta-cause** is one sentence: the seam's safety rests on
+hand-maintained enumerations (ledger rows, GC visitation arms, gate
+placement, transient lists) that scale with incremental growth and
+were overwhelmed by a bulk merge that doubled the engine underneath
+them — and none of those enumerations has a mechanical
+reconciliation against the source of truth it enumerates. The
+wave-6 fix pass should therefore land not only the fixes but the
+missing test CLASSES: enum-vs-struct reconciliation, an independent
+GC ground-truth net, contract-violation locks per gate,
+failure-mode locks per Pending row, a multi-crank oracle mode, and
+adversarial-retention fixtures.
+
 ## What Is the Problem Being Solved?
 
 ### Ground truth: the snapshot is a monolith
