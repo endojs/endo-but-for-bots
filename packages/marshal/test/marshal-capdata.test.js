@@ -1,6 +1,8 @@
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
+import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
+import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { passStyleOf, Far, unpassableSymbolForName } from '@endo/pass-style';
 import { makeMarshal } from '../src/marshal.js';
 import { roundTripPairs } from '../tools/marshal-test-data.js';
@@ -88,6 +90,22 @@ test('unserialize static data', t => {
   t.truthy(isFrozen(a.b));
   t.truthy(isFrozen(a.b.c));
   t.truthy(isFrozen(a.b.c.d));
+});
+
+test('serialize and unserialize immutable byte arrays', t => {
+  const m = makeTestMarshal();
+  const bytes = bytesToImmutable(new Uint8Array([0, 1, 254, 255]));
+
+  t.deepEqual(m.serialize(bytes), {
+    body: '{"@qclass":"byteArray","data":"0001feff"}',
+    slots: [],
+  });
+  const decoded = m.unserialize({
+    body: '{"@qclass":"byteArray","data":"0001feff"}',
+    slots: [],
+  });
+  t.is(passStyleOf(decoded), 'byteArray');
+  t.deepEqual([...bytesFromImmutable(decoded)], [0, 1, 254, 255]);
 });
 
 test('serialize errors', t => {

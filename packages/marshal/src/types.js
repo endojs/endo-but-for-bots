@@ -47,6 +47,8 @@ export {};
  *           } |
  *           EncodingClass<'tagged'> & { tag: string,
  *                                       payload: Encoding
+ *           } |
+ *           EncodingClass<'byteArray'> & { data: string
  *           }
  * } EncodingUnion
  *

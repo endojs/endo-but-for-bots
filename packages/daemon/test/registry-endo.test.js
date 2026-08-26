@@ -17,6 +17,8 @@ import path from 'path';
 import fsp from 'fs/promises';
 import { E } from '@endo/eventual-send';
 import { makeCancelKit } from '@endo/cancel';
+import { bytesFromText } from '@endo/bytes/from-string.js';
+import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { start, stop, purge, makeEndoClient } from '../index.js';
 
 const contexts = [];
@@ -68,6 +70,19 @@ test.serial('E(host).lookup("@registry") resolves an EndoRegistry', async t => {
     'the registry reports its help',
   );
 });
+
+test.serial(
+  'EndoRegistry.resolve accepts immutable package JSON bytes over CapTP',
+  async t => {
+    const { host } = await prepare(t);
+    const registry = await E(host).lookup('@registry');
+    const packageJson = bytesToImmutable(
+      bytesFromText(JSON.stringify({ name: 'entry' })),
+    );
+    const resolution = await E(registry).resolve(packageJson);
+    t.deepEqual(resolution.keys, []);
+  },
+);
 
 test.serial(
   '@registry lookup(name, version) is undefined before any fetch',

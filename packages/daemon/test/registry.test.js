@@ -10,6 +10,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 
 import { E } from '@endo/far';
 import { bytesFromText } from '@endo/bytes/from-string.js';
+import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { bytesToText } from '@endo/bytes/to-string.js';
 import { createHash } from 'node:crypto';
 
@@ -97,7 +98,10 @@ const makeFakeBackend = (fixture, { tamper = new Set() } = {}) => {
  * @param {object} [options]
  */
 const resolveEntry = (packageJson, registry, options) =>
-  E(registry).resolve(JSON.stringify(packageJson), options);
+  E(registry).resolve(
+    bytesToImmutable(bytesFromText(JSON.stringify(packageJson))),
+    options,
+  );
 
 test('semver: parse, compare, satisfies, minSatisfying', t => {
   t.deepEqual(
