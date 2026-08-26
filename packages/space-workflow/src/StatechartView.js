@@ -10,11 +10,28 @@ import { layoutGraph } from './layout.js';
 
 const NODE_WIDTH = 150;
 const NODE_HEIGHT = 40;
-// Edges that span more than one column, and edges that go backwards, are routed
-// OUTSIDE the node band rather than straight across it — a straight chord from
-// column 1 to column 4 otherwise runs through whatever sits in columns 2 and 3,
-// which reads as a path going through an unrelated state.
+// Backward edges arc under the node band. Forward edges that span more than one
+// column are ROUTED by the layout, through a lane of its own in each column
+// they cross, so they never pass over an unrelated state.
 const ARC_MARGIN = 64;
+
+/**
+ * A smooth path through a list of points, with horizontal control handles so it
+ * reads as a flowing line rather than a dogleg.
+ *
+ * @param {Array<{ x: number, y: number }>} points
+ * @returns {string}
+ */
+const smoothPath = points => {
+  let d = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 1; i < points.length; i += 1) {
+    const a = points[i - 1];
+    const b = points[i];
+    const handle = Math.max(20, (b.x - a.x) / 2);
+    d += ` C ${a.x + handle} ${a.y}, ${b.x - handle} ${b.y}, ${b.x} ${b.y}`;
+  }
+  return d;
+};
 
 /**
  * The ids of every active node in a run configuration: the top-level
@@ -68,7 +85,10 @@ export const StatechartView = ({
   pending,
 }) => {
   const graph = renderGraph(chart);
-  const { positions, width, height } = layoutGraph(graph, chart.initial);
+  const { positions, routes, width, height } = layoutGraph(
+    graph,
+    chart.initial,
+  );
   // `$eachParam` regions render once under a `#each` segment while the
   // runtime configuration and effect paths carry real indices (`#0`,
   // `#1`, …); fold runtime ids onto the drawn node when no literal node
@@ -88,18 +108,17 @@ export const StatechartView = ({
     const to = positions[edge.to];
     return from !== undefined && to !== undefined && !edge.internal;
   });
-  const hasOver = drawn.some(edge => {
-    const from = positions[edge.from];
-    const to = positions[edge.to];
-    return to.layer > from.layer + 1;
-  });
   const hasUnder = drawn.some(edge => {
     const from = positions[edge.from];
     const to = positions[edge.to];
     return to.layer <= from.layer;
   });
-  const top = hasOver ? -ARC_MARGIN : 0;
-  const viewHeight = bandHeight - top + (hasUnder ? ARC_MARGIN : 0);
+  const top = 0;
+  const viewHeight = bandHeight + (hasUnder ? ARC_MARGIN : 0);
+  // Parallel transitions share a routed lane, so their labels would land on the
+  // same point; stagger them down the lane instead.
+  /** @type {Map<string, number>} */
+  const parallelSeen = new Map();
 
   return h(
     'svg',
@@ -110,7 +129,7 @@ export const StatechartView = ({
       'aria-label': `Statechart for ${chart.name}`,
     },
     [
-      ...graph.edges.map(edge => {
+      ...graph.edges.map((edge, edgeIndex) => {
         const from = positions[edge.from];
         const to = positions[edge.to];
         if (from === undefined || to === undefined || edge.internal) {
@@ -121,20 +140,23 @@ export const StatechartView = ({
         const x2 = to.x;
         const y2 = to.y + NODE_HEIGHT / 2;
         const backward = to.layer <= from.layer;
-        // A skip-forward edge arcs over the top of the band; a backward edge
-        // arcs under the bottom. Only same-column-to-next-column edges take the
-        // direct route, where there is nothing in between to cross.
-        const skips = !backward && to.layer > from.layer + 1;
+        const route = routes[edgeIndex];
         let d;
+        let labelX = (x1 + x2) / 2;
         let labelY;
         if (backward) {
           const under = bandHeight + ARC_MARGIN / 2;
           d = `M ${x1} ${y1} C ${x1 + 40} ${under}, ${x2 - 40} ${under}, ${x2} ${y2}`;
           labelY = under - 4;
-        } else if (skips) {
-          const over = top + ARC_MARGIN / 2;
-          d = `M ${x1} ${y1} C ${x1 + 40} ${over}, ${x2 - 40} ${over}, ${x2} ${y2}`;
-          labelY = over - 4;
+        } else if (route !== undefined && route.length > 0) {
+          d = smoothPath([{ x: x1, y: y1 }, ...route, { x: x2, y: y2 }]);
+          // Along the lane, staggered so parallel transitions stay readable.
+          const pair = `${edge.from}\u0000${edge.to}`;
+          const nth = parallelSeen.get(pair) ?? 0;
+          parallelSeen.set(pair, nth + 1);
+          const at = route[Math.min(nth, route.length - 1)];
+          labelX = at.x;
+          labelY = at.y - 6 - (nth >= route.length ? (nth + 1) * 12 : 0);
         } else {
           d = `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`;
           labelY = (y1 + y2) / 2 - 4;
@@ -146,14 +168,14 @@ export const StatechartView = ({
             h('path', {
               class: backward
                 ? 'wf-edge wf-edge-back'
-                : `wf-edge${skips ? ' wf-edge-skip' : ''}`,
+                : `wf-edge${route !== undefined ? ' wf-edge-routed' : ''}`,
               d,
             }),
             h(
               'text',
               {
                 class: 'wf-edge-label',
-                x: (x1 + x2) / 2,
+                x: labelX,
                 y: labelY,
               },
               edge.guarded ? `${edge.type} ✓?` : edge.type,
