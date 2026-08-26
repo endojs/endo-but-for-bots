@@ -135,6 +135,9 @@ const GatewayBootstrapInterface = M.interface('GatewayBootstrap', {
  *   destined to weblets this registration publishes. Phase 2 stores
  *   the reference but does not call into it; the call sites land
  *   with the HTTP/WS surface.
+ * @property {Promise<unknown>} [cancelled] Required when `daemon` is
+ *   present. Settles when the daemon's CapTP connection detaches, at
+ *   which point the gateway automatically deregisters the daemon.
  */
 
 /**
@@ -355,6 +358,19 @@ export const makeGatewayBootstrap = ({
   /** @type {Set<RegistrationEntry>} */
   const allRegistrations = new Set();
 
+  /** @param {RegistrationEntry} entry */
+  const deregisterEntry = entry => {
+    if (entry.deregistered) {
+      return;
+    }
+    entry.deregistered = true;
+    for (const key of entry.publicKeys) {
+      registrationsByKey.delete(publicKeyToHex(key));
+    }
+    entry.weblets.clear();
+    allRegistrations.delete(entry);
+  };
+
   /**
    * @param {RegistrationEntry} entry
    */
@@ -413,15 +429,7 @@ export const makeGatewayBootstrap = ({
           registrationsByKey.set(hex, entry);
         },
         async deregister() {
-          if (entry.deregistered) {
-            return;
-          }
-          entry.deregistered = true;
-          for (const key of entry.publicKeys) {
-            registrationsByKey.delete(publicKeyToHex(key));
-          }
-          entry.weblets.clear();
-          allRegistrations.delete(entry);
+          deregisterEntry(entry);
         },
         async listWeblets() {
           if (entry.deregistered) {
@@ -444,7 +452,7 @@ export const makeGatewayBootstrap = ({
    * @param {ArrayBuffer | Uint8Array} publicKey
    * @param {ArrayBuffer | Uint8Array} nonce
    * @param {ArrayBuffer | Uint8Array} signature
-   * @param {{ daemon?: unknown, relayTarget?: unknown }} extras
+   * @param {{ daemon?: unknown, cancelled?: Promise<unknown>, relayTarget?: unknown }} extras
    */
   const registerInternal = (publicKey, nonce, signature, extras) => {
     nonces.verifyAndConsume({ publicKey, nonce, signature });
@@ -473,6 +481,12 @@ export const makeGatewayBootstrap = ({
     }
     registrationsByKey.set(hex, entry);
     allRegistrations.add(entry);
+    if (extras.cancelled !== undefined) {
+      void Promise.resolve(extras.cancelled).then(
+        () => deregisterEntry(entry),
+        () => deregisterEntry(entry),
+      );
+    }
     return makeRegistrationExo(entry);
   };
 
@@ -499,8 +513,12 @@ export const makeGatewayBootstrap = ({
         const publicKey = checkPublicKey(args.publicKey);
         const nonce = checkNonce(args.nonce);
         const signature = checkSignature(args.signature);
+        if (args.daemon !== undefined && args.cancelled === undefined) {
+          throw makeError(X`register requires cancelled when daemon is present`);
+        }
         return registerInternal(publicKey, nonce, signature, {
           daemon: args.daemon,
+          cancelled: args.cancelled,
         });
       },
       /** @param {RelayRegistrationArgs} args */

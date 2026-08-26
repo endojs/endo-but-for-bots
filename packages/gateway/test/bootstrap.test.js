@@ -6,6 +6,7 @@ import test from 'ava';
 
 import { E } from '@endo/far';
 import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { makePromiseKit } from '@endo/promise-kit';
 
 import {
   makeGatewayBootstrap,
@@ -97,6 +98,41 @@ test('register rejects a missing args object', async t => {
     () => E(handle.bootstrap).register(/** @type {any} */ (null)),
     { message: /register expects an args object/ },
   );
+});
+
+test('register requires connection cancellation with a daemon', async t => {
+  const { handle } = stand();
+  const keypair = await generateNodeEd25519Keypair();
+  const issued = await E(handle.bootstrap).challenge();
+  await t.throwsAsync(
+    () =>
+      E(handle.bootstrap).register({
+        publicKey: keypair.publicKey,
+        nonce: issued.nonce,
+        signature: keypair.sign(issued.hashedNonce),
+        daemon: harden({}),
+      }),
+    { message: /requires cancelled when daemon is present/ },
+  );
+});
+
+test('settled connection cancellation deregisters its daemon', async t => {
+  const { handle } = stand();
+  const keypair = await generateNodeEd25519Keypair();
+  const issued = await E(handle.bootstrap).challenge();
+  const { promise: cancelled, resolve: cancel } = makePromiseKit();
+  await E(handle.bootstrap).register({
+    publicKey: keypair.publicKey,
+    nonce: issued.nonce,
+    signature: keypair.sign(issued.hashedNonce),
+    daemon: harden({}),
+    cancelled,
+  });
+  t.is(handle.listRegisteredPeers().length, 1);
+  cancel(undefined);
+  await cancelled;
+  await Promise.resolve();
+  t.is(handle.listRegisteredPeers().length, 0);
 });
 
 test('register rejects a wrong-length publicKey', async t => {
