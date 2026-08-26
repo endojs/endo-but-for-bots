@@ -56,7 +56,7 @@
 //!   *deterministic* slot indices. `restore_snapshot_state` reconstructs the
 //!   machine on a fresh [`ironhorse_vm::Interp::new`] whose boot lands them at the
 //!   same indices the snapshot arena's boot region uses, so they need no atom.
-//! - `symbol_ids`, `next_intern_id`, and the name-keyed lookup-id caches
+//! - `symbol_ids` and the name-keyed lookup-id caches
 //!   (`length_id`/`name_id`/`value_id`/`done_id`/`size_id`/`byte_length_id`/
 //!   `byte_offset_id`/`buffer_id`/`then_id`/`last_index_id`, plus the
 //!   `regexp_getter_ids`/`regexp_result_ids` clusters) — **derived from
@@ -64,7 +64,28 @@
 //!   re-derives all of them (`bind_program_symbols`) from the restored names,
 //!   identically to boot; this is exactly what makes the `SymbolTables` row
 //!   [`Coverage::RebuiltAtRestore`] rather than a silent omission. (The
-//!   forward `symbol_names` itself is the ledger row, not a transient.)
+//!   forward `symbol_names` itself is the ledger row, not a transient; the
+//!   top-down `next_symbol_key_id` mint counter is NOT derived — it travels
+//!   in the `SYMB` atom with the `SymbolKeyIds` row.)
+//!
+//! **Satellite brand/edge sets — classified with their primary row.** A few
+//! small `HashSet`/`Vec` fields brand or annotate instances whose principal
+//! state is another row's; each rides its primary row's coverage rather than
+//! earning a variant, and this list is the audit trail (a set that stops
+//! riding must graduate to a row):
+//! - `detached_buffers`, `shared_buffers` — brands on `array_buffers`
+//!   instances (`ArrayBuffers`, Pending).
+//! - `deleted_fn_meta` — per-function deleted-`length`/-`name` marks
+//!   (`Functions`, Pending).
+//! - `from_async` — `Array.fromAsync` accumulation state (`Combinators`,
+//!   Pending).
+//! - `regexp_last_names` — the last-match named-group scratch (`RegExps`,
+//!   Pending).
+//! - `arguments_objects` — the arguments-exotic brand set. Its primary row
+//!   (`Arrays`) is Serialized but this brand does NOT yet travel, so a
+//!   suspended arguments object resumes as a plain array-exotic — an honest
+//!   known gap, called out here so the `Arrays` row's `Serialized` is not
+//!   read as covering it.
 
 /// Whether a side table is carried by the current snapshot image
 /// ([`crate::image`]), and if not, why it is safe to defer.
@@ -144,8 +165,14 @@ pub enum SideTable {
     TypedArrays,
     /// `data_views` — DataView view state + buffer reference.
     DataViews,
-    /// `iterators` — array-iterator state (target, index, kind, reused
-    /// result object).
+    /// `iterators` — built-in iterator state (target, index/byte-offset,
+    /// kind, reused result object): array, string, for-in enumerator, and
+    /// Map/Set collection cursors, which additionally carry the owning
+    /// collection's clear-generation. Pending — and note the live
+    /// machine's collection cursors index tombstoned entry positions, so
+    /// when this row lands its encoding must compose with the snapshot
+    /// writer's COLL compaction (which renumbers entries by dropping
+    /// tombstones) or a resumed cursor drifts.
     Iterators,
     /// `promises` — per-instance settlement STATUS/RESULT/THENS.
     Promises,
@@ -171,9 +198,44 @@ pub enum SideTable {
     /// `regexps` — compiled RegExp program + source/flags (note:
     /// `lastIndex` is an ordinary own property, in the arena).
     RegExps,
-    /// `temporal_instants` + `temporal_durations` — exact immutable Temporal
-    /// internal-slot records keyed by their branded instance slots.
+    /// `temporal_instants` / `temporal_durations` / `temporal_plains` /
+    /// `temporal_zoneds` — immutable Temporal internal-slot records keyed
+    /// by their branded instance slots (the plain/zoned tables arrived
+    /// with the language-completion sweep, 2026-08-26).
     TemporalRecords,
+    /// `async_generators` + `async_gen_run_stack` — per-instance async
+    /// generator state (suspended frame, request queue, lifecycle) and the
+    /// mid-`step_async_generator` dispatch stack. The language-completion
+    /// sweep's async-generator machinery; per-instance runtime state like
+    /// `Generators`/`AsyncInstances`, so honestly `Pending` with them.
+    AsyncGenerators,
+    /// `private_values` + `private_accessors` — class private
+    /// fields/methods and private accessors keyed by (instance, brand).
+    /// Reachable only through these maps (no arena property slot), so a
+    /// suspended instance's private state does not yet travel.
+    PrivateElements,
+    /// `disposable_stacks` — `DisposableStack`/`AsyncDisposableStack`
+    /// recorded resources and dispose callbacks. Per-instance runtime
+    /// state; a suspended stack's pending disposals do not yet travel.
+    DisposableStacks,
+    /// The Intl per-instance record tables (`locales`, `collators`,
+    /// `list_formats`, `plural_rules`, `number_formats`, `segmenters`,
+    /// `segments`, `segment_iterators`, `date_time_formats`) plus the
+    /// bound-function link tables (`collator_compare_functions`,
+    /// `number_format_bound_functions`). Internal-slot records keyed by
+    /// branded instance slots, none arena-recoverable.
+    IntlRecords,
+    /// `code_segments` + `func_segments` — the dynamic-code segment buffer
+    /// (the `eval`/dynamic-`Function` source bridge) and the function→
+    /// segment index. No atom carries crank or segment bytecode, so a heap
+    /// holding a live segment-backed function cannot round-trip; the store
+    /// gates refuse it by name (`StoreError::DynamicSegmentsUnsupported`
+    /// at `begin_store_session` and `checkpoint_to_store` — see
+    /// `tests/dynamic_segments.rs`). The row is the ledger's name for that
+    /// refusal: flipping it to a coverage means building crank-code
+    /// retention, which also unlocks the cross-crank-function half of
+    /// `Functions`.
+    Segments,
     /// `ctor_prototype` — each constructor instance's `.prototype` object.
     /// The `.prototype` *object* is an arena slot, but the constructor→proto
     /// link is HashMap-only (never an own-property slot), so it is not
@@ -182,21 +244,21 @@ pub enum SideTable {
     /// `symbol_registry` (+ `symbol_registry_keys`) — the global
     /// `Symbol.for`/`keyFor` registry.
     SymbolRegistry,
-    /// `symbol_names` / `symbol_ids` / `next_intern_id` — the program
-    /// symbol name↔id tables and the runtime-interned-key counter. Only
-    /// `symbol_names` is serialized (the `NAME` atom; `SYMB` carries
-    /// well-known symbol identities and is a separate, still-pending
-    /// surface); `symbol_ids` and
-    /// `next_intern_id` are re-derived from it at restore.
+    /// `symbol_names` / `symbol_ids` — the program symbol name↔id tables.
+    /// Since the id-space unification (2026-08-26) a runtime-interned
+    /// string key APPENDS to `symbol_names` (its id is its position), so
+    /// the one table covers program and runtime names alike. Only the
+    /// forward `symbol_names` is serialized (the `NAME` atom); the inverse
+    /// `symbol_ids` map and the lookup-id caches are re-derived from it at
+    /// restore.
     SymbolTables,
-    /// `symbol_key_ids` — the symbol-value descriptor slot → property id map
-    /// minted when a symbol is used as a property key (`o[sym]` /
-    /// `Object.defineProperty(o, sym, …)`). The symbol-keyed property *slot*
-    /// round-trips in the arena, but the desc→id map that re-keys it by the
-    /// same symbol is runtime-minted (not boot-derived, not derivable from
-    /// `symbol_names`), so a machine suspended holding a symbol key cannot
-    /// re-resolve it after restore until an atom carries this — honestly
-    /// `Pending`, exactly like `SymbolRegistry`.
+    /// `symbol_key_ids` + `next_symbol_key_id` — the symbol-value
+    /// descriptor slot → property id map minted when a symbol is used as a
+    /// property key (`o[sym]` / `Object.defineProperty(o, sym, …)`), and
+    /// its top-down mint counter (ids descend from `u16::MAX`, so they
+    /// never collide with the growing name table). Both travel in the
+    /// `SYMB` atom (2026-08-26; formerly the honest-`Pending` intern gap
+    /// that made intern-holding machines refuse to persist).
     SymbolKeyIds,
     /// The module records/maps (`ironhorse_vm::module::ModuleGraph`): a
     /// worker that has imported modules carries linked module records and
@@ -245,6 +307,11 @@ impl SideTable {
         SideTable::AsyncRunStack,
         SideTable::RegExps,
         SideTable::TemporalRecords,
+        SideTable::AsyncGenerators,
+        SideTable::PrivateElements,
+        SideTable::DisposableStacks,
+        SideTable::IntlRecords,
+        SideTable::Segments,
         SideTable::CtorPrototype,
         SideTable::SymbolRegistry,
         SideTable::SymbolTables,
@@ -282,13 +349,14 @@ impl SideTable {
             // machine already aborts cross-crank construction), which is the
             // deciding evidence the row cannot be claimed covered.
             SideTable::CtorPrototype => ("ctor_prototype", Pending),
-            // Only `symbol_names` is serialized (the `SYMB` atom); the inverse
-            // `symbol_ids` and the `next_intern_id` counter are *derived* from
-            // it and never persisted (`link_intrinsics` computes them at boot).
-            // `restore_snapshot_state` re-derives both via `bind_program_symbols`
-            // from the restored names, so an earlier-crank global reads back by
-            // name and a novel runtime-interned key cannot collide with a
-            // program symbol id. Regression: `restore_side_tables.rs`
+            // Only the forward `symbol_names` is serialized (the `NAME`
+            // atom); the inverse `symbol_ids` map is *derived* from it and
+            // never persisted (`link_intrinsics` computes it at boot).
+            // `restore_snapshot_state` re-derives it via
+            // `bind_program_symbols` from the restored names, so an
+            // earlier-crank global reads back by name — and because a
+            // runtime-interned string key IS a `symbol_names` append, the
+            // same restore covers it. Regression: `restore_side_tables.rs`
             // (`symbol_tables_rebuilt_at_restore`).
             SideTable::SymbolTables => {
                 ("symbol_names(NAME-serialized)+symbol_ids(derived)", RebuiltAtRestore)
@@ -351,7 +419,18 @@ impl SideTable {
             SideTable::AsyncInstances => ("async_instances", Pending),
             SideTable::AsyncRunStack => ("async_run_stack", Pending),
             SideTable::RegExps => ("regexps", Pending),
-            SideTable::TemporalRecords => ("temporal_instants/temporal_durations", Pending),
+            SideTable::TemporalRecords => {
+                ("temporal_instants/temporal_durations/temporal_plains/temporal_zoneds", Pending)
+            }
+            SideTable::AsyncGenerators => ("async_generators/async_gen_run_stack", Pending),
+            SideTable::PrivateElements => ("private_values/private_accessors", Pending),
+            SideTable::DisposableStacks => ("disposable_stacks", Pending),
+            SideTable::IntlRecords => ("locales/collators/…/date_time_formats + bound-fn links", Pending),
+            // Pending here is load-bearing beyond the missing atom: the
+            // store gates REFUSE a heap holding a live segment-backed
+            // function (`DynamicSegmentsUnsupported`), fail-closed instead
+            // of resuming a callable whose body is gone.
+            SideTable::Segments => ("code_segments/func_segments", Pending),
             SideTable::Modules => ("module::ModuleGraph", Pending),
             SideTable::HardenState => ("lockdown/harden state", Pending),
             // The metering state — carried by the METR atom (child 3).
@@ -397,7 +476,7 @@ mod tests {
     fn all_is_exhaustive() {
         // Count of variants, kept beside the enum. Bump when a variant is
         // added — the assertion below then forces the ALL entry too.
-        const VARIANT_COUNT: usize = 33;
+        const VARIANT_COUNT: usize = 38;
         assert_eq!(SideTable::ALL.len(), VARIANT_COUNT);
 
         // No duplicates: each field name appears once.
@@ -418,16 +497,23 @@ mod tests {
         // arena property slot) and needs the `functions` table to interpret,
         // so it is honestly Pending — not the false `InArena` it once claimed.
         assert!(pending.contains(&SideTable::CtorPrototype));
+        // The language-completion sweep's tables joined the ledger Pending,
+        // and the segments row names the store gates' standing refusal.
+        assert!(pending.contains(&SideTable::AsyncGenerators));
+        assert!(pending.contains(&SideTable::Segments));
         // The restore-time-rebuilt rows are not pending: their data round-trips
         // and restore re-derives the consulting index/counter.
         assert!(!pending.contains(&SideTable::GlobalProps));
         assert!(!pending.contains(&SideTable::SymbolTables));
+        // The 2026-08-26 id-space unification landed the symbol-key table
+        // in the SYMB atom; the old intern gap is closed, not pending.
+        assert!(!pending.contains(&SideTable::SymbolKeyIds));
     }
 
     /// The restore-time rebuild rows are classified [`Coverage::RebuiltAtRestore`],
     /// not the `InArena`/`Serialized` overstatement the supervisor review
     /// flagged: each round-trips its data but reaches it through a side index
-    /// (`global_props` map / `symbol_ids` inverse map + `next_intern_id`) that
+    /// (`global_props` map / `symbol_ids` inverse map) that
     /// `ironhorse_vm::Interp::restore_snapshot_state` re-derives. The cross-crank
     /// regression that the rebuild actually runs lives in
     /// `tests/restore_side_tables.rs`.

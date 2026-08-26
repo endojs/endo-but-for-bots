@@ -7883,10 +7883,11 @@ impl Interp {
         Ok(remapped)
     }
 
-    /// The first program-symbol id past this machine's table — every id
-    /// at or above it was RUNTIME-INTERNED (a string key minted past the
-    /// program table by `o[expr]`, `JSON.parse`, the reflection helpers,
-    /// or a symbol key by `o[sym]`).
+    /// The first id past this machine's name table. Since the id-space
+    /// unification a runtime-interned STRING key appends INTO the table
+    /// (`append_name_key`), so every id at or above this floor is a
+    /// SYMBOL-key id (minted top-down from `u16::MAX` by `o[sym]` /
+    /// `Object.defineProperty(o, sym, …)`).
     pub fn first_runtime_intern_id(&self) -> u16 {
         (self.symbol_names.len() as u16).saturating_add(1)
     }
@@ -7895,16 +7896,17 @@ impl Interp {
     /// `intern_symbol_key` lowers the top-down counter and nothing raises
     /// it, so this is cheap and monotone.
     ///
-    /// String keys no longer count: a runtime-interned NAME appends to the
+    /// String keys do not count: a runtime-interned NAME appends to the
     /// persisted name table (`append_name_key`), so its id→name map
-    /// round-trips every snapshot and it is not a persistence hazard at
-    /// all. What remains is the SYMBOL-key map (`symbol_key_ids`, keyed by
-    /// descriptor slot), which does not yet travel — the ledger's SYMB
-    /// row. And minting alone is still NECESSARY, not sufficient, for the
-    /// hazard: interning happens on a LOOKUP, not a store (review wave 5's
-    /// mint-counter false-positive lesson). Ask
-    /// [`Self::stored_runtime_intern`] for the real answer; ask this first
-    /// only to skip that walk.
+    /// round-trips every snapshot. Symbol keys travel too now — the map
+    /// plus this counter ride the SYMB atom
+    /// ([`Self::symbol_key_table`] / [`Self::restore_symbol_key_table`])
+    /// — so minting is no longer a persistence hazard either; this
+    /// remains as the cheap pre-check that lets
+    /// [`Self::stored_runtime_intern`] skip its O(heap) walk, and as a
+    /// test witness that a fixture really minted (review wave 5's
+    /// mint-counter lesson: minting happens on a LOOKUP, not a store, so
+    /// only [`Self::stored_runtime_intern`] proves an id was STORED).
     pub fn may_hold_runtime_interns(&self) -> bool {
         self.next_symbol_key_id != u16::MAX
     }
@@ -7915,13 +7917,16 @@ impl Interp {
     /// ids: string keys always live IN the table since the id-space
     /// unification, so nothing else occupies that range.)
     ///
-    /// This is what remains of the id-space hazard (wave-4 P1): the
-    /// symbol-key map (`symbol_key_ids`) does NOT travel in a snapshot,
-    /// yet the slots keyed by those ids do. A resumed machine re-mints
-    /// the same numeric ids for different symbols and silently reads and
-    /// writes the wrong slot. So a store must refuse to persist such a
-    /// machine rather than resume it corrupt, until the ledger's SYMB
-    /// row carries the map.
+    /// Historically this was the persistence gate for the id-space hazard
+    /// (wave-4 P1): the symbol-key map did not travel, so a store refused
+    /// any machine that stored such an id. The map and its counter now
+    /// ride the SYMB atom, so the gate is gone; this survives as a TEST
+    /// WITNESS (`side_table_ledger.rs` uses it to prove a fixture stored
+    /// a symbol-key id before checkpointing) and as the live-side
+    /// counterpart of the image-side audit
+    /// (`MachineImage::stored_unregistered_key_id`, which refuses a
+    /// STORED id that maps to nothing in either table — torn or crafted
+    /// bytes, not honest minting).
     ///
     /// A slot on the FREE LIST is skipped: its record is stale, nothing
     /// reaches it, and its id names nothing. Counting it would refuse a
