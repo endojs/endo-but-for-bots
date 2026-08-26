@@ -8,6 +8,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeRunSyncClient } from '@endo/workflow/src/sync.js';
 
 import { ApprovalPanel } from './ApprovalPanel.js';
+import { newestFirst, relativeAge } from './relative-age.js';
 import { StatechartView } from './StatechartView.js';
 import { TimelineView } from './TimelineView.js';
 
@@ -168,7 +169,9 @@ export const WorkflowApp = ({ service, powers }) => {
       h(
         'ul',
         { class: 'wf-rail-list' },
-        summaries.map(summary =>
+        // Newest at the top: the run you just started is the one you are
+        // looking for, and it was previously at the bottom of a growing list.
+        newestFirst(summaries).map(summary =>
           h(
             'li',
             { key: summary.runId },
@@ -202,6 +205,11 @@ export const WorkflowApp = ({ service, powers }) => {
                   'span',
                   { class: 'wf-rail-name' },
                   `${summary.chartName ?? '?'} ${summary.runId}`,
+                ),
+                h(
+                  'span',
+                  { class: 'wf-rail-age' },
+                  relativeAge(summary.updatedAt),
                 ),
               ],
             ),
