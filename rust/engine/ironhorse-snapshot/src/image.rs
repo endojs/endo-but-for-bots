@@ -274,21 +274,22 @@ impl MachineImage {
         }
     }
 
-    /// The first RUNTIME-INTERNED property id this image stores, or
-    /// `None` if it stores none — the content witness the persistence
-    /// gates ask ([`crate::store::StoreError::RuntimeInternsUnsupported`]).
-    ///
-    /// An id past `names` was minted at runtime, and its id→name map
-    /// (`KEYS`/`SYMB`) does not travel yet, so a resumed machine would
-    /// re-mint the same number for a different key and read the wrong
-    /// slot. Free slots are skipped — a stale record on the free list
-    /// names nothing.
+    /// The first stored property id that is registered in NEITHER table —
+    /// not a `names` position (string keys live IN the table since the
+    /// id-space unification) and not a `symbols` pair (the SYMB atom now
+    /// carries every minted symbol-key id) — or `None` if every stored id
+    /// resolves. The persist/adopt paths treat a hit as
+    /// [`crate::store::StoreError::Corrupt`]: an unregistered id maps to
+    /// nothing on resume, and honest minting cannot produce one, so it
+    /// can only be torn or crafted bytes. Free slots are skipped — a
+    /// stale record on the free list names nothing.
     ///
     /// Asking the IMAGE rather than the live machine's mint counter is
-    /// what makes the answer survive a round trip: the counter is
-    /// session state that a resume rebuilds from `names.len()`, so a
-    /// heap that reached the store poisoned reported itself clean ever
-    /// after (review wave 5).
+    /// what makes the answer survive a round trip: the counter is small
+    /// state a resume restores verbatim, but a counter says only that
+    /// minting HAPPENED, not that an id was stored (review wave 5's
+    /// false-positive lesson) — and a crafted image lies about its
+    /// counter anyway. The stored ids are the evidence.
     pub fn stored_unregistered_key_id(&self) -> Option<u16> {
         let registered = self.symbols.id_set();
         let free: std::collections::BTreeSet<u32> = self.slot_free.iter().copied().collect();

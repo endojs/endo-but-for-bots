@@ -4,9 +4,12 @@
 //! `SymbolTables` were covered by the arena / serialized atoms, but
 //! `Interp::restore_snapshot_state` reinstates arenas + stack + `symbol_names`
 //! + meter only — the `global_props` id→slot index and the `symbol_ids`
-//! inverse map + `next_intern_id` counter (all derived, HashMap-resident, not
-//! arena state) stayed at their empty fresh-boot values. A runtime global
-//! materialized in an earlier crank then vanished after suspend/resume.
+//! inverse map + the then-extant `next_intern_id` counter (all derived,
+//! HashMap-resident, not arena state) stayed at their empty fresh-boot
+//! values. A runtime global materialized in an earlier crank then vanished
+//! after suspend/resume. (The counter has since retired: the 2026-08-26
+//! id-space unification made runtime string keys `symbol_names` appends and
+//! moved symbol-key minting to the SYMB-carried `next_symbol_key_id`.)
 //!
 //! These tests lock the fix in the shape the review used: a real guest crank
 //! materializes a runtime global, the machine is suspended via
@@ -81,12 +84,12 @@ fn runtime_global_survives_suspend_resume() {
 
 /// **Finding 3 — `SymbolTables`.** Only `symbol_names` is serialized; the
 /// inverse `symbol_ids` map (which `global_string` — and every native
-/// built-in that relinks a well-known property name — consults) and the
-/// `next_intern_id` runtime-key counter are derived from it and were never
-/// rebuilt at restore, so they stayed at fresh-boot values (empty / `1`).
-/// After the fix `restore_snapshot_state` re-derives them via
-/// `bind_program_symbols`, so a global materialized before the snapshot reads
-/// back **by name** on the restored machine.
+/// built-in that relinks a well-known property name — consults) is derived
+/// from it and was never rebuilt at restore, so it stayed at its fresh-boot
+/// value (empty; so did the runtime-key counter of the day, since retired
+/// by the id-space unification). After the fix `restore_snapshot_state`
+/// re-derives it via `bind_program_symbols`, so a global materialized before
+/// the snapshot reads back **by name** on the restored machine.
 #[test]
 fn symbol_tables_rebuilt_at_restore() {
     let (crank1, names1) = compile("var x = 5;");

@@ -1466,13 +1466,16 @@ rather than work items.
   intact, both refusal edges are pinned, and the worker lifecycle
   test now runs a divergent crank through relink live and after
   reopen.
-  STILL OPEN in this workstream: `KEYS`/`SYMB` (runtime-interned
-  property keys, well-known symbol identities — also what gates
-  relink on intern-holding machines) and the other 23 `Pending`
-  rows (functions/closures, generators, promises, …, several
+  STILL OPEN in this workstream: the 31 `Pending` ledger rows
+  (functions/closures, generators, promises, the language-completion
+  sweep's per-instance tables, dynamic code segments, …, several
   unreachable cross-crank in the vm today regardless of restore).
+  The old intern gap is NOT among them: runtime string keys live in
+  the NAME table and symbol keys travel in `SYMB` (id-space
+  unification, 2026-08-26), so no interning gates relink or
+  persistence any more.
   The ledger names and classifies every row; several carry the
-  deciding evidence explicitly (`CtorPrototype`, `SymbolKeyIds`) and
+  deciding evidence explicitly (`CtorPrototype`, `Segments`) and
   the rest share the class-level justification.
 - [x] ~~Sparse attach (roadmap item 9's deferred half)~~ Done
   (deferred pass, 2026-08-24), measured first: the new
@@ -1683,6 +1686,36 @@ rather than work items.
   provenance (a content re-pin, not a format one). A bare detached
   prototype method with a wrong receiver stays a NAMED refusal, never
   a wrong answer. Locked by the four `detached_natives` tests.
+- [ ] Dynamic code segments do not persist — the store gates refuse a
+  heap holding a live eval-defined function by name
+  (`StoreError::DynamicSegmentsUnsupported`; the ledger's `Segments`
+  row; unreachable on the daemon path, which installs no source
+  compiler). The lift is crank-code retention — the segments
+  machinery generalized to retain and serialize defining-crank
+  bytecode — which is also what makes cross-crank function
+  references real (the `functions` row's other half). Pinned from
+  both sides in `dynamic_segments.rs`.
+- [ ] Symbol-key id-space EXHAUSTION at the meet: symbol keys mint
+  top-down from `u16::MAX` while the name table grows bottom-up, and
+  the MEET — same class as the old shared counter's saturation —
+  trips a `debug_assert` in debug builds but ALIASES in release
+  (`intern_symbol_key` stops decrementing and hands out the same id;
+  relink's `TableFull` fails closed only for the name-growth
+  direction). ~64k combined keys is far past any observed workload,
+  but the honest lift is a release-visible refusal (a `Halt`, like
+  the relink edge) or a widened id type — an engine-wide format
+  decision to take deliberately.
+- The async-generator START-REJECT boundary is not yet
+  oracle-exact in COMPUTRONS (results agree): −20 versus XS when
+  the rejecting generator's `next()` is observed directly, −26 on
+  the drain-side twin — constants per shape, a pre-existing
+  mainline gap (fxAsyncGeneratorReject's request processing is
+  uncalibrated), where the plain async function's start-reject −1
+  IS calibrated away (`ASYNC_START_REJECT_BOUNDARY_METERING`). The
+  −20 is PINNED in `await_in_try.rs` so drift is a visible flip;
+  calibrating it properly means tracing XS's reject-request
+  dispatch chain, deferred until async-generator metering identity
+  is a bar someone holds.
 
 *Tooling and coverage:*
 
@@ -1866,6 +1899,57 @@ reconciliation is recorded here, with its lock.
   pinned so either becoming true is a deliberate flip; the lift is
   the functions ledger row plus crank-code retention (the segments
   machinery generalized).
+
+A post-rebase review pass (seven independent reviews over the merged
+tree, each confirmed finding bite-checked) then landed one fix batch;
+its outcomes belong to this record:
+
+- **GC visitation for the sweep's tables (P1, silent corruption).**
+  None of the language-completion sweep's per-instance side tables
+  (proxies, accessor closures, private elements, disposable stacks,
+  async generators, Intl/Temporal records, bound-function links) was
+  visited by the full mark, the partial collector's enumeration, or
+  the sweeps — a collection between cranks freed a live proxy's
+  target and the next crank's allocations REUSED the slot (proven
+  behaviorally: reads answered wrong values, not errors). All are now
+  wired through the shared hook points (`extra_edges`,
+  `external_chunk_refs`, in-sweep prunes, both collectors' retains),
+  the dead-entry prunes included so the tables cannot leak either
+  (`gc_side_tables.rs`, churn-based).
+- **Relink must not re-run the well-known-SYMBOL installs.**
+  `install_intrinsic_bindings`' name-keyed branches were gated by the
+  relink's append-only `keep` filter, but its symbol-keyed branches
+  (`@@toStringTag`/`@@iterator`/dispose aliases) depend on no program
+  name — every top-down symbol id reads as "appended" — so each
+  relink reinstalled them over guest edits: a crank-1 monkeypatch of
+  `String.prototype[Symbol.iterator]` silently reverted. They now run
+  on the FULL link only (`relink_preserves_guest_edits.rs`).
+- **The async host boundary is FENCED.** XS runs an async body's
+  synchronous start under its own native mxTry
+  (fxStepAsync/fxAsyncGeneratorStep); unfenced, a throw before the
+  first suspend landed in a `try` live around the start (XS rejects
+  the promise instead) or leaked an internal `Halt::Resume` out of
+  `Interp::run`. `step_async`/`step_async_generator` now fence the
+  jump chain (`mem::take` for the step's duration), the AWAIT arm
+  selects the INNERMOST driver by call-depth (a plain async helper
+  called from an async-generator body suspends itself, not the
+  generator), and the fence's one boundary computron is calibrated
+  (`ASYNC_START_REJECT_BOUNDARY_METERING`); oracle-differential
+  locks in `await_in_try.rs`, with the async-generator reject
+  residue pinned (see Remaining).
+- **Tombstoned collections: `clear()` latches live cursors DONE.**
+  The tombstone representation made deletes cursor-safe, but
+  `clear()` physically emptied the vec, so a live iterator re-read
+  entries a later crank inserted. `CollectionData` now carries a
+  clear-GENERATION; cursors capture it at creation and dead-end on
+  mismatch (XS's purge semantics, oracle-verified), and `forEach`
+  breaks on a generation change.
+- **Id-space hardening residue.** The unification's cache seeding
+  (`refresh_special_ids_from_symbols` on append), for-in excludes
+  symbol-key ids (`enumerable_keys`), restore validates the SYMB
+  table shape (counter above the name table, ascending ids, distinct
+  descriptors; non-canonical empty refused), and
+  `check_image_slot_bounds` covers symbol descriptors.
 
 The rebase squashed the branch's prior 43-commit series into a curated
 foundation commit: several of those commits' mechanisms are superseded
@@ -2655,9 +2739,14 @@ compaction/vacuum policy.
    and the compile-time split retained as the fallback.
 2. Page and extent geometry (256 slots / 64 KiB starting points) —
    calibrate on real worker heaps in phase 2.
-3. Checkpoint cadence policy: supervisor-driven only, or an automatic
-   every-N-cranks knob on the worker?
-   (A policy question for the daemon, not an engine semantic.)
+3. ~~Checkpoint cadence policy: supervisor-driven only, or an automatic
+   every-N-cranks knob on the worker?~~ **Decided 2026-08-24** (deferred
+   pass; see the cadence item in the Remaining ledger): both —
+   `CadencePolicy` on `HeapStoreOptions` gives the worker a
+   replica-visible `checkpoint_every`/`collect_every` knob (default 1 =
+   the per-crank contract), and the supervisor stays free to drive
+   checkpoints manually; the counters are crank-sequence functions, so
+   replicas flush at identical points.
 4. ~~Side-table row granularity as `Pending` atoms land~~ **Decided
    2026-08-08** (phase 5-9 roadmap): per-instance keyed rows from the
    start, with dirty tracking and lazy fault, the same discipline as
