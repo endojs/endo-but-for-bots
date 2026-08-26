@@ -1843,6 +1843,30 @@ reconciliation is recorded here, with its lock.
   async-generator suspend paths gained the seam's hostile-bytecode
   stack-underflow refusals, which they lacked.
 
+- **Dynamic code segments fail persistence CLOSED, and the
+  cross-crank function contract is pinned.** The eval/dynamic-
+  `Function` bridge compiles into per-realm SEGMENT buffers
+  (`code_segments`) that no snapshot carries. On the daemon path this
+  intersection is unreachable — nothing installs a source compiler,
+  so `eval` halts with `Unsupported("eval:no-compiler")` before any
+  segment exists — but an embedder that wires a compiler AND a store
+  would have persisted a heap whose resumed callables have no bodies.
+  `begin_store_session` and `checkpoint_to_store` now refuse by name
+  (`StoreError::DynamicSegmentsUnsupported`), witnessed by what the
+  heap HOLDS (a live `func_segments` entry; the map is pruned by both
+  collectors, so a collected eval function persists again — the
+  wave-5 mint-counter lesson applied). Locks in
+  `dynamic_segments.rs`, bite-checked. The same investigation pinned
+  the broader crank contract: a function stored in crank N is not
+  callable from crank N+1 on the LIVE machine either (its
+  `FuncInfo.body` is a pc into the defining crank's borrowed buffer —
+  the live failure is `Unsupported` by luck of the bytes, not by
+  construction), and on a RESUMED machine the call throws a catchable
+  TypeError (`functions` is a Pending row). Both directions are
+  pinned so either becoming true is a deliberate flip; the lift is
+  the functions ledger row plus crank-code retention (the segments
+  machinery generalized).
+
 The rebase squashed the branch's prior 43-commit series into a curated
 foundation commit: several of those commits' mechanisms are superseded
 above, so a faithful per-commit replay would have manufactured

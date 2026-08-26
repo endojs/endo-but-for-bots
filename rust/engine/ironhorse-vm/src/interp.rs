@@ -7957,6 +7957,29 @@ impl Interp {
         out
     }
 
+    /// The first LIVE function instance whose body lives in a DYNAMIC
+    /// code segment (an `eval` / dynamic-`Function` unit's persisted-in-
+    /// RAM bytecode) — or `None` when no live one exists. Segment
+    /// buffers are realm session state that no snapshot carries, so
+    /// persisting such a heap would resume a callable whose body is
+    /// gone; the store gates refuse it by name
+    /// (`StoreError::DynamicSegmentsUnsupported`). The map is pruned by
+    /// both collectors, so a machine whose eval-defined functions have
+    /// all been collected persists again — the witness is what the heap
+    /// HOLDS, not what the session once did (the wave-5 mint-counter
+    /// lesson). The common no-eval case is one emptiness check. The one
+    /// conservative direction: an eval function that is dead but not
+    /// yet collected still refuses until a collection runs.
+    pub fn live_dynamic_segment_function(&self) -> Option<u32> {
+        if self.func_segments.is_empty() {
+            return None;
+        }
+        self.func_segments
+            .keys()
+            .find(|f| !self.slots.is_free_index(**f))
+            .map(|f| f.0)
+    }
+
     /// The symbol-key property-id table (ledger `SYMB` row): the
     /// top-down mint counter and every `(id, descriptor slot)` pair,
     /// ascending by id. [`Self::restore_symbol_key_table`] is the exact
@@ -41324,6 +41347,13 @@ impl Interp {
         self.error_data.retain(|k, _| !dead.contains(k));
         self.regexps.retain(|k, _| !dead.contains(k));
         self.symbol_key_ids.retain(|k, _| !dead.contains(k));
+        // `func_segments` holds no slots or chunks (function slot →
+        // dynamic-segment index), so it prunes late like the rest of
+        // this list. Pruning it is what keeps the dynamic-segment
+        // persistence witness (`live_dynamic_segment_function`) from
+        // counting collected eval functions — and from mis-answering
+        // through a reused slot index.
+        self.func_segments.retain(|k, _| !dead.contains(k));
         self.symbol_registry_keys.retain(|k, _| !dead.contains(k));
         // The FORWARD map (`symbol_registry`: string → descriptor) is
         // deliberately not pruned here. It is a GC ROOT — every
@@ -41376,6 +41406,7 @@ impl Interp {
         let dead: std::collections::HashSet<SlotIndex> = freed.iter().copied().collect();
         self.functions.retain(|k, _| !dead.contains(k));
         self.bound_functions.retain(|k, _| !dead.contains(k));
+        self.func_segments.retain(|k, _| !dead.contains(k));
         self.ctor_prototype.retain(|k, _| !dead.contains(k));
         self.wrapper_data.retain(|k, _| !dead.contains(k));
         self.error_data.retain(|k, _| !dead.contains(k));
