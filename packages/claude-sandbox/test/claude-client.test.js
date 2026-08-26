@@ -769,11 +769,52 @@ test('a turn killed by a mount recreate aborts with the recreate-labelled reason
   }
   const last = rest[rest.length - 1];
   t.is(last.type, 'abort');
-  t.regex(last.reason, /container mount set changed; sandbox slice recreated/);
-  t.regex(last.reason, /killed by SIGKILL/);
+  // The turn really did end, so it aborts — but the reason describes the
+  // restart we caused, not the symptoms of our own kill. Reporting the exit
+  // status here is what made an expected restart read as a crash.
+  t.regex(last.reason, /sandbox restarted to apply a container mount change/);
+  t.regex(last.reason, /\/mnt\/z/, 'names the mount that caused it');
+  t.regex(last.reason, /send this turn again/, 'says what to do');
+  t.notRegex(last.reason, /killed by SIGKILL/);
+  t.notRegex(last.reason, /exited with code/);
+  t.true(last.expected, 'marked as by-design so the UI need not style an error');
   releaseProvision();
   await applied;
   t.is(provisionCount, 2);
+});
+
+test('an ordinary turn failure keeps its exit status and stderr', async t => {
+  // The counterpart to the test above: when nothing is recreating, a non-zero
+  // exit IS the diagnosis and must not be softened away.
+  const fake = makeFakeSlice([[]]);
+  const mount = makeFakeMount();
+  const client = makeClaudeClient({
+    ...baseArgs(fake, mount),
+    provision: async () => ({
+      slice: {
+        async spawn() {
+          return {
+            async stdout() {
+              return harden({ kind: 'fake-stdout' });
+            },
+            async kill() {},
+            async wait() {
+              return harden({ code: 1, signal: null });
+            },
+          };
+        },
+        async dispose() {},
+      },
+    }),
+  });
+  const events = [];
+  for await (const ev of iterateReader(await client.send('work'))) {
+    events.push(ev);
+  }
+  const last = events[events.length - 1];
+  t.is(last.type, 'abort');
+  t.regex(last.reason, /exited with code 1/);
+  t.falsy(last.expected, 'a real failure is not by design');
 });
 
 test('setExtraMounts refuses eager and terminated clients without recording', async t => {

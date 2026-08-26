@@ -435,16 +435,34 @@ export const makeClaudeClient = ({
 
   /**
    * While a recreate is disposing the live slice, the in-flight `claude`
-   * process dies by signal; name the actual cause in that turn's abort
-   * reason (attach/detach is disruptive by design — see
-   * designs/runtime-container-fs-mount.md).
+   * process dies because WE killed it (attach/detach is disruptive by design —
+   * see designs/runtime-container-fs-mount.md). The turn genuinely ends, so it
+   * still aborts; but the reason should describe the restart, not the symptoms
+   * of our own kill.
+   *
+   * The exit code and stderr of a process we SIGKILLed describe the kill, and
+   * reporting them turns an expected restart into what reads as a crash on
+   * session start — "claude exited with code 1" — which is exactly how this
+   * gets misdiagnosed.
    *
    * @param {string} base
    */
-  const abortReasonInContext = base =>
-    recreating
-      ? `container mount set changed; sandbox slice recreated — ${base}`
-      : base;
+  const abortReasonInContext = base => {
+    if (!recreating) return base;
+    const paths = extraMounts
+      .map(spec => spec && spec.innerPath)
+      .filter(Boolean)
+      .join(', ');
+    return `sandbox restarted to apply a container mount change${
+      paths ? ` (${paths})` : ''
+    } — the attach succeeded; send this turn again to continue`;
+  };
+
+  /**
+   * Whether the current abort is our own doing, and so should not carry the
+   * killed process's diagnostics.
+   */
+  const abortIsByDesign = () => recreating;
 
   /**
    * Spawn one `claude -p` process inside the slice and return its
@@ -594,6 +612,7 @@ export const makeClaudeClient = ({
           reason: abortReasonInContext(
             error instanceof Error ? error.message : String(error),
           ),
+          ...(abortIsByDesign() ? { expected: true } : {}),
         });
         return;
       }
@@ -653,13 +672,16 @@ export const makeClaudeClient = ({
             status.code === null
               ? `killed by ${status.signal}`
               : `exited with code ${status.code}`;
-          const stderrText = await readStderrBrief(proc);
           const base = abortReasonInContext(`claude ${how}`);
+          const stderrText = abortIsByDesign()
+            ? ''
+            : await readStderrBrief(proc);
           push({
             type: 'abort',
             reason: stderrText
               ? `${base}\n--- stderr ---\n${stderrText}`
               : base,
+            ...(abortIsByDesign() ? { expected: true } : {}),
           });
         } else {
           push({ type: 'end' });
@@ -671,14 +693,16 @@ export const makeClaudeClient = ({
         // Kill first so the captured stderr stream EOFs, then fold any
         // diagnostic claude wrote to stderr into the abort reason — without
         // it, a claude-side failure surfaces only as an opaque stream/parse
-        // error.
+        // error. Skipped for a recreate: the diagnostics would be of our own
+        // kill.
         await E(proc)
           .kill()
           .catch(() => {});
-        const stderrText = await readStderrBrief(proc);
+        const stderrText = abortIsByDesign() ? '' : await readStderrBrief(proc);
         push({
           type: 'abort',
           reason: stderrText ? `${base}\n--- stderr ---\n${stderrText}` : base,
+          ...(abortIsByDesign() ? { expected: true } : {}),
         });
       } finally {
         if (inFlight === proc) {
