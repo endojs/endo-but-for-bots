@@ -62,11 +62,19 @@ jobs:
           git config user.name "github-actions[bot]"
 
       - name: Process Changesets
-        env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         # This action will create/update Changesets' Release PR *or* create a
         # GitHub Release and tags if its Release PR was just merged
-        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
+        uses: changesets/action@198f833dd7d863100ea6e28967bc9a9fdefadb0a # v2.1.0
         with:
-          publish: yarn changeset tag
-          createGithubReleases: true
+          # v2 renamed these inputs to kebab-case (`publish` ->
+          # `publish-script`, `createGithubReleases` -> `create-github-releases`)
+          # and no longer reads the custom token from the `GITHUB_TOKEN` env var:
+          # it must be passed via the `github-token` input, otherwise the action
+          # pushes as the default `github.token` identity instead of RELEASE_TOKEN.
+          publish-script: yarn changeset tag
+          create-github-releases: true
+          github-token: ${{ secrets.RELEASE_TOKEN }}
+          # v2's push default flipped from git-CLI to the GitHub API; keep the v1
+          # git-CLI push so tags and the release PR continue to push via the
+          # persisted RELEASE_TOKEN credentials, preserving prior behavior.
+          push-with-git-cli: true
