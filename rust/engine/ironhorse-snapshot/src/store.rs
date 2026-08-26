@@ -99,6 +99,15 @@ pub const STORE_SCHEMA_MIN_SUPPORTED: u32 = 5;
 /// reader uses.
 #[derive(Debug, PartialEq, Eq)]
 pub enum StoreError {
+    /// The machine holds a live function whose body lives in a dynamic
+    /// (`eval` / dynamic-`Function`) code segment. Segment buffers are
+    /// realm session state that no snapshot carries — the ledger's
+    /// segments row does not exist yet — so persisting the heap would
+    /// resume a callable whose body is gone. Refused fail-closed at
+    /// `begin_store_session` and `checkpoint_to_store`; unreachable
+    /// today on the daemon path, which installs no source compiler,
+    /// so `eval` halts before any segment exists.
+    DynamicSegmentsUnsupported,
     /// The store has no committed epoch yet (a fresh store). Callers
     /// that require content (resume, export) fail on this; the first
     /// checkpoint expects it.

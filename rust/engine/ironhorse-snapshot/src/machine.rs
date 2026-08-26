@@ -530,6 +530,14 @@ pub fn begin_store_session(
         Ok(m) => return Err((interp, StoreError::NotEmpty { epoch: m.epoch })),
         Err(e) => return Err((interp, e)),
     }
+    // Dynamic code segments do not travel (no ledger row yet): a live
+    // eval-defined function would resume with its body gone. Refuse by
+    // name before anything is written. (Unreachable on the daemon
+    // path, which installs no source compiler — defense in depth for
+    // an embedder that wires one.)
+    if interp.live_dynamic_segment_function().is_some() {
+        return Err((interp, StoreError::DynamicSegmentsUnsupported));
+    }
     // The id-space audit (what remains of the wave-4 P1 gate): with
     // string keys living in the NAME table and symbol keys traveling in
     // the SYMB table, a LIVE machine cannot store an id outside both —
@@ -616,6 +624,15 @@ pub fn checkpoint_to_store(
     // machine's stored ids are always resumable by construction, and
     // `begin_store_session` / `resume_from_store` keep the full-image
     // audit for adopted bytes.
+    //
+    // Dynamic code segments are the state that still cannot travel: a
+    // crank that ran `eval` and left a live eval-defined function
+    // refuses here by name, before anything is written, and the caller
+    // rewinds the crank (same contract the intern gate had). One
+    // emptiness check for the no-eval common case.
+    if session.interp.live_dynamic_segment_function().is_some() {
+        return Err(StoreError::DynamicSegmentsUnsupported);
+    }
     let stored = store.manifest()?;
     if stored.epoch != session.epoch {
         return Err(StoreError::EpochMismatch {
