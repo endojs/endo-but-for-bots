@@ -256,9 +256,9 @@ export const makeNonceRegistry = ({
      * @param {ArrayBuffer | Uint8Array} args.signature
      */
     verifyAndConsume({ publicKey, nonce, signature }) {
-      if (
-        !(publicKey instanceof ArrayBuffer || publicKey instanceof Uint8Array)
-      ) {
+      if (!(
+        publicKey instanceof ArrayBuffer || publicKey instanceof Uint8Array
+      )) {
         throw makeError(
           X`publicKey must be an immutable ArrayBuffer or Uint8Array`,
         );
@@ -268,9 +268,9 @@ export const makeNonceRegistry = ({
           X`nonce must be an immutable ArrayBuffer or Uint8Array`,
         );
       }
-      if (
-        !(signature instanceof ArrayBuffer || signature instanceof Uint8Array)
-      ) {
+      if (!(
+        signature instanceof ArrayBuffer || signature instanceof Uint8Array
+      )) {
         throw makeError(
           X`signature must be an immutable ArrayBuffer or Uint8Array`,
         );
