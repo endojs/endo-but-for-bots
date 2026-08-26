@@ -1,4 +1,5 @@
 // @ts-check
+// prefer-endo-primitives-exempt -- this is the Node crypto powers adapter.
 
 /**
  * @file Node-backed adapter for the `CryptoPowers` shape that the

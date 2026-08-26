@@ -37,6 +37,7 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
 import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
+import { encodeHex } from '@endo/hex';
 
 import { makeNonceRegistry, NONCE_BYTE_LENGTH } from './proof-of-possession.js';
 
@@ -176,11 +177,7 @@ const checkContentTreeRoot = candidate => {
  */
 const publicKeyToHex = bytes => {
   const view = bytes instanceof Uint8Array ? bytes : bytesFromImmutable(bytes);
-  let hex = '';
-  for (let i = 0; i < view.length; i += 1) {
-    hex += view[i].toString(16).padStart(2, '0');
-  }
-  return hex;
+  return encodeHex(view);
 };
 
 /**

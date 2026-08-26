@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt -- ENDO_HTTP_ADDR is the public environment variable.
 
 import '@endo/init/debug.js';
 
