@@ -748,6 +748,18 @@ pub(crate) fn decode_symbol_keys(p: &[u8]) -> Result<SymbolKeyImage, SnapshotErr
     }
     let mut c = Cursor::new(p, "symbol-key table");
     let next_id = c.u16()?;
+    // `next_id == u16::MAX` means nothing was ever minted, and that
+    // state has exactly one canonical encoding — the 4-byte legacy
+    // empty accepted above (every pair would fail `id <= next_id`, so
+    // a new-format payload claiming it can only be the redundant
+    // empty). Accepting it would break the import∘export byte
+    // identity the sibling decoders enforce by rejecting their
+    // non-canonical forms.
+    if next_id == u16::MAX {
+        return Err(SnapshotError::Corrupt(
+            "symbol-key table: non-canonical empty (legacy encoding required)",
+        ));
+    }
     let count = c.u32()? as usize;
     let mut pairs = Vec::with_capacity(count.min(p.len() / 6));
     let mut prev: Option<u16> = None;
@@ -1590,12 +1602,37 @@ mod tests {
     }
 
     #[test]
+    fn non_canonical_empty_symbol_table_is_rejected() {
+        // The empty table has ONE encoding (the 4-byte legacy zeros);
+        // a new-format payload with next_id == u16::MAX could only be
+        // the same empty state spelled differently, and re-encoding it
+        // would emit the legacy bytes — breaking import∘export
+        // identity. The decoder refuses it like every other
+        // non-canonical form.
+        let crafted = [0xFF, 0xFF, 0, 0, 0, 0];
+        assert_eq!(
+            decode_symbol_keys(&crafted),
+            Err(SnapshotError::Corrupt(
+                "symbol-key table: non-canonical empty (legacy encoding required)"
+            ))
+        );
+        // The canonical legacy empty still round-trips byte-exactly.
+        let empty = decode_symbol_keys(&[0, 0, 0, 0]).unwrap();
+        assert_eq!(empty, SymbolKeyImage::default());
+        assert_eq!(encode_symbol_keys(&empty), vec![0, 0, 0, 0]);
+    }
+
+    #[test]
     fn malformed_u32_count_does_not_over_allocate() {
         // SYMB claims a huge pair count but carries none: the cursor
         // refuses at the first missing pair instead of pre-allocating
-        // for the claimed count.
+        // for the claimed count. (next_id = 1 keeps the payload past
+        // the non-canonical-empty gate so the count path is what's
+        // exercised.)
+        let mut payload = vec![0u8, 1];
+        payload.extend_from_slice(&u32::MAX.to_be_bytes());
         let mut w = valid_prefix();
-        w.atom(SYMB, &huge_count_payload());
+        w.atom(SYMB, &payload);
         let bytes = w.finish();
         assert_eq!(
             read_machine(&bytes, &sig()),

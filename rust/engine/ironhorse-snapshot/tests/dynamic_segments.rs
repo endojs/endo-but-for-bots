@@ -92,7 +92,7 @@ fn live_eval_function_refuses_begin() {
 /// prior epoch and the caller can rewind the crank.
 #[test]
 fn eval_crank_refuses_checkpoint_and_writes_nothing() {
-    let (b0, n0) = compile("var f = 0; var t = 0; t = 1; t");
+    let (_b0, n0) = compile("var f = 0; var t = 0; t = 1; t");
     let mut m = Interp::new();
     m.link_intrinsics(&n0);
     m.set_source_compiler(std::rc::Rc::new(TestCompiler));
