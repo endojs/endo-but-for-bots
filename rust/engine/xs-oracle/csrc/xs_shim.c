@@ -27,6 +27,7 @@
 
 #include "xsAll.h"
 #include "xsScript.h"
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -53,6 +54,22 @@ typedef struct {
 } EndorOracleResult;
 
 static int gEndorClusterReady = 0;
+
+/*
+ * Machine create/delete must be serialized process-wide.  XS machines
+ * are thread-confined while RUNNING (the differential harness runs
+ * cases in parallel across test threads on purpose), but
+ * fxCreateMachine / fxDeleteMachine each adjust the process-global
+ * shared-cluster usage count (gxSharedCluster->usage in xsAtomics.c)
+ * with plain unsynchronized int arithmetic.  Racing creates/deletes
+ * lose updates; when the count drifts to zero, fxTerminateSharedCluster
+ * frees the live cluster and every later machine create/delete is a
+ * use-after-free — observed as intermittent glibc aborts ("double free
+ * or corruption", "corrupted double-linked list") in the parallel
+ * oracle-differential suites.  The mutex covers the latch and the
+ * create/delete calls only; machine execution stays parallel.
+ */
+static pthread_mutex_t gEndorMachineLifecycleMutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void fx_endor_detachArrayBuffer(txMachine *the)
 {
@@ -218,6 +235,28 @@ static txCreation gEndorCreation = {
 	0,          /* nativeStackSize */
 };
 
+/* See gEndorMachineLifecycleMutex: the latch and the cluster-usage
+ * mutations inside fxCreateMachine run under the lock. */
+static txMachine *xs_oracle_create_machine(const char *name)
+{
+	txMachine *the;
+	pthread_mutex_lock(&gEndorMachineLifecycleMutex);
+	if (!gEndorClusterReady) {
+		fxInitializeSharedCluster(C_NULL);
+		gEndorClusterReady = 1;
+	}
+	the = fxCreateMachine(&gEndorCreation, (txString)name, C_NULL, 0);
+	pthread_mutex_unlock(&gEndorMachineLifecycleMutex);
+	return the;
+}
+
+static void xs_oracle_delete_machine(txMachine *the)
+{
+	pthread_mutex_lock(&gEndorMachineLifecycleMutex);
+	fxDeleteMachine(the);
+	pthread_mutex_unlock(&gEndorMachineLifecycleMutex);
+}
+
 /*
  * Run `source` as a program eval on a fresh machine.
  * Returns 0 on success (machine created and result populated),
@@ -229,12 +268,7 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 	txMachine *the;
 	memset(out, 0, sizeof(*out));
 
-	if (!gEndorClusterReady) {
-		fxInitializeSharedCluster(C_NULL);
-		gEndorClusterReady = 1;
-	}
-
-	the = fxCreateMachine(&gEndorCreation, "xs-oracle", C_NULL, 0);
+	the = xs_oracle_create_machine("xs-oracle");
 	if (!the)
 		return -1;
 
@@ -397,7 +431,7 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 		}
 	}
 	fxEndHost(the);
-	fxDeleteMachine(the);
+	xs_oracle_delete_machine(the);
 	return 0;
 }
 
@@ -444,12 +478,7 @@ int xs_oracle_compile_module(const char *source, txU4 sourceLen, EndorOracleResu
 	txMachine *the;
 	memset(out, 0, sizeof(*out));
 
-	if (!gEndorClusterReady) {
-		fxInitializeSharedCluster(C_NULL);
-		gEndorClusterReady = 1;
-	}
-
-	the = fxCreateMachine(&gEndorCreation, "xs-oracle-module", C_NULL, 0);
+	the = xs_oracle_create_machine("xs-oracle-module");
 	if (!the)
 		return -1;
 
@@ -507,7 +536,7 @@ int xs_oracle_compile_module(const char *source, txU4 sourceLen, EndorOracleResu
 		}
 	}
 	fxEndHost(the);
-	fxDeleteMachine(the);
+	xs_oracle_delete_machine(the);
 	return 0;
 }
 
@@ -589,12 +618,7 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 	txMachine *the;
 	memset(out, 0, sizeof(*out));
 
-	if (!gEndorClusterReady) {
-		fxInitializeSharedCluster(C_NULL);
-		gEndorClusterReady = 1;
-	}
-
-	the = fxCreateMachine(&gEndorCreation, "xs-oracle-run-module", C_NULL, 0);
+	the = xs_oracle_create_machine("xs-oracle-run-module");
 	if (!the)
 		return -1;
 
@@ -735,7 +759,7 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 	}
 	gEndorModuleLatch = C_NULL;
 	fxEndHost(the);
-	fxDeleteMachine(the);
+	xs_oracle_delete_machine(the);
 	return 0;
 }
 
@@ -794,12 +818,7 @@ int xs_oracle_regexp(const char *pattern, const char *modifier,
 	txMachine *the;
 	memset(out, 0, sizeof(*out));
 
-	if (!gEndorClusterReady) {
-		fxInitializeSharedCluster(C_NULL);
-		gEndorClusterReady = 1;
-	}
-
-	the = fxCreateMachine(&gEndorCreation, "xs-oracle-regexp", C_NULL, 0);
+	the = xs_oracle_create_machine("xs-oracle-regexp");
 	if (!the)
 		return -1;
 
@@ -867,6 +886,6 @@ int xs_oracle_regexp(const char *pattern, const char *modifier,
 		}
 	}
 	fxEndHost(the);
-	fxDeleteMachine(the);
+	xs_oracle_delete_machine(the);
 	return 0;
 }
