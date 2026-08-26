@@ -386,7 +386,9 @@ export const makeGatewayBootstrap = ({
         const nonce = checkNonce(args.nonce);
         const signature = checkSignature(args.signature);
         if (args.daemon !== undefined && args.cancelled === undefined) {
-          throw makeError(X`register requires cancelled when daemon is present`);
+          throw makeError(
+            X`register requires cancelled when daemon is present`,
+          );
         }
         return registerInternal(publicKey, nonce, signature, {
           daemon: args.daemon,
