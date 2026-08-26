@@ -442,37 +442,78 @@ fn side_table_page_bits_agree_with_slot_enumeration() {
 }
 
 #[test]
-fn weak_collection_entries_are_retained_conservatively() {
-    // PINS today's deliberate conservatism (the PR review's weak-
-    // collection finding): the mark loop treats WeakMap entries as
-    // strong edges, so entries whose keys are dead are RETAINED, not
-    // reclaimed. Retention-only — never frees a live object. When
-    // ephemeron marking lands, this test flips: the weak-held slots
-    // join the reclaimed count and the bound below moves.
+fn ephemeron_marking_reclaims_dead_keyed_weak_entries() {
+    // The ephemeron pass (deferred-work checklist; this flips the old
+    // `weak_collection_entries_are_retained_conservatively` pin
+    // exactly as that pin promised): a WeakMap holds neither its keys
+    // nor — on its own — its values. A value lives exactly while its
+    // key does (fixpoint: a value that is itself the KEY of a second
+    // entry carries that entry's value too), dead-keyed entries are
+    // pruned before the sweep, and a live-keyed entry still answers
+    // `get` afterwards.
     //
-    // Fixture: 300 WeakMap entries whose keys AND values are held
-    // only by the map (dead by ephemeron semantics, retained today),
-    // plus 300 plain dropped objects (real garbage either way). The
-    // weak side is ~1200 slots (2-slot key + 2-slot value each); the
-    // plain side is ~900 (3-slot objects).
-    let build = "var wm = new WeakMap(); var g = 0; var i = 0; \
-                 for (i = 0; i < 300; i = i + 1) { wm.set({ k: i }, { v: i }); } \
-                 for (i = 0; i < 300; i = i + 1) { g = { v: i, w: i }; } \
-                 g = 0;";
-    let (b, names) = compile(build);
+    // Fixture: one externally-held key (`keep`) whose entry chains to
+    // a second entry (value-of-A is key-of-B); 300 map-only pairs
+    // (dead by ephemeron semantics, ~1200 slots); 300 plain dropped
+    // objects (~900 slots).
+    let cranks = [
+        "var wm = new WeakMap(); var keep = 0; var g = 0; var i = 0; var t = 0; \
+         wm.get; keep.w; \
+         keep = { k: 1 }; g = { k: 2 }; wm.set(keep, g); wm.set(g, { v: 3 }); g = 0; \
+         for (i = 0; i < 300; i = i + 1) { wm.set({ k: i }, { v: i }); } \
+         for (i = 0; i < 300; i = i + 1) { g = { v: i, w: i }; } \
+         g = 0; t = 7; t",
+        "var wm; var keep; var g; var i; var t; g = WeakMap; g = 0; \
+         wm.set; keep.w; \
+         g = wm.get(keep); t = g.k; g = wm.get(g); t = t + g.v; \
+         i = 0; i < 1; t",
+    ];
+    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
     let mut m = Interp::new();
-    m.link_intrinsics(&names);
-    let o = m.run(&b);
-    assert!(o.completed, "fixture halted: {:?}", o.halt);
+    m.link_intrinsics(&compiled[0].1);
+    let o1 = m.run(&compiled[0].0);
+    assert!(o1.completed, "fixture halted: {:?}", o1.halt);
+    assert_eq!(o1.result, "7");
+
     let stats = m.collect_garbage();
     assert!(
-        stats.slots_reclaimed >= 800,
-        "the plain garbage is reclaimed: {stats:?}"
+        stats.slots_reclaimed >= 2000,
+        "dead-keyed weak entries AND the plain garbage reclaim: {stats:?}"
     );
+
+    // The live-keyed chain survives: keep -> {k:2} -> {v:3}.
+    let o2 = m.run(&compiled[1].0);
+    assert!(o2.completed, "halt: {:?}", o2.halt);
+    assert_eq!(o2.result, "5", "get() answers through the ephemeron chain after GC");
+}
+
+#[test]
+fn weak_set_membership_keeps_nothing_alive() {
+    // WeakSet: membership is not an edge — a member lives only
+    // through outside references; dead members are pruned and a live
+    // member still answers `has` after the collection.
+    let cranks = [
+        "var ws = new WeakSet(); var keep = 0; var g = 0; var i = 0; var t = 0; \
+         ws.has; \
+         keep = { k: 1 }; ws.add(keep); \
+         for (i = 0; i < 200; i = i + 1) { ws.add({ k: i }); } \
+         g = 0; t = 1; t",
+        "var ws; var keep; var g; var i; var t; g = WeakSet; g = 0; ws.add; keep.k; \
+         t = 0; if (ws.has(keep)) { t = 1; } t",
+    ];
+    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let mut m = Interp::new();
+    m.link_intrinsics(&compiled[0].1);
+    let o1 = m.run(&compiled[0].0);
+    assert!(o1.completed, "fixture halted: {:?}", o1.halt);
+    let stats = m.collect_garbage();
     assert!(
-        stats.slots_reclaimed < 1200,
-        "weak-held entries are conservatively retained (ephemerons not yet landed): {stats:?}"
+        stats.slots_reclaimed >= 380,
+        "set-only members are dead by ephemeron semantics: {stats:?}"
     );
+    let o2 = m.run(&compiled[1].0);
+    assert!(o2.completed, "halt: {:?}", o2.halt);
+    assert_eq!(o2.result, "1", "the externally-held member is still a member");
 }
 
 #[test]
@@ -483,13 +524,17 @@ fn symbol_key_descriptor_survives_collection() {
     // the only descriptor→id link. Before the fix, collection swept
     // the descriptor and dropped the mapping, after which the
     // string-key enumerations misclassified the still-live symbol
-    // property. The descriptors are now GC roots: after a full
-    // collect, `Object.keys` still partitions the symbol key out.
-    // The cross-crank symbol table is a deterministic function of the
-    // crank's name SET (not first-appearance order), so crank 2
+    // property. Retention is PRECISE now (the deferred pass): the
+    // ephemeron pass keeps a descriptor exactly while its interned id
+    // sits on a marked property record — here `o` is live, so the
+    // descriptor and the partition survive a full collect; the twin
+    // test below proves the dead-keyed case reclaims. Crank 2 must
+    // compile to crank 1's exact symbol table (same names, same
+    // first-appearance order where names hash-collide — wave 3
+    // falsified the looser "same set suffices" claim), so it
     // references exactly crank 1's names — the vars, the property
     // names (`a` via a read, `v`/`w` via reads), and the intrinsics
-    // (`Symbol` via a reference) — to get the identical table.
+    // (`Symbol` via a reference).
     let cranks = [
         "var o = 0; var g = 0; var i = 0; var sym = 0; \
          o = { a: 1 }; sym = Symbol('key'); o[sym] = 42; sym = 0; \
@@ -513,4 +558,202 @@ fn symbol_key_descriptor_survives_collection() {
         o2.result, "1",
         "the symbol-key descriptor survived collection, so enumeration still partitions it"
     );
+}
+
+#[test]
+fn partial_collect_under_bulk_table_churn_stays_parity_clean() {
+    use ironhorse_snapshot::machine::{checkpoint_to_store, partial_collect};
+    // The counted-accessor churn arm (design § Plan: counted
+    // side-table ref-page accessors): drive the bulk tables through
+    // their full mutation surface — dynamic element writes, a
+    // length-truncation drop, shift/unshift whole-map rebuilds, Map
+    // set/overwrite/delete/clear — with a partial collection at every
+    // clean boundary. In debug builds EVERY projection call
+    // cross-checks the standing per-page counts against a fresh
+    // enumeration (the parity net in `side_table_ref_page_bits`), so
+    // this test is the churn oracle; the pinned results prove the
+    // machine still computes.
+    // One crank text discipline: every crank references the SAME name
+    // set (program-symbol ids are table positions; the file's other
+    // fixtures anchor unused names the same way).
+    let cranks = [
+        // Build: 400 array-held objects (dynamic index), a Map of 60
+        // object->object pairs, a dropped 300-object chain, then
+        // truncate the array to 200 (the remove_item drop loop).
+        "var arr = []; var m = new Map(); var g = 0; var i = 0; var k = 0; var t = 0; \
+         arr.unshift; arr.shift; m.clear; \
+         for (i = 0; i < 400; i = i + 1) { arr[i] = { v: i, w: i }; } \
+         for (i = 0; i < 60; i = i + 1) { k = { v: i, w: 0 }; m.set(k, { v: 0, w: i }); } \
+         for (i = 0; i < 300; i = i + 1) { g = { v: i, w: i }; } \
+         g = 0; arr.length = 200; t = 7; t",
+        // Churn: unshift/shift (replace_items paths), overwrite the
+        // low elements, clear the Map and repopulate small, then read
+        // through a DYNAMIC index (the items-map path).
+        "var arr; var m; var g; var i; var k; var t; g = Map; g = 0; \
+         arr.unshift({ v: 9, w: 9 }); arr.shift(); \
+         for (i = 0; i < 50; i = i + 1) { arr[i] = { v: i + 1000, w: i }; } \
+         m.clear(); \
+         for (i = 0; i < 10; i = i + 1) { k = { v: i, w: 1 }; m.set(k, k); } \
+         i = 10; t = arr[i].v; t; arr.length; t",
+        // Post-collect integrity read, same name set.
+        "var arr; var m; var g; var i; var k; var t; g = Map; g = 0; \
+         arr.unshift; arr.shift; m.clear; m.set; k = { v: 0, w: 0 }; \
+         i = 5; t = arr[i].v + 1; arr.length; t",
+    ];
+    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+
+    let mut m = Interp::new();
+    m.link_intrinsics(&compiled[0].1);
+    let o1 = m.run(&compiled[0].0);
+    assert!(o1.completed, "halt: {:?}", o1.halt);
+    assert_eq!(o1.result, "7");
+
+    let mut store = MemoryStore::new();
+    let mut session = begin_store_session(m, &sig(), &mut store)
+        .map_err(|(_, e)| e)
+        .expect("begin");
+    let freed_1 = partial_collect(&mut session, &store).expect("collect after build");
+    assert!(freed_1 > 0, "the dropped chain reclaims: {freed_1}");
+    checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+
+    let o2 = session.machine_mut().run(&compiled[1].0);
+    assert!(o2.completed, "halt: {:?}", o2.halt);
+    assert_eq!(o2.result, "1010", "post-churn dynamic read");
+    checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    let _freed_2 = partial_collect(&mut session, &store).expect("collect after churn");
+
+    let o3 = session.machine_mut().run(&compiled[2].0);
+    assert!(o3.completed, "halt: {:?}", o3.halt);
+    assert_eq!(o3.result, "1006", "the churned state survives the collections");
+}
+
+#[test]
+fn dead_keyed_symbol_interns_are_reclaimed_precisely() {
+    // The twin of `symbol_key_descriptor_survives_collection`: when
+    // the last object carrying a symbol-keyed property DIES, the
+    // descriptor, its intern, and its description chunk go with it —
+    // the old behavior rooted every intern forever (retention-only,
+    // but a leak per dead symbol key). A live plain-keyed object
+    // rides through untouched, and symbols keep working afterwards.
+    let cranks = [
+        "var o = 0; var g = 0; var i = 0; var sym = 0; \
+         for (i = 0; i < 50; i = i + 1) { sym = Symbol('key'); o = { a: 1 }; o[sym] = 42; } \
+         o = 0; sym = 0; g = { a: 7 }; g.a",
+        "var o; var g; var i; var sym; \
+         o = { a: 2 }; sym = Symbol('key'); o[sym] = 9; i = o[sym]; g.a + i",
+    ];
+    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let mut m = Interp::new();
+    m.link_intrinsics(&compiled[0].1);
+    let o1 = m.run(&compiled[0].0);
+    assert!(o1.completed, "fixture halted: {:?}", o1.halt);
+    assert_eq!(o1.result, "7");
+
+    let stats = m.collect_garbage();
+    // 50 dead owners (2-slot objects + their symbol property slots)
+    // and 50 dead descriptors; the exact figure rides slot layout, so
+    // bound it from below well past what plain-object garbage alone
+    // would explain, and require the description chunks to compact.
+    assert!(
+        stats.slots_reclaimed >= 200,
+        "dead symbol-keyed owners AND their descriptors reclaim: {stats:?}"
+    );
+    assert!(
+        stats.chunk_bytes_after < stats.chunk_bytes_before,
+        "the dead descriptions' chunks compact away: {stats:?}"
+    );
+
+    // Symbols still intern and read back after the precise sweep.
+    let o2 = m.run(&compiled[1].0);
+    assert!(o2.completed, "halt: {:?}", o2.halt);
+    assert_eq!(o2.result, "16", "a fresh symbol key works after the reclamation");
+}
+
+#[test]
+fn generational_collect_frees_new_garbage_and_never_more_than_partial() {
+    use ironhorse_snapshot::machine::{
+        checkpoint_to_store, generational_collect, partial_collect,
+    };
+    // Phase 11's semantic lock, run as TWINS from identical state:
+    // the generational pass (candidates = pages dirtied since the
+    // last collect) frees new page-isolated garbage, never frees a
+    // page the full partial pass would keep (retention-only
+    // divergence), and the machine computes identically afterwards.
+    let cranks = [
+        // Old generation: live structure plus a dropped chain, then a
+        // collect to draw the generation boundary.
+        "var keep = 0; var g = 0; var i = 0; var t = 0; \
+         keep = { v: 0, w: 0 }; \
+         for (i = 0; i < 800; i = i + 1) { keep = { v: i, w: i }; } \
+         t = 1; t",
+        // New generation: fresh garbage (page-isolated chain) plus a
+        // little live growth.
+        "var keep; var g; var i; var t; \
+         for (i = 0; i < 900; i = i + 1) { g = { v: i, w: i }; } \
+         g = 0; keep = { v: -1, w: -1 }; t = 2; t",
+        // The read that proves state survived either collector (the
+        // `keep.w` read anchors `w` so the crank's symbol table
+        // matches the earlier cranks').
+        "var keep; var g; var i; var t; keep.w; t = keep.v; t",
+    ];
+    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+
+    let run_twin = |generational: bool| -> (u32, String, u64) {
+        let mut store = MemoryStore::new();
+        let mut m = Interp::new();
+        m.link_intrinsics(&compiled[0].1);
+        assert!(m.run(&compiled[0].0).completed);
+        let mut session = begin_store_session(m, &sig(), &mut store)
+            .map_err(|(_, e)| e)
+            .expect("begin");
+        // Draw the generation boundary: everything to here is OLD.
+        let _ = partial_collect(&mut session, &store).expect("boundary collect");
+        checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+
+        let o = session.machine_mut().run(&compiled[1].0);
+        assert!(o.completed, "halt: {:?}", o.halt);
+        checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+
+        let freed = if generational {
+            generational_collect(&mut session, &store).expect("generational")
+        } else {
+            partial_collect(&mut session, &store).expect("partial")
+        };
+        let o = session.machine_mut().run(&compiled[2].0);
+        assert!(o.completed, "halt: {:?}", o.halt);
+        (freed, o.result, o.computrons)
+    };
+
+    let (freed_gen, r_gen, c_gen) = run_twin(true);
+    let (freed_part, r_part, c_part) = run_twin(false);
+    assert!(freed_gen > 0, "the new dropped chain reclaims: {freed_gen}");
+    assert!(
+        freed_gen <= freed_part,
+        "retention-only divergence: gen {freed_gen} <= partial {freed_part}"
+    );
+    assert_eq!(r_gen, r_part, "the surviving state agrees");
+    assert_eq!(r_gen, "-1");
+    assert_eq!(c_gen, c_part, "the meter agrees across collector choices");
+}
+
+#[test]
+fn generational_collect_is_a_noop_with_no_new_dirt() {
+    use ironhorse_snapshot::machine::{generational_collect, partial_collect};
+    // Right after a full partial collect the candidate set is empty:
+    // the generational pass frees nothing and touches nothing.
+    let (b, names) = compile(
+        "var g = 0; var i = 0; \
+         for (i = 0; i < 400; i = i + 1) { g = { v: i, w: i }; } g = 0;",
+    );
+    let mut m = Interp::new();
+    m.link_intrinsics(&names);
+    assert!(m.run(&b).completed);
+    let mut store = MemoryStore::new();
+    let mut session = begin_store_session(m, &sig(), &mut store)
+        .map_err(|(_, e)| e)
+        .expect("begin");
+    let freed = partial_collect(&mut session, &store).expect("partial");
+    assert!(freed > 0);
+    let again = generational_collect(&mut session, &store).expect("generational");
+    assert_eq!(again, 0, "no dirt since the last collect, nothing to examine");
 }

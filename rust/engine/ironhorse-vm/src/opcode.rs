@@ -493,7 +493,21 @@ pub static CODE_SIZES: [i8; XS_CODE_COUNT] = [
     1, // XS_CODE_WITH
     1, // XS_CODE_WITHOUT
     1, // XS_CODE_YIELD
-    5, // XS_CODE_PROFILE
+    // XS_CODE_PROFILE is ID-SHAPED but deliberately NOT id-mapped, so it
+    // keeps a POSITIVE size rather than the `0` sentinel. XS writes the
+    // entry longhand under `#ifdef mx32bitID` (`5` with 4-byte IDs, `3`
+    // without) — `xsCommon.c` — and this is a 2-byte-ID build, so `3` is
+    // the right value; the `5` that stood here was the 32-bit branch
+    // transcribed into a 16-bit build (review wave 4, G2-d).
+    //
+    // The `0` sentinel would be equally wrong, in the other direction:
+    // `fxMapperMapIDs` (`xsAPI.c`) keys the symbol remap on `0 == offset`
+    // and handles PROFILE inside the `0 < offset` branch, where it mints
+    // a FRESH profile id via `fxGenerateProfileID` instead of mapping the
+    // operand. PROFILE's operand is a profiling counter, not a
+    // symbol-table position, so it must stay out of `remap_ids` (review
+    // wave 5). Inert today either way — the coder never emits PROFILE.
+    3, // XS_CODE_PROFILE
     1, // XS_CODE_YIELD_STAR
     2, // XS_CODE_USED_1
     3, // XS_CODE_USED_2
@@ -1071,5 +1085,120 @@ pub fn instruction_len(code: &[u8], pc: usize) -> Option<usize> {
         // Every negative sentinel XS emits is -1/-2/-4; anything else is
         // an impossible table entry.
         _ => None,
+    }
+}
+
+/// Rewrite every 2-byte little-endian ID operand through `map`,
+/// walking the stream with [`instruction_len`] exactly as the
+/// disassembler does (side-table ledger G2: the bytecode half of
+/// per-crank relinking). `gxCodeSizes == 0` marks ID-bearing opcodes
+/// — XS's own snapshot remap keys off the same table entry — so the
+/// coverage cannot drift from the length walk. Nested function bodies
+/// are covered: a `CODE_X` operand carries only the body LENGTH and
+/// the body's instructions follow inline, so the walk enters them;
+/// length-prefixed data payloads (strings, bigints, host names) are
+/// skipped whole by their `-1/-2/-4` sentinels. Returns `None` on an
+/// unknown opcode, a truncated instruction, or a `map` refusal — the
+/// caller treats all three as "this bytecode cannot be relinked".
+pub fn remap_ids(bytecode: &[u8], mut map: impl FnMut(u16) -> Option<u16>) -> Option<Vec<u8>> {
+    let mut out = bytecode.to_vec();
+    let mut pc = 0usize;
+    while pc < out.len() {
+        let op = Opcode::from_u8(out[pc])?;
+        let len = instruction_len(&out, pc)?;
+        if op.size() == 0 {
+            if pc + 1 + ID_SIZE > out.len() {
+                return None;
+            }
+            let id = u16::from_le_bytes([out[pc + 1], out[pc + 2]]);
+            let new = map(id)?;
+            out[pc + 1..pc + 1 + ID_SIZE].copy_from_slice(&new.to_le_bytes());
+        }
+        pc = pc.checked_add(len)?;
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every SYMBOL-operand opcode must carry the `0` sentinel, because
+    /// that is what [`remap_ids`] keys on and what [`instruction_len`]
+    /// resolves to `1 + ID_SIZE`. A concrete size on one of these is
+    /// doubly wrong: the relink skips its operand AND mis-advances the
+    /// scan, desynchronizing every instruction after it.
+    ///
+    /// The list is exactly XS's own `gxCodeSizes` ZERO entries, read off
+    /// `xsCommon.c`. `XS_CODE_PROFILE` is deliberately NOT among them:
+    /// it is ID-shaped but XS gives it a positive size (`3` in a
+    /// 2-byte-ID build) precisely so the symbol remap skips it —
+    /// `fxMapperMapIDs` handles it in the `0 < offset` branch and mints a
+    /// fresh profile id rather than mapping the operand. Both directions
+    /// are asserted below, so neither "PROFILE joins the sentinel set"
+    /// nor "a real symbol op leaves it" can land silently (review waves
+    /// 4 and 5).
+    #[test]
+    fn every_id_bearing_opcode_uses_the_computed_size_sentinel() {
+        let id_bearing = [
+            Opcode::XS_CODE_ASYNC_FUNCTION,
+            Opcode::XS_CODE_ASYNC_GENERATOR_FUNCTION,
+            Opcode::XS_CODE_CONSTRUCTOR_FUNCTION,
+            Opcode::XS_CODE_DELETE_PROPERTY,
+            Opcode::XS_CODE_DELETE_SUPER,
+            Opcode::XS_CODE_FILE,
+            Opcode::XS_CODE_FUNCTION,
+            Opcode::XS_CODE_GENERATOR_FUNCTION,
+            Opcode::XS_CODE_GET_PROPERTY,
+            Opcode::XS_CODE_GET_SUPER,
+            Opcode::XS_CODE_GET_THIS_VARIABLE,
+            Opcode::XS_CODE_GET_VARIABLE,
+            Opcode::XS_CODE_EVAL_PRIVATE,
+            Opcode::XS_CODE_EVAL_REFERENCE,
+            Opcode::XS_CODE_NAME,
+            Opcode::XS_CODE_NEW_CLOSURE,
+            Opcode::XS_CODE_NEW_LOCAL,
+            Opcode::XS_CODE_NEW_PROPERTY,
+            Opcode::XS_CODE_PROGRAM_REFERENCE,
+            Opcode::XS_CODE_SET_PROPERTY,
+            Opcode::XS_CODE_SET_SUPER,
+            Opcode::XS_CODE_SET_VARIABLE,
+            Opcode::XS_CODE_SYMBOL,
+        ];
+        for op in id_bearing {
+            assert_eq!(
+                op.size(),
+                0,
+                "{} carries an ID operand and must use the computed-size sentinel",
+                op.name(),
+            );
+        }
+        // And the converse: nothing else claims the sentinel, so
+        // `remap_ids` never rewrites two bytes of a non-ID operand.
+        for byte in 0..XS_CODE_COUNT {
+            let Some(op) = Opcode::from_u8(byte as u8) else {
+                continue;
+            };
+            if op.size() == 0 {
+                assert!(
+                    id_bearing.contains(&op),
+                    "{} claims the computed-size sentinel but is not ID-bearing",
+                    op.name(),
+                );
+            }
+        }
+        // PROFILE specifically: ID-shaped, positive size, out of the
+        // remap set. `3` is `1 + ID_SIZE` — XS's own non-`mx32bitID`
+        // value — so the instruction WALK agrees with the sentinel form
+        // while the symbol REMAP correctly skips it.
+        assert_eq!(
+            Opcode::XS_CODE_PROFILE.size(),
+            (1 + ID_SIZE) as i8,
+            "PROFILE must keep XS's positive 2-byte-ID size, not the remap sentinel",
+        );
+        assert!(
+            !id_bearing.contains(&Opcode::XS_CODE_PROFILE),
+            "PROFILE's operand is a profile counter, not a symbol id",
+        );
     }
 }

@@ -206,3 +206,158 @@ fn gc_cost_across_heap_sizes() {
         );
     }
 }
+
+#[test]
+#[ignore]
+fn generational_steady_state_cost() {
+    use ironhorse_snapshot::machine::{
+        begin_store_session, checkpoint_to_store, generational_collect, partial_collect,
+    };
+    use ironhorse_snapshot::store::MemoryStore;
+    // Phase 11's bar: with a SMALL mutation set, the generational
+    // pass's decision cost is bounded by the mutated region — near
+    // flat across heap sizes — while the full partial pass's decision
+    // cost grows with the page count. The same small churn crank runs
+    // at every heap size; only the old-generation size varies.
+    for &n in &[5_000u32, 20_000, 80_000] {
+        let build = format!(
+            "var keep = 0; var g = 0; var i = 0; var t = 0; \
+             for (i = 0; i < {n}; i = i + 1) {{ keep = {{ v: i, w: i }}; }} t = 1; t"
+        );
+        let churn = "var keep; var g; var i; var t; \
+                     for (i = 0; i < 300; i = i + 1) { g = { v: i, w: i }; } \
+                     g = 0; keep = { v: -1, w: -1 }; t = 2; t";
+        let (b, names) = compile(&build);
+        let (bc, _) = compile(churn);
+
+        let mut gen_ms = Vec::new();
+        let mut part_ms = Vec::new();
+        let mut freed_gen = 0u32;
+        let mut slots_total = 0u32;
+        for _ in 0..5 {
+            let mut store = MemoryStore::new();
+            let mut m = Interp::new();
+            m.link_intrinsics(&names);
+            assert!(m.run(&b).completed);
+            let mut session = begin_store_session(m, &sig(), &mut store)
+                .map_err(|(_, e)| e)
+                .expect("begin");
+            let _ = partial_collect(&mut session, &store).expect("boundary");
+            checkpoint_to_store(&mut session, &sig(), &mut store).expect("ckpt");
+            assert!(session.machine_mut().run(&bc).completed);
+            checkpoint_to_store(&mut session, &sig(), &mut store).expect("ckpt");
+
+            slots_total = session.machine().slots.capacity();
+            let t0 = std::time::Instant::now();
+            freed_gen = generational_collect(&mut session, &store).expect("gen");
+            gen_ms.push(t0.elapsed().as_secs_f64() * 1e3);
+
+            // The full-pass comparison runs on a TWIN state (same
+            // build, same churn) so neither timing sees the other's
+            // reclamation.
+            let mut store2 = MemoryStore::new();
+            let mut m2 = Interp::new();
+            m2.link_intrinsics(&names);
+            assert!(m2.run(&b).completed);
+            let mut s2 = begin_store_session(m2, &sig(), &mut store2)
+                .map_err(|(_, e)| e)
+                .expect("begin");
+            let _ = partial_collect(&mut s2, &store2).expect("boundary");
+            checkpoint_to_store(&mut s2, &sig(), &mut store2).expect("ckpt");
+            assert!(s2.machine_mut().run(&bc).completed);
+            checkpoint_to_store(&mut s2, &sig(), &mut store2).expect("ckpt");
+            let t1 = std::time::Instant::now();
+            let _ = partial_collect(&mut s2, &store2).expect("partial");
+            part_ms.push(t1.elapsed().as_secs_f64() * 1e3);
+        }
+        println!(
+            "slots={slots_total:>7} | generational {:>7.3} ms (freed {freed_gen}) | full partial {:>7.3} ms",
+            median(gen_ms),
+            median(part_ms),
+        );
+        // Dense-default regime (MemoryStore): both passes read the
+        // whole edge table, so both grow with the page count and the
+        // generational win is a constant factor. The INDEXED regime —
+        // seeds from the reverse index, expansion bounded to the
+        // dirty region — is measured in the SQLite store_bench's
+        // generational arm, where the pass stays flat.
+    }
+}
+
+/// The phase-12 gate instrument: how much of a post-compaction
+/// checkpoint is the SLIDE — the extents rewritten only because
+/// surviving chunk bytes moved down over reclaimed space. Identity-
+/// keyed chunk rows (compaction as row moves) would reduce those
+/// rewrites to metadata updates; the phase-7 incremental-dirt cut
+/// already keeps a NO-move collection's checkpoint clean, so this arm
+/// measures exactly the residual win that would justify the deep
+/// redesign (store schema + slot→chunk encoding + compactor together,
+/// per the design's honest note).
+///
+/// Two rounds on the same shape: garbage allocated BEHIND the
+/// survivors (front of the chunk space — compaction slides everything
+/// live), then garbage AFTER them (tail — nothing moves). The delta
+/// between the two checkpoints' extent-row counts is the slide cost.
+#[test]
+#[ignore]
+fn compaction_slide_checkpoint_cost() {
+    use ironhorse_snapshot::machine::checkpoint_to_store;
+    use ironhorse_snapshot::store::{HeapStore, MemoryStore, CHUNK_EXTENT_BYTES};
+
+    for &n in &[500u32, 2_000, 8_000] {
+        // `junk` strings first (low chunk offsets), `keep` strings
+        // after them (higher offsets): dropping junk and collecting
+        // slides every keep chunk down. The reverse order (keep
+        // first) frees the tail: same reclaim, zero movement.
+        // Plain literals only: a `'…' + i` concat would interleave
+        // intermediate garbage between the survivors and force a slide
+        // in BOTH rounds (measured before this shape was chosen —
+        // realistic string BUILDING makes every compaction slide-heavy,
+        // which is the phase-12 demand signal in itself).
+        let front = format!(
+            "var junk = 0; var keep = 0; var i = 0; var t = 0; \
+             junk = []; keep = []; \
+             for (i = 0; i < {n}; i = i + 1) {{ junk[i] = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; }} \
+             for (i = 0; i < {n}; i = i + 1) {{ keep[i] = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; }} \
+             junk = 0; t = 7;"
+        );
+        let tail = format!(
+            "var junk = 0; var keep = 0; var i = 0; var t = 0; \
+             keep = []; junk = []; \
+             for (i = 0; i < {n}; i = i + 1) {{ keep[i] = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; }} \
+             for (i = 0; i < {n}; i = i + 1) {{ junk[i] = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; }} \
+             junk = 0; t = 7;"
+        );
+        let mut row = |label: &str, source: &str| {
+            let (b, names) = compile(source);
+            let mut m = Interp::new();
+            m.link_intrinsics(&names);
+            assert!(m.run(&b).completed);
+            let mut store = MemoryStore::new();
+            let mut session = begin_store_session(m, &sig(), &mut store)
+                .map_err(|(_, e)| e)
+                .unwrap();
+            let extents_before =
+                (store.manifest().unwrap().chunk_len as usize).div_ceil(CHUNK_EXTENT_BYTES as usize);
+            session.machine_mut().collect_garbage();
+            let t0 = Instant::now();
+            checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
+            let ms = t0.elapsed().as_secs_f64() * 1e3;
+            let stats = store.last_commit_stats();
+            let extents_after =
+                (store.manifest().unwrap().chunk_len as usize).div_ceil(CHUNK_EXTENT_BYTES as usize);
+            println!(
+                "chunks n={n:>5} {label}: extents {extents_before:>4}→{extents_after:>4} | \
+                 extent rows written {:>4} | slot pages written {:>4} | checkpoint {ms:>7.3} ms",
+                stats.chunk_extents_written, stats.slot_pages_written,
+            );
+            stats.chunk_extents_written
+        };
+        let moved = row("front-garbage (slide)", &front);
+        let unmoved = row("tail-garbage  (no-op)", &tail);
+        println!(
+            "chunks n={n:>5} SLIDE COST: {} extent rows are pure movement rewrite\n",
+            moved.saturating_sub(unmoved),
+        );
+    }
+}

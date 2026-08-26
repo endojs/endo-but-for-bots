@@ -144,11 +144,18 @@ impl Supervisor {
 
     /// Mark a store-backed Ironhorse worker as suspended.
     ///
-    /// The heap database at `heap_store` IS the durable state — the
-    /// worker checkpointed it at every completed crank, so suspend
-    /// records only the path (no snapshot write, no CAS key). Resume
-    /// reopens the database and continues from its committed epoch
-    /// (designs/ironhorse-snapshot-store-seam.md § supervisor wiring).
+    /// The heap database at `heap_store` IS the durable state, so
+    /// suspend records only the path (no snapshot write, no CAS key).
+    /// Resume reopens the database and continues from its committed
+    /// epoch (designs/ironhorse-snapshot-store-seam.md § supervisor
+    /// wiring).
+    ///
+    /// How much is durable at this point is the worker's
+    /// `CadencePolicy`, not a fixed per-crank rule: under
+    /// `checkpoint_every > 1` completed cranks can be pending. The
+    /// close path flushes them before the machine is released, which is
+    /// what makes the recorded path a complete suspend rather than one
+    /// missing its tail.
     pub fn mark_suspended_store(&self, handle: Handle, heap_store: std::path::PathBuf) {
         self.mark_suspended_inner(handle, String::new(), std::path::PathBuf::new(), Some(heap_store));
     }

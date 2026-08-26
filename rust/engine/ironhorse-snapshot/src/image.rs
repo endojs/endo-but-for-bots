@@ -12,10 +12,13 @@
 //! `Interp`↔image conversion stays in the engine.
 //!
 //! Coverage today: the index arenas (`HEAP`/`BLOC`), the interpreter stack
-//! (`STAC`), and the symbol/key tables (`NAME`/`KEYS`/`SYMB`), plus the
-//! `VERS`/`SIGN`/`CREA` headers. The rich per-instance side tables are
-//! enumerated in [`crate::sidetable`] with their coverage; the ones marked
-//! `Pending` there are the remaining atoms.
+//! (`STAC`), the symbol/key tables (`NAME`/`KEYS`/`SYMB`), the
+//! `VERS`/`SIGN`/`CREA` headers, and — since the G1 side-table ledger —
+//! the arrays, collections, and `Symbol.for` registry tables
+//! (`ARRY`/`COLL`/`REGY`, emitted only when non-empty so side-table-free
+//! containers keep their exact prior bytes). The rich per-instance side
+//! tables are enumerated in [`crate::sidetable`] with their coverage; the
+//! ones marked `Pending` there are the remaining atoms.
 
 use crate::atom::{AtomReader, AtomWriter};
 use crate::format::{
@@ -130,6 +133,79 @@ impl CreationParams {
     }
 }
 
+/// One array instance's serialized side-table row (the `ARRY` atom /
+/// small-state arrays section): the owning slot, the spec `length`,
+/// and the sparse items ascending by index. Values are ordinary slot
+/// records — their slot/chunk references round-trip with the arenas,
+/// and the full collector's chunk remap rewrites the live table, so a
+/// quiescent image is always internally consistent.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ArrayImage {
+    pub owner: u32,
+    pub length: u32,
+    pub items: Vec<(u32, Slot)>,
+}
+
+/// One collection instance's serialized side-table row (the `COLL`
+/// atom / small-state collections section): the owning slot, the
+/// frozen kind code (0 Map, 1 Set, 2 WeakMap, 3 WeakSet), XS's
+/// power-of-two hash-table length (metering geometry), and the
+/// insertion-ordered entries. Set/WeakSet carry an undefined value
+/// half, exactly as the live table does.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollectionImage {
+    pub owner: u32,
+    pub kind: u8,
+    pub table_length: u32,
+    pub entries: Vec<(Slot, Slot)>,
+}
+
+/// One `Symbol.for` registry entry (the `REGY` atom / small-state
+/// registry section): the registration key's bytes and the symbol
+/// descriptor's slot. Ascending by key bytes in serialized form.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RegistryImage {
+    pub key: Vec<u8>,
+    pub descriptor: u32,
+}
+
+/// The symbol-key property-id table (the `SYMB` atom / small-state
+/// symbols section): the machine's top-down mint counter and every
+/// `(id, descriptor slot)` pair, ascending by id. Symbol keys mint
+/// DOWNWARD from `u16::MAX` (string keys — program symbols and
+/// runtime-interned names alike — live in the NAME table, growing up
+/// from 1), so persisting this table is what lets a heap holding
+/// symbol-KEYED properties round-trip: the restored machine re-binds
+/// each stored id to the same descriptor slot instead of re-minting
+/// the number for a different symbol.
+///
+/// Wire form: the canonical EMPTY table (`next_id == u16::MAX`, no
+/// pairs) encodes as the legacy 4-zero-byte empty list, byte-stable
+/// with every blob and store written before the table traveled;
+/// anything else encodes as `u16 next_id`, `u32 count`, then the
+/// pairs (`u16 id`, `u32 desc`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SymbolKeyImage {
+    pub next_id: u16,
+    pub pairs: Vec<(u16, u32)>,
+}
+
+impl Default for SymbolKeyImage {
+    fn default() -> SymbolKeyImage {
+        SymbolKeyImage {
+            next_id: u16::MAX,
+            pairs: Vec::new(),
+        }
+    }
+}
+
+impl SymbolKeyImage {
+    /// The registered id set, for the stored-id audit.
+    pub fn id_set(&self) -> std::collections::BTreeSet<u16> {
+        self.pairs.iter().map(|&(id, _)| id).collect()
+    }
+}
+
 /// The serializable image of an ironhorse machine.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MachineImage {
@@ -150,11 +226,17 @@ pub struct MachineImage {
     pub keys: Vec<String>,
     /// `NAME`: the program symbol names, id-ordered (`symbol_names`).
     pub names: Vec<String>,
-    /// `SYMB`: well-known / registered symbol identity slot indices.
-    pub symbols: Vec<u32>,
+    /// `SYMB`: the symbol-key property-id table (see [`SymbolKeyImage`]).
+    pub symbols: SymbolKeyImage,
     /// `METR`: the metering state (design row 6). A resumed machine
     /// continues its meter from exactly this point.
     pub meter: MeterImage,
+    /// `ARRY`: the arrays side table (side-table ledger), owner-ascending.
+    pub arrays: Vec<ArrayImage>,
+    /// `COLL`: the collections side table (ledger), owner-ascending.
+    pub collections: Vec<CollectionImage>,
+    /// `REGY`: the `Symbol.for` registry (ledger), key-ascending.
+    pub registry: Vec<RegistryImage>,
 }
 
 impl MachineImage {
@@ -168,7 +250,7 @@ impl MachineImage {
         stack: &[Slot],
         names: Vec<String>,
         keys: Vec<String>,
-        symbols: Vec<u32>,
+        symbols: SymbolKeyImage,
     ) -> MachineImage {
         MachineImage {
             version: Version::current(),
@@ -186,7 +268,53 @@ impl MachineImage {
             names,
             symbols,
             meter: MeterImage::current(),
+            arrays: Vec::new(),
+            collections: Vec::new(),
+            registry: Vec::new(),
         }
+    }
+
+    /// The first RUNTIME-INTERNED property id this image stores, or
+    /// `None` if it stores none — the content witness the persistence
+    /// gates ask ([`crate::store::StoreError::RuntimeInternsUnsupported`]).
+    ///
+    /// An id past `names` was minted at runtime, and its id→name map
+    /// (`KEYS`/`SYMB`) does not travel yet, so a resumed machine would
+    /// re-mint the same number for a different key and read the wrong
+    /// slot. Free slots are skipped — a stale record on the free list
+    /// names nothing.
+    ///
+    /// Asking the IMAGE rather than the live machine's mint counter is
+    /// what makes the answer survive a round trip: the counter is
+    /// session state that a resume rebuilds from `names.len()`, so a
+    /// heap that reached the store poisoned reported itself clean ever
+    /// after (review wave 5).
+    pub fn stored_unregistered_key_id(&self) -> Option<u16> {
+        let registered = self.symbols.id_set();
+        let free: std::collections::BTreeSet<u32> = self.slot_free.iter().copied().collect();
+        let live = self
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !free.contains(&(*i as u32)))
+            .map(|(_, s)| s);
+        first_stored_unregistered_id(live.chain(self.stack.iter()), self.names.len(), &registered)
+            .or_else(|| {
+                first_stored_unregistered_id(
+                    self.arrays.iter().flat_map(|a| a.items.iter().map(|(_, s)| s)),
+                    self.names.len(),
+                    &registered,
+                )
+            })
+            .or_else(|| {
+                first_stored_unregistered_id(
+                    self.collections
+                        .iter()
+                        .flat_map(|c| c.entries.iter().flat_map(|(k, v)| [k, v])),
+                    self.names.len(),
+                    &registered,
+                )
+            })
     }
 
     /// Attach a metering state to this image (design row 6). The snapshot
@@ -194,6 +322,21 @@ impl MachineImage {
     /// resume continues the meter exactly.
     pub fn with_meter(mut self, meter: MeterState) -> MachineImage {
         self.meter = MeterImage::of(meter);
+        self
+    }
+
+    /// Attach the bulk side tables and symbol registry (side-table
+    /// ledger). The snapshot surface calls this with the live
+    /// machine's `*_snapshot()` views, already in canonical order.
+    pub fn with_side_tables(
+        mut self,
+        arrays: Vec<ArrayImage>,
+        collections: Vec<CollectionImage>,
+        registry: Vec<RegistryImage>,
+    ) -> MachineImage {
+        self.arrays = arrays;
+        self.collections = collections;
+        self.registry = registry;
         self
     }
 
@@ -356,6 +499,480 @@ fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
 }
 
 /// STAC payload: `[count][records…]`.
+/// A bounds-checked big-endian cursor over an attacker-shaped payload:
+/// every read is gated and every failure is the caller's named
+/// [`SnapshotError::Corrupt`] — the side-table decoders below share the
+/// string/u32 decoders' fuzz discipline through it.
+struct Cursor<'a> {
+    p: &'a [u8],
+    i: usize,
+    what: &'static str,
+}
+
+impl<'a> Cursor<'a> {
+    fn new(p: &'a [u8], what: &'static str) -> Cursor<'a> {
+        Cursor { p, i: 0, what }
+    }
+    fn u32(&mut self) -> Result<u32, SnapshotError> {
+        if self.i + 4 > self.p.len() {
+            return Err(SnapshotError::Corrupt(self.what));
+        }
+        let x = u32::from_be_bytes(self.p[self.i..self.i + 4].try_into().unwrap());
+        self.i += 4;
+        Ok(x)
+    }
+    fn u16(&mut self) -> Result<u16, SnapshotError> {
+        if self.i + 2 > self.p.len() {
+            return Err(SnapshotError::Corrupt(self.what));
+        }
+        let x = u16::from_be_bytes(self.p[self.i..self.i + 2].try_into().unwrap());
+        self.i += 2;
+        Ok(x)
+    }
+    fn u8(&mut self) -> Result<u8, SnapshotError> {
+        if self.i >= self.p.len() {
+            return Err(SnapshotError::Corrupt(self.what));
+        }
+        let x = self.p[self.i];
+        self.i += 1;
+        Ok(x)
+    }
+    fn bytes(&mut self, len: usize) -> Result<&'a [u8], SnapshotError> {
+        // checked_add: `len` is attacker-sized, so `i + len` can wrap
+        // on 32-bit targets (the wave-3 class the string decoder guards).
+        let end = self
+            .i
+            .checked_add(len)
+            .ok_or(SnapshotError::Corrupt(self.what))?;
+        if end > self.p.len() {
+            return Err(SnapshotError::Corrupt(self.what));
+        }
+        let b = &self.p[self.i..end];
+        self.i = end;
+        Ok(b)
+    }
+    fn slot(&mut self) -> Result<Slot, SnapshotError> {
+        let b = self.bytes(crate::slot_codec::SLOT_RECORD_BYTES)?;
+        crate::slot_codec::decode_slot(b).map_err(|_| SnapshotError::Corrupt(self.what))
+    }
+    fn done(&self) -> Result<(), SnapshotError> {
+        if self.i != self.p.len() {
+            return Err(SnapshotError::Corrupt(self.what));
+        }
+        Ok(())
+    }
+}
+
+/// Encode the arrays side table (the `ARRY` payload / small-state
+/// arrays section). Input is owner-ascending (the vm snapshot's
+/// canonical order), items index-ascending.
+pub(crate) fn encode_arrays(arrays: &[ArrayImage]) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(arrays.len() as u32).to_be_bytes());
+    for a in arrays {
+        v.extend_from_slice(&a.owner.to_be_bytes());
+        v.extend_from_slice(&a.length.to_be_bytes());
+        v.extend_from_slice(&(a.items.len() as u32).to_be_bytes());
+        for (index, value) in &a.items {
+            v.extend_from_slice(&index.to_be_bytes());
+            crate::slot_codec::encode_slot(value, &mut v);
+        }
+    }
+    v
+}
+
+pub(crate) fn decode_arrays(p: &[u8]) -> Result<Vec<ArrayImage>, SnapshotError> {
+    let mut c = Cursor::new(p, "arrays side table");
+    let count = c.u32()? as usize;
+    // Each array costs at least 12 header bytes; clamp the reservation
+    // like the string/u32 decoders do.
+    let mut out = Vec::with_capacity(count.min(p.len() / 12));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        let length = c.u32()?;
+        let item_count = c.u32()? as usize;
+        let mut items = Vec::with_capacity(item_count.min(p.len() / 24));
+        let mut prev_index: Option<u32> = None;
+        for _ in 0..item_count {
+            let index = c.u32()?;
+            let value = c.slot()?;
+            // Strictly-ascending ITEM indices, for the same reason the
+            // owner check below exists — one level deeper, which wave 4
+            // missed. `restore_bulk_side_tables` inserts items into a
+            // `BTreeMap`, so a crafted duplicate or out-of-order pair is
+            // silently DEDUPED and RE-SORTED by a resume: items
+            // [(1,10),(1,11)] come back as one item, and [(3,30),(1,10)]
+            // come back reordered. Either way resume-then-re-snapshot
+            // emits different bytes than it read, breaking the
+            // import∘export identity the CAS key rests on.
+            //
+            // Note the plain `write_machine(read_machine(b))` round trip
+            // IS idempotent for these, which is exactly why the wave-4
+            // test missed it: the divergence only appears once the image
+            // has passed through a live `Interp` (review wave 5).
+            if prev_index.is_some_and(|prev| index <= prev) {
+                return Err(SnapshotError::Corrupt(
+                    "arrays side table: item indices not strictly ascending",
+                ));
+            }
+            prev_index = Some(index);
+            items.push((index, value));
+        }
+        // The declared `length` must actually cover the items. An item
+        // at or past it is a wrong answer twice over: `arr[last]` reads
+        // a value that `arr.length` says is not there, and a resume
+        // re-emitting the row would have to either drop the item or
+        // silently grow the length, so import∘export stops being the
+        // identity the CAS key rests on (review wave 5).
+        //
+        // What is deliberately NOT checked here is `length` itself. A
+        // sparse array is ordinary JS state, so a row declaring a huge
+        // length with one item is a faithful image, and a decoder that
+        // refused it would refuse correct snapshots. The reason that
+        // used to be dangerous — `ironhorse-vm`'s TypedArray-from-source
+        // path collecting `0..length` before its bound check and its
+        // metering, so a ~7.5 KB container declaring length 200_000_000
+        // reserved gigabytes of slots off a tiny input — is a defect of
+        // that consumer, and is fixed and locked there
+        // (`ironhorse-vm/tests/typed_array_source_length.rs`).
+        //
+        // Bounding the LAST index bounds the row: the indices are already
+        // strictly ascending, so `last < length` gives every index a
+        // distinct value below `length`, hence `item_count <= length` with
+        // no separate count check. (A count check was written first and
+        // bite-checking found it unreachable behind these two.)
+        if let Some(last) = prev_index {
+            if last >= length {
+                return Err(SnapshotError::Corrupt(
+                    "arrays side table: item index at or past the declared length",
+                ));
+            }
+        }
+        // Strictly-ascending owners (wave-4 P2): the writer emits them
+        // owner-sorted and unique (one row per instance). Enforcing it
+        // at decode rejects a crafted duplicate — whose restore would
+        // displace the first row's `ArrayData` WITHOUT decrementing its
+        // side-ref counts (a parity-net panic / release over-pin) — and
+        // makes `import ∘ export` idempotent (the dedup-and-re-sort a
+        // crafted unordered image would otherwise survive).
+        if out.last().is_some_and(|prev: &ArrayImage| owner <= prev.owner) {
+            return Err(SnapshotError::Corrupt("arrays side table: owners not strictly ascending"));
+        }
+        out.push(ArrayImage {
+            owner,
+            length,
+            items,
+        });
+    }
+    c.done()?;
+    Ok(out)
+}
+
+/// Encode the collections side table (the `COLL` payload /
+/// small-state collections section).
+pub(crate) fn encode_collections(collections: &[CollectionImage]) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(collections.len() as u32).to_be_bytes());
+    for coll in collections {
+        v.extend_from_slice(&coll.owner.to_be_bytes());
+        v.push(coll.kind);
+        v.extend_from_slice(&coll.table_length.to_be_bytes());
+        v.extend_from_slice(&(coll.entries.len() as u32).to_be_bytes());
+        for (key, value) in &coll.entries {
+            crate::slot_codec::encode_slot(key, &mut v);
+            crate::slot_codec::encode_slot(value, &mut v);
+        }
+    }
+    v
+}
+
+pub(crate) fn decode_collections(p: &[u8]) -> Result<Vec<CollectionImage>, SnapshotError> {
+    let mut c = Cursor::new(p, "collections side table");
+    let count = c.u32()? as usize;
+    let mut out = Vec::with_capacity(count.min(p.len() / 13));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        let kind = c.u8()?;
+        if kind > 3 {
+            return Err(SnapshotError::Corrupt("collection kind code"));
+        }
+        let table_length = c.u32()?;
+        let entry_count = c.u32()? as usize;
+        let mut entries = Vec::with_capacity(entry_count.min(p.len() / 40));
+        for _ in 0..entry_count {
+            let key = c.slot()?;
+            let value = c.slot()?;
+            entries.push((key, value));
+        }
+        // Strictly-ascending owners — same rationale as `decode_arrays`.
+        if out.last().is_some_and(|prev: &CollectionImage| owner <= prev.owner) {
+            return Err(SnapshotError::Corrupt(
+                "collections side table: owners not strictly ascending",
+            ));
+        }
+        out.push(CollectionImage {
+            owner,
+            kind,
+            table_length,
+            entries,
+        });
+    }
+    c.done()?;
+    Ok(out)
+}
+
+/// Encode the `Symbol.for` registry (the `REGY` payload / small-state
+/// registry section).
+/// Encode the symbol-key table (the `SYMB` payload / small-state
+/// symbols section). See [`SymbolKeyImage`] for the wire form and the
+/// legacy-empty byte-stability rule.
+pub(crate) fn encode_symbol_keys(symbols: &SymbolKeyImage) -> Vec<u8> {
+    if symbols.next_id == u16::MAX && symbols.pairs.is_empty() {
+        // Canonical empty: the legacy empty-u32-list bytes, so every
+        // pre-table blob and store stays byte-identical.
+        return vec![0, 0, 0, 0];
+    }
+    let mut v = Vec::with_capacity(6 + symbols.pairs.len() * 6);
+    v.extend_from_slice(&symbols.next_id.to_be_bytes());
+    v.extend_from_slice(&(symbols.pairs.len() as u32).to_be_bytes());
+    for &(id, desc) in &symbols.pairs {
+        v.extend_from_slice(&id.to_be_bytes());
+        v.extend_from_slice(&desc.to_be_bytes());
+    }
+    v
+}
+
+pub(crate) fn decode_symbol_keys(p: &[u8]) -> Result<SymbolKeyImage, SnapshotError> {
+    if p == [0, 0, 0, 0] {
+        return Ok(SymbolKeyImage::default());
+    }
+    let mut c = Cursor::new(p, "symbol-key table");
+    let next_id = c.u16()?;
+    let count = c.u32()? as usize;
+    let mut pairs = Vec::with_capacity(count.min(p.len() / 6));
+    let mut prev: Option<u16> = None;
+    let mut descs = std::collections::BTreeSet::new();
+    for _ in 0..count {
+        let id = c.u16()?;
+        let desc = c.u32()?;
+        // Every minted id is above the counter (top-down mints), and
+        // strictly-ascending unique ids + pairwise-distinct descriptors
+        // keep the id→symbol map a bijection and the encoding
+        // canonical — a crafted duplicate would displace a binding at
+        // restore and break import∘export identity, the same class the
+        // sibling decoders refuse.
+        if id <= next_id || prev.is_some_and(|prev_id| id <= prev_id) {
+            return Err(SnapshotError::Corrupt(
+                "symbol-key table: ids not strictly ascending above the counter",
+            ));
+        }
+        if !descs.insert(desc) {
+            return Err(SnapshotError::Corrupt(
+                "symbol-key table: two ids share a descriptor",
+            ));
+        }
+        prev = Some(id);
+        pairs.push((id, desc));
+    }
+    c.done()?;
+    Ok(SymbolKeyImage { next_id, pairs })
+}
+
+pub(crate) fn encode_registry(registry: &[RegistryImage]) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(registry.len() as u32).to_be_bytes());
+    for e in registry {
+        v.extend_from_slice(&(e.key.len() as u32).to_be_bytes());
+        v.extend_from_slice(&e.key);
+        v.extend_from_slice(&e.descriptor.to_be_bytes());
+    }
+    v
+}
+
+pub(crate) fn decode_registry(p: &[u8]) -> Result<Vec<RegistryImage>, SnapshotError> {
+    let mut c = Cursor::new(p, "symbol registry");
+    let count = c.u32()? as usize;
+    let mut out = Vec::with_capacity(count.min(p.len() / 8));
+    for _ in 0..count {
+        let key_len = c.u32()? as usize;
+        let key = c.bytes(key_len)?.to_vec();
+        let descriptor = c.u32()?;
+        // Strictly-ascending, unique keys (the writer sorts by key
+        // bytes): a crafted duplicate/unordered registry would
+        // otherwise not round-trip byte-identically and could displace
+        // a forward/reverse map entry at restore.
+        if out.last().is_some_and(|prev: &RegistryImage| key <= prev.key) {
+            return Err(SnapshotError::Corrupt(
+                "symbol registry: keys not strictly ascending",
+            ));
+        }
+        // DESCRIPTORS must be distinct too. Ascending KEYS say nothing
+        // about the reverse map: restore fills forward (key -> desc) and
+        // reverse (desc -> key) pairwise, last-writer-wins on the
+        // reverse, so two rows sharing a descriptor make
+        // `Symbol.for('aaa') === Symbol.for('bbb')` TRUE and leave
+        // `Symbol.keyFor` answering the wrong key. Both indices are in
+        // bounds and the registry is a GC root, so nothing downstream
+        // catches it — it is a silent spec break, not a crash (review
+        // wave 5). Linear scan: one row per registered symbol, decoded
+        // once at an untrusted boundary, where clarity beats a hash set.
+        if out
+            .iter()
+            .any(|prev: &RegistryImage| prev.descriptor == descriptor)
+        {
+            return Err(SnapshotError::Corrupt(
+                "symbol registry: two keys share a descriptor",
+            ));
+        }
+        out.push(RegistryImage { key, descriptor });
+    }
+    c.done()?;
+    Ok(out)
+}
+
+/// Every slot index and chunk offset a decoded image can carry, checked
+/// against the geometry the image itself declares.
+///
+/// This is the SEMANTIC gate the byte-level decoders lack: a crafted
+/// index is rooted or walked by the collector and hits an unchecked
+/// `Vec` index — a RELEASE panic on the first `collect_garbage`. Wave 4
+/// closed only the three side tables; review wave 5 showed the class is
+/// wider, and that the narrow version missed containers with NO side
+/// table at all (a 238-byte container panicked at `value.rs`'s
+/// `marks[i]`). So the walk now covers, against `slot_count`:
+///
+/// - every `HEAP` slot's `next` link and `Reference` payload,
+/// - every `STAC` slot's ditto,
+/// - side-table owners, array item values, collection entry keys AND
+///   values, and registry descriptors;
+///
+/// and, against `chunk_len`, every `String`/`BigInt` chunk offset on any
+/// of those slots — invisible to `each_ref_slot`, and reachable at
+/// compaction from a side table even when the owner is DEAD, because
+/// `external_chunk_refs` walks the tables unconditionally.
+///
+/// `SlotIndex::NULL` is skipped, matching `SideRefCounts::page_of`: a
+/// null reference is an absence, not an out-of-arena index, and scoring
+/// it as one would refuse honest images.
+///
+/// `heap` is empty on the store path, where rows are not read at
+/// validation time; those records are bounds-checked as they fault
+/// ([`crate::machine`]'s page source).
+/// The chunk arena's per-payload header width (`value.rs`'s private
+/// `CHUNK_HEADER`). A payload offset always sits this far above its
+/// header, which is why `0` is not a valid offset.
+const CHUNK_HEADER: usize = 4;
+
+/// The lowest property id that would be RUNTIME-INTERNED on a machine
+/// whose program symbol table holds `program_names` names — ids are
+/// 1-based table positions, so everything past the table was minted at
+/// runtime.
+///
+/// `None` for an EMPTY table, which is not "everything is interned" but
+/// its opposite: an unlinked machine runs raw bytecode whose ID operands
+/// are positions in a table that does not exist, so its ids carry no
+/// name mapping in the first place. There is nothing for a resume to
+/// lose, and a resumed machine re-reads the same operands the same way.
+/// (A machine that both stays unlinked AND interns would collide its
+/// minted ids with those operands, but that is an engine hazard in raw
+/// mode, not a persistence one, and it is not what this gate is about.)
+pub fn runtime_intern_floor(program_names: usize) -> Option<u16> {
+    (program_names > 0).then(|| (program_names as u16).saturating_add(1))
+}
+
+/// The first UNREGISTERED property id stored anywhere in `slots` — an
+/// id past the `program_names` name-table positions that the
+/// `registered` symbol-key id set does not carry — or `None`.
+///
+/// Since the id-space unification, every string key lives IN the name
+/// table and every symbol key the machine minted is in its symbol-key
+/// table, so a stored id outside both maps to nothing: it can only
+/// come from crafted or torn bytes, and restoring it would leave a
+/// property no lookup can ever name. The audit refuses it as corrupt.
+pub fn first_stored_unregistered_id<'a, I>(
+    slots: I,
+    program_names: usize,
+    registered: &std::collections::BTreeSet<u16>,
+) -> Option<u16>
+where
+    I: IntoIterator<Item = &'a Slot>,
+{
+    let floor = runtime_intern_floor(program_names)?;
+    slots
+        .into_iter()
+        .find_map(|s| s.stored_key_id().filter(|&id| id >= floor && !registered.contains(&id)))
+}
+
+/// `SYMB` joined this walk when the symbol-key table became live
+/// state (it was deliberately excluded while nothing consumed the
+/// section on restore — review wave 5): each pair's descriptor is a
+/// slot index the restored machine will use as a property-key
+/// identity, so an out-of-arena descriptor is refused with the same
+/// closed fist as every other crafted index.
+pub(crate) fn check_image_slot_bounds(
+    heap: &[Slot],
+    stack: &[Slot],
+    arrays: &[ArrayImage],
+    collections: &[CollectionImage],
+    registry: &[RegistryImage],
+    symbols: &SymbolKeyImage,
+    slot_count: u32,
+    chunk_len: usize,
+) -> Result<(), SnapshotError> {
+    const OOB: SnapshotError = SnapshotError::Corrupt("slot index out of arena bounds");
+    const OOC: SnapshotError = SnapshotError::Corrupt("chunk offset out of arena bounds");
+    let check = |s: &Slot| -> Result<(), SnapshotError> {
+        let mut bad = false;
+        s.each_ref_slot(|r| bad |= !r.is_null() && r.0 >= slot_count);
+        if bad {
+            return Err(OOB);
+        }
+        if let Some(off) = s.chunk_ref() {
+            if !off.is_null() {
+                let o = off.0 as usize;
+                // A payload offset sits ABOVE its 4-byte header and the
+                // header must lie inside the arena — the two asserts
+                // `ChunkArena::compact` would otherwise hit.
+                if o < CHUNK_HEADER || o > chunk_len {
+                    return Err(OOC);
+                }
+            }
+        }
+        Ok(())
+    };
+    for s in heap.iter().chain(stack) {
+        check(s)?;
+    }
+    for a in arrays {
+        if a.owner >= slot_count {
+            return Err(OOB);
+        }
+        for (_, v) in &a.items {
+            check(v)?;
+        }
+    }
+    for coll in collections {
+        if coll.owner >= slot_count {
+            return Err(OOB);
+        }
+        for (k, v) in &coll.entries {
+            check(k)?;
+            check(v)?;
+        }
+    }
+    for e in registry {
+        if e.descriptor >= slot_count {
+            return Err(OOB);
+        }
+    }
+    for &(_, desc) in &symbols.pairs {
+        if desc >= slot_count {
+            return Err(OOB);
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn encode_stack(stack: &[Slot]) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&(stack.len() as u32).to_be_bytes());
@@ -397,8 +1014,23 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
     w.atom(STAC, &encode_stack(&image.stack));
     w.atom(KEYS, &encode_strings(&image.keys));
     w.atom(NAME, &encode_strings(&image.names));
-    w.atom(SYMB, &encode_u32s(&image.symbols));
+    w.atom(SYMB, &encode_symbol_keys(&image.symbols));
     w.atom(METR, &image.meter.encode());
+    // Side-table ledger atoms, emitted ONLY when non-empty: a machine
+    // with no side-table state keeps its exact pre-ledger container
+    // bytes, so the CAS/blob identity of every existing container —
+    // the golden-vector pin included — is unchanged by the ledger.
+    // Presence is content-determined, so the canonical-bytes property
+    // (same image → same bytes) holds either way.
+    if !image.arrays.is_empty() {
+        w.atom(crate::format::ARRY, &encode_arrays(&image.arrays));
+    }
+    if !image.collections.is_empty() {
+        w.atom(crate::format::COLL, &encode_collections(&image.collections));
+    }
+    if !image.registry.is_empty() {
+        w.atom(crate::format::REGY, &encode_registry(&image.registry));
+    }
     w.finish()
 }
 
@@ -444,8 +1076,8 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         None => Vec::new(),
     };
     let symbols = match r.find(SYMB) {
-        Some(a) => decode_u32s(a.payload)?,
-        None => Vec::new(),
+        Some(a) => decode_symbol_keys(a.payload)?,
+        None => SymbolKeyImage::default(),
     };
 
     // METR (design row 6): decode the metering state and fail closed on a
@@ -463,6 +1095,37 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         });
     }
 
+    // Side-table ledger atoms: absent means empty (a pre-ledger or
+    // side-table-free container), exactly mirroring the writer's
+    // emit-only-when-non-empty rule.
+    let arrays = match r.find(crate::format::ARRY) {
+        Some(a) => decode_arrays(a.payload)?,
+        None => Vec::new(),
+    };
+    let collections = match r.find(crate::format::COLL) {
+        Some(a) => decode_collections(a.payload)?,
+        None => Vec::new(),
+    };
+    let registry = match r.find(crate::format::REGY) {
+        Some(a) => decode_registry(a.payload)?,
+        None => Vec::new(),
+    };
+    // Semantic bounds gate (wave-4 P1, widened in wave 5): every slot
+    // index and chunk offset the container carries — heap, stack,
+    // symbols and side tables alike — must fall inside the decoded
+    // arenas, or the collector would index them out of range in
+    // release.
+    check_image_slot_bounds(
+        &slots,
+        &stack,
+        &arrays,
+        &collections,
+        &registry,
+        &symbols,
+        slots.len() as u32,
+        chunks.len(),
+    )?;
+
     Ok(MachineImage {
         version,
         signature,
@@ -476,16 +1139,204 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         names,
         symbols,
         meter,
+        arrays,
+        collections,
+        registry,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ironhorse_vm::{Kind, Payload, SlotIndex};
+    use ironhorse_vm::{ChunkOffset, Kind, Payload, SlotIndex};
 
     fn sig() -> Signature {
         Signature::new("ironhorse-test-sig-v1")
+    }
+
+    #[test]
+    fn decode_rejects_non_ascending_side_table_owners() {
+        // A crafted ARRY with two rows for the same owner: restore
+        // would displace the first `ArrayData` without decrementing its
+        // side-ref counts (wave-4 P2). Decode must reject it.
+        let dup = vec![
+            ArrayImage { owner: 3, length: 0, items: vec![] },
+            ArrayImage { owner: 3, length: 0, items: vec![] },
+        ];
+        assert!(matches!(
+            decode_arrays(&encode_arrays(&dup)),
+            Err(SnapshotError::Corrupt(_))
+        ));
+        // Unordered (would break import∘export idempotency / CAS).
+        let unordered = vec![
+            CollectionImage { owner: 5, kind: 0, table_length: 0, entries: vec![] },
+            CollectionImage { owner: 2, kind: 0, table_length: 0, entries: vec![] },
+        ];
+        assert!(matches!(
+            decode_collections(&encode_collections(&unordered)),
+            Err(SnapshotError::Corrupt(_))
+        ));
+        let dup_key = vec![
+            RegistryImage { key: b"k".to_vec(), descriptor: 1 },
+            RegistryImage { key: b"k".to_vec(), descriptor: 2 },
+        ];
+        assert!(matches!(
+            decode_registry(&encode_registry(&dup_key)),
+            Err(SnapshotError::Corrupt(_))
+        ));
+        // The ascending forms decode fine.
+        let ok = vec![
+            ArrayImage { owner: 2, length: 0, items: vec![] },
+            ArrayImage { owner: 5, length: 0, items: vec![] },
+        ];
+        assert_eq!(decode_arrays(&encode_arrays(&ok)).unwrap(), ok);
+    }
+
+    #[test]
+    fn image_bounds_reject_out_of_arena_indices() {
+        // Wave 4 closed the three side tables; wave 5 showed the class is
+        // wider — a container with NO side table at all panicked the
+        // collector via an unchecked `marks[i]`. Each arm below is a
+        // shape a reviewer actually crafted and reached a release panic
+        // (or an abort) with. slot_count = 4, chunk_len = 64 throughout.
+        let ok = |heap: &[Slot], stack: &[Slot]| {
+            check_image_slot_bounds(heap, stack, &[], &[], &[], &SymbolKeyImage::default(), 4, 64)
+        };
+        let refd = |i: u32| Slot::of(Kind::Reference, Payload::Reference(SlotIndex(i)));
+
+        // --- the wave-5 additions: heap, next, stack, symbols, chunks ---
+        assert!(ok(&[refd(9)], &[]).is_err(), "heap Reference past the arena");
+        let mut chained = Slot::undefined();
+        chained.next = SlotIndex(9);
+        assert!(ok(&[chained], &[]).is_err(), "heap `next` past the arena");
+        assert!(ok(&[], &[refd(9)]).is_err(), "stack Reference past the arena");
+        let bad_chunk = Slot::of(Kind::String, Payload::String(ChunkOffset(0xFFFF_0000)));
+        assert!(ok(&[bad_chunk], &[]).is_err(), "chunk offset past the arena");
+        let below_header = Slot::of(Kind::String, Payload::String(ChunkOffset(0)));
+        assert!(ok(&[below_header], &[]).is_err(), "chunk offset below the header");
+
+        // --- the wave-4 arms, still enforced ---
+        let bad_desc = [RegistryImage { key: b"k".to_vec(), descriptor: 9 }];
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &bad_desc, &SymbolKeyImage::default(), 4, 64).is_err());
+        // A symbol-key descriptor beyond the arena is refused the same way.
+        let bad_sym = SymbolKeyImage {
+            next_id: u16::MAX - 1,
+            pairs: vec![(u16::MAX, 4)],
+        };
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &bad_sym, 4, 64).is_err());
+        let bad_owner = [ArrayImage { owner: 9, length: 0, items: vec![] }];
+        assert!(check_image_slot_bounds(&[], &[], &bad_owner, &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
+        let bad_ref = [ArrayImage { owner: 1, length: 1, items: vec![(0, refd(9))] }];
+        assert!(check_image_slot_bounds(&[], &[], &bad_ref, &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
+        // Collections were passed `&[]` in every wave-4 case, so that
+        // whole branch never executed (wave 5, llvm-cov). Exercise both
+        // the key and the value side.
+        let bad_key = [CollectionImage {
+            owner: 1,
+            kind: 0,
+            table_length: 0,
+            entries: vec![(refd(9), Slot::undefined())],
+        }];
+        assert!(check_image_slot_bounds(&[], &[], &[], &bad_key, &[], &SymbolKeyImage::default(), 4, 64).is_err());
+        let bad_val = [CollectionImage {
+            owner: 1,
+            kind: 0,
+            table_length: 0,
+            entries: vec![(Slot::undefined(), refd(9))],
+        }];
+        assert!(check_image_slot_bounds(&[], &[], &[], &bad_val, &[], &SymbolKeyImage::default(), 4, 64).is_err());
+
+        // --- in-bounds and NULL pass ---
+        assert!(ok(&[refd(3)], &[refd(0)]).is_ok(), "in-bounds indices pass");
+        assert!(
+            ok(&[refd(SlotIndex::NULL.0)], &[]).is_ok(),
+            "a NULL reference is an absence, not an out-of-arena index",
+        );
+        let good_chunk = Slot::of(Kind::String, Payload::String(ChunkOffset(8)));
+        assert!(ok(&[good_chunk], &[]).is_ok(), "an in-range chunk offset passes");
+    }
+
+    /// Review wave 5: the declared `length` must cover the row's items.
+    ///
+    /// Note what this does NOT do: it does not bound `length` itself. A
+    /// sparse array is ordinary JS state (`a[0] = 7; a.length = 2e8`), so
+    /// a row declaring a huge length with one item is a faithful image
+    /// and a decoder must accept it. The reason that used to be
+    /// dangerous — a restore materializing `0..length` before any bound
+    /// check or metering — is a defect of the CONSUMER, and is fixed
+    /// where it lives, in `ironhorse-vm`'s TypedArray-from-source path.
+    #[test]
+    fn decode_rejects_items_outside_the_declared_length() {
+        let v = |n: i32| Slot::of(Kind::Integer, Payload::Integer(n));
+        // More items than the length can hold — caught, like the case
+        // below, by bounding the last index: ascending indices under
+        // `length` cannot outnumber it.
+        let overfull = vec![ArrayImage { owner: 1, length: 1, items: vec![(0, v(7)), (1, v(8))] }];
+        assert!(matches!(
+            decode_arrays(&encode_arrays(&overfull)),
+            Err(SnapshotError::Corrupt(_)),
+        ));
+        // A single item sitting AT or PAST the declared length.
+        let past = vec![ArrayImage { owner: 1, length: 2, items: vec![(2, v(7))] }];
+        assert!(matches!(
+            decode_arrays(&encode_arrays(&past)),
+            Err(SnapshotError::Corrupt(_)),
+        ));
+        // A dense, honest row still decodes.
+        let ok = vec![ArrayImage { owner: 1, length: 2, items: vec![(0, v(7)), (1, v(8))] }];
+        assert_eq!(decode_arrays(&encode_arrays(&ok)).unwrap(), ok);
+        // And a SPARSE row does too — the guard bounds the items, it does
+        // not require density. Including the extreme: this is exactly
+        // `a[0] = 7; a.length = 2e8`, and refusing it would refuse a
+        // correct snapshot.
+        let sparse = vec![ArrayImage { owner: 1, length: 9, items: vec![(0, v(7)), (8, v(8))] }];
+        assert_eq!(decode_arrays(&encode_arrays(&sparse)).unwrap(), sparse);
+        let huge = vec![ArrayImage { owner: 1, length: 200_000_000, items: vec![(0, v(7))] }];
+        assert_eq!(decode_arrays(&encode_arrays(&huge)).unwrap(), huge);
+    }
+
+    #[test]
+    fn decode_rejects_non_ascending_array_item_indices() {
+        let v = |n: i32| Slot::of(Kind::Integer, Payload::Integer(n));
+        // Restore inserts items into a BTreeMap, so a duplicate is
+        // silently DEDUPED and an out-of-order pair RE-SORTED — a resume
+        // then re-emits different bytes than it read, breaking the
+        // import-export identity the CAS key rests on. Note the plain
+        // write(read(b)) round trip IS idempotent for these, which is
+        // why only a live-Interp round trip exposes it.
+        let dup = vec![ArrayImage { owner: 1, length: 4, items: vec![(1, v(10)), (1, v(11))] }];
+        assert!(matches!(
+            decode_arrays(&encode_arrays(&dup)),
+            Err(SnapshotError::Corrupt(_)),
+        ));
+        let unordered = vec![ArrayImage { owner: 1, length: 4, items: vec![(3, v(30)), (1, v(10))] }];
+        assert!(matches!(
+            decode_arrays(&encode_arrays(&unordered)),
+            Err(SnapshotError::Corrupt(_)),
+        ));
+    }
+
+    #[test]
+    fn decode_rejects_a_registry_whose_keys_share_a_descriptor() {
+        // Ascending KEYS say nothing about the REVERSE map. Two rows
+        // sharing a descriptor make `Symbol.for('aaa') === Symbol.for('bbb')`
+        // true and leave `Symbol.keyFor` answering the wrong key — both
+        // indices in bounds, registry rooted, nothing downstream catches
+        // it.
+        let shared = vec![
+            RegistryImage { key: b"aaa".to_vec(), descriptor: 3 },
+            RegistryImage { key: b"bbb".to_vec(), descriptor: 3 },
+        ];
+        assert!(matches!(
+            decode_registry(&encode_registry(&shared)),
+            Err(SnapshotError::Corrupt(_)),
+        ));
+        // Distinct descriptors decode fine.
+        let ok = vec![
+            RegistryImage { key: b"aaa".to_vec(), descriptor: 3 },
+            RegistryImage { key: b"bbb".to_vec(), descriptor: 4 },
+        ];
+        assert_eq!(decode_registry(&encode_registry(&ok)).unwrap(), ok);
     }
 
     #[test]
@@ -501,8 +1352,11 @@ mod tests {
             stack: Vec::new(),
             keys: Vec::new(),
             names: Vec::new(),
-            symbols: Vec::new(),
+            symbols: SymbolKeyImage::default(),
             meter: MeterImage::current(),
+            arrays: Vec::new(),
+            collections: Vec::new(),
+            registry: Vec::new(),
         };
         let bytes = write_machine(&img);
         let back = read_machine(&bytes, &sig()).unwrap();
@@ -524,8 +1378,11 @@ mod tests {
             stack: Vec::new(),
             keys: Vec::new(),
             names: Vec::new(),
-            symbols: Vec::new(),
+            symbols: SymbolKeyImage::default(),
             meter: MeterImage::current(),
+            arrays: Vec::new(),
+            collections: Vec::new(),
+            registry: Vec::new(),
         };
         let bytes = write_machine(&img);
         match read_machine(&bytes, &Signature::new("host-is-now-v2")) {
@@ -576,7 +1433,10 @@ mod tests {
             &stack,
             vec!["length".to_string(), "name".to_string()],
             vec!["dynKey".to_string()],
-            vec![101, 202],
+            SymbolKeyImage {
+                next_id: u16::MAX - 2,
+                pairs: vec![(u16::MAX - 1, 0), (u16::MAX, 1)],
+            },
         );
 
         let bytes = write_machine(&img);
@@ -620,8 +1480,14 @@ mod tests {
             stack: vec![Slot::boolean(true)],
             keys: vec!["k1".to_string(), "k2".to_string(), "".to_string()],
             names: vec!["Object".to_string(), "length".to_string()],
-            symbols: vec![7, 8, 9],
+            symbols: SymbolKeyImage {
+                next_id: u16::MAX - 1,
+                pairs: vec![(u16::MAX, 0)],
+            },
             meter: MeterImage::current(),
+            arrays: Vec::new(),
+            collections: Vec::new(),
+            registry: Vec::new(),
         };
         let bytes = write_machine(&img);
         let back = read_machine(&bytes, &sig()).unwrap();
@@ -657,7 +1523,7 @@ mod tests {
             &[],
             vec![],
             vec![],
-            vec![],
+            SymbolKeyImage::default(),
         );
         let bytes = write_machine(&img);
         let back = read_machine(&bytes, &sig()).unwrap();
@@ -725,13 +1591,15 @@ mod tests {
 
     #[test]
     fn malformed_u32_count_does_not_over_allocate() {
-        // SYMB claims u32::MAX ids but carries none.
+        // SYMB claims a huge pair count but carries none: the cursor
+        // refuses at the first missing pair instead of pre-allocating
+        // for the claimed count.
         let mut w = valid_prefix();
         w.atom(SYMB, &huge_count_payload());
         let bytes = w.finish();
         assert_eq!(
             read_machine(&bytes, &sig()),
-            Err(SnapshotError::Corrupt("u32 list entry"))
+            Err(SnapshotError::Corrupt("symbol-key table"))
         );
     }
 

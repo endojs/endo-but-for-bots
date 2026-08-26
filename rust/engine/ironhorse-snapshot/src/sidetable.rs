@@ -291,17 +291,31 @@ impl SideTable {
             // program symbol id. Regression: `restore_side_tables.rs`
             // (`symbol_tables_rebuilt_at_restore`).
             SideTable::SymbolTables => {
-                ("symbol_names(NAME-serialized)+symbol_ids/next_intern_id(derived)", RebuiltAtRestore)
+                ("symbol_names(NAME-serialized)+symbol_ids(derived)", RebuiltAtRestore)
             }
-            // Boot objects/ids re-derived by re-linking intrinsics.
-            SideTable::SymbolRegistry => ("symbol_registry/symbol_registry_keys", Pending),
-            // The symbol-key desc→id map: runtime-minted, not arena-recoverable
-            // and not derivable from `symbol_names`, so a suspended symbol key
-            // cannot re-resolve after restore until an atom carries it. A
-            // cross-crank symbol-keyed round-trip is unreachable today
-            // regardless of restore (as with `CtorPrototype`), so this row
-            // cannot be claimed covered.
-            SideTable::SymbolKeyIds => ("symbol_key_ids", Pending),
+            // Ledger G1 (2026-08-24): the `Symbol.for` registry travels in
+            // the `REGY` atom / small-state registry section (key bytes →
+            // descriptor slot, key-ascending), and restore repopulates the
+            // forward and reverse maps pairwise — `Symbol.for('k')` minted
+            // before a suspend IS the same symbol after a resume
+            // (`resumed_symbol_registry_keeps_symbol_for_identity`).
+            SideTable::SymbolRegistry => ("symbol_registry/symbol_registry_keys", Serialized),
+            // The symbol-key desc→id map (ledger SYMB, 2026-08-26): the
+            // wave-4 P1 id-space hazard, lifted in two halves. String keys
+            // no longer occupy a runtime range at all — a runtime-interned
+            // NAME appends to `symbol_names` and travels with the NAME
+            // row. Symbol keys mint DOWNWARD from `u16::MAX` (no collision
+            // with the growing table) and travel in the SYMB atom /
+            // small-state symbols section: the top-down counter plus every
+            // (id, descriptor slot) pair, id-ascending, restored via
+            // `Interp::restore_symbol_key_table` — so a symbol-keyed
+            // property reads back under the same id after a resume
+            // (`interned_property_keys_round_trip_through_the_store`).
+            // What the persist/adopt paths still refuse — as Corrupt, via
+            // `MachineImage::stored_unregistered_key_id` — is a stored id
+            // outside BOTH tables, which maps to nothing and can only be
+            // crafted or torn bytes.
+            SideTable::SymbolKeyIds => ("symbol_key_ids/next_symbol_key_id", Serialized),
             // The rich per-instance/per-activation tables still to be wired
             // into dedicated atoms (child-3-adjacent; the honest remainder).
             SideTable::Functions => ("functions", Pending),
@@ -312,8 +326,17 @@ impl SideTable {
             SideTable::ErrorData => ("error_data", Pending),
             SideTable::Accessors => ("accessors", Pending),
             SideTable::WrapperData => ("wrapper_data", Pending),
-            SideTable::Arrays => ("arrays", Pending),
-            SideTable::Collections => ("collections", Pending),
+            // Ledger G1 (2026-08-24): the two BULK tables travel in the
+            // `ARRY`/`COLL` atoms and the schema-7 small-state sections
+            // (owner-ascending, items/entries in table order; values are
+            // ordinary slot records, chunk-remapped with the live table).
+            // Restore routes every insert through the counted accessors,
+            // so the side-ref page counts rebuild in lockstep — the
+            // uninterrupted-vs-resumed twins in
+            // `tests/side_table_ledger.rs` (incl. lazy resume + full
+            // collect under the debug parity net) are the locks.
+            SideTable::Arrays => ("arrays", Serialized),
+            SideTable::Collections => ("collections", Serialized),
             SideTable::ArrayBuffers => ("array_buffers", Pending),
             SideTable::TypedArrays => ("typed_arrays", Pending),
             SideTable::DataViews => ("data_views", Pending),

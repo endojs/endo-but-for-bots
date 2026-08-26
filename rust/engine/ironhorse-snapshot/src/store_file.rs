@@ -47,11 +47,15 @@ use crate::store::{
     StoreError, StoreManifest,
 };
 
-/// The file-format discriminator. Version-suffixed: a layout change is
-/// a new magic, and a reader fails closed on a magic it does not know.
-/// v5 carries the same sections as v4; the bump tracks the store
-/// schema (the root/seal encodings changed, so v4 content cannot
-/// validate under v5 rules).
+/// The file-format discriminator — the LAYOUT version. A layout
+/// change (sections, directories) is a new magic and a reader fails
+/// closed on one it does not know. The STORE SCHEMA no longer rides
+/// the magic: since the v5→v6 root-formula bump it travels in the
+/// manifest's `store_schema` field, gated by the supported range and
+/// migrated forward in place by [`crate::store::migrate_store`], which
+/// the opener runs explicitly (it gates the restamp on the
+/// callback-table signature `open` does not know); the "5" suffix is
+/// historical — the last time the LAYOUT changed.
 pub const FILE_MAGIC: [u8; 8] = *b"IHSTORE5";
 
 /// Temp files are uniquely named per process and per commit
@@ -103,11 +107,57 @@ fn corrupt(what: &'static str) -> StoreError {
 }
 
 impl FileStore {
+    /// Write `bytes` as the store file through the commit path's
+    /// exact durability discipline — unique temp, fsync, rename,
+    /// directory sync — then reload the in-memory view from the
+    /// renamed file. The migration writes share this so their
+    /// atomicity can never drift from commit's.
+    fn atomic_replace_and_reload(&mut self, bytes: &[u8]) -> Result<(), StoreError> {
+        let tmp_path = {
+            let mut os = self.path.clone().into_os_string();
+            os.push(format!(
+                ".tmp-{}-{}",
+                std::process::id(),
+                TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+            PathBuf::from(os)
+        };
+        let write_tmp = || -> Result<(), StoreError> {
+            let mut tmp = File::create(&tmp_path).map_err(io_err)?;
+            tmp.write_all(bytes).map_err(io_err)?;
+            tmp.sync_all().map_err(io_err)?;
+            Ok(())
+        };
+        if let Err(e) = write_tmp() {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(e);
+        }
+        if let Err(e) = std::fs::rename(&tmp_path, &self.path) {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(io_err(e));
+        }
+        let dir = match self.path.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p,
+            _ => std::path::Path::new("."),
+        };
+        File::open(dir).and_then(|d| d.sync_all()).map_err(io_err)?;
+        let mut file = File::open(&self.path).map_err(io_err)?;
+        let loaded = Self::load(&mut file)?;
+        self.state = Some((loaded, RefCell::new(file)));
+        Ok(())
+    }
+
     /// Open the store at `path`. An absent file is a valid empty store
     /// (its first commit creates the file); a present file has its
     /// header and directories decoded and checked immediately, so a
     /// foreign or truncated file fails closed here rather than on a
     /// later fault.
+    ///
+    /// Open does NOT migrate: an older but decodable store opens as-is
+    /// and the caller upgrades it with [`crate::store::migrate_store`],
+    /// which gates the restamp on the callback-table signature (review
+    /// wave 4, F2). Resuming without migrating first fails closed with
+    /// [`StoreError::NeedsMigration`].
     pub fn open(path: impl Into<PathBuf>) -> Result<FileStore, StoreError> {
         let path = path.into();
         if !path.exists() {
@@ -309,6 +359,143 @@ impl HeapStore for FileStore {
             .as_ref()
             .map(|(l, _)| l.manifest.clone())
             .ok_or(StoreError::Empty)
+    }
+
+    /// The one backend that caches: `open` reads the header once and
+    /// `manifest()` serves that copy, so a handle opened before another
+    /// process upgraded the file would otherwise decide a ladder step
+    /// from a schema the file no longer has (review wave 5). Re-reads
+    /// the header off disk.
+    fn reread_manifest(&self) -> Result<StoreManifest, StoreError> {
+        if !self.path.exists() {
+            return Err(StoreError::Empty);
+        }
+        let mut file = File::open(&self.path).map_err(io_err)?;
+        Ok(Self::load(&mut file)?.manifest)
+    }
+
+    fn replace_manifest_for_migration(
+        &mut self,
+        manifest: &StoreManifest,
+    ) -> Result<(), StoreError> {
+        // The manifest is length-prefixed at the file's front and
+        // every directory offset is absolute, so this write is only
+        // sound when the replacement encodes to the SAME length. It
+        // does for v5 → v6 (the schema stamp is a fixed-width u32 and
+        // the root a fixed 64-hex string); a future step that changes
+        // the length must rewrite the layout instead, and the guard
+        // makes that unmissable.
+        //
+        // The caller verified the OLD root against the cached view
+        // (`self.state`, loaded at open) while this re-reads the durable
+        // file. Those agree under the store's single-writer discipline —
+        // no other process rewrites the file between open and migrate —
+        // which is the same assumption the whole in-place migration
+        // rests on (review wave 4, F7). A multi-writer backend would have
+        // to reload-then-verify instead.
+        if self.state.is_none() {
+            return Err(StoreError::Empty);
+        }
+        let mut bytes = std::fs::read(&self.path).map_err(io_err)?;
+        let old_len = u32::from_be_bytes(
+            bytes
+                .get(8..12)
+                .and_then(|b| b.try_into().ok())
+                .ok_or(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "store file header truncated",
+                )))?,
+        ) as usize;
+        let new_manifest = manifest.encode();
+        if new_manifest.len() != old_len {
+            return Err(StoreError::Io(
+                "migration manifest length changed; full rewrite required".to_string(),
+            ));
+        }
+        // The header's manifest length is trusted only after the file
+        // is proven long enough to hold it: an externally truncated
+        // file (header intact, body cut) must fail closed here, not
+        // panic on the splice (review wave 4, F6). The 6→7 step below
+        // already bounds every offset the same way.
+        let man_end = 12usize
+            .checked_add(old_len)
+            .filter(|&end| end <= bytes.len())
+            .ok_or(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store file manifest region truncated",
+            )))?;
+        bytes[12..man_end].copy_from_slice(&new_manifest);
+        self.atomic_replace_and_reload(&bytes)
+    }
+
+    fn replace_manifest_and_small_for_migration(
+        &mut self,
+        manifest: &StoreManifest,
+        small: &[u8],
+    ) -> Result<(), StoreError> {
+        // The length-changing ladder write (6→7 grows the small state,
+        // 7→8 grows the manifest): unlike the manifest-only splice
+        // above this rebuilds the header region and shifts every
+        // directory offset by the COMBINED length delta — the
+        // directories' offsets are absolute and every blob sits after
+        // both sections. Leaf hashes, edges, free segments, and blob
+        // bytes copy verbatim.
+        if self.state.is_none() {
+            return Err(StoreError::Empty);
+        }
+        let old = std::fs::read(&self.path).map_err(io_err)?;
+        let truncated = || StoreError::Snapshot(SnapshotError::Corrupt("store file header truncated"));
+        let read_u32 = |at: usize| -> Result<usize, StoreError> {
+            Ok(u32::from_be_bytes(
+                old.get(at..at + 4)
+                    .and_then(|b| b.try_into().ok())
+                    .ok_or_else(truncated)?,
+            ) as usize)
+        };
+        let man_len = read_u32(8)?;
+        let new_manifest = manifest.encode();
+        // Unlike the manifest-only splice above, this write rebuilds the
+        // header region, so BOTH sections may change length — the 6→7
+        // step grows the small state, the 7→8 step grows the manifest.
+        // Every directory offset is absolute and every blob sits after
+        // both sections, so the shift below is their COMBINED delta.
+        let man_end = 12usize.checked_add(man_len).ok_or_else(truncated)?;
+        let old_small_len = read_u32(man_end)?;
+        let small_end = man_end
+            .checked_add(4)
+            .and_then(|x| x.checked_add(old_small_len))
+            .ok_or_else(truncated)?;
+        let n_pages = read_u32(small_end)?;
+        let n_exts = read_u32(small_end + 4)?;
+        let dirs_start = small_end + 8;
+        let dirs_len = n_pages
+            .checked_add(n_exts)
+            .and_then(|n| n.checked_mul(12))
+            .ok_or_else(truncated)?;
+        let dirs_end = dirs_start.checked_add(dirs_len).ok_or_else(truncated)?;
+        if dirs_end > old.len() {
+            return Err(truncated());
+        }
+        let delta = (new_manifest.len() as i64 - man_len as i64)
+            + (small.len() as i64 - old_small_len as i64);
+
+        let mut out = Vec::with_capacity(old.len().saturating_add_signed(delta as isize));
+        out.extend_from_slice(&old[0..8]);
+        out.extend_from_slice(&(new_manifest.len() as u32).to_be_bytes());
+        out.extend_from_slice(&new_manifest);
+        out.extend_from_slice(&(small.len() as u32).to_be_bytes());
+        out.extend_from_slice(small);
+        out.extend_from_slice(&old[small_end..dirs_start]);
+        for row in old[dirs_start..dirs_end].chunks_exact(12) {
+            let offset = u64::from_be_bytes(row[0..8].try_into().unwrap());
+            let shifted = offset
+                .checked_add_signed(delta)
+                .ok_or(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "store file directory offset overflow",
+                )))?;
+            out.extend_from_slice(&shifted.to_be_bytes());
+            out.extend_from_slice(&row[8..12]);
+        }
+        out.extend_from_slice(&old[dirs_end..]);
+        self.atomic_replace_and_reload(&out)
     }
 
     fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
@@ -654,11 +841,8 @@ mod tests {
         m.snapshot_image(&sig())
     }
 
-    fn tmp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ironhorse-file-store-{name}"));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn tmp_dir(name: &str) -> crate::test_dir::TempDir {
+        crate::test_dir::TempDir::new(&format!("ironhorse-file-store-{name}"))
     }
 
     #[test]
@@ -678,7 +862,7 @@ mod tests {
             store.commit(&image_to_batch(&image, 1, "")).is_err(),
             "renaming a file onto a non-empty directory fails"
         );
-        let leftovers: Vec<String> = std::fs::read_dir(&dir)
+        let leftovers: Vec<String> = std::fs::read_dir(&*dir)
             .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
@@ -688,7 +872,6 @@ mod tests {
             leftovers.is_empty(),
             "no temp litter after a failed rename: {leftovers:?}"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -696,7 +879,6 @@ mod tests {
         let dir = tmp_dir("empty");
         let store = FileStore::open(dir.join("heap.ihstore")).unwrap();
         assert_eq!(store.manifest().unwrap_err(), StoreError::Empty);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The same identity locks as the memory store, through the durable
@@ -718,7 +900,6 @@ mod tests {
         validate_store(&store, &sig()).expect("validates after reopen");
         assert_eq!(store_to_image(&store).unwrap(), image);
         assert_eq!(export_to_container(&store).unwrap(), bytes);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// An incremental commit merges dirty rows over clean ones: the
@@ -768,7 +949,6 @@ mod tests {
         drop(store);
         let store = FileStore::open(&path).unwrap();
         assert_eq!(store_to_image(&store).unwrap(), changed);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -791,7 +971,6 @@ mod tests {
         );
         let prev = store.manifest().unwrap().seal;
         store.commit(&image_to_batch(&image, 2, &prev)).unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -803,7 +982,6 @@ mod tests {
             Err(StoreError::Snapshot(SnapshotError::Corrupt("file store magic"))) => {}
             other => panic!("expected magic failure, got {other:?}"),
         }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -819,7 +997,6 @@ mod tests {
         let bytes = std::fs::read(&path).unwrap();
         std::fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
         assert!(FileStore::open(&path).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A leftover temp file from a torn commit is inert: open ignores
@@ -839,7 +1016,6 @@ mod tests {
         let prev = store.manifest().unwrap().seal;
         store.commit(&image_to_batch(&image, 2, &prev)).unwrap();
         assert_eq!(store.manifest().unwrap().epoch, 2);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A grown geometry whose new rows are missing from the batch is a
@@ -864,6 +1040,5 @@ mod tests {
             Err(StoreError::MissingRow("chunk extent", _)) => {}
             other => panic!("expected missing grown row, got {other:?}"),
         }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

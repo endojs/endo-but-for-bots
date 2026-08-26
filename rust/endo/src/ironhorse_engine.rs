@@ -52,12 +52,14 @@ pub mod engine {
         /// resume, collect, or close). Store errors are fail-closed by
         /// design; the message carries the store's own taxonomy.
         Store(String),
-        /// A later crank compiled to a different symbol table than
-        /// the one the machine linked and persisted. Running it would
-        /// silently read and mutate the WRONG globals and properties
-        /// (ids are table positions), so it is refused before it
-        /// runs. The side-table ledger workstream lifts this by
-        /// relinking per crank.
+        /// A later crank's compiled symbol table could not be
+        /// RELINKED onto the machine's persisted one (side-table
+        /// ledger G2 lifted the old exact-alignment requirement:
+        /// differing tables are remapped, extending append-only).
+        /// Refusal is now the exception, fail-closed before anything
+        /// runs: runtime-interned ids block table extension until the
+        /// ledger's KEYS row lands, and malformed bytecode cannot be
+        /// walked.
         SymbolMismatch(String),
     }
 
@@ -238,43 +240,142 @@ pub mod engine {
         /// blob format both gate on it, so a database from a worker
         /// with a different host surface is refused, not adopted.
         pub signature: String,
+        /// Checkpoint/collect scheduling (store seam deferred item I).
+        /// The default is the stated per-crank minimum; anything
+        /// richer is an explicit supervisor opt-in with its trade
+        /// documented on the field.
+        pub cadence: CadencePolicy,
+    }
+
+    /// The checkpoint/collect cadence a [`PersistentMachine`] runs
+    /// under — a SUPERVISOR policy, counted in completed cranks so the
+    /// schedule is REPLICA-VISIBLE: two replicas configured alike make
+    /// identical checkpoint/collect decisions at identical crank
+    /// counts over a deterministic execution (crank halts included —
+    /// they rewind at the same point everywhere). Host I/O failures
+    /// fork epoch history regardless of policy; after such a rewind
+    /// the counters restart from the surviving checkpoint.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct CadencePolicy {
+        /// Checkpoint after every Nth completed crank. `1` (the
+        /// default, and what `0` normalizes to) is today's contract:
+        /// every completed crank is durable before its outcome is
+        /// reported. N > 1 trades durability for throughput and the
+        /// trade is exactly the REWIND WINDOW, rewinding to the last
+        /// CHECKPOINT: a crank that HALTS discards up to N-1 completed-
+        /// but-unflushed cranks (the halting crank never completed), and
+        /// a crank whose FLUSH fails discards up to N completed cranks
+        /// (the N-1 previously reported Ok plus this one, its Err). A
+        /// suspend (`close`) always flushes pending cranks first, so
+        /// the widened window exists only while the machine is live.
+        pub checkpoint_every: u32,
+        /// Run the durable summary-driven partial collection after
+        /// every Mth completed crank; `0` (the default) never does —
+        /// the supervisor calls [`PersistentMachine::collect`] itself.
+        /// An automatic collection flushes pending cranks first (the
+        /// collector requires a checkpoint boundary) and then
+        /// checkpoints again for durability, exactly as the manual
+        /// call does. Collection rewrites the free list, and free-list
+        /// order feeds allocation, so this schedule being
+        /// replica-visible is what keeps replicas byte-identical.
+        pub collect_every: u32,
+    }
+
+    impl Default for CadencePolicy {
+        fn default() -> CadencePolicy {
+            CadencePolicy {
+                checkpoint_every: 1,
+                collect_every: 0,
+            }
+        }
     }
 
     /// A machine whose heap is backed by the snapshot store: the
     /// supervisor-facing worker-heap lifecycle. One instance owns one
     /// store session over one database.
     ///
-    /// Cadence policy (deliberately minimal, stated rather than
-    /// configurable): every COMPLETED crank checkpoints before its
-    /// outcome is reported, so the database is always at a crank
-    /// boundary; a crank that halts without completing is discarded by
-    /// resuming from the last checkpoint (the deterministic
-    /// crashed-crank contract — no partial effect ever persists);
-    /// [`PersistentMachine::collect`] offers summary-driven partial
-    /// collection at any boundary, and the supervisor decides when.
+    /// Cadence ([`CadencePolicy`], deferred item I): by DEFAULT every
+    /// COMPLETED crank checkpoints before its outcome is reported, so
+    /// the database is always at a crank boundary; a crank that halts
+    /// without completing is discarded by resuming from the last
+    /// checkpoint (the deterministic crashed-crank contract — no
+    /// partial effect ever persists). A supervisor may opt into
+    /// `checkpoint_every: N` (flush every Nth crank; halts and failed
+    /// flushes then rewind past up to N-1 completed cranks — the
+    /// documented window, closed by `close`'s final flush) and
+    /// `collect_every: M` (the durable partial collection on a
+    /// replica-visible crank schedule); manual
+    /// [`PersistentMachine::collect`] remains available either way and
+    /// restarts the collect clock.
     ///
     /// The SES boot bundle and the worker envelope protocol remain the
     /// named gaps they were; this type is the heap-persistence half the
-    /// supervisor owns either way. Cranks after the first must compile
-    /// to the SAME SYMBOL TABLE as the linked crank, and this is
-    /// ENFORCED, not merely documented: a crank whose compiled table
-    /// differs from the persisted one is refused with
-    /// [`MachineError::SymbolMismatch`] before it runs, because its
-    /// ids would silently bind the wrong globals (review finding).
-    /// Equal tables require the same used-name set AND, for any two
-    /// names that collide in the coder's hash buckets, the same
-    /// first-appearance order — review wave 3 falsified the earlier
-    /// "same name set suffices" claim (the table is bucket-ordered,
-    /// so equal sets suffice only when no two names share a bucket).
-    /// The practical contract: keep later cranks' references
-    /// textually aligned with the linked crank; the side-table
-    /// ledger's per-crank relinking lifts the constraint.
+    /// supervisor owns either way. Cranks after the first RELINK
+    /// per crank (side-table ledger G2): each crank compiles against
+    /// its own symbol table and `Interp::relink_crank` rewrites its
+    /// ID operands onto the machine's persisted table, extending it
+    /// append-only for new names — the old textual-alignment
+    /// contract (same used-name set, same first-appearance order for
+    /// hash-bucket-colliding names; the wave-3 sharpening) is lifted.
+    /// An aligned crank passes through byte-identical. The remaining
+    /// [`MachineError::SymbolMismatch`] refusals are fail-closed
+    /// exceptions before anything runs: runtime-interned ids present
+    /// (table extension would collide until the ledger's KEYS row
+    /// lands), or bytecode the instruction walker cannot decode.
     pub struct PersistentMachine {
         store: std::rc::Rc<std::cell::RefCell<ironhorse_store_sqlite::SqliteHeapStore>>,
         session: Option<ironhorse_snapshot::machine::StoreSession>,
         signature: ironhorse_snapshot::Signature,
         linked: bool,
         heap_store: std::path::PathBuf,
+        cadence: CadencePolicy,
+        /// Completed cranks not yet checkpointed (the live rewind
+        /// window under `checkpoint_every > 1`; always 0 at a
+        /// checkpoint boundary).
+        pending_cranks: u32,
+        /// Total COMPLETED cranks this STORE has absorbed, mirroring
+        /// the manifest's durable counter (store schema 8). The collect
+        /// schedule is derived from this ABSOLUTE total rather than a
+        /// session-local "since the last collection" clock, which is
+        /// what makes it survive a suspend: review wave 5 measured two
+        /// replicas under an identical policy collecting at different
+        /// cranks purely because one of them resumed mid-window, with
+        /// identical per-crank results and computrons hiding the fork.
+        ///
+        /// Absolute also removes the clock entirely, and with it two
+        /// defects a clock has: a rewind cannot mis-credit it, and a
+        /// failed collection cannot consume credit for work it did not
+        /// do — `total % collect_every` answers the same way regardless.
+        durable_cranks: u64,
+        /// Force the NEXT completed crank to checkpoint, whatever the
+        /// cadence says. Set by a rewind.
+        ///
+        /// Without it, `checkpoint_every: N` STARVES on any workload
+        /// that halts more often than every N cranks: the halt rewinds
+        /// to the last checkpoint and drops the pending cranks, so the
+        /// counter never reaches N, nothing is ever made durable, and
+        /// the machine makes no progress at all — not the bounded
+        /// rewind window the policy documents, but total loss (review
+        /// wave 5). A rewind is evidence the cadence is too loose for
+        /// this workload, so the next chance to make progress durable
+        /// is taken and the cadence resumes from there. The flag is a
+        /// pure function of the crank/halt sequence, so identically
+        /// driven replicas still flush at identical points.
+        checkpoint_after_rewind: bool,
+        /// Scheduled collections that FAILED, and the most recent
+        /// failure's text — the programmatic signal a supervisor needs.
+        ///
+        /// A failed scheduled collection cannot fail the crank (the
+        /// crank is already durable, and reporting Err would be
+        /// indistinguishable from the checkpoint-failure Err whose
+        /// crank was DISCARDED — a supervisor re-delivering would then
+        /// double-execute a committed crank, wave-4 P2). But it leaves
+        /// this replica's free list and epoch behind a replica whose
+        /// collection succeeded, and a log line is not something a
+        /// supervisor can act on (review wave 5). Latching: a poll at
+        /// any later point still sees it.
+        collect_failures: u32,
+        last_collect_error: Option<String>,
     }
 
     fn store_err(e: ironhorse_snapshot::store::StoreError) -> MachineError {
@@ -293,17 +394,32 @@ pub mod engine {
             let signature = ironhorse_snapshot::Signature::new(&options.signature);
             let mut store =
                 ironhorse_store_sqlite::SqliteHeapStore::open(&options.path).map_err(store_err)?;
+            // Upgrade a decodable older store forward before resuming.
+            // Open no longer migrates (review wave 4, F2): the restamp is
+            // authorized by the callback-table signature, which lives
+            // here, so a daemon pointed at a store it could not resume
+            // (incompatible signature) refuses to migrate it rather than
+            // one-way restamping it out from under its rightful owner. A
+            // fresh or already-current store is a no-op.
+            ironhorse_snapshot::store::migrate_store(&mut store, &signature).map_err(store_err)?;
             match store.manifest() {
                 Err(StoreError::Empty) => {
                     let session =
                         begin_store_session(ironhorse_vm::Interp::new(), &signature, &mut store)
                             .map_err(|(_, e)| store_err(e))?;
+                    let durable_cranks = session.cranks();
                     Ok(PersistentMachine {
                         store: std::rc::Rc::new(std::cell::RefCell::new(store)),
                         session: Some(session),
                         signature,
                         linked: false,
                         heap_store: options.path.clone(),
+                        cadence: options.cadence.clone(),
+                        pending_cranks: 0,
+                        durable_cranks,
+                        checkpoint_after_rewind: false,
+                        collect_failures: 0,
+                        last_collect_error: None,
                     })
                 }
                 Ok(_) => {
@@ -315,12 +431,22 @@ pub mod engine {
                     // no crank ever linked (e.g. the first crank
                     // crashed before its checkpoint).
                     let linked = !session.machine().program_symbol_names().is_empty();
+                    // The durable crank total the store already carries:
+                    // the schedule continues from here, which is what
+                    // makes a suspend invisible to it.
+                    let durable_cranks = session.cranks();
                     Ok(PersistentMachine {
                         store,
                         session: Some(session),
                         signature,
                         linked,
                         heap_store: options.path.clone(),
+                        cadence: options.cadence.clone(),
+                        pending_cranks: 0,
+                        durable_cranks,
+                        checkpoint_after_rewind: false,
+                        collect_failures: 0,
+                        last_collect_error: None,
                     })
                 }
                 Err(e) => Err(store_err(e)),
@@ -334,6 +460,18 @@ pub mod engine {
         fn rewind_to_last_checkpoint(&mut self) -> Result<(), MachineError> {
             use ironhorse_snapshot::machine::resume_from_store_lazy;
             self.session = None;
+            // The cadence just cost this workload every pending crank;
+            // make the next completed one durable rather than betting
+            // on reaching N before the next halt (review wave 5).
+            self.checkpoint_after_rewind = true;
+            // A rewind lands on the last CHECKPOINT, discarding only the
+            // PENDING (completed-but-unflushed) cranks. Their collect-
+            // discarded with them. `durable_cranks` is untouched — it
+            // counts what the STORE absorbed, and a rewind returns the
+            // machine to exactly that point, so the schedule resumes
+            // from the same absolute total a replica that never halted
+            // would be at.
+            self.pending_cranks = 0;
             let fresh = resume_from_store_lazy(self.store.clone(), &self.signature)
                 .map_err(store_err)?;
             self.linked = !fresh.machine().program_symbol_names().is_empty();
@@ -358,10 +496,32 @@ pub mod engine {
             let (bytecode, symbols) = compile_atoms_with(source, false)
                 .map_err(|e| MachineError::Compile(e.to_string()))?;
             let names = ironhorse_vm::parse_symbols(&symbols);
+            // The cadence decision (deferred item I), taken up front
+            // from replica-visible state: counted in completed cranks,
+            // so identically configured replicas flush and collect at
+            // identical points. `checkpoint_every` is 1-normalized;
+            // a due collection forces the flush (the collector needs a
+            // checkpoint boundary).
+            let pending_after = self.pending_cranks.saturating_add(1);
+            // The absolute completed-crank total this crank would reach.
+            // Deriving the schedule from a durable ABSOLUTE number is
+            // what makes it resume-invariant: two replicas at the same
+            // total agree on whether a collection is due, whatever their
+            // suspend histories (review wave 5).
+            let total_after = self.durable_cranks.saturating_add(pending_after as u64);
+            let collect_due = self.cadence.collect_every > 0
+                && total_after % self.cadence.collect_every as u64 == 0;
+            let checkpoint_due = pending_after >= self.cadence.checkpoint_every.max(1)
+                || collect_due
+                || self.checkpoint_after_rewind;
             let (outcome, checkpointed) = {
                 let session = self.session.as_mut().ok_or_else(|| {
                     MachineError::Store("machine has no session (a rewind failed)".to_string())
                 })?;
+                // The store's durable counter is the schedule's input,
+                // so it must travel with the commit that makes these
+                // cranks durable. The session cannot derive it.
+                session.set_cranks(total_after);
                 if !self.linked {
                     // An EMPTY table links nothing and constrains
                     // nothing (there are no ids to misalign), and
@@ -374,39 +534,43 @@ pub mod engine {
                         session.machine_mut().link_intrinsics(&names);
                         self.linked = true;
                     }
-                } else {
-                    // Refused BEFORE the crank runs unless this
-                    // crank's compiled table EQUALS the persisted
-                    // one: ids are table positions, so any position
-                    // whose name differs would read and mutate the
-                    // wrong global silently. Comparing the actual
-                    // name strings means the check can never
-                    // false-accept; it CAN refuse spuriously, because
-                    // the table is ordered by the coder's hash-bucket
-                    // walk — the same name set yields the same table
-                    // only when no two names share a bucket, and
-                    // colliding names order by first appearance
-                    // (review wave 3 falsified the earlier "same
-                    // name set suffices" claim). Subsets are refused
-                    // too. Nothing ran on refusal, so no rewind is
-                    // needed and the epoch stands.
-                    let persisted = session.machine().program_symbol_names();
-                    let aligned = persisted == names.as_slice();
-                    if !aligned {
-                        return Err(MachineError::SymbolMismatch(format!(
-                            "this crank's compiled table ({} names) differs from the \
-                             machine's persisted table ({} names) — later cranks must \
-                             compile to the linked crank's exact symbol table: same \
-                             name set, referenced in the same order when names collide \
-                             in the coder's hash buckets (the side-table ledger \
-                             workstream lifts this)",
-                            names.len(),
-                            persisted.len(),
-                        )));
-                    }
                 }
+                // Per-crank RELINKING (side-table ledger G2): a later
+                // crank compiles against its OWN symbol table — ids
+                // are table positions, so running it raw against a
+                // differing persisted table would silently bind the
+                // wrong globals (the review finding that used to make
+                // this a hard refusal). `relink_crank` rewrites the
+                // bytecode's ID operands onto the persisted table
+                // (extending it append-only for genuinely new names),
+                // so textual alignment is no longer required. Aligned
+                // cranks pass through byte-identical. The remaining
+                // refusals are fail-closed and name their reason:
+                // malformed bytecode cannot be walked, and a table
+                // grown to the symbol-key floor cannot extend (the
+                // runtime-intern extension refusal retired with the
+                // id-space unification — interned names live in the
+                // persisted table and symbol keys mint top-down, so
+                // extension aliases nothing). Nothing ran on refusal,
+                // so no rewind is needed and the epoch stands.
+                let bytecode = if self.linked {
+                    session
+                        .machine_mut()
+                        .relink_crank(&bytecode, &names)
+                        .map_err(|e| {
+                            MachineError::SymbolMismatch(format!(
+                                "this crank's compiled table ({} names) could not be \
+                                 relinked onto the machine's persisted table ({} names): \
+                                 {e:?}",
+                                names.len(),
+                                session.machine().program_symbol_names().len(),
+                            ))
+                        })?
+                } else {
+                    bytecode
+                };
                 let outcome = session.machine_mut().run(&bytecode);
-                if outcome.completed {
+                if outcome.completed && checkpoint_due {
                     let r = checkpoint_to_store(
                         session,
                         &self.signature,
@@ -417,8 +581,57 @@ pub mod engine {
                     (outcome, None)
                 }
             };
+            if !outcome.completed {
+                // Halted: rewind to the LAST CHECKPOINT — under
+                // `checkpoint_every > 1` that discards the pending
+                // completed cranks too, the documented rewind-window
+                // trade the policy opted into.
+                let halt = outcome.halt;
+                if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
+                    return Err(MachineError::Store(format!(
+                        "rewind failed after a crank halt ({}): {rewind_err}",
+                        describe_halt(&halt)
+                    )));
+                }
+                return Err(MachineError::Halt(halt));
+            }
             match checkpointed {
-                Some(Ok(_epoch)) => Ok(outcome.into()),
+                Some(Ok(_epoch)) => {
+                    self.pending_cranks = 0;
+                    self.durable_cranks = total_after;
+                    // Progress is durable again; the cadence resumes.
+                    self.checkpoint_after_rewind = false;
+                    if collect_due {
+                        // The scheduled durable collection is a
+                        // memory-management OPTIMIZATION, not part of the
+                        // crank's contract: the crank is already flushed
+                        // (durable at this epoch). If the collection
+                        // fails, `collect()` rewinds to that same epoch —
+                        // the crank stands — so this eval must still
+                        // report Ok (wave-4 P2: returning Err here was
+                        // indistinguishable from the checkpoint-failure
+                        // Err whose crank was DISCARDED, so a supervisor
+                        // re-delivering would double-execute a committed
+                        // crank). A failed scheduled collection is logged
+                        // and retried by the next schedule; a real store
+                        // fault resurfaces at the next crank's checkpoint.
+                        if let Err(e) = self.collect() {
+                            // Ok still, for the reason above — but
+                            // RECORDED, so a supervisor can see that
+                            // this replica's free list and epoch are
+                            // behind one whose collection succeeded
+                            // instead of only finding it in a log
+                            // (review wave 5).
+                            self.collect_failures = self.collect_failures.saturating_add(1);
+                            self.last_collect_error = Some(e.to_string());
+                            eprintln!(
+                                "ironhorse: scheduled collection failed after a committed crank \
+                                 (the crank stands; collection will retry): {e}"
+                            );
+                        }
+                    }
+                    Ok(outcome.into())
+                }
                 Some(Err(e)) => {
                     // A failed rewind poisons the session (later
                     // calls refuse), but the caller asked what
@@ -433,14 +646,12 @@ pub mod engine {
                     Err(store_err(e))
                 }
                 None => {
-                    let halt = outcome.halt;
-                    if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
-                        return Err(MachineError::Store(format!(
-                            "rewind failed after a crank halt ({}): {rewind_err}",
-                            describe_halt(&halt)
-                        )));
-                    }
-                    Err(MachineError::Halt(halt))
+                    // Completed but deferred by the cadence: the crank
+                    // is live-only until the next flush point (a later
+                    // crank, an automatic or manual collection, or
+                    // close's final flush).
+                    self.pending_cranks = pending_after;
+                    Ok(outcome.into())
                 }
             }
         }
@@ -458,6 +669,9 @@ pub mod engine {
         /// the schedule is replica-visible, like the full collector's.
         pub fn collect(&mut self) -> Result<u32, MachineError> {
             use ironhorse_snapshot::machine::{checkpoint_to_store, partial_collect};
+            // The collector requires a checkpoint boundary; under a
+            // deferred cadence, flush the pending cranks first.
+            self.flush_pending()?;
             let (freed, checkpointed) = {
                 let session = self.session.as_mut().ok_or_else(|| {
                     MachineError::Store("machine has no session (a rewind failed)".to_string())
@@ -481,6 +695,23 @@ pub mod engine {
             }
         }
 
+        /// How many SCHEDULED collections have failed on this machine,
+        /// and the most recent failure's text.
+        ///
+        /// A failed scheduled collection deliberately does not fail its
+        /// crank — the crank is already durable, and an Err there would
+        /// be indistinguishable from the checkpoint failure whose crank
+        /// was DISCARDED, which a re-delivering supervisor would then
+        /// double-execute. But it does leave this replica behind one
+        /// whose collection succeeded, in both free-list order and
+        /// epoch, so the fact is reported here rather than only logged
+        /// (review wave 5). Latching, so an occasional poll still sees
+        /// it. A manual [`Self::collect`] reports its own failure
+        /// directly and is not counted here.
+        pub fn failed_collections(&self) -> (u32, Option<&str>) {
+            (self.collect_failures, self.last_collect_error.as_deref())
+        }
+
         /// The store's committed epoch (advances by one per
         /// checkpoint).
         pub fn epoch(&self) -> Result<u64, MachineError> {
@@ -498,16 +729,85 @@ pub mod engine {
             &self.heap_store
         }
 
+        /// Force any completed-but-deferred cranks durable NOW — the
+        /// side-effect-free way to close the live rewind window a
+        /// `checkpoint_every > 1` cadence opens, without consuming the
+        /// machine (`close`) or perturbing the free list (`collect`).
+        /// A supervisor calls it before copying `heap_store_path` or
+        /// before an external acknowledgement. A no-op at a checkpoint
+        /// boundary; on failure the machine rewinds to the last
+        /// checkpoint and the error says the pending cranks were never
+        /// durable.
+        pub fn flush(&mut self) -> Result<(), MachineError> {
+            self.flush_pending()
+        }
+
+        /// Checkpoint any completed-but-deferred cranks (a no-op at a
+        /// checkpoint boundary). On failure the machine rewinds to
+        /// the last checkpoint — the pending cranks were never
+        /// durable, and the error says so.
+        fn flush_pending(&mut self) -> Result<(), MachineError> {
+            use ironhorse_snapshot::machine::checkpoint_to_store;
+            if self.pending_cranks == 0 {
+                return Ok(());
+            }
+            let total = self
+                .durable_cranks
+                .saturating_add(self.pending_cranks as u64);
+            let r = {
+                let session = self.session.as_mut().ok_or_else(|| {
+                    MachineError::Store("machine has no session (a rewind failed)".to_string())
+                })?;
+                session.set_cranks(total);
+                checkpoint_to_store(session, &self.signature, &mut *self.store.borrow_mut())
+            };
+            match r {
+                Ok(_epoch) => {
+                    self.pending_cranks = 0;
+                    self.durable_cranks = total;
+                    self.checkpoint_after_rewind = false;
+                    Ok(())
+                }
+                Err(e) => {
+                    if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
+                        return Err(MachineError::Store(format!(
+                            "rewind failed after a failed flush ({e:?}): {rewind_err}"
+                        )));
+                    }
+                    Err(store_err(e))
+                }
+            }
+        }
+
         /// Release the machine and close the database with the full
         /// last-connection contract: after `Ok`, the file is
         /// self-contained (WAL folded in, sidecars removed) and safe
         /// to copy or hand to another supervisor.
         pub fn close(mut self) -> Result<(), MachineError> {
+            // A suspend must not silently drop completed cranks: the
+            // final flush closes the live rewind window the cadence
+            // opened. Both the flush and the file close can fail; the
+            // FLUSH error wins precedence — it reports data loss (the
+            // acknowledged-but-unflushed cranks were never durable),
+            // which the file-close error would otherwise mask (wave-4
+            // P3). The store is closed either way (the machine is being
+            // released).
+            let flush = self.flush_pending();
             drop(self.session.take());
-            let store = std::rc::Rc::try_unwrap(self.store)
-                .map_err(|_| MachineError::Store("store still shared at close".to_string()))?
-                .into_inner();
-            store.close().map_err(store_err)
+            let store = match std::rc::Rc::try_unwrap(self.store) {
+                Ok(cell) => cell.into_inner(),
+                // Same precedence as below, which `?` used to skip:
+                // a still-shared store means the file was not closed,
+                // but a failed flush means acknowledged cranks were
+                // never durable, and that outranks it (review wave 5).
+                Err(_) => {
+                    return flush.and(Err(MachineError::Store(
+                        "store still shared at close".to_string(),
+                    )))
+                }
+            };
+            let close = store.close().map_err(store_err);
+            flush.and(close)
         }
     }
 
@@ -515,13 +815,25 @@ pub mod engine {
     ///
     /// The worker speaks the CBOR envelope protocol over a transport and
     /// boots `polyfills.js` → `host_aliases.js` → `ses_boot.js`. Those
-    /// need the host-function surface and the SES bundle, which are
-    /// later roadmap stages. Reported as a named gap rather than faked.
+    /// need the host-function surface and the SES bundle, neither of
+    /// which has landed. Reported as a named gap rather than faked.
     pub fn run_worker() -> Result<(), MachineError> {
         Err(MachineError::Unavailable(
-            "the worker envelope protocol (needs the host-function surface \
-             and the SES boot bundle; see designs/ironhorse-engine.md \
-             roadmap stages 4 and 7)"
+            "the worker envelope protocol. The heap-persistence half is \
+             fully landed (PersistentMachine: open/resume, per-crank \
+             relinking, durable collect, cadence policy, close contract); \
+             what remains is exactly the deliver-payload side: the \
+             host-function surface (ironhorse-engine.md § Endor \
+             integration, the host-powers row — not a numbered stage) \
+             and the SES boot bundle (roadmap stage 4, Hardened \
+             JavaScript, whose acceptance bar is those bundles running \
+             identically on both engines — concretely the side-table \
+             ledger's HardenState/Modules/Functions rows). The transport \
+             loop itself (init/restore + deliver, as \
+             xsnap::run_xs_program speaks it over a worker_io transport) \
+             is mechanical once payloads can be interpreted; a private \
+             eval-shaped dialect would fake the protocol, so this stays \
+             a named gap"
                 .to_string(),
         ))
     }

@@ -20,8 +20,12 @@ icu_normalizer = "=2.2.0"
 icu_segmenter = "=2.2.0"
 
 [dev-dependencies]
-# Portable fuzz regressions compile the generated source with the Rust compiler;
-# unlike the differential harness, this needs neither XS nor c/moddable.
+# Source-level regression locks (`tests/`) need guest JS turned into
+# bytecode + a symbols atom, and the portable fuzz regressions compile
+# their generated source the same way. `ironhorse-compile` is the
+# pure-Rust half of the pipeline `dual_run` rides, so both need neither
+# XS nor c/moddable nor libclang; it does not depend on this crate, so
+# the edge is not a cycle.
 ironhorse-compile = { path = "../ironhorse-compile" }
 
 [features]
