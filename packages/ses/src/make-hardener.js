@@ -23,12 +23,16 @@
 
 import {
   Set,
+  ArrayBuffer,
+  SharedArrayBuffer,
   String,
   TypeError,
+  Uint8Array,
   WeakSet,
   globalThis,
   apply,
   arrayForEach,
+  arrayBufferGetResizable,
   defineProperty,
   freeze,
   getOwnPropertyDescriptor,
@@ -42,8 +46,10 @@ import {
   setAdd,
   setForEach,
   setHas,
+  sharedArrayBufferGetGrowable,
   toStringTagSymbol,
   typedArrayPrototype,
+  typedArrayGetBuffer,
   weaksetAdd,
   weaksetHas,
   FERAL_STACK_GETTER,
@@ -89,11 +95,80 @@ const isCanonicalIntegerIndexString = propertyKey => {
   return isInteger(n) && String(n) === propertyKey;
 };
 
+// ECMA-262 requires TypedArray [[PreventExtensions]] to reject views whose
+// indexed properties might change when their backing buffer changes. Probe
+// once so conforming engines retain their native behavior while older engines
+// get the compatibility check below.
+const needsResizableArrayBufferPreventExtensionsWorkaround =
+  arrayBufferGetResizable !== undefined &&
+  (() => {
+    const buffer = new ArrayBuffer(0, { maxByteLength: 1 });
+    const array = new Uint8Array(buffer);
+    try {
+      preventExtensions(array);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+const needsGrowableSharedArrayBufferPreventExtensionsWorkaround =
+  SharedArrayBuffer !== undefined &&
+  sharedArrayBufferGetGrowable !== undefined &&
+  (() => {
+    const buffer = new SharedArrayBuffer(0, { maxByteLength: 1 });
+    const array = new Uint8Array(buffer);
+    try {
+      preventExtensions(array);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+/**
+ * @param {ArrayBufferLike} buffer
+ */
+const isBufferResizableOrGrowable = buffer => {
+  if (
+    needsResizableArrayBufferPreventExtensionsWorkaround &&
+    arrayBufferGetResizable !== undefined
+  ) {
+    try {
+      return arrayBufferGetResizable(buffer);
+    } catch {
+      // The buffer may be a SharedArrayBuffer.
+    }
+  }
+  if (
+    needsGrowableSharedArrayBufferPreventExtensionsWorkaround &&
+    sharedArrayBufferGetGrowable !== undefined
+  ) {
+    try {
+      return sharedArrayBufferGetGrowable(buffer);
+    } catch {
+      // The buffer may be an ArrayBuffer.
+    }
+  }
+  return false;
+};
+
 /**
  * @template T
  * @param {ArrayLike<T>} array
  */
 const freezeTypedArray = array => {
+  const buffer = typedArrayGetBuffer(array);
+  if (isBufferResizableOrGrowable(buffer)) {
+    // On a nonconforming engine, JavaScript cannot distinguish a fixed-length
+    // view from a length-tracking view over a growable SharedArrayBuffer, so
+    // reject both. Conforming engines take the native path and preserve the
+    // specification's fixed-length SharedArrayBuffer exception.
+    throw TypeError(
+      'Cannot prevent extensions on a TypedArray backed by a resizable or growable buffer',
+    );
+  }
+
   preventExtensions(array);
 
   // Downgrade writable expandos to readonly, even if non-configurable.

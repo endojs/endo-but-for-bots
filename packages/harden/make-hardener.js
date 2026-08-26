@@ -23,11 +23,13 @@
 
 const {
   Array,
+  ArrayBuffer,
   JSON,
   Number,
   Object,
   Reflect,
   Set,
+  SharedArrayBuffer,
   String,
   Symbol,
   Uint8Array,
@@ -89,6 +91,8 @@ const { prototype: weaksetPrototype } = WeakSet;
 const { prototype: functionPrototype } = Function;
 
 const typedArrayPrototype = getPrototypeOf(Uint8Array.prototype);
+const { prototype: arrayBufferPrototype } = ArrayBuffer;
+const sharedArrayBufferPrototype = SharedArrayBuffer?.prototype;
 
 const { bind } = functionPrototype;
 
@@ -135,6 +139,23 @@ const setHas = uncurryThis(setPrototype.has);
 
 const weaksetAdd = uncurryThis(weaksetPrototype.add);
 const weaksetHas = uncurryThis(weaksetPrototype.has);
+
+const arrayBufferResizableGetter = getOwnPropertyDescriptor(
+  arrayBufferPrototype,
+  'resizable',
+)?.get;
+const arrayBufferGetResizable =
+  typeof arrayBufferResizableGetter === 'function'
+    ? uncurryThis(arrayBufferResizableGetter)
+    : undefined;
+const sharedArrayBufferGrowableGetter =
+  sharedArrayBufferPrototype === undefined
+    ? undefined
+    : getOwnPropertyDescriptor(sharedArrayBufferPrototype, 'growable')?.get;
+const sharedArrayBufferGetGrowable =
+  typeof sharedArrayBufferGrowableGetter === 'function'
+    ? uncurryThis(sharedArrayBufferGrowableGetter)
+    : undefined;
 
 /**
  * TODO Consolidate with `isPrimitive` that's currently in `@endo/pass-style`
@@ -246,6 +267,17 @@ const assert = condition => {
   }
 };
 
+const typedArrayBufferDescriptor = getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  'buffer',
+);
+assert(typedArrayBufferDescriptor);
+const typedArrayBufferGetter = typedArrayBufferDescriptor.get;
+assert(typedArrayBufferGetter);
+const typedArrayGetBuffer = /** @type {(array: object) => ArrayBufferLike} */ (
+  uncurryThis(typedArrayBufferGetter)
+);
+
 /**
  * @template T
  * @typedef {(value: T) => T} Harden
@@ -284,11 +316,80 @@ const isCanonicalIntegerIndexString = propertyKey => {
   return isInteger(n) && String(n) === propertyKey;
 };
 
+// ECMA-262 requires TypedArray [[PreventExtensions]] to reject views whose
+// indexed properties might change when their backing buffer changes. Probe
+// once so conforming engines retain their native behavior while older engines
+// get the compatibility check below.
+const needsResizableArrayBufferPreventExtensionsWorkaround =
+  arrayBufferGetResizable !== undefined &&
+  (() => {
+    const buffer = new ArrayBuffer(0, { maxByteLength: 1 });
+    const array = new Uint8Array(buffer);
+    try {
+      preventExtensions(array);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+const needsGrowableSharedArrayBufferPreventExtensionsWorkaround =
+  SharedArrayBuffer !== undefined &&
+  sharedArrayBufferGetGrowable !== undefined &&
+  (() => {
+    const buffer = new SharedArrayBuffer(0, { maxByteLength: 1 });
+    const array = new Uint8Array(buffer);
+    try {
+      preventExtensions(array);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+/**
+ * @param {ArrayBufferLike} buffer
+ */
+const isBufferResizableOrGrowable = buffer => {
+  if (
+    needsResizableArrayBufferPreventExtensionsWorkaround &&
+    arrayBufferGetResizable !== undefined
+  ) {
+    try {
+      return arrayBufferGetResizable(buffer);
+    } catch {
+      // The buffer may be a SharedArrayBuffer.
+    }
+  }
+  if (
+    needsGrowableSharedArrayBufferPreventExtensionsWorkaround &&
+    sharedArrayBufferGetGrowable !== undefined
+  ) {
+    try {
+      return sharedArrayBufferGetGrowable(buffer);
+    } catch {
+      // The buffer may be an ArrayBuffer.
+    }
+  }
+  return false;
+};
+
 /**
  * @template T
  * @param {ArrayLike<T>} array
  */
 const freezeTypedArray = array => {
+  const buffer = typedArrayGetBuffer(array);
+  if (isBufferResizableOrGrowable(buffer)) {
+    // On a nonconforming engine, JavaScript cannot distinguish a fixed-length
+    // view from a length-tracking view over a growable SharedArrayBuffer, so
+    // reject both. Conforming engines take the native path and preserve the
+    // specification's fixed-length SharedArrayBuffer exception.
+    throw TypeError(
+      'Cannot prevent extensions on a TypedArray backed by a resizable or growable buffer',
+    );
+  }
+
   preventExtensions(array);
 
   // Downgrade writable expandos to readonly, even if non-configurable.
