@@ -26,7 +26,7 @@ import crypto from 'node:crypto';
 import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 
-/** @import { CryptoPowers } from './proof-of-possession.js' */
+/** @import { CryptoPowers } from './types.js' */
 
 /**
  * The PKCS#8 DER prefix Node expects on a raw 32-byte Ed25519

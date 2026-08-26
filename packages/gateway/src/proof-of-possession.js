@@ -60,6 +60,8 @@ import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 import { encodeHex } from '@endo/hex';
 
+/** @import { ChallengeIssued, ClockPowers, CryptoPowers, NonceRegistry } from './types.js' */
+
 /**
  * The domain-separation literal hashed into every challenge nonce.
  * Changing this string invalidates every outstanding challenge and
@@ -86,46 +88,6 @@ harden(NONCE_BYTE_LENGTH);
  */
 export const DEFAULT_NONCE_TTL_MS = 30_000;
 harden(DEFAULT_NONCE_TTL_MS);
-
-/**
- * @typedef {object} CryptoPowers
- * @property {(byteLength: number) => ArrayBuffer} randomBytes
- *   Returns a freshly-randomized immutable `ArrayBuffer` of the
- *   requested length. The byte source must be CSPRNG-quality
- *   (Node `crypto.randomBytes`, libsodium `randombytes_buf`); a
- *   non-cryptographic RNG breaks the security property.
- * @property {(input: ArrayBuffer | Uint8Array) => ArrayBuffer} sha256
- *   Returns the 32-byte SHA-256 hash of the input as an immutable
- *   `ArrayBuffer`. The bootstrap hashes the challenge nonce together
- *   with the domain-separation prefix before storing or verifying.
- * @property {(args: {
- *   publicKey: ArrayBuffer | Uint8Array,
- *   message: ArrayBuffer | Uint8Array,
- *   signature: ArrayBuffer | Uint8Array,
- * }) => boolean} verifyEd25519 Returns `true` iff `signature` is a
- *   valid Ed25519 signature of `message` under `publicKey`. Must
- *   not throw on malformed inputs; returns `false` instead so the
- *   verifier upgrades to a uniform reject path.
- */
-
-/**
- * @typedef {object} ClockPowers
- * @property {() => number} now Returns the current time in
- *   milliseconds since the epoch. Injected so tests can simulate
- *   nonce expiry deterministically.
- */
-
-/**
- * @typedef {object} ChallengeIssued
- * @property {ArrayBuffer} nonce The unhashed nonce the registrar
- *   returns to the caller. The caller will sign the *hashed* nonce
- *   (see {@link hashNonceForSigning}).
- * @property {ArrayBuffer} hashedNonce The hashed bytes the caller
- *   must sign and the bootstrap stores until the matching
- *   `register` call.
- * @property {number} issuedAt Epoch milliseconds.
- * @property {number} expiresAt `issuedAt + ttlMs`.
- */
 
 /**
  * Convert any byte-shaped input (immutable `ArrayBuffer` or
@@ -198,21 +160,6 @@ export const constantTimeEqual = (a, b) => {
   return constantTimeBytesEqual(asUint8(a), asUint8(b));
 };
 harden(constantTimeEqual);
-
-/**
- * @typedef {object} NonceRegistry
- * @property {() => ChallengeIssued} issue Mints a fresh nonce and
- *   stores its hash under the registry's TTL policy.
- * @property {(args: {
- *   publicKey: ArrayBuffer | Uint8Array,
- *   nonce: ArrayBuffer | Uint8Array,
- *   signature: ArrayBuffer | Uint8Array,
- * }) => void} verifyAndConsume Verifies the proof-of-possession
- *   signature and consumes the nonce. Throws on a malformed input,
- *   an unknown nonce, an expired nonce, or a bad signature.
- * @property {() => number} size For tests and diagnostics: the
- *   number of issued-but-unconsumed nonces currently held.
- */
 
 /**
  * Create a registry that issues challenge nonces and verifies

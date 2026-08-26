@@ -1,5 +1,103 @@
-import type { CryptoPowers, ClockPowers } from './proof-of-possession.js';
-import type { GatewayBootstrap } from './bootstrap.js';
+export type CryptoPowers = {
+  randomBytes(byteLength: number): ArrayBuffer;
+  sha256(input: ArrayBuffer | Uint8Array): ArrayBuffer;
+  verifyEd25519(args: {
+    publicKey: ArrayBuffer | Uint8Array;
+    message: ArrayBuffer | Uint8Array;
+    signature: ArrayBuffer | Uint8Array;
+  }): boolean;
+};
+
+export type ClockPowers = { now(): number };
+
+export type ChallengeIssued = {
+  nonce: ArrayBuffer;
+  hashedNonce: ArrayBuffer;
+  issuedAt: number;
+  expiresAt: number;
+};
+
+export type NonceRegistry = {
+  issue(): ChallengeIssued;
+  verifyAndConsume(args: {
+    publicKey: ArrayBuffer | Uint8Array;
+    nonce: ArrayBuffer | Uint8Array;
+    signature: ArrayBuffer | Uint8Array;
+  }): void;
+  size(): number;
+};
+
+export type ChallengePayload = ChallengeIssued;
+
+export type WebletDescriptor = {
+  webletId: string;
+  contentTreeRoot: string;
+  hasWebSocket: boolean;
+};
+
+export type PublicKeyAddition = {
+  publicKey: ArrayBuffer | Uint8Array;
+  nonce: ArrayBuffer | Uint8Array;
+  signature: ArrayBuffer | Uint8Array;
+};
+
+export type RegistrationArgs = PublicKeyAddition & {
+  daemon?: unknown;
+  cancelled?: Promise<unknown>;
+};
+
+export type RelayRegistrationArgs = PublicKeyAddition & {
+  relayTarget: unknown;
+};
+
+export type RegistrationEntry = {
+  publicKeys: ReadonlyArray<ArrayBuffer | Uint8Array>;
+  daemon: unknown;
+  weblets: Map<string, WebletDescriptor>;
+  deregistered: boolean;
+};
+
+export type Registration = {
+  publishWeblet(descriptor: WebletDescriptor): Promise<void>;
+  unpublishWeblet(webletId: string): Promise<void>;
+  addPublicKey(addition: PublicKeyAddition): Promise<void>;
+  deregister(): Promise<void>;
+  listWeblets(): Promise<ReadonlyArray<WebletDescriptor>>;
+  listPublicKeys(): Promise<ReadonlyArray<ArrayBuffer | Uint8Array>>;
+};
+
+export type GatewayBootstrap = {
+  challenge(): Promise<ChallengePayload>;
+  register(args: RegistrationArgs): Promise<Registration>;
+  registerRelay(args: RelayRegistrationArgs): Promise<Registration>;
+  getBindAddress(): Promise<string>;
+  getApps(): Promise<AppsNameHub>;
+};
+
+export type BootstrapDeps = {
+  crypto: CryptoPowers;
+  clock: ClockPowers;
+  apps: AppsNameHub;
+  getBindAddress(): string;
+  ttlMs?: number;
+};
+
+export type BootstrapPathInfo = {
+  home: string;
+  user: string;
+  temp: string;
+};
+
+export type BootstrapPathResolution = {
+  path: string;
+  source:
+    | 'override'
+    | 'system'
+    | 'user-xdg'
+    | 'user-darwin'
+    | 'user-tmpdir';
+  kind: 'unix-socket';
+};
 
 export type BindAddress = {
   /**

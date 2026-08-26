@@ -40,8 +40,7 @@ import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 
 import { makeNonceRegistry, NONCE_BYTE_LENGTH } from './proof-of-possession.js';
 
-/** @import { AppsNameHub } from './types.js' */
-/** @import { CryptoPowers, ClockPowers, ChallengeIssued } from './proof-of-possession.js' */
+/** @import { AppsNameHub, BootstrapDeps, ChallengeIssued, GatewayBootstrap, PublicKeyAddition, Registration, RegistrationArgs, RegistrationEntry, RelayRegistrationArgs, WebletDescriptor } from './types.js' */
 
 /**
  * Expected raw Ed25519 public key length in bytes. The bootstrap
@@ -74,94 +73,6 @@ const GatewayBootstrapInterface = M.interface('GatewayBootstrap', {
   getBindAddress: M.call().returns(M.promise()),
   getApps: M.call().returns(M.promise()),
 });
-
-/**
- * @typedef {object} ChallengePayload The shape returned to a caller
- *   of `E(gatewayBootstrap).challenge()`. The caller signs
- *   `hashedNonce` with its Ed25519 private key and submits the
- *   resulting 64-byte signature as `proofOfPossession` together
- *   with the *unhashed* `nonce`. Byte fields are immutable
- *   `ArrayBuffer` per the `@endo/bytes` wire shape.
- * @property {ArrayBuffer} nonce The 32-byte unhashed challenge.
- * @property {ArrayBuffer} hashedNonce The 32-byte domain-separated
- *   hash that the caller signs.
- * @property {number} issuedAt Epoch milliseconds, for diagnostics.
- * @property {number} expiresAt Epoch milliseconds; after this, the
- *   nonce is rejected on submission.
- */
-
-/**
- * @typedef {object} WebletDescriptor The shape passed to
- *   `Registration.publishWeblet`.
- * @property {string} webletId Gateway-assigned identifier (the
- *   value the gateway routes by). Allocated by the gateway and
- *   handed back to the registrant in a parallel step the design
- *   names `allocateWebletId`; the current slice treats it as an
- *   opaque caller-supplied string and the allocator lands with
- *   feature-2's vhost-table integration.
- * @property {string} contentTreeRoot SHA-256 hex of the
- *   readable-tree root the gateway should serve.
- * @property {boolean} hasWebSocket `true` if the weblet wants the
- *   gateway to forward upgrade requests, `false` for static-only.
- */
-
-/**
- * @typedef {object} PublicKeyAddition The shape passed to
- *   `Registration.addPublicKey`. Byte fields are immutable
- *   `ArrayBuffer` on the wire; the bootstrap also accepts
- *   `Uint8Array` on in-realm calls.
- * @property {ArrayBuffer | Uint8Array} publicKey 32-byte raw
- *   Ed25519 public key.
- * @property {ArrayBuffer | Uint8Array} nonce The unhashed nonce
- *   returned by a preceding `challenge()` call; one nonce per
- *   public key.
- * @property {ArrayBuffer | Uint8Array} signature 64-byte Ed25519
- *   signature of the hashed nonce under the new public key.
- */
-
-/**
- * @typedef {object} RegistrationArgs Args to
- *   `GatewayBootstrap.register`.
- * @property {ArrayBuffer | Uint8Array} publicKey
- * @property {ArrayBuffer | Uint8Array} nonce
- * @property {ArrayBuffer | Uint8Array} signature The
- *   proof-of-possession signature, as named `proofOfPossession`
- *   in the design. We use the shorter wire name on the args object
- *   so the bytes-on-wire shape matches OCapN's terse-message
- *   convention; the long name stays in the prose.
- * @property {unknown} [daemon] Optional user-daemon callback exo;
- *   when present, the gateway later calls `handleHttp` /
- *   `handleWebSocketUpgrade` / `fetchContentTree` on it for traffic
- *   destined to weblets this registration publishes. Phase 2 stores
- *   the reference but does not call into it; the call sites land
- *   with the HTTP/WS surface.
- * @property {Promise<unknown>} [cancelled] Required when `daemon` is
- *   present. Settles when the daemon's CapTP connection detaches, at
- *   which point the gateway automatically deregisters the daemon.
- */
-
-/**
- * @typedef {object} RelayRegistrationArgs Args to
- *   `GatewayBootstrap.registerRelay`.
- * @property {ArrayBuffer | Uint8Array} publicKey
- * @property {ArrayBuffer | Uint8Array} nonce
- * @property {ArrayBuffer | Uint8Array} signature
- * @property {unknown} relayTarget The relay-target handle the
- *   public CapTP relay (Feature 6) forwards Noise-encrypted frames
- *   to. Phase 2 stores the reference; Feature 6 is the consumer.
- */
-
-/**
- * @typedef {object} RegistrationEntry Stored per registration.
- * @property {ReadonlyArray<ArrayBuffer | Uint8Array>} publicKeys
- *   One or more raw Ed25519 public keys (whatever shape the caller
- *   handed in). `register` seeds the first; `addPublicKey` extends.
- * @property {unknown} daemon The optional callback exo.
- * @property {Map<string, WebletDescriptor>} weblets webletId to
- *   descriptor.
- * @property {boolean} deregistered Once true, the registration is
- *   tombstoned and every facet method rejects.
- */
 
 /**
  * Validate that a byte-shaped input is an immutable `ArrayBuffer`
@@ -271,42 +182,6 @@ const publicKeyToHex = bytes => {
   }
   return hex;
 };
-
-/**
- * @typedef {object} GatewayBootstrap CapTP-facing exo. Methods are
- *   `async` so they cross the wire as eventual sends.
- * @property {() => Promise<ChallengePayload>} challenge
- * @property {(args: RegistrationArgs) => Promise<Registration>} register
- * @property {(args: RelayRegistrationArgs) => Promise<Registration>} registerRelay
- * @property {() => Promise<string>} getBindAddress
- * @property {() => Promise<AppsNameHub>} getApps
- */
-
-/**
- * @typedef {object} Registration Per-registration handle.
- * @property {(descriptor: WebletDescriptor) => Promise<void>} publishWeblet
- * @property {(webletId: string) => Promise<void>} unpublishWeblet
- * @property {(addition: PublicKeyAddition) => Promise<void>} addPublicKey
- * @property {() => Promise<void>} deregister
- * @property {() => Promise<ReadonlyArray<WebletDescriptor>>} listWeblets
- * @property {() => Promise<ReadonlyArray<ArrayBuffer | Uint8Array>>} listPublicKeys
- */
-
-/**
- * @typedef {object} BootstrapDeps
- * @property {CryptoPowers} crypto
- * @property {ClockPowers} clock
- * @property {AppsNameHub} apps The gateway's shared apps NameHub
- *   (Feature 2). The bootstrap returns it to authorized callers via
- *   `getApps`; bootstrap and HTTP surface share the same hub so a
- *   binding installed over the sock shows up on the routing path.
- * @property {() => string} getBindAddress Returns the gateway's
- *   bind address. Injected from the gateway proper so the bootstrap
- *   reports the *actual* bound address (which, for `:0`, differs
- *   from the configured value after `start()`).
- * @property {number} [ttlMs] Nonce TTL; defaults to the registry's
- *   own default (30s).
- */
 
 /**
  * Create the bootstrap exo, the registration registry, and the

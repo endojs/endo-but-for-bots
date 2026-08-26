@@ -47,6 +47,8 @@
 
 import { makeError, q, X } from '@endo/errors';
 
+/** @import { BootstrapPathInfo, BootstrapPathResolution } from './types.js' */
+
 /**
  * The unbracketed basename for the sock path. Kept as an
  * export so callers (a follow-on listener, downstream tooling) can
@@ -71,26 +73,6 @@ harden(SYSTEM_RUNTIME_DIR_LINUX);
  */
 export const USER_RUNTIME_SUBDIR = 'endo-gateway';
 harden(USER_RUNTIME_SUBDIR);
-
-/**
- * @typedef {object} BootstrapPathInfo
- * @property {string} home Home directory for fallback resolution.
- * @property {string} user User name for fallback resolution.
- * @property {string} temp Temp directory for fallback resolution.
- */
-
-/**
- * @typedef {object} BootstrapPathResolution
- * @property {string} path The resolved sock path.
- * @property {'override' | 'system' | 'user-xdg' | 'user-darwin' | 'user-tmpdir'} source
- *   Where the path came from. Useful for diagnostics: when an
- *   operator misconfigures the override, the source name in the
- *   warning tells them which rule they hit.
- * @property {'unix-socket'} kind The listener shape. Always a UNIX
- *   domain socket; the gateway targets Linux primarily and macOS
- *   secondarily, both of which use a UNIX domain socket for the
- *   sock.
- */
 
 /**
  * Resolve the gateway's bootstrap sock path for a given platform
