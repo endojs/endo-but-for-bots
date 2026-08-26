@@ -155,13 +155,27 @@ An otherwise reachable driver is unavailable unless its probe proves
 process-group or container-wide termination and crash cleanup.
 The factory never substitutes an unconfined host process.
 
+Not every backend can materialise every rootfs: bwrap serves
+`host-bind` / `minimal` / `mount` and refuses `oci`, while podman serves
+only `oci`.
+The drivers reject the pairs they cannot serve, but not before
+`prepareSlice()`.
+[`src/interfaces.js`](./src/interfaces.js) therefore publishes the same
+constraint as `backendRootfsKinds`, so a policy layer can refuse a
+profile that no driver could ever construct — podman with a
+`host-bind` rootfs, say — up front, and name the field at fault.
+A backend absent from that table (`'auto'`, or one of the unimplemented
+names) carries no constraint; availability remains `make()`'s verdict.
+
 ## Capability surface
 
 The capability surface:
 
 - `SandboxFactory` — root cap; `help`, `listBackends`, `make`.
-- `SandboxHandle` — one slice; `spawn`, `mount`, `scratch`, `open`,
-  `fork`, `reset`, `dispose`.
+- `SandboxHandle` — one slice; `backend`, `spawn`, `mount`, `scratch`,
+  `open`, `fork`, `reset`, `dispose`.
+  `backend()` names the driver that resolved for this slice, so a caller
+  that passed `backend: 'auto'` can still tell which confinement it got.
 - `ProcessHandle` — one process inside a slice; `pid`, `stdin`,
   `stdout`, `stderr`, `wait`, `kill`.
 - `MountHandle` — one bind into a slice; `innerPath`, `cap`, `mode`,

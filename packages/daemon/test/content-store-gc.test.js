@@ -268,6 +268,9 @@ const makeNoopSandboxFactory = () => async (_powers, _context, options) =>
   Far('FakeSandboxFactory', {
     make: async () =>
       Far('FakeSandboxHandle', {
+        // The escalation ledger records the driver a mint resolved to,
+        // so a handle that cannot name one does not become a slice.
+        backend: () => 'bwrap',
         dispose: async () => {
           await options?.onHandleDisposed?.();
         },

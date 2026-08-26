@@ -303,6 +303,12 @@ export type SandboxFactory = FarRef<{
 export type SandboxHandle = FarRef<{
   help(methodName?: string): string;
   /**
+   * The driver actually confining this slice, resolved at `make()` time
+   * and fixed for the handle's lifetime. Never the `'auto'` selector —
+   * a caller that did not name a backend learns the real one here.
+   */
+  backend(): BackendName;
+  /**
    * Spawn a process in the slice.
    * `spawn()` rejects for any timeout, disposal, or owner cancellation
    * initiated before it settles, including after driver admission resolves.

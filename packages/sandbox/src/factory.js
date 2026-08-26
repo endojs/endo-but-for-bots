@@ -56,6 +56,7 @@ ProcessHandle is killed and every MountHandle is unmounted before the
 driver tears down the underlying namespace.
 
 Methods:
+  backend()           Name the driver that is confining this slice.
   spawn(argv, opts)   Spawn a process in the slice.
   mount(cap, …)       Bind a Mount capability into the slice.
   scratch(innerPath)  Mint an ephemeral scratch mount.
@@ -1113,6 +1114,10 @@ export const makeSandboxFactory = (
       /** @type {unknown} */ (
         makeExo('SandboxHandle', SandboxHandleInterface, {
           help: () => `${HANDLE_HELP_BASE}\n${sliceRuntimeReport}`,
+          // Resolved at `pickDriver` above and fixed for the slice's
+          // lifetime: a handle never migrates between backends, so this
+          // stays true even when the selector was `'auto'`.
+          backend: () => driver.name,
           spawn: spawnProc,
           mount: mountInSlice,
           scratch: scratchInSlice,

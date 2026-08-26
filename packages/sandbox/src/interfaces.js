@@ -218,6 +218,11 @@ harden(SandboxFactoryInterface);
  */
 export const SandboxHandleInterface = M.interface('SandboxHandle', {
   help: M.call().optional(M.string()).returns(M.string()),
+  // The resolved driver, never the selector that asked for it. A holder
+  // that passed `'auto'` has no other way to learn which backend is
+  // enforcing its confinement, and an audit record that names the
+  // selector describes the request rather than what happened.
+  backend: M.call().returns(BackendNameShape),
   spawn: M.call(M.arrayOf(M.string()))
     .optional(SpawnOptsShape)
     .returns(M.promise()),

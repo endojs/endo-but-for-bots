@@ -239,6 +239,17 @@ export const makeSandboxSlice = async ({
   /** @type {SandboxEscalationRecord | undefined} */
   let escalationRecorded;
   /**
+   * The backend that actually took the escalation. Starts as the
+   * profile's selector so a failed attempt still records what was asked
+   * for, and is replaced by the resolved driver name once a slice
+   * exists. Recording the selector for a slice that was minted would
+   * describe the request rather than the escalation: under `'auto'` the
+   * ledger would never name the backend that left the capability graph.
+   *
+   * @type {string}
+   */
+  let escalatedBackend = profile.backend;
+  /**
    * Record every mint attempt exactly once. A failed attempt is recorded
    * before cleanup, so the entry describes the authority and projections
    * that were actually assembled even when the backend cannot make a
@@ -250,7 +261,7 @@ export const makeSandboxSlice = async ({
       sandboxId,
       reason: profile.escalation.reason,
       capability: profile.escalation.capability,
-      backend: profile.backend,
+      backend: escalatedBackend,
       network: profile.network,
       projections: harden(
         realizedProjections().map(({ innerPath, projection }) =>
@@ -475,6 +486,14 @@ export const makeSandboxSlice = async ({
       }),
     );
 
+    // Ask before recording: the ledger entry and this incarnation's own
+    // accessor must name the driver that took the escalation, not the
+    // selector that asked for one. A handle that cannot name its backend
+    // is not one to hand out, so a rejection here unwinds the mint —
+    // where the catch below still records the attempt under the
+    // selector.
+    const resolvedBackend = await E(slice).backend();
+    escalatedBackend = resolvedBackend;
     recordEscalation();
 
     /** @type {Promise<void> | undefined} */
@@ -538,8 +557,12 @@ export const makeSandboxSlice = async ({
       /** @param {string} [methodName] */
       help: methodName =>
         methodName === undefined
-          ? 'SandboxHandle: spawn, mount, scratch, open, fork, reset, dispose'
+          ? 'SandboxHandle: backend, spawn, mount, scratch, open, fork, reset, dispose'
           : `SandboxHandle.${methodName}`,
+      // Resolved once at mint time rather than forwarded, so the name
+      // stays answerable for as long as this wrapper is, including after
+      // the backend handle has been disposed.
+      backend: () => resolvedBackend,
       /**
        * @param {readonly string[]} argv
        * @param {SpawnOpts} [options]

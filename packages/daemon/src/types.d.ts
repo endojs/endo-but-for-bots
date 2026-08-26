@@ -499,6 +499,11 @@ export type SandboxEscalationRecord = {
   sandboxId: FormulaIdentifier;
   reason: SandboxEscalationReason;
   capability: string;
+  /**
+   * The driver that took the escalation, or the profile's selector when
+   * the attempt failed before a backend was selected. `'auto'` therefore
+   * means "never resolved" — a minted slice always names a driver.
+   */
   backend: string;
   network: string;
   projections: Array<{ innerPath: string; kind: SandboxMountProjection }>;
