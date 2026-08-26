@@ -116,10 +116,22 @@ const makeFakeProjector = ({ prepare = async () => {} } = {}) => {
  * mounts through the powers it was handed, exactly as the real factory
  * does, and records what it saw.
  */
-/** @param {{ disposeError?: unknown, makeError?: unknown }} [opts] */
+/**
+ * @param {{
+ *   disposeError?: unknown,
+ *   makeError?: unknown,
+ *   backendName?: string,
+ *   backendNameError?: unknown,
+ * }} [opts]
+ *   `backendName` is what the minted handle reports from `backend()` —
+ *   the driver the factory resolved, which need not be the selector the
+ *   profile asked for.
+ */
 const makeFakeBackend = ({
   disposeError = undefined,
   makeError = undefined,
+  backendName = 'bwrap',
+  backendNameError = undefined,
 } = {}) => {
   const calls = {
     /** @type {any[]} */ factories: [],
@@ -152,6 +164,12 @@ const makeFakeBackend = ({
           throw makeError;
         }
         const backendHandle = Far('FakeSandboxHandle', {
+          backend: () => {
+            if (backendNameError !== undefined) {
+              throw backendNameError;
+            }
+            return backendName;
+          },
           reset: async () => {
             await options?.resetScratch?.();
           },
@@ -255,6 +273,79 @@ test('normalizeSandboxProfile defaults to the confined end of every ladder', t =
   t.deepEqual(profile.mounts, []);
   t.deepEqual(profile.env, {});
   t.is(profile.cwd, undefined);
+});
+
+test('normalizeSandboxProfile rejects a backend that cannot serve the rootfs', t => {
+  // Each driver refuses these pairs too, but only at `prepareSlice()` —
+  // by which point the formula has been persisted. The profile layer is
+  // the place to name the field at fault.
+  t.throws(
+    () =>
+      normalizeSandboxProfile(
+        {
+          rootfs: { kind: 'host-bind' },
+          backend: 'podman',
+          escalation: baseEscalation,
+        },
+        resolveFakeMountId,
+      ),
+    {
+      message:
+        /backend "podman" cannot materialise rootfs kind "host-bind"; it supports \["oci"\]/,
+    },
+  );
+
+  t.throws(
+    () =>
+      normalizeSandboxProfile(
+        {
+          rootfs: { kind: 'oci', ref: 'docker.io/library/alpine:3.19' },
+          backend: 'bwrap',
+          escalation: baseEscalation,
+        },
+        resolveFakeMountId,
+      ),
+    { message: /backend "bwrap" cannot materialise rootfs kind "oci"/ },
+  );
+
+  // A mount cap normalizes to the `mount` rootfs kind, which is bwrap's
+  // and not podman's.
+  t.throws(
+    () =>
+      normalizeSandboxProfile(
+        {
+          rootfs: Far('Mount', {}),
+          backend: 'podman',
+          escalation: baseEscalation,
+        },
+        resolveFakeMountId,
+      ),
+    { message: /backend "podman" cannot materialise rootfs kind "mount"/ },
+  );
+});
+
+test('normalizeSandboxProfile leaves unresolved backends to make()', t => {
+  // `auto` and the unimplemented names carry no rootfs constraint:
+  // whether they can serve the profile is a property of the host, which
+  // only `make()` can report.
+  for (const backend of /** @type {const} */ ([
+    'auto',
+    'lima',
+    'containerization',
+    'wsl',
+  ])) {
+    for (const rootfs of /** @type {const} */ ([
+      { kind: 'host-bind' },
+      { kind: 'oci', ref: 'docker.io/library/alpine:3.19' },
+    ])) {
+      const profile = normalizeSandboxProfile(
+        { rootfs, backend, escalation: baseEscalation },
+        resolveFakeMountId,
+      );
+      t.is(profile.backend, backend);
+      t.is(profile.rootfs.kind, rootfs.kind);
+    }
+  }
 });
 
 test('normalizeSandboxProfile accepts zero and rejects non-integer limits', t => {
@@ -1062,7 +1153,7 @@ test('every mint records an escalation with the projections it needed', async t 
   const { mount } = await provisionMount(t, { deniedSegments: [] });
   const profile = normalizeSandboxProfile(
     {
-      rootfs: { kind: 'host-bind' },
+      rootfs: { kind: 'oci', ref: 'docker.io/library/alpine:3.19' },
       mounts: [{ cap: mount, innerPath: '/workspace', mode: 'rw' }],
       network: 'private',
       backend: 'podman',
@@ -1072,6 +1163,7 @@ test('every mint records an escalation with the projections it needed', async t 
   );
   const { escalations } = await mintSlice(t, profile, {
     capForId: { 'mount-id': mount },
+    backend: { backendName: 'podman' },
   });
   const records = escalations.list();
   t.is(records.length, 1);
@@ -1085,6 +1177,51 @@ test('every mint records an escalation with the projections it needed', async t 
   t.deepEqual(records[0].projections, [
     { innerPath: '/workspace', kind: '9p' },
   ]);
+});
+
+test('an auto-selected mint records the driver that took the escalation', async t => {
+  // The whole point of the ledger is to say what left the capability
+  // graph. Under `auto` the selector names nothing, so the record has to
+  // carry what the factory resolved.
+  const profile = normalizeSandboxProfile(
+    { rootfs: { kind: 'minimal' }, escalation: baseEscalation },
+    resolveFakeMountId,
+  );
+  t.is(profile.backend, 'auto');
+
+  const { escalations, slice, release } = await mintSlice(t, profile, {
+    capForId: {},
+    backend: { backendName: 'bwrap' },
+  });
+  t.is(escalations.list()[0].backend, 'bwrap');
+  // The same name is answerable from the slice the caller holds.
+  t.is(await E(/** @type {any} */ (slice)).backend(), 'bwrap');
+
+  await release();
+  // Still answerable after release: the wrapper resolved the name at
+  // mint time rather than forwarding to a handle that is now gone.
+  t.is(await E(/** @type {any} */ (slice)).backend(), 'bwrap');
+});
+
+test('a handle that cannot name its backend does not become a slice', async t => {
+  const profile = normalizeSandboxProfile(
+    { rootfs: { kind: 'minimal' }, escalation: baseEscalation },
+    resolveFakeMountId,
+  );
+  const escalations = makeSandboxEscalationLog();
+  await t.throwsAsync(
+    mintSlice(t, profile, {
+      capForId: {},
+      escalations,
+      backend: { backendNameError: new Error('backend is unreachable') },
+    }),
+    { message: /backend is unreachable/ },
+  );
+  // The attempt is still recorded, under the selector: no backend was
+  // ever resolved, which is exactly what `auto` means in a record.
+  const records = escalations.list();
+  t.is(records.length, 1);
+  t.is(records[0].backend, 'auto');
 });
 
 test('the escalation ledger is bounded and ordered oldest-first', t => {
