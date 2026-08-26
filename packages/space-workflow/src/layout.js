@@ -107,8 +107,74 @@ export const layoutGraph = (graph, initial) => {
     byLayer.set(layer, row);
   }
 
-  const layerWidth = 180;
-  const rowHeight = 64;
+  // In-layer ordering. Insertion order is whatever `renderGraph` happened to
+  // emit, which puts a state's successors wherever they fall and makes edges
+  // cross for no reason. Sort each layer by the average position of its
+  // neighbours in the adjacent layer (the barycentre heuristic), sweeping
+  // forwards then backwards a few times. Ties keep the previous order, so the
+  // result is still deterministic for a given chart.
+  const orderedLayers = [...byLayer.keys()].sort((a, b) => a - b);
+  /** @type {Map<string, number>} */
+  const slot = new Map();
+  const reslot = () => {
+    for (const layer of orderedLayers) {
+      const row = /** @type {string[]} */ (byLayer.get(layer));
+      row.forEach((id, i) => slot.set(id, i));
+    }
+  };
+  reslot();
+  /**
+   * @param {string} id
+   * @param {boolean} forward - look at the layer before (true) or after
+   * @returns {number | undefined}
+   */
+  const barycentre = (id, forward) => {
+    const neighbours = [];
+    for (const edge of edges) {
+      const other = forward
+        ? edge.to === id && edge.from !== id && edge.from
+        : edge.from === id && edge.to !== id && edge.to;
+      if (!other) continue;
+      const otherLayer = layers.get(other);
+      const ownLayer = layers.get(id);
+      if (otherLayer === undefined || ownLayer === undefined) continue;
+      if (forward ? otherLayer >= ownLayer : otherLayer <= ownLayer) continue;
+      const at = slot.get(other);
+      if (at !== undefined) neighbours.push(at);
+    }
+    if (neighbours.length === 0) return undefined;
+    return neighbours.reduce((sum, n) => sum + n, 0) / neighbours.length;
+  };
+  for (let sweep = 0; sweep < 4; sweep += 1) {
+    const forward = sweep % 2 === 0;
+    const order = forward ? orderedLayers : [...orderedLayers].reverse();
+    for (const layer of order) {
+      const row = /** @type {string[]} */ (byLayer.get(layer));
+      const keyed = row.map((id, i) => ({
+        id,
+        i,
+        b: barycentre(id, forward),
+      }));
+      keyed.sort((a, b) => {
+        // Nodes with no neighbour on that side keep their place.
+        if (a.b === undefined && b.b === undefined) return a.i - b.i;
+        if (a.b === undefined) return -1;
+        if (b.b === undefined) return 1;
+        return a.b === b.b ? a.i - b.i : a.b - b.b;
+      });
+      byLayer.set(
+        layer,
+        keyed.map(entry => entry.id),
+      );
+      reslot();
+    }
+  }
+
+  // Room to route around: NODE_WIDTH is 150 and NODE_HEIGHT 40 in the view, so
+  // these leave a 70px channel between columns and 36px between rows for edges
+  // and their labels.
+  const layerWidth = 220;
+  const rowHeight = 76;
   /** @type {Record<string, { x: number, y: number, layer: number }>} */
   const positions = {};
   let height = 0;

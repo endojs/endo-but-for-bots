@@ -329,3 +329,18 @@
   color: #f87171;
   font-size: 0.8rem;
 }
+
+/* Age label in the runs rail. The rail is newest-first, so this is what tells
+   you whether "newest" means minutes or months. */
+.wf-rail-age {
+  font-size: 0.7rem;
+  opacity: 0.55;
+}
+
+/* A skip-forward edge arcs over the node band and a backward edge under it, so
+   neither is drawn through a state it has nothing to do with. Dimmed so the
+   column-to-column flow stays the thing you read first. */
+.wf-edge-skip {
+  opacity: 0.55;
+  stroke-dasharray: 4 3;
+}

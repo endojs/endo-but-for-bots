@@ -10,6 +10,11 @@ import { layoutGraph } from './layout.js';
 
 const NODE_WIDTH = 150;
 const NODE_HEIGHT = 40;
+// Edges that span more than one column, and edges that go backwards, are routed
+// OUTSIDE the node band rather than straight across it — a straight chord from
+// column 1 to column 4 otherwise runs through whatever sits in columns 2 and 3,
+// which reads as a path going through an unrelated state.
+const ARC_MARGIN = 64;
 
 /**
  * The ids of every active node in a run configuration: the top-level
@@ -77,11 +82,30 @@ export const StatechartView = ({
     (pending ?? []).map(record => normalize((record.path ?? []).join('/'))),
   );
 
+  const bandHeight = Math.max(height, 120);
+  const drawn = graph.edges.filter(edge => {
+    const from = positions[edge.from];
+    const to = positions[edge.to];
+    return from !== undefined && to !== undefined && !edge.internal;
+  });
+  const hasOver = drawn.some(edge => {
+    const from = positions[edge.from];
+    const to = positions[edge.to];
+    return to.layer > from.layer + 1;
+  });
+  const hasUnder = drawn.some(edge => {
+    const from = positions[edge.from];
+    const to = positions[edge.to];
+    return to.layer <= from.layer;
+  });
+  const top = hasOver ? -ARC_MARGIN : 0;
+  const viewHeight = bandHeight - top + (hasUnder ? ARC_MARGIN : 0);
+
   return h(
     'svg',
     {
       class: 'wf-statechart',
-      viewBox: `0 0 ${width} ${Math.max(height, 120)}`,
+      viewBox: `0 ${top} ${width} ${viewHeight}`,
       role: 'img',
       'aria-label': `Statechart for ${chart.name}`,
     },
@@ -97,23 +121,40 @@ export const StatechartView = ({
         const x2 = to.x;
         const y2 = to.y + NODE_HEIGHT / 2;
         const backward = to.layer <= from.layer;
-        const midY = backward ? Math.max(y1, y2) + NODE_HEIGHT : (y1 + y2) / 2;
+        // A skip-forward edge arcs over the top of the band; a backward edge
+        // arcs under the bottom. Only same-column-to-next-column edges take the
+        // direct route, where there is nothing in between to cross.
+        const skips = !backward && to.layer > from.layer + 1;
+        let d;
+        let labelY;
+        if (backward) {
+          const under = bandHeight + ARC_MARGIN / 2;
+          d = `M ${x1} ${y1} C ${x1 + 40} ${under}, ${x2 - 40} ${under}, ${x2} ${y2}`;
+          labelY = under - 4;
+        } else if (skips) {
+          const over = top + ARC_MARGIN / 2;
+          d = `M ${x1} ${y1} C ${x1 + 40} ${over}, ${x2 - 40} ${over}, ${x2} ${y2}`;
+          labelY = over - 4;
+        } else {
+          d = `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`;
+          labelY = (y1 + y2) / 2 - 4;
+        }
         return h(
           'g',
           { key: `${edge.from}-${edge.to}-${edge.type}-${edge.index}` },
           [
             h('path', {
-              class: backward ? 'wf-edge wf-edge-back' : 'wf-edge',
-              d: backward
-                ? `M ${x1} ${y1} C ${x1 + 40} ${midY}, ${x2 - 40} ${midY}, ${x2} ${y2}`
-                : `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`,
+              class: backward
+                ? 'wf-edge wf-edge-back'
+                : `wf-edge${skips ? ' wf-edge-skip' : ''}`,
+              d,
             }),
             h(
               'text',
               {
                 class: 'wf-edge-label',
                 x: (x1 + x2) / 2,
-                y: midY - 4,
+                y: labelY,
               },
               edge.guarded ? `${edge.type} ✓?` : edge.type,
             ),
