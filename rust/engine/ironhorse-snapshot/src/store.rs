@@ -2248,6 +2248,14 @@ pub fn validate_store(
         manifest.chunk_len as usize,
     )
     .map_err(StoreError::Snapshot)?;
+    // The symbol-key counter must clear the name table — the store
+    // mirror of `read_machine`'s check (a counter at or below the
+    // table aliases a symbol id onto a string key at restore).
+    if (small.symbols.next_id as usize) <= small.names.len() {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "symbol-key table: counter inside the name table",
+        )));
+    }
 
     // Accounting: every record is live or on the free list. The count
     // side uses the manifest's free_len (the list itself is segment
