@@ -57,12 +57,8 @@ Implemented:
   TTL, single-use semantics, constant-time signature comparison
   helper, and a Node-backed `CryptoPowers` adapter
   (`src/node-crypto-powers.js`).
-- Bootstrap sock path resolver
-  (`src/sock-paths.js`) covering `/run/endo-gateway/bootstrap.sock`
-  (system service), `${XDG_RUNTIME_DIR}/endo-gateway/...` (user
-  Linux), the macOS `Library/Application Support` variant, the
-  `${TMPDIR}/...` fallback, and `ENDO_GATEWAY_BOOTSTRAP_SOCK`
-  operator override.
+- Gateway registrar sock path resolution is provided by `@endo/where`'s
+  `whereEndoGatewayRegistrarSock`.
 
 Deferred to follow-on PRs:
 

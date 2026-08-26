@@ -54,13 +54,6 @@ export {
   makeGatewayBootstrap,
 } from './src/bootstrap.js';
 
-export {
-  resolveBootstrapSocketPath,
-  BOOTSTRAP_SOCKET_BASENAME,
-  SYSTEM_RUNTIME_DIR_LINUX,
-  USER_RUNTIME_SUBDIR,
-} from './src/sock-paths.js';
-
 /** @import { GatewayConfig, BindAddress, GatewayPowers, Gateway } from './src/types.js' */
 
 const GatewayInterface = M.interface('Gateway', {

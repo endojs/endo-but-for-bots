@@ -82,23 +82,6 @@ export type BootstrapDeps = {
   ttlMs?: number;
 };
 
-export type BootstrapPathInfo = {
-  home: string;
-  user: string;
-  temp: string;
-};
-
-export type BootstrapPathResolution = {
-  path: string;
-  source:
-    | 'override'
-    | 'system'
-    | 'user-xdg'
-    | 'user-darwin'
-    | 'user-tmpdir';
-  kind: 'unix-socket';
-};
-
 export type BindAddress = {
   /**
    * A non-empty hostname or IP literal, with no surrounding IPv6
