@@ -6,6 +6,12 @@ import { M } from '@endo/patterns';
  * Runtime `M.interface()` guards for the `@endo/sandbox` capability
  * surface. The compile-time shapes live in `./types.d.ts`; these guards
  * are what `makeExo` enforces at the CapTP boundary.
+ *
+ * This module also carries the declarative backend-capability table that
+ * callers need in order to reject an unconstructible profile before a
+ * driver ever sees it. It deliberately imports nothing but `M`, so a
+ * policy layer can consume it without pulling a `node:` builtin into an
+ * XS bundle.
  */
 
 // ---------------------------------------------------------------------------
@@ -46,6 +52,35 @@ const RootfsSpecShape = M.or(
   M.splitRecord({ kind: 'oci', ref: M.string() }),
 );
 harden(RootfsSpecShape);
+
+/**
+ * Rootfs kinds each implemented backend can actually materialise, keyed
+ * by `BackendName`.
+ *
+ * The drivers already reject the pairs they cannot serve — see
+ * `bwrap.js`'s `oci` refusal and `podman.js`'s "only supports rootfs:
+ * { kind: 'oci', ref }" — but they can only do so at `prepareSlice`
+ * time, long after a policy layer has validated and persisted the
+ * profile. Publishing the table lets that layer refuse
+ * `{ backend: 'podman', rootfs: { kind: 'host-bind' } }` up front,
+ * with an error about the profile rather than about the driver.
+ *
+ * A backend absent from this table carries no constraint: it is either
+ * unimplemented (`lima`, `containerization`, `wsl`) or the `'auto'`
+ * selector, whose resolution is a runtime property of the host. Callers
+ * should read a missing entry as "not known to be impossible" and let
+ * `make()` report the real availability.
+ *
+ * `'mount'` is the resolved kind a `Mount` capability normalizes to; it
+ * is not spelled in `RootfsSpecShape` because callers pass the cap
+ * itself.
+ *
+ * @type {Readonly<Record<string, readonly string[] | undefined>>}
+ */
+const backendRootfsKinds = harden({
+  bwrap: ['host-bind', 'minimal', 'mount'],
+  podman: ['oci'],
+});
 
 const MountSpecShape = M.splitRecord(
   {
@@ -225,7 +260,9 @@ export const MountHandleInterface = M.interface('SandboxMount', {
 harden(MountHandleInterface);
 
 // ---------------------------------------------------------------------------
-// Re-exported shape fragments — useful for tests / driver authors
+// Re-exported shape fragments and the backend-capability table — useful
+// for tests, driver authors, and policy layers that validate a profile
+// before a driver sees it.
 // ---------------------------------------------------------------------------
 
 export {
@@ -244,4 +281,5 @@ export {
   SeccompPolicyShape,
   SpawnOptsShape,
   TerminationSignalShape,
+  backendRootfsKinds,
 };

@@ -18,6 +18,7 @@ import {
   EnvShape,
   MountModeShape,
   NetworkProfileShape,
+  backendRootfsKinds,
 } from '@endo/sandbox/interfaces.js';
 
 import { getMountBacking } from './mount.js';
@@ -64,6 +65,11 @@ export const SandboxEscalationRecordShape = M.splitRecord({
   sandboxId: M.string(),
   reason: EscalationReasonShape,
   capability: NonEmptyStringShape,
+  // The driver that took the escalation, once one has been selected;
+  // the profile's selector when the attempt failed before selection.
+  // The distinction is legible in the record: `'auto'` here means no
+  // backend was ever chosen, because a resolved slice always reports a
+  // concrete driver name.
   backend: BackendSelectorShape,
   network: NetworkProfileShape,
   projections: M.arrayOf(
@@ -332,6 +338,34 @@ export const normalizeSandboxProfile = (profile, { resolveMountId }) => {
     ),
   });
 
+  const normalizedBackend = /** @type {SandboxFormulaProfile['backend']} */ (
+    backend === undefined
+      ? 'auto'
+      : checked(
+          backend,
+          BackendSelectorShape,
+          'provideSandbox: profile.backend',
+        )
+  );
+
+  // A named backend that cannot materialise this rootfs is refused here
+  // rather than at `prepareSlice`. Both are structured errors, but only
+  // this one arrives before the formula is persisted, and only this one
+  // can name the field the caller has to change: the driver sees a
+  // resolved `SliceSpec` and can only report its own constraint. A
+  // backend absent from the table — `'auto'`, or one of the
+  // unimplemented names — carries no constraint, so availability stays
+  // `make()`'s verdict to deliver.
+  const supportedRootfsKinds = backendRootfsKinds[normalizedBackend];
+  if (
+    supportedRootfsKinds !== undefined &&
+    !supportedRootfsKinds.includes(normalizedRootfs.kind)
+  ) {
+    throw makeError(
+      X`provideSandbox: backend ${q(normalizedBackend)} cannot materialise rootfs kind ${q(normalizedRootfs.kind)}; it supports ${q([...supportedRootfsKinds])}`,
+    );
+  }
+
   return harden({
     rootfs: normalizedRootfs,
     mounts: harden(normalizedMounts),
@@ -344,15 +378,7 @@ export const normalizeSandboxProfile = (profile, { resolveMountId }) => {
             'provideSandbox: profile.network',
           )
     ),
-    backend: /** @type {SandboxFormulaProfile['backend']} */ (
-      backend === undefined
-        ? 'auto'
-        : checked(
-            backend,
-            BackendSelectorShape,
-            'provideSandbox: profile.backend',
-          )
-    ),
+    backend: normalizedBackend,
     seccomp: /** @type {'default' | 'unconfined'} */ (
       seccomp === undefined
         ? 'default'
