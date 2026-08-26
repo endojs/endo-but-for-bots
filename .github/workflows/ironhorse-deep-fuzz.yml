@@ -113,12 +113,19 @@ jobs:
         # Accumulate failures instead of stopping at the first
         # crashing target, so one red run surfaces every crashing
         # target's artifact at once. A scheduled run uses the default
-        # budget; a dispatch can widen or narrow it.
+        # budget; a dispatch can widen or narrow it. The dispatch
+        # input reaches the script through env, never template
+        # expansion inside `run` (zizmor: template-injection), and is
+        # digit-checked before use.
+        env:
+          FUZZ_BUDGET: ${{ github.event.inputs.seconds_per_target || '900' }}
         run: |
-          budget='${{ github.event.inputs.seconds_per_target || '900' }}'
+          case "$FUZZ_BUDGET" in
+            *[!0-9]*|'') echo "::error::seconds_per_target must be a positive integer"; exit 1 ;;
+          esac
           rc=0
           for t in snapshot_decoder snapshot_roundtrip bytecode_decoder parser; do
-            cargo +"$FUZZ_TOOLCHAIN" fuzz run "$t" -- -max_total_time="$budget" -print_final_stats=1 || rc=1
+            cargo +"$FUZZ_TOOLCHAIN" fuzz run "$t" -- -max_total_time="$FUZZ_BUDGET" -print_final_stats=1 || rc=1
           done
           exit "$rc"
 
