@@ -121,3 +121,124 @@ test('the same chart always lays out the same way', t => {
   };
   t.deepEqual(layoutGraph(graph, 'a'), layoutGraph(graph, 'a'));
 });
+
+// The view draws a node as a 150x40 box at each position, and a routed edge as
+// a polyline through `routes`. This is the property the routing exists for.
+const NODE_WIDTH = 150;
+const NODE_HEIGHT = 40;
+
+/**
+ * @param {{x: number, y: number}} a
+ * @param {{x: number, y: number}} b
+ * @param {{x: number, y: number}} box
+ */
+const segmentEntersBox = (a, b, box) => {
+  for (let step = 0; step <= 40; step += 1) {
+    const x = a.x + (b.x - a.x) * (step / 40);
+    const y = a.y + (b.y - a.y) * (step / 40);
+    if (
+      x > box.x &&
+      x < box.x + NODE_WIDTH &&
+      y > box.y &&
+      y < box.y + NODE_HEIGHT
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
+test('a routed edge never passes through an unrelated state', t => {
+  // The deploy charts' shape: several states converge on one late compensation
+  // state, so their edges span most of the diagram. Drawn as straight chords
+  // they crossed whatever sat in between.
+  const graph = {
+    nodes: [
+      { id: 'pin' },
+      { id: 'prebuild' },
+      { id: 'build' },
+      { id: 'await-approval' },
+      { id: 'apply' },
+      { id: 'verify' },
+      { id: 'unpinning' },
+      { id: 'done' },
+    ],
+    edges: [
+      { from: 'pin', to: 'prebuild' },
+      { from: 'prebuild', to: 'build' },
+      { from: 'build', to: 'await-approval' },
+      { from: 'await-approval', to: 'apply' },
+      { from: 'apply', to: 'verify' },
+      { from: 'verify', to: 'done' },
+      { from: 'prebuild', to: 'unpinning' },
+      { from: 'build', to: 'unpinning' },
+      { from: 'await-approval', to: 'unpinning' },
+    ],
+  };
+  const { positions, routes } = layoutGraph(graph, 'pin');
+  const routed = Object.keys(routes);
+  t.true(routed.length > 0, 'the long edges are routed, not drawn as chords');
+
+  for (const index of routed) {
+    const edge = graph.edges[index];
+    const points = [
+      {
+        x: positions[edge.from].x + NODE_WIDTH,
+        y: positions[edge.from].y + NODE_HEIGHT / 2,
+      },
+      ...routes[index],
+      { x: positions[edge.to].x, y: positions[edge.to].y + NODE_HEIGHT / 2 },
+    ];
+    for (let i = 1; i < points.length; i += 1) {
+      for (const node of graph.nodes) {
+        if (node.id === edge.from || node.id === edge.to) continue;
+        t.false(
+          segmentEntersBox(points[i - 1], points[i], positions[node.id]),
+          `${edge.from} -> ${edge.to} must not cross ${node.id}`,
+        );
+      }
+    }
+  }
+});
+
+test('parallel transitions share one lane', t => {
+  // Three ways from `build` to `unpinning` are three labels along one path, not
+  // three paths; a lane each turns the diagram into empty vertical space.
+  const graph = {
+    nodes: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }],
+    edges: [
+      { from: 'a', to: 'b' },
+      { from: 'b', to: 'c' },
+      { from: 'c', to: 'd' },
+      { from: 'a', to: 'd', type: 'one' },
+      { from: 'a', to: 'd', type: 'two' },
+      { from: 'a', to: 'd', type: 'three' },
+    ],
+  };
+  const { routes } = layoutGraph(graph, 'a');
+  const lanes = new Set(
+    Object.values(routes).map(route => JSON.stringify(route)),
+  );
+  t.is(Object.keys(routes).length, 3, 'all three are routed');
+  t.is(lanes.size, 1, 'and they share a single lane');
+});
+
+test('layout does not mutate the graph it is given', t => {
+  // `renderGraph`'s output is hardened in production; routing adds edges for
+  // its own ordering and must do that on a copy.
+  const edges = harden([
+    harden({ from: 'a', to: 'b' }),
+    harden({ from: 'b', to: 'c' }),
+    harden({ from: 'a', to: 'c' }),
+  ]);
+  const graph = harden({
+    nodes: harden([
+      harden({ id: 'a' }),
+      harden({ id: 'b' }),
+      harden({ id: 'c' }),
+    ]),
+    edges,
+  });
+  t.notThrows(() => layoutGraph(graph, 'a'));
+  t.is(edges.length, 3, 'the caller keeps its own edges');
+});
