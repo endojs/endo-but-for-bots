@@ -8,6 +8,14 @@
  * stable in-layer ordering suffices — no external layout dependency,
  * and the same input always yields the same picture. Nested and region
  * states participate flat, named by their path ids.
+ *
+ * An edge that spans more than one column is ROUTED rather than drawn as
+ * a chord: it gets a dummy node in each column it passes through, those
+ * dummies take part in the in-layer ordering like any other node, and
+ * the edge is returned as a polyline through them. This is what keeps a
+ * long edge out of the middle of an unrelated state — the compensation
+ * edges in the deploy charts all converge on one late state, and as
+ * chords they crossed most of the diagram.
  */
 
 import harden from '@endo/harden';
@@ -107,6 +115,52 @@ export const layoutGraph = (graph, initial) => {
     byLayer.set(layer, row);
   }
 
+  // Dummy nodes for multi-column edges. Each gets a slot in every column it
+  // crosses, so the ordering below moves it out of the way of real states just
+  // as it would any other node, and the edge is drawn through those slots
+  // instead of straight over whatever lies between. Backward edges are left
+  // alone: there are few of them and they arc under the band in the view.
+  /** @type {Map<number, string[]>} */
+  const routeIds = new Map();
+  // Parallel transitions between the same pair share one lane: three ways of
+  // getting from `build` to `unpinning` are three labels along one path, not
+  // three paths. Without this the deploy charts grow a lane per transition and
+  // the diagram becomes mostly empty vertical space.
+  /** @type {Map<string, string[]>} */
+  const laneByPair = new Map();
+  edges.forEach((edge, index) => {
+    const fromLayer = layers.get(edge.from);
+    const toLayer = layers.get(edge.to);
+    if (fromLayer === undefined || toLayer === undefined) return;
+    if (toLayer <= fromLayer + 1) return;
+    const pair = `${edge.from}\u0000${edge.to}`;
+    let ids = laneByPair.get(pair);
+    if (ids === undefined) {
+      ids = [];
+      for (let layer = fromLayer + 1; layer < toLayer; layer += 1) {
+        const id = `~route/${laneByPair.size}/${layer}`;
+        layers.set(id, layer);
+        const row = byLayer.get(layer) ?? [];
+        row.push(id);
+        byLayer.set(layer, row);
+        ids.push(id);
+      }
+      laneByPair.set(pair, ids);
+    }
+    routeIds.set(index, ids);
+  });
+  // The ordering sweeps below need each dummy chained to its own route so it
+  // follows the edge rather than drifting. Built as a COPY: `graph.edges` comes
+  // from the caller (hardened, in production) and is not ours to extend.
+  const orderingEdges = [...edges];
+  for (const [pair, ids] of laneByPair) {
+    const [from, to] = pair.split('\u0000');
+    const chain = [from, ...ids, to];
+    for (let i = 0; i < chain.length - 1; i += 1) {
+      orderingEdges.push({ from: chain[i], to: chain[i + 1] });
+    }
+  }
+
   // In-layer ordering. Insertion order is whatever `renderGraph` happened to
   // emit, which puts a state's successors wherever they fall and makes edges
   // cross for no reason. Sort each layer by the average position of its
@@ -130,7 +184,7 @@ export const layoutGraph = (graph, initial) => {
    */
   const barycentre = (id, forward) => {
     const neighbours = [];
-    for (const edge of edges) {
+    for (const edge of orderingEdges) {
       const other = forward
         ? edge.to === id && edge.from !== id && edge.from
         : edge.from === id && edge.to !== id && edge.to;
@@ -188,7 +242,31 @@ export const layoutGraph = (graph, initial) => {
     });
     height = Math.max(height, 20 + row.length * rowHeight);
   }
+  // Polyline for each routed edge. Two points per column crossed — the lane's
+  // entry and exit — so the line runs HORIZONTALLY across a column at its
+  // lane's height and does all its climbing in the gutters between columns.
+  // A single mid-column point instead lets the approach cut diagonally through
+  // the box of whatever sits in that column, which is the crossing this is
+  // meant to remove. The view adds the endpoints on the node borders.
+  const nodeWidth = 150;
+  /** @type {Record<number, Array<{ x: number, y: number }>>} */
+  const routes = {};
+  for (const [index, ids] of routeIds) {
+    const points = [];
+    for (const id of ids) {
+      const at = positions[id];
+      points.push(harden({ x: at.x, y: at.y + 20 }));
+      points.push(harden({ x: at.x + nodeWidth, y: at.y + 20 }));
+    }
+    routes[index] = harden(points);
+  }
+
   const width = 40 + (Math.max(0, ...byLayer.keys()) + 1) * layerWidth;
-  return harden({ positions: harden(positions), width, height });
+  return harden({
+    positions: harden(positions),
+    routes: harden(routes),
+    width,
+    height,
+  });
 };
 harden(layoutGraph);
