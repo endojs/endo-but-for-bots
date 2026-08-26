@@ -6,6 +6,7 @@ export {
   formAsks,
   matchInboxMessage,
 } from './src/ApprovalPanel.js';
+export { relativeAge, newestFirst } from './src/relative-age.js';
 export { StatechartView } from './src/StatechartView.js';
 export { TimelineView } from './src/TimelineView.js';
 export { layoutGraph } from './src/layout.js';
