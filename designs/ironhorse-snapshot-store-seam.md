@@ -1717,16 +1717,23 @@ rather than work items.
   as result-agreement-only in `resource_management.rs` until the
   dispose-path metering is calibrated like the async-generator
   reject residue above.
-- [ ] Symbol-key id-space EXHAUSTION at the meet: symbol keys mint
+- [x] ~~Symbol-key id-space EXHAUSTION at the meet: symbol keys mint
   top-down from `u16::MAX` while the name table grows bottom-up, and
   the MEET — same class as the old shared counter's saturation —
-  trips a `debug_assert` in debug builds but ALIASES in release
-  (`intern_symbol_key` stops decrementing and hands out the same id;
-  relink's `TableFull` fails closed only for the name-growth
-  direction). ~64k combined keys is far past any observed workload,
-  but the honest lift is a release-visible refusal (a `Halt`, like
-  the relink edge) or a widened id type — an engine-wide format
-  decision to take deliberately.
+  trips a `debug_assert` in debug builds but ALIASES in release~~
+  Done (release-visible refusal, 2026-08-27): the meet branches of
+  `append_name_key`/`intern_symbol_key` now set an
+  `id_space_exhausted` poison latch instead of debug-asserting; the
+  dispatch loop halts `Unsupported("property-key:id-space-exhausted")`
+  before the next instruction (no aliased id is guest-observable —
+  the managed lifecycle rewinds the aborted crank), the latch holds
+  for the machine's lifetime, and `is_quiescent()` reports a
+  poisoned machine non-quiescent so every persist gate refuses it.
+  Relink's `TableFull` still fails closed for the name-growth
+  direction. Locked by `id_space_exhaustion.rs` (66k-key
+  `JSON.parse` fixture; asserted in release mode too). The widened
+  id type remains available as a future format decision if ~64k
+  combined keys ever binds a real workload.
 - The async-generator START-REJECT boundary is not yet
   oracle-exact in COMPUTRONS (results agree): −20 versus XS when
   the rejecting generator's `next()` is observed directly, −26 on

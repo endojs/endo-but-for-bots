@@ -3967,10 +3967,9 @@ pub struct Interp {
     /// up from 1 (string keys — program symbols and runtime-interned names
     /// alike — live in [`Self::symbol_names`], where they persist via the
     /// NAME row). The two spaces meeting is the id-space-exhaustion
-    /// hazard: minting then saturates at the boundary and aliases, the
-    /// same failure class the old shared counter had at `u16::MAX`
-    /// (recorded in the design's Remaining ledger; a fail-closed
-    /// conversion needs fallible intern plumbing at ~50 call sites).
+    /// hazard — the same failure class the old shared counter had at
+    /// `u16::MAX` — handled by the [`Self::id_space_exhausted`] poison
+    /// latch: the meet halts the machine by name instead of aliasing.
     next_symbol_key_id: u16,
     /// High-water mark of the name table as of the last
     /// `install_intrinsic_bindings` pass (wave-6 W6-7). The relink/eval
@@ -3979,6 +3978,17 @@ pub struct Interp {
     /// RUNTIME (a computed string key) has an id no install has seen, and
     /// filtering by the unit's own table length refused it forever.
     installed_names_len: usize,
+    /// Poison latch: the two property-key id spaces met (the name table
+    /// growing up collided with [`Self::next_symbol_key_id`] minting
+    /// down), so any further intern would alias an existing key. Set by
+    /// the meet branches of [`Self::append_name_key`] and
+    /// [`Self::intern_symbol_key`]; the dispatch loop halts with a named
+    /// refusal (`property-key:id-space-exhausted`) before the NEXT
+    /// instruction, so no guest program observes an aliased id. The latch
+    /// is for the machine's lifetime — the id space is genuinely full —
+    /// and [`Self::is_quiescent`] reports a poisoned machine
+    /// non-quiescent so the persist gates refuse it.
+    id_space_exhausted: bool,
     /// The program's symbol names indexed by `id - 1` (the decoded symbols
     /// atom, verbatim), so a function definition can recover its own name
     /// string for `Function.prototype.toString`.
@@ -4846,6 +4856,7 @@ impl Interp {
             default_keys: crate::default_keys::DEFAULT_KEYS.iter().copied().collect(),
             next_symbol_key_id: u16::MAX,
             installed_names_len: 0,
+            id_space_exhausted: false,
             symbol_names: Vec::new(),
             error_data: std::collections::HashMap::new(),
             wrapper_data: std::collections::HashMap::new(),
@@ -8379,6 +8390,7 @@ impl Interp {
             && self.async_run_stack.is_empty()
             && self.async_gen_run_stack.is_empty()
             && self.exception.kind == Kind::Undefined
+            && !self.id_space_exhausted
     }
 
     /// A loop-closing metering check (`mxCheckMeter`). Consults the host
@@ -8970,6 +8982,16 @@ impl Interp {
                 && self.slots.live_count() >= BOUNDED_RUN_SLOT_CEILING
             {
                 return Halt::StepLimit(self.n_dispatched);
+            }
+            // Property-key id-space poison latch (wave-6 Remaining item):
+            // an intern that would alias sets the flag instead of handing
+            // out a duplicate id; the halt here fires before the next
+            // instruction so no aliased read or write is guest-observable.
+            // The latch holds for the machine's lifetime — every later
+            // crank halts identically — and `is_quiescent` keeps the
+            // poisoned machine out of the persist gates.
+            if self.id_space_exhausted {
+                return Halt::Unsupported("property-key:id-space-exhausted");
             }
             if pc >= len {
                 return Halt::Decode(format!("pc {} past end {}", pc, len));
@@ -32601,7 +32623,12 @@ impl Interp {
     fn append_name_key(&mut self, name: &str) -> u16 {
         let next = self.symbol_names.len().saturating_add(1);
         if next >= self.next_symbol_key_id as usize {
-            debug_assert!(false, "property-key id space exhausted");
+            // The id spaces met: poison the machine and hand the CURRENT
+            // operation a saturated placeholder. The placeholder aliases,
+            // but the dispatch loop halts on the latch before the next
+            // instruction and the managed lifecycle rewinds the crank, so
+            // the alias is never guest-observable or persisted.
+            self.id_space_exhausted = true;
             let id = self.next_symbol_key_id;
             self.symbol_ids.insert(name.to_string(), id);
             return id;
@@ -32648,7 +32675,10 @@ impl Interp {
             return id;
         }
         if (self.next_symbol_key_id as usize) <= self.symbol_names.len().saturating_add(1) {
-            debug_assert!(false, "property-key id space exhausted");
+            // Same poison latch as `append_name_key`: the placeholder id
+            // aliases, but the loop-top halt fires before the next
+            // instruction, so it never leaks to a completed crank.
+            self.id_space_exhausted = true;
             let id = self.next_symbol_key_id;
             self.symbol_key_ids.insert(desc, id);
             return id;

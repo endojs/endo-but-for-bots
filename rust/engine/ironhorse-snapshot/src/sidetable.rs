@@ -58,6 +58,10 @@
 //! - `direct_eval_hoist`, `eval_direct`, `active_segment`,
 //!   `top_level_code` — the eval bridge's per-crank registers,
 //!   re-established at every run entry and save/restored around units.
+//! - `id_space_exhausted` — the property-key id-space poison latch; the
+//!   dispatch loop halts on it before the next instruction and
+//!   `is_quiescent` refuses a poisoned machine, so it is provably false
+//!   at every boundary a snapshot can be taken from.
 //!
 //! The registry of ALL these classifications is now MECHANICAL:
 //! [`tests::ledger_classification_reconciles_with_the_interp_struct`]
@@ -584,6 +588,12 @@ mod tests {
             "pending_new_target", "exception", "frame_slots", "locals", "id_map",
             "resume_status", "callback_return_depth", "env", "direct_eval_hoist",
             "eval_direct", "active_segment", "top_level_code", "result", "strict",
+            // Poison latch for the property-key id-space meet: provably
+            // never set at a persistable boundary — the dispatch loop
+            // halts on it before the next instruction and `is_quiescent`
+            // reports the poisoned machine non-quiescent, so no snapshot
+            // ever needs to carry it.
+            "id_space_exhausted",
         ];
         const HOST_WIRING: &[&str] = &[
             "meter_host", "source_compiler", "cost", "step_limit", "n_dispatched",
