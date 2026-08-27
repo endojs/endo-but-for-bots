@@ -88,9 +88,9 @@ pub enum MachineSnapshotError {
     /// the same refusal the store verbs make).
     DynamicSegmentsUnsupported,
     /// The heap holds live state in a SILENT-WRONG Pending side table
-    /// (wave-6 W6-9: proxies, accessors, typed arrays, error data) - a
-    /// resumed machine would answer wrong values, so persist refuses by
-    /// name until the row's atom lands.
+    /// (wave-6 W6-9: proxies, accessors, typed arrays) - a resumed
+    /// machine would answer wrong values, so persist refuses by name
+    /// until the row's atom lands (error data graduated to `ERRD`).
     PendingStateUnsupported { row: &'static str },
 }
 
@@ -222,7 +222,7 @@ impl MachineSnapshot for Interp {
         // symbols and runtime-interned names alike — travel inside the
         // NAME table since the id-space unification, so the KEYS atom
         // is retired and travels empty.
-        let (arrays, collections, registry) = side_tables_of(self);
+        let (arrays, collections, registry, errors) = side_tables_of(self);
         let (next_id, pairs) = self.symbol_key_table();
         MachineImage::from_arenas(
             signature.clone(),
@@ -234,20 +234,21 @@ impl MachineSnapshot for Interp {
             crate::image::SymbolKeyImage { next_id, pairs },
         )
         .with_meter(self.meter_state())
-        .with_side_tables(arrays, collections, registry)
+        .with_side_tables(arrays, collections, registry, errors)
     }
 }
 
-/// The machine's three serialized side-table views (ledger rows
-/// `Arrays`/`Collections`/`SymbolRegistry`), converted from the vm's
-/// tuple snapshots into the image structs, in the vm's canonical
-/// (ascending) order.
+/// The machine's four serialized side-table views (ledger rows
+/// `Arrays`/`Collections`/`SymbolRegistry`/`ErrorData`), converted
+/// from the vm's tuple snapshots into the image structs, in the vm's
+/// canonical (ascending) order.
 fn side_tables_of(
     interp: &Interp,
 ) -> (
     Vec<crate::image::ArrayImage>,
     Vec<crate::image::CollectionImage>,
     Vec<crate::image::RegistryImage>,
+    Vec<crate::image::ErrorImage>,
 ) {
     let arrays = interp
         .arrays_snapshot()
@@ -275,7 +276,17 @@ fn side_tables_of(
         .into_iter()
         .map(|(key, descriptor)| crate::image::RegistryImage { key, descriptor })
         .collect();
-    (arrays, collections, registry)
+    let errors = interp
+        .errors_snapshot()
+        .into_iter()
+
+        .map(|(owner, name, message)| crate::image::ErrorImage {
+            owner,
+            name: name.to_string(),
+            message,
+        })
+        .collect();
+    (arrays, collections, registry, errors)
 }
 
 /// Reinstate the ledger side tables on a restored machine from their
@@ -289,6 +300,7 @@ fn restore_side_tables(
     arrays: Vec<crate::image::ArrayImage>,
     collections: Vec<crate::image::CollectionImage>,
     registry: Vec<crate::image::RegistryImage>,
+    errors: Vec<crate::image::ErrorImage>,
 ) {
     let ok = interp.restore_bulk_side_tables(
         arrays
@@ -302,6 +314,16 @@ fn restore_side_tables(
         registry.into_iter().map(|r| (r.key, r.descriptor)).collect(),
     );
     debug_assert!(ok, "validated image cannot carry an unknown kind code");
+    // The error-data rows (name validated at decode against the
+    // engine's closed error-name set, so this cannot fail on a
+    // validated image either).
+    let ok = interp.restore_error_data(
+        errors
+            .into_iter()
+            .map(|e| (e.owner, e.name, e.message))
+            .collect(),
+    );
+    debug_assert!(ok, "validated image cannot carry an unknown error name");
 }
 
 /// Rebuild a live [`Interp`] from a decoded [`MachineImage`]: a fresh
@@ -330,6 +352,7 @@ pub fn image_to_interp(image: MachineImage) -> Interp {
         image.arrays,
         image.collections,
         image.registry,
+        image.errors,
     );
     interp
 }
@@ -545,10 +568,11 @@ fn manifest_of(
 /// The machine's small state, mirroring [`MachineSnapshot::snapshot_image`]
 /// exactly (the KEYS section is retired — string keys travel inside the
 /// NAME table since the id-space unification; the ledger rows — arrays,
-/// collections, registry — travel since schema 7, and the symbol-key
-/// table travels in the symbols section).
+/// collections, registry since schema 7 and errors since schema 9 —
+/// travel alongside, and the symbol-key table travels in the symbols
+/// section).
 fn small_state_of(interp: &Interp) -> SmallState {
-    let (arrays, collections, registry) = side_tables_of(interp);
+    let (arrays, collections, registry, errors) = side_tables_of(interp);
     let (next_id, pairs) = interp.symbol_key_table();
     SmallState {
         stack: interp.stack_slots().to_vec(),
@@ -560,6 +584,7 @@ fn small_state_of(interp: &Interp) -> SmallState {
         arrays,
         collections,
         registry,
+        errors,
     }
 }
 
@@ -1238,7 +1263,13 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     // The ledger side tables ride the small state, so a LAZY resume
     // restores them eagerly like everything else small — only arena
     // rows fault on demand.
-    restore_side_tables(&mut interp, small.arrays, small.collections, small.registry);
+    restore_side_tables(
+        &mut interp,
+        small.arrays,
+        small.collections,
+        small.registry,
+        small.errors,
+    );
     Ok(StoreSession {
         gen_dirty: std::collections::BTreeSet::new(),
         interp,

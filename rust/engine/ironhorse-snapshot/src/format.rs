@@ -61,6 +61,11 @@ pub const COLL: FourCc = FourCc(*b"COLL");
 /// which keep their XS meanings (runtime-interned property keys /
 /// well-known symbol identities) for the ledger rows still pending.
 pub const REGY: FourCc = FourCc(*b"REGY");
+/// `ERRD` — the error-data side table (ledger `ErrorData` row): per
+/// Error instance, the construction-time constructor name and optional
+/// message the abort-value render consults. Ironhorse-specific;
+/// emitted only when non-empty (see [`ARRY`]).
+pub const ERRD: FourCc = FourCc(*b"ERRD");
 
 /// The Ironhorse discriminator embedded at the head of the `VERS` atom. An
 /// Ironhorse snapshot is never mistaken for an XS one and vice versa

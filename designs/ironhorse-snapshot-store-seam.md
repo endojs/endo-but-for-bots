@@ -1695,16 +1695,38 @@ rather than work items.
   bytecode — which is also what makes cross-crank function
   references real (the `functions` row's other half). Pinned from
   both sides in `dynamic_segments.rs`.
-- [ ] Ledger G3 — carry the four SILENT-WRONG rows. The wave-6 fix
+- [ ] Ledger G3 — carry the SILENT-WRONG rows. The wave-6 fix
   pass gated them (`PendingStateUnsupported{row}` at every persist
   verb: `proxies`, `accessors`, the typed-array family, `error_data`
   — a resumed heap holding one answered wrong values, and the
   visible-fail rows are protected only by per-native `this` guards),
   so persisting such heaps now refuses honestly. The lift is the G1
   pattern per row: an atom + small-state section + restore +
-  round-trip twins, retiring each gate as its row lands. `error_data`
-  is the cheapest (name + optional message) and the most common
-  refusal in real guest code, so it goes first.
+  round-trip twins, retiring each gate as its row lands.
+  - [x] `error_data` LANDED (2026-08-27, the first graduation): the
+    `ERRD` atom (owner-ascending `(owner, name, optional message)`,
+    name refused at decode outside the engine's closed
+    error-constructor set, emitted only when non-empty so the golden
+    blob pin held) + the tenth small-state section (store schema
+    v9; the 8→9 migration appends the one empty section header —
+    provably content-preserving, since the v8 gates refused any heap
+    holding a live row) + `errors_snapshot`/`restore_error_data` on
+    both resume paths + the bounds gate covering `ERRD` owners. The
+    gate arm is retired; `error_data_carry.rs` holds the
+    uninterrupted-vs-resumed twins (bite-checked: without the carry a
+    resumed `throw e` renders `[object Object]` where the continuous
+    machine renders `TypeError: boom`). En route the twins surfaced
+    and fixed a mainline vm defect: error constructors materialized
+    own `message`/`errors`/`error`/`suppressed` properties only when
+    the constructing crank happened to compile the name (XS's key
+    table is machine-global, so XS always sets them), and
+    `new SuppressedError(e, s, msg)` dropped its message argument
+    entirely — invisible to the single-crank oracle (naming `.message`
+    in source interns it), locked cross-crank in
+    `error_own_properties.rs`.
+  - [ ] `proxies`, `accessors`, the typed-array family: the same
+    pattern per row; typed arrays are the larger lift (buffer bytes
+    + view geometry).
 - The `combinators` / `from_async` / `promise_guards` tables are
   append-only for the machine's lifetime (wave-6 W6-19): settled
   entries are unreachable but never reclaimed — unbounded growth on
@@ -2393,7 +2415,8 @@ bite-checked by reverting the fix under the lock). Statuses:
   every persist verb refuses `PendingStateUnsupported{row}`;
   `pending_row_gates.rs` incl. the collected-instance and
   ordinary-heap controls; CARRYING these rows is the recorded G3
-  lift that retires each gate); W6-10 (`Interp::is_quiescent` +
+  lift that retires each gate — `error_data` graduated first, see
+  the Remaining ledger's G3 entry); W6-10 (`Interp::is_quiescent` +
   gates at begin/checkpoint and every blob verb;
   `persist_gates.rs` carries the tree's first contract-VIOLATION
   locks); W6-11 (`result`/`locals`/`id_map` clear at the completed

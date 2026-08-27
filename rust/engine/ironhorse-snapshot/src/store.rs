@@ -86,7 +86,7 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// sections EMPTY (a pure 12-byte suffix; a v6-era machine had
 /// nothing persisted in them by definition) and restamps the root for
 /// the changed small leaf.
-pub const STORE_SCHEMA_VERSION: u32 = 8;
+pub const STORE_SCHEMA_VERSION: u32 = 9;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -1322,20 +1322,24 @@ pub struct SmallState {
     pub collections: Vec<crate::image::CollectionImage>,
     /// The `Symbol.for` registry (schema 7; the `REGY` encoding).
     pub registry: Vec<crate::image::RegistryImage>,
+    /// The error-data side table (schema 9; the `ERRD` encoding).
+    pub errors: Vec<crate::image::ErrorImage>,
 }
 
 impl SmallState {
-    /// Serialize: nine sections, each `u32` length-prefixed, in the
+    /// Serialize: ten sections, each `u32` length-prefixed, in the
     /// fixed order stack, free list, keys, names, symbols, meter,
-    /// arrays, collections, registry (the last three since store
-    /// schema 7 — the side-table ledger; the 6→7 migration appends
-    /// them empty, a pure 12-byte suffix). Since store schema v4 the
+    /// arrays, collections, registry, errors (arrays/collections/
+    /// registry since store schema 7 — the side-table ledger; the 6→7
+    /// migration appends them empty, a pure 12-byte suffix — and
+    /// errors since schema 9, whose 8→9 migration appends its one
+    /// empty section the same way). Since store schema v4 the
     /// free-list section is always EMPTY in stored small state — the
     /// list lives in dirty-diffed segment rows (phase 9) — but the
     /// section slot stays so the layout is stable; the atom container
     /// path still carries the list via the image, not this encoding.
     pub fn encode(&self) -> Vec<u8> {
-        let sections: [Vec<u8>; 9] = [
+        let sections: [Vec<u8>; 10] = [
             encode_stack(&self.stack),
             encode_u32s(&[]),
             encode_strings(&self.keys),
@@ -1345,6 +1349,7 @@ impl SmallState {
             crate::image::encode_arrays(&self.arrays),
             crate::image::encode_collections(&self.collections),
             crate::image::encode_registry(&self.registry),
+            crate::image::encode_errors(&self.errors),
         ];
         let mut v = Vec::new();
         for s in sections {
@@ -1354,7 +1359,7 @@ impl SmallState {
         v
     }
 
-    /// Decode the nine sections. Every section length is bounds-checked
+    /// Decode the ten sections. Every section length is bounds-checked
     /// against the remaining payload before it is sliced.
     pub fn decode(p: &[u8]) -> Result<SmallState, StoreError> {
         let mut i = 0usize;
@@ -1401,7 +1406,15 @@ impl SmallState {
         } else {
             crate::image::decode_registry(registry_bytes)?
         };
-        // Same exact-consumption rule as the manifest: nine sections and
+        // Schema-9 section (the error-data row), same empty-section
+        // rule: the 8→9 migration appends exactly this.
+        let errors_bytes = section("small state errors section")?;
+        let errors = if errors_bytes.is_empty() {
+            Vec::new()
+        } else {
+            crate::image::decode_errors(errors_bytes)?
+        };
+        // Same exact-consumption rule as the manifest: ten sections and
         // nothing after them, or the small state fails closed.
         if i != p.len() {
             return Err(StoreError::Snapshot(SnapshotError::Corrupt(
@@ -1418,6 +1431,7 @@ impl SmallState {
             arrays,
             collections,
             registry,
+            errors,
         })
     }
 }
@@ -1718,6 +1732,7 @@ pub fn migrate_store(
             5 => migrate_v5_to_v6(store)?,
             6 => migrate_v6_to_v7(store)?,
             7 => migrate_v7_to_v8(store)?,
+            8 => migrate_v8_to_v9(store)?,
             _ => {
                 return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                     "unsupported store schema version",
@@ -1820,6 +1835,41 @@ fn migrate_v7_to_v8(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     // this goes through the write that can shift the file's directory
     // offsets rather than the same-length splice.
     store.replace_manifest_and_small_for_migration(&manifest, &small)
+}
+
+/// Ladder step 8→9 (the error-data row): the small state grows the one
+/// `ERRD` section EMPTY — a pure 4-byte suffix of a zero-length section
+/// header, provably content-preserving (nothing a v8-era machine
+/// persisted lives in it: the persist gates refused any heap holding a
+/// live error row). Verifies the v8 content against its stored root
+/// first, then writes the new small and the restamped manifest through
+/// the backend's one atomic migration write — the `migrate_v6_to_v7`
+/// pattern exactly.
+fn migrate_v8_to_v9(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    let small = store.read_small_state()?;
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    if old != manifest.root {
+        // `expected` = recomputed root, `found` = manifest's claim.
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root.clone(),
+        });
+    }
+    let mut new_small = small;
+    new_small.extend_from_slice(&[0u8; 4]);
+    manifest.store_schema = 9;
+    manifest.root = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &new_small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
 }
 
 /// The epoch discipline every [`HeapStore::commit`] enforces: the first
@@ -1956,6 +2006,7 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         arrays: image.arrays.clone(),
         collections: image.collections.clone(),
         registry: image.registry.clone(),
+        errors: image.errors.clone(),
     };
     let small_bytes = small.encode();
     let slot_pages = encode_all_slot_pages(&image.slots);
@@ -2157,6 +2208,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         &small.arrays,
         &small.collections,
         &small.registry,
+        &small.errors,
         &small.symbols,
         slots.len() as u32,
         chunks.len(),
@@ -2179,6 +2231,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         arrays: small.arrays,
         collections: small.collections,
         registry: small.registry,
+        errors: small.errors,
     })
 }
 
@@ -2255,7 +2308,7 @@ pub fn validate_store(
         }));
     }
     // Semantic bounds gate for everything the small state carries —
-    // stack, symbols, and the three side tables — against the
+    // stack, symbols, and the four side tables — against the
     // manifest's geometry. It lives HERE, not in `store_to_image`,
     // because `validate_store` is the one function BOTH resume paths
     // run: gating the eager path alone left `resume_from_store_lazy`
@@ -2269,6 +2322,7 @@ pub fn validate_store(
         &small.arrays,
         &small.collections,
         &small.registry,
+        &small.errors,
         &small.symbols,
         manifest.slot_count,
         manifest.chunk_len as usize,
@@ -2775,6 +2829,7 @@ mod tests {
             arrays: Vec::new(),
             collections: Vec::new(),
             registry: Vec::new(),
+            errors: Vec::new(),
         };
         // Since schema v4 the free list does NOT ride in small state
         // (it lives in segment rows); the round-trip drops it.
@@ -2795,6 +2850,7 @@ mod tests {
             arrays: Vec::new(),
             collections: Vec::new(),
             registry: Vec::new(),
+            errors: Vec::new(),
         };
         let bytes = s.encode();
         for cut in [0, 3, 7, bytes.len() - 1] {

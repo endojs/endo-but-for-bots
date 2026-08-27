@@ -38,8 +38,8 @@ pub use compartment::{
 };
 pub use gc::{GcStats, Heap};
 pub use interp::{
-    ArraySnapshot, CollectionSnapshot, CompiledSource, Halt, Interp, Native, RelinkError,
-    RunOutcome, SourceCompileError, SourceCompiler,
+    error_name_static, ArraySnapshot, CollectionSnapshot, CompiledSource, Halt, Interp, Native,
+    RelinkError, RunOutcome, SourceCompileError, SourceCompiler,
     PROGRAM_INVOCATION_COMPUTRONS,
 };
 pub use meter::{Meter, MeterCheck, MeterState, COST_TABLE_VERSION};

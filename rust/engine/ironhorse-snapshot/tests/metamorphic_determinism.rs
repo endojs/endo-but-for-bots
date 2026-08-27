@@ -101,31 +101,42 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     // (segmented free list: free_len in the manifest, free rows in
     // the seal), and v5 (summaries folded into the root; counts
     // header and length-prefixed edge entries in root and seal).
-    // Those container/store format changes left the blob hash
-    // unchanged — the independence this vector exists to prove. Both
-    // the blob AND the seal were re-pinned 2026-08-23 when the
-    // ironhorse-262 language-completion branch merged `llm` in: that
-    // branch grows the machine's live intrinsic/proto state, so the
-    // canonical snapshot blob legitimately differs (a MACHINE-STATE
-    // change, not a store-format one), and the seal derives from it.
-    // The seven-way metamorphic tests above still pass, so the new
-    // bytes remain deterministic and cross-host stable. Re-pinned again for
-    // the Date intrinsic's new constructor/prototype boot state, then for the
-    // collection methods' specified name/length metadata and their distinct
-    // Map/Set iterator-prototype boot state, then for the Iterator constructor
-    // and helper-method prototype surface, and then for the async-generator
-    // constructor/prototype metadata, and then for the generator-family
-    // Symbol.toStringTag properties. Re-pinned once more for two XS-parity
-    // boot-state changes that grew the canonical heap: constructors now
-    // install a real `.prototype` own property at boot (XS's
-    // fxDefaultFunctionPrototype), and the `%Error.prototype%` `stack`
-    // accessor's `stack` key is force-interned unmetered at link time as an
-    // XS boot default. Both are MACHINE-STATE changes; the seven-way
-    // metamorphic tests above still pass, so the new bytes remain
-    // deterministic and cross-host stable.
+    // The blob hash above was unchanged by ALL of those format
+    // commits — the container/store independence this vector proves.
+    // Both pins moved together on 2026-08-18 for a CONTENT reason,
+    // not a format one: the boot heap deliberately changed (native
+    // function instances chain to %Function.prototype% now).
+    // Seal re-pinned again 2026-08-18 for schema v6 (class-tree
+    // root: the manifest root formula changed from the flat v5
+    // combine to per-class Merkle trees, and the seal signs the
+    // manifest). The blob hash above did NOT move — v6 changed the
+    // root formula only, never the container format.
+    // Seal re-pinned again 2026-08-24 for schema v7 (the side-table
+    // ledger: the small state grew the arrays/collections/registry
+    // sections, so every small leaf — and thus root and seal —
+    // moved). The blob hash above did NOT move: this machine carries
+    // no side-table state, and the ledger atoms are emitted only
+    // when non-empty, which is precisely the container-stability
+    // property the two-pin split exists to prove.
+    // Seal re-pinned again 2026-08-25 for schema v8 (the durable
+    // completed-crank counter): the seal signs the whole manifest, and
+    // the manifest grew a `u64` tail. The blob hash above did NOT move
+    // — the counter is store metadata and the container carries no
+    // manifest at all, which is the same two-pin split again.
+    // BOTH pins re-pinned 2026-08-26 for the llm rebase: a CONTENT
+    // move (the language-completion boot heap: Intl, Temporal, the
+    // test262 host, and the boot-link name-table appends), not a
+    // format one — the container grammar, store schema 8, and the
+    // canonical-empty SYMB/KEYS encodings are all unchanged.
+    // Seal re-pinned again 2026-08-27 for schema v9 (the error-data
+    // row: the small state grew the ERRD section and the manifest
+    // stamps schema 9, so every small leaf — and thus root and seal —
+    // moved). The blob hash above did NOT move: this machine holds no
+    // error rows, and the ERRD atom is emitted only when non-empty —
+    // the same container-stability property the two-pin split proves.
     assert_eq!(
         store.manifest().unwrap().seal,
-        "69da8025749a56e8b4c0026ee5a2ba5788d11f2ddb3ecc56a0590721a58629db",
+        "c79e465f2d95fcc1f18ca69ff502b417bfcb339f9ee403111c4fb19587f39782",
         "epoch-3 seal chain"
     );
 }
