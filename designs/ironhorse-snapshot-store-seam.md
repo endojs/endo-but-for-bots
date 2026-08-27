@@ -2516,10 +2516,19 @@ bite-checked by reverting the fix under the lock). Statuses:
   misclassified requirement fails against the visitor bodies —
   `symbol_key_ids`' ephemeron-not-edges classification was caught
   live by the net while writing it).
-- **RECORDED, not fixed** — the lazy path's chunk-offset bound
-  (the eager gate covers it).
+- **RECORDED, not fixed** — nothing remains open in this list: the
+  last entry, the lazy path's chunk-offset bound, closed 2026-08-27.
+  The lazy backing now carries the attach-time chunk length
+  (`SlotArena::lazy_from_parts` takes `chunk_bound`; the resume path
+  passes `manifest.chunk_len`), and `ensure_page_resident` refuses a
+  faulted slot whose String/BigInt offset falls outside
+  `CHUNK_HEADER..=chunk_bound` — named AT THE FAULT, mirroring the
+  eager gate's rule, instead of dying anonymously in the compactor.
+  Locked by the forged-store twin
+  (`a_lazily_resumed_store_with_a_poisoned_chunk_offset_dies_named_at_the_fault`,
+  red-first: the pre-fix panic was the compactor's anonymous assert).
   (W6-19's arena growth, the resource-management metering gap, and
-  W6-22 were subsequently FIXED — for W6-22, `instruction_len` now
+  W6-22 were also FIXED — for W6-22, `instruction_len` now
   bounds the WHOLE instruction, operands and declared payload
   included, so a truncated trailing string/bigint payload refuses to
   size and `remap_ids` agrees with the dispatch loop's fail-closed

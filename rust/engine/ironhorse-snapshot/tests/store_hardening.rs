@@ -408,6 +408,7 @@ fn randomized_fault_schedules_reify_identically() {
             image.slot_free.clone(),
             manifest.slot_live,
             source.clone(),
+            manifest.chunk_len,
         );
         let chunks =
             ironhorse_vm::ChunkArena::lazy_from_parts(manifest.chunk_len as usize, source);
@@ -750,7 +751,7 @@ fn evict_refuses_a_page_holding_records_past_the_backed_rows() {
         }
     }
 
-    let mut slots = SlotArena::lazy_from_parts(BACKED, Vec::new(), BACKED, Rc::new(OnePage));
+    let mut slots = SlotArena::lazy_from_parts(BACKED, Vec::new(), BACKED, Rc::new(OnePage), 0);
 
     // Fully backed and clean: page 0 evicts, as it always has. (The
     // guard must not cost the RAM win on a quiescent resumed arena.)

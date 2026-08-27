@@ -1324,6 +1324,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.slot_free.clone(),
         manifest.slot_live,
         source.clone(),
+        manifest.chunk_len,
     );
     let chunks = ironhorse_vm::ChunkArena::lazy_from_parts(manifest.chunk_len as usize, source);
     let mut interp = Interp::new();
@@ -1421,6 +1422,42 @@ mod tests {
             .expect("a live slot");
         let poison = image.slots.len() as u32 + 100;
         image.slots[k] = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(poison)));
+        let mut store = crate::store::MemoryStore::new();
+        let batch = image_to_batch(&image, 1, "");
+        crate::store::HeapStore::commit(&mut store, &batch)
+            .expect("the forged batch seals consistently");
+        let mut resumed = resume_from_store_lazy(
+            std::rc::Rc::new(std::cell::RefCell::new(store)),
+            &sig(),
+        )
+        .expect("lazy attach");
+        // Force every page resident - the poisoned one faults.
+        resumed.machine_mut().collect_garbage();
+    }
+
+    /// The chunk-offset half of the same class (the recorded lazy
+    /// remainder, now closed): a faulted slot whose String payload
+    /// names an offset outside the chunk arena must die AT THE FAULT
+    /// with the named corrupt-store refusal — not later, anonymously,
+    /// inside a chunk read or the compactor's asserts.
+    #[test]
+    #[should_panic(expected = "out-of-arena chunk offset")]
+    fn a_lazily_resumed_store_with_a_poisoned_chunk_offset_dies_named_at_the_fault() {
+        use ironhorse_vm::{ChunkOffset, Kind, Payload, Slot};
+        let mut m = Interp::new();
+        m.link_intrinsics(&["x".to_string()]);
+        let mut image = m.snapshot_image(&sig());
+        let free: std::collections::HashSet<u32> = image.slot_free.iter().copied().collect();
+        let k = (0..image.slots.len())
+            .find(|i| !free.contains(&(*i as u32)))
+            .expect("a live slot");
+        let poison = image.chunks.len() as u32 + 100;
+        image.slots[k] = Slot::of(Kind::String, Payload::String(ChunkOffset(poison)));
+        // Sanity: the CONTAINER path refuses this exact content.
+        assert!(
+            crate::image::read_machine(&crate::image::write_machine(&image), &sig()).is_err(),
+            "the container gate refuses the poisoned chunk offset"
+        );
         let mut store = crate::store::MemoryStore::new();
         let batch = image_to_batch(&image, 1, "");
         crate::store::HeapStore::commit(&mut store, &batch)
