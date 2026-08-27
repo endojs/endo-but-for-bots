@@ -1730,6 +1730,9 @@ pub enum MathId {
 /// user code — the `call`/`apply`/`bind` re-entrant methods are separate.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NativeMethod {
+    /// `Date` statics and prototype methods. The compact operation id keeps
+    /// the calendar implementation centralized; see `date_method`.
+    Date(u8),
     /// A method on one of the ISO Temporal plain families.  The first byte is
     /// the family (date, time, date-time, year-month, month-day, calendar),
     /// and the second is the operation.  Keeping this compact makes the
@@ -2484,6 +2487,15 @@ pub enum NativeMethod {
     /// `String.prototype.split(separator[, limit])`
     /// (`fx_String_prototype_split`): split on a string-or-RegExp separator.
     StringSplit,
+    /// `%MapIteratorPrototype%.next()` and `%SetIteratorPrototype%.next()`.
+    /// Distinct identities enforce the collection-specific internal-slot
+    /// brand check even though both advance the shared `IterState` layout.
+    MapIteratorNext,
+    SetIteratorNext,
+    IteratorFrom,
+    /// One of the Iterator Helper prototype methods, indexed in the order
+    /// installed by `create_intrinsics`.
+    IteratorHelper(u8),
 }
 
 impl Default for FuncInfo {
@@ -3167,6 +3179,7 @@ pub enum Native {
     Symbol,
     Number,
     String,
+    Date,
     Array,
     Error,
     EvalError,
@@ -3183,6 +3196,8 @@ pub enum Native {
     Set,
     WeakMap,
     WeakSet,
+    /// The abstract `Iterator` constructor and its helper-method prototype.
+    Iterator,
     /// `ArrayBuffer` — the raw byte-buffer constructor (`xsDataView.c`
     /// `fx_ArrayBuffer`). Its per-instance backing store lives in the
     /// [`Interp::array_buffers`] side table.
@@ -3257,6 +3272,7 @@ impl Native {
             Native::Symbol => "Symbol",
             Native::Number => "Number",
             Native::String => "String",
+            Native::Date => "Date",
             Native::Array => "Array",
             Native::Error => "Error",
             Native::EvalError => "EvalError",
@@ -3273,6 +3289,7 @@ impl Native {
             Native::Set => "Set",
             Native::WeakMap => "WeakMap",
             Native::WeakSet => "WeakSet",
+            Native::Iterator => "Iterator",
             Native::ArrayBuffer => "ArrayBuffer",
             Native::SharedArrayBuffer => "SharedArrayBuffer",
             Native::TypedArray(i) => TYPED_ARRAY_TYPES[i as usize].name,
@@ -3313,7 +3330,13 @@ impl Native {
             | Native::AsyncGeneratorFunction => 1,
             Native::TypedArray(_) => 3,
             Native::DataView => 1,
-            Native::Symbol | Native::Map | Native::Set | Native::WeakMap | Native::WeakSet => 0,
+            Native::Date => 7,
+            Native::Symbol
+            | Native::Map
+            | Native::Set
+            | Native::WeakMap
+            | Native::WeakSet
+            | Native::Iterator => 0,
             Native::Object
             | Native::Function
             | Native::Boolean
@@ -3345,6 +3368,7 @@ impl Native {
             ("Symbol", Native::Symbol),
             ("Number", Native::Number),
             ("String", Native::String),
+            ("Date", Native::Date),
             ("Array", Native::Array),
             ("Error", Native::Error),
             ("EvalError", Native::EvalError),
@@ -3361,6 +3385,7 @@ impl Native {
             ("Set", Native::Set),
             ("WeakMap", Native::WeakMap),
             ("WeakSet", Native::WeakSet),
+            ("Iterator", Native::Iterator),
             ("ArrayBuffer", Native::ArrayBuffer),
             ("SharedArrayBuffer", Native::SharedArrayBuffer),
         ];
@@ -3978,6 +4003,9 @@ pub struct Interp {
     /// `arr[Symbol.iterator]()` produce. Carries `next` and a
     /// `Symbol.iterator` returning the iterator itself.
     array_iterator_proto: crate::value::SlotIndex,
+    iterator_proto: crate::value::SlotIndex,
+    map_iterator_proto: crate::value::SlotIndex,
+    set_iterator_proto: crate::value::SlotIndex,
     /// The realm's `Math` namespace object (XS's `mxMathObject`) — a boot
     /// object carrying the `Math.*` functions and the numeric constants
     /// (`Math.PI`, …) as own properties, bound into the global object under
@@ -3995,6 +4023,11 @@ pub struct Interp {
     /// The realm's `%Number.prototype%` (a boot object) — the box target for a
     /// primitive number's method access (`(42).toString(2)`, …).
     number_proto: crate::value::SlotIndex,
+    /// `%Date.prototype%` and the `[[DateValue]]` side table. A Date instance
+    /// remains an ordinary arena object for property/prototype behavior; its
+    /// time value is the one non-property internal slot recorded here.
+    date_proto: crate::value::SlotIndex,
+    dates: std::collections::HashMap<crate::value::SlotIndex, f64>,
     /// The realm's `%Symbol.prototype%` (a boot object) — the box target for a
     /// primitive symbol's method access (`Symbol("x").toString()`, …).
     symbol_proto: crate::value::SlotIndex,
@@ -4711,10 +4744,15 @@ impl Interp {
             length_id: None,
             name_id: None,
             array_iterator_proto: crate::value::SlotIndex::NULL,
+            iterator_proto: crate::value::SlotIndex::NULL,
+            map_iterator_proto: crate::value::SlotIndex::NULL,
+            set_iterator_proto: crate::value::SlotIndex::NULL,
             math_object: crate::value::SlotIndex::NULL,
             string_proto: crate::value::SlotIndex::NULL,
             string_iterator_method: crate::value::SlotIndex::NULL,
             number_proto: crate::value::SlotIndex::NULL,
+            date_proto: crate::value::SlotIndex::NULL,
+            dates: std::collections::HashMap::new(),
             symbol_proto: crate::value::SlotIndex::NULL,
             symbol_registry: std::collections::HashMap::new(),
             symbol_registry_keys: std::collections::HashMap::new(),
@@ -4861,7 +4899,7 @@ impl Interp {
                 | Native::URIError
                 | Native::AggregateError => self.slots.alloc(Slot::instance(error_proto)),
                 Native::SuppressedError => self.slots.alloc(Slot::instance(error_proto)),
-                Native::Boolean | Native::Symbol | Native::Number | Native::String => {
+                Native::Boolean | Native::Symbol | Native::Number | Native::String | Native::Date => {
                     self.slots.alloc(Slot::instance(object_proto))
                 }
                 Native::DisposableStack | Native::AsyncDisposableStack => {
@@ -4880,6 +4918,7 @@ impl Interp {
                 Native::Map | Native::Set | Native::WeakMap | Native::WeakSet => {
                     self.slots.alloc(Slot::instance(object_proto))
                 }
+                Native::Iterator => self.slots.alloc(Slot::instance(object_proto)),
                 // `%ArrayBuffer.prototype%`: a plain boot object chaining to
                 // %Object.prototype%, carrying the `byteLength` accessor and
                 // the `slice` method bound below. The per-instance backing
@@ -4973,6 +5012,38 @@ impl Interp {
             .get("Array")
             .and_then(|&c| self.ctor_prototype.get(&c).copied())
             .unwrap_or(crate::value::SlotIndex::NULL);
+        self.iterator_proto = self
+            .intrinsics
+            .get("Iterator")
+            .and_then(|&c| self.ctor_prototype.get(&c).copied())
+            .unwrap_or(crate::value::SlotIndex::NULL);
+        if let Some(&iterator_ctor) = self.intrinsics.get("Iterator") {
+            let from = self.alloc_named_method(NativeMethod::IteratorFrom, "from", 1);
+            self.proto_methods.push((iterator_ctor, "from", from));
+            for (op, (name, arity)) in [
+                ("map", 1u32),
+                ("filter", 1),
+                ("take", 1),
+                ("drop", 1),
+                ("flatMap", 1),
+                ("reduce", 1),
+                ("toArray", 0),
+                ("forEach", 1),
+                ("some", 1),
+                ("every", 1),
+                ("find", 1),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let method = self.alloc_named_method(
+                    NativeMethod::IteratorHelper(op as u8),
+                    name,
+                    arity,
+                );
+                self.proto_methods.push((self.iterator_proto, name, method));
+            }
+        }
         // The `Array.prototype` methods ironhorse models (dense fast paths), bound
         // as own properties of `%Array.prototype%` at link time only when the
         // program references the method name.
@@ -5044,10 +5115,22 @@ impl Interp {
         // `%Array Iterator.prototype%`: a boot object chaining to
         // %Object.prototype%, carrying `next` (the iterators produced by
         // `values`/`keys`/`entries` chain to it).
-        let array_iter_proto = self.slots.alloc(Slot::instance(object_proto));
+        let array_iter_proto = self.slots.alloc(Slot::instance(self.iterator_proto));
         self.array_iterator_proto = array_iter_proto;
         let next_mf = self.alloc_method(NativeMethod::ArrayIteratorNext);
         self.proto_methods.push((array_iter_proto, "next", next_mf));
+        // Collection iterators have distinct intrinsic prototypes and `next`
+        // function identities.  They share the iterator-state representation
+        // with Array iterators, but the methods must reject an iterator of the
+        // other collection family (the spec's [[Map]]/[[Set]] brand check).
+        self.map_iterator_proto = self.slots.alloc(Slot::instance(self.iterator_proto));
+        self.set_iterator_proto = self.slots.alloc(Slot::instance(self.iterator_proto));
+        let map_next = self.alloc_named_method(NativeMethod::MapIteratorNext, "next", 0);
+        let set_next = self.alloc_named_method(NativeMethod::SetIteratorNext, "next", 0);
+        self.proto_methods
+            .push((self.map_iterator_proto, "next", map_next));
+        self.proto_methods
+            .push((self.set_iterator_proto, "next", set_next));
         // `Array.isArray` — a static bound as an own property of the `Array`
         // constructor instance (not the prototype).
         if let Some(&array_ctor) = self.intrinsics.get("Array") {
@@ -5099,42 +5182,42 @@ impl Interp {
                 2 => self.weakmap_proto = proto,
                 _ => self.weakset_proto = proto,
             }
-            let methods: &[(&'static str, NativeMethod)] = match cache {
+            let methods: &[(&'static str, u32, NativeMethod)] = match cache {
                 0 => &[
-                    ("set", NativeMethod::MapSet),
-                    ("get", NativeMethod::MapGet),
-                    ("has", NativeMethod::MapHas),
-                    ("delete", NativeMethod::MapDelete),
-                    ("forEach", NativeMethod::CollForEach),
-                    ("entries", NativeMethod::CollEntries),
-                    ("keys", NativeMethod::CollKeys),
-                    ("values", NativeMethod::CollValues),
-                    ("clear", NativeMethod::CollClear),
+                    ("set", 2, NativeMethod::MapSet),
+                    ("get", 1, NativeMethod::MapGet),
+                    ("has", 1, NativeMethod::MapHas),
+                    ("delete", 1, NativeMethod::MapDelete),
+                    ("forEach", 1, NativeMethod::CollForEach),
+                    ("entries", 0, NativeMethod::CollEntries),
+                    ("keys", 0, NativeMethod::CollKeys),
+                    ("values", 0, NativeMethod::CollValues),
+                    ("clear", 0, NativeMethod::CollClear),
                 ],
                 1 => &[
-                    ("add", NativeMethod::SetAdd),
-                    ("has", NativeMethod::SetHas),
-                    ("delete", NativeMethod::SetDelete),
-                    ("forEach", NativeMethod::CollForEach),
-                    ("entries", NativeMethod::CollEntries),
+                    ("add", 1, NativeMethod::SetAdd),
+                    ("has", 1, NativeMethod::SetHas),
+                    ("delete", 1, NativeMethod::SetDelete),
+                    ("forEach", 1, NativeMethod::CollForEach),
+                    ("entries", 0, NativeMethod::CollEntries),
                     // Set's `keys`/`values` are bound after this loop as a
                     // single shared function object (see below).
-                    ("clear", NativeMethod::CollClear),
+                    ("clear", 0, NativeMethod::CollClear),
                 ],
                 2 => &[
-                    ("set", NativeMethod::WeakMapSet),
-                    ("get", NativeMethod::WeakMapGet),
-                    ("has", NativeMethod::WeakMapHas),
-                    ("delete", NativeMethod::WeakMapDelete),
+                    ("set", 2, NativeMethod::WeakMapSet),
+                    ("get", 1, NativeMethod::WeakMapGet),
+                    ("has", 1, NativeMethod::WeakMapHas),
+                    ("delete", 1, NativeMethod::WeakMapDelete),
                 ],
                 _ => &[
-                    ("add", NativeMethod::WeakSetAdd),
-                    ("has", NativeMethod::WeakSetHas),
-                    ("delete", NativeMethod::WeakSetDelete),
+                    ("add", 1, NativeMethod::WeakSetAdd),
+                    ("has", 1, NativeMethod::WeakSetHas),
+                    ("delete", 1, NativeMethod::WeakSetDelete),
                 ],
             };
-            for &(m_name, m) in methods {
-                let mf = self.alloc_method(m);
+            for &(m_name, arity, m) in methods {
+                let mf = self.alloc_named_method(m, m_name, arity);
                 self.proto_methods.push((proto, m_name, mf));
             }
             // The two upsert-proposal methods on `Map.prototype` (cache == 0)
@@ -5315,16 +5398,27 @@ impl Interp {
         // generators, but each returns a promise and requests are serialized.
         let async_generator_proto = self.slots.alloc(Slot::instance(self.object_proto));
         self.async_generator_proto = async_generator_proto;
-        for (name, m) in [
-            ("next", NativeMethod::AsyncGeneratorNext),
-            ("return", NativeMethod::AsyncGeneratorReturn),
-            ("throw", NativeMethod::AsyncGeneratorThrow),
+        for (name, arity, m) in [
+            ("next", 1, NativeMethod::AsyncGeneratorNext),
+            ("return", 1, NativeMethod::AsyncGeneratorReturn),
+            ("throw", 1, NativeMethod::AsyncGeneratorThrow),
         ] {
-            let mf = self.alloc_method(m);
+            let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((async_generator_proto, name, mf));
         }
         self.async_iterator_identity = self.alloc_method(NativeMethod::AsyncIteratorIdentity);
         self.async_generator_function_proto = self.slots.alloc(Slot::instance(self.function_proto));
+        // `%AsyncGenerator%` (the common prototype of async-generator
+        // functions) exposes `%AsyncGeneratorPrototype%` through its own
+        // non-writable `prototype` property.  Per-function `.prototype`
+        // objects still live in `ctor_prototype`; `ordinary_set` recognizes
+        // those exotic own properties before consulting this inherited boot
+        // property, so assigning `g.prototype` remains valid.
+        self.proto_methods.push((
+            self.async_generator_function_proto,
+            "prototype",
+            async_generator_proto,
+        ));
         // `%GeneratorFunction.prototype%` (XS's `mxGeneratorFunctionPrototype`,
         // `fxBuildFunction`): a plain object off `%Function.prototype%`. A
         // generator function's instance `[[Prototype]]` chains here (see
@@ -5639,6 +5733,7 @@ impl Interp {
         self.create_math();
         self.create_string_proto();
         self.create_number_globals();
+        self.create_date();
         self.create_json();
         self.create_atomics();
         self.create_reflect();
@@ -6223,6 +6318,42 @@ impl Interp {
         }
     }
 
+    /// Register the `Date` statics and the bounded, deterministic UTC profile
+    /// of `%Date.prototype%`. The embedding supplies no time-zone database;
+    /// local-time operations therefore use UTC, matching the engine's existing
+    /// deterministic Intl/Temporal host profile.
+    fn create_date(&mut self) {
+        let Some(&ctor) = self.intrinsics.get("Date") else { return };
+        let Some(proto) = self.prototype_of(ctor) else { return };
+        self.date_proto = proto;
+        self.dates.insert(proto, f64::NAN);
+        for (name, op, arity) in [
+            ("parse", 0u8, 1u32), ("UTC", 1, 7), ("now", 2, 0),
+        ] {
+            let f = self.alloc_named_method(NativeMethod::Date(op), name, arity);
+            self.proto_methods.push((ctor, name, f));
+        }
+        for (name, op, arity) in [
+            ("getTime", 10u8, 0u32), ("valueOf", 11, 0),
+            ("getFullYear", 12, 0), ("getUTCFullYear", 12, 0),
+            ("getMonth", 13, 0), ("getUTCMonth", 13, 0),
+            ("getDate", 14, 0), ("getUTCDate", 14, 0),
+            ("getDay", 15, 0), ("getUTCDay", 15, 0),
+            ("getHours", 16, 0), ("getUTCHours", 16, 0),
+            ("getMinutes", 17, 0), ("getUTCMinutes", 17, 0),
+            ("getSeconds", 18, 0), ("getUTCSeconds", 18, 0),
+            ("getMilliseconds", 19, 0), ("getUTCMilliseconds", 19, 0),
+            ("getTimezoneOffset", 20, 0),
+            ("toISOString", 21, 0), ("toUTCString", 22, 0),
+            ("toGMTString", 22, 0), ("toString", 23, 0),
+            ("toDateString", 24, 0), ("toTimeString", 25, 0),
+            ("setTime", 26, 1), ("toJSON", 27, 1),
+        ] {
+            let f = self.alloc_named_method(NativeMethod::Date(op), name, arity);
+            self.proto_methods.push((proto, name, f));
+        }
+    }
+
     /// Register the modeled `String.prototype` methods (`xsString.c`) on
     /// `%String.prototype%`, bound at link time only for the names the program
     /// references. A primitive string's method access boxes to this prototype
@@ -6685,6 +6816,23 @@ impl Interp {
                 self.done_id = Some(self.intern_key("done"));
             }
         }
+        let iterator_helpers_used = [
+            "map", "filter", "take", "drop", "flatMap", "reduce", "toArray",
+            "forEach", "some", "every", "find",
+        ]
+        .iter()
+        .any(|name| self.symbol_ids.contains_key(*name));
+        if iterator_helpers_used {
+            for name in ["next", "done", "value", "return"] {
+                self.intern_key(name);
+            }
+            if self.value_id.is_none() {
+                self.value_id = Some(self.intern_key("value"));
+            }
+            if self.done_id.is_none() {
+                self.done_id = Some(self.intern_key("done"));
+            }
+        }
         // `Map.groupBy` / `Object.groupBy` drive `GetIterator(items)` from Rust,
         // reading the produced result object's `next`/`value`/`done` — even when
         // the program never spells them (e.g. `Map.groupBy([1,2,3], fn)`). Mirror
@@ -6754,6 +6902,21 @@ impl Interp {
             }
         }
         self.proto_methods = methods;
+        // `%AsyncGeneratorPrototype%.constructor` points to `%AsyncGenerator%`
+        // (the common function prototype object), not to the dynamic
+        // `%AsyncGeneratorFunction%` constructor.  Its descriptor is
+        // non-writable, non-enumerable, and configurable.
+        if let Some(cid) = self.constructor_id {
+            self.set_own_unmetered_with_flag(
+                self.async_generator_proto,
+                cid,
+                Slot::of(
+                    Kind::Reference,
+                    Payload::Reference(self.async_generator_function_proto),
+                ),
+                XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG,
+            );
+        }
         // Inherited prototype data (Error `name`/`message`).
         let data = std::mem::take(&mut self.proto_data);
         for (proto, pname, value) in &data {
@@ -6823,6 +6986,9 @@ impl Interp {
                 // "DataView" with the same non-writable/non-enumerable/
                 // configurable descriptor.
                 (self.dataview_proto, "DataView"),
+                (self.map_iterator_proto, "Map Iterator"),
+                (self.set_iterator_proto, "Set Iterator"),
+                (self.async_generator_proto, "AsyncGenerator"),
             ] {
                 if proto.is_null() {
                     continue;
@@ -6848,6 +7014,17 @@ impl Interp {
             );
         }
         if let Some(id) = self.well_known_symbol_property_id("iterator") {
+            let identity = self.alloc_named_method(
+                NativeMethod::AsyncIteratorIdentity,
+                "[Symbol.iterator]",
+                0,
+            );
+            self.set_own_unmetered_with_flag(
+                self.iterator_proto,
+                id,
+                Slot::of(Kind::Reference, Payload::Reference(identity)),
+                XS_DONT_ENUM_FLAG,
+            );
             self.set_own_unmetered_with_flag(
                 self.string_proto,
                 id,
@@ -6857,6 +7034,28 @@ impl Interp {
                 ),
                 XS_DONT_ENUM_FLAG,
             );
+            // Map's @@iterator is `entries`; Set's is the shared `values`
+            // function. Locate the already-created boot methods directly so
+            // the aliases exist even when the source never spells those
+            // string keys (a Symbol.iterator-only test).
+            for (proto, method_name) in [
+                (self.map_proto, "entries"),
+                (self.set_proto, "values"),
+            ] {
+                if let Some((_, _, function)) = self
+                    .proto_methods
+                    .iter()
+                    .find(|(holder, name, _)| *holder == proto && *name == method_name)
+                    .copied()
+                {
+                    self.set_own_unmetered_with_flag(
+                        proto,
+                        id,
+                        Slot::of(Kind::Reference, Payload::Reference(function)),
+                        XS_DONT_ENUM_FLAG,
+                    );
+                }
+            }
             // `%Segments.prototype%[Symbol.iterator]` mints a `%SegmentIterator%`;
             // the iterator itself carries the identity `[Symbol.iterator]`
             // (`%IteratorPrototype%`) so it survives spread/`Array.from`.
@@ -8394,19 +8593,48 @@ impl Interp {
                                 Err(halt) => return halt,
                             }
                         }
-                        // Every other primitive's ToObject boxes to its
-                        // `%<Type>.prototype%` wrapper. The wrapper's *exotic*
-                        // own properties (a String wrapper's `length` and
-                        // indexed characters, in particular) are not yet
-                        // materialized on the boxed instance, so a subsequent
-                        // own-property read would silently diverge from the
-                        // oracle. Name the gap honestly as an `Unsupported`
-                        // skip rather than hand back a mis-answering wrapper —
-                        // the boxed-primitive ToObject surface (string/number
-                        // destructuring, `with(primitive)`) is a later child's
-                        // work. The hot in-scope paths (a base-class
-                        // constructor and object destructuring of an object
-                        // RHS) take the identity arm above and never reach here.
+                        // A `Number`/`Integer`/`Boolean` primitive's ToObject
+                        // boxes to its `%Number.prototype%`/`%Boolean.prototype%`
+                        // wrapper. These wrappers carry **no exotic own
+                        // property** (the wrapped primitive is the internal
+                        // `[[NumberData]]`/`[[BooleanData]]` slot), so a name
+                        // resolved against the wrapper — the `with(primitive)`
+                        // scopable walk — finds nothing own, falls through the
+                        // prototype chain outward, and matches the oracle
+                        // exactly. Boxing meters `fxToInstance`'s two `fxNewSlot`
+                        // allocations (see [`Self::box_primitive_to_instance`]).
+                        // The opcode replaces the top-of-stack primitive with the
+                        // wrapper reference in place (XS's `mxToInstance(mxStack)`).
+                        Kind::Boolean => {
+                            let inst =
+                                self.box_primitive_to_instance(Native::Boolean, top);
+                            let head =
+                                Slot::of(Kind::Reference, Payload::Reference(inst));
+                            if let Some(t) = self.stack.last_mut() {
+                                *t = head;
+                            } else {
+                                self.push(head);
+                            }
+                        }
+                        Kind::Integer | Kind::Number => {
+                            let inst =
+                                self.box_primitive_to_instance(Native::Number, top);
+                            let head =
+                                Slot::of(Kind::Reference, Payload::Reference(inst));
+                            if let Some(t) = self.stack.last_mut() {
+                                *t = head;
+                            } else {
+                                self.push(head);
+                            }
+                        }
+                        // A `String` wrapper's *exotic* own properties (its
+                        // `length` and indexed characters) are not materialized
+                        // in the side-table wrapper model, so a subsequent
+                        // own-property read (`with("ab") { length }`, string
+                        // destructuring) would silently diverge from the oracle;
+                        // a `Symbol`/`BigInt` wrapper is likewise unmodeled. Name
+                        // the gap honestly as an `Unsupported` skip rather than
+                        // hand back a mis-answering wrapper.
                         _ => return Halt::Unsupported("to_instance:primitive-box"),
                     }
                     pc += size as usize;
@@ -10123,9 +10351,27 @@ impl Interp {
                         }
                         pc = ret_pc;
                     } else if let Some((NativeMethod::FunctionCall, base)) = method {
-                        // `Function.prototype.call`: a native receiver can be
-                        // dispatched in place; a user receiver re-enters its
-                        // bytecode frame through the trampoline.
+                        // `Function.prototype.call` is a built-in that is **not**
+                        // a constructor (ECMA-262: built-ins lack [[Construct]]
+                        // unless specified). `new fn.call()` must therefore
+                        // throw a catchable TypeError, not trampoline.
+                        let _ = base;
+                        if has_target {
+                            dispatch_result!(
+                                Err::<(), Halt>(self.catchable_type_error()),
+                                pc,
+                                self,
+                                return_depth
+                            );
+                            if self.check_meter() == MeterCheck::Abort {
+                                return Halt::MeterAbort;
+                            }
+                            pc = ret_pc;
+                            continue;
+                        }
+                        // A native receiver can be dispatched in place; a user
+                        // receiver re-enters its bytecode frame through the
+                        // trampoline.
                         match dispatch_result!(
                             self.call_dot_call_native(base, argc, code),
                             pc,
@@ -10149,16 +10395,58 @@ impl Interp {
                             },
                         }
                     } else if let Some((NativeMethod::FunctionApply, base)) = method {
-                        // `Function.prototype.apply` (no-array subset): re-enter
-                        // the target with the rebound `this` and no arguments.
-                        match self.enter_call_dot_apply(base, argc, ret_pc) {
-                            Ok(body_start) => {
+                        // `Function.prototype.apply` is a built-in that is **not**
+                        // a constructor: `new fn.apply()` throws a catchable
+                        // TypeError rather than trampolining.
+                        if has_target {
+                            dispatch_result!(
+                                Err::<(), Halt>(self.catchable_type_error()),
+                                pc,
+                                self,
+                                return_depth
+                            );
+                            if self.check_meter() == MeterCheck::Abort {
+                                return Halt::MeterAbort;
+                            }
+                            pc = ret_pc;
+                            continue;
+                        }
+                        // A native receiver dispatches in place (dense-array or
+                        // no-array argument shapes); a user receiver re-enters
+                        // its bytecode frame through the trampoline.
+                        match dispatch_result!(
+                            self.call_dot_apply_native(base, code),
+                            pc,
+                            self,
+                            return_depth
+                        ) {
+                            true => {
                                 if self.check_meter() == MeterCheck::Abort {
                                     return Halt::MeterAbort;
                                 }
-                                pc = body_start;
+                                pc = ret_pc;
                             }
-                            Err(h) => return h,
+                            false => match self.enter_call_dot_apply(base, argc, ret_pc, code) {
+                                Ok(body_start) => {
+                                    if self.check_meter() == MeterCheck::Abort {
+                                        return Halt::MeterAbort;
+                                    }
+                                    pc = body_start;
+                                }
+                                // A non-object argArray raises a **catchable**
+                                // TypeError: resume a caller's handler (or escape
+                                // to the host if uncaught) rather than propagate
+                                // the raw `Resume`.
+                                Err(Halt::Resume(target))
+                                    if self.call_stack.len() < return_depth =>
+                                {
+                                    return Halt::Resume(target);
+                                }
+                                Err(Halt::Resume(target)) => {
+                                    pc = target;
+                                }
+                                Err(h) => return h,
+                            },
                         }
                     } else if let Some((m, base)) = method {
                         // A native prototype method: the call's receiver is
@@ -10179,11 +10467,35 @@ impl Interp {
                     } else if let Some((bf, base)) = bound {
                         // A bound function (`fx_Function_prototype_bound`):
                         // re-enter the target with the bound `this` and the
-                        // bound args prepended to the call args. `new boundF()`
-                        // needs the construct-target geometry — a later
-                        // increment, so it self-names.
+                        // bound args prepended to the call args.
                         if has_target {
-                            return Halt::Unsupported("bind:new-bound");
+                            // `new boundF(...)`: a non-constructor target throws
+                            // a catchable TypeError; otherwise construct the
+                            // ultimate target with the bound args prepended
+                            // (`new.target` → the ultimate target).
+                            if !self.slot_is_constructor(bf) {
+                                dispatch_result!(
+                                    Err::<(), Halt>(self.catchable_type_error()),
+                                    pc,
+                                    self,
+                                    return_depth
+                                );
+                                if self.check_meter() == MeterCheck::Abort {
+                                    return Halt::MeterAbort;
+                                }
+                                pc = ret_pc;
+                                continue;
+                            }
+                            match self.enter_construct_bound(bf, base, argc, ret_pc) {
+                                Ok(body_start) => {
+                                    if self.check_meter() == MeterCheck::Abort {
+                                        return Halt::MeterAbort;
+                                    }
+                                    pc = body_start;
+                                    continue;
+                                }
+                                Err(h) => return h,
+                            }
                         }
                         // The test262 property harness captures uncurried
                         // primordials with
@@ -10219,6 +10531,49 @@ impl Interp {
                                     args.len().saturating_sub(1),
                                     code,
                                 ),
+                                pc,
+                                self,
+                                return_depth
+                            );
+                            if self.check_meter() == MeterCheck::Abort {
+                                return Halt::MeterAbort;
+                            }
+                            pc = ret_pc;
+                            continue;
+                        }
+                        // A bound function whose target is a native callable or
+                        // prototype method (`Number.bind(null)`, `[].push.bind(a)`,
+                        // …): dispatch the native in place with the bound `this`
+                        // and the bound leading args prepended, rather than
+                        // entering a (nonexistent) bytecode body.
+                        let tgt_native = self.native_of(bound_data.target);
+                        let tgt_method = self.method_of(bound_data.target);
+                        if tgt_native.is_some() || tgt_method.is_some() {
+                            let mut args = bound_data.args.clone();
+                            args.extend_from_slice(&self.stack[base + 4..base + 4 + argc]);
+                            let n = args.len();
+                            let this = bound_data.this_arg;
+                            let target_slot = Slot::of(
+                                Kind::Reference,
+                                Payload::Reference(bound_data.target),
+                            );
+                            self.stack.truncate(base);
+                            self.push(this);
+                            self.push(target_slot);
+                            self.push(Slot::undefined());
+                            self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                            for a in args {
+                                self.push(a);
+                            }
+                            self.meter.tick_raw(
+                                BIND_CALL_METERING + n as u64 * BIND_CALL_PER_ARG,
+                            );
+                            dispatch_result!(
+                                if let Some(nat) = tgt_native {
+                                    self.call_native(nat, base, n, false, code)
+                                } else {
+                                    self.call_native_method(tgt_method.unwrap(), base, n, code)
+                                },
                                 pc,
                                 self,
                                 return_depth
@@ -12581,11 +12936,31 @@ impl Interp {
                         Err(h)
                     }
                 };
-            } else if self.functions[&f].native.is_some() {
-                // A native *constructor/callable* (`parseInt`, …) reaches a
-                // different seam (`call_native`, not `call_native_method`); still
-                // outside the callback subset.
-                return Err(Halt::Unsupported("callback:non-user-function"));
+            } else if let Some(native) = self.functions[&f].native {
+                // A native *callable* callback (`[..].map(parseInt)`,
+                // `[..].forEach(print)`, `arr.filter(Boolean)`, …). It reaches
+                // the `call_native` seam rather than `call_native_method`; drive
+                // it through the same in-place frame the native-method branch
+                // uses. A native *constructor* invoked as a callback (no `new`,
+                // so `has_target = false`) either produces its call-completion
+                // or throws a catchable TypeError inside `call_native`, matching
+                // the oracle. On a throw `call_native` may return WITHOUT
+                // truncating, so restore the stack to `base` before propagating.
+                let base = self.stack.len();
+                self.push(this);
+                self.push(func);
+                self.push(Slot::undefined());
+                self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                for a in args {
+                    self.push(*a);
+                }
+                return match self.call_native(native, base, args.len(), false, code) {
+                    Ok(()) => Ok(self.pop()),
+                    Err(h) => {
+                        self.stack.truncate(base);
+                        Err(h)
+                    }
+                };
             } else {
                 (this, func, args.to_vec())
             };
@@ -13831,6 +14206,48 @@ impl Interp {
                 }
                 self.temporal_new_zoned(ns, time_zone, offset_ns)?
             }
+            Native::Date => {
+                let now = 0.0;
+                if !has_target {
+                    let text = date_local_string(now);
+                    let off = self.alloc_str_text(text.as_bytes());
+                    Slot::of(Kind::String, Payload::String(off))
+                } else {
+                    let time = if argc == 0 {
+                        now
+                    } else if argc == 1 {
+                        let value = arg(0);
+                        if let Payload::Reference(r) = value.value {
+                            if let Some(&date) = self.dates.get(&r) {
+                                date
+                            } else {
+                                let primitive = self.to_primitive(code, value, false)?;
+                                if primitive.kind == Kind::String {
+                                    let text = match primitive.value { Payload::String(o) => self.str_text(o), _ => String::new() };
+                                    parse_date_string(&text).unwrap_or(f64::NAN)
+                                } else {
+                                    time_clip(to_number(&self.to_number_value(code, primitive)?))
+                                }
+                            }
+                        } else if value.kind == Kind::String {
+                            let text = match value.value { Payload::String(o) => self.str_text(o), _ => String::new() };
+                            parse_date_string(&text).unwrap_or(f64::NAN)
+                        } else {
+                            time_clip(to_number(&self.to_number_value(code, value)?))
+                        }
+                    } else {
+                        let mut values = [0.0; 7];
+                        let inputs: Vec<Slot> = (0..7).map(|i| if i < argc { arg(i) } else if i == 2 { Slot::integer(1) } else { Slot::integer(0) }).collect();
+                        for (value, v) in values.iter_mut().zip(inputs) {
+                            *value = to_number(&self.to_number_value(code, v)?);
+                        }
+                        date_from_components(values)
+                    };
+                    let inst = self.slots.alloc(Slot::instance(self.date_proto));
+                    self.dates.insert(inst, time);
+                    Slot::of(Kind::Reference, Payload::Reference(inst))
+                }
+            }
             // `Boolean(value)` (`fx_Boolean`): ToBoolean(argument0), or
             // `false` when called with no argument. Measured against the pin,
             // the primitive coercion meters **no** built-in step beyond the
@@ -14009,6 +14426,10 @@ impl Interp {
                 self.meter.tick_raw(SYMBOL_CREATE_METERING);
                 Slot::of(Kind::Symbol, Payload::Reference(d))
             }
+            // The intrinsic Iterator constructor is abstract. Direct call and
+            // direct construction both throw; derived construction is left as
+            // an explicit later increment.
+            Native::Iterator => return Err(self.catchable_type_error()),
             // `Array(...)` / `new Array(...)` (`fx_Array`): both forms build the
             // same array. A single number argument is the length (a holey
             // array of that length); a single non-number, or two-or-more
@@ -19204,10 +19625,19 @@ impl Interp {
             .unwrap_or_else(Slot::undefined);
         // Any callable may be bound. User functions use the ordinary bound
         // trampoline; the canonical bound `Function.prototype.call` native
-        // shape is handled directly by the call opcode.
+        // shape is handled directly by the call opcode. A **native** receiver
+        // (native constructor/method) is equally in `functions`, so it binds
+        // through the same record — its bound call re-dispatches the native.
+        // `Function.prototype.bind` step 2 (ECMA-262 20.2.3.2): if the target
+        // is **not callable**, throw a TypeError (catchable). A callable proxy
+        // is bindable per spec, but a bound-of-proxy call is not yet modeled,
+        // so keep the honest skip rather than throw wrongly.
         let target = match this.value {
             Payload::Reference(r) if self.functions.contains_key(&r) => r,
-            _ => return Err(Halt::Unsupported("bind:non-user-function-receiver")),
+            Payload::Reference(r) if self.slot_is_callable(r) => {
+                return Err(Halt::Unsupported("bind:non-user-function-receiver"));
+            }
+            _ => return Err(self.catchable_type_error()),
         };
         let this_arg = self
             .stack
@@ -19278,6 +19708,52 @@ impl Interp {
     /// `Object` empty-object cost plus [`WRAPPER_CONSTRUCT_EXTRA`], chains the
     /// wrapper to the constructor's `%X.prototype%` (so it is `instanceof X`),
     /// and records the wrapped primitive so it stringifies as the primitive.
+    /// `fxToInstance` boxing of a primitive for the `XS_CODE_TO_INSTANCE`
+    /// opcode (`with(primitive)`, object-destructuring of a primitive RHS) —
+    /// XS's `fxNewBooleanInstance`/`fxNewNumberInstance` (`xsType.c`
+    /// `fxToInstance`). Distinct from [`Self::build_wrapper`], which is the
+    /// `new Number()`/`new Boolean()` **constructor** path (a native dispatch
+    /// plus the calibrated [`WRAPPER_CONSTRUCT_EXTRA`]): the bare coercion is
+    /// two `fxNewSlot` allocations only — `fxNewObjectInstance` (the wrapper
+    /// head) and `fxNext<Type>Property` (the internal `[[NumberData]]`/
+    /// `[[BooleanData]]` slot) — with no constructor call frame, so it meters
+    /// exactly `2 × SLOT_ALLOCATION_METERING` beyond the opcode dispatch. The
+    /// wrapped primitive lives in [`Self::wrapper_data`] (where `valueOf`/
+    /// `toString`/the bare completion read it); the wrapper carries no own
+    /// enumerable property, so a name resolved against it (the `with`
+    /// scopable walk) falls through to `%Number.prototype%`/`%Boolean.prototype%`
+    /// and then outward, matching the oracle. In strict code XS stamps the
+    /// wrapper `XS_DONT_PATCH_FLAG` (non-extensible); `with` is a strict-mode
+    /// SyntaxError so that arm only matters to a strict destructuring temporary,
+    /// but it is set faithfully. Only the primitives with **no exotic own
+    /// properties** route here — a `String` wrapper's `length`/indexed
+    /// characters are not materialized in the side-table model, so a `String`
+    /// (and `Symbol`/`BigInt`, unmodeled wrappers) stays an honest
+    /// `to_instance:primitive-box` skip in the caller.
+    fn box_primitive_to_instance(
+        &mut self,
+        native: Native,
+        prim: Slot,
+    ) -> crate::value::SlotIndex {
+        // fxNewObjectInstance: one fxNewSlot for the wrapper head.
+        let proto = self
+            .intrinsics
+            .get(native.display_name())
+            .and_then(|&c| self.prototype_of(c))
+            .unwrap_or(self.object_proto);
+        let inst = self.slots.alloc(Slot::instance(proto));
+        self.meter.tick_slot_alloc();
+        // fxNext<Type>Property: one fxNewSlot for the internal [[XxxData]]
+        // slot. ironhorse holds the wrapped primitive in the side table, so
+        // the slot's cost is metered here explicitly.
+        self.meter.tick_slot_alloc();
+        self.wrapper_data.insert(inst, prim);
+        if self.strict {
+            self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG;
+        }
+        inst
+    }
+
     fn build_wrapper(&mut self, native: Native, prim: Slot) -> Slot {
         self.meter.tick_builtin();
         let inst = self.new_object();
@@ -19425,6 +19901,78 @@ impl Interp {
         Ok(true)
     }
 
+    /// Dispatch `native.apply(thisArg, argsArray)` without entering a bytecode
+    /// frame — the `.apply` analog of [`Self::call_dot_call_native`]. Returns
+    /// `Ok(false)` when the receiver is not a native constructor/method (the
+    /// ordinary user-function trampoline then runs), or when the arguments
+    /// array is a shape not yet forwarded (a sparse array / array-like), so
+    /// [`Self::enter_call_dot_apply`] keeps its honest self-name. A dense Array
+    /// instance (or absent/undefined/null → no args) forwards its elements as
+    /// the call arguments, exactly as the user-receiver path does.
+    fn call_dot_apply_native(
+        &mut self,
+        base: usize,
+        code: &[u8],
+    ) -> Result<bool, Halt> {
+        let target = self
+            .stack
+            .get(base)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let target_ref = match target.value {
+            Payload::Reference(r) => r,
+            _ => return Ok(false),
+        };
+        let native = self.native_of(target_ref);
+        let method = self.method_of(target_ref);
+        if native.is_none() && method.is_none() {
+            return Ok(false);
+        }
+        let this_arg = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        // Expand the arguments array (arg 1 of `.apply`) into the forwarded
+        // slice — the same dense-only reading as the user-receiver path. A
+        // sparse array or a non-array object is not yet forwarded: return
+        // `Ok(false)` so `enter_call_dot_apply` self-names it rather than
+        // dropping arguments silently.
+        let arg_array = self.stack.get(base + 5).copied();
+        let (forwarded, array_read_meter) = match arg_array.map(|s| (s.kind, s.value)) {
+            None | Some((Kind::Undefined, _)) | Some((Kind::Null, _)) => (Vec::new(), 0),
+            Some((Kind::Reference, Payload::Reference(arr))) if self.arrays.contains_key(&arr) => {
+                let data = &self.arrays[&arr];
+                let len = data.length;
+                if (0..len).any(|i| !data.items.contains_key(&i)) {
+                    return Ok(false);
+                }
+                let args: Vec<Slot> = (0..len).map(|i| data.items[&i]).collect();
+                let meter =
+                    APPLY_ARRAY_BASE_METERING + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
+                (args, meter)
+            }
+            _ => return Ok(false),
+        };
+        let forwarded_len = forwarded.len();
+        self.stack.truncate(base);
+        self.push(this_arg);
+        self.push(target);
+        self.push(Slot::undefined());
+        self.push(Slot::of(Kind::Uninitialized, Payload::None));
+        for arg in forwarded {
+            self.push(arg);
+        }
+        self.meter
+            .tick_raw(CALL_TRAMPOLINE_METERING + array_read_meter);
+        if let Some(native) = native {
+            self.call_native(native, base, forwarded_len, false, code)?;
+        } else if let Some(method) = method {
+            self.call_native_method(method, base, forwarded_len, code)?;
+        }
+        Ok(true)
+    }
+
     /// `Function.prototype.call` trampoline: reshape the call frame from
     /// `[f, callMethod, RESULT, FRAME, thisArg, args…]` into a direct call
     /// `[thisArg, f, RESULT, FRAME, args…]` and enter the receiver's body,
@@ -19471,16 +20019,14 @@ impl Interp {
             .copied()
             .unwrap_or_else(Slot::undefined);
         // A primitive `thisArg` is boxed to its wrapper object in a sloppy
-        // callee (XS's `fxToInstance`) but left as-is in a strict callee — a
-        // meter-affecting distinction ironhorse does not yet model, and the
-        // callee's strictness is not known until its `begin`. Self-name for a
-        // primitive `thisArg` rather than answer a `this`-dependent test
-        // wrongly; `undefined`/`null` (→ global / kept) and an object
-        // `thisArg` are handled.
-        if !matches!(
-            this_arg.kind,
-            Kind::Undefined | Kind::Null | Kind::Reference
-        ) {
+        // callee (XS's `fxToInstance`) but left as-is in a strict callee. The
+        // strictness is only known at the callee's `begin`, so the boxing (or
+        // pass-through) is deferred there via [`Self::bind_this_sloppy`] /
+        // `BEGIN_STRICT`: Number/Boolean box cleanly, `undefined`/`null` bind
+        // to the global (sloppy) or are kept (strict), and an object is used
+        // directly. Only a String/Symbol/BigInt `thisArg` self-names, whose
+        // wrapper's exotic own properties are not yet modeled.
+        if matches!(this_arg.kind, Kind::String | Kind::Symbol | Kind::BigInt) {
             return Err(Halt::Unsupported("call:primitive-this-boxing"));
         }
         let real_args: Vec<Slot> = if argc >= 1 {
@@ -19513,6 +20059,7 @@ impl Interp {
         base: usize,
         _argc: usize,
         ret_pc: usize,
+        code: &[u8],
     ) -> Result<usize, Halt> {
         let f = self
             .stack
@@ -19542,10 +20089,9 @@ impl Interp {
             .get(base + 4)
             .copied()
             .unwrap_or_else(Slot::undefined);
-        if !matches!(
-            this_arg.kind,
-            Kind::Undefined | Kind::Null | Kind::Reference
-        ) {
+        // See `enter_call_dot_call`: Number/Boolean/undefined/null/object are
+        // handled at the callee's `begin`; only String/Symbol/BigInt self-names.
+        if matches!(this_arg.kind, Kind::String | Kind::Symbol | Kind::BigInt) {
             return Err(Halt::Unsupported("apply:primitive-this-boxing"));
         }
         // The arguments array (the second argument). Absent/undefined/null is
@@ -19572,7 +20118,20 @@ impl Interp {
                     APPLY_ARRAY_BASE_METERING + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
                 (args, meter)
             }
-            _ => return Err(Halt::Unsupported("apply:arguments-array")),
+            // A non-dense-array **object** argArray (array-like / `arguments` /
+            // sparse array): `CreateListFromArrayLike` (ECMA-262 7.3.18) reads
+            // `length` (`ToLength`) then each indexed element, with any getter
+            // throw propagated. The per-property reads meter themselves, so no
+            // extra array meter is added here.
+            Some((Kind::Reference, _)) | Some((Kind::Instance, _)) => {
+                let arg_slot = arg_array.unwrap_or_else(Slot::undefined);
+                let args = self.arraylike_to_vec(code, arg_slot)?;
+                (args, 0)
+            }
+            // A non-object, non-nullish argArray (a Boolean/Number/String/
+            // Symbol/BigInt primitive): `CreateListFromArrayLike` step 2
+            // (ECMA-262 7.3.18) throws a catchable TypeError.
+            Some(_) => return Err(self.catchable_type_error()),
         };
         let n = real_args.len();
         self.stack.truncate(base);
@@ -19640,6 +20199,70 @@ impl Interp {
         self.meter
             .tick_raw(BIND_CALL_METERING + total as u64 * BIND_CALL_PER_ARG);
         self.enter_call(total, ret_pc, false)
+    }
+
+    /// A bound function's **construct** (`new boundF(...)`, ECMA-262 10.4.1.2
+    /// `[[Construct]]`): construct the ultimate target with the bound leading
+    /// arguments prepended to the call arguments, and the fresh instance's
+    /// `new.target` resolved to that ultimate target. The stack at `base` holds
+    /// the construct frame `[THIS(uninit), FUNCTION(bound), RESULT, FRAME,
+    /// callArgs...]`; reshape it to the target's construct frame and enter.
+    ///
+    /// The bound chain is walked to its ultimate target, prepending each
+    /// level's bound args **inner-first** (`args = innerBound ++ … ++ outerBound
+    /// ++ callArgs`, the fold of step 1's `boundArgs ++ argumentsList` down the
+    /// chain). For the plain `new` operator the `new.target` supplied to the
+    /// outermost bound is the bound itself, and step 5 (`SameValue(F, newTarget)
+    /// → target`) applies at every level, so the effective `new.target` is the
+    /// ultimate target — its `.prototype` becomes the instance's prototype
+    /// (via [`Self::run_constructor`] reading `target_func`). A native or
+    /// non-constructor ultimate target is not yet modeled and self-names.
+    fn enter_construct_bound(
+        &mut self,
+        bf: crate::value::SlotIndex,
+        base: usize,
+        argc: usize,
+        ret_pc: usize,
+    ) -> Result<usize, Halt> {
+        let call_args: Vec<Slot> = if argc >= 1 {
+            self.stack[base + 4..base + 4 + argc].to_vec()
+        } else {
+            Vec::new()
+        };
+        let mut acc = call_args;
+        let mut cur = bf;
+        let target = loop {
+            let data = self.bound_functions[&cur].clone();
+            // Prepend this level's bound args ahead of the accumulated tail.
+            let mut prepended = data.args;
+            prepended.extend_from_slice(&acc);
+            acc = prepended;
+            let t = data.target;
+            if self.bound_functions.contains_key(&t) {
+                cur = t;
+                continue;
+            }
+            match self.functions.get(&t) {
+                Some(fi) if fi.native.is_none() && fi.method.is_none() => break t,
+                _ => return Err(Halt::Unsupported("bind:new-bound-target")),
+            }
+        };
+        let total = acc.len();
+        self.stack.truncate(base);
+        self.stack.push(Slot::uninitialized()); // THIS (construct placeholder)
+        self.stack
+            .push(Slot::of(Kind::Reference, Payload::Reference(target))); // FUNCTION
+        self.stack.push(Slot::undefined()); // RESULT
+        self.stack
+            .push(Slot::of(Kind::Uninitialized, Payload::None)); // FRAME
+        for a in acc {
+            self.stack.push(a);
+        }
+        // `new.target` resolves to the ultimate target (see the doc comment).
+        self.pending_new_target = Some(target);
+        self.meter
+            .tick_raw(BIND_CALL_METERING + total as u64 * BIND_CALL_PER_ARG);
+        self.enter_call(total, ret_pc, true)
     }
 
     /// `Error.prototype.toString` over an arbitrary object receiver. The
@@ -20761,6 +21384,60 @@ impl Interp {
         }
     }
 
+    fn date_method(&mut self, op: u8, this: Slot, base: usize, argc: usize, code: &[u8]) -> Result<Slot, Halt> {
+        let arg = |stack: &[Slot], i: usize| stack.get(base + 4 + i).copied().unwrap_or_else(Slot::undefined);
+        match op {
+            0 => {
+                let text = self.value_to_string(code, arg(&self.stack, 0))?;
+                Ok(Slot::number(parse_date_string(&text).unwrap_or(f64::NAN)))
+            }
+            1 => {
+                let inputs: Vec<Slot> = (0..7).map(|i| if i < argc { arg(&self.stack, i) } else if i == 2 { Slot::integer(1) } else { Slot::integer(0) }).collect();
+                let mut values = [0.0; 7];
+                for (value, input) in values.iter_mut().zip(inputs) {
+                    *value = to_number(&self.to_number_value(code, input)?);
+                }
+                Ok(Slot::number(date_from_components(values)))
+            }
+            2 => Ok(Slot::number(0.0)),
+            _ => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.dates.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let t = self.dates[&inst];
+                if op == 26 {
+                    let n = self.to_number_value(code, arg(&self.stack, 0))?;
+                    let clipped = time_clip(to_number(&n));
+                    self.dates.insert(inst, clipped);
+                    return Ok(Slot::number(clipped));
+                }
+                if op == 27 {
+                    return if t.is_finite() { Ok(self.intl_string(&date_iso_string(t))) } else { Ok(Slot::null()) };
+                }
+                if matches!(op, 10 | 11) { return Ok(Slot::number(t)); }
+                if !t.is_finite() {
+                    return match op {
+                        21 => Err(self.catchable_range_error()),
+                        22..=25 => Ok(self.intl_string("Invalid Date")),
+                        _ => Ok(Slot::number(f64::NAN)),
+                    };
+                }
+                let (year, month, day, weekday, hour, minute, second, millis) = civil_fields(t, 0);
+                Ok(match op {
+                    12 => Slot::number(year as f64), 13 => Slot::integer(month as i32 - 1),
+                    14 => Slot::integer(day as i32), 15 => Slot::integer(weekday as i32),
+                    16 => Slot::integer(hour as i32), 17 => Slot::integer(minute as i32),
+                    18 => Slot::integer(second as i32), 19 => Slot::integer(millis as i32),
+                    20 => Slot::integer(0), 21 => self.intl_string(&date_iso_string(t)),
+                    22 => self.intl_string(&date_utc_string(t)), 23 => self.intl_string(&date_local_string(t)),
+                    24 => self.intl_string(&date_only_string(t)), 25 => self.intl_string(&date_time_string(t)),
+                    _ => return Err(Halt::Unsupported("Date:method")),
+                })
+            }
+        }
+    }
+
     fn call_native_method(
         &mut self,
         m: NativeMethod,
@@ -20802,6 +21479,7 @@ impl Interp {
             }
         }
         let result: Slot = match m {
+            NativeMethod::Date(op) => self.date_method(op, this, base, argc, code)?,
             NativeMethod::TemporalPlain(kind, op) => {
                 let arg1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
                 self.temporal_plain_method(kind, op, this, arg0, arg1, code)?
@@ -22261,19 +22939,28 @@ impl Interp {
                 if !self.is_ordinary_object(inst) {
                     return Err(Halt::Unsupported("propertyIsEnumerable:exotic-object"));
                 }
-                let key = match arg0.value {
-                    Payload::String(off) if arg0.kind == Kind::String => self.str_text(off),
-                    _ => return Err(Halt::Unsupported("propertyIsEnumerable:non-string-key")),
+                let id = match (arg0.kind, arg0.value) {
+                    (Kind::String, Payload::String(off)) => {
+                        let key = self.str_text(off);
+                        if string_to_index(&key).is_some() {
+                            return Err(Halt::Unsupported("propertyIsEnumerable:index-key"));
+                        }
+                        if !self.symbol_ids.contains_key(&key)
+                            && self.default_keys.contains(key.as_str())
+                        {
+                            return Err(Halt::Unsupported(
+                                "propertyIsEnumerable:ambiguous-default-key",
+                            ));
+                        }
+                        self.intern_key(&key)
+                    }
+                    (Kind::Symbol, Payload::Reference(desc)) => self.intern_symbol_key(desc),
+                    _ => {
+                        return Err(Halt::Unsupported(
+                            "propertyIsEnumerable:non-string-key",
+                        ))
+                    }
                 };
-                if string_to_index(&key).is_some() {
-                    return Err(Halt::Unsupported("propertyIsEnumerable:index-key"));
-                }
-                if !self.symbol_ids.contains_key(&key) && self.default_keys.contains(key.as_str()) {
-                    return Err(Halt::Unsupported(
-                        "propertyIsEnumerable:ambiguous-default-key",
-                    ));
-                }
-                let id = self.intern_key(&key);
                 let r = match self.find_property(inst, id) {
                     Some(p) => self.slots.get(p).flag & XS_DONT_ENUM_FLAG == 0,
                     None => false,
@@ -23892,6 +24579,36 @@ impl Interp {
                     _ => return Err(Halt::Unsupported("array-iterator-next:non-iterator")),
                 };
                 self.array_iterator_next(iter)?
+            }
+            NativeMethod::MapIteratorNext | NativeMethod::SetIteratorNext => {
+                let expected = if m == NativeMethod::MapIteratorNext {
+                    CollKind::Map
+                } else {
+                    CollKind::Set
+                };
+                let iter = match this.value {
+                    Payload::Reference(i)
+                        if self
+                            .iterators
+                            .get(&i)
+                            .and_then(|state| self.collections.get(&state.iterable))
+                            .is_some_and(|collection| collection.kind == expected) => i,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                self.collection_iterator_next(iter)
+            }
+            NativeMethod::IteratorFrom => {
+                let value = arg0;
+                match value.value {
+                    Payload::Reference(i)
+                        if self.iterators.contains_key(&i)
+                            || self.generators.contains_key(&i) => value,
+                    _ => return Err(Halt::Unsupported("Iterator.from:wrapper")),
+                }
+            }
+            NativeMethod::IteratorHelper(6) => self.iterator_to_array(this)?,
+            NativeMethod::IteratorHelper(_) => {
+                return Err(Halt::Unsupported("Iterator.helper"));
             }
             NativeMethod::Math(id) => self.call_math(id, base, argc)?,
             NativeMethod::ReflectGetPrototypeOf
@@ -26979,7 +27696,12 @@ impl Interp {
         if let Some(did) = self.done_id {
             self.set_own_unmetered(result, did, Slot::boolean(false));
         }
-        let iter = self.slots.alloc(Slot::instance(self.array_iterator_proto));
+        let proto = match self.collections.get(&inst).map(|c| c.kind) {
+            Some(CollKind::Map) => self.map_iterator_proto,
+            Some(CollKind::Set) => self.set_iterator_proto,
+            _ => self.array_iterator_proto,
+        };
+        let iter = self.slots.alloc(Slot::instance(proto));
         self.iterators.insert(
             iter,
             IterState {
@@ -26993,6 +27715,44 @@ impl Interp {
             },
         );
         Slot::of(Kind::Reference, Payload::Reference(iter))
+    }
+
+    /// `Iterator.prototype.toArray` for the intrinsic iterator families. The
+    /// generic user-defined `next` protocol remains an honest named gap; this
+    /// path advances the same native iterator state used by ordinary `.next()`
+    /// calls and appends each yielded value to a fresh Array.
+    fn iterator_to_array(&mut self, this: Slot) -> Result<Slot, Halt> {
+        let iter = match this.value {
+            Payload::Reference(i) if self.iterators.contains_key(&i) => i,
+            Payload::Reference(_) => return Err(Halt::Unsupported("Iterator.toArray:generic")),
+            _ => return Err(self.catchable_type_error()),
+        };
+        let array = self.new_array();
+        let mut length = 0u32;
+        loop {
+            let result = self.array_iterator_next(iter)?;
+            let Payload::Reference(result_obj) = result.value else {
+                return Err(Halt::Unsupported("Iterator.toArray:bad-result"));
+            };
+            let done = self
+                .done_id
+                .map(|id| self.instance_get(result_obj, id))
+                .is_some_and(|value| self.truthy(&value));
+            if done {
+                break;
+            }
+            let value = self
+                .value_id
+                .map(|id| self.instance_get(result_obj, id))
+                .unwrap_or_else(Slot::undefined);
+            self.arrays.get_mut(&array).unwrap().items.insert(length, value);
+            length += 1;
+        }
+        self.arrays.get_mut(&array).unwrap().length = length;
+        if length != 0 {
+            self.meter.tick_raw(self.array_chunk_size_metering(length));
+        }
+        Ok(Slot::of(Kind::Reference, Payload::Reference(array)))
     }
 
     /// `fx_MapIterator_prototype_next` / `fx_SetIterator_prototype_next`: yield
@@ -30278,8 +31038,29 @@ impl Interp {
     }
 
     fn bind_this_sloppy(&mut self) {
-        if matches!(self.this_val.kind, Kind::Undefined | Kind::Null) {
-            self.this_val = Slot::of(Kind::Reference, Payload::Reference(self.global_obj));
+        match self.this_val.kind {
+            // `undefined`/`null` bind to the realm global (the sloppy default).
+            Kind::Undefined | Kind::Null => {
+                self.this_val = Slot::of(Kind::Reference, Payload::Reference(self.global_obj));
+            }
+            // A primitive `this` in a sloppy callee is ToObject-boxed to its
+            // wrapper object (XS's `fxToInstance`; ECMA-262 OrdinaryCallBindThis
+            // step 5 for non-strict code). Number/Boolean box cleanly — the
+            // wrapped primitive lives in the side table, so `typeof this` is
+            // `"object"` and value coercions round-trip through `valueOf`. A
+            // String/Symbol/BigInt wrapper's exotic own properties are not yet
+            // modeled, so those are left unboxed here (the `.call`/`.apply`
+            // trampolines self-name such a primitive `thisArg` before entry
+            // rather than hand back a mis-answering wrapper).
+            Kind::Boolean => {
+                let inst = self.box_primitive_to_instance(Native::Boolean, self.this_val);
+                self.this_val = Slot::of(Kind::Reference, Payload::Reference(inst));
+            }
+            Kind::Integer | Kind::Number => {
+                let inst = self.box_primitive_to_instance(Native::Number, self.this_val);
+                self.this_val = Slot::of(Kind::Reference, Payload::Reference(inst));
+            }
+            _ => {}
         }
     }
 
@@ -31570,7 +32351,13 @@ impl Interp {
         value: Slot,
         receiver: Slot,
     ) -> Result<bool, Halt> {
-        let own = self.ordinary_get_own_descriptor(inst, id);
+        // Functions keep their `length`, `name`, and (when constructable)
+        // `prototype` own properties in side tables.  They participate in
+        // OrdinarySet exactly like materialized own descriptors and must be
+        // considered before an inherited non-writable property.
+        let own = self
+            .ordinary_get_own_descriptor(inst, id)
+            .or_else(|| self.exotic_own_descriptor(inst, id));
         if let Some(descriptor) = own {
             if descriptor.is_accessor() {
                 let setter = descriptor.set.unwrap_or_else(Slot::undefined);
@@ -34884,6 +35671,87 @@ fn civil_fields(t: f64, offset_minutes: i32) -> (i64, u32, u32, u32, u32, u32, u
     (year, m, d, weekday, hour, minute, second, millis)
 }
 
+fn time_clip(t: f64) -> f64 {
+    if !t.is_finite() || t.abs() > 8_640_000_000_000_000.0 { f64::NAN }
+    else { let clipped = t.trunc(); if clipped == 0.0 { 0.0 } else { clipped } }
+}
+
+fn date_from_components(v: [f64; 7]) -> f64 {
+    if v.iter().any(|n| !n.is_finite()) { return f64::NAN; }
+    let mut year = v[0].trunc();
+    if (0.0..=99.0).contains(&year) { year += 1900.0; }
+    if year < i64::MIN as f64 || year > i64::MAX as f64 { return f64::NAN; }
+    let month = v[1].trunc();
+    if month < i64::MIN as f64 || month > i64::MAX as f64 { return f64::NAN; }
+    let total_month = (year as i128) * 12 + month as i128;
+    let norm_year = total_month.div_euclid(12);
+    let norm_month = total_month.rem_euclid(12) as u32 + 1;
+    let Ok(norm_year) = i64::try_from(norm_year) else { return f64::NAN };
+    let Some(first) = days_from_civil(norm_year, norm_month, 1) else { return f64::NAN };
+    let days = first + v[2].trunc() as i128 - 1;
+    time_clip(days as f64 * 86_400_000.0 + v[3].trunc() * 3_600_000.0
+        + v[4].trunc() * 60_000.0 + v[5].trunc() * 1_000.0 + v[6].trunc())
+}
+
+fn parse_date_string(text: &str) -> Option<f64> {
+    let text = text.trim();
+    if let Some(ns) = parse_temporal_instant(text) {
+        return Some(time_clip((ns / 1_000_000) as f64));
+    }
+    let (date, clock) = match text.find(['T', 't']) {
+        Some(i) => (&text[..i], Some(&text[i + 1..])), None => (text, None),
+    };
+    let last = date.rfind('-')?;
+    let second = date[..last].rfind('-')?;
+    let year: i64 = date[..second].parse().ok()?;
+    let month: u32 = date[second + 1..last].parse().ok()?;
+    let day: u32 = date[last + 1..].parse().ok()?;
+    let mut v = [year as f64, month as f64 - 1.0, day as f64, 0.0, 0.0, 0.0, 0.0];
+    if let Some(clock) = clock {
+        let clock = clock.strip_suffix('Z').or_else(|| clock.strip_suffix('z')).unwrap_or(clock);
+        let mut parts = clock.split(':');
+        v[3] = parts.next()?.parse().ok()?;
+        v[4] = parts.next()?.parse().ok()?;
+        let sec = parts.next().unwrap_or("0");
+        if parts.next().is_some() { return None; }
+        let (seconds, fraction) = sec.split_once('.').unwrap_or((sec, ""));
+        v[5] = seconds.parse().ok()?;
+        if !fraction.is_empty() {
+            let digits = &fraction[..fraction.len().min(3)];
+            v[6] = format!("{digits:0<3}").parse().ok()?;
+        }
+    }
+    Some(date_from_components(v))
+}
+
+fn date_year_string(year: i64) -> String {
+    if (0..=9999).contains(&year) { format!("{year:04}") }
+    else if year < 0 { format!("-{:<06}", -year).replace(' ', "0") }
+    else { format!("+{year:06}") }
+}
+
+fn date_iso_string(t: f64) -> String {
+    let (y, m, d, _, h, min, s, ms) = civil_fields(t, 0);
+    format!("{}-{m:02}-{d:02}T{h:02}:{min:02}:{s:02}.{ms:03}Z", date_year_string(y))
+}
+
+fn date_utc_string(t: f64) -> String {
+    let (y, m, d, w, h, min, s, _) = civil_fields(t, 0);
+    format!("{}, {d:02} {} {} {h:02}:{min:02}:{s:02} GMT", EN_WEEKDAYS_SHORT[w as usize], EN_MONTHS_SHORT[m as usize - 1], date_year_string(y))
+}
+
+fn date_only_string(t: f64) -> String {
+    let (y, m, d, w, _, _, _, _) = civil_fields(t, 0);
+    format!("{} {} {d:02} {}", EN_WEEKDAYS_SHORT[w as usize], EN_MONTHS_SHORT[m as usize - 1], date_year_string(y))
+}
+
+fn date_time_string(t: f64) -> String {
+    let (_, _, _, _, h, min, s, _) = civil_fields(t, 0);
+    format!("{h:02}:{min:02}:{s:02} GMT+0000")
+}
+
+fn date_local_string(t: f64) -> String { format!("{} {}", date_only_string(t), date_time_string(t)) }
+
 const EN_MONTHS_LONG: [&str; 12] = [
     "January", "February", "March", "April", "May", "June", "July", "August",
     "September", "October", "November", "December",
@@ -36443,6 +37311,7 @@ fn native_unsupported_name(native: Native) -> &'static str {
         Native::Symbol => "native-call:Symbol",
         Native::Number => "native-call:Number",
         Native::String => "native-call:String",
+        Native::Date => "native-call:Date",
         Native::Array => "native-call:Array",
         Native::Error => "native-call:Error",
         Native::EvalError => "native-call:EvalError",
@@ -36459,6 +37328,7 @@ fn native_unsupported_name(native: Native) -> &'static str {
         Native::Set => "native-call:Set",
         Native::WeakMap => "native-call:WeakMap",
         Native::WeakSet => "native-call:WeakSet",
+        Native::Iterator => "native-call:Iterator",
         Native::ArrayBuffer => "native-call:ArrayBuffer",
         Native::SharedArrayBuffer => "native-call:SharedArrayBuffer",
         Native::TypedArray(_) => "native-call:TypedArray",
@@ -38683,6 +39553,9 @@ impl Interp {
             self.arraybuffer_proto,
             self.dataview_proto,
             self.array_iterator_proto,
+            self.iterator_proto,
+            self.map_iterator_proto,
+            self.set_iterator_proto,
             self.string_proto,
             self.number_proto,
             self.symbol_proto,

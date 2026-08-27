@@ -834,13 +834,21 @@ impl Scoper {
                     } else if closure_flag {
                         self.declare_mut(si, id).flags |= dflags::CLOSURE;
                     }
-                } else if (self.scopes[si].flags & SCOPE_STRICT != 0) && is_private_member {
-                    let mut d = self.new_declare(si, Token::Private, Some(symbol.clone()), sym_line);
-                    d.flags |= dflags::CLOSURE;
-                    let id = self.scope_add_declare(si, d);
-                    self.scopes[si].closure_count += 1;
-                    found = Some(id);
                 }
+                // XS's `fxScopeLookup` synthesizes a `Private` brand declare
+                // here for a strict eval scope (`XS_TOKEN_PRIVATE_MEMBER`),
+                // deferring the "undefined private property" check to run time.
+                // The static oracle-shim compile drives the whole assembled
+                // program as one eval goal, so this Eval scope is the top-level
+                // program with no enclosing class — an unresolved `#name` at
+                // this point is the `AllPrivateNamesValid` early error and can
+                // never resolve at run time. Leaving `found = None` lets
+                // `bind_private_member` report "invalid private identifier" (a
+                // parse-phase rejection), matching XS's own SyntaxError verdict
+                // for these sources. A future direct-eval implementation must
+                // resolve a private name against the *real* enclosing private
+                // environment, never a synthesized top-level brand.
+                let _ = is_private_member;
                 found.map(|id| (si, id))
             }
             Token::Function => {

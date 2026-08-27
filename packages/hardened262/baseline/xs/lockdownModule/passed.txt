@@ -60,4 +60,5 @@ test/harden/proto.js
 test/harden/stamp.js
 test/harden/transitive-property.js
 test/harden/transitive-proto.js
+test/intrinsics/AsyncGeneratorPrototype/intrinsic-metadata.js
 test/lockdown/function-frozen.js

@@ -94,3 +94,34 @@ fn iteration_is_live_across_deletion_and_append() {
          out.join(',')",
     );
 }
+
+#[test]
+fn collection_builtin_function_metadata_is_reflective() {
+    for source in [
+        "var f = Map.prototype.set; f.name + ':' + f.length",
+        "var f = Set.prototype.add; f.name + ':' + f.length",
+        "var f = Map.prototype.entries; f.name + ':' + f.length",
+        "var f = Set.prototype.forEach; f.name + ':' + f.length",
+        "var f = Map.prototype.get; delete f.name; Object.defineProperty(f, 'name', { value: 'again' }); f.name",
+        "var f = Set.prototype.delete; delete f.length; Object.defineProperty(f, 'length', { value: 7 }); f.length",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn map_and_set_iterator_prototypes_are_distinct_and_branded() {
+    for source in [
+        "var p = Object.getPrototypeOf(new Map().entries()); p.next.name + ':' + p.next.length",
+        "var p = Object.getPrototypeOf(new Set().values()); p.next.name + ':' + p.next.length",
+        "Object.getPrototypeOf(new Map().entries())[Symbol.toStringTag]",
+        "Object.getPrototypeOf(new Set().values())[Symbol.toStringTag]",
+        "Object.getPrototypeOf(new Map().entries()).propertyIsEnumerable(Symbol.toStringTag)",
+        "Object.getPrototypeOf(new Set().values()).propertyIsEnumerable(Symbol.toStringTag)",
+        "Object.getPrototypeOf(new Map().entries()) === Object.getPrototypeOf(new Set().values())",
+        "var m = new Map([[1, 2]]).entries(); var s = new Set([1]).values(); var ok = false; try { m.next.call(s); } catch (e) { ok = e instanceof TypeError; } ok",
+        "var m = new Map([[1, 2]]).entries(); var s = new Set([1]).values(); var ok = false; try { s.next.call(m); } catch (e) { ok = e instanceof TypeError; } ok",
+    ] {
+        agrees(source);
+    }
+}

@@ -2118,7 +2118,15 @@ impl Coder<'_> {
             }
             target = self.targets[t].next_target;
         }
-        panic!("coder: invalid {}", if is_break { "break" } else { "continue" });
+        // No enclosing target carries this (label, kind): XS's
+        // `fxBreakContinueNodeCode` reports "invalid break"/"invalid continue"
+        // here (a code-time `fxReportParserError`, i.e. a parse-phase early
+        // error). Record it as a structured rejection instead of panicking so
+        // the front end declines the source exactly as XS does.
+        self.report(
+            node.line,
+            if is_break { "invalid break" } else { "invalid continue" },
+        );
     }
 
     /// `fxThrowNodeCode`. Child `[expression]`.
