@@ -65,6 +65,7 @@ test/harden/stamp.js
 test/harden/transitive-property.js
 test/harden/transitive-proto.js
 test/intrinsics/AsyncGeneratorPrototype/intrinsic-metadata.js
+test/intrinsics/GeneratorPrototype/intrinsic-metadata.js
 test/lockdown/function-frozen.js
 test/modules/module-source-reflection/ses-legacy/duplicate-import.js
 test/modules/module-source-reflection/ses-legacy/export-all-from.js
