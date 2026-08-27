@@ -1053,39 +1053,48 @@ pub const ID_SIZE: usize = 2;
 /// - `size == -2`: `1 + 2 + u16` (u16 LE length prefix, then bytes).
 /// - `size == -4`: `1 + 4 + u32` (u32 LE length prefix, then bytes).
 ///
-/// Returns `None` on an unknown opcode byte or a truncated length
-/// prefix (a corrupt or truncated stream), never panicking — the
-/// bytecode-decoder fuzz target (design § Fuzzability, target 2) relies
-/// on this.
+/// Returns `None` on an unknown opcode byte, a truncated length
+/// prefix, or a TRUNCATED INSTRUCTION — one whose operands or declared
+/// payload run past the end of the stream (wave-6 W6-22: the sentinel
+/// arms used to size a truncated trailing payload "successfully", so
+/// the relink walk accepted bytes the dispatch loop refuses; bounding
+/// the whole instruction here makes every walker agree). Never
+/// panicking — the bytecode-decoder fuzz target (design § Fuzzability,
+/// target 2) relies on this.
 pub fn instruction_len(code: &[u8], pc: usize) -> Option<usize> {
     let byte = *code.get(pc)?;
     let op = Opcode::from_u8(byte)?;
     let size = op.size();
-    if size > 0 {
-        return Some(size as usize);
-    }
-    match size {
-        0 => Some(1 + ID_SIZE),
-        -1 => {
-            let n = *code.get(pc + 1)? as usize;
-            Some(2 + n)
+    let len = if size > 0 {
+        size as usize
+    } else {
+        match size {
+            0 => 1 + ID_SIZE,
+            -1 => {
+                let n = *code.get(pc + 1)? as usize;
+                2 + n
+            }
+            -2 => {
+                let lo = *code.get(pc + 1)? as usize;
+                let hi = *code.get(pc + 2)? as usize;
+                3 + (lo | (hi << 8))
+            }
+            -4 => {
+                let b0 = *code.get(pc + 1)? as usize;
+                let b1 = *code.get(pc + 2)? as usize;
+                let b2 = *code.get(pc + 3)? as usize;
+                let b3 = *code.get(pc + 4)? as usize;
+                5 + (b0 | (b1 << 8) | (b2 << 16) | (b3 << 24))
+            }
+            // Every negative sentinel XS emits is -1/-2/-4; anything
+            // else is an impossible table entry.
+            _ => return None,
         }
-        -2 => {
-            let lo = *code.get(pc + 1)? as usize;
-            let hi = *code.get(pc + 2)? as usize;
-            Some(3 + (lo | (hi << 8)))
-        }
-        -4 => {
-            let b0 = *code.get(pc + 1)? as usize;
-            let b1 = *code.get(pc + 2)? as usize;
-            let b2 = *code.get(pc + 3)? as usize;
-            let b3 = *code.get(pc + 4)? as usize;
-            Some(5 + (b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)))
-        }
-        // Every negative sentinel XS emits is -1/-2/-4; anything else is
-        // an impossible table entry.
-        _ => None,
-    }
+    };
+    // The whole instruction — operands and payload included — must lie
+    // inside the stream; an instruction ending exactly at the end is
+    // complete, one running past it is truncation.
+    (pc.checked_add(len)? <= code.len()).then_some(len)
 }
 
 /// Rewrite every 2-byte little-endian ID operand through `map`,
@@ -1200,5 +1209,39 @@ mod tests {
             !id_bearing.contains(&Opcode::XS_CODE_PROFILE),
             "PROFILE's operand is a profile counter, not a symbol id",
         );
+    }
+
+    /// Wave-6 W6-22: a TRUNCATED TRAILING payload must refuse to walk.
+    /// A length-prefixed instruction declaring more payload bytes than
+    /// the stream holds used to size "successfully" (the sentinel arms
+    /// computed the length without checking the payload exists), so
+    /// `remap_ids` walked off the end and reported the truncated
+    /// bytecode relinkable — while the dispatch loop fails closed on
+    /// the same bytes. The two walkers must agree: truncation is a
+    /// refusal in both.
+    #[test]
+    fn a_truncated_trailing_payload_refuses_to_walk() {
+        // STRING_1 (`-1` sentinel: u8 length prefix, then bytes)
+        // declaring 8 payload bytes with only 2 present.
+        let truncated = [Opcode::XS_CODE_STRING_1 as u8, 8, b'a', b'b'];
+        assert_eq!(
+            instruction_len(&truncated, 0),
+            None,
+            "a truncated payload must not size"
+        );
+        assert!(
+            remap_ids(&truncated, Some).is_none(),
+            "a truncated payload must not relink"
+        );
+        // A truncated FIXED-size operand at the tail refuses the same
+        // way (INTEGER_2 is 3 bytes; only the opcode byte is present).
+        let short_fixed = [Opcode::XS_CODE_INTEGER_2 as u8];
+        assert_eq!(instruction_len(&short_fixed, 0), None);
+        assert!(remap_ids(&short_fixed, Some).is_none());
+        // The well-formed forms still walk: a payload ending EXACTLY at
+        // the end of the stream is complete, not truncated.
+        let exact = [Opcode::XS_CODE_STRING_1 as u8, 2, b'a', b'b'];
+        assert_eq!(instruction_len(&exact, 0), Some(4));
+        assert!(remap_ids(&exact, Some).is_some());
     }
 }
