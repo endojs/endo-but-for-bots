@@ -120,7 +120,9 @@ test('makeStubInspector exposes the grouping verbs', async t => {
 
 test('no-op inspector accepts grouping silently', async t => {
   const inspector = makeNoopInspector();
-  await t.notThrowsAsync(() => inspector.group({ label: 'g', collapsed: true }));
+  await t.notThrowsAsync(() =>
+    inspector.group({ label: 'g', collapsed: true }),
+  );
   await t.notThrowsAsync(() => inspector.groupEnd());
 });
 
