@@ -146,6 +146,18 @@ pub enum Coverage {
     /// existing one) before a machine spanning this table can round-trip.
     /// This is the remaining-work ledger the completeness note demands.
     Pending,
+    /// **Provably empty at every persistable boundary**, so no atom is
+    /// ever needed: `Interp::is_quiescent` requires the table empty and
+    /// EVERY persist verb — store and blob alike — gates on quiescence
+    /// (wave-6 W6-10; the contract-violation locks in
+    /// `persist_gates.rs` enforce the gates behaviorally, and
+    /// [`tests::empty_at_boundary_rows_match_the_quiescence_predicate`]
+    /// ties this classification to the predicate's actual field list
+    /// mechanically). Distinct from an excluded transient: these ARE
+    /// reachable machine state mid-crank — a halted crank holds them —
+    /// but a halted machine cannot pass the gates, and the managed
+    /// lifecycle rewinds it whole.
+    EmptyAtBoundary,
 }
 
 /// One side table of the machine's reachable state. Enumerated from the
@@ -171,11 +183,14 @@ pub enum SideTable {
     /// visible-broken, not for correct.
     Proxies,
     /// `call_stack` — the suspended `CallerState` activations (scope,
-    /// args, result) of the active call chain.
+    /// args, result) of the active call chain. Empty at every
+    /// persistable boundary (`is_quiescent` requires it; the persist
+    /// gates enforce it), so no atom is needed.
     CallStack,
     /// `jumps` — the `CatchJump` chain (`the->firstJump`): each entry
     /// snapshots the value stack, scope, and call frames to restore on a
     /// throw. A caught-and-pending exception lives here + `exception`.
+    /// Empty at every persistable boundary (quiescence-gated).
     Jumps,
     /// `global_props` — the global object's materialized own-property
     /// slot index by id.
@@ -225,7 +240,11 @@ pub enum SideTable {
     PromiseFunctions,
     /// `promise_guards` — the per-pair `[[AlreadyResolved]]` flags.
     PromiseGuards,
-    /// `promise_jobs` — the pending microtask (reaction-job) queue.
+    /// `promise_jobs` — the queued microtasks. Empty at every
+    /// persistable boundary: the crank model drains the queue before
+    /// completion, `is_quiescent` requires it empty (a HALTED crank
+    /// leaves jobs queued, and the gates refuse exactly that machine),
+    /// so no atom is needed.
     PromiseJobs,
     /// `combinators` — the shared `Promise.all`/`allSettled`/`race`/`any`
     /// element-accumulation state a `ReactionKind::Combine` reaction indexes.
@@ -233,12 +252,16 @@ pub enum SideTable {
     /// `generators` — per-instance suspended activation + lifecycle state.
     Generators,
     /// `gen_run_stack` — generators currently mid-`resume_generator`
-    /// dispatch (the `YIELD` snapshot target stack).
+    /// dispatch (the `YIELD` snapshot target stack). Empty at every
+    /// persistable boundary (quiescence-gated) — a SUSPENDED
+    /// generator's state is the `generators` row, not this stack.
     GenRunStack,
     /// `async_instances` — per-instance async activation + result promise.
     AsyncInstances,
     /// `async_run_stack` — async instances mid-`step_async` dispatch (the
-    /// `AWAIT` snapshot target stack).
+    /// `AWAIT` snapshot target stack). Empty at every persistable
+    /// boundary (quiescence-gated) — a suspended instance's state is
+    /// the `async_instances` row, not this stack.
     AsyncRunStack,
     /// `regexps` — compiled RegExp program + source/flags (note:
     /// `lastIndex` is an ordinary own property, in the arena).
@@ -253,6 +276,9 @@ pub enum SideTable {
     /// mid-`step_async_generator` dispatch stack. The language-completion
     /// sweep's async-generator machinery; per-instance runtime state like
     /// `Generators`/`AsyncInstances`, so honestly `Pending` with them.
+    /// (The `async_gen_run_stack` HALF is quiescence-empty like the
+    /// other run stacks; the variant stays `Pending` for the instance
+    /// table it also names.)
     AsyncGenerators,
     /// `private_values` + `private_accessors` — class private
     /// fields/methods and private accessors keyed by (instance, brand).
@@ -435,8 +461,8 @@ impl SideTable {
             SideTable::Functions => ("functions", Pending),
             SideTable::BoundFunctions => ("bound_functions", Pending),
             SideTable::Proxies => ("proxies/proxy_revokers", Pending),
-            SideTable::CallStack => ("call_stack", Pending),
-            SideTable::Jumps => ("jumps", Pending),
+            SideTable::CallStack => ("call_stack", EmptyAtBoundary),
+            SideTable::Jumps => ("jumps", EmptyAtBoundary),
             SideTable::ErrorData => ("error_data", Serialized),
             SideTable::Accessors => ("accessors", Pending),
             SideTable::WrapperData => ("wrapper_data", Pending),
@@ -458,12 +484,12 @@ impl SideTable {
             SideTable::Promises => ("promises", Pending),
             SideTable::PromiseFunctions => ("promise_functions", Pending),
             SideTable::PromiseGuards => ("promise_guards", Pending),
-            SideTable::PromiseJobs => ("promise_jobs", Pending),
+            SideTable::PromiseJobs => ("promise_jobs", EmptyAtBoundary),
             SideTable::Combinators => ("combinators", Pending),
             SideTable::Generators => ("generators", Pending),
-            SideTable::GenRunStack => ("gen_run_stack", Pending),
+            SideTable::GenRunStack => ("gen_run_stack", EmptyAtBoundary),
             SideTable::AsyncInstances => ("async_instances", Pending),
-            SideTable::AsyncRunStack => ("async_run_stack", Pending),
+            SideTable::AsyncRunStack => ("async_run_stack", EmptyAtBoundary),
             SideTable::RegExps => ("regexps", Pending),
             SideTable::TemporalRecords => {
                 ("temporal_instants/temporal_durations/temporal_plains/temporal_zoneds", Pending)
@@ -693,6 +719,89 @@ mod tests {
         assert!(!pending.contains(&SideTable::DataViews));
         assert!(pending.contains(&SideTable::Proxies));
         assert!(pending.contains(&SideTable::Accessors));
+        // The quiescence-gated run stacks, call chain, catch chain, and
+        // microtask queue are EmptyAtBoundary, not pending: no atom is
+        // ever needed for state the gates prove empty.
+        for t in [
+            SideTable::CallStack,
+            SideTable::Jumps,
+            SideTable::PromiseJobs,
+            SideTable::GenRunStack,
+            SideTable::AsyncRunStack,
+        ] {
+            assert!(!pending.contains(&t), "{t:?} is quiescence-gated, not pending");
+            assert_eq!(t.descriptor().coverage, Coverage::EmptyAtBoundary);
+        }
+    }
+
+    /// The `EmptyAtBoundary` classification is honest only while
+    /// `Interp::is_quiescent` actually requires each such table empty
+    /// (the persist gates all run the predicate; `persist_gates.rs`
+    /// enforces THAT behaviorally). Parse the predicate's body from
+    /// source and reconcile, both ways: every EmptyAtBoundary field
+    /// appears in it, and every `is_empty()`-checked field in it is
+    /// accounted for — an EmptyAtBoundary row, the value stack (an
+    /// arena, serialized empty via `STAC`), or `async_gen_run_stack`
+    /// (quiescence-empty, but riding the still-Pending
+    /// `AsyncGenerators` variant for the instance table it names).
+    #[test]
+    fn empty_at_boundary_rows_match_the_quiescence_predicate() {
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../ironhorse-vm/src/interp.rs"
+        ))
+        .expect("read the vm source");
+        let start = src.find("pub fn is_quiescent(&self)").expect("the predicate");
+        let open = start + src[start..].find('{').expect("body");
+        let mut depth = 0usize;
+        let mut end = open;
+        for (i, b) in src[open..].bytes().enumerate() {
+            match b {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[open..=end];
+
+        // Forward: every EmptyAtBoundary field is required empty.
+        for t in SideTable::ALL {
+            if t.descriptor().coverage != Coverage::EmptyAtBoundary {
+                continue;
+            }
+            for field in t.descriptor().field.split('/') {
+                assert!(
+                    body.contains(&format!("self.{field}.is_empty()")),
+                    "{field} is classified EmptyAtBoundary but is_quiescent does not require it empty"
+                );
+            }
+        }
+        // Reverse: every field the predicate requires empty is
+        // accounted for by the classification.
+        let empty_rows: Vec<&str> = SideTable::ALL
+            .iter()
+            .filter(|t| t.descriptor().coverage == Coverage::EmptyAtBoundary)
+            .flat_map(|t| t.descriptor().field.split('/'))
+            .collect();
+        for cap in body.split("self.").skip(1) {
+            let Some(field) = cap.split(".is_empty()").next() else { continue };
+            if !cap[field.len()..].starts_with(".is_empty()") {
+                continue;
+            }
+            let accounted = empty_rows.contains(&field)
+                || field == "stack"
+                || field == "async_gen_run_stack";
+            assert!(
+                accounted,
+                "is_quiescent requires `{field}` empty but the ledger does not classify it EmptyAtBoundary (or document its exception)"
+            );
+        }
     }
 
     /// The restore-time rebuild rows are classified [`Coverage::RebuiltAtRestore`],
