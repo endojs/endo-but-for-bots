@@ -2517,12 +2517,26 @@ bite-checked by reverting the fix under the lock). Statuses:
   `symbol_key_ids`' ephemeron-not-edges classification was caught
   live by the net while writing it).
 - **RECORDED, not fixed** — W6-22 (truncated trailing
-  payload relinks; dispatch fails closed), the lazy path's
-  chunk-offset bound (the eager gate covers it), and the
-  multi-crank oracle mode (the one test class still open).
+  payload relinks; dispatch fails closed), and the lazy path's
+  chunk-offset bound (the eager gate covers it).
   (W6-19's arena growth and the resource-management metering gap
   were subsequently FIXED — see the Remaining ledger; W6-23 now
-  carries its decision below.)
+  carries its decision below; the multi-crank oracle mode LANDED
+  2026-08-27, closing the last open wave-6 test class:
+  `xs_oracle_run_cranks` keeps ONE XS machine across sequential
+  script cranks — per-crank compile capture, per-crank meterIndex
+  reset, per-crank microtask drain, stop-at-throw — and
+  `dual_run_cranks` mirrors it with one relinking ironhorse machine,
+  comparing every crank on results AND per-crank raw-meter-delta
+  computrons. Scope is the self-contained-crank contract (cross-crank
+  data/state reads; never calls of a prior crank's functions, which
+  diverge by design). `multi_crank_oracle.rs` holds the locks —
+  cross-crank state, error metadata (the pattern-2 live specimen: the
+  own-`message` read the single-crank oracle structurally missed,
+  bite-checked by reverting that fix and watching crank 2 diverge
+  `boom:TypeError` vs `:TypeError`), collections/arrays, `Symbol.for`
+  identity, typed arrays, and an aborting crank agreeing on the
+  rendered error and the at-throw computron count.)
 - **W6-23 DECIDED (libm decision-of-record, 2026-08-27):**
   determinism is scoped PER RELEASE BINARY PER PLATFORM. The Math
   transcendentals call the platform libm — the engine's one genuine

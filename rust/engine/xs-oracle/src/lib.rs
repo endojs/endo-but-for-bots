@@ -71,6 +71,12 @@ extern "C" {
         out: *mut XsOracleResultRaw,
     ) -> c_int;
     fn xs_oracle_free(out: *mut XsOracleResultRaw);
+    fn xs_oracle_run_cranks(
+        sources: *const *const c_char,
+        source_lens: *const u32,
+        crank_count: u32,
+        outs: *mut XsOracleResultRaw,
+    ) -> c_int;
     fn xs_oracle_regexp(
         pattern: *const c_char,
         modifier: *const c_char,
@@ -288,6 +294,76 @@ pub fn run(source: &str) -> Option<OracleOutcome> {
     unsafe { xs_oracle_free(&mut raw as *mut _) };
 
     Some(outcome)
+}
+
+/// Convert (and free) one shim result slot into an owned outcome —
+/// the same copy-out [`run`] performs inline.
+fn outcome_from_raw(raw: &mut XsOracleResultRaw) -> OracleOutcome {
+    let bytecode = if raw.code.is_null() || raw.code_size == 0 {
+        Vec::new()
+    } else {
+        // Safety: the shim malloc'd `code_size` bytes at `code`.
+        unsafe {
+            std::slice::from_raw_parts(raw.code as *const u8, raw.code_size as usize).to_vec()
+        }
+    };
+    let symbols = if raw.symbols.is_null() || raw.symbols_size == 0 {
+        Vec::new()
+    } else {
+        unsafe {
+            std::slice::from_raw_parts(raw.symbols as *const u8, raw.symbols_size as usize)
+                .to_vec()
+        }
+    };
+    let outcome = OracleOutcome {
+        bytecode,
+        symbols,
+        completed: raw.ok != 0,
+        result: cstr_field(&raw.result),
+        error: cstr_field(&raw.error),
+        computrons: raw.computrons as u64,
+        meter_raw: raw.meter_raw,
+    };
+    // Safety: frees the shim's heap buffers; copied out above.
+    unsafe { xs_oracle_free(raw as *mut _) };
+    outcome
+}
+
+/// MULTI-CRANK oracle mode: run `sources` sequentially on ONE XS
+/// machine and return a per-crank outcome — each crank's own compiled
+/// bytecode/symbols, its run-only computrons (meterIndex reset per
+/// crank, microtask drain included), and its completion value. This is
+/// the differential harness's window onto CROSS-CRANK semantics (state
+/// created by crank 1 observed by crank 2), which the single-crank
+/// [`run`] entry structurally cannot compare. An uncaught throw stops
+/// the run at that crank: its outcome carries the error, and later
+/// sources are returned as not-completed placeholders with empty
+/// bytecode.
+///
+/// Returns `None` only on a machine-level failure.
+pub fn run_cranks(sources: &[&str]) -> Option<Vec<OracleOutcome>> {
+    let ptrs: Vec<*const c_char> = sources
+        .iter()
+        .map(|s| s.as_bytes().as_ptr() as *const c_char)
+        .collect();
+    let lens: Vec<u32> = sources.iter().map(|s| s.as_bytes().len() as u32).collect();
+    let mut raws: Vec<XsOracleResultRaw> =
+        (0..sources.len()).map(|_| XsOracleResultRaw::default()).collect();
+    // Safety: `ptrs`/`lens`/`raws` are valid for `sources.len()` slots;
+    // the C side reads the sources by (pointer, length) and writes only
+    // within each out slot and heap buffers we copy out and free.
+    let rc = unsafe {
+        xs_oracle_run_cranks(
+            ptrs.as_ptr(),
+            lens.as_ptr(),
+            sources.len() as u32,
+            raws.as_mut_ptr(),
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    Some(raws.iter_mut().map(outcome_from_raw).collect())
 }
 
 /// The outcome of compiling one **Module** on XS (parse + code, no run).
