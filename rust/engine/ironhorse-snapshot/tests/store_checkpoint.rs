@@ -286,8 +286,8 @@ fn resume_after_incremental_checkpoint_reads_merged_state() {
     let s2 = resume_from_store(&store, &sig()).unwrap();
     assert_eq!(s2.machine().meter_state(), session.machine().meter_state());
     assert_eq!(
-        s2.machine().write_snapshot(&sig()),
-        session.machine().write_snapshot(&sig())
+        s2.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots")
     );
 }
 
@@ -648,7 +648,7 @@ fn evict_after_own_checkpoint_refaults_cleanly() {
     checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
 
     // Reference bytes, faulting everything in (all rows resident).
-    let expect = session.machine().write_snapshot(&sig());
+    let expect = session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots");
 
     // Evict every clean row — including the rows the checkpoint just
     // rewrote and the pages appended past the attach range.
@@ -665,7 +665,7 @@ fn evict_after_own_checkpoint_refaults_cleanly() {
     // Every re-fault must verify against the REFRESHED leaves at the
     // COMMITTED geometry and reinstall identical content.
     assert_eq!(
-        session.machine().write_snapshot(&sig()),
+        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
         expect,
         "post-commit eviction re-faults reinstall the committed bytes"
     );
@@ -724,7 +724,7 @@ fn evict_after_a_twin_store_checkpoint_keeps_the_modified_body() {
     checkpoint_to_store(&mut session, &sig(), &mut twin).expect("twin checkpoint");
 
     // Reference bytes with everything resident.
-    let expect = session.machine().write_snapshot(&sig());
+    let expect = session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots");
 
     let manifest = store.borrow().manifest().unwrap();
     let mut evictions = 0u32;
@@ -739,7 +739,7 @@ fn evict_after_a_twin_store_checkpoint_keeps_the_modified_body() {
     let _ = evictions;
 
     assert_eq!(
-        session.machine().write_snapshot(&sig()),
+        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
         expect,
         "an evict sweep after a twin-store checkpoint must not revert the body"
     );

@@ -134,7 +134,7 @@ fn run_scenario(name: &str, cranks: &[&str]) -> String {
     // the blob the baseline machine itself writes.
     assert_eq!(
         export_to_container(&store).unwrap(),
-        baseline.write_snapshot(&sig()),
+        baseline.write_snapshot(&sig()).expect("quiescent machine snapshots"),
         "[{name}] final store export byte-equals the never-suspended machine's blob"
     );
 

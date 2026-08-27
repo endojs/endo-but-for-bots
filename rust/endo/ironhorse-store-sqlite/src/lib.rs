@@ -1276,7 +1276,7 @@ mod tests {
     fn container_import_export_is_byte_identical() {
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let bytes = m.write_snapshot(&sig());
+        let bytes = m.write_snapshot(&sig()).expect("quiescent machine snapshots");
 
         let mut store = SqliteHeapStore::open_in_memory().unwrap();
         import_from_container(&bytes, &sig(), &mut store).expect("imports");
@@ -1308,7 +1308,7 @@ mod tests {
         );
         assert_eq!(
             export_to_container(&store).unwrap(),
-            session.machine().write_snapshot(&sig())
+            session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots")
         );
     }
 

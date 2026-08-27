@@ -598,6 +598,29 @@ impl SlotArena {
             "page source returned {} records for page {page}, expected {expected} (corrupt or torn store row)",
             records.len(),
         );
+        // Wave-6 W6-14 (lazy half): leaf hashes prove the row's bytes
+        // are authentic-to-commit, not that its indices are in-arena —
+        // a consistently-resealed hostile store faulted rows whose
+        // references sent the collector out of range (an anonymous
+        // release panic). Refuse AT THE FAULT, named, like the leaf
+        // check above. (The chunk-offset bound needs the chunk arena's
+        // length, which this installer cannot see — the eager path's
+        // full-image gate covers it; recorded remainder.)
+        let capacity = self.capacity() as u32;
+        for s in &records {
+            s.each_ref_slot(|r| {
+                assert!(
+                    r.is_null() || r.0 < capacity,
+                    "lazy heap fault: slot page {page} holds an out-of-arena                      reference ({} past {capacity}) — corrupt store",
+                    r.0,
+                );
+            });
+            assert!(
+                s.next.is_null() || s.next.0 < capacity,
+                "lazy heap fault: slot page {page} holds an out-of-arena                  next link ({} past {capacity}) — corrupt store",
+                s.next.0,
+            );
+        }
         for (k, s) in records.into_iter().enumerate() {
             backing.set(start + k, s);
         }

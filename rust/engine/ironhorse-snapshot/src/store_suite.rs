@@ -64,7 +64,7 @@ fn run_baseline(compiled: &[(Vec<u8>, Vec<String>)]) -> Baseline {
     Baseline {
         results,
         computrons,
-        final_blob: m.write_snapshot(&sig()),
+        final_blob: m.write_snapshot(&sig()).expect("quiescent machine snapshots"),
     }
 }
 
@@ -98,14 +98,14 @@ fn run_blob(compiled: &[(Vec<u8>, Vec<String>)]) -> (Vec<String>, Vec<u64>, Vec<
     let mut computrons = Vec::new();
     for (i, (bytecode, _)) in compiled.iter().enumerate() {
         if i > 0 {
-            let bytes = m.write_snapshot(&sig());
+            let bytes = m.write_snapshot(&sig()).expect("quiescent machine snapshots");
             m = from_snapshot_bytes(&bytes, &sig()).expect("blob resumes");
         }
         let o = m.run(bytecode);
         results.push(o.result);
         computrons.push(o.computrons);
     }
-    (results, computrons, m.write_snapshot(&sig()))
+    (results, computrons, m.write_snapshot(&sig()).expect("quiescent machine snapshots"))
 }
 
 /// How a store-backed variant resumes between cranks.
@@ -219,7 +219,7 @@ fn run_store<S: HeapStore + 'static>(
             "the adversarial-evict arm must actually evict"
         );
     }
-    (results, computrons, session.machine().write_snapshot(&sig()))
+    (results, computrons, session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"))
 }
 
 /// Variant 7: one surviving machine, checkpoint after every crank, one
@@ -250,7 +250,7 @@ fn run_checkpoint_every_crank<S: HeapStore + 'static>(
     }
     drop(session);
     let resumed = resume_from_store_lazy(store.clone(), &sig()).expect("final lazy resume");
-    (results, computrons, resumed.machine().write_snapshot(&sig()))
+    (results, computrons, resumed.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"))
 }
 
 fn metamorphic<S: HeapStore + 'static>(
@@ -389,7 +389,7 @@ pub fn checkpoint_acceptance(store: &mut dyn HeapStore) {
     );
     assert_eq!(
         export_to_container(store).unwrap(),
-        session.machine().write_snapshot(&sig()),
+        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
         "store export byte-equals the machine's own blob"
     );
 
@@ -402,11 +402,11 @@ pub fn checkpoint_acceptance(store: &mut dyn HeapStore) {
     );
     assert_eq!(
         export_to_container(store).unwrap(),
-        session.machine().write_snapshot(&sig())
+        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots")
     );
     assert_eq!(
         root_hash(store).unwrap(),
-        hex_sha256(&session.machine().write_snapshot(&sig()))
+        hex_sha256(&session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"))
     );
     assert_edges_match_content(store);
 }
