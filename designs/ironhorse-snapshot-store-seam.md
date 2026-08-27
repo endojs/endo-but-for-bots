@@ -2516,12 +2516,16 @@ bite-checked by reverting the fix under the lock). Statuses:
   misclassified requirement fails against the visitor bodies —
   `symbol_key_ids`' ephemeron-not-edges classification was caught
   live by the net while writing it).
-- **RECORDED, not fixed** — W6-22 (truncated trailing
-  payload relinks; dispatch fails closed), and the lazy path's
-  chunk-offset bound (the eager gate covers it).
-  (W6-19's arena growth and the resource-management metering gap
-  were subsequently FIXED — see the Remaining ledger; W6-23 now
-  carries its decision below; the multi-crank oracle mode LANDED
+- **RECORDED, not fixed** — the lazy path's chunk-offset bound
+  (the eager gate covers it).
+  (W6-19's arena growth, the resource-management metering gap, and
+  W6-22 were subsequently FIXED — for W6-22, `instruction_len` now
+  bounds the WHOLE instruction, operands and declared payload
+  included, so a truncated trailing string/bigint payload refuses to
+  size and `remap_ids` agrees with the dispatch loop's fail-closed
+  behavior; locked in `opcode.rs` with truncated `-1`-sentinel and
+  fixed-size tails plus the exactly-at-the-end well-formed control.
+  W6-23 now carries its decision below; the multi-crank oracle mode LANDED
   2026-08-27, closing the last open wave-6 test class:
   `xs_oracle_run_cranks` keeps ONE XS machine across sequential
   script cranks — per-crank compile capture, per-crank meterIndex
