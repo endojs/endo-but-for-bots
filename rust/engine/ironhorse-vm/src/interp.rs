@@ -13439,7 +13439,7 @@ impl Interp {
                     let has_prior = matches!(selector.value, Payload::Integer(0));
                     if has_prior {
                         let prior = self.get_local(exception_index).unwrap_or_else(Slot::undefined);
-                        let suppressed = self.build_suppressed_error(current, prior);
+                        let suppressed = self.build_suppressed_error(current, prior, None);
                         self.set_local(exception_index, suppressed);
                     } else {
                         self.set_local(exception_index, current);
@@ -15589,7 +15589,10 @@ impl Interp {
             // Array errors argument is modeled; any other iterable drives the
             // general `fxGetIterator` protocol and self-names an honest skip.
             Native::AggregateError => self.build_aggregate_error(base, argc)?,
-            Native::SuppressedError => self.build_suppressed_error(arg(0), arg(1)),
+            Native::SuppressedError => {
+                let message = (argc >= 3).then(|| arg(2));
+                self.build_suppressed_error(arg(0), arg(1), message)
+            }
             Native::DisposableStack | Native::AsyncDisposableStack => {
                 if !has_target {
                     return Err(self.catchable_type_error());
@@ -20597,13 +20600,12 @@ impl Interp {
         }
         arr_data.length = n as u32;
         self.arrays.insert(arr_inst, arr_data);
-        if let Some(&eid) = self.symbol_ids.get("errors") {
-            self.set_own_unmetered(
-                inst,
-                eid,
-                Slot::of(Kind::Reference, Payload::Reference(arr_inst)),
-            );
-        }
+        let eid = self.intern_key_unmetered("errors");
+        self.set_own_unmetered(
+            inst,
+            eid,
+            Slot::of(Kind::Reference, Payload::Reference(arr_inst)),
+        );
         Slot::of(Kind::Reference, Payload::Reference(inst))
     }
 
@@ -20683,17 +20685,20 @@ impl Interp {
         // prototype. `name` is always inherited from the prototype, never own
         // — so `err.hasOwnProperty('name')` is `false`, matching XS. Both are
         // set unmetered (the own message slot cost is folded into the
-        // measured construct constants).
+        // measured construct constants). The key is INTERNED, not looked up:
+        // XS's key table is machine-global ("message" is a boot key), so the
+        // own property exists whether or not the constructing crank ever
+        // compiled the name — a later crank's `e.message` must resolve
+        // (locked by `error_own_properties.rs`).
         if let Some(text) = message {
-            if let Some(&mid) = self.symbol_ids.get("message") {
-                let off = self.alloc_str_text(text.as_bytes());
-                self.set_own_unmetered_with_flag(
-                    inst,
-                    mid,
-                    Slot::of(Kind::String, Payload::String(off)),
-                    XS_DONT_ENUM_FLAG,
-                );
-            }
+            let mid = self.intern_key_unmetered("message");
+            let off = self.alloc_str_text(text.as_bytes());
+            self.set_own_unmetered_with_flag(
+                inst,
+                mid,
+                Slot::of(Kind::String, Payload::String(off)),
+                XS_DONT_ENUM_FLAG,
+            );
         }
         // `InstallErrorCause`: when the options object has a `cause`
         // property, copy its value to a writable, non-enumerable,
@@ -20734,15 +20739,14 @@ impl Interp {
             if let Some(info) = self.error_data.get_mut(&inst) {
                 info.message = Some(message.clone());
             }
-            if let Some(&mid) = self.symbol_ids.get("message") {
-                let off = self.alloc_str_text(message.as_bytes());
-                self.set_own_unmetered_with_flag(
-                    inst,
-                    mid,
-                    Slot::of(Kind::String, Payload::String(off)),
-                    XS_DONT_ENUM_FLAG,
-                );
-            }
+            let mid = self.intern_key_unmetered("message");
+            let off = self.alloc_str_text(message.as_bytes());
+            self.set_own_unmetered_with_flag(
+                inst,
+                mid,
+                Slot::of(Kind::String, Payload::String(off)),
+                XS_DONT_ENUM_FLAG,
+            );
         }
         err
     }
@@ -20758,9 +20762,20 @@ impl Interp {
     }
 
     /// Construct `SuppressedError(error, suppressed, message)`. Disposal
-    /// chaining uses the first two fields directly; ordinary constructor
-    /// calls share the same realm prototype and non-enumerable own fields.
-    fn build_suppressed_error(&mut self, error: Slot, suppressed: Slot) -> Slot {
+    /// chaining uses the first two fields directly (and passes no
+    /// message); ordinary constructor calls share the same realm
+    /// prototype and non-enumerable own fields, and ToString a present,
+    /// non-undefined message argument exactly as `build_error` does
+    /// (metered — XS's `fx_Error_aux` message path). The field keys are
+    /// INTERNED, not looked up: XS's key table is machine-global, so
+    /// the own properties exist whether or not the constructing crank
+    /// compiled the names (locked by `error_own_properties.rs`).
+    fn build_suppressed_error(
+        &mut self,
+        error: Slot,
+        suppressed: Slot,
+        message_arg: Option<Slot>,
+    ) -> Slot {
         let inst = self.new_object();
         if let Some(proto) = self
             .intrinsics
@@ -20769,18 +20784,38 @@ impl Interp {
         {
             self.slots.get_mut(inst).value = Payload::Reference(proto);
         }
+        let message: Option<String> = match message_arg {
+            Some(a) if a.kind != Kind::Undefined => {
+                let bytes = self.to_string_bytes_metered(a);
+                self.meter.tick_raw(ERROR_MESSAGE_METERING);
+                Some(String::from_utf8_lossy(&bytes).into_owned())
+            }
+            _ => None,
+        };
         self.error_data.insert(
             inst,
             ErrorInfo {
                 name: "SuppressedError",
-                message: None,
+                // This branch's fix (the SuppressedError message was
+                // dropped) composes with the base's new stack frames:
+                // both fields are wanted.
+                message: message.clone(),
                 frames: self.capture_error_frames(),
             },
         );
+        if let Some(text) = message {
+            let mid = self.intern_key_unmetered("message");
+            let off = self.alloc_str_text(text.as_bytes());
+            self.set_own_unmetered_with_flag(
+                inst,
+                mid,
+                Slot::of(Kind::String, Payload::String(off)),
+                XS_DONT_ENUM_FLAG,
+            );
+        }
         for (name, value) in [("error", error), ("suppressed", suppressed)] {
-            if let Some(&id) = self.symbol_ids.get(name) {
-                self.set_own_unmetered_with_flag(inst, id, value, XS_DONT_ENUM_FLAG);
-            }
+            let id = self.intern_key_unmetered(name);
+            self.set_own_unmetered_with_flag(inst, id, value, XS_DONT_ENUM_FLAG);
         }
         Slot::of(Kind::Reference, Payload::Reference(inst))
     }
@@ -20853,15 +20888,16 @@ impl Interp {
             },
         );
         if let Some(text) = message {
-            if let Some(&mid) = self.symbol_ids.get("message") {
-                let off = self.alloc_str_text(text.as_bytes());
-                self.set_own_unmetered_with_flag(
-                    inst,
-                    mid,
-                    Slot::of(Kind::String, Payload::String(off)),
-                    XS_DONT_ENUM_FLAG,
-                );
-            }
+            // Interned, not looked up — the machine-global key rule
+            // `build_error` documents.
+            let mid = self.intern_key_unmetered("message");
+            let off = self.alloc_str_text(text.as_bytes());
+            self.set_own_unmetered_with_flag(
+                inst,
+                mid,
+                Slot::of(Kind::String, Payload::String(off)),
+                XS_DONT_ENUM_FLAG,
+            );
         }
         if argc >= 3 {
             let options = self
@@ -20892,14 +20928,13 @@ impl Interp {
         }
         arr_data.length = n as u32;
         self.arrays.insert(arr_inst, arr_data);
-        if let Some(&eid) = self.symbol_ids.get("errors") {
-            self.set_own_unmetered_with_flag(
-                inst,
-                eid,
-                Slot::of(Kind::Reference, Payload::Reference(arr_inst)),
-                XS_DONT_ENUM_FLAG,
-            );
-        }
+        let eid = self.intern_key_unmetered("errors");
+        self.set_own_unmetered_with_flag(
+            inst,
+            eid,
+            Slot::of(Kind::Reference, Payload::Reference(arr_inst)),
+            XS_DONT_ENUM_FLAG,
+        );
         Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
     }
 
@@ -21891,7 +21926,7 @@ impl Interp {
                 &args,
             )? {
                 pending_error = Some(match pending_error {
-                    Some(suppressed) => self.build_suppressed_error(error, suppressed),
+                    Some(suppressed) => self.build_suppressed_error(error, suppressed, None),
                     None => error,
                 });
             }
