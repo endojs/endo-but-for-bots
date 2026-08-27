@@ -81,6 +81,23 @@ pub const TARR: FourCc = FourCc(*b"TARR");
 /// view, buffer slot + byte offset + byte length. Ironhorse-specific;
 /// emitted only when non-empty (see [`ARRY`]).
 pub const DVIW: FourCc = FourCc(*b"DVIW");
+/// `WRAP` — the primitive-wrapper side table (ledger `WrapperData`
+/// row): per wrapper instance, its boxed value slot. Ironhorse-specific;
+/// emitted only when non-empty (see [`ARRY`]).
+pub const WRAP: FourCc = FourCc(*b"WRAP");
+/// `REGX` — the regular-expression side table (ledger `RegExps` row):
+/// per instance, `(source, flags, lastIndex)`; the compiled program
+/// recompiles from the pair at restore. Ironhorse-specific; emitted
+/// only when non-empty (see [`ARRY`]).
+pub const REGX: FourCc = FourCc(*b"REGX");
+/// `ARGB` — the arguments-exotic brand set (the `Arrays` row's
+/// satellite): the branded owners, ascending. Ironhorse-specific;
+/// emitted only when non-empty (see [`ARRY`]).
+pub const ARGB: FourCc = FourCc(*b"ARGB");
+/// `TMPR` — the four Temporal record tables (ledger `TemporalRecords`
+/// row): instants, durations, plains, zoneds, each owner-ascending.
+/// Ironhorse-specific; emitted only when non-empty (see [`ARRY`]).
+pub const TMPR: FourCc = FourCc(*b"TMPR");
 
 /// The Ironhorse discriminator embedded at the head of the `VERS` atom. An
 /// Ironhorse snapshot is never mistaken for an XS one and vice versa

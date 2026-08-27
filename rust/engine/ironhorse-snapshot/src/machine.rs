@@ -243,6 +243,12 @@ impl MachineSnapshot for Interp {
             tables.typed_arrays,
             tables.data_views,
         )
+        .with_language_rows(
+            tables.wrappers,
+            tables.regexps,
+            tables.arguments_brands,
+            tables.temporal,
+        )
     }
 }
 
@@ -259,6 +265,10 @@ struct SideTableImages {
     buffers: Vec<crate::image::BufferImage>,
     typed_arrays: Vec<crate::image::TypedArrayImage>,
     data_views: Vec<crate::image::DataViewImage>,
+    wrappers: Vec<crate::image::WrapperImage>,
+    regexps: Vec<crate::image::RegExpImage>,
+    arguments_brands: Vec<u32>,
+    temporal: crate::image::TemporalImage,
 }
 
 fn side_tables_of(interp: &Interp) -> SideTableImages {
@@ -329,6 +339,29 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
             size,
         })
         .collect();
+    let wrappers = interp
+        .wrappers_snapshot()
+        .into_iter()
+        .map(|(owner, value)| crate::image::WrapperImage { owner, value })
+        .collect();
+    let regexps = interp
+        .regexps_snapshot()
+        .into_iter()
+        .map(|(owner, source, flags, last_index_bits)| crate::image::RegExpImage {
+            owner,
+            source,
+            flags,
+            last_index_bits,
+        })
+        .collect();
+    let arguments_brands = interp.arguments_brands_snapshot();
+    let (instants, durations, plains, zoneds) = interp.temporal_snapshot();
+    let temporal = crate::image::TemporalImage {
+        instants,
+        durations,
+        plains,
+        zoneds,
+    };
     SideTableImages {
         arrays,
         collections,
@@ -337,6 +370,10 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
         buffers,
         typed_arrays,
         data_views,
+        wrappers,
+        regexps,
+        arguments_brands,
+        temporal,
     }
 }
 
@@ -346,6 +383,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
 /// lazy store). A malformed kind code was already refused at decode,
 /// so the restore cannot fail on validated input; the `false` return
 /// is a belt-and-braces corrupt signal.
+#[allow(clippy::too_many_arguments)]
 fn restore_side_tables(
     interp: &mut Interp,
     arrays: Vec<crate::image::ArrayImage>,
@@ -355,6 +393,10 @@ fn restore_side_tables(
     buffers: Vec<crate::image::BufferImage>,
     typed_arrays: Vec<crate::image::TypedArrayImage>,
     data_views: Vec<crate::image::DataViewImage>,
+    wrappers: Vec<crate::image::WrapperImage>,
+    regexps: Vec<crate::image::RegExpImage>,
+    arguments_brands: Vec<u32>,
+    temporal: crate::image::TemporalImage,
 ) {
     let ok = interp.restore_bulk_side_tables(
         arrays
@@ -396,6 +438,29 @@ fn restore_side_tables(
             .collect(),
     );
     debug_assert!(ok, "validated image cannot carry a malformed typed-array family");
+    // The data-only language rows (schema 11). Wrapper values were
+    // bounds-walked with the heap; a regexp that fails to RECOMPILE
+    // from its persisted (source, flags) cannot come from an honest
+    // snapshot (construction compiled the same pair), and a plain
+    // record's kind was validated at decode.
+    interp.restore_wrapper_data(
+        wrappers.into_iter().map(|w| (w.owner, w.value)).collect(),
+    );
+    let ok = interp.restore_regexps(
+        regexps
+            .into_iter()
+            .map(|r| (r.owner, r.source, r.flags, r.last_index_bits))
+            .collect(),
+    );
+    debug_assert!(ok, "a persisted regexp source must recompile");
+    interp.restore_arguments_brands(arguments_brands);
+    let ok = interp.restore_temporal_records(
+        temporal.instants,
+        temporal.durations,
+        temporal.plains,
+        temporal.zoneds,
+    );
+    debug_assert!(ok, "validated image cannot carry a malformed temporal record");
 }
 
 /// Rebuild a live [`Interp`] from a decoded [`MachineImage`]: a fresh
@@ -428,6 +493,10 @@ pub fn image_to_interp(image: MachineImage) -> Interp {
         image.buffers,
         image.typed_arrays,
         image.data_views,
+        image.wrappers,
+        image.regexps,
+        image.arguments_brands,
+        image.temporal,
     );
     interp
 }
@@ -663,6 +732,10 @@ fn small_state_of(interp: &Interp) -> SmallState {
         buffers: tables.buffers,
         typed_arrays: tables.typed_arrays,
         data_views: tables.data_views,
+        wrappers: tables.wrappers,
+        regexps: tables.regexps,
+        arguments_brands: tables.arguments_brands,
+        temporal: tables.temporal,
     }
 }
 
@@ -1351,6 +1424,10 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.buffers,
         small.typed_arrays,
         small.data_views,
+        small.wrappers,
+        small.regexps,
+        small.arguments_brands,
+        small.temporal,
     );
     Ok(StoreSession {
         gen_dirty: std::collections::BTreeSet::new(),
