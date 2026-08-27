@@ -2,15 +2,16 @@
 
 use ironhorse_262::{dual_run, Agreement};
 
-// RESULT agreement only: resource-management metering is not yet
-// oracle-exact — a pre-existing gap across this whole suite (the
-// DisposableStack tests measure -4..-8 computrons vs XS, the `using`
-// paths -4), recorded in the design's Remaining ledger with the
-// async-generator reject residue rather than asserted falsely here.
+// FULL agreement — results AND computrons. The suite-wide gap this
+// bar replaces (-4..-8 on the DisposableStack paths, -2 per sync
+// `using`) decomposed into five measured per-operation constants
+// (construct, add-record, use-record disposal, `using` declaration,
+// `using` resource lookup), now charged at the natives; see
+// `DISPOSABLE_STACK_CONSTRUCT_METERING` and siblings in the vm.
 fn agrees(source: &str) {
     let run = dual_run(source).expect("the XS oracle machine must start");
     assert_eq!(run.agreement, Agreement::BothComplete, "{source}: {run:?}");
-    assert!(run.result_agrees, "{source}: {run:?}");
+    assert!(run.is_bit_exact(), "{source}: {run:?}");
 }
 
 #[test]

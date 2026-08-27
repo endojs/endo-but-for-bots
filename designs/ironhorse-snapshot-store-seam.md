@@ -1771,12 +1771,22 @@ rather than work items.
   (the first fixture draft survived the bite because a lone live
   entry remaps identically — the displacement churn is what gives
   the twins teeth).
-- Resource-management METERING is not oracle-exact (wave-6): the
-  DisposableStack paths measure −4..−8 computrons vs XS and the
-  `using` paths −4 — pre-existing across the whole suite, asserted
-  as result-agreement-only in `resource_management.rs` until the
-  dispose-path metering is calibrated like the async-generator
-  reject residue above.
+- [x] ~~Resource-management METERING is not oracle-exact (wave-6):
+  the DisposableStack paths measure −4..−8 computrons vs XS and the
+  `using` paths −4~~ Done (calibrated 2026-08-27): the suite-wide
+  gap decomposed, via a ten-shape dual-run probe, into five clean
+  whole-dispatch-unit constants — construct +2
+  (`DISPOSABLE_STACK_CONSTRUCT_METERING`), each record-adding
+  method and `move` +2 (`DISPOSABLE_STACK_ADD_METERING`), disposing
+  a `use` record (this-bound @@dispose) +1
+  (`DISPOSE_USE_RECORD_METERING`), the `using` declaration +1
+  (`USING_DECL_METERING`) and +1 more for a real resource
+  (`USING_RESOURCE_METERING`) — additive across every combination
+  probed (defer×2+move measured exactly 3×2 beyond the construct).
+  All ten shapes now measure delta 0 and `resource_management.rs`
+  asserts FULL agreement (results and computrons). The async forms
+  share the arm and the charges, pending their own oracle
+  calibration (no async-`using` differential lock exists yet).
 - [x] ~~Symbol-key id-space EXHAUSTION at the meet: symbol keys mint
   top-down from `u16::MAX` while the name table grows bottom-up, and
   the MEET — same class as the old shared counter's saturation —
@@ -2507,12 +2517,26 @@ bite-checked by reverting the fix under the lock). Statuses:
   `symbol_key_ids`' ephemeron-not-edges classification was caught
   live by the net while writing it).
 - **RECORDED, not fixed** — W6-22 (truncated trailing
-  payload relinks; dispatch fails closed), W6-23 (libm
-  decision-of-record), the lazy path's chunk-offset bound (the
-  eager gate covers it), the resource-management metering gap, and
-  the multi-crank oracle mode (the one test class still open).
-  (W6-19's arena growth was subsequently FIXED — see the Remaining
-  ledger's compaction entry.)
+  payload relinks; dispatch fails closed), the lazy path's
+  chunk-offset bound (the eager gate covers it), and the
+  multi-crank oracle mode (the one test class still open).
+  (W6-19's arena growth and the resource-management metering gap
+  were subsequently FIXED — see the Remaining ledger; W6-23 now
+  carries its decision below.)
+- **W6-23 DECIDED (libm decision-of-record, 2026-08-27):**
+  determinism is scoped PER RELEASE BINARY PER PLATFORM. The Math
+  transcendentals call the platform libm — the engine's one genuine
+  host-environment dependence — and the pinned XS oracle links the
+  SAME platform libm, which is what the differential suite's
+  bit-exactness rests on; twins on one host are exact regardless.
+  Heterogeneous-fleet consensus requires vendoring a deterministic
+  libm (the pure-Rust `libm` crate is the named candidate), and that
+  swap must land TOGETHER with an oracle built against the same
+  library: a unilateral swap breaks the differential pin wherever
+  glibc and MUSL disagree in the last ulp, and any last-ulp
+  divergence is a full determinism break (results feed guest
+  branches, so computrons diverge transitively). Recorded at
+  `Interp::call_math` where the bodies live.
 
 ## What Is the Problem Being Solved?
 

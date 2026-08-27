@@ -833,6 +833,38 @@ pub const ERROR_CONSTRUCT_EXTRA: u64 = (1 << 16) + 768;
 /// message length (the message string's own chunk is metered at its literal).
 pub const ERROR_MESSAGE_METERING: u64 = 280;
 
+/// `new DisposableStack()` / `new AsyncDisposableStack()` beyond what the
+/// arm's own allocation models. Measured against the pinned oracle
+/// (2026-08-27, the resource-management dual-run deltas): a bare construct
+/// under-metered by exactly two dispatch units, stable across every shape
+/// probed, so the gap is charged as a whole-unit constant.
+pub const DISPOSABLE_STACK_CONSTRUCT_METERING: u64 = 2 << 16;
+
+/// One record-adding DisposableStack method (`use`/`adopt`/`defer`) or a
+/// `move`. Measured (same probe): each added two dispatch units over the
+/// modeled cost, additive across combinations (defer×2 + move measured
+/// exactly 3× this constant beyond the construct).
+pub const DISPOSABLE_STACK_ADD_METERING: u64 = 2 << 16;
+
+/// Disposing a `use` record (the @@dispose method invoked WITH the
+/// resource as `this`) costs one dispatch unit more than the modeled
+/// callback; `defer`/`adopt` records (undefined `this` / passed resource)
+/// measured no residue. Charged per record in the dispose drain.
+pub const DISPOSE_USE_RECORD_METERING: u64 = 1 << 16;
+
+/// The `using`/`await using` declaration opcode's bookkeeping beyond the
+/// modeled lookups: one dispatch unit always (the null/undefined skip path
+/// measured exactly this), plus [`USING_RESOURCE_METERING`] when the
+/// resource is real. Measured on the sync form; the async form shares the
+/// arm and the charge, pending its own oracle calibration.
+pub const USING_DECL_METERING: u64 = 1 << 16;
+
+/// The non-nullish `using` resource's disposer capture beyond the modeled
+/// @@dispose lookup — one further dispatch unit (measured: a real-resource
+/// `using` totals exactly two units over the modeled cost, the null form
+/// one).
+pub const USING_RESOURCE_METERING: u64 = 1 << 16;
+
 /// `AggregateError(errors, message)` beyond the base error
 /// ([`ERROR_CONSTRUCT_EXTRA`] + the message): the `errors` Array instance
 /// (`fxNewArrayInstance` + `fxCacheArray`) plus the `fxGetIterator` +
@@ -13576,10 +13608,14 @@ impl Interp {
                 // adjacent synthetic disposal slot while preserving the
                 // resource as the binding value.
                 XS_CODE_USING | XS_CODE_USING_ASYNC => {
+                    // Measured declaration residue (see the constants):
+                    // one unit always, one more for a real resource.
+                    self.meter.tick_raw(USING_DECL_METERING);
                     let resource = *self.stack.last().unwrap_or(&Slot::undefined());
                     let disposer = if matches!(resource.kind, Kind::Null | Kind::Undefined) {
                         Slot::null()
                     } else {
+                        self.meter.tick_raw(USING_RESOURCE_METERING);
                         let inst = match resource.value {
                             Payload::Reference(inst) if resource.kind == Kind::Reference => inst,
                             _ => {
@@ -15792,6 +15828,8 @@ impl Interp {
                 if !has_target {
                     return Err(self.catchable_type_error());
                 }
+                // Measured constructor residue (see the constant).
+                self.meter.tick_raw(DISPOSABLE_STACK_CONSTRUCT_METERING);
                 let proto = self
                     .intrinsics
                     .get(native.display_name())
@@ -22019,6 +22057,9 @@ impl Interp {
             if data.disposed {
                 return Err(self.catchable_type_error());
             }
+            // Measured add-record residue (see the constant).
+            self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
+            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
             data.records.push(DisposalRecord {
                 resource,
                 method: disposer,
@@ -22039,6 +22080,8 @@ impl Interp {
             if data.disposed {
                 return Err(self.catchable_type_error());
             }
+            self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
+            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
             data.records.push(DisposalRecord {
                 resource,
                 method: disposer,
@@ -22058,6 +22101,8 @@ impl Interp {
             if data.disposed {
                 return Err(self.catchable_type_error());
             }
+            self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
+            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
             data.records.push(DisposalRecord {
                 resource: Slot::undefined(),
                 method: disposer,
@@ -22073,6 +22118,8 @@ impl Interp {
             if data.disposed {
                 return Err(self.catchable_type_error());
             }
+            self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
+            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
             data.disposed = true;
             let records = std::mem::take(&mut data.records);
             let proto = match self.slots.get(inst).value {
@@ -22114,6 +22161,12 @@ impl Interp {
             } else {
                 record.resource
             };
+            // A `use` record (this-bound @@dispose; `defer` records
+            // carry an undefined resource, `adopt` passes it as the
+            // argument) meters one extra dispatch unit at disposal.
+            if !record.pass_resource && record.resource.kind != Kind::Undefined {
+                self.meter.tick_raw(DISPOSE_USE_RECORD_METERING);
+            }
             if let Err(error) = self.run_callback_catching_throw(
                 code,
                 record.method,
@@ -27697,6 +27750,22 @@ impl Interp {
     /// meters the single native host frame ([`MATH_FRAME_METERING`]). No
     /// `mxMeterSome` and no chunk — the pin's bodies carry neither. A NaN
     /// result is the canonical `f64::NAN`.
+    ///
+    /// LIBM DECISION-OF-RECORD (wave-6 W6-23): the transcendental bodies
+    /// call the platform libm (via `f64::sin`/`powf`/…), the engine's one
+    /// genuine host-environment dependence — and the pinned XS oracle
+    /// links the SAME platform libm, which is what the differential
+    /// suite's bit-exactness rests on. The recorded stance: determinism
+    /// is scoped PER RELEASE BINARY PER PLATFORM (one pinned toolchain
+    /// and libm per release; twins on one host are always exact).
+    /// Heterogeneous-fleet consensus needs a vendored deterministic libm
+    /// (the pure-Rust `libm` crate is the named candidate), which must
+    /// land TOGETHER with an oracle built against the same library — a
+    /// unilateral swap here would break the differential pin wherever
+    /// glibc and MUSL disagree in the last ulp, and a last-ulp divergence
+    /// is a full determinism break (results feed guest branches, so
+    /// computrons diverge transitively). See the design's Remaining
+    /// ledger for the decision record.
     fn call_math(&mut self, id: MathId, base: usize, argc: usize) -> Result<Slot, Halt> {
         let arg = |i: usize| -> Option<Slot> {
             if i < argc {
