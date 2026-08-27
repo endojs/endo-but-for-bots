@@ -8555,6 +8555,18 @@ impl Interp {
         self.meter.state().index
     }
 
+    /// The three reaction-arena lengths `(combinators, from_async,
+    /// promise_guards)` — diagnostic for the arena-growth lock
+    /// (wave-6 W6-19): settled entries must be RECLAIMED by a
+    /// collection, not accumulate for the machine's lifetime.
+    pub fn reaction_arena_lens(&self) -> (usize, usize, usize) {
+        (
+            self.combinators.len(),
+            self.from_async.len(),
+            self.promise_guards.len(),
+        )
+    }
+
     /// Whether the machine stands at a QUIESCENT crank boundary — the
     /// precondition every persist verb requires (wave-6 W6-10). A crank
     /// that HALTED (uncaught throw, meter abort, unsupported opcode)
@@ -41484,10 +41496,11 @@ impl Interp {
                             }
                         }
                         // A `fromAsync` reaction indexes the [`FromAsyncData`]
-                        // side table (append-only, its slots live for the
-                        // machine's lifetime); the queued reaction is the only
-                        // edge to that record at the drain, so root its
-                        // reference-bearing slots here (mirrors `Combine`).
+                        // side table (compacted at sweep to the entries such
+                        // reactions still name — W6-19); the queued reaction
+                        // is the only edge to that record at the drain, so
+                        // root its reference-bearing slots here (mirrors
+                        // `Combine`).
                         ReactionKind::FromAsyncNext(fa)
                         | ReactionKind::FromAsyncElem(fa)
                         | ReactionKind::FromAsyncMap(fa)
@@ -42222,7 +42235,124 @@ impl Interp {
         // real omission and the reverse map's `retain` above shows the
         // shape the fix takes.
 
+        self.compact_reaction_arenas();
+
         stats
+    }
+
+    /// Compact the append-only reaction arenas (wave-6 W6-19):
+    /// `combinators`, `from_async`, and `promise_guards` were
+    /// append-only for the machine's lifetime — settled entries were
+    /// unreachable but never reclaimed, unbounded growth on a
+    /// long-lived machine doing combinator/`fromAsync`/resolving work
+    /// every crank. An arena index is LIVE while some surviving
+    /// holder still names it: a `ReactionKind::Combine`/`FromAsync*`
+    /// on a live promise's pending reactions or a queued job
+    /// (combinators, fromAsync), or a live resolving-function pair's
+    /// `guard` (promise_guards). The compaction keeps live entries in
+    /// index order, re-points every holder onto the dense arena, and
+    /// drops the rest. Runs at the end of both collectors' sweeps —
+    /// deterministic (holder contents only, stable order) and
+    /// guest-invisible (indices never surface; nothing is metered).
+    fn compact_reaction_arenas(&mut self) {
+        use std::collections::BTreeSet;
+        let mut live_comb: BTreeSet<u32> = BTreeSet::new();
+        let mut live_fa: BTreeSet<u32> = BTreeSet::new();
+        {
+            let mut note = |kind: &ReactionKind| match *kind {
+                ReactionKind::Combine(ci, _) => {
+                    live_comb.insert(ci);
+                }
+                ReactionKind::FromAsyncNext(fa)
+                | ReactionKind::FromAsyncElem(fa)
+                | ReactionKind::FromAsyncMap(fa)
+                | ReactionKind::FromAsyncClose(fa) => {
+                    live_fa.insert(fa);
+                }
+                _ => {}
+            };
+            for p in self.promises.values() {
+                for r in &p.reactions {
+                    note(&r.kind);
+                }
+            }
+            for j in &self.promise_jobs {
+                if let PromiseJob::Reaction { reaction, .. } = j {
+                    note(&reaction.kind);
+                }
+            }
+        }
+        let live_guards: BTreeSet<usize> =
+            self.promise_functions.values().map(|d| d.guard).collect();
+
+        // Fully-live arenas need no rewrite (every index below the
+        // length is referenced, so every remap would be the identity).
+        if live_comb.len() == self.combinators.len()
+            && live_fa.len() == self.from_async.len()
+            && live_guards.len() == self.promise_guards.len()
+        {
+            return;
+        }
+
+        let comb_map: std::collections::HashMap<u32, u32> = live_comb
+            .iter()
+            .enumerate()
+            .map(|(new, &old)| (old, new as u32))
+            .collect();
+        let fa_map: std::collections::HashMap<u32, u32> = live_fa
+            .iter()
+            .enumerate()
+            .map(|(new, &old)| (old, new as u32))
+            .collect();
+        let guard_map: std::collections::HashMap<usize, usize> = live_guards
+            .iter()
+            .enumerate()
+            .map(|(new, &old)| (old, new))
+            .collect();
+
+        let repoint = |kind: &mut ReactionKind| match kind {
+            ReactionKind::Combine(ci, _) => *ci = comb_map[ci],
+            ReactionKind::FromAsyncNext(fa)
+            | ReactionKind::FromAsyncElem(fa)
+            | ReactionKind::FromAsyncMap(fa)
+            | ReactionKind::FromAsyncClose(fa) => *fa = fa_map[fa],
+            _ => {}
+        };
+        for p in self.promises.values_mut() {
+            for r in &mut p.reactions {
+                repoint(&mut r.kind);
+            }
+        }
+        for j in &mut self.promise_jobs {
+            if let PromiseJob::Reaction { reaction, .. } = j {
+                repoint(&mut reaction.kind);
+            }
+        }
+        for d in self.promise_functions.values_mut() {
+            d.guard = guard_map[&d.guard];
+        }
+
+        let old = std::mem::take(&mut self.combinators);
+        self.combinators = old
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| live_comb.contains(&(*i as u32)))
+            .map(|(_, e)| e)
+            .collect();
+        let old = std::mem::take(&mut self.from_async);
+        self.from_async = old
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| live_fa.contains(&(*i as u32)))
+            .map(|(_, e)| e)
+            .collect();
+        let old = std::mem::take(&mut self.promise_guards);
+        self.promise_guards = old
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| live_guards.contains(i))
+            .map(|(_, e)| e)
+            .collect();
     }
 }
 
@@ -42333,6 +42463,7 @@ impl Interp {
         // GC-P3d). If the registry is ever made weak, this becomes a
         // real omission and the reverse map's `retain` above shows the
         // shape the fix takes.
+        self.compact_reaction_arenas();
         freed.len() as u32
     }
 
