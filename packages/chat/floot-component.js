@@ -868,14 +868,20 @@ export const flootComponent = (
         // it with the guard below stranded the component busy forever.
         if (ev.type === 'done') {
           const stopped = turnCancelled;
-          if (turn.error) {
+          // A turn WE cancelled ends with an abort, and that abort's reason
+          // lands in `turn.error` — but it describes our own stop, not a
+          // failure. Reporting it as one marks the session errored and reads as
+          // a broken session, which is what pressing "Send now" (or Stop) on a
+          // running turn looked like.
+          const failed = Boolean(turn.error) && !stopped;
+          if (failed) {
             sessionStatus.set(turn.sessionId, 'error');
           } else {
             sessionStatus.set(turn.sessionId, 'idle');
           }
           // Only speak to the status line for the session being viewed.
           if (activeSessionId === turn.sessionId) {
-            if (turn.error) {
+            if (failed) {
               status = `error: ${turn.error}`;
             } else {
               status = stopped ? 'stopped.' : 'Ready.';
