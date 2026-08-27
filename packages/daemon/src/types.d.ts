@@ -3081,3 +3081,196 @@ export interface RemoteControlState {
     dispose: () => void,
   ): { state: RemoteControlState; remoteGateway: ERef<EndoGateway> };
 }
+
+// --- Hashline edit format (see designs/cli-edit-verb.md and
+// src/hashline.js). The pure parser/validator/splice core shared by the
+// daemon-side `EndoMount.edit` / `EndoGuest.edit` capability and the CLI
+// `endo edit` verb, so the agent's view and the daemon's view of a patch
+// agree byte-for-byte.
+
+/** A per-line hash anchor. */
+export type HashlineAnchor = {
+  /** 1-indexed line number. */
+  line: number;
+  /** 2-or-4-char lowercase hex CRC32 anchor. */
+  hash: string;
+};
+
+export type HashlineEditOpKind =
+  | 'replace'
+  | 'replace-range'
+  | 'delete'
+  | 'insert-after'
+  | 'insert-before'
+  | 'prepend'
+  | 'append';
+
+/**
+ * A single edit operation. A discriminated union on `op`, so the presence of
+ * `anchor` / `anchorEnd` / `payload` is fixed by the kind rather than left
+ * all-optional — the shape the validator (`validateEditOp`) actually enforces,
+ * and the shape the splice narrows against without casts. Each `payload` entry
+ * is a bare line content with no embedded LF or CR.
+ */
+export type HashlineEditOp =
+  | { op: 'prepend' | 'append'; payload: string[] }
+  | {
+      op: 'replace' | 'insert-after' | 'insert-before';
+      anchor: HashlineAnchor;
+      payload: string[];
+    }
+  | { op: 'delete'; anchor: HashlineAnchor; anchorEnd?: HashlineAnchor }
+  | {
+      op: 'replace-range';
+      anchor: HashlineAnchor;
+      anchorEnd: HashlineAnchor;
+      payload: string[];
+    };
+
+export type HashlineEditPatch = {
+  /** SHA-256 of the file the agent read, 64-char lowercase hex. */
+  expectedFileHash: string;
+  ops: HashlineEditOp[];
+};
+
+/**
+ * A per-line anchor mismatch report. Because it echoes CRC32 digests of the
+ * *live* line at a caller-named line number, an array of these is a narrow read
+ * oracle over file content: a mount must not forward it to a guest that lacks
+ * `read` authority on the path (see `HashlineEditResult`).
+ */
+export type HashlineAnchorMismatch = {
+  line: number;
+  /** The patch's anchor hash. */
+  hashExpected: string;
+  /**
+   * The live line's CRC32 at the patch anchor's declared hex width
+   * ('' if the line does not exist).
+   */
+  hashActualAtPatchWidth: string;
+  /**
+   * The live line's CRC32 at the file's currently-native width
+   * ('' if the line does not exist).
+   */
+  hashActualAtFileWidth: string;
+};
+
+export type HashlineReapplyAmbiguity = {
+  /** The original anchor line. */
+  line: number;
+  /**
+   * Every line in the reapply window whose hash matches the anchor.
+   */
+  candidates: number[];
+};
+
+export type HashlineEditFailure = {
+  reason:
+    | 'hash-mismatch'
+    | 'file-rev-mismatch'
+    | 'ambiguous-reapply'
+    | 'patch-syntax'
+    | 'path-not-found'
+    | 'permission-denied';
+  /** The live file SHA-256. */
+  fileHashActual: string;
+  /** Human-readable diagnostic. */
+  message?: string;
+  /**
+   * Populated on `hash-mismatch`, and also on `ambiguous-reapply` when a
+   * second anchor was genuinely unlocatable (zero relocation candidates)
+   * while another was ambiguous — the two coexist rather than the
+   * mismatch being dropped.
+   */
+  mismatches?: HashlineAnchorMismatch[];
+  /** Populated on `ambiguous-reapply`. */
+  ambiguities?: HashlineReapplyAmbiguity[];
+};
+
+export type HashlineAnchorRelocation = {
+  /** The anchor's original 1-indexed line. */
+  line: number;
+  /**
+   * The 1-indexed line the anchor was relocated to by the bounded
+   * reapply search.
+   */
+  relocatedTo: number;
+};
+
+/**
+ * The outcome record of an edit — the value a mount may forward across the
+ * guest/daemon capability boundary. A discriminated union on `success`, so a
+ * success carries no `failure` and a failure carries no relocation report, and
+ * — crucially — NO member carries the spliced *file text*. The post-edit
+ * `newText` is returned on a separate channel (`HashlineSpliceOutcome.newText`) the
+ * mount writes to the backing store but must not forward, so a guest cannot
+ * reconstruct the whole file from a single result by construction.
+ *
+ * This closes the whole-file channel, NOT every read channel: a `hash-mismatch`
+ * or `ambiguous-reapply` failure echoes per-line CRC32 digests of *live* lines
+ * (`HashlineAnchorMismatch.hashActualAtPatchWidth` / `hashActualAtFileWidth`, and
+ * `HashlineReapplyAmbiguity.candidates`) for any line number the patch names. Those are
+ * a narrow, per-probe read oracle over file content, so `edit` is not safely
+ * grantable without `read` on the same path: a mount MUST treat the invariant
+ * "`edit` presupposes `read`" as a precondition — or strip `mismatches` /
+ * `ambiguities` before forwarding to a guest that lacks read authority — rather
+ * than relying on this record to be opaque. See `HashlineAnchorMismatch`.
+ */
+export type HashlineEditResult =
+  | {
+      success: true;
+      /** SHA-256 of the file after the edit. */
+      fileHashAfter: string;
+      /**
+       * Present only when the bounded reapply search moved one or more anchors
+       * off their authored line; the mount layer surfaces these so a caller can
+       * tell "landed where I meant" from "an anchor collided and the edit was
+       * applied at a different line".
+       */
+      relocations?: HashlineAnchorRelocation[];
+    }
+  | {
+      success: false;
+      /** SHA-256 of the unchanged file. */
+      fileHashAfter: string;
+      failure: HashlineEditFailure;
+    };
+
+/**
+ * What `applyEditPatch` returns: the boundary-safe `result` plus, on success
+ * only, the spliced `newText` on a SEPARATE channel. Keeping `newText` off
+ * `HashlineEditResult` is what makes the whole-file read impossible to leak by
+ * forwarding the result — the privileged payload the boundary must strip is
+ * simply not a field of the record that crosses it.
+ */
+export type HashlineSpliceOutcome = {
+  result: HashlineEditResult;
+  /** The spliced file content, present only when `result.success` is true. */
+  newText?: string;
+};
+
+/**
+ * A synchronous SHA-256 digest power: bytes to 64-char lowercase hex. Named
+ * `Sha256HexFn` (not `Sha256Hex`) to avoid colliding with `@endo/mem-cas`'s
+ * exported `Sha256Hex`, an incompatible *asynchronous* digest power
+ * (`=> Promise<string>`); both are re-exported from their package roots.
+ */
+export type Sha256HexFn = (bytes: Uint8Array) => string;
+
+/**
+ * The guest-tunable knobs of an edit. The injected `sha256Hex` digest power is
+ * deliberately NOT a member: it is a separate positional parameter of
+ * `applyEditPatch`, so a guest-authored `options` object forwarded by a mount
+ * can never occupy the power's slot (were it a member, the guest would receive
+ * every byte of the file plaintext and could defeat the file-rev CAS by
+ * returning the expected hash).
+ */
+export type HashlineApplyEditOptions = {
+  /** Enable bounded anchor relocation (default false, strict). */
+  reapply?: boolean;
+  /**
+   * Half-width of the relocation search window in lines (default 20,
+   * max 200).
+   */
+  reapplyWindow?: number;
+};

@@ -66,6 +66,9 @@
       "path": "packages/compartment-mapper/tsconfig.composite.json"
     },
     {
+      "path": "packages/crc32/tsconfig.composite.json"
+    },
+    {
       "path": "packages/daemon/tsconfig.composite.json"
     },
     {

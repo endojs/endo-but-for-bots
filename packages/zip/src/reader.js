@@ -1,10 +1,9 @@
 // @ts-check
-/* eslint-disable no-use-before-define */
+import { crc32 } from '@endo/crc32';
 
 import { STORE, DEFLATE } from './compression.js';
 import { BufferReader } from './buffer-reader.js';
 import { readZip as readZipFormat } from './format-reader.js';
-import { crc32 } from './crc32.js';
 
 /** @import { ArchivedFile, ArchivedStat, DecompressFn, DecompressNowFn } from './types.js' */
 

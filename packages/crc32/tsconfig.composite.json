@@ -6,9 +6,6 @@
   },
   "references": [
     {
-      "path": "../crc32/tsconfig.composite.json"
-    },
-    {
       "path": "../harden/tsconfig.composite.json"
     }
   ]
