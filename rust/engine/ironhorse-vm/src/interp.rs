@@ -3963,6 +3963,13 @@ pub struct Interp {
     /// (recorded in the design's Remaining ledger; a fail-closed
     /// conversion needs fallible intern plumbing at ~50 call sites).
     next_symbol_key_id: u16,
+    /// High-water mark of the name table as of the last
+    /// `install_intrinsic_bindings` pass (wave-6 W6-7). The relink/eval
+    /// keep filters admit ids ABOVE this floor: "appended since the last
+    /// install pass", not "appended by this unit" — a name interned at
+    /// RUNTIME (a computed string key) has an id no install has seen, and
+    /// filtering by the unit's own table length refused it forever.
+    installed_names_len: usize,
     /// The program's symbol names indexed by `id - 1` (the decoded symbols
     /// atom, verbatim), so a function definition can recover its own name
     /// string for `Function.prototype.toString`.
@@ -4829,6 +4836,7 @@ impl Interp {
             symbol_ids: std::collections::HashMap::new(),
             default_keys: crate::default_keys::DEFAULT_KEYS.iter().copied().collect(),
             next_symbol_key_id: u16::MAX,
+            installed_names_len: 0,
             symbol_names: Vec::new(),
             error_data: std::collections::HashMap::new(),
             wrapper_data: std::collections::HashMap::new(),
@@ -6936,6 +6944,10 @@ impl Interp {
         full: bool,
         keep: impl Fn(u16) -> bool,
     ) {
+        // Every id in `names` is CONSIDERED by this pass (admitted or
+        // deliberately skipped by `keep`), so the floor for future
+        // partial passes advances to the full table (wave-6 W6-7).
+        self.installed_names_len = names.len();
         for name in names.iter() {
             let Some(&id) = self.symbol_ids.get(name.as_str()) else {
                 continue;
@@ -7110,6 +7122,13 @@ impl Interp {
                 if !keep(mid) {
                     continue;
                 }
+                // A property the guest (or an earlier pass) already put
+                // there wins — installs are create-only on partial passes
+                // (wave-6 W6-7: the widened keep must not clobber a
+                // monkeypatch whose name was interned at runtime).
+                if !full && self.find_property(proto, mid).is_some() {
+                    continue;
+                }
                 let flag = if mname == "prototype" {
                     XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG
                 } else {
@@ -7143,7 +7162,7 @@ impl Interp {
         let data = std::mem::take(&mut self.proto_data);
         for (proto, pname, value) in &data {
             if let Some(&pid) = self.symbol_ids.get(*pname) {
-                if keep(pid) {
+                if keep(pid) && (full || self.find_property(*proto, pid).is_none()) {
                     let off = self.alloc_str_text(value.as_bytes());
                     self.set_own_unmetered(*proto, pid, Slot::of(Kind::String, Payload::String(off)));
                 }
@@ -7168,6 +7187,9 @@ impl Interp {
             if let Some(&guard_id) = self.symbol_ids.get(guard) {
                 if keep(guard_id) {
                     let pid = self.intern_key_unmetered(pname);
+                    if !full && self.find_property(proto, pid).is_some() {
+                        continue;
+                    }
                     self.set_own_accessor_unmetered(
                         proto,
                         pid,
@@ -7213,7 +7235,7 @@ impl Interp {
         let vdata = std::mem::take(&mut self.proto_value_data);
         for (owner, pname, value) in &vdata {
             if let Some(&pid) = self.symbol_ids.get(*pname) {
-                if keep(pid) {
+                if keep(pid) && (full || self.find_property(*owner, pid).is_none()) {
                     self.set_own_unmetered(*owner, pid, *value);
                 }
             }
@@ -7224,7 +7246,7 @@ impl Interp {
             let wks = std::mem::take(&mut self.well_known_symbols);
             for (name, value) in &wks {
                 if let Some(&wid) = self.symbol_ids.get(*name) {
-                    if keep(wid) {
+                    if keep(wid) && (full || self.find_property(symbol_ctor, wid).is_none()) {
                         self.set_own_unmetered(symbol_ctor, wid, *value);
                     }
                 }
@@ -7526,7 +7548,8 @@ impl Interp {
         // already carries already has its binding (or a guest's
         // deliberate replacement of it, which a re-install would
         // clobber — the same append-scoping `relink_crank` applies).
-        self.install_intrinsic_bindings(&eval_names, false, |id| (id as usize) > pre_eval_len);
+        let floor = self.installed_names_len;
+        self.install_intrinsic_bindings(&eval_names, false, move |id| (id as usize) > floor);
         // The unit may reference a well-known property name (`length`, `name`,
         // `then`, a RegExp getter, …) the outer program never used; its id is
         // now in the realm table, so refresh the exotic-property id caches that
@@ -7878,7 +7901,8 @@ impl Interp {
             // guest monkeypatch of a crank-1 prototype method is not
             // clobbered.
             self.bind_program_symbols(&extended);
-            self.install_intrinsic_bindings(&extended, false, |id| (id as usize) > old_len);
+            let floor = self.installed_names_len;
+            self.install_intrinsic_bindings(&extended, false, move |id| (id as usize) > floor);
         }
         Ok(remapped)
     }
@@ -8668,6 +8692,14 @@ impl Interp {
         // buffer from a nested segment. Only the cross-segment call path reads
         // it, and that path is gated on an eval having defined a function.
         self.top_level_code = Some(std::rc::Rc::new(code.to_vec()));
+        // A crank's top level starts sloppy until its own `BEGIN_STRICT`
+        // says otherwise (wave-6 W6-6: nothing reset this register at
+        // crank entry, so one strict crank latched strict semantics onto
+        // every later crank's top level — and, unserialized, diverged
+        // from a resumed twin's fresh-boot `false`). Function frames are
+        // unaffected: `enter_call` sets it per callee and unwind/resume
+        // restore it.
+        self.strict = false;
         let mut halt = self.dispatch(code);
         // Pump-loop latch: after the script settles, drain the promise job
         // queue with metering still accumulating — the host-driven microtask
@@ -13212,16 +13244,19 @@ impl Interp {
                                 );
                             }
                         }
+                        // The @@dispose lookup serves BOTH forms: it is the
+                        // sync `using`'s primary protocol and the async
+                        // form's fallback (wave-6 W6-5 — gating it behind
+                        // the async opcode made every sync `using` with a
+                        // disposer throw TypeError at the declaration).
                         if !self.is_callable_value(value) {
-                            if op == XS_CODE_USING_ASYNC {
-                                if let Some(id) = self.well_known_symbol_property_id("dispose") {
-                                    value = dispatch_result!(
-                                        self.mop_get(code, inst, id, resource),
-                                        pc,
-                                        self,
-                                        return_depth
-                                    );
-                                }
+                            if let Some(id) = self.well_known_symbol_property_id("dispose") {
+                                value = dispatch_result!(
+                                    self.mop_get(code, inst, id, resource),
+                                    pc,
+                                    self,
+                                    return_depth
+                                );
                             }
                         }
                         if !self.is_callable_value(value) {
@@ -32034,6 +32069,12 @@ impl Interp {
         // `mxEnvironment` restore from `jump->scope`), so a throw out of a
         // `with` body resets the environment for the surviving catch/finally.
         self.env = jump.env;
+        // A throw between `XS_CODE_SUPER` (which arms the pending
+        // new-target for the construct about to happen) and the construct
+        // frame that consumes it abandons that construct (wave-6 W6-15:
+        // left armed, the machine's NEXT `new F()` took the stale target
+        // as its `new.target`).
+        self.pending_new_target = None;
         let _ = jump.flag; // every ironhorse jump is a JS jump (flag == 1)
         Some(jump.target_pc)
     }
@@ -32047,6 +32088,9 @@ impl Interp {
         match self.unwind_to_jump() {
             Some(target) => Ok(target),
             None => {
+                // Uncaught: the host-escape leaves the machine post-throw;
+                // disarm the pending new-target here too (wave-6 W6-15).
+                self.pending_new_target = None;
                 self.meter_host_escape();
                 Err(Halt::Throw(self.render(&value)))
             }
@@ -40873,6 +40917,11 @@ impl Interp {
         // host reads it at the boundary where collections run), so it
         // is a root exactly like `this_val`/`exception`.
         slot_roots(&self.result, &mut roots);
+        // The active `with`/eval environment head (wave-6 W6-1): the
+        // compiled `POP` after `XS_CODE_WITH` discards the only stack
+        // reference, so this register is an environment instance's
+        // SOLE holder while a `with` body executes.
+        slot_roots(&self.env, &mut roots);
         for f in &self.call_stack {
             for s in &f.locals {
                 slot_roots(s, &mut roots);
@@ -40882,7 +40931,14 @@ impl Interp {
             }
             slot_roots(&f.this_val, &mut roots);
             slot_roots(&f.result, &mut roots);
+            slot_roots(&f.env, &mut roots);
             roots.push(f.cur_func);
+            roots.push(f.target_func);
+        }
+        // Live exception handlers hold the environment head to restore
+        // on a throw (`CatchJump::env`) — a reference like any frame's.
+        for j in &self.jumps {
+            slot_roots(&j.env, &mut roots);
         }
         for (_, s) in &self.well_known_symbols {
             slot_roots(s, &mut roots);
@@ -40936,6 +40992,14 @@ impl Interp {
         for (holder, _, _) in &self.proto_data {
             roots.push(*holder);
         }
+        // The lazy-install accessor list (wave-6 W6-4): until the first
+        // crank that names its guard installs it, the pending getter
+        // function (and its owning prototype) is reachable ONLY here —
+        // exactly like its rooted `proto_methods`/`proto_data` siblings.
+        for (holder, _, getter, _) in &self.proto_accessors {
+            roots.push(*holder);
+            roots.push(*getter);
+        }
         // Symbol.for registry entries are strong per spec.
         roots.extend(self.symbol_registry.values().copied());
         for f in &self.gen_run_stack {
@@ -40943,6 +41007,9 @@ impl Interp {
         }
         for f in &self.async_run_stack {
             roots.push(f.inst);
+        }
+        for f in &self.async_gen_run_stack {
+            roots.push(f.gen);
         }
         // The pending microtask queue: a crank that halts on a throw,
         // meter exhaustion, or an unsupported opcode leaves jobs
@@ -41076,7 +41143,7 @@ impl Interp {
                 &'a mut std::collections::HashMap<SlotIndex, SlotIndex>,
             number_formats: &'a mut std::collections::HashMap<SlotIndex, NumberFormatData>,
             combinators: &'a [CombinatorState],
-            from_async: &'a [FromAsyncData],
+            from_async: &'a mut Vec<FromAsyncData>,
             static_str: &'a mut StaticStrings,
             swept: Vec<SlotIndex>,
         }
@@ -41093,7 +41160,15 @@ impl Interp {
             }
             f.this_val.each_ref_slot(&mut *visit);
             f.result.each_ref_slot(&mut *visit);
+            // The suspended `with`/eval environment head and the saved
+            // handlers' restore environments (wave-6 W6-1): the frame is
+            // an environment instance's SOLE holder across a suspension.
+            f.env.each_ref_slot(&mut *visit);
+            for j in &f.jumps {
+                j.env.each_ref_slot(&mut *visit);
+            }
             visit(f.cur_func);
+            visit(f.target_func);
         }
 
         // Rewrite a chunk offset carried INSIDE a stored Slot.
@@ -41125,6 +41200,10 @@ impl Interp {
             fn extra_edges(&self, idx: SlotIndex, visit: &mut dyn FnMut(SlotIndex)) {
                 if let Some(f) = self.functions.get(&idx) {
                     visit(f.closures);
+                    // The `super` home object (wave-6 W6-2): for a method
+                    // detached from a dead class, this is the prototype's
+                    // only remaining edge.
+                    visit(f.home);
                 }
                 if let Some(b) = self.bound_functions.get(&idx) {
                     visit(b.target);
@@ -41480,6 +41559,20 @@ impl Interp {
                         slot_chunk(&mut r.reject, visit);
                     }
                 }
+                // Wave-6 W6-3: in-flight `Array.fromAsync` state stores raw
+                // Slot COPIES (a string thisArg, a captured close error);
+                // their chunk offsets relocate with compaction like any
+                // other external holder's.
+                for d in self.from_async.iter_mut() {
+                    slot_chunk(&mut d.resolve, visit);
+                    slot_chunk(&mut d.reject, visit);
+                    slot_chunk(&mut d.mapfn, visit);
+                    slot_chunk(&mut d.this_arg, visit);
+                    slot_chunk(&mut d.iterator, visit);
+                    slot_chunk(&mut d.next_method, visit);
+                    slot_chunk(&mut d.array_like, visit);
+                    slot_chunk(&mut d.close_error, visit);
+                }
                 for g in self.generators.values_mut() {
                     if let Some(f) = &mut g.frame {
                         saved_frame_chunks(f, visit);
@@ -41629,7 +41722,7 @@ impl Interp {
             number_format_bound_functions: &mut self.number_format_bound_functions,
             number_formats: &mut self.number_formats,
             combinators: &self.combinators,
-            from_async: &self.from_async,
+            from_async: &mut self.from_async,
             static_str: &mut self.static_str,
             swept: Vec::new(),
         };
@@ -41923,10 +42016,21 @@ impl Interp {
             }
             slot_refs(&f.this_val, visit);
             slot_refs(&f.result, visit);
+            // Wave-6 W6-1: the suspended environment head and the saved
+            // handlers' restore environments, mirrored from the full
+            // collector's saved_frame_slots.
+            slot_refs(&f.env, visit);
+            for j in &f.jumps {
+                slot_refs(&j.env, visit);
+            }
             visit(f.cur_func);
+            visit(f.target_func);
         }
         for f in self.functions.values() {
             visit(f.closures);
+            // Wave-6 W6-2: the super home object, mirrored from the full
+            // collector's functions arm.
+            visit(f.home);
         }
         for b in self.bound_functions.values() {
             visit(b.target);
