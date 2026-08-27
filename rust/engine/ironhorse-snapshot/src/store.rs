@@ -86,7 +86,7 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// sections EMPTY (a pure 12-byte suffix; a v6-era machine had
 /// nothing persisted in them by definition) and restamps the root for
 /// the changed small leaf.
-pub const STORE_SCHEMA_VERSION: u32 = 10;
+pub const STORE_SCHEMA_VERSION: u32 = 11;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -1330,23 +1330,33 @@ pub struct SmallState {
     pub typed_arrays: Vec<crate::image::TypedArrayImage>,
     /// The data-views side table (schema 10; the `DVIW` encoding).
     pub data_views: Vec<crate::image::DataViewImage>,
+    /// The primitive-wrapper side table (schema 11; the `WRAP` encoding).
+    pub wrappers: Vec<crate::image::WrapperImage>,
+    /// The regexp side table (schema 11; the `REGX` encoding).
+    pub regexps: Vec<crate::image::RegExpImage>,
+    /// The arguments-exotic brand owners (schema 11; the `ARGB` encoding).
+    pub arguments_brands: Vec<u32>,
+    /// The Temporal record tables (schema 11; the `TMPR` encoding).
+    pub temporal: crate::image::TemporalImage,
 }
 
 impl SmallState {
-    /// Serialize: thirteen sections, each `u32` length-prefixed, in
+    /// Serialize: seventeen sections, each `u32` length-prefixed, in
     /// the fixed order stack, free list, keys, names, symbols, meter,
     /// arrays, collections, registry, errors, buffers, typed arrays,
-    /// data views (arrays/collections/registry since store schema 7 —
-    /// the side-table ledger; the 6→7 migration appends them empty, a
-    /// pure 12-byte suffix — errors since schema 9 and the
-    /// typed-array family since schema 10, whose migrations append
-    /// their empty sections the same way). Since store schema v4 the
-    /// free-list section is always EMPTY in stored small state — the
-    /// list lives in dirty-diffed segment rows (phase 9) — but the
-    /// section slot stays so the layout is stable; the atom container
-    /// path still carries the list via the image, not this encoding.
+    /// data views, wrappers, regexps, arguments brands, temporal
+    /// (arrays/collections/registry since store schema 7 — the
+    /// side-table ledger; the 6→7 migration appends them empty, a
+    /// pure 12-byte suffix — errors since schema 9, the typed-array
+    /// family since schema 10, and the data-only language rows since
+    /// schema 11, whose migrations append their empty sections the
+    /// same way). Since store schema v4 the free-list section is
+    /// always EMPTY in stored small state — the list lives in
+    /// dirty-diffed segment rows (phase 9) — but the section slot
+    /// stays so the layout is stable; the atom container path still
+    /// carries the list via the image, not this encoding.
     pub fn encode(&self) -> Vec<u8> {
-        let sections: [Vec<u8>; 13] = [
+        let sections: [Vec<u8>; 17] = [
             encode_stack(&self.stack),
             encode_u32s(&[]),
             encode_strings(&self.keys),
@@ -1360,6 +1370,10 @@ impl SmallState {
             crate::image::encode_buffers(&self.buffers),
             crate::image::encode_typed_arrays(&self.typed_arrays),
             crate::image::encode_data_views(&self.data_views),
+            crate::image::encode_wrappers(&self.wrappers),
+            crate::image::encode_regexps(&self.regexps),
+            crate::image::encode_arguments_brands(&self.arguments_brands),
+            crate::image::encode_temporal(&self.temporal),
         ];
         let mut v = Vec::new();
         for s in sections {
@@ -1369,7 +1383,7 @@ impl SmallState {
         v
     }
 
-    /// Decode the thirteen sections. Every section length is
+    /// Decode the seventeen sections. Every section length is
     /// bounds-checked against the remaining payload before it is
     /// sliced.
     pub fn decode(p: &[u8]) -> Result<SmallState, StoreError> {
@@ -1444,7 +1458,32 @@ impl SmallState {
         } else {
             crate::image::decode_data_views(data_views_bytes)?
         };
-        // Same exact-consumption rule as the manifest: thirteen
+        // Schema-11 sections (the data-only language rows), same rule.
+        let wrappers_bytes = section("small state wrappers section")?;
+        let wrappers = if wrappers_bytes.is_empty() {
+            Vec::new()
+        } else {
+            crate::image::decode_wrappers(wrappers_bytes)?
+        };
+        let regexps_bytes = section("small state regexps section")?;
+        let regexps = if regexps_bytes.is_empty() {
+            Vec::new()
+        } else {
+            crate::image::decode_regexps(regexps_bytes)?
+        };
+        let arguments_bytes = section("small state arguments section")?;
+        let arguments_brands = if arguments_bytes.is_empty() {
+            Vec::new()
+        } else {
+            crate::image::decode_arguments_brands(arguments_bytes)?
+        };
+        let temporal_bytes = section("small state temporal section")?;
+        let temporal = if temporal_bytes.is_empty() {
+            crate::image::TemporalImage::default()
+        } else {
+            crate::image::decode_temporal(temporal_bytes)?
+        };
+        // Same exact-consumption rule as the manifest: seventeen
         // sections and nothing after them, or the small state fails
         // closed.
         if i != p.len() {
@@ -1466,6 +1505,10 @@ impl SmallState {
             buffers,
             typed_arrays,
             data_views,
+            wrappers,
+            regexps,
+            arguments_brands,
+            temporal,
         })
     }
 }
@@ -1768,6 +1811,7 @@ pub fn migrate_store(
             7 => migrate_v7_to_v8(store)?,
             8 => migrate_v8_to_v9(store)?,
             9 => migrate_v9_to_v10(store)?,
+            10 => migrate_v10_to_v11(store)?,
             _ => {
                 return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                     "unsupported store schema version",
@@ -1940,6 +1984,40 @@ fn migrate_v9_to_v10(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     store.replace_manifest_and_small_for_migration(&manifest, &new_small)
 }
 
+/// Ladder step 10→11 (the data-only language rows): the small state
+/// grows the four `WRAP`/`REGX`/`ARGB`/`TMPR` sections EMPTY — a pure
+/// 16-byte suffix of zero-length section headers, content-preserving
+/// by the same argument as every ladder step (a v10-era machine
+/// persisted nothing in them: these rows were silently dropped by
+/// resume, which is exactly what the carry fixes going forward). The
+/// `migrate_v6_to_v7` pattern exactly.
+fn migrate_v10_to_v11(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    let small = store.read_small_state()?;
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    if old != manifest.root {
+        // `expected` = recomputed root, `found` = manifest's claim.
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root.clone(),
+        });
+    }
+    let mut new_small = small;
+    new_small.extend_from_slice(&[0u8; 16]);
+    manifest.store_schema = 11;
+    manifest.root = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &new_small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
+}
+
 /// The epoch discipline every [`HeapStore::commit`] enforces: the first
 /// commit into an empty store is epoch 1; every later commit advances
 /// the stored epoch by exactly one. Anything else is a replayed or
@@ -2078,6 +2156,10 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         buffers: image.buffers.clone(),
         typed_arrays: image.typed_arrays.clone(),
         data_views: image.data_views.clone(),
+        wrappers: image.wrappers.clone(),
+        regexps: image.regexps.clone(),
+        arguments_brands: image.arguments_brands.clone(),
+        temporal: image.temporal.clone(),
     };
     let small_bytes = small.encode();
     let slot_pages = encode_all_slot_pages(&image.slots);
@@ -2283,6 +2365,12 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         &small.buffers,
         &small.typed_arrays,
         &small.data_views,
+        &crate::image::LangRows {
+            wrappers: &small.wrappers,
+            regexps: &small.regexps,
+            arguments_brands: &small.arguments_brands,
+            temporal: &small.temporal,
+        },
         &small.symbols,
         slots.len() as u32,
         chunks.len(),
@@ -2309,6 +2397,10 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         buffers: small.buffers,
         typed_arrays: small.typed_arrays,
         data_views: small.data_views,
+        wrappers: small.wrappers,
+        regexps: small.regexps,
+        arguments_brands: small.arguments_brands,
+        temporal: small.temporal,
     })
 }
 
@@ -2403,6 +2495,12 @@ pub fn validate_store(
         &small.buffers,
         &small.typed_arrays,
         &small.data_views,
+        &crate::image::LangRows {
+            wrappers: &small.wrappers,
+            regexps: &small.regexps,
+            arguments_brands: &small.arguments_brands,
+            temporal: &small.temporal,
+        },
         &small.symbols,
         manifest.slot_count,
         manifest.chunk_len as usize,
@@ -2913,6 +3011,10 @@ mod tests {
             buffers: Vec::new(),
             typed_arrays: Vec::new(),
             data_views: Vec::new(),
+            wrappers: Vec::new(),
+            regexps: Vec::new(),
+            arguments_brands: Vec::new(),
+            temporal: crate::image::TemporalImage::default(),
         };
         // Since schema v4 the free list does NOT ride in small state
         // (it lives in segment rows); the round-trip drops it.
@@ -2937,6 +3039,10 @@ mod tests {
             buffers: Vec::new(),
             typed_arrays: Vec::new(),
             data_views: Vec::new(),
+            wrappers: Vec::new(),
+            regexps: Vec::new(),
+            arguments_brands: Vec::new(),
+            temporal: crate::image::TemporalImage::default(),
         };
         let bytes = s.encode();
         for cut in [0, 3, 7, bytes.len() - 1] {

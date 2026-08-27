@@ -102,13 +102,18 @@
 //!   (`Functions`, Pending).
 //! - `from_async` — `Array.fromAsync` accumulation state (`Combinators`,
 //!   Pending).
-//! - `regexp_last_names` — the last-match named-group scratch (`RegExps`,
-//!   Pending).
-//! - `arguments_objects` — the arguments-exotic brand set. Its primary row
-//!   (`Arrays`) is Serialized but this brand does NOT yet travel, so a
-//!   suspended arguments object resumes as a plain array-exotic — an honest
-//!   known gap, called out here so the `Arrays` row's `Serialized` is not
-//!   read as covering it.
+//! - `regexp_last_names` — the last-match named-group scratch (a global
+//!   `Vec<i32>`, not slot-keyed): per-crank match state consumed by the
+//!   legacy result accessors within the crank; its primary row
+//!   (`RegExps`) is Serialized since schema 11 (source/flags/lastIndex
+//!   travel; the program recompiles), while this scratch stays honest
+//!   per-crank state.
+//! - `arguments_objects` — the arguments-exotic brand set, riding its
+//!   primary row (`Arrays`, Serialized). Since store schema 11 the brand
+//!   itself TRAVELS (the `ARGB` atom / small-state arguments section), so
+//!   a suspended arguments object resumes branded — its completion-value
+//!   render answers `[object Arguments]`, not the array join
+//!   (`language_rows_carry.rs`).
 //! - `side_refs` — the counted-accessor page projection over the two bulk
 //!   rows (`Arrays`/`Collections`); a derived cache the restore path
 //!   rebuilds in lockstep by routing every insert through the counted
@@ -465,7 +470,7 @@ impl SideTable {
             SideTable::Jumps => ("jumps", EmptyAtBoundary),
             SideTable::ErrorData => ("error_data", Serialized),
             SideTable::Accessors => ("accessors", Pending),
-            SideTable::WrapperData => ("wrapper_data", Pending),
+            SideTable::WrapperData => ("wrapper_data", Serialized),
             // Ledger G1 (2026-08-24): the two BULK tables travel in the
             // `ARRY`/`COLL` atoms and the schema-7 small-state sections
             // (owner-ascending, items/entries in table order; values are
@@ -490,9 +495,9 @@ impl SideTable {
             SideTable::GenRunStack => ("gen_run_stack", EmptyAtBoundary),
             SideTable::AsyncInstances => ("async_instances", Pending),
             SideTable::AsyncRunStack => ("async_run_stack", EmptyAtBoundary),
-            SideTable::RegExps => ("regexps", Pending),
+            SideTable::RegExps => ("regexps", Serialized),
             SideTable::TemporalRecords => {
-                ("temporal_instants/temporal_durations/temporal_plains/temporal_zoneds", Pending)
+                ("temporal_instants/temporal_durations/temporal_plains/temporal_zoneds", Serialized)
             }
             SideTable::AsyncGenerators => ("async_generators/async_gen_run_stack", Pending),
             SideTable::PrivateElements => ("private_values/private_accessors", Pending),
@@ -719,6 +724,12 @@ mod tests {
         assert!(!pending.contains(&SideTable::DataViews));
         assert!(pending.contains(&SideTable::Proxies));
         assert!(pending.contains(&SideTable::Accessors));
+        // The schema-11 data-only language rows graduated: wrappers,
+        // regexps (recompiled from source at restore), and the four
+        // Temporal record tables.
+        assert!(!pending.contains(&SideTable::WrapperData));
+        assert!(!pending.contains(&SideTable::RegExps));
+        assert!(!pending.contains(&SideTable::TemporalRecords));
         // The quiescence-gated run stacks, call chain, catch chain, and
         // microtask queue are EmptyAtBoundary, not pending: no atom is
         // ever needed for state the gates prove empty.

@@ -1746,6 +1746,38 @@ rather than work items.
     red-first at the gate, bite-checked by dropping the buffer rows
     (the orphaned views then refuse to resume: the cross-table
     validation biting).
+  - [x] The DATA-ONLY language rows LANDED (2026-08-27, store schema
+    v11, the `WRAP`/`REGX`/`ARGB`/`TMPR` atoms + four more
+    small-state sections; the 10→11 migration appends them empty):
+    primitive wrapper boxes (the boxed value is an ordinary slot, so
+    its chunk reference joins the bounds walk), regular expressions
+    (source/flags/`lastIndex` travel; the compiled program RECOMPILES
+    from the pair at restore, refusing closed if it cannot — an
+    honest snapshot's source always recompiles), the
+    arguments-exotic brand (the `Arrays` satellite the coverage note
+    called out as not traveling; its consumer is the
+    completion-value render, `[object Arguments]` vs the array
+    join), and the four Temporal record tables (pure numeric/string
+    data; a plain record's `kind` refused past the engine's 0..=4
+    discriminants). None depends on the `functions` row — every
+    consuming method is a native on rooted boot structure, so a
+    resumed instance WORKS (a resumed global regexp continues its
+    scan from the persisted `lastIndex`). Twins in
+    `language_rows_carry.rs`, red-first (the pre-fix degradations:
+    wrapper `to_primitive` halts, regexp this-guard refusals, the
+    array join where the brand's render belongs, Temporal
+    TypeErrors), bite-checked by dropping the rows at the builder
+    (both store and blob paths ride `snapshot_image`, so the bite
+    reddened all five twins). En route the twins surfaced two
+    engine rendering gaps, recorded not fixed: `new
+    String('hi').length` answers `undefined` on a LIVE machine (the
+    wrapper's length is not materialized), and
+    `Object.prototype.toString.call(arguments)` answers
+    `[object Object]` live (only the completion render consults the
+    brand). The Intl DATA tables (locales, collators, list/plural/
+    number formats, segmenters, segments+iterators, date-time
+    formats) remain Pending on codec volume alone — same pure-data
+    class, one hand-rolled codec per record struct, no blocker.
   - [ ] `proxies`, `accessors`: dependency-gated on the `functions`
     row, with the probe evidence recorded (2026-08-27): a resumed
     guest function is UNCALLABLE today (`f(2)` throws TypeError,
@@ -2529,8 +2561,9 @@ bite-checked by reverting the fix under the lock). Statuses:
   (`empty_at_boundary_rows_match_the_quiescence_predicate`,
   bite-checked in both directions), and `async_gen_run_stack`'s
   quiescence-empty half is documented on the still-Pending
-  `AsyncGenerators` variant it rides. 21 honestly-Pending rows
-  remain.
+  `AsyncGenerators` variant it rides. With the schema-11 data-only
+  carries (wrappers, regexps, Temporal records) the count stands at
+  18 honestly-Pending rows.
   The lazy backing now carries the attach-time chunk length
   (`SlotArena::lazy_from_parts` takes `chunk_bound`; the resume path
   passes `manifest.chunk_len`), and `ensure_page_resident` refuses a

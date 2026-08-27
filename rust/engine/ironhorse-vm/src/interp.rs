@@ -8349,6 +8349,217 @@ impl Interp {
         true
     }
 
+    /// Quiescent snapshot of the `wrapper_data` side table (ledger
+    /// `WrapperData` row, the `WRAP` atom), ascending by owning slot:
+    /// each primitive wrapper instance's boxed value. The value is an
+    /// ordinary [`Slot`] — its chunk reference (a boxed String)
+    /// round-trips with the arenas.
+    pub fn wrappers_snapshot(&self) -> Vec<(u32, Slot)> {
+        let mut out: Vec<(u32, Slot)> = self
+            .wrapper_data
+            .iter()
+            .map(|(owner, v)| (owner.0, *v))
+            .collect();
+        out.sort_unstable_by_key(|(owner, _)| *owner);
+        out
+    }
+
+    /// Reinstate the `wrapper_data` side table from a snapshot (the
+    /// exact inverse of [`Self::wrappers_snapshot`]); the decoded
+    /// slots were already bounds-checked with the heap.
+    pub fn restore_wrapper_data(&mut self, rows: Vec<(u32, Slot)>) {
+        for (owner, value) in rows {
+            self.wrapper_data.insert(crate::value::SlotIndex(owner), value);
+        }
+    }
+
+    /// Quiescent snapshot of the `regexps` side table (ledger `RegExps`
+    /// row, the `REGX` atom), ascending by owning slot: `(owner,
+    /// source, flags, lastIndex bits)`. The COMPILED program does not
+    /// travel — it is a pure function of `(source, flags)` and the
+    /// restore recompiles it, exactly as construction did.
+    pub fn regexps_snapshot(&self) -> Vec<(u32, String, String, u64)> {
+        let mut out: Vec<(u32, String, String, u64)> = self
+            .regexps
+            .iter()
+            .map(|(owner, r)| {
+                (
+                    owner.0,
+                    r.source.clone(),
+                    r.flags.clone(),
+                    r.last_index.to_bits(),
+                )
+            })
+            .collect();
+        out.sort_unstable_by_key(|(owner, _, _, _)| *owner);
+        out
+    }
+
+    /// Reinstate the `regexps` side table from a snapshot, recompiling
+    /// each program from its persisted `(source, flags)`. A source
+    /// that fails to recompile cannot come from an honest snapshot
+    /// (construction compiled the same pair), so the `false` return
+    /// fails the caller's decode closed.
+    pub fn restore_regexps(&mut self, rows: Vec<(u32, String, String, u64)>) -> bool {
+        for (owner, source, flags, last_index_bits) in rows {
+            let Ok(program) = ironhorse_regexp::compile(&source, &flags) else {
+                return false;
+            };
+            self.regexps.insert(
+                crate::value::SlotIndex(owner),
+                RegExpData {
+                    program,
+                    source,
+                    flags,
+                    last_index: f64::from_bits(last_index_bits),
+                },
+            );
+        }
+        true
+    }
+
+    /// Quiescent snapshot of the `arguments_objects` brand set (the
+    /// `ARGB` atom — the satellite the `Arrays` row's coverage note
+    /// called out as NOT traveling), ascending owners.
+    pub fn arguments_brands_snapshot(&self) -> Vec<u32> {
+        let mut out: Vec<u32> = self.arguments_objects.iter().map(|o| o.0).collect();
+        out.sort_unstable();
+        out
+    }
+
+    /// Reinstate the arguments-exotic brand set.
+    pub fn restore_arguments_brands(&mut self, owners: Vec<u32>) {
+        for owner in owners {
+            self.arguments_objects.insert(crate::value::SlotIndex(owner));
+        }
+    }
+
+    /// Quiescent snapshot of the four Temporal record tables (ledger
+    /// `TemporalRecords` row, the `TMPR` atom), each ascending by
+    /// owner: instants `(owner, epochNanoseconds)`, durations
+    /// `(owner, the ten field values)`, plains `(owner, kind,
+    /// year, [month, day, hour, minute, second, ms, µs, ns])`, zoneds
+    /// `(owner, epochNanoseconds, timeZone, offsetNs)`.
+    #[allow(clippy::type_complexity)]
+    pub fn temporal_snapshot(
+        &self,
+    ) -> (
+        Vec<(u32, i128)>,
+        Vec<(u32, [i64; 10])>,
+        Vec<(u32, u8, i64, [u32; 8])>,
+        Vec<(u32, i128, String, i64)>,
+    ) {
+        let mut instants: Vec<(u32, i128)> = self
+            .temporal_instants
+            .iter()
+            .map(|(o, r)| (o.0, r.epoch_nanoseconds))
+            .collect();
+        instants.sort_unstable_by_key(|(o, _)| *o);
+        let mut durations: Vec<(u32, [i64; 10])> = self
+            .temporal_durations
+            .iter()
+            .map(|(o, r)| (o.0, r.fields()))
+            .collect();
+        durations.sort_unstable_by_key(|(o, _)| *o);
+        let mut plains: Vec<(u32, u8, i64, [u32; 8])> = self
+            .temporal_plains
+            .iter()
+            .map(|(o, r)| {
+                (
+                    o.0,
+                    r.kind,
+                    r.year,
+                    [
+                        r.month,
+                        r.day,
+                        r.hour,
+                        r.minute,
+                        r.second,
+                        r.millisecond,
+                        r.microsecond,
+                        r.nanosecond,
+                    ],
+                )
+            })
+            .collect();
+        plains.sort_unstable_by_key(|(o, _, _, _)| *o);
+        let mut zoneds: Vec<(u32, i128, String, i64)> = self
+            .temporal_zoneds
+            .iter()
+            .map(|(o, r)| (o.0, r.epoch_nanoseconds, r.time_zone.clone(), r.offset_ns))
+            .collect();
+        zoneds.sort_unstable_by_key(|(o, _, _, _)| *o);
+        (instants, durations, plains, zoneds)
+    }
+
+    /// Reinstate the four Temporal record tables. A plain record's
+    /// `kind` outside the engine's discriminants (0..=4) can only be
+    /// crafted bytes — the consuming natives match on it — so the
+    /// `false` return fails the caller's decode closed.
+    #[allow(clippy::type_complexity)]
+    pub fn restore_temporal_records(
+        &mut self,
+        instants: Vec<(u32, i128)>,
+        durations: Vec<(u32, [i64; 10])>,
+        plains: Vec<(u32, u8, i64, [u32; 8])>,
+        zoneds: Vec<(u32, i128, String, i64)>,
+    ) -> bool {
+        for (owner, epoch_nanoseconds) in instants {
+            self.temporal_instants.insert(
+                crate::value::SlotIndex(owner),
+                TemporalInstantRecord { epoch_nanoseconds },
+            );
+        }
+        for (owner, f) in durations {
+            self.temporal_durations.insert(
+                crate::value::SlotIndex(owner),
+                TemporalDurationRecord {
+                    years: f[0],
+                    months: f[1],
+                    weeks: f[2],
+                    days: f[3],
+                    hours: f[4],
+                    minutes: f[5],
+                    seconds: f[6],
+                    milliseconds: f[7],
+                    microseconds: f[8],
+                    nanoseconds: f[9],
+                },
+            );
+        }
+        for (owner, kind, year, f) in plains {
+            if kind > 4 {
+                return false;
+            }
+            self.temporal_plains.insert(
+                crate::value::SlotIndex(owner),
+                TemporalPlainRecord {
+                    kind,
+                    year,
+                    month: f[0],
+                    day: f[1],
+                    hour: f[2],
+                    minute: f[3],
+                    second: f[4],
+                    millisecond: f[5],
+                    microsecond: f[6],
+                    nanosecond: f[7],
+                },
+            );
+        }
+        for (owner, epoch_nanoseconds, time_zone, offset_ns) in zoneds {
+            self.temporal_zoneds.insert(
+                crate::value::SlotIndex(owner),
+                TemporalZonedRecord {
+                    epoch_nanoseconds,
+                    time_zone,
+                    offset_ns,
+                },
+            );
+        }
+        true
+    }
+
     /// The symbol-key property-id table (ledger `SYMB` row): the
     /// top-down mint counter and every `(id, descriptor slot)` pair,
     /// ascending by id. [`Self::restore_symbol_key_table`] is the exact

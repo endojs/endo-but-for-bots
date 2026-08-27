@@ -128,18 +128,18 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     // test262 host, and the boot-link name-table appends), not a
     // format one — the container grammar, store schema 8, and the
     // canonical-empty SYMB/KEYS encodings are all unchanged.
-    // Seal re-pinned again 2026-08-27, twice, for the G3 carries:
-    // schema v9 (the error-data row: the small state grew the ERRD
-    // section) and schema v10 (the typed-array family: the
-    // ABUF/TARR/DVIW sections) — each grows the small state and stamps
-    // the manifest, so every small leaf — and thus root and seal —
-    // moved. The blob hash above did NOT move either time: this
-    // machine holds no error or typed-array rows, and the ledger atoms
-    // are emitted only when non-empty — the same container-stability
-    // property the two-pin split proves.
+    // Seal re-pinned again 2026-08-27, three times, for the ledger
+    // carries: schema v9 (the error-data row: the ERRD section),
+    // schema v10 (the typed-array family: ABUF/TARR/DVIW), and schema
+    // v11 (the data-only language rows: WRAP/REGX/ARGB/TMPR) — each
+    // grows the small state and stamps the manifest, so every small
+    // leaf — and thus root and seal — moved. The blob hash above did
+    // NOT move any time: this machine holds none of those rows, and
+    // the ledger atoms are emitted only when non-empty — the same
+    // container-stability property the two-pin split proves.
     assert_eq!(
         store.manifest().unwrap().seal,
-        "b736b1dc1c182109f59f1d2c3db9c165861042bd19612bf1fe1aa569ab935c1b",
+        "96b9c34d19d91ffc4cbead5f97b4950725eafc486e7cfe16b25a2d3b94acb4af",
         "epoch-3 seal chain"
     );
 }

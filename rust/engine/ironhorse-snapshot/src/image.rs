@@ -224,6 +224,54 @@ pub struct DataViewImage {
     pub size: u32,
 }
 
+/// One primitive wrapper's serialized side-table row (the `WRAP` atom /
+/// small-state wrappers section): the owning slot and the boxed value —
+/// an ordinary [`Slot`], so its chunk reference (a boxed String) rides
+/// the arenas and joins the bounds walk. Ascending by owner.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WrapperImage {
+    pub owner: u32,
+    pub value: Slot,
+}
+
+/// One RegExp instance's serialized side-table row (the `REGX` atom /
+/// small-state regexps section): the owning slot, the pattern source,
+/// the flags, and the `lastIndex` internal store as raw f64 bits. The
+/// COMPILED program does not travel — it is a pure function of
+/// `(source, flags)` and the restore recompiles it. Ascending by owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegExpImage {
+    pub owner: u32,
+    pub source: String,
+    pub flags: String,
+    pub last_index_bits: u64,
+}
+
+/// The four Temporal record tables (the `TMPR` atom / small-state
+/// temporal section), each ascending by owner. Pure numeric/string
+/// data — no slot references beyond the weak owners.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct TemporalImage {
+    /// `(owner, epochNanoseconds)`.
+    pub instants: Vec<(u32, i128)>,
+    /// `(owner, the ten duration fields)`.
+    pub durations: Vec<(u32, [i64; 10])>,
+    /// `(owner, kind 0..=4, year, [month, day, hour, minute, second,
+    /// ms, µs, ns])`.
+    pub plains: Vec<(u32, u8, i64, [u32; 8])>,
+    /// `(owner, epochNanoseconds, timeZone, offsetNs)`.
+    pub zoneds: Vec<(u32, i128, String, i64)>,
+}
+
+impl TemporalImage {
+    pub fn is_empty(&self) -> bool {
+        self.instants.is_empty()
+            && self.durations.is_empty()
+            && self.plains.is_empty()
+            && self.zoneds.is_empty()
+    }
+}
+
 /// The symbol-key property-id table (the `SYMB` atom / small-state
 /// symbols section): the machine's top-down mint counter and every
 /// `(id, descriptor slot)` pair, ascending by id. Symbol keys mint
@@ -300,6 +348,14 @@ pub struct MachineImage {
     pub typed_arrays: Vec<TypedArrayImage>,
     /// `DVIW`: the data-views side table (ledger), owner-ascending.
     pub data_views: Vec<DataViewImage>,
+    /// `WRAP`: the primitive-wrapper side table (ledger), owner-ascending.
+    pub wrappers: Vec<WrapperImage>,
+    /// `REGX`: the regexp side table (ledger), owner-ascending.
+    pub regexps: Vec<RegExpImage>,
+    /// `ARGB`: the arguments-exotic brand owners, ascending.
+    pub arguments_brands: Vec<u32>,
+    /// `TMPR`: the four Temporal record tables (ledger).
+    pub temporal: TemporalImage,
 }
 
 impl MachineImage {
@@ -338,6 +394,10 @@ impl MachineImage {
             buffers: Vec::new(),
             typed_arrays: Vec::new(),
             data_views: Vec::new(),
+            wrappers: Vec::new(),
+            regexps: Vec::new(),
+            arguments_brands: Vec::new(),
+            temporal: TemporalImage::default(),
         }
     }
 
@@ -413,6 +473,24 @@ impl MachineImage {
         self.buffers = buffers;
         self.typed_arrays = typed_arrays;
         self.data_views = data_views;
+        self
+    }
+
+    /// Attach the data-only language rows (store schema v11): primitive
+    /// wrappers, regexps, the arguments-exotic brand, and the Temporal
+    /// record tables. The snapshot surface calls this with the live
+    /// machine's `*_snapshot()` views, already in canonical order.
+    pub fn with_language_rows(
+        mut self,
+        wrappers: Vec<WrapperImage>,
+        regexps: Vec<RegExpImage>,
+        arguments_brands: Vec<u32>,
+        temporal: TemporalImage,
+    ) -> MachineImage {
+        self.wrappers = wrappers;
+        self.regexps = regexps;
+        self.arguments_brands = arguments_brands;
+        self.temporal = temporal;
         self
     }
 
@@ -1136,6 +1214,253 @@ pub(crate) fn decode_data_views(p: &[u8]) -> Result<Vec<DataViewImage>, Snapshot
     Ok(out)
 }
 
+/// Encode the primitive-wrapper side table (the `WRAP` payload /
+/// small-state wrappers section). Wire form per row: `u32 owner`, then
+/// the slot record.
+pub(crate) fn encode_wrappers(wrappers: &[WrapperImage]) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(wrappers.len() as u32).to_be_bytes());
+    for w in wrappers {
+        v.extend_from_slice(&w.owner.to_be_bytes());
+        crate::slot_codec::encode_slot(&w.value, &mut v);
+    }
+    v
+}
+
+pub(crate) fn decode_wrappers(p: &[u8]) -> Result<Vec<WrapperImage>, SnapshotError> {
+    let mut c = Cursor::new(p, "wrapper side table");
+    let count = c.u32()? as usize;
+    let mut out = Vec::with_capacity(count.min(p.len() / 8));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        let value = c.slot()?;
+        if out.last().is_some_and(|prev: &WrapperImage| owner <= prev.owner) {
+            return Err(SnapshotError::Corrupt(
+                "wrapper side table: owners not strictly ascending",
+            ));
+        }
+        out.push(WrapperImage { owner, value });
+    }
+    c.done()?;
+    Ok(out)
+}
+
+/// Encode the regexp side table (the `REGX` payload / small-state
+/// regexps section). Wire form per row: `u32 owner`, `u32 source_len` +
+/// bytes, `u32 flags_len` + bytes, `u64 lastIndex bits`.
+pub(crate) fn encode_regexps(regexps: &[RegExpImage]) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(regexps.len() as u32).to_be_bytes());
+    for r in regexps {
+        v.extend_from_slice(&r.owner.to_be_bytes());
+        let src = r.source.as_bytes();
+        v.extend_from_slice(&(src.len() as u32).to_be_bytes());
+        v.extend_from_slice(src);
+        let flags = r.flags.as_bytes();
+        v.extend_from_slice(&(flags.len() as u32).to_be_bytes());
+        v.extend_from_slice(flags);
+        v.extend_from_slice(&r.last_index_bits.to_be_bytes());
+    }
+    v
+}
+
+pub(crate) fn decode_regexps(p: &[u8]) -> Result<Vec<RegExpImage>, SnapshotError> {
+    let mut c = Cursor::new(p, "regexp side table");
+    let count = c.u32()? as usize;
+    let mut out = Vec::with_capacity(count.min(p.len() / 16));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        let source_len = c.u32()? as usize;
+        let source = String::from_utf8(c.bytes(source_len)?.to_vec())
+            .map_err(|_| SnapshotError::Corrupt("regexp side table: source not UTF-8"))?;
+        let flags_len = c.u32()? as usize;
+        let flags = String::from_utf8(c.bytes(flags_len)?.to_vec())
+            .map_err(|_| SnapshotError::Corrupt("regexp side table: flags not UTF-8"))?;
+        let last_index_bits = ((c.u32()? as u64) << 32) | c.u32()? as u64;
+        if out.last().is_some_and(|prev: &RegExpImage| owner <= prev.owner) {
+            return Err(SnapshotError::Corrupt(
+                "regexp side table: owners not strictly ascending",
+            ));
+        }
+        out.push(RegExpImage {
+            owner,
+            source,
+            flags,
+            last_index_bits,
+        });
+    }
+    c.done()?;
+    Ok(out)
+}
+
+/// Encode the arguments-exotic brand owners (the `ARGB` payload /
+/// small-state arguments section): a `u32` count then ascending owners.
+pub(crate) fn encode_arguments_brands(owners: &[u32]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(4 + owners.len() * 4);
+    v.extend_from_slice(&(owners.len() as u32).to_be_bytes());
+    for o in owners {
+        v.extend_from_slice(&o.to_be_bytes());
+    }
+    v
+}
+
+pub(crate) fn decode_arguments_brands(p: &[u8]) -> Result<Vec<u32>, SnapshotError> {
+    let mut c = Cursor::new(p, "arguments brand set");
+    let count = c.u32()? as usize;
+    let mut out = Vec::with_capacity(count.min(p.len() / 4));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        if out.last().is_some_and(|prev| owner <= *prev) {
+            return Err(SnapshotError::Corrupt(
+                "arguments brand set: owners not strictly ascending",
+            ));
+        }
+        out.push(owner);
+    }
+    c.done()?;
+    Ok(out)
+}
+
+/// Encode the four Temporal record tables (the `TMPR` payload /
+/// small-state temporal section): four `u32`-counted lists in the
+/// fixed order instants, durations, plains, zoneds. `i128`/`i64`
+/// values travel as big-endian two's-complement bytes.
+pub(crate) fn encode_temporal(t: &TemporalImage) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(t.instants.len() as u32).to_be_bytes());
+    for (owner, ns) in &t.instants {
+        v.extend_from_slice(&owner.to_be_bytes());
+        v.extend_from_slice(&ns.to_be_bytes());
+    }
+    v.extend_from_slice(&(t.durations.len() as u32).to_be_bytes());
+    for (owner, f) in &t.durations {
+        v.extend_from_slice(&owner.to_be_bytes());
+        for x in f {
+            v.extend_from_slice(&x.to_be_bytes());
+        }
+    }
+    v.extend_from_slice(&(t.plains.len() as u32).to_be_bytes());
+    for (owner, kind, year, f) in &t.plains {
+        v.extend_from_slice(&owner.to_be_bytes());
+        v.push(*kind);
+        v.extend_from_slice(&year.to_be_bytes());
+        for x in f {
+            v.extend_from_slice(&x.to_be_bytes());
+        }
+    }
+    v.extend_from_slice(&(t.zoneds.len() as u32).to_be_bytes());
+    for (owner, ns, tz, off) in &t.zoneds {
+        v.extend_from_slice(&owner.to_be_bytes());
+        v.extend_from_slice(&ns.to_be_bytes());
+        let tzb = tz.as_bytes();
+        v.extend_from_slice(&(tzb.len() as u32).to_be_bytes());
+        v.extend_from_slice(tzb);
+        v.extend_from_slice(&off.to_be_bytes());
+    }
+    v
+}
+
+pub(crate) fn decode_temporal(p: &[u8]) -> Result<TemporalImage, SnapshotError> {
+    let mut c = Cursor::new(p, "temporal record tables");
+    let mut t = TemporalImage::default();
+    let ascending = |prev: Option<u32>, owner: u32, what: &'static str| {
+        if prev.is_some_and(|prev| owner <= prev) {
+            Err(SnapshotError::Corrupt(what))
+        } else {
+            Ok(())
+        }
+    };
+    let n = c.u32()? as usize;
+    let mut prev = None;
+    for _ in 0..n {
+        let owner = c.u32()?;
+        ascending(prev, owner, "temporal instants: owners not strictly ascending")?;
+        prev = Some(owner);
+        let mut b = [0u8; 16];
+        b.copy_from_slice(c.bytes(16)?);
+        t.instants.push((owner, i128::from_be_bytes(b)));
+    }
+    let n = c.u32()? as usize;
+    let mut prev = None;
+    for _ in 0..n {
+        let owner = c.u32()?;
+        ascending(prev, owner, "temporal durations: owners not strictly ascending")?;
+        prev = Some(owner);
+        let mut f = [0i64; 10];
+        for x in &mut f {
+            let mut b = [0u8; 8];
+            b.copy_from_slice(c.bytes(8)?);
+            *x = i64::from_be_bytes(b);
+        }
+        t.durations.push((owner, f));
+    }
+    let n = c.u32()? as usize;
+    let mut prev = None;
+    for _ in 0..n {
+        let owner = c.u32()?;
+        ascending(prev, owner, "temporal plains: owners not strictly ascending")?;
+        prev = Some(owner);
+        let kind = c.u8()?;
+        // The engine's plain-record discriminants are 0..=4; anything
+        // else is crafted bytes the consuming natives would match on.
+        if kind > 4 {
+            return Err(SnapshotError::Corrupt("temporal plains: unknown kind"));
+        }
+        let mut b = [0u8; 8];
+        b.copy_from_slice(c.bytes(8)?);
+        let year = i64::from_be_bytes(b);
+        let mut f = [0u32; 8];
+        for x in &mut f {
+            *x = c.u32()?;
+        }
+        t.plains.push((owner, kind, year, f));
+    }
+    let n = c.u32()? as usize;
+    let mut prev = None;
+    for _ in 0..n {
+        let owner = c.u32()?;
+        ascending(prev, owner, "temporal zoneds: owners not strictly ascending")?;
+        prev = Some(owner);
+        let mut b = [0u8; 16];
+        b.copy_from_slice(c.bytes(16)?);
+        let ns = i128::from_be_bytes(b);
+        let tz_len = c.u32()? as usize;
+        let tz = String::from_utf8(c.bytes(tz_len)?.to_vec())
+            .map_err(|_| SnapshotError::Corrupt("temporal zoneds: time zone not UTF-8"))?;
+        let mut b = [0u8; 8];
+        b.copy_from_slice(c.bytes(8)?);
+        t.zoneds.push((owner, ns, tz, i64::from_be_bytes(b)));
+    }
+    c.done()?;
+    Ok(t)
+}
+
+/// The data-only language rows, bundled for the bounds gate (one
+/// parameter instead of four more positionals as the ledger grows).
+pub(crate) struct LangRows<'a> {
+    pub wrappers: &'a [WrapperImage],
+    pub regexps: &'a [RegExpImage],
+    pub arguments_brands: &'a [u32],
+    pub temporal: &'a TemporalImage,
+}
+
+impl LangRows<'_> {
+    /// The empty rows, for callers checking language-row-free content.
+    pub(crate) const EMPTY: LangRows<'static> = LangRows {
+        wrappers: &[],
+        regexps: &[],
+        arguments_brands: &[],
+        temporal: &EMPTY_TEMPORAL,
+    };
+}
+
+static EMPTY_TEMPORAL: TemporalImage = TemporalImage {
+    instants: Vec::new(),
+    durations: Vec::new(),
+    plains: Vec::new(),
+    zoneds: Vec::new(),
+};
+
 /// Every slot index and chunk offset a decoded image can carry, checked
 /// against the geometry the image itself declares.
 ///
@@ -1225,6 +1550,7 @@ pub(crate) fn check_image_slot_bounds(
     buffers: &[BufferImage],
     typed_arrays: &[TypedArrayImage],
     data_views: &[DataViewImage],
+    lang: &LangRows<'_>,
     symbols: &SymbolKeyImage,
     slot_count: u32,
     chunk_len: usize,
@@ -1330,6 +1656,45 @@ pub(crate) fn check_image_slot_bounds(
             ));
         }
     }
+    // The language rows: weak owners bounded like every sibling's, and
+    // a wrapper's boxed VALUE walks the same slot check as an array
+    // item (its refs and chunk offset are real edges).
+    for w in lang.wrappers {
+        if w.owner >= slot_count {
+            return Err(OOB);
+        }
+        check(&w.value)?;
+    }
+    for r in lang.regexps {
+        if r.owner >= slot_count {
+            return Err(OOB);
+        }
+    }
+    for &o in lang.arguments_brands {
+        if o >= slot_count {
+            return Err(OOB);
+        }
+    }
+    for &(o, _) in &lang.temporal.instants {
+        if o >= slot_count {
+            return Err(OOB);
+        }
+    }
+    for &(o, _) in &lang.temporal.durations {
+        if o >= slot_count {
+            return Err(OOB);
+        }
+    }
+    for &(o, _, _, _) in &lang.temporal.plains {
+        if o >= slot_count {
+            return Err(OOB);
+        }
+    }
+    for (o, _, _, _) in &lang.temporal.zoneds {
+        if *o >= slot_count {
+            return Err(OOB);
+        }
+    }
     for &(_, desc) in &symbols.pairs {
         if desc >= slot_count {
             return Err(OOB);
@@ -1407,6 +1772,21 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
     }
     if !image.data_views.is_empty() {
         w.atom(crate::format::DVIW, &encode_data_views(&image.data_views));
+    }
+    if !image.wrappers.is_empty() {
+        w.atom(crate::format::WRAP, &encode_wrappers(&image.wrappers));
+    }
+    if !image.regexps.is_empty() {
+        w.atom(crate::format::REGX, &encode_regexps(&image.regexps));
+    }
+    if !image.arguments_brands.is_empty() {
+        w.atom(
+            crate::format::ARGB,
+            &encode_arguments_brands(&image.arguments_brands),
+        );
+    }
+    if !image.temporal.is_empty() {
+        w.atom(crate::format::TMPR, &encode_temporal(&image.temporal));
     }
     w.finish()
 }
@@ -1514,6 +1894,22 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => decode_data_views(a.payload)?,
         None => Vec::new(),
     };
+    let wrappers = match r.find(crate::format::WRAP) {
+        Some(a) => decode_wrappers(a.payload)?,
+        None => Vec::new(),
+    };
+    let regexps = match r.find(crate::format::REGX) {
+        Some(a) => decode_regexps(a.payload)?,
+        None => Vec::new(),
+    };
+    let arguments_brands = match r.find(crate::format::ARGB) {
+        Some(a) => decode_arguments_brands(a.payload)?,
+        None => Vec::new(),
+    };
+    let temporal = match r.find(crate::format::TMPR) {
+        Some(a) => decode_temporal(a.payload)?,
+        None => TemporalImage::default(),
+    };
     // Semantic bounds gate (wave-4 P1, widened in wave 5): every slot
     // index and chunk offset the container carries — heap, stack,
     // symbols and side tables alike — must fall inside the decoded
@@ -1529,6 +1925,12 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         &buffers,
         &typed_arrays,
         &data_views,
+        &LangRows {
+            wrappers: &wrappers,
+            regexps: &regexps,
+            arguments_brands: &arguments_brands,
+            temporal: &temporal,
+        },
         &symbols,
         slots.len() as u32,
         chunks.len(),
@@ -1554,6 +1956,10 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         buffers,
         typed_arrays,
         data_views,
+        wrappers,
+        regexps,
+        arguments_brands,
+        temporal,
     })
 }
 
@@ -1655,6 +2061,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &LangRows::EMPTY,
             &SymbolKeyImage::default(),
             4,
             64
@@ -1711,14 +2118,14 @@ mod tests {
         let sym = SymbolKeyImage::default();
         // A buffer whose backing extent runs past the chunk arena.
         let past = vec![BufferImage { owner: 1, data: 60, length: 8, flags: 0 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &past, &[], &[], &sym, 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &past, &[], &[], &LangRows::EMPTY, &sym, 4, 64).is_err());
         // A buffer whose offset sits inside the chunk header.
         let low = vec![BufferImage { owner: 1, data: 2, length: 8, flags: 0 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &low, &[], &[], &sym, 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &low, &[], &[], &LangRows::EMPTY, &sym, 4, 64).is_err());
         // A view naming a buffer with NO row (an in-bounds slot is not
         // enough — restoring it would read through unbacked geometry).
         let orphan = vec![TypedArrayImage { owner: 2, kind: 0, buffer: 3, offset: 0, length: 1 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &orphan, &[], &sym, 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &orphan, &[], &LangRows::EMPTY, &sym, 4, 64).is_err());
         // View geometry past its buffer's length (Uint32Array: shift 2).
         let buf = vec![BufferImage { owner: 1, data: 4, length: 8, flags: 0 }];
         let kind_u32 = ironhorse_vm::TYPED_ARRAY_TYPES
@@ -1727,16 +2134,16 @@ mod tests {
             .unwrap() as u8;
         let wide = vec![TypedArrayImage { owner: 2, kind: kind_u32, buffer: 1, offset: 4, length: 2 }];
         assert!(
-            check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &buf, &wide, &[], &sym, 4, 64).is_err()
+            check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &buf, &wide, &[], &LangRows::EMPTY, &sym, 4, 64).is_err()
         );
         // A data view past its buffer.
         let dv = vec![DataViewImage { owner: 2, buffer: 1, offset: 6, size: 4 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &buf, &[], &dv, &sym, 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &buf, &[], &dv, &LangRows::EMPTY, &sym, 4, 64).is_err());
         // The covered forms pass.
         let fit_view = vec![TypedArrayImage { owner: 2, kind: kind_u32, buffer: 1, offset: 0, length: 2 }];
         let fit_dv = vec![DataViewImage { owner: 3, buffer: 1, offset: 4, size: 4 }];
         assert!(check_image_slot_bounds(
-            &[], &[], &[], &[], &[], &[], &buf, &fit_view, &fit_dv, &sym, 4, 64
+            &[], &[], &[], &[], &[], &[], &buf, &fit_view, &fit_dv, &LangRows::EMPTY, &sym, 4, 64
         )
         .is_ok());
     }
@@ -1749,7 +2156,7 @@ mod tests {
         // shape a reviewer actually crafted and reached a release panic
         // (or an abort) with. slot_count = 4, chunk_len = 64 throughout.
         let ok = |heap: &[Slot], stack: &[Slot]| {
-            check_image_slot_bounds(heap, stack, &[], &[], &[], &[], &[], &[], &[], &SymbolKeyImage::default(), 4, 64)
+            check_image_slot_bounds(heap, stack, &[], &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &SymbolKeyImage::default(), 4, 64)
         };
         let refd = |i: u32| Slot::of(Kind::Reference, Payload::Reference(SlotIndex(i)));
 
@@ -1766,17 +2173,17 @@ mod tests {
 
         // --- the wave-4 arms, still enforced ---
         let bad_desc = [RegistryImage { key: b"k".to_vec(), descriptor: 9 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &bad_desc, &[], &[], &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &bad_desc, &[], &[], &[], &[], &LangRows::EMPTY, &SymbolKeyImage::default(), 4, 64).is_err());
         // A symbol-key descriptor beyond the arena is refused the same way.
         let bad_sym = SymbolKeyImage {
             next_id: u16::MAX - 1,
             pairs: vec![(u16::MAX, 4)],
         };
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &[], &[], &bad_sym, 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &bad_sym, 4, 64).is_err());
         let bad_owner = [ArrayImage { owner: 9, length: 0, items: vec![] }];
-        assert!(check_image_slot_bounds(&[], &[], &bad_owner, &[], &[], &[], &[], &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &bad_owner, &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &SymbolKeyImage::default(), 4, 64).is_err());
         let bad_ref = [ArrayImage { owner: 1, length: 1, items: vec![(0, refd(9))] }];
-        assert!(check_image_slot_bounds(&[], &[], &bad_ref, &[], &[], &[], &[], &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &bad_ref, &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &SymbolKeyImage::default(), 4, 64).is_err());
         // Collections were passed `&[]` in every wave-4 case, so that
         // whole branch never executed (wave 5, llvm-cov). Exercise both
         // the key and the value side.
@@ -1786,14 +2193,14 @@ mod tests {
             table_length: 0,
             entries: vec![(refd(9), Slot::undefined())],
         }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &bad_key, &[], &[], &[], &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &bad_key, &[], &[], &[], &[], &[], &LangRows::EMPTY, &SymbolKeyImage::default(), 4, 64).is_err());
         let bad_val = [CollectionImage {
             owner: 1,
             kind: 0,
             table_length: 0,
             entries: vec![(Slot::undefined(), refd(9))],
         }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &bad_val, &[], &[], &[], &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &bad_val, &[], &[], &[], &[], &[], &LangRows::EMPTY, &SymbolKeyImage::default(), 4, 64).is_err());
 
         // --- in-bounds and NULL pass ---
         assert!(ok(&[refd(3)], &[refd(0)]).is_ok(), "in-bounds indices pass");
@@ -1910,6 +2317,10 @@ mod tests {
             buffers: Vec::new(),
             typed_arrays: Vec::new(),
             data_views: Vec::new(),
+            wrappers: Vec::new(),
+            regexps: Vec::new(),
+            arguments_brands: Vec::new(),
+            temporal: TemporalImage::default(),
         };
         let bytes = write_machine(&img);
         let back = read_machine(&bytes, &sig()).unwrap();
@@ -1940,6 +2351,10 @@ mod tests {
             buffers: Vec::new(),
             typed_arrays: Vec::new(),
             data_views: Vec::new(),
+            wrappers: Vec::new(),
+            regexps: Vec::new(),
+            arguments_brands: Vec::new(),
+            temporal: TemporalImage::default(),
         };
         let bytes = write_machine(&img);
         match read_machine(&bytes, &Signature::new("host-is-now-v2")) {
@@ -2049,6 +2464,10 @@ mod tests {
             buffers: Vec::new(),
             typed_arrays: Vec::new(),
             data_views: Vec::new(),
+            wrappers: Vec::new(),
+            regexps: Vec::new(),
+            arguments_brands: Vec::new(),
+            temporal: TemporalImage::default(),
         };
         let bytes = write_machine(&img);
         let back = read_machine(&bytes, &sig()).unwrap();

@@ -204,6 +204,10 @@ fn incremental_batch(
         buffers: Vec::new(),
         typed_arrays: Vec::new(),
         data_views: Vec::new(),
+        wrappers: Vec::new(),
+        regexps: Vec::new(),
+        arguments_brands: Vec::new(),
+        temporal: ironhorse_snapshot::image::TemporalImage::default(),
     };
     let mut page_edges: Vec<(u32, Vec<u32>)> = Vec::new();
     let slot_pages: Vec<(u32, Vec<u8>)> = slots
