@@ -46,14 +46,30 @@ const tagOf = value => {
  * chart has to be rewritten to opt in. Everything else stays text, which is
  * exactly the previous behaviour.
  *
+ * Recognised two ways on purpose. The tagged form is what a CopyTagged looks
+ * like when it arrives intact. The untagged form — a plain record whose only
+ * content is `payload: 'boolean'` — is what is left if the tag is lost in
+ * transit, which is what a `match:kind` pattern degrades to when it passes
+ * through anything that copies structurally and drops symbol keys.
+ *
+ * Reading it structurally as well costs nothing: no other field shape is a
+ * record whose sole own property is a `payload` of exactly `'boolean'`. The
+ * alternative is a field the UI silently renders as text and the daemon then
+ * refuses on submit, which is the failure this whole module exists to remove.
+ *
  * @param {FormFieldDef} field
  * @returns {'boolean' | 'text'}
  */
 export const fieldKind = field => {
   const pattern = field && field.pattern;
-  if (tagOf(pattern) === 'match:kind') {
-    if (/** @type {any} */ (pattern).payload === 'boolean') return 'boolean';
-  }
+  if (pattern === null || typeof pattern !== 'object') return 'text';
+  const payload = /** @type {any} */ (pattern).payload;
+  if (payload !== 'boolean') return 'text';
+  const tag = tagOf(pattern);
+  if (tag === 'match:kind') return 'boolean';
+  // Tag stripped: accept it only if `payload` is all there is, so this cannot
+  // swallow some richer pattern that merely happens to carry that field.
+  if (tag === undefined && Object.keys(pattern).length === 1) return 'boolean';
   return 'text';
 };
 harden(fieldKind);
