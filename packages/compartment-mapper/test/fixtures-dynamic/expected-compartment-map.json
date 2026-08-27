@@ -1,0 +1,34 @@
+{
+  "compartments": {
+    "app": {
+      "modules": {
+        "dynamic": {
+          "link": "dynamic"
+        }
+      }
+    },
+    "dynamic": {
+      "modules": {
+        "is-ok": {
+          "link": "is-ok"
+        }
+      }
+    },
+    "is-not-ok": {
+      "modules": {}
+    },
+    "is-ok": {
+      "modules": {
+        "is-not-ok": {
+          "link": "is-not-ok"
+        }
+      }
+    }
+  },
+  "entry": "node_modules/app/index.js",
+  "entryCompartment": "app",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-dynamic",
+  "oracle": "node",
+  "projection": "dependency-classification"
+}

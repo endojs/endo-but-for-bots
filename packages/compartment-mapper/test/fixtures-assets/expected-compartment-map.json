@@ -1,0 +1,25 @@
+{
+  "compartments": {
+    "assets": {
+      "modules": {
+        "./bytes.bytes": {
+          "language": "bytes"
+        },
+        "./main.js": {
+          "language": "js"
+        },
+        "./text.text": {
+          "language": "text"
+        },
+        "./uint32.uint32": {
+          "language": "bytes"
+        }
+      }
+    }
+  },
+  "entry": "main.js",
+  "entryCompartment": "assets",
+  "entryModule": "./main.js",
+  "fixture": "fixtures-assets",
+  "oracle": "node"
+}

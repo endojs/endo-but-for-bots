@@ -1,0 +1,36 @@
+{
+  "compartments": {
+    "evan": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        },
+        "evankin": {
+          "link": "evankin"
+        }
+      }
+    },
+    "evan-n1": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        }
+      }
+    },
+    "evankin": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        },
+        "evan": {
+          "link": "evan-n1"
+        }
+      }
+    }
+  },
+  "entry": "node_modules/evan/index.js",
+  "entryCompartment": "evan",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-1",
+  "oracle": "node"
+}

@@ -1,0 +1,20 @@
+{
+  "compartments": {
+    "app": {
+      "modules": {
+        "dep": {
+          "link": "dep"
+        }
+      }
+    },
+    "dep": {
+      "modules": {}
+    }
+  },
+  "entry": "node_modules/app/index.js",
+  "entryCompartment": "app",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-dynamic-import-esm",
+  "oracle": "node",
+  "projection": "dependency-classification"
+}
