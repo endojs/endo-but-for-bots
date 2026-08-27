@@ -13,7 +13,7 @@
 //!   endor ping                  # liveness check
 //!
 //!   endor worker  [-e xs]       # supervised worker child
-//!   endor run     [-e xs] <archive.zip>
+//!   endor run     [-e xs] [-i] <archive.zip>
 //!                               # standalone archive runner
 //!
 //! The manager is hosted in-process by `endor daemon` on a
@@ -24,6 +24,18 @@
 //! The optional `-e <engine>` flag makes the engine explicit. Future
 //! engines (`-e wasm`, `-e native`) slot in without changing the
 //! subcommand vocabulary.
+//!
+//! The optional `-i` / `--interactive` flag selects the TUI host
+//! mode for `endor run`. Without it, the archive runs as a
+//! conventional UNIX process: stdout is the program's output,
+//! stderr is for diagnostics, and there is no curses-style
+//! repaint. With `-i`, `endor` opens the interactive TUI host
+//! defined by `designs/endor-bus-tui.md` and surfaces an
+//! "inspector" pane that captures worker `console.*`, telemetry,
+//! and (someday) a stepping debugger. The Endo platform never
+//! treats `console` as a stdout writer; logs flow through a
+//! dedicated capability into the inspector. See
+//! `packages/tui/index.js`.
 
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
@@ -73,9 +85,24 @@ fn main() -> ExitCode {
         "run" => {
             let cas_hash = parse_flag_value(rest, "--cas");
             let no_cas = rest.iter().any(|a| a == "--no-cas");
+            let mode = parse_tui_mode(rest);
             let path = parse_positional_path(rest);
             match engine {
                 "xs" => {
+                    if mode == TuiMode::Interactive {
+                        // The interactive TUI host is stubbed: see
+                        // designs/endor-bus-tui.md and
+                        // packages/tui/. The Rust ratatui/crossterm
+                        // wiring lands in a follow-up; for now the
+                        // flag is parsed and rejected with a clear
+                        // diagnostic so callers can start adopting
+                        // it without surprise.
+                        eprintln!(
+                            "endor: --interactive TUI mode is not yet \
+                             implemented (stub); see designs/endor-bus-tui.md"
+                        );
+                        return ExitCode::from(78);
+                    }
                     if let Some(hash) = cas_hash {
                         // Run from CAS root hash.
                         result_to_exit("endor", cmd_run_from_cas(&hash))
@@ -89,7 +116,7 @@ fn main() -> ExitCode {
                         }
                     } else {
                         eprintln!(
-                            "usage: endor run [-e xs] [--cas <hash>] [--no-cas] [--registry <url>] [--offline] <archive.zip | entry.js>"
+                            "usage: endor run [-e xs] [-i|--interactive] [--cas <hash>] [--no-cas] [--registry <url>] [--offline] <archive.zip | entry.js>"
                         );
                         ExitCode::from(2)
                     }
@@ -140,7 +167,9 @@ fn print_help() {
     eprintln!();
     eprintln!("Child-facing commands (XS engine by default):");
     eprintln!("  worker  [-e xs]                Run a supervised worker child");
-    eprintln!("  run     [-e xs] <archive.zip>  Run a compartment-map archive");
+    eprintln!("  run     [-e xs] [-i] <archive.zip>");
+    eprintln!("                                 Run a compartment-map archive");
+    eprintln!("                                 (-i / --interactive opens the TUI host)");
     eprintln!("  run     <entry.js>             Run an entry module, npm deps via CAS");
     eprintln!("  run     -e ironhorse <script.js>");
     eprintln!("                                 Run a script on the Rust engine");
@@ -219,7 +248,7 @@ fn print_subcommand_help(sub: &str) {
         }
         "run" => {
             eprintln!(
-                "Usage: endor run [-e xs] [--registry <url>] [--offline] <archive.zip | entry.js>"
+                "Usage: endor run [-e xs] [-i|--interactive] [--registry <url>] [--offline] <archive.zip | entry.js>"
             );
             eprintln!();
             eprintln!("Run a compartment-map archive, or an entry module, standalone.");
@@ -242,8 +271,19 @@ fn print_subcommand_help(sub: &str) {
             eprintln!("//host/path/:_auth, their top-level forms (default");
             eprintln!("registry only), with ${{VAR}} expansion in values.");
             eprintln!();
+            eprintln!("Without -i, the archive runs as a conventional UNIX process:");
+            eprintln!("stdout is the program's output, stderr is for diagnostics, and");
+            eprintln!("there is no curses-style repaint.");
+            eprintln!();
+            eprintln!("With -i / --interactive, endor opens the TUI host (see");
+            eprintln!("designs/endor-bus-tui.md) and exposes an inspector pane that");
+            eprintln!("captures worker console.* output, telemetry, and (someday) a");
+            eprintln!("stepping debugger. The Endo platform never treats console as");
+            eprintln!("a stdout writer; logs flow through a dedicated capability.");
+            eprintln!();
             eprintln!("Options:");
             eprintln!("  -e, --engine <engine>  Engine to use (default: xs)");
+            eprintln!("  -i, --interactive      Open the interactive TUI host (stub)");
             eprintln!("  --registry <url>       Registry base URL for entry-module runs");
             eprintln!("                         (default: https://registry.npmjs.org/)");
             eprintln!("  --offline              Refuse network access: only packages");
@@ -417,6 +457,33 @@ fn parse_positional_path(args: &[String]) -> Option<PathBuf> {
         return Some(PathBuf::from(a));
     }
     None
+}
+
+/// TUI host mode for `endor run`. `endor` decides between an
+/// interactive curses-style TUI (with the inspector pane defined in
+/// `designs/endor-bus-tui.md`) and conventional UNIX output. This
+/// mirrors the JS-side mode contract in `packages/tui/index.js`.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TuiMode {
+    /// No TUI; stdout is the program's output, stderr is for
+    /// diagnostics. This is the default and matches the behavior
+    /// of any other UNIX tool.
+    Unix,
+    /// Open the interactive TUI host with the inspector pane.
+    /// Worker `console.*` is captured by a dedicated logging
+    /// capability; the platform never treats `console` as a stdout
+    /// writer. Selected by `-i` or `--interactive`.
+    Interactive,
+}
+
+/// Returns `Interactive` if `-i` or `--interactive` is anywhere in
+/// `args`, else `Unix`.
+fn parse_tui_mode(args: &[String]) -> TuiMode {
+    if args.iter().any(|a| a == "-i" || a == "--interactive") {
+        TuiMode::Interactive
+    } else {
+        TuiMode::Unix
+    }
 }
 
 /// Parse a flag with a value (e.g., --cas <hash>).
@@ -838,5 +905,52 @@ fn parse_package_spec(spec: &str) -> (String, String) {
     match spec[1..].rfind('@') {
         Some(i) => (spec[..i + 1].to_string(), spec[i + 2..].to_string()),
         None => (spec.to_string(), "*".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn parse_tui_mode_defaults_to_unix() {
+        assert_eq!(parse_tui_mode(&args(&["foo.zip"])), TuiMode::Unix);
+        assert_eq!(parse_tui_mode(&args(&[])), TuiMode::Unix);
+    }
+
+    #[test]
+    fn parse_tui_mode_short_flag_selects_interactive() {
+        assert_eq!(
+            parse_tui_mode(&args(&["-i", "foo.zip"])),
+            TuiMode::Interactive
+        );
+        assert_eq!(
+            parse_tui_mode(&args(&["foo.zip", "-i"])),
+            TuiMode::Interactive
+        );
+    }
+
+    #[test]
+    fn parse_tui_mode_long_flag_selects_interactive() {
+        assert_eq!(
+            parse_tui_mode(&args(&["--interactive", "foo.zip"])),
+            TuiMode::Interactive
+        );
+    }
+
+    #[test]
+    fn parse_positional_path_skips_interactive_flag() {
+        assert_eq!(
+            parse_positional_path(&args(&["-i", "foo.zip"])),
+            Some(PathBuf::from("foo.zip"))
+        );
+        assert_eq!(
+            parse_positional_path(&args(&["--interactive", "foo.zip"])),
+            Some(PathBuf::from("foo.zip"))
+        );
     }
 }
