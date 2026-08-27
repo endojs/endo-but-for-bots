@@ -1755,12 +1755,22 @@ rather than work items.
     silent-wrong for visible-broken, not for correct — so the gates
     stay, and the `functions` carry (per-instance FuncInfo + the
     code-segment story) is the prerequisite lift.
-- The `combinators` / `from_async` / `promise_guards` tables are
-  append-only for the machine's lifetime (wave-6 W6-19): settled
-  entries are unreachable but never reclaimed — unbounded growth on
-  a long-lived machine doing many combinator/`fromAsync` calls.
-  Compaction needs the `ReactionKind` indices re-pointed, so it is a
-  deliberate change, recorded rather than patched in passing.
+- [x] ~~The `combinators` / `from_async` / `promise_guards` tables
+  are append-only for the machine's lifetime (wave-6 W6-19)~~ Done
+  (2026-08-27): both collectors' sweeps now COMPACT the three arenas
+  — an index is live while a surviving reaction kind, queued job, or
+  live resolving-function pair still names it; live entries keep
+  index order, every holder is re-pointed onto the dense arena, and
+  fully-live arenas early-exit (identity remap). Locked in
+  `reaction_arena_pruning.rs`: the growth lock (20 settling cranks
+  held 20/20/160 entries before the fix, bounded after) and three
+  straddle twins — a PENDING combinator/fromAsync/guard whose index
+  the compaction MOVES (settled same-kind churn precedes it), run
+  across the very collection that compacts, GC-vs-plain on results
+  AND computrons. Bite-checked by skipping the `Combine` re-point
+  (the first fixture draft survived the bite because a lone live
+  entry remaps identically — the displacement churn is what gives
+  the twins teeth).
 - Resource-management METERING is not oracle-exact (wave-6): the
   DisposableStack paths measure −4..−8 computrons vs XS and the
   `using` paths −4 — pre-existing across the whole suite, asserted
@@ -2496,12 +2506,13 @@ bite-checked by reverting the fix under the lock). Statuses:
   misclassified requirement fails against the visitor bodies —
   `symbol_key_ids`' ephemeron-not-edges classification was caught
   live by the net while writing it).
-- **RECORDED, not fixed** — W6-19 (`combinators`/`from_async`/
-  `promise_guards` append-only growth), W6-22 (truncated trailing
+- **RECORDED, not fixed** — W6-22 (truncated trailing
   payload relinks; dispatch fails closed), W6-23 (libm
   decision-of-record), the lazy path's chunk-offset bound (the
   eager gate covers it), the resource-management metering gap, and
   the multi-crank oracle mode (the one test class still open).
+  (W6-19's arena growth was subsequently FIXED — see the Remaining
+  ledger's compaction entry.)
 
 ## What Is the Problem Being Solved?
 
