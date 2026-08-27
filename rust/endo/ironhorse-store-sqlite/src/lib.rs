@@ -1402,8 +1402,19 @@ mod tests {
             "fixture must carry chunk bytes for the shrink to mean anything"
         );
 
+        // A real compaction rewrites every stored chunk offset with the
+        // bytes it moves; mirror that coherence (the wave-6 W6-14 heap
+        // gate refuses an image whose slots point into chunks it lacks)
+        // by degrading chunk-bearing slots to chunk-free values in
+        // place - chain links, ids, and accounting untouched.
         let mut shrunk = image.clone();
         shrunk.chunks = Vec::new();
+        for slot in shrunk.slots.iter_mut().chain(shrunk.stack.iter_mut()) {
+            if slot.chunk_ref().is_some() {
+                slot.kind = ironhorse_vm::Kind::Integer;
+                slot.value = ironhorse_vm::Payload::Integer(0);
+            }
+        }
         let prev = store.manifest().unwrap().seal;
         let mut batch = image_to_batch(&shrunk, 2, &prev);
         batch.chunk_extents.clear();
