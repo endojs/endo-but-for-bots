@@ -27,17 +27,32 @@ import {
 /**
  * The pending `ask` effects of a live state, in form mode.
  *
- * @param {any[]} pending
+ * Two shapes reach here and they differ, which is why this keys off the
+ * CORRELATION rather than the effect kind:
+ *
+ * - the run facet's `status()` projects a flattened record with `kind` at the
+ *   top level;
+ * - the client-side fold — what this space actually renders from, via
+ *   `makeRunSyncClient` — stores the raw effect record, where the kind is
+ *   nested at `record.effect.kind`.
+ *
+ * Reading `kind` at the top level therefore matched nothing in the space, and
+ * the panel never appeared. `correlation.mode === 'form'` is present in both,
+ * is what the engine journals, and is the thing actually being tested: there
+ * is a form waiting to be answered.
+ *
+ * @param {any[] | undefined} pending
  * @returns {any[]}
  */
 export const formAsks = pending =>
-  (Array.isArray(pending) ? pending : []).filter(
-    effect =>
-      effect &&
-      effect.kind === 'ask' &&
-      effect.correlation &&
-      effect.correlation.mode === 'form',
-  );
+  (Array.isArray(pending) ? pending : []).filter(record => {
+    if (!record || !record.correlation) return false;
+    if (record.correlation.mode !== 'form') return false;
+    // Accept either shape; tolerate a record that carries no kind at all
+    // rather than silently rendering nothing again.
+    const kind = record.kind ?? (record.effect && record.effect.kind);
+    return kind === undefined || kind === 'ask';
+  });
 harden(formAsks);
 
 /**
