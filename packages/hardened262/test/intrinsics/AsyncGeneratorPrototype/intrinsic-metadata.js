@@ -1,9 +1,6 @@
-// Copyright (C) 2026 Endo contributors. All rights reserved.
-// This code is governed by the BSD license found in the LICENSE file.
-
 /*---
-description: Async generator intrinsic metadata is coherent across SES hosts
-features: [async-iteration, Symbol.toStringTag, ses-xs-parity]
+description: Async generator intrinsic metadata is coherent across Hardened JavaScript hosts
+features: [async-iteration, Symbol.toStringTag]
 ---*/
 
 async function* generator() {}
