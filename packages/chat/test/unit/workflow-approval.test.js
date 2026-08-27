@@ -31,6 +31,38 @@ test('only form asks are offered as answerable', t => {
   t.deepEqual(formAsks(undefined), []);
 });
 
+// The run facet's `status()` flattens `kind` to the top level, but the space
+// renders from the CLIENT-SIDE FOLD, which stores the raw effect record with
+// the kind nested under `effect`. Matching only the flat shape is why the
+// approval panel never appeared in the workflow space.
+const NESTED_ASK = {
+  effectId: '8-0',
+  path: ['await-approval'],
+  correlation: ASK.correlation,
+  effect: { kind: 'ask', target: 'operator' },
+};
+const NESTED_TIMER = {
+  effectId: '8-1',
+  path: ['await-approval'],
+  correlation: { deadline: 1788396096769 },
+  effect: { kind: 'after' },
+};
+
+test('the fold shape is recognised, not just the status projection', t => {
+  t.deepEqual(formAsks([NESTED_ASK, NESTED_TIMER]), [NESTED_ASK]);
+});
+
+test('both shapes are found together', t => {
+  t.is(formAsks([ASK, NESTED_ASK, TIMER, NESTED_TIMER]).length, 2);
+});
+
+test('a pending record with no kind at all still counts', t => {
+  // Better to offer the form than to vanish because a projection changed
+  // shape again.
+  const kindless = { effectId: '9-0', correlation: ASK.correlation };
+  t.deepEqual(formAsks([kindless]), [kindless]);
+});
+
 test('an ask in another mode is not treated as a form', t => {
   const request = { ...ASK, correlation: { ...ASK.correlation, mode: 'request' } };
   t.deepEqual(formAsks([request]), []);
