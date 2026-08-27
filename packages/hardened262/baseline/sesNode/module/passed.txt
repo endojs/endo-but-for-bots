@@ -10,7 +10,9 @@ test/Compartment/import-now-hook/source-specifier-descriptor.js
 test/Compartment/import-now-optional-resolve-hook.js
 test/Compartment/legacy-module-method.js
 test/freeze/monadic.js
+test/intrinsics/AsyncGeneratorFunction/intrinsic-metadata.js
 test/intrinsics/AsyncGeneratorPrototype/intrinsic-metadata.js
+test/intrinsics/GeneratorFunction/intrinsic-metadata.js
 test/intrinsics/GeneratorPrototype/intrinsic-metadata.js
 test/modules/module-source-reflection/ses-legacy/duplicate-import.js
 test/modules/module-source-reflection/ses-legacy/export-all-from.js
