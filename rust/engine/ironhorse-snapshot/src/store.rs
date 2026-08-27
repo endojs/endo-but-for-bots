@@ -112,6 +112,10 @@ pub enum StoreError {
     /// its last crank halted. Rewind or complete a crank before
     /// persisting.
     MachineNotQuiescent,
+    /// The heap holds live state in a SILENT-WRONG Pending side table
+    /// (wave-6 W6-9): a resumed machine would answer wrong values, so
+    /// persist refuses by name until the row's atom lands.
+    PendingStateUnsupported { row: &'static str },
     /// The store has no committed epoch yet (a fresh store). Callers
     /// that require content (resume, export) fail on this; the first
     /// checkpoint expects it.
