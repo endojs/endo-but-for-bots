@@ -2518,6 +2518,19 @@ bite-checked by reverting the fix under the lock). Statuses:
   live by the net while writing it).
 - **RECORDED, not fixed** — nothing remains open in this list: the
   last entry, the lazy path's chunk-offset bound, closed 2026-08-27.
+  The ledger also gained `Coverage::EmptyAtBoundary` the same day:
+  the five quiescence-gated rows (`call_stack`, `jumps`,
+  `promise_jobs`, `gen_run_stack`, `async_run_stack`) are provably
+  empty at every persistable boundary — `is_quiescent` requires each
+  empty and every persist verb gates on it (W6-10's gates,
+  behaviorally enforced by `persist_gates.rs`) — so no atom is ever
+  needed for them; the classification is tied to the predicate's
+  ACTUAL field list by a mechanical two-way reconciliation test
+  (`empty_at_boundary_rows_match_the_quiescence_predicate`,
+  bite-checked in both directions), and `async_gen_run_stack`'s
+  quiescence-empty half is documented on the still-Pending
+  `AsyncGenerators` variant it rides. 21 honestly-Pending rows
+  remain.
   The lazy backing now carries the attach-time chunk length
   (`SlotArena::lazy_from_parts` takes `chunk_bound`; the resume path
   passes `manifest.chunk_len`), and `ensure_page_resident` refuses a
