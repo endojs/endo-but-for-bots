@@ -7821,6 +7821,13 @@ impl Interp {
         // (Consumes `symbol_names`, so this both sets the forward table and
         // rebuilds the rest.)
         self.bind_program_symbols(&symbol_names);
+        // The installed-names floor (wave-6 W6-7) restores to the FULL
+        // restored table: every restored name's binding state — an
+        // install or a guest's edit of it — lives in the restored heap,
+        // so no later relink's partial install pass may touch ids at or
+        // below it (a fresh-boot floor of zero would re-admit every id
+        // and re-run the installs against restored guest edits).
+        self.installed_names_len = self.symbol_names.len();
         // GlobalProps ledger row: the global object's own-property slots
         // (intrinsic bindings and runtime-materialized `var`/sloppy globals
         // alike) round-trip *inside* the restored slot arena — they are linked
@@ -8068,6 +8075,43 @@ impl Interp {
             .filter(|f| !self.slots.is_free_index(**f))
             .map(|f| f.0)
             .min()
+    }
+
+    /// The first SILENT-WRONG Pending-row class this heap HOLDS, or
+    /// `None` (wave-6 W6-9). These four side tables do not travel, and
+    /// a resumed slot that loses its row degrades to a PLAIN OBJECT
+    /// whose reads answer wrong values (a Proxy's gets answer
+    /// `undefined`, accessor properties read as absent, TypedArray
+    /// elements and length read `undefined`, an Error renders
+    /// `[object Object]`) — unlike the rows whose consuming natives
+    /// happen to guard `this` and fail visibly. Until their atoms land
+    /// (the recorded G3 lift), the persist verbs refuse a heap holding
+    /// one, by name — the `Segments` precedent. Free-listed owners are
+    /// skipped: a swept instance's stale row names nothing.
+    pub fn stored_unpersistable_row(&self) -> Option<&'static str> {
+        if self.proxies.keys().any(|o| !self.slots.is_free_index(*o)) {
+            return Some("proxies");
+        }
+        if self
+            .accessors
+            .keys()
+            .any(|(o, _)| !self.slots.is_free_index(*o))
+        {
+            return Some("accessors");
+        }
+        if self
+            .array_buffers
+            .keys()
+            .chain(self.typed_arrays.keys())
+            .chain(self.data_views.keys())
+            .any(|o| !self.slots.is_free_index(*o))
+        {
+            return Some("typed arrays");
+        }
+        if self.error_data.keys().any(|o| !self.slots.is_free_index(*o)) {
+            return Some("error data");
+        }
+        None
     }
 
     /// The symbol-key property-id table (ledger `SYMB` row): the
@@ -8802,6 +8846,21 @@ impl Interp {
         } else {
             String::new()
         };
+        // Boundary-register hygiene (wave-6 W6-11): on a COMPLETED
+        // crank, the host has its rendered completion above and the
+        // next crank's prologue rebuilds locals — but between here and
+        // there these registers were live GC ROOTS the restore path
+        // never reinstates, so an uninterrupted machine's boundary
+        // collection retained pages its resumed twin freed (free-list
+        // divergence, which feeds replica-visible allocation order).
+        // Clear them at the boundary so both twins root the same set.
+        // A HALTED crank keeps everything: the quiescence gate refuses
+        // it and the managed lifecycle rewinds it whole.
+        if completed {
+            self.result = Slot::undefined();
+            self.locals.clear();
+            self.id_map.clear();
+        }
         RunOutcome {
             completed,
             result,

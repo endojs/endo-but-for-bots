@@ -46,6 +46,24 @@
 //!   (tracked, Pending), not this register.
 //! - `callback_return_depth` — the return-depth sentinel while a property
 //!   accessor or other callback is executing; no callback spans a crank.
+//! - `env` — the active `with`/eval environment head; live only inside a
+//!   `with` body or eval frame, all of which close before a crank returns
+//!   (SUSPENDED environments live in `SavedFrame.env`, inside their row).
+//! - `result`, `strict` — the completion register and top-level strictness;
+//!   both cleared/reset at the crank boundary (wave-6 W6-11/W6-6), so a
+//!   resumed twin's fresh defaults match.
+//! - `pending_new_target` — armed by `SUPER` for the construct about to
+//!   happen; consumed by the construct frame and disarmed on unwind
+//!   (wave-6 W6-15).
+//! - `direct_eval_hoist`, `eval_direct`, `active_segment`,
+//!   `top_level_code` — the eval bridge's per-crank registers,
+//!   re-established at every run entry and save/restored around units.
+//!
+//! The registry of ALL these classifications is now MECHANICAL:
+//! [`tests::ledger_classification_reconciles_with_the_interp_struct`]
+//! parses `Interp`'s field list from source and reconciles it two-way
+//! against the classified groups, so a new field cannot land
+//! unclassified and a stale entry cannot linger.
 //!
 //! **Boot-derived / program-symbol caches — re-derived, never stored.** These
 //! are pure functions of the boot procedure and the program's `symbol_names`,
@@ -86,6 +104,10 @@
 //!   suspended arguments object resumes as a plain array-exotic — an honest
 //!   known gap, called out here so the `Arrays` row's `Serialized` is not
 //!   read as covering it.
+//! - `side_refs` — the counted-accessor page projection over the two bulk
+//!   rows (`Arrays`/`Collections`); a derived cache the restore path
+//!   rebuilds in lockstep by routing every insert through the counted
+//!   accessors.
 
 /// Whether a side table is carried by the current snapshot image
 /// ([`crate::image`]), and if not, why it is safe to defer.
@@ -264,9 +286,10 @@ pub enum SideTable {
     /// worker that has imported modules carries linked module records and
     /// namespace objects.
     Modules,
-    /// The harden worklist / frozen-intrinsics tables (SES `lockdown`/
-    /// `harden`/`petrify`, requirement 5): which intrinsics and object
-    /// graphs are frozen. A resumed hardened graph must stay hardened.
+    /// Hardened-ness (SES `lockdown`/`harden`/`petrify`, requirement
+    /// 5): which intrinsics and object graphs are frozen. Kept as slot
+    /// FLAGS on the objects themselves — no side table exists — so it
+    /// rides the HEAP atom and a resumed hardened graph stays hardened.
     HardenState,
     /// `meter` — the machine's metering state (design row 6): accumulated
     /// computrons, the check interval/threshold, and the frozen cost-table
@@ -432,7 +455,13 @@ impl SideTable {
             // of resuming a callable whose body is gone.
             SideTable::Segments => ("code_segments/func_segments", Pending),
             SideTable::Modules => ("module::ModuleGraph", Pending),
-            SideTable::HardenState => ("lockdown/harden state", Pending),
+            // Wave-6 W6-25: the ledger UNDERSTATED this coverage — the
+            // engine keeps hardened-ness purely as slot FLAGS
+            // (`XS_DONT_MARSHALL`/`PATCH`/`DELETE`/`SET` on the slots
+            // themselves, `harden_freeze_and_traverse`); there is no
+            // side-table field at all, so the state rides the HEAP atom
+            // structurally and a resumed hardened graph stays hardened.
+            SideTable::HardenState => ("harden slot flags (no side table)", InArena),
             // The metering state — carried by the METR atom (child 3).
             SideTable::Meter => ("meter", Serialized),
         };
@@ -485,6 +514,122 @@ mod tests {
         let before = fields.len();
         fields.dedup();
         assert_eq!(before, fields.len(), "duplicate side table in ALL");
+    }
+
+    /// Wave-6 pattern-3 antidote: the ledger's exhaustiveness was a
+    /// hand convention ("enumerated against `Interp`'s actual fields")
+    /// that a thirty-field bulk merge overwhelmed. This test parses the
+    /// struct's field list FROM SOURCE and reconciles it, two-way,
+    /// against the classification below: a new `Interp` field fails
+    /// here until it is classified (a ledger row, a documented
+    /// satellite or transient, a boot artifact, host wiring, or an
+    /// arena), and a renamed/removed field fails the reverse direction.
+    #[test]
+    fn ledger_classification_reconciles_with_the_interp_struct() {
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../ironhorse-vm/src/interp.rs"
+        ))
+        .expect("read the vm source");
+        let start = src.find("pub struct Interp {").expect("struct Interp");
+        let body = &src[start..];
+        let end = body.find("\n}").expect("struct end");
+        let body = &body[..end];
+        let mut fields: Vec<&str> = Vec::new();
+        for line in body.lines() {
+            let l = line.strip_prefix("    ").unwrap_or("");
+            let l = l.strip_prefix("pub(crate) ").unwrap_or(l);
+            let l = l.strip_prefix("pub ").unwrap_or(l);
+            if let Some(colon) = l.find(':') {
+                let name = &l[..colon];
+                if !name.is_empty()
+                    && !name.contains(' ')
+                    && name
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                {
+                    fields.push(name);
+                }
+            }
+        }
+        assert!(fields.len() > 100, "parse sanity: found {}", fields.len());
+
+        // The classification. Every entry is accounted for by exactly
+        // the mechanism named for its group; moving a field between
+        // groups is a deliberate edit here, never drift.
+        const LEDGER_ROWS: &[&str] = &[
+            "functions", "bound_functions", "proxies", "proxy_revokers", "call_stack",
+            "jumps", "global_props", "error_data", "accessors", "wrapper_data", "arrays",
+            "collections", "array_buffers", "typed_arrays", "data_views", "iterators",
+            "promises", "promise_functions", "promise_guards", "promise_jobs",
+            "combinators", "generators", "gen_run_stack", "async_instances",
+            "async_run_stack", "async_generators", "async_gen_run_stack",
+            "private_values", "private_accessors", "disposable_stacks", "regexps",
+            "temporal_instants", "temporal_durations", "temporal_plains",
+            "temporal_zoneds", "locales", "collators", "list_formats", "plural_rules",
+            "number_formats", "segmenters", "segments", "segment_iterators",
+            "date_time_formats", "collator_compare_functions",
+            "number_format_bound_functions", "code_segments", "func_segments",
+            "ctor_prototype", "symbol_registry", "symbol_registry_keys",
+            "symbol_names", "symbol_ids", "symbol_key_ids", "next_symbol_key_id",
+            "meter",
+        ];
+        const ARENAS: &[&str] = &["slots", "chunks", "stack"];
+        const SATELLITES: &[&str] = &[
+            "detached_buffers", "shared_buffers", "deleted_fn_meta", "from_async",
+            "regexp_last_names", "arguments_objects", "side_refs",
+        ];
+        const TRANSIENTS: &[&str] = &[
+            "args", "this_val", "cur_func", "cur_target", "target_func",
+            "pending_new_target", "exception", "frame_slots", "locals", "id_map",
+            "resume_status", "callback_return_depth", "env", "direct_eval_hoist",
+            "eval_direct", "active_segment", "top_level_code", "result", "strict",
+        ];
+        const HOST_WIRING: &[&str] = &[
+            "meter_host", "source_compiler", "cost", "step_limit", "n_dispatched",
+        ];
+        const BOOT_DERIVED: &[&str] = &[
+            "intrinsics", "global_obj", "intl_object", "temporal_object",
+            "temporal_now_object", "math_object", "static_str", "default_keys",
+            "well_known_symbols", "proto_methods", "proto_data", "proto_accessors",
+            "proto_value_data", "string_iterator_method", "async_iterator_identity",
+            "installed_names_len", "object_proto", "function_proto", "array_proto",
+            "map_proto", "set_proto", "weakmap_proto", "weakset_proto",
+            "arraybuffer_proto", "dataview_proto", "array_iterator_proto",
+            "string_proto", "number_proto", "symbol_proto", "promise_proto",
+            "generator_proto", "generator_function_proto", "async_function_proto",
+            "async_generator_proto", "async_generator_function_proto", "regexp_proto",
+            "locale_proto", "collator_proto", "list_format_proto",
+            "plural_rules_proto", "segmenter_proto", "segments_proto",
+            "segment_iterator_proto", "date_time_format_proto", "number_format_proto",
+            "temporal_instant_proto", "temporal_duration_proto",
+            "temporal_plain_protos", "temporal_zoned_proto", "byte_length_id",
+            "byte_offset_id", "buffer_id", "size_id", "length_id", "name_id",
+            "value_id", "done_id", "then_id", "constructor_id", "last_index_id",
+            "regexp_getter_ids", "regexp_result_ids",
+        ];
+
+        let mut accounted: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for group in [LEDGER_ROWS, ARENAS, SATELLITES, TRANSIENTS, HOST_WIRING, BOOT_DERIVED] {
+            for f in group {
+                assert!(accounted.insert(f), "{f} classified twice");
+            }
+        }
+        let struct_set: std::collections::BTreeSet<&str> = fields.iter().copied().collect();
+        for f in &struct_set {
+            assert!(
+                accounted.contains(f),
+                "Interp field `{f}` is NOT classified in the snapshot ledger's \
+                 reconciliation — add it to a group here (and, if it can hold \
+                 cross-crank state, to the ledger itself)"
+            );
+        }
+        for f in &accounted {
+            assert!(
+                struct_set.contains(f),
+                "classified field `{f}` no longer exists on Interp — stale entry"
+            );
+        }
     }
 
     #[test]

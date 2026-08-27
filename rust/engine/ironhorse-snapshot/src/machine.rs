@@ -87,6 +87,11 @@ pub enum MachineSnapshotError {
     /// in a dynamic code segment no snapshot carries (wave-6 W6-12 -
     /// the same refusal the store verbs make).
     DynamicSegmentsUnsupported,
+    /// The heap holds live state in a SILENT-WRONG Pending side table
+    /// (wave-6 W6-9: proxies, accessors, typed arrays, error data) - a
+    /// resumed machine would answer wrong values, so persist refuses by
+    /// name until the row's atom lands.
+    PendingStateUnsupported { row: &'static str },
 }
 
 impl std::fmt::Display for MachineSnapshotError {
@@ -99,6 +104,9 @@ impl std::fmt::Display for MachineSnapshotError {
             }
             MachineSnapshotError::DynamicSegmentsUnsupported => {
                 write!(f, "live eval-defined function: dynamic code segments do not travel")
+            }
+            MachineSnapshotError::PendingStateUnsupported { row } => {
+                write!(f, "heap holds live {row}: that side table does not travel yet")
             }
         }
     }
@@ -199,6 +207,9 @@ impl MachineSnapshot for Interp {
         }
         if self.live_dynamic_segment_function().is_some() {
             return Err(MachineSnapshotError::DynamicSegmentsUnsupported);
+        }
+        if let Some(row) = self.stored_unpersistable_row() {
+            return Err(MachineSnapshotError::PendingStateUnsupported { row });
         }
         Ok(())
     }
@@ -583,6 +594,12 @@ pub fn begin_store_session(
     if interp.live_dynamic_segment_function().is_some() {
         return Err((interp, StoreError::DynamicSegmentsUnsupported));
     }
+    // The four SILENT-WRONG Pending rows (wave-6 W6-9): a resumed heap
+    // holding one answers wrong values, not visible failures. Refuse by
+    // name until their atoms land (the recorded G3 lift).
+    if let Some(row) = interp.stored_unpersistable_row() {
+        return Err((interp, StoreError::PendingStateUnsupported { row }));
+    }
     // The id-space audit (what remains of the wave-4 P1 gate): with
     // string keys living in the NAME table and symbol keys traveling in
     // the SYMB table, a LIVE machine cannot store an id outside both —
@@ -677,6 +694,9 @@ pub fn checkpoint_to_store(
     // emptiness check for the no-eval common case.
     if session.interp.live_dynamic_segment_function().is_some() {
         return Err(StoreError::DynamicSegmentsUnsupported);
+    }
+    if let Some(row) = session.interp.stored_unpersistable_row() {
+        return Err(StoreError::PendingStateUnsupported { row });
     }
     // And the quiescence gate (wave-6 W6-10): a halted crank must be
     // rewound, never checkpointed - see begin_store_session.

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
-| **Updated** | 2026-08-26 |
+| **Updated** | 2026-08-27 |
 | **Author** | Aaron Kumavis (prompted) |
 | **Status** | In Progress |
 | **Builds on** | designs/ironhorse-engine.md (§ Snapshots, requirement 1c) |
@@ -1466,7 +1466,7 @@ rather than work items.
   intact, both refusal edges are pinned, and the worker lifecycle
   test now runs a divergent crank through relink live and after
   reopen.
-  STILL OPEN in this workstream: the 31 `Pending` ledger rows
+  STILL OPEN in this workstream: the 30 `Pending` ledger rows
   (functions/closures, generators, promises, the language-completion
   sweep's per-instance tables, dynamic code segments, …, several
   unreachable cross-crank in the vm today regardless of restore).
@@ -1695,6 +1695,28 @@ rather than work items.
   bytecode — which is also what makes cross-crank function
   references real (the `functions` row's other half). Pinned from
   both sides in `dynamic_segments.rs`.
+- [ ] Ledger G3 — carry the four SILENT-WRONG rows. The wave-6 fix
+  pass gated them (`PendingStateUnsupported{row}` at every persist
+  verb: `proxies`, `accessors`, the typed-array family, `error_data`
+  — a resumed heap holding one answered wrong values, and the
+  visible-fail rows are protected only by per-native `this` guards),
+  so persisting such heaps now refuses honestly. The lift is the G1
+  pattern per row: an atom + small-state section + restore +
+  round-trip twins, retiring each gate as its row lands. `error_data`
+  is the cheapest (name + optional message) and the most common
+  refusal in real guest code, so it goes first.
+- The `combinators` / `from_async` / `promise_guards` tables are
+  append-only for the machine's lifetime (wave-6 W6-19): settled
+  entries are unreachable but never reclaimed — unbounded growth on
+  a long-lived machine doing many combinator/`fromAsync` calls.
+  Compaction needs the `ReactionKind` indices re-pointed, so it is a
+  deliberate change, recorded rather than patched in passing.
+- Resource-management METERING is not oracle-exact (wave-6): the
+  DisposableStack paths measure −4..−8 computrons vs XS and the
+  `using` paths −4 — pre-existing across the whole suite, asserted
+  as result-agreement-only in `resource_management.rs` until the
+  dispose-path metering is calibrated like the async-generator
+  reject residue above.
 - [ ] Symbol-key id-space EXHAUSTION at the meet: symbol keys mint
   top-down from `u16::MAX` while the name table grows bottom-up, and
   the MEET — same class as the old shared counter's saturation —
@@ -2334,6 +2356,77 @@ missing test CLASSES: enum-vs-struct reconciliation, an independent
 GC ground-truth net, contract-violation locks per gate,
 failure-mode locks per Pending row, a multi-crank oracle mode, and
 adversarial-retention fixtures.
+
+#### The wave-6 fix pass (2026-08-27): outcomes
+
+Every fix landed TDD-red-first (each lock written from the finding,
+confirmed failing with the predicted signature, then fixed, then
+bite-checked by reverting the fix under the lock). Statuses:
+
+- **FIXED with locks** — W6-1..4 (`gc_frame_state.rs`: same-buffer
+  phase-flag cranks keep a saved frame's pc valid so the collection is
+  the only variable; the environment chain, `FuncInfo.home`,
+  `from_async` chunk remap, and `proto_accessors` roots all landed,
+  plus `async_gen_run_stack` roots); W6-5 (`using` @@dispose, THREE
+  oracle-differential locks in `resource_management.rs` — result
+  agreement; the suite-wide resource-management METERING gap of
+  −4..−8 computrons vs XS is pre-existing and recorded below); W6-6
+  (`strict` resets at crank entry; `strict_crank_boundary.rs` with a
+  sloppy control); W6-7 (the keep filter compares against an
+  installed-names floor advanced by every install pass and RESTORED to
+  the full table at resume, with create-only existence guards on the
+  partial-install branches; the reachable intern path is JSON.parse —
+  the computed-access path refuses boot-default names by design, and
+  the literal `o['k']` form is an unimplemented opcode; locks in
+  `relink_preserves_guest_edits.rs`); W6-8 (endowments seed in id
+  order; `endowment_order.rs`, 12-endowment permutation lock, red
+  3/3 unsorted); W6-9 (refuse-on-hold gates for the four silent-wrong
+  rows — `stored_unpersistable_row` witnesses live-owner-filtered
+  `proxies`/`accessors`/typed-array-family/`error_data` holdings and
+  every persist verb refuses `PendingStateUnsupported{row}`;
+  `pending_row_gates.rs` incl. the collected-instance and
+  ordinary-heap controls; CARRYING these rows is the recorded G3
+  lift that retires each gate); W6-10 (`Interp::is_quiescent` +
+  gates at begin/checkpoint and every blob verb;
+  `persist_gates.rs` carries the tree's first contract-VIOLATION
+  locks); W6-11 (`result`/`locals`/`id_map` clear at the completed
+  boundary, so uninterrupted and resumed twins root the same set);
+  W6-12 (`MachineSnapshot::write_snapshot` now returns `Result`
+  through a `persist_gate` carrying the quiescence AND segments
+  checks — the blob verbs refuse what the store verbs refuse);
+  W6-13 (`Meter::rearm`/`Interp::rearm_meter` re-arm without zeroing
+  the restored index; the lock runs the resumed machine armed to a
+  real `MeterAbort`); W6-14 (eager `store_to_image` runs the
+  full-image semantic bounds gate; the lazy fault installer
+  bounds-checks faulted slot references and dies as a NAMED
+  corrupt-store refusal — the lock forges a consistently-sealed
+  hostile store with the crate's own batch writer); W6-15
+  (`pending_new_target` disarms on unwind and host escape;
+  oracle lock `new_target_hygiene.rs`); W6-16 (`run_bounded`
+  scoped); W6-17 (`count_new_locals` sizes `NEW_PROPERTY_AT` as the
+  1-byte opcode it is); W6-18 (the eval-bridge relinker fails
+  closed on out-of-table ids); W6-25 (transient/satellite audit
+  trails completed; `HardenState` reclassified `InArena` — hardened-
+  ness is slot FLAGS riding the HEAP atom, no side table exists —
+  so the Pending count is 30).
+- **FIXED, no dedicated lock** — W6-20 (the async-generator halt arm
+  completes its instance, sibling-arm parity); W6-24 (both refusal
+  witnesses answer the deterministic minimum).
+- **LANDED test classes** — contract-violation locks
+  (`persist_gates.rs`, `pending_row_gates.rs`), the enum-vs-struct
+  reconciliation test
+  (`ledger_classification_reconciles_with_the_interp_struct`, which
+  parses `Interp`'s fields from source and reconciles them two-way
+  against the classified groups), adversarial-retention and
+  same-buffer-crank fixtures (`gc_frame_state.rs`), and the first
+  forged-store harness (W6-14's lock).
+- **RECORDED, not fixed** — W6-19 (`combinators`/`from_async`/
+  `promise_guards` append-only growth), W6-22 (truncated trailing
+  payload relinks; dispatch fails closed), W6-23 (libm
+  decision-of-record), the lazy path's chunk-offset bound (the
+  eager gate covers it), the resource-management metering gap, and
+  the multi-crank oracle mode / independent GC ground-truth net
+  (the two test classes still open).
 
 ## What Is the Problem Being Solved?
 
