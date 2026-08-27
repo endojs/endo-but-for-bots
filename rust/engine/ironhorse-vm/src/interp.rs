@@ -7470,13 +7470,16 @@ impl Interp {
                 // Id 0 is XS's reserved `XS_NO_ID` (an anonymous function
                 // name, an absent file): it names nothing, so it is left as-is.
                 if id != 0 {
-                    if let Some(name) = eval_names.get((id - 1) as usize) {
-                        let name = name.clone();
-                        let host_id = self.intern_program_symbol(&name);
-                        let bytes = host_id.to_le_bytes();
-                        out[pc + 1] = bytes[0];
-                        out[pc + 2] = bytes[1];
-                    }
+                    // Fail CLOSED on an id beyond the unit's own symbol
+                    // atom (wave-6 W6-18): `relink_crank` refuses the
+                    // same condition as MalformedBytecode; left in
+                    // place it would denote whatever realm name holds
+                    // that position.
+                    let name = eval_names.get((id - 1) as usize)?.clone();
+                    let host_id = self.intern_program_symbol(&name);
+                    let bytes = host_id.to_le_bytes();
+                    out[pc + 1] = bytes[0];
+                    out[pc + 2] = bytes[1];
                 }
             }
             pc += ilen;
@@ -7539,15 +7542,17 @@ impl Interp {
             }
         };
         let eval_names = crate::symbols::parse_symbols(&compiled.symbols);
-        let pre_eval_len = self.symbol_names.len();
         let code = match self.relink_program_symbols(&compiled.bytecode, &eval_names) {
             Some(code) => code,
             None => return Err(Halt::Unsupported("eval:relink")),
         };
-        // Bind only the ids this unit APPENDED: an id the outer link
-        // already carries already has its binding (or a guest's
+        // Bind only the ids appended SINCE THE LAST INSTALL PASS (the
+        // installed-names floor, wave-6 W6-7 — a name interned at
+        // runtime has an id no install has seen, so filtering by this
+        // unit's own pre-relink length refused it forever); ids at or
+        // below the floor keep their existing binding or a guest's
         // deliberate replacement of it, which a re-install would
-        // clobber — the same append-scoping `relink_crank` applies).
+        // clobber — the same floor scoping `relink_crank` applies.
         let floor = self.installed_names_len;
         self.install_intrinsic_bindings(&eval_names, false, move |id| (id as usize) > floor);
         // The unit may reference a well-known property name (`length`, `name`,
@@ -7977,6 +7982,8 @@ impl Interp {
                 return Some(id);
             }
         }
+        // Deterministic witness (wave-6 W6-24): the MINIMUM offending
+        // id across the map-backed tails, not HashMap surfacing order.
         self.stack_slots()
             .iter()
             .chain(self.arrays.values().flat_map(|a| a.items().values()))
@@ -7985,7 +7992,8 @@ impl Interp {
                     .values()
                     .flat_map(|c| c.live_entries().flat_map(|(k, v)| [k, v])),
             )
-            .find_map(over)
+            .filter_map(over)
+            .min()
     }
 
     /// Quiescent snapshot of the `arrays` side table (side-table
@@ -8053,10 +8061,13 @@ impl Interp {
         if self.func_segments.is_empty() {
             return None;
         }
+        // Deterministic witness (wave-6 W6-24): the MINIMUM live slot,
+        // not whichever HashMap order surfaces first.
         self.func_segments
             .keys()
-            .find(|f| !self.slots.is_free_index(**f))
+            .filter(|f| !self.slots.is_free_index(**f))
             .map(|f| f.0)
+            .min()
     }
 
     /// The symbol-key property-id table (ledger `SYMB` row): the
@@ -8277,6 +8288,44 @@ impl Interp {
     pub fn arm_meter(&mut self, interval: u64, host: Box<dyn FnMut(u64) -> bool>) {
         self.meter.begin(interval);
         self.meter_host = Some(host);
+    }
+
+    /// Re-arm a RESUMED machine's meter without destroying the restored
+    /// computron count (wave-6 W6-13): the meter's `index` survives; a
+    /// fresh check window opens from it. The host callback cannot travel
+    /// in a snapshot, so every resume that wants metering MUST call this
+    /// (or [`Self::arm_meter`] for a deliberately fresh count) — a
+    /// restored machine that skips it reports armed state but never
+    /// consults a host.
+    pub fn rearm_meter(&mut self, interval: u64, host: Box<dyn FnMut(u64) -> bool>) {
+        self.meter.rearm(interval);
+        self.meter_host = Some(host);
+    }
+
+    /// The accumulated raw meter index (diagnostic; the same value the
+    /// meter state serializes).
+    pub fn meter_index(&self) -> u64 {
+        self.meter.state().index
+    }
+
+    /// Whether the machine stands at a QUIESCENT crank boundary — the
+    /// precondition every persist verb requires (wave-6 W6-10). A crank
+    /// that HALTED (uncaught throw, meter abort, unsupported opcode)
+    /// returns with pending microtasks, a populated call stack, live
+    /// handlers, a set exception, and a mid-frame value stack; a
+    /// checkpoint there would serialize the mid-frame stack while
+    /// silently dropping the rest — a resumed chimera. The managed
+    /// lifecycle rewinds halted cranks; this is the seam-level gate for
+    /// every other caller.
+    pub fn is_quiescent(&self) -> bool {
+        self.call_stack.is_empty()
+            && self.stack.is_empty()
+            && self.jumps.is_empty()
+            && self.promise_jobs.is_empty()
+            && self.gen_run_stack.is_empty()
+            && self.async_run_stack.is_empty()
+            && self.async_gen_run_stack.is_empty()
+            && self.exception.kind == Kind::Undefined
     }
 
     /// A loop-closing metering check (`mxCheckMeter`). Consults the host
@@ -8682,8 +8731,13 @@ impl Interp {
     /// harness) that must stay total on arbitrary/malformed bytecode without
     /// wedging on a non-terminating dispatch cycle.
     pub fn run_bounded(&mut self, code: &[u8], step_limit: u64) -> RunOutcome {
+        // Scoped, not latched (wave-6 W6-16): the ceiling applies to
+        // THIS run; a later plain `run` is unbounded again.
+        let prev = self.step_limit;
         self.step_limit = step_limit;
-        self.run(code)
+        let out = self.run(code);
+        self.step_limit = prev;
+        out
     }
 
     pub fn run(&mut self, code: &[u8]) -> RunOutcome {
@@ -14570,6 +14624,14 @@ impl Interp {
                 }
                 self.stack.truncate(stack_base);
                 self.jumps.truncate(jumps_base);
+                // A halt (meter abort, unsupported opcode) abandons the
+                // step: complete the instance like the sibling arms do
+                // (wave-6 W6-20 — leaving it `Executing` with no frame
+                // was a lifecycle state the machine cannot otherwise
+                // produce, and a raw caller's later `next()` met it).
+                let data = self.async_generators.get_mut(&gen).unwrap();
+                data.state = AsyncGeneratorState::Completed;
+                data.frame = None;
                 Err(other)
             }
         };
@@ -38783,8 +38845,12 @@ fn count_new_locals(code: &[u8], start: usize, len: usize) -> usize {
             }
             // The 2-byte inline flag operand `new_property`/`new_property_at`
             // carry past their id (the dispatch loop advances 5, not the
-            // `instruction_len` id-opcode 3).
-            Opcode::XS_CODE_NEW_PROPERTY | Opcode::XS_CODE_NEW_PROPERTY_AT => 5,
+            // `instruction_len` id-opcode 3). The AT form has NO id
+            // operand: a 1-byte opcode whose 2-byte INTEGER_1 flag is a
+            // separate instruction the loop below sizes itself (wave-6
+            // W6-17 - bundling it as 5 desynchronized the scan).
+            Opcode::XS_CODE_NEW_PROPERTY => 5,
+            Opcode::XS_CODE_NEW_PROPERTY_AT => 1,
             Opcode::XS_CODE_NEW_PRIVATE_1 => 4,
             Opcode::XS_CODE_NEW_PRIVATE_2 => 5,
             _ => crate::opcode::instruction_len(code, pc).unwrap_or(1),
@@ -39413,6 +39479,48 @@ mod tests {
 
     fn b(op: Opcode) -> u8 {
         op as u8
+    }
+
+    /// Wave-6 W6-17: `NEW_PROPERTY_AT` is a 1-byte opcode followed by a
+    /// SEPARATE 2-byte `INTEGER_1` flag instruction (the coder emits
+    /// them as two instructions; dispatch advances 3). The local-count
+    /// walker hard-coded 5 — `NEW_PROPERTY`'s footprint (3-byte id op +
+    /// 2-byte flag) — stepping 2 bytes past every computed-key member
+    /// and desynchronizing the scan, so a following `NEW_LOCAL` was
+    /// missed and `FUNCTION_LOCAL_METERING` under-charged.
+    #[test]
+    fn local_count_walker_sizes_new_property_at_exactly() {
+        let code = [
+            b(Opcode::XS_CODE_NEW_PROPERTY_AT),
+            b(Opcode::XS_CODE_INTEGER_1),
+            0,
+            b(Opcode::XS_CODE_NEW_LOCAL),
+            5,
+            0,
+        ];
+        assert_eq!(
+            count_new_locals(&code, 0, code.len()),
+            1,
+            "the walker mis-stepped NEW_PROPERTY_AT and skipped the NEW_LOCAL"
+        );
+    }
+
+    /// Wave-6 W6-18: the eval-bridge relinker must FAIL CLOSED on an id
+    /// beyond the unit's own symbol atom, exactly as `relink_crank`
+    /// refuses `MalformedBytecode` — not silently leave the id denoting
+    /// whatever realm name holds that position.
+    #[test]
+    fn eval_relink_refuses_an_id_beyond_the_unit_table() {
+        let mut interp = Interp::new();
+        interp.link_intrinsics(&["Object".to_string()]);
+        // GET_VARIABLE with id 200 in a unit whose table has one name.
+        let code = [b(Opcode::XS_CODE_GET_VARIABLE), 200, 0];
+        assert!(
+            interp
+                .relink_program_symbols(&code, &["only".to_string()])
+                .is_none(),
+            "an out-of-table id must refuse, not fail open"
+        );
     }
 
     #[test]

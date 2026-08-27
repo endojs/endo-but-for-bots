@@ -65,7 +65,7 @@ fn runtime_global_survives_suspend_resume() {
     let mut m1 = Interp::new();
     m1.link_intrinsics(&names1);
     m1.run(&crank1);
-    let bytes = m1.write_snapshot(&sig());
+    let bytes = m1.write_snapshot(&sig()).expect("quiescent machine snapshots");
     drop(m1);
 
     let mut m2 = from_snapshot_bytes(&bytes, &sig()).expect("machine restores from bytes");
@@ -100,7 +100,7 @@ fn symbol_tables_rebuilt_at_restore() {
     // Sanity: the live machine reads the global by name (uses `symbol_ids`).
     assert_eq!(m1.global_string("x").as_deref(), Some("5"));
 
-    let bytes = m1.write_snapshot(&sig());
+    let bytes = m1.write_snapshot(&sig()).expect("quiescent machine snapshots");
     drop(m1);
     let m2 = from_snapshot_bytes(&bytes, &sig()).expect("machine restores from bytes");
 

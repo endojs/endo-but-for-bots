@@ -108,6 +108,10 @@ pub enum StoreError {
     /// today on the daemon path, which installs no source compiler,
     /// so `eval` halts before any segment exists.
     DynamicSegmentsUnsupported,
+    /// The machine is not at a quiescent crank boundary (wave-6 W6-10):
+    /// its last crank halted. Rewind or complete a crank before
+    /// persisting.
+    MachineNotQuiescent,
     /// The store has no committed epoch yet (a fresh store). Callers
     /// that require content (resume, export) fail on this; the first
     /// checkpoint expects it.
@@ -2033,10 +2037,16 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
             found: small.meter.cost_table_version.clone(),
         }));
     }
-    // NOTE the semantic bounds gate is NOT here: it lives in
-    // `validate_store`, which BOTH resume paths run (wave 5 —
-    // `store_to_image` serves only the eager path, so gating here left
-    // the lazy path, which is the one the daemon opens, ungated).
+    // The semantic bounds gate runs in TWO places: `validate_store`
+    // covers the stack/side-table/symbol references on BOTH resume
+    // paths (wave 5), and the HEAP rows are covered per path — the
+    // full-image gate at the end of this function for the eager path
+    // (wave-6 W6-14: leaf hashes prove bytes authentic-to-commit, not
+    // in-arena, so a consistently-resealed hostile store passed here
+    // and panicked at the first collection), and a per-page slot-ref
+    // bound at the lazy fault installer (the chunk-offset half of the
+    // lazy path is a recorded remainder — the slot-ref bound removes
+    // the collector-panic vector).
 
     // Row-content integrity (phase 5, completed by the review wave):
     // every row read below — INCLUDING the small state — is checked
@@ -2136,6 +2146,18 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
                 .map(|c| u32::from_be_bytes(c.try_into().unwrap())),
         );
     }
+
+    crate::image::check_image_slot_bounds(
+        &slots,
+        &small.stack,
+        &small.arrays,
+        &small.collections,
+        &small.registry,
+        &small.symbols,
+        slots.len() as u32,
+        chunks.len(),
+    )
+    .map_err(StoreError::Snapshot)?;
 
     Ok(MachineImage {
         version: manifest.version,
@@ -2935,9 +2957,20 @@ mod tests {
         store.commit(&image_to_batch(&image, 1, "")).unwrap();
         let exts_before = chunk_extent_count(store.manifest().unwrap().chunk_len);
 
-        // Same machine state, chunk arena "compacted" to empty.
+        // Same machine state, chunk arena "compacted" to empty. A real
+        // compaction rewrites every stored chunk offset with the bytes
+        // it moves; mirror that coherence (the wave-6 W6-14 heap gate
+        // refuses an image whose slots point into chunks it lacks) by
+        // degrading chunk-bearing slots to chunk-free values in place —
+        // chain links, ids, and accounting untouched.
         let mut shrunk = image.clone();
         shrunk.chunks = Vec::new();
+        for slot in shrunk.slots.iter_mut().chain(shrunk.stack.iter_mut()) {
+            if slot.chunk_ref().is_some() {
+                slot.kind = ironhorse_vm::Kind::Integer;
+                slot.value = ironhorse_vm::Payload::Integer(0);
+            }
+        }
         let prev = store.manifest().unwrap().seal;
         let mut batch = image_to_batch(&shrunk, 2, &prev);
         batch.chunk_extents.clear(); // nothing to write; drop-only

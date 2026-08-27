@@ -78,6 +78,15 @@ use ironhorse_vm::Interp;
 pub enum MachineSnapshotError {
     Io(io::Error),
     Snapshot(SnapshotError),
+    /// The machine is not at a quiescent crank boundary (wave-6 W6-10):
+    /// its last crank halted, leaving pending microtasks / frames / an
+    /// exception that no snapshot carries. Rewind or complete a crank
+    /// before persisting.
+    NotQuiescent,
+    /// The heap holds a live eval-defined function whose bytecode lives
+    /// in a dynamic code segment no snapshot carries (wave-6 W6-12 -
+    /// the same refusal the store verbs make).
+    DynamicSegmentsUnsupported,
 }
 
 impl std::fmt::Display for MachineSnapshotError {
@@ -85,6 +94,12 @@ impl std::fmt::Display for MachineSnapshotError {
         match self {
             MachineSnapshotError::Io(e) => write!(f, "snapshot io error: {e}"),
             MachineSnapshotError::Snapshot(e) => write!(f, "snapshot decode error: {e:?}"),
+            MachineSnapshotError::NotQuiescent => {
+                write!(f, "machine is not at a quiescent crank boundary")
+            }
+            MachineSnapshotError::DynamicSegmentsUnsupported => {
+                write!(f, "live eval-defined function: dynamic code segments do not travel")
+            }
         }
     }
 }
@@ -114,9 +129,20 @@ pub trait MachineSnapshot {
     /// value stack, the program symbol names, and the metering state.
     fn snapshot_image(&self, signature: &Signature) -> MachineImage;
 
+    /// The persist preconditions for the blob verbs (wave-6 W6-10/12):
+    /// the same gates the store verbs enforce - a quiescent crank
+    /// boundary and no live dynamic-segment function. The default is
+    /// permissive for image-only implementors; [`Interp`] overrides it.
+    fn persist_gate(&self) -> Result<(), MachineSnapshotError> {
+        Ok(())
+    }
+
     /// Serialize this machine to the in-memory `XS_M` container bytes.
-    fn write_snapshot(&self, signature: &Signature) -> Vec<u8> {
-        write_machine(&self.snapshot_image(signature))
+    /// Refuses a machine that fails [`Self::persist_gate`] - the blob
+    /// verbs carry the same preconditions as the store verbs.
+    fn write_snapshot(&self, signature: &Signature) -> Result<Vec<u8>, MachineSnapshotError> {
+        self.persist_gate()?;
+        Ok(write_machine(&self.snapshot_image(signature)))
     }
 
     /// Write this machine's heap snapshot to `file`, computing SHA-256 on
@@ -129,7 +155,7 @@ pub trait MachineSnapshot {
         signature: &Signature,
         file: File,
     ) -> Result<String, MachineSnapshotError> {
-        let bytes = self.write_snapshot(signature);
+        let bytes = self.write_snapshot(signature)?;
         let mut hasher = Sha256::new();
         let mut file = file;
         // Stream the serialized image to disk in chunks, hashing on the
@@ -167,6 +193,16 @@ pub trait MachineSnapshot {
 }
 
 impl MachineSnapshot for Interp {
+    fn persist_gate(&self) -> Result<(), MachineSnapshotError> {
+        if !self.is_quiescent() {
+            return Err(MachineSnapshotError::NotQuiescent);
+        }
+        if self.live_dynamic_segment_function().is_some() {
+            return Err(MachineSnapshotError::DynamicSegmentsUnsupported);
+        }
+        Ok(())
+    }
+
     fn snapshot_image(&self, signature: &Signature) -> MachineImage {
         // The carried atoms (see the suspend-point contract): arenas +
         // stack + the name table + meter, plus the side-table ledger's
@@ -530,6 +566,15 @@ pub fn begin_store_session(
         Ok(m) => return Err((interp, StoreError::NotEmpty { epoch: m.epoch })),
         Err(e) => return Err((interp, e)),
     }
+    // A persist verb requires a QUIESCENT crank boundary (wave-6
+    // W6-10): a halted crank leaves pending microtasks, a populated
+    // call stack, live handlers, a set exception, and a mid-frame value
+    // stack — a checkpoint there serializes the mid-frame stack while
+    // silently dropping the rest. The managed lifecycle rewinds halted
+    // cranks; this gate covers every other caller.
+    if !interp.is_quiescent() {
+        return Err((interp, StoreError::MachineNotQuiescent));
+    }
     // Dynamic code segments do not travel (no ledger row yet): a live
     // eval-defined function would resume with its body gone. Refuse by
     // name before anything is written. (Unreachable on the daemon
@@ -632,6 +677,11 @@ pub fn checkpoint_to_store(
     // emptiness check for the no-eval common case.
     if session.interp.live_dynamic_segment_function().is_some() {
         return Err(StoreError::DynamicSegmentsUnsupported);
+    }
+    // And the quiescence gate (wave-6 W6-10): a halted crank must be
+    // rewound, never checkpointed - see begin_store_session.
+    if !session.interp.is_quiescent() {
+        return Err(StoreError::MachineNotQuiescent);
     }
     let stored = store.manifest()?;
     if stored.epoch != session.epoch {
@@ -1189,6 +1239,69 @@ mod tests {
         Signature::new("ironhorse-worker-v1")
     }
 
+    /// Wave-6 W6-14: a store whose hashes are CONSISTENT over hostile
+    /// content (the tampered-at-rest / crafted-store class) must be
+    /// refused at resume exactly as the container path refuses the same
+    /// bytes - leaf hashes prove authentic-to-commit, not in-arena.
+    #[test]
+    fn a_consistently_sealed_store_with_out_of_arena_refs_refuses_eager_resume() {
+        use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
+        let mut m = Interp::new();
+        m.link_intrinsics(&["x".to_string()]);
+        let mut image = m.snapshot_image(&sig());
+        let free: std::collections::HashSet<u32> = image.slot_free.iter().copied().collect();
+        let k = (0..image.slots.len())
+            .find(|i| !free.contains(&(*i as u32)))
+            .expect("a live slot");
+        let poison = image.slots.len() as u32 + 100;
+        image.slots[k] = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(poison)));
+        // Sanity: the CONTAINER path refuses this exact content.
+        assert!(
+            crate::image::read_machine(&crate::image::write_machine(&image), &sig()).is_err(),
+            "the container gate refuses the poisoned image"
+        );
+        // Forge the store: image_to_batch computes CONSISTENT leaf
+        // hashes / root / seal over the poisoned rows - the honest
+        // sealing machinery run over hostile content.
+        let mut store = crate::store::MemoryStore::new();
+        let batch = image_to_batch(&image, 1, "");
+        crate::store::HeapStore::commit(&mut store, &batch)
+            .expect("the forged batch seals consistently");
+        assert!(
+            resume_from_store(&store, &sig()).is_err(),
+            "the store path must refuse what the container path refuses"
+        );
+    }
+
+    /// The lazy twin: the poisoned page dies AT THE FAULT with a named
+    /// corrupt-store refusal (the path's established channel), not
+    /// later inside the collector as an anonymous index panic.
+    #[test]
+    #[should_panic(expected = "out-of-arena")]
+    fn a_lazily_resumed_poisoned_store_dies_named_at_the_fault() {
+        use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
+        let mut m = Interp::new();
+        m.link_intrinsics(&["x".to_string()]);
+        let mut image = m.snapshot_image(&sig());
+        let free: std::collections::HashSet<u32> = image.slot_free.iter().copied().collect();
+        let k = (0..image.slots.len())
+            .find(|i| !free.contains(&(*i as u32)))
+            .expect("a live slot");
+        let poison = image.slots.len() as u32 + 100;
+        image.slots[k] = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(poison)));
+        let mut store = crate::store::MemoryStore::new();
+        let batch = image_to_batch(&image, 1, "");
+        crate::store::HeapStore::commit(&mut store, &batch)
+            .expect("the forged batch seals consistently");
+        let mut resumed = resume_from_store_lazy(
+            std::rc::Rc::new(std::cell::RefCell::new(store)),
+            &sig(),
+        )
+        .expect("lazy attach");
+        // Force every page resident - the poisoned one faults.
+        resumed.machine_mut().collect_garbage();
+    }
+
     // The exact XS bytecode for `(function(x){return x+1})(5)` (captured
     // from the oracle in the engine's meter tests): completion "6", 30
     // computrons on a fresh machine.
@@ -1214,12 +1327,12 @@ mod tests {
         let a = m.run(&PROG_A);
         assert!(a.completed);
 
-        let bytes = m.write_snapshot(&sig());
+        let bytes = m.write_snapshot(&sig()).expect("quiescent machine snapshots");
         let m2 = from_snapshot_bytes(&bytes, &sig()).expect("restores");
         // The restored machine carries the same metering state.
         assert_eq!(m2.meter_state(), m.meter_state());
         // Re-serializing the restored machine is byte-identical.
-        assert_eq!(m2.write_snapshot(&sig()), bytes);
+        assert_eq!(m2.write_snapshot(&sig()).expect("quiescent machine snapshots"), bytes);
     }
 
     /// The row-6 bar: run-to-a-crank, suspend, resume, run-to-end equals
@@ -1237,7 +1350,7 @@ mod tests {
         let mut m1 = Interp::new();
         let a1 = m1.run(&PROG_A);
         assert!(a1.completed);
-        let bytes = m1.write_snapshot(&sig());
+        let bytes = m1.write_snapshot(&sig()).expect("quiescent machine snapshots");
         let mut m2 = from_snapshot_bytes(&bytes, &sig()).expect("restores");
         let b2 = m2.run(&PROG_B);
 
@@ -1264,7 +1377,7 @@ mod tests {
         let armed_state = m1.meter_state();
         assert!(armed_state.interval > 0, "meter is armed");
 
-        let bytes = m1.write_snapshot(&sig());
+        let bytes = m1.write_snapshot(&sig()).expect("quiescent machine snapshots");
         let m2 = from_snapshot_bytes(&bytes, &sig()).expect("restores");
         // The armed interval and the accumulated index both survive.
         assert_eq!(m2.meter_state(), armed_state);
@@ -1297,6 +1410,7 @@ mod tests {
         let mut m = Interp::new();
         m.run(&PROG_A);
         let bytes = m.write_snapshot(&Signature::new("host-v1"));
+        let bytes = bytes.expect("quiescent machine snapshots");
         match from_snapshot_bytes(&bytes, &Signature::new("host-v2")) {
             Err(SnapshotError::SignatureMismatch { .. }) => {}
             Err(e) => panic!("expected signature mismatch, got {e:?}"),

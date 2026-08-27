@@ -91,8 +91,8 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     }
 
     assert_eq!(
-        hex_sha256(&session.machine().write_snapshot(&sig)),
-        "d628873464ae2e6f7a1773d2a3cefb829c4f3202c54e94293f1fdcb59968daba",
+        hex_sha256(&session.machine().write_snapshot(&sig).expect("quiescent machine snapshots")),
+        "d34c62fc6ac11563e01c14e0a2316a846e872f0a2368f0ec931243772dc733ea",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per

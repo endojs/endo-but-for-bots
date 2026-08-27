@@ -387,7 +387,12 @@ pub fn roundtrip_program_is_invariant(source: &str) -> Result<(), RoundtripDiver
     interp.run(&oracle.bytecode);
 
     let sig = fuzz_snapshot_sig();
-    let bytes = interp.write_snapshot(&sig);
+    // The persist gate refuses a non-quiescent machine (a generated
+    // program that HALTED) — a named refusal, not a divergence.
+    let bytes = match interp.write_snapshot(&sig) {
+        Ok(b) => b,
+        Err(_) => return Ok(()),
+    };
     let restored = match from_snapshot_bytes(&bytes, &sig) {
         Ok(m) => m,
         Err(e) => {
@@ -396,7 +401,16 @@ pub fn roundtrip_program_is_invariant(source: &str) -> Result<(), RoundtripDiver
             })
         }
     };
-    let bytes2 = restored.write_snapshot(&sig);
+    // The restored machine is quiescent by construction; a refusal
+    // HERE is a real divergence.
+    let bytes2 = match restored.write_snapshot(&sig) {
+        Ok(b) => b,
+        Err(e) => {
+            return Err(RoundtripDivergence {
+                detail: format!("restored machine refused to re-snapshot: {e:?}"),
+            })
+        }
+    };
     if bytes != bytes2 {
         return Err(RoundtripDivergence {
             detail: format!(
@@ -440,7 +454,10 @@ pub fn suspend_resume_is_transparent(
     let sig = fuzz_snapshot_sig();
     let mut m1 = Interp::new();
     m1.run(&a.bytecode);
-    let bytes = m1.write_snapshot(&sig);
+    let bytes = match m1.write_snapshot(&sig) {
+        Ok(b) => b,
+        Err(_) => return Ok(()),
+    };
     let mut m2 = match from_snapshot_bytes(&bytes, &sig) {
         Ok(m) => m,
         Err(e) => {

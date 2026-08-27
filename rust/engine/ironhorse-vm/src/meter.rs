@@ -123,6 +123,17 @@ impl Meter {
         self.index = 0;
     }
 
+    /// Re-arm on a RESUMED machine (wave-6 W6-13): install a fresh
+    /// check window without destroying the restored `index` — the
+    /// accumulated computron count that [`Self::restore`] just
+    /// reinstated. [`Self::begin`] is the fresh-machine form and zeroes
+    /// it by design.
+    pub fn rearm(&mut self, interval: u64) {
+        let scaled = interval << 16;
+        self.interval = scaled;
+        self.count = self.index.saturating_add(scaled);
+    }
+
     /// Reset the raw index to zero (the oracle shim does this after
     /// parse so the run-only count is comparable).
     pub fn reset(&mut self) {

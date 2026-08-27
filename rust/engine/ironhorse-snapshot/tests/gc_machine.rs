@@ -89,8 +89,8 @@ fn collected_machine_checkpoints_and_resumes_exactly() {
     assert_eq!(got.result, expected.result);
     assert_eq!(got.computrons, expected.computrons);
     assert_eq!(
-        resumed.machine().write_snapshot(&sig()),
-        oracle.write_snapshot(&sig()),
+        resumed.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        oracle.write_snapshot(&sig()).expect("quiescent machine snapshots"),
         "post-GC store round-trip is byte-exact"
     );
 }
@@ -144,8 +144,8 @@ fn partial_collect_is_conservative_and_exact() {
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
     let resumed = resume_from_store(&store, &sig()).expect("resume");
     assert_eq!(
-        resumed.machine().write_snapshot(&sig()),
-        session.machine().write_snapshot(&sig()),
+        resumed.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
         "post-partial-collect store round-trip is byte-exact"
     );
 }
@@ -225,8 +225,8 @@ fn partial_collect_keeps_side_table_only_referenced_objects() {
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
     let resumed = resume_from_store(&store, &sig()).expect("resume");
     assert_eq!(
-        resumed.machine().write_snapshot(&sig()),
-        session.machine().write_snapshot(&sig()),
+        resumed.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
         "store round-trip stays byte-exact"
     );
 }
@@ -292,8 +292,8 @@ fn partial_collect_reclaims_page_isolated_garbage() {
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
     let resumed = resume_from_store(&store, &sig()).expect("resume");
     assert_eq!(
-        resumed.machine().write_snapshot(&sig()),
-        session.machine().write_snapshot(&sig()),
+        resumed.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
         "post-reclaim store round-trip is byte-exact"
     );
     session.machine_mut().collect_garbage();
