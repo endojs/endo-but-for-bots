@@ -1,0 +1,23 @@
+{
+  "compartments": {
+    "fixtures-exit": {
+      "modules": {
+        "./import-export.js": {
+          "language": "js"
+        }
+      }
+    }
+  },
+  "emulatedHooks": {
+    "exitModuleImports": [
+      "h2g2:meaning"
+    ],
+    "moduleSources": []
+  },
+  "entry": "import-export.js",
+  "entryCompartment": "fixtures-exit",
+  "entryModule": "./import-export.js",
+  "fixture": "fixtures-exit",
+  "oracle": "node",
+  "projection": "archive-host-hooks"
+}

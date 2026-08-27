@@ -1,0 +1,26 @@
+{
+  "compartments": {
+    "app2": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        },
+        "fjord": {
+          "link": "fjord"
+        }
+      }
+    },
+    "fjord": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        }
+      }
+    }
+  },
+  "entry": "node_modules/app2/index.js",
+  "entryCompartment": "app2",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-digest",
+  "oracle": "node"
+}

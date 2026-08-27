@@ -1,0 +1,90 @@
+{
+  "compartments": {
+    "browser": {
+      "modules": {
+        "./browser-ijk.js": {
+          "language": "js"
+        },
+        "./browser-xyz.js": {
+          "language": "js"
+        },
+        "./main.js": {
+          "language": "js"
+        },
+        "./xyz": {
+          "link": "browser"
+        },
+        "./xyz.js": {
+          "link": "browser"
+        },
+        "abc": {
+          "link": "browser-abc"
+        },
+        "abc/alt.js": {
+          "link": "browser-abc"
+        },
+        "browser-main": {
+          "link": "browser-main"
+        },
+        "browser-main-obj-redirect": {
+          "link": "browser-main-obj-redirect"
+        },
+        "browser-main-unmodified": {
+          "link": "browser-main-unmodified"
+        },
+        "ijk": {
+          "link": "browser"
+        },
+        "qwe/alt.js": {
+          "link": "browser-qwe"
+        }
+      }
+    },
+    "browser-abc": {
+      "modules": {
+        "./alt.js": {
+          "language": "js"
+        },
+        "./main.js": {
+          "language": "js"
+        }
+      }
+    },
+    "browser-main": {
+      "modules": {
+        "./browser-main.js": {
+          "language": "js"
+        }
+      }
+    },
+    "browser-main-obj-redirect": {
+      "modules": {
+        "./browser-main.js": {
+          "language": "js"
+        }
+      }
+    },
+    "browser-main-unmodified": {
+      "modules": {
+        "./main.js": {
+          "language": "js"
+        }
+      }
+    },
+    "browser-qwe": {
+      "modules": {
+        "./qwe.js": {
+          "language": "js"
+        }
+      }
+    }
+  },
+  "conditions": [
+    "browser"
+  ],
+  "entry": "node_modules/browser/main.js",
+  "entryCompartment": "browser",
+  "entryModule": "./main.js",
+  "fixture": "fixtures-resolve",
+  "oracle": "node"
+}

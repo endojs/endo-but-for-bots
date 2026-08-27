@@ -1,0 +1,20 @@
+{
+  "compartments": {
+    "app": {
+      "modules": {
+        "paperina": {
+          "link": "paperina"
+        }
+      }
+    },
+    "paperina": {
+      "modules": {}
+    }
+  },
+  "entry": "node_modules/app/index.js",
+  "entryCompartment": "app",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-optional-peer-dependencies",
+  "oracle": "node",
+  "projection": "dependency-classification"
+}

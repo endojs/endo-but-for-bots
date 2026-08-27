@@ -1,0 +1,238 @@
+{
+  "compartments": {
+    "after-exec": {
+      "modules": {
+        "./a": {
+          "link": "after-exec"
+        },
+        "./a.js": {
+          "language": "js"
+        },
+        "./later": {
+          "link": "after-exec"
+        },
+        "./later.js": {
+          "language": "js"
+        },
+        "./main.js": {
+          "language": "js"
+        }
+      }
+    },
+    "app": {
+      "modules": {
+        "./assertion-generators/json.cjs": {
+          "language": "cjs"
+        },
+        "./cycle1": {
+          "link": "app"
+        },
+        "./cycle1.js": {
+          "language": "js"
+        },
+        "./cycle2": {
+          "link": "app"
+        },
+        "./cycle2.js": {
+          "language": "js"
+        },
+        "./index.js": {
+          "language": "js"
+        },
+        "./moduleinterops": {
+          "link": "app"
+        },
+        "./moduleinterops.js": {
+          "language": "js"
+        },
+        "after-exec": {
+          "link": "after-exec"
+        },
+        "default-difficulties": {
+          "link": "default-difficulties"
+        },
+        "defineprop": {
+          "link": "defineprop"
+        },
+        "exports-shenanigans": {
+          "link": "exports-shenanigans"
+        },
+        "exports-shenanigans/default-exports": {
+          "link": "exports-shenanigans"
+        },
+        "exports-shenanigans/define-exports": {
+          "link": "exports-shenanigans"
+        },
+        "exports-shenanigans/exports-this": {
+          "link": "exports-shenanigans"
+        },
+        "exports-shenanigans/from-debug": {
+          "link": "exports-shenanigans"
+        },
+        "interops": {
+          "link": "interops"
+        },
+        "nested-export/callBound": {
+          "link": "nested-export"
+        },
+        "nested-file/nested": {
+          "link": "nested-file"
+        },
+        "parser-struggles": {
+          "link": "parser-struggles"
+        },
+        "require-resolve": {
+          "link": "require-resolve"
+        }
+      }
+    },
+    "default-difficulties": {
+      "modules": {
+        "./1.cjs": {
+          "language": "cjs"
+        },
+        "./2.cjs": {
+          "language": "cjs"
+        },
+        "./3.cjs": {
+          "language": "cjs"
+        },
+        "./4.cjs": {
+          "language": "cjs"
+        },
+        "./5.cjs": {
+          "language": "cjs"
+        },
+        "./6.cjs": {
+          "language": "cjs"
+        },
+        "./7.cjs": {
+          "language": "cjs"
+        },
+        "./index.mjs": {
+          "language": "mjs"
+        }
+      }
+    },
+    "defineprop": {
+      "modules": {
+        "./c.js": {
+          "language": "js"
+        },
+        "./example-babeltypes": {
+          "link": "defineprop"
+        },
+        "./example-babeltypes.js": {
+          "language": "js"
+        },
+        "./example-elliptic": {
+          "link": "defineprop"
+        },
+        "./example-elliptic.js": {
+          "language": "js"
+        },
+        "./example-ethereum-util": {
+          "link": "defineprop"
+        },
+        "./example-ethereum-util.js": {
+          "language": "js"
+        },
+        "./main.js": {
+          "language": "js"
+        }
+      }
+    },
+    "exports-shenanigans": {
+      "modules": {
+        "./debug-common": {
+          "link": "exports-shenanigans"
+        },
+        "./debug-common.js": {
+          "language": "js"
+        },
+        "./default-exports": {
+          "link": "exports-shenanigans"
+        },
+        "./default-exports.js": {
+          "language": "js"
+        },
+        "./define-exports": {
+          "link": "exports-shenanigans"
+        },
+        "./define-exports.js": {
+          "language": "js"
+        },
+        "./exports-this": {
+          "link": "exports-shenanigans"
+        },
+        "./exports-this.js": {
+          "language": "js"
+        },
+        "./from-debug": {
+          "link": "exports-shenanigans"
+        },
+        "./from-debug.js": {
+          "language": "js"
+        },
+        "./main.js": {
+          "language": "js"
+        }
+      }
+    },
+    "interops": {
+      "modules": {
+        "./main.js": {
+          "language": "js"
+        }
+      }
+    },
+    "nested-export": {
+      "modules": {
+        "./callBound.js": {
+          "language": "js"
+        }
+      }
+    },
+    "nested-file": {
+      "modules": {
+        "./nested": {
+          "link": "nested-file"
+        },
+        "./nested.js": {
+          "language": "js"
+        }
+      }
+    },
+    "parser-struggles": {
+      "modules": {
+        "./is-ok": {
+          "link": "parser-struggles"
+        },
+        "./is-ok.js": {
+          "language": "js"
+        },
+        "./main.js": {
+          "language": "js"
+        },
+        "./spam": {
+          "deferredError": true
+        },
+        "spam": {
+          "deferredError": true
+        }
+      }
+    },
+    "require-resolve": {
+      "modules": {
+        "./main.js": {
+          "language": "js"
+        }
+      }
+    }
+  },
+  "entry": "node_modules/app/index.js",
+  "entryCompartment": "app",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-cjs-compat",
+  "oracle": "node"
+}

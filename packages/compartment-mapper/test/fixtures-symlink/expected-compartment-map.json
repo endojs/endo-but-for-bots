@@ -1,0 +1,36 @@
+{
+  "compartments": {
+    "app": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        },
+        "symlink": {
+          "link": "symlink"
+        }
+      }
+    },
+    "symlink": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        },
+        "symlink-peer": {
+          "link": "symlink-peer"
+        }
+      }
+    },
+    "symlink-peer": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        }
+      }
+    }
+  },
+  "entry": "app/index.js",
+  "entryCompartment": "app",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-symlink",
+  "oracle": "node"
+}

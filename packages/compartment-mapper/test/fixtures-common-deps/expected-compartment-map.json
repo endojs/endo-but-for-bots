@@ -1,0 +1,36 @@
+{
+  "compartments": {
+    "app": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        },
+        "common-dep-required": {
+          "link": "common-dep-required"
+        }
+      }
+    },
+    "common-dep-required": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        },
+        "unlisted-common-dep": {
+          "link": "common-dep-target"
+        }
+      }
+    },
+    "common-dep-target": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        }
+      }
+    }
+  },
+  "entry": "node_modules/app/index.js",
+  "entryCompartment": "app",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-common-deps",
+  "oracle": "node"
+}

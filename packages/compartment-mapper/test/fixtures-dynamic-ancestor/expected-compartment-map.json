@@ -1,0 +1,37 @@
+{
+  "compartments": {
+    "pantspack": {
+      "modules": {
+        "./pantspack.js": {
+          "language": "js"
+        },
+        "pantspack-folder-runner": {
+          "link": "pantspack-folder-runner"
+        }
+      }
+    },
+    "pantspack-folder-runner": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        }
+      }
+    },
+    "webpackish-app": {
+      "modules": {
+        "./build.js": {
+          "language": "js"
+        },
+        "pantspack": {
+          "link": "pantspack"
+        }
+      }
+    }
+  },
+  "dev": true,
+  "entry": "node_modules/webpackish-app/build.js",
+  "entryCompartment": "webpackish-app",
+  "entryModule": "./build.js",
+  "fixture": "fixtures-dynamic-ancestor",
+  "oracle": "node"
+}

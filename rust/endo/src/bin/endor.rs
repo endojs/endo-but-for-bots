@@ -14,7 +14,20 @@
 //!
 //!   endor worker  [-e xs]       # supervised worker child
 //!   endor run     [-e xs] <archive.zip>
-//!                               # standalone archive runner
+//!                               # standalone archive runner (ZIP file)
+//!   endor run     [-e xs] <entry.js>
+//!                               # standalone runner for a single
+//!                               # entry-point source. By default the
+//!                               # entry's dependencies resolve from
+//!                               # the endor registry cache, no
+//!                               # `node_modules` consulted
+//!                               # (`endor-npm-registry-proxy`).
+//!   endor run     --node-modules <entry.js>
+//!                               # legacy resolution: walk static
+//!                               # `import` specifiers through a
+//!                               # sibling `node_modules` tree into a
+//!                               # multi-compartment archive
+//!                               # (`endor-run-expanded` Phase 5).
 //!
 //! The manager is hosted in-process by `endor daemon` on a
 //! dedicated `std::thread`; there is no separate `manager`
@@ -31,6 +44,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use endo::error::EndoError;
+use endo::run_input::{classify_run_input, RunInput};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -80,23 +94,57 @@ fn main() -> ExitCode {
                         // Run from CAS root hash.
                         result_to_exit("endor", cmd_run_from_cas(&hash))
                     } else if let Some(ref p) = path {
-                        if is_entry_module(p) {
-                            result_to_exit("endor", cmd_run_entry(rest, p))
-                        } else if no_cas {
-                            xsnap_result_to_exit(xsnap::run_xs_archive(p))
-                        } else {
-                            result_to_exit("endor", cmd_run_with_cas(p))
+                        match classify_run_input(p) {
+                            RunInput::ZipArchive => {
+                                if no_cas {
+                                    xsnap_result_to_exit(xsnap::run_xs_archive(p))
+                                } else {
+                                    result_to_exit("endor", cmd_run_with_cas(p))
+                                }
+                            }
+                            RunInput::EntryPoint => match entry_resolution(rest) {
+                                EntryResolution::Registry => {
+                                    // Default: resolve the entry package's
+                                    // dependencies from the endor registry
+                                    // cache, without consulting a node_modules
+                                    // tree (designs/endor-npm-registry-proxy.md).
+                                    result_to_exit("endor", cmd_run_entry(rest, p))
+                                }
+                                EntryResolution::NodeModules => {
+                                    // `--node-modules`: PR #282 Phase 5 of
+                                    // designs/endor-run-expanded.md — walk a
+                                    // sibling node_modules tree for the entry's
+                                    // static imports into a multi-compartment
+                                    // archive (legacy Node-style resolution).
+                                    if no_cas {
+                                        eprintln!(
+                                            "endor run: --no-cas is incompatible with an \
+                                             entry-point input; entry-point runs always use \
+                                             the CAS"
+                                        );
+                                        ExitCode::from(2)
+                                    } else {
+                                        result_to_exit("endor", cmd_run_entry_node_modules(p))
+                                    }
+                                }
+                            },
+                            RunInput::Missing => {
+                                eprintln!("endor run: input not found: {}", p.display());
+                                ExitCode::from(1)
+                            }
                         }
                     } else {
                         eprintln!(
-                            "usage: endor run [-e xs] [--cas <hash>] [--no-cas] [--registry <url>] [--offline] <archive.zip | entry.js>"
+                            "usage: endor run [-e xs] [--cas <hash>] [--no-cas] [--registry <url>] [--offline] [--node-modules] <archive.zip | entry.js>"
                         );
                         ExitCode::from(2)
                     }
                 }
                 #[cfg(feature = "ironhorse-engine")]
                 "ironhorse" => match path {
-                    Some(ref p) => ironhorse_result_to_exit(endo::ironhorse_engine::engine::run_script(p)),
+                    Some(ref p) => {
+                        ironhorse_result_to_exit(endo::ironhorse_engine::engine::run_script(p))
+                    }
                     None => {
                         eprintln!("usage: endor run -e ironhorse <script.js>");
                         ExitCode::from(2)
@@ -219,13 +267,22 @@ fn print_subcommand_help(sub: &str) {
         }
         "run" => {
             eprintln!(
-                "Usage: endor run [-e xs] [--registry <url>] [--offline] <archive.zip | entry.js>"
+                "Usage: endor run [-e xs] [--cas <hash>] [--no-cas] [--registry <url>] [--offline] [--node-modules] <archive.zip | entry.js>"
             );
             eprintln!();
             eprintln!("Run a compartment-map archive, or an entry module, standalone.");
             eprintln!();
-            eprintln!("A .zip archive executes in an XS machine without a running");
-            eprintln!("daemon. Useful for testing and one-off execution.");
+            eprintln!("<path> is one of:");
+            eprintln!("  archive.zip   A compartment-map ZIP file (Phase 2).");
+            eprintln!("  entry.js      A single source file. With no static");
+            eprintln!("                imports, synthesises a one-compartment");
+            eprintln!("                archive (Phase 4). With one or more");
+            eprintln!("                `import`/`export ... from` specifiers,");
+            eprintln!("                walks the dependency graph (relative paths");
+            eprintln!("                within the entry directory, bare specifiers");
+            eprintln!("                resolved via sibling `node_modules`) into a");
+            eprintln!("                multi-compartment archive (Phase 5).");
+            eprintln!("                Recognised extensions: .js, .mjs, .cjs, .json.");
             eprintln!();
             eprintln!("A .js/.mjs/.cjs entry module instead resolves the entry");
             eprintln!("package's npm dependencies (Go-like minimal version");
@@ -233,6 +290,10 @@ fn print_subcommand_help(sub: &str) {
             eprintln!("assembles the compartment map binding them — no npm CLI,");
             eprintln!("no node_modules, no lockfile — and executes it in an XS");
             eprintln!("machine. A fully cached graph runs without network access.");
+            eprintln!();
+            eprintln!("Both forms ingest the contents into the CAS and execute the");
+            eprintln!("loaded archive in an XS machine, printing the root hash to");
+            eprintln!("stderr so a later run can re-use it via --cas <hash>.");
             eprintln!();
             eprintln!("The registry is configured npm-style: ~/.npmrc, then the");
             eprintln!("entry package's .npmrc, then NPM_CONFIG_REGISTRY, then");
@@ -244,11 +305,21 @@ fn print_subcommand_help(sub: &str) {
             eprintln!();
             eprintln!("Options:");
             eprintln!("  -e, --engine <engine>  Engine to use (default: xs)");
-            eprintln!("  --registry <url>       Registry base URL for entry-module runs");
-            eprintln!("                         (default: https://registry.npmjs.org/)");
-            eprintln!("  --offline              Refuse network access: only packages");
-            eprintln!("                         already in the CAS and registry table");
-            eprintln!("                         resolve");
+            eprintln!("  --cas <hash>           Run from a previously ingested CAS root hash.");
+            eprintln!("  --no-cas               Skip CAS ingestion; legacy in-memory path.");
+            eprintln!("                         ZIP inputs only. Entry-point inputs always");
+            eprintln!("                         use the CAS (the synthesised compartment-map");
+            eprintln!("                         needs a content-addressed home); passing");
+            eprintln!("                         --no-cas with an entry-point input exits with");
+            eprintln!("                         code 2 and prints a diagnostic.");
+            eprintln!(
+                "  --registry <url>       Registry base URL for registry-backed entry-module runs"
+            );
+            eprintln!("  --offline              Refuse network access for registry-backed entry-module runs");
+            eprintln!("  --node-modules         Resolve an entry module's static imports by");
+            eprintln!("                         walking a sibling node_modules tree (legacy");
+            eprintln!("                         Node-style resolution) instead of the default");
+            eprintln!("                         endor registry cache. Entry points only.");
         }
         "gc" => {
             eprintln!("Usage: endor gc");
@@ -286,7 +357,9 @@ fn print_subcommand_help(sub: &str) {
             eprintln!("                    packages resolve");
         }
         "registry" => {
-            eprintln!("Usage: endor registry <list [name] | meta [name] | refresh <name>... | verify>");
+            eprintln!(
+                "Usage: endor registry <list [name] | meta [name] | refresh <name>... | verify>"
+            );
             eprintln!();
             eprintln!("Inspect and maintain the registry table, the SQLite index that");
             eprintln!("makes the CAS a cache of the npm registry.");
@@ -502,13 +575,32 @@ fn cmd_ping() -> Result<(), EndoError> {
     Ok(())
 }
 
-/// A `.js`/`.mjs`/`.cjs` positional is an entry module for the
-/// npm-registry-proxy path; anything else stays an archive.
-fn is_entry_module(path: &std::path::Path) -> bool {
-    matches!(
-        path.extension().and_then(|e| e.to_str()),
-        Some("js") | Some("mjs") | Some("cjs")
-    )
+/// Which resolver `endor run <entry.js>` uses for an entry-point
+/// input. The archive-versus-entry-point discrimination is
+/// `classify_run_input`'s job; this only picks *how* an entry
+/// point's dependencies are resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EntryResolution {
+    /// Default: resolve non-workspace dependencies from the endor
+    /// registry cache, without consulting a node_modules tree
+    /// (`designs/endor-npm-registry-proxy.md`).
+    Registry,
+    /// `--node-modules`: PR #282 Phase 5's legacy Node-style walker
+    /// over a sibling `node_modules` tree
+    /// (`designs/endor-run-expanded.md`).
+    NodeModules,
+}
+
+/// Picks the entry-point resolver from the `run` argument list. The
+/// registry path is the default; `--node-modules` opts into the
+/// legacy node_modules walker. Kept as a pure function so the
+/// dispatch decision is unit-testable independently of `main`.
+fn entry_resolution(args: &[String]) -> EntryResolution {
+    if args.iter().any(|a| a == "--node-modules") {
+        EntryResolution::NodeModules
+    } else {
+        EntryResolution::Registry
+    }
 }
 
 /// `endor run <entry.js>`: Phase 4 of
@@ -580,11 +672,9 @@ fn cmd_run_entry(args: &[String], entry_path: &std::path::Path) -> Result<(), En
 
     let archive = endo::execute::load_assembled_archive(&cas, &assembled.compartment_map_hash)
         .map_err(|e| EndoError::Config(format!("{e}")))?;
-    xsnap::run_xs_archive_loaded(&archive)
-        .map_err(|e| EndoError::Config(format!("run: {e}")))?;
+    xsnap::run_xs_archive_loaded(&archive).map_err(|e| EndoError::Config(format!("run: {e}")))?;
     Ok(())
 }
-
 fn cmd_run_with_cas(archive_path: &std::path::Path) -> Result<(), EndoError> {
     // Create a temporary CAS for standalone runs.
     let cas_dir = std::env::temp_dir().join("endor-cas");
@@ -606,6 +696,42 @@ fn cmd_run_with_cas(archive_path: &std::path::Path) -> Result<(), EndoError> {
     Ok(())
 }
 
+fn cmd_run_entry_node_modules(entry_path: &std::path::Path) -> Result<(), EndoError> {
+    // Phase 4 / Phase 5 entry-point form dispatch.
+    //
+    // Phase 4 handles the no-dependencies case via
+    // `ingest_entry_point` (synthetic one-compartment archive).
+    // Phase 5 (`endo::entry_walk::ingest_entry_point_with_deps`)
+    // handles entries with one or more statically discoverable dependency
+    // specifiers
+    // by walking the dependency graph and emitting a
+    // multi-compartment archive.
+    //
+    // The dispatch reads the entry source once and routes to the
+    // walker when a static import, literal dynamic import, direct require,
+    // or literal require.resolve target is present; entries with
+    // no imports stay on the (faster, simpler, more battle-tested)
+    // Phase 4 path so the regression surface for import-free runs
+    // is unchanged.
+    let cas_dir = std::env::temp_dir().join("endor-cas");
+    let cas = endo::cas::ContentStore::open(&cas_dir)
+        .map_err(|e| EndoError::Config(format!("CAS open: {e}")))?;
+
+    // Match `cmd_run_with_cas`'s wrapping: the inner error from
+    // `ingest_entry_point` already names the offending path
+    // (`unsupported entry-point extension: /tmp/foo.txt`, `not a
+    // regular file: /tmp/bar`), so the outer prefix only names
+    // the operation.
+    let ingested = endo::entry_walk::ingest_entry_point_for_run(&cas, entry_path)
+        .map_err(|e| EndoError::Config(format!("CAS ingest: {e}")))?;
+
+    eprintln!("endor[run]: archive root {}", ingested.root_hash);
+
+    xsnap::run_xs_archive_loaded(&ingested.archive)
+        .map_err(|e| EndoError::Config(format!("run: {e}")))?;
+    Ok(())
+}
+
 fn cmd_run_from_cas(root_hash: &str) -> Result<(), EndoError> {
     let cas_dir = std::env::temp_dir().join("endor-cas");
     let cas = endo::cas::ContentStore::open(&cas_dir)
@@ -614,8 +740,7 @@ fn cmd_run_from_cas(root_hash: &str) -> Result<(), EndoError> {
     let archive = endo::cas_archive::load_archive_from_cas(&cas, root_hash)
         .map_err(|e| EndoError::Config(format!("CAS load: {e}")))?;
 
-    xsnap::run_xs_archive_loaded(&archive)
-        .map_err(|e| EndoError::Config(format!("run: {e}")))?;
+    xsnap::run_xs_archive_loaded(&archive).map_err(|e| EndoError::Config(format!("run: {e}")))?;
     Ok(())
 }
 
@@ -736,7 +861,7 @@ fn cmd_registry(args: &[String]) -> Result<(), EndoError> {
             }
             .map_err(|e| EndoError::Config(format!("registry list: {e}")))?;
             for p in &entries {
-                println!("{} {} {}", p.name, p.version, p.hash);
+                println!("{} {} {} {}", p.name, p.version, p.hash, p.registry);
             }
             eprintln!("endor registry: {} package(s) cached", entries.len());
             Ok(())
@@ -745,13 +870,22 @@ fn cmd_registry(args: &[String]) -> Result<(), EndoError> {
             let table = open_registry_table(&paths)?;
             match args.get(1) {
                 Some(name) => {
-                    let json = table
-                        .get_meta(name)
-                        .map_err(|e| EndoError::Config(format!("registry meta: {e}")))?
-                        .ok_or_else(|| {
-                            EndoError::Config(format!("no cached metadata for {name}"))
-                        })?;
-                    println!("{json}");
+                    let docs = table
+                        .get_meta_all(name)
+                        .map_err(|e| EndoError::Config(format!("registry meta: {e}")))?;
+                    if docs.is_empty() {
+                        return Err(EndoError::Config(format!("no cached metadata for {name}")));
+                    }
+                    // The origin is part of the key, so a package may
+                    // be cached from more than one registry; label each
+                    // document when so, and print the JSON alone in the
+                    // common single-registry case.
+                    for (registry, json) in &docs {
+                        if docs.len() > 1 {
+                            eprintln!("# {registry}");
+                        }
+                        println!("{json}");
+                    }
                     Ok(())
                 }
                 None => {
@@ -824,8 +958,7 @@ fn verify_cas_tree(cas: &endo::cas::ContentStore, hash: &str) -> Result<(), Stri
         .map_err(|e| format!("tree {hash}: {e}"))?;
     for (name, entry) in &tree.entries {
         if entry.entry_type == "tree" {
-            verify_cas_tree(cas, &entry.hash)
-                .map_err(|detail| format!("{name}: {detail}"))?;
+            verify_cas_tree(cas, &entry.hash).map_err(|detail| format!("{name}: {detail}"))?;
         } else if !cas.has(&entry.hash) {
             return Err(format!("blob {} ({name}) missing", entry.hash));
         }
@@ -840,5 +973,52 @@ fn parse_package_spec(spec: &str) -> (String, String) {
     match spec[1..].rfind('@') {
         Some(i) => (spec[..i + 1].to_string(), spec[i + 2..].to_string()),
         None => (spec.to_string(), "*".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{entry_resolution, EntryResolution};
+
+    fn args(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    // The load-bearing dispatch invariant for the flag-gated
+    // reconciliation: `llm`'s registry entry-point path and PR #282's
+    // node_modules walker both claim `endor run <entry.js>`, and CI
+    // does not compile this crate — so the resolver choice is pinned
+    // here rather than left to a silent auto-merge.
+    #[test]
+    fn default_entry_uses_the_registry_path() {
+        assert_eq!(
+            entry_resolution(&args(&["app.js"])),
+            EntryResolution::Registry
+        );
+    }
+
+    #[test]
+    fn registry_stays_default_with_unrelated_flags() {
+        assert_eq!(
+            entry_resolution(&args(&["--registry", "https://example.test", "app.js"])),
+            EntryResolution::Registry
+        );
+        assert_eq!(
+            entry_resolution(&args(&["--offline", "app.js"])),
+            EntryResolution::Registry
+        );
+    }
+
+    #[test]
+    fn node_modules_flag_selects_the_walker() {
+        assert_eq!(
+            entry_resolution(&args(&["--node-modules", "app.js"])),
+            EntryResolution::NodeModules
+        );
+        // Order-independent: the flag may follow the positional.
+        assert_eq!(
+            entry_resolution(&args(&["app.js", "--node-modules"])),
+            EntryResolution::NodeModules
+        );
     }
 }

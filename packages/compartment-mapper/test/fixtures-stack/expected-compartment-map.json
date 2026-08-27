@@ -1,0 +1,17 @@
+{
+  "compartments": {
+    "entry": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        }
+      }
+    }
+  },
+  "divergence": "fixtures-stack has no package.json boundary; compartment-mapper resolves the entry into the enclosing @endo/compartment-mapper package (a release-versioned id), while endor roots it at the entry directory (entry-v1.0.0).",
+  "entry": "index.js",
+  "entryCompartment": "entry",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-stack",
+  "oracle": "endor-baseline"
+}

@@ -1,0 +1,27 @@
+{
+  "compartments": {
+    "app": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        },
+        "no-name-pkg": {
+          "link": "no-name-pkg"
+        }
+      }
+    },
+    "no-name-pkg": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        }
+      }
+    }
+  },
+  "divergence": "compartment-mapper throws on the nameless no-name-pkg dependency (test/no-name.test.js asserts it); endor extends support by falling back to the package directory basename for the compartment id.",
+  "entry": "node_modules/app/index.js",
+  "entryCompartment": "app",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-no-name",
+  "oracle": "endor-baseline"
+}
