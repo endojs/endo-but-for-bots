@@ -66,6 +66,21 @@ pub const REGY: FourCc = FourCc(*b"REGY");
 /// message the abort-value render consults. Ironhorse-specific;
 /// emitted only when non-empty (see [`ARRY`]).
 pub const ERRD: FourCc = FourCc(*b"ERRD");
+/// `ABUF` — the array-buffers side table (ledger `ArrayBuffers` row):
+/// per instance, the backing chunk offset + byte length + brand flags
+/// (detached/shared). The backing BYTES travel in `BLOC`; this is the
+/// geometry that makes them readable. Ironhorse-specific; emitted only
+/// when non-empty (see [`ARRY`]).
+pub const ABUF: FourCc = FourCc(*b"ABUF");
+/// `TARR` — the typed-arrays side table (ledger `TypedArrays` row):
+/// per view, element kind + buffer slot + byte offset + element
+/// length. Ironhorse-specific; emitted only when non-empty (see
+/// [`ARRY`]).
+pub const TARR: FourCc = FourCc(*b"TARR");
+/// `DVIW` — the data-views side table (ledger `DataViews` row): per
+/// view, buffer slot + byte offset + byte length. Ironhorse-specific;
+/// emitted only when non-empty (see [`ARRY`]).
+pub const DVIW: FourCc = FourCc(*b"DVIW");
 
 /// The Ironhorse discriminator embedded at the head of the `VERS` atom. An
 /// Ironhorse snapshot is never mistaken for an XS one and vice versa

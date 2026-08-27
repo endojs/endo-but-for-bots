@@ -1,14 +1,19 @@
 //! Wave-6 W6-9: the SILENT-WRONG Pending rows refuse to persist.
 //!
-//! The blast-radius probe showed a resumed heap holding a Proxy,
-//! an accessor property, or a TypedArray answers WRONG VALUES (a
-//! plain-object degradation the consuming natives never notice),
-//! where the other Pending rows fail visibly via per-native `this`
-//! guards. Until their atoms land (the recorded G3 lift), the persist
-//! verbs refuse such heaps by name — the `Segments` precedent: honest
-//! refusal over silent corruption. Error data started as the fourth
-//! row here and GRADUATED: it travels in the `ERRD` atom since store
-//! schema 9 (`error_data_carry.rs` holds its twins).
+//! The blast-radius probe showed a resumed heap holding a Proxy or an
+//! accessor property answers WRONG VALUES (a plain-object degradation
+//! the consuming natives never notice), where the other Pending rows
+//! fail visibly via per-native `this` guards. Both remaining rows hold
+//! FUNCTION slots (traps, getters/setters), so their honest carry is
+//! dependency-gated on the `functions` row — a resumed guest function
+//! is uncallable today, and carrying a proxy whose traps cannot run
+//! would trade silent-wrong for visible-broken, not for correct. Until
+//! then the persist verbs refuse such heaps by name — the `Segments`
+//! precedent: honest refusal over silent corruption. Error data and
+//! the typed-array family started here and GRADUATED: they travel in
+//! the `ERRD` (store schema 9) and `ABUF`/`TARR`/`DVIW` (schema 10)
+//! atoms (`error_data_carry.rs` / `typed_array_carry.rs` hold their
+//! twins).
 
 use ironhorse_snapshot::machine::begin_store_session;
 use ironhorse_snapshot::store::{MemoryStore, StoreError};
@@ -52,11 +57,6 @@ fn a_heap_holding_a_guest_accessor_refuses_to_persist() {
          Object.defineProperty(o, 'x', { get: function () { return 1; } }); 0;",
         "accessors",
     );
-}
-
-#[test]
-fn a_heap_holding_a_typed_array_refuses_to_persist() {
-    refuses("var t = 0; t = new Uint8Array(8); 0;", "typed arrays");
 }
 
 /// A COLLECTED instance is no longer a hazard — the witness asks what

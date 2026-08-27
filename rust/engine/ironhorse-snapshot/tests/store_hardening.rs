@@ -201,6 +201,9 @@ fn incremental_batch(
         collections: Vec::new(),
         registry: Vec::new(),
         errors: Vec::new(),
+        buffers: Vec::new(),
+        typed_arrays: Vec::new(),
+        data_views: Vec::new(),
     };
     let mut page_edges: Vec<(u32, Vec<u32>)> = Vec::new();
     let slot_pages: Vec<(u32, Vec<u8>)> = slots

@@ -222,7 +222,7 @@ impl MachineSnapshot for Interp {
         // symbols and runtime-interned names alike — travel inside the
         // NAME table since the id-space unification, so the KEYS atom
         // is retired and travels empty.
-        let (arrays, collections, registry, errors) = side_tables_of(self);
+        let tables = side_tables_of(self);
         let (next_id, pairs) = self.symbol_key_table();
         MachineImage::from_arenas(
             signature.clone(),
@@ -234,22 +234,34 @@ impl MachineSnapshot for Interp {
             crate::image::SymbolKeyImage { next_id, pairs },
         )
         .with_meter(self.meter_state())
-        .with_side_tables(arrays, collections, registry, errors)
+        .with_side_tables(
+            tables.arrays,
+            tables.collections,
+            tables.registry,
+            tables.errors,
+            tables.buffers,
+            tables.typed_arrays,
+            tables.data_views,
+        )
     }
 }
 
-/// The machine's four serialized side-table views (ledger rows
-/// `Arrays`/`Collections`/`SymbolRegistry`/`ErrorData`), converted
-/// from the vm's tuple snapshots into the image structs, in the vm's
-/// canonical (ascending) order.
-fn side_tables_of(
-    interp: &Interp,
-) -> (
-    Vec<crate::image::ArrayImage>,
-    Vec<crate::image::CollectionImage>,
-    Vec<crate::image::RegistryImage>,
-    Vec<crate::image::ErrorImage>,
-) {
+/// The machine's serialized side-table views (ledger rows `Arrays`/
+/// `Collections`/`SymbolRegistry`/`ErrorData`/`ArrayBuffers`/
+/// `TypedArrays`/`DataViews`), converted from the vm's tuple
+/// snapshots into the image structs, in the vm's canonical
+/// (ascending) order.
+struct SideTableImages {
+    arrays: Vec<crate::image::ArrayImage>,
+    collections: Vec<crate::image::CollectionImage>,
+    registry: Vec<crate::image::RegistryImage>,
+    errors: Vec<crate::image::ErrorImage>,
+    buffers: Vec<crate::image::BufferImage>,
+    typed_arrays: Vec<crate::image::TypedArrayImage>,
+    data_views: Vec<crate::image::DataViewImage>,
+}
+
+fn side_tables_of(interp: &Interp) -> SideTableImages {
     let arrays = interp
         .arrays_snapshot()
         .into_iter()
@@ -279,14 +291,53 @@ fn side_tables_of(
     let errors = interp
         .errors_snapshot()
         .into_iter()
-
         .map(|(owner, name, message)| crate::image::ErrorImage {
             owner,
             name: name.to_string(),
             message,
         })
         .collect();
-    (arrays, collections, registry, errors)
+    let buffers = interp
+        .array_buffers_snapshot()
+        .into_iter()
+
+        .map(|(owner, data, length, flags)| crate::image::BufferImage {
+            owner,
+            data,
+            length,
+            flags,
+        })
+        .collect();
+    let typed_arrays = interp
+        .typed_arrays_snapshot()
+        .into_iter()
+        .map(|(owner, kind, buffer, offset, length)| crate::image::TypedArrayImage {
+            owner,
+            kind,
+            buffer,
+            offset,
+            length,
+        })
+        .collect();
+    let data_views = interp
+        .data_views_snapshot()
+        .into_iter()
+        .map(|(owner, buffer, offset, size)| crate::image::DataViewImage {
+            owner,
+            buffer,
+            offset,
+            size,
+        })
+        .collect();
+    SideTableImages {
+        arrays,
+        collections,
+        registry,
+        errors,
+        buffers,
+        typed_arrays,
+        data_views,
+    }
 }
 
 /// Reinstate the ledger side tables on a restored machine from their
@@ -301,6 +352,9 @@ fn restore_side_tables(
     collections: Vec<crate::image::CollectionImage>,
     registry: Vec<crate::image::RegistryImage>,
     errors: Vec<crate::image::ErrorImage>,
+    buffers: Vec<crate::image::BufferImage>,
+    typed_arrays: Vec<crate::image::TypedArrayImage>,
+    data_views: Vec<crate::image::DataViewImage>,
 ) {
     let ok = interp.restore_bulk_side_tables(
         arrays
@@ -324,6 +378,24 @@ fn restore_side_tables(
             .collect(),
     );
     debug_assert!(ok, "validated image cannot carry an unknown error name");
+    // The typed-array family (kinds, flags, extents and view geometry
+    // all validated at decode/bounds; the vm re-validates against its
+    // restored arenas, so `false` is a belt-and-braces corrupt signal).
+    let ok = interp.restore_typed_array_family(
+        buffers
+            .into_iter()
+            .map(|b| (b.owner, b.data, b.length, b.flags))
+            .collect(),
+        typed_arrays
+            .into_iter()
+            .map(|t| (t.owner, t.kind, t.buffer, t.offset, t.length))
+            .collect(),
+        data_views
+            .into_iter()
+            .map(|d| (d.owner, d.buffer, d.offset, d.size))
+            .collect(),
+    );
+    debug_assert!(ok, "validated image cannot carry a malformed typed-array family");
 }
 
 /// Rebuild a live [`Interp`] from a decoded [`MachineImage`]: a fresh
@@ -353,6 +425,9 @@ pub fn image_to_interp(image: MachineImage) -> Interp {
         image.collections,
         image.registry,
         image.errors,
+        image.buffers,
+        image.typed_arrays,
+        image.data_views,
     );
     interp
 }
@@ -572,7 +647,7 @@ fn manifest_of(
 /// travel alongside, and the symbol-key table travels in the symbols
 /// section).
 fn small_state_of(interp: &Interp) -> SmallState {
-    let (arrays, collections, registry, errors) = side_tables_of(interp);
+    let tables = side_tables_of(interp);
     let (next_id, pairs) = interp.symbol_key_table();
     SmallState {
         stack: interp.stack_slots().to_vec(),
@@ -581,10 +656,13 @@ fn small_state_of(interp: &Interp) -> SmallState {
         names: interp.program_symbol_names().to_vec(),
         symbols: crate::image::SymbolKeyImage { next_id, pairs },
         meter: MeterImage::of(interp.meter_state()),
-        arrays,
-        collections,
-        registry,
-        errors,
+        arrays: tables.arrays,
+        collections: tables.collections,
+        registry: tables.registry,
+        errors: tables.errors,
+        buffers: tables.buffers,
+        typed_arrays: tables.typed_arrays,
+        data_views: tables.data_views,
     }
 }
 
@@ -1269,6 +1347,9 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.collections,
         small.registry,
         small.errors,
+        small.buffers,
+        small.typed_arrays,
+        small.data_views,
     );
     Ok(StoreSession {
         gen_dirty: std::collections::BTreeSet::new(),

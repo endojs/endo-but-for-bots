@@ -1724,9 +1724,37 @@ rather than work items.
     entirely — invisible to the single-crank oracle (naming `.message`
     in source interns it), locked cross-crank in
     `error_own_properties.rs`.
-  - [ ] `proxies`, `accessors`, the typed-array family: the same
-    pattern per row; typed arrays are the larger lift (buffer bytes
-    + view geometry).
+  - [x] The typed-array family LANDED (2026-08-27, store schema
+    v10): the `ABUF`/`TARR`/`DVIW` atoms + three more small-state
+    sections (the 9→10 migration appends them empty — the same
+    provably-content-preserving suffix as every ladder step, since
+    the v9 gates refused any heap holding a live row). The backing
+    BYTES always traveled (an `ArrayBuffer`'s store is a chunk-arena
+    allocation riding `BLOC`); the carry is the geometry: per-buffer
+    `(chunk offset, byte length, flags)` — the
+    `detached_buffers`/`shared_buffers` brand satellites fold into
+    the flag bits — and per-view `(kind, buffer, offset, length)`.
+    Decode refuses unknown kinds, unknown flag bits, and
+    non-ascending owners; the widened bounds gate (both resume
+    paths) refuses backing extents outside the chunk arena, views
+    naming a buffer with NO row, and view geometry past its buffer's
+    length; the vm restore re-validates against the restored arenas.
+    Gate arm retired; `typed_array_carry.rs` holds the twins
+    (element/length/byteLength reads, multi-view aliasing through
+    one restored buffer, DataView get/set, detached-brand refusal,
+    the SharedArrayBuffer/Atomics brand, blob + re-checkpoint) —
+    red-first at the gate, bite-checked by dropping the buffer rows
+    (the orphaned views then refuse to resume: the cross-table
+    validation biting).
+  - [ ] `proxies`, `accessors`: dependency-gated on the `functions`
+    row, with the probe evidence recorded (2026-08-27): a resumed
+    guest function is UNCALLABLE today (`f(2)` throws TypeError,
+    `typeof f` answers `"object"` — the `functions` FuncInfo row does
+    not travel), and both remaining rows hold function slots (traps,
+    getters/setters). Carrying them before `functions` would trade
+    silent-wrong for visible-broken, not for correct — so the gates
+    stay, and the `functions` carry (per-instance FuncInfo + the
+    code-segment story) is the prerequisite lift.
 - The `combinators` / `from_async` / `promise_guards` tables are
   append-only for the machine's lifetime (wave-6 W6-19): settled
   entries are unreachable but never reclaimed — unbounded growth on

@@ -8118,17 +8118,20 @@ impl Interp {
     }
 
     /// The first SILENT-WRONG Pending-row class this heap HOLDS, or
-    /// `None` (wave-6 W6-9). These three side tables do not travel, and
+    /// `None` (wave-6 W6-9). These two side tables do not travel, and
     /// a resumed slot that loses its row degrades to a PLAIN OBJECT
     /// whose reads answer wrong values (a Proxy's gets answer
-    /// `undefined`, accessor properties read as absent, TypedArray
-    /// elements and length read `undefined`) — unlike the rows whose
-    /// consuming natives happen to guard `this` and fail visibly. Until
-    /// their atoms land (the recorded G3 lift), the persist verbs
-    /// refuse a heap holding one, by name — the `Segments` precedent.
-    /// Free-listed owners are skipped: a swept instance's stale row
-    /// names nothing. (`error_data` started here and GRADUATED: it
-    /// travels in the `ERRD` atom / small-state errors section now.)
+    /// `undefined`, accessor properties read as absent) — unlike the
+    /// rows whose consuming natives happen to guard `this` and fail
+    /// visibly. Both remaining rows hold FUNCTION slots (traps,
+    /// getters/setters), so their honest carry is dependency-gated on
+    /// the `functions` row (a resumed guest function is uncallable
+    /// today — carrying a proxy whose traps cannot run would trade
+    /// silent-wrong for visible-broken, not for correct). Free-listed
+    /// owners are skipped: a swept instance's stale row names nothing.
+    /// (`error_data` and the typed-array family started here and
+    /// GRADUATED: they travel in the `ERRD` and `ABUF`/`TARR`/`DVIW`
+    /// atoms now.)
     pub fn stored_unpersistable_row(&self) -> Option<&'static str> {
         if self.proxies.keys().any(|o| !self.slots.is_free_index(*o)) {
             return Some("proxies");
@@ -8139,15 +8142,6 @@ impl Interp {
             .any(|(o, _)| !self.slots.is_free_index(*o))
         {
             return Some("accessors");
-        }
-        if self
-            .array_buffers
-            .keys()
-            .chain(self.typed_arrays.keys())
-            .chain(self.data_views.keys())
-            .any(|o| !self.slots.is_free_index(*o))
-        {
-            return Some("typed arrays");
         }
         None
     }
@@ -8183,6 +8177,142 @@ impl Interp {
             };
             self.error_data
                 .insert(crate::value::SlotIndex(owner), ErrorInfo { name, message });
+        }
+        true
+    }
+
+    /// Quiescent snapshot of the `array_buffers` side table (ledger
+    /// `ArrayBuffers` row, the `ABUF` atom), ascending by owning slot:
+    /// `(owner slot, backing chunk offset, byte length, flags)`. The
+    /// backing BYTES travel with the chunk arena (`BLOC`); this row is
+    /// the geometry that makes them readable. Flags fold the two
+    /// satellite brand sets in: bit 0 = detached
+    /// ([`Self::detached_buffers`]), bit 1 = shared
+    /// ([`Self::shared_buffers`]).
+    pub fn array_buffers_snapshot(&self) -> Vec<(u32, u32, u32, u8)> {
+        let mut out: Vec<(u32, u32, u32, u8)> = self
+            .array_buffers
+            .iter()
+            .map(|(owner, b)| {
+                let flags = u8::from(self.detached_buffers.contains(owner))
+                    | (u8::from(self.shared_buffers.contains(owner)) << 1);
+                (owner.0, b.data.0, b.length, flags)
+            })
+            .collect();
+        out.sort_unstable_by_key(|(owner, _, _, _)| *owner);
+        out
+    }
+
+    /// Quiescent snapshot of the `typed_arrays` side table (ledger
+    /// `TypedArrays` row, the `TARR` atom), ascending by owning slot:
+    /// `(owner slot, element kind, buffer slot, byte offset, element
+    /// length)`. `kind` indexes [`TYPED_ARRAY_TYPES`].
+    pub fn typed_arrays_snapshot(&self) -> Vec<(u32, u8, u32, u32, u32)> {
+        let mut out: Vec<(u32, u8, u32, u32, u32)> = self
+            .typed_arrays
+            .iter()
+            .map(|(owner, t)| (owner.0, t.kind, t.buffer.0, t.offset, t.length))
+            .collect();
+        out.sort_unstable_by_key(|(owner, _, _, _, _)| *owner);
+        out
+    }
+
+    /// Quiescent snapshot of the `data_views` side table (ledger
+    /// `DataViews` row, the `DVIW` atom), ascending by owning slot:
+    /// `(owner slot, buffer slot, byte offset, byte length)`.
+    pub fn data_views_snapshot(&self) -> Vec<(u32, u32, u32, u32)> {
+        let mut out: Vec<(u32, u32, u32, u32)> = self
+            .data_views
+            .iter()
+            .map(|(owner, d)| (owner.0, d.buffer.0, d.offset, d.size))
+            .collect();
+        out.sort_unstable_by_key(|(owner, _, _, _)| *owner);
+        out
+    }
+
+    /// Reinstate the typed-array family from a snapshot (the exact
+    /// inverse of the three `*_snapshot` views above). Runs on a
+    /// freshly restored machine whose tables are empty, AFTER the
+    /// arenas are in place (the buffer extents are validated against
+    /// the restored chunk arena). Validates every row — an unknown
+    /// element kind, a flags byte outside the two brand bits, a NULL
+    /// or out-of-arena backing extent, a view naming a buffer with no
+    /// row, or view geometry past its buffer's length — and returns
+    /// `false` without completing on a violation (the caller fails its
+    /// decode closed); a well-formed snapshot always restores fully.
+    pub fn restore_typed_array_family(
+        &mut self,
+        buffers: Vec<(u32, u32, u32, u8)>,
+        views: Vec<(u32, u8, u32, u32, u32)>,
+        data_views: Vec<(u32, u32, u32, u32)>,
+    ) -> bool {
+        let chunk_len = self.chunks.byte_size() as u64;
+        for (owner, data, length, flags) in &buffers {
+            let data = crate::value::ChunkOffset(*data);
+            // Every honest buffer owns a real chunk allocation (a
+            // zero-length buffer still allocates its header), whose
+            // payload begins past the 4-byte header and ends inside
+            // the arena.
+            if data.is_null()
+                || (data.0 as u64) < crate::value::CHUNK_HEADER as u64
+                || data.0 as u64 + *length as u64 > chunk_len
+                || *flags > 0b11
+            {
+                return false;
+            }
+            let owner = crate::value::SlotIndex(*owner);
+            self.array_buffers.insert(
+                owner,
+                ArrayBufferData {
+                    data,
+                    length: *length,
+                },
+            );
+            if flags & 1 != 0 {
+                self.detached_buffers.insert(owner);
+            }
+            if flags & 2 != 0 {
+                self.shared_buffers.insert(owner);
+            }
+        }
+        for (owner, kind, buffer, offset, length) in views {
+            let Some(ty) = TYPED_ARRAY_TYPES.get(kind as usize) else {
+                return false;
+            };
+            let buffer = crate::value::SlotIndex(buffer);
+            let Some(buf) = self.array_buffers.get(&buffer) else {
+                return false;
+            };
+            let end = offset as u64 + ((length as u64) << ty.shift);
+            if end > buf.length as u64 {
+                return false;
+            }
+            self.typed_arrays.insert(
+                crate::value::SlotIndex(owner),
+                TypedArrayData {
+                    kind,
+                    buffer,
+                    offset,
+                    length,
+                },
+            );
+        }
+        for (owner, buffer, offset, size) in data_views {
+            let buffer = crate::value::SlotIndex(buffer);
+            let Some(buf) = self.array_buffers.get(&buffer) else {
+                return false;
+            };
+            if offset as u64 + size as u64 > buf.length as u64 {
+                return false;
+            }
+            self.data_views.insert(
+                crate::value::SlotIndex(owner),
+                DataViewData {
+                    buffer,
+                    offset,
+                    size,
+                },
+            );
         }
         true
     }
