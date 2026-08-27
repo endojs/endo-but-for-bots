@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-27 |
+| **Updated** | 2026-08-27 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Not Started |
 | **Source** | Follow-up requested in review 5045929318 on PR #1064 (head `ec37f708d74c64714475c8452145623bf26b004c`) |
@@ -70,12 +71,46 @@ no dedicated branch to delete.
 | `test/harden/frozen.js` | `onlyStrict, onlyLockdown` | strict + module (module is strict) |
 | `test/harden/private-field.js` | `onlyStrict, onlyLockdown` | strict + module |
 | `test/harden/stamp.js` | `onlyStrict, onlyLockdown, noSesNode` | strict + module, never `sesNode` |
-| `test/Compartment/prototype/Symbol.toStringTag-lockdown.js` | `noSloppy, onlyLockdown, noXs, noSesNode, noSesXs` | **inert** — all three agents excluded → stays `zeroCoverage` |
+| `test/Compartment/prototype/Symbol.toStringTag-lockdown.js` | `noSloppy, onlyLockdown, noXs, noSesNode, noSesXs` | strict + module modes, once an agent exclusion is lifted |
 
-The Compartment case is a no-op for this change: every agent is already excluded
-by `noXs`/`noSesNode`/`noSesXs`, so `filterNoRules` drops all combinations and it
-remains a `zeroCoverage` skip whether or not `onlyLockdown` is present. It is
-listed for completeness and to keep the "retire globally" invariant honest.
+### Why the baseline records this case as skipped
+
+`baseline/zeroCoverage/skipped.txt` is not a list of tests that ran and elected
+to skip at runtime.
+It is the lossless inventory for source files whose front-matter filters leave
+no agent-scenario pair to execute.
+Such a file cannot honestly appear under `passed.txt` or `failed.txt`, because
+neither outcome was observed.
+The harness instead emits one synthetic `zeroCoverage` record so the excluded
+file remains visible.
+
+All ten files in that baseline group are `Compartment` or `ModuleSource` tests
+whose source front matter records known behavior gaps for the current agents.
+Every file carries the complete current-agent exclusion: `noXs` covers bare XS,
+and `noSesXs` plus `noSesNode` cover the two SES shim agents.
+Their individual source descriptions preserve the more specific disposition:
+
+| Case | Recorded reason it has no eligible current agent |
+|---|---|
+| `test/Compartment/ModuleSource/bindings/name.js` | The `ModuleSource.prototype.bindings` descriptor check is pending a SES fix. |
+| `test/Compartment/ModuleSource/needsImport/name.js` | The `needsImport` descriptor check is known to fail on XS and SES. |
+| `test/Compartment/ModuleSource/needsImportMeta/name.js` | The `needsImportMeta` descriptor check is known to fail on XS and SES. |
+| `test/Compartment/constructor/resolveHook.js` | The `Compartment` `resolveHook` behavior is pending a SES fix. |
+| `test/Compartment/prototype/Symbol.toStringTag-lockdown.js` | The locked-down `Compartment.prototype[Symbol.toStringTag]` descriptor is pending a SES fix. |
+| `test/Compartment/prototype/Symbol.toStringTag.js` | The non-lockdown `Compartment.prototype[Symbol.toStringTag]` descriptor is pending a SES fix. |
+| `test/Compartment/prototype/import/importHook-separate-errors.js` | Separate error results from concurrent `importHook` consumers are known to fail on XS and SES. |
+| `test/Compartment/prototype/importNow/importNowHook-separate-errors.js` | Separate synchronous error results are known to fail in SES and bare XS. |
+| `test/Compartment/prototype/importNow/importNowHook-source-parent.js` | Parent-source resolution through `importNowHook` is known to fail in XS and Node.js. |
+| `test/Compartment/prototype/importNow/loadNowHook-source-parent.js` | Parent-source resolution through `loadNowHook` is known to fail in XS and SES. |
+
+The `Symbol.toStringTag-lockdown.js` row is the only member of this group that
+also carries `onlyLockdown`.
+Removing that token broadens its mode eligibility, but deliberately does not
+override any environment exclusion: `filterNoRules` still removes all three
+agents, so the case remains visible in `zeroCoverage/skipped.txt`.
+When support for any excluded agent is implemented, removing that agent's
+`no*` flag will move the case into that agent's scenario baseline with an
+observed pass or failure.
 
 ### The matrix broadening reveals (measured, wired scenarios only)
 
