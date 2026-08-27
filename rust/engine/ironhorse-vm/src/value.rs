@@ -70,6 +70,12 @@ struct SlotBacking {
     /// against (a short row must die loudly, not install placeholder
     /// records beside real ones).
     snapshot_count: u32,
+    /// The attach-time chunk-arena byte length, so a fault can bound a
+    /// slot's String/BigInt chunk offset without seeing the chunk
+    /// arena itself (the wave-6 W6-14 lazy remainder, closed): a
+    /// consistently-resealed hostile row must die named AT THE FAULT,
+    /// not anonymously in a later chunk read or the compactor.
+    chunk_bound: u64,
     /// SPARSE record storage (store seam H1): a lazily attached
     /// arena's records live here, page-by-page, materialized on
     /// first write — attaching a wide heap allocates a pages-table
@@ -536,6 +542,7 @@ impl SlotArena {
         free: Vec<u32>,
         live: u32,
         source: Rc<dyn PageSource>,
+        chunk_bound: u64,
     ) -> SlotArena {
         let pages = slot_count.div_ceil(SLOTS_PER_PAGE) as usize;
         let mut free_marks = vec![false; slot_count as usize];
@@ -556,6 +563,7 @@ impl SlotArena {
                 source,
                 resident: (0..pages).map(|_| Cell::new(false)).collect(),
                 snapshot_count: slot_count,
+                chunk_bound,
                 pages: RefCell::new((0..pages).map(|_| None).collect()),
                 count: Cell::new(slot_count),
             }),
@@ -603,9 +611,10 @@ impl SlotArena {
         // a consistently-resealed hostile store faulted rows whose
         // references sent the collector out of range (an anonymous
         // release panic). Refuse AT THE FAULT, named, like the leaf
-        // check above. (The chunk-offset bound needs the chunk arena's
-        // length, which this installer cannot see — the eager path's
-        // full-image gate covers it; recorded remainder.)
+        // check above. The chunk-offset bound rides the backing
+        // (`chunk_bound`, the attach-time chunk length), mirroring the
+        // eager gate's rule: a payload offset sits above its 4-byte
+        // header and inside the arena.
         let capacity = self.capacity() as u32;
         for s in &records {
             s.each_ref_slot(|r| {
@@ -620,6 +629,16 @@ impl SlotArena {
                 "lazy heap fault: slot page {page} holds an out-of-arena                  next link ({} past {capacity}) — corrupt store",
                 s.next.0,
             );
+            if let Some(off) = s.chunk_ref() {
+                let o = off.0 as u64;
+                assert!(
+                    off.is_null()
+                        || (o >= CHUNK_HEADER as u64 && o <= backing.chunk_bound),
+                    "lazy heap fault: slot page {page} holds an out-of-arena chunk offset ({o} outside {}..={}) — corrupt store",
+                    CHUNK_HEADER,
+                    backing.chunk_bound,
+                );
+            }
         }
         for (k, s) in records.into_iter().enumerate() {
             backing.set(start + k, s);

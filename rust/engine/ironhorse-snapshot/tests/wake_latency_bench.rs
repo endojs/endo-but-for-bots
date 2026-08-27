@@ -112,7 +112,7 @@ fn placeholder_alloc_cost_across_slot_counts() {
         for _ in 0..5 {
             let source: Rc<dyn PageSource> = Rc::new(NoFaults);
             let t0 = Instant::now();
-            let arena = SlotArena::lazy_from_parts(slots, Vec::new(), slots, source);
+            let arena = SlotArena::lazy_from_parts(slots, Vec::new(), slots, source, u64::MAX);
             ms.push(t0.elapsed().as_secs_f64() * 1e3);
             drop(arena);
         }
