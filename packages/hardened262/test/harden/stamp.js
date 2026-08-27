@@ -1,7 +1,7 @@
 /*---
 description:
 features: [harden]
-flags: [onlyStrict,onlyLockdown,noSesNode]
+flags: [onlyStrict,noSesNode]
 ---*/
 
 // noSesNode: PrivateFieldAdd (ECMA-262 §7.3.27; §7.3.28 is
@@ -10,6 +10,9 @@ flags: [onlyStrict,onlyLockdown,noSesNode]
 // intercept the stamp — only a native control (bare XS / SES-on-XS) can enforce
 // that a hardened object rejects it. The Node shim is excluded because it would
 // spuriously fail this native-only guarantee, not because the case is unfinished.
+// The `noSesNode` exclusion leaves only the native agents, where `harden` is
+// ambient before lockdown, so this case runs in both the module and
+// lockdownModule columns without needing an availability guard.
 
 const object = {};
 const frozenObject = Object.freeze({});
