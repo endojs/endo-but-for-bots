@@ -3072,6 +3072,26 @@ struct ErrorInfo {
     frames: Vec<String>,
 }
 
+/// Resolve a decoded error-constructor name to the engine's static
+/// name, or `None` for anything the engine never records — the closed
+/// name set `ErrorInfo.name` draws from ([`Interp::restore_error_data`]
+/// and the `ERRD` decoder both refuse an unknown name as corrupt: no
+/// honest snapshot can carry one).
+pub fn error_name_static(name: &str) -> Option<&'static str> {
+    const ERROR_NAMES: [&str; 9] = [
+        "Error",
+        "EvalError",
+        "RangeError",
+        "ReferenceError",
+        "SyntaxError",
+        "TypeError",
+        "URIError",
+        "AggregateError",
+        "SuppressedError",
+    ];
+    ERROR_NAMES.iter().find(|&&n| n == name).copied()
+}
+
 /// Exact, immutable Temporal records.  Keeping these independent from the
 /// ordinary-property store gives Temporal its required internal-slot branding
 /// and gives the later Plain*/ZonedDateTime implementation one shared record
@@ -8098,16 +8118,17 @@ impl Interp {
     }
 
     /// The first SILENT-WRONG Pending-row class this heap HOLDS, or
-    /// `None` (wave-6 W6-9). These four side tables do not travel, and
+    /// `None` (wave-6 W6-9). These three side tables do not travel, and
     /// a resumed slot that loses its row degrades to a PLAIN OBJECT
     /// whose reads answer wrong values (a Proxy's gets answer
     /// `undefined`, accessor properties read as absent, TypedArray
-    /// elements and length read `undefined`, an Error renders
-    /// `[object Object]`) — unlike the rows whose consuming natives
-    /// happen to guard `this` and fail visibly. Until their atoms land
-    /// (the recorded G3 lift), the persist verbs refuse a heap holding
-    /// one, by name — the `Segments` precedent. Free-listed owners are
-    /// skipped: a swept instance's stale row names nothing.
+    /// elements and length read `undefined`) — unlike the rows whose
+    /// consuming natives happen to guard `this` and fail visibly. Until
+    /// their atoms land (the recorded G3 lift), the persist verbs
+    /// refuse a heap holding one, by name — the `Segments` precedent.
+    /// Free-listed owners are skipped: a swept instance's stale row
+    /// names nothing. (`error_data` started here and GRADUATED: it
+    /// travels in the `ERRD` atom / small-state errors section now.)
     pub fn stored_unpersistable_row(&self) -> Option<&'static str> {
         if self.proxies.keys().any(|o| !self.slots.is_free_index(*o)) {
             return Some("proxies");
@@ -8128,10 +8149,42 @@ impl Interp {
         {
             return Some("typed arrays");
         }
-        if self.error_data.keys().any(|o| !self.slots.is_free_index(*o)) {
-            return Some("error data");
-        }
         None
+    }
+
+    /// Quiescent snapshot of the `error_data` side table (ledger
+    /// `ErrorData` row, the `ERRD` atom), ascending by owning slot:
+    /// `(owner slot, error name, optional message)`. The name is the
+    /// construction-time constructor name and the message half is
+    /// `None` (bare-name render) or the recorded text — exactly what
+    /// the abort-value render consults, so a resumed `throw e`
+    /// stringifies as the uninterrupted machine's would.
+    pub fn errors_snapshot(&self) -> Vec<(u32, &'static str, Option<String>)> {
+        let mut out: Vec<(u32, &'static str, Option<String>)> = self
+            .error_data
+            .iter()
+            .map(|(owner, info)| (owner.0, info.name, info.message.clone()))
+            .collect();
+        out.sort_unstable_by_key(|(owner, _, _)| *owner);
+        out
+    }
+
+    /// Reinstate the `error_data` side table from a snapshot (the exact
+    /// inverse of [`Self::errors_snapshot`]). Runs on a freshly
+    /// restored machine whose table is empty. Each decoded name must be
+    /// one of the engine's error constructor names
+    /// ([`error_name_static`]) — the decoder already refused anything
+    /// else, so the `false` return is a belt-and-braces corrupt signal
+    /// (the caller fails its decode closed).
+    pub fn restore_error_data(&mut self, rows: Vec<(u32, String, Option<String>)>) -> bool {
+        for (owner, name, message) in rows {
+            let Some(name) = error_name_static(&name) else {
+                return false;
+            };
+            self.error_data
+                .insert(crate::value::SlotIndex(owner), ErrorInfo { name, message });
+        }
+        true
     }
 
     /// The symbol-key property-id table (ledger `SYMB` row): the

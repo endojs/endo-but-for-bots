@@ -169,6 +169,21 @@ pub struct RegistryImage {
     pub descriptor: u32,
 }
 
+/// One Error instance's serialized side-table row (the `ERRD` atom /
+/// small-state errors section): the owning slot, the construction-time
+/// constructor name, and the optional recorded message — exactly what
+/// the abort-value render consults, so a resumed `throw e` stringifies
+/// as `name` / `name: message` like the uninterrupted machine's.
+/// Ascending by owner in serialized form; the name is drawn from the
+/// engine's closed error-constructor set
+/// ([`ironhorse_vm::error_name_static`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ErrorImage {
+    pub owner: u32,
+    pub name: String,
+    pub message: Option<String>,
+}
+
 /// The symbol-key property-id table (the `SYMB` atom / small-state
 /// symbols section): the machine's top-down mint counter and every
 /// `(id, descriptor slot)` pair, ascending by id. Symbol keys mint
@@ -237,6 +252,8 @@ pub struct MachineImage {
     pub collections: Vec<CollectionImage>,
     /// `REGY`: the `Symbol.for` registry (ledger), key-ascending.
     pub registry: Vec<RegistryImage>,
+    /// `ERRD`: the error-data side table (ledger), owner-ascending.
+    pub errors: Vec<ErrorImage>,
 }
 
 impl MachineImage {
@@ -271,6 +288,7 @@ impl MachineImage {
             arrays: Vec::new(),
             collections: Vec::new(),
             registry: Vec::new(),
+            errors: Vec::new(),
         }
     }
 
@@ -326,18 +344,20 @@ impl MachineImage {
         self
     }
 
-    /// Attach the bulk side tables and symbol registry (side-table
-    /// ledger). The snapshot surface calls this with the live
-    /// machine's `*_snapshot()` views, already in canonical order.
+    /// Attach the bulk side tables, symbol registry, and error data
+    /// (side-table ledger). The snapshot surface calls this with the
+    /// live machine's `*_snapshot()` views, already in canonical order.
     pub fn with_side_tables(
         mut self,
         arrays: Vec<ArrayImage>,
         collections: Vec<CollectionImage>,
         registry: Vec<RegistryImage>,
+        errors: Vec<ErrorImage>,
     ) -> MachineImage {
         self.arrays = arrays;
         self.collections = collections;
         self.registry = registry;
+        self.errors = errors;
         self
     }
 
@@ -843,6 +863,86 @@ pub(crate) fn decode_registry(p: &[u8]) -> Result<Vec<RegistryImage>, SnapshotEr
     Ok(out)
 }
 
+/// Encode the error-data side table (the `ERRD` payload / small-state
+/// errors section). Input is owner-ascending (the vm snapshot's
+/// canonical order). Wire form per row: `u32 owner`, `u32 name_len` +
+/// name bytes, `u8 has_message` (0/1), then `u32 msg_len` + message
+/// bytes when present.
+pub(crate) fn encode_errors(errors: &[ErrorImage]) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(errors.len() as u32).to_be_bytes());
+    for e in errors {
+        v.extend_from_slice(&e.owner.to_be_bytes());
+        let name = e.name.as_bytes();
+        v.extend_from_slice(&(name.len() as u32).to_be_bytes());
+        v.extend_from_slice(name);
+        match &e.message {
+            Some(m) => {
+                v.push(1);
+                let m = m.as_bytes();
+                v.extend_from_slice(&(m.len() as u32).to_be_bytes());
+                v.extend_from_slice(m);
+            }
+            None => v.push(0),
+        }
+    }
+    v
+}
+
+pub(crate) fn decode_errors(p: &[u8]) -> Result<Vec<ErrorImage>, SnapshotError> {
+    let mut c = Cursor::new(p, "error-data side table");
+    let count = c.u32()? as usize;
+    let mut out = Vec::with_capacity(count.min(p.len() / 9));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        let name_len = c.u32()? as usize;
+        let name = String::from_utf8(c.bytes(name_len)?.to_vec())
+            .map_err(|_| SnapshotError::Corrupt("error-data side table: name not UTF-8"))?;
+        // The engine only ever RECORDS its closed error-constructor
+        // name set, so anything else is crafted or torn bytes; refusing
+        // here keeps the vm restore's own check a belt-and-braces
+        // debug assert, like the collection kind codes.
+        if ironhorse_vm::error_name_static(&name).is_none() {
+            return Err(SnapshotError::Corrupt(
+                "error-data side table: not an engine error name",
+            ));
+        }
+        // The message flag is exactly 0 or 1 — any other byte is a
+        // non-canonical encoding a round trip could not reproduce.
+        let message = match c.u8()? {
+            0 => None,
+            1 => {
+                let msg_len = c.u32()? as usize;
+                Some(String::from_utf8(c.bytes(msg_len)?.to_vec()).map_err(|_| {
+                    SnapshotError::Corrupt("error-data side table: message not UTF-8")
+                })?)
+            }
+            _ => {
+                return Err(SnapshotError::Corrupt(
+                    "error-data side table: message flag not 0/1",
+                ))
+            }
+        };
+        // Strictly-ascending owners, for the sibling decoders' reason:
+        // the writer emits one owner-sorted row per instance, and a
+        // crafted duplicate would displace a row at restore while an
+        // unordered image would re-sort — either breaks the
+        // import∘export identity the CAS key rests on.
+        if out.last().is_some_and(|prev: &ErrorImage| owner <= prev.owner) {
+            return Err(SnapshotError::Corrupt(
+                "error-data side table: owners not strictly ascending",
+            ));
+        }
+        out.push(ErrorImage {
+            owner,
+            name,
+            message,
+        });
+    }
+    c.done()?;
+    Ok(out)
+}
+
 /// Every slot index and chunk offset a decoded image can carry, checked
 /// against the geometry the image itself declares.
 ///
@@ -928,6 +1028,7 @@ pub(crate) fn check_image_slot_bounds(
     arrays: &[ArrayImage],
     collections: &[CollectionImage],
     registry: &[RegistryImage],
+    errors: &[ErrorImage],
     symbols: &SymbolKeyImage,
     slot_count: u32,
     chunk_len: usize,
@@ -975,6 +1076,11 @@ pub(crate) fn check_image_slot_bounds(
     }
     for e in registry {
         if e.descriptor >= slot_count {
+            return Err(OOB);
+        }
+    }
+    for e in errors {
+        if e.owner >= slot_count {
             return Err(OOB);
         }
     }
@@ -1043,6 +1149,9 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
     }
     if !image.registry.is_empty() {
         w.atom(crate::format::REGY, &encode_registry(&image.registry));
+    }
+    if !image.errors.is_empty() {
+        w.atom(crate::format::ERRD, &encode_errors(&image.errors));
     }
     w.finish()
 }
@@ -1134,6 +1243,10 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => decode_registry(a.payload)?,
         None => Vec::new(),
     };
+    let errors = match r.find(crate::format::ERRD) {
+        Some(a) => decode_errors(a.payload)?,
+        None => Vec::new(),
+    };
     // Semantic bounds gate (wave-4 P1, widened in wave 5): every slot
     // index and chunk offset the container carries — heap, stack,
     // symbols and side tables alike — must fall inside the decoded
@@ -1145,6 +1258,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         &arrays,
         &collections,
         &registry,
+        &errors,
         &symbols,
         slots.len() as u32,
         chunks.len(),
@@ -1166,6 +1280,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         arrays,
         collections,
         registry,
+        errors,
     })
 }
 
@@ -1217,6 +1332,61 @@ mod tests {
     }
 
     #[test]
+    fn error_data_decode_refuses_crafted_rows() {
+        // Duplicate owner: restore would displace the first row.
+        let dup = vec![
+            ErrorImage { owner: 3, name: "Error".to_string(), message: None },
+            ErrorImage { owner: 3, name: "TypeError".to_string(), message: None },
+        ];
+        assert!(matches!(
+            decode_errors(&encode_errors(&dup)),
+            Err(SnapshotError::Corrupt(_))
+        ));
+        // A name outside the engine's closed error-name set can only be
+        // crafted or torn bytes — the vm has no `&'static str` for it.
+        let unknown = vec![ErrorImage {
+            owner: 1,
+            name: "NotAnError".to_string(),
+            message: None,
+        }];
+        assert!(matches!(
+            decode_errors(&encode_errors(&unknown)),
+            Err(SnapshotError::Corrupt(_))
+        ));
+        // A message flag byte outside 0/1 is a non-canonical encoding.
+        let mut bytes = encode_errors(&[ErrorImage {
+            owner: 1,
+            name: "Error".to_string(),
+            message: None,
+        }]);
+        *bytes.last_mut().unwrap() = 2;
+        assert!(matches!(
+            decode_errors(&bytes),
+            Err(SnapshotError::Corrupt(_))
+        ));
+        // The well-formed rows round-trip, message halves preserved.
+        let ok = vec![
+            ErrorImage { owner: 2, name: "RangeError".to_string(), message: Some("r".to_string()) },
+            ErrorImage { owner: 7, name: "SuppressedError".to_string(), message: None },
+        ];
+        assert_eq!(decode_errors(&encode_errors(&ok)).unwrap(), ok);
+        // And an out-of-arena owner is refused by the bounds gate.
+        let oob = vec![ErrorImage { owner: 9, name: "Error".to_string(), message: None }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &oob,
+            &SymbolKeyImage::default(),
+            4,
+            64
+        )
+        .is_err());
+    }
+
+    #[test]
     fn image_bounds_reject_out_of_arena_indices() {
         // Wave 4 closed the three side tables; wave 5 showed the class is
         // wider — a container with NO side table at all panicked the
@@ -1224,7 +1394,7 @@ mod tests {
         // shape a reviewer actually crafted and reached a release panic
         // (or an abort) with. slot_count = 4, chunk_len = 64 throughout.
         let ok = |heap: &[Slot], stack: &[Slot]| {
-            check_image_slot_bounds(heap, stack, &[], &[], &[], &SymbolKeyImage::default(), 4, 64)
+            check_image_slot_bounds(heap, stack, &[], &[], &[], &[], &SymbolKeyImage::default(), 4, 64)
         };
         let refd = |i: u32| Slot::of(Kind::Reference, Payload::Reference(SlotIndex(i)));
 
@@ -1241,17 +1411,17 @@ mod tests {
 
         // --- the wave-4 arms, still enforced ---
         let bad_desc = [RegistryImage { key: b"k".to_vec(), descriptor: 9 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &bad_desc, &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &bad_desc, &[], &SymbolKeyImage::default(), 4, 64).is_err());
         // A symbol-key descriptor beyond the arena is refused the same way.
         let bad_sym = SymbolKeyImage {
             next_id: u16::MAX - 1,
             pairs: vec![(u16::MAX, 4)],
         };
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &bad_sym, 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &bad_sym, 4, 64).is_err());
         let bad_owner = [ArrayImage { owner: 9, length: 0, items: vec![] }];
-        assert!(check_image_slot_bounds(&[], &[], &bad_owner, &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &bad_owner, &[], &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
         let bad_ref = [ArrayImage { owner: 1, length: 1, items: vec![(0, refd(9))] }];
-        assert!(check_image_slot_bounds(&[], &[], &bad_ref, &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &bad_ref, &[], &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
         // Collections were passed `&[]` in every wave-4 case, so that
         // whole branch never executed (wave 5, llvm-cov). Exercise both
         // the key and the value side.
@@ -1261,14 +1431,14 @@ mod tests {
             table_length: 0,
             entries: vec![(refd(9), Slot::undefined())],
         }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &bad_key, &[], &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &bad_key, &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
         let bad_val = [CollectionImage {
             owner: 1,
             kind: 0,
             table_length: 0,
             entries: vec![(Slot::undefined(), refd(9))],
         }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &bad_val, &[], &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &bad_val, &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
 
         // --- in-bounds and NULL pass ---
         assert!(ok(&[refd(3)], &[refd(0)]).is_ok(), "in-bounds indices pass");
@@ -1381,6 +1551,7 @@ mod tests {
             arrays: Vec::new(),
             collections: Vec::new(),
             registry: Vec::new(),
+            errors: Vec::new(),
         };
         let bytes = write_machine(&img);
         let back = read_machine(&bytes, &sig()).unwrap();
@@ -1407,6 +1578,7 @@ mod tests {
             arrays: Vec::new(),
             collections: Vec::new(),
             registry: Vec::new(),
+            errors: Vec::new(),
         };
         let bytes = write_machine(&img);
         match read_machine(&bytes, &Signature::new("host-is-now-v2")) {
@@ -1512,6 +1684,7 @@ mod tests {
             arrays: Vec::new(),
             collections: Vec::new(),
             registry: Vec::new(),
+            errors: Vec::new(),
         };
         let bytes = write_machine(&img);
         let back = read_machine(&bytes, &sig()).unwrap();

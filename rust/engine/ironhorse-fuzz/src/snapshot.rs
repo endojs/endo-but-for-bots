@@ -323,9 +323,31 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         next_desc += 1 + (c.byte() % 3) as u32;
     }
 
+    // Error-data rows (the ERRD atom): ascending in-bounds owners, names
+    // drawn from the engine's closed error-name set (the decoder refuses
+    // anything else), and an optional message from the input bytes.
+    let n_err = (c.byte() % 4) as usize;
+    let mut errors: Vec<ironhorse_snapshot::image::ErrorImage> = Vec::new();
+    let mut next_owner = 0u32;
+    const ERROR_NAMES: [&str; 4] = ["Error", "TypeError", "RangeError", "AggregateError"];
+    for _ in 0..n_err {
+        next_owner += (c.byte() % 3) as u32;
+        if next_owner >= cap {
+            break;
+        }
+        let name = ERROR_NAMES[(c.byte() % 4) as usize].to_string();
+        let message = (c.byte() % 2 == 1).then(|| format!("m{}", c.u32() % 1000));
+        errors.push(ironhorse_snapshot::image::ErrorImage {
+            owner: next_owner,
+            name,
+            message,
+        });
+        next_owner += 1;
+    }
+
     MachineImage::from_arenas(fuzz_snapshot_sig(), &slots, &chunks, &stack, names, keys, symbols)
         .with_meter(meter)
-        .with_side_tables(arrays, collections, registry)
+        .with_side_tables(arrays, collections, registry, errors)
 }
 
 /// The core round-trip invariant over a built image: a freshly written

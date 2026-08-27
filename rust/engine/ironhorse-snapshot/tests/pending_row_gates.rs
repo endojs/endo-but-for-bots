@@ -1,12 +1,14 @@
-//! Wave-6 W6-9: the four SILENT-WRONG Pending rows refuse to persist.
+//! Wave-6 W6-9: the SILENT-WRONG Pending rows refuse to persist.
 //!
 //! The blast-radius probe showed a resumed heap holding a Proxy,
-//! an accessor property, a TypedArray, or Error data answers WRONG
-//! VALUES (a plain-object degradation the consuming natives never
-//! notice), where the other Pending rows fail visibly via per-native
-//! `this` guards. Until their atoms land (the recorded G3 lift), the
-//! persist verbs refuse such heaps by name — the `Segments` precedent:
-//! honest refusal over silent corruption.
+//! an accessor property, or a TypedArray answers WRONG VALUES (a
+//! plain-object degradation the consuming natives never notice),
+//! where the other Pending rows fail visibly via per-native `this`
+//! guards. Until their atoms land (the recorded G3 lift), the persist
+//! verbs refuse such heaps by name — the `Segments` precedent: honest
+//! refusal over silent corruption. Error data started as the fourth
+//! row here and GRADUATED: it travels in the `ERRD` atom since store
+//! schema 9 (`error_data_carry.rs` holds its twins).
 
 use ironhorse_snapshot::machine::begin_store_session;
 use ironhorse_snapshot::store::{MemoryStore, StoreError};
@@ -55,11 +57,6 @@ fn a_heap_holding_a_guest_accessor_refuses_to_persist() {
 #[test]
 fn a_heap_holding_a_typed_array_refuses_to_persist() {
     refuses("var t = 0; t = new Uint8Array(8); 0;", "typed arrays");
-}
-
-#[test]
-fn a_heap_holding_a_live_error_refuses_to_persist() {
-    refuses("var e = 0; e = new Error('kept'); 0;", "error data");
 }
 
 /// A COLLECTED instance is no longer a hazard — the witness asks what

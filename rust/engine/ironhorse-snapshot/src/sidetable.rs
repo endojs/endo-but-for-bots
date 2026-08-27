@@ -175,7 +175,10 @@ pub enum SideTable {
     /// `global_props` — the global object's materialized own-property
     /// slot index by id.
     GlobalProps,
-    /// `error_data` — per-instance Error name/message.
+    /// `error_data` — per-instance Error name/message, the metadata the
+    /// abort-value render consults. Serialized in the `ERRD` atom /
+    /// small-state errors section (store schema 9), owner-ascending,
+    /// name drawn from the engine's closed error-constructor set.
     ErrorData,
     /// `accessors` — per-instance getter/setter function slots.
     Accessors,
@@ -418,7 +421,7 @@ impl SideTable {
             SideTable::Proxies => ("proxies/proxy_revokers", Pending),
             SideTable::CallStack => ("call_stack", Pending),
             SideTable::Jumps => ("jumps", Pending),
-            SideTable::ErrorData => ("error_data", Pending),
+            SideTable::ErrorData => ("error_data", Serialized),
             SideTable::Accessors => ("accessors", Pending),
             SideTable::WrapperData => ("wrapper_data", Pending),
             // Ledger G1 (2026-08-24): the two BULK tables travel in the
@@ -663,6 +666,9 @@ mod tests {
         // The 2026-08-26 id-space unification landed the symbol-key table
         // in the SYMB atom; the old intern gap is closed, not pending.
         assert!(!pending.contains(&SideTable::SymbolKeyIds));
+        // The G3 error-data carry (`ERRD`, store schema 9) graduated the
+        // first of the four silent-wrong refuse-on-hold rows.
+        assert!(!pending.contains(&SideTable::ErrorData));
     }
 
     /// The restore-time rebuild rows are classified [`Coverage::RebuiltAtRestore`],
