@@ -74,3 +74,65 @@ fn a_growing_relink_preserves_a_symbol_keyed_deletion() {
         "the relink resurrected a property the guest deleted"
     );
 }
+
+// ---- Wave-6 W6-7: the keep-gate's runtime-intern false negative ------
+//
+// The append-only filter (`id > old_len`) conflates "this id existed
+// before the unit" with "this binding was installed by an earlier
+// link". A computed string key (`o['Math']`) interns the NAME without
+// any install having seen it; the next unit to reference `Math`
+// textually mapped onto the pre-existing id, the filter refused it,
+// and the global was never bound.
+
+#[test]
+fn a_runtime_interned_name_does_not_block_a_later_textual_install() {
+    // JSON.parse is the reachable intern-without-install path: it
+    // interns every object key straight through `intern_key` (the
+    // computed-access path refuses boot-default names by design).
+    let crank1 = "var j = 0; j = JSON.parse('{\"Math\":1}'); 0;";
+    let (b1, n1) = compile(crank1);
+    let mut m = Interp::new();
+    m.link_intrinsics(&n1);
+    let o = m.run(&b1);
+    assert!(o.completed, "intern crank: {:?}", o.halt);
+
+    let crank2 = "var j; var t = 0; t = Math.floor(1.5); t";
+    let (b2, n2) = compile(crank2);
+    let relinked = m.relink_crank(&b2, &n2).expect("relink");
+    let o2 = m.run(&relinked);
+    assert!(
+        o2.completed,
+        "the runtime-interned name blocked the textual install: {:?}",
+        o2.halt
+    );
+    assert_eq!(o2.result, "1");
+}
+
+/// The same gap through the eval bridge, on a live machine with no
+/// store involved: the unit's keep filter refused the pre-interned id.
+#[test]
+fn a_runtime_interned_name_does_not_block_a_later_eval_install() {
+    struct TestCompiler;
+    impl ironhorse_vm::SourceCompiler for TestCompiler {
+        fn compile_source(
+            &self,
+            source: &str,
+            strict: bool,
+        ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+            match ironhorse_compile::compile_atoms_with(source, strict) {
+                Ok((bytecode, symbols)) => Ok(ironhorse_vm::CompiledSource { bytecode, symbols }),
+                Err(_) => Err(ironhorse_vm::SourceCompileError::Syntax(String::new())),
+            }
+        }
+    }
+    let src = "var j = 0; var t = 0; \
+               j = JSON.parse('{\"Math\":1}'); \
+               t = eval('Math.floor(1.5)'); t";
+    let (b, n) = compile(src);
+    let mut m = Interp::new();
+    m.link_intrinsics(&n);
+    m.set_source_compiler(std::rc::Rc::new(TestCompiler));
+    let o = m.run(&b);
+    assert!(o.completed, "eval crank: {:?}", o.halt);
+    assert_eq!(o.result, "1");
+}
