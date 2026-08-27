@@ -2476,15 +2476,32 @@ bite-checked by reverting the fix under the lock). Statuses:
   (`ledger_classification_reconciles_with_the_interp_struct`, which
   parses `Interp`'s fields from source and reconciles them two-way
   against the classified groups), adversarial-retention and
-  same-buffer-crank fixtures (`gc_frame_state.rs`), and the first
-  forged-store harness (W6-14's lock).
+  same-buffer-crank fixtures (`gc_frame_state.rs`), the first
+  forged-store harness (W6-14's lock), and — landed 2026-08-27 —
+  the INDEPENDENT GC GROUND-TRUTH NET (`gc_visitation_registry.rs`):
+  ground truth derived from the STRUCT, not either collector's
+  visitor — it parses `Interp`'s fields and the type graph from
+  source, computes which fields are transitively slot-bearing, and
+  requires every one to carry an explicit, CHECKED classification
+  (rooted in `gc_roots` / edged in `extra_edges` AND the partial
+  enumeration / ephemeron / chunk-remap / weak-keyed with a
+  mechanically slot-free value type AND pruning in BOTH sweep
+  paths / documented-transitively-rooted), so a shared omission —
+  the class the runtime parity net structurally cannot see, and
+  exactly how W6-1..4 escaped — fails the moment the field lands;
+  `gc_anchor_truth.rs` holds the behavioral GC-vs-plain twins
+  (results AND computrons) that back the documented-only anchors,
+  including the guest-delete direction. Bite-checked both ways
+  (a deregistered field fails the completeness pass; a
+  misclassified requirement fails against the visitor bodies —
+  `symbol_key_ids`' ephemeron-not-edges classification was caught
+  live by the net while writing it).
 - **RECORDED, not fixed** — W6-19 (`combinators`/`from_async`/
   `promise_guards` append-only growth), W6-22 (truncated trailing
   payload relinks; dispatch fails closed), W6-23 (libm
   decision-of-record), the lazy path's chunk-offset bound (the
   eager gate covers it), the resource-management metering gap, and
-  the multi-crank oracle mode / independent GC ground-truth net
-  (the two test classes still open).
+  the multi-crank oracle mode (the one test class still open).
 
 ## What Is the Problem Being Solved?
 
