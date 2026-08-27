@@ -1839,14 +1839,24 @@ rather than work items.
 - The async-generator START-REJECT boundary is not yet
   oracle-exact in COMPUTRONS (results agree): −20 versus XS when
   the rejecting generator's `next()` is observed directly, −26 on
-  the drain-side twin — constants per shape, a pre-existing
-  mainline gap (fxAsyncGeneratorReject's request processing is
-  uncalibrated), where the plain async function's start-reject −1
-  IS calibrated away (`ASYNC_START_REJECT_BOUNDARY_METERING`). The
-  −20 is PINNED in `await_in_try.rs` so drift is a visible flip;
-  calibrating it properly means tracing XS's reject-request
-  dispatch chain, deferred until async-generator metering identity
-  is a bar someone holds.
+  the drain-side twin — a pre-existing mainline gap
+  (fxAsyncGeneratorReject's request processing is uncalibrated),
+  where the plain async function's start-reject −1 IS calibrated
+  away (`ASYNC_START_REJECT_BOUNDARY_METERING`). A calibration
+  ATTEMPT (2026-08-27, the resource-management ten-shape method)
+  measured the full matrix and CONFIRMED the deferral: the residue
+  is not a clean per-operation decomposition — throw+1×`next` −20,
+  +2 −38, +3 −55 (per-extra-request increments −18 then −17, so
+  not a whole-unit constant), the observed-rejection twin −21, the
+  yield-then-throw drain twin −26, while the NORMAL completion
+  path measures −1 and the return-only path +3 (an OVERcharge in
+  the opposite direction) — compensating constants would overfit
+  these shapes and miswire others. The matrix is PINNED
+  (`async_generator_reject_residue_shape_is_pinned` beside the −20
+  pin in `await_in_try.rs`) so drift in ANY direction is a visible
+  flip; calibrating it properly still means tracing XS's
+  fxAsyncGeneratorReject/Resolve request dispatch, deferred until
+  async-generator metering identity is a bar someone holds.
 
 *Tooling and coverage:*
 

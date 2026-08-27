@@ -111,6 +111,49 @@ fn async_generator_body_throw_before_first_yield_rejects_not_catches() {
     );
 }
 
+/// The residue's SHAPE, pinned so drift in any direction is a visible
+/// flip. A 2026-08-27 calibration attempt measured the matrix and
+/// found it is NOT a clean per-operation decomposition (unlike the
+/// resource-management gap, which fell to five whole-unit constants):
+/// each further `next()` on the rejected generator adds -18 then -17,
+/// the NORMAL completion path measures -1, and the return-only path
+/// measures +3 — an OVERcharge — so compensating constants would
+/// overfit these shapes and miswire others. Calibrating it properly
+/// still means tracing XS's fxAsyncGeneratorReject/Resolve request
+/// processing; the matrix is recorded in the design's Remaining
+/// ledger.
+#[test]
+fn async_generator_reject_residue_shape_is_pinned() {
+    let cases: [(&str, i64); 4] = [
+        (
+            "var g = 0; var it = 0;              async function* ag() { throw 1; }              it = ag(); it.next(); it.next(); g = 'after';",
+            -38,
+        ),
+        (
+            "var g = 0; var it = 0;              async function* ag() { yield 1; throw 2; }              it = ag(); it.next(); it.next(); g = 'after';",
+            -26,
+        ),
+        (
+            "var g = 0; var it = 0;              async function* ag() { yield 1; }              it = ag(); it.next(); it.next(); g = 'after';",
+            -1,
+        ),
+        (
+            "var g = 0; var it = 0;              async function* ag() { return 5; }              it = ag(); it.next(); g = 'after';",
+            3,
+        ),
+    ];
+    for (source, pinned) in cases {
+        let a = dual_run_async(source, "g").expect("the XS oracle machine must start");
+        assert_eq!(a.run.agreement, Agreement::BothComplete, "{source}");
+        assert_eq!(a.ironhorse_signal.as_deref(), Some("after"), "{source}");
+        assert_eq!(
+            a.run.ironhorse_computrons as i64 - a.run.oracle_computrons as i64,
+            pinned,
+            "the async-generator metering residue moved for {source}:              re-measure the matrix and update the pins (or celebrate)"
+        );
+    }
+}
+
 // ---- The AWAAIT-owner selection (llm-rebase review) ----------------
 //
 // A plain async function called synchronously from an async generator
