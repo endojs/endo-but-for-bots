@@ -40,7 +40,7 @@ pub use gc::{GcStats, Heap};
 pub use interp::{
     error_name_static, ArraySnapshot, CollectionSnapshot, CompiledSource, Halt, Interp, Native,
     RelinkError, RunOutcome, SourceCompileError, SourceCompiler,
-    PROGRAM_INVOCATION_COMPUTRONS,
+    PROGRAM_INVOCATION_COMPUTRONS, TYPED_ARRAY_TYPES,
 };
 pub use meter::{Meter, MeterCheck, MeterState, COST_TABLE_VERSION};
 pub use module::{

@@ -347,7 +347,11 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
 
     MachineImage::from_arenas(fuzz_snapshot_sig(), &slots, &chunks, &stack, names, keys, symbols)
         .with_meter(meter)
-        .with_side_tables(arrays, collections, registry, errors)
+        // The typed-array family is left empty here: honest ABUF rows
+        // need REAL chunk-arena extents, which this builder does not
+        // model. Crafted family bytes are exercised by the byte-level
+        // container decoder target instead.
+        .with_side_tables(arrays, collections, registry, errors, Vec::new(), Vec::new(), Vec::new())
 }
 
 /// The core round-trip invariant over a built image: a freshly written

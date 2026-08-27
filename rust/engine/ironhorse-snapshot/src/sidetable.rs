@@ -96,7 +96,8 @@
 //! earning a variant, and this list is the audit trail (a set that stops
 //! riding must graduate to a row):
 //! - `detached_buffers`, `shared_buffers` — brands on `array_buffers`
-//!   instances (`ArrayBuffers`, Pending).
+//!   instances (`ArrayBuffers`, Serialized): each rides its buffer's
+//!   `ABUF` row as a flag bit and restores into the satellite set.
 //! - `deleted_fn_meta` — per-function deleted-`length`/-`name` marks
 //!   (`Functions`, Pending).
 //! - `from_async` — `Array.fromAsync` accumulation state (`Combinators`,
@@ -163,7 +164,11 @@ pub enum SideTable {
     /// proxy back-links. Runtime-minted per `new Proxy`/`Proxy.revocable`, not
     /// arena-recoverable and not boot-derived, so honestly `Pending` (like
     /// `BoundFunctions`) until an atom carries it — a machine suspended holding
-    /// a live proxy cannot yet round-trip.
+    /// a live proxy cannot yet round-trip. Its honest carry is
+    /// dependency-gated on the `functions` row: traps are guest
+    /// functions, and a resumed guest function is uncallable today, so
+    /// carrying the row alone would trade silent-wrong for
+    /// visible-broken, not for correct.
     Proxies,
     /// `call_stack` — the suspended `CallerState` activations (scope,
     /// args, result) of the active call chain.
@@ -181,6 +186,8 @@ pub enum SideTable {
     /// name drawn from the engine's closed error-constructor set.
     ErrorData,
     /// `accessors` — per-instance getter/setter function slots.
+    /// Pending, dependency-gated on the `functions` row exactly as
+    /// `Proxies` is (getters/setters are guest functions).
     Accessors,
     /// `wrapper_data` — per-instance primitive-wrapper boxed value.
     WrapperData,
@@ -188,11 +195,20 @@ pub enum SideTable {
     Arrays,
     /// `collections` — Map/Set/WeakMap/WeakSet internal slots.
     Collections,
-    /// `array_buffers` — ArrayBuffer backing store.
+    /// `array_buffers` — ArrayBuffer backing-store geometry (the bytes
+    /// live in the chunk arena and travel with `BLOC`). Serialized in
+    /// the `ABUF` atom / small-state buffers section (store schema
+    /// 10), with the `detached_buffers`/`shared_buffers` brand
+    /// satellites folded into per-row flags.
     ArrayBuffers,
     /// `typed_arrays` — TypedArray view state + buffer reference.
+    /// Serialized in the `TARR` atom (schema 10); element kind refused
+    /// at decode past the dispatch table, view geometry refused past
+    /// its buffer's length.
     TypedArrays,
     /// `data_views` — DataView view state + buffer reference.
+    /// Serialized in the `DVIW` atom (schema 10), same geometry
+    /// discipline as `TypedArrays`.
     DataViews,
     /// `iterators` — built-in iterator state (target, index/byte-offset,
     /// kind, reused result object): array, string, for-in enumerator, and
@@ -435,9 +451,9 @@ impl SideTable {
             // collect under the debug parity net) are the locks.
             SideTable::Arrays => ("arrays", Serialized),
             SideTable::Collections => ("collections", Serialized),
-            SideTable::ArrayBuffers => ("array_buffers", Pending),
-            SideTable::TypedArrays => ("typed_arrays", Pending),
-            SideTable::DataViews => ("data_views", Pending),
+            SideTable::ArrayBuffers => ("array_buffers", Serialized),
+            SideTable::TypedArrays => ("typed_arrays", Serialized),
+            SideTable::DataViews => ("data_views", Serialized),
             SideTable::Iterators => ("iterators", Pending),
             SideTable::Promises => ("promises", Pending),
             SideTable::PromiseFunctions => ("promise_functions", Pending),
@@ -669,6 +685,14 @@ mod tests {
         // The G3 error-data carry (`ERRD`, store schema 9) graduated the
         // first of the four silent-wrong refuse-on-hold rows.
         assert!(!pending.contains(&SideTable::ErrorData));
+        // The typed-array family followed (`ABUF`/`TARR`/`DVIW`,
+        // schema 10); proxies/accessors stay pending, dependency-gated
+        // on the `functions` row.
+        assert!(!pending.contains(&SideTable::ArrayBuffers));
+        assert!(!pending.contains(&SideTable::TypedArrays));
+        assert!(!pending.contains(&SideTable::DataViews));
+        assert!(pending.contains(&SideTable::Proxies));
+        assert!(pending.contains(&SideTable::Accessors));
     }
 
     /// The restore-time rebuild rows are classified [`Coverage::RebuiltAtRestore`],

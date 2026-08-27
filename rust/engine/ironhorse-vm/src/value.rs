@@ -1077,7 +1077,7 @@ impl SlotArena {
 /// `txChunk` header discipline (a size field precedes each chunk) so
 /// the slide-compactor can walk and relocate blocks without external
 /// bookkeeping.
-const CHUNK_HEADER: usize = 4;
+pub(crate) const CHUNK_HEADER: usize = 4;
 
 /// The chunk arena: variable-size data (strings as UTF-16 big-endian code
 /// units, ArrayBuffers, BigInt digits, bytecode). Each block carries a length

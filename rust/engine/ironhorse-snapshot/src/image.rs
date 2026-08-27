@@ -184,6 +184,46 @@ pub struct ErrorImage {
     pub message: Option<String>,
 }
 
+/// One `ArrayBuffer` instance's serialized side-table row (the `ABUF`
+/// atom / small-state buffers section): the owning slot, the backing
+/// store's chunk offset (the bytes themselves travel with the chunk
+/// arena in `BLOC`), the byte length, and the brand flags (bit 0 =
+/// detached, bit 1 = shared; all other bits refused). Ascending by
+/// owner in serialized form.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BufferImage {
+    pub owner: u32,
+    pub data: u32,
+    pub length: u32,
+    pub flags: u8,
+}
+
+/// One TypedArray instance's serialized side-table row (the `TARR`
+/// atom / small-state typed-arrays section): the owning slot, the
+/// element kind (an index into `ironhorse_vm::TYPED_ARRAY_TYPES`,
+/// refused past it), the backing buffer's slot, the byte offset, and
+/// the element length. Ascending by owner in serialized form.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TypedArrayImage {
+    pub owner: u32,
+    pub kind: u8,
+    pub buffer: u32,
+    pub offset: u32,
+    pub length: u32,
+}
+
+/// One DataView instance's serialized side-table row (the `DVIW` atom
+/// / small-state data-views section): the owning slot, the backing
+/// buffer's slot, the byte offset, and the byte length. Ascending by
+/// owner in serialized form.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DataViewImage {
+    pub owner: u32,
+    pub buffer: u32,
+    pub offset: u32,
+    pub size: u32,
+}
+
 /// The symbol-key property-id table (the `SYMB` atom / small-state
 /// symbols section): the machine's top-down mint counter and every
 /// `(id, descriptor slot)` pair, ascending by id. Symbol keys mint
@@ -254,6 +294,12 @@ pub struct MachineImage {
     pub registry: Vec<RegistryImage>,
     /// `ERRD`: the error-data side table (ledger), owner-ascending.
     pub errors: Vec<ErrorImage>,
+    /// `ABUF`: the array-buffers side table (ledger), owner-ascending.
+    pub buffers: Vec<BufferImage>,
+    /// `TARR`: the typed-arrays side table (ledger), owner-ascending.
+    pub typed_arrays: Vec<TypedArrayImage>,
+    /// `DVIW`: the data-views side table (ledger), owner-ascending.
+    pub data_views: Vec<DataViewImage>,
 }
 
 impl MachineImage {
@@ -289,6 +335,9 @@ impl MachineImage {
             collections: Vec::new(),
             registry: Vec::new(),
             errors: Vec::new(),
+            buffers: Vec::new(),
+            typed_arrays: Vec::new(),
+            data_views: Vec::new(),
         }
     }
 
@@ -353,11 +402,17 @@ impl MachineImage {
         collections: Vec<CollectionImage>,
         registry: Vec<RegistryImage>,
         errors: Vec<ErrorImage>,
+        buffers: Vec<BufferImage>,
+        typed_arrays: Vec<TypedArrayImage>,
+        data_views: Vec<DataViewImage>,
     ) -> MachineImage {
         self.arrays = arrays;
         self.collections = collections;
         self.registry = registry;
         self.errors = errors;
+        self.buffers = buffers;
+        self.typed_arrays = typed_arrays;
+        self.data_views = data_views;
         self
     }
 
@@ -943,6 +998,144 @@ pub(crate) fn decode_errors(p: &[u8]) -> Result<Vec<ErrorImage>, SnapshotError> 
     Ok(out)
 }
 
+/// Encode the array-buffers side table (the `ABUF` payload /
+/// small-state buffers section). Input is owner-ascending. Wire form
+/// per row: `u32 owner`, `u32 data`, `u32 length`, `u8 flags`.
+pub(crate) fn encode_buffers(buffers: &[BufferImage]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(4 + buffers.len() * 13);
+    v.extend_from_slice(&(buffers.len() as u32).to_be_bytes());
+    for b in buffers {
+        v.extend_from_slice(&b.owner.to_be_bytes());
+        v.extend_from_slice(&b.data.to_be_bytes());
+        v.extend_from_slice(&b.length.to_be_bytes());
+        v.push(b.flags);
+    }
+    v
+}
+
+pub(crate) fn decode_buffers(p: &[u8]) -> Result<Vec<BufferImage>, SnapshotError> {
+    let mut c = Cursor::new(p, "array-buffers side table");
+    let count = c.u32()? as usize;
+    let mut out = Vec::with_capacity(count.min(p.len() / 13));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        let data = c.u32()?;
+        let length = c.u32()?;
+        let flags = c.u8()?;
+        // Only the two brand bits (detached, shared) exist; anything
+        // else is a non-canonical encoding.
+        if flags > 0b11 {
+            return Err(SnapshotError::Corrupt(
+                "array-buffers side table: unknown flag bits",
+            ));
+        }
+        // Strictly-ascending owners, for the sibling decoders' reason.
+        if out.last().is_some_and(|prev: &BufferImage| owner <= prev.owner) {
+            return Err(SnapshotError::Corrupt(
+                "array-buffers side table: owners not strictly ascending",
+            ));
+        }
+        out.push(BufferImage {
+            owner,
+            data,
+            length,
+            flags,
+        });
+    }
+    c.done()?;
+    Ok(out)
+}
+
+/// Encode the typed-arrays side table (the `TARR` payload /
+/// small-state typed-arrays section). Wire form per row: `u32 owner`,
+/// `u8 kind`, `u32 buffer`, `u32 offset`, `u32 length`.
+pub(crate) fn encode_typed_arrays(views: &[TypedArrayImage]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(4 + views.len() * 17);
+    v.extend_from_slice(&(views.len() as u32).to_be_bytes());
+    for t in views {
+        v.extend_from_slice(&t.owner.to_be_bytes());
+        v.push(t.kind);
+        v.extend_from_slice(&t.buffer.to_be_bytes());
+        v.extend_from_slice(&t.offset.to_be_bytes());
+        v.extend_from_slice(&t.length.to_be_bytes());
+    }
+    v
+}
+
+pub(crate) fn decode_typed_arrays(p: &[u8]) -> Result<Vec<TypedArrayImage>, SnapshotError> {
+    let mut c = Cursor::new(p, "typed-arrays side table");
+    let count = c.u32()? as usize;
+    let mut out = Vec::with_capacity(count.min(p.len() / 17));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        let kind = c.u8()?;
+        let buffer = c.u32()?;
+        let offset = c.u32()?;
+        let length = c.u32()?;
+        // The element kind indexes the engine's dispatch table; an
+        // index past it can only be crafted or torn bytes.
+        if (kind as usize) >= ironhorse_vm::TYPED_ARRAY_TYPES.len() {
+            return Err(SnapshotError::Corrupt(
+                "typed-arrays side table: unknown element kind",
+            ));
+        }
+        if out.last().is_some_and(|prev: &TypedArrayImage| owner <= prev.owner) {
+            return Err(SnapshotError::Corrupt(
+                "typed-arrays side table: owners not strictly ascending",
+            ));
+        }
+        out.push(TypedArrayImage {
+            owner,
+            kind,
+            buffer,
+            offset,
+            length,
+        });
+    }
+    c.done()?;
+    Ok(out)
+}
+
+/// Encode the data-views side table (the `DVIW` payload / small-state
+/// data-views section). Wire form per row: `u32 owner`, `u32 buffer`,
+/// `u32 offset`, `u32 size`.
+pub(crate) fn encode_data_views(views: &[DataViewImage]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(4 + views.len() * 16);
+    v.extend_from_slice(&(views.len() as u32).to_be_bytes());
+    for d in views {
+        v.extend_from_slice(&d.owner.to_be_bytes());
+        v.extend_from_slice(&d.buffer.to_be_bytes());
+        v.extend_from_slice(&d.offset.to_be_bytes());
+        v.extend_from_slice(&d.size.to_be_bytes());
+    }
+    v
+}
+
+pub(crate) fn decode_data_views(p: &[u8]) -> Result<Vec<DataViewImage>, SnapshotError> {
+    let mut c = Cursor::new(p, "data-views side table");
+    let count = c.u32()? as usize;
+    let mut out = Vec::with_capacity(count.min(p.len() / 16));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        let buffer = c.u32()?;
+        let offset = c.u32()?;
+        let size = c.u32()?;
+        if out.last().is_some_and(|prev: &DataViewImage| owner <= prev.owner) {
+            return Err(SnapshotError::Corrupt(
+                "data-views side table: owners not strictly ascending",
+            ));
+        }
+        out.push(DataViewImage {
+            owner,
+            buffer,
+            offset,
+            size,
+        });
+    }
+    c.done()?;
+    Ok(out)
+}
+
 /// Every slot index and chunk offset a decoded image can carry, checked
 /// against the geometry the image itself declares.
 ///
@@ -1029,6 +1222,9 @@ pub(crate) fn check_image_slot_bounds(
     collections: &[CollectionImage],
     registry: &[RegistryImage],
     errors: &[ErrorImage],
+    buffers: &[BufferImage],
+    typed_arrays: &[TypedArrayImage],
+    data_views: &[DataViewImage],
     symbols: &SymbolKeyImage,
     slot_count: u32,
     chunk_len: usize,
@@ -1082,6 +1278,56 @@ pub(crate) fn check_image_slot_bounds(
     for e in errors {
         if e.owner >= slot_count {
             return Err(OOB);
+        }
+    }
+    // The typed-array family carries CROSS-table geometry, checked here
+    // where all three tables are in hand (the SYMB-vs-NAME precedent):
+    // every buffer's backing extent lies inside the chunk arena, and
+    // every view names a buffer ROW whose length covers the view. A
+    // view that merely named an in-bounds SLOT with no buffer row
+    // would restore, then read through a geometry no allocation backs.
+    let buffer_length = |slot: u32| -> Option<u32> {
+        buffers
+            .binary_search_by_key(&slot, |b| b.owner)
+            .ok()
+            .map(|i| buffers[i].length)
+    };
+    for b in buffers {
+        if b.owner >= slot_count {
+            return Err(OOB);
+        }
+        if (b.data as usize) < CHUNK_HEADER || b.data as u64 + b.length as u64 > chunk_len as u64 {
+            return Err(OOC);
+        }
+    }
+    for t in typed_arrays {
+        if t.owner >= slot_count || t.buffer >= slot_count {
+            return Err(OOB);
+        }
+        let shift = ironhorse_vm::TYPED_ARRAY_TYPES
+            .get(t.kind as usize)
+            .map(|ty| ty.shift)
+            .ok_or(SnapshotError::Corrupt(
+                "typed-arrays side table: unknown element kind",
+            ))?;
+        let covered = buffer_length(t.buffer)
+            .is_some_and(|len| t.offset as u64 + ((t.length as u64) << shift) <= len as u64);
+        if !covered {
+            return Err(SnapshotError::Corrupt(
+                "typed-arrays side table: view geometry past its buffer",
+            ));
+        }
+    }
+    for d in data_views {
+        if d.owner >= slot_count || d.buffer >= slot_count {
+            return Err(OOB);
+        }
+        let covered =
+            buffer_length(d.buffer).is_some_and(|len| d.offset as u64 + d.size as u64 <= len as u64);
+        if !covered {
+            return Err(SnapshotError::Corrupt(
+                "data-views side table: view geometry past its buffer",
+            ));
         }
     }
     for &(_, desc) in &symbols.pairs {
@@ -1152,6 +1398,15 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
     }
     if !image.errors.is_empty() {
         w.atom(crate::format::ERRD, &encode_errors(&image.errors));
+    }
+    if !image.buffers.is_empty() {
+        w.atom(crate::format::ABUF, &encode_buffers(&image.buffers));
+    }
+    if !image.typed_arrays.is_empty() {
+        w.atom(crate::format::TARR, &encode_typed_arrays(&image.typed_arrays));
+    }
+    if !image.data_views.is_empty() {
+        w.atom(crate::format::DVIW, &encode_data_views(&image.data_views));
     }
     w.finish()
 }
@@ -1247,6 +1502,18 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => decode_errors(a.payload)?,
         None => Vec::new(),
     };
+    let buffers = match r.find(crate::format::ABUF) {
+        Some(a) => decode_buffers(a.payload)?,
+        None => Vec::new(),
+    };
+    let typed_arrays = match r.find(crate::format::TARR) {
+        Some(a) => decode_typed_arrays(a.payload)?,
+        None => Vec::new(),
+    };
+    let data_views = match r.find(crate::format::DVIW) {
+        Some(a) => decode_data_views(a.payload)?,
+        None => Vec::new(),
+    };
     // Semantic bounds gate (wave-4 P1, widened in wave 5): every slot
     // index and chunk offset the container carries — heap, stack,
     // symbols and side tables alike — must fall inside the decoded
@@ -1259,6 +1526,9 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         &collections,
         &registry,
         &errors,
+        &buffers,
+        &typed_arrays,
+        &data_views,
         &symbols,
         slots.len() as u32,
         chunks.len(),
@@ -1281,6 +1551,9 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         collections,
         registry,
         errors,
+        buffers,
+        typed_arrays,
+        data_views,
     })
 }
 
@@ -1379,11 +1652,93 @@ mod tests {
             &[],
             &[],
             &oob,
+            &[],
+            &[],
+            &[],
             &SymbolKeyImage::default(),
             4,
             64
         )
         .is_err());
+    }
+
+    #[test]
+    fn typed_array_family_decode_refuses_crafted_rows() {
+        // Unknown flag bits on a buffer row.
+        let bad_flags = vec![BufferImage { owner: 1, data: 4, length: 8, flags: 4 }];
+        assert!(matches!(
+            decode_buffers(&encode_buffers(&bad_flags)),
+            Err(SnapshotError::Corrupt(_))
+        ));
+        // Duplicate owners in each table.
+        let dup_buf = vec![
+            BufferImage { owner: 2, data: 4, length: 8, flags: 0 },
+            BufferImage { owner: 2, data: 16, length: 8, flags: 0 },
+        ];
+        assert!(matches!(
+            decode_buffers(&encode_buffers(&dup_buf)),
+            Err(SnapshotError::Corrupt(_))
+        ));
+        // Unknown element kind on a view row.
+        let bad_kind = vec![TypedArrayImage { owner: 1, kind: 200, buffer: 2, offset: 0, length: 1 }];
+        assert!(matches!(
+            decode_typed_arrays(&encode_typed_arrays(&bad_kind)),
+            Err(SnapshotError::Corrupt(_))
+        ));
+        // Unordered data-view owners.
+        let unordered = vec![
+            DataViewImage { owner: 5, buffer: 1, offset: 0, size: 1 },
+            DataViewImage { owner: 3, buffer: 1, offset: 0, size: 1 },
+        ];
+        assert!(matches!(
+            decode_data_views(&encode_data_views(&unordered)),
+            Err(SnapshotError::Corrupt(_))
+        ));
+        // The well-formed rows round-trip.
+        let ok_b = vec![
+            BufferImage { owner: 1, data: 4, length: 8, flags: 0b10 },
+            BufferImage { owner: 3, data: 16, length: 0, flags: 0b01 },
+        ];
+        assert_eq!(decode_buffers(&encode_buffers(&ok_b)).unwrap(), ok_b);
+        let ok_t = vec![TypedArrayImage { owner: 2, kind: 0, buffer: 1, offset: 0, length: 8 }];
+        assert_eq!(decode_typed_arrays(&encode_typed_arrays(&ok_t)).unwrap(), ok_t);
+        let ok_d = vec![DataViewImage { owner: 2, buffer: 1, offset: 4, size: 4 }];
+        assert_eq!(decode_data_views(&encode_data_views(&ok_d)).unwrap(), ok_d);
+    }
+
+    #[test]
+    fn typed_array_family_bounds_refuse_crafted_geometry() {
+        let sym = SymbolKeyImage::default();
+        // A buffer whose backing extent runs past the chunk arena.
+        let past = vec![BufferImage { owner: 1, data: 60, length: 8, flags: 0 }];
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &past, &[], &[], &sym, 4, 64).is_err());
+        // A buffer whose offset sits inside the chunk header.
+        let low = vec![BufferImage { owner: 1, data: 2, length: 8, flags: 0 }];
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &low, &[], &[], &sym, 4, 64).is_err());
+        // A view naming a buffer with NO row (an in-bounds slot is not
+        // enough — restoring it would read through unbacked geometry).
+        let orphan = vec![TypedArrayImage { owner: 2, kind: 0, buffer: 3, offset: 0, length: 1 }];
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &orphan, &[], &sym, 4, 64).is_err());
+        // View geometry past its buffer's length (Uint32Array: shift 2).
+        let buf = vec![BufferImage { owner: 1, data: 4, length: 8, flags: 0 }];
+        let kind_u32 = ironhorse_vm::TYPED_ARRAY_TYPES
+            .iter()
+            .position(|t| t.shift == 2)
+            .unwrap() as u8;
+        let wide = vec![TypedArrayImage { owner: 2, kind: kind_u32, buffer: 1, offset: 4, length: 2 }];
+        assert!(
+            check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &buf, &wide, &[], &sym, 4, 64).is_err()
+        );
+        // A data view past its buffer.
+        let dv = vec![DataViewImage { owner: 2, buffer: 1, offset: 6, size: 4 }];
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &buf, &[], &dv, &sym, 4, 64).is_err());
+        // The covered forms pass.
+        let fit_view = vec![TypedArrayImage { owner: 2, kind: kind_u32, buffer: 1, offset: 0, length: 2 }];
+        let fit_dv = vec![DataViewImage { owner: 3, buffer: 1, offset: 4, size: 4 }];
+        assert!(check_image_slot_bounds(
+            &[], &[], &[], &[], &[], &[], &buf, &fit_view, &fit_dv, &sym, 4, 64
+        )
+        .is_ok());
     }
 
     #[test]
@@ -1394,7 +1749,7 @@ mod tests {
         // shape a reviewer actually crafted and reached a release panic
         // (or an abort) with. slot_count = 4, chunk_len = 64 throughout.
         let ok = |heap: &[Slot], stack: &[Slot]| {
-            check_image_slot_bounds(heap, stack, &[], &[], &[], &[], &SymbolKeyImage::default(), 4, 64)
+            check_image_slot_bounds(heap, stack, &[], &[], &[], &[], &[], &[], &[], &SymbolKeyImage::default(), 4, 64)
         };
         let refd = |i: u32| Slot::of(Kind::Reference, Payload::Reference(SlotIndex(i)));
 
@@ -1411,17 +1766,17 @@ mod tests {
 
         // --- the wave-4 arms, still enforced ---
         let bad_desc = [RegistryImage { key: b"k".to_vec(), descriptor: 9 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &bad_desc, &[], &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &bad_desc, &[], &[], &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
         // A symbol-key descriptor beyond the arena is refused the same way.
         let bad_sym = SymbolKeyImage {
             next_id: u16::MAX - 1,
             pairs: vec![(u16::MAX, 4)],
         };
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &bad_sym, 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &[], &[], &bad_sym, 4, 64).is_err());
         let bad_owner = [ArrayImage { owner: 9, length: 0, items: vec![] }];
-        assert!(check_image_slot_bounds(&[], &[], &bad_owner, &[], &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &bad_owner, &[], &[], &[], &[], &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
         let bad_ref = [ArrayImage { owner: 1, length: 1, items: vec![(0, refd(9))] }];
-        assert!(check_image_slot_bounds(&[], &[], &bad_ref, &[], &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &bad_ref, &[], &[], &[], &[], &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
         // Collections were passed `&[]` in every wave-4 case, so that
         // whole branch never executed (wave 5, llvm-cov). Exercise both
         // the key and the value side.
@@ -1431,14 +1786,14 @@ mod tests {
             table_length: 0,
             entries: vec![(refd(9), Slot::undefined())],
         }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &bad_key, &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &bad_key, &[], &[], &[], &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
         let bad_val = [CollectionImage {
             owner: 1,
             kind: 0,
             table_length: 0,
             entries: vec![(Slot::undefined(), refd(9))],
         }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &bad_val, &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &bad_val, &[], &[], &[], &[], &[], &SymbolKeyImage::default(), 4, 64).is_err());
 
         // --- in-bounds and NULL pass ---
         assert!(ok(&[refd(3)], &[refd(0)]).is_ok(), "in-bounds indices pass");
@@ -1552,6 +1907,9 @@ mod tests {
             collections: Vec::new(),
             registry: Vec::new(),
             errors: Vec::new(),
+            buffers: Vec::new(),
+            typed_arrays: Vec::new(),
+            data_views: Vec::new(),
         };
         let bytes = write_machine(&img);
         let back = read_machine(&bytes, &sig()).unwrap();
@@ -1579,6 +1937,9 @@ mod tests {
             collections: Vec::new(),
             registry: Vec::new(),
             errors: Vec::new(),
+            buffers: Vec::new(),
+            typed_arrays: Vec::new(),
+            data_views: Vec::new(),
         };
         let bytes = write_machine(&img);
         match read_machine(&bytes, &Signature::new("host-is-now-v2")) {
@@ -1685,6 +2046,9 @@ mod tests {
             collections: Vec::new(),
             registry: Vec::new(),
             errors: Vec::new(),
+            buffers: Vec::new(),
+            typed_arrays: Vec::new(),
+            data_views: Vec::new(),
         };
         let bytes = write_machine(&img);
         let back = read_machine(&bytes, &sig()).unwrap();
