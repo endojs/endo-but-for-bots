@@ -434,35 +434,41 @@ export const makeClaudeClient = ({
   };
 
   /**
-   * While a recreate is disposing the live slice, the in-flight `claude`
-   * process dies because WE killed it (attach/detach is disruptive by design —
-   * see designs/runtime-container-fs-mount.md). The turn genuinely ends, so it
-   * still aborts; but the reason should describe the restart, not the symptoms
-   * of our own kill.
-   *
-   * The exit code and stderr of a process we SIGKILLed describe the kill, and
-   * reporting them turns an expected restart into what reads as a crash on
-   * session start — "claude exited with code 1" — which is exactly how this
-   * gets misdiagnosed.
-   *
-   * @param {string} base
+   * Whether the current abort is our own doing — a recreate we started — and
+   * so should not carry the killed process's diagnostics.
    */
-  const abortReasonInContext = base => {
-    if (!recreating) return base;
-    const paths = extraMounts
+  const abortIsByDesign = () => recreating;
+
+  /** The mounts whose attach caused the restart, for the message. */
+  const restartPaths = () =>
+    extraMounts
       .map(spec => spec && spec.innerPath)
       .filter(Boolean)
       .join(', ');
-    return `sandbox restarted to apply a container mount change${
-      paths ? ` (${paths})` : ''
-    } — the attach succeeded; send this turn again to continue`;
-  };
 
   /**
-   * Whether the current abort is our own doing, and so should not carry the
-   * killed process's diagnostics.
+   * The abort reason for a turn that ended while we were recreating the slice.
+   *
+   * A turn killed by a recreate is normally re-run (see `runTurn`), so reaching
+   * here means it could not be: either it had already produced output, or a
+   * further recreate landed on the retry. Say which, rather than reporting the
+   * exit code and stderr of a process we SIGKILLed — those describe our own
+   * kill, and reporting them is what made an expected restart read as a crash.
+   *
+   * @param {{ base: string, emitted: boolean, exhausted: boolean }} context
+   * @returns {string}
    */
-  const abortIsByDesign = () => recreating;
+  const restartAbortReason = ({ base, emitted, exhausted }) => {
+    if (!recreating && !exhausted) return base;
+    const paths = restartPaths();
+    const where = paths ? ` (${paths})` : '';
+    if (emitted) {
+      // Re-running would repeat whatever the turn already did — a file it
+      // edited, a deploy it started. Nothing here can resume from the middle.
+      return `sandbox restarted to apply a container mount change${where} — this turn had already begun, so it was not re-run automatically`;
+    }
+    return `sandbox restarted to apply a container mount change${where} — the turn could not be restarted, another change landed while it was retrying`;
+  };
 
   /**
    * Spawn one `claude -p` process inside the slice and return its
@@ -602,118 +608,163 @@ export const makeClaudeClient = ({
         push({ type: 'abort', reason: 'session terminated before turn ran' });
         return;
       }
-      try {
-        proc = await spawnClaude(prompt, opts);
-      } catch (error) {
-        // A recreate disposes the slice a queued spawn may be about to use;
-        // label that failure the same way an in-flight kill is labelled.
-        push({
-          type: 'abort',
-          reason: abortReasonInContext(
-            error instanceof Error ? error.message : String(error),
-          ),
-          ...(abortIsByDesign() ? { expected: true } : {}),
-        });
-        return;
-      }
-      if (closed || terminated) {
-        await E(proc)
-          .kill()
-          .catch(() => {});
-        push({ type: 'abort', reason: 'session terminated' });
-        return;
-      }
-      inFlight = proc;
-      inFlightClose = close;
-      try {
-        for await (const event of parseStreamJsonLines(
-          makeStdoutIterable(proc),
-        )) {
-          if (
-            describeTranscripts &&
-            event?.type === 'system' &&
-            event?.subtype === 'init'
-          ) {
-            // What the CLI itself believes it opened. A `session_id` other than
-            // the one we asked to resume means the resume did not take.
+      // Attaching a mount recreates the slice and kills whatever is running.
+      // That is not a failure the person who typed the prompt should have to
+      // recover from, so a turn killed by OUR OWN recreate is simply run
+      // again on the new slice.
+      //
+      // Only while nothing observable has been emitted, though. Once the turn
+      // has produced assistant text — or run a tool, which may have already
+      // edited a file or started a deploy — re-running it would repeat that
+      // work. There is no safe way to resume from the middle, so that case
+      // reports honestly instead.
+      //
+      // `claude`'s own `system/init` does not count as output: it says the CLI
+      // started, not that the turn did anything.
+      let initPushed = false;
+      // Bounded so a stream of attaches cannot spin here forever; a second
+      // recreate during the retry gives up and reports.
+      const maxRestarts = 1;
+      let restarts = 0;
+
+      for (;;) {
+        let emitted = false;
+        const byDesign = () => abortIsByDesign() || restarts > 0;
+        /**
+         * @param {string} base
+         * @param {string} [stderrText]
+         * @returns {boolean} whether a retry was started instead
+         */
+        const retryOrReport = (base, stderrText) => {
+          if (abortIsByDesign() && !emitted && restarts < maxRestarts) {
+            restarts += 1;
+            return true;
+          }
+          const reason = restartAbortReason({
+            base,
+            emitted,
+            exhausted: restarts >= maxRestarts && abortIsByDesign(),
+          });
+          const text = byDesign() ? '' : stderrText;
+          push({
+            type: 'abort',
+            reason: text ? `${reason}\n--- stderr ---\n${text}` : reason,
+            ...(byDesign() ? { expected: true } : {}),
+          });
+          return false;
+        };
+
+        try {
+          proc = await spawnClaude(prompt, opts);
+        } catch (error) {
+          // A recreate disposes the slice a queued spawn may be about to use.
+          const message =
+            error instanceof Error ? error.message : String(error);
+          // eslint-disable-next-line no-continue
+          if (retryOrReport(message)) continue;
+          return;
+        }
+        if (closed || terminated) {
+          await E(proc)
+            .kill()
+            .catch(() => {});
+          push({ type: 'abort', reason: 'session terminated' });
+          return;
+        }
+        inFlight = proc;
+        inFlightClose = close;
+        try {
+          for await (const event of parseStreamJsonLines(
+            makeStdoutIterable(proc),
+          )) {
+            if (
+              describeTranscripts &&
+              event?.type === 'system' &&
+              event?.subtype === 'init'
+            ) {
+              // What the CLI itself believes it opened. A `session_id` other than
+              // the one we asked to resume means the resume did not take.
+              console.error(
+                '[claude-sandbox] init',
+                JSON.stringify({
+                  sessionId,
+                  claudeSessionId: event.session_id,
+                  cwd: event.cwd,
+                  model: event.model,
+                  version: event.claude_code_version,
+                  apiKeySource: event.apiKeySource,
+                }),
+              );
+            }
+            const isInit =
+              event?.type === 'system' && event?.subtype === 'init';
+            // A retry re-runs `claude`, which emits its own init. Suppress
+            // the duplicate so the consumer sees one turn, not two.
+            if (isInit && initPushed) continue;
+            if (isInit) initPushed = true;
+            else emitted = true;
+            push(event);
+          }
+          if (describeTranscripts) {
+            // Ground truth for the turn: whether the prompt Claude just
+            // persisted chained onto the conversation, or started a fresh
+            // root.
             console.error(
-              '[claude-sandbox] init',
-              JSON.stringify({
-                sessionId,
-                claudeSessionId: event.session_id,
-                cwd: event.cwd,
-                model: event.model,
-                version: event.claude_code_version,
-                apiKeySource: event.apiKeySource,
-              }),
+              '[claude-sandbox] after-turn',
+              JSON.stringify({ sessionId, transcripts: describeTranscripts() }),
             );
           }
-          push(event);
-        }
-        if (describeTranscripts) {
-          // Ground truth for the turn: whether the prompt Claude just persisted
-          // chained onto the conversation, or started a fresh root.
-          console.error(
-            '[claude-sandbox] after-turn',
-            JSON.stringify({ sessionId, transcripts: describeTranscripts() }),
-          );
-        }
-        // Stdout EOF alone does not mean the turn succeeded: `claude` exits
-        // non-zero on auth failure, an internal error, or an external kill,
-        // having already streamed a partial transcript. Consult the exit
-        // status so a failed turn terminates as `abort` (with whatever it
-        // wrote to stderr) instead of a clean `end` the consumer would
-        // persist as a successful answer.
-        const status = await E(proc)
-          .wait()
-          .catch(() => null);
-        if (status && (status.code === null ? status.signal : status.code)) {
-          const how =
-            status.code === null
-              ? `killed by ${status.signal}`
-              : `exited with code ${status.code}`;
-          const base = abortReasonInContext(`claude ${how}`);
+          // Stdout EOF alone does not mean the turn succeeded: `claude` exits
+          // non-zero on auth failure, an internal error, or an external kill,
+          // having already streamed a partial transcript. Consult the exit
+          // status so a failed turn terminates as `abort` (with whatever it
+          // wrote to stderr) instead of a clean `end` the consumer would
+          // persist as a successful answer.
+          const status = await E(proc)
+            .wait()
+            .catch(() => null);
+          if (status && (status.code === null ? status.signal : status.code)) {
+            const how =
+              status.code === null
+                ? `killed by ${status.signal}`
+                : `exited with code ${status.code}`;
+            const stderrText = abortIsByDesign()
+              ? ''
+              : await readStderrBrief(proc);
+            // eslint-disable-next-line no-continue
+            if (retryOrReport(`claude ${how}`, stderrText)) continue;
+            return;
+          }
+          push({ type: 'end' });
+          return;
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          // Kill first so the captured stderr stream EOFs, then fold any
+          // diagnostic claude wrote to stderr into the abort reason — without
+          // it, a claude-side failure surfaces only as an opaque stream/parse
+          // error. Skipped for a recreate: the diagnostics would be of our own
+          // kill.
+          await E(proc)
+            .kill()
+            .catch(() => {});
           const stderrText = abortIsByDesign()
             ? ''
             : await readStderrBrief(proc);
-          push({
-            type: 'abort',
-            reason: stderrText
-              ? `${base}\n--- stderr ---\n${stderrText}`
-              : base,
-            ...(abortIsByDesign() ? { expected: true } : {}),
-          });
-        } else {
-          push({ type: 'end' });
-        }
-      } catch (error) {
-        const base = abortReasonInContext(
-          error instanceof Error ? error.message : String(error),
-        );
-        // Kill first so the captured stderr stream EOFs, then fold any
-        // diagnostic claude wrote to stderr into the abort reason — without
-        // it, a claude-side failure surfaces only as an opaque stream/parse
-        // error. Skipped for a recreate: the diagnostics would be of our own
-        // kill.
-        await E(proc)
-          .kill()
-          .catch(() => {});
-        const stderrText = abortIsByDesign() ? '' : await readStderrBrief(proc);
-        push({
-          type: 'abort',
-          reason: stderrText ? `${base}\n--- stderr ---\n${stderrText}` : base,
-          ...(abortIsByDesign() ? { expected: true } : {}),
-        });
-      } finally {
-        if (inFlight === proc) {
-          inFlight = null;
-          inFlightClose = null;
-        }
-        // Drop the finished turn's closer so a later `interrupt()` reports
-        // "nothing in flight" instead of silently no-op'ing against a closed
-        // channel.
-        if (currentClose === close) {
-          currentClose = null;
+          // eslint-disable-next-line no-continue
+          if (retryOrReport(message, stderrText)) continue;
+          return;
+        } finally {
+          if (inFlight === proc) {
+            inFlight = null;
+            inFlightClose = null;
+          }
+          // Drop the finished turn's closer so a later `interrupt()` reports
+          // "nothing in flight" instead of silently no-op'ing against a closed
+          // channel.
+          if (currentClose === close) {
+            currentClose = null;
+          }
         }
       }
     });
