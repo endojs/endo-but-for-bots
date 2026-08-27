@@ -390,7 +390,7 @@ LLM-agent stack).*
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | 2026-04-23 | 2026-05-06 | Not Started |
 | [syrup-frame](syrup-frame.md) | 2026-05-04 | 2026-05-06 | Deprecated |
-| [cbor-frame](cbor-frame.md) | 2026-05-04 | 2026-05-05 | Not Started |
+| [cbor-frame](cbor-frame.md) | 2026-05-04 | 2026-07-15 | Implemented (PR #288) |
 | [cbor-codec](cbor-codec.md) | 2026-07-12 | 2026-07-28 | Phase 1 implemented |
 | [trust-on-first-bind](trust-on-first-bind.md) | 2026-05-08 | 2026-05-10 | Reference |
 | [outliner-design-doc](outliner-design-doc.md) | 2026-03-17 | 2026-03-18 | In Progress |
@@ -876,8 +876,8 @@ finalized.
 | ocapn-tcp-for-test-extraction | Not Started | Clean separation before Noise |
 | ocapn-tcp-syrup-framing | Not Started | Comma-less netstring variant (`@endo/syrups`) on a distinct `tcp+syrups` netlayer identifier |
 | syrups | Deprecated | Consolidated with PR 29's `@endo/syrups` (same shape: `Uint8Array` chunks in, `Uint8Array`-delimited messages out); see [`ocapn-tcp-syrup-framing.md`](ocapn-tcp-syrup-framing.md) |
-| cbors | Not Started | `@endo/cbor-frame` reader/writer for length-prefixed CBOR byte strings (proposed as `@endo/cbors`; renamed per [cbor-codec](cbor-codec.md)); peer of `@endo/syrups` and `@endo/netstring` |
-| cbor-codec | Phase 1 implemented | Shared canonical-CBOR primitive codec (`@endo/cbor`) extracted from `packages/ocapn/src/cbor` and PR #124's `packages/slots/src/cbor.js`; also serves the M11 `endor` slot-machine line; complement of the framing package `@endo/cbor-frame` (impl PR #288; proposed as `@endo/cbors`) |
+| cbor-frame | Implemented (PR #288) | `@endo/cbor-frame` reader/writer for length-prefixed CBOR byte strings; peer of `@endo/syrup-frame` and `@endo/netstring` |
+| cbor-codec | Phase 1 implemented | Shared canonical-CBOR primitive codec (`@endo/cbor`) extracted from `packages/ocapn/src/cbor` and PR #124's `packages/slots/src/cbor.js`; also serves the M11 `endor` slot-machine line; complement of the framing package `@endo/cbor-frame` (impl PR #288) |
 | ocapn-noise-cryptographic-review | Not Started | External review coordination |
 | daemon-agent-network-identity | Not Started | Per-agent keypairs for network identity |
 | daemon-ocapn-external-connectivity | In Progress | Daemon adopts `@endo/ocapn` for the daemon-to-daemon peer edge; retires the bespoke `EndoNetwork`/`EndoGreeter`/`RemoteControl` CapTP peer stack. Worker, CLI, and web-gateway edges stay CapTP. Satisfies the daemon-integration half of the M4 exit criterion (implementation in-flight: PRs #340, #684, #688, #693) |
@@ -1489,7 +1489,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | ocapn-tcp-for-test-extraction | S-M | 3 days | 4 | Code relocation |
 | ocapn-tcp-syrup-framing | S-M | 3 days | 4 | `@endo/syrups` package, new `tcp+syrups` netlayer; design merged (PR #108); impl PR #109 open |
 | ~~syrup-frame~~ | — | — | 4 | Consolidated into `ocapn-tcp-syrup-framing` (PR 29); see [`syrup-frame.md`](syrup-frame.md) |
-| cbors | S-M | 3 days | 4 | New `@endo/cbor-frame` package (proposed as `@endo/cbors`); design merged with syrups in PR #86 |
+| ~~cbor-frame~~ | — | — | 4 | New `@endo/cbor-frame` package (implemented, PR #288); design merged with syrup framing in PR #86 |
 | cbor-codec | S | 2-3 days | 4 | New `@endo/cbor` package plus ocapn and slots migrations; slots adoption gated on PR #124 landing |
 | ocapn-noise-cryptographic-review | S | 1 day | 4 | External review coordination |
 | ocapn-orthogonal-persistence | M | 4-5 days | 4 | Phases 1-4 landed including the XS engine (`rust/thixotrope-xs-worker` on the `xsnap` crate; thixotrope suite green on real XS heap snapshots) and the worker controller; remaining estimate covers ses-lockdown-on-XS and the Phase 5 Noise transport wiring |
@@ -1575,7 +1575,7 @@ date of this pass.
 | M1: AI Agent Experience (was M0) | 0 | **Complete** | — |
 | M2: Project Hygiene (was M½) | 0 | **Complete** | — |
 | M3: Remote Access & Tools (was M1) | 18 (`gateway-package`, `daemon-docker-selfhost`, `daemon-agent-tools`, `endo-agent-tools`, `agentry-agent-builder`, `agentry-git-verb-gaps`, `agentry-git-eval-scenarios`, `daemon-mount`, `daemon-worker-import-from-mount`, `registry-capability`, `mvs-resolver`, `snapshot-mapper`, `filesystem-watchers`, `daemon-locator-terminology`, `daemon-rename-to-manager`, `daemon-xs-worker-snapshot`, `endoclaw-timer`, `endoclaw-network-fetch`) | 9-13 weeks | 11-15 weeks |
-| M4: Networking (was M2) | 8 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrup-framing`, `cbors`, `cbor-codec`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`, `ocapn-orthogonal-persistence`) | 5-6 weeks | 6-8 weeks |
+| M4: Networking (was M2) | 8 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrup-framing`, `cbor-frame`, `cbor-codec`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`, `ocapn-orthogonal-persistence`) | 5-6 weeks | 6-8 weeks |
 | M5: Public Hosting & Billing (was M7) | 4 in-flight on PR #356 stack (`gateway-package` counted under M3; `gateway-packaging-ci`, `gateway-aws-deployment`, `gateway-aws-attuned` counted here) + 3 design gaps (`gateway-oauth-bonding`, `gateway-key-recovery`, `gateway-stripe-adapter`) | 4-6 weeks design + impl | merge cadence of PRs #343 and #356 |
 | M6: MCP Bridge Hosting (was Milestone B) | 2 net-new (`endo-gateway-mcp` impl, `endo-claude`); cross-milestone slices in M3 (P0) and M5 (P2/P3/P4 gaps) | ~3-3.5 weeks own work (endo-gateway-mcp ~2 weeks + endo-claude ~1-1.5 weeks) + ~6-9 weeks across P0-P4 | gated by M3 gateway-package phases 2/7/8 merge cadence |
 | M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |

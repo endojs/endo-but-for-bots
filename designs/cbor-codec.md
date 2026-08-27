@@ -3,8 +3,16 @@
 | | |
 |---|---|
 | **Created** | 2026-07-12 |
+| **Updated** | 2026-08-26 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Phase 1 implemented (PR #755); phases 2-3 proposed |
+
+> **2026-07-15 - open questions resolved.** The maintainer review on
+> [PR #710](https://github.com/endojs/endo-but-for-bots/pull/710) settled all
+> four open questions and directed the build: the framing sibling is
+> `@endo/cbor-frame`; readers are strict; text-string well-formedness rides a
+> shared ponyfill rather than the engine-native method; and phase 1 lands on
+> `llm`. Phase 1 subsequently landed in PR #755 with unconditional strictness.
 
 ## What is the Problem Being Solved?
 
@@ -77,9 +85,9 @@ returns no existing `cbor` package. "CBOR" is the canonical acronym
 for Concise Binary Object Representation and is permitted under the
 namer's rule on canonical acronyms. `@endo/cbor` names the codec
 primitives for one CBOR item; the framing sibling landed as
-`@endo/cbor-frame` — proposed as `@endo/cbors` in
-[cbor-frame.md](cbor-frame.md), implemented under the explicit `-frame` suffix in
-[PR #288](https://github.com/endojs/endo-but-for-bots/pull/288) — and
+`@endo/cbor-frame` in
+[PR #288](https://github.com/endojs/endo-but-for-bots/pull/288)
+([cbor-frame.md](cbor-frame.md)) and
 names a *stream* of length-prefixed byte strings on the wire. The two
 packages are complements, not competitors: `@endo/cbor-frame` frames
 opaque payload bytes, `@endo/cbor` encodes and decodes the bytes inside
@@ -238,11 +246,10 @@ class layer.
 }
 ```
 
-Text-string well-formedness (today checked in ocapn via
-`isWellFormedString` from `@endo/pass-style`) uses the engine-native
-`String.prototype.isWellFormed` so the package does not entrain
-`@endo/pass-style`; engine availability is an Open Question with a
-small local fallback as the escape hatch.
+Text-string well-formedness uses the `@endo/is-well-formed-string`
+ponyfill factored out for phase 1. The ponyfill uses the engine-native
+method where available and a manual surrogate scan otherwise, so
+`@endo/cbor` does not entrain `@endo/pass-style` or assume XS support.
 
 ### What moves, what stays
 
@@ -262,9 +269,9 @@ Phased so each step is independently landable and verifiable:
    suite: the vector tests from `packages/slots/test/cbor.test.js`
    (PR #124) and the primitive-level cases from
    `packages/ocapn/test/cbor/{encode,decode}.test.js`, plus a golden
-   hex-vector fixture (see Test Plan). Base per the repository's
-   base-branch inference rule: `master`, merged forward to `llm` and
-   `endor` in the ordinary course.
+   hex-vector fixture (see Test Plan). This phase landed on `llm` in
+   PR #755, as directed by the maintainer, for later porting to
+   `origin/master` when stable.
 2. **Migrate ocapn.** Replace the module-level helpers in
    `encode.js` / `decode.js` with imports; the `CborWriter` /
    `CborReader` classes and the `OcapnCodec` surface are unchanged.
@@ -279,13 +286,12 @@ Phased so each step is independently landable and verifiable:
    adversarial and end-to-end suites plus the Rust parity CI lane
    (`.github/workflows/rust-endor.yml`) stay green, proving the
    byte-identity contract with `rust/endo/slots` held.
-4. **Optional: migrate the daemon envelope codec** and revisit the
-   `@endo/cbor-frame` framing design, which may import `writeHead` /
-   `readHead` for its byte-string heads. Its recorded decision to
-   duplicate head-parsing scaffolding for independent auditability
-   ([cbor-frame.md](cbor-frame.md) section Dependencies) predates a shared
-   primitive package existing; whether to supersede that decision is
-   left to the maintainer at implementation time.
+4. **Optional: migrate the daemon envelope codec** and refactor
+   `@endo/cbor-frame` to import `writeHead` / `readHead` for its
+   byte-string heads through narrowly scoped module imports. Its
+   recorded decision to duplicate head-parsing scaffolding for
+   independent auditability ([cbor-frame.md](cbor-frame.md) section
+   Dependencies) predates the shared primitive package.
 
 Sequencing note: phase 1 and 2 do not depend on PR #124 merging;
 phase 3 does. If PR #124 instead rebases onto a landed phase 1, the
@@ -297,8 +303,8 @@ slots package can adopt `@endo/cbor` before merge and shed its
 | Package | Role |
 |---|---|
 | `@endo/cbor` (this design) | Encodes and decodes single CBOR items; the primitive layer |
-| [`@endo/cbor-frame`](cbor-frame.md) (impl PR #288; proposed as `@endo/cbors`) | Frames a stream of length-prefixed CBOR byte strings; payload bytes are opaque |
-| [`@endo/syrup-frame`](ocapn-tcp-syrup-framing.md) (landed on `llm`; proposed as `@endo/syrups`) | The Syrup-grammar framing sibling |
+| [`@endo/cbor-frame`](cbor-frame.md) (impl PR #288) | Frames a stream of length-prefixed CBOR byte strings; payload bytes are opaque |
+| [`@endo/syrup-frame`](ocapn-tcp-syrup-framing.md) (landed on `llm`) | The Syrup-grammar framing sibling |
 | `@endo/netstring` | The netstring-grammar framing sibling |
 | `packages/ocapn` | OCapN protocol codec; becomes a consumer |
 | `packages/slots` (PR #124) | Slot-machine wire protocol; becomes a consumer |
@@ -368,10 +374,13 @@ slots package can adopt `@endo/cbor` before merge and shed its
 
 ## Open Questions
 
+All four are resolved by the maintainer's 2026-07-15 review on
+[PR #710](https://github.com/endojs/endo-but-for-bots/pull/710) and by the
+phase-1 implementation in PR #755.
+
 1. **Is `@endo/cbor` acceptable alongside the framing package?**
    Resolved by the implementation: the framing sibling landed as
-   `@endo/cbor-frame` (PR #288), not the near-collision `@endo/cbors`
-   this section originally weighed, so the codec/framing distinction is
+   `@endo/cbor-frame` (PR #288), so the codec/framing distinction is
    now carried by an explicit `-frame` suffix rather than a single
    trailing letter. `@endo/cbor` stays as the primitive-codec name.
 2. **Should ocapn's signature-verification paths construct readers
@@ -389,11 +398,9 @@ slots package can adopt `@endo/cbor` before merge and shed its
    ponyfill that uses the engine-native method where it exists and a
    manual surrogate scan where it does not. `@endo/cbor` depends on
    that package rather than on the intrinsic or on `@endo/pass-style`.
-4. **Where does phase 1 land relative to PR #124?** The design
-   assumes `master` first with forward-merges to `llm` and `endor`,
-   and slots adopting post-merge (phase 3). If the maintainer prefers
-   the package to exist before #124 merges so the PR never ships its
-   private copy, phase 1 can target the `endor` line first.
+4. **Where does phase 1 land relative to PR #124?** Resolved by the
+   implementation: phase 1 landed on `llm` in PR #755 and can be ported
+   to `origin/master` when stable.
 
 ## Prompt
 

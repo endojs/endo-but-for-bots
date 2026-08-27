@@ -20,7 +20,7 @@ using length-prefixed Syrup byte-string framing on the wire
 The earlier reading in this design (that `@endo/syrups` was a separate
 "message-stream" layer carrying decoded structured Syrup values, one
 rung above PR 29's byte-string framer) was wrong.
-Both `@endo/cbors` (the sibling design in this PR) and
+Both `@endo/cbor-frame` (the sibling design in this PR) and
 `@endo/syrup-frame` (PR 29) carry `Uint8Array` at their boundaries;
 the value codec sits above either of them, not inside.
 Under the corrected reading, `@endo/syrups` and `@endo/syrup-frame` are
@@ -30,13 +30,13 @@ the same package by different names, and only one need ship.
 
 Adopt PR 29's design and rename the package and design from
 `@endo/syrup-frame` to `@endo/syrups`, so that the two streaming
-message-framing packages in this PR pair (`@endo/cbors` and
+message-framing packages in this PR pair (`@endo/cbor-frame` and
 `@endo/syrups`) share a naming convention.
 The rename has been applied to PR 29's branch across the package
 directory, `package.json`, exported reader and writer identifiers,
 design doc title, and PR title and body.
 
-## Effect on the sibling `@endo/cbors` design
+## Effect on the sibling `@endo/cbor-frame` design
 
 [`cbor-frame.md`](./cbor-frame.md) (the sibling design in this PR) is unaffected.
 It already carries `Uint8Array` at its boundaries and is the precise
