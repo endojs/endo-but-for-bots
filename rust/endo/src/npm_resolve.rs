@@ -404,7 +404,7 @@ pub fn resolve_transitive_outcome<H: HttpClient>(
             let mut resolved = Vec::with_capacity(selection.len());
             for (name, version) in &selection {
                 let entry = registry_table
-                    .lookup(name, version)
+                    .lookup(config.registry_for(name), name, version)
                     .map_err(|e| ResolveError::Fetch(FetchError::Io(e)))?
                     .expect("selected package must be in the registry table");
                 resolved.push(ResolvedPackage {

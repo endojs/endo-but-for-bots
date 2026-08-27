@@ -23,7 +23,7 @@
 //! caller is expected to schedule it onto a worker thread if it
 //! needs to interleave with an async runtime.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Read};
 
 use base64::Engine;
@@ -92,10 +92,7 @@ pub enum FetchError {
     /// metadata for this package.
     VersionMissing { name: String, version: String },
     /// The downloaded tarball failed its integrity check.
-    IntegrityMismatch {
-        expected: String,
-        actual: String,
-    },
+    IntegrityMismatch { expected: String, actual: String },
     /// The integrity string the registry returned was not in the
     /// recognised SRI form we support (e.g. `sha512-<base64>`).
     UnsupportedIntegrity(String),
@@ -186,9 +183,7 @@ impl UreqClient {
     /// own connection pool, so a per-fetch `UreqClient::new()` pays
     /// a fresh TCP/TLS handshake on every request.
     pub fn new() -> Self {
-        let agent = ureq::AgentBuilder::new()
-            .user_agent(USER_AGENT)
-            .build();
+        let agent = ureq::AgentBuilder::new().user_agent(USER_AGENT).build();
         UreqClient {
             agent,
             config: None,
@@ -209,11 +204,7 @@ impl UreqClient {
 
     fn request(&self, url: &str) -> ureq::Request {
         let mut request = self.agent.get(url);
-        if let Some(header) = self
-            .config
-            .as_ref()
-            .and_then(|config| config.auth_for(url))
-        {
+        if let Some(header) = self.config.as_ref().and_then(|config| config.auth_for(url)) {
             request = request.set("authorization", &header);
         }
         request
@@ -294,7 +285,7 @@ pub fn fetch_metadata_cached<H: HttpClient>(
     name: &str,
 ) -> Result<Vec<u8>, FetchError> {
     if let Some(cached) = registry_table
-        .get_meta(name)
+        .get_meta(registry_url, name)
         .map_err(FetchError::Io)?
     {
         return Ok(cached.into_bytes());
@@ -304,7 +295,7 @@ pub fn fetch_metadata_cached<H: HttpClient>(
     let body_str = std::str::from_utf8(&body)
         .map_err(|e| FetchError::BadMetadata(format!("non-utf8 body: {e}")))?;
     registry_table
-        .set_meta(name, body_str)
+        .set_meta(registry_url, name, body_str)
         .map_err(FetchError::Io)?;
     Ok(body)
 }
@@ -337,8 +328,14 @@ pub fn fetch_package<H: HttpClient>(
     name: &str,
     version: &str,
 ) -> Result<FetchResult, FetchError> {
-    // Fast path: already in the registry table.
-    if let Some(entry) = registry_table.lookup(name, version).map_err(FetchError::Io)? {
+    // Fast path: already in the registry table for this registry.
+    // The origin is part of the key, so a package cached against a
+    // different registry never satisfies this lookup — no
+    // cross-registry cache hit.
+    if let Some(entry) = registry_table
+        .lookup(registry_url, name, version)
+        .map_err(FetchError::Io)?
+    {
         return Ok(FetchResult {
             name: entry.name,
             version: entry.version,
@@ -350,12 +347,13 @@ pub fn fetch_package<H: HttpClient>(
     let meta_body = fetch_metadata_cached(http, registry_table, registry_url, name)?;
     let meta: PackageMeta = serde_json::from_slice(&meta_body)
         .map_err(|e| FetchError::BadMetadata(format!("parse metadata: {e}")))?;
-    let version_doc = meta.versions.get(version).ok_or_else(|| {
-        FetchError::VersionMissing {
+    let version_doc = meta
+        .versions
+        .get(version)
+        .ok_or_else(|| FetchError::VersionMissing {
             name: name.to_string(),
             version: version.to_string(),
-        }
-    })?;
+        })?;
 
     let tarball_bytes = http.get_tarball(&version_doc.dist.tarball)?;
 
@@ -367,6 +365,7 @@ pub fn fetch_package<H: HttpClient>(
 
     registry_table
         .insert(
+            registry_url,
             name,
             version,
             &tree_hash,
@@ -401,17 +400,14 @@ pub fn verify_integrity(integrity: &str, bytes: &[u8]) -> Result<(), FetchError>
     }
     let expected = base64::engine::general_purpose::STANDARD
         .decode(expected_b64)
-        .map_err(|e| {
-            FetchError::UnsupportedIntegrity(format!("{integrity}: {e}"))
-        })?;
+        .map_err(|e| FetchError::UnsupportedIntegrity(format!("{integrity}: {e}")))?;
     let mut hasher = Sha512::new();
     hasher.update(bytes);
     let actual = hasher.finalize();
     if actual.as_slice() == expected.as_slice() {
         Ok(())
     } else {
-        let actual_b64 =
-            base64::engine::general_purpose::STANDARD.encode(actual.as_slice());
+        let actual_b64 = base64::engine::general_purpose::STANDARD.encode(actual.as_slice());
         Err(FetchError::IntegrityMismatch {
             expected: integrity.to_string(),
             actual: format!("sha512-{actual_b64}"),
@@ -436,10 +432,7 @@ pub fn verify_integrity(integrity: &str, bytes: &[u8]) -> Result<(), FetchError>
 /// entries). Paths containing `..` or absolute components are
 /// likewise rejected, so a hostile tarball can never plant a
 /// traversal-shaped key in a tree manifest.
-pub fn extract_tarball_to_cas(
-    tarball: &[u8],
-    cas: &ContentStore,
-) -> Result<String, FetchError> {
+pub fn extract_tarball_to_cas(tarball: &[u8], cas: &ContentStore) -> Result<String, FetchError> {
     let decoder = GzDecoder::new(tarball);
     let mut archive = Archive::new(decoder);
 
@@ -544,12 +537,9 @@ impl DirNode {
 }
 
 pub(crate) fn materialise(node: &DirNode, cas: &ContentStore) -> Result<String, FetchError> {
-    // Stage entries in a HashMap so we honour `TreeManifest`'s
-    // declared type, then hand-serialise the JSON with sorted keys
-    // for tree-hash determinism (a plain `serde_json::to_vec` on a
-    // `HashMap` iterates in non-deterministic order, which would
-    // make the same input tarball hash differently across runs).
-    let mut entries: HashMap<String, TreeEntry> = HashMap::new();
+    // `TreeManifest` uses a BTreeMap, so derived JSON serialization is
+    // canonical and the tree hash is stable across runs.
+    let mut entries: BTreeMap<String, TreeEntry> = BTreeMap::new();
     for (name, (hash, size)) in &node.files {
         entries.insert(
             name.clone(),
@@ -572,38 +562,13 @@ pub(crate) fn materialise(node: &DirNode, cas: &ContentStore) -> Result<String, 
         );
     }
     let manifest = TreeManifest { entries };
-    let bytes = encode_manifest_sorted(&manifest)?;
-    cas.store_tree(&bytes).map_err(FetchError::Io)
-}
-
-/// Encode a [`TreeManifest`] as JSON with the `entries` object's
-/// keys in sorted order, so the on-disk byte order (and hence the
-/// CAS hash) is a stable function of the input.
-///
-/// `serde_json::to_vec` on the wrapped `HashMap` iterates in
-/// non-deterministic order; routing through `serde_json::Map`
-/// (which is backed by `BTreeMap` by default) sorts the keys.
-fn encode_manifest_sorted(manifest: &TreeManifest) -> Result<Vec<u8>, FetchError> {
-    let mut map = serde_json::Map::new();
-    for (name, entry) in &manifest.entries {
-        map.insert(
-            name.clone(),
-            serde_json::to_value(entry).map_err(|e| {
-                FetchError::Io(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("encode entry: {e}"),
-                ))
-            })?,
-        );
-    }
-    let mut outer = serde_json::Map::new();
-    outer.insert("entries".to_string(), serde_json::Value::Object(map));
-    serde_json::to_vec(&serde_json::Value::Object(outer)).map_err(|e| {
+    let bytes = serde_json::to_vec(&manifest).map_err(|e| {
         FetchError::Io(io::Error::new(
             io::ErrorKind::Other,
             format!("encode tree: {e}"),
         ))
-    })
+    })?;
+    cas.store_tree(&bytes).map_err(FetchError::Io)
 }
 
 /// Ensure the registry URL ends with `/`, so concatenation with a
@@ -676,9 +641,7 @@ mod tests {
                 header.set_size(content.len() as u64);
                 header.set_mode(0o644);
                 header.set_cksum();
-                builder
-                    .append_data(&mut header, path, *content)
-                    .unwrap();
+                builder.append_data(&mut header, path, *content).unwrap();
             }
             builder.finish().unwrap();
         }
@@ -735,7 +698,10 @@ mod tests {
     fn extract_strips_package_prefix() {
         let (_tmp, cas) = fresh_cas();
         let tarball = make_tarball(&[
-            ("package/package.json", br#"{"name":"is-odd","version":"3.0.1"}"# as &[u8]),
+            (
+                "package/package.json",
+                br#"{"name":"is-odd","version":"3.0.1"}"# as &[u8],
+            ),
             ("package/index.js", b"module.exports = n => n % 2 === 1;\n"),
             ("package/lib/util.js", b"// utility\n"),
         ]);
@@ -762,9 +728,7 @@ mod tests {
             "package/ prefix leaked into CAS tree: {names:?}"
         );
 
-        let pj = cas
-            .fetch_from_tree(&tree_hash, "package.json")
-            .unwrap();
+        let pj = cas.fetch_from_tree(&tree_hash, "package.json").unwrap();
         assert_eq!(pj, br#"{"name":"is-odd","version":"3.0.1"}"# as &[u8]);
 
         let util = cas.fetch_from_tree(&tree_hash, "lib/util.js").unwrap();
@@ -778,14 +742,8 @@ mod tests {
         // in different order.
         let (_tmp_a, cas_a) = fresh_cas();
         let (_tmp_b, cas_b) = fresh_cas();
-        let entries_a: &[(&str, &[u8])] = &[
-            ("package/a.js", b"A"),
-            ("package/b.js", b"B"),
-        ];
-        let entries_b: &[(&str, &[u8])] = &[
-            ("package/b.js", b"B"),
-            ("package/a.js", b"A"),
-        ];
+        let entries_a: &[(&str, &[u8])] = &[("package/a.js", b"A"), ("package/b.js", b"B")];
+        let entries_b: &[(&str, &[u8])] = &[("package/b.js", b"B"), ("package/a.js", b"A")];
         let h_a = extract_tarball_to_cas(&make_tarball(entries_a), &cas_a).unwrap();
         let h_b = extract_tarball_to_cas(&make_tarball(entries_b), &cas_b).unwrap();
         assert_eq!(h_a, h_b, "tree hash drifted with tar order");
@@ -797,7 +755,10 @@ mod tests {
         let registry = RegistryTable::open_in_memory().unwrap();
 
         let tarball = make_tarball(&[
-            ("package/package.json", br#"{"name":"is-odd","version":"3.0.1"}"# as &[u8]),
+            (
+                "package/package.json",
+                br#"{"name":"is-odd","version":"3.0.1"}"# as &[u8],
+            ),
             ("package/index.js", b"module.exports = n => n % 2 === 1;\n"),
         ]);
         let integrity = sri_sha512(&tarball);
@@ -810,22 +771,18 @@ mod tests {
             .respond("https://registry.npmjs.org/is-odd", metadata.into_bytes())
             .respond(tarball_url, tarball.clone());
 
-        let result = fetch_package(
-            &http,
-            &cas,
-            &registry,
-            DEFAULT_REGISTRY,
-            "is-odd",
-            "3.0.1",
-        )
-        .unwrap();
+        let result =
+            fetch_package(&http, &cas, &registry, DEFAULT_REGISTRY, "is-odd", "3.0.1").unwrap();
 
         assert_eq!(result.name, "is-odd");
         assert_eq!(result.version, "3.0.1");
         assert_eq!(result.integrity.as_deref(), Some(integrity.as_str()));
 
         // The registry table now carries the entry.
-        let entry = registry.lookup("is-odd", "3.0.1").unwrap().unwrap();
+        let entry = registry
+            .lookup(DEFAULT_REGISTRY, "is-odd", "3.0.1")
+            .unwrap()
+            .unwrap();
         assert_eq!(entry.hash, result.tree_hash);
 
         // The CAS contains the extracted files at the expected
@@ -834,22 +791,14 @@ mod tests {
             .fetch_from_tree(&result.tree_hash, "package.json")
             .unwrap();
         assert_eq!(
-            pj,
-            br#"{"name":"is-odd","version":"3.0.1"}"# as &[u8],
+            pj, br#"{"name":"is-odd","version":"3.0.1"}"# as &[u8],
             "package.json round-tripped through fetch_package"
         );
 
         // A second call hits the cache: no further HTTP calls.
         let before = http.calls.borrow().len();
-        let again = fetch_package(
-            &http,
-            &cas,
-            &registry,
-            DEFAULT_REGISTRY,
-            "is-odd",
-            "3.0.1",
-        )
-        .unwrap();
+        let again =
+            fetch_package(&http, &cas, &registry, DEFAULT_REGISTRY, "is-odd", "3.0.1").unwrap();
         assert_eq!(again.tree_hash, result.tree_hash);
         assert_eq!(
             http.calls.borrow().len(),
@@ -866,13 +815,15 @@ mod tests {
         let (_tmp, cas) = fresh_cas();
         let registry = RegistryTable::open_in_memory().unwrap();
 
-        let real_tarball = make_tarball(&[
-            ("package/package.json", br#"{"name":"x","version":"1.0.0"}"# as &[u8]),
-        ]);
+        let real_tarball = make_tarball(&[(
+            "package/package.json",
+            br#"{"name":"x","version":"1.0.0"}"# as &[u8],
+        )]);
         let claimed_integrity = sri_sha512(&real_tarball);
-        let tampered_tarball = make_tarball(&[
-            ("package/package.json", br#"{"name":"x","version":"1.0.0","evil":true}"# as &[u8]),
-        ]);
+        let tampered_tarball = make_tarball(&[(
+            "package/package.json",
+            br#"{"name":"x","version":"1.0.0","evil":true}"# as &[u8],
+        )]);
         let tarball_url = "https://registry.npmjs.org/x/-/x-1.0.0.tgz";
         let metadata = format!(
             r#"{{"versions":{{"1.0.0":{{"dist":{{"tarball":"{tarball_url}","integrity":"{claimed_integrity}"}}}}}}}}"#
@@ -882,19 +833,15 @@ mod tests {
             .respond("https://registry.npmjs.org/x", metadata.into_bytes())
             .respond(tarball_url, tampered_tarball);
 
-        match fetch_package(
-            &http,
-            &cas,
-            &registry,
-            DEFAULT_REGISTRY,
-            "x",
-            "1.0.0",
-        ) {
+        match fetch_package(&http, &cas, &registry, DEFAULT_REGISTRY, "x", "1.0.0") {
             Err(FetchError::IntegrityMismatch { .. }) => {}
             other => panic!("expected IntegrityMismatch, got {other:?}"),
         }
         // Registry must not have been updated.
-        assert!(registry.lookup("x", "1.0.0").unwrap().is_none());
+        assert!(registry
+            .lookup(DEFAULT_REGISTRY, "x", "1.0.0")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -903,17 +850,10 @@ mod tests {
         let registry = RegistryTable::open_in_memory().unwrap();
         let metadata =
             r#"{"versions":{"1.0.0":{"dist":{"tarball":"https://example.invalid/x.tgz"}}}}"#;
-        let http = MockHttp::new()
-            .respond("https://registry.npmjs.org/x", metadata.as_bytes().to_vec());
+        let http =
+            MockHttp::new().respond("https://registry.npmjs.org/x", metadata.as_bytes().to_vec());
 
-        match fetch_package(
-            &http,
-            &cas,
-            &registry,
-            DEFAULT_REGISTRY,
-            "x",
-            "9.9.9",
-        ) {
+        match fetch_package(&http, &cas, &registry, DEFAULT_REGISTRY, "x", "9.9.9") {
             Err(FetchError::VersionMissing { name, version }) => {
                 assert_eq!(name, "x");
                 assert_eq!(version, "9.9.9");
@@ -928,14 +868,11 @@ mod tests {
         // mock's call log must not grow on the second call.
         let registry = RegistryTable::open_in_memory().unwrap();
         let body = br#"{"versions":{}}"#;
-        let http = MockHttp::new()
-            .respond("https://registry.npmjs.org/foo", body.to_vec());
+        let http = MockHttp::new().respond("https://registry.npmjs.org/foo", body.to_vec());
 
-        let first =
-            fetch_metadata_cached(&http, &registry, DEFAULT_REGISTRY, "foo").unwrap();
+        let first = fetch_metadata_cached(&http, &registry, DEFAULT_REGISTRY, "foo").unwrap();
         let calls_after_first = http.calls.borrow().len();
-        let second =
-            fetch_metadata_cached(&http, &registry, DEFAULT_REGISTRY, "foo").unwrap();
+        let second = fetch_metadata_cached(&http, &registry, DEFAULT_REGISTRY, "foo").unwrap();
         assert_eq!(first, second);
         assert_eq!(
             http.calls.borrow().len(),
@@ -982,8 +919,7 @@ mod tests {
                 .unwrap();
             builder.finish().unwrap();
         }
-        let mut gz =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         gz.write_all(&tar_buf).unwrap();
         let tarball = gz.finish().unwrap();
 
@@ -1012,8 +948,7 @@ mod tests {
                 .unwrap();
             builder.finish().unwrap();
         }
-        let mut gz =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         gz.write_all(&tar_buf).unwrap();
         let tarball = gz.finish().unwrap();
 
@@ -1038,16 +973,14 @@ mod tests {
             let mut builder = tar::Builder::new(&mut tar_buf);
             let mut header = tar::Header::new_gnu();
             let path_bytes = b"package/../etc/passwd";
-            header.as_old_mut().name[..path_bytes.len()]
-                .copy_from_slice(path_bytes);
+            header.as_old_mut().name[..path_bytes.len()].copy_from_slice(path_bytes);
             header.set_size(content.len() as u64);
             header.set_mode(0o644);
             header.set_cksum();
             builder.append(&header, content).unwrap();
             builder.finish().unwrap();
         }
-        let mut gz =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         gz.write_all(&tar_buf).unwrap();
         let tarball = gz.finish().unwrap();
 
@@ -1069,7 +1002,13 @@ mod tests {
         let (_tmp, cas) = fresh_cas();
         let registry = RegistryTable::open_in_memory().unwrap();
         registry
-            .insert("pre-seeded", "1.2.3", "deadbeef", Some("sha512-cached"))
+            .insert(
+                DEFAULT_REGISTRY,
+                "pre-seeded",
+                "1.2.3",
+                "deadbeef",
+                Some("sha512-cached"),
+            )
             .unwrap();
 
         let http = MockHttp::new();
@@ -1094,6 +1033,65 @@ mod tests {
     }
 
     #[test]
+    fn fetch_package_does_not_serve_across_registries() {
+        // Wrong-origin regression: `foo@1.2.3` cached from registry A
+        // must NOT be served from cache for a fetch configured against
+        // registry B. The registry origin is part of the key, so the
+        // fast-path lookup misses and B is fetched on its own terms;
+        // the two origins' entries coexist. Were the origin absent from
+        // the key, this fetch would short-circuit to registry A's tree
+        // — a cross-registry cache collision.
+        const REGISTRY_A: &str = "https://registry.npmjs.org/";
+        const REGISTRY_B: &str = "https://registry.other.example/";
+
+        let (_tmp, cas) = fresh_cas();
+        let registry = RegistryTable::open_in_memory().unwrap();
+        // Registry A already holds an entry for foo@1.2.3.
+        registry
+            .insert(REGISTRY_A, "foo", "1.2.3", "tree-from-a", Some("sha512-a"))
+            .unwrap();
+
+        // Registry B serves its own foo@1.2.3 tarball.
+        let tarball = make_tarball(&[(
+            "package/package.json",
+            br#"{"name":"foo","version":"1.2.3"}"# as &[u8],
+        )]);
+        let tarball_url = "https://registry.other.example/foo/-/foo-1.2.3.tgz";
+        let metadata =
+            format!(r#"{{"versions":{{"1.2.3":{{"dist":{{"tarball":"{tarball_url}"}}}}}}}}"#);
+        let http = MockHttp::new()
+            .respond("https://registry.other.example/foo", metadata.into_bytes())
+            .respond(tarball_url, tarball.clone());
+
+        let result = fetch_package(&http, &cas, &registry, REGISTRY_B, "foo", "1.2.3")
+            .expect("registry B fetch must succeed on its own terms");
+        // The result is registry B's freshly extracted tree, never A's.
+        assert_ne!(result.tree_hash, "tree-from-a");
+        assert!(
+            !http.calls.borrow().is_empty(),
+            "registry B must have been fetched, not served from A's cache"
+        );
+
+        // Both origins' entries coexist, each keyed to its registry.
+        assert_eq!(
+            registry
+                .lookup(REGISTRY_A, "foo", "1.2.3")
+                .unwrap()
+                .unwrap()
+                .hash,
+            "tree-from-a"
+        );
+        assert_eq!(
+            registry
+                .lookup(REGISTRY_B, "foo", "1.2.3")
+                .unwrap()
+                .unwrap()
+                .hash,
+            result.tree_hash
+        );
+    }
+
+    #[test]
     fn fetch_package_accepts_missing_integrity() {
         // Very old packages publish `shasum` but no `integrity`.  The
         // module's contract is to extract anyway and store `integrity =
@@ -1112,40 +1110,30 @@ mod tests {
         // No `integrity` field; only `tarball` (and no `shasum` either,
         // which is fine: shasum is only read via the `#[allow(dead_code)]`
         // field and never enforced here).
-        let metadata = format!(
-            r#"{{"versions":{{"0.0.1":{{"dist":{{"tarball":"{tarball_url}"}}}}}}}}"#
-        );
+        let metadata =
+            format!(r#"{{"versions":{{"0.0.1":{{"dist":{{"tarball":"{tarball_url}"}}}}}}}}"#);
 
         let http = MockHttp::new()
-            .respond(
-                "https://registry.npmjs.org/legacy",
-                metadata.into_bytes(),
-            )
+            .respond("https://registry.npmjs.org/legacy", metadata.into_bytes())
             .respond(tarball_url, tarball.clone());
 
-        let result = fetch_package(
-            &http,
-            &cas,
-            &registry,
-            DEFAULT_REGISTRY,
-            "legacy",
-            "0.0.1",
-        )
-        .expect("missing-integrity branch must still extract");
+        let result = fetch_package(&http, &cas, &registry, DEFAULT_REGISTRY, "legacy", "0.0.1")
+            .expect("missing-integrity branch must still extract");
         assert!(
             result.integrity.is_none(),
             "expected integrity=None, got {:?}",
             result.integrity
         );
-        let entry = registry.lookup("legacy", "0.0.1").unwrap().unwrap();
+        let entry = registry
+            .lookup(DEFAULT_REGISTRY, "legacy", "0.0.1")
+            .unwrap()
+            .unwrap();
         assert!(
             entry.integrity.is_none(),
             "registry row should carry NULL integrity"
         );
         // The extracted file still landed in the CAS.
-        let pj = cas
-            .fetch_from_tree(&entry.hash, "package.json")
-            .unwrap();
+        let pj = cas.fetch_from_tree(&entry.hash, "package.json").unwrap();
         assert_eq!(pj, br#"{"name":"legacy","version":"0.0.1"}"# as &[u8]);
     }
 
@@ -1164,14 +1152,7 @@ mod tests {
             b"this is not json".to_vec(),
         );
 
-        match fetch_package(
-            &http,
-            &cas,
-            &registry,
-            DEFAULT_REGISTRY,
-            "broken",
-            "1.0.0",
-        ) {
+        match fetch_package(&http, &cas, &registry, DEFAULT_REGISTRY, "broken", "1.0.0") {
             Err(FetchError::BadMetadata(msg)) => {
                 assert!(
                     msg.contains("parse metadata"),
@@ -1205,7 +1186,10 @@ mod tests {
             other => panic!("expected BadMetadata(non-utf8 ...), got {other:?}"),
         }
         // Nothing should have been cached.
-        assert!(registry.get_meta("binary").unwrap().is_none());
+        assert!(registry
+            .get_meta(DEFAULT_REGISTRY, "binary")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -1290,8 +1274,7 @@ mod tests {
                 .unwrap();
             builder.finish().unwrap();
         }
-        let mut gz =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         gz.write_all(&tar_buf).unwrap();
         let tarball = gz.finish().unwrap();
 
@@ -1341,8 +1324,7 @@ mod tests {
             .to_string()
             .starts_with("unsupported integrity form: "));
 
-        let io_err: FetchError =
-            io::Error::new(io::ErrorKind::Other, "disk gone").into();
+        let io_err: FetchError = io::Error::new(io::ErrorKind::Other, "disk gone").into();
         let s = io_err.to_string();
         assert!(s.starts_with("io: "), "got {s:?}");
         assert!(s.contains("disk gone"));
@@ -1378,7 +1360,13 @@ mod tests {
         let (_tmp, cas) = fresh_cas();
         let registry = RegistryTable::open_in_memory().unwrap();
         registry
-            .insert("cached", "1.0.0", "cafe", Some("sha512-x"))
+            .insert(
+                DEFAULT_REGISTRY,
+                "cached",
+                "1.0.0",
+                "cafe",
+                Some("sha512-x"),
+            )
             .unwrap();
 
         let http = OfflineClient;
@@ -1386,7 +1374,14 @@ mod tests {
             .expect("cached package must resolve offline");
         assert_eq!(hit.tree_hash, "cafe");
 
-        match fetch_package(&http, &cas, &registry, DEFAULT_REGISTRY, "uncached", "1.0.0") {
+        match fetch_package(
+            &http,
+            &cas,
+            &registry,
+            DEFAULT_REGISTRY,
+            "uncached",
+            "1.0.0",
+        ) {
             Err(FetchError::Offline { url }) => {
                 assert_eq!(url, "https://registry.npmjs.org/uncached");
             }
@@ -1419,23 +1414,14 @@ mod tests {
     #[test]
     fn live_registry_fetch_is_odd() {
         if std::env::var("ENDOR_REGISTRY_LIVE_TEST").ok().as_deref() != Some("1") {
-            eprintln!(
-                "skipping live registry test (set ENDOR_REGISTRY_LIVE_TEST=1 to enable)"
-            );
+            eprintln!("skipping live registry test (set ENDOR_REGISTRY_LIVE_TEST=1 to enable)");
             return;
         }
         let (_tmp, cas) = fresh_cas();
         let registry = RegistryTable::open_in_memory().unwrap();
         let http = UreqClient::new();
-        let result = fetch_package(
-            &http,
-            &cas,
-            &registry,
-            DEFAULT_REGISTRY,
-            "is-odd",
-            "3.0.1",
-        )
-        .expect("live fetch of is-odd@3.0.1");
+        let result = fetch_package(&http, &cas, &registry, DEFAULT_REGISTRY, "is-odd", "3.0.1")
+            .expect("live fetch of is-odd@3.0.1");
         assert_eq!(result.name, "is-odd");
         assert_eq!(result.version, "3.0.1");
         // The published is-odd@3.0.1 package always contains a
