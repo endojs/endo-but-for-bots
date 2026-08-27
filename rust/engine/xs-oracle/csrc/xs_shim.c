@@ -448,6 +448,162 @@ void xs_oracle_free(EndorOracleResult *out)
 }
 
 /*
+ * MULTI-CRANK oracle mode (the wave-6 pattern-2 antidote): run
+ * `crankCount` script sources SEQUENTIALLY on ONE machine, capturing a
+ * full EndorOracleResult per crank — bytecode/symbols (each crank's
+ * own compile), run-only computrons (meterIndex reset per crank,
+ * exactly as xs_oracle_run measures a single crank), the microtask
+ * drain included (the pump-loop latch), and the completion value.
+ *
+ * This is what lets the differential harness compare CROSS-CRANK
+ * semantics — state created by crank 1 observed by crank 2 — where the
+ * single-crank entry structurally cannot (a class of divergence the
+ * wave-6 analysis showed 1093 single-crank tests missed). The harness
+ * scope is the self-contained-crank contract the ironhorse side pins:
+ * data/state reads across cranks, never calls of a prior crank's
+ * functions (ironhorse's crank bytecode is the caller's; XS retains
+ * it, so such a fixture diverges by design and is out of scope).
+ *
+ * An uncaught throw in crank i captures into outs[i] exactly as the
+ * single-crank entry's catch does and STOPS the run; later cranks are
+ * left ok == 0 with no code (the harness compares up to and including
+ * the aborting crank). Every out slot must be released with
+ * xs_oracle_free regardless.
+ */
+int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
+	txU4 crankCount, EndorOracleResult *outs)
+{
+	txMachine *the;
+	/* Survives the mxCatch longjmp, so the catch attributes the throw
+	 * to the crank that raised it. */
+	volatile txU4 crank_i = 0;
+	txU4 j;
+
+	for (j = 0; j < crankCount; j++)
+		memset(&outs[j], 0, sizeof(outs[j]));
+
+	the = xs_oracle_create_machine("xs-oracle-cranks");
+	if (!the)
+		return -1;
+
+	the = fxBeginHost(the);
+	{
+		mxTry(the) {
+			/* The Hardened-JavaScript globals + test262 host hook, exactly
+			 * as xs_oracle_run installs them (see its comment for why the
+			 * global must be the stack top during the installs). */
+			{
+				txSlot *slot;
+				mxPush(mxGlobal);
+				slot = fxLastProperty(the, fxToInstance(the, the->stack));
+				slot = fxNextHostFunctionProperty(the, slot, fx_harden, 1,
+					fxID(the, "harden"), XS_DONT_ENUM_FLAG);
+				slot = fxNextHostFunctionProperty(the, slot, fx_lockdown, 0,
+					fxID(the, "lockdown"), XS_DONT_ENUM_FLAG);
+				slot = fxNextHostFunctionProperty(the, slot, fx_petrify, 1,
+					fxID(the, "petrify"), XS_DONT_ENUM_FLAG);
+				slot = fxNextHostFunctionProperty(the, slot, fx_mutabilities, 1,
+					fxID(the, "mutabilities"), XS_DONT_ENUM_FLAG);
+				mxPop();
+			}
+			{
+				txSlot *slot;
+				txSlot *global;
+				txSlot *host;
+				mxPush(mxGlobal);
+				global = the->stack;
+				mxPush(mxObjectPrototype);
+				slot = fxLastProperty(the, fxNewObjectInstance(the));
+				slot = fxNextHostFunctionProperty(the, slot,
+					fx_endor_detachArrayBuffer, 1,
+					fxID(the, "detachArrayBuffer"), XS_DONT_ENUM_FLAG);
+				host = the->stack;
+				slot = fxLastProperty(the, fxToInstance(the, global));
+				(void)fxNextSlotProperty(the, slot, host,
+					fxID(the, "$262"), XS_DONT_ENUM_FLAG);
+				mxPop();
+				mxPop();
+			}
+
+			for (crank_i = 0; crank_i < crankCount; crank_i++) {
+				EndorOracleResult *out = &outs[crank_i];
+				txStringCStream stream;
+				txScript *script;
+				txSlot *module;
+				txSlot *realm;
+				txSlot *result;
+
+				stream.buffer = (txString)sources[crank_i];
+				stream.offset = 0;
+				stream.size = (txSize)sourceLens[crank_i];
+
+				/* Compile this crank (parse metering discarded below). */
+				script = fxParseScript(the, &stream, fxStringCGetter,
+					mxProgramFlag | mxEvalFlag);
+
+				out->code_size = (txU4)script->codeSize;
+				if (script->codeSize > 0) {
+					out->code = (txS1 *)malloc(script->codeSize);
+					if (out->code)
+						memcpy(out->code, script->codeBuffer, script->codeSize);
+				}
+				if (script->symbolsBuffer && script->symbolsSize > 0) {
+					out->symbols_size = (txU4)script->symbolsSize;
+					out->symbols = (txS1 *)malloc(script->symbolsSize);
+					if (out->symbols)
+						memcpy(out->symbols, script->symbolsBuffer, script->symbolsSize);
+				}
+
+				module = mxProgram.value.reference;
+				realm = mxModuleInstanceInternal(module)->value.module.realm;
+
+				/* Measure THIS crank's run only. */
+				the->meterIndex = 0;
+				fxRunScript(the, script, mxRealmGlobal(realm), C_NULL,
+					mxRealmClosures(realm)->value.reference, C_NULL, module);
+				/* Per-crank microtask drain (the pump-loop latch). */
+				while (the->promiseJobs) {
+					the->promiseJobs = 0;
+					fxRunPromiseJobs(the);
+				}
+				out->computrons = the->meterIndex >> 16;
+				out->meter_raw = (txU4)the->meterIndex;
+
+				result = the->stack;
+				fxToString(the, result);
+				{
+					txString s = result->value.string;
+					if (s) {
+						strncpy(out->result, s, ENDOR_RESULT_MAX - 1);
+						out->result[ENDOR_RESULT_MAX - 1] = 0;
+					}
+				}
+				mxPop();
+				out->ok = 1;
+			}
+		}
+		mxCatch(the) {
+			EndorOracleResult *out = &outs[crank_i];
+			out->ok = 0;
+			out->computrons = the->meterIndex >> 16;
+			out->meter_raw = (txU4)the->meterIndex;
+			if (mxException.kind != XS_UNDEFINED_KIND) {
+				mxPush(mxException);
+				fxToString(the, the->stack);
+				if (the->stack->value.string) {
+					strncpy(out->error, the->stack->value.string, ENDOR_ERROR_MAX - 1);
+					out->error[ENDOR_ERROR_MAX - 1] = 0;
+				}
+				mxPop();
+			}
+		}
+	}
+	fxEndHost(the);
+	xs_oracle_delete_machine(the);
+	return 0;
+}
+
+/*
  * Compile `source` as a MODULE goal and return the emitted bytecode
  * WITHOUT running it (stage-5 modules child, PR #600).
  *

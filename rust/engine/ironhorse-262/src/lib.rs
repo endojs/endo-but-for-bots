@@ -404,6 +404,91 @@ pub fn dual_run_with(source: &str, compiler: Compiler) -> Option<DualRun> {
     Some(build_dual_run(source, oracle, ironhorse, compile, bytecode))
 }
 
+/// MULTI-CRANK differential mode (the wave-6 pattern-2 antidote): run
+/// `sources` as SEQUENTIAL CRANKS on one machine per engine — XS keeps
+/// one live machine across every crank (`xs_oracle::run_cranks`), and
+/// ironhorse keeps one `Interp`, relinking each crank's oracle-emitted
+/// bytecode (`relink_crank`, the managed-lifecycle path) — and compare
+/// per crank. This is the harness's window onto CROSS-CRANK semantics
+/// (state created by one crank observed by a later one), which
+/// [`dual_run`] structurally cannot see: the class of divergence the
+/// wave-6 analysis showed 1093 single-crank tests missed (an error
+/// constructor's own `message` read by a LATER crank was its live
+/// specimen).
+///
+/// Scope: the self-contained-crank contract — data/state reads across
+/// cranks, never calls of a prior crank's functions (ironhorse's crank
+/// bytecode is the caller's; XS retains it, so such a fixture diverges
+/// by design). Per-crank ironhorse computrons are the RAW meter delta
+/// across the crank (`meter_index`), matching the shim's per-crank
+/// `meterIndex` reset. The run stops at the first crank where either
+/// engine fails to complete (that crank's comparison is returned;
+/// later sources are not run).
+///
+/// Returns `None` only if the oracle machine fails to start.
+pub fn dual_run_cranks(sources: &[&str]) -> Option<Vec<DualRun>> {
+    let oracle_outcomes = xs_oracle::run_cranks(sources)?;
+    let mut interp: Option<ironhorse_vm::Interp> = None;
+    let mut prev_raw: u64 = 0;
+    let mut out = Vec::new();
+    for (source, oracle) in sources.iter().zip(oracle_outcomes) {
+        let bytecode = oracle.bytecode.clone();
+        let names = ironhorse_vm::parse_symbols(&oracle.symbols);
+        let mut ironhorse = if bytecode.is_empty() {
+            // The oracle did not emit this crank (a parse failure, or a
+            // prior crank aborted the run): present ironhorse's side as
+            // the same non-run.
+            RunOutcome {
+                completed: false,
+                result: String::new(),
+                computrons: 0,
+                dispatched: 0,
+                meter_raw: 0,
+                halt: ironhorse_vm::Halt::Throw("SyntaxError".to_string()),
+            }
+        } else {
+            match interp.as_mut() {
+                None => {
+                    let mut m = interp_with_source_bridge(&names);
+                    let o = m.run(&bytecode);
+                    interp = Some(m);
+                    o
+                }
+                Some(m) => match m.relink_crank(&bytecode, &names) {
+                    Ok(relinked) => m.run(&relinked),
+                    Err(e) => RunOutcome {
+                        completed: false,
+                        result: String::new(),
+                        computrons: 0,
+                        dispatched: 0,
+                        meter_raw: 0,
+                        halt: ironhorse_vm::Halt::Decode(format!("relink refused: {e:?}")),
+                    },
+                },
+            }
+        };
+        // Per-crank metering: the raw delta across this crank, shifted
+        // exactly as the shim shifts its per-crank reset index.
+        let raw_now = interp.as_ref().map(|m| m.meter_index()).unwrap_or(0);
+        let crank_raw = raw_now.saturating_sub(prev_raw);
+        prev_raw = raw_now;
+        ironhorse.computrons = crank_raw >> 16;
+        ironhorse.meter_raw = crank_raw;
+        let stop = !(oracle.completed && ironhorse.completed);
+        out.push(build_dual_run(
+            source,
+            oracle,
+            ironhorse,
+            IronhorseCompile::NotAttempted,
+            bytecode,
+        ));
+        if stop {
+            break;
+        }
+    }
+    Some(out)
+}
+
 /// Assemble a [`DualRun`] record from an oracle outcome and ironhorse's run of
 /// (the compiler-selected) `bytecode`, computing the four-valued agreement plus
 /// the result/computron/error comparisons. Shared by [`dual_run_with`] and
