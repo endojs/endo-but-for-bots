@@ -162,6 +162,15 @@ pub const RESUMED_HANDLER_THROW_METERING: u64 = crate::meter::CODE_METERING;
 /// engines instead of ironhorse's unbounded `Vec` completing where XS
 /// overflows.
 pub const STACK_SLOT_COUNT: usize = 4096;
+
+/// Live-slot ceiling for a BOUNDED run (wave-6 CI fuzz trophy
+/// `oom-60435549…`): the unmetered decoder harness bounds dispatch
+/// COUNT but not memory, so a program minting a retained side-table
+/// entry per dispatch (a self-feeding `START_ASYNC` loop) OOMs before
+/// the step ceiling. One million live slots is far past any legitimate
+/// ≤21-byte fuzz input yet holds a bounded run well under the harness's
+/// 2 GiB cap. Never consulted in production (`step_limit == u64::MAX`).
+const BOUNDED_RUN_SLOT_CEILING: u32 = 1_000_000;
 /// XS reserves a fixed band at the top of the stack for the machine roots
 /// (`mxGlobal`/`mxException`/`mxProgram`/… — the `*StackIndex` slots in
 /// `xsAll.h`) plus the frame scratch `fxOverflow` guards against; the
@@ -8944,6 +8953,22 @@ impl Interp {
             // top so every recursive `dispatch_at` entry (callbacks, promise
             // jobs) shares the one cumulative ceiling.
             if self.n_dispatched >= self.step_limit {
+                return Halt::StepLimit(self.n_dispatched);
+            }
+            // Memory wedge guard, bounded mode ONLY (`step_limit` is
+            // `u64::MAX` in production, which relies on the computron
+            // meter to bound allocation). A hostile program can mint a
+            // retained side-table entry per dispatch — e.g. a
+            // self-feeding `START_ASYNC` loop allocates an async
+            // instance (and its saved-frame Vecs) each step — so the
+            // dispatch ceiling alone lets an unmetered bounded run
+            // (the decoder fuzz harness) reach it 2M times and OOM
+            // before it halts. Bound live slots too: a bounded wedge is
+            // memory as much as time, and no real ≤21-byte fuzz input
+            // legitimately reaches a million live slots.
+            if self.step_limit != u64::MAX
+                && self.slots.live_count() >= BOUNDED_RUN_SLOT_CEILING
+            {
                 return Halt::StepLimit(self.n_dispatched);
             }
             if pc >= len {
