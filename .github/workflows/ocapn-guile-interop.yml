@@ -106,8 +106,8 @@ jobs:
           # bump or upstream re-publish forces a fresh download.
           key: guix-binary-x86_64-linux-${{ env.GUIX_VERSION }}-${{ env.GUIX_TARBALL_SHA256 }}
       - name: Download Guix stable tarball
-        # `ftp.gnu.org/gnu/guix/` is the GNU project's canonical
-        # mirror for release binaries. It is operationally independent
+        # `ftpmirror.gnu.org/guix/` redirects to an available GNU mirror
+        # for release binaries. It is operationally independent
         # from `ci.guix.gnu.org` (the substitute server), so a
         # substitute outage does not block the install path.
         #
@@ -125,7 +125,7 @@ jobs:
           command: |
             set -euo pipefail
             rm -f guix-binary.x86_64-linux.tar.xz.tmp guix-binary.x86_64-linux.tar.xz
-            wget -nv "https://ftp.gnu.org/gnu/guix/guix-binary-${GUIX_VERSION}.x86_64-linux.tar.xz" -O guix-binary.x86_64-linux.tar.xz.tmp
+            wget -nv "https://ftpmirror.gnu.org/guix/guix-binary-${GUIX_VERSION}.x86_64-linux.tar.xz" -O guix-binary.x86_64-linux.tar.xz.tmp
             file guix-binary.x86_64-linux.tar.xz.tmp | grep -q 'XZ compressed data'
             echo "${GUIX_TARBALL_SHA256}  guix-binary.x86_64-linux.tar.xz.tmp" | sha256sum --check --strict
             mv guix-binary.x86_64-linux.tar.xz.tmp guix-binary.x86_64-linux.tar.xz
