@@ -268,6 +268,10 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("generator_proto", &[Req::GcRoots], "boot anchor"),
     ("async_function_proto", &[Req::GcRoots], "boot anchor"),
     ("regexp_proto", &[Req::GcRoots], "boot anchor"),
+    ("iterator_proto", &[Req::GcRoots], "boot anchor (llm Iterator global, 2026-08-28 rebase)"),
+    ("map_iterator_proto", &[Req::GcRoots], "boot anchor (llm Map/Set iterator protos)"),
+    ("set_iterator_proto", &[Req::GcRoots], "boot anchor (llm Map/Set iterator protos)"),
+    ("date_proto", &[Req::GcRoots], "boot anchor (llm Date core; rooted beside its siblings)"),
     ("math_object", &[Req::GcRoots], "boot anchor"),
     ("gen_run_stack", &[Req::GcRoots], "mid-resume generator stack"),
     ("async_run_stack", &[Req::GcRoots], "mid-step async stack"),
@@ -307,6 +311,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("static_str", &[Req::ChunkRemap], "boot static-string chunk offsets"),
     // --- weak-keyed data tables: slot-free values, pruned on sweep ---
     ("error_data", &[Req::ValueSlotFree, Req::PrunedBothPaths], "error render metadata"),
+    ("dates", &[Req::ValueSlotFree, Req::PrunedBothPaths], "Date epoch-ms records (llm Date core)"),
     ("locales", &[Req::ValueSlotFree, Req::PrunedBothPaths], "Intl.Locale data"),
     ("collators", &[Req::ValueSlotFree, Req::PrunedBothPaths], "Intl.Collator data"),
     ("list_formats", &[Req::ValueSlotFree, Req::PrunedBothPaths], "Intl.ListFormat data"),

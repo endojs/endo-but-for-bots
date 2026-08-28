@@ -314,6 +314,12 @@ pub enum SideTable {
     /// (`intl_carry.rs`). The bound-function LINKS split into
     /// [`SideTable::IntlBoundFunctions`] below.
     IntlRecords,
+    /// `dates` — per-instance `Date` internal slots (the epoch
+    /// milliseconds, one `f64` keyed by the branded instance slot;
+    /// the llm mainline's Date-core landing, 2026-08-28 rebase).
+    /// Pure data — the same class as the Temporal records — so its
+    /// carry is a recorded follow-up, not a design blocker.
+    Dates,
     /// The Intl bound-function link tables
     /// (`collator_compare_functions`, `number_format_bound_functions`)
     /// and the `NumberFormatData::bound_format` cache they mirror. A
@@ -422,6 +428,7 @@ impl SideTable {
         SideTable::AsyncRunStack,
         SideTable::RegExps,
         SideTable::TemporalRecords,
+        SideTable::Dates,
         SideTable::AsyncGenerators,
         SideTable::PrivateElements,
         SideTable::DisposableStacks,
@@ -547,6 +554,10 @@ impl SideTable {
             SideTable::TemporalRecords => {
                 ("temporal_instants/temporal_durations/temporal_plains/temporal_zoneds", Serialized)
             }
+            // The mainline's Date-core table (2026-08-28 rebase): pure
+            // per-instance data, the Temporal-records class; Pending
+            // until an atom carries it (a recorded follow-up).
+            SideTable::Dates => ("dates", Pending),
             SideTable::AsyncGenerators => ("async_generators/async_gen_run_stack", Pending),
             SideTable::PrivateElements => ("private_values/private_accessors", Pending),
             SideTable::DisposableStacks => ("disposable_stacks", Pending),
@@ -624,7 +635,7 @@ mod tests {
     fn all_is_exhaustive() {
         // Count of variants, kept beside the enum. Bump when a variant is
         // added — the assertion below then forces the ALL entry too.
-        const VARIANT_COUNT: usize = 40;
+        const VARIANT_COUNT: usize = 41;
         assert_eq!(SideTable::ALL.len(), VARIANT_COUNT);
 
         // No duplicates: each field name appears once.
@@ -685,7 +696,7 @@ mod tests {
             "async_run_stack", "async_generators", "async_gen_run_stack",
             "private_values", "private_accessors", "disposable_stacks", "regexps",
             "temporal_instants", "temporal_durations", "temporal_plains",
-            "temporal_zoneds", "locales", "collators", "list_formats", "plural_rules",
+            "temporal_zoneds", "dates", "locales", "collators", "list_formats", "plural_rules",
             "number_formats", "segmenters", "segments", "segment_iterators",
             "date_time_formats", "collator_compare_functions",
             "number_format_bound_functions", "code_segments", "func_segments",
@@ -724,6 +735,7 @@ mod tests {
             "string_proto", "number_proto", "symbol_proto", "promise_proto",
             "generator_proto", "generator_function_proto", "async_function_proto",
             "async_generator_proto", "async_generator_function_proto", "regexp_proto",
+            "iterator_proto", "map_iterator_proto", "set_iterator_proto", "date_proto",
             "locale_proto", "collator_proto", "list_format_proto",
             "plural_rules_proto", "segmenter_proto", "segments_proto",
             "segment_iterator_proto", "date_time_format_proto", "number_format_proto",
@@ -805,6 +817,9 @@ mod tests {
         // iterator continues its walk (ordinal-normalized collection
         // cursors included).
         assert!(!pending.contains(&SideTable::Iterators));
+        // The 2026-08-28 rebase surfaced the mainline's Date table —
+        // honestly Pending until its (pure-data) atom lands.
+        assert!(pending.contains(&SideTable::Dates));
         // The quiescence-gated run stacks, call chain, catch chain, and
         // microtask queue are EmptyAtBoundary, not pending: no atom is
         // ever needed for state the gates prove empty.

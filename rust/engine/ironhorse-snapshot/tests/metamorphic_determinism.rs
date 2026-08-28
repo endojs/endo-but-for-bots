@@ -107,7 +107,12 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // this golden machine's included. The floor must travel or a
         // resumed machine can never lazily install a name interned
         // during its last install pass (`intl_carry.rs`).
-        "df7bac61bb373db748f727a76c762798d7987c0404ffb15d1222a200bc0d6bde",
+        // Re-pinned 2026-08-28 again at the second llm rebase: the boot
+        // heap grew on the mainline (the Date core, the Iterator global
+        // and helper surface, the Map/Set iterator prototypes, the
+        // async-generator metadata) — a CONTENT move on the base, the
+        // same class as the first llm re-pin. Format unchanged.
+        "3b5dcfe933771be479571e7e6fb10a2f4d7e35e8eec7c04a8b8ac990234c13af",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -166,7 +171,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     // after v12's deliberate exception.
     assert_eq!(
         store.manifest().unwrap().seal,
-        "9d00e0e85d40fe5249f2a8296bc04ecdf1334d580834f44ce369c4628dff2cef",
+        // Both pins moved again at the second llm rebase (2026-08-28):
+        // the mainline boot-heap growth above — content, not format.
+        "7474a44c70a007dcf3531584032837dd36574949469b86d1cde55a3b303df9da",
         "epoch-3 seal chain"
     );
 }
