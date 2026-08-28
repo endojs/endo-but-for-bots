@@ -77,16 +77,29 @@ const hexToBytes = hex => {
 };
 
 /**
- * Return a Uint8Array covering the contents of `buf`. Immutable
- * ArrayBuffers must be sliced before a typed-array view works.
+ * Return a genuine, integer-indexable `Uint8Array` covering the contents
+ * of `buf`.
  *
- * @param {ArrayBufferLike} buf
+ * The `byteArray` pass style is a frozen `Uint8Array` backed by an
+ * immutable `ArrayBuffer`. In an engine without native immutable
+ * ArrayBuffers the shim emulates it with a plain object that answers
+ * `instanceof Uint8Array` and iterates correctly but has no
+ * integer-indexed exotic slots, so `emulated[i]` reads `undefined`.
+ * `ArrayBuffer.isView` — not `instanceof` — is the reliable test for a
+ * genuine view (matching `@endo/immutable-arraybuffer`' `thawedBytes`): genuine
+ * views (including those over immutable buffers, which permit indexed
+ * reads) are returned as-is, while an emulated
+ * `@endo/immutable-arraybuffer` wrapper (which reports
+ * `ArrayBuffer.isView === false`) is copied into a fresh, genuine
+ * `Uint8Array`.
+ *
+ * @param {Uint8Array} buf
  * @returns {Uint8Array}
  */
 const asUint8 = buf =>
-  buf instanceof Uint8Array
-    ? buf
-    : new Uint8Array(/** @type {ArrayBuffer} */ (buf.slice()));
+  ArrayBuffer.isView(buf)
+    ? /** @type {Uint8Array} */ (buf)
+    : new Uint8Array(/** @type {Uint8Array} */ (buf).slice());
 
 /**
  * Pull one whole message from a message-framed `Reader<Uint8Array>`
@@ -722,7 +735,7 @@ export const makeOcapnNoiseNetwork = ({
       },
     });
 
-    const peerEd25519Buffer = peerEd25519.slice().buffer;
+    const peerEd25519Buffer = peerEd25519.slice();
     const sessionId = makeSessionId(
       localKey.keyPair.publicKey.id,
       cryptography.makeOcapnPublicKey(peerEd25519Buffer).id,
@@ -1036,9 +1049,7 @@ export const makeOcapnNoiseNetwork = ({
     const privateKey = new Uint8Array(32);
     getRandomValues(privateKey);
     const keyPair = cryptography.makeOcapnKeyPairFromPrivateKey(privateKey);
-    const publicKey = new Uint8Array(
-      /** @type {ArrayBuffer} */ (keyPair.publicKey.bytes.slice()),
-    );
+    const publicKey = new Uint8Array(asUint8(keyPair.publicKey.bytes));
     return { privateKey, publicKey };
   };
 
@@ -1057,9 +1068,7 @@ export const makeOcapnNoiseNetwork = ({
     // under one keyId but unable to complete a handshake as that
     // identity, which is a debugging cliff to fall off).
     const keyPair = cryptography.makeOcapnKeyPairFromPrivateKey(privateKey);
-    const derivedPublicKey = new Uint8Array(
-      /** @type {ArrayBuffer} */ (keyPair.publicKey.bytes.slice()),
-    );
+    const derivedPublicKey = new Uint8Array(asUint8(keyPair.publicKey.bytes));
     if (publicKey) {
       if (compareUint8Arrays(publicKey, derivedPublicKey) !== 0) {
         throw makeError(
