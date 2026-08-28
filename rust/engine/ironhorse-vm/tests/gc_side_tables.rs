@@ -90,3 +90,67 @@ fn disposable_stack_resources_survive_a_full_collection() {
     assert!(out.completed, "crank 2: {:?}", out.halt);
     assert_eq!(out.result, "true");
 }
+
+/// The mainline's `dates` table (Date epoch-ms records, 2026-08-28
+/// rebase) joins the same net from both directions: a LIVE Date's
+/// record survives a full collection, and a DEAD Date's record is
+/// PRUNED — without the prune, a later allocation reusing the swept
+/// slot inherits the stale brand and answers the old date where a
+/// plain object must TypeError (the recycled-slot silent-wrong class).
+#[test]
+fn a_live_date_record_survives_and_a_dead_ones_is_pruned() {
+    let crank1 = "var d = 0; var churn = 0; churn = []; \
+                  d = new Date(86400000); \
+                  (function () { var dead = new Date(1); })(); 0;";
+    let crank2 = &format!(
+        "var d; var churn; {CHURN} \
+         var t = 0; t = d.getTime(); t"
+    );
+    let o = run_two_cranks_with_gc(crank1, crank2);
+    assert!(o.completed, "crank 2: {:?}", o.halt);
+    assert_eq!(o.result, "86400000", "the live Date's record survives the collection");
+}
+
+#[test]
+fn a_recycled_slot_does_not_inherit_a_dead_dates_brand() {
+    // Crank 1 creates and drops a Date; the collection must prune its
+    // `dates` row along with the slot. A drain crank first retires the
+    // relink install backlog (whose property installs would otherwise
+    // consume the freed slots), so the churn's first allocation
+    // deterministically reuses the dead Date's slot. `new Date(value)`
+    // reads a branded argument's time DIRECTLY (no property lookup
+    // shields it): a healthy engine halts each probe at the plain
+    // object's unsupported ToPrimitive; a stale row instead COMPLETES
+    // with the dead Date's 123456 — the silent-wrong signature.
+    let (b1, n1) = compile(
+        "var churn = 0; churn = []; \
+         (function () { var dead = new Date(123456); })(); 0;",
+    );
+    let mut m = Interp::new();
+    m.link_intrinsics(&n1);
+    let o1 = m.run(&b1);
+    assert!(o1.completed, "crank 1: {:?}", o1.halt);
+    let crank = |m: &mut Interp, src: &str| {
+        let (b, n) = compile(src);
+        let b = m.relink_crank(&b, &n).expect("relink");
+        m.run(&b)
+    };
+    assert!(crank(&mut m, "var churn; var zz = 0; zz = 1; 0;").completed, "drain crank");
+    m.collect_garbage();
+    assert!(
+        crank(&mut m, "var churn; var zz; for (zz = 0; zz < 64; zz++) { churn[zz] = {}; } 0;")
+            .completed,
+        "churn crank"
+    );
+    for i in 0..64 {
+        let o = crank(
+            &mut m,
+            &format!("var churn; var t = 0; t = '' + new Date(churn[{i}]).getTime(); t"),
+        );
+        assert!(
+            !o.completed,
+            "churn[{i}] answered as a branded Date: {} (the dead row leaked)",
+            o.result
+        );
+    }
+}

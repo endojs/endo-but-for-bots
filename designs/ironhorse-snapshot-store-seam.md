@@ -2750,6 +2750,28 @@ bite-checked by reverting the fix under the lock). Statuses:
   Full narrative in the Remaining ledger's G3 entry; twins in
   `iterator_carry.rs`, bite-checked three ways; 17 Pending rows
   remain, all function-, activation-, or module-shaped.
+- **Second llm rebase (2026-08-28):** the branch re-parented onto the
+  mainline head that landed the Date core, the
+  `Function.prototype.call`/`apply`/`bind` overhaul, the Iterator
+  global and helper surface, the Map/Set iterator prototypes, the
+  async-generator metadata, and parse-time rejections — full commit
+  history preserved (no squash), two conflict stops. Reconciliation
+  decisions: the seam's older `.apply` arm yields to the mainline's
+  richer one (not-a-constructor TypeError, catchable non-object
+  argArray; the superseded helpers deleted); the mainline's new
+  `CreateListFromArrayLike` and `Array.from`-family writes are ported
+  onto the counted accessors (a raw `items` write desyncs the
+  side-ref parity net); and the mechanical nets did exactly their
+  job on the mainline's new state — the ledger/struct reconciliation
+  forced classification of the four new boot protos and the `dates`
+  table (a new honestly-Pending pure-data row, the Temporal-records
+  class), and the GC ground-truth net caught that `dates` was never
+  pruned by either sweep: a recycled slot inherited the dead Date's
+  brand and `new Date(value)` answered the dead time (locked
+  red-first in `gc_side_tables.rs` with a deterministic
+  free-list-reuse fixture; `date_proto` also joined the explicit
+  roots beside its siblings). Both golden pins re-pinned for the
+  mainline's boot-heap growth — content, not format.
 
 ## What Is the Problem Being Solved?
 

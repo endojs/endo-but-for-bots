@@ -22122,10 +22122,12 @@ impl Interp {
             Some((Kind::Reference, Payload::Reference(arr))) if self.arrays.contains_key(&arr) => {
                 let data = &self.arrays[&arr];
                 let len = data.length;
-                if (0..len).any(|i| !data.items.contains_key(&i)) {
+                // Reads route through the counted-accessor view (the
+                // seam's bulk-table discipline); no counts move.
+                if (0..len).any(|i| !data.items().contains_key(&i)) {
                     return Ok(false);
                 }
-                let args: Vec<Slot> = (0..len).map(|i| data.items[&i]).collect();
+                let args: Vec<Slot> = (0..len).map(|i| data.items()[&i]).collect();
                 let meter =
                     APPLY_ARRAY_BASE_METERING + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
                 (args, meter)
@@ -22227,112 +22229,7 @@ impl Interp {
         self.enter_call(n, ret_pc, false)
     }
 
-    /// The `.call`/`.apply` receiver, when it is a NATIVE function
-    /// instance (a prototype method or an intrinsic constructor) — the
-    /// detached-native route the user-frame trampolines cannot take.
-    /// Returns None for user functions (the trampolines own those) and
-    /// for the Function.prototype re-dispatch methods themselves
-    /// (`f.call.call(...)` self-names in the caller).
-    fn dot_call_native_receiver(&self, base: usize) -> Option<crate::value::SlotIndex> {
-        let f = self.stack.get(base).copied()?;
-        let r = match f.value {
-            Payload::Reference(r) => r,
-            _ => return None,
-        };
-        let fi = self.functions.get(&r)?;
-        match fi.method {
-            Some(
-                NativeMethod::FunctionCall | NativeMethod::FunctionApply | NativeMethod::FunctionBind,
-            ) => None,
-            Some(_) => Some(r),
-            None if fi.native.is_some() => Some(r),
-            None => None,
-        }
-    }
 
-    /// `nativeF.apply(thisArg[, args])`: reshape the `.apply` window into
-    /// the ordinary native-call geometry `[THIS=thisArg, FUNCTION=nativeF,
-    /// RESULT, FRAME, args…]` and dispatch through the SAME native paths a
-    /// pathful call takes — callee identity decides, exactly like the
-    /// direct detached call (`var n = Object.keys; n(o)`) already does.
-    /// Apply-only since the llm rebase: the `.call` twin routes through the
-    /// mainline's `call_dot_call_native` (same feature, wider receiver
-    /// coverage), so the old shared body's `.call` half was merge residue
-    /// and is gone.
-    fn call_dot_apply_on_native(
-        &mut self,
-        fref: crate::value::SlotIndex,
-        base: usize,
-        argc: usize,
-        code: &[u8],
-    ) -> Result<(), Halt> {
-        let f = self.stack.get(base).copied().unwrap_or_else(Slot::undefined);
-        let this_arg = self
-            .stack
-            .get(base + 4)
-            .copied()
-            .unwrap_or_else(Slot::undefined);
-        if !matches!(this_arg.kind, Kind::Undefined | Kind::Null | Kind::Reference) {
-            return Err(Halt::Unsupported("apply:primitive-this-boxing"));
-        }
-        // The argument list, paired with the forwarding cost it accrues
-        // beyond [`CALL_TRAMPOLINE_METERING`]. `.call` and `.apply` reach
-        // the same native callee but pay DIFFERENT host costs to get
-        // there, and the cost belongs to the re-dispatch method, not the
-        // callee: `fx_Function_prototype_apply`'s array unpack
-        // (`fxToInstance`/`fxToLength`, the `_length` read, the
-        // per-element `mxGetIndex`) is callee-agnostic, so a native
-        // receiver charges the SAME apply-array constants the user
-        // receiver does in `enter_call_dot_apply` (review wave 4, DET-2 —
-        // this arm previously charged `.call`'s per-argument constant for
-        // both, undercharging every `nativeF.apply(t, [..])`).
-        let _ = argc; // thisArg/argArray read positionally, like enter_call_dot_apply
-        let (real_args, forward_meter): (Vec<Slot>, u64) = {
-            // The no-array subset plus a DENSE Array argument list —
-            // the same subsets the user-frame apply supports.
-            let arg_array = self.stack.get(base + 5).copied();
-            match arg_array.map(|s| (s.kind, s.value)) {
-                // No array: identical to `.call` with zero arguments,
-                // whose base is already folded into the trampoline.
-                None | Some((Kind::Undefined, _)) | Some((Kind::Null, _)) => (Vec::new(), 0),
-                Some((Kind::Reference, Payload::Reference(arr)))
-                    if self.arrays.contains_key(&arr) =>
-                {
-                    let data = &self.arrays[&arr];
-                    let len = data.length;
-                    let mut v = Vec::with_capacity(len as usize);
-                    for i in 0..len {
-                        match data.items().get(&i) {
-                            Some(s) => v.push(*s),
-                            None => return Err(Halt::Unsupported("apply:sparse-arguments")),
-                        }
-                    }
-                    let meter = APPLY_ARRAY_BASE_METERING
-                        + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
-                    (v, meter)
-                }
-                _ => return Err(Halt::Unsupported("apply:array-like-arguments")),
-            }
-        };
-        let n = real_args.len();
-        self.stack.truncate(base);
-        self.stack.push(this_arg); // THIS (the rebound receiver)
-        self.stack.push(f); // FUNCTION (the native)
-        self.stack.push(Slot::undefined()); // RESULT
-        self.stack.push(Slot::of(Kind::Uninitialized, Payload::None)); // FRAME
-        for a in real_args {
-            self.stack.push(a);
-        }
-        self.meter
-            .tick_raw(CALL_TRAMPOLINE_METERING + forward_meter);
-        if let Some(m) = self.method_of(fref) {
-            self.call_native_method(m, base, n, code)
-        } else if let Some(nat) = self.native_of(fref) {
-            self.call_native(nat, base, n, false, code)
-        } else {
-            Err(Halt::Unsupported("call:non-user-function-receiver"))
-        }
-    }
 
     /// `Function.prototype.apply` (no-array subset): invoke the receiver with
     /// the rebound `this` and **no** arguments — the case where the arguments
@@ -30096,7 +29993,13 @@ impl Interp {
                 .value_id
                 .map(|id| self.instance_get(result_obj, id))
                 .unwrap_or_else(Slot::undefined);
-            self.arrays.get_mut(&array).unwrap().items.insert(length, value);
+            // The write routes through the counted accessor so the
+            // side-ref page counts move with it (the seam's bulk-table
+            // discipline; a raw map insert desyncs the parity net).
+            self.arrays
+                .get_mut(&array)
+                .unwrap()
+                .insert_item(length, value, &mut self.side_refs);
             length += 1;
         }
         self.arrays.get_mut(&array).unwrap().length = length;
@@ -42110,6 +42013,7 @@ impl Interp {
             self.arraybuffer_proto,
             self.dataview_proto,
             self.array_iterator_proto,
+            self.date_proto,
             self.iterator_proto,
             self.map_iterator_proto,
             self.set_iterator_proto,
@@ -42898,6 +42802,11 @@ impl Interp {
         self.temporal_durations.retain(|k, _| !dead.contains(k));
         self.temporal_plains.retain(|k, _| !dead.contains(k));
         self.temporal_zoneds.retain(|k, _| !dead.contains(k));
+        // The mainline's Date table (2026-08-28 rebase): weak-keyed
+        // epoch-ms records — a swept instance's row must go with it,
+        // or a recycled slot inherits the brand and `new Date(value)`
+        // answers the dead Date's time (locked in gc_side_tables.rs).
+        self.dates.retain(|k, _| !dead.contains(k));
         self.detached_buffers.retain(|k| !dead.contains(k));
         self.shared_buffers.retain(|k| !dead.contains(k));
         self.arguments_objects.retain(|k| !dead.contains(k));
@@ -43124,6 +43033,11 @@ impl Interp {
         self.temporal_durations.retain(|k, _| !dead.contains(k));
         self.temporal_plains.retain(|k, _| !dead.contains(k));
         self.temporal_zoneds.retain(|k, _| !dead.contains(k));
+        // The mainline's Date table (2026-08-28 rebase): weak-keyed
+        // epoch-ms records — a swept instance's row must go with it,
+        // or a recycled slot inherits the brand and `new Date(value)`
+        // answers the dead Date's time (locked in gc_side_tables.rs).
+        self.dates.retain(|k, _| !dead.contains(k));
         self.detached_buffers.retain(|k| !dead.contains(k));
         self.shared_buffers.retain(|k| !dead.contains(k));
         self.arguments_objects.retain(|k| !dead.contains(k));
