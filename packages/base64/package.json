@@ -27,6 +27,8 @@
     "./btoa.js": "./btoa.js",
     "./encode.js": "./encode.js",
     "./decode.js": "./decode.js",
+    "./no-padding-encode": "./src/no-padding-encode.js",
+    "./no-padding-decode": "./src/no-padding-decode.js",
     "./shim.js": "./shim.js",
     "./package.json": "./package.json"
   },
@@ -38,6 +40,9 @@
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
     "test": "ava"
+  },
+  "dependencies": {
+    "@endo/bytes": "workspace:^"
   },
   "devDependencies": {
     "ava": "catalog:dev",
