@@ -28,8 +28,13 @@ assert.throws(
 
 // Every concrete typed-array constructor shares the single abstract %TypedArray%
 // intrinsic as its prototype, and every concrete prototype chains up to the
-// single %TypedArrayPrototype% intrinsic. Enumerate the full finite family
-// (Number- and BigInt-backed alike) rather than spot-checking a subset.
+// single %TypedArrayPrototype% intrinsic. Enumerate the family the vendored
+// test262 harness knows (Number- and BigInt-backed alike) rather than
+// spot-checking a subset. NOTE: the vendored `typedArrayConstructors` list
+// (harness/testTypedArray.js) predates `Float16Array` (ES2025, Stage 4), so
+// that one family member is not yet enumerated here; it will be covered
+// automatically once the vendored harness is refreshed to match upstream
+// test262.
 function assertSharedSuperclass(TA) {
   assert.sameValue(
     Object.getPrototypeOf(TA),
