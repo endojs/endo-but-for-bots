@@ -1,7 +1,7 @@
 /*---
 description: The %TypedArray% intrinsic superclass and %TypedArrayPrototype% expose coherent metadata across Hardened JavaScript hosts
 includes: [testTypedArray.js, testBigIntTypedArray.js]
-features: [TypedArray, BigInt, Symbol.iterator, Symbol.toStringTag, arraybuffer-transfer]
+features: [TypedArray, BigInt, Symbol.iterator, Symbol.toStringTag]
 ---*/
 
 // `TypedArray` (the %TypedArray% intrinsic) and the constructor-family helpers
@@ -112,9 +112,11 @@ assert.sameValue(
   'the @@toStringTag getter yields undefined for a non-typed-array receiver',
 );
 
-// The getter keys off the [[TypedArrayName]] internal slot, which survives
-// buffer detachment, so a typed array whose buffer has been detached must still
-// report its constructor name rather than undefined.
+// The getter keys off the [[TypedArrayName]] internal slot (ECMA-262 §23.2.3.38
+// `get %TypedArray%.prototype[@@toStringTag]`, and §20.1.3.6
+// Object.prototype.toString's typed-array branch), which survives buffer
+// detachment, so a typed array whose buffer has been detached must still report
+// its constructor name rather than undefined.
 //
 // Detach portably. `ArrayBuffer.prototype.transfer` is ES2024 (V8 11.8 / Node
 // 21+), NOT present on this package's supported Node 20.17 floor
@@ -122,26 +124,32 @@ assert.sameValue(
 // `features:` front-matter to skip, so an unconditional `transfer()` would crash
 // with a TypeError on the floor rather than skip. `structuredClone(buffer,
 // { transfer: [buffer] })` (ES2021 / Node 17+) detaches the source buffer and is
-// the portable fallback; guard for a host that offers neither.
+// the portable fallback. If a host offers NEITHER mechanism, throw rather than
+// silently no-op: a "passed" baseline entry must not conceal a detachment-survival
+// check that never ran. Both currently-supported hosts clear this bar (XS has
+// native `ArrayBuffer.prototype.transfer`; Node's floor has `structuredClone`
+// since 17), so this branch is unreachable today and a future host regression in
+// either primitive surfaces as a loud failure instead of vanishing from coverage.
 function detachBuffer(buffer) {
   if (typeof ArrayBuffer.prototype.transfer === 'function') {
     buffer.transfer();
-    return true;
+    return;
   }
   if (typeof structuredClone === 'function') {
     structuredClone(buffer, { transfer: [buffer] });
-    return true;
+    return;
   }
-  return false;
+  throw new Test262Error(
+    'host offers neither ArrayBuffer.prototype.transfer nor structuredClone; ' +
+      'cannot detach a buffer to verify detached-buffer @@toStringTag survival',
+  );
 }
 
 // Cover both a Number-backed and a BigInt-backed constructor so the
 // detachment-survival check is not a single-constructor spot check.
 function assertDetachedToStringTag(TA) {
   var typedArray = new TA(8);
-  if (!detachBuffer(typedArray.buffer)) {
-    return;
-  }
+  detachBuffer(typedArray.buffer);
   assert.sameValue(
     toStringTag.get.call(typedArray),
     TA.name,
