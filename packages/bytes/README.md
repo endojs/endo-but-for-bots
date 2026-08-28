@@ -22,24 +22,24 @@ npm install @endo/bytes
 ## Usage
 
 ```js
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
 import { concatBytes } from '@endo/bytes/concat.js';
 import { bytesEqual } from '@endo/bytes/equals.js';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
+// The immutable byte utilities live in @endo/immutable-arraybuffer.
+import { frozenBytes, thawedBytes } from '@endo/immutable-arraybuffer';
 
-const a = bytesFromText('Hello, ');
-const b = bytesFromText('world!');
-const greeting = concatBytes([a, b]);
-bytesToText(greeting); // 'Hello, world!'
+const greeting = concatBytes([
+  new Uint8Array([72, 101, 108, 108, 111, 44]),
+  new Uint8Array([32, 119, 111, 114, 108, 100, 33]),
+]);
 
-bytesEqual(bytesFromText('abc'), bytesFromText('abc')); // true
+bytesEqual(greeting, greeting.slice()); // true
 
-// Wrap a Uint8Array in a passable, immutable ArrayBuffer.
-const passable = bytesToImmutable(greeting);
-// Recover a working Uint8Array from an immutable buffer received over a vat boundary.
-bytesToText(bytesFromImmutable(passable)); // 'Hello, world!'
+// Wrap a Uint8Array as a passable, frozen Uint8Array backed by an
+// immutable ArrayBuffer.
+const passable = frozenBytes(greeting);
+// Recover a working mutable Uint8Array from a passable received over a
+// vat boundary.
+thawedBytes(passable); // mutable copy of `greeting`
 ```
 
 The package is exported as per-symbol subpath modules so that callers
@@ -58,32 +58,31 @@ Empty input yields an empty `Uint8Array`.
 Compares two `Uint8Array` values byte-for-byte.
 Returns `true` when the two arrays have equal length and equal contents.
 
-### `bytesFromText(s) -> Uint8Array`
+### `toIndexableUint8Array(bytes) -> Uint8Array`
 
-Encodes a string as UTF-8 bytes.
+Exported from `@endo/bytes/indexed.js` as a stopgap for historical bytewise
+algorithms that require integer-indexed reads.
+Prefer `at(index)` unless a multi-platform benchmark demonstrates that coercing
+an emulated immutable wrapper is faster on platforms that use the JavaScript
+fallback.
 
-### `bytesToText(view) -> string`
+### `concatImmutables(buffers) -> Uint8Array`
 
-Decodes UTF-8 bytes to a string.
+Concatenates a list of byteArray-passable values (or bare
+`ArrayBufferLike`s) into a single hardened frozen `Uint8Array` backed
+by an immutable `ArrayBuffer`. Equivalent to
+`frozenBytes(concatBytes(buffers.map(thawedBytes)))`, provided as a
+single-call helper because that composition is common when assembling
+protocol records from immutable byte fragments.
 
-### `bytesToImmutable(view) -> ArrayBuffer`
+### `frozenBytes` and `thawedBytes` (in `@endo/immutable-arraybuffer`)
 
-Wraps a `Uint8Array` view's contents in an immutable `ArrayBuffer` via
-the `ArrayBuffer.prototype.sliceToImmutable` shim
-(proposal-immutable-arraybuffer).
-The result carries the `'byteArray'` passStyle and is hardened, so it
-is safe to share across vat boundaries.
-The view's `byteOffset` and `byteLength` are honored, so `subarray`
-windows copy only the addressed bytes.
-
-### `bytesFromImmutable(buffer) -> Uint8Array`
-
-Copies the contents of an immutable `ArrayBuffer` into a fresh,
-mutable `Uint8Array`.
-Immutable `ArrayBuffer` instances cannot back a `Uint8Array` view
-directly and APIs such as `TextDecoder.decode` reject them; this
-helper produces a working `Uint8Array` copy that callers can pass to
-those APIs.
+The immutable byte utilities `frozenBytes` (wrap a `Uint8Array` view's
+contents in a hardened frozen `Uint8Array` backed by an immutable
+`ArrayBuffer`) and `thawedBytes` (copy such a value back out into a
+fresh mutable `Uint8Array`) are exported from
+`@endo/immutable-arraybuffer`, alongside the platform shim that remains
+its separate `@endo/immutable-arraybuffer/shim.js` export.
 
 ## Out of scope
 
@@ -94,14 +93,11 @@ methods.
   `Uint8Array.prototype.slice` (copy).
 - Hex encoding and decoding: use `@endo/hex`.
 - Base64 encoding and decoding: use `@endo/base64`.
+- UTF-8 encoding and decoding: use `@endo/utf8`.
 - Streaming concatenation: compose `concatBytes` with a `for await`
   loop; see `@endo/stream` and `@endo/stream-node` for stream primitives.
 
 ## Hardened JavaScript
 
 Every export is hardened.
-The `TextEncoder` and `TextDecoder` instances backing `bytesFromText`
-and `bytesToText` are captured once at module load, so post-lockdown
-mutation of the corresponding globals cannot redirect the dispatched
-calls.
 The modules have no other mutable state.
