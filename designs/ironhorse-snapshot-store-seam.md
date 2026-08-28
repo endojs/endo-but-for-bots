@@ -2691,6 +2691,27 @@ bite-checked by reverting the fix under the lock). Statuses:
   ledger's G3 entry; twins in `intl_carry.rs`; gate locks in
   `pending_row_gates.rs`; both golden pins re-pinned for the first
   deliberate container-format addition since the ledger carries.
+- **Deferred-install reach (2026-08-28, the Intl carry's follow-up):**
+  the wart the carry's twins only grazed by accident is FIXED. The
+  partial install pass ran only when a relink GREW the table, so a
+  crank referencing an above-floor name without introducing any novel
+  name read `undefined` where the next growing crank read the binding
+  (the Intl twins survived on an array literal interning `length`).
+  `relink_crank` now runs a create-only backlog pass on EVERY relink
+  — aligned included — while any id sits above the floor
+  (`install_pending_intrinsics`); the pass advances the floor, so
+  each id is considered exactly once and the hot path pays one length
+  comparison afterwards. Locked live in `lazy_install_reach.rs`
+  (boot-interned `format`, a guest-interned `Math` via `JSON.parse` —
+  the computed `o['Ma'+'th']` form is the engine's separate,
+  deliberate default-keys ambiguity refusal — and the one-shot
+  no-resurrection guard over a guest overwrite), and across the
+  boundary in `name_floor_carry.rs`: the floor's OWN twins with no
+  accidental growth anywhere (boot-interned and guest-interned
+  backlog installs on a resumed machine's first non-growing relink,
+  bite-checked against a disabled floor restore, plus the
+  deleted-seed-accessor twin proving nothing resurrects what the
+  guest deleted).
 
 ## What Is the Problem Being Solved?
 

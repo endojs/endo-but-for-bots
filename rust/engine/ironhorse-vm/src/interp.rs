@@ -8011,6 +8011,7 @@ impl Interp {
         crank_names: &[String],
     ) -> Result<Vec<u8>, RelinkError> {
         if crank_names == self.symbol_names.as_slice() {
+            self.install_pending_intrinsics();
             return Ok(bytecode.to_vec());
         }
         let old_len = self.symbol_names.len();
@@ -8049,18 +8050,37 @@ impl Interp {
         .ok_or(RelinkError::MalformedBytecode)?;
         if extended.len() != old_len {
             // The table grew: re-derive the inverse table, the intern
-            // counter, and every name-keyed lookup-id cache, then
-            // INSTALL the intrinsic bindings for the APPENDED ids — a
-            // crank that first references `Math`/`arr.map`/a well-known
-            // symbol must get it bound, exactly as a fresh link would
-            // (wave-4 P1). Only the appended ids are installed, so a
-            // guest monkeypatch of a crank-1 prototype method is not
-            // clobbered.
+            // counter, and every name-keyed lookup-id cache. The
+            // install pass below then covers the appended ids along
+            // with any older above-floor backlog.
             self.bind_program_symbols(&extended);
-            let floor = self.installed_names_len;
-            self.install_intrinsic_bindings(&extended, false, move |id| (id as usize) > floor);
         }
+        self.install_pending_intrinsics();
         Ok(remapped)
+    }
+
+    /// The create-only partial install pass over every id ABOVE the
+    /// installed-names floor — names no install pass has considered:
+    /// ids this relink appended, names interned DURING an earlier
+    /// pass (the `format` accessor key, the Intl member keys), and
+    /// names the guest interned itself (a `JSON.parse` key, a
+    /// defineProperty key). Run on EVERY relink, aligned or not: a
+    /// crank that first references such a name must get it bound
+    /// exactly as a fresh link would (wave-4 P1), and gating the pass
+    /// on table GROWTH left non-growing cranks reading `undefined`
+    /// where the next growing crank read the binding — the
+    /// deferred-install divergence the Intl carry's twins caught.
+    /// Create-only (a property or global the guest already holds
+    /// wins), and the pass advances the floor, so each id is
+    /// considered exactly once and the aligned hot path pays one
+    /// length comparison once the backlog is empty.
+    fn install_pending_intrinsics(&mut self) {
+        if self.symbol_names.len() <= self.installed_names_len {
+            return;
+        }
+        let floor = self.installed_names_len;
+        let names = self.symbol_names.clone();
+        self.install_intrinsic_bindings(&names, false, move |id| (id as usize) > floor);
     }
 
     /// The installed-names floor (wave-6 W6-7): ids at or below it keep
