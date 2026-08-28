@@ -43,6 +43,7 @@
     "@endo/promise-kit": "workspace:^"
   },
   "devDependencies": {
+    "@endo/immutable-arraybuffer": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@fast-check/ava": "catalog:dev",
