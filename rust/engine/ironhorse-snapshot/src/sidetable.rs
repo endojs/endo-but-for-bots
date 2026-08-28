@@ -233,15 +233,20 @@ pub enum SideTable {
     /// Serialized in the `DVIW` atom (schema 10), same geometry
     /// discipline as `TypedArrays`.
     DataViews,
-    /// `iterators` — built-in iterator state (target, index/byte-offset,
-    /// kind, reused result object): array, string, for-in enumerator, and
-    /// Map/Set collection cursors, which additionally carry the owning
-    /// collection's clear-generation. Pending — and note the live
-    /// machine's collection cursors index tombstoned entry positions, so
-    /// when this row lands its encoding must compose with the snapshot
-    /// writer's COLL compaction (which renumbers entries by dropping
-    /// tombstones) or a resumed cursor drifts.
+    /// `iterators` — the built-in iterator cursors (array
+    /// values/keys/entries, for-in enumerators, string iterators,
+    /// Map/Set cursors). Serialized in the `ITER` atom / small-state
+    /// iterators section (store schema 13), owner-ascending, with two
+    /// boundary normalizations that make the row pure data: a
+    /// collection cursor travels as its LIVE-ENTRY ordinal (the `COLL`
+    /// row compacts tombstones, so the ordinal IS the physical index
+    /// in the restored dense table) and `clear()`-staleness folds into
+    /// `done` (restored collections rebuild at generation zero; only
+    /// "retired" is observable). Locks: the `iterator_carry.rs` twins
+    /// — a resumed cursor CONTINUES its walk, straddling a tombstone
+    /// compaction and staying retired across a clear.
     Iterators,
+
     /// `promises` — per-instance settlement STATUS/RESULT/THENS.
     Promises,
     /// `promise_functions` — a resolve/reject function's bound home data.
@@ -528,7 +533,7 @@ impl SideTable {
             SideTable::ArrayBuffers => ("array_buffers", Serialized),
             SideTable::TypedArrays => ("typed_arrays", Serialized),
             SideTable::DataViews => ("data_views", Serialized),
-            SideTable::Iterators => ("iterators", Pending),
+            SideTable::Iterators => ("iterators", Serialized),
             SideTable::Promises => ("promises", Pending),
             SideTable::PromiseFunctions => ("promise_functions", Pending),
             SideTable::PromiseGuards => ("promise_guards", Pending),
@@ -796,6 +801,10 @@ mod tests {
         assert!(!pending.contains(&SideTable::IntlRecords));
         assert!(!pending.contains(&SideTable::NameFloor));
         assert!(pending.contains(&SideTable::IntlBoundFunctions));
+        // The schema-13 iterator-cursor carry: a resumed built-in
+        // iterator continues its walk (ordinal-normalized collection
+        // cursors included).
+        assert!(!pending.contains(&SideTable::Iterators));
         // The quiescence-gated run stacks, call chain, catch chain, and
         // microtask queue are EmptyAtBoundary, not pending: no atom is
         // ever needed for state the gates prove empty.

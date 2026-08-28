@@ -98,6 +98,12 @@ pub const ARGB: FourCc = FourCc(*b"ARGB");
 /// row): instants, durations, plains, zoneds, each owner-ascending.
 /// Ironhorse-specific; emitted only when non-empty (see [`ARRY`]).
 pub const TMPR: FourCc = FourCc(*b"TMPR");
+/// `ITER` — the built-in iterator cursors (ledger `Iterators` row):
+/// array/string/for-in/collection cursors, owner-ascending, with the
+/// collection cursors carried as live-entry ordinals and staleness
+/// folded into `done` (see the vm's `IteratorRow`). Ironhorse-specific;
+/// emitted only when non-empty (see [`ARRY`]).
+pub const ITER: FourCc = FourCc(*b"ITER");
 /// `NFLR` — the installed-names floor (wave-6 W6-7): the id ceiling at
 /// or below which partial install passes leave bindings alone. Four
 /// big-endian bytes. Emitted only when it differs from the name-table

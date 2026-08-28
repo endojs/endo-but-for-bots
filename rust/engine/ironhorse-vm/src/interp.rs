@@ -4615,6 +4615,33 @@ impl IntlTables {
     }
 }
 
+/// One built-in iterator cursor as the snapshot carries it (the ledger
+/// `Iterators` row, the `ITER` atom) — [`Interp::iterators_snapshot`]'s
+/// emission and [`Interp::restore_iterators`]'s input. Kinds: 0-2 array
+/// values/keys/entries, 3 for-in enumerator, 4 string, 5-7 collection
+/// keys/values/entries. Two boundary normalizations make the row pure
+/// data: a collection cursor's `index` is the LIVE-ENTRY ORDINAL (the
+/// `COLL` row compacts tombstones, so the ordinal IS the physical index
+/// in the restored dense table), and `clear()`-staleness folds into
+/// `done` (the absolute clear-generation counter is unobservable; only
+/// "retired" is).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IteratorRow {
+    pub owner: u32,
+    pub kind: u8,
+    /// The iterated slot (weak). `u32::MAX` — [`crate::value::SlotIndex::NULL`]
+    /// — for a string iterator, whose text lives in `str_bytes`.
+    pub iterable: u32,
+    pub index: u32,
+    pub done: bool,
+    /// The reused `{value, done}` result object's slot.
+    pub result: u32,
+    /// For-in keys as `(id, index)` pairs (`id == 0` ⇒ an array index).
+    pub enum_keys: Vec<(u16, u32)>,
+    /// A string iterator's UTF-16BE text; `index` is a byte offset.
+    pub str_bytes: Vec<u8>,
+}
+
 /// A suspended activation: the caller's scope and resume point, saved by
 /// `run` and restored by `end` (XS's `mxFrame->value.frame.{code,scope}`
 /// plus the environment the frame aliases). The value stack is shared and
@@ -8219,12 +8246,13 @@ impl Interp {
     /// `Collections` row), ascending by owning slot: `(owner slot,
     /// kind code, table_length, entries in insertion order)`.
     /// Tombstones (deleted entries whose physical index a live
-    /// iterator cursor may still hold) are COMPACTED out: iterator
-    /// state lives in the `iterators` side table, an honest `Pending`
-    /// ledger row that does not round-trip, so physical indices are
-    /// not observable across a suspend — while live-entry order,
-    /// `size`, and the rehash geometry (`table_length`) all are, and
-    /// all survive compaction unchanged.
+    /// iterator cursor may still hold) are COMPACTED out: live-entry
+    /// order, `size`, and the rehash geometry (`table_length`) are the
+    /// observables, and all survive compaction unchanged. Iterator
+    /// cursors round-trip alongside (the `ITER` row, store schema 13)
+    /// as live-entry ORDINALS — [`Self::iterators_snapshot`] performs
+    /// the matching translation, so a resumed cursor addresses exactly
+    /// the entries this compaction keeps.
     pub fn collections_snapshot(&self) -> Vec<CollectionSnapshot> {
         let mut out: Vec<CollectionSnapshot> = self
             .collections
@@ -8827,6 +8855,113 @@ impl Interp {
         install(&mut self.segments, t.segments);
         install(&mut self.segment_iterators, t.segment_iterators);
         install(&mut self.date_time_formats, t.date_time_formats);
+        true
+    }
+
+    /// Quiescent snapshot of the built-in iterator cursors (ledger
+    /// `Iterators` row, the `ITER` atom), ascending by owning slot.
+    /// Free-listed owners are skipped (a swept cursor's row names
+    /// nothing, and its collection may be gone). Two normalizations
+    /// at the boundary (see [`IteratorRow`]): a collection cursor's
+    /// physical entry index becomes the live-entry ORDINAL — matching
+    /// the `COLL` row's tombstone compaction — and a stale cursor
+    /// (its collection's clear-generation moved) emits `done: true`,
+    /// exactly the latch its next `next()` would have set.
+    pub fn iterators_snapshot(&self) -> Vec<IteratorRow> {
+        let mut out: Vec<IteratorRow> = Vec::new();
+        for (owner, st) in &self.iterators {
+            if self.slots.is_free_index(*owner) {
+                continue;
+            }
+            let (index, done) = if (5..=7).contains(&st.kind) {
+                let Some(c) = self.collections.get(&st.iterable) else {
+                    continue;
+                };
+                let stale = c.generation() != st.generation;
+                let ordinal = c.entries()[..(st.index as usize).min(c.entries().len())]
+                    .iter()
+                    .filter(|e| e.is_some())
+                    .count() as u32;
+                (ordinal, st.done || stale)
+            } else {
+                (st.index, st.done)
+            };
+            out.push(IteratorRow {
+                owner: owner.0,
+                kind: st.kind,
+                iterable: st.iterable.0,
+                index,
+                done,
+                result: st.result.0,
+                enum_keys: st.enum_keys.clone(),
+                str_bytes: st.str_bytes.clone(),
+            });
+        }
+        out.sort_unstable_by_key(|r| r.owner);
+        out
+    }
+
+    /// Reinstate the built-in iterator cursors. Returns `false` —
+    /// failing the caller's decode closed — for structure only crafted
+    /// bytes can hold: an unknown kind, a collection cursor naming an
+    /// instance with no restored collection (its `next()` indexes the
+    /// table unconditionally) or a cursor past the live-entry list, a
+    /// string cursor past its text or splitting a UTF-16 unit, or a
+    /// for-in cursor past its key list or holding a key id outside the
+    /// restored name table.
+    pub fn restore_iterators(&mut self, rows: Vec<IteratorRow>) -> bool {
+        for r in &rows {
+            if r.kind > 7 {
+                return false;
+            }
+            match r.kind {
+                5..=7 => {
+                    let Some(c) = self.collections.get(&crate::value::SlotIndex(r.iterable))
+                    else {
+                        return false;
+                    };
+                    if r.index as usize > c.entries().len() {
+                        return false;
+                    }
+                }
+                4 => {
+                    if r.index as usize > r.str_bytes.len() || r.index % 2 != 0 {
+                        return false;
+                    }
+                }
+                3 => {
+                    if r.index as usize > r.enum_keys.len() {
+                        return false;
+                    }
+                    if r.enum_keys.iter().any(|&(id, _)| {
+                        id != crate::value::XS_NO_ID
+                            && id as usize > self.symbol_names.len()
+                    }) {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+        }
+        for r in rows {
+            // Restored collections rebuild at clear-generation ZERO, so
+            // a live carried cursor adopts zero and a retired one rides
+            // its folded `done` — the equality the stale check consults
+            // holds exactly as it did live.
+            self.iterators.insert(
+                crate::value::SlotIndex(r.owner),
+                IterState {
+                    iterable: crate::value::SlotIndex(r.iterable),
+                    index: r.index,
+                    kind: r.kind,
+                    generation: 0,
+                    result: crate::value::SlotIndex(r.result),
+                    done: r.done,
+                    enum_keys: r.enum_keys,
+                    str_bytes: r.str_bytes,
+                },
+            );
+        }
         true
     }
 
