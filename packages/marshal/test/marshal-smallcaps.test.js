@@ -46,7 +46,14 @@ test('smallcaps serialize unserialize round trip half pairs', t => {
   for (const [plain, _] of roundTripPairs) {
     const { body } = serialize(plain);
     const decoding = unserialize({ body, slots: [] });
-    t.deepEqual(decoding, plain);
+    if (passStyleOf(plain) === 'byteArray') {
+      t.deepEqual(
+        [.../** @type {Uint8Array} */ (decoding)],
+        [.../** @type {Uint8Array} */ (plain)],
+      );
+    } else {
+      t.deepEqual(decoding, plain);
+    }
     t.assert(isFrozen(decoding));
   }
 });
