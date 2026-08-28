@@ -378,7 +378,7 @@ export const make = async (powers, context) => {
     const sessionPublicKey = fromHex(remoteLocation.designator);
     const cryptography = makeCryptography(codec);
     const publicKeyVerifier = cryptography.makeOcapnPublicKey(
-      fromHex(binding.agentPublicKey).buffer,
+      fromHex(binding.agentPublicKey),
     );
     // Ed25519 raw signature is 64 bytes (r||s); the OCapN signature
     // value the cryptography helper expects splits those into a
