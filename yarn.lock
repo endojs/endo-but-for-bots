@@ -1452,7 +1452,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/ascii@workspace:packages/ascii":
+"@endo/ascii@workspace:^, @endo/ascii@workspace:packages/ascii":
   version: 0.0.0-use.local
   resolution: "@endo/ascii@workspace:packages/ascii"
   dependencies:
@@ -1470,6 +1470,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/base64@workspace:packages/base64"
   dependencies:
+    "@endo/bytes": "workspace:^"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
     c8: "catalog:dev"
@@ -1530,9 +1531,6 @@ __metadata:
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/immutable-arraybuffer": "workspace:^"
-    "@endo/init": "workspace:^"
-    "@endo/pass-style": "workspace:^"
-    "@endo/ses-ava": "workspace:^"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
     c8: "catalog:dev"
@@ -1573,6 +1571,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/capn-web@workspace:packages/capn-web"
   dependencies:
+    "@endo/base64": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
@@ -1621,6 +1620,7 @@ __metadata:
     "@endo/harden": "workspace:^"
     "@endo/is-well-formed-string": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/utf8": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
     ses: "workspace:^"
@@ -1795,6 +1795,7 @@ __metadata:
     "@endo/promise-kit": "workspace:^"
     "@endo/stream": "workspace:^"
     "@endo/stream-node": "workspace:^"
+    "@endo/utf8": "workspace:^"
     "@endo/where": "workspace:^"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
@@ -1943,6 +1944,7 @@ __metadata:
     "@endo/stream": "workspace:^"
     "@endo/stream-node": "workspace:^"
     "@endo/tar": "workspace:^"
+    "@endo/utf8": "workspace:^"
     "@endo/where": "workspace:^"
     "@endo/zip": "workspace:^"
     "@number0/iroh": "npm:^1.1.0"
@@ -2453,6 +2455,7 @@ __metadata:
     "@endo/ses-ava": "workspace:^"
     "@endo/sha256": "workspace:^"
     "@endo/stream": "workspace:^"
+    "@endo/utf8": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
     typescript: "catalog:dev"
@@ -2549,6 +2552,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/hex@workspace:packages/hex"
   dependencies:
+    "@endo/bytes": "workspace:^"
     "@endo/chacha12": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/random": "workspace:^"
@@ -2610,6 +2614,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/immutable-arraybuffer@workspace:packages/immutable-arraybuffer"
   dependencies:
+    "@endo/harden": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -2776,11 +2781,14 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/marshal@workspace:packages/marshal"
   dependencies:
+    "@endo/bytes": "workspace:^"
     "@endo/common": "workspace:^"
     "@endo/env-options": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
+    "@endo/hex": "workspace:^"
+    "@endo/immutable-arraybuffer": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/nat": "workspace:^"
@@ -2809,6 +2817,7 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/utf8": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -2950,12 +2959,14 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/ocapn@workspace:packages/ocapn"
   dependencies:
+    "@endo/ascii": "workspace:^"
     "@endo/bytes": "workspace:^"
     "@endo/cbor": "workspace:^"
     "@endo/chacha12": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/hex": "workspace:^"
+    "@endo/immutable-arraybuffer": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/marshal": "workspace:^"
@@ -2966,6 +2977,7 @@ __metadata:
     "@endo/ses-ava": "workspace:^"
     "@endo/stream": "workspace:^"
     "@endo/syrup-frame": "workspace:^"
+    "@endo/utf8": "workspace:^"
     "@noble/curves": "npm:^2.3.0"
     "@noble/hashes": "npm:^2.3.0"
     "@types/ws": "npm:^8"
@@ -3023,6 +3035,7 @@ __metadata:
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
+    "@endo/immutable-arraybuffer": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/is-well-formed-string": "workspace:^"
     "@endo/promise-kit": "workspace:^"
@@ -3101,6 +3114,7 @@ __metadata:
     "@endo/sha256": "workspace:^"
     "@endo/stream": "workspace:^"
     "@endo/stream-node": "workspace:^"
+    "@endo/utf8": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
     expect-type: "npm:^1.4.0"
@@ -3503,6 +3517,7 @@ __metadata:
     "@endo/errors": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/utf8": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -3515,7 +3530,11 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/test262-runner@workspace:packages/test262-runner"
   dependencies:
+    "@endo/bytes": "workspace:^"
     "@endo/compartment-mapper": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/immutable-arraybuffer": "workspace:^"
+    "@endo/pass-style": "workspace:^"
     eslint: "catalog:dev"
     ses: "workspace:^"
     test262-harness: "npm:^10.0.0"
@@ -3528,12 +3547,12 @@ __metadata:
   resolution: "@endo/thixotrope@workspace:packages/thixotrope"
   dependencies:
     "@endo/base64": "workspace:^"
-    "@endo/bytes": "workspace:^"
     "@endo/compartment-mapper": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/far": "workspace:^"
     "@endo/harden": "workspace:^"
+    "@endo/immutable-arraybuffer": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/ocapn": "workspace:^"
@@ -3556,6 +3575,23 @@ __metadata:
     c8: "catalog:dev"
     eslint: "catalog:dev"
     expect-type: "npm:^1.4.0"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/utf8@workspace:^, @endo/utf8@workspace:packages/utf8":
+  version: 0.0.0-use.local
+  resolution: "@endo/utf8@workspace:packages/utf8"
+  dependencies:
+    "@endo/eventual-send": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
+    babel-eslint: "npm:^10.1.0"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    prettier: "npm:^3.9.6"
+    ses: "workspace:^"
     typescript: "catalog:dev"
   languageName: unknown
   linkType: soft
