@@ -1,7 +1,7 @@
 /*---
 description: The %TypedArray% intrinsic superclass and %TypedArrayPrototype% expose coherent metadata across Hardened JavaScript hosts
 includes: [testTypedArray.js, testBigIntTypedArray.js]
-features: [TypedArray, BigInt, Symbol.iterator, Symbol.toStringTag]
+features: [TypedArray, BigInt, Symbol.iterator, Symbol.toStringTag, arraybuffer-transfer]
 ---*/
 
 // `TypedArray` (the %TypedArray% intrinsic) and the constructor-family helpers
