@@ -1,6 +1,7 @@
 /*---
 description: The %ThrowTypeError% intrinsic is a single shared, frozen poison-pill accessor across Hardened JavaScript hosts
 features: [caller]
+flags: [onlyStrict]
 ---*/
 
 // %ThrowTypeError% is a well-known intrinsic that no host exposes as a global:
@@ -18,10 +19,17 @@ function makeArguments() {
 var calleeDescriptor = Object.getOwnPropertyDescriptor(makeArguments(), 'callee');
 var ThrowTypeError = calleeDescriptor.get;
 
-// A single accessor object is installed as both the getter and the setter, it
-// is an anonymous zero-length function reparented onto %Function.prototype%, and
-// hardening freezes it. Every value is pinned in one string so a host that
-// disagrees on any one field is caught.
+// A single accessor object is installed as both the getter and the setter. It
+// is an anonymous zero-length function whose [[Prototype]] is %Function.prototype%
+// from creation, and it is frozen by the language itself — base ECMA-262 builds
+// %ThrowTypeError% as a non-extensible function with non-configurable `length`
+// and `name` (§10.2.4.1), independent of SES lockdown. This test therefore pins
+// that hardening does not perturb that pre-existing invariant, rather than that
+// hardening establishes it. It has no own `prototype` property (a non-constructible
+// built-in, unlike an ordinary function expression), and the `callee` accessor
+// property itself is non-configurable and non-enumerable so the poison pill cannot
+// be deleted or enumerated away per arguments object. Every value is pinned in one
+// string so a host that disagrees on any one field is caught.
 var metadata = [
   typeof ThrowTypeError,
   ThrowTypeError.name,
@@ -29,12 +37,15 @@ var metadata = [
   calleeDescriptor.get === calleeDescriptor.set,
   Object.getPrototypeOf(ThrowTypeError) === Function.prototype,
   Object.isFrozen(ThrowTypeError),
+  Object.prototype.hasOwnProperty.call(ThrowTypeError, 'prototype'),
+  calleeDescriptor.configurable,
+  calleeDescriptor.enumerable,
 ].join('|');
 
 assert.sameValue(
   metadata,
-  'function||0|true|true|true',
-  'the %ThrowTypeError% intrinsic is a frozen, zero-length, anonymous function shared by the callee poison pill get/set pair',
+  'function||0|true|true|true|false|false|false',
+  'the %ThrowTypeError% intrinsic is a frozen, zero-length, anonymous, prototype-less function shared by the non-configurable, non-enumerable callee poison pill get/set pair',
 );
 
 // The defining behavior: reading or writing the poison pill throws a TypeError,
