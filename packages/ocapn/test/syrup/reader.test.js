@@ -2,8 +2,8 @@
 import test from '@endo/ses-ava/test.js';
 import * as fs from 'fs';
 import path from 'path';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { thawedBytes } from '@endo/immutable-arraybuffer';
+import { strictDecodeUtf8 } from '@endo/utf8/strict-decode.js';
 import { makeSyrupReader } from '../../src/syrup/decode.js';
 
 // zoo.bin from https://github.com/ocapn/syrup/tree/2214cbb7c0ee081699fdef64edbc2444af2bb1d2/test-data
@@ -15,10 +15,10 @@ const zooBin = Uint8Array.from(zooBinRaw);
 
 /**
  *
- * @param {ArrayBufferLike} bytes
+ * @param {Uint8Array} bytes
  * @returns {string}
  */
-const toUtf8 = bytes => bytesToText(bytesFromImmutable(bytes), { fatal: true });
+const toUtf8 = bytes => strictDecodeUtf8(thawedBytes(bytes));
 
 test('exciting a dictionary without entering it', t => {
   const syrup = '}';

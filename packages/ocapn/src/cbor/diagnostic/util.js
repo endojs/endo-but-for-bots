@@ -6,6 +6,8 @@
  * Hex conversion and value comparison helpers.
  */
 
+import { toIndexableUint8Array } from '@endo/bytes/indexed.js';
+
 /**
  * Convert hex string to Uint8Array
  * @param {string} hex - Hex string (with or without spaces)
@@ -69,10 +71,20 @@ export function equals(actual, expected) {
 
   // Handle ArrayBuffer/Uint8Array
   if (actual instanceof ArrayBuffer || actual instanceof Uint8Array) {
-    const actualBytes =
-      actual instanceof Uint8Array ? actual : new Uint8Array(actual);
-    const expectedBytes =
-      expected instanceof Uint8Array ? expected : new Uint8Array(expected);
+    if (!(expected instanceof ArrayBuffer || expected instanceof Uint8Array)) {
+      return false;
+    }
+    // A bare `ArrayBuffer` may reach here (the `equals` input is `any`);
+    // normalize it to a `Uint8Array` at this boundary so `toIndexableUint8Array`
+    // resolves no buffer-vs-view disjunction. It then thaws an emulated wrapper
+    // into a mutable copy so integer-indexed reads see the real bytes rather
+    // than `undefined`.
+    const actualBytes = toIndexableUint8Array(
+      actual instanceof Uint8Array ? actual : new Uint8Array(actual),
+    );
+    const expectedBytes = toIndexableUint8Array(
+      expected instanceof Uint8Array ? expected : new Uint8Array(expected),
+    );
 
     if (actualBytes.length !== expectedBytes.length) return false;
     for (let i = 0; i < actualBytes.length; i += 1) {
@@ -92,7 +104,7 @@ export function equals(actual, expected) {
   }
 
   // Handle tagged values (from parsed diagnostic notation)
-  if (actual && actual.tag !== undefined) {
+  if (actual && actual.tag !== undefined && Object.hasOwn(actual, 'content')) {
     return (
       expected &&
       expected.tag === actual.tag &&

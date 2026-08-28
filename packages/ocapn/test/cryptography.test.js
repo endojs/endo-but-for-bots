@@ -2,8 +2,8 @@
 
 import test from '@endo/ses-ava/test.js';
 
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { makeCryptography, makeSessionId } from '../src/cryptography.js';
 import { syrupCodec } from '../src/syrup/index.js';
 import {
@@ -56,7 +56,7 @@ test('makeWithdrawGiftDescriptor', t => {
     },
     gifterExporterSessionId,
     gifterKey.publicKey.id,
-    bytesToImmutable(bytesFromText('gift-id')),
+    frozenBytes(encodeUtf8('gift-id')),
   );
   const handoffGiveSignature = signHandoffGive(
     handoffGiveDescriptor,

@@ -526,7 +526,7 @@ const makeBootstrapObject = (
       return object;
     },
     /**
-     * @param {ArrayBufferLike} giftId
+     * @param {Uint8Array} giftId
      * @param {any} gift
      */
     'deposit-gift': (giftId, gift) => {

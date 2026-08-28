@@ -71,7 +71,7 @@ import { makeSlot, parseSlot } from '../captp/pairwise.js';
  * @property {(remotePromise: Promise<unknown>) => object} makeLocalResolverForRemotePromise
  * @property {(answerPosition: bigint, promise: Promise<unknown>) => Promise<unknown>} makeLocalAnswerPromiseAndFulfill
  * @property {(position: bigint) => Promise<unknown>} getLocalAnswerValue
- * @property {(location: OcapnLocation, secret: string) => SturdyRef} makeSturdyRef
+ * @property {(location: OcapnLocation, secret: string | Uint8Array) => SturdyRef} makeSturdyRef
  * @property {(signedGive: HandoffGiveSigEnvelope) => Promise<unknown>} provideHandoff
  * @property {(signedGive: HandoffGiveDetails) => HandoffGiveSigEnvelope} sendHandoff
  * @property {(value: object) => ValInfo} getInfoForVal

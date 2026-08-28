@@ -6,8 +6,7 @@
 
 import test from '@endo/ses-ava/test.js';
 import harden from '@endo/harden';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { thawedBytes, frozenBytes } from '@endo/immutable-arraybuffer';
 import { makeTagged } from '@endo/pass-style';
 
 import { makeSelector } from '../../src/selector.js';
@@ -40,11 +39,11 @@ const table = [
   { name: 'string hello', value: 'hello' },
   {
     name: 'byte array hello',
-    value: bytesToImmutable(new Uint8Array([0x68, 0x65, 0x6c, 0x6c, 0x6f])),
+    value: frozenBytes(new Uint8Array([0x68, 0x65, 0x6c, 0x6c, 0x6f])),
   },
   {
     name: 'byte array',
-    value: bytesToImmutable(new Uint8Array([0x68, 0x65, 0x6c, 0x6c, 0x6f])),
+    value: frozenBytes(new Uint8Array([0x68, 0x65, 0x6c, 0x6c, 0x6f])),
   },
   {
     name: 'selector',
@@ -149,7 +148,7 @@ const table = [
         throw Error('SturdyRef has no details');
       }
       t.deepEqual(details.location, exporterLocation);
-      t.is(details.secret, '123');
+      t.deepEqual([...details.secret], [0x31, 0x32, 0x33]);
     },
   },
   {
@@ -163,7 +162,7 @@ const table = [
         throw Error('SturdyRef has no details');
       }
       t.deepEqual(details.location, exporterLocation);
-      t.is(details.secret, '123');
+      t.deepEqual([...details.secret], [0x31, 0x32, 0x33]);
     },
   },
   // Tagged objects containing references
@@ -208,7 +207,7 @@ const table = [
         throw Error('SturdyRef has no details');
       }
       t.deepEqual(details.location, exporterLocation);
-      t.is(details.secret, '456');
+      t.deepEqual([...details.secret], [0x34, 0x35, 0x36]);
     },
   },
 ];
@@ -226,7 +225,7 @@ runTableTestsAllCodecs(
 test('error on unknown record type in passable [syrup]', t => {
   const codec = PassableCodec;
   const syrup = recordSyrup('unknown-record-type');
-  const syrupBytes = bytesFromImmutable(syrup);
+  const syrupBytes = thawedBytes(syrup);
   const syrupReader = SyrupCodec.makeReader(syrupBytes, {
     name: 'unknown record type',
   });

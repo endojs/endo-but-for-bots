@@ -31,6 +31,8 @@ import {
   writeUndefined,
 } from '@endo/cbor';
 
+import { thawedBytes } from '@endo/immutable-arraybuffer';
+
 /**
  * @import { OcapnWriter } from '../codec-interface.js'
  * @import { CborWriter as CborWriterState } from '@endo/cbor'
@@ -55,16 +57,18 @@ const TAG_SYMBOL = 280n; // OCapN symbol (selector)
 const TAG_TAGGED_VALUE = 55_799n; // Self-described CBOR / OCapN tagged
 
 /**
- * Write a byte string, accepting either a Uint8Array or an (immutable)
- * ArrayBuffer. `@endo/cbor`'s `writeByteString` requires a Uint8Array, so the
- * ArrayBuffer coercion stays here at the OCapN boundary.
+ * Write a byte string. The value is a `Uint8Array`: a plain mutable one, a
+ * genuine frozen view over an immutable `ArrayBuffer`, or an emulated
+ * `@endo/immutable-arraybuffer` wrapper (which reports
+ * `ArrayBuffer.isView === false`). `@endo/cbor`'s `writeByteString` requires a
+ * plain mutable `Uint8Array`, so the `thawedBytes` normalization stays here at
+ * the OCapN boundary.
  *
  * @param {CborWriterState} writer
- * @param {Uint8Array | ArrayBufferLike} value
+ * @param {Uint8Array} value
  */
 function writeBytestring(writer, value) {
-  const bytes =
-    value instanceof Uint8Array ? value : new Uint8Array(value.slice());
+  const bytes = thawedBytes(value);
   writeByteString(writer, bytes);
 }
 
@@ -146,7 +150,7 @@ export class CborWriter {
   }
 
   /**
-   * @param {ArrayBufferLike} value
+   * @param {Uint8Array} value
    */
   writeBytestring(value) {
     writeBytestring(this.#writer, value);

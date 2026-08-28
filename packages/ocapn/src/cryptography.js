@@ -1,8 +1,7 @@
 // @ts-check
 /* global crypto */
 import harden from '@endo/harden';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
+import { frozenBytes, thawedBytes } from '@endo/immutable-arraybuffer';
 import { concatBytes } from '@endo/bytes/concat.js';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { sha256 } from '@noble/hashes/sha2.js';
@@ -35,15 +34,15 @@ const sessionIdHashPrefixBytes = textEncoder.encode('prot0');
 /**
  * @typedef {object} OcapnPublicKey
  * @property {PublicKeyId} id
- * @property {ArrayBufferLike} bytes
+ * @property {Uint8Array} bytes
  * @property {OcapnPublicKeyDescriptor} descriptor
- * @property {(msg: ArrayBufferLike, sig: OcapnSignature) => void} assertSignatureValid - Throws if signature is invalid
+ * @property {(message: Uint8Array, sig: OcapnSignature) => void} assertSignatureValid - Throws if signature is invalid
  */
 
 /**
  * @typedef {object} OcapnKeyPair
  * @property {OcapnPublicKey} publicKey
- * @property {(msg: ArrayBufferLike) => OcapnSignature} sign
+ * @property {(message: Uint8Array) => OcapnSignature} sign
  */
 
 /**
@@ -51,13 +50,13 @@ const sessionIdHashPrefixBytes = textEncoder.encode('prot0');
  * @returns {Uint8Array}
  */
 const ocapNSignatureToBytes = sig => {
-  const rBytes = bytesFromImmutable(sig.r);
-  const sBytes = bytesFromImmutable(sig.s);
+  const rBytes = thawedBytes(sig.r);
+  const sBytes = thawedBytes(sig.s);
   return concatBytes([rBytes, sBytes]);
 };
 
 /**
- * @param {ArrayBufferLike} publicKeyBytes
+ * @param {Uint8Array} publicKeyBytes
  * @returns {OcapnPublicKeyDescriptor}
  */
 const makePublicKeyDescriptor = publicKeyBytes => {
@@ -71,13 +70,13 @@ const makePublicKeyDescriptor = publicKeyBytes => {
 };
 
 /**
- * @param {ArrayBufferLike} peerIdOne
- * @param {ArrayBufferLike} peerIdTwo
+ * @param {Uint8Array} peerIdOne
+ * @param {Uint8Array} peerIdTwo
  * @returns {SessionId}
  */
 export const makeSessionId = (peerIdOne, peerIdTwo) => {
-  const peerIdOneBytes = bytesFromImmutable(peerIdOne);
-  const peerIdTwoBytes = bytesFromImmutable(peerIdTwo);
+  const peerIdOneBytes = thawedBytes(peerIdOne);
+  const peerIdTwoBytes = thawedBytes(peerIdTwo);
   const result = compareUint8Arrays(peerIdOneBytes, peerIdTwoBytes);
   const peerIds =
     result < 0
@@ -87,7 +86,7 @@ export const makeSessionId = (peerIdOne, peerIdTwo) => {
   const hash1 = sha256(sessionIdBytes);
   const hash2 = sha256(hash1);
   // @ts-expect-error - Branded type: SessionId is ArrayBufferLike at runtime
-  return bytesToImmutable(hash2);
+  return frozenBytes(hash2);
 };
 
 /**
@@ -95,17 +94,17 @@ export const makeSessionId = (peerIdOne, peerIdTwo) => {
  * browsers, and can be shimmed on embedded engines (an engine profile
  * that never mints gift ids may shim a throwing stub).
  *
- * @returns {ArrayBufferLike}
+ * @returns {Uint8Array}
  */
 export const randomGiftId = () => {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
-  return bytesToImmutable(bytes);
+  return frozenBytes(bytes);
 };
 
 /**
  * @typedef {object} Cryptography
- * @property {(publicKeyBytes: ArrayBufferLike) => OcapnPublicKey} makeOcapnPublicKey
+ * @property {(publicKeyBytes: Uint8Array) => OcapnPublicKey} makeOcapnPublicKey
  * @property {(publicKeyDescriptor: OcapnPublicKeyDescriptor) => OcapnPublicKey} publicKeyDescriptorToPublicKey
  * @property {(privateKeyBytes: Uint8Array) => OcapnKeyPair} makeOcapnKeyPairFromPrivateKey
  * @property {() => OcapnKeyPair} makeOcapnKeyPair
@@ -113,7 +112,7 @@ export const randomGiftId = () => {
  * @property {(location: OcapnLocation, keyPair: OcapnKeyPair, binding: ArrayBufferLike) => OcapnSignature} signLocation
  * @property {(location: OcapnLocation, signature: OcapnSignature, publicKey: OcapnPublicKey, binding: ArrayBufferLike) => void} assertLocationSignatureValid
  * @property {(handoffGive: HandoffGive, keyPair: OcapnKeyPair) => OcapnSignature} signHandoffGive
- * @property {(receiverPublicKeyForGifter: OcapnPublicKey, exporterLocation: OcapnLocation, gifterExporterSessionId: SessionId, gifterSideId: PublicKeyId, giftId: ArrayBufferLike, gifterKeyForExporter: OcapnKeyPair) => HandoffGiveSigEnvelope} makeSignedHandoffGive
+ * @property {(receiverPublicKeyForGifter: OcapnPublicKey, exporterLocation: OcapnLocation, gifterExporterSessionId: SessionId, gifterSideId: PublicKeyId, giftId: Uint8Array, gifterKeyForExporter: OcapnKeyPair) => HandoffGiveSigEnvelope} makeSignedHandoffGive
  * @property {(handoffGive: HandoffGive, signature: OcapnSignature, publicKey: OcapnPublicKey) => void} assertHandoffGiveSignatureValid
  * @property {(handoffReceive: HandoffReceive, keyPair: OcapnKeyPair) => OcapnSignature} signHandoffReceive
  * @property {(handoffReceive: HandoffReceive, signature: OcapnSignature, publicKey: OcapnPublicKey) => void} assertHandoffReceiveSignatureValid
@@ -141,11 +140,11 @@ export const makeCryptography = codec => {
     const hash1 = sha256(publicKeyDescriptorBytes);
     const hash2 = sha256(hash1);
     // @ts-expect-error - Branded type: PublicKeyId is ArrayBufferLike at runtime
-    return bytesToImmutable(hash2);
+    return frozenBytes(hash2);
   };
 
   /**
-   * @param {ArrayBufferLike} publicKeyBytes
+   * @param {Uint8Array} publicKeyBytes
    * @returns {OcapnPublicKey}
    */
   const makeOcapnPublicKey = publicKeyBytes => {
@@ -155,14 +154,14 @@ export const makeCryptography = codec => {
       bytes: publicKeyBytes,
       descriptor: publicKeyDescriptor,
       /**
-       * @param {ArrayBufferLike} msgBytes
+       * @param {Uint8Array} messageBytes
        * @param {OcapnSignature} ocapnSig
        */
-      assertSignatureValid: (msgBytes, ocapnSig) => {
+      assertSignatureValid: (messageBytes, ocapnSig) => {
         const sigBytes = ocapNSignatureToBytes(ocapnSig);
-        const msgUint8 = bytesFromImmutable(msgBytes);
-        const pkUint8 = bytesFromImmutable(publicKeyBytes);
-        const isValid = ed25519.verify(sigBytes, msgUint8, pkUint8);
+        const messageUint8 = thawedBytes(messageBytes);
+        const pkUint8 = thawedBytes(publicKeyBytes);
+        const isValid = ed25519.verify(sigBytes, messageUint8, pkUint8);
         if (!isValid) {
           throw new Error('Invalid signature');
         }
@@ -176,17 +175,17 @@ export const makeCryptography = codec => {
    */
   const makeOcapnKeyPairFromPrivateKey = privateKeyBytes => {
     const publicKeyBytes = ed25519.getPublicKey(privateKeyBytes);
-    const publicKeyBuffer = bytesToImmutable(publicKeyBytes);
+    const publicKeyBuffer = frozenBytes(publicKeyBytes);
     return {
       publicKey: makeOcapnPublicKey(publicKeyBuffer),
-      sign: msg => {
-        const msgBytes = bytesFromImmutable(msg);
-        const sigBytes = ed25519.sign(msgBytes, privateKeyBytes);
+      sign: message => {
+        const messageBytes = thawedBytes(message);
+        const sigBytes = ed25519.sign(messageBytes, privateKeyBytes);
         return {
           type: 'sig-val',
           scheme: 'eddsa',
-          r: bytesToImmutable(sigBytes.slice(0, 32)),
-          s: bytesToImmutable(sigBytes.slice(32)),
+          r: frozenBytes(sigBytes.slice(0, 32)),
+          s: frozenBytes(sigBytes.slice(32)),
         };
       },
     };
@@ -275,7 +274,7 @@ export const makeCryptography = codec => {
     // wire bytes the OCapN python reference suite produces and
     // verifies, so tcp-testing-only interop is bit-for-bit unchanged.
     if (bindingBytes.length === 0) {
-      return bytesToImmutable(myLocationBytes);
+      return frozenBytes(myLocationBytes);
     }
     // With a non-empty binding (e.g. the Noise handshake hash on the
     // np netlayer), prepend a domain-separator and length-prefix the
@@ -299,7 +298,7 @@ export const makeCryptography = codec => {
     out.set(bindingBytes, offset);
     offset += bindingBytes.length;
     out.set(myLocationBytes, offset);
-    return bytesToImmutable(out);
+    return frozenBytes(out);
   };
 
   /**
