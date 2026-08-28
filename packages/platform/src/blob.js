@@ -1,7 +1,7 @@
 // @ts-check
 
 import { encodeBase64 } from '@endo/base64';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
 import { makeExo } from '@endo/exo';
 import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
 import harden from '@endo/harden';
@@ -36,9 +36,9 @@ export const blobFromBytes = bytesOrPromise => {
     /** @param {unknown} synHead */
     streamBase64: synHead =>
       makeReaderPump(base64Chunks(bytes()))(/** @type {any} */ (synHead)),
-    text: () => bytes().then(bytesToText),
+    text: () => bytes().then(decodeUtf8),
     json: () =>
-      bytes().then(resolvedBytes => JSON.parse(bytesToText(resolvedBytes))),
+      bytes().then(resolvedBytes => JSON.parse(decodeUtf8(resolvedBytes))),
     /** @param {string} [method] */
     help: method =>
       method === undefined

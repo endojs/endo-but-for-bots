@@ -91,7 +91,8 @@
     "@endo/patterns": "workspace:^",
     "@endo/sha256": "workspace:^",
     "@endo/stream": "workspace:^",
-    "@endo/stream-node": "workspace:^"
+    "@endo/stream-node": "workspace:^",
+    "@endo/utf8": "workspace:^"
   },
   "devDependencies": {
     "@endo/captp": "workspace:^",
