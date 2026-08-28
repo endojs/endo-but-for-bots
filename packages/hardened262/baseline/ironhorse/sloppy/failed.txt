@@ -12,6 +12,7 @@ test/Compartment/import-now-optional-resolve-hook.js
 test/Compartment/prototype/Symbol.toStringTag.js
 test/freeze/monadic.js
 test/intrinsics/ArrayIteratorPrototype/intrinsic-metadata.js
+test/intrinsics/AsyncFunction/intrinsic-metadata.js
 test/intrinsics/AsyncIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/GeneratorPrototype/intrinsic-metadata.js
 test/intrinsics/IteratorPrototype/intrinsic-metadata.js
