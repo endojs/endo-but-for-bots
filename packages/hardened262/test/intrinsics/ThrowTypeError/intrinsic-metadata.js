@@ -65,18 +65,25 @@ assert.throws(
   'invoking %ThrowTypeError% as a setter throws a TypeError',
 );
 
-// %ThrowTypeError% is a single shared intrinsic: distinct strict arguments
-// objects — including one with a different argument count — resolve to the very
-// same accessor, so a host that minted a fresh poison pill per call would be
-// caught.
+// %ThrowTypeError% is a single realm-wide intrinsic, not one minted per call or
+// per function object. Reach it from a second, syntactically distinct strict
+// function declaration — with a different argument count — and it must resolve
+// to the very same accessor. Using a distinct declaration (rather than a second
+// call of makeArguments) is what catches a host that mints a fresh poison pill
+// per function object as well as one that mints per call. This check is
+// unconditional so it holds even under SES lockdown, where the
+// Function.prototype cross-route below is deleted.
+function makeOtherArguments() {
+  return arguments;
+}
 var otherCalleeDescriptor = Object.getOwnPropertyDescriptor(
-  makeArguments(1, 2, 3),
+  makeOtherArguments(1, 2, 3),
   'callee',
 );
 assert.sameValue(
   otherCalleeDescriptor.get,
   ThrowTypeError,
-  'every strict-mode arguments object shares one %ThrowTypeError%',
+  'every strict-mode arguments object shares one realm-wide %ThrowTypeError%',
 );
 
 // Where a host retains the Function.prototype `caller`/`arguments` poison pills
@@ -88,11 +95,12 @@ var callerDescriptor = Object.getOwnPropertyDescriptor(
   Function.prototype,
   'caller',
 );
+// `caller` and `arguments` are each independently optional — hosts have dropped
+// one without the other across engine history — so guard each descriptor on its
+// own presence rather than assuming the pair is retained or removed together. A
+// host that stripped just one would otherwise throw an uncaught TypeError here
+// instead of failing (or skipping) cleanly.
 if (callerDescriptor !== undefined) {
-  var argumentsDescriptor = Object.getOwnPropertyDescriptor(
-    Function.prototype,
-    'arguments',
-  );
   assert.sameValue(
     callerDescriptor.get,
     ThrowTypeError,
@@ -103,6 +111,12 @@ if (callerDescriptor !== undefined) {
     callerDescriptor.set,
     'Function.prototype.caller uses one accessor for get and set',
   );
+}
+var argumentsDescriptor = Object.getOwnPropertyDescriptor(
+  Function.prototype,
+  'arguments',
+);
+if (argumentsDescriptor !== undefined) {
   assert.sameValue(
     argumentsDescriptor.get,
     ThrowTypeError,
