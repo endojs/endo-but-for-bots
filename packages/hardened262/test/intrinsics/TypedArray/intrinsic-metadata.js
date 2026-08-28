@@ -49,16 +49,17 @@ assert.throws(
 // that one family member is not yet enumerated here; it will be covered
 // automatically once the vendored harness is refreshed to match upstream
 // test262.
-function assertSharedSuperclass(TA) {
+function assertSharedSuperclass(typedArrayConstructor) {
   assert.sameValue(
-    Object.getPrototypeOf(TA),
+    Object.getPrototypeOf(typedArrayConstructor),
     TypedArray,
-    TA.name + ' chains to the single %TypedArray% intrinsic',
+    typedArrayConstructor.name + ' chains to the single %TypedArray% intrinsic',
   );
   assert.sameValue(
-    Object.getPrototypeOf(TA.prototype),
+    Object.getPrototypeOf(typedArrayConstructor.prototype),
     TypedArrayPrototype,
-    TA.name + '.prototype chains to the single %TypedArrayPrototype% intrinsic',
+    typedArrayConstructor.name +
+      '.prototype chains to the single %TypedArrayPrototype% intrinsic',
   );
 }
 testWithTypedArrayConstructors(assertSharedSuperclass);
@@ -110,11 +111,15 @@ assert.sameValue(
 
 // The getter yields the per-instance constructor name for every concrete
 // typed-array constructor.
-function assertToStringTagName(TA) {
+function assertToStringTagName(typedArrayConstructor) {
   assert.sameValue(
-    toStringTag.get.call(new TA(0)),
-    TA.name,
-    'the @@toStringTag getter yields ' + TA.name + ' for a ' + TA.name + ' instance',
+    toStringTag.get.call(new typedArrayConstructor(0)),
+    typedArrayConstructor.name,
+    'the @@toStringTag getter yields ' +
+      typedArrayConstructor.name +
+      ' for a ' +
+      typedArrayConstructor.name +
+      ' instance',
   );
 }
 testWithTypedArrayConstructors(assertToStringTagName);
@@ -163,25 +168,37 @@ function detachBuffer(buffer) {
   );
 }
 
-// Cover both a Number-backed and a BigInt-backed constructor so the
-// detachment-survival check is not a single-constructor spot check.
-function assertDetachedToStringTag(TA) {
-  var typedArray = new TA(8);
+// Sweep the whole typed-array family (Number- and BigInt-backed alike) rather
+// than spot-checking a subset: a shim that wraps each concrete subclass's
+// accessor individually could regress the detached-getter for one member
+// without a two-constructor spot check noticing.
+function assertDetachedToStringTag(typedArrayConstructor) {
+  var typedArray = new typedArrayConstructor(8);
   detachBuffer(typedArray.buffer);
+  // Assert the buffer actually became detached before asserting @@toStringTag
+  // survives it: on a host whose transfer/structuredClone silently no-ops
+  // instead of detaching, the survival assertion would pass without ever
+  // exercising the detached branch of the getter.
+  assert.sameValue(
+    typedArray.buffer.byteLength,
+    0,
+    'the buffer is detached (byteLength 0) before asserting @@toStringTag survival for ' +
+      typedArrayConstructor.name,
+  );
   assert.sameValue(
     toStringTag.get.call(typedArray),
-    TA.name,
+    typedArrayConstructor.name,
     'the @@toStringTag getter still yields ' +
-      TA.name +
+      typedArrayConstructor.name +
       ' for a detached-buffer typed array',
   );
   assert.sameValue(
     Object.prototype.toString.call(typedArray),
-    '[object ' + TA.name + ']',
+    '[object ' + typedArrayConstructor.name + ']',
     'Object.prototype.toString still reports the ' +
-      TA.name +
+      typedArrayConstructor.name +
       ' tag after buffer detachment',
   );
 }
-assertDetachedToStringTag(Int8Array);
-assertDetachedToStringTag(BigInt64Array);
+testWithTypedArrayConstructors(assertDetachedToStringTag);
+testWithBigIntTypedArrayConstructors(assertDetachedToStringTag);
