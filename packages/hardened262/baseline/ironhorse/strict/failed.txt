@@ -65,9 +65,13 @@ test/Compartment/prototype/importNow/modules-shared-namespaces.js
 test/freeze/monadic.js
 test/intrinsics/ArrayIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/AsyncIteratorPrototype/intrinsic-metadata.js
+test/intrinsics/Atomics/intrinsic-metadata.js
 test/intrinsics/GeneratorPrototype/intrinsic-metadata.js
 test/intrinsics/IteratorPrototype/intrinsic-metadata.js
+test/intrinsics/JSON/intrinsic-metadata.js
 test/intrinsics/MapIteratorPrototype/intrinsic-metadata.js
+test/intrinsics/Math/intrinsic-metadata.js
+test/intrinsics/Reflect/intrinsic-metadata.js
 test/intrinsics/RegExpStringIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/SetIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/StringIteratorPrototype/intrinsic-metadata.js
