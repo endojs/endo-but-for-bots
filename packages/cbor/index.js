@@ -2,11 +2,11 @@
 /* eslint-disable no-bitwise */
 
 import { bytesEqual } from '@endo/bytes/equals.js';
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
 import { b, Fail, makeError, q } from '@endo/errors';
 import harden from '@endo/harden';
 import { isWellFormedString } from '@endo/is-well-formed-string';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { strictDecodeUtf8 } from '@endo/utf8/strict-decode.js';
 
 /**
  * Exclusive upper bound of a CBOR head argument. A head carries at most eight
@@ -286,7 +286,7 @@ export const writeTextString = (writer, value) => {
   // isWellFormedString checks typeof and returns false for lone surrogates.
   isWellFormedString(value) ||
     Fail`writeTextString: expected a well-formed string, got ${q(value)}`;
-  const bytes = bytesFromText(value);
+  const bytes = encodeUtf8(value);
   writeCountHead(writer, 3, bytes.length, 'text string length');
   appendBytes(writer, bytes);
 };
@@ -576,7 +576,7 @@ export const readTextString = reader => {
   const head = expectHead(reader, 3, 'text string');
   const bytes = take(reader, headCount(reader, head, 'text string length'));
   try {
-    return bytesToText(bytes, { fatal: true });
+    return strictDecodeUtf8(bytes);
   } catch {
     return readerError(reader, head.start, 'Invalid UTF-8 text string');
   }
