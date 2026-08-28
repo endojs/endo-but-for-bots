@@ -45,6 +45,9 @@ type GitDiffOptions = {
     paths?: string[];
 };
 type GitFilesystem = GitExtendedFilesystem;
+type GitFollowRootOptions = {
+    cancelled?: Promise<never>;
+};
 type GitLogOptions = {
     maxCount?: number;
     ref?: GitRef | string;
@@ -67,6 +70,8 @@ type GitReadOnlyEndoGit = {
     stashShow: (index?: number) => Promise<string>;
     tree: (ref: GitRef | string) => Promise<GitTree>;
     filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
+    followRootChanges: (options?: GitFollowRootOptions) => unknown;
+    followLatestRoot: (options?: GitFollowRootOptions) => unknown;
     readOnly: () => GitReadOnlyEndoGit;
     scope: (name: 'reader') => GitReadOnlyEndoGit;
 };
@@ -366,6 +371,8 @@ type GitPathEntryIssuer = GitLitePathEntryIssuer;`,
     detach: (ref: GitRef | string) => Promise<void>;
     diff: (options?: GitDiffOptions) => Promise<string>;
     filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
+    followLatestRoot: (options?: GitFollowRootOptions) => unknown;
+    followRootChanges: (options?: GitFollowRootOptions) => unknown;
     help: (method?: string) => string;
     log: (options?: GitLogOptions) => Promise<GitCommit[]>;
     merge: (ref: GitRef | string, options?: {
