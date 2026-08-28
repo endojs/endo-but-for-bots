@@ -547,7 +547,7 @@ jobs:
         with:
           path: endo
           persist-credentials: false
-          # @endo/hardened262 now invokes ironhorse-xst in its coverage matrix;
+          # @endo/hardened262 now invokes endot-ih in its coverage matrix;
           # the existing runner builds its pinned XS oracle from this tree.
           submodules: true
 

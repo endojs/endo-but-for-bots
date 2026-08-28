@@ -1,4 +1,4 @@
-# Ironhorse test262 Convergence: the Corpus Becomes test262 Cases, the Harness Becomes `ironhorse-xst`
+# Ironhorse test262 Convergence: the Corpus Becomes test262 Cases, the Harness Becomes `endot-ih`
 
 | | |
 |---|---|
@@ -228,16 +228,19 @@ Hardened JavaScript additions beyond tc39, and ironhorse-discovered SES
 cases join that set via `packages/test262-runner`, tagged
 `ses-xs-parity` where they prove the XS↔Node↔Ironhorse surface.
 
-## Part 2: Harness → `ironhorse-xst`
+## Part 2: Harness → `endot-ih`
 
 ### The shape of the analogue
 
-One new binary, **`ironhorse-xst`** (crate `ironhorse-262` — the runner is
+One new binary, **`endot-ih`** (crate `ironhorse-262` — the runner is
 an evolution of the existing harness, not a parallel tool), that
 plays for the Rust engine exactly the role `xst` plays for XS,
-plus the one thing `xst` never had: a differential oracle.
+plus the one thing `xst` never had: a differential oracle. The
+corresponding XS test262 runner is named **`endot-xs`**; the unsuffixed
+**`endot`** name remains reserved for a future runner that can select
+either engine with a flag.
 
-| `xst` behavior (at the pin) | `ironhorse-xst` |
+| `xst` behavior (at the pin) | `endot-ih` |
 |---|---|
 | Paths are test262 cases or directories; test262 mode auto-detected via `../harness` | Same: positional paths, harness dir located via the existing `locate_test262()` walk (defaulting to `packages/test262-runner/test262`), `--test262-dir` override |
 | Full YAML frontmatter (libyaml): `includes`, `negative` (`phase` + `type`), `flags`, `features` | Full YAML frontmatter (a real YAML dependency replaces `test262.rs`'s three-field hand parser; `#![forbid(unsafe_code)]` constrains the choice to a pure-Rust parser) |
@@ -245,15 +248,15 @@ plus the one thing `xst` never had: a differential oracle.
 | Default sloppy + strict double-run; `onlyStrict` / `noStrict` / `raw` / `module` / `async` / `CanBlockIsFalse` flag semantics | Identical sloppy/strict mode selection. The strict variant prepends its directive to the whole assembled Script. `module` routes through the module machinery when stage 4 lands |
 | Fresh machine per case per mode; `sta.js`, `assert.js`, includes; `$DONE` host function + did-not-run latch for `async`; `fxRunLoop` job drain; unhandled-rejection latch | Fresh `ironhorse-vm` machine per case per mode; same assembly order (already implemented in `assemble()`); `$DONE` registered through the host-function seam once the async surface lands (the stage-3b promise pump is the job-drain substrate); the unhandled-rejection latch mirrors `the->rejection` |
 | Negative verdict: thrown `constructor.name` vs `negative.type`; machine memory/stack-overflow exits accepted for expected `RangeError` | Same verdict, computed **per engine**; Ironhorse's stack-limit abort maps to the `RangeError` acceptance the same way (the stage-3 child-1 fixed stack limits make that abort deterministic) |
-| `-l` / `-lc` / `-c` lockdown & compartment modes | The same modes once stage 4 (Hardened JavaScript) lands — this is precisely the "Ironhorse as a third `test262-runner` host alongside `xst` and `node`" the engine design promises, so `ironhorse-xst` doubles as that host's engine-side entry point |
-| `-o` YAML report: `mode:` / `skip:` / `fail:` | Same report grammar, extended with two Ironhorse sections (below), so tooling that reads an `xst` report reads an `ironhorse-xst` report |
+| `-l` / `-lc` / `-c` lockdown & compartment modes | The same modes once stage 4 (Hardened JavaScript) lands — this is precisely the "Ironhorse as a third `test262-runner` host alongside `xst` and `node`" the engine design promises, so `endot-ih` doubles as that host's engine-side entry point |
+| `-o` YAML report: `mode:` / `skip:` / `fail:` | Same report grammar, extended with two Ironhorse sections (below), so tooling that reads an `xst` report reads an `endot-ih` report |
 | Worker-thread pool | Per-subtree subprocess parallelism first (the memory-bounding pattern `test262-language` already documents); an in-process pool is an optimization, not a semantic |
 | `-f` REPRL (Fuzzilli) harness | **Non-goal for now** — `ironhorse-fuzz`'s cargo-fuzz targets cover the differential-fuzz mandate; a REPRL mode is optional later work if a Fuzzilli campaign is ever wanted |
 | `$262.agent.*` (multi-agent Atomics tests) | **Out of scope** until Ironhorse has a threading story; agent tests are named skips (`structural:agent`) |
 
 ### The dual-run oracle wiring
 
-`ironhorse-xst` subsumes the dual-run harness rather than sitting beside
+`endot-ih` subsumes the dual-run harness rather than sitting beside
 it. `--oracle` (default **on** in CI for as long as the XS oracle
 earns its keep, per engine-design decision 8) runs every assembled
 source on both engines and layers three comparisons on top of the
@@ -282,7 +285,7 @@ each engine compiles its own source, parse-phase negative cases are active,
 and bytecode byte-identity is separately enforced by the stage-5 bar.
 
 The **honest-split discipline is retained as an Ironhorse extension**:
-where `xst` reports a skip only by feature or flag, `ironhorse-xst`
+where `xst` reports a skip only by feature or flag, `endot-ih`
 keeps naming skips by the exact unsupported opcode / built-in /
 structural reason (`Report::skip_summary()` today), in a
 `skip-detail:` report section. That reporting is the port's progress
@@ -291,9 +294,9 @@ instrument and survives the convergence.
 ### What retires
 
 - `src/bin/harness.rs` (stage-1 corpus CLI) and
-  `src/bin/test262_language.rs` fold into `ironhorse-xst` (the latter's
-  subtree-walk and per-subtree-process pattern become `ironhorse-xst`
-  defaults); both retire by name once `ironhorse-xst` reproduces their
+  `src/bin/test262_language.rs` fold into `endot-ih` (the latter's
+  subtree-walk and per-subtree-process pattern become `endot-ih`
+  defaults); both retire by name once `endot-ih` reproduces their
   output in CI.
 - `test262.rs`'s three-field frontmatter parser is replaced by the
   full YAML parse; `assemble()` and the `Class`/`Report` core carry
@@ -308,7 +311,7 @@ stages 4–5 are the enabling dependencies for lockdown modes, module
 mode, strict mode, and parse negatives). Rollout order, each step
 independently green on this PR (kept DRAFT):
 
-1. **`ironhorse-xst` core** — full frontmatter, feature skip list,
+1. **`endot-ih` core** — full frontmatter, feature skip list,
    both-modes run loop, negative verdicts, oracle wiring, xst-shaped
    report. Immediately useful: it runs today's checked-in subset with
    today's covered surface, replacing `test262-language`.
@@ -342,7 +345,7 @@ build orchestration (children parked as `--orchestrated` under
    harness and format, not its tree.** One include model, two
    corpora with different jobs: upstream-parity vs. engine
    bring-up/regression; graduation upstream is a file move.
-3. **`ironhorse-xst` is one runner that subsumes the dual-run harness**
+3. **`endot-ih` is one runner that subsumes the dual-run harness**
    — `xst`'s CLI/verdict/report shape (grounded in `xs/tools/xst.c`
    + `xst262.c` at the pin) plus the differential oracle and the
    honest named-skip split as Ironhorse extensions. No parallel tool.
@@ -361,4 +364,4 @@ build orchestration (children parked as `--orchestrated` under
 |---|---|
 | [ironhorse-engine](ironhorse-engine.md) | Parent: § test262 conformance (requirement 6), § Metering (the doctrine the meter assertions encode), § Fuzzability (the trophies ledger), the stage ladder this milestone queues behind |
 | `packages/test262-runner` | The shared checked-in test262 subset, harness includes, `ses-xs-parity` convention, and the third-host integration target |
-| `xs/tools/xst.c`, `xs/tools/xst262.c` @ `48ee02d8cfe0` | The behavioral reference `ironhorse-xst` mirrors |
+| `xs/tools/xst.c`, `xs/tools/xst262.c` @ `48ee02d8cfe0` | The behavioral reference `endot-ih` mirrors |

@@ -45,7 +45,7 @@ gitignored `rust/engine/target/`.
 - **Bounded worker lifetime.** The XS oracle retains process RSS across the tens of
   thousands of machine create/destroy cycles a whole-tree run makes. The tree is
   partitioned into batches of at most **100 cases** and each batch is its **own
-  `ironhorse-xst` process**, so the oracle's RSS is freed on every batch exit.
+  `endot-ih` process**, so the oracle's RSS is freed on every batch exit.
   Each batch gets a wall-clock watchdog, so an unmetered oracle call cannot
   hold a worker forever. `--jobs` bounds the number of concurrent oracle
   processes; the script does not claim a per-process memory ceiling.
@@ -84,7 +84,7 @@ gitignored `rust/engine/target/`.
 
 | Piece | What it does |
 | --- | --- |
-| `ironhorse-xst --direct-only --batch-size N --batch-index I --json FILE <directory>` | runs one bounded directory batch through the full oracle differential, writing per-case JSON |
+| `endot-ih --direct-only --batch-size N --batch-index I --json FILE <directory>` | runs one bounded directory batch through the full oracle differential, writing per-case JSON |
 | `ironhorse-262-report discover` | lists every case-count-capped batch under the tree |
 | `ironhorse-262-report plan` | lists the batches not yet completed (resume plan) |
 | `ironhorse-262-report validate` | verifies schema, run identity, and expected case count |

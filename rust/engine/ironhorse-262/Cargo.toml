@@ -24,11 +24,11 @@ yaml-rust2 = { version = "0.11", default-features = false }
 name = "compile-diff"
 path = "src/bin/compile_diff.rs"
 
-# ironhorse-xst: the xst-analogue test262 runner (design § Part 2). Subsumes the
+# endot-ih: the xst-analogue test262 runner (design § Part 2). Subsumes the
 # dual-run harness and the `test262-language` subtree walker.
 [[bin]]
-name = "ironhorse-xst"
-path = "src/bin/ironhorse_xst.rs"
+name = "endot-ih"
+path = "src/bin/endot_ih.rs"
 
 # corpus-to-262: the mechanical corpus -> test262-style case converter
 # (design § Part 1). Dual-runs each corpus line against the oracle once and
@@ -41,7 +41,7 @@ path = "src/bin/corpus_to_262.rs"
 # described in designs/ironhorse-test262-convergence.md. Discovery, resume
 # planning, and deterministic aggregation of per-batch JSON into stable
 # report.json + static HTML. Runs no
-# oracle — the per-case execution is `ironhorse-xst --direct-only --json`.
+# oracle — the per-case execution is `endot-ih --direct-only --json`.
 [[bin]]
 name = "ironhorse-262-report"
 path = "src/bin/ironhorse_262_report.rs"

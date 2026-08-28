@@ -67,10 +67,10 @@ unacknowledged change fails CI.
 
 The XS and Node.js agents wire `module` and `lockdownModule`; the Ironhorse
 agents wire the four script scenarios `sloppy`, `strict`, `lockdownSloppy`, and
-`lockdownStrict`. The Ironhorse adapter uses the existing `ironhorse-xst`
+`lockdownStrict`. The Ironhorse adapter uses the existing `endot-ih`
 command without changing the engine or its runner. Its baseline classifies
 every generated scenario as passed or failed: unsupported scenarios and
-`ironhorse-xst` named skips are failures until they advance to a pass. Reports
+`endot-ih` named skips are failures until they advance to a pass. Reports
 retain separate agent/scenario keys, so bare and shimmed Ironhorse coverage can
 ratchet independently without making their unlike parse goals look comparable.
 Compact output adds the differential's failure reason as a final field; the
@@ -119,7 +119,7 @@ JavaScript cases and their harness includes.
   Hardened JavaScript corpus, run as a multi-agent cross product in one process.
   The two corpora are disjoint, so there is no duplication to reconcile away.
 
-- **`designs/ironhorse-test262-convergence.md`** describes the `ironhorse-xst`
+- **`designs/ironhorse-test262-convergence.md`** describes the `endot-ih`
   command used here and by `packages/test262-runner`. The large language corpus
   remains in `test262-runner`; this package invokes the existing runner over its
   own small corpus and keeps its distinct shim-delivery matrix.

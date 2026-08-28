@@ -9,11 +9,11 @@
 //! bar), and the **same bit-exact set under `--gate-meter-exact`** (every
 //! meter-exact-tagged case reproduces its historical computron agreement, so
 //! the gate is green). It runs the checked-in `cases/` tree through the same
-//! `ironhorse-xst` machinery a nightly run uses.
+//! `endot-ih` machinery a nightly run uses.
 //!
 //! The oracle accumulates process RSS across machine create/destroy cycles;
 //! the case set is ~1.7k, well under the tens-of-thousands the whole-tree
-//! `ironhorse-xst` binary bounds with per-subtree subprocesses, so one in-test
+//! `endot-ih` binary bounds with per-subtree subprocesses, so one in-test
 //! pass is safe.
 
 use ironhorse_262::test262::{collect_js, locate_test262};

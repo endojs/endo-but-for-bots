@@ -59,7 +59,7 @@ pub struct Frontmatter {
 /// ([`crate::frontmatter`]) — the three-field hand parser is retired
 /// (design § Part 2, "test262.rs's three-field frontmatter parser is
 /// replaced by the full YAML parse"), so a block-sequence `flags:` or a
-/// multi-line `negative:` reads the same here as it does under `ironhorse-xst`.
+/// multi-line `negative:` reads the same here as it does under `endot-ih`.
 pub fn parse_frontmatter(src: &str) -> Frontmatter {
     let full = crate::frontmatter::parse(src);
     Frontmatter {
@@ -403,7 +403,7 @@ mod tests {
         // agrees but whose computrons shift under the recalibration is a NAMED
         // `builtin-coercion-computron-gap` skip (classify()), NOT a divergence —
         // exactly the accuracy-over-parity split the swap adopted. Whole-tree
-        // `built-ins/String` (1111 files) is the `ironhorse-xst` binary; this
+        // `built-ins/String` (1111 files) is the `endot-ih` binary; this
         // in-`cargo test` slice stays bounded so the oracle RSS is contained.
         let (root, harness) = match locate_test262() {
             Some(p) => p,
@@ -465,7 +465,7 @@ mod tests {
         };
         // A bounded, deterministic slice of the covered-grammar sections so
         // the in-`cargo test` run stays fast; the full-tree walk is the
-        // `ironhorse-xst` binary. These sections are where the covered
+        // `endot-ih` binary. These sections are where the covered
         // grammar (arithmetic/logic/comparison/conditional expressions,
         // block/if/while/for/var/throw/try statements) actually lives.
         let sections = [

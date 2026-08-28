@@ -16,7 +16,7 @@
 //! The bespoke per-stage corpus (`corpora/*.js` + the `stage*_corpus()`
 //! accessors) that drove bring-up has **retired** into a test262-shaped
 //! `cases/` tree: the `corpus-to-262` converter (bin) dual-runs each corpus
-//! line once and emits one standard test262 case, and `ironhorse-xst` ([`xst`])
+//! line once and emits one standard test262 case, and `endot-ih` ([`xst`])
 //! runs that tree with the same differential (design § Part 1, "the corpus
 //! becomes test262 cases"). The coverage-equivalence proof lives in
 //! `tests/corpus_conversion_equivalence.rs`. Whole-section runs draw from the

@@ -16,7 +16,7 @@ const repositoryRoot = new URL('../../', packageRootUrl);
 const engineDirectoryUrl = new URL('rust/engine/', repositoryRoot);
 const engineDirectory = fileURLToPath(engineDirectoryUrl);
 const ironhorseBinary = fileURLToPath(
-  new URL('target/release/ironhorse-xst', engineDirectoryUrl),
+  new URL('target/release/endot-ih', engineDirectoryUrl),
 );
 
 let ironhorseBuilt = false;
@@ -42,7 +42,7 @@ const ensureIronhorse = () => {
       '-p',
       'ironhorse-262',
       '--bin',
-      'ironhorse-xst',
+      'endot-ih',
     ],
     {
       cwd: engineDirectory,
@@ -98,7 +98,7 @@ export const decodeIronhorseOutcome = (test, code, signal, reportText) => {
       ok: false,
       code,
       signal,
-      failureReason: 'invalid ironhorse-xst report',
+      failureReason: 'invalid endot-ih report',
       ...test,
     };
   }
@@ -112,8 +112,8 @@ export const decodeIronhorseOutcome = (test, code, signal, reportText) => {
     failureReason:
       record?.reason ??
       (record?.outcome
-        ? `ironhorse-xst outcome: ${record.outcome}`
-        : 'ironhorse-xst produced no case'),
+        ? `endot-ih outcome: ${record.outcome}`
+        : 'endot-ih produced no case'),
     ...test,
   };
 };
@@ -145,7 +145,7 @@ export const testIronhorse = async (test, { sesShim, quiet }) => {
   child.stderr.on('data', chunk => {
     stderr += chunk;
   });
-  const { code, signal } = await awaitScenarioChild(child, 'ironhorse-xst');
+  const { code, signal } = await awaitScenarioChild(child, 'endot-ih');
   let reportText = '';
   try {
     reportText = readFileSync(reportFile, 'utf8');

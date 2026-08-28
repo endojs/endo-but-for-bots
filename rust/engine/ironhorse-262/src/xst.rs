@@ -1,6 +1,6 @@
-//! `ironhorse-xst`: the xst-analogue test262 runner for the Rust engine
+//! `endot-ih`: the xst-analogue test262 runner for the Rust engine
 //! (design [`designs/ironhorse-test262-convergence.md`] § Part 2,
-//! "Harness -> `ironhorse-xst`"). It plays for ironhorse exactly the role
+//! "Harness -> `endot-ih`"). It plays for ironhorse exactly the role
 //! `xs/tools/xst.c` + `xst262.c` (@ `48ee02d8cfe0`) play for XS, plus the
 //! one thing `xst` never had: a differential oracle.
 //!
@@ -68,14 +68,14 @@ pub const DEFAULT_ENDOR_SKIP_FEATURES: &[&str] = &[
     "ses-xs-parity",
 ];
 
-/// The SES lockdown/compartment mode — ironhorse-xst's analogue of `xst262.c`'s
+/// The SES lockdown/compartment mode — endot-ih's analogue of `xst262.c`'s
 /// `-l` / `-lc` / `-c` (design § Part 2, the lockdown/compartment row). It
 /// selects the Hardened-JavaScript setup applied to every case before it
 /// runs, exactly as `xst` calls `lockdown()` and/or evaluates the body in a
 /// `Compartment`. This is the engine-side entry point of the "ironhorse as a
 /// third `packages/test262-runner` host alongside `xst` and `node`" the
 /// engine design promises: the `ses-xs-parity` axis runs `xst -l`, `node`
-/// with the SES prelude, and `ironhorse-xst -l`.
+/// with the SES prelude, and `endot-ih -l`.
 ///
 /// Because the guest surface these modes need (`lockdown()`, the
 /// `Compartment` intrinsic) is a named scope fold ironhorse does not yet expose
@@ -187,7 +187,7 @@ pub struct Config {
     /// `--feature-filter <feature>`: run **only** cases whose frontmatter
     /// `features:` lists this (the `test262-harness --features-include`
     /// semantics the repo drives `xst`/`node` with — distinct from
-    /// ironhorse-xst's skip-list `--features-include`). Empty = no filter. Used
+    /// endot-ih's skip-list `--features-include`). Empty = no filter. Used
     /// to restrict a whole-tree walk to the `ses-xs-parity` axis.
     pub feature_filter: Vec<String>,
     /// `--case-timeout SECS`: the hard per-case wall-clock bound. Both the XS
@@ -1199,7 +1199,7 @@ pub struct XstReport {
     /// Hardened-JavaScript axis produced it. [`SesMode::None`] for a plain run.
     pub ses_mode: SesMode,
     /// Every case's full record — the per-case wire the whole-tree sweep emits
-    /// as JSON (`ironhorse-xst --json`) for [`crate::report`] to aggregate.
+    /// as JSON (`endot-ih --json`) for [`crate::report`] to aggregate.
     /// Populated by [`XstReport::record_case`] and by [`XstReport::record`];
     /// legacy aggregate callers record an empty feature list.
     pub cases: Vec<CaseRecord>,
@@ -1271,7 +1271,7 @@ impl XstReport {
     /// additive.
     pub fn to_yaml(&self) -> String {
         let mut s = String::new();
-        s.push_str("runner: ironhorse-xst\n");
+        s.push_str("runner: endot-ih\n");
         s.push_str(&format!("total: {}\n", self.total));
         s.push_str(&format!("covered: {}\n", self.covered));
         s.push_str(&format!("bar-met: {}\n", self.met_bar()));
@@ -2083,7 +2083,7 @@ mod tests {
             },
         );
         let y = rep.to_yaml();
-        assert!(y.contains("runner: ironhorse-xst"));
+        assert!(y.contains("runner: endot-ih"));
         assert!(y.contains("mode:"));
         assert!(y.contains("strict-skipped-by-policy: 2"));
         assert!(y.contains("skip:"));
@@ -2095,20 +2095,20 @@ mod tests {
 
     #[test]
     fn covered_grammar_sections_have_zero_failures_through_xst() {
-        // The ironhorse-xst analogue of test262.rs's covered-grammar bar: walk a
+        // The endot-ih analogue of test262.rs's covered-grammar bar: walk a
         // bounded, deterministic slice of the covered-grammar sections
         // through the full mode/verdict/oracle machinery and require ZERO
         // failures — every case ironhorse runs end-to-end either meets the bar
         // (covered) or is honestly named-skipped; nothing diverges. The
         // covered count is reported, not asserted to a target (it grows as
-        // stages land the built-ins). The full-tree walk is the `ironhorse-xst`
+        // stages land the built-ins). The full-tree walk is the `endot-ih`
         // binary; this in-`cargo test` slice stays bounded so the oracle RSS
         // is contained.
         use crate::test262::{collect_js, locate_test262};
         let (root, harness) = match locate_test262() {
             Some(p) => p,
             None => {
-                eprintln!("test262 subset absent; skipping the ironhorse-xst covered-grammar bar");
+                eprintln!("test262 subset absent; skipping the endot-ih covered-grammar bar");
                 return;
             }
         };
@@ -2129,7 +2129,7 @@ mod tests {
         let cfg = Config::default();
         let rep = run_files(&cfg, &harness, &root, &files);
         eprintln!(
-            "ironhorse-xst covered-grammar slice: total={} covered={} failed={} advisory-computron-gap={}",
+            "endot-ih covered-grammar slice: total={} covered={} failed={} advisory-computron-gap={}",
             rep.total,
             rep.covered,
             rep.failures.len(),
@@ -2144,7 +2144,7 @@ mod tests {
         // The report YAML must be well-formed enough to re-parse its own
         // shape (a smoke check on the emitter).
         let y = rep.to_yaml();
-        assert!(y.contains("runner: ironhorse-xst") && y.contains("bar-met: true"));
+        assert!(y.contains("runner: endot-ih") && y.contains("bar-met: true"));
         assert!(
             rep.met_bar(),
             "zero failures required through the xst runner; got {}",
@@ -2344,7 +2344,7 @@ mod tests {
         let (root, harness) = match locate_test262() {
             Some(p) => p,
             None => {
-                eprintln!("test262 subset absent; skipping the ironhorse-xst async bar");
+                eprintln!("test262 subset absent; skipping the endot-ih async bar");
                 return;
             }
         };
@@ -2363,7 +2363,7 @@ mod tests {
         let cfg = Config::default();
         let rep = run_files(&cfg, &harness, &root, &files);
         eprintln!(
-            "ironhorse-xst async slice: total={} covered={} failed={}",
+            "endot-ih async slice: total={} covered={} failed={}",
             rep.total,
             rep.covered,
             rep.failures.len(),

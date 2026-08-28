@@ -1,4 +1,4 @@
-//! `ironhorse-xst`: the xst-analogue test262 runner (design
+//! `endot-ih`: the xst-analogue test262 runner (design
 //! [`designs/ironhorse-test262-convergence.md`] § Part 2). It plays for
 //! the Rust engine the role `xs/tools/xst.c` + `xst262.c` play for XS —
 //! full YAML frontmatter, the not-yet-implemented feature skip list,
@@ -12,14 +12,14 @@
 //! skipped / divergent split — now with the full verdict and report layer.
 //!
 //! Usage:
-//!   ironhorse-xst                                  # all of language/ (default)
-//!   ironhorse-xst expressions/addition             # a language/ subtree
-//!   ironhorse-xst built-ins/Boolean                # a built-ins/ subtree
-//!   ironhorse-xst --features-include ses-xs-parity built-ins/Object
-//!   ironhorse-xst --repeat 3 --gate-meter-exact language/expressions/addition
-//!   ironhorse-xst -o report.yaml language/statements
-//!   ironhorse-xst --test262-dir /path/to/test262 --no-oracle built-ins/Math
-//!   ironhorse-xst -l --feature-filter ses-xs-parity --features-include ses-xs-parity built-ins
+//!   endot-ih                                  # all of language/ (default)
+//!   endot-ih expressions/addition             # a language/ subtree
+//!   endot-ih built-ins/Boolean                # a built-ins/ subtree
+//!   endot-ih --features-include ses-xs-parity built-ins/Object
+//!   endot-ih --repeat 3 --gate-meter-exact language/expressions/addition
+//!   endot-ih -o report.yaml language/statements
+//!   endot-ih --test262-dir /path/to/test262 --no-oracle built-ins/Math
+//!   endot-ih -l --feature-filter ses-xs-parity --features-include ses-xs-parity built-ins
 //!
 //! The last line is the third-host `ses-xs-parity` invocation: ironhorse joins
 //! `xst -l` and node-with-SES-prelude as the third `packages/test262-runner`
@@ -231,7 +231,7 @@ fn main() {
     }
 
     eprintln!(
-        "ironhorse-xst: running {} test262 files (oracle={}, repeat={}, gate-meter-exact={}, ses-mode={})",
+        "endot-ih: running {} test262 files (oracle={}, repeat={}, gate-meter-exact={}, ses-mode={})",
         files.len(),
         cfg.oracle,
         cfg.repeat,
@@ -242,7 +242,7 @@ fn main() {
 
     println!("{}", "=".repeat(72));
     println!(
-        "ironhorse-xst: total={} covered={} failed={} skipped={}",
+        "endot-ih: total={} covered={} failed={} skipped={}",
         rep.total,
         rep.covered,
         rep.failures.len(),
@@ -317,15 +317,15 @@ fn main() {
 }
 
 fn fail(msg: &str) -> ! {
-    eprintln!("ironhorse-xst: {}", msg);
+    eprintln!("endot-ih: {}", msg);
     std::process::exit(2);
 }
 
 const HELP: &str = "\
-ironhorse-xst: the xst-analogue test262 runner (design § Part 2)
+endot-ih: the xst-analogue test262 runner (design § Part 2)
 
 USAGE:
-    ironhorse-xst [OPTIONS] [SUBTREE...]
+    endot-ih [OPTIONS] [SUBTREE...]
 
 SUBTREE:
     A subtree under the test262 root. `language/…` and `built-ins/…` resolve
@@ -359,5 +359,5 @@ OPTIONS:
     -h, --help               print this help
 
 THIRD-HOST (ses-xs-parity axis, alongside `xst -l` and node+SES prelude):
-    ironhorse-xst -l --feature-filter ses-xs-parity --features-include ses-xs-parity built-ins
+    endot-ih -l --feature-filter ses-xs-parity --features-include ses-xs-parity built-ins
 ";

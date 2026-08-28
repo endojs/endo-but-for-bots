@@ -9,7 +9,7 @@
 #   * BOUNDED PROCESS LIFETIME. The XS oracle retains process RSS across the tens of
 #     thousands of machine create/destroy cycles a whole-tree run makes, so the
 #     tree is partitioned into case-count-capped batches and EACH batch is its own
-#     `ironhorse-xst` process — every batch frees the oracle's RSS on exit, and
+#     `endot-ih` process — every batch frees the oracle's RSS on exit, and
 #     a watchdog prevents an unmetered oracle call from holding a worker forever.
 #   * RESUMABLE. Each batch writes one JSON file; an interrupted run leaves the
 #     completed files on disk and a re-run (same command) skips them.
@@ -93,11 +93,11 @@ mkdir -p "$results"
 
 echo "full-run: building the runner + report binaries (release)..." >&2
 cargo build --release --manifest-path "$engine_directory/Cargo.toml" \
-  -p ironhorse-262 --bin ironhorse-xst --bin ironhorse-262-report >&2
+  -p ironhorse-262 --bin endot-ih --bin ironhorse-262-report >&2
 target_directory=${CARGO_TARGET_DIR:-$engine_directory/target}
 target_triple_directory=""
 [ -n "${CARGO_BUILD_TARGET:-}" ] && target_triple_directory="${CARGO_BUILD_TARGET}/"
-xst_binary="$target_directory/${target_triple_directory}release/ironhorse-xst"
+xst_binary="$target_directory/${target_triple_directory}release/endot-ih"
 report_binary="$target_directory/${target_triple_directory}release/ironhorse-262-report"
 
 # The partition cap is single-sourced from the report binary (the same Rust
@@ -368,7 +368,7 @@ fi
 
 cat > "$provenance" <<EOF
 {
-  "runner": $("$report_binary" json-string "ironhorse-xst"),
+  "runner": $("$report_binary" json-string "endot-ih"),
   "test262_sha": $("$report_binary" json-string "$test262_sha"),
   "test262_ref": $("$report_binary" json-string "$test262_ref"),
   "endo_sha": $("$report_binary" json-string "$endo_sha"),

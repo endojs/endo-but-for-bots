@@ -371,7 +371,7 @@ test('decodeIronhorseOutcome maps every non-covered result to failure', () => {
   );
   assert.equal(
     decodeIronhorseOutcome(scenario, 2, null, 'not-json').failureReason,
-    'invalid ironhorse-xst report',
+    'invalid endot-ih report',
   );
 });
 
@@ -404,7 +404,7 @@ Object.defineProperty(Test262Error.prototype, 'toString', {
   assert.ok(source.endsWith(subject));
 });
 
-test('makeIronhorseSource delegates async handling to ironhorse-xst', () => {
+test('makeIronhorseSource delegates async handling to endot-ih', () => {
   const source = makeIronhorseSource(
     {
       contents: '$DONE();\n',
