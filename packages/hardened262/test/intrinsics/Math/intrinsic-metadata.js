@@ -19,10 +19,13 @@ assert.sameValue(
   '%Math% Object.prototype.toString tag',
 );
 
-// Pin the complete ES2015-and-later method surface supported by every hardened
-// host, each method as its own assertion. Method names and lengths are
-// deliberately not checked because XS native lockdown may tame function metadata
-// while preserving callability.
+// Pin the widely-supported ES2015-and-later method surface, each method as its
+// own assertion. This is intentionally NOT the complete %Math% surface: the
+// finished-but-unevenly-shipped addition %Math.sumPrecise% is omitted so the
+// assertion stays cross-host-stable on engines (including current XS/V8 builds)
+// that do not yet expose it. Method names and lengths are deliberately not checked
+// because XS native lockdown may tame function metadata while preserving
+// callability.
 [
   'abs',
   'acos',

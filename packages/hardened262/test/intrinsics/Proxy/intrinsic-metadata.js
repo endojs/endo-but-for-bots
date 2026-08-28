@@ -26,10 +26,11 @@ assert.sameValue(
   '%Proxy.revocable% is a callable static factory',
 );
 
-// A proxy with an empty handler is fully transparent: every internal method
-// forwards to the target. This pins that hardening did not replace %Proxy% with
-// a stand-in that breaks transparent forwarding, each forwarded operation
-// asserted independently.
+// A proxy with an empty handler forwards to its target. This pins that hardening
+// did not replace %Proxy% with a stand-in that breaks transparent forwarding for
+// the fundamental operations exercised here — property reads, the `in`/has check,
+// and getPrototypeOf — each asserted independently. Only these three are pinned;
+// this is not a claim that every one of the ~13 internal methods was checked.
 var target = { a: 1 };
 var transparent = new Proxy(target, {});
 assert.sameValue(
@@ -55,11 +56,11 @@ assert.sameValue(
 var trapped = new Proxy(
   { real: 'value' },
   {
-    get: function (t, key, receiver) {
+    get: function (trapTarget, key, receiver) {
       if (key === 'intercepted') {
         return 'trap';
       }
-      return Reflect.get(t, key, receiver);
+      return Reflect.get(trapTarget, key, receiver);
     },
   },
 );
@@ -74,9 +75,10 @@ assert.sameValue(
   'a %Proxy% get trap can defer to %Reflect.get% for the default behavior',
 );
 
-// %Proxy.revocable% yields a { proxy, revoke } pair; after revoke() every
-// operation on the proxy throws a TypeError. This pins the revocation semantics
-// end to end on every host.
+// %Proxy.revocable% yields a { proxy, revoke } pair; after revoke() any
+// trap-mediated operation on the proxy (such as a property access) throws a
+// TypeError. Non-trap operations like `typeof` do not invoke a trap and are not
+// pinned here. This pins the revocation semantics end to end on every host.
 var revocable = Proxy.revocable({ x: 1 }, {});
 assert.sameValue(revocable.proxy.x, 1, 'a revocable proxy works before revocation');
 assert.sameValue(
@@ -90,5 +92,5 @@ assert.throws(
   function () {
     return revocable.proxy.x;
   },
-  'a revoked proxy throws a TypeError on any access',
+  'a revoked proxy throws a TypeError on property access',
 );

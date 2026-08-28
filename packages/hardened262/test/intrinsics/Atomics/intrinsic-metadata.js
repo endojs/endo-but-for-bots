@@ -23,10 +23,24 @@ assert.sameValue(
   '%Atomics% Object.prototype.toString tag',
 );
 
-// Pin the read-modify-write and synchronization method surface every hardened
-// host is expected to expose, each method as its own assertion. Method names and
-// lengths are deliberately not checked because XS native lockdown may tame
-// function metadata while preserving callability.
+// NOTE ON SUPPRESSION: `packages/ses/src/permits.js` marks `Atomics: false`
+// ("UNSAFE and suppressed"), but that permit is currently unenforced — Atomics is
+// not sampled into the pruned intrinsics set, so lockdown does not actually remove
+// it, and %Atomics% remains fully functional post-lockdown on every current host.
+// This test pins that present, observed cross-host reality, NOT an endorsement
+// that Atomics ought to survive lockdown. If the suppression is ever wired up,
+// these assertions will start failing and the baseline ratchet will surface that
+// change for a human to re-evaluate this test — the intended signal, not an
+// unexplained regression.
+
+// Pin the widely-supported read-modify-write and synchronization method surface,
+// each method as its own assertion. This is intentionally NOT the complete
+// %Atomics% surface: the finished-but-unevenly-shipped additions %Atomics.pause%
+// and %Atomics.waitAsync% are omitted so the assertion stays cross-host-stable on
+// engines (including current XS/V8 builds) that do not yet expose them. Method
+// names and lengths are deliberately not checked because XS native lockdown may
+// tame function metadata while preserving callability. The list is in
+// specification (alphabetical) order.
 [
   'add',
   'and',
@@ -34,11 +48,11 @@ assert.sameValue(
   'exchange',
   'isLockFree',
   'load',
+  'notify',
   'or',
   'store',
   'sub',
   'wait',
-  'notify',
   'xor',
 ].forEach(function (name) {
   assert.sameValue(
