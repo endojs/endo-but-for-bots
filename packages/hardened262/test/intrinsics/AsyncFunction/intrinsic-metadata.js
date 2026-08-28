@@ -89,3 +89,40 @@ assert.notSameValue(
   GeneratorFunction,
   '%AsyncFunction% and %GeneratorFunction% are distinct intrinsics',
 );
+
+// A taming bug that collapsed the async-function stand-in onto the tamed
+// `Function` intrinsic (the constructor the comment above notes lockdown
+// reparents it off of) would leave every identity check above intact yet
+// still be wrong; pin the distinctness the reparenting implies.
+assert.notSameValue(
+  AsyncFunction,
+  Function,
+  '%AsyncFunction% and the %Function% intrinsic are distinct',
+);
+
+// The one behavioral claim this file's prose makes — that lockdown tames the
+// async-function constructor into an inert stand-in — is exercised only where
+// it applies. Lockdown replaces %AsyncFunction% with a frozen inert
+// constructor that throws when called or constructed (see
+// packages/ses/src/tame-function-constructors.js), whereas a non-lockdown host
+// exposes the native, extensible, callable constructor. `Object.isFrozen`
+// distinguishes the two states without invoking the constructor, so this
+// covers the throw-on-invoke contract in the lockdown scenarios and stays
+// inert (skipping the throw assertions) in the plain-module scenario where the
+// native constructor is legitimately callable.
+if (Object.isFrozen(AsyncFunction)) {
+  assert.throws(
+    TypeError,
+    function () {
+      AsyncFunction('return 1');
+    },
+    'lockdown tames %AsyncFunction% into an inert stand-in that throws when called',
+  );
+  assert.throws(
+    TypeError,
+    function () {
+      new AsyncFunction('return 1');
+    },
+    'the tamed %AsyncFunction% stand-in throws under construct as well as call',
+  );
+}
