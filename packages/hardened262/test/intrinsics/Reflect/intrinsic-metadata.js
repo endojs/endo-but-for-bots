@@ -3,11 +3,13 @@ description: The %Reflect% namespace intrinsic exposes a coherent method table a
 features: [Reflect, Symbol.toStringTag]
 ---*/
 
-// %Reflect% is a namespace object, not a constructor: it is a plain frozen
-// intrinsic whose prototype is %Object.prototype% and which is not itself
-// callable or constructable. Lockdown hardens it but must not tame away its
-// identity, so each fact that survives hardening on every host is pinned as its
-// own assertion.
+// %Reflect% is a namespace object, not a constructor: it is a plain intrinsic
+// whose prototype is %Object.prototype% and which is not itself callable or
+// constructable. Lockdown hardens it but must not tame away its identity, so each
+// fact that survives hardening on every host is pinned as its own assertion.
+// Frozenness is intentionally NOT pinned: these tests also run in the pre-lockdown
+// `module` scenario, where the intrinsic is not yet frozen, so only the identity
+// facts that hold with and without lockdown are asserted here.
 assert.sameValue(typeof Reflect, 'object', '%Reflect% is a namespace object');
 assert.sameValue(
   Object.getPrototypeOf(Reflect),
@@ -23,6 +25,20 @@ assert.sameValue(
   Object.prototype.toString.call(Reflect),
   '[object Reflect]',
   '%Reflect% Object.prototype.toString tag',
+);
+assert.throws(
+  TypeError,
+  function () {
+    Reflect();
+  },
+  '%Reflect% is not callable',
+);
+assert.throws(
+  TypeError,
+  function () {
+    return new Reflect();
+  },
+  '%Reflect% is not constructable',
 );
 
 // The full %Reflect% method table must be present as callable own properties on
