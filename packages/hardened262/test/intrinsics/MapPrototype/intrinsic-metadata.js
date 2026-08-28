@@ -84,6 +84,11 @@ assert.sameValue(
   '%Map.prototype% size is an accessor',
 );
 assert.sameValue(
+  Object.getOwnPropertyDescriptor(MapPrototype, 'size').set,
+  undefined,
+  '%Map.prototype% size is a getter-only accessor (no setter)',
+);
+assert.sameValue(
   MapPrototype[Symbol.toStringTag],
   'Map',
   '%Map.prototype%[Symbol.toStringTag]',

@@ -55,6 +55,19 @@ assert.sameValue(
   '%WeakSet.prototype% exposes no Symbol.iterator',
 );
 assert.sameValue(
+  'size' in WeakSetPrototype,
+  false,
+  '%WeakSet.prototype% exposes no size',
+);
+// Close the enumeration rather than spot-checking the named methods: pin the
+// full own-property-name table so a host exposing a fifth method (or an errant
+// `size`) fails here instead of slipping past the per-method assertions above.
+assert.sameValue(
+  Object.getOwnPropertyNames(WeakSetPrototype).sort().join(','),
+  'add,constructor,delete,has',
+  '%WeakSet.prototype% own property names are exactly constructor plus the add/has/delete method table',
+);
+assert.sameValue(
   WeakSetPrototype[Symbol.toStringTag],
   'WeakSet',
   '%WeakSet.prototype%[Symbol.toStringTag]',

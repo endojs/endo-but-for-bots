@@ -86,6 +86,11 @@ assert.sameValue(
   '%Set.prototype% size is an accessor',
 );
 assert.sameValue(
+  Object.getOwnPropertyDescriptor(SetPrototype, 'size').set,
+  undefined,
+  '%Set.prototype% size is a getter-only accessor (no setter)',
+);
+assert.sameValue(
   SetPrototype[Symbol.toStringTag],
   'Set',
   '%Set.prototype%[Symbol.toStringTag]',
