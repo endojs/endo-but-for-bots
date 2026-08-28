@@ -8,8 +8,8 @@ import { cborCodec } from '@endo/ocapn/cbor';
 import { makeCryptography } from '@endo/ocapn/cryptography';
 import { makeOcapnNoiseNetwork } from '@endo/ocapn-noise';
 import { makeTcpTransport } from '@endo/ocapn-noise/transport/tcp';
-import { bytesFromText } from '@endo/bytes/from-string.js';
 import { concatBytes } from '@endo/bytes/concat.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { fromHex, toHex } from '../hex.js';
 
 /**
@@ -80,7 +80,7 @@ const LISTEN_ADDR_NAME = 'ocapn-listen-addr';
 const AGENT_BINDING_DOMAIN = 'endo-agent-binding\0';
 
 const agentBindingMessage = sessionPublicKey =>
-  concatBytes([bytesFromText(AGENT_BINDING_DOMAIN), sessionPublicKey]);
+  concatBytes([encodeUtf8(AGENT_BINDING_DOMAIN), sessionPublicKey]);
 
 // Format an authority (`host:port`) component. IPv6 literals contain
 // colons and must be wrapped in brackets so `new URL('proto://[::1]:8080')`
@@ -396,7 +396,7 @@ export const make = async (powers, context) => {
     });
     try {
       publicKeyVerifier.assertSignatureValid(
-        agentBindingMessage(sessionPublicKey).buffer,
+        agentBindingMessage(sessionPublicKey),
         /** @type {any} */ (ocapnSignature),
       );
     } catch (_e) {

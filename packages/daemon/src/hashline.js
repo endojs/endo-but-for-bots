@@ -41,10 +41,10 @@
  *   embedded LF/CR.
  */
 
-import { bytesFromText } from '@endo/bytes/from-string.js';
 import { crc32 } from '@endo/crc32';
 import { makeError, q, X } from '@endo/errors';
 import { isWellFormedString } from '@endo/pass-style';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 /**
  * @import {
@@ -212,8 +212,7 @@ const normalizeLineForHash = line => {
 export const lineAnchorHash = (line, lineNumber, hexWidth = 2) => {
   const normalized = normalizeLineForHash(line);
   const input = normalized === '' ? `\n${lineNumber}` : normalized;
-  const masked =
-    crc32(bytesFromText(input)) % (hexWidth === 4 ? 0x1_0000 : 0x100);
+  const masked = crc32(encodeUtf8(input)) % (hexWidth === 4 ? 0x1_0000 : 0x100);
   return masked.toString(16).padStart(hexWidth, '0');
 };
 harden(lineAnchorHash);
@@ -874,7 +873,7 @@ export const applyEditPatch = (
   // that. `patch.expectedFileHash` is validated to the same shape, so the CAS
   // compares like against like.
   const digestOf = /** @param {string} text */ text => {
-    const digest = sha256Hex(bytesFromText(text));
+    const digest = sha256Hex(encodeUtf8(text));
     if (typeof digest !== 'string' || !/^[0-9a-f]{64}$/.test(digest)) {
       throw makeError(
         X`applyEditPatch: sha256Hex power must return 64-char lowercase hex, got ${q(digest)}`,

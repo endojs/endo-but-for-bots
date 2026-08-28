@@ -79,7 +79,6 @@
   },
   "dependencies": {
     "@endo/base64": "workspace:^",
-    "@endo/bytes": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",

@@ -42,7 +42,7 @@
     "@endo/harden": "workspace:^"
   },
   "devDependencies": {
-    "@endo/bytes": "workspace:^",
+    "@endo/utf8": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
