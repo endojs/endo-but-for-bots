@@ -194,32 +194,37 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         idxs.push(slots.alloc(slot));
     }
 
-    // Free a distinct prefix of the allocated slots to exercise the free-list
-    // round-trip (indices are distinct — all allocated before any free — so no
-    // double-free).
+    // Free a distinct SUFFIX of the allocated slots to exercise the
+    // free-list round-trip (indices are distinct — all allocated before
+    // any free — so no double-free). A suffix, not a prefix: the ledger
+    // rows below take ascending owners/descriptors from the LOW indices,
+    // and the reader now refuses a side-table row owned by a free slot
+    // (review findings 2+3), so the generated free set and the generated
+    // owners must not overlap.
     let n_free = (c.byte() as usize) % idxs.len();
-    for &ix in idxs.iter().take(n_free) {
+    for &ix in idxs.iter().skip(idxs.len() - n_free) {
         slots.free(ix);
     }
+    // The low indices that stayed live — the pool the ledger rows below
+    // draw owners and descriptors from.
+    let live_cap = (idxs.len() - n_free) as u32;
 
-    // A value stack of slots (empty at true quiescence, but the codec must
-    // round-trip a non-empty stack too).
-    let n_stack = (c.byte() % 6) as usize;
-    let stack: Vec<Slot> = (0..n_stack)
-        .map(|_| {
-            let mut s = Slot::of(Kind::Integer, payload(&mut c, &offs, &idxs));
-            s.id = c.u32() as u16;
-            s
-        })
-        .collect();
+    // The value stack is EMPTY: the reader enforces quiescence (a
+    // populated `STAC` cannot come from an honest writer — review
+    // finding 5), so a generated stack would turn the round-trip target
+    // into a decode-failure target. The refusal itself is locked by
+    // `crafted_row_refusals.rs`, and the raw-bytes mutation lane still
+    // corrupts the STAC atom's framing.
+    let stack: Vec<Slot> = Vec::new();
 
     let names = rand_string_list(&mut c);
     let keys = rand_string_list(&mut c);
     // Symbol-key table: generated VALID like the ledger rows below —
-    // ids strictly ascending above the counter, descriptors distinct
-    // and in-bounds — so write→read identity holds while the DECODER
-    // sees ill-formed tables from the raw-bytes fuzz lane.
-    let bound = (n_slots as u32).max(1);
+    // ids strictly ascending above the counter, descriptors distinct,
+    // in-bounds AND live (a descriptor on a free slot is refused) — so
+    // write→read identity holds while the DECODER sees ill-formed
+    // tables from the raw-bytes fuzz lane.
+    let bound = live_cap.max(1);
     // At most one pair per distinct in-bounds descriptor, or the
     // dedup nudge below cannot terminate on a tiny arena.
     let n_sym = ((c.byte() % 5) as usize).min(bound as usize);
@@ -256,10 +261,12 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // "Valid" is whatever the decoders accept, so wave 5's new rules are
     // generated here too: array item indices strictly ascending and
     // below the row's declared length, and registry descriptors
-    // pairwise distinct. Generating rows the decoder refuses would turn
-    // the round-trip target into a decode-failure target and stop
+    // pairwise distinct — and, since the review round, owners drawn
+    // only from LIVE slots and collection tables with reachable rehash
+    // geometry. Generating rows the decoder refuses would turn the
+    // round-trip target into a decode-failure target and stop
     // exercising the identity it exists for.
-    let cap = n_slots as u32;
+    let cap = live_cap;
     let mut next_owner = 0u32;
     let mut arrays: Vec<ironhorse_snapshot::image::ArrayImage> = Vec::new();
     while next_owner < cap && (c.byte() & 3) != 0 {
@@ -298,10 +305,25 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
                 )
             })
             .collect();
+        let kind = c.byte() % 4;
+        // Reachable rehash geometry (review finding 9): weak kinds
+        // carry no table; Map/Set carry the smallest power of two
+        // whose grow threshold covers the live size, optionally
+        // doubled a step or two (the cleared-then-shrinking states the
+        // engine can also rest in).
+        let table_length = if kind >= 2 {
+            0
+        } else {
+            let mut l = 1u32;
+            while (l >> 1) + (l >> 2) < n_entries as u32 {
+                l <<= 1;
+            }
+            (l << (c.byte() % 3)).min(1 << 20)
+        };
         collections.push(ironhorse_snapshot::image::CollectionImage {
             owner,
-            kind: c.byte() % 4,
-            table_length: c.u32() % 16,
+            kind,
+            table_length,
             entries,
         });
     }
@@ -605,7 +627,6 @@ mod tests {
         // diverse (not one shape a thousand times).
         let mut distinct = std::collections::BTreeSet::new();
         let mut saw_free = false;
-        let mut saw_stack = false;
         let mut saw_chunks = false;
         let mut saw_symbols = false;
         // The side-table arms need witnesses too. Review wave 5 probed
@@ -621,7 +642,6 @@ mod tests {
             let img = gen_machine_image(&buf);
             distinct.insert(write_machine(&img));
             saw_free |= !img.slot_free.is_empty();
-            saw_stack |= !img.stack.is_empty();
             saw_chunks |= !img.chunks.is_empty();
             saw_symbols |= !img.symbols.pairs.is_empty();
             saw_arrays |= !img.arrays.is_empty();
@@ -633,7 +653,9 @@ mod tests {
         }
         assert!(distinct.len() > 500, "arena sweep too uniform: {} distinct", distinct.len());
         assert!(saw_free, "free-list arm never exercised");
-        assert!(saw_stack, "value-stack arm never exercised");
+        // (No value-stack witness: the reader enforces quiescence, so
+        // the generator emits only the empty stack every honest writer
+        // does — review finding 5.)
         assert!(saw_chunks, "chunk-arena arm never exercised");
         assert!(saw_symbols, "symbol-table arm never exercised");
         assert!(saw_arrays, "side-table ARRY arm never exercised");
@@ -707,16 +729,22 @@ mod tests {
 
     #[test]
     fn nan_payload_round_trips_byte_exact_but_not_parteq() {
-        // Locked trophy (snapshot_roundtrip campaign, seed input `22 03 ff ff`,
-        // 2026-07-16): this input generates a machine image with a slot whose
-        // payload is `Number(NaN)`. The container round-trips **byte-exactly**
-        // (the codec preserves the NaN bit pattern — the real invariant), but
-        // `MachineImage`'s derived `PartialEq` reports the decoded image
-        // unequal to the original because `NaN != NaN`. The fix is not in the
-        // codec (it is correct) but in the invariant: `roundtrip_image_is_-
-        // invariant` asserts write→read→write **byte-equality**, not value
-        // equality, so a non-reflexive float payload is not a false trophy.
-        let data = [0x22u8, 0x03, 0xff, 0xff];
+        // Locked trophy (snapshot_roundtrip campaign, originally seed
+        // input `22 03 ff ff`, 2026-07-16): an input that generates a
+        // machine image carrying a `Number(NaN)` payload. The container
+        // round-trips **byte-exactly** (the codec preserves the NaN bit
+        // pattern — the real invariant), but `MachineImage`'s derived
+        // `PartialEq` reports the decoded image unequal to the original
+        // because `NaN != NaN`. The fix is not in the codec (it is
+        // correct) but in the invariant: `roundtrip_image_is_invariant`
+        // asserts write→read→write **byte-equality**, not value
+        // equality, so a non-reflexive float payload is not a false
+        // trophy. The seed input was re-derived when the reader's
+        // quiescence gate emptied the generated stack (review finding
+        // 5) — the original's NaN rode a stack slot; this one is
+        // constructed to land it in heap slot 0 (no chunks, one slot,
+        // arm 4, bits 0x7ff8_0000_…).
+        let data = [0x00u8, 0x00, 0x04, 0x7f, 0xf8, 0x00, 0x00, 0x00];
         let img = gen_machine_image(&data);
         // The image genuinely contains a NaN payload (the condition that made
         // the derived PartialEq fire).

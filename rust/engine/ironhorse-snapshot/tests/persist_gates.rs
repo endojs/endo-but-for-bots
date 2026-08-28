@@ -176,3 +176,76 @@ fn a_resumed_machine_rearms_without_losing_its_meter() {
         o2.halt
     );
 }
+
+/// Review finding 7: a resume that only wants its host callback back
+/// must not move the check deadline. `rearm_meter` opens a fresh window
+/// from the preserved index (`count = index + interval`) — right for a
+/// deliberate interval change, but through it every sub-interval
+/// suspend/resume cycle pushes the host deadline forward, so a machine
+/// checkpointed often enough would never consult its host.
+/// `reattach_meter_host` reinstalls the callback and leaves all three
+/// restored counters exactly as the snapshot carried them.
+#[test]
+fn a_resumed_machine_reattaches_without_moving_the_meter_deadline() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    // Crank 1 spends most of a window; crank 2 is cheap but crosses
+    // what REMAINS of it. Measure both costs on a scratch machine so
+    // the armed interval can be pinned strictly between `spent1` and
+    // `spent1 + spent2`.
+    let crank1_src = "var i = 0; for (i = 0; i < 2000; i++) { i = i; } i";
+    let crank2_src = "var j = 0; var i; for (j = 0; j < 50; j++) { j = j; } j";
+    let (b1, n1) = compile(crank1_src);
+    let mut scratch = Interp::new();
+    scratch.link_intrinsics(&n1);
+    assert!(scratch.run(&b1).completed);
+    let spent1 = scratch.meter_index();
+    let (b2s, n2s) = compile(crank2_src);
+    let b2s = scratch.relink_crank(&b2s, &n2s).expect("relink");
+    assert!(scratch.run(&b2s).completed);
+    let spent2 = scratch.meter_index() - spent1;
+    // Two computrons past crank 1's spend: inside crank 2's window by a
+    // wide margin (a 50-iteration loop meters far beyond 2 computrons).
+    let interval = (spent1 >> 16) + 2;
+    assert!(spent1 < interval << 16, "interval must clear crank 1");
+    assert!(interval << 16 < spent1 + spent2, "and land inside crank 2");
+
+    let mut m = Interp::new();
+    m.link_intrinsics(&n1);
+    m.arm_meter(interval, Box::new(|_| true));
+    assert!(m.run(&b1).completed, "crank 1 stays inside the window");
+    let mid_window = m.meter_state();
+    assert_eq!(mid_window.index, spent1, "armed crank 1 spent as measured");
+
+    let mut store = MemoryStore::new();
+    let mut session = begin_store_session(m, &sig(), &mut store)
+        .map_err(|(_, e)| e)
+        .expect("begin");
+    checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    drop(session);
+    let mut resumed = resume_from_store(&store, &sig()).expect("resume");
+
+    // The pure reattach: every restored counter — the `count` deadline
+    // included — survives untouched. (`rearm_meter` here would move
+    // `count` to `index + interval`, past everything crank 2 spends.)
+    let consulted = Rc::new(Cell::new(0u32));
+    let seen = consulted.clone();
+    resumed.machine_mut().reattach_meter_host(Box::new(move |_| {
+        seen.set(seen.get() + 1);
+        true
+    }));
+    assert_eq!(
+        resumed.machine_mut().meter_state(),
+        mid_window,
+        "reattach_meter_host must not touch the restored meter counters"
+    );
+
+    let (b2, n2) = compile(crank2_src);
+    let b2 = resumed.machine_mut().relink_crank(&b2, &n2).expect("relink");
+    assert!(resumed.machine_mut().run(&b2).completed);
+    assert!(
+        consulted.get() >= 1,
+        "crank 2 crossed the ORIGINAL deadline, so the host must be consulted"
+    );
+}

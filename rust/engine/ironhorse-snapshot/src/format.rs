@@ -127,10 +127,25 @@ pub const INTL: FourCc = FourCc(*b"INTL");
 /// reads.
 pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 
-/// The Ironhorse snapshot format version. Bumped on any change to the atom
-/// layout or the slot-record encoding; the reader refuses a version it
-/// does not understand.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 1;
+/// The Ironhorse snapshot format version — the stamp every writer
+/// emits. Bumped on any change to the atom layout or the slot-record
+/// encoding, INCLUDING the addition of state-bearing atoms (review
+/// finding 1): version 2 marks the side-table atom family
+/// (`ARRY`…`INTL`/`ITER`/`NFLR`), so a version-1 reader — which skips
+/// unknown atoms and would silently drop arrays, collections, RegExps,
+/// Intl records and iterator cursors — refuses a version-2 container
+/// outright instead of resuming a degraded machine. The reader accepts
+/// [`IRONHORSE_FORMAT_VERSION_MIN_READ`]`..=`this and refuses anything
+/// newer.
+pub const IRONHORSE_FORMAT_VERSION: u32 = 2;
+
+/// The oldest format version this reader still decodes. Version-1
+/// containers predate the version-2 stamp; every version-1 writer in
+/// this lineage either emitted the same atom encodings this reader
+/// knows or refused machines whose state could not travel (the ledger
+/// Pending gates), so reading them is sound — their absent side-table
+/// atoms genuinely mean empty tables.
+pub const IRONHORSE_FORMAT_VERSION_MIN_READ: u32 = 1;
 
 /// Slot-record width tag written into `VERS`: Ironhorse's serialized slot
 /// image is a fixed [`crate::slot_codec::SLOT_RECORD_BYTES`]-byte record
@@ -185,7 +200,14 @@ impl Version {
             return Err(VersionError::NotIronhorse(m));
         }
         let format_version = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
-        if format_version != IRONHORSE_FORMAT_VERSION {
+        // The read RANGE, not the write stamp: an older readable
+        // version decodes (its atoms are a subset with the same
+        // encodings), while a NEWER one is refused — its atoms may
+        // carry state this reader would silently skip (review
+        // finding 1).
+        if !(IRONHORSE_FORMAT_VERSION_MIN_READ..=IRONHORSE_FORMAT_VERSION)
+            .contains(&format_version)
+        {
             return Err(VersionError::UnsupportedVersion(format_version));
         }
         let slot_width = payload[8];
@@ -204,6 +226,19 @@ impl Version {
             slot_width,
             endian,
         })
+    }
+
+    /// Whether THIS reader decodes a container/store stamped `self`: a
+    /// format version inside the read range with the one slot width and
+    /// endianness. Every [`Version::decode`] survivor satisfies it; the
+    /// store's open gate re-checks it explicitly rather than comparing
+    /// equality with [`Version::current`], so an older readable stamp
+    /// opens (and migrates) instead of failing as a mismatch.
+    pub fn is_readable(&self) -> bool {
+        (IRONHORSE_FORMAT_VERSION_MIN_READ..=IRONHORSE_FORMAT_VERSION)
+            .contains(&self.format_version)
+            && self.slot_width == SLOT_WIDTH_TAG
+            && self.endian == ENDIAN_BIG
     }
 }
 
@@ -331,6 +366,44 @@ mod tests {
         assert_eq!(
             Version::decode(&payload),
             Err(VersionError::UnsupportedVersion(999))
+        );
+    }
+
+    fn stamped(format_version: u32) -> Vec<u8> {
+        let mut payload = IRONHORSE_MAGIC.to_vec();
+        payload.extend_from_slice(&format_version.to_be_bytes());
+        payload.push(SLOT_WIDTH_TAG);
+        payload.push(ENDIAN_BIG);
+        payload
+    }
+
+    /// Review finding 1: the write stamp moved to 2 when the
+    /// state-bearing side-table atoms joined the format, so a
+    /// version-1 reader (exact-match, as this reader was) REFUSES a
+    /// version-2 container instead of skipping the unknown atoms and
+    /// silently dropping that state.
+    #[test]
+    fn the_write_stamp_is_past_the_side_table_addition() {
+        assert!(IRONHORSE_FORMAT_VERSION >= 2, "the side-table atoms are a format bump");
+        assert_eq!(Version::current().format_version, IRONHORSE_FORMAT_VERSION);
+    }
+
+    /// The read RANGE: the previous version still decodes (its atoms
+    /// are a subset with the same encodings)…
+    #[test]
+    fn version_accepts_the_previous_readable_format() {
+        let v = Version::decode(&stamped(IRONHORSE_FORMAT_VERSION_MIN_READ)).unwrap();
+        assert_eq!(v.format_version, IRONHORSE_FORMAT_VERSION_MIN_READ);
+        assert!(v.is_readable());
+    }
+
+    /// …while a FUTURE version — atoms this reader would silently
+    /// skip — is refused by name.
+    #[test]
+    fn version_rejects_a_future_format() {
+        assert_eq!(
+            Version::decode(&stamped(IRONHORSE_FORMAT_VERSION + 1)),
+            Err(VersionError::UnsupportedVersion(IRONHORSE_FORMAT_VERSION + 1))
         );
     }
 

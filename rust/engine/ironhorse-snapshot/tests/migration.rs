@@ -123,6 +123,86 @@ fn migrate_refuses_incompatible_signature_without_touching_bytes() {
     );
 }
 
+/// Review finding 8: a store whose meter ran under a DIFFERENT cost
+/// table can never resume on this engine — `validate_store` refuses
+/// it after any migration — so the ladder restamping it forward first
+/// would wedge it: the new implementation still refuses it and the
+/// old one no longer recognizes the schema. The wrapper serves a
+/// small state whose cost-table version differs and PANICS on any
+/// write, so the lock proves the refusal lands BEFORE any mutation.
+struct ForeignCostTableStore(FileStore);
+
+impl HeapStore for ForeignCostTableStore {
+    fn manifest(&self) -> Result<ironhorse_snapshot::store::StoreManifest, StoreError> {
+        self.0.manifest()
+    }
+    fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
+        let mut bytes = self.0.read_small_state()?;
+        let needle = b"ironhorse-meter-1";
+        let at = bytes
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .expect("the fixture's meter section carries the current cost-table version");
+        bytes[at + needle.len() - 1] = b'0';
+        Ok(bytes)
+    }
+    fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
+        self.0.read_slot_page(page)
+    }
+    fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError> {
+        self.0.read_chunk_extent(ext)
+    }
+    fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
+        self.0.inventory()
+    }
+    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
+        self.0.leaf_hashes()
+    }
+    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+        self.0.read_free_seg(seg)
+    }
+    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
+        self.0.free_leaf_hashes()
+    }
+    fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
+        self.0.page_edges()
+    }
+    fn commit(
+        &mut self,
+        _batch: &ironhorse_snapshot::store::CheckpointBatch,
+    ) -> Result<(), StoreError> {
+        panic!("migration must not commit to a store it cannot resume");
+    }
+    fn replace_manifest_for_migration(
+        &mut self,
+        _manifest: &ironhorse_snapshot::store::StoreManifest,
+    ) -> Result<(), StoreError> {
+        panic!("migration must not restamp a store it cannot resume");
+    }
+}
+
+#[test]
+fn migrate_refuses_a_foreign_cost_table_before_any_restamp() {
+    let dir = TempDir::new("ih-migrate-cost");
+    let path = dir.join("store.ihstore");
+    std::fs::copy(fixture("store-v5.ihstore"), &path).expect("copy fixture");
+    let before = std::fs::read(&path).expect("read v5 fixture");
+    let mut store = ForeignCostTableStore(FileStore::open(&path).expect("open v5 store"));
+    match migrate_store(&mut store, &sig()) {
+        Err(StoreError::Snapshot(SnapshotError::CostTableMismatch { expected, found })) => {
+            assert_eq!(expected, ironhorse_vm::COST_TABLE_VERSION);
+            assert_eq!(found, "ironhorse-meter-0");
+        }
+        other => panic!("expected CostTableMismatch, got {other:?}"),
+    }
+    drop(store);
+    assert_eq!(
+        std::fs::read(&path).expect("reread"),
+        before,
+        "a cost-refused migration leaves the store byte-identical"
+    );
+}
+
 /// Assert the file at `path` currently holds exactly `expected` —
 /// named so the call site reads as the idempotence lock it is.
 fn drop_guard_bytes(path: &std::path::Path, expected: &[u8]) {
