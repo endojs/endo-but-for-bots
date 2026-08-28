@@ -38,6 +38,21 @@ const main = async () => {
   );
 
   await write(new URL('../tmp/test-xs.js', import.meta.url).href, xsPrelude);
+
+  const dataViewWrapperEntries = [
+    '_dataview-wrappers-immutable-first.js',
+    '_dataview-wrappers-ses-first.js',
+  ];
+  await Promise.all(
+    dataViewWrapperEntries.map(async entry => {
+      const bundle = await makeBundle(
+        read,
+        new URL(`../../ses/test/${entry}`, import.meta.url).href,
+        { tags: new Set(['xs']) },
+      );
+      await write(new URL(`../tmp/${entry}`, import.meta.url).href, bundle);
+    }),
+  );
 };
 
 main().catch(err => {
