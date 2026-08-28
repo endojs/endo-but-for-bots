@@ -250,6 +250,7 @@ impl MachineSnapshot for Interp {
             tables.temporal,
             tables.intl,
         )
+        .with_iterators(tables.iterators)
         .with_name_floor(self.installed_names_floor())
     }
 }
@@ -272,6 +273,7 @@ struct SideTableImages {
     arguments_brands: Vec<u32>,
     temporal: crate::image::TemporalImage,
     intl: ironhorse_vm::IntlTables,
+    iterators: Vec<ironhorse_vm::IteratorRow>,
 }
 
 fn side_tables_of(interp: &Interp) -> SideTableImages {
@@ -366,6 +368,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
         zoneds,
     };
     let intl = interp.intl_snapshot();
+    let iterators = interp.iterators_snapshot();
     SideTableImages {
         arrays,
         collections,
@@ -379,6 +382,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
         arguments_brands,
         temporal,
         intl,
+        iterators,
     }
 }
 
@@ -403,6 +407,7 @@ fn restore_side_tables(
     arguments_brands: Vec<u32>,
     temporal: crate::image::TemporalImage,
     intl: ironhorse_vm::IntlTables,
+    iterators: Vec<ironhorse_vm::IteratorRow>,
 ) {
     let ok = interp.restore_bulk_side_tables(
         arrays
@@ -472,6 +477,12 @@ fn restore_side_tables(
     // at decode/bounds, and the vm re-validates them on the way in.
     let ok = interp.restore_intl(intl);
     debug_assert!(ok, "validated image cannot carry a malformed intl record");
+    // The iterator cursors (schema 13): validated at decode/bounds
+    // (kinds, cursor ranges, the covering-collection cross-check);
+    // restored AFTER the collections so the covering rows are in hand
+    // for the vm's own re-validation.
+    let ok = interp.restore_iterators(iterators);
+    debug_assert!(ok, "validated image cannot carry a malformed iterator cursor");
 }
 
 /// Rebuild a live [`Interp`] from a decoded [`MachineImage`]: a fresh
@@ -517,6 +528,7 @@ pub fn image_to_interp(image: MachineImage) -> Interp {
         image.arguments_brands,
         image.temporal,
         image.intl,
+        image.iterators,
     );
     interp
 }
@@ -757,6 +769,7 @@ fn small_state_of(interp: &Interp) -> SmallState {
         arguments_brands: tables.arguments_brands,
         temporal: tables.temporal,
         intl: tables.intl,
+        iterators: tables.iterators,
         // Canonicalized like `with_name_floor`: a floor at the table
         // length is the restore default and travels as `None`.
         name_floor: {
@@ -1462,6 +1475,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.arguments_brands,
         small.temporal,
         small.intl,
+        small.iterators,
     );
     Ok(StoreSession {
         gen_dirty: std::collections::BTreeSet::new(),

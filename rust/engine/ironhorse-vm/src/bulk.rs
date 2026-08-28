@@ -262,9 +262,11 @@ pub(crate) struct CollectionData {
     /// the generation at creation and dead-ends when it changes —
     /// XS's observable `clear` semantics (its purge frees the list a
     /// cursor's node pointer chains through, so the cursor never
-    /// reaches entries added after a clear). Not persisted: cursors
-    /// live in the non-round-tripping `iterators` row, so a resumed
-    /// machine's reset-to-zero generations are unobservable.
+    /// reaches entries added after a clear). Not persisted — the
+    /// absolute counter is unobservable: carried cursors (the `ITER`
+    /// row) fold staleness into `done` at the boundary and adopt the
+    /// restored table's reset-to-zero generation, so the equality this
+    /// counter feeds holds identically after a resume.
     generation: u32,
 }
 

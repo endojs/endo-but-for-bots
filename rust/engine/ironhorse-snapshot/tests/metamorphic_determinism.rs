@@ -157,9 +157,16 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     // exception to the container-stability rule — the blob gained the
     // `NFLR` atom, because the installed-names floor is real machine
     // state every linked machine holds (see the blob pin's comment).
+    // Seal re-pinned again 2026-08-28 for schema v13 (the iterator
+    // cursors: the ITER section) — the small state grew and stamped
+    // the manifest, so every small leaf — and thus root and seal —
+    // moved. The blob hash did NOT move: this machine holds no
+    // cursors, and the atom is emitted only when non-empty — the
+    // container-stability property the two-pin split proves, restored
+    // after v12's deliberate exception.
     assert_eq!(
         store.manifest().unwrap().seal,
-        "dd9bed74e72d75d8541f672c4dccd83a12f4afd1f55c5adfc0dafa31f7ae1b18",
+        "9d00e0e85d40fe5249f2a8296bc04ecdf1334d580834f44ce369c4628dff2cef",
         "epoch-3 seal chain"
     );
 }

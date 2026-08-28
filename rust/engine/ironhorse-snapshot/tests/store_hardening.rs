@@ -210,6 +210,7 @@ fn incremental_batch(
         temporal: ironhorse_snapshot::image::TemporalImage::default(),
         intl: ironhorse_vm::IntlTables::default(),
         name_floor: None,
+        iterators: Vec::new(),
     };
     let mut page_edges: Vec<(u32, Vec<u32>)> = Vec::new();
     let slot_pages: Vec<(u32, Vec<u8>)> = slots

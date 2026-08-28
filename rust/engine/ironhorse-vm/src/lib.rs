@@ -40,8 +40,8 @@ pub use gc::{GcStats, Heap};
 pub use interp::{
     dtf_component_key_static, error_name_static, ArraySnapshot, CollatorData, CollectionSnapshot,
     CompiledSource, DateTimeFormatData, Halt, Interp, IntlTables, ListFormatData, LocaleData,
-    Native, NumberFormatData, PluralRulesData, RelinkError, RunOutcome, SegmentIteratorData,
-    SegmenterData, SegmentsData, SourceCompileError, SourceCompiler,
+    IteratorRow, Native, NumberFormatData, PluralRulesData, RelinkError, RunOutcome,
+    SegmentIteratorData, SegmenterData, SegmentsData, SourceCompileError, SourceCompiler,
     PROGRAM_INVOCATION_COMPUTRONS, TYPED_ARRAY_TYPES,
 };
 pub use meter::{Meter, MeterCheck, MeterState, COST_TABLE_VERSION};

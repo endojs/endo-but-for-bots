@@ -27,8 +27,8 @@ use crate::format::{
 use crate::slot_codec::{decode_slots, encode_slots, SLOT_RECORD_BYTES};
 use ironhorse_vm::{
     dtf_component_key_static, ChunkArena, CollatorData, DateTimeFormatData, IntlTables,
-    ListFormatData, LocaleData, MeterState, NumberFormatData, PluralRulesData, SegmentIteratorData,
-    SegmenterData, SegmentsData, Slot, SlotArena, COST_TABLE_VERSION,
+    IteratorRow, ListFormatData, LocaleData, MeterState, NumberFormatData, PluralRulesData,
+    SegmentIteratorData, SegmenterData, SegmentsData, Slot, SlotArena, COST_TABLE_VERSION,
 };
 
 /// The metering state carried in the `METR` atom (design row 6: "meter
@@ -362,6 +362,8 @@ pub struct MachineImage {
     pub temporal: TemporalImage,
     /// `INTL`: the nine Intl record tables (ledger), owner-ascending.
     pub intl: IntlTables,
+    /// `ITER`: the built-in iterator cursors (ledger), owner-ascending.
+    pub iterators: Vec<IteratorRow>,
     /// `NFLR`: the installed-names floor (wave-6 W6-7), when it
     /// traveled. `None` — a pre-floor snapshot — restores to the
     /// conservative full-table default.
@@ -409,6 +411,7 @@ impl MachineImage {
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
+            iterators: Vec::new(),
             name_floor: None,
         }
     }
@@ -505,6 +508,15 @@ impl MachineImage {
         self.arguments_brands = arguments_brands;
         self.temporal = temporal;
         self.intl = intl;
+        self
+    }
+
+    /// Attach the built-in iterator cursors (ledger `Iterators` row).
+    /// The snapshot surface calls this with the live machine's
+    /// `iterators_snapshot()`, already owner-ascending and
+    /// boundary-normalized (collection ordinals; staleness in `done`).
+    pub fn with_iterators(mut self, iterators: Vec<IteratorRow>) -> MachineImage {
+        self.iterators = iterators;
         self
     }
 
@@ -1882,6 +1894,94 @@ pub(crate) fn decode_intl(p: &[u8]) -> Result<IntlTables, SnapshotError> {
     Ok(t)
 }
 
+/// Encode the built-in iterator cursors (the `ITER` payload /
+/// small-state iterators section): a `u32`-counted list of rows
+/// `(owner, kind, iterable, index, done, result, enum_keys, str_bytes)`
+/// in owner order.
+pub(crate) fn encode_iterators(rows: &[IteratorRow]) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    for r in rows {
+        v.extend_from_slice(&r.owner.to_be_bytes());
+        v.push(r.kind);
+        v.extend_from_slice(&r.iterable.to_be_bytes());
+        v.extend_from_slice(&r.index.to_be_bytes());
+        v.push(r.done as u8);
+        v.extend_from_slice(&r.result.to_be_bytes());
+        v.extend_from_slice(&(r.enum_keys.len() as u32).to_be_bytes());
+        for &(id, idx) in &r.enum_keys {
+            v.extend_from_slice(&id.to_be_bytes());
+            v.extend_from_slice(&idx.to_be_bytes());
+        }
+        v.extend_from_slice(&(r.str_bytes.len() as u32).to_be_bytes());
+        v.extend_from_slice(&r.str_bytes);
+    }
+    v
+}
+
+pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotError> {
+    let mut c = Cursor::new(p, "iterator cursors");
+    let count = c.u32()? as usize;
+    let mut out: Vec<IteratorRow> = Vec::with_capacity(count.min(p.len() / 19));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        if out.last().is_some_and(|prev| owner <= prev.owner) {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: owners not strictly ascending",
+            ));
+        }
+        let kind = c.u8()?;
+        // The engine's cursor kinds are 0..=7 (array values/keys/
+        // entries, for-in, string, collection keys/values/entries).
+        if kind > 7 {
+            return Err(SnapshotError::Corrupt("iterator cursors: unknown kind"));
+        }
+        let iterable = c.u32()?;
+        let index = c.u32()?;
+        let done = match c.u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err(SnapshotError::Corrupt("iterator cursors: bad done byte")),
+        };
+        let result = c.u32()?;
+        let en = c.u32()? as usize;
+        let mut enum_keys = Vec::with_capacity(en.min(p.len() / 6));
+        for _ in 0..en {
+            let id = c.u16()?;
+            let idx = c.u32()?;
+            enum_keys.push((id, idx));
+        }
+        let sn = c.u32()? as usize;
+        let str_bytes = c.bytes(sn)?.to_vec();
+        // Self-contained cursor sanity; the cross-table checks (a
+        // collection cursor's covering row, the for-in ids against the
+        // name table) run in the bounds gate where those rows are in
+        // hand.
+        if kind == 4 && (index as usize > str_bytes.len() || index % 2 != 0) {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: string cursor outside its text",
+            ));
+        }
+        if kind == 3 && index as usize > enum_keys.len() {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: for-in cursor past its key list",
+            ));
+        }
+        out.push(IteratorRow {
+            owner,
+            kind,
+            iterable,
+            index,
+            done,
+            result,
+            enum_keys,
+            str_bytes,
+        });
+    }
+    c.done()?;
+    Ok(out)
+}
+
 /// The data-only language rows, bundled for the bounds gate (one
 /// parameter instead of four more positionals as the ledger grows).
 pub(crate) struct LangRows<'a> {
@@ -2001,6 +2101,7 @@ where
 /// slot index the restored machine will use as a property-key
 /// identity, so an out-of-arena descriptor is refused with the same
 /// closed fist as every other crafted index.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn check_image_slot_bounds(
     heap: &[Slot],
     stack: &[Slot],
@@ -2012,6 +2113,8 @@ pub(crate) fn check_image_slot_bounds(
     typed_arrays: &[TypedArrayImage],
     data_views: &[DataViewImage],
     lang: &LangRows<'_>,
+    iterators: &[IteratorRow],
+    names_len: usize,
     symbols: &SymbolKeyImage,
     slot_count: u32,
     chunk_len: usize,
@@ -2192,6 +2295,40 @@ pub(crate) fn check_image_slot_bounds(
             ));
         }
     }
+    // The iterator cursors: weak owner and result slots bounded; a
+    // collection cursor must name a COVERING collections row (its
+    // `next()` indexes the table unconditionally) with the carried
+    // ordinal inside the compacted live list; a for-in cursor's key
+    // ids must live in the restored name table.
+    for r in iterators {
+        if r.owner >= slot_count || r.result >= slot_count {
+            return Err(OOB);
+        }
+        if r.iterable != u32::MAX && r.iterable >= slot_count {
+            return Err(OOB);
+        }
+        if (5..=7).contains(&r.kind) {
+            let row = collections.binary_search_by_key(&r.iterable, |c| c.owner);
+            let covered = match row {
+                Ok(k) => r.index as usize <= collections[k].entries.len(),
+                Err(_) => false,
+            };
+            if !covered {
+                return Err(SnapshotError::Corrupt(
+                    "iterator cursors: collection cursor names no covering row",
+                ));
+            }
+        }
+        if r.kind == 3
+            && r.enum_keys
+                .iter()
+                .any(|&(id, _)| id != 0 && id as usize > names_len)
+        {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: for-in key id outside the name table",
+            ));
+        }
+    }
     for &(_, desc) in &symbols.pairs {
         if desc >= slot_count {
             return Err(OOB);
@@ -2287,6 +2424,9 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
     }
     if !image.intl.is_empty() {
         w.atom(crate::format::INTL, &encode_intl(&image.intl));
+    }
+    if !image.iterators.is_empty() {
+        w.atom(crate::format::ITER, &encode_iterators(&image.iterators));
     }
     // The installed-names floor: `Some` only when it differs from the
     // name-table length (`with_name_floor` canonicalizes), so machines
@@ -2421,6 +2561,10 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => decode_intl(a.payload)?,
         None => IntlTables::default(),
     };
+    let iterators = match r.find(crate::format::ITER) {
+        Some(a) => decode_iterators(a.payload)?,
+        None => Vec::new(),
+    };
     let name_floor = match r.find(crate::format::NFLR) {
         Some(a) => {
             if a.payload.len() != 4 {
@@ -2461,6 +2605,8 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
             temporal: &temporal,
             intl: &intl,
         },
+        &iterators,
+        names.len(),
         &symbols,
         slots.len() as u32,
         chunks.len(),
@@ -2491,6 +2637,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         arguments_brands,
         temporal,
         intl,
+        iterators,
         name_floor,
     })
 }
@@ -2594,6 +2741,8 @@ mod tests {
             &[],
             &[],
             &LangRows::EMPTY,
+            &[],
+            0,
             &SymbolKeyImage::default(),
             4,
             64
@@ -2650,14 +2799,14 @@ mod tests {
         let sym = SymbolKeyImage::default();
         // A buffer whose backing extent runs past the chunk arena.
         let past = vec![BufferImage { owner: 1, data: 60, length: 8, flags: 0 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &past, &[], &[], &LangRows::EMPTY, &sym, 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &past, &[], &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64).is_err());
         // A buffer whose offset sits inside the chunk header.
         let low = vec![BufferImage { owner: 1, data: 2, length: 8, flags: 0 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &low, &[], &[], &LangRows::EMPTY, &sym, 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &low, &[], &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64).is_err());
         // A view naming a buffer with NO row (an in-bounds slot is not
         // enough — restoring it would read through unbacked geometry).
         let orphan = vec![TypedArrayImage { owner: 2, kind: 0, buffer: 3, offset: 0, length: 1 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &orphan, &[], &LangRows::EMPTY, &sym, 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &orphan, &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64).is_err());
         // View geometry past its buffer's length (Uint32Array: shift 2).
         let buf = vec![BufferImage { owner: 1, data: 4, length: 8, flags: 0 }];
         let kind_u32 = ironhorse_vm::TYPED_ARRAY_TYPES
@@ -2666,16 +2815,16 @@ mod tests {
             .unwrap() as u8;
         let wide = vec![TypedArrayImage { owner: 2, kind: kind_u32, buffer: 1, offset: 4, length: 2 }];
         assert!(
-            check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &buf, &wide, &[], &LangRows::EMPTY, &sym, 4, 64).is_err()
+            check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &buf, &wide, &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64).is_err()
         );
         // A data view past its buffer.
         let dv = vec![DataViewImage { owner: 2, buffer: 1, offset: 6, size: 4 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &buf, &[], &dv, &LangRows::EMPTY, &sym, 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &buf, &[], &dv, &LangRows::EMPTY, &[], 0, &sym, 4, 64).is_err());
         // The covered forms pass.
         let fit_view = vec![TypedArrayImage { owner: 2, kind: kind_u32, buffer: 1, offset: 0, length: 2 }];
         let fit_dv = vec![DataViewImage { owner: 3, buffer: 1, offset: 4, size: 4 }];
         assert!(check_image_slot_bounds(
-            &[], &[], &[], &[], &[], &[], &buf, &fit_view, &fit_dv, &LangRows::EMPTY, &sym, 4, 64
+            &[], &[], &[], &[], &[], &[], &buf, &fit_view, &fit_dv, &LangRows::EMPTY, &[], 0, &sym, 4, 64
         )
         .is_ok());
     }
@@ -2769,7 +2918,7 @@ mod tests {
                 temporal: &EMPTY_TEMPORAL,
                 intl,
             };
-            check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &[], &[], &lang, &sym, 4, 64)
+            check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &[], &[], &lang, &[], 0, &sym, 4, 64)
         };
         let segs = |owner: u32| {
             (
@@ -2812,6 +2961,100 @@ mod tests {
     }
 
     #[test]
+    fn iterator_decode_refuses_crafted_rows() {
+        fn row(owner: u32) -> IteratorRow {
+            IteratorRow {
+                owner,
+                kind: 0,
+                iterable: 1,
+                index: 0,
+                done: false,
+                result: 2,
+                enum_keys: Vec::new(),
+                str_bytes: Vec::new(),
+            }
+        }
+        // Owners not strictly ascending.
+        assert!(decode_iterators(&encode_iterators(&[row(5), row(3)])).is_err());
+        // Unknown kind.
+        let mut bad = row(1);
+        bad.kind = 8;
+        assert!(decode_iterators(&encode_iterators(&[bad])).is_err());
+        // A string cursor splitting a UTF-16 unit, and one past its text.
+        let mut odd = row(1);
+        odd.kind = 4;
+        odd.str_bytes = vec![0, 97, 0, 98];
+        odd.index = 1;
+        assert!(decode_iterators(&encode_iterators(&[odd.clone()])).is_err());
+        odd.index = 6;
+        assert!(decode_iterators(&encode_iterators(&[odd])).is_err());
+        // A for-in cursor past its key list.
+        let mut over = row(1);
+        over.kind = 3;
+        over.enum_keys = vec![(0, 0)];
+        over.index = 2;
+        assert!(decode_iterators(&encode_iterators(&[over])).is_err());
+        // The intact forms round-trip.
+        let mut s = row(3);
+        s.kind = 4;
+        s.iterable = u32::MAX;
+        s.str_bytes = vec![0, 97, 0, 98];
+        s.index = 2;
+        let ok = vec![row(1), s];
+        assert_eq!(decode_iterators(&encode_iterators(&ok)).unwrap(), ok);
+    }
+
+    #[test]
+    fn iterator_bounds_refuse_crafted_cursors() {
+        let sym = SymbolKeyImage::default();
+        let check = |rows: &[IteratorRow], colls: &[CollectionImage], names_len: usize| {
+            check_image_slot_bounds(
+                &[], &[], &[], colls, &[], &[], &[], &[], &[], &LangRows::EMPTY, rows, names_len,
+                &sym, 4, 64,
+            )
+        };
+        let coll = CollectionImage {
+            owner: 1,
+            kind: 0,
+            table_length: 8,
+            entries: vec![(Slot::integer(1), Slot::integer(2))],
+        };
+        let cursor = |iterable: u32, index: u32| IteratorRow {
+            owner: 2,
+            kind: 5,
+            iterable,
+            index,
+            done: false,
+            result: 3,
+            enum_keys: Vec::new(),
+            str_bytes: Vec::new(),
+        };
+        // A collection cursor naming an instance with NO covering row.
+        assert!(check(&[cursor(0, 0)], std::slice::from_ref(&coll), 0).is_err());
+        // A cursor past the compacted live list.
+        assert!(check(&[cursor(1, 2)], std::slice::from_ref(&coll), 0).is_err());
+        // The exhausted cursor (index == live count) passes.
+        assert!(check(&[cursor(1, 1)], std::slice::from_ref(&coll), 0).is_ok());
+        // A for-in key id outside the restored name table.
+        let forin = IteratorRow {
+            owner: 2,
+            kind: 3,
+            iterable: 1,
+            index: 0,
+            done: false,
+            result: 3,
+            enum_keys: vec![(7, 0)],
+            str_bytes: Vec::new(),
+        };
+        assert!(check(std::slice::from_ref(&forin), &[], 3).is_err());
+        assert!(check(std::slice::from_ref(&forin), &[], 7).is_ok());
+        // An out-of-arena owner/result.
+        let mut oob = cursor(1, 0);
+        oob.result = 9;
+        assert!(check(&[oob], std::slice::from_ref(&coll), 0).is_err());
+    }
+
+    #[test]
     fn image_bounds_reject_out_of_arena_indices() {
         // Wave 4 closed the three side tables; wave 5 showed the class is
         // wider — a container with NO side table at all panicked the
@@ -2819,7 +3062,7 @@ mod tests {
         // shape a reviewer actually crafted and reached a release panic
         // (or an abort) with. slot_count = 4, chunk_len = 64 throughout.
         let ok = |heap: &[Slot], stack: &[Slot]| {
-            check_image_slot_bounds(heap, stack, &[], &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &SymbolKeyImage::default(), 4, 64)
+            check_image_slot_bounds(heap, stack, &[], &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64)
         };
         let refd = |i: u32| Slot::of(Kind::Reference, Payload::Reference(SlotIndex(i)));
 
@@ -2836,17 +3079,17 @@ mod tests {
 
         // --- the wave-4 arms, still enforced ---
         let bad_desc = [RegistryImage { key: b"k".to_vec(), descriptor: 9 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &bad_desc, &[], &[], &[], &[], &LangRows::EMPTY, &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &bad_desc, &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64).is_err());
         // A symbol-key descriptor beyond the arena is refused the same way.
         let bad_sym = SymbolKeyImage {
             next_id: u16::MAX - 1,
             pairs: vec![(u16::MAX, 4)],
         };
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &bad_sym, 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &bad_sym, 4, 64).is_err());
         let bad_owner = [ArrayImage { owner: 9, length: 0, items: vec![] }];
-        assert!(check_image_slot_bounds(&[], &[], &bad_owner, &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &bad_owner, &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64).is_err());
         let bad_ref = [ArrayImage { owner: 1, length: 1, items: vec![(0, refd(9))] }];
-        assert!(check_image_slot_bounds(&[], &[], &bad_ref, &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &bad_ref, &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64).is_err());
         // Collections were passed `&[]` in every wave-4 case, so that
         // whole branch never executed (wave 5, llvm-cov). Exercise both
         // the key and the value side.
@@ -2856,14 +3099,14 @@ mod tests {
             table_length: 0,
             entries: vec![(refd(9), Slot::undefined())],
         }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &bad_key, &[], &[], &[], &[], &[], &LangRows::EMPTY, &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &bad_key, &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64).is_err());
         let bad_val = [CollectionImage {
             owner: 1,
             kind: 0,
             table_length: 0,
             entries: vec![(Slot::undefined(), refd(9))],
         }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &bad_val, &[], &[], &[], &[], &[], &LangRows::EMPTY, &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &bad_val, &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64).is_err());
 
         // --- in-bounds and NULL pass ---
         assert!(ok(&[refd(3)], &[refd(0)]).is_ok(), "in-bounds indices pass");
@@ -2985,6 +3228,7 @@ mod tests {
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
+            iterators: Vec::new(),
             name_floor: None,
         };
         let bytes = write_machine(&img);
@@ -3021,6 +3265,7 @@ mod tests {
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
+            iterators: Vec::new(),
             name_floor: None,
         };
         let bytes = write_machine(&img);
@@ -3136,6 +3381,7 @@ mod tests {
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
+            iterators: Vec::new(),
             name_floor: None,
         };
         let bytes = write_machine(&img);

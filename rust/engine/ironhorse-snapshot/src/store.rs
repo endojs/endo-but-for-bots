@@ -86,7 +86,7 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// sections EMPTY (a pure 12-byte suffix; a v6-era machine had
 /// nothing persisted in them by definition) and restamps the root for
 /// the changed small leaf.
-pub const STORE_SCHEMA_VERSION: u32 = 12;
+pub const STORE_SCHEMA_VERSION: u32 = 13;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -1344,27 +1344,30 @@ pub struct SmallState {
     /// `None` — an empty section — restores the conservative
     /// full-table default).
     pub name_floor: Option<u32>,
+    /// The built-in iterator cursors (schema 13; the `ITER` encoding).
+    pub iterators: Vec<ironhorse_vm::IteratorRow>,
 }
 
 impl SmallState {
-    /// Serialize: nineteen sections, each `u32` length-prefixed, in
+    /// Serialize: twenty sections, each `u32` length-prefixed, in
     /// the fixed order stack, free list, keys, names, symbols, meter,
     /// arrays, collections, registry, errors, buffers, typed arrays,
     /// data views, wrappers, regexps, arguments brands, temporal,
-    /// intl, name floor
+    /// intl, name floor, iterators
     /// (arrays/collections/registry since store schema 7 — the
     /// side-table ledger; the 6→7 migration appends them empty, a
     /// pure 12-byte suffix — errors since schema 9, the typed-array
     /// family since schema 10, the data-only language rows since
-    /// schema 11, and the Intl record tables plus the installed-names
-    /// floor since schema 12, whose migrations append their empty
-    /// sections the same way). Since store schema v4 the free-list section is
+    /// schema 11, the Intl record tables plus the installed-names
+    /// floor since schema 12, and the iterator cursors since schema
+    /// 13, whose migrations append their empty sections the same
+    /// way). Since store schema v4 the free-list section is
     /// always EMPTY in stored small state — the list lives in
     /// dirty-diffed segment rows (phase 9) — but the section slot
     /// stays so the layout is stable; the atom container path still
     /// carries the list via the image, not this encoding.
     pub fn encode(&self) -> Vec<u8> {
-        let sections: [Vec<u8>; 19] = [
+        let sections: [Vec<u8>; 20] = [
             encode_stack(&self.stack),
             encode_u32s(&[]),
             encode_strings(&self.keys),
@@ -1387,6 +1390,7 @@ impl SmallState {
                 Some(floor) => floor.to_be_bytes().to_vec(),
                 None => Vec::new(),
             },
+            crate::image::encode_iterators(&self.iterators),
         ];
         let mut v = Vec::new();
         for s in sections {
@@ -1396,7 +1400,7 @@ impl SmallState {
         v
     }
 
-    /// Decode the nineteen sections. Every section length is
+    /// Decode the twenty sections. Every section length is
     /// bounds-checked against the remaining payload before it is
     /// sliced.
     pub fn decode(p: &[u8]) -> Result<SmallState, StoreError> {
@@ -1526,7 +1530,14 @@ impl SmallState {
                 "installed-names floor past the name table",
             )));
         }
-        // Same exact-consumption rule as the manifest: nineteen
+        // Schema-13 section (the iterator cursors), same rule.
+        let iterators_bytes = section("small state iterators section")?;
+        let iterators = if iterators_bytes.is_empty() {
+            Vec::new()
+        } else {
+            crate::image::decode_iterators(iterators_bytes).map_err(StoreError::Snapshot)?
+        };
+        // Same exact-consumption rule as the manifest: twenty
         // sections and nothing after them, or the small state fails
         // closed.
         if i != p.len() {
@@ -1554,6 +1565,7 @@ impl SmallState {
             temporal,
             intl,
             name_floor,
+            iterators,
         })
     }
 }
@@ -1858,6 +1870,7 @@ pub fn migrate_store(
             9 => migrate_v9_to_v10(store)?,
             10 => migrate_v10_to_v11(store)?,
             11 => migrate_v11_to_v12(store)?,
+            12 => migrate_v12_to_v13(store)?,
             _ => {
                 return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                     "unsupported store schema version",
@@ -2101,6 +2114,40 @@ fn migrate_v11_to_v12(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     store.replace_manifest_and_small_for_migration(&manifest, &new_small)
 }
 
+/// 12 → 13: the built-in iterator cursors join the small state (the
+/// ledger's `Iterators` graduation). The one new section appends
+/// EMPTY — a pure 4-byte suffix, content-preserving by construction:
+/// the v12 persist path had no `ITER` atom, and iterator rows a v12
+/// resume dropped were the visible-fail class the carry retires.
+/// Verify the store against its OWN root first, then restamp schema
+/// and root together.
+fn migrate_v12_to_v13(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    let small = store.read_small_state()?;
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    if old != manifest.root {
+        // `expected` = recomputed root, `found` = manifest's claim.
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root.clone(),
+        });
+    }
+    let mut new_small = small;
+    new_small.extend_from_slice(&[0u8; 4]);
+    manifest.store_schema = 13;
+    manifest.root = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &new_small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
+}
+
 /// The epoch discipline every [`HeapStore::commit`] enforces: the first
 /// commit into an empty store is epoch 1; every later commit advances
 /// the stored epoch by exactly one. Anything else is a replayed or
@@ -2245,6 +2292,7 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         temporal: image.temporal.clone(),
         intl: image.intl.clone(),
         name_floor: image.name_floor,
+        iterators: image.iterators.clone(),
     };
     let small_bytes = small.encode();
     let slot_pages = encode_all_slot_pages(&image.slots);
@@ -2457,6 +2505,8 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
             temporal: &small.temporal,
             intl: &small.intl,
         },
+        &small.iterators,
+        small.names.len(),
         &small.symbols,
         slots.len() as u32,
         chunks.len(),
@@ -2489,6 +2539,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         temporal: small.temporal,
         intl: small.intl,
         name_floor: small.name_floor,
+        iterators: small.iterators,
     })
 }
 
@@ -2590,6 +2641,8 @@ pub fn validate_store(
             temporal: &small.temporal,
             intl: &small.intl,
         },
+        &small.iterators,
+        small.names.len(),
         &small.symbols,
         manifest.slot_count,
         manifest.chunk_len as usize,
@@ -3106,6 +3159,7 @@ mod tests {
             temporal: crate::image::TemporalImage::default(),
             intl: ironhorse_vm::IntlTables::default(),
             name_floor: None,
+            iterators: Vec::new(),
         };
         // Since schema v4 the free list does NOT ride in small state
         // (it lives in segment rows); the round-trip drops it.
@@ -3136,6 +3190,7 @@ mod tests {
             temporal: crate::image::TemporalImage::default(),
             intl: ironhorse_vm::IntlTables::default(),
             name_floor: None,
+            iterators: Vec::new(),
         };
         let bytes = s.encode();
         for cut in [0, 3, 7, bytes.len() - 1] {

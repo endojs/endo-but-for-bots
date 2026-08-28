@@ -1835,6 +1835,35 @@ rather than work items.
     verify-root-then-restamp). The ledger stands at 18 Pending rows:
     `IntlRecords` and the new `NameFloor` graduated Serialized;
     `IntlBoundFunctions` joined Pending.
+  - [x] The built-in iterator cursors LANDED (2026-08-28, store
+    schema v13): the `ITER` atom + a twentieth small-state section
+    carrying the `iterators` side table — array values/keys/entries
+    cursors, string iterators (UTF-16 byte cursors; a resumed cursor
+    steps a surrogate pair whole), for-in enumerators (inert across
+    cranks: the covered grammar cannot hold one, so their rows ride
+    along inertly), and Map/Set cursors. The row's old Pending note
+    called its hazard exactly: a live collection cursor indexes
+    TOMBSTONED entry positions while the `COLL` row compacts
+    tombstones — so the carry emits the cursor as its LIVE-ENTRY
+    ORDINAL, which IS the physical index in the restored dense table,
+    and `clear()`-staleness folds into the carried `done` (restored
+    collections rebuild at generation zero; the absolute counter is
+    unobservable, only "retired" is). Decode refuses unknown kinds,
+    bad flag bytes, and cursors outside their own text/key lists; the
+    bounds gate (both resume paths) refuses a collection cursor with
+    no covering `COLL` row (its `next()` indexes the table
+    unconditionally), an ordinal past the compacted live list, and a
+    for-in key id outside the restored name table (the gate gained a
+    `names_len` input for exactly this); the vm restore re-validates
+    all of it. Twins in `iterator_carry.rs`, red-first (six suites
+    born failing on the this-guard TypeErrors), bite-checked three
+    ways: dropped rows redden everything, a RAW physical index
+    reddens precisely the tombstone-straddle twin, and an unfolded
+    staleness reddens precisely the cleared-cursor twin. The 12→13
+    migration appends the one empty section (a pure 4-byte suffix,
+    verify-root-then-restamp); the golden seal re-pinned, the blob
+    pin held — container stability restored after v12's deliberate
+    `NFLR` exception. The ledger stands at 17 Pending rows.
   - [ ] `proxies`, `accessors`: dependency-gated on the `functions`
     row, with the probe evidence recorded (2026-08-27): a resumed
     guest function is UNCALLABLE today (`f(2)` throws TypeError,
@@ -2712,6 +2741,15 @@ bite-checked by reverting the fix under the lock). Statuses:
   bite-checked against a disabled floor restore, plus the
   deleted-seed-accessor twin proving nothing resurrects what the
   guest deleted).
+- **The iterator-cursor carry (2026-08-28, store schema v13):** the
+  `iterators` row graduates Serialized in the `ITER` atom / twentieth
+  small-state section — a resumed built-in iterator CONTINUES its
+  walk. Collection cursors travel as live-entry ordinals (composing
+  with the `COLL` row's tombstone compaction exactly as the row's old
+  Pending note demanded) and `clear()`-staleness folds into `done`.
+  Full narrative in the Remaining ledger's G3 entry; twins in
+  `iterator_carry.rs`, bite-checked three ways; 17 Pending rows
+  remain, all function-, activation-, or module-shaped.
 
 ## What Is the Problem Being Solved?
 
