@@ -12,9 +12,13 @@ test/intrinsics/GeneratorFunction/intrinsic-metadata.js
 test/intrinsics/GeneratorPrototype/intrinsic-metadata.js
 test/intrinsics/IteratorPrototype/intrinsic-metadata.js
 test/intrinsics/MapIteratorPrototype/intrinsic-metadata.js
+test/intrinsics/MapPrototype/intrinsic-metadata.js
 test/intrinsics/RegExpStringIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/SetIteratorPrototype/intrinsic-metadata.js
+test/intrinsics/SetPrototype/intrinsic-metadata.js
 test/intrinsics/StringIteratorPrototype/intrinsic-metadata.js
+test/intrinsics/WeakMapPrototype/intrinsic-metadata.js
+test/intrinsics/WeakSetPrototype/intrinsic-metadata.js
 test/modules/module-source-reflection/ses-legacy/duplicate-import.js
 test/modules/module-source-reflection/ses-legacy/export-all-from.js
 test/modules/module-source-reflection/ses-legacy/export-default.js
