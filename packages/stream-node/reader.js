@@ -46,9 +46,13 @@ export const makeNodeReader = input => {
   };
 
   /** @type {import('@endo/stream').Reader<Uint8Array>} */
-  return mapReader(reader, buffer => {
-    assert(typeof buffer !== 'string');
-    return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.length);
+  return mapReader(reader, nodeBuffer => {
+    assert(typeof nodeBuffer !== 'string');
+    return new Uint8Array(
+      nodeBuffer.buffer,
+      nodeBuffer.byteOffset,
+      nodeBuffer.length,
+    );
   });
 };
 harden(makeNodeReader);
