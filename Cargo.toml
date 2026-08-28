@@ -1,5 +1,5 @@
 [workspace]
-members = ["rust/ocapn_noise", "rust/endo", "rust/endo/xsnap", "rust/endo/ironhorse-store-sqlite", "rust/thixotrope-xs-worker", "rust/endo_iroh"]
+members = ["rust/ocapn_noise", "rust/endo", "rust/endo/xsnap", "rust/endo/ironhorse-store-sqlite", "rust/endor-git", "rust/thixotrope-xs-worker", "rust/endo_iroh"]
 # rust/engine is the Ironhorse engine port (designs/ironhorse-engine.md),
 # its own nested workspace so it builds in-repo from the first commit
 # (resolved question 9) without entangling this workspace's members.
