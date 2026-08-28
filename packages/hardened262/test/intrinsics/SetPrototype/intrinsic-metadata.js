@@ -26,7 +26,9 @@ var metadata = [
   SetPrototype.forEach.name,
   SetPrototype.forEach.length,
   SetPrototype.entries.name,
+  SetPrototype.entries.length,
   SetPrototype.values.name,
+  SetPrototype.values.length,
   SetPrototype.keys === SetPrototype.values,
   SetPrototype[Symbol.iterator] === SetPrototype.values,
   typeof Object.getOwnPropertyDescriptor(SetPrototype, 'size').get,
@@ -36,6 +38,6 @@ var metadata = [
 
 assert.sameValue(
   metadata,
-  'function|add|1|has|1|delete|1|clear|0|forEach|1|entries|values|true|true|function|Set|true',
+  'function|add|1|has|1|delete|1|clear|0|forEach|1|entries|0|values|0|true|true|function|Set|true',
   'the %Set.prototype% method table, size accessor, keys/values alias, and chain agree',
 );
