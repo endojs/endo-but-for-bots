@@ -1,8 +1,17 @@
 /*---
 description: The %ThrowTypeError% intrinsic is a single shared, frozen poison-pill accessor across Hardened JavaScript hosts
-features: [caller]
+features: [caller, class]
 flags: [onlyStrict]
 ---*/
+
+// Skip note: the baseline records this case as `skipped` under every
+// `strict`/`compartment*`/`lockdownStrict` scenario and `passed` only under
+// `module`/`lockdownModule`. That is a harness-wide property, not specific to
+// this test: `agentRunsScenario` in scripts/test.js drives only the `module`
+// and `lockdownModule` scenarios today, so the remaining sloppy/strict and
+// compartment axes are enumerated but reported as skips for every case. The
+// `onlyStrict` flag is still satisfied because a module body is inherently
+// strict, which is why the `module`/`lockdownModule` runs cover this case.
 
 // %ThrowTypeError% is a well-known intrinsic that no host exposes as a global:
 // it is the shared accessor installed as the get/set pair of the poison-pill
@@ -48,6 +57,17 @@ assert.sameValue(
   'the %ThrowTypeError% intrinsic is a frozen, zero-length, anonymous, prototype-less function shared by the non-configurable, non-enumerable callee poison pill get/set pair',
 );
 
+// Non-constructibility is pinned operationally, not merely inferred from the
+// absent own `prototype` above: %ThrowTypeError% has no [[Construct]], so a
+// `new` invocation must throw a TypeError rather than yield an instance.
+assert.throws(
+  TypeError,
+  function () {
+    return new ThrowTypeError();
+  },
+  '%ThrowTypeError% is not constructible',
+);
+
 // The defining behavior: reading or writing the poison pill throws a TypeError,
 // through either the `callee` accessor or a direct call of the intrinsic.
 assert.throws(
@@ -84,6 +104,25 @@ assert.sameValue(
   otherCalleeDescriptor.get,
   ThrowTypeError,
   'every strict-mode arguments object shares one realm-wide %ThrowTypeError%',
+);
+
+// Reach the same intrinsic through a different *kind* of function object — a
+// class method, whose body is implicitly strict — rather than another plain
+// `function` declaration. This catches a host that keyed the poison pill on the
+// function's syntactic kind rather than minting one realm-wide accessor.
+class ArgumentsHost {
+  method() {
+    return arguments;
+  }
+}
+var methodCalleeDescriptor = Object.getOwnPropertyDescriptor(
+  new ArgumentsHost().method(),
+  'callee',
+);
+assert.sameValue(
+  methodCalleeDescriptor.get,
+  ThrowTypeError,
+  "a class method's strict arguments object shares the same realm-wide %ThrowTypeError%",
 );
 
 // Where a host retains the Function.prototype `caller`/`arguments` poison pills
