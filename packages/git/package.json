@@ -50,7 +50,8 @@
     "@endo/hex": "workspace:^",
     "@endo/platform": "workspace:^",
     "@endo/sha256": "workspace:^",
-    "@endo/stream": "workspace:^"
+    "@endo/stream": "workspace:^",
+    "@endo/utf8": "workspace:^"
   },
   "devDependencies": {
     "@endo/eventual-send": "workspace:^",
