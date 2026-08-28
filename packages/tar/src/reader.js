@@ -1,7 +1,7 @@
 // @ts-check
 
 import { q } from '@endo/errors';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
 
 /** @import { TarReader, TarEntry } from './types.js' */
 
@@ -23,7 +23,7 @@ harden(isZeroTarBlock);
 export const tarString = field => {
   const nul = field.indexOf(0);
   const end = nul < 0 ? field.length : nul;
-  return bytesToText(field.slice(0, end));
+  return decodeUtf8(field.slice(0, end));
 };
 harden(tarString);
 
@@ -90,8 +90,8 @@ export const parsePaxRecords = bytes => {
     if (equals < 0) {
       throw new Error('Malformed pax extended header record');
     }
-    const key = bytesToText(record.subarray(0, equals));
-    const value = bytesToText(record.subarray(equals + 1));
+    const key = decodeUtf8(record.subarray(0, equals));
+    const value = decodeUtf8(record.subarray(equals + 1));
     if (key === 'path') {
       overrides.path = value;
     } else if (key === 'linkpath') {
