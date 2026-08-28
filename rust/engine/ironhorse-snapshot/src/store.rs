@@ -1530,6 +1530,14 @@ impl SmallState {
                 "installed-names floor past the name table",
             )));
         }
+        // And an explicit floor AT the table length is non-canonical:
+        // writers emit the fully-installed state as an EMPTY section
+        // (the store mirror of `read_machine`'s NFLR gate — review).
+        if name_floor.is_some_and(|floor| floor as usize == names.len()) {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "installed-names floor: non-canonical explicit full floor",
+            )));
+        }
         // Schema-13 section (the iterator cursors), same rule.
         let iterators_bytes = section("small state iterators section")?;
         let iterators = if iterators_bytes.is_empty() {
@@ -1806,6 +1814,41 @@ pub trait HeapStore {
 /// therefore lives with the caller that knows the signature — the
 /// raw `open()` no longer runs it — and this is the reason it takes
 /// `expected_sig` rather than reading only the store.
+/// Peek the meter's cost-table version from a small-state PREFIX: the
+/// first six sections (stack, free list, keys, names, symbols, meter)
+/// have held the same positions since schema 5, every ladder step
+/// appends sections strictly AFTER them, and the peek never reads the
+/// schema-variable tail — so it decodes identically under every
+/// schema [`migrate_store`] supports. See the cost-table gate there
+/// (review finding 8).
+fn peek_cost_table_version(p: &[u8]) -> Result<String, StoreError> {
+    let mut i = 0usize;
+    let mut section = |name: &'static str| -> Result<&[u8], StoreError> {
+        if i + 4 > p.len() {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(name)));
+        }
+        let len = u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]) as usize;
+        i += 4;
+        if i + len > p.len() {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(name)));
+        }
+        let s = &p[i..i + len];
+        i += len;
+        Ok(s)
+    };
+    for name in [
+        "small state stack section",
+        "small state free-list section",
+        "small state keys section",
+        "small state names section",
+        "small state symbols section",
+    ] {
+        let _ = section(name)?;
+    }
+    let meter = MeterImage::decode(section("small state meter section")?)?;
+    Ok(meter.cost_table_version)
+}
+
 pub fn migrate_store(
     store: &mut dyn HeapStore,
     expected_sig: &Signature,
@@ -1832,6 +1875,23 @@ pub fn migrate_store(
         return Err(StoreError::Snapshot(SnapshotError::SignatureMismatch {
             expected: expected_sig.clone(),
             found: manifest.signature.clone(),
+        }));
+    }
+    // Cost-table gate BEFORE the first restamp too (review finding 8):
+    // a store whose meter ran under a different cost table can NEVER
+    // resume on this engine — `validate_store` refuses it after any
+    // migration — so restamping it forward first would wedge it: the
+    // new implementation still refuses it and the old one no longer
+    // recognizes the schema. Refuse here, bytes untouched, with the
+    // same error `validate_store` would raise. The peek parses only
+    // the small-state PREFIX (the first six sections, whose positions
+    // every supported schema shares), so it works under the SOURCE
+    // schema without decoding the schema-variable tail.
+    let cost = peek_cost_table_version(&store.read_small_state()?)?;
+    if cost != COST_TABLE_VERSION {
+        return Err(StoreError::Snapshot(SnapshotError::CostTableMismatch {
+            expected: COST_TABLE_VERSION.to_string(),
+            found: cost,
         }));
     }
     // The ladder: one verified in-place step at a time, each leaving a
@@ -2510,6 +2570,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         &small.symbols,
         slots.len() as u32,
         chunks.len(),
+        &slot_free,
     )
     .map_err(StoreError::Snapshot)?;
 
@@ -2576,7 +2637,13 @@ pub fn validate_store(
     expected_sig: &Signature,
 ) -> Result<(StoreManifest, SmallState, StoreLeaves), StoreError> {
     let manifest = store.manifest()?;
-    if manifest.version != Version::current() {
+    // Readability, not equality with the write stamp (review finding
+    // 1's flip side): an older READABLE format version opens — its
+    // atoms are a subset with the same encodings, and the schema
+    // ladder below migrates its sections — while a newer one was
+    // already refused at manifest decode. The next checkpoint restamps
+    // the manifest at the current version.
+    if !manifest.version.is_readable() {
         return Err(StoreError::Snapshot(SnapshotError::Corrupt(
             "store version stamp mismatch",
         )));
@@ -2615,45 +2682,21 @@ pub fn validate_store(
             found: small.meter.cost_table_version.clone(),
         }));
     }
-    // Semantic bounds gate for everything the small state carries —
-    // stack, symbols, and the four side tables — against the
-    // manifest's geometry. It lives HERE, not in `store_to_image`,
-    // because `validate_store` is the one function BOTH resume paths
-    // run: gating the eager path alone left `resume_from_store_lazy`
-    // (the path `PersistentMachine` actually opens) accepting a crafted
-    // store that then panics the collector in release (review wave 5).
-    // The heap ROWS are not read at validation time by design — their
-    // records are bounds-checked as they fault.
-    crate::image::check_image_slot_bounds(
-        &[],
-        &small.stack,
-        &small.arrays,
-        &small.collections,
-        &small.registry,
-        &small.errors,
-        &small.buffers,
-        &small.typed_arrays,
-        &small.data_views,
-        &crate::image::LangRows {
-            wrappers: &small.wrappers,
-            regexps: &small.regexps,
-            arguments_brands: &small.arguments_brands,
-            temporal: &small.temporal,
-            intl: &small.intl,
-        },
-        &small.iterators,
-        small.names.len(),
-        &small.symbols,
-        manifest.slot_count,
-        manifest.chunk_len as usize,
-    )
-    .map_err(StoreError::Snapshot)?;
     // The symbol-key counter must clear the name table — the store
     // mirror of `read_machine`'s check (a counter at or below the
     // table aliases a symbol id onto a string key at restore).
     if (small.symbols.next_id as usize) <= small.names.len() {
         return Err(StoreError::Snapshot(SnapshotError::Corrupt(
             "symbol-key table: counter inside the name table",
+        )));
+    }
+    // Quiescence, the store mirror of `read_machine`'s STAC gate
+    // (review finding 5): checkpoints only ever commit quiescent
+    // machines, whose value stack is empty, so a populated stack
+    // section can only be crafted.
+    if !small.stack.is_empty() {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "STAC not empty at a quiescent boundary",
         )));
     }
 
@@ -2786,6 +2829,45 @@ pub fn validate_store(
         }
     }
     small.slot_free = free;
+
+    // Semantic bounds gate for everything the small state carries —
+    // stack, symbols, and the side tables — against the manifest's
+    // geometry. It lives HERE, not in `store_to_image`, because
+    // `validate_store` is the one function BOTH resume paths run:
+    // gating the eager path alone left `resume_from_store_lazy` (the
+    // path `PersistentMachine` actually opens) accepting a crafted
+    // store that then panics the collector in release (review wave 5).
+    // It runs AFTER the free-list reassembly above so the free set is
+    // in hand: a side-table row owned by a free slot is refused, while
+    // freed heap records stay opaque (review findings 2+3). The heap
+    // ROWS are not read at validation time by design — their records
+    // are bounds-checked as they fault, with the same free-record
+    // skip.
+    crate::image::check_image_slot_bounds(
+        &[],
+        &small.stack,
+        &small.arrays,
+        &small.collections,
+        &small.registry,
+        &small.errors,
+        &small.buffers,
+        &small.typed_arrays,
+        &small.data_views,
+        &crate::image::LangRows {
+            wrappers: &small.wrappers,
+            regexps: &small.regexps,
+            arguments_brands: &small.arguments_brands,
+            temporal: &small.temporal,
+            intl: &small.intl,
+        },
+        &small.iterators,
+        small.names.len(),
+        &small.symbols,
+        manifest.slot_count,
+        manifest.chunk_len as usize,
+        &small.slot_free,
+    )
+    .map_err(StoreError::Snapshot)?;
 
     Ok((
         manifest,

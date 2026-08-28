@@ -390,8 +390,11 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
 /// image rows — [`Interp::restore_bulk_side_tables`]'s image-typed
 /// front door, shared by every resume path (container, eager store,
 /// lazy store). A malformed kind code was already refused at decode,
-/// so the restore cannot fail on validated input; the `false` return
-/// is a belt-and-braces corrupt signal.
+/// so the restore cannot fail on validated input — but "cannot" is a
+/// claim about the decoders, not a proof, so a `false` return is a
+/// STRUCTURED refusal, never a debug-only assert: a release build must
+/// refuse the row set, not continue with silently missing exotic state
+/// (review finding 4).
 #[allow(clippy::too_many_arguments)]
 fn restore_side_tables(
     interp: &mut Interp,
@@ -408,7 +411,8 @@ fn restore_side_tables(
     temporal: crate::image::TemporalImage,
     intl: ironhorse_vm::IntlTables,
     iterators: Vec<ironhorse_vm::IteratorRow>,
-) {
+) -> Result<(), crate::format::SnapshotError> {
+    use crate::format::SnapshotError;
     let ok = interp.restore_bulk_side_tables(
         arrays
             .into_iter()
@@ -420,7 +424,9 @@ fn restore_side_tables(
             .collect(),
         registry.into_iter().map(|r| (r.key, r.descriptor)).collect(),
     );
-    debug_assert!(ok, "validated image cannot carry an unknown kind code");
+    if !ok {
+        return Err(SnapshotError::Corrupt("side-table restore: unknown kind code"));
+    }
     // The error-data rows (name validated at decode against the
     // engine's closed error-name set, so this cannot fail on a
     // validated image either).
@@ -430,7 +436,9 @@ fn restore_side_tables(
             .map(|e| (e.owner, e.name, e.message))
             .collect(),
     );
-    debug_assert!(ok, "validated image cannot carry an unknown error name");
+    if !ok {
+        return Err(SnapshotError::Corrupt("side-table restore: unknown error name"));
+    }
     // The typed-array family (kinds, flags, extents and view geometry
     // all validated at decode/bounds; the vm re-validates against its
     // restored arenas, so `false` is a belt-and-braces corrupt signal).
@@ -448,7 +456,11 @@ fn restore_side_tables(
             .map(|d| (d.owner, d.buffer, d.offset, d.size))
             .collect(),
     );
-    debug_assert!(ok, "validated image cannot carry a malformed typed-array family");
+    if !ok {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed typed-array family",
+        ));
+    }
     // The data-only language rows (schema 11). Wrapper values were
     // bounds-walked with the heap; a regexp that fails to RECOMPILE
     // from its persisted (source, flags) cannot come from an honest
@@ -463,7 +475,11 @@ fn restore_side_tables(
             .map(|r| (r.owner, r.source, r.flags, r.last_index_bits))
             .collect(),
     );
-    debug_assert!(ok, "a persisted regexp source must recompile");
+    if !ok {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: persisted regexp does not recompile",
+        ));
+    }
     interp.restore_arguments_brands(arguments_brands);
     let ok = interp.restore_temporal_records(
         temporal.instants,
@@ -471,18 +487,29 @@ fn restore_side_tables(
         temporal.plains,
         temporal.zoneds,
     );
-    debug_assert!(ok, "validated image cannot carry a malformed temporal record");
+    if !ok {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed temporal record",
+        ));
+    }
     // The Intl record rows (schema 12): pure resolved-options data;
     // segment geometry and the iterator cross-reference were validated
     // at decode/bounds, and the vm re-validates them on the way in.
     let ok = interp.restore_intl(intl);
-    debug_assert!(ok, "validated image cannot carry a malformed intl record");
+    if !ok {
+        return Err(SnapshotError::Corrupt("side-table restore: malformed intl record"));
+    }
     // The iterator cursors (schema 13): validated at decode/bounds
     // (kinds, cursor ranges, the covering-collection cross-check);
     // restored AFTER the collections so the covering rows are in hand
     // for the vm's own re-validation.
     let ok = interp.restore_iterators(iterators);
-    debug_assert!(ok, "validated image cannot carry a malformed iterator cursor");
+    if !ok {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed iterator cursor",
+        ));
+    }
+    Ok(())
 }
 
 /// Rebuild a live [`Interp`] from a decoded [`MachineImage`]: a fresh
@@ -491,7 +518,12 @@ fn restore_side_tables(
 /// boot-derived intrinsics/prototypes come from the fresh boot at their
 /// deterministic slot indices, matching the image's boot region. See
 /// [`Interp::restore_snapshot_state`].
-pub fn image_to_interp(image: MachineImage) -> Interp {
+///
+/// Fallible (review finding 4): decode validated shape, but every
+/// restore verb that RE-DERIVES state (a regexp recompile, the vm's
+/// own cross-checks) can still refuse, and a release build must
+/// surface that as a structured error, not continue with missing rows.
+pub fn image_to_interp(image: MachineImage) -> Result<Interp, crate::format::SnapshotError> {
     let meter = image.meter.to_state();
     let (slots, chunks) = image.to_arenas();
     let mut interp = Interp::new();
@@ -499,18 +531,23 @@ pub fn image_to_interp(image: MachineImage) -> Interp {
     // The installed-names floor (wave-6 W6-7): adopt the live floor
     // when it traveled, so names interned during the last install pass
     // stay lazily installable exactly as they were live. Bounds were
-    // validated at decode; the `false` return is belt-and-braces.
+    // validated at decode.
     if let Some(floor) = image.name_floor {
-        let ok = interp.restore_installed_names_floor(floor);
-        debug_assert!(ok, "validated name floor cannot fail to restore");
+        if !interp.restore_installed_names_floor(floor) {
+            return Err(crate::format::SnapshotError::Corrupt(
+                "installed-names floor does not restore",
+            ));
+        }
     }
     // The symbol-key id table (SYMB): re-bind each stored id to its
     // descriptor slot and reinstate the top-down mint counter, so a
     // symbol-keyed property reads back under the same id and a later
-    // mint cannot reuse a stored number. Shape was validated at decode;
-    // the `false` return is a belt-and-braces corrupt signal.
-    let ok = interp.restore_symbol_key_table(image.symbols.next_id, &image.symbols.pairs);
-    debug_assert!(ok, "validated symbol-key table cannot fail to restore");
+    // mint cannot reuse a stored number.
+    if !interp.restore_symbol_key_table(image.symbols.next_id, &image.symbols.pairs) {
+        return Err(crate::format::SnapshotError::Corrupt(
+            "symbol-key table does not restore",
+        ));
+    }
     // The side-table ledger rows (arrays, collections, registry):
     // restored through the counted accessors so the side-ref page
     // counts rebuild in lockstep.
@@ -529,8 +566,8 @@ pub fn image_to_interp(image: MachineImage) -> Interp {
         image.temporal,
         image.intl,
         image.iterators,
-    );
-    interp
+    )?;
+    Ok(interp)
 }
 
 /// Rebuild a machine from `XS_M` container bytes, enforcing the ironhorse
@@ -539,7 +576,7 @@ pub fn image_to_interp(image: MachineImage) -> Interp {
 /// `fxReadSnapshot`'s signature gate is the `METR` cost-table check.
 pub fn from_snapshot_bytes(buf: &[u8], expected_sig: &Signature) -> Result<Interp, SnapshotError> {
     let image = read_machine(buf, expected_sig)?;
-    Ok(image_to_interp(image))
+    image_to_interp(image)
 }
 
 /// Rebuild a machine from a snapshot file. Streams the file into memory,
@@ -1281,7 +1318,7 @@ pub fn resume_from_store(
     debug_assert_eq!(root_ledger.root(), manifest.root, "seed from validated state");
     Ok(StoreSession {
         gen_dirty: std::collections::BTreeSet::new(),
-        interp: image_to_interp(image),
+        interp: image_to_interp(image).map_err(StoreError::Snapshot)?,
         epoch: manifest.epoch,
         seal: manifest.seal,
         pin: None,
@@ -1451,13 +1488,19 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     // The installed-names floor (wave-6 W6-7), exactly as the container
     // path adopts it; bounds were validated by `SmallState::decode`.
     if let Some(floor) = small.name_floor {
-        let ok = interp.restore_installed_names_floor(floor);
-        debug_assert!(ok, "validated name floor cannot fail to restore");
+        if !interp.restore_installed_names_floor(floor) {
+            return Err(StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
+                "installed-names floor does not restore",
+            )));
+        }
     }
     // The symbol-key id table rides the small state too, restored
     // before anything can mint.
-    let ok = interp.restore_symbol_key_table(small.symbols.next_id, &small.symbols.pairs);
-    debug_assert!(ok, "validated symbol-key table cannot fail to restore");
+    if !interp.restore_symbol_key_table(small.symbols.next_id, &small.symbols.pairs) {
+        return Err(StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
+            "symbol-key table does not restore",
+        )));
+    }
     // The ledger side tables ride the small state, so a LAZY resume
     // restores them eagerly like everything else small — only arena
     // rows fault on demand.
@@ -1476,7 +1519,8 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.temporal,
         small.intl,
         small.iterators,
-    );
+    )
+    .map_err(StoreError::Snapshot)?;
     Ok(StoreSession {
         gen_dirty: std::collections::BTreeSet::new(),
         interp,

@@ -902,6 +902,41 @@ pub(crate) fn decode_collections(p: &[u8]) -> Result<Vec<CollectionImage>, Snaps
                 "collections side table: owners not strictly ascending",
             ));
         }
+        // The rehash geometry (review finding 9): `table_length`
+        // mirrors XS's power-of-two address array
+        // (`fxResizeEntries` / the vm's `collection_table_resize`),
+        // which the engine only ever doubles or halves between
+        // `MAP_MIN_TABLE_LENGTH` and the 2^20 cap, re-checking after
+        // every size change — so a weak collection's is exactly 0 (no
+        // table), a Map/Set's is a power of two in that range, and
+        // below the cap the live size never rests past the grow
+        // threshold `(L>>1)+(L>>2)` (the add that crossed it doubled
+        // the table). Anything else is crafted, and adopting it would
+        // diverge the rehash boundaries — consensus-relevant chunk
+        // metering — from an uninterrupted run.
+        const TABLE_MAX: u32 = 1024 * 1024;
+        if kind >= 2 {
+            if table_length != 0 {
+                return Err(SnapshotError::Corrupt(
+                    "collections side table: weak kind carries a hash table",
+                ));
+            }
+        } else {
+            if !table_length.is_power_of_two()
+                || table_length < ironhorse_vm::interp::MAP_MIN_TABLE_LENGTH
+                || table_length > TABLE_MAX
+            {
+                return Err(SnapshotError::Corrupt(
+                    "collections side table: unreachable rehash geometry",
+                ));
+            }
+            let high = (table_length >> 1) + (table_length >> 2);
+            if table_length < TABLE_MAX && entries.len() as u64 > high as u64 {
+                return Err(SnapshotError::Corrupt(
+                    "collections side table: live size past the grow threshold",
+                ));
+            }
+        }
         out.push(CollectionImage {
             owner,
             kind,
@@ -1688,9 +1723,21 @@ pub(crate) fn decode_intl(p: &[u8]) -> Result<IntlTables, SnapshotError> {
         }
         let un = c.u32()? as usize;
         let mut unicode = std::collections::BTreeMap::new();
+        let mut prev_key: Option<String> = None;
         for _ in 0..un {
             let k = text(&mut c)?;
             let val = text(&mut c)?;
+            // Canonical bytes only (review): the writer iterates the
+            // `BTreeMap` in strictly-ascending key order, so a
+            // duplicated or unordered key can only be crafted — and
+            // silently accepting it re-canonicalizes, breaking the
+            // write(read(bytes)) == bytes identity the seals pin.
+            if prev_key.as_ref().is_some_and(|p| k <= *p) {
+                return Err(SnapshotError::Corrupt(
+                    "intl side table: unicode keys not strictly ascending",
+                ));
+            }
+            prev_key = Some(k.clone());
             unicode.insert(k, val);
         }
         t.locales.push((
@@ -1814,19 +1861,34 @@ pub(crate) fn decode_intl(p: &[u8]) -> Result<IntlTables, SnapshotError> {
         }
         let sn = c.u32()? as usize;
         let mut segs: Vec<(usize, usize, bool)> = Vec::with_capacity(sn.min(p.len() / 9));
+        let mut prev_end = 0usize;
         for _ in 0..sn {
             let start = c.u32()? as usize;
             let end = c.u32()? as usize;
             let word = boolean(&mut c)?;
-            // Boundaries tile the input left to right; anything else
-            // is crafted bytes the consuming natives would index on.
-            if segs.last().is_some_and(|&(s0, _, _)| start < s0) || end < start || end > units.len()
-            {
+            // Boundaries TILE the input left to right: the engine's
+            // `segment_units` emits `(previous boundary, boundary)`
+            // pairs, so every start is exactly the previous END and
+            // every segment is non-empty. The pre-review check
+            // compared against the previous START, so overlapping
+            // ranges decoded silently (review); anything that does not
+            // tile is crafted bytes the consuming natives would index
+            // on.
+            if start != prev_end || end <= start || end > units.len() {
                 return Err(SnapshotError::Corrupt(
-                    "intl side table: segment boundaries outside their input",
+                    "intl side table: segment boundaries do not tile their input",
                 ));
             }
+            prev_end = end;
             segs.push((start, end, word));
+        }
+        // And they COVER it: ICU always emits the final boundary at
+        // the input length, so an honest row's last end is the unit
+        // count (vacuously zero for an empty input).
+        if prev_end != units.len() {
+            return Err(SnapshotError::Corrupt(
+                "intl side table: segment boundaries do not cover their input",
+            ));
         }
         let granularity = text(&mut c)?;
         t.segments.push((
@@ -2118,9 +2180,38 @@ pub(crate) fn check_image_slot_bounds(
     symbols: &SymbolKeyImage,
     slot_count: u32,
     chunk_len: usize,
+    free: &[u32],
 ) -> Result<(), SnapshotError> {
     const OOB: SnapshotError = SnapshotError::Corrupt("slot index out of arena bounds");
     const OOC: SnapshotError = SnapshotError::Corrupt("chunk offset out of arena bounds");
+    const FREE: SnapshotError = SnapshotError::Corrupt("side table names a free slot");
+    // The free set, as a bitmap (entries already range-checked and
+    // deduplicated by both decode paths). It cuts BOTH ways (review
+    // findings 2+3): a freed heap record is OPAQUE — the sweep does not
+    // scrub it and chunk compaction remaps MARKED slots only, so an
+    // honest post-GC snapshot legitimately holds freed records whose
+    // stale chunk offsets sit outside the compacted arena, and nothing
+    // reads those bytes before `alloc` overwrites them — while a
+    // side-table row whose OWNER sits in the free set can only be
+    // crafted: the sweep drops rows keyed by every index it frees, so
+    // restoring one would attach exotic state to a free slot for an
+    // unrelated later allocation to inherit.
+    let mut free_marks = vec![false; slot_count as usize];
+    for &f in free {
+        if let Some(m) = free_marks.get_mut(f as usize) {
+            *m = true;
+        }
+    }
+    let is_free = |i: u32| free_marks.get(i as usize).copied().unwrap_or(false);
+    let owned = |o: u32| -> Result<(), SnapshotError> {
+        if o >= slot_count {
+            return Err(OOB);
+        }
+        if is_free(o) {
+            return Err(FREE);
+        }
+        Ok(())
+    };
     let check = |s: &Slot| -> Result<(), SnapshotError> {
         let mut bad = false;
         s.each_ref_slot(|r| bad |= !r.is_null() && r.0 >= slot_count);
@@ -2140,35 +2231,33 @@ pub(crate) fn check_image_slot_bounds(
         }
         Ok(())
     };
-    for s in heap.iter().chain(stack) {
+    for (i, s) in heap.iter().enumerate() {
+        if is_free(i as u32) {
+            continue; // opaque: dead bytes, preserved for index identity only
+        }
+        check(s)?;
+    }
+    for s in stack {
         check(s)?;
     }
     for a in arrays {
-        if a.owner >= slot_count {
-            return Err(OOB);
-        }
+        owned(a.owner)?;
         for (_, v) in &a.items {
             check(v)?;
         }
     }
     for coll in collections {
-        if coll.owner >= slot_count {
-            return Err(OOB);
-        }
+        owned(coll.owner)?;
         for (k, v) in &coll.entries {
             check(k)?;
             check(v)?;
         }
     }
     for e in registry {
-        if e.descriptor >= slot_count {
-            return Err(OOB);
-        }
+        owned(e.descriptor)?;
     }
     for e in errors {
-        if e.owner >= slot_count {
-            return Err(OOB);
-        }
+        owned(e.owner)?;
     }
     // The typed-array family carries CROSS-table geometry, checked here
     // where all three tables are in hand (the SYMB-vs-NAME precedent):
@@ -2183,17 +2272,14 @@ pub(crate) fn check_image_slot_bounds(
             .map(|i| buffers[i].length)
     };
     for b in buffers {
-        if b.owner >= slot_count {
-            return Err(OOB);
-        }
+        owned(b.owner)?;
         if (b.data as usize) < CHUNK_HEADER || b.data as u64 + b.length as u64 > chunk_len as u64 {
             return Err(OOC);
         }
     }
     for t in typed_arrays {
-        if t.owner >= slot_count || t.buffer >= slot_count {
-            return Err(OOB);
-        }
+        owned(t.owner)?;
+        owned(t.buffer)?;
         let shift = ironhorse_vm::TYPED_ARRAY_TYPES
             .get(t.kind as usize)
             .map(|ty| ty.shift)
@@ -2209,9 +2295,8 @@ pub(crate) fn check_image_slot_bounds(
         }
     }
     for d in data_views {
-        if d.owner >= slot_count || d.buffer >= slot_count {
-            return Err(OOB);
-        }
+        owned(d.owner)?;
+        owned(d.buffer)?;
         let covered =
             buffer_length(d.buffer).is_some_and(|len| d.offset as u64 + d.size as u64 <= len as u64);
         if !covered {
@@ -2224,40 +2309,26 @@ pub(crate) fn check_image_slot_bounds(
     // a wrapper's boxed VALUE walks the same slot check as an array
     // item (its refs and chunk offset are real edges).
     for w in lang.wrappers {
-        if w.owner >= slot_count {
-            return Err(OOB);
-        }
+        owned(w.owner)?;
         check(&w.value)?;
     }
     for r in lang.regexps {
-        if r.owner >= slot_count {
-            return Err(OOB);
-        }
+        owned(r.owner)?;
     }
     for &o in lang.arguments_brands {
-        if o >= slot_count {
-            return Err(OOB);
-        }
+        owned(o)?;
     }
     for &(o, _) in &lang.temporal.instants {
-        if o >= slot_count {
-            return Err(OOB);
-        }
+        owned(o)?;
     }
     for &(o, _) in &lang.temporal.durations {
-        if o >= slot_count {
-            return Err(OOB);
-        }
+        owned(o)?;
     }
     for &(o, _, _, _) in &lang.temporal.plains {
-        if o >= slot_count {
-            return Err(OOB);
-        }
+        owned(o)?;
     }
     for (o, _, _, _) in &lang.temporal.zoneds {
-        if *o >= slot_count {
-            return Err(OOB);
-        }
+        owned(*o)?;
     }
     // The Intl rows: weak owners bounded like every sibling's, and a
     // segment ITERATOR must name an owner with a segments ROW whose
@@ -2276,9 +2347,7 @@ pub(crate) fn check_image_slot_bounds(
         .chain(lang.intl.segment_iterators.iter().map(|(o, _)| *o))
         .chain(lang.intl.date_time_formats.iter().map(|(o, _)| *o))
     {
-        if o >= slot_count {
-            return Err(OOB);
-        }
+        owned(o)?;
     }
     for (_, it) in &lang.intl.segment_iterators {
         let row = lang
@@ -2301,11 +2370,10 @@ pub(crate) fn check_image_slot_bounds(
     // ordinal inside the compacted live list; a for-in cursor's key
     // ids must live in the restored name table.
     for r in iterators {
-        if r.owner >= slot_count || r.result >= slot_count {
-            return Err(OOB);
-        }
-        if r.iterable != u32::MAX && r.iterable >= slot_count {
-            return Err(OOB);
+        owned(r.owner)?;
+        owned(r.result)?;
+        if r.iterable != u32::MAX {
+            owned(r.iterable)?;
         }
         if (5..=7).contains(&r.kind) {
             let row = collections.binary_search_by_key(&r.iterable, |c| c.owner);
@@ -2330,9 +2398,7 @@ pub(crate) fn check_image_slot_bounds(
         }
     }
     for &(_, desc) in &symbols.pairs {
-        if desc >= slot_count {
-            return Err(OOB);
-        }
+        owned(desc)?;
     }
     Ok(())
 }
@@ -2471,6 +2537,16 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => decode_stack(a.payload)?,
         None => Vec::new(),
     };
+    // The write verbs persist only QUIESCENT machines, and quiescence
+    // includes an empty value stack — so a populated `STAC` cannot come
+    // from an honest writer, and adopting one would seed a machine that
+    // can neither run nor checkpoint safely (review finding 5: the
+    // reader must enforce what the writer enforces).
+    if !stack.is_empty() {
+        return Err(SnapshotError::Corrupt(
+            "STAC not empty at a quiescent boundary",
+        ));
+    }
     let keys = match r.find(KEYS) {
         Some(a) => decode_strings(a.payload)?,
         None => Vec::new(),
@@ -2579,6 +2655,16 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
                     "installed-names floor past the name table",
                 ));
             }
+            // A floor AT the table length is the fully-installed state
+            // every writer canonicalizes as an ABSENT atom
+            // (`with_name_floor`); an explicit one can only be crafted,
+            // and accepting it re-canonicalizes on the next write —
+            // breaking write(read(bytes)) == bytes (review).
+            if floor as usize == names.len() {
+                return Err(SnapshotError::Corrupt(
+                    "installed-names floor: non-canonical explicit full floor",
+                ));
+            }
             Some(floor)
         }
         None => None,
@@ -2610,6 +2696,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         &symbols,
         slots.len() as u32,
         chunks.len(),
+        &slot_free,
     )?;
 
     Ok(MachineImage {
@@ -2746,7 +2833,7 @@ mod tests {
             &SymbolKeyImage::default(),
             4,
             64
-        )
+        , &[])
         .is_err());
     }
 
@@ -2799,14 +2886,14 @@ mod tests {
         let sym = SymbolKeyImage::default();
         // A buffer whose backing extent runs past the chunk arena.
         let past = vec![BufferImage { owner: 1, data: 60, length: 8, flags: 0 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &past, &[], &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &past, &[], &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64, &[]).is_err());
         // A buffer whose offset sits inside the chunk header.
         let low = vec![BufferImage { owner: 1, data: 2, length: 8, flags: 0 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &low, &[], &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &low, &[], &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64, &[]).is_err());
         // A view naming a buffer with NO row (an in-bounds slot is not
         // enough — restoring it would read through unbacked geometry).
         let orphan = vec![TypedArrayImage { owner: 2, kind: 0, buffer: 3, offset: 0, length: 1 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &orphan, &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &orphan, &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64, &[]).is_err());
         // View geometry past its buffer's length (Uint32Array: shift 2).
         let buf = vec![BufferImage { owner: 1, data: 4, length: 8, flags: 0 }];
         let kind_u32 = ironhorse_vm::TYPED_ARRAY_TYPES
@@ -2815,17 +2902,17 @@ mod tests {
             .unwrap() as u8;
         let wide = vec![TypedArrayImage { owner: 2, kind: kind_u32, buffer: 1, offset: 4, length: 2 }];
         assert!(
-            check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &buf, &wide, &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64).is_err()
+            check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &buf, &wide, &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64, &[]).is_err()
         );
         // A data view past its buffer.
         let dv = vec![DataViewImage { owner: 2, buffer: 1, offset: 6, size: 4 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &buf, &[], &dv, &LangRows::EMPTY, &[], 0, &sym, 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &buf, &[], &dv, &LangRows::EMPTY, &[], 0, &sym, 4, 64, &[]).is_err());
         // The covered forms pass.
         let fit_view = vec![TypedArrayImage { owner: 2, kind: kind_u32, buffer: 1, offset: 0, length: 2 }];
         let fit_dv = vec![DataViewImage { owner: 3, buffer: 1, offset: 4, size: 4 }];
         assert!(check_image_slot_bounds(
             &[], &[], &[], &[], &[], &[], &buf, &fit_view, &fit_dv, &LangRows::EMPTY, &[], 0, &sym, 4, 64
-        )
+        , &[])
         .is_ok());
     }
 
@@ -2861,6 +2948,60 @@ mod tests {
             },
         )];
         assert!(decode_intl(&encode_intl(&t)).is_err(), "segment end past units");
+        // Overlapping ranges (review): a start must equal the previous
+        // END — the pre-review check compared previous STARTS, so
+        // (0,2),(1,3) decoded silently.
+        let mut t = IntlTables::default();
+        t.segments = vec![(
+            1,
+            SegmentsData {
+                units: vec![104, 105, 106],
+                segments: vec![(0, 2, false), (1, 3, false)],
+                granularity: "word".into(),
+            },
+        )];
+        assert!(decode_intl(&encode_intl(&t)).is_err(), "overlapping segments");
+        // Boundaries that do not COVER the input (ICU always emits the
+        // final boundary at the unit count).
+        let mut t = IntlTables::default();
+        t.segments = vec![(
+            1,
+            SegmentsData {
+                units: vec![104, 105, 106],
+                segments: vec![(0, 2, false)],
+                granularity: "word".into(),
+            },
+        )];
+        assert!(decode_intl(&encode_intl(&t)).is_err(), "non-covering segments");
+        // Unicode-extension keys: the writer emits BTreeMap order, so
+        // unordered or duplicated keys are non-canonical crafted bytes
+        // (review: silently re-canonicalizing broke byte identity).
+        let mut unicode = std::collections::BTreeMap::new();
+        unicode.insert("ca".to_string(), "vx".to_string());
+        unicode.insert("nu".to_string(), "wy".to_string());
+        let mut t = IntlTables::default();
+        t.locales = vec![(
+            1,
+            ironhorse_vm::LocaleData {
+                tag: "en".into(),
+                language: "en".into(),
+                script: None,
+                region: None,
+                variants: vec![],
+                unicode,
+            },
+        )];
+        let canonical = encode_intl(&t);
+        let ca = canonical.windows(2).position(|w| w == b"ca").unwrap();
+        let nu = canonical.windows(2).position(|w| w == b"nu").unwrap();
+        let mut swapped = canonical.clone();
+        swapped[ca..ca + 2].copy_from_slice(b"nu");
+        swapped[nu..nu + 2].copy_from_slice(b"ca");
+        assert!(decode_intl(&swapped).is_err(), "unordered unicode keys");
+        let mut duped = canonical.clone();
+        duped[nu..nu + 2].copy_from_slice(b"ca");
+        assert!(decode_intl(&duped).is_err(), "duplicate unicode keys");
+        assert_eq!(decode_intl(&canonical).unwrap(), t, "canonical order round-trips");
         // An unknown date-time component key is crafted bytes: the keys
         // are a closed engine set carried as statics.
         let mut t = IntlTables::default();
@@ -2918,7 +3059,7 @@ mod tests {
                 temporal: &EMPTY_TEMPORAL,
                 intl,
             };
-            check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &[], &[], &lang, &[], 0, &sym, 4, 64)
+            check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &[], &[], &lang, &[], 0, &sym, 4, 64, &[])
         };
         let segs = |owner: u32| {
             (
@@ -3010,7 +3151,7 @@ mod tests {
         let check = |rows: &[IteratorRow], colls: &[CollectionImage], names_len: usize| {
             check_image_slot_bounds(
                 &[], &[], &[], colls, &[], &[], &[], &[], &[], &LangRows::EMPTY, rows, names_len,
-                &sym, 4, 64,
+                &sym, 4, 64, &[],
             )
         };
         let coll = CollectionImage {
@@ -3062,7 +3203,7 @@ mod tests {
         // shape a reviewer actually crafted and reached a release panic
         // (or an abort) with. slot_count = 4, chunk_len = 64 throughout.
         let ok = |heap: &[Slot], stack: &[Slot]| {
-            check_image_slot_bounds(heap, stack, &[], &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64)
+            check_image_slot_bounds(heap, stack, &[], &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64, &[])
         };
         let refd = |i: u32| Slot::of(Kind::Reference, Payload::Reference(SlotIndex(i)));
 
@@ -3079,17 +3220,17 @@ mod tests {
 
         // --- the wave-4 arms, still enforced ---
         let bad_desc = [RegistryImage { key: b"k".to_vec(), descriptor: 9 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &bad_desc, &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &bad_desc, &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64, &[]).is_err());
         // A symbol-key descriptor beyond the arena is refused the same way.
         let bad_sym = SymbolKeyImage {
             next_id: u16::MAX - 1,
             pairs: vec![(u16::MAX, 4)],
         };
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &bad_sym, 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &bad_sym, 4, 64, &[]).is_err());
         let bad_owner = [ArrayImage { owner: 9, length: 0, items: vec![] }];
-        assert!(check_image_slot_bounds(&[], &[], &bad_owner, &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &bad_owner, &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64, &[]).is_err());
         let bad_ref = [ArrayImage { owner: 1, length: 1, items: vec![(0, refd(9))] }];
-        assert!(check_image_slot_bounds(&[], &[], &bad_ref, &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &bad_ref, &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64, &[]).is_err());
         // Collections were passed `&[]` in every wave-4 case, so that
         // whole branch never executed (wave 5, llvm-cov). Exercise both
         // the key and the value side.
@@ -3099,14 +3240,14 @@ mod tests {
             table_length: 0,
             entries: vec![(refd(9), Slot::undefined())],
         }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &bad_key, &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &bad_key, &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64, &[]).is_err());
         let bad_val = [CollectionImage {
             owner: 1,
             kind: 0,
             table_length: 0,
             entries: vec![(Slot::undefined(), refd(9))],
         }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &bad_val, &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64).is_err());
+        assert!(check_image_slot_bounds(&[], &[], &[], &bad_val, &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64, &[]).is_err());
 
         // --- in-bounds and NULL pass ---
         assert!(ok(&[refd(3)], &[refd(0)]).is_ok(), "in-bounds indices pass");
@@ -3116,6 +3257,50 @@ mod tests {
         );
         let good_chunk = Slot::of(Kind::String, Payload::String(ChunkOffset(8)));
         assert!(ok(&[good_chunk], &[]).is_ok(), "an in-range chunk offset passes");
+    }
+
+    /// Review findings 2+3 (free-record hygiene): a record on the free
+    /// list is opaque dead bytes — the sweep does not scrub it and
+    /// chunk compaction remaps MARKED slots only, so an honest post-GC
+    /// image legitimately holds freed records whose stale chunk
+    /// offsets and references sit outside the arenas. Refusing those
+    /// refuses honest machines. The dual: a side-table row whose OWNER
+    /// is free can only be crafted (the sweep drops rows keyed by
+    /// every index it frees), and restoring one would attach exotic
+    /// state to a slot a later allocation reuses.
+    #[test]
+    fn free_records_are_opaque_and_free_owners_are_refused() {
+        let sym = SymbolKeyImage::default();
+        let gate = |heap: &[Slot], errors: &[ErrorImage], free: &[u32]| {
+            check_image_slot_bounds(
+                heap, &[], &[], &[], &[], errors, &[], &[], &[], &LangRows::EMPTY, &[], 0, &sym,
+                4, 64, free,
+            )
+        };
+        // A stale chunk offset AND a dangling reference on freed
+        // records: opaque, accepted.
+        let stale_chunk = Slot::of(Kind::String, Payload::String(ChunkOffset(0xFFFF_0000)));
+        let stale_ref = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(9)));
+        assert!(
+            gate(&[Slot::undefined(), stale_chunk, stale_ref, Slot::undefined()], &[], &[1, 2]).is_ok(),
+            "freed records are opaque: stale bytes must not refuse an honest post-GC image"
+        );
+        // The SAME records live: refused (the wave-5 rule unchanged).
+        assert!(
+            gate(&[Slot::undefined(), stale_chunk, stale_ref, Slot::undefined()], &[], &[]).is_err(),
+            "live records keep the wave-5 refusals"
+        );
+        // A side-table row owned by a free slot: refused by name.
+        let row = [ErrorImage { owner: 1, name: "Error".to_string(), message: None }];
+        assert!(
+            matches!(
+                gate(&[Slot::undefined(); 4], &row, &[1]),
+                Err(SnapshotError::Corrupt("side table names a free slot"))
+            ),
+            "a free-owned side-table row can only be crafted"
+        );
+        // And the same row live-owned still passes.
+        assert!(gate(&[Slot::undefined(); 4], &row, &[]).is_ok());
     }
 
     /// Review wave 5: the declared `length` must cover the row's items.
@@ -3303,11 +3488,12 @@ mod tests {
         let scratch = slots.alloc(Slot::integer(0));
         slots.free(scratch);
 
-        let stack = vec![
-            Slot::of(Kind::Reference, Payload::Reference(inst_i)),
-            Slot::of(Kind::Closure, Payload::Reference(cell)),
-            Slot::of(Kind::String, Payload::String(hi)),
-        ];
+        // The stack is EMPTY: `read_machine` enforces quiescence (a
+        // populated STAC cannot come from an honest writer — review
+        // finding 5), and honest writers only ever persist between
+        // cranks. The heap graph above already exercises reference,
+        // closure, and string payload round-trips.
+        let stack: Vec<Slot> = Vec::new();
         let _ = closure;
 
         let img = MachineImage::from_arenas(
@@ -3361,7 +3547,8 @@ mod tests {
             slots: vec![Slot::integer(9)],
             slot_free: vec![],
             slot_live: 1,
-            stack: vec![Slot::boolean(true)],
+            // Empty by the quiescence gate (review finding 5).
+            stack: vec![],
             keys: vec!["k1".to_string(), "k2".to_string(), "".to_string()],
             names: vec!["Object".to_string(), "length".to_string()],
             symbols: SymbolKeyImage {

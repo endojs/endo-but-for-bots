@@ -616,7 +616,19 @@ impl SlotArena {
         // eager gate's rule: a payload offset sits above its 4-byte
         // header and inside the arena.
         let capacity = self.capacity() as u32;
-        for s in &records {
+        for (k, s) in records.iter().enumerate() {
+            // A record on the free list is OPAQUE dead bytes: the sweep
+            // does not scrub it and chunk compaction remaps MARKED
+            // slots only, so an honest post-GC store legitimately
+            // holds freed records whose stale references and chunk
+            // offsets sit outside the current arenas. Nothing reads
+            // them before `alloc` overwrites (and re-faults) the page,
+            // so validating them here refuses honest stores (review
+            // finding 2 — the lazy half; the eager gate skips the same
+            // records).
+            if self.is_free((start + k) as u32) {
+                continue;
+            }
             s.each_ref_slot(|r| {
                 assert!(
                     r.is_null() || r.0 < capacity,
