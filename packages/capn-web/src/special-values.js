@@ -1,4 +1,3 @@
-/* global Buffer */
 // Special-value codecs for the Cap'n Web wire format.
 //
 // Atomic values that cannot be represented directly in JSON are wrapped in a
@@ -6,6 +5,8 @@
 // See https://github.com/cloudflare/capnweb/blob/main/protocol.md
 
 import harden from '@endo/harden';
+import { decodeBase64NoPadding } from '@endo/base64/no-padding-decode';
+import { encodeBase64NoPadding } from '@endo/base64/no-padding-encode';
 
 const { isNaN } = Number;
 
@@ -32,50 +33,20 @@ const ERROR_TYPES = harden(
 const hasAggregateError = typeof AggregateError !== 'undefined';
 
 /**
- * Encode a Uint8Array to base64.  Works in both browsers (btoa) and Node.
+ * Encode a Uint8Array to base64.  Delegates to `@endo/base64`, which is
+ * runtime-agnostic (no dependence on Node's `Buffer` or the browser `btoa`).
  *
  * @param {Uint8Array} bytes
  */
-export const bytesToBase64 = bytes => {
-  let base64;
-  if (typeof Buffer !== 'undefined') {
-    base64 = Buffer.from(
-      bytes.buffer,
-      bytes.byteOffset,
-      bytes.byteLength,
-    ).toString('base64');
-  } else {
-    let binary = '';
-    for (let i = 0; i < bytes.length; i += 1) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    // eslint-disable-next-line no-undef
-    base64 = btoa(binary);
-  }
-  // Match cloudflare/capnweb, which emits standard-alphabet base64 with the
-  // trailing `=` padding omitted.  Our decoder (and capnweb's) accept the
-  // padded or unpadded form, but omitting it keeps the wire byte-identical.
-  return base64.replace(/=+$/, '');
-};
+export const bytesToBase64 = bytes => encodeBase64NoPadding(bytes);
 
 /**
  * Decode a base64 string (with or without padding) into a Uint8Array.
+ * Delegates to `@endo/base64` for runtime-agnostic decoding.
  *
  * @param {string} base64
  */
-export const base64ToBytes = base64 => {
-  if (typeof Buffer !== 'undefined') {
-    const buffer = Buffer.from(base64, 'base64');
-    return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-  }
-  // eslint-disable-next-line no-undef
-  const binary = atob(base64);
-  const out = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    out[i] = binary.charCodeAt(i);
-  }
-  return out;
-};
+export const base64ToBytes = base64 => decodeBase64NoPadding(base64);
 
 /**
  * Encode an `Error` to capnweb's `["error", name, message, stack?, props?]`
