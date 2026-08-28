@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-02-14 |
-| **Updated** | 2026-07-29 |
+| **Updated** | 2026-08-28 |
 | **Author** | Kris Kowal (prompted), Kriscendo Bot (prompted) |
 | **Status** | In Progress |
 
@@ -51,13 +51,22 @@ flowchart LR
 ```
 
 Hints retain the OCapN locator's string-to-string table so they remain
-serializable by the existing codec. A key is `<transport-scheme>:<field>`.
-The initial registered schemes are:
+serializable by the existing codec. **There is exactly one hint per transport
+protocol: the hint key is the transport scheme, and its value is the single
+connection string a peer needs to dial that carrier.** An earlier draft of this
+design split the TCP carrier across two keys (`tcp+cbor:host`, `tcp+cbor:port`);
+that is an aberration — separate host and port hints for one protocol — and is
+superseded here (Kris Kowal,
+[issue #58](https://github.com/kriscendobot/garden/issues/58#issuecomment-5447781817),
+2026-08-28: "Separate hints for the TCP host and port is an aberration. There
+should only be one hint per transport protocol"). The `<scheme>:<field>`
+sub-keying is dropped: the key is the bare scheme. The initial registered
+schemes are:
 
-| Carrier | Scheme | Published hints | Framing |
-|---|---|---|---|
-| TCP | `tcp+cbor` | `tcp+cbor:host`, `tcp+cbor:port` | One definite-length CBOR byte string per Noise handshake or ciphertext frame |
-| WebSocket | `ws` | `ws:url` | One binary WebSocket message per Noise handshake or ciphertext frame |
+| Carrier | Scheme | Published hint | Value | Framing |
+|---|---|---|---|---|
+| TCP | `tcp+cbor` | `tcp+cbor` | `host:port` authority (IPv6 literals bracketed, e.g. `[::1]:3469`) | One definite-length CBOR byte string per Noise handshake or ciphertext frame |
+| WebSocket | `ws` | `ws` | The `wss://…` / `ws://…` dial URL | One binary WebSocket message per Noise handshake or ciphertext frame |
 
 `tcp+cbor` is deliberately distinct from the current TCP netstring adapter:
 the scheme is a wire commitment, not a nickname. The TCP implementation uses
@@ -67,10 +76,11 @@ transport for which it has both a registered dial adapter and a complete hint
 set. It tries matching schemes in the caller-configured preference order; a
 failed dial closes its partial stream before the next eligible scheme is tried.
 
-Only one published endpoint per scheme is allowed in a location. Registering
-two `ws` listeners must fail rather than silently overwrite `ws:url`. A future
-multi-endpoint scheme needs an explicitly specified encoding, rather than an
-array smuggled into the string-only hints table.
+Only one published endpoint per scheme is allowed in a location — which the
+one-hint-per-transport rule makes structural, since a scheme owns a single key.
+Registering two `ws` listeners must fail rather than silently overwrite the `ws`
+hint. A future multi-endpoint scheme needs an explicitly specified encoding,
+rather than an array smuggled into the string-only hints table.
 
 ## Target API
 
@@ -99,13 +109,12 @@ const wsListener = await network.listen(ws, {
 
 const location = network.locationFor(keyId);
 // location.hints === {
-//   'tcp+cbor:host': '127.0.0.1',
-//   'tcp+cbor:port': '3469',
-//   'ws:url': 'wss://peer.example/ocapn-cbor-np',
+//   'tcp+cbor': '127.0.0.1:3469',
+//   'ws': 'wss://peer.example/ocapn-cbor-np',
 // }
 
-tcpListener.close(); // withdraws only tcp+cbor hints and listener
-wsListener.close(); // withdraws only ws hints and listener
+tcpListener.close(); // withdraws only the tcp+cbor hint and listener
+wsListener.close(); // withdraws only the ws hint and listener
 ```
 
 The transport and listener contracts are:
@@ -113,7 +122,7 @@ The transport and listener contracts are:
 ```ts
 interface OcapnNoiseTransport<ListenOptions> {
   readonly scheme: string;
-  connect(hints: Record<string, string>): Promise<ByteStream>;
+  connect(hint: string): Promise<ByteStream>;
   listen(
     options: ListenOptions,
     accept: (stream: ByteStream) => void,
@@ -122,7 +131,7 @@ interface OcapnNoiseTransport<ListenOptions> {
 }
 
 interface TransportListener {
-  readonly hints: Record<string, string>; // unprefixed and complete
+  readonly hint: string; // the transport's single connection string
   close(): void;
 }
 
@@ -136,7 +145,8 @@ interface OcapnNoiseNetwork {
 }
 ```
 
-The network prefixes and validates `listener.hints` before publication. A
+The network keys each `listener.hint` under its transport's scheme and
+validates it before publication. A
 listener is live only after binding succeeds; a failed bind changes neither the
 registered adapters nor any advertised location. `removeTransport` fails while
 that transport owns a listener. `shutdown` closes every listener, then every
