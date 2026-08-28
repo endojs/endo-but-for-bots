@@ -59,6 +59,36 @@ fn a_heap_holding_a_guest_accessor_refuses_to_persist() {
     );
 }
 
+/// The boot-seed exemption (the Intl carry, store schema 12) admits
+/// EXACTLY the seeded `proto_accessors` entry — the `Intl.NumberFormat`
+/// `format` getter, whose side-table pair `restore_snapshot_state`
+/// re-derives from boot structure. A guest REDEFINITION at the very
+/// same key stores a different getter, which restore could not tell
+/// from the seed once the live table is gone — so it must keep
+/// refusing.
+#[test]
+fn a_redefined_seed_accessor_still_refuses_to_persist() {
+    refuses(
+        "var t = 0; \
+         Object.defineProperty(Intl.NumberFormat.prototype, 'format', \
+           { get: function () { return 1; }, configurable: true }); \
+         t = 7; 0;",
+        "accessors",
+    );
+}
+
+/// And the exemption's positive half: a heap whose only accessor row IS
+/// the boot seed (any Intl-referencing program) persists. Before the
+/// exemption every Intl-touching heap refused, which masked the Intl
+/// record rows entirely.
+#[test]
+fn a_heap_holding_only_the_boot_seed_accessor_persists() {
+    let mut store = MemoryStore::new();
+    begin_store_session(machine_running("var t = 0; t = typeof Intl; 0;"), &sig(), &mut store)
+        .map_err(|(_, e)| e)
+        .expect("the boot-seeded accessor is re-derived at restore, not lost");
+}
+
 /// A COLLECTED instance is no longer a hazard — the witness asks what
 /// the heap holds, not what it ever held (the mint-counter lesson).
 #[test]

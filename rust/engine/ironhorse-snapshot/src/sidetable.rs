@@ -207,7 +207,10 @@ pub enum SideTable {
     ErrorData,
     /// `accessors` — per-instance getter/setter function slots.
     /// Pending, dependency-gated on the `functions` row exactly as
-    /// `Proxies` is (getters/setters are guest functions).
+    /// `Proxies` is (getters/setters are guest functions). The one
+    /// boot-derived entry — the seeded `Intl.NumberFormat` `format`
+    /// getter — is exempt from the persist gate and re-derived at
+    /// restore from boot structure (`rebuild_boot_accessors`).
     Accessors,
     /// `wrapper_data` — per-instance primitive-wrapper boxed value.
     WrapperData,
@@ -294,13 +297,31 @@ pub enum SideTable {
     /// recorded resources and dispose callbacks. Per-instance runtime
     /// state; a suspended stack's pending disposals do not yet travel.
     DisposableStacks,
-    /// The Intl per-instance record tables (`locales`, `collators`,
-    /// `list_formats`, `plural_rules`, `number_formats`, `segmenters`,
-    /// `segments`, `segment_iterators`, `date_time_formats`) plus the
-    /// bound-function link tables (`collator_compare_functions`,
-    /// `number_format_bound_functions`). Internal-slot records keyed by
-    /// branded instance slots, none arena-recoverable.
+    /// The nine Intl per-instance record tables (`locales`,
+    /// `collators`, `list_formats`, `plural_rules`, `number_formats`,
+    /// `segmenters`, `segments`, `segment_iterators`,
+    /// `date_time_formats`): resolved-options records keyed by branded
+    /// instance slots — pure numeric/string data. Serialized in the
+    /// `INTL` atom / small-state intl section (store schema 12),
+    /// owner-ascending; a segment iterator's cross-reference must name
+    /// a covering segments row, and its consuming natives are natives
+    /// on rooted boot structure, so a resumed instance WORKS
+    /// (`intl_carry.rs`). The bound-function LINKS split into
+    /// [`SideTable::IntlBoundFunctions`] below.
     IntlRecords,
+    /// The Intl bound-function link tables
+    /// (`collator_compare_functions`, `number_format_bound_functions`)
+    /// and the `NumberFormatData::bound_format` cache they mirror. A
+    /// minted bound compare/format function IS a `functions`
+    /// (`FuncInfo`) row — `alloc_method` creates one per mint — so the
+    /// links are dependency-gated on the `functions` carry exactly as
+    /// `Proxies`/`Accessors` are. Deliberately DROPPED at the
+    /// boundary, not refused: both getters re-mint on a cache miss, so
+    /// an instance-held collator/format answers identically after
+    /// resume (first-access behavior); only a guest that held the
+    /// bound function ITSELF degrades, exactly as every held guest
+    /// function does today.
+    IntlBoundFunctions,
     /// `code_segments` + `func_segments` — the dynamic-code segment buffer
     /// (the `eval`/dynamic-`Function` source bridge) and the function→
     /// segment index. No atom carries crank or segment bytecode, so a heap
@@ -336,6 +357,18 @@ pub enum SideTable {
     /// `SYMB` atom (2026-08-26; formerly the honest-`Pending` intern gap
     /// that made intern-holding machines refuse to persist).
     SymbolKeyIds,
+    /// `installed_names_len` — the installed-names floor (wave-6
+    /// W6-7): partial install passes re-consider only ids ABOVE it, so
+    /// names interned DURING an install pass (Intl member keys, the
+    /// `format` accessor key) stay lazily installable by a later
+    /// growing relink. Real dynamic state: serialized in the `NFLR`
+    /// atom / small-state name-floor section (store schema 12; emitted
+    /// only when it differs from the table length, the conservative
+    /// default a floor-less restore assumes). Without it a resumed
+    /// machine floored at the full table and could never install such
+    /// a name — the `ListFormat.prototype.format` divergence
+    /// (`intl_carry.rs`).
+    NameFloor,
     /// The module records/maps (`ironhorse_vm::module::ModuleGraph`): a
     /// worker that has imported modules carries linked module records and
     /// namespace objects.
@@ -388,11 +421,13 @@ impl SideTable {
         SideTable::PrivateElements,
         SideTable::DisposableStacks,
         SideTable::IntlRecords,
+        SideTable::IntlBoundFunctions,
         SideTable::Segments,
         SideTable::CtorPrototype,
         SideTable::SymbolRegistry,
         SideTable::SymbolTables,
         SideTable::SymbolKeyIds,
+        SideTable::NameFloor,
         SideTable::Modules,
         SideTable::HardenState,
         SideTable::Meter,
@@ -469,6 +504,14 @@ impl SideTable {
             SideTable::CallStack => ("call_stack", EmptyAtBoundary),
             SideTable::Jumps => ("jumps", EmptyAtBoundary),
             SideTable::ErrorData => ("error_data", Serialized),
+            // One entry class is EXEMPT from the refuse-on-hold gate and
+            // re-derived at restore: an entry that IS a boot
+            // `proto_accessors` seed (the `Intl.NumberFormat` `format`
+            // getter) — its getter is a boot-minted native, so
+            // `Interp::rebuild_boot_accessors` reinstates the pair from
+            // boot structure (the `RebuiltAtRestore` pattern inside a
+            // Pending row). Guest accessors — and a guest REDEFINITION at
+            // the seed key — still refuse (`pending_row_gates.rs`).
             SideTable::Accessors => ("accessors", Pending),
             SideTable::WrapperData => ("wrapper_data", Serialized),
             // Ledger G1 (2026-08-24): the two BULK tables travel in the
@@ -502,7 +545,19 @@ impl SideTable {
             SideTable::AsyncGenerators => ("async_generators/async_gen_run_stack", Pending),
             SideTable::PrivateElements => ("private_values/private_accessors", Pending),
             SideTable::DisposableStacks => ("disposable_stacks", Pending),
-            SideTable::IntlRecords => ("locales/collators/…/date_time_formats + bound-fn links", Pending),
+            // The Intl DATA record tables (`INTL`, store schema 12): nine
+            // resolved-options tables, owner-ascending, restored via
+            // `Interp::restore_intl` with segment geometry and the
+            // iterator cross-reference validated at decode, bounds, and
+            // restore. Locks: the `intl_carry.rs` twins (memory, file,
+            // lazy, blob — a resumed segment iterator CONTINUES its walk).
+            SideTable::IntlRecords => ("locales/collators/…/date_time_formats", Serialized),
+            // The bound-fn links are `functions`-gated (a minted bound
+            // function is a FuncInfo row) and boundary-DROPPED, not
+            // refused: the getters re-mint on a cache miss.
+            SideTable::IntlBoundFunctions => {
+                ("collator_compare_functions/number_format_bound_functions", Pending)
+            }
             // Pending here is load-bearing beyond the missing atom: the
             // store gates REFUSE a heap holding a live segment-backed
             // function (`DynamicSegmentsUnsupported`), fail-closed instead
@@ -516,6 +571,11 @@ impl SideTable {
             // side-table field at all, so the state rides the HEAP atom
             // structurally and a resumed hardened graph stays hardened.
             SideTable::HardenState => ("harden slot flags (no side table)", InArena),
+            // The installed-names floor (`NFLR`, store schema 12): the
+            // W6-7 register travels so a resumed machine's partial
+            // install passes re-consider exactly the ids the live one's
+            // would (`intl_carry.rs`, the lazy-install twins).
+            SideTable::NameFloor => ("installed_names_len", Serialized),
             // The metering state — carried by the METR atom (child 3).
             SideTable::Meter => ("meter", Serialized),
         };
@@ -559,7 +619,7 @@ mod tests {
     fn all_is_exhaustive() {
         // Count of variants, kept beside the enum. Bump when a variant is
         // added — the assertion below then forces the ALL entry too.
-        const VARIANT_COUNT: usize = 38;
+        const VARIANT_COUNT: usize = 40;
         assert_eq!(SideTable::ALL.len(), VARIANT_COUNT);
 
         // No duplicates: each field name appears once.
@@ -626,7 +686,7 @@ mod tests {
             "number_format_bound_functions", "code_segments", "func_segments",
             "ctor_prototype", "symbol_registry", "symbol_registry_keys",
             "symbol_names", "symbol_ids", "symbol_key_ids", "next_symbol_key_id",
-            "meter",
+            "installed_names_len", "meter",
         ];
         const ARENAS: &[&str] = &["slots", "chunks", "stack"];
         const SATELLITES: &[&str] = &[
@@ -653,7 +713,7 @@ mod tests {
             "temporal_now_object", "math_object", "static_str", "default_keys",
             "well_known_symbols", "proto_methods", "proto_data", "proto_accessors",
             "proto_value_data", "string_iterator_method", "async_iterator_identity",
-            "installed_names_len", "object_proto", "function_proto", "array_proto",
+            "object_proto", "function_proto", "array_proto",
             "map_proto", "set_proto", "weakmap_proto", "weakset_proto",
             "arraybuffer_proto", "dataview_proto", "array_iterator_proto",
             "string_proto", "number_proto", "symbol_proto", "promise_proto",
@@ -730,6 +790,12 @@ mod tests {
         assert!(!pending.contains(&SideTable::WrapperData));
         assert!(!pending.contains(&SideTable::RegExps));
         assert!(!pending.contains(&SideTable::TemporalRecords));
+        // The schema-12 Intl carry: the nine DATA record tables and the
+        // installed-names floor graduated; the bound-fn links split
+        // into their own functions-gated row.
+        assert!(!pending.contains(&SideTable::IntlRecords));
+        assert!(!pending.contains(&SideTable::NameFloor));
+        assert!(pending.contains(&SideTable::IntlBoundFunctions));
         // The quiescence-gated run stacks, call chain, catch chain, and
         // microtask queue are EmptyAtBoundary, not pending: no atom is
         // ever needed for state the gates prove empty.

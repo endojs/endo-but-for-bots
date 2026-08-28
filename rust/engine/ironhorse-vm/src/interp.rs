@@ -4406,106 +4406,106 @@ struct StaticStrings {
 // libc, environment variables, or a dynamically-updated database.
 const INTL_DATA_VERSION: &str = "ironhorse-intl-2026a";
 
-#[derive(Clone, Debug)]
-struct LocaleData {
-    tag: String,
-    language: String,
-    script: Option<String>,
-    region: Option<String>,
-    variants: Vec<String>,
-    unicode: std::collections::BTreeMap<String, String>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocaleData {
+    pub tag: String,
+    pub language: String,
+    pub script: Option<String>,
+    pub region: Option<String>,
+    pub variants: Vec<String>,
+    pub unicode: std::collections::BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug)]
-struct CollatorData {
-    locale: String,
-    usage: String,
-    sensitivity: String,
-    collation: String,
-    numeric: bool,
-    case_first: String,
-    ignore_punctuation: bool,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CollatorData {
+    pub locale: String,
+    pub usage: String,
+    pub sensitivity: String,
+    pub collation: String,
+    pub numeric: bool,
+    pub case_first: String,
+    pub ignore_punctuation: bool,
 }
 
-#[derive(Clone, Debug)]
-struct ListFormatData {
-    locale: String,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListFormatData {
+    pub locale: String,
     /// `conjunction` | `disjunction` | `unit`
-    kind: String,
+    pub kind: String,
     /// `long` | `short` | `narrow`
-    style: String,
+    pub style: String,
 }
 
-#[derive(Clone, Debug)]
-struct PluralRulesData {
-    locale: String,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluralRulesData {
+    pub locale: String,
     /// `cardinal` | `ordinal`
-    kind: String,
+    pub kind: String,
     /// `standard` | `scientific` | `engineering` | `compact`
-    notation: String,
-    minimum_integer_digits: u32,
-    minimum_fraction_digits: u32,
-    maximum_fraction_digits: u32,
-    minimum_significant_digits: Option<u32>,
-    maximum_significant_digits: Option<u32>,
+    pub notation: String,
+    pub minimum_integer_digits: u32,
+    pub minimum_fraction_digits: u32,
+    pub maximum_fraction_digits: u32,
+    pub minimum_significant_digits: Option<u32>,
+    pub maximum_significant_digits: Option<u32>,
     /// `fractionDigits` | `significantDigits` | `morePrecision` | `lessPrecision`
-    rounding_type: String,
+    pub rounding_type: String,
     /// `auto` | `morePrecision` | `lessPrecision`
-    rounding_priority: String,
-    rounding_mode: String,
-    rounding_increment: u32,
+    pub rounding_priority: String,
+    pub rounding_mode: String,
+    pub rounding_increment: u32,
     /// `auto` | `stripIfInteger`
-    trailing_zero_display: String,
+    pub trailing_zero_display: String,
 }
 
 /// The resolved internal slots of an `Intl.NumberFormat`. The digit-option
 /// fields mirror `PluralRulesData` (both are populated by
 /// `set_number_digit_options`); the remaining fields carry the
 /// style/currency/unit/notation/sign/grouping resolution.
-#[derive(Clone, Debug)]
-struct NumberFormatData {
-    locale: String,
-    numbering_system: String,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NumberFormatData {
+    pub locale: String,
+    pub numbering_system: String,
     /// `decimal` | `percent` | `currency` | `unit`
-    style: String,
+    pub style: String,
     /// `standard` | `scientific` | `engineering` | `compact`
-    notation: String,
+    pub notation: String,
     /// `short` | `long`
-    compact_display: String,
+    pub compact_display: String,
     /// `auto` | `always` | `never` | `exceptZero` | `negative`
-    sign_display: String,
+    pub sign_display: String,
     /// `always` | `auto` | `min2` | `false`
-    use_grouping: String,
-    currency: Option<String>,
+    pub use_grouping: String,
+    pub currency: Option<String>,
     /// `symbol` | `narrowSymbol` | `code` | `name`
-    currency_display: String,
+    pub currency_display: String,
     /// `standard` | `accounting`
-    currency_sign: String,
-    unit: Option<String>,
+    pub currency_sign: String,
+    pub unit: Option<String>,
     /// `short` | `narrow` | `long`
-    unit_display: String,
-    minimum_integer_digits: u32,
-    minimum_fraction_digits: u32,
-    maximum_fraction_digits: u32,
-    minimum_significant_digits: Option<u32>,
-    maximum_significant_digits: Option<u32>,
-    rounding_type: String,
-    rounding_priority: String,
-    rounding_mode: String,
-    rounding_increment: u32,
-    trailing_zero_display: String,
+    pub unit_display: String,
+    pub minimum_integer_digits: u32,
+    pub minimum_fraction_digits: u32,
+    pub maximum_fraction_digits: u32,
+    pub minimum_significant_digits: Option<u32>,
+    pub maximum_significant_digits: Option<u32>,
+    pub rounding_type: String,
+    pub rounding_priority: String,
+    pub rounding_mode: String,
+    pub rounding_increment: u32,
+    pub trailing_zero_display: String,
     /// The lazily-created, cached `[[BoundFormat]]` function (the `format`
     /// getter returns the same function on every read). Reserved for the
     /// accessor-getter follow-up; the current `format` is a plain method.
     #[allow(dead_code)]
-    bound_format: Option<crate::value::SlotIndex>,
+    pub bound_format: Option<crate::value::SlotIndex>,
 }
 
-#[derive(Clone, Debug)]
-struct SegmenterData {
-    locale: String,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SegmenterData {
+    pub locale: String,
     /// `grapheme` | `word` | `sentence`
-    granularity: String,
+    pub granularity: String,
 }
 
 /// One `%Segments%` object (the result of `segmenter.segment(string)`): the
@@ -4514,42 +4514,105 @@ struct SegmenterData {
 /// pinned `icu_segmenter` Unicode data, so precomputing the whole list at
 /// `segment()` time is equivalent to the spec's lazy FindBoundary and lets both
 /// iteration and `containing` share one immutable result.
-#[derive(Clone, Debug)]
-struct SegmentsData {
-    units: Vec<u16>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SegmentsData {
+    pub units: Vec<u16>,
     /// Each `(start, end, is_word_like)` in UTF-16 code-unit offsets.
-    segments: Vec<(usize, usize, bool)>,
+    pub segments: Vec<(usize, usize, bool)>,
     /// `grapheme` | `word` | `sentence` — only `word` exposes `isWordLike`.
-    granularity: String,
+    pub granularity: String,
 }
 
 /// One `%SegmentIterator%` — a cursor into a `%Segments%` object's precomputed
 /// list (the segment index to yield next).
-#[derive(Clone, Debug)]
-struct SegmentIteratorData {
-    segments_inst: crate::value::SlotIndex,
-    pos: usize,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SegmentIteratorData {
+    pub segments_inst: crate::value::SlotIndex,
+    pub pos: usize,
 }
 
 /// One `Intl.DateTimeFormat` object's resolved options. The frozen profile
 /// carries the proleptic Gregorian calendar and a fixed offset time-zone
 /// table; formatting is deterministic and host-independent.
-#[derive(Clone, Debug)]
-struct DateTimeFormatData {
-    locale: String,
-    calendar: String,
-    numbering_system: String,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DateTimeFormatData {
+    pub locale: String,
+    pub calendar: String,
+    pub numbering_system: String,
     /// The resolved IANA time-zone name (canonicalized).
-    time_zone: String,
+    pub time_zone: String,
     /// Minutes east of UTC for the resolved zone (the frozen table is
     /// fixed-offset: UTC and the `Etc/GMT±N` / numeric-offset zones).
-    offset_minutes: i32,
-    hour_cycle: Option<String>,
+    pub offset_minutes: i32,
+    pub hour_cycle: Option<String>,
     /// Each present component's resolved representation, in resolvedOptions
     /// enumeration order. `(key, value)` e.g. `("year","numeric")`.
-    components: Vec<(&'static str, String)>,
-    date_style: Option<String>,
-    time_style: Option<String>,
+    pub components: Vec<(&'static str, String)>,
+    pub date_style: Option<String>,
+    pub time_style: Option<String>,
+}
+
+/// The closed set of `Intl.DateTimeFormat` component keys
+/// ([`DateTimeFormatData::components`] holds `&'static str` keys from
+/// exactly this list). A snapshot decoder maps persisted key strings
+/// back onto these statics and refuses anything else — crafted bytes,
+/// never engine output.
+pub fn dtf_component_key_static(name: &str) -> Option<&'static str> {
+    for key in [
+        "weekday",
+        "era",
+        "year",
+        "month",
+        "day",
+        "dayPeriod",
+        "hour",
+        "minute",
+        "second",
+        "fractionalSecondDigits",
+        "timeZoneName",
+    ] {
+        if key == name {
+            return Some(key);
+        }
+    }
+    None
+}
+
+/// The nine Intl DATA record tables of one machine, each ascending by
+/// owning slot — the ledger `IntlRecords` row as
+/// [`Interp::intl_snapshot`] emits it and [`Interp::restore_intl`]
+/// reinstates it. Pure resolved-options data; the bound-function link
+/// satellites (`collator_compare_functions`,
+/// `number_format_bound_functions`) are deliberately absent — a minted
+/// bound function is a `functions` (`FuncInfo`) row, the Pending
+/// dependency — and both getters re-mint on a cache miss, so dropping
+/// the caches at the boundary is first-access behavior, not loss.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IntlTables {
+    pub locales: Vec<(u32, LocaleData)>,
+    pub collators: Vec<(u32, CollatorData)>,
+    pub list_formats: Vec<(u32, ListFormatData)>,
+    pub plural_rules: Vec<(u32, PluralRulesData)>,
+    pub number_formats: Vec<(u32, NumberFormatData)>,
+    pub segmenters: Vec<(u32, SegmenterData)>,
+    pub segments: Vec<(u32, SegmentsData)>,
+    pub segment_iterators: Vec<(u32, SegmentIteratorData)>,
+    pub date_time_formats: Vec<(u32, DateTimeFormatData)>,
+}
+
+impl IntlTables {
+    /// Whether every table is empty (the atom is emitted only when not).
+    pub fn is_empty(&self) -> bool {
+        self.locales.is_empty()
+            && self.collators.is_empty()
+            && self.list_formats.is_empty()
+            && self.plural_rules.is_empty()
+            && self.number_formats.is_empty()
+            && self.segmenters.is_empty()
+            && self.segments.is_empty()
+            && self.segment_iterators.is_empty()
+            && self.date_time_formats.is_empty()
+    }
 }
 
 /// A suspended activation: the caller's scope and resume point, saved by
@@ -7893,12 +7956,16 @@ impl Interp {
         // (Consumes `symbol_names`, so this both sets the forward table and
         // rebuilds the rest.)
         self.bind_program_symbols(&symbol_names);
-        // The installed-names floor (wave-6 W6-7) restores to the FULL
-        // restored table: every restored name's binding state — an
-        // install or a guest's edit of it — lives in the restored heap,
-        // so no later relink's partial install pass may touch ids at or
-        // below it (a fresh-boot floor of zero would re-admit every id
-        // and re-run the installs against restored guest edits).
+        // The installed-names floor (wave-6 W6-7) DEFAULTS to the full
+        // restored table — the conservative choice when no floor
+        // traveled (a pre-schema-12 store or container): no partial
+        // install pass may then touch any restored id, which can never
+        // clobber or resurrect a guest edit. When the snapshot carries
+        // the live floor (the `NFLR` atom / small-state section), the
+        // resume path narrows this via
+        // [`Self::restore_installed_names_floor`], so names interned
+        // DURING the last install pass stay lazily installable exactly
+        // as they were live (the `ListFormat.prototype.format` case).
         self.installed_names_len = self.symbol_names.len();
         // GlobalProps ledger row: the global object's own-property slots
         // (intrinsic bindings and runtime-materialized `var`/sloppy globals
@@ -7908,6 +7975,11 @@ impl Interp {
         // state, and boot leaves it empty. Rebuild it by walking the restored
         // chain, so a global created in an earlier crank resolves after resume.
         self.rebuild_global_props();
+        // Accessors ledger row, the boot-seeded half: a `proto_accessors`
+        // install's PROPERTY slot travels in the arena but its side-table
+        // getter entry does not; re-derive it from the boot seeds (the
+        // persist gate admits no other entry at a seed key).
+        self.rebuild_boot_accessors();
     }
 
     /// Relink a later crank COMPILED AGAINST ITS OWN symbol table onto
@@ -7989,6 +8061,33 @@ impl Interp {
             self.install_intrinsic_bindings(&extended, false, move |id| (id as usize) > floor);
         }
         Ok(remapped)
+    }
+
+    /// The installed-names floor (wave-6 W6-7): ids at or below it keep
+    /// their existing binding on partial install passes; ids above it —
+    /// names interned during an install pass (the Intl member keys, the
+    /// `format` accessor key) or by the guest — are re-considered,
+    /// create-only, by the next growing relink. Real machine state: a
+    /// resumed machine must adopt the live machine's floor, not the
+    /// restored table's length, or a boot name interned during the last
+    /// install pass can never lazily install after resume (the
+    /// `ListFormat.prototype.format` divergence the Intl carry twins
+    /// caught — the continuous machine installs it at its next growing
+    /// relink; a full-table floor refuses it forever).
+    pub fn installed_names_floor(&self) -> u32 {
+        self.installed_names_len as u32
+    }
+
+    /// Adopt a persisted installed-names floor (the `NFLR` atom /
+    /// small-state section). `false` — failing the caller's decode
+    /// closed — for a floor past the restored name table, which honest
+    /// suspension cannot produce.
+    pub fn restore_installed_names_floor(&mut self, floor: u32) -> bool {
+        if floor as usize > self.symbol_names.len() {
+            return false;
+        }
+        self.installed_names_len = floor as usize;
+        true
     }
 
     /// The first id past this machine's name table. Since the id-space
@@ -8164,18 +8263,87 @@ impl Interp {
     /// (`error_data` and the typed-array family started here and
     /// GRADUATED: they travel in the `ERRD` and `ABUF`/`TARR`/`DVIW`
     /// atoms now.)
+    /// One accessor class is exempt: an entry that IS a boot
+    /// [`Self::proto_accessors`] seed — same `(proto, id)` key, the
+    /// seed's own getter, no setter (today: the `Intl.NumberFormat`
+    /// `format` getter, installed on first `Intl` reference). Its
+    /// getter is a boot-minted native whose `FuncInfo` lives on every
+    /// fresh boot, so [`Self::restore_snapshot_state`] re-derives the
+    /// entry exactly ([`Self::rebuild_boot_accessors`]) — the
+    /// `RebuiltAtRestore` pattern, not a carry. A guest REDEFINITION
+    /// at the seed key stores a different getter and still refuses.
     pub fn stored_unpersistable_row(&self) -> Option<&'static str> {
         if self.proxies.keys().any(|o| !self.slots.is_free_index(*o)) {
             return Some("proxies");
         }
-        if self
-            .accessors
-            .keys()
-            .any(|(o, _)| !self.slots.is_free_index(*o))
-        {
+        if self.accessors.iter().any(|((o, id), data)| {
+            !self.slots.is_free_index(*o) && !self.is_boot_seed_accessor(*o, *id, data)
+        }) {
             return Some("accessors");
         }
         None
+    }
+
+    /// Whether an `accessors` entry is exactly a boot
+    /// [`Self::proto_accessors`] seed: seed proto and interned seed
+    /// name as the key, the seed getter (by slot identity) as the
+    /// getter, and no setter.
+    fn is_boot_seed_accessor(
+        &self,
+        owner: crate::value::SlotIndex,
+        id: u16,
+        data: &AccessorData,
+    ) -> bool {
+        if data.set.is_some() {
+            return false;
+        }
+        let getter = match data.get {
+            Some(Slot {
+                value: Payload::Reference(g),
+                ..
+            }) => g,
+            _ => return false,
+        };
+        self.proto_accessors.iter().any(|&(proto, pname, seed, _)| {
+            proto == owner && seed == getter && self.symbol_ids.get(pname) == Some(&id)
+        })
+    }
+
+    /// Re-derive the boot-seeded prototype accessor entries after a
+    /// restore (the `RebuiltAtRestore` pattern, like
+    /// [`Self::rebuild_global_props`]): the accessor PROPERTY slot
+    /// travels in the arena, but its getter/setter pair lives in the
+    /// `accessors` side table, which does not. Every seed's getter is
+    /// a boot-minted native at a deterministic boot slot, so the entry
+    /// is a pure function of boot structure plus the restored arena —
+    /// and the persist gate refused any heap whose entry at a seed key
+    /// was NOT exactly the seed, so an accessor-flagged property at a
+    /// seed key can only mean the boot accessor. A guest deletion or
+    /// data-property redefinition leaves no accessor-flagged slot and
+    /// rebuilds nothing.
+    fn rebuild_boot_accessors(&mut self) {
+        let seeds = std::mem::take(&mut self.proto_accessors);
+        for &(proto, pname, getter, _) in &seeds {
+            let Some(&pid) = self.symbol_ids.get(pname) else {
+                continue;
+            };
+            let Some(p) = self.find_property(proto, pid) else {
+                continue;
+            };
+            if self.slots.get(p).flag & (XS_GETTER_FLAG | XS_SETTER_FLAG)
+                != (XS_GETTER_FLAG | XS_SETTER_FLAG)
+            {
+                continue;
+            }
+            self.accessors.insert(
+                (proto, pid),
+                AccessorData {
+                    get: Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
+                    set: None,
+                },
+            );
+        }
+        self.proto_accessors = seeds;
     }
 
     /// Quiescent snapshot of the `error_data` side table (ledger
@@ -8557,6 +8725,88 @@ impl Interp {
                 },
             );
         }
+        true
+    }
+
+    /// Quiescent snapshot of the nine Intl DATA record tables (ledger
+    /// `IntlRecords` row, the `INTL` atom), each ascending by owning
+    /// slot. The `NumberFormatData::bound_format` cache is STRIPPED to
+    /// `None` on the way out: the minted bound function is a
+    /// `functions` (`FuncInfo`) row that does not travel, and the
+    /// `format` getter re-mints on a cache miss, so a first
+    /// post-resume read behaves exactly like a first access. The
+    /// bound-function LINK tables ride the same reasoning and are not
+    /// emitted at all (see [`IntlTables`]).
+    pub fn intl_snapshot(&self) -> IntlTables {
+        fn sorted<T: Clone>(
+            m: &std::collections::HashMap<crate::value::SlotIndex, T>,
+        ) -> Vec<(u32, T)> {
+            let mut v: Vec<(u32, T)> = m.iter().map(|(o, r)| (o.0, r.clone())).collect();
+            v.sort_unstable_by_key(|(o, _)| *o);
+            v
+        }
+        let mut number_formats = sorted(&self.number_formats);
+        for (_, r) in &mut number_formats {
+            r.bound_format = None;
+        }
+        IntlTables {
+            locales: sorted(&self.locales),
+            collators: sorted(&self.collators),
+            list_formats: sorted(&self.list_formats),
+            plural_rules: sorted(&self.plural_rules),
+            number_formats,
+            segmenters: sorted(&self.segmenters),
+            segments: sorted(&self.segments),
+            segment_iterators: sorted(&self.segment_iterators),
+            date_time_formats: sorted(&self.date_time_formats),
+        }
+    }
+
+    /// Reinstate the nine Intl record tables. Returns `false` —
+    /// failing the caller's decode closed — for structure only crafted
+    /// bytes can hold: a segments record whose boundaries lie outside
+    /// its input (or out of order), or a segment iterator naming an
+    /// instance with no segments record or a cursor past its list.
+    /// Unrecognized option STRINGS are not refused: every consuming
+    /// match has a fallback arm, so the worst a forged string yields
+    /// is a wrong rendering, never unsafety (`forbid(unsafe_code)`).
+    pub fn restore_intl(&mut self, t: IntlTables) -> bool {
+        for (_, r) in &t.segments {
+            let mut prev = 0usize;
+            for &(start, end, _) in &r.segments {
+                if start < prev || end < start || end > r.units.len() {
+                    return false;
+                }
+                prev = start;
+            }
+        }
+        for (_, r) in &t.segment_iterators {
+            match t.segments.binary_search_by_key(&r.segments_inst.0, |(o, _)| *o) {
+                Ok(k) => {
+                    if r.pos > t.segments[k].1.segments.len() {
+                        return false;
+                    }
+                }
+                Err(_) => return false,
+            }
+        }
+        fn install<T>(
+            m: &mut std::collections::HashMap<crate::value::SlotIndex, T>,
+            rows: Vec<(u32, T)>,
+        ) {
+            for (owner, r) in rows {
+                m.insert(crate::value::SlotIndex(owner), r);
+            }
+        }
+        install(&mut self.locales, t.locales);
+        install(&mut self.collators, t.collators);
+        install(&mut self.list_formats, t.list_formats);
+        install(&mut self.plural_rules, t.plural_rules);
+        install(&mut self.number_formats, t.number_formats);
+        install(&mut self.segmenters, t.segmenters);
+        install(&mut self.segments, t.segments);
+        install(&mut self.segment_iterators, t.segment_iterators);
+        install(&mut self.date_time_formats, t.date_time_formats);
         true
     }
 

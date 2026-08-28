@@ -92,7 +92,22 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
 
     assert_eq!(
         hex_sha256(&session.machine().write_snapshot(&sig).expect("quiescent machine snapshots")),
-        "d34c62fc6ac11563e01c14e0a2316a846e872f0a2368f0ec931243772dc733ea",
+        // Re-pinned 2026-08-26 (llm rebase): the boot heap changed on BOTH
+        // sides — the deferred pass chained native instances to
+        // %Function.prototype% (the detached-.call fix), and the llm
+        // language-completion sweep grew the boot intrinsics (Intl,
+        // Temporal, Atomics, the test262 host). Every boot's canonical
+        // bytes moved together. Format unchanged.
+        // Re-pinned 2026-08-28 for a FORMAT addition — the container's
+        // first new atom since the ledger carries: `NFLR`, the
+        // installed-names floor (wave-6 W6-7). Every linked machine's
+        // floor sits below its boot-appended name table (installs
+        // intern the Intl member and accessor keys AFTER the floor is
+        // taken), so the atom is present on every real container,
+        // this golden machine's included. The floor must travel or a
+        // resumed machine can never lazily install a name interned
+        // during its last install pass (`intl_carry.rs`).
+        "df7bac61bb373db748f727a76c762798d7987c0404ffb15d1222a200bc0d6bde",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -137,9 +152,14 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     // NOT move any time: this machine holds none of those rows, and
     // the ledger atoms are emitted only when non-empty — the same
     // container-stability property the two-pin split proves.
+    // BOTH pins re-pinned 2026-08-28 for schema v12: the small state
+    // grew the intl and name-floor sections, and — the one deliberate
+    // exception to the container-stability rule — the blob gained the
+    // `NFLR` atom, because the installed-names floor is real machine
+    // state every linked machine holds (see the blob pin's comment).
     assert_eq!(
         store.manifest().unwrap().seal,
-        "96b9c34d19d91ffc4cbead5f97b4950725eafc486e7cfe16b25a2d3b94acb4af",
+        "dd9bed74e72d75d8541f672c4dccd83a12f4afd1f55c5adfc0dafa31f7ae1b18",
         "epoch-3 seal chain"
     );
 }

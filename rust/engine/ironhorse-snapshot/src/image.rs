@@ -25,7 +25,11 @@ use crate::format::{
     Signature, SnapshotError, Version, BLOC, CREA, HEAP, KEYS, METR, NAME, SIGN, STAC, SYMB, VERS,
 };
 use crate::slot_codec::{decode_slots, encode_slots, SLOT_RECORD_BYTES};
-use ironhorse_vm::{ChunkArena, MeterState, Slot, SlotArena, COST_TABLE_VERSION};
+use ironhorse_vm::{
+    dtf_component_key_static, ChunkArena, CollatorData, DateTimeFormatData, IntlTables,
+    ListFormatData, LocaleData, MeterState, NumberFormatData, PluralRulesData, SegmentIteratorData,
+    SegmenterData, SegmentsData, Slot, SlotArena, COST_TABLE_VERSION,
+};
 
 /// The metering state carried in the `METR` atom (design row 6: "meter
 /// state across suspend"). The frozen 16.16 fixed-point counters plus the
@@ -356,6 +360,12 @@ pub struct MachineImage {
     pub arguments_brands: Vec<u32>,
     /// `TMPR`: the four Temporal record tables (ledger).
     pub temporal: TemporalImage,
+    /// `INTL`: the nine Intl record tables (ledger), owner-ascending.
+    pub intl: IntlTables,
+    /// `NFLR`: the installed-names floor (wave-6 W6-7), when it
+    /// traveled. `None` — a pre-floor snapshot — restores to the
+    /// conservative full-table default.
+    pub name_floor: Option<u32>,
 }
 
 impl MachineImage {
@@ -398,6 +408,8 @@ impl MachineImage {
             regexps: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
+            intl: IntlTables::default(),
+            name_floor: None,
         }
     }
 
@@ -486,11 +498,25 @@ impl MachineImage {
         regexps: Vec<RegExpImage>,
         arguments_brands: Vec<u32>,
         temporal: TemporalImage,
+        intl: IntlTables,
     ) -> MachineImage {
         self.wrappers = wrappers;
         self.regexps = regexps;
         self.arguments_brands = arguments_brands;
         self.temporal = temporal;
+        self.intl = intl;
+        self
+    }
+
+    /// Attach the installed-names floor (wave-6 W6-7; the `NFLR`
+    /// atom). The snapshot surface calls this with the live machine's
+    /// floor so a resumed machine's partial install passes re-consider
+    /// exactly the ids the live machine's would. CANONICALIZED: a floor
+    /// AT the table length is the restore default, so it is stored (and
+    /// wired) as `None` — one representation per meaning, which is what
+    /// keeps the container round-trip byte- and value-identical.
+    pub fn with_name_floor(mut self, floor: u32) -> MachineImage {
+        self.name_floor = (floor as usize != self.names.len()).then_some(floor);
         self
     }
 
@@ -1435,6 +1461,427 @@ pub(crate) fn decode_temporal(p: &[u8]) -> Result<TemporalImage, SnapshotError> 
     Ok(t)
 }
 
+/// Encode the nine Intl record tables (the `INTL` payload /
+/// small-state intl section): nine `u32`-counted lists in the fixed
+/// order locales, collators, list formats, plural rules, number
+/// formats, segmenters, segments, segment iterators, date-time
+/// formats. Strings are `u32`-length-prefixed UTF-8; options are a
+/// one-byte presence tag; booleans are one byte. The
+/// `NumberFormatData::bound_format` cache is NOT encoded (the emitter
+/// strips it; see `Interp::intl_snapshot`).
+pub(crate) fn encode_intl(t: &IntlTables) -> Vec<u8> {
+    let mut v = Vec::new();
+    fn s(v: &mut Vec<u8>, s: &str) {
+        let b = s.as_bytes();
+        v.extend_from_slice(&(b.len() as u32).to_be_bytes());
+        v.extend_from_slice(b);
+    }
+    fn os(v: &mut Vec<u8>, o: &Option<String>) {
+        match o {
+            Some(x) => {
+                v.push(1);
+                s(v, x);
+            }
+            None => v.push(0),
+        }
+    }
+    fn ou32(v: &mut Vec<u8>, o: &Option<u32>) {
+        match o {
+            Some(x) => {
+                v.push(1);
+                v.extend_from_slice(&x.to_be_bytes());
+            }
+            None => v.push(0),
+        }
+    }
+    v.extend_from_slice(&(t.locales.len() as u32).to_be_bytes());
+    for (owner, r) in &t.locales {
+        v.extend_from_slice(&owner.to_be_bytes());
+        s(&mut v, &r.tag);
+        s(&mut v, &r.language);
+        os(&mut v, &r.script);
+        os(&mut v, &r.region);
+        v.extend_from_slice(&(r.variants.len() as u32).to_be_bytes());
+        for x in &r.variants {
+            s(&mut v, x);
+        }
+        v.extend_from_slice(&(r.unicode.len() as u32).to_be_bytes());
+        for (k, val) in &r.unicode {
+            s(&mut v, k);
+            s(&mut v, val);
+        }
+    }
+    v.extend_from_slice(&(t.collators.len() as u32).to_be_bytes());
+    for (owner, r) in &t.collators {
+        v.extend_from_slice(&owner.to_be_bytes());
+        s(&mut v, &r.locale);
+        s(&mut v, &r.usage);
+        s(&mut v, &r.sensitivity);
+        s(&mut v, &r.collation);
+        v.push(r.numeric as u8);
+        s(&mut v, &r.case_first);
+        v.push(r.ignore_punctuation as u8);
+    }
+    v.extend_from_slice(&(t.list_formats.len() as u32).to_be_bytes());
+    for (owner, r) in &t.list_formats {
+        v.extend_from_slice(&owner.to_be_bytes());
+        s(&mut v, &r.locale);
+        s(&mut v, &r.kind);
+        s(&mut v, &r.style);
+    }
+    v.extend_from_slice(&(t.plural_rules.len() as u32).to_be_bytes());
+    for (owner, r) in &t.plural_rules {
+        v.extend_from_slice(&owner.to_be_bytes());
+        s(&mut v, &r.locale);
+        s(&mut v, &r.kind);
+        s(&mut v, &r.notation);
+        v.extend_from_slice(&r.minimum_integer_digits.to_be_bytes());
+        v.extend_from_slice(&r.minimum_fraction_digits.to_be_bytes());
+        v.extend_from_slice(&r.maximum_fraction_digits.to_be_bytes());
+        ou32(&mut v, &r.minimum_significant_digits);
+        ou32(&mut v, &r.maximum_significant_digits);
+        s(&mut v, &r.rounding_type);
+        s(&mut v, &r.rounding_priority);
+        s(&mut v, &r.rounding_mode);
+        v.extend_from_slice(&r.rounding_increment.to_be_bytes());
+        s(&mut v, &r.trailing_zero_display);
+    }
+    v.extend_from_slice(&(t.number_formats.len() as u32).to_be_bytes());
+    for (owner, r) in &t.number_formats {
+        v.extend_from_slice(&owner.to_be_bytes());
+        s(&mut v, &r.locale);
+        s(&mut v, &r.numbering_system);
+        s(&mut v, &r.style);
+        s(&mut v, &r.notation);
+        s(&mut v, &r.compact_display);
+        s(&mut v, &r.sign_display);
+        s(&mut v, &r.use_grouping);
+        os(&mut v, &r.currency);
+        s(&mut v, &r.currency_display);
+        s(&mut v, &r.currency_sign);
+        os(&mut v, &r.unit);
+        s(&mut v, &r.unit_display);
+        v.extend_from_slice(&r.minimum_integer_digits.to_be_bytes());
+        v.extend_from_slice(&r.minimum_fraction_digits.to_be_bytes());
+        v.extend_from_slice(&r.maximum_fraction_digits.to_be_bytes());
+        ou32(&mut v, &r.minimum_significant_digits);
+        ou32(&mut v, &r.maximum_significant_digits);
+        s(&mut v, &r.rounding_type);
+        s(&mut v, &r.rounding_priority);
+        s(&mut v, &r.rounding_mode);
+        v.extend_from_slice(&r.rounding_increment.to_be_bytes());
+        s(&mut v, &r.trailing_zero_display);
+    }
+    v.extend_from_slice(&(t.segmenters.len() as u32).to_be_bytes());
+    for (owner, r) in &t.segmenters {
+        v.extend_from_slice(&owner.to_be_bytes());
+        s(&mut v, &r.locale);
+        s(&mut v, &r.granularity);
+    }
+    v.extend_from_slice(&(t.segments.len() as u32).to_be_bytes());
+    for (owner, r) in &t.segments {
+        v.extend_from_slice(&owner.to_be_bytes());
+        v.extend_from_slice(&(r.units.len() as u32).to_be_bytes());
+        for u in &r.units {
+            v.extend_from_slice(&u.to_be_bytes());
+        }
+        v.extend_from_slice(&(r.segments.len() as u32).to_be_bytes());
+        for &(start, end, word) in &r.segments {
+            v.extend_from_slice(&(start as u32).to_be_bytes());
+            v.extend_from_slice(&(end as u32).to_be_bytes());
+            v.push(word as u8);
+        }
+        s(&mut v, &r.granularity);
+    }
+    v.extend_from_slice(&(t.segment_iterators.len() as u32).to_be_bytes());
+    for (owner, r) in &t.segment_iterators {
+        v.extend_from_slice(&owner.to_be_bytes());
+        v.extend_from_slice(&r.segments_inst.0.to_be_bytes());
+        v.extend_from_slice(&(r.pos as u32).to_be_bytes());
+    }
+    v.extend_from_slice(&(t.date_time_formats.len() as u32).to_be_bytes());
+    for (owner, r) in &t.date_time_formats {
+        v.extend_from_slice(&owner.to_be_bytes());
+        s(&mut v, &r.locale);
+        s(&mut v, &r.calendar);
+        s(&mut v, &r.numbering_system);
+        s(&mut v, &r.time_zone);
+        v.extend_from_slice(&r.offset_minutes.to_be_bytes());
+        os(&mut v, &r.hour_cycle);
+        v.extend_from_slice(&(r.components.len() as u32).to_be_bytes());
+        for (k, val) in &r.components {
+            s(&mut v, k);
+            s(&mut v, val);
+        }
+        os(&mut v, &r.date_style);
+        os(&mut v, &r.time_style);
+    }
+    v
+}
+
+pub(crate) fn decode_intl(p: &[u8]) -> Result<IntlTables, SnapshotError> {
+    let mut c = Cursor::new(p, "intl record tables");
+    let mut t = IntlTables::default();
+    fn text(c: &mut Cursor<'_>) -> Result<String, SnapshotError> {
+        let len = c.u32()? as usize;
+        String::from_utf8(c.bytes(len)?.to_vec())
+            .map_err(|_| SnapshotError::Corrupt("intl side table: string not UTF-8"))
+    }
+    fn opt_text(c: &mut Cursor<'_>) -> Result<Option<String>, SnapshotError> {
+        match c.u8()? {
+            0 => Ok(None),
+            1 => Ok(Some(text(c)?)),
+            _ => Err(SnapshotError::Corrupt("intl side table: bad option tag")),
+        }
+    }
+    fn opt_u32(c: &mut Cursor<'_>) -> Result<Option<u32>, SnapshotError> {
+        match c.u8()? {
+            0 => Ok(None),
+            1 => Ok(Some(c.u32()?)),
+            _ => Err(SnapshotError::Corrupt("intl side table: bad option tag")),
+        }
+    }
+    fn boolean(c: &mut Cursor<'_>) -> Result<bool, SnapshotError> {
+        match c.u8()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(SnapshotError::Corrupt("intl side table: bad boolean byte")),
+        }
+    }
+    fn owner_of(
+        c: &mut Cursor<'_>,
+        prev: &mut Option<u32>,
+    ) -> Result<u32, SnapshotError> {
+        let owner = c.u32()?;
+        if prev.is_some_and(|p| owner <= p) {
+            return Err(SnapshotError::Corrupt(
+                "intl side table: owners not strictly ascending",
+            ));
+        }
+        *prev = Some(owner);
+        Ok(owner)
+    }
+    let n = c.u32()? as usize;
+    let mut prev = None;
+    for _ in 0..n {
+        let owner = owner_of(&mut c, &mut prev)?;
+        let tag = text(&mut c)?;
+        let language = text(&mut c)?;
+        let script = opt_text(&mut c)?;
+        let region = opt_text(&mut c)?;
+        let vn = c.u32()? as usize;
+        let mut variants = Vec::with_capacity(vn.min(p.len() / 4));
+        for _ in 0..vn {
+            variants.push(text(&mut c)?);
+        }
+        let un = c.u32()? as usize;
+        let mut unicode = std::collections::BTreeMap::new();
+        for _ in 0..un {
+            let k = text(&mut c)?;
+            let val = text(&mut c)?;
+            unicode.insert(k, val);
+        }
+        t.locales.push((
+            owner,
+            LocaleData {
+                tag,
+                language,
+                script,
+                region,
+                variants,
+                unicode,
+            },
+        ));
+    }
+    let n = c.u32()? as usize;
+    let mut prev = None;
+    for _ in 0..n {
+        let owner = owner_of(&mut c, &mut prev)?;
+        t.collators.push((
+            owner,
+            CollatorData {
+                locale: text(&mut c)?,
+                usage: text(&mut c)?,
+                sensitivity: text(&mut c)?,
+                collation: text(&mut c)?,
+                numeric: boolean(&mut c)?,
+                case_first: text(&mut c)?,
+                ignore_punctuation: boolean(&mut c)?,
+            },
+        ));
+    }
+    let n = c.u32()? as usize;
+    let mut prev = None;
+    for _ in 0..n {
+        let owner = owner_of(&mut c, &mut prev)?;
+        t.list_formats.push((
+            owner,
+            ListFormatData {
+                locale: text(&mut c)?,
+                kind: text(&mut c)?,
+                style: text(&mut c)?,
+            },
+        ));
+    }
+    let n = c.u32()? as usize;
+    let mut prev = None;
+    for _ in 0..n {
+        let owner = owner_of(&mut c, &mut prev)?;
+        t.plural_rules.push((
+            owner,
+            PluralRulesData {
+                locale: text(&mut c)?,
+                kind: text(&mut c)?,
+                notation: text(&mut c)?,
+                minimum_integer_digits: c.u32()?,
+                minimum_fraction_digits: c.u32()?,
+                maximum_fraction_digits: c.u32()?,
+                minimum_significant_digits: opt_u32(&mut c)?,
+                maximum_significant_digits: opt_u32(&mut c)?,
+                rounding_type: text(&mut c)?,
+                rounding_priority: text(&mut c)?,
+                rounding_mode: text(&mut c)?,
+                rounding_increment: c.u32()?,
+                trailing_zero_display: text(&mut c)?,
+            },
+        ));
+    }
+    let n = c.u32()? as usize;
+    let mut prev = None;
+    for _ in 0..n {
+        let owner = owner_of(&mut c, &mut prev)?;
+        t.number_formats.push((
+            owner,
+            NumberFormatData {
+                locale: text(&mut c)?,
+                numbering_system: text(&mut c)?,
+                style: text(&mut c)?,
+                notation: text(&mut c)?,
+                compact_display: text(&mut c)?,
+                sign_display: text(&mut c)?,
+                use_grouping: text(&mut c)?,
+                currency: opt_text(&mut c)?,
+                currency_display: text(&mut c)?,
+                currency_sign: text(&mut c)?,
+                unit: opt_text(&mut c)?,
+                unit_display: text(&mut c)?,
+                minimum_integer_digits: c.u32()?,
+                minimum_fraction_digits: c.u32()?,
+                maximum_fraction_digits: c.u32()?,
+                minimum_significant_digits: opt_u32(&mut c)?,
+                maximum_significant_digits: opt_u32(&mut c)?,
+                rounding_type: text(&mut c)?,
+                rounding_priority: text(&mut c)?,
+                rounding_mode: text(&mut c)?,
+                rounding_increment: c.u32()?,
+                trailing_zero_display: text(&mut c)?,
+                bound_format: None,
+            },
+        ));
+    }
+    let n = c.u32()? as usize;
+    let mut prev = None;
+    for _ in 0..n {
+        let owner = owner_of(&mut c, &mut prev)?;
+        t.segmenters.push((
+            owner,
+            SegmenterData {
+                locale: text(&mut c)?,
+                granularity: text(&mut c)?,
+            },
+        ));
+    }
+    let n = c.u32()? as usize;
+    let mut prev = None;
+    for _ in 0..n {
+        let owner = owner_of(&mut c, &mut prev)?;
+        let un = c.u32()? as usize;
+        let mut units = Vec::with_capacity(un.min(p.len() / 2));
+        for _ in 0..un {
+            units.push(c.u16()?);
+        }
+        let sn = c.u32()? as usize;
+        let mut segs: Vec<(usize, usize, bool)> = Vec::with_capacity(sn.min(p.len() / 9));
+        for _ in 0..sn {
+            let start = c.u32()? as usize;
+            let end = c.u32()? as usize;
+            let word = boolean(&mut c)?;
+            // Boundaries tile the input left to right; anything else
+            // is crafted bytes the consuming natives would index on.
+            if segs.last().is_some_and(|&(s0, _, _)| start < s0) || end < start || end > units.len()
+            {
+                return Err(SnapshotError::Corrupt(
+                    "intl side table: segment boundaries outside their input",
+                ));
+            }
+            segs.push((start, end, word));
+        }
+        let granularity = text(&mut c)?;
+        t.segments.push((
+            owner,
+            SegmentsData {
+                units,
+                segments: segs,
+                granularity,
+            },
+        ));
+    }
+    let n = c.u32()? as usize;
+    let mut prev = None;
+    for _ in 0..n {
+        let owner = owner_of(&mut c, &mut prev)?;
+        let segments_inst = ironhorse_vm::value::SlotIndex(c.u32()?);
+        let pos = c.u32()? as usize;
+        t.segment_iterators.push((
+            owner,
+            SegmentIteratorData { segments_inst, pos },
+        ));
+    }
+    let n = c.u32()? as usize;
+    let mut prev = None;
+    for _ in 0..n {
+        let owner = owner_of(&mut c, &mut prev)?;
+        let locale = text(&mut c)?;
+        let calendar = text(&mut c)?;
+        let numbering_system = text(&mut c)?;
+        let time_zone = text(&mut c)?;
+        let mut b = [0u8; 4];
+        b.copy_from_slice(c.bytes(4)?);
+        let offset_minutes = i32::from_be_bytes(b);
+        let hour_cycle = opt_text(&mut c)?;
+        let cn = c.u32()? as usize;
+        let mut components = Vec::with_capacity(cn.min(p.len() / 8));
+        for _ in 0..cn {
+            let key = text(&mut c)?;
+            // The component keys are a CLOSED engine set carried as
+            // `&'static str`; an unknown key is crafted bytes.
+            let key = dtf_component_key_static(&key).ok_or(SnapshotError::Corrupt(
+                "intl side table: unknown date-time component key",
+            ))?;
+            let val = text(&mut c)?;
+            components.push((key, val));
+        }
+        let date_style = opt_text(&mut c)?;
+        let time_style = opt_text(&mut c)?;
+        t.date_time_formats.push((
+            owner,
+            DateTimeFormatData {
+                locale,
+                calendar,
+                numbering_system,
+                time_zone,
+                offset_minutes,
+                hour_cycle,
+                components,
+                date_style,
+                time_style,
+            },
+        ));
+    }
+    c.done()?;
+    Ok(t)
+}
+
 /// The data-only language rows, bundled for the bounds gate (one
 /// parameter instead of four more positionals as the ledger grows).
 pub(crate) struct LangRows<'a> {
@@ -1442,6 +1889,7 @@ pub(crate) struct LangRows<'a> {
     pub regexps: &'a [RegExpImage],
     pub arguments_brands: &'a [u32],
     pub temporal: &'a TemporalImage,
+    pub intl: &'a IntlTables,
 }
 
 impl LangRows<'_> {
@@ -1451,6 +1899,7 @@ impl LangRows<'_> {
         regexps: &[],
         arguments_brands: &[],
         temporal: &EMPTY_TEMPORAL,
+        intl: &EMPTY_INTL,
     };
 }
 
@@ -1459,6 +1908,18 @@ static EMPTY_TEMPORAL: TemporalImage = TemporalImage {
     durations: Vec::new(),
     plains: Vec::new(),
     zoneds: Vec::new(),
+};
+
+static EMPTY_INTL: IntlTables = IntlTables {
+    locales: Vec::new(),
+    collators: Vec::new(),
+    list_formats: Vec::new(),
+    plural_rules: Vec::new(),
+    number_formats: Vec::new(),
+    segmenters: Vec::new(),
+    segments: Vec::new(),
+    segment_iterators: Vec::new(),
+    date_time_formats: Vec::new(),
 };
 
 /// Every slot index and chunk offset a decoded image can carry, checked
@@ -1695,6 +2156,42 @@ pub(crate) fn check_image_slot_bounds(
             return Err(OOB);
         }
     }
+    // The Intl rows: weak owners bounded like every sibling's, and a
+    // segment ITERATOR must name an owner with a segments ROW whose
+    // list covers its cursor — the view-names-a-buffer-row discipline.
+    for o in lang
+        .intl
+        .locales
+        .iter()
+        .map(|(o, _)| *o)
+        .chain(lang.intl.collators.iter().map(|(o, _)| *o))
+        .chain(lang.intl.list_formats.iter().map(|(o, _)| *o))
+        .chain(lang.intl.plural_rules.iter().map(|(o, _)| *o))
+        .chain(lang.intl.number_formats.iter().map(|(o, _)| *o))
+        .chain(lang.intl.segmenters.iter().map(|(o, _)| *o))
+        .chain(lang.intl.segments.iter().map(|(o, _)| *o))
+        .chain(lang.intl.segment_iterators.iter().map(|(o, _)| *o))
+        .chain(lang.intl.date_time_formats.iter().map(|(o, _)| *o))
+    {
+        if o >= slot_count {
+            return Err(OOB);
+        }
+    }
+    for (_, it) in &lang.intl.segment_iterators {
+        let row = lang
+            .intl
+            .segments
+            .binary_search_by_key(&it.segments_inst.0, |(o, _)| *o);
+        let covered = match row {
+            Ok(k) => it.pos <= lang.intl.segments[k].1.segments.len(),
+            Err(_) => false,
+        };
+        if it.segments_inst.0 >= slot_count || !covered {
+            return Err(SnapshotError::Corrupt(
+                "intl side table: segment iterator names no covering segments row",
+            ));
+        }
+    }
     for &(_, desc) in &symbols.pairs {
         if desc >= slot_count {
             return Err(OOB);
@@ -1787,6 +2284,16 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
     }
     if !image.temporal.is_empty() {
         w.atom(crate::format::TMPR, &encode_temporal(&image.temporal));
+    }
+    if !image.intl.is_empty() {
+        w.atom(crate::format::INTL, &encode_intl(&image.intl));
+    }
+    // The installed-names floor: `Some` only when it differs from the
+    // name-table length (`with_name_floor` canonicalizes), so machines
+    // whose floor sits at the table stay byte-stable with every
+    // pre-floor container.
+    if let Some(floor) = image.name_floor {
+        w.atom(crate::format::NFLR, &floor.to_be_bytes());
     }
     w.finish()
 }
@@ -1910,6 +2417,28 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => decode_temporal(a.payload)?,
         None => TemporalImage::default(),
     };
+    let intl = match r.find(crate::format::INTL) {
+        Some(a) => decode_intl(a.payload)?,
+        None => IntlTables::default(),
+    };
+    let name_floor = match r.find(crate::format::NFLR) {
+        Some(a) => {
+            if a.payload.len() != 4 {
+                return Err(SnapshotError::Corrupt("installed-names floor size"));
+            }
+            let floor = u32::from_be_bytes([a.payload[0], a.payload[1], a.payload[2], a.payload[3]]);
+            // A floor past the name table cannot come from an honest
+            // suspension — installs only ever floor at a table length
+            // the machine actually had.
+            if floor as usize > names.len() {
+                return Err(SnapshotError::Corrupt(
+                    "installed-names floor past the name table",
+                ));
+            }
+            Some(floor)
+        }
+        None => None,
+    };
     // Semantic bounds gate (wave-4 P1, widened in wave 5): every slot
     // index and chunk offset the container carries — heap, stack,
     // symbols and side tables alike — must fall inside the decoded
@@ -1930,6 +2459,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
             regexps: &regexps,
             arguments_brands: &arguments_brands,
             temporal: &temporal,
+            intl: &intl,
         },
         &symbols,
         slots.len() as u32,
@@ -1960,6 +2490,8 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         regexps,
         arguments_brands,
         temporal,
+        intl,
+        name_floor,
     })
 }
 
@@ -2149,6 +2681,137 @@ mod tests {
     }
 
     #[test]
+    fn intl_decode_refuses_crafted_rows() {
+        use ironhorse_vm::{CollatorData, DateTimeFormatData, SegmentsData};
+        fn collator(owner: u32) -> (u32, CollatorData) {
+            (
+                owner,
+                CollatorData {
+                    locale: "en".into(),
+                    usage: "sort".into(),
+                    sensitivity: "variant".into(),
+                    collation: "default".into(),
+                    numeric: false,
+                    case_first: "false".into(),
+                    ignore_punctuation: false,
+                },
+            )
+        }
+        // Owners not strictly ascending.
+        let mut t = IntlTables::default();
+        t.collators = vec![collator(5), collator(3)];
+        assert!(decode_intl(&encode_intl(&t)).is_err(), "non-ascending owners");
+        // Segment boundaries outside their input.
+        let mut t = IntlTables::default();
+        t.segments = vec![(
+            1,
+            SegmentsData {
+                units: vec![104, 105],
+                segments: vec![(0, 5, false)],
+                granularity: "word".into(),
+            },
+        )];
+        assert!(decode_intl(&encode_intl(&t)).is_err(), "segment end past units");
+        // An unknown date-time component key is crafted bytes: the keys
+        // are a closed engine set carried as statics.
+        let mut t = IntlTables::default();
+        t.date_time_formats = vec![(
+            1,
+            DateTimeFormatData {
+                locale: "en".into(),
+                calendar: "gregory".into(),
+                numbering_system: "latn".into(),
+                time_zone: "UTC".into(),
+                offset_minutes: 0,
+                hour_cycle: None,
+                components: vec![("year", "numeric".into())],
+                date_style: None,
+                time_style: None,
+            },
+        )];
+        let mut bytes = encode_intl(&t);
+        let needle = b"year";
+        let at = bytes.windows(4).position(|w| w == needle).unwrap();
+        bytes[at..at + 4].copy_from_slice(b"yerp");
+        assert!(decode_intl(&bytes).is_err(), "unknown component key");
+        // A boolean byte outside 0/1.
+        let mut t = IntlTables::default();
+        t.collators = vec![collator(1)];
+        let mut bytes = encode_intl(&t);
+        // The `numeric` byte follows the four leading strings; find the
+        // first 0x00 after the "default" text and poke it to 7.
+        let at = bytes.windows(7).position(|w| w == b"default").unwrap() + 7;
+        bytes[at] = 7;
+        assert!(decode_intl(&bytes).is_err(), "boolean byte outside 0/1");
+        // The intact forms round-trip.
+        let mut ok = IntlTables::default();
+        ok.collators = vec![collator(1), collator(4)];
+        ok.segments = vec![(
+            2,
+            SegmentsData {
+                units: vec![104, 105],
+                segments: vec![(0, 2, true)],
+                granularity: "word".into(),
+            },
+        )];
+        assert_eq!(decode_intl(&encode_intl(&ok)).unwrap(), ok);
+    }
+
+    #[test]
+    fn intl_bounds_refuse_crafted_iterators_and_owners() {
+        use ironhorse_vm::{SegmentIteratorData, SegmentsData};
+        let sym = SymbolKeyImage::default();
+        let check = |intl: &IntlTables| {
+            let lang = LangRows {
+                wrappers: &[],
+                regexps: &[],
+                arguments_brands: &[],
+                temporal: &EMPTY_TEMPORAL,
+                intl,
+            };
+            check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &[], &[], &lang, &sym, 4, 64)
+        };
+        let segs = |owner: u32| {
+            (
+                owner,
+                SegmentsData {
+                    units: vec![104, 105],
+                    segments: vec![(0, 2, true)],
+                    granularity: "word".into(),
+                },
+            )
+        };
+        // An owner past the arena.
+        let mut t = IntlTables::default();
+        t.segments = vec![segs(9)];
+        assert!(check(&t).is_err(), "owner past the arena");
+        // An iterator naming an instance with NO segments row.
+        let mut t = IntlTables::default();
+        t.segments = vec![segs(1)];
+        t.segment_iterators = vec![(
+            2,
+            SegmentIteratorData { segments_inst: ironhorse_vm::value::SlotIndex(3), pos: 0 },
+        )];
+        assert!(check(&t).is_err(), "iterator names no covering segments row");
+        // A cursor past the precomputed list.
+        let mut t = IntlTables::default();
+        t.segments = vec![segs(1)];
+        t.segment_iterators = vec![(
+            2,
+            SegmentIteratorData { segments_inst: ironhorse_vm::value::SlotIndex(1), pos: 5 },
+        )];
+        assert!(check(&t).is_err(), "cursor past the list");
+        // The covered form passes (pos == len is the exhausted cursor).
+        let mut t = IntlTables::default();
+        t.segments = vec![segs(1)];
+        t.segment_iterators = vec![(
+            2,
+            SegmentIteratorData { segments_inst: ironhorse_vm::value::SlotIndex(1), pos: 1 },
+        )];
+        assert!(check(&t).is_ok(), "a covering row with an in-range cursor passes");
+    }
+
+    #[test]
     fn image_bounds_reject_out_of_arena_indices() {
         // Wave 4 closed the three side tables; wave 5 showed the class is
         // wider — a container with NO side table at all panicked the
@@ -2321,6 +2984,8 @@ mod tests {
             regexps: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
+            intl: IntlTables::default(),
+            name_floor: None,
         };
         let bytes = write_machine(&img);
         let back = read_machine(&bytes, &sig()).unwrap();
@@ -2355,6 +3020,8 @@ mod tests {
             regexps: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
+            intl: IntlTables::default(),
+            name_floor: None,
         };
         let bytes = write_machine(&img);
         match read_machine(&bytes, &Signature::new("host-is-now-v2")) {
@@ -2468,6 +3135,8 @@ mod tests {
             regexps: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
+            intl: IntlTables::default(),
+            name_floor: None,
         };
         let bytes = write_machine(&img);
         let back = read_machine(&bytes, &sig()).unwrap();
