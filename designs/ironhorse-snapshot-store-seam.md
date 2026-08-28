@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
-| **Updated** | 2026-08-27 |
+| **Updated** | 2026-08-28 |
 | **Author** | Aaron Kumavis (prompted) |
 | **Status** | In Progress |
 | **Builds on** | designs/ironhorse-engine.md (§ Snapshots, requirement 1c) |
@@ -2772,6 +2772,103 @@ bite-checked by reverting the fix under the lock). Statuses:
   free-list-reuse fixture; `date_proto` also joined the explicit
   roots beside its siblings). Both golden pins re-pinned for the
   mainline's boot-heap growth — content, not format.
+
+### External review — the fail-closed persistence boundary (2026-08-28)
+
+An external "request changes" review (relayed on PR #1059) audited the
+persistence boundary: nine blocking findings, five additional issues,
+one architectural recommendation.
+Every claim was verified against the code before any fix; one was
+already stale.
+The dispositions and the landed fixes, each red-first with a
+bite-checked lock:
+
+- **Container format version (finding 1, confirmed → fixed):** the
+  write stamp moved to 2, marking the side-table atom family, so a
+  version-1 exact-match reader refuses these containers instead of
+  skipping unknown atoms and silently dropping arrays, collections,
+  RegExps, Intl records and cursors.
+  The reader accepts a read RANGE (`1..=2`) — older atoms are a subset
+  with the same encodings — and refuses anything newer; the store's
+  open gate checks readability rather than equality so older stores
+  still open and migrate.
+  Both golden pins moved (`format.rs`, `metamorphic_determinism.rs`).
+- **Freed heap records (findings 2+3, confirmed → fixed):** the sweep
+  does not scrub records and chunk compaction remaps MARKED slots
+  only, so an honest post-GC snapshot holds freed records whose stale
+  chunk offsets sit outside the compacted arena — and both the eager
+  bounds gate and the lazy fault asserts REFUSED them (a false
+  refusal on every path, locked red in `free_record_hygiene.rs`).
+  Free records are now opaque at both boundaries (nothing reads them
+  before `alloc` overwrites), while the same free set refuses the
+  dual: a side-table row OWNED by a free slot (only craftable — the
+  sweep drops rows keyed by freed indices) no longer restores stale
+  exotic state onto a slot a later allocation reuses.
+- **`debug_assert!` restore (finding 4, confirmed → fixed):**
+  `restore_side_tables` and `image_to_interp` are fallible now; every
+  restore-verb `false` (a regexp that does not recompile, a refused
+  cross-check) is a named `Corrupt` error on every build profile,
+  never a debug-only panic or a release-mode silent drop
+  (`crafted_row_refusals.rs`).
+- **Non-empty `STAC` (finding 5, confirmed → fixed):** the write verbs
+  persist only quiescent machines, whose value stack is empty, so a
+  populated stack atom/section can only be crafted — and was accepted,
+  seeding a machine that could neither run nor checkpoint.
+  Both `read_machine` and `validate_store` now refuse it by name.
+- **Live iterators bypass the gates (finding 6, STALE):** fixed one
+  round earlier by the schema-v13 iterator-cursor carry — `iterators`
+  is Serialized, not Pending, and a resumed cursor continues its walk
+  (`iterator_carry.rs`).
+- **Meter rearm moves the deadline (finding 7, confirmed → fixed):**
+  `rearm_meter` opens a fresh window by design (the interval-change
+  form), so sub-interval suspend/resume cycles through it pushed the
+  host deadline forward forever.
+  The new `reattach_meter_host` reinstalls the callback and leaves all
+  three restored counters untouched; the persist-gates lock proves the
+  host fires at the ORIGINAL threshold across a suspend.
+- **Migration restamps before compatibility (finding 8, confirmed →
+  fixed):** the ladder now peeks the meter's cost-table version from
+  the small-state PREFIX (the first six sections, position-stable
+  since schema 5) BEFORE the first restamp, refusing with the same
+  error `validate_store` would raise — a store this engine can never
+  resume is left byte-identical for its rightful owner instead of
+  being wedged at a schema its old implementation no longer knows.
+  The root-then-restamp ladder already validated integrity under the
+  source schema; the cost table was the one compatibility axis checked
+  only after mutation.
+- **Collection geometry (finding 9, confirmed → fixed):**
+  `table_length` decode now enforces the engine's own reachable rehash
+  geometry — weak kinds carry 0, Map/Set a power of two in
+  `[MAP_MIN_TABLE_LENGTH, 2^20]`, and below the cap the live size
+  never rests past the grow threshold `(L>>1)+(L>>2)` — refusing the
+  crafted values (zero for a populated Map included) whose rehash
+  boundaries would diverge consensus-relevant chunk metering.
+- **Additional issues (all confirmed → fixed):** Intl
+  unicode-extension keys must arrive strictly ascending (the
+  `BTreeMap` was silently re-canonicalizing crafted order, breaking
+  write∘read byte identity); segment boundaries must TILE and COVER
+  their input (the old check compared previous STARTS, accepting
+  overlaps); an explicit `NFLR` at the table length is refused as
+  non-canonical on both decode paths; the uncaught direct
+  `THROW`/`RETHROW` host escapes now disarm `pending_new_target`
+  exactly as the caught path does (the disarm hoisted into
+  `unwind_to_jump`, covering every escape; `uncaught_throw_hygiene.rs`
+  locks the cross-crank leak); and the oracle shim's catch-side
+  exception stringification runs under a nested `mxTry` so a throwing
+  `toString` cannot re-jump past `fxEndHost`/machine teardown.
+- **Architectural recommendation (a proof-carrying
+  `UntrustedSnapshot → ValidatedSnapshot` pipeline):** direction
+  accepted, incremental adoption over rewrite.
+  The seam already carries the pieces the recommendation names — the
+  declarative side-table ledger with per-row coverage classes and its
+  reconciliation net, `validate_store` as the one open-time gate both
+  resume paths share, decoders that produce only refused-or-valid
+  rows, and (this round) a restore with no debug-only trust checks.
+  What remains of the recommendation — a single typed
+  `ValidatedSnapshot` boundary object consumed by an infallible
+  restore — is recorded as follow-up rather than done piecemeal here;
+  the eager/lazy split shares its header and page-validation rules
+  already.
 
 ## What Is the Problem Being Solved?
 
