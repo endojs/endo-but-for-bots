@@ -31,6 +31,7 @@ test/intrinsics/MapIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/RegExpStringIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/SetIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/StringIteratorPrototype/intrinsic-metadata.js
+test/intrinsics/TypedArray/intrinsic-metadata.js
 test/lockdown/function-frozen.js
 test/modules/module-source-reflection/ses-legacy/duplicate-import.js
 test/modules/module-source-reflection/ses-legacy/export-all-from.js
