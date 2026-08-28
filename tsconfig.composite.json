@@ -261,6 +261,9 @@
       "path": "packages/trampoline/tsconfig.composite.json"
     },
     {
+      "path": "packages/utf8/tsconfig.composite.json"
+    },
+    {
       "path": "packages/where/tsconfig.composite.json"
     },
     {
