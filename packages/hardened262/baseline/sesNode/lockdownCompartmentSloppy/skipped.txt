@@ -21,6 +21,7 @@ test/harden/proto.js
 test/harden/transitive-property.js
 test/harden/transitive-proto.js
 test/intrinsics/ArrayIteratorPrototype/intrinsic-metadata.js
+test/intrinsics/AsyncFunction/inert-stand-in.js
 test/intrinsics/AsyncFunction/intrinsic-metadata.js
 test/intrinsics/AsyncGeneratorFunction/intrinsic-metadata.js
 test/intrinsics/AsyncGeneratorPrototype/intrinsic-metadata.js
