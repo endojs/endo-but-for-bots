@@ -1,8 +1,13 @@
 # cargo-fuzz manifest for the ironhorse-fuzz targets (design § Fuzzability).
-# Built with `cargo +nightly fuzz run <target>`; not part of the engine
-# workspace build (kept out via the parent's default-members). The
+# Run locally with `cargo fuzz run <target>` from this directory (the sibling
+# rust-toolchain.toml pins the nightly, so no `+nightly-…` is needed); not part of
+# the engine workspace build (kept out via the parent's default-members). The
 # comparison and generation logic lives in the ironhorse-fuzz lib, which the
 # engine workspace builds and unit-tests without a libFuzzer toolchain.
+#
+# NOTE: fuzzing no longer runs in pull-request CI — a garden background service
+# drives these targets continuously over a persistent corpus and files each finding
+# as a standing repair PR. These targets remain fully runnable locally.
 [package]
 name = "ironhorse-fuzz-targets"
 version = "0.0.0"
