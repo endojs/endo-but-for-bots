@@ -42,6 +42,7 @@
     "test": "exit 0"
   },
   "dependencies": {
+    "@endo/bytes": "workspace:^",
     "@endo/harden": "workspace:^"
   },
   "devDependencies": {
