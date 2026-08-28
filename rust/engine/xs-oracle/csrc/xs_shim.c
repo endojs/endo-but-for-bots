@@ -95,6 +95,35 @@ static void fx_endor_detachArrayBuffer(txMachine *the)
 }
 
 /*
+ * Best-effort stringification of the caught mxException into `buf`.
+ * Every mxCatch in this shim wants the thrown value as text, but
+ * fxToString can itself throw (an Error whose toString/name/message
+ * reads throw again, a Symbol exception), and a throw inside mxCatch
+ * re-enters fxJump with an EMPTY jump chain — fxAbort, bypassing the
+ * caller's fxEndHost and machine teardown (review finding). So the
+ * conversion runs under its own nested mxTry and falls back to a
+ * fixed tag; the jump restore rebalances the->stack either way.
+ */
+static void endor_error_from_exception(txMachine *the, char *buf, size_t max)
+{
+	if (mxException.kind == XS_UNDEFINED_KIND)
+		return;
+	mxTry(the) {
+		mxPush(mxException);
+		fxToString(the, the->stack);
+		if (the->stack->value.string) {
+			strncpy(buf, the->stack->value.string, max - 1);
+			buf[max - 1] = 0;
+		}
+		mxPop();
+	}
+	mxCatch(the) {
+		strncpy(buf, "(exception stringification threw)", max - 1);
+		buf[max - 1] = 0;
+	}
+}
+
+/*
  * Filesystem module loader for the executable-module oracle
  * (xs_oracle_run_module). The xsnap platform's default loader resolves
  * only baked-in archive/preparation scripts, so csrc/xsoracle-platform.h
@@ -419,15 +448,7 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 			out->computrons = the->meterIndex >> 16;
 			out->meter_raw = (txU4)the->meterIndex;
 			/* mxException holds the thrown value; stringify best-effort. */
-			if (mxException.kind != XS_UNDEFINED_KIND) {
-				mxPush(mxException);
-				fxToString(the, the->stack);
-				if (the->stack->value.string) {
-					strncpy(out->error, the->stack->value.string, ENDOR_ERROR_MAX - 1);
-					out->error[ENDOR_ERROR_MAX - 1] = 0;
-				}
-				mxPop();
-			}
+			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
 		}
 	}
 	fxEndHost(the);
@@ -587,15 +608,7 @@ int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
 			out->ok = 0;
 			out->computrons = the->meterIndex >> 16;
 			out->meter_raw = (txU4)the->meterIndex;
-			if (mxException.kind != XS_UNDEFINED_KIND) {
-				mxPush(mxException);
-				fxToString(the, the->stack);
-				if (the->stack->value.string) {
-					strncpy(out->error, the->stack->value.string, ENDOR_ERROR_MAX - 1);
-					out->error[ENDOR_ERROR_MAX - 1] = 0;
-				}
-				mxPop();
-			}
+			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
 		}
 	}
 	fxEndHost(the);
@@ -679,16 +692,7 @@ int xs_oracle_compile_module(const char *source, txU4 sourceLen, EndorOracleResu
 		}
 		mxCatch(the) {
 			out->ok = 0;
-			if (mxException.kind != XS_UNDEFINED_KIND) {
-				mxPush(mxException);
-				fxToString(the, the->stack);
-				if (the->stack->value.string) {
-					strncpy(out->error, the->stack->value.string,
-						ENDOR_ERROR_MAX - 1);
-					out->error[ENDOR_ERROR_MAX - 1] = 0;
-				}
-				mxPop();
-			}
+			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
 		}
 	}
 	fxEndHost(the);
@@ -901,16 +905,7 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 			out->computrons = the->meterIndex >> 16;
 			out->meter_raw = (txU4)the->meterIndex;
 			out->ok = 0;
-			if (mxException.kind != XS_UNDEFINED_KIND) {
-				mxPush(mxException);
-				fxToString(the, the->stack);
-				if (the->stack->value.string) {
-					strncpy(out->error, the->stack->value.string,
-						ENDOR_ERROR_MAX - 1);
-					out->error[ENDOR_ERROR_MAX - 1] = 0;
-				}
-				mxPop();
-			}
+			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
 		}
 	}
 	gEndorModuleLatch = C_NULL;
@@ -1030,15 +1025,7 @@ int xs_oracle_regexp(const char *pattern, const char *modifier,
 			 * overflow on a pathological pattern). Report as a compile
 			 * failure with a best-effort message. */
 			out->ok = 0;
-			if (mxException.kind != XS_UNDEFINED_KIND) {
-				mxPush(mxException);
-				fxToString(the, the->stack);
-				if (the->stack->value.string) {
-					strncpy(out->error, the->stack->value.string, ENDOR_ERROR_MAX - 1);
-					out->error[ENDOR_ERROR_MAX - 1] = 0;
-				}
-				mxPop();
-			}
+			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
 		}
 	}
 	fxEndHost(the);
