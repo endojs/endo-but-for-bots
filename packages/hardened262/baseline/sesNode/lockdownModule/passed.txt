@@ -21,12 +21,17 @@ test/harden/proto-of-property.js
 test/harden/proto.js
 test/harden/transitive-property.js
 test/harden/transitive-proto.js
+test/intrinsics/ArrayIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/AsyncGeneratorFunction/intrinsic-metadata.js
 test/intrinsics/AsyncGeneratorPrototype/intrinsic-metadata.js
 test/intrinsics/AsyncIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/GeneratorFunction/intrinsic-metadata.js
 test/intrinsics/GeneratorPrototype/intrinsic-metadata.js
 test/intrinsics/IteratorPrototype/intrinsic-metadata.js
+test/intrinsics/MapIteratorPrototype/intrinsic-metadata.js
+test/intrinsics/RegExpStringIteratorPrototype/intrinsic-metadata.js
+test/intrinsics/SetIteratorPrototype/intrinsic-metadata.js
+test/intrinsics/StringIteratorPrototype/intrinsic-metadata.js
 test/lockdown/function-frozen.js
 test/modules/module-source-reflection/ses-legacy/duplicate-import.js
 test/modules/module-source-reflection/ses-legacy/export-all-from.js
