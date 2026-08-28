@@ -29,6 +29,10 @@ import {
   readResultBaseline,
   writeResultBaseline,
 } from './test.js';
+import {
+  decodeIronhorseOutcome,
+  makeIronhorseSource,
+} from './agents/ironhorse.js';
 
 /**
  * Build a test262-stream-shaped case. `test262-stream` normalizes `flags` to a
@@ -303,17 +307,114 @@ test('scenariosForTests emits no zero-coverage record for a normally-covered fil
 
 // --- agentRunsScenario: the child-spawn boundary classifier ------------------
 
-test('agentRunsScenario wires exactly module and lockdownModule today', () => {
-  assert.equal(agentRunsScenario('module'), true);
-  assert.equal(agentRunsScenario('lockdownModule'), true);
-  // Everything else — the sloppy/strict modes and the whole compartment axis —
-  // is generated and enumerated by `--list` but not yet wired to an agent; pin
-  // that so an accidental future widening of the wired set is caught.
-  assert.equal(agentRunsScenario('sloppy'), false);
-  assert.equal(agentRunsScenario('strict'), false);
-  assert.equal(agentRunsScenario('lockdownStrict'), false);
-  assert.equal(agentRunsScenario('compartmentModule'), false);
-  assert.equal(agentRunsScenario('lockdownCompartmentModule'), false);
+test('agentRunsScenario preserves the module matrix for JavaScript agents', () => {
+  assert.equal(agentRunsScenario('xs', 'module'), true);
+  assert.equal(agentRunsScenario('sesNode', 'lockdownModule'), true);
+  // The remaining modes are not yet wired to these module-only agents.
+  // Ironhorse's script coverage is asserted separately below.
+  assert.equal(agentRunsScenario('xs', 'sloppy'), false);
+  assert.equal(agentRunsScenario('sesXs', 'strict'), false);
+  assert.equal(agentRunsScenario('sesNode', 'lockdownStrict'), false);
+  assert.equal(agentRunsScenario('xs', 'compartmentModule'), false);
+  assert.equal(agentRunsScenario('sesXs', 'lockdownCompartmentModule'), false);
+});
+
+test('agentRunsScenario exposes script modes for both Ironhorse deliveries', () => {
+  for (const agent of ['ironhorse', 'sesIronhorse']) {
+    assert.equal(agentRunsScenario(agent, 'sloppy'), true);
+    assert.equal(agentRunsScenario(agent, 'strict'), true);
+    assert.equal(agentRunsScenario(agent, 'lockdownSloppy'), true);
+    assert.equal(agentRunsScenario(agent, 'lockdownStrict'), true);
+    assert.equal(agentRunsScenario(agent, 'module'), false);
+    assert.equal(agentRunsScenario(agent, 'compartmentStrict'), false);
+  }
+});
+
+test('decodeIronhorseOutcome maps every non-covered result to failure', () => {
+  const scenario = { file: 'test/x.js' };
+  assert.equal(
+    decodeIronhorseOutcome(
+      scenario,
+      0,
+      null,
+      JSON.stringify({ cases: [{ outcome: 'covered' }] }),
+    ).ok,
+    true,
+  );
+  assert.deepEqual(
+    decodeIronhorseOutcome(
+      scenario,
+      0,
+      null,
+      JSON.stringify({
+        cases: [{ outcome: 'run-skip', reason: 'unsupported-opcode:eval' }],
+      }),
+    ),
+    {
+      ok: false,
+      code: 1,
+      signal: null,
+      failureReason: 'unsupported-opcode:eval',
+      ...scenario,
+    },
+  );
+  assert.equal(
+    decodeIronhorseOutcome(
+      scenario,
+      1,
+      null,
+      JSON.stringify({
+        cases: [{ outcome: 'fail', reason: 'result divergence' }],
+      }),
+    ).ok,
+    false,
+  );
+  assert.equal(
+    decodeIronhorseOutcome(scenario, 2, null, 'not-json').failureReason,
+    'invalid ironhorse-xst report',
+  );
+});
+
+test('makeIronhorseSource reuses the stream harness and inserts setup at its boundary', () => {
+  const harness = `function Test262Error(message) {
+  this.message = message || '';
+}
+Object.defineProperty(Test262Error.prototype, 'toString', {
+  value: function () {
+    return 'Test262Error: ' + this.message;
+  },
+  writable: true,
+  enumerable: false,
+  configurable: true,
+});
+`;
+  const subject = 'assert.sameValue(1, 1);\n';
+  const source = makeIronhorseSource(
+    {
+      contents: `${harness}${subject}`,
+      insertionIndex: harness.length,
+      lockdown: false,
+    },
+    { sesShim: false },
+  );
+  assert.equal(source.match(/function Test262Error/g)?.length, 1);
+  assert.match(source, /flags: \[raw\]/);
+  assert.doesNotMatch(source, /Object\.defineProperty/);
+  assert.match(source, /Test262Error\.prototype\.toString = function/);
+  assert.ok(source.endsWith(subject));
+});
+
+test('makeIronhorseSource delegates async handling to ironhorse-xst', () => {
+  const source = makeIronhorseSource(
+    {
+      contents: '$DONE();\n',
+      insertionIndex: 0,
+      attrs: { flags: { async: true } },
+      lockdown: false,
+    },
+    { sesShim: false },
+  );
+  assert.match(source, /flags: \[raw, async\]/);
 });
 
 // --- result report: lossless baseline indexed by agent/scenario --------------
