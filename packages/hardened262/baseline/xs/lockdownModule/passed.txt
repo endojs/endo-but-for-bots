@@ -48,6 +48,8 @@ test/Compartment/prototype/importNow/modules-separate-errors.js
 test/Compartment/prototype/importNow/modules-separate-namespaces.js
 test/Compartment/prototype/importNow/modules-shared-errors.js
 test/Compartment/prototype/importNow/modules-shared-namespaces.js
+test/TextDecoder/immutable-arraybuffer-intersection.js
+test/TextEncoder/immutable-arraybuffer-intersection.js
 test/harden/cycle.js
 test/harden/exists.js
 test/harden/frozen.js

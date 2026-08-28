@@ -34,8 +34,8 @@ each case into a cross product of scenarios along four dimensions:
 - **lockdown** — whether `lockdown()` has been called.
 - **compartment** — whether the case runs inside a `Compartment`.
 
-`onlyStrict` / `noStrict` / `onlyModule` / `raw` front-matter flags filter the
-cross product the way test262 consumers expect. The agent names deliberately
+`onlyStrict` / `noStrict` / `onlyModule` / `onlyRaw` / `raw` front-matter flags
+filter the cross product the way test262 consumers expect. The agent names deliberately
 leave room for bare `node` and further `xs` agents as the native surface grows.
 
 ## Usage
