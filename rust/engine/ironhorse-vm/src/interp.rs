@@ -9187,13 +9187,30 @@ impl Interp {
 
     /// Re-arm a RESUMED machine's meter without destroying the restored
     /// computron count (wave-6 W6-13): the meter's `index` survives; a
-    /// fresh check window opens from it. The host callback cannot travel
-    /// in a snapshot, so every resume that wants metering MUST call this
-    /// (or [`Self::arm_meter`] for a deliberately fresh count) — a
-    /// restored machine that skips it reports armed state but never
-    /// consults a host.
+    /// fresh check window opens from it. This is the deliberate
+    /// interval-CHANGE form — the host chose a new window, so the next
+    /// check threshold restarts from the preserved index. A resume that
+    /// wants the meter to continue **exactly** as suspended must use
+    /// [`Self::reattach_meter_host`] instead: repeated sub-interval
+    /// suspend/resume cycles through `rearm_meter` would move the check
+    /// deadline forward each time (review finding 7). The host callback
+    /// cannot travel in a snapshot, so every resume that wants metering
+    /// MUST call one of the three arm forms — a restored machine that
+    /// skips them reports armed state but never consults a host.
     pub fn rearm_meter(&mut self, interval: u64, host: Box<dyn FnMut(u64) -> bool>) {
         self.meter.rearm(interval);
+        self.meter_host = Some(host);
+    }
+
+    /// Reattach ONLY the host callback on a resumed machine, leaving
+    /// every restored meter counter — `index`, `interval`, and the
+    /// next-check threshold `count` — exactly as the snapshot carried
+    /// them (review finding 7). This is the pure resume form: a machine
+    /// suspended mid-window resumes as if never interrupted, so the
+    /// host sees its callback at the original deadline rather than a
+    /// freshly opened window. Meaningless on a snapshot whose meter was
+    /// never armed (`interval == 0` never checks), exactly as suspended.
+    pub fn reattach_meter_host(&mut self, host: Box<dyn FnMut(u64) -> bool>) {
         self.meter_host = Some(host);
     }
 
@@ -33030,6 +33047,15 @@ impl Interp {
     /// throw escapes every JS handler and reaches the host boundary), so
     /// the caller yields `Halt::Throw`.
     fn unwind_to_jump(&mut self) -> Option<usize> {
+        // A throw between `XS_CODE_SUPER` (which arms the pending
+        // new-target for the construct about to happen) and the
+        // construct frame that consumes it abandons that construct
+        // (wave-6 W6-15: left armed, the machine's NEXT `new F()` took
+        // the stale target as its `new.target`). Disarm BEFORE the
+        // empty-chain return below, so the uncaught direct
+        // `THROW`/`RETHROW` (and rejected-await) host escapes are
+        // covered exactly like the caught path and `raise_js`.
+        self.pending_new_target = None;
         let jump = self.jumps.pop()?;
         // A handler live across a suspend costs XS one extra dispatch to
         // land in (see [`RESUMED_HANDLER_THROW_METERING`]); a handler
@@ -33055,12 +33081,6 @@ impl Interp {
         // `mxEnvironment` restore from `jump->scope`), so a throw out of a
         // `with` body resets the environment for the surviving catch/finally.
         self.env = jump.env;
-        // A throw between `XS_CODE_SUPER` (which arms the pending
-        // new-target for the construct about to happen) and the construct
-        // frame that consumes it abandons that construct (wave-6 W6-15:
-        // left armed, the machine's NEXT `new F()` took the stale target
-        // as its `new.target`).
-        self.pending_new_target = None;
         let _ = jump.flag; // every ironhorse jump is a JS jump (flag == 1)
         Some(jump.target_pc)
     }
@@ -33074,9 +33094,9 @@ impl Interp {
         match self.unwind_to_jump() {
             Some(target) => Ok(target),
             None => {
-                // Uncaught: the host-escape leaves the machine post-throw;
-                // disarm the pending new-target here too (wave-6 W6-15).
-                self.pending_new_target = None;
+                // Uncaught: the host-escape leaves the machine
+                // post-throw ([`Self::unwind_to_jump`] disarmed the
+                // pending new-target for every escape path, W6-15).
                 self.meter_host_escape();
                 Err(Halt::Throw(self.render(&value)))
             }
