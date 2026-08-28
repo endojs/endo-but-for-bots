@@ -248,7 +248,9 @@ impl MachineSnapshot for Interp {
             tables.regexps,
             tables.arguments_brands,
             tables.temporal,
+            tables.intl,
         )
+        .with_name_floor(self.installed_names_floor())
     }
 }
 
@@ -269,6 +271,7 @@ struct SideTableImages {
     regexps: Vec<crate::image::RegExpImage>,
     arguments_brands: Vec<u32>,
     temporal: crate::image::TemporalImage,
+    intl: ironhorse_vm::IntlTables,
 }
 
 fn side_tables_of(interp: &Interp) -> SideTableImages {
@@ -362,6 +365,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
         plains,
         zoneds,
     };
+    let intl = interp.intl_snapshot();
     SideTableImages {
         arrays,
         collections,
@@ -374,6 +378,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
         regexps,
         arguments_brands,
         temporal,
+        intl,
     }
 }
 
@@ -397,6 +402,7 @@ fn restore_side_tables(
     regexps: Vec<crate::image::RegExpImage>,
     arguments_brands: Vec<u32>,
     temporal: crate::image::TemporalImage,
+    intl: ironhorse_vm::IntlTables,
 ) {
     let ok = interp.restore_bulk_side_tables(
         arrays
@@ -461,6 +467,11 @@ fn restore_side_tables(
         temporal.zoneds,
     );
     debug_assert!(ok, "validated image cannot carry a malformed temporal record");
+    // The Intl record rows (schema 12): pure resolved-options data;
+    // segment geometry and the iterator cross-reference were validated
+    // at decode/bounds, and the vm re-validates them on the way in.
+    let ok = interp.restore_intl(intl);
+    debug_assert!(ok, "validated image cannot carry a malformed intl record");
 }
 
 /// Rebuild a live [`Interp`] from a decoded [`MachineImage`]: a fresh
@@ -474,6 +485,14 @@ pub fn image_to_interp(image: MachineImage) -> Interp {
     let (slots, chunks) = image.to_arenas();
     let mut interp = Interp::new();
     interp.restore_snapshot_state(slots, chunks, image.stack, image.names, meter);
+    // The installed-names floor (wave-6 W6-7): adopt the live floor
+    // when it traveled, so names interned during the last install pass
+    // stay lazily installable exactly as they were live. Bounds were
+    // validated at decode; the `false` return is belt-and-braces.
+    if let Some(floor) = image.name_floor {
+        let ok = interp.restore_installed_names_floor(floor);
+        debug_assert!(ok, "validated name floor cannot fail to restore");
+    }
     // The symbol-key id table (SYMB): re-bind each stored id to its
     // descriptor slot and reinstate the top-down mint counter, so a
     // symbol-keyed property reads back under the same id and a later
@@ -497,6 +516,7 @@ pub fn image_to_interp(image: MachineImage) -> Interp {
         image.regexps,
         image.arguments_brands,
         image.temporal,
+        image.intl,
     );
     interp
 }
@@ -736,6 +756,13 @@ fn small_state_of(interp: &Interp) -> SmallState {
         regexps: tables.regexps,
         arguments_brands: tables.arguments_brands,
         temporal: tables.temporal,
+        intl: tables.intl,
+        // Canonicalized like `with_name_floor`: a floor at the table
+        // length is the restore default and travels as `None`.
+        name_floor: {
+            let floor = interp.installed_names_floor();
+            (floor as usize != interp.program_symbol_names().len()).then_some(floor)
+        },
     }
 }
 
@@ -1408,6 +1435,12 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.names.clone(),
         small.meter.to_state(),
     );
+    // The installed-names floor (wave-6 W6-7), exactly as the container
+    // path adopts it; bounds were validated by `SmallState::decode`.
+    if let Some(floor) = small.name_floor {
+        let ok = interp.restore_installed_names_floor(floor);
+        debug_assert!(ok, "validated name floor cannot fail to restore");
+    }
     // The symbol-key id table rides the small state too, restored
     // before anything can mint.
     let ok = interp.restore_symbol_key_table(small.symbols.next_id, &small.symbols.pairs);
@@ -1428,6 +1461,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.regexps,
         small.arguments_brands,
         small.temporal,
+        small.intl,
     );
     Ok(StoreSession {
         gen_dirty: std::collections::BTreeSet::new(),

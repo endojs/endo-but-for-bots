@@ -1774,10 +1774,67 @@ rather than work items.
     wrapper's length is not materialized), and
     `Object.prototype.toString.call(arguments)` answers
     `[object Object]` live (only the completion render consults the
-    brand). The Intl DATA tables (locales, collators, list/plural/
-    number formats, segmenters, segments+iterators, date-time
-    formats) remain Pending on codec volume alone — same pure-data
-    class, one hand-rolled codec per record struct, no blocker.
+    brand). The Intl DATA tables were recorded here as Pending on
+    codec volume alone — landed as the next item.
+  - [x] The Intl DATA record tables LANDED (2026-08-28, store schema
+    v12): the `INTL` atom + an eighteenth small-state section carrying
+    all nine tables (locales, collators, list/plural/number formats,
+    segmenters, segments + iterators, date-time formats),
+    owner-ascending with per-table codecs. Decode refuses
+    non-ascending owners, non-UTF-8, bad boolean/option tags, segment
+    boundaries outside their input, and a date-time component key
+    outside the engine's closed static set
+    (`dtf_component_key_static`); the bounds gate (both resume paths)
+    refuses a segment iterator naming no covering segments row or a
+    cursor past its list; the vm restore re-validates. Every
+    consuming method is a native on rooted boot structure, so a
+    resumed instance WORKS — a resumed segment iterator CONTINUES its
+    walk (the `lastIndex` discipline). Twins in `intl_carry.rs`
+    (memory, file, LAZY resume, blob), red-first, bite-checked four
+    ways (dropped rows; disabled accessor rebuild; disabled floor
+    restore, per resume path; disabled gate exemption).
+    The carry surfaced and closed two adjacent seams. First, the
+    `accessors` refuse-on-hold gate refused EVERY Intl-touching heap:
+    the first `Intl` reference installs the boot
+    `Intl.NumberFormat.prototype.format` getter, whose getter/setter
+    pair lives only in the non-traveling `accessors` side table. The
+    gate now EXEMPTS an entry that exactly matches a boot
+    `proto_accessors` seed — same key, the seed's own getter, no
+    setter — and `restore_snapshot_state` re-derives the pair from
+    boot structure (`rebuild_boot_accessors`; the RebuiltAtRestore
+    pattern inside a Pending row). A guest accessor, and a guest
+    REDEFINITION at the seed key, still refuse
+    (`pending_row_gates.rs`). Second, the installed-names floor —
+    wave-6 W6-7's register — did not travel: restore floored at the
+    FULL restored table, so a name interned DURING the live machine's
+    install pass (`format`, the Intl member keys) could never be
+    lazily installed by a resumed machine's growing relink. The
+    continuous twin installed `ListFormat.prototype.format` at its
+    first growing relink and answered; the resumed twin threw
+    TypeError forever. The floor now travels — the `NFLR` atom + the
+    nineteenth small-state section, canonicalized to ABSENT when it
+    equals the table length (one representation per meaning, which
+    keeps the container round-trip identical and every
+    floor-at-table machine byte-stable). `NFLR` is the container's
+    first new atom since the ledger carries, and every LINKED
+    machine's floor sits below its boot-appended table, so BOTH
+    golden pins moved consciously (the pin comments carry the
+    reason).
+    NOT carried, split into its own ledger row (`IntlBoundFunctions`,
+    Pending): the bound-function link tables
+    (`collator_compare_functions`, `number_format_bound_functions`)
+    and the `bound_format` cache. A minted bound compare/format
+    function IS a `functions` (`FuncInfo`) row, so the links are
+    dependency-gated with `proxies`/`accessors` — and they are
+    boundary-DROPPED rather than refused, because both getters
+    re-mint on a cache miss: an instance-held collator or format
+    answers identically after resume (first-access behavior), and
+    only a guest that held the bound function ITSELF degrades,
+    exactly as every held guest function does today. The 11→12
+    migration appends the two empty sections (a pure 8-byte suffix,
+    verify-root-then-restamp). The ledger stands at 18 Pending rows:
+    `IntlRecords` and the new `NameFloor` graduated Serialized;
+    `IntlBoundFunctions` joined Pending.
   - [ ] `proxies`, `accessors`: dependency-gated on the `functions`
     row, with the probe evidence recorded (2026-08-27): a resumed
     guest function is UNCALLABLE today (`f(2)` throws TypeError,
@@ -2620,6 +2677,20 @@ bite-checked by reverting the fix under the lock). Statuses:
   divergence is a full determinism break (results feed guest
   branches, so computrons diverge transitively). Recorded at
   `Interp::call_math` where the bodies live.
+- **The Intl carry (2026-08-28, store schema v12):** the nine Intl
+  DATA record tables travel in the `INTL` atom / eighteenth
+  small-state section, and the wave-6 W6-7 installed-names floor
+  travels in `NFLR` / the nineteenth — the register whose reset at
+  restore silently broke lazy installs of names interned during the
+  live link (caught red by the carry's own twins). The `accessors`
+  gate exempts the boot `proto_accessors` seed, which
+  `rebuild_boot_accessors` re-derives at restore, so Intl-touching
+  heaps persist at all. The bound-function links split into the
+  functions-gated `IntlBoundFunctions` row (boundary-dropped: the
+  getters re-mint on a cache miss). Full narrative in the Remaining
+  ledger's G3 entry; twins in `intl_carry.rs`; gate locks in
+  `pending_row_gates.rs`; both golden pins re-pinned for the first
+  deliberate container-format addition since the ledger carries.
 
 ## What Is the Problem Being Solved?
 

@@ -208,6 +208,8 @@ fn incremental_batch(
         regexps: Vec::new(),
         arguments_brands: Vec::new(),
         temporal: ironhorse_snapshot::image::TemporalImage::default(),
+        intl: ironhorse_vm::IntlTables::default(),
+        name_floor: None,
     };
     let mut page_edges: Vec<(u32, Vec<u32>)> = Vec::new();
     let slot_pages: Vec<(u32, Vec<u8>)> = slots

@@ -98,6 +98,19 @@ pub const ARGB: FourCc = FourCc(*b"ARGB");
 /// row): instants, durations, plains, zoneds, each owner-ascending.
 /// Ironhorse-specific; emitted only when non-empty (see [`ARRY`]).
 pub const TMPR: FourCc = FourCc(*b"TMPR");
+/// `NFLR` — the installed-names floor (wave-6 W6-7): the id ceiling at
+/// or below which partial install passes leave bindings alone. Four
+/// big-endian bytes. Emitted only when it differs from the name-table
+/// length (the conservative default a floor-less restore assumes), so
+/// pre-floor containers and floor-at-table machines stay byte-stable.
+pub const NFLR: FourCc = FourCc(*b"NFLR");
+/// `INTL` — the nine Intl record tables (ledger `IntlRecords` row):
+/// locales, collators, list formats, plural rules, number formats,
+/// segmenters, segments, segment iterators, date-time formats, each
+/// owner-ascending. Pure resolved-options data; the bound-function
+/// link satellites travel with the `functions` row, not here.
+/// Ironhorse-specific; emitted only when non-empty (see [`ARRY`]).
+pub const INTL: FourCc = FourCc(*b"INTL");
 
 /// The Ironhorse discriminator embedded at the head of the `VERS` atom. An
 /// Ironhorse snapshot is never mistaken for an XS one and vice versa
