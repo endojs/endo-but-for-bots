@@ -4,7 +4,7 @@ import '@endo/init/debug.js';
 
 import test from 'ava';
 import { commandSelectorComponent } from '@endo/spaces-util/command-selector.js';
-import { createDOM, tick, waitFor } from '../helpers/dom-setup.js';
+import { createDOM, waitFor } from '../helpers/dom-setup.js';
 
 const { document: testDocument } = createDOM();
 
@@ -32,10 +32,6 @@ const setupSelector = async (overrides = {}) => {
 
   const selector = commandSelectorComponent(options);
 
-  // Let the root component's mount effect (which wires the controller setter)
-  // settle. Generous because the first test pays SES/Preact warmup.
-  await tick(80);
-
   return { $menu, selector, selected, cancels };
 };
 
@@ -43,7 +39,11 @@ test.serial('show renders the command list and the hint footer', async t => {
   const { $menu, selector } = await setupSelector();
 
   selector.show();
-  await waitFor(() => $menu.classList.contains('visible'));
+  await waitFor(
+    () =>
+      $menu.classList.contains('visible') &&
+      $menu.querySelectorAll('.token-menu-item').length > 0,
+  );
 
   t.true(selector.isVisible(), 'selector reports visible');
   t.true($menu.classList.contains('visible'), 'container has visible class');
