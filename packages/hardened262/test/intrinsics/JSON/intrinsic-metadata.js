@@ -4,20 +4,25 @@ features: [JSON, Symbol.toStringTag]
 ---*/
 
 // %JSON% is a namespace object rather than a constructor. Lockdown hardens the
-// intrinsic, but must preserve its identity and ordinary prototype chain.
-var metadata = [
-  typeof JSON,
-  Object.getPrototypeOf(JSON) === Object.prototype,
-  JSON[Symbol.toStringTag],
-  Object.prototype.toString.call(JSON),
-  typeof JSON.parse,
-  typeof JSON.stringify,
-].join('|');
-
+// intrinsic, but must preserve its identity and ordinary prototype chain; each
+// fact is pinned as its own assertion.
+assert.sameValue(typeof JSON, 'object', '%JSON% is a namespace object');
 assert.sameValue(
-  metadata,
-  'object|true|JSON|[object JSON]|function|function',
-  'the %JSON% namespace is an object rooted at %Object.prototype% with callable parse and stringify methods',
+  Object.getPrototypeOf(JSON),
+  Object.prototype,
+  '%JSON% chains directly to %Object.prototype%',
+);
+assert.sameValue(JSON[Symbol.toStringTag], 'JSON', '%JSON%[Symbol.toStringTag]');
+assert.sameValue(
+  Object.prototype.toString.call(JSON),
+  '[object JSON]',
+  '%JSON% Object.prototype.toString tag',
+);
+assert.sameValue(typeof JSON.parse, 'function', '%JSON.parse% is callable');
+assert.sameValue(
+  typeof JSON.stringify,
+  'function',
+  '%JSON.stringify% is callable',
 );
 
 var parsed = JSON.parse('{"answer":21,"items":[1,2]}', function (key, value) {
