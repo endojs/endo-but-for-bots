@@ -31,8 +31,8 @@
  * confine module scope but do not rest on repaired intrinsics.
  */
 
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
 import { makeCapTP } from '@endo/captp';
 
 import {
@@ -54,7 +54,7 @@ const workerFacet = makeXsWorkerFacet({ markShouldTerminate });
 /** @param {Record<string, unknown>} message */
 const send = message => {
   const json = JSON.stringify(message);
-  node.sendEnvelope(daemonHandle, 'deliver', bytesFromText(json));
+  node.sendEnvelope(daemonHandle, 'deliver', encodeUtf8(json));
 };
 
 const { dispatch } = makeCapTP('Endo', send, workerFacet, {
@@ -67,7 +67,7 @@ const { dispatch } = makeCapTP('Endo', send, workerFacet, {
 // traceable, and its console routes to the Rust `trace` host
 // function, so report before returning rather than swallowing.
 node.registerSession(daemonHandle, payload => {
-  const json = bytesToText(payload);
+  const json = decodeUtf8(payload);
   let message;
   try {
     message = JSON.parse(json);

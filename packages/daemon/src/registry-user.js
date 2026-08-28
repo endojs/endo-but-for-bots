@@ -22,7 +22,7 @@
 import { makeError, q, X } from '@endo/errors';
 import { encodeBase64 } from '@endo/base64';
 import { decodeHex } from '@endo/hex';
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { readTarEntries, tarPathSegments } from '@endo/tar/reader.js';
 import { makeRegistryMissingPackageError } from './registry.js';
 
@@ -185,7 +185,7 @@ export const makeRegistryBackend = ({
         }
       }
       entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-      const json = bytesFromText(JSON.stringify(entries));
+      const json = encodeUtf8(JSON.stringify(entries));
       return contentStore.store(singleChunk(json));
     };
 
@@ -255,7 +255,7 @@ export const makeRegistryBackend = ({
       // Fall back to reading `package.json` out of the live tree capability.
       const blob = await /** @type {any} */ (treeRef).lookup('package.json');
       const text = await blob.text();
-      return bytesFromText(text);
+      return encodeUtf8(text);
     },
 
     sha256Hex,

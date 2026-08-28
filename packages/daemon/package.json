@@ -91,6 +91,7 @@
     "@endo/stream": "workspace:^",
     "@endo/stream-node": "workspace:^",
     "@endo/tar": "workspace:^",
+    "@endo/utf8": "workspace:^",
     "@endo/where": "workspace:^",
     "@endo/zip": "workspace:^",
     "better-sqlite3": "^11.0.0",

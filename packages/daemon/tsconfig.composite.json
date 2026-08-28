@@ -105,6 +105,9 @@
       "path": "../tar/tsconfig.composite.json"
     },
     {
+      "path": "../utf8/tsconfig.composite.json"
+    },
+    {
       "path": "../where/tsconfig.composite.json"
     },
     {

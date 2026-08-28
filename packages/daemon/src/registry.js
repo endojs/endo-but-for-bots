@@ -20,7 +20,7 @@
 
 import { makeExo } from '@endo/exo';
 import { makeError, q, X } from '@endo/errors';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
 import { RegistryInterface } from './interfaces.js';
 
 // #region Structured errors
@@ -546,7 +546,7 @@ export const makeRegistryTable = ({ maxEntries = 0 } = {}) => {
  */
 const parsePackageJson = bytesOrText => {
   const text =
-    typeof bytesOrText === 'string' ? bytesOrText : bytesToText(bytesOrText);
+    typeof bytesOrText === 'string' ? bytesOrText : decodeUtf8(bytesOrText);
   let parsed;
   try {
     parsed = JSON.parse(text);

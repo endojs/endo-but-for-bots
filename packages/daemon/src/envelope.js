@@ -1,8 +1,8 @@
 // @ts-check
 /* eslint-disable no-bitwise */
 
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
 import { concatBytes } from '@endo/bytes/concat.js';
 
 /**
@@ -88,7 +88,7 @@ const cborAppendBytes = (buf, data) => {
  * @param {string} s
  */
 const cborAppendText = (buf, s) => {
-  const encoded = bytesFromText(s);
+  const encoded = encodeUtf8(s);
   cborAppendHead(buf, CBOR_TEXT, encoded.length);
   for (let i = 0; i < encoded.length; i += 1) {
     buf.push(encoded[i]);
@@ -211,7 +211,7 @@ const cborReadText = cursor => {
   if (major !== CBOR_TEXT) {
     throw new Error(`CBOR: expected text (major 3), got major ${major}`);
   }
-  const result = bytesToText(
+  const result = decodeUtf8(
     cursor.data.subarray(cursor.pos, cursor.pos + value),
   );
   cursor.pos += value;

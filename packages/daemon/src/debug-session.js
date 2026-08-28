@@ -9,8 +9,8 @@
  */
 
 import { makePromiseKit } from '@endo/promise-kit';
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
 
 /** @import { PromiseKit } from '@endo/promise-kit' */
 
@@ -401,7 +401,7 @@ export const makeDebugSession = sendToWorker => {
   const sendCommand = xml => {
     // xsbug protocol prefixes commands with BOM + \r\n.
     const full = `\r\n${xml}\r\n`;
-    sendToWorker(bytesFromText(full));
+    sendToWorker(encodeUtf8(full));
   };
 
   /**
@@ -426,7 +426,7 @@ export const makeDebugSession = sendToWorker => {
   /** @type {DebugSession} */
   const session = {
     feedXml(bytes) {
-      const text = bytesToText(bytes);
+      const text = decodeUtf8(bytes);
       parser.feed(text);
     },
 
