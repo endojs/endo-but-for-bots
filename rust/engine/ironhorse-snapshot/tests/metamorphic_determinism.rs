@@ -112,7 +112,12 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // and helper surface, the Map/Set iterator prototypes, the
         // async-generator metadata) — a CONTENT move on the base, the
         // same class as the first llm re-pin. Format unchanged.
-        "3b5dcfe933771be479571e7e6fb10a2f4d7e35e8eec7c04a8b8ac990234c13af",
+        // Re-pinned 2026-08-28 once more for a FORMAT version bump
+        // (review finding 1): the write stamp moved to 2, marking the
+        // side-table atom family, so a version-1 exact-match reader
+        // refuses these containers instead of silently dropping that
+        // state. Only the `VERS` payload bytes moved.
+        "22843b227177b4af77b9ac5d1a95df9c191188a34ebeb41c7116557a3e8d9c77",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -173,7 +178,11 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         store.manifest().unwrap().seal,
         // Both pins moved again at the second llm rebase (2026-08-28):
         // the mainline boot-heap growth above — content, not format.
-        "7474a44c70a007dcf3531584032837dd36574949469b86d1cde55a3b303df9da",
+        // And again for the format-version bump (review finding 1):
+        // the manifest embeds the `VERS` stamp, so the seal moves with
+        // the blob — the one other deliberate exception to the two-pin
+        // independence, exercised by a version field doing its job.
+        "9e75a21a588d5f02538a81d116bd4522d6f796b3d6833dbf8e753d8a863ff549",
         "epoch-3 seal chain"
     );
 }
