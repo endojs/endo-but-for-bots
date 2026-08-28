@@ -1877,8 +1877,8 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/crc32@workspace:packages/crc32"
   dependencies:
-    "@endo/bytes": "workspace:^"
     "@endo/harden": "workspace:^"
+    "@endo/utf8": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -3098,7 +3098,6 @@ __metadata:
   resolution: "@endo/platform@workspace:packages/platform"
   dependencies:
     "@endo/base64": "workspace:^"
-    "@endo/bytes": "workspace:^"
     "@endo/captp": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
