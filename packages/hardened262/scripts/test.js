@@ -13,6 +13,7 @@ import TestStream from 'test262-stream';
 
 // agents:
 import { testSesNode } from './agents/node.js';
+import { testIronhorse } from './agents/ironhorse.js';
 import { testXs } from './agents/xs.js';
 
 // This harness reuses its own package root as the test262 corpus directory, so
@@ -289,32 +290,57 @@ const compactEnd = test => {
       test.mode,
       test.lockdown ? 'lockdown' : '',
       test.compartment ? 'compartment' : '',
+      test.skipReason ?? test.failureReason ?? '',
     ].join(':'),
   );
 };
 
-// Which (agent, scenario) pairs an agent actually executes today. Every agent
-// currently drives only the `module` and `lockdownModule` scenarios; the
-// remaining sloppy/strict modes and the whole compartment axis are generated
-// (and enumerated by `--list`) but not yet wired to any agent.
-export const agentRunsScenario = scenario =>
-  scenario === 'module' || scenario === 'lockdownModule';
+// Which (agent, scenario) pairs execute today. XS and Node.js use their module
+// entry points. Ironhorse's compiler currently accepts scripts, so its bare and
+// SES-shim deliveries exercise sloppy/strict, with and without lockdown. The
+// whole compartment axis remains generated. Ironhorse records every scenario
+// it does not yet run as a failure so its baseline has no skips.
+export const agentRunsScenario = (agent, scenario) => {
+  if (agent === 'ironhorse' || agent === 'sesIronhorse') {
+    return (
+      scenario === 'sloppy' ||
+      scenario === 'strict' ||
+      scenario === 'lockdownSloppy' ||
+      scenario === 'lockdownStrict'
+    );
+  }
+  return scenario === 'module' || scenario === 'lockdownModule';
+};
 
 export async function* runTests({ quiet, begin }, tests) {
   for await (const test of tests) {
     const { agent, scenario } = test;
     begin(test);
-    if (!agentRunsScenario(scenario)) {
+    if (!agentRunsScenario(agent, scenario)) {
       // Report the scenario as an explicit skip rather than silently dropping
       // it, so a run and `--list` enumerate the same scenarios and un-covered
       // cases stay visible.
-      yield { ...test, skipped: true };
+      if (agent === 'ironhorse' || agent === 'sesIronhorse') {
+        yield {
+          ...test,
+          ok: false,
+          code: 1,
+          signal: null,
+          failureReason: 'structural:scenario-not-supported',
+        };
+      } else {
+        yield { ...test, skipped: true };
+      }
     } else if (agent === 'xs') {
       yield await testXs(test, { sesShim: false, quiet });
     } else if (agent === 'sesXs') {
       yield await testXs(test, { sesShim: true, quiet });
     } else if (agent === 'sesNode') {
       yield await testSesNode(test, { quiet });
+    } else if (agent === 'ironhorse') {
+      yield await testIronhorse(test, { sesShim: false, quiet });
+    } else if (agent === 'sesIronhorse') {
+      yield await testIronhorse(test, { sesShim: true, quiet });
     } else {
       yield { ...test, skipped: true };
     }
@@ -485,7 +511,13 @@ const main = async () => {
   const conditions = Object.fromEntries(
     (flagArguments ?? []).map(flag => [flag, true]),
   );
-  const agents = agentArguments ?? ['xs', 'sesXs', 'sesNode'];
+  const agents = agentArguments ?? [
+    'xs',
+    'sesXs',
+    'sesNode',
+    'ironhorse',
+    'sesIronhorse',
+  ];
   const tests = scenariosForTests(stream, agents, conditions);
 
   const resultArtifactRequested =

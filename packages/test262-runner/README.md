@@ -9,13 +9,13 @@ The `ses-xs-parity` axis runs against three hosts off one maintained subset:
 
 * `yarn test262:xs` — XS via `xst` and the SES prelude.
 * `yarn test262:node` — Node.js and the SES prelude.
-* `yarn test262:ironhorse` — Ironhorse, the XS→Rust port, via its `ironhorse-xst`
-  runner in SES lockdown mode (`xst262.c`'s `-l`). ironhorse-xst walks this same
+* `yarn test262:ironhorse` — Ironhorse, the XS→Rust port, via its `endot-ih`
+  runner in SES lockdown mode (`xst262.c`'s `-l`). endot-ih walks this same
   `test262/` tree filtered to `ses-xs-parity`, so no separate corpus is
   needed. Ironhorse's guest `lockdown()`/`Compartment` surface is still landing,
   so a case that needs it reports an honest named skip today and lights up as
   the surface lands; the run is green (zero failures) either way. Requires a
-  Rust toolchain and the `c/moddable` submodule (the XS oracle ironhorse-xst
+  Rust toolchain and the `c/moddable` submodule (the XS oracle endot-ih
   diffs against), the same XS dependency the `xs` host already needs.
 
 See `designs/ironhorse-test262-convergence.md` for the convergence that

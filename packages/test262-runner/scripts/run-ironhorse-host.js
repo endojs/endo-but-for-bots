@@ -2,13 +2,13 @@
 // the `ses-xs-parity` axis, alongside `xst` (`test262:xs`) and node
 // (`test262:node`). Where those two drive the checked-in subset through the
 // npm `test262-harness` with a SES prelude, Ironhorse drives the SAME subset
-// through its own `ironhorse-xst` runner (design
+// through its own `endot-ih` runner (design
 // `designs/ironhorse-test262-convergence.md` § Part 2 + § Staging step
 // 4): the xst-analogue runner already walks this tree, so joining the parity
 // axis is one lockdown-mode invocation filtered to the `ses-xs-parity`
 // feature.
 //
-// ironhorse-xst is a Rust binary in the engine workspace (`rust/engine`), so this
+// endot-ih is a Rust binary in the engine workspace (`rust/engine`), so this
 // wrapper builds it with cargo and runs it over `test262/` with:
 //   -l                         the SES lockdown mode (xst262.c's `-l`), the
 //                              engine-side analogue of the SES prelude xs/node
@@ -16,7 +16,7 @@
 //   --feature-filter ses-xs-parity   run ONLY the ses-xs-parity-marked cases
 //                              (the `test262-harness --features-include`
 //                              semantics the xs/node scripts use);
-//   --features-include ses-xs-parity opt that feature out of ironhorse-xst's own
+//   --features-include ses-xs-parity opt that feature out of endot-ih's own
 //                              not-implemented skip list so the cases are
 //                              attempted rather than pre-skipped on the marker.
 //
@@ -50,15 +50,7 @@ const run = (command, args, cwd) => {
 // Build once (release, so a whole-tree walk is not debug-slow), then run.
 const buildStatus = run(
   'cargo',
-  [
-    'build',
-    '--release',
-    '--quiet',
-    '-p',
-    'ironhorse-262',
-    '--bin',
-    'ironhorse-xst',
-  ],
+  ['build', '--release', '--quiet', '-p', 'ironhorse-262', '--bin', 'endot-ih'],
   engineDir,
 );
 if (buildStatus !== 0) {
@@ -77,7 +69,7 @@ const runStatus = run(
     '-p',
     'ironhorse-262',
     '--bin',
-    'ironhorse-xst',
+    'endot-ih',
     '--',
     '-l',
     '--feature-filter',

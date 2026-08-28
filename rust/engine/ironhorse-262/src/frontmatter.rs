@@ -6,7 +6,7 @@
 //! reads it through `yaml-rust2`, a pure-Rust YAML 1.2 parser, so the
 //! crate's `#![forbid(unsafe_code)]` holds. This lifts the three fields
 //! `test262.rs` hand-scanned (`flags`, `includes`, presence of `negative`)
-//! to the full block the `ironhorse-xst` verdict layer needs: the typed
+//! to the full block the `endot-ih` verdict layer needs: the typed
 //! `negative` (`phase` + `type`), `features` (the skip-list axis), and
 //! `description`/`info` prose.
 

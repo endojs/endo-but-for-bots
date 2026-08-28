@@ -143,7 +143,7 @@ awaited promise — the exact infrastructure `Promise.prototype.finally`
   named. `language/statements/async-generator` + `for-await-of` stay the
   **designated scope fold**: named skips `async-generator` / `for-await-of`.
 
-**Harness wiring — LANDED** (convergence child 3/5, PR #600). The `ironhorse-xst`
+**Harness wiring — LANDED** (convergence child 3/5, PR #600). The `endot-ih`
 runner now graduates `flags: [async]` cases from the `structural:async-or-can-
 block` pre-skip to real dual-run verdicts (`ironhorse_262::xst::run_async_case`):
 a pure-JS async prelude defines `$DONE`/`print` once (byte-identical on both
@@ -154,7 +154,7 @@ unhandled-rejection latch off Ironhorse after the drain
 `the->rejection`). The base dual-run verdict is refined by the latch: only a
 clean `Test262:AsyncTestComplete` on a `Covered` base counts as covered;
 every other signal (reported failure, did-not-run, unhandled rejection) is an
-honest `async:*` named skip, never a `Fail`. Graduated `ironhorse-xst` covered
+honest `async:*` named skip, never a `Fail`. Graduated `endot-ih` covered
 (divergent=0): await 10, async-function 22, `built-ins/AsyncFunction` 1,
 `built-ins/Promise` 68. Bars in `ironhorse-262/src/xst.rs`.
 - Grow `built-ins/Promise` further only once native reaction handlers land

@@ -547,6 +547,9 @@ jobs:
         with:
           path: endo
           persist-credentials: false
+          # @endo/hardened262 now invokes endot-ih in its coverage matrix;
+          # the existing runner builds its pinned XS oracle from this tree.
+          submodules: true
 
       # without this, setup-node errors on mismatched yarn versions
       - run: corepack enable

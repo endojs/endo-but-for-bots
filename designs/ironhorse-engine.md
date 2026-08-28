@@ -651,7 +651,7 @@ into a proper analogue of `xst` (XS's test262 runner). The sibling
 design
 [ironhorse-test262-convergence](ironhorse-test262-convergence.md)
 specs both halves — the case shape and `features:`-marker gating,
-the meter assertions kept out of test bodies, and the `ironhorse-xst`
+the meter assertions kept out of test bodies, and the `endot-ih`
 runner that subsumes this harness with the differential oracle as
 its Ironhorse extension. That milestone is parked behind the remaining
 build stages; nothing in it changes the stage bars above.
@@ -1128,7 +1128,7 @@ annotations inline mark exactly what changed.
    `endor-262` → `ironhorse-262`, `endor-fuzz` → `ironhorse-fuzz`,
    `endor-oracle` → `xs-oracle` (the oracle binds the XS engine, so
    it names what it binds); the test262 runner `endor-xst` →
-   `ironhorse-xst`; the cargo feature `endor-engine` →
+   `endot-ih`; the cargo feature `endor-engine` →
    `ironhorse-engine`; the daemon seam module `endor_engine` →
    `ironhorse_engine`; the snapshot image magic
    `ENDOR_MAGIC`/`b"ENDR"` → `IRONHORSE_MAGIC`/`b"IRON"`; the

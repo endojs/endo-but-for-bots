@@ -37,7 +37,7 @@ pure test262 program.
 
 ## The bar
 
-`tests/regressions_dual_run.rs` runs this tree through the same `ironhorse-xst`
+`tests/regressions_dual_run.rs` runs this tree through the same `endot-ih`
 machinery a nightly run uses and holds every case to one bar: **zero
 divergence**. A case may be a *named* skip (a parse-negative awaiting the
 compiler flip), but a verdict/observable disagreement fails the build. This

@@ -2,7 +2,7 @@
 //! It is the deterministic,
 //! oracle-free half of the full run — every subcommand is pure filesystem work,
 //! unit-tested in [`ironhorse_262::report`] — leaving the heavy per-case oracle
-//! execution to `ironhorse-xst`, which the orchestrator (`scripts/full-run.sh`)
+//! execution to `endot-ih`, which the orchestrator (`scripts/full-run.sh`)
 //! drives one batch per process so the XS oracle's retained RSS cannot OOM.
 //! Run with `--help` for the single authoritative subcommand reference.
 
@@ -333,6 +333,6 @@ SUBCOMMANDS:
     quarantine --test262-dir DIR --batch BATCH --run-id ID --reason REASON --json OUT
         Write an infrastructure-classified batch after repeated worker failures.
 
-The oracle-heavy per-case execution is `ironhorse-xst --direct-only --json`; this CLI
+The oracle-heavy per-case execution is `endot-ih --direct-only --json`; this CLI
 never runs a case, so every subcommand is deterministic and fast.
 ";

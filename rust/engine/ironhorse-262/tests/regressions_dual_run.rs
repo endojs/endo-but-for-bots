@@ -6,7 +6,7 @@
 //! trophies: each minimized, fixed source divergence is checked in as a
 //! test262-style case (features `ironhorse-dual-run`, the fuzz arm named in
 //! `info:`), so a finding becomes a regression test rather than a line in a
-//! stage corpus. This test runs that tree through the same `ironhorse-xst`
+//! stage corpus. This test runs that tree through the same `endot-ih`
 //! machinery a nightly run uses and holds it to the one bar a regression case
 //! must always meet: **zero divergence**. A case may still be a *named* skip
 //! (a parse-phase negative waits on the `ironhorse-compile` default flip, exactly

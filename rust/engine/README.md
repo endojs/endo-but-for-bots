@@ -165,17 +165,17 @@ cargo run -p ironhorse-262 --bin harness          # stage-1 corpus
 cargo run -p ironhorse-262 --bin harness -- '1 + 2 * 3'   # ad-hoc program
 cargo test  --workspace -- --test-threads=1   # includes the bar as a test
 
-# The xst-analogue test262 runner (`ironhorse-xst`, design § Part 2) — the
+# The xst-analogue test262 runner (`endot-ih`, design § Part 2) — the
 # dual-run runner that subsumes the retired `test262-language` walker.
 # Run per subtree — the XS oracle accumulates memory across a whole-tree
 # walk, so `expressions`/`statements` in separate processes bound the RSS.
-cargo run -p ironhorse-262 --bin ironhorse-xst -- expressions
-cargo run -p ironhorse-262 --bin ironhorse-xst -- statements/for
+cargo run -p ironhorse-262 --bin endot-ih -- expressions
+cargo run -p ironhorse-262 --bin endot-ih -- statements/for
 # The stage-3 built-ins sections run through the same binary:
-cargo run -p ironhorse-262 --bin ironhorse-xst -- built-ins/Boolean
+cargo run -p ironhorse-262 --bin endot-ih -- built-ins/Boolean
 # The full frontmatter, negative verdicts, feature skip list, and the
-# xst-shaped YAML report (`-o`) are documented in `ironhorse-xst --help`.
-cargo run -p ironhorse-262 --bin ironhorse-xst -- -o report.yaml built-ins/Math
+# xst-shaped YAML report (`-o`) are documented in `endot-ih --help`.
+cargo run -p ironhorse-262 --bin endot-ih -- -o report.yaml built-ins/Math
 ```
 
 The stage-scoped curated corpora under `ironhorse-262/corpora/` are the
@@ -770,7 +770,7 @@ code unit** (XS's `c_strcmp`), then the single symbol key `@@toStringTag` →
 audited oracle seam: the `xs-oracle` shim compiles the **script goal only**
 (`fxParseScript(..., mxProgramFlag | mxEvalFlag)`); it does not drive the module
 goal / loader, so a top-level `import`/`export` is a script-goal syntax error and
-the `ironhorse-xst` runner already names every `module`-flagged test a
+the `endot-ih` runner already names every `module`-flagged test a
 `structural:module` skip. Extending the shim to drive `fxParseModule` +
 `fxLinkModules` + a resolve hook across the FFI is a larger, separately-audited
 seam this static child deliberately does not open; the **differential gap is
@@ -1067,7 +1067,7 @@ under the id that program assigned it (`ironhorse_vm::run_program_with_symbols`)
 monorepo's existing `packages/test262-runner` test262 subset — the same
 tree and convention that package already uses to prove XS↔Node HardenedJS
 parity — rather than a separate pinned test262 submodule. The
-`ironhorse-xst` runner (modules `ironhorse_262::{xst,test262}`) assembles each
+`endot-ih` runner (modules `ironhorse_262::{xst,test262}`) assembles each
 `language/` test the standard test262 way and dual-runs it, reporting an
 **honest covered/skipped split**: `covered` is bit-exact (result AND
 computron, four-valued completion) only; every skip is named by the opcode
@@ -1098,7 +1098,7 @@ signal, the did-not-run case, and an unhandled rejection each become an
 honest named skip (`async:*`) — never a `Fail`, since on a `Covered` base the
 oracle agreed with Ironhorse, so any non-success signal reflects the shared
 execution, not an Ironhorse defect (a genuine Ironhorse divergence is already caught
-by the completion/computron differential). Graduated `ironhorse-xst` covered
+by the completion/computron differential). Graduated `endot-ih` covered
 counts, `divergent=0` throughout: `language/expressions/await` 10,
 `language/statements/async-function` 22, `built-ins/AsyncFunction` 1,
 `built-ins/Promise` 68 (the async-flagged Promise cases now run end-to-end).
@@ -1793,7 +1793,7 @@ These are the remaining child-6/7 surface.
 > `compile-diff` (no arg): **1711/1711 identical, divergent=0 endor-rejected=0
 > accept-disagree=0**; module corpora in-crate. Determinism spot-check:
 > `compile-diff -- eval-code` run twice -> byte-identical output (151/151).
-> Stage-4 dual-run spot-checks (`ironhorse-xst`), EXIT=0, no crash-aborts, all
+> Stage-4 dual-run spot-checks (`endot-ih`), EXIT=0, no crash-aborts, all
 > skips named (`endor-aborted` is a named SKIP reason, not a crash):
 > `built-ins/Object` **175/0 of 3127** (2952 skipped by named reason),
 > `built-ins/Function` **40/0 of 511** (471 skipped), `built-ins/Array` **435/0
@@ -1996,7 +1996,7 @@ strongest form.
 > smokes). Curated corpora `compile-diff` (no arg): **1711/1711 identical,
 > divergent=0 endor-rejected=0 accept-disagree=0**; module corpora 45/45
 > (in-crate). Determinism spot-check: `compile-diff -- eval-code` run twice ->
-> byte-identical output. Stage-4 dual-run spot-checks (`ironhorse-xst`),
+> byte-identical output. Stage-4 dual-run spot-checks (`endot-ih`),
 > EXIT=0, no crash-aborts, all skips named: `built-ins/Object` **176/0 of 3127**
 > (2951 skipped by named reason -- `endor-aborted` + `unsupported-opcode:*`),
 > `built-ins/Function` **40/0 of 511**, `built-ins/Array` **437/0 of 2625**.
@@ -2626,7 +2626,7 @@ everywhere), so no `oracle-rejected` is a divergence.
   `class_field_init_direct_eval`, `class_accessor_numeric_key_canonicalization`,
   `numeric_property_key_index_boundary`,
   `named_class_with_heritage_names_constructor`, `captured_function_self_name`).
-- **Stage-4 dual-run spot-checks** (`ironhorse-xst <t>`, `Compiler::Oracle`):
+- **Stage-4 dual-run spot-checks** (`endot-ih <t>`, `Compiler::Oracle`):
   `built-ins/Object total=3127 covered=176 divergent=0`, `built-ins/Function
   total=511 covered=40 divergent=0`, `built-ins/Array total=2625 covered=437
   divergent=0` — all EXIT=0, **no crash-aborts** (every skip a named
@@ -2942,7 +2942,7 @@ children:
 >   **total=20603 identical=16981 divergent=0 oracle-rejected=3622
 >   endor-rejected=0 accept-disagree=0** — exactly the s19 anchor at
 >   `69ec87becb`, all rejections agreed.
-> - **Stage-4 dual-run spot-checks** (`ironhorse-xst`), EXIT=0, all skips named:
+> - **Stage-4 dual-run spot-checks** (`endot-ih`), EXIT=0, all skips named:
 >   `built-ins/Object` **182 covered / 0 failed** (of 3127; 2945 named skips),
 >   `built-ins/Function` **43 / 0** (of 511; 468 skips), `built-ins/Array`
 >   **487 / 0** (of 2625; 2138 skips) — the covered-counts recovered above the
