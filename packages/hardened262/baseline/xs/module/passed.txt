@@ -60,3 +60,4 @@ test/intrinsics/MapIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/RegExpStringIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/SetIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/StringIteratorPrototype/intrinsic-metadata.js
+test/intrinsics/ThrowTypeError/intrinsic-metadata.js
