@@ -128,6 +128,35 @@ with, and is measured against, the 8.3.1 oracle at the stage that reaches it.
 No item below diverges from the *current* (8.3.1) oracle: the port matches
 8.3.1 today across every surface it has reached.
 
+## Running the fuzzers locally
+
+Fuzzing is **no longer part of pull-request CI** — the `fuzz-ironhorse` job was
+removed so a latent crash never reddens an unrelated PR. A garden background service
+now drives all of the `ironhorse-fuzz` targets **continuously** over a persistent
+corpus and files each distinct reproducible finding as a standing repair PR (design:
+`designs/continuous-ironhorse-fuzz.md` in kriscendobot/garden). The targets stay
+fully runnable locally:
+
+```sh
+# 1. Build the XS oracle submodule (needed for the differential targets — see above).
+# 2. Install the pinned nightly + cargo-fuzz (the pin lives in
+#    rust/engine/ironhorse-fuzz/fuzz/rust-toolchain.toml, no longer only in CI):
+rustup toolchain install nightly-2026-08-15 --profile minimal
+cargo install cargo-fuzz --locked
+# 3. Run any target from the fuzz project (the toolchain file selects the nightly):
+cd rust/engine/ironhorse-fuzz
+cargo fuzz run parser            # or differential_compile, snapshot_decoder, bytecode_decoder, …
+cargo fuzz run parser -- -max_total_time=30   # bounded, mirrors the old CI smoke
+```
+
+The maintained targets are `differential_source`, `bytecode_decoder`,
+`differential_stage2b`, `differential_regexp`, `differential_regexp_surface`,
+`parser`, `differential_compile`, `snapshot_roundtrip`, and `snapshot_decoder`.
+Crashing inputs land in `fuzz/artifacts/`; reduce with `cargo fuzz tmin <target>
+<input>`. A finding's durable regression is a Rust unit test in `ironhorse-vm` (the
+`fuzz/corpus` and `fuzz/artifacts` trees are gitignored, so a corpus seed cannot be
+a committed regression).
+
 ## Running the harness
 
 ```sh
