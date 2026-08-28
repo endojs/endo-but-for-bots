@@ -69,6 +69,7 @@ import { lookupPath } from './name-hub.js';
  * hardened — both sides assign onto it.
  *
  * @typedef {object} TokenMenuController
+ * @property {TokenMenuState | null} state
  * @property {(s: TokenMenuState | null) => void} [setState]
  * @property {(index: number) => void} [onHover]
  * @property {(name: string) => void} [onPick]
@@ -173,6 +174,7 @@ const TokenAutocompleteRoot = ({ controller }) => {
 
   useEffect(() => {
     controller.setState = setState;
+    setState(controller.state);
     return () => {
       if (controller.setState === setState) delete controller.setState;
     };
@@ -241,7 +243,7 @@ export const tokenAutocompleteComponent = (
   // component's effect). Intentionally NOT hardened — the component writes its
   // setter and the host writes the row callbacks onto it.
   /** @type {TokenMenuController} */
-  const controller = {};
+  const controller = { state: null };
 
   // Subscribe to inventory changes (skip if external names are provided)
   if (!externalPetNames) {
@@ -280,8 +282,9 @@ export const tokenAutocompleteComponent = (
     pendingToken = null;
     pathPrefix = [];
     directoryNames = null;
+    controller.state = null;
     if (controller.setState) {
-      controller.setState(null);
+      controller.setState(controller.state);
     }
   };
 
@@ -319,14 +322,13 @@ export const tokenAutocompleteComponent = (
    * @param {string} filterText
    */
   const render = filterText => {
+    controller.state = harden({
+      names: [...filteredNames],
+      selectedIndex,
+      filterText,
+    });
     if (controller.setState) {
-      controller.setState(
-        harden({
-          names: [...filteredNames],
-          selectedIndex,
-          filterText,
-        }),
-      );
+      controller.setState(controller.state);
     }
     const $selected = $menu.querySelector('.token-menu-item.selected');
     if ($selected) {
