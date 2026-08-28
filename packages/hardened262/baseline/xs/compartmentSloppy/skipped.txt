@@ -9,6 +9,7 @@ test/Compartment/import-now-hook/returns-undefined.js
 test/Compartment/import-now-hook/source-specifier-descriptor.js
 test/freeze/monadic.js
 test/intrinsics/ArrayIteratorPrototype/intrinsic-metadata.js
+test/intrinsics/AsyncFunction/intrinsic-metadata.js
 test/intrinsics/AsyncGeneratorFunction/intrinsic-metadata.js
 test/intrinsics/AsyncGeneratorPrototype/intrinsic-metadata.js
 test/intrinsics/AsyncIteratorPrototype/intrinsic-metadata.js
