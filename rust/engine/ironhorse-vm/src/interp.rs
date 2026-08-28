@@ -142,6 +142,26 @@ pub const STACK_SLOT_RESERVED: usize = 32;
 /// separately.
 pub const FRAME_OVERHEAD_SLOTS: usize = 4;
 
+/// Ceiling on **native `dispatch_at` re-entry depth**. An ordinary bytecode
+/// CALL loops within a single `dispatch_at` (it rewrites `pc` and pushes a
+/// `CallerState`), so deep JS recursion consumes value-stack slots, not native
+/// Rust stack, and is bounded by the [`STACK_SLOT_COUNT`] value-stack budget
+/// alone. But a callback (`Array.prototype.map`/`forEach`/…), an async body
+/// (`START_ASYNC`), an async-generator resume, and a generator resume each
+/// drive the callee by *recursively* calling `dispatch_at` on the native stack.
+/// The value-stack budget (~4064 slots) is calibrated to XS's `fxOverflow`
+/// point; reached by native re-entry it implies hundreds of nested frames of
+/// the (very large) `dispatch_at` activation, which overflows the real thread
+/// stack — and thus the libFuzzer/ASan `bytecode_decoder` process — long before
+/// the value-slot guard can fire (endojs/endo-but-for-bots#1046:
+/// `[193, 193, 37, 253, 45, 93]` = nested `START_ASYNC`). This ceiling bounds
+/// the native re-entry depth well below any real thread-stack limit while
+/// staying far above any real program's callback/async/generator nesting,
+/// degrading a degenerate nest to a host-abort [`Halt::StackOverflow`]. It is
+/// deliberately conservative: the `dispatch_at` activation is tens of KiB, so
+/// even a few hundred levels can exhaust a main-thread stack.
+pub const DISPATCH_REENTRY_LIMIT: usize = 64;
+
 /// The fixed cost, in computrons, of the top-level program invocation
 /// that precedes the captured program bytecode. XS dispatches the
 /// program-as-function through its call machinery before the first
@@ -3606,6 +3626,12 @@ pub struct Interp {
     /// computron count, which now also folds in the program overhead and
     /// the allocation metering.
     n_dispatched: u64,
+    /// Current **native `dispatch_at` re-entry depth** (callbacks, async
+    /// bodies, async-generator and generator resumes each recurse into
+    /// `dispatch_at`). Bounded by [`DISPATCH_REENTRY_LIMIT`] so a degenerate
+    /// nest aborts with [`Halt::StackOverflow`] instead of overflowing the real
+    /// thread stack.
+    dispatch_depth: usize,
     /// The host-installed source compiler ([`SourceCompiler`]) the runtime
     /// source-execution bridge (`eval` of a string, the `Function`
     /// constructor) drives to compile a source string to bytecode in this
@@ -4653,6 +4679,7 @@ impl Interp {
             chunks,
             static_str,
             n_dispatched: 0,
+            dispatch_depth: 0,
             source_compiler: None,
             eval_direct: false,
             code_segments: Vec::new(),
@@ -6989,6 +7016,22 @@ impl Interp {
                 (self.map_iterator_proto, "Map Iterator"),
                 (self.set_iterator_proto, "Set Iterator"),
                 (self.async_generator_proto, "AsyncGenerator"),
+                // The generator-family constructor prototypes each carry a
+                // `Symbol.toStringTag` string (ES2024 25.2.3.1 / 25.3.3.1 /
+                // 27.5.1.5), so `Object.prototype.toString` renders
+                // `[object GeneratorFunction]` / `[object Generator]` /
+                // `[object AsyncGeneratorFunction]` and a direct symbol read
+                // returns the tag — the `%GeneratorPrototype%` /
+                // `%GeneratorFunction.prototype%` / `%AsyncGeneratorFunction.prototype%`
+                // metadata the intrinsic-metadata corpus pins. Only the
+                // `%AsyncGeneratorPrototype%` tag was set before (above); its
+                // three siblings were omitted, so every `GeneratorFunction` /
+                // `AsyncGeneratorFunction` intrinsic-metadata case diverged from
+                // XS on the tag and the toString rendering
+                // (endojs/endo-but-for-bots#1046).
+                (self.generator_proto, "Generator"),
+                (self.generator_function_proto, "GeneratorFunction"),
+                (self.async_generator_function_proto, "AsyncGeneratorFunction"),
             ] {
                 if proto.is_null() {
                     continue;
@@ -8070,7 +8113,27 @@ impl Interp {
     /// current call depth, so the callback runs to its own `END` and returns
     /// control here — the re-entrant substrate the callback-taking
     /// `Array.prototype` methods (`forEach`/`map`/…) need.
+    ///
+    /// This thin wrapper tracks the **native re-entry depth** and aborts with
+    /// [`Halt::StackOverflow`] once it exceeds [`DISPATCH_REENTRY_LIMIT`], so a
+    /// degenerate callback/async/generator nest cannot overflow the real thread
+    /// stack (endojs/endo-but-for-bots#1046). It manages the counter across the
+    /// inner loop's many early returns; every re-entry site
+    /// (`run_callback`/`step_async`/`step_async_generator`/`resume_generator`)
+    /// calls back through here, so their native recursion is counted uniformly.
     fn dispatch_at(&mut self, code: &[u8], start_pc: usize, return_depth: usize) -> Halt {
+        if self.dispatch_depth >= DISPATCH_REENTRY_LIMIT {
+            // Do not descend; the innermost re-entry that tipped the ceiling
+            // aborts to the host exactly as the value-stack `fxOverflow` guard.
+            return Halt::StackOverflow(self.stack_slots_in_use());
+        }
+        self.dispatch_depth += 1;
+        let halt = self.dispatch_at_inner(code, start_pc, return_depth);
+        self.dispatch_depth -= 1;
+        halt
+    }
+
+    fn dispatch_at_inner(&mut self, code: &[u8], start_pc: usize, return_depth: usize) -> Halt {
         let len = code.len();
         let mut pc: usize = start_pc;
 
@@ -11892,6 +11955,22 @@ impl Interp {
                         }
                         return Halt::Return;
                     }
+                    // Guard the non-boundary resume against a frame underflow:
+                    // crafted bytecode can reach this return-family opcode with
+                    // the call stack already **below** the depth this dispatch
+                    // was entered at (`call_stack.len() < return_depth`), so the
+                    // frame `leave_call` would pop belongs to an OUTER dispatch
+                    // context — popping it corrupts the caller's frame
+                    // accounting and, cascaded through nested async/generator
+                    // re-entry, empties the stack (the `leave_call with empty
+                    // call stack` fuzz abort, endojs/endo-but-for-bots#1046). A
+                    // leave/return with no matching active frame is malformed
+                    // control flow, so degrade to a host-facing `Halt` exactly
+                    // as the sibling stack-underflow guards do (`yield:`/
+                    // `await:`/`add:stack-underflow`), never `panic!`.
+                    if self.call_stack.len() < return_depth {
+                        return Halt::Unsupported("end:frame-underflow");
+                    }
                     // Construct return (XS's `END` with `mxFrameHasTarget`):
                     // a constructor's completion is its `this` instance unless
                     // the body explicitly returned an object.
@@ -11942,6 +12021,12 @@ impl Interp {
                             self.callback_return_depth = Some(return_depth);
                         }
                         return Halt::Return;
+                    }
+                    // Same frame-underflow guard as `END` (see there): a
+                    // `start_generator` reached below `return_depth` on crafted
+                    // bytecode must not pop an outer frame (#1046).
+                    if self.call_stack.len() < return_depth {
+                        return Halt::Unsupported("start_generator:frame-underflow");
                     }
                     let resume = self.leave_call();
                     self.push(gen_slot);
@@ -12087,6 +12172,12 @@ impl Interp {
                         }
                         return Halt::Return;
                     }
+                    // Same frame-underflow guard as `END` (see there): a
+                    // `start_async_generator` reached below `return_depth` on
+                    // crafted bytecode must not pop an outer frame (#1046).
+                    if self.call_stack.len() < return_depth {
+                        return Halt::Unsupported("start_async_generator:frame-underflow");
+                    }
                     let resume = self.leave_call();
                     self.push(slot);
                     pc = resume;
@@ -12130,6 +12221,14 @@ impl Interp {
                             self.callback_return_depth = Some(return_depth);
                         }
                         return Halt::Return;
+                    }
+                    // Same frame-underflow guard as `END` (see there): a
+                    // `start_async` reached below `return_depth` on crafted
+                    // bytecode must not pop an outer frame — this is the exact
+                    // site the `leave_call with empty call stack` fuzz abort
+                    // hit (#1046).
+                    if self.call_stack.len() < return_depth {
+                        return Halt::Unsupported("start_async:frame-underflow");
                     }
                     let resume = self.leave_call();
                     self.push(promise_slot);
@@ -13339,7 +13438,26 @@ impl Interp {
             }
             Halt::Return => {
                 // The generator's `END` boundary branch already ran
-                // `leave_call` (driver restored) and pushed the completion.
+                // `leave_call` (driver restored) and pushed the completion, so
+                // `call_stack.len() < return_depth` here. A body terminated by
+                // the top-level-*only* `RETURN` opcode instead returns
+                // `Halt::Return` WITHOUT that boundary `leave_call`, leaking the
+                // driver frame — the generator twin of the async
+                // `START_ASYNC, RETURN` frame-leak (endojs/endo-but-for-bots
+                // #1046). Pop the leaked frame(s) and degrade to a named skip,
+                // symmetric with the `other` arm and the frame-underflow guards.
+                if self.call_stack.len() >= return_depth {
+                    while self.call_stack.len() >= return_depth {
+                        let _ = self.leave_call();
+                    }
+                    self.stack.truncate(stack_base);
+                    self.jumps.truncate(jumps_base);
+                    if let Some(g) = self.generators.get_mut(&gen) {
+                        g.state = GeneratorState::Completed;
+                        g.frame = None;
+                    }
+                    return Err(Halt::Unsupported("generator:non-boundary-return"));
+                }
                 let ret = self.pop();
                 self.stack.truncate(stack_base);
                 self.jumps.truncate(jumps_base);
@@ -13583,6 +13701,24 @@ impl Interp {
                 self.schedule_native_await(value, ReactionKind::AsyncGeneratorAwait(gen))
             }
             Halt::Return => {
+                // A boundary `END` already ran `leave_call` (driver restored),
+                // so `call_stack.len() < return_depth`. A body terminated by the
+                // top-level-*only* `RETURN` opcode instead skips that boundary
+                // `leave_call`, leaking the driver frame — the async-generator
+                // twin of the `START_ASYNC, RETURN` frame-leak
+                // (endojs/endo-but-for-bots#1046). Pop the leaked frame(s) and
+                // degrade to a named skip, symmetric with the `other` arm.
+                if self.call_stack.len() >= return_depth {
+                    while self.call_stack.len() >= return_depth {
+                        let _ = self.leave_call();
+                    }
+                    self.stack.truncate(stack_base);
+                    self.jumps.truncate(jumps_base);
+                    let data = self.async_generators.get_mut(&gen).unwrap();
+                    data.state = AsyncGeneratorState::Completed;
+                    data.frame = None;
+                    return Err(Halt::Unsupported("async-generator:non-boundary-return"));
+                }
                 let value = self.pop();
                 self.stack.truncate(stack_base);
                 self.jumps.truncate(jumps_base);
@@ -13751,7 +13887,33 @@ impl Interp {
             }
             Halt::Return => {
                 // The body's `END` boundary branch already ran `leave_call`
-                // (ambient restored) and pushed the completion value.
+                // (ambient restored) and pushed the completion value — so the
+                // driver frame is gone (`call_stack.len() < return_depth`).
+                // Crafted bytecode can instead terminate the async body with
+                // `RETURN`, the top-level-*only* terminator, which returns
+                // `Halt::Return` WITHOUT the boundary `leave_call`: the driver
+                // frame is left on `call_stack` and the async activation is
+                // still current. `START_ASYNC` would then `leave_call` that
+                // stray driver and resume at its sentinel `ret_pc` (0),
+                // re-executing this very `START_ASYNC` and allocating a fresh
+                // async instance every step until the fuzz OOM / `StepLimit`
+                // (the `[193, 169]` = `START_ASYNC, RETURN` reproducer,
+                // endojs/endo-but-for-bots#1046). Degrade that malformed exit
+                // to a named skip, symmetric with the `other` arm below and the
+                // `start_async:frame-underflow` guard — pop the leaked driver
+                // frame(s) so the caller's frame accounting is not corrupted.
+                if self.call_stack.len() >= return_depth {
+                    while self.call_stack.len() >= return_depth {
+                        let _ = self.leave_call();
+                    }
+                    self.stack.truncate(stack_base);
+                    self.jumps.truncate(jumps_base);
+                    if let Some(a) = self.async_instances.get_mut(&inst) {
+                        a.done = true;
+                        a.frame = None;
+                    }
+                    return Err(Halt::Unsupported("async:non-boundary-return"));
+                }
                 let ret = self.pop();
                 self.stack.truncate(stack_base);
                 self.jumps.truncate(jumps_base);
@@ -38071,6 +38233,36 @@ mod tests {
     }
 
     #[test]
+    fn leave_call_underflow_fails_closed_on_main_thread_stack() {
+        // The `fuzz-ironhorse` bytecode_decoder trophy (CI run
+        // 33123238794, 2026-08-27): this 20-byte crafted program drove
+        // nested async re-entry until a `start_async` return-family
+        // opcode ran with the call stack already **below** the depth its
+        // dispatch was entered at, so `leave_call` popped an outer frame,
+        // cascaded to an empty stack, and hit the explicit
+        // `panic!("leave_call with empty call stack")` — a host process
+        // abort where a named refusal is owed (endojs/endo-but-for-bots#1046).
+        // The frame-underflow guards on the four return-family boundaries
+        // (`end:`/`start_generator:`/`start_async_generator:`/`start_async:`)
+        // now degrade it to a host-facing `Halt::Unsupported`, exactly as
+        // the sibling `*:stack-underflow` refusals do. Run on a
+        // main-thread-sized (8 MiB, libFuzzer's default) stack via a
+        // spawned thread so the assertion faithfully mirrors the fuzz
+        // harness rather than the test runner's smaller worker stack.
+        let bytes: &[u8] = &[
+            41, 12, 193, 193, 193, 193, 12, 12, 56, 102, 102, 102, 102, 102, 102, 102, 6, 66,
+            193, 82,
+        ];
+        let halt = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| crate::run_program_bounded(bytes, 500_000).halt)
+            .expect("spawn fuzz-repro thread")
+            .join()
+            .expect("run must not panic — a frame underflow is a named refusal, not an abort");
+        assert_eq!(halt, Halt::Unsupported("start_async:frame-underflow"));
+    }
+
+    #[test]
     fn relink_remaps_only_symbol_id_operands_and_skips_literal_payloads() {
         // The eval symbol-relinker must rewrite the id operand of every
         // size-0 (ID-operand) opcode from the unit's program-local numbering
@@ -38103,6 +38295,43 @@ mod tests {
         // The real GET_VARIABLE operand was remapped 1 -> host id 2 ("bar").
         let host_id = u16::from_le_bytes([relinked[5], relinked[6]]);
         assert_eq!(host_id, 2, "unit id 1 (\"bar\") relinked to host id 2");
+    }
+
+    #[test]
+    fn async_non_boundary_return_does_not_leak_instances() {
+        // Regression for the `bytecode_decoder` fuzz **out-of-memory**
+        // (endojs/endo-but-for-bots#1046), distinct from the sibling nested
+        // `START_ASYNC` stack overflow. The two-byte input `[193, 169]` =
+        // `START_ASYNC, RETURN`: the async body is terminated by `RETURN`, the
+        // top-level-*only* terminator, which returns `Halt::Return` WITHOUT the
+        // boundary `leave_call` that a real `END` performs. That left the
+        // `step_async` driver frame on the call stack, so `START_ASYNC` popped
+        // it and resumed at the driver's sentinel `ret_pc` (0) — re-executing
+        // `START_ASYNC` and inserting a fresh, never-reclaimed entry into
+        // `async_instances` every step. Under the fuzz step limit ~1,000,000
+        // live instances (~1.4 KB each) accumulated to ~2.8 GB and tripped
+        // libFuzzer's 2048 MB rss_limit. `step_async`'s `Halt::Return` arm now
+        // detects the un-popped driver (`call_stack.len() >= return_depth`) and
+        // degrades to a named `Halt::Unsupported`, so the run halts in a
+        // constant two dispatches with the single pre-`RETURN` instance and
+        // never spins. Even the full fuzz step budget returns instantly.
+        let mut interp = Interp::new();
+        let out = interp.run_bounded(&[193u8, 169], 2_000_000);
+        assert_eq!(
+            out.halt,
+            Halt::Unsupported("async:non-boundary-return"),
+            "malformed async `RETURN` body must degrade to a named skip"
+        );
+        assert!(
+            out.dispatched < 1000,
+            "the spin is gone: dispatched {} must be a handful, not the step limit",
+            out.dispatched
+        );
+        assert!(
+            interp.async_instances.len() <= 1,
+            "async instances must stay bounded, got {}",
+            interp.async_instances.len()
+        );
     }
 
     #[test]

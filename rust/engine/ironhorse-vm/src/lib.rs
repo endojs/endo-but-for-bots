@@ -120,6 +120,40 @@ mod tests {
     }
 
     #[test]
+    fn nested_start_async_degrades_to_stack_overflow() {
+        // Regression for the `bytecode_decoder` fuzz stack overflow
+        // (endojs/endo-but-for-bots#1046, ASan crash-9088911a…): the six-byte
+        // input `[193, 193, 37, 253, 45, 93]` (`0xc1 0xc1 …`, START_ASYNC
+        // leading an async body that itself leads with START_ASYNC) drove
+        // `dispatch_at → step_async → dispatch_at …` recursion that the
+        // dispatch-count step limit does not bound, blowing the native stack.
+        // The native re-entry depth is now capped ([`DISPATCH_REENTRY_LIMIT`]),
+        // so an arbitrary corrupt snapshot degrades to `Halt::StackOverflow`
+        // instead of aborting the process.
+        //
+        // Run on an 8 MiB stack — the size of the main thread libFuzzer drives
+        // the fuzz target on (and of a normal OS main thread), the environment
+        // the crash and this fix are about. The default Rust *test* harness
+        // gives worker threads only 2 MiB, and the `dispatch_at` activation is
+        // tens of KiB, so even the bounded (< 64-frame) recursion this fix
+        // permits would still be near that artificially small ceiling; pinning
+        // the stack keeps the regression faithful and deterministic rather than
+        // hostage to the harness default.
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let crash = [193u8, 193, 37, 253, 45, 93];
+                run_program_bounded(&crash, 2_000_000).halt
+            })
+            .expect("spawn regression thread");
+        let halt = handle.join().expect("regression thread must not overflow");
+        assert!(
+            matches!(halt, Halt::StackOverflow(_)),
+            "nested START_ASYNC must bound to StackOverflow, got {halt:?}"
+        );
+    }
+
+    #[test]
     fn known_opcode_bytes_match_xs() {
         // Spot-check against the bytes the oracle emitted.
         assert_eq!(Opcode::XS_CODE_ADD as u8, 0x01);
@@ -157,3 +191,5 @@ mod tests {
         assert!(b.global("x").is_none(), "globals are per-compartment");
     }
 }
+
+
