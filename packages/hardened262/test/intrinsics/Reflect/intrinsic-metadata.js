@@ -6,26 +6,32 @@ features: [Reflect, Symbol.toStringTag]
 // %Reflect% is a namespace object, not a constructor: it is a plain frozen
 // intrinsic whose prototype is %Object.prototype% and which is not itself
 // callable or constructable. Lockdown hardens it but must not tame away its
-// identity, so this pins the shape that survives hardening on every host.
-var metadata = [
-  typeof Reflect,
-  Object.getPrototypeOf(Reflect) === Object.prototype,
-  Reflect[Symbol.toStringTag],
-  Object.prototype.toString.call(Reflect),
-].join('|');
-
+// identity, so each fact that survives hardening on every host is pinned as its
+// own assertion.
+assert.sameValue(typeof Reflect, 'object', '%Reflect% is a namespace object');
 assert.sameValue(
-  metadata,
-  'object|true|Reflect|[object Reflect]',
-  'the %Reflect% namespace is an object rooted at %Object.prototype% tagged Reflect',
+  Object.getPrototypeOf(Reflect),
+  Object.prototype,
+  '%Reflect% chains directly to %Object.prototype%',
+);
+assert.sameValue(
+  Reflect[Symbol.toStringTag],
+  'Reflect',
+  '%Reflect%[Symbol.toStringTag]',
+);
+assert.sameValue(
+  Object.prototype.toString.call(Reflect),
+  '[object Reflect]',
+  '%Reflect% Object.prototype.toString tag',
 );
 
 // The full %Reflect% method table must be present as callable own properties on
-// every host. The `.name`/`.length` of each method is intentionally NOT pinned:
-// XS's native lockdown blanks tamed function names, so only presence and
-// callability are cross-host-stable. The list is spelled in specification order
-// so a host missing any single reflective operation is caught precisely.
-var methodNames = [
+// every host, each pinned by its own assertion so a host missing any single
+// reflective operation is named precisely. The `.name`/`.length` of each method
+// is intentionally NOT pinned: XS's native lockdown blanks tamed function names,
+// so only presence and callability are cross-host-stable. The list is spelled in
+// specification order.
+[
   'apply',
   'construct',
   'defineProperty',
@@ -39,33 +45,45 @@ var methodNames = [
   'preventExtensions',
   'set',
   'setPrototypeOf',
-];
-var methodTable = methodNames
-  .map(function (name) {
-    return name + ':' + typeof Reflect[name];
-  })
-  .join('|');
-
-assert.sameValue(
-  methodTable,
-  methodNames
-    .map(function (name) {
-      return name + ':function';
-    })
-    .join('|'),
-  'every %Reflect% reflective operation is present and callable',
-);
+].forEach(function (name) {
+  assert.sameValue(
+    typeof Reflect[name],
+    'function',
+    '%Reflect%.' + name + ' is present and callable',
+  );
+});
 
 // The reflective operations agree with their ordinary-object counterparts, so a
 // stand-in that kept the shape but broke the behavior is caught. Each check
-// exercises one operation against a fresh target built after hardening.
+// exercises one operation against a fresh target built after hardening and is
+// pinned independently.
 var target = { existing: 1 };
-var behavior = [
+assert.sameValue(
   Reflect.has(target, 'existing'),
+  true,
+  '%Reflect.has% reports a present property',
+);
+assert.sameValue(
   Reflect.has(target, 'absent'),
+  false,
+  '%Reflect.has% reports an absent property',
+);
+assert.sameValue(
   Reflect.get(target, 'existing'),
-  Reflect.getPrototypeOf([]) === Array.prototype,
+  1,
+  '%Reflect.get% reads a property value',
+);
+assert.sameValue(
+  Reflect.getPrototypeOf([]),
+  Array.prototype,
+  '%Reflect.getPrototypeOf% returns the ordinary prototype',
+);
+assert.sameValue(
   Reflect.ownKeys({ a: 1, b: 2 }).join(','),
+  'a,b',
+  '%Reflect.ownKeys% enumerates own keys in order',
+);
+assert.sameValue(
   Reflect.apply(
     function (x) {
       return this.base + x;
@@ -73,30 +91,35 @@ var behavior = [
     { base: 10 },
     [5],
   ),
+  15,
+  '%Reflect.apply% invokes with the given this and argument list',
+);
+assert.sameValue(
   Reflect.construct(function (v) {
     this.v = v;
   }, [7]).v,
-].join('|');
-
-assert.sameValue(
-  behavior,
-  'true|false|1|true|a,b|15|7',
-  'the %Reflect% operations behave as the reflective counterparts of the ordinary internal methods',
+  7,
+  '%Reflect.construct% constructs with the given argument list',
 );
 
 // A defineProperty/deleteProperty round-trip through %Reflect% mutates a
 // post-hardening object exactly as the imperative forms would: lockdown freezes
-// the intrinsics, not the objects a program later creates.
+// the intrinsics, not the objects a program later creates. Each step of the
+// round-trip is pinned independently.
 var mutable = {};
-var roundTrip = [
-  Reflect.defineProperty(mutable, 'k', { value: 42, configurable: true }),
-  mutable.k,
-  Reflect.deleteProperty(mutable, 'k'),
-  Reflect.has(mutable, 'k'),
-].join('|');
-
 assert.sameValue(
-  roundTrip,
-  'true|42|true|false',
-  'a %Reflect% defineProperty/deleteProperty round-trip mutates a post-lockdown object',
+  Reflect.defineProperty(mutable, 'k', { value: 42, configurable: true }),
+  true,
+  '%Reflect.defineProperty% reports success on a post-lockdown object',
+);
+assert.sameValue(mutable.k, 42, '%Reflect.defineProperty% installs the value');
+assert.sameValue(
+  Reflect.deleteProperty(mutable, 'k'),
+  true,
+  '%Reflect.deleteProperty% reports success',
+);
+assert.sameValue(
+  Reflect.has(mutable, 'k'),
+  false,
+  '%Reflect.deleteProperty% removes the property',
 );

@@ -4,24 +4,26 @@ features: [Math, Symbol.toStringTag]
 ---*/
 
 // %Math% is a namespace object rather than a constructor. Lockdown hardens the
-// intrinsic, but must preserve its identity and its ordinary prototype chain.
-var metadata = [
-  typeof Math,
-  Object.getPrototypeOf(Math) === Object.prototype,
-  Math[Symbol.toStringTag],
-  Object.prototype.toString.call(Math),
-].join('|');
-
+// intrinsic, but must preserve its identity and its ordinary prototype chain;
+// each fact is pinned as its own assertion.
+assert.sameValue(typeof Math, 'object', '%Math% is a namespace object');
 assert.sameValue(
-  metadata,
-  'object|true|Math|[object Math]',
-  'the %Math% namespace is an object rooted at %Object.prototype% tagged Math',
+  Object.getPrototypeOf(Math),
+  Object.prototype,
+  '%Math% chains directly to %Object.prototype%',
+);
+assert.sameValue(Math[Symbol.toStringTag], 'Math', '%Math%[Symbol.toStringTag]');
+assert.sameValue(
+  Object.prototype.toString.call(Math),
+  '[object Math]',
+  '%Math% Object.prototype.toString tag',
 );
 
 // Pin the complete ES2015-and-later method surface supported by every hardened
-// host. Method names and lengths are deliberately not checked because XS native
-// lockdown may tame function metadata while preserving callability.
-var methodNames = [
+// host, each method as its own assertion. Method names and lengths are
+// deliberately not checked because XS native lockdown may tame function metadata
+// while preserving callability.
+[
   'abs',
   'acos',
   'acosh',
@@ -57,54 +59,44 @@ var methodNames = [
   'tan',
   'tanh',
   'trunc',
-];
-var methodTable = methodNames
-  .map(function (name) {
-    return name + ':' + typeof Math[name];
-  })
-  .join('|');
+].forEach(function (name) {
+  assert.sameValue(
+    typeof Math[name],
+    'function',
+    '%Math%.' + name + ' is present and callable',
+  );
+});
 
+// Each mathematical constant is pinned independently as a finite number so a
+// drifted constant is named precisely.
+[
+  ['E', Math.E],
+  ['LN10', Math.LN10],
+  ['LN2', Math.LN2],
+  ['LOG10E', Math.LOG10E],
+  ['LOG2E', Math.LOG2E],
+  ['PI', Math.PI],
+  ['SQRT1_2', Math.SQRT1_2],
+  ['SQRT2', Math.SQRT2],
+].forEach(function (entry) {
+  assert.sameValue(
+    typeof entry[1] === 'number' && Number.isFinite(entry[1]),
+    true,
+    '%Math%.' + entry[0] + ' is a finite number',
+  );
+});
+
+// Representative operations retain their specified behavior after hardening,
+// each pinned independently.
+assert.sameValue(Math.abs(-3), 3, '%Math.abs% returns the magnitude');
+assert.sameValue(Math.max(1, 7, 2), 7, '%Math.max% returns the largest argument');
+assert.sameValue(Math.min(1, 7, 2), 1, '%Math.min% returns the smallest argument');
+assert.sameValue(Math.hypot(3, 4), 5, '%Math.hypot% returns the Euclidean norm');
+assert.sameValue(Math.trunc(-1.75), -1, '%Math.trunc% truncates toward zero');
+assert.sameValue(Math.sign(-9), -1, '%Math.sign% returns the sign');
+assert.sameValue(Math.clz32(1), 31, '%Math.clz32% counts leading zero bits');
 assert.sameValue(
-  methodTable,
-  methodNames
-    .map(function (name) {
-      return name + ':function';
-    })
-    .join('|'),
-  'every %Math% numerical operation is present and callable',
-);
-
-var constants = [
-  Math.E,
-  Math.LN10,
-  Math.LN2,
-  Math.LOG10E,
-  Math.LOG2E,
-  Math.PI,
-  Math.SQRT1_2,
-  Math.SQRT2,
-];
-assert.sameValue(
-  constants.every(function (value) {
-    return typeof value === 'number' && Number.isFinite(value);
-  }),
-  true,
-  'every %Math% mathematical constant is a finite number',
-);
-
-var behavior = [
-  Math.abs(-3),
-  Math.max(1, 7, 2),
-  Math.min(1, 7, 2),
-  Math.hypot(3, 4),
-  Math.trunc(-1.75),
-  Math.sign(-9),
-  Math.clz32(1),
   Math.imul(0xffffffff, 5),
-].join('|');
-
-assert.sameValue(
-  behavior,
-  '3|7|1|5|-1|-1|31|-5',
-  'representative %Math% operations retain their specified behavior after hardening',
+  -5,
+  '%Math.imul% performs 32-bit integer multiplication',
 );
