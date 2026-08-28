@@ -13,31 +13,85 @@ function prototypeOf(value) {
 // iterator aliases `values` — both are pinned as cross-host tells.
 var SetPrototype = prototypeOf(new Set());
 
-var metadata = [
-  typeof SetPrototype.add,
-  SetPrototype.add.name,
-  SetPrototype.add.length,
-  SetPrototype.has.name,
-  SetPrototype.has.length,
-  SetPrototype.delete.name,
-  SetPrototype.delete.length,
-  SetPrototype.clear.name,
-  SetPrototype.clear.length,
-  SetPrototype.forEach.name,
-  SetPrototype.forEach.length,
-  SetPrototype.entries.name,
-  SetPrototype.entries.length,
-  SetPrototype.values.name,
-  SetPrototype.values.length,
-  SetPrototype.keys === SetPrototype.values,
-  SetPrototype[Symbol.iterator] === SetPrototype.values,
-  typeof Object.getOwnPropertyDescriptor(SetPrototype, 'size').get,
-  SetPrototype[Symbol.toStringTag],
-  prototypeOf(SetPrototype) === Object.prototype,
-].join('|');
-
+// Each metadatum is an independent assertion so a divergence names the exact
+// property that drifted rather than failing an opaque joined string.
 assert.sameValue(
-  metadata,
-  'function|add|1|has|1|delete|1|clear|0|forEach|1|entries|0|values|0|true|true|function|Set|true',
-  'the %Set.prototype% method table, size accessor, keys/values alias, and chain agree',
+  typeof SetPrototype.add,
+  'function',
+  '%Set.prototype%.add is callable',
+);
+assert.sameValue(SetPrototype.add.name, 'add', '%Set.prototype%.add.name');
+assert.sameValue(SetPrototype.add.length, 1, '%Set.prototype%.add.length');
+assert.sameValue(SetPrototype.has.name, 'has', '%Set.prototype%.has.name');
+assert.sameValue(SetPrototype.has.length, 1, '%Set.prototype%.has.length');
+assert.sameValue(
+  SetPrototype.delete.name,
+  'delete',
+  '%Set.prototype%.delete.name',
+);
+assert.sameValue(
+  SetPrototype.delete.length,
+  1,
+  '%Set.prototype%.delete.length',
+);
+assert.sameValue(
+  SetPrototype.clear.name,
+  'clear',
+  '%Set.prototype%.clear.name',
+);
+assert.sameValue(SetPrototype.clear.length, 0, '%Set.prototype%.clear.length');
+assert.sameValue(
+  SetPrototype.forEach.name,
+  'forEach',
+  '%Set.prototype%.forEach.name',
+);
+assert.sameValue(
+  SetPrototype.forEach.length,
+  1,
+  '%Set.prototype%.forEach.length',
+);
+assert.sameValue(
+  SetPrototype.entries.name,
+  'entries',
+  '%Set.prototype%.entries.name',
+);
+assert.sameValue(
+  SetPrototype.entries.length,
+  0,
+  '%Set.prototype%.entries.length',
+);
+assert.sameValue(
+  SetPrototype.values.name,
+  'values',
+  '%Set.prototype%.values.name',
+);
+assert.sameValue(
+  SetPrototype.values.length,
+  0,
+  '%Set.prototype%.values.length',
+);
+assert.sameValue(
+  SetPrototype.keys,
+  SetPrototype.values,
+  '%Set.prototype%.keys is the same object as values',
+);
+assert.sameValue(
+  SetPrototype[Symbol.iterator],
+  SetPrototype.values,
+  '%Set.prototype%[Symbol.iterator] aliases values',
+);
+assert.sameValue(
+  typeof Object.getOwnPropertyDescriptor(SetPrototype, 'size').get,
+  'function',
+  '%Set.prototype% size is an accessor',
+);
+assert.sameValue(
+  SetPrototype[Symbol.toStringTag],
+  'Set',
+  '%Set.prototype%[Symbol.toStringTag]',
+);
+assert.sameValue(
+  prototypeOf(SetPrototype),
+  Object.prototype,
+  '%Set.prototype% chains directly to %Object.prototype%',
 );

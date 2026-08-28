@@ -12,21 +12,55 @@ function prototypeOf(value) {
 // method table is exactly add/has/delete is itself a cross-host tell.
 var WeakSetPrototype = prototypeOf(new WeakSet());
 
-var metadata = [
-  typeof WeakSetPrototype.add,
-  WeakSetPrototype.add.name,
-  WeakSetPrototype.add.length,
-  WeakSetPrototype.has.name,
-  WeakSetPrototype.has.length,
-  WeakSetPrototype.delete.name,
-  WeakSetPrototype.delete.length,
-  Symbol.iterator in WeakSetPrototype,
-  WeakSetPrototype[Symbol.toStringTag],
-  prototypeOf(WeakSetPrototype) === Object.prototype,
-].join('|');
-
+// Each metadatum is an independent assertion so a divergence names the exact
+// property that drifted rather than failing an opaque joined string.
 assert.sameValue(
-  metadata,
-  'function|add|1|has|1|delete|1|false|WeakSet|true',
-  'the %WeakSet.prototype% method table, toStringTag, and chain agree',
+  typeof WeakSetPrototype.add,
+  'function',
+  '%WeakSet.prototype%.add is callable',
+);
+assert.sameValue(
+  WeakSetPrototype.add.name,
+  'add',
+  '%WeakSet.prototype%.add.name',
+);
+assert.sameValue(
+  WeakSetPrototype.add.length,
+  1,
+  '%WeakSet.prototype%.add.length',
+);
+assert.sameValue(
+  WeakSetPrototype.has.name,
+  'has',
+  '%WeakSet.prototype%.has.name',
+);
+assert.sameValue(
+  WeakSetPrototype.has.length,
+  1,
+  '%WeakSet.prototype%.has.length',
+);
+assert.sameValue(
+  WeakSetPrototype.delete.name,
+  'delete',
+  '%WeakSet.prototype%.delete.name',
+);
+assert.sameValue(
+  WeakSetPrototype.delete.length,
+  1,
+  '%WeakSet.prototype%.delete.length',
+);
+assert.sameValue(
+  Symbol.iterator in WeakSetPrototype,
+  false,
+  '%WeakSet.prototype% exposes no Symbol.iterator',
+);
+assert.sameValue(
+  WeakSetPrototype[Symbol.toStringTag],
+  'WeakSet',
+  '%WeakSet.prototype%[Symbol.toStringTag]',
+);
+assert.sameValue(
+  prototypeOf(WeakSetPrototype),
+  Object.prototype,
+  '%WeakSet.prototype% chains directly to %Object.prototype%',
 );
