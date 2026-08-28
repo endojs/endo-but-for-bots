@@ -4,6 +4,9 @@
 import { q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { defineExoClassKit } from '@endo/exo';
+import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+import { makeChangeTopic } from '@endo/pubsub/change-topic.js';
+import { makeLatestTopic } from '@endo/pubsub/latest-topic.js';
 // Deep specifiers rather than the `@endo/platform/fs/extended` index: the
 // index also re-exports `makeNodeFilesystem` / `makeNodeFsBackend`, which
 // statically import `node:fs/promises` and `node:path`.  `@endo/exo-git` is
@@ -20,6 +23,8 @@ import {
   GitRewriterInterface,
 } from './interfaces.js';
 
+/** @import { Reader } from '@endo/stream' */
+
 /**
  * @import {
  *   EndoGit,
@@ -30,6 +35,10 @@ import {
  *   GitCreateBranchOptions,
  *   GitDeleteBranchOptions,
  *   GitDiffOptions,
+ *   FollowRootOptions,
+ *   GitCommitPosition,
+ *   GitRootChange,
+ *   GitRootSnapshot,
  *   GitIndexStatus,
  *   GitLogOptions,
  *   GitMakeHistoryRewriteOptions,
@@ -179,6 +188,13 @@ import {
  *   commit OID that points at it.  Used by `filesystemAt(ref)` at
  *   construction time so the resulting Filesystem is pinned to a
  *   specific tree OID and later ref movement does not affect it.
+ * @property {() => Promise<{ treeOid: string, commitOid: string, treeAlgorithm: string } | null>} resolveRoot
+ *   Resolve the repository's currently published root. An unborn repository
+ *   returns null.
+ * @property {(options: { cancelled: Promise<never>, after: { treeOid: string, commitOid: string, treeAlgorithm: string } | null }) => AsyncIterable<{ treeOid: string, commitOid: string, treeAlgorithm: string } | null>} watchRoot
+ *   Watch the published root through a backend-owned mechanism. The native
+ *   backend initially implements this seam by polling; a future fs watcher can
+ *   replace that mechanism without changing the public follower.
  * @property {(treeOid: string) => Promise<readonly GitTreeEntryRecord[]>} lsTree
  *   Enumerate entries at a tree OID.  The records are content-addressed
  *   and safe to cache per-OID.
@@ -277,6 +293,21 @@ harden(makeGitOperations);
  * @property {object | undefined} mountLineage
  * @property {Map<string, object>} filesystemByTreeOid
  * @property {Promise<ReadOnlyGitWorktree> | undefined} readOnlyWorktreeP
+ * @property {RootTracker} rootTracker
+ */
+
+/**
+ * @typedef {object} RootTracker
+ * @property {Promise<void>} tail
+ * @property {boolean} initialized
+ * @property {bigint} revision
+ * @property {GitCommitPosition | null} position
+ * @property {ReturnType<typeof makeChangeTopic<GitRootChange, undefined>>} changes
+ * @property {ReturnType<typeof makeLatestTopic<GitRootSnapshot, undefined>>} latest
+ * @property {number} subscriberCount
+ * @property {((reason?: Error) => void) | undefined} stopWatching
+ * @property {Promise<void> | undefined} watching
+ * @property {Error | undefined} failure
  */
 
 /**
@@ -306,6 +337,18 @@ const initGitState = ({ mount, backend, lineageOf }) =>
     mountLineage: lineageOf(mount),
     filesystemByTreeOid: new Map(),
     readOnlyWorktreeP: undefined,
+    rootTracker: {
+      tail: Promise.resolve(),
+      initialized: false,
+      revision: 0n,
+      position: null,
+      changes: makeChangeTopic(),
+      latest: makeLatestTopic(),
+      subscriberCount: 0,
+      stopWatching: undefined,
+      watching: undefined,
+      failure: undefined,
+    },
   });
 
 /**
@@ -731,12 +774,30 @@ async function checkoutConflict(designators, side) {
 }
 
 /**
+ * Refresh follower state after a successful operation that may move HEAD.
+ * The Git operation has already committed by this point, so a failure to
+ * observe the new root terminates followers but does not misreport the
+ * mutation itself as rejected.
+ *
+ * @param {GitState} state
+ */
+const notifyRootAfterMutation = async state => {
+  try {
+    await refreshRoot(state);
+  } catch (caughtError) {
+    await failRootTracker(state, /** @type {Error} */ (caughtError));
+  }
+};
+
+/**
  * @param {string} message
  * @param {GitCommitOptions} options
  * @this {GitMethodThis}
  */
 async function commit(message, options = {}) {
-  return this.state.backend.commit(message, options);
+  const result = await this.state.backend.commit(message, options);
+  await notifyRootAfterMutation(this.state);
+  return result;
 }
 
 /**
@@ -745,7 +806,9 @@ async function commit(message, options = {}) {
  * @this {GitMethodThis}
  */
 async function reword(ref, message) {
-  return this.state.backend.reword(refName(ref), message);
+  const result = await this.state.backend.reword(refName(ref), message);
+  await notifyRootAfterMutation(this.state);
+  return result;
 }
 
 /**
@@ -754,7 +817,9 @@ async function reword(ref, message) {
  * @this {GitMethodThis}
  */
 async function cherryPick(ref, options = {}) {
-  return this.state.backend.cherryPick(refName(ref), options);
+  const result = await this.state.backend.cherryPick(refName(ref), options);
+  await notifyRootAfterMutation(this.state);
+  return result;
 }
 
 /** @this {GitMethodThis} */
@@ -773,7 +838,9 @@ async function branches() {
  * @this {GitMethodThis}
  */
 async function createBranch(name, options = {}) {
-  return this.state.backend.createBranch(name, options);
+  const result = await this.state.backend.createBranch(name, options);
+  await notifyRootAfterMutation(this.state);
+  return result;
 }
 
 /**
@@ -799,7 +866,8 @@ async function renameBranch(from, to) {
  * @this {GitMethodThis}
  */
 async function switchBranch(name) {
-  return this.state.backend.switchBranch(name);
+  await this.state.backend.switchBranch(name);
+  await notifyRootAfterMutation(this.state);
 }
 
 /**
@@ -807,7 +875,8 @@ async function switchBranch(name) {
  * @this {GitMethodThis}
  */
 async function detach(ref) {
-  return this.state.backend.detach(refName(ref));
+  await this.state.backend.detach(refName(ref));
+  await notifyRootAfterMutation(this.state);
 }
 
 /**
@@ -815,7 +884,8 @@ async function detach(ref) {
  * @this {GitMethodThis}
  */
 async function doSwitch(ref) {
-  return this.state.backend.switch(refName(ref));
+  await this.state.backend.switch(refName(ref));
+  await notifyRootAfterMutation(this.state);
 }
 
 /**
@@ -824,7 +894,9 @@ async function doSwitch(ref) {
  * @this {GitMethodThis}
  */
 async function merge(ref, options = {}) {
-  return this.state.backend.merge(refName(ref), options);
+  const result = await this.state.backend.merge(refName(ref), options);
+  await notifyRootAfterMutation(this.state);
+  return result;
 }
 
 /**
@@ -832,7 +904,9 @@ async function merge(ref, options = {}) {
  * @this {GitMethodThis}
  */
 async function rebase(input) {
-  return this.state.backend.rebase(input);
+  const result = await this.state.backend.rebase(input);
+  await notifyRootAfterMutation(this.state);
+  return result;
 }
 
 /**
@@ -902,27 +976,292 @@ async function tree(ref) {
 }
 
 /**
+ * Return the memoized immutable Filesystem for one canonical tree OID.
+ *
+ * @param {GitState} state
+ * @param {string} treeOid
+ * @returns {object}
+ */
+const filesystemForTree = (state, treeOid) => {
+  const cached = state.filesystemByTreeOid.get(treeOid);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const fsBackend = makeGitFsBackend({ backend: state.backend, treeOid });
+  const description = `git-tree (${treeOid})`;
+  const filesystem = readOnlyFs(wrapBackend(fsBackend, { description }));
+  state.filesystemByTreeOid.set(treeOid, filesystem);
+  return filesystem;
+};
+
+/**
+ * @param {GitState} state
+ * @param {{ treeOid: string, commitOid: string, treeAlgorithm: string } | null} resolved
+ * @returns {GitCommitPosition | null}
+ */
+const positionForResolvedRoot = (state, resolved) => {
+  if (resolved === null) {
+    return null;
+  }
+  return harden({
+    commitOid: resolved.commitOid,
+    tree: harden({ algorithm: resolved.treeAlgorithm, hash: resolved.treeOid }),
+    root: filesystemForTree(state, resolved.treeOid),
+  });
+};
+
+/**
+ * Update a root tracker while its serialization tail is held.
+ *
+ * @param {GitState} state
+ * @param {{ treeOid: string, commitOid: string, treeAlgorithm: string } | null} resolved
+ */
+const updateRootTracker = async (state, resolved) => {
+  const { rootTracker } = state;
+  const nextPosition = positionForResolvedRoot(state, resolved);
+  if (!rootTracker.initialized) {
+    rootTracker.initialized = true;
+    rootTracker.position = nextPosition;
+    return;
+  }
+  const previousCommitOid = rootTracker.position?.commitOid;
+  const nextCommitOid = nextPosition?.commitOid;
+  if (previousCommitOid === nextCommitOid) {
+    return;
+  }
+  if (nextPosition === null) {
+    throw new Error('published Git root cannot return to an unborn state');
+  }
+  const fromRevision = rootTracker.revision;
+  const toRevision = fromRevision + 1n;
+  rootTracker.revision = toRevision;
+  rootTracker.position = nextPosition;
+  const transition = harden({
+    type: /** @type {'transition'} */ ('transition'),
+    fromRevision,
+    toRevision,
+    position: nextPosition,
+  });
+  const snapshot = harden({
+    type: /** @type {'snapshot'} */ ('snapshot'),
+    revision: toRevision,
+    position: nextPosition,
+  });
+  await Promise.all([
+    rootTracker.changes.publisher.next(transition),
+    rootTracker.latest.publisher.next(snapshot),
+  ]);
+};
+
+/**
+ * Serialize one root observation with subscriptions and peer observations.
+ *
+ * @param {GitState} state
+ * @param {{ treeOid: string, commitOid: string, treeAlgorithm: string } | null | undefined} observed
+ */
+const refreshRoot = (state, observed = undefined) => {
+  const { rootTracker } = state;
+  const operation = rootTracker.tail.then(async () => {
+    if (rootTracker.failure !== undefined) {
+      throw rootTracker.failure;
+    }
+    const resolved =
+      observed === undefined ? await state.backend.resolveRoot() : observed;
+    await updateRootTracker(state, resolved);
+  });
+  rootTracker.tail = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  return operation;
+};
+
+/**
+ * Terminate both follower topics with one sticky source failure.
+ *
+ * @param {GitState} state
+ * @param {Error} error
+ */
+const failRootTracker = async (state, error) => {
+  const { rootTracker } = state;
+  if (rootTracker.failure !== undefined) return;
+  rootTracker.failure = error;
+  await Promise.all([
+    rootTracker.changes.publisher.throw(error),
+    rootTracker.latest.publisher.throw(error),
+  ]);
+};
+
+/**
+ * Start the backend-owned watcher when the first root subscriber arrives.
+ *
+ * @param {GitState} state
+ */
+const startRootWatcher = state => {
+  const { rootTracker } = state;
+  if (rootTracker.watching !== undefined) return;
+  let stopWatching;
+  const stopped = new Promise((_resolve, reject) => {
+    stopWatching = reject;
+  });
+  stopped.catch(() => {});
+  rootTracker.stopWatching = stopWatching;
+  const { position } = rootTracker;
+  const after =
+    position === null
+      ? null
+      : harden({
+          commitOid: position.commitOid,
+          treeOid: position.tree.hash,
+          treeAlgorithm: position.tree.algorithm,
+        });
+  rootTracker.watching = (async () => {
+    try {
+      for await (const resolved of state.backend.watchRoot({
+        cancelled: /** @type {Promise<never>} */ (stopped),
+        after,
+      })) {
+        await refreshRoot(state, resolved);
+      }
+      if (rootTracker.stopWatching !== undefined) {
+        throw new Error('Git root watcher ended before cancellation');
+      }
+    } catch (caughtError) {
+      const error = /** @type {Error} */ (caughtError);
+      if (rootTracker.stopWatching !== undefined) {
+        await failRootTracker(state, error);
+      }
+    }
+  })().finally(() => {
+    rootTracker.watching = undefined;
+    rootTracker.stopWatching = undefined;
+  });
+};
+
+/**
+ * @param {GitState} state
+ */
+const releaseRootWatcher = state => {
+  const { rootTracker } = state;
+  rootTracker.subscriberCount -= 1;
+  if (rootTracker.subscriberCount === 0) {
+    const stop = rootTracker.stopWatching;
+    rootTracker.stopWatching = undefined;
+    stop?.(new Error('Git root watcher has no subscribers'));
+  }
+};
+
+/**
+ * Atomically subscribe and capture the initial root snapshot.
+ *
+ * @param {GitState} state
+ * @param {'changes' | 'latest'} mode
+ */
+const openRootSubscription = (state, mode) => {
+  const { rootTracker } = state;
+  let opened;
+  const operation = rootTracker.tail.then(async () => {
+    if (rootTracker.failure !== undefined) {
+      if (rootTracker.subscriberCount !== 0) {
+        throw rootTracker.failure;
+      }
+      rootTracker.failure = undefined;
+      rootTracker.initialized = false;
+      rootTracker.revision = 0n;
+      rootTracker.position = null;
+      rootTracker.changes = makeChangeTopic();
+      rootTracker.latest = makeLatestTopic();
+    }
+    // Subscribe before resolving the root. If this observation publishes a
+    // concurrent advancement, the revision filter in the iterator suppresses
+    // the duplicate after yielding the newer initial snapshot.
+    const subscription =
+      mode === 'changes'
+        ? rootTracker.changes.subscribe()
+        : rootTracker.latest.subscribe();
+    await updateRootTracker(state, await state.backend.resolveRoot());
+    const snapshot = harden({
+      type: /** @type {'snapshot'} */ ('snapshot'),
+      revision: rootTracker.revision,
+      position: rootTracker.position,
+    });
+    rootTracker.subscriberCount += 1;
+    opened = { subscription, snapshot };
+  });
+  rootTracker.tail = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  return operation.then(() => {
+    startRootWatcher(state);
+    return opened;
+  });
+};
+
+/**
+ * @param {GitState} state
+ * @param {'changes' | 'latest'} mode
+ * @param {FollowRootOptions} options
+ */
+const rootIterator = async function* rootChangesIterator(state, mode, options) {
+  const { subscription, snapshot } =
+    /** @type {{ subscription: Reader<GitRootChange, undefined>, snapshot: GitRootSnapshot }} */ (
+      await openRootSubscription(state, mode)
+    );
+  let deliveredRevision = snapshot.revision;
+  try {
+    yield snapshot;
+    for (;;) {
+      const next = subscription.next();
+      let result;
+      if (options.cancelled === undefined) {
+        // eslint-disable-next-line no-await-in-loop
+        result = await next;
+      } else {
+        // eslint-disable-next-line no-await-in-loop
+        result = await Promise.race([next, options.cancelled]);
+      }
+      if (result.done) return;
+      const revision = /** @type {bigint} */ (
+        result.value.type === 'transition'
+          ? result.value.toRevision
+          : result.value.revision
+      );
+      if (revision > deliveredRevision) {
+        deliveredRevision = revision;
+        yield result.value;
+      }
+    }
+  } finally {
+    subscription.return(undefined).catch(() => {});
+    releaseRootWatcher(state);
+  }
+};
+
+/**
+ * @param {FollowRootOptions} options
+ * @this {GitMethodThis}
+ */
+function followRootChanges(options = {}) {
+  return readerFromIterator(rootIterator(this.state, 'changes', options));
+}
+
+/**
+ * @param {FollowRootOptions} options
+ * @this {GitMethodThis}
+ */
+function followLatestRoot(options = {}) {
+  return readerFromIterator(rootIterator(this.state, 'latest', options));
+}
+
+/**
  * @param {unknown} ref
  * @this {GitMethodThis}
  */
 async function filesystemAt(ref) {
   const { state } = this;
   const { treeOid } = await state.backend.resolveTree(refName(ref));
-  const cached = state.filesystemByTreeOid.get(treeOid);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const fsBackend = makeGitFsBackend({ backend: state.backend, treeOid });
-  // The cache is keyed only on `treeOid`; two refs that resolve to the
-  // same tree (e.g. cherry-picks, `--allow-empty` commits, identical
-  // branches) intentionally share one Filesystem cap so brand identity is
-  // stable for `compose`. The description must therefore reference only
-  // the tree — embedding a `commitOid` would make `statfs().type` lie
-  // about which commit the cached Filesystem was first minted for.
-  const description = `git-tree (${treeOid})`;
-  const fs = readOnlyFs(wrapBackend(fsBackend, { description }));
-  state.filesystemByTreeOid.set(treeOid, fs);
-  return fs;
+  return filesystemForTree(state, treeOid);
 }
 
 /** Every facet's `readOnly()` attenuates to the same pre-existing reader. */
@@ -967,6 +1306,8 @@ const readerMethods = harden({
   stashShow,
   tree,
   filesystemAt,
+  followLatestRoot,
+  followRootChanges,
   worktreeList,
   scope,
   readOnly: attenuateToReadOnly,
@@ -1246,6 +1587,15 @@ export const makeNotYetImplementedBackend = () => {
     remoteFetch: async () => fail('remoteFetch'),
     remotePush: async () => fail('remotePush'),
     resolveTree: async () => fail('resolveTree'),
+    resolveRoot: async () => fail('resolveRoot'),
+    watchRoot: () => {
+      fail('watchRoot');
+      return /** @type {AsyncIterable<null>} */ ({
+        async *[Symbol.asyncIterator]() {
+          yield* [];
+        },
+      });
+    },
     lsTree: async () => fail('lsTree'),
     readBlobBytes: async () => fail('readBlobBytes'),
     streamBlobBytes: () => {

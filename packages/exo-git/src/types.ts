@@ -1,8 +1,15 @@
 // Public type surface for `@endo/exo-git`.
 
+import type { PassableReader } from '@endo/exo-stream';
+import type { RemotableObject } from '@endo/pass-style';
+
+export type { PassableReader };
+
 export type Directory = import('@endo/platform/fs/lite/types').Directory;
 export type File = import('@endo/platform/fs/lite/types').File;
 export type Filesystem = import('@endo/platform/fs/extended').Filesystem;
+export type RemotableFilesystem = Filesystem & RemotableObject;
+export type TreeRef = import('@endo/platform/fs/extended').TreeRef;
 export type PathEntry = import('@endo/platform/fs/lite/types').PathEntry;
 export type PathEntryIssuer =
   import('@endo/platform/fs/lite/types').PathEntryIssuer;
@@ -69,6 +76,31 @@ export type GitCommit = {
   author?: string;
   committedAt?: number;
 };
+
+export type FollowRootOptions = {
+  cancelled?: Promise<never>;
+};
+
+export type GitCommitPosition = {
+  commitOid: string;
+  tree: TreeRef;
+  root: RemotableFilesystem;
+};
+
+export type GitRootSnapshot = {
+  type: 'snapshot';
+  revision: bigint;
+  position: GitCommitPosition | null;
+};
+
+export type GitRootTransition = {
+  type: 'transition';
+  fromRevision: bigint;
+  toRevision: bigint;
+  position: GitCommitPosition;
+};
+
+export type GitRootChange = GitRootSnapshot | GitRootTransition;
 
 export type GitIndexStatus =
   | 'clean'
@@ -366,6 +398,16 @@ export type ReadOnlyEndoGit = {
   /** @see filesystemAt, the preferred historical-read method; `tree(ref)` is its `ReadableTree` projection. */
   tree: (ref: GitRef | string) => Promise<GitTree>;
   filesystemAt: (ref: GitRef | string) => Promise<Filesystem>;
+  followRootChanges: (
+    options?: FollowRootOptions,
+  ) => import('@endo/eventual-send').ERef<
+    PassableReader<GitRootChange, undefined>
+  >;
+  followLatestRoot: (
+    options?: FollowRootOptions,
+  ) => import('@endo/eventual-send').ERef<
+    PassableReader<GitRootSnapshot, undefined>
+  >;
   readOnly: () => ReadOnlyEndoGit;
   /**
    * Downscope to a pre-existing sibling facet of the same Git instance.

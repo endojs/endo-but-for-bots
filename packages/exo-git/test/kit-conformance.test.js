@@ -123,6 +123,23 @@ const makeFakeBackend = (worktreeRemove = async () => undefined) =>
     async resolveTree() {
       return { treeOid: TREE_OID };
     },
+    async resolveRoot() {
+      return {
+        treeOid: TREE_OID,
+        commitOid: '0'.repeat(40),
+        treeAlgorithm: 'git-sha1-tree',
+      };
+    },
+    watchRoot({ cancelled }) {
+      return harden({
+        async *[Symbol.asyncIterator]() {
+          try {
+            await cancelled;
+          } catch {}
+          yield* [];
+        },
+      });
+    },
     async lsTree(treeOid) {
       if (treeOid !== TREE_OID) return [];
       return harden([

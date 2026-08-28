@@ -36,6 +36,10 @@ export const helpTextEntries = harden([
       tree: 'tree(ref) -> Promise<GitTree>\nGet a read-only GitTree over the tree a revision resolves to.\nNested trees resolve to further GitTree values and files to readable\nblobs.\nPrefer filesystemAt(ref) for general historical reads.',
       filesystemAt:
         'filesystemAt(ref) -> Promise<Filesystem>\nGet a read-only Filesystem pinned to the tree a revision resolves to.\nLater movement of the ref does not affect the returned view, and two\nrevisions with the same tree share one memoized capability.',
+      followRootChanges:
+        'followRootChanges(options?) -> PassableReader<GitRootChange>\nFollow every published commit that replaces the repository root.\nThe first value is a snapshot of the current commit, or `position: null` for\nan unborn repository. Later values are chained transitions carrying the commit\nobject id, complete-tree identity, and an immutable filesystem rooted at that\ntree. A rejected `options.cancelled` promise closes only this follower.',
+      followLatestRoot:
+        'followLatestRoot(options?) -> PassableReader<GitRootSnapshot>\nFollow the latest published repository root with bounded retention.\nThe first value is the current snapshot. A slow reader may skip intermediate\ncommits and observes the skipped range as a revision jump. A rejected\n`options.cancelled` promise closes only this follower.',
       readOnly:
         'readOnly() -> Git\nAttenuate to the read-only facet of this same repository.\nEvery facet of one Git instance returns the identical reader reference.',
       scope:
