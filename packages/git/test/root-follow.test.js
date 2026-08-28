@@ -111,3 +111,71 @@ test('native polling watcher preserves rapid external commit advancement', async
 
   await roots.return();
 });
+
+test('native watcher reports a non-fast-forward root replacement as a single transition', async t => {
+  const repoRoot = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'git-root-replace-'),
+  );
+  t.teardown(() => fs.promises.rm(repoRoot, { recursive: true, force: true }));
+  await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+
+  const backend = makeNativeGitBackend({ repoRoot, rootPollIntervalMs: 10 });
+  const mount = makeExo('NativeRootReplaceTestMount', undefined, {});
+  const git = makeGit(
+    /** @type {Parameters<typeof makeGit>[0]} */ (
+      /** @type {unknown} */ ({
+        mount,
+        backend,
+        lineageOf: () => undefined,
+      })
+    ),
+  );
+  const roots = iterateReader(E(git).followRootChanges());
+  t.deepEqual(await roots.next(), {
+    done: false,
+    value: { type: 'snapshot', revision: 0n, position: null },
+  });
+
+  // The repository's identity is anchored to its root commit, so the root
+  // commit itself is held fixed; only the tip is replaced.
+  const base = await commitFile(repoRoot, 'base\n', 'base');
+  const superseded = await commitFile(repoRoot, 'superseded\n', 'superseded');
+  const observed = /** @type {GitRootTransition} */ (
+    (await within(roots.next(), 'first tip')).value
+  );
+  // Advance the follower until it has observed the tip we are about to
+  // supersede; rapid commits may still be in flight as distinct transitions.
+  let latest = observed;
+  while (latest.position.commitOid !== superseded) {
+    latest = /** @type {GitRootTransition} */ (
+      // eslint-disable-next-line no-await-in-loop
+      (await within(roots.next(), 'superseded tip')).value
+    );
+  }
+  const supersededRevision = latest.toRevision;
+
+  // Reset to the base and commit a sibling: the new tip shares the base's
+  // history but is not a descendant of the superseded tip, so the backend
+  // cannot walk a fast-forward range and must surface the replacement as one
+  // explicit transition rather than a chain of intermediate commits.
+  await execFileAsync('git', ['reset', '--hard', base], { cwd: repoRoot });
+  const replacement = await commitFile(
+    repoRoot,
+    'replacement\n',
+    'replacement',
+  );
+  t.not(replacement, superseded);
+
+  const replaced = /** @type {GitRootTransition} */ (
+    (await within(roots.next(), 'replacement tip')).value
+  );
+  t.like(replaced, {
+    type: 'transition',
+    fromRevision: supersededRevision,
+    toRevision: supersededRevision + 1n,
+    position: { commitOid: replacement },
+  });
+  t.not(latest.position.tree.hash, replaced.position.tree.hash);
+
+  await roots.return();
+});
