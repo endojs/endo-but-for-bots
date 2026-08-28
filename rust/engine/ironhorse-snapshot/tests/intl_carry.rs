@@ -167,10 +167,10 @@ fn resumed_date_time_format_and_locale_answer_like_uninterrupted() {
     // Crank 1 CALLS `format` once, so its compiled atom carries the
     // name and the full link installs
     // `DateTimeFormat.prototype.format` right there — the shape of any
-    // real program that formats. (A program whose first `format`
-    // reference arrives only in a later, non-growing crank hits the
-    // engine's deferred-install semantics LIVE — both twins fail
-    // identically — so it would prove nothing about the carry.)
+    // real program that formats, pinning the record carry
+    // independently of the relink install pass. (The
+    // late-first-reference shape — a later crank reaching a name only
+    // the install pass interned — is `name_floor_carry.rs`'s subject.)
     assert_twin(
         "ih-intl-twin-dtf-loc",
         "var dtf = 0; var loc = 0; var t = 0; \
