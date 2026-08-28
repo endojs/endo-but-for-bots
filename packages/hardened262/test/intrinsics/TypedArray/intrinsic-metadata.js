@@ -7,6 +7,20 @@ features: [TypedArray, BigInt, Symbol.iterator, Symbol.toStringTag]
 // `TypedArray` (the %TypedArray% intrinsic) and the constructor-family helpers
 // come from the test262 harness includes above, where `TypedArray` is derived
 // as `Object.getPrototypeOf(Int8Array)` independently of the assertions here.
+//
+// This single file deliberately covers BOTH the %TypedArray% abstract superclass
+// and the shared %TypedArrayPrototype% intrinsic, rather than splitting them into
+// separate `TypedArray/` and `TypedArrayPrototype/` directories the way the
+// `GeneratorFunction`/`GeneratorPrototype` (and `AsyncGeneratorFunction`/
+// `AsyncGeneratorPrototype`) siblings do. Unlike the Generator families, the two
+// TypedArray intrinsics are inseparable in practice here: every concrete
+// typed-array constructor enumeration below touches the superclass and its
+// prototype together (the shared-superclass chain check reads both, and the
+// %TypedArrayPrototype% metadata/@@toStringTag assertions are keyed off instances
+// built from the concrete constructors), so a split would duplicate the same
+// `testWith{,BigInt}TypedArrayConstructors` sweep across two files. Keep new
+// %TypedArray%- or %TypedArrayPrototype%-only corners here rather than starting a
+// `TypedArrayPrototype/` directory.
 var TypedArrayPrototype = TypedArray.prototype;
 
 // %TypedArray% is an abstract superclass: it is not directly constructible,
@@ -112,11 +126,15 @@ assert.sameValue(
   'the @@toStringTag getter yields undefined for a non-typed-array receiver',
 );
 
-// The getter keys off the [[TypedArrayName]] internal slot (ECMA-262 §23.2.3.38
-// `get %TypedArray%.prototype[@@toStringTag]`, and §20.1.3.6
-// Object.prototype.toString's typed-array branch), which survives buffer
+// The getter keys off the [[TypedArrayName]] internal slot (ECMA-262
+// `get %TypedArray%.prototype[@@toStringTag]`,
+// https://tc39.es/ecma262/#sec-get-%25typedarray%25.prototype-@@tostringtag; and
+// Object.prototype.toString's typed-array branch,
+// https://tc39.es/ecma262/#sec-object.prototype.tostring), which survives buffer
 // detachment, so a typed array whose buffer has been detached must still report
-// its constructor name rather than undefined.
+// its constructor name rather than undefined. (Stable anchor URLs rather than
+// bare section numbers: the numerals shift edition-to-edition — the vendored
+// test262 corpus records these operations as 22.2.3.32 and 19.1.3.6.)
 //
 // Detach portably. `ArrayBuffer.prototype.transfer` is ES2024 (V8 11.8 / Node
 // 21+), NOT present on this package's supported Node 20.17 floor
