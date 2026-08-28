@@ -127,7 +127,12 @@ impl Meter {
     /// check window without destroying the restored `index` — the
     /// accumulated computron count that [`Self::restore`] just
     /// reinstated. [`Self::begin`] is the fresh-machine form and zeroes
-    /// it by design.
+    /// it by design. NOTE this deliberately REPLACES the restored
+    /// `count` (the next-check threshold) — the interval-change form —
+    /// so a resume that wants the deadline to survive untouched must
+    /// not call it at all: [`Self::restore`] already reinstated all
+    /// three counters, and the interp's `reattach_meter_host` installs
+    /// the host without touching them (review finding 7).
     pub fn rearm(&mut self, interval: u64) {
         let scaled = interval << 16;
         self.interval = scaled;
