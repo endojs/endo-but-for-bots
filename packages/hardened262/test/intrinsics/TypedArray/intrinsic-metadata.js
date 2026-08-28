@@ -115,15 +115,47 @@ assert.sameValue(
 // The getter keys off the [[TypedArrayName]] internal slot, which survives
 // buffer detachment, so a typed array whose buffer has been detached must still
 // report its constructor name rather than undefined.
-var detached = new Int8Array(8);
-detached.buffer.transfer();
-assert.sameValue(
-  toStringTag.get.call(detached),
-  'Int8Array',
-  'the @@toStringTag getter still yields the constructor name for a detached-buffer typed array',
-);
-assert.sameValue(
-  Object.prototype.toString.call(detached),
-  '[object Int8Array]',
-  'Object.prototype.toString still reports the typed-array tag after buffer detachment',
-);
+//
+// Detach portably. `ArrayBuffer.prototype.transfer` is ES2024 (V8 11.8 / Node
+// 21+), NOT present on this package's supported Node 20.17 floor
+// (`"node": "^20.17.0 || >=22.9.0"`), and `scripts/test.js` does not consume the
+// `features:` front-matter to skip, so an unconditional `transfer()` would crash
+// with a TypeError on the floor rather than skip. `structuredClone(buffer,
+// { transfer: [buffer] })` (ES2021 / Node 17+) detaches the source buffer and is
+// the portable fallback; guard for a host that offers neither.
+function detachBuffer(buffer) {
+  if (typeof ArrayBuffer.prototype.transfer === 'function') {
+    buffer.transfer();
+    return true;
+  }
+  if (typeof structuredClone === 'function') {
+    structuredClone(buffer, { transfer: [buffer] });
+    return true;
+  }
+  return false;
+}
+
+// Cover both a Number-backed and a BigInt-backed constructor so the
+// detachment-survival check is not a single-constructor spot check.
+function assertDetachedToStringTag(TA) {
+  var typedArray = new TA(8);
+  if (!detachBuffer(typedArray.buffer)) {
+    return;
+  }
+  assert.sameValue(
+    toStringTag.get.call(typedArray),
+    TA.name,
+    'the @@toStringTag getter still yields ' +
+      TA.name +
+      ' for a detached-buffer typed array',
+  );
+  assert.sameValue(
+    Object.prototype.toString.call(typedArray),
+    '[object ' + TA.name + ']',
+    'Object.prototype.toString still reports the ' +
+      TA.name +
+      ' tag after buffer detachment',
+  );
+}
+assertDetachedToStringTag(Int8Array);
+assertDetachedToStringTag(BigInt64Array);
