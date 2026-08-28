@@ -14,12 +14,12 @@ import { makeOcapn } from '@endo/ocapn';
  *
  * @template [MethodResult=any]
  * @typedef {object} ThixotropeRemote
- * @property {(swissnum: ArrayBufferLike) => ERef<ThixotropeRemote>} fetch
+ * @property {(swissnum: Uint8Array) => ERef<ThixotropeRemote>} fetch
  * @property {(source: string, endowments?: Record<string, unknown>) => ERef<MethodResult>} evaluate
  * @property {() => ERef<{ gift: Promise<unknown> }>} getGift
  *
  * @typedef {object} ThixotropeBootstrap
- * @property {(swissnum: ArrayBufferLike) => ERef<ThixotropeRemote>} fetch
+ * @property {(swissnum: Uint8Array) => ERef<ThixotropeRemote>} fetch
  */
 
 /**

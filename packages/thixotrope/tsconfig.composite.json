@@ -9,9 +9,6 @@
       "path": "../base64/tsconfig.composite.json"
     },
     {
-      "path": "../bytes/tsconfig.composite.json"
-    },
-    {
       "path": "../errors/tsconfig.composite.json"
     },
     {
@@ -22,6 +19,9 @@
     },
     {
       "path": "../harden/tsconfig.composite.json"
+    },
+    {
+      "path": "../immutable-arraybuffer/tsconfig.composite.json"
     },
     {
       "path": "../ocapn/tsconfig.composite.json"
