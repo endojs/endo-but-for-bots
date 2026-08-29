@@ -40,10 +40,10 @@ const filePowers = makeFilePowers({ fs, path });
  * @param {import('ava').ExecutionContext} t
  * @param {string} prefix
  */
-const makeTempRoot = (t, prefix) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  t.teardown(() => fs.rmSync(dir, { recursive: true, force: true }));
-  return dir;
+const makeTemporaryRoot = (t, prefix) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  t.teardown(() => fs.rmSync(directory, { recursive: true, force: true }));
+  return directory;
 };
 
 /**
@@ -146,7 +146,7 @@ test('streamGlob on a subView is scoped to the sub-root, like glob', async t => 
 // --- Incrementality: grep reads only as far as the consumer pulls ---
 
 test('streamGrep is incremental: closing after one match leaves later files unread', async t => {
-  const root = makeTempRoot(t, 'mount-stream-incr-');
+  const root = makeTemporaryRoot(t, 'mount-stream-incr-');
   const total = 40;
   for (let i = 0; i < total; i += 1) {
     // Zero-padded so the sorted walk order is stable and every file matches.
@@ -192,7 +192,7 @@ test('streamGrep is incremental: closing after one match leaves later files unre
 // --- Backpressure: buffer 0 reads exactly one file per pull, none ahead ---
 
 test('streamGrep with buffer 0 does not read ahead of demand', async t => {
-  const root = makeTempRoot(t, 'mount-stream-bp-');
+  const root = makeTemporaryRoot(t, 'mount-stream-bp-');
   const total = 20;
   for (let i = 0; i < total; i += 1) {
     fs.writeFileSync(
@@ -225,7 +225,7 @@ test('streamGrep with buffer 0 does not read ahead of demand', async t => {
 // --- Cancellation: break out of for-await; walk stops, no unhandled rejection ---
 
 test('breaking out of a streamGrep for-await stops the walk cleanly', async t => {
-  const root = makeTempRoot(t, 'mount-stream-cancel-');
+  const root = makeTemporaryRoot(t, 'mount-stream-cancel-');
   const total = 30;
   for (let i = 0; i < total; i += 1) {
     fs.writeFileSync(
@@ -262,7 +262,7 @@ test('breaking out of a streamGrep for-await stops the walk cleanly', async t =>
 // --- Revocation mid-stream: the next pull after revoke() rejects ---
 
 test('streamGrep rejects the next pull after a mid-stream revoke', async t => {
-  const root = makeTempRoot(t, 'mount-stream-revoke-');
+  const root = makeTemporaryRoot(t, 'mount-stream-revoke-');
   for (const name of ['a.txt', 'b.txt', 'c.txt']) {
     fs.writeFileSync(path.join(root, name), 'live match\n');
   }
@@ -284,7 +284,7 @@ test('streamGrep rejects the next pull after a mid-stream revoke', async t => {
 });
 
 test('streamGlob throws synchronously at invocation on an already-revoked mount', async t => {
-  const root = makeTempRoot(t, 'mount-stream-revoke2-');
+  const root = makeTemporaryRoot(t, 'mount-stream-revoke2-');
   fs.writeFileSync(path.join(root, 'a.txt'), 'x\n');
   const { mount, control } = makeRevocableMount({
     rootPath: root,
@@ -474,7 +474,7 @@ test('the MountInterface guard rejects a non-number buffer', async t => {
 
 test('streamGrep yields past GREP_MAX_RESULTS while grep truncates at it', async t => {
   t.timeout(60_000);
-  const root = makeTempRoot(t, 'mount-stream-grepcap-');
+  const root = makeTemporaryRoot(t, 'mount-stream-grepcap-');
   // One file, more matching lines than the eager grep cap. Every line matches,
   // so the match count — not the file count — crosses the boundary cheaply.
   const overCap = GREP_MAX_RESULTS + 25;
@@ -501,7 +501,7 @@ test('streamGrep yields past GREP_MAX_RESULTS while grep truncates at it', async
 
 test('streamGlob yields past GLOB_MAX_RESULTS while glob truncates at it', async t => {
   t.timeout(120_000);
-  const root = makeTempRoot(t, 'mount-stream-globcap-');
+  const root = makeTemporaryRoot(t, 'mount-stream-globcap-');
   // A flat directory just over the eager glob cap. Empty files keep this cheap;
   // `glob('*')` walks one directory and sorts the names, no recursion.
   const overCap = GLOB_MAX_RESULTS + 1;
@@ -536,7 +536,7 @@ test('streamGlob yields past GLOB_MAX_RESULTS while glob truncates at it', async
 
 test('streamGrep clamps producer read-ahead to STREAM_BUFFER_MAX', async t => {
   t.timeout(120_000);
-  const root = makeTempRoot(t, 'mount-stream-clamp-');
+  const root = makeTemporaryRoot(t, 'mount-stream-clamp-');
   // More one-match files than the ceiling, so "clamped to 1024" is observably
   // distinct from "reads them all". One matching line per file ⇒ one element
   // (and one readFileText) per file.
@@ -588,7 +588,7 @@ test('streamGrep clamps producer read-ahead to STREAM_BUFFER_MAX', async t => {
 // still eventually rejects. [breaker finding 1]
 
 test('streamGrep with buffer > 0 bounds post-revoke delivery to the clamped buffer', async t => {
-  const root = makeTempRoot(t, 'mount-stream-revoke-buf-');
+  const root = makeTemporaryRoot(t, 'mount-stream-revoke-buf-');
   const total = 40;
   for (let i = 0; i < total; i += 1) {
     fs.writeFileSync(
@@ -646,18 +646,18 @@ test('streamGrep with buffer > 0 bounds post-revoke delivery to the clamped buff
 // [engine-realist finding]
 
 test('streamGrep enumerates the whole tree before the first match, but reads only as far as needed', async t => {
-  const root = makeTempRoot(t, 'mount-stream-deep-');
+  const root = makeTemporaryRoot(t, 'mount-stream-deep-');
   // A match at the root (sorts first) and a chain of nested directories whose
   // deepest file also matches. The walk must descend the whole chain regardless
   // of where the first match sorts.
   fs.writeFileSync(path.join(root, 'aaa.txt'), 'deep-needle\n');
-  let dir = root;
+  let directory = root;
   const depth = 10;
   for (let i = 0; i < depth; i += 1) {
-    dir = path.join(dir, `d${i}`);
-    fs.mkdirSync(dir);
+    directory = path.join(directory, `d${i}`);
+    fs.mkdirSync(directory);
   }
-  fs.writeFileSync(path.join(dir, 'deep.txt'), 'deep-needle\n');
+  fs.writeFileSync(path.join(directory, 'deep.txt'), 'deep-needle\n');
 
   // Learn the full-walk directory-read count from a complete streamGlob pass.
   const glob = countingPowers();
@@ -723,12 +723,12 @@ test('breaking out of a streamGlob for-await stops cleanly with no late reads', 
     }
   }
   t.is(seen, 1);
-  const dirReadsAtBreak = counters.readDirectory;
+  const directoryReadsAtBreak = counters.readDirectory;
   await null;
   await null;
   t.is(
     counters.readDirectory,
-    dirReadsAtBreak,
+    directoryReadsAtBreak,
     'no directory reads after cancellation',
   );
 });
