@@ -22,44 +22,7 @@
 
 import { makeError, X, q } from '@endo/errors';
 
-/** @import { ERef } from '@endo/eventual-send' */
-
-/**
- * @typedef {object} ClaudeCredentialsLike
- * @property {(sessionTag: string) => ERef<IssuedCredentialLike>} issue
- * @property {(sessionTag: string) => ERef<void>} revoke
- */
-
-/**
- * @typedef {object} IssuedCredentialLike
- * @property {() => ERef<string>} materialise
- */
-
-/**
- * @typedef {object} Subscription
- * @property {string} id                       Stable identifier for occupancy accounting.
- * @property {ClaudeCredentialsLike} credentials  The (possibly remote) caplet exo.
- */
-
-/**
- * @typedef {object} AcquiredSlot
- * @property {'acquired'} type
- * @property {string} subscriptionId
- * @property {IssuedCredentialLike} issued
- * @property {(opts?: { failed?: boolean }) => Promise<void>} release
- *   Idempotent. Frees the occupancy slot ALWAYS; additionally calls
- *   `revoke(sessionTag)` (the invalidate-on-failure path).
- */
-
-/**
- * @typedef {object} PoolExhausted
- * @property {'pool-exhausted'} type
- * @property {number} [retryAfterMs]
- */
-
-/**
- * @typedef {AcquiredSlot | PoolExhausted} AcquireResult
- */
+/** @import { AcquireResult, InternalSlot, Subscription } from './types.js' */
 
 /**
  * The default selection policy: least-recently-issued free, non-cooling
@@ -83,15 +46,6 @@ const leastRecentlyUsed = (slots, nowMs) => {
   }
   return best;
 };
-
-/**
- * @typedef {object} InternalSlot
- * @property {string} id
- * @property {ClaudeCredentialsLike} credentials
- * @property {boolean} busy
- * @property {number} coolingUntil   Epoch ms; a slot is skipped while `now < coolingUntil`.
- * @property {number} lastIssuedAt   Epoch ms of the most recent issue.
- */
 
 /**
  * @param {object} params

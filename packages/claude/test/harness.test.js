@@ -7,6 +7,8 @@ import { assertConfinedArgv } from '../src/argv.js';
 import { ALLOWED_ENV_KEYS } from '../src/child-env.js';
 import { ok } from '../src/results.js';
 
+/** @import { McpTransport } from '../src/types.js' */
+
 const HEX64 = 'a'.repeat(64);
 const PINNED = '2.1.232';
 
@@ -28,7 +30,7 @@ const makeHarness = (overrides = {}) => {
       return observed.catalog;
     },
     async transport() {
-      return /** @type {import('../src/mcp-config.js').McpTransport} */ ({
+      return /** @type {McpTransport} */ ({
         kind: 'stdio',
         command: '/opt/endo-claude-shim',
       });
