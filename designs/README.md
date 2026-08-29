@@ -9,9 +9,9 @@ layer new groom notes at the top of this file.*
 [exo-stream-adaptive-pacing](exo-stream-adaptive-pacing.md) (added
 2026-08-29; an opt-in, consumer-side CoDel-inspired credit controller for
 `@endo/exo-stream` readers that sizes the flow-control window to the smallest
-value sustaining throughput (CoDel governs the ceiling via credit withholding,
+value sustaining throughput [CoDel governs the ceiling via credit withholding,
 additive-increase governs the floor, and a single monotone `alpha` dials
-relative aggressiveness); wire-format-unchanged and numeric-`buffer`-compatible,
+relative aggressiveness]; wire-format-unchanged and numeric-`buffer`-compatible,
 leaving the `ReadableBlob.lines(buffer = 0)` decision untouched; follow-up to
 [PR #832](https://github.com/endojs/endo-but-for-bots/pull/832)),
 [endor-registry-proxy-worker](endor-registry-proxy-worker.md) (added
