@@ -74,8 +74,8 @@ working machinery, not a rewrite of the registry proxy.
 |---|---|---|
 | `/` | `EnumerableTree` | `list()` returns configured registry names, initially `['npm']`; `lookup('npm')` returns the npm hub. |
 | `/npm` | Non-enumerable `LookupTree` | No `list` method. `lookup('ses')` returns its version directory; `lookup('@endo')` returns a non-enumerable scope hub. |
-| `/npm/@scope` | Non-enumerable `LookupTree` | No `list` method. `lookup('package')` returns that scoped package's version directory. |
-| `/npm/<package>` or `/npm/@scope/<package>` | `EnumerableTree` | `list()` returns exact published versions in ascending semver order; `lookup('1.2.3')` selects one version. |
+| `/npm/@<scope>` | Non-enumerable `LookupTree` | No `list` method. `lookup('package')` returns that scoped package's version directory. |
+| `/npm/<package>` or `/npm/@<scope>/<package>` | `EnumerableTree` | `list()` returns exact published versions in ascending semver order; `lookup('1.2.3')` selects one version. |
 | `.../<version>` | Immutable `SnapshotTree` / `EndoReadableTree` | The package root itself: `lookup('package.json')`, `lookup('src')`, and content identity through `getInfo()` / `sha256()`. |
 
 The `SnapshotTree`, `EndoReadableTree`, `ReadableTreeInterface`, and
@@ -88,21 +88,25 @@ hierarchy.
 Scoped names use two path segments because `/` is a tree separator.
 The leading `@` makes the intermediate scope hub unambiguous.
 
-`lookup` accepts either an array path (`['@endo', 'patterns']`) or a
-single string, and a single string is one path segment matched literally
-against the current node's children; it is not split on `/`.
+`lookup`, `has`, and `list` all take a path as variadic segments
+(`lookup('@endo', 'patterns')`), matching the rest-parameter form
+[fs-interface-reconciliation](fs-interface-reconciliation.md) establishes
+for these methods, so one calling convention serves the whole interface
+and there is no string-versus-array shape for a caller to disambiguate at
+runtime.
+Each segment is matched literally against the current node's children; no
+segment is split on `/`.
 This follows the standing convention in `packages/daemon/src/mount.js`,
 whose `segmentsFromEntryPathArg` reserves slash-splitting for `entry()`
-and keeps every other path-bearing method on single-name string
+and keeps every other path-bearing method on single-name segment
 matching.
-So `lookup('@endo/patterns')` against `/npm` looks for a literal child
-named `@endo/patterns`, finds none (the only matching key is the scope
-hub `@endo`), and rejects; the scoped package is reached by
-`lookup(['@endo', 'patterns'])` or by a stepwise `lookup('@endo')` then
-`lookup('patterns')`.
-The resolver and every adapter always spell scoped names as array paths
-for this reason, and adapters must return the same intermediate scope-hub
-capability for the stepwise and array-path forms.
+So a scoped package is reached by `lookup('@endo', 'patterns')` (two
+segments) or by a stepwise `lookup('@endo')` then `lookup('patterns')`; a
+single-segment `lookup('@endo/patterns')` against `/npm` looks for one
+literal child named `@endo/patterns`, finds none (the only matching key
+is the scope hub `@endo`), and rejects.
+Adapters must return the same intermediate scope-hub capability for the
+stepwise and multi-segment forms.
 
 Only exact published versions appear below a package.
 `list()` on a package directory returns those versions in ascending
@@ -130,7 +134,7 @@ and enumeration is an extension:
 interface LookupTree {
   help(method?: string): string;
   has(...path: string[]): Promise<boolean>;
-  lookup(path: string | string[]): Promise<unknown>;
+  lookup(...path: string[]): Promise<unknown>;
 }
 
 interface EnumerableTree extends LookupTree {
@@ -152,9 +156,9 @@ source compatible because they already implement the superset.
 
 The npm and scope hubs are Exos guarded only by `LookupTreeInterface`;
 the root and package-version directories use `EnumerableTreeInterface`.
-They do not implement `list`, so non-enumerability is authority the
-holder never receives, not a boolean that asks an enumerable object to
-behave.
+The npm and scope hubs do not implement `list`, so non-enumerability is
+authority the holder never receives, not a boolean that asks an
+enumerable object to behave.
 `LookupTree` is the only genuinely new method shape; `EnumerableTree`
 merely names the already exported common guard surface.
 All other nodes reuse the consolidated filesystem interfaces.
@@ -167,8 +171,9 @@ Add `makeNpmRegistryTree` in `@endo/exo-npm` over two injected
 operations: list published versions for one known package and provide the
 CAS tree for one exact version.
 The Node adapter in `packages/daemon/src/registry-user.js` supplies those
-operations from its existing packument cache, integrity verifier, tar
-reader, and content store.
+operations from its existing packument cache (a packument is npm's
+per-package document listing that package's published versions and their
+metadata), integrity verifier, tar reader, and content store.
 The existing `registry` formula (the daemon's persistent recipe for
 constructing a capability) and its required `HostFormula.registry` field
 stay in place, but incarnation (the daemon evaluating that formula to
@@ -238,7 +243,7 @@ This mirrors the superseded
 [registry-capability](registry-capability.md) design's "snapshot before
 resolve; do not stream live reads" law: the snapshot here is the emitted
 `RegistryResolution`, and per-import live reads are what the eager
-closure exists to avoid.
+resolution exists to avoid.
 
 ## Resolver, mapper, and mockability
 
@@ -258,32 +263,56 @@ content tree, and reads that tree's `package.json` before continuing.
 Workspace lookup remains a higher-priority local-tree source and is not
 inserted under `/npm`.
 
-`resolveRegistryTree` and the `registryRoot` tree it walks are colocated:
-the resolver runs in the same vat as the registry adapter and reaches the
-tree through in-process calls, not eventual-send (`E()`) across a worker
-or vat boundary.
-The per-dependency traversal (`lookup` the package or scope, `list`
-versions, `lookup` the selected version, read its `package.json`) is
-therefore local dispatch, not one bus round trip per node, so a live
-graph of hundreds of packages costs no per-dependency transport.
+`resolveRegistryTree` must run in the same vat as the `registryRoot` tree
+it walks, so its per-dependency traversal is in-process dispatch and not
+eventual-send (`E()`) across a worker or vat boundary.
+This colocation is a load-bearing constraint of the design, not an
+incidental property, and it fixes where the resolver executes per backend:
+
+- Node: the registry adapter and the `@registry` root tree live in the
+  daemon manager (host) process (`packages/daemon/src/registry-user.js`),
+  while the snapshot mapper's `makeFromPackage` runs in the out-of-process
+  Node worker (see
+  [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md)).
+  `resolveRegistryTree` therefore runs daemon-side, colocated with the
+  tree, and only the emitted `RegistryResolution` crosses once to the
+  worker.
+  Building the tree-walk resolver in the worker instead — the process
+  where the mapper already lives — would turn each `lookup` and `list`
+  into an `E()` round trip back to the daemon and regress the single
+  coarse `EndoRegistry.resolve()` call this design replaces into
+  O(dependency count) round trips; the design deliberately does not move
+  the traversal into the worker.
+- Endor: the adapter's XS-hosted callbacks into narrow Rust host powers
+  are in-process to the XS-hosted adapter, so a dependency walk does not
+  cross the XS/Rust boundary once per node.
+
+Either way the per-dependency traversal (`lookup` the package or scope,
+`list` versions, `lookup` the selected version, read its `package.json`)
+is local dispatch, not one bus round trip per node, so a live graph of
+hundreds of packages costs no per-dependency transport.
 This is the same locality the [mvs-resolver](mvs-resolver.md) design
 secures with caller-supplied `getPackument` / `getTarball` hooks: the
 tree adapter replaces those hooks with tree methods on the same side of
 the boundary, so that design's Non-goal that "the worker does not emit
 per-import `resolvePackage` calls" is preserved for the resolver's own
 traversal, not only for the mapper.
-On the Rust-hosted Endor backend the adapter's XS-hosted callbacks into
-narrow Rust host powers are likewise in-process to the XS-hosted adapter,
-so a dependency walk does not cross the XS/Rust boundary once per node.
 
-`RegistryResolution` remains the mapper-facing eager closure, so
+`RegistryResolution` remains the mapper-facing eager resolution, so
 [snapshot-mapper](snapshot-mapper.md) does not gain per-import registry
 round trips.
 Snapshot-mapper's late-bind fallback replaces `registry.fetch(name,
 version)` with the same package/version tree traversal helper.
-`resolutionHash` is derived from canonical package keys and package-tree
-content hashes; npm `dist.integrity` remains an internal fetch
-attestation rather than public resolution data.
+`resolutionHash` keeps its shipped input unchanged: `hashResolution` in
+`packages/exo-npm/src/mvs-resolver.js` hashes each canonical package key
+together with that package's npm `dist.integrity`, exactly as
+[mvs-resolver](mvs-resolver.md) specifies, so this presentation-layer
+migration produces byte-identical `resolutionHash` values and does not
+invalidate any pinned `RegistryResolution`, reproducibility record, or
+`resolutionHash`-keyed cache entry.
+The tree presentation changes how a package tree is reached, not what the
+resolution hashes over; `dist.integrity` stays the hashed fetch
+attestation and does not become an enumerable tree entry.
 Retention links continue to pin the returned CAS trees.
 
 A fixture registry is an ordinary readable layout.
@@ -308,14 +337,21 @@ registry fake is required for resolver and mapper tests.
    exports.
 2. Change the MVS resolver and snapshot-mapper late-bind path to consume
    the tree, then change daemon and Endor integration callers.
+   On the Node backend the resolver runs daemon-side, in the
+   registry-owning vat, with only the emitted `RegistryResolution`
+   crossing to the worker; it is not moved into the worker beside
+   `makeFromPackage` (see § Resolver, mapper, and mockability for why that
+   would regress per-dependency round trips).
 3. Re-incarnate the existing `@registry` formula as the root tree without
    changing its formula identifier or `HostFormula.registry` slot.
    Callers reach this capability by the `@registry` host special name,
    not only by importing a factory, and the shipped call shape differs
    from the tree's: `packages/daemon/test/registry-endo.test.js` calls
-   `E(registry).lookup(name, version)` with two positional strings and
-   `E(registry).list()` as a top-level enumeration returning `[]` before
-   any fetch, whereas the root tree's `lookup(path)` takes one path and
+   `E(registry).lookup(name, version)` with two positional strings that
+   the shipped registry reads as a package name and a version to resolve,
+   and `E(registry).list()` as a top-level enumeration returning `[]`
+   before any fetch, whereas the root tree reads `lookup`'s arguments as
+   path segments (its top-level `lookup('npm')` enters the npm hub) and
    its `list()` returns `['npm']`.
    The re-incarnation therefore audits every existing reader of
    `@registry` by special name (not only direct importers of
