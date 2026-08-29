@@ -4739,6 +4739,33 @@ pub struct IntlBoundFunctionRow {
     pub arity: u32,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrivateValueRow {
+    pub receiver: u32,
+    pub brand: u32,
+    pub value: Slot,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrivateAccessorRow {
+    pub receiver: u32,
+    pub brand: u32,
+    pub get: Option<Slot>,
+    pub set: Option<Slot>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PrivateElementSnapshot {
+    pub values: Vec<PrivateValueRow>,
+    pub accessors: Vec<PrivateAccessorRow>,
+}
+
+impl PrivateElementSnapshot {
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty() && self.accessors.is_empty()
+    }
+}
+
 /// A suspended activation: the caller's scope and resume point, saved by
 /// `run` and restored by `end` (XS's `mxFrame->value.frame.{code,scope}`
 /// plus the environment the frame aliases). The value stack is shared and
@@ -9145,6 +9172,64 @@ impl Interp {
                 self.number_format_bound_functions.insert(function, owner);
                 self.number_formats.get_mut(&owner).unwrap().bound_format = Some(function);
             }
+        }
+        true
+    }
+
+    pub fn private_elements_snapshot(&self) -> PrivateElementSnapshot {
+        let mut values: Vec<PrivateValueRow> = self
+            .private_values
+            .iter()
+            .map(|((receiver, brand), value)| PrivateValueRow {
+                receiver: receiver.0,
+                brand: brand.0,
+                value: *value,
+            })
+            .collect();
+        values.sort_unstable_by_key(|row| (row.receiver, row.brand));
+        let mut accessors: Vec<PrivateAccessorRow> = self
+            .private_accessors
+            .iter()
+            .map(|((receiver, brand), data)| PrivateAccessorRow {
+                receiver: receiver.0,
+                brand: brand.0,
+                get: data.get,
+                set: data.set,
+            })
+            .collect();
+        accessors.sort_unstable_by_key(|row| (row.receiver, row.brand));
+        PrivateElementSnapshot { values, accessors }
+    }
+
+    pub fn restore_private_elements(&mut self, state: PrivateElementSnapshot) -> bool {
+        for row in state.values {
+            self.private_values.insert(
+                (
+                    crate::value::SlotIndex(row.receiver),
+                    crate::value::SlotIndex(row.brand),
+                ),
+                row.value,
+            );
+        }
+        for row in state.accessors {
+            for value in [row.get, row.set].into_iter().flatten() {
+                let Payload::Reference(function) = value.value else {
+                    return false;
+                };
+                if !self.functions.contains_key(&function) {
+                    return false;
+                }
+            }
+            self.private_accessors.insert(
+                (
+                    crate::value::SlotIndex(row.receiver),
+                    crate::value::SlotIndex(row.brand),
+                ),
+                AccessorData {
+                    get: row.get,
+                    set: row.set,
+                },
+            );
         }
         true
     }

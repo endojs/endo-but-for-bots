@@ -547,7 +547,7 @@ impl SideTable {
             // is re-derived by boot; a guest-mutated seed is emitted.
             SideTable::Dates => ("dates", Serialized),
             SideTable::AsyncGenerators => ("async_generators/async_gen_run_stack", Pending),
-            SideTable::PrivateElements => ("private_values/private_accessors", Pending),
+            SideTable::PrivateElements => ("private_values/private_accessors", Serialized),
             SideTable::DisposableStacks => ("disposable_stacks", Pending),
             // The Intl DATA record tables (`INTL`, store schema 12): nine
             // resolved-options tables, owner-ascending, restored via
@@ -762,7 +762,7 @@ mod tests {
     #[test]
     fn pending_is_derived_from_ledger() {
         let pending = SideTable::pending();
-        assert_eq!(pending.len(), 10, "the design's Remaining ledger count");
+        assert_eq!(pending.len(), 9, "the design's Remaining ledger count");
         // The rich per-instance tables are still pending.
         assert!(!pending.contains(&SideTable::Functions));
         assert!(!pending.contains(&SideTable::BoundFunctions));
@@ -774,6 +774,7 @@ mod tests {
         // The language-completion sweep's tables joined the ledger Pending,
         // and the segments row names the store gates' standing refusal.
         assert!(pending.contains(&SideTable::AsyncGenerators));
+        assert!(!pending.contains(&SideTable::PrivateElements));
         assert!(!pending.contains(&SideTable::Segments));
         // The restore-time-rebuilt rows are not pending: their data round-trips
         // and restore re-derives the consulting index/counter.
