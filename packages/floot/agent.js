@@ -1637,6 +1637,10 @@ harden(makeStreamingAgent);
 // Petname (in the factory guest's own petstore) where the session registry —
 // an array of { id, title, createdAt } — is persisted.
 const REGISTRY_NAME = 'floot-sessions';
+// A write-ahead copy that remains rooted until REGISTRY_NAME contains the same
+// snapshot. Its presence means an interrupted save must be completed before
+// the registry is read or another save starts.
+const REGISTRY_BACKUP_NAME = 'floot-sessions-backup';
 
 // Petname where whole-Floot voice/TTS preferences (voice, speed, expression…)
 // are persisted. These are a property of the Floot instance — shared across
@@ -1942,10 +1946,30 @@ export const make = (hostPowers, _context, { env } = {}) => {
   // lazily so make() never awaits.
   /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, presetPromptVersion?: number, model?: string }> | undefined} */
   let registry;
+
+  // Complete an interrupted save while the write-ahead copy remains rooted.
+  // Removing/replacing the canonical name is safe here because the backup is
+  // not removed until the canonical value has been stored successfully.
+  const recoverRegistryBackup = async () => {
+    await null;
+    if (!(await E(powers).has(REGISTRY_BACKUP_NAME))) return undefined;
+    const stored = await E(powers).lookup(REGISTRY_BACKUP_NAME);
+    if (await E(powers).has(REGISTRY_NAME)) {
+      await E(powers).remove(REGISTRY_NAME);
+    }
+    await E(powers).storeValue(stored, REGISTRY_NAME);
+    await E(powers).remove(REGISTRY_BACKUP_NAME);
+    return stored;
+  };
+
   const loadRegistry = async () => {
     if (registry) return registry;
-    if (await E(powers).has(REGISTRY_NAME)) {
-      const stored = await E(powers).lookup(REGISTRY_NAME);
+    const recovered = await recoverRegistryBackup();
+    if (recovered !== undefined || (await E(powers).has(REGISTRY_NAME))) {
+      const stored =
+        recovered === undefined
+          ? await E(powers).lookup(REGISTRY_NAME)
+          : recovered;
       const entries = Array.isArray(stored) ? [...stored] : [];
       const refreshed = entries.map(refreshPresetEntry);
       registry = refreshed;
@@ -1959,19 +1983,30 @@ export const make = (hostPowers, _context, { env } = {}) => {
     }
     return registry;
   };
-  // Serialize registry writes: storeValue can't overwrite, so each save is a
-  // remove-then-store. Two concurrent saves would interleave (both see the key,
-  // the second remove throws on the already-removed name), so we chain them.
+  // Serialize registry writes. storeValue cannot overwrite, so root a
+  // write-ahead copy first and keep it until the canonical name contains the
+  // same immutable snapshot. A crash at every await leaves at least one name
+  // from which loadRegistry can recover.
   let registryWrite = Promise.resolve();
   const saveRegistry = () => {
+    const snapshot = harden([...(registry || [])]);
     const result = registryWrite.then(async () => {
+      // A previous in-process failure may have left a backup behind. Complete
+      // that save before beginning this one, then persist the current snapshot.
+      await recoverRegistryBackup();
+      await E(powers).storeValue(snapshot, REGISTRY_BACKUP_NAME);
       if (await E(powers).has(REGISTRY_NAME)) {
         await E(powers).remove(REGISTRY_NAME);
       }
-      await E(powers).storeValue(harden([...(registry || [])]), REGISTRY_NAME);
+      await E(powers).storeValue(snapshot, REGISTRY_NAME);
+      await E(powers).remove(REGISTRY_BACKUP_NAME);
     });
-    // Keep the chain alive even if this write rejects.
-    registryWrite = result.catch(() => {});
+    // Keep the chain alive after a rejection, but do not make persistence
+    // failures silent: callers still receive `result`, and the daemon journal
+    // records failures from fire-and-forget migrations.
+    registryWrite = result.catch(error => {
+      console.error('[floot-factory] session registry save failed:', error);
+    });
     return result;
   };
 
