@@ -22,8 +22,13 @@ and a final unterminated line.
 Add this method directly to `readableBlobMethodGuards`, the single shared
 interface-guard object (owned by
 [fs-interface-consolidation.md](fs-interface-consolidation.md)) that every
-`ReadableBlob`-derived exo spreads, so defining it once propagates it to every
-exo that spreads that record:
+`ReadableBlob`-derived exo spreads. A *guard* here is the interface contract that
+validates an exo's method calls at the CapTP boundary; defining `lines` once on the
+shared record propagates it to every exo that spreads that record. The single
+exception is `BlobRef`, which hand-declares its own guard rather than spreading the
+shared record (§ Implementations and migration): it must be given `lines`
+explicitly, and so is the one producer where "define once, propagate everywhere"
+does not reach by identity. The method signature:
 
 ```ts
 lines(options?: {
@@ -58,8 +63,9 @@ spelled `startLine`/`endLine` to match the sibling vocabulary rather than
 diverging on names for an identical index value.
 
 `lines` is bare-named rather than prefixed `streamLines`, even though it returns a
-stream like the guard's one existing stream-returning member, `streamBase64`, and
-unlike the materializing `text`/`json` pair. The `streamBase64` prefix
+stream like the guard's one existing stream-returning member, `streamBase64` (which
+pumps the blob's bytes to the caller as a base64-encoded stream). It is unlike the
+materializing `text`/`json` pair. The `streamBase64` prefix
 disambiguates an *encoding*: it names which representation the base64 pump emits,
 not merely that the method streams, so its prefix is not a general "this returns a
 stream" convention on the guard that `lines` would violate. `lines` instead
@@ -68,9 +74,32 @@ carries the near-universal cross-ecosystem spelling for a per-line reader (Node'
 the commissioning prompt fixes that spelling. The materialize-vs-stream signal a
 caller needs is therefore carried by the return type
 (`PassableReader<string, undefined>`, consumed via `iterateReader`, not `await`)
-and, as with the terminator-retention callout, by the per-surface `help()` text
-and TypeScript doc-comments, which must state that `lines` returns a reader to be
+and, as noted where the terminator-retention callout is required below (§
+Implementations and migration), by the per-surface `help()` text and TypeScript
+doc-comments, which must state that `lines` returns a reader to be
 iterated, not a materialized value.
+
+Two consequences of the bare spelling are called out so they are not left to the
+implementation. First, this repo's feature detection keys on method *names*, not on
+the exo tag (`readableBlobMethodGuards`' own comment, and `AGENTS.md` § CapTP
+introspection, which instructs a caller to enumerate `__getMethodNames__()` and
+reason from the name). A caller listing this guard sees `text`, `json`, `lines`,
+`streamBase64`, `getInfo`, `fetch`; by this repo's own naming pattern `text`,
+`json`, and `lines` all read as materializing accessors, yet only `lines` is a
+remotable driven with `iterateReader`. Because the bare name cannot itself carry
+the "returns a stream" signal that name-based discovery relies on, the guard's own
+shared doc-comment (not only per-producer `help()`/TSDoc) must carry the
+"returns a reader to iterate, not a value" callout, so a maintainer reading the
+full method set off the guard learns it at the first place they look. Second,
+`lines` and `streamBase64` are the guard's only two stream-returning members but
+use incompatible invocation protocols: `streamBase64(syncPromise)` is a
+caller-driven pump that takes a synchronization promise and returns a raw promise
+chain, whereas `lines(options)` returns a `PassableReader` the caller drives via
+`iterateReader` (the newer `@endo/exo-stream` idiom used by `followNameChanges`
+and the mount watcher). A caller who has learned to drive one cannot reuse that
+pattern for the other. This design does not migrate `streamBase64`; whether it
+should eventually converge on the `PassableReader` shape is left to the broader
+reader-level design noted under Follow-up.
 
 `lines` deliberately does **not** share those methods' *line-boundary* model,
 and the divergence is intrinsic to its purpose, so the two surfaces are not
@@ -88,6 +117,30 @@ line models differ, line index `N` need not denote the same span across the
 surfaces: `lines` is not a drop-in continuation of a `rangeReadText`/`textRange`
 window's line numbering, and callers must not assume line-index parity between
 them.
+
+A unifying alternative was weighed on its merits before accepting the divergence,
+independent of the commissioning prompt. The alternative is a single boundary
+model behind a mode flag (for example `lines({ terminators: 'lf' | 'crlf-aware',
+retain: boolean })`) letting one method reproduce `rangeReadText`/`textRange`'s
+LF-only, terminator-stripped, trailing-empty-line slots *and* the CR/LF/CRLF,
+terminator-retained, no-trailing-empty stream. It is rejected on three counts, not
+merely because the prompt fixes the CR/LF/CRLF-retaining shape. First, it moves a
+line-boundary decision from the design into every call site and every guard
+predicate, so a reviewer or caller can no longer read the boundary model off the
+method name; a mode flag that silently changes what a *line* is (not just which
+lines are selected) is the "same name, divergent meaning" hazard the design already
+works to avoid on `startLine`/`endLine`. Second, the two modes want different
+return shapes (`rangeReadText` joins its LF slots into one string and `textRange`
+returns a sub-blob, while `lines` streams individual terminator-bearing values), so
+a single method spanning both would either force one mode into an unnatural return
+type or fan out into the very family of methods the flag was meant to collapse.
+Third, terminator retention is not an orthogonal toggle: retaining CR/LF/CRLF is
+what lets `lines` stream without a normalization pass and lets a caller reassemble
+the exact bytes, so pairing "retain" with the LF-split model yields a fourth,
+un-asked-for semantics with no consumer. The three sibling methods therefore
+deliberately share only the *range-index* convention and stay distinct on the
+boundary model and return shape; the prompt fixes which of these already-preferred
+shapes `lines` takes, it is not the sole reason for the divergence.
 
 A negative, fractional, or non-safe bound rejects with `EINVAL` before opening
 the source (via the shared `toSafeNumber`), so the same input class throws
@@ -130,6 +183,20 @@ bounded window. The amount retained is governed only by the source chunk,
 an unfinished line straddling chunks, and the exo-stream buffer, not by the
 requested range.
 
+The one bound this design does *not* impose is a per-line cap: because a value is
+not yielded until the scanner finds its terminator (or EOF), a single overlong or
+entirely unterminated line (a minified bundle, a binary file mistyped as text, or
+a stalled writer that never emits a terminator) forces the adapter to accumulate
+that whole line in memory before it can yield anything, which for a source that is
+one unterminated line degrades to whole-source materialization. This is an
+accepted, documented limitation, not an oversight: `lines` bounds memory per
+*line*, not per byte, and offers no maximum-line-length option in this iteration.
+A caller that must defend against adversarial or pathological line lengths should
+range-attenuate the blob first (`textRange`, once landed) or use the byte reader
+directly; a future maximum-line-length option is noted under Follow-up. The
+verification plan's overlong-line case asserts the line is delivered whole rather
+than truncated, pinning this behavior.
+
 This "never materializes the source" property is the adapter's, and it is only as
 incremental as the byte iterator a given producer hands it. Producers backed by a
 genuinely incremental source get the full benefit: `LocalBlob`
@@ -169,6 +236,32 @@ normal reader cancellation behavior: an early consumer `return()` closes the
 underlying byte reader or file handle. `lines()` does not change blob identity,
 range authority, or the behavior of `text`, `json`, and `streamBase64`.
 
+Two source-liveness contracts are stated here rather than deferred to the
+verification plan, because both are capability-safety properties a conformance
+test must assert against a defined outcome.
+
+*Revocation mid-stream.* On the daemon mount view, the underlying byte reader
+re-checks the mount's confinement/revocation on each read, exactly as `getInfo`
+and `fetch` do. If the mount is revoked while a `lines()` stream is in flight, the
+next pull that reaches the revoked source rejects: the reader yields already-buffered
+lines that were pulled before revocation, and then the pending/next iteration
+settles to a rejection carrying the same revocation error `fetch`/`getInfo` throw
+on a revoked mount (an `EPERM`-class error marshalled across the CapTP boundary as
+that error's passable form), not a silent stream end. The adapter does not swallow
+the error into a clean `done`, so a caller cannot mistake revocation for
+end-of-content.
+
+*Growth mid-stream (live sources).* A mount file is a live, non-snapshot face:
+its bytes can grow underneath the reader. `lines()` reads the source to *current*
+EOF and ends the stream there; it does not wait for further appends the way a
+directory watch does. A caller processing a growing log therefore drains the
+lines available at the moment it started, sees `done`, and resumes by invoking
+`lines({ startLine: <count already consumed> })` again. The zero-based
+`startLine` skip makes resumption exact without re-reading consumed lines. `lines`
+is deliberately a finite reader over the content present when it opens the source,
+not a tail-follower; a follow-mode reader, if wanted, is separate future work
+noted under Follow-up.
+
 Once `textRange` lands, three line-range methods will share the same
 range-*index* addressing on this interface while differing in both return shape
 and line-boundary model: `rangeReadText(startLine, endLine)` returns an LF-split
@@ -198,10 +291,17 @@ implementable*: range attenuation and recursive tree listing are `LocalBlob`/
 `LocalTree` capabilities that the daemon, git, and mount exos cannot all cheaply
 provide, so folding them into the shared record would force implementers to
 supply a method they have no backing for. `lines` is the opposite case: every
-producer already exposes incremental byte iteration (each row in the table below
-names the concrete iterator), so every exo can implement `lines` through the one
-shared byte-to-line adapter, and this design commits to landing all
-implementations in the same change. Placing `lines` on a temporary narrow guard would therefore only
+producer can trivially satisfy the adapter's iterator shape (each row in the table
+below names the byte source it hands the adapter), so every exo can implement
+`lines` through the one shared byte-to-line adapter, and this design commits to
+landing all implementations in the same change. That uniformity is at the adapter
+*interface*, not at the source: `LocalBlob`, the mount view, git's streaming path,
+and the browser bridge feed a genuinely incremental iterator, while `BlobRef`,
+`blobFromBytes`, and git's whole-object `fetch`/`getInfo`/`text` paths hand the
+adapter one fully-resident buffer (the degenerate single-chunk case, per the
+"never materializes the source" paragraph above). Both classes satisfy the same
+adapter contract; the wide-blast-radius move is safe because that contract is
+universally implementable, not because every source is already incremental. Placing `lines` on a temporary narrow guard would therefore only
 add a parallel interface to fold back into the shared record once the (already
 enumerated) producers land, which is net churn for a method that is universal by
 construction. The wide blast radius is accepted here precisely because the guard
@@ -211,17 +311,17 @@ narrow the guard. Compatibility migrations and a temporary richer interface are
 unnecessary at this stage.
 
 Widening the guard in one step and landing every implementation in one PR are
-separable decisions, and the reviewability argument the precedent
+separable decisions, and the reviewability argument that the precedent
 ([platform-range-and-tree-reads.md](platform-range-and-tree-reads.md) §
 "Interface layering (blast radius)") makes for staging a change applies to the
-second, not the first. That precedent, and its sibling
+second decision, not the first. That precedent, and its sibling
 [fs-interface-consolidation.md](fs-interface-consolidation.md) § "Follow-ups"
-deferring the `getInfo` → `contentAddress` rename "to keep this change
+deferring the `getInfo` -> `contentAddress` rename "to keep this change
 reviewable," stage work whose per-site edits carry *independent* meaning: a rename
 touches each call site with a distinct name in a distinct context, so a reviewer
 must read each site on its own terms and the review cost grows with the site
 count. `lines` is deliberately the opposite: the semantics live once in the shared
-byte-to-line adapter, and each producer's change is the same mechanical shape,
+byte-to-line adapter, and each producer's change is the same mechanical shape:
 open the backing byte iterator this row already names and feed it to that adapter.
 The review cost is therefore dominated by one adapter plus a single repeated
 pattern a reviewer verifies once and then confirms per row, not by N independent
@@ -311,7 +411,16 @@ A separate design will consider a CoDel-inspired (Controlled Delay) control algo
 implicitly adjust reader pace and buffer size. Such an API still needs an
 explicit alpha parameter so callers can select relative aggressiveness. This
 proposal keeps the fixed `buffer = 0` default until that broader reader-level
-design establishes a replacement.
+design establishes a replacement. That broader reader-level design is also the
+natural place to decide whether `streamBase64` should converge on the same
+`PassableReader` invocation shape `lines` uses, so the guard's two stream-returning
+members stop diverging on protocol.
+
+Two further extensions are deliberately out of scope here and left as follow-ups: a
+maximum-line-length option (or error) to bound the per-line buffering this design
+accepts as unbounded; and a follow/tail mode that waits for further appends on a
+live source rather than ending at current EOF, for callers processing a still-growing
+log. Both are additive to the finite, per-line-bounded reader specified here.
 
 ## Prompt
 
