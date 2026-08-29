@@ -842,9 +842,9 @@ export const main = async rawArgs => {
       'required with --policy-mode tofu-auto: confirm you accept an unbounded ' +
         'outbound capability that Phase 1 ships no verb to inspect or revoke',
     )
-    .action(async (name, cmd) => {
+    .action(async (name, options) => {
       const { httpMk } = await import('./commands/http-mk.js');
-      return httpMk(httpMkArgumentsFromOptions(name, cmd.opts()));
+      return httpMk(httpMkArgumentsFromOptions(name, options));
     });
 
   const where = program
