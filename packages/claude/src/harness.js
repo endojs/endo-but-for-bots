@@ -34,10 +34,7 @@ import { renderMcpConfig, serializeMcpConfig } from './mcp-config.js';
 import { renderApiKeyHelperSettings } from './credentials-pool.js';
 import { cancelled as cancelledResult, poolExhausted } from './results.js';
 
-/** @import { McpToolDescriptor } from './tool-permissions.js' */
-/** @import { McpTransport } from './mcp-config.js' */
-/** @import { InferResult } from './results.js' */
-/** @import { AcquireResult } from './credentials-pool.js' */
+/** @import { AcquireResult, Broker, HarnessOptions, InferResult, LaunchSpec, SpawnFiles } from './types.js' */
 
 const InferInterface = M.interface('GuestInference', {
   infer: M.call(M.string())
@@ -75,50 +72,6 @@ const makeOneShotCancel = cancelledP => {
     },
   });
 };
-
-/**
- * @typedef {object} Broker
- *   The harness-owned facet broker for ONE guest. It resolved the formula id and
- *   holds the attenuated facet connection; the raw fd is never inherited into the
- *   claude-spawned tree.
- * @property {() => Promise<McpToolDescriptor[]>} toolsList
- *   Take the one `tools/list` snapshot (raw, pre-prune).
- * @property {() => Promise<McpTransport>} transport
- *   How the confined child reaches this broker's adapter (stdio command / http url).
- * @property {() => Promise<void>} [close]
- */
-
-/**
- * @typedef {object} LaunchSpec
- * @property {readonly string[]} argv
- * @property {Readonly<Record<string, string>>} env
- * @property {string} prompt
- * @property {string} sessionTag
- * @property {{ wallClockMs: number, outputByteCap: number, maxTurns: number }} limits
- * @property {unknown} [cancelled]
- */
-
-/**
- * @typedef {object} HarnessOptions
- * @property {string[]} pinnedModels          Model values that may reach `--model`.
- * @property {string} [defaultModel]          Used when `infer` omits `model` (defaults to pinnedModels[0]).
- * @property {string} [serverName]            MCP server key (default `endo`).
- * @property {string} [pinnedCliVersion]      Default `PINNED_CLI_VERSION`.
- * @property {() => Promise<string>} getClaudeVersion  Reads `claude --version`.
- * @property {() => string} mintSessionTag    Unique per spawn (NOT per guest).
- * @property {(args: { sessionTag: string, mcpConfigJson: string, settingsJson: string }) => Promise<SpawnFiles>} prepareSpawnFiles
- * @property {(spec: LaunchSpec) => Promise<InferResult>} launch
- * @property {{ wallClockMs: number, outputByteCap: number, maxTurns: number }} [limits]
- */
-
-/**
- * @typedef {object} SpawnFiles
- * @property {string} mcpConfigPath
- * @property {string} settingsPath
- * @property {string} apiKeyHelperCommand   Harness-fixed helper argv (emits the acquired credential).
- * @property {string} pathValue             The PATH the child sees (scoped to the shim).
- * @property {() => Promise<void>} cleanup   Unlink the per-spawn files (runs on every exit path).
- */
 
 const DEFAULT_LIMITS = harden({
   wallClockMs: 120_000,

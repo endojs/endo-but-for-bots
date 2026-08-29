@@ -11,11 +11,9 @@
 
 import { makeError, X, q } from '@endo/errors';
 
-const FORMULA_ID = /^[0-9a-f]{64}$/;
+/** @import { GuestFormulaId } from './types.js' */
 
-/**
- * @typedef {string & { readonly __brand: 'GuestFormulaId' }} GuestFormulaId
- */
+const FORMULA_ID = /^[0-9a-f]{64}$/;
 
 /**
  * Assert a value is a 64-hex formula id and return it branded. Throws (a
