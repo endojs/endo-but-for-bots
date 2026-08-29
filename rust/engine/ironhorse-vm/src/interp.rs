@@ -2496,6 +2496,17 @@ pub enum NativeMethod {
     /// annexB stub is literally `*mxResult = *mxThis` — no instance check, no
     /// recompilation, arguments ignored — so the mirror returns `this` as-is.
     RegExpCompile,
+    /// `get Error.prototype.stack` (`fx_Error_prototype_get_stack`): for an
+    /// error instance, `name[: message]` plus one `\n at <fn> ()` line per
+    /// construction-time frame; `undefined` for a non-error object; a
+    /// TypeError for a non-object `this`.
+    ErrorStackGetter,
+    /// `set Error.prototype.stack` (`fx_Error_prototype_set_stack`): defines
+    /// an own `{value, writable, enumerable, configurable}` `stack` property
+    /// on `this` unconditionally (no string check — `mxDefineID`), with a
+    /// TypeError for a non-object `this`, a missing argument, or a refused
+    /// define (a frozen receiver, a rejecting proxy trap).
+    ErrorStackSetter,
     /// `String.prototype.match(regexp)` (`fx_String_prototype_match`): coerce
     /// the receiver to string, the argument to a RegExp, and dispatch to the
     /// matcher — the non-global path returns `exec`'s result; the global path
@@ -3038,6 +3049,12 @@ struct IterState {
 struct ErrorInfo {
     name: &'static str,
     message: Option<String>,
+    /// The call-frame names captured at construction (innermost first,
+    /// ending with the empty program frame), the way XS records the frame
+    /// chain `fx_Error_prototype_get_stack` renders as `\n at <name> ()`
+    /// lines in the oracle shim (which compiles from buffers, so frames
+    /// carry no file:line ids).
+    frames: Vec<String>,
 }
 
 /// Exact, immutable Temporal records.  Keeping these independent from the
@@ -4202,6 +4219,15 @@ pub struct Interp {
     /// keeping non-`constructor` programs (and the exact-metering corpus)
     /// byte-identical.
     constructor_id: Option<u16>,
+    /// The `%Error.prototype%` `stack` accessor pair awaiting link-time
+    /// install: `(error_proto, getter, setter)`. Installed (guarded on the
+    /// program naming `Error`, for metering neutrality elsewhere) beside
+    /// the `proto_accessors` in `link_intrinsics`.
+    error_stack_accessor: Option<(
+        crate::value::SlotIndex,
+        crate::value::SlotIndex,
+        crate::value::SlotIndex,
+    )>,
     /// The program-symbol id of `prototype`, when the program names it —
     /// gates installing a constructor function's own `prototype` property
     /// (unobservable otherwise), exactly like [`Self::constructor_id`] gates
@@ -4820,6 +4846,7 @@ impl Interp {
             from_async: Vec::new(),
             then_id: None,
             constructor_id: None,
+            error_stack_accessor: None,
             prototype_key_id: None,
             regexps: std::collections::HashMap::new(),
             regexp_proto: crate::value::SlotIndex::NULL,
@@ -5706,6 +5733,12 @@ impl Interp {
             .push((error_proto, "name", "Error".to_string()));
         self.proto_data
             .push((error_proto, "message", String::new()));
+        // `%Error.prototype%`'s `stack` host accessor pair
+        // (`fxNextHostAccessorProperty` in `fxBuildError`), installed at
+        // link time beside the other native accessors.
+        let stack_getter = self.alloc_named_method(NativeMethod::ErrorStackGetter, "get stack", 0);
+        let stack_setter = self.alloc_named_method(NativeMethod::ErrorStackSetter, "set stack", 1);
+        self.error_stack_accessor = Some((error_proto, stack_getter, stack_setter));
         for (_, native) in Native::intrinsics() {
             if matches!(
                 native,
@@ -7007,6 +7040,36 @@ impl Interp {
             }
         }
         self.proto_accessors = accessors;
+        // `%Error.prototype%.stack` {get, set} (`XS_DONT_ENUM_FLAG` only —
+        // enumerable: false, configurable: true), installed when the program
+        // names `Error` so every other program's metering stays untouched;
+        // the `stack` key is force-interned unmetered (an XS boot default
+        // key, reachable reflectively by string).
+        if let Some((proto, getter, setter)) = self.error_stack_accessor {
+            let names_error_family = [
+                "Error",
+                "EvalError",
+                "RangeError",
+                "ReferenceError",
+                "SyntaxError",
+                "TypeError",
+                "URIError",
+                "AggregateError",
+                "SuppressedError",
+                "stack",
+            ]
+            .iter()
+            .any(|n| self.symbol_ids.contains_key(*n));
+            if names_error_family {
+                let sid = self.intern_key_unmetered("stack");
+                self.set_own_accessor_unmetered(
+                    proto,
+                    sid,
+                    Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
+                    Some(Slot::of(Kind::Reference, Payload::Reference(setter))),
+                );
+            }
+        }
         // Native numeric data properties (`Math.PI` &co.): bound as own
         // properties of their owner under the program-local id, unmetered.
         let vdata = std::mem::take(&mut self.proto_value_data);
@@ -19712,6 +19775,7 @@ impl Interp {
             ErrorInfo {
                 name: "AggregateError",
                 message: None,
+                frames: self.capture_error_frames(),
             },
         );
         let n = errors.len() as u64;
@@ -19746,6 +19810,25 @@ impl Interp {
     /// (under the program's relinked ids) so guest reads resolve — both
     /// unmetered, mirroring XS where `name` is the inherited prototype value
     /// and the property slot cost is folded into the measured constants.
+    /// The frame-name chain an error captures at construction (XS's
+    /// `fxCaptureErrorStack` recording): the current activation's function
+    /// name, each suspended caller's, then the empty program frame. A
+    /// non-function level (the program scope) contributes nothing beyond
+    /// the final empty frame.
+    fn capture_error_frames(&self) -> Vec<String> {
+        let mut frames = Vec::new();
+        if let Some(fi) = self.functions.get(&self.cur_func) {
+            frames.push(fi.name.clone());
+        }
+        for state in self.call_stack.iter().rev() {
+            if let Some(fi) = self.functions.get(&state.cur_func) {
+                frames.push(fi.name.clone());
+            }
+        }
+        frames.push(String::new());
+        frames
+    }
+
     fn build_error(&mut self, name: &'static str, base: usize, argc: usize) -> Slot {
         // Base object cost, exactly as the native `Object` constructor
         // (`tick_builtin` + `fxNewObject`), plus the error-instance extra.
@@ -19785,6 +19868,7 @@ impl Interp {
             ErrorInfo {
                 name,
                 message: message.clone(),
+                frames: self.capture_error_frames(),
             },
         );
         // An own `message` property only when a message argument was given
@@ -19883,6 +19967,7 @@ impl Interp {
             ErrorInfo {
                 name: "SuppressedError",
                 message: None,
+                frames: self.capture_error_frames(),
             },
         );
         for (name, value) in [("error", error), ("suppressed", suppressed)] {
@@ -19959,6 +20044,7 @@ impl Interp {
             ErrorInfo {
                 name: "AggregateError",
                 message: message.clone(),
+                frames: self.capture_error_frames(),
             },
         );
         if let Some(text) = message {
@@ -25416,6 +25502,70 @@ impl Interp {
                 self.regexp_test(inst, arg0)?
             }
             NativeMethod::RegExpCompile => this,
+            NativeMethod::ErrorStackGetter => {
+                let inst = match this.value {
+                    Payload::Reference(r) if this.kind == Kind::Reference => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                match self.error_data.get(&inst).cloned() {
+                    None => Slot::undefined(),
+                    Some(info) => {
+                        // `name`/`message` are read live off the instance
+                        // (`mxGetID`), so a post-construction rename shows.
+                        let mut text = match self.name_id.map(|id| self.instance_get(inst, id)) {
+                            Some(v) if v.kind != Kind::Undefined => self.render(&v),
+                            _ => info.name.to_string(),
+                        };
+                        let message = match self.symbol_ids.get("message").copied() {
+                            Some(id) => {
+                                let v = self.instance_get(inst, id);
+                                if v.kind == Kind::Undefined {
+                                    None
+                                } else {
+                                    Some(self.render(&v))
+                                }
+                            }
+                            None => info.message.clone(),
+                        };
+                        if let Some(m) = message {
+                            if !m.is_empty() {
+                                text.push_str(": ");
+                                text.push_str(&m);
+                            }
+                        }
+                        for frame in &info.frames {
+                            text.push_str("\n at");
+                            if !frame.is_empty() {
+                                text.push(' ');
+                                text.push_str(frame);
+                            }
+                            text.push_str(" ()");
+                        }
+                        self.new_string_metered(text.as_bytes())
+                    }
+                }
+            }
+            NativeMethod::ErrorStackSetter => {
+                let inst = match this.value {
+                    Payload::Reference(r) if this.kind == Kind::Reference => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                if argc < 1 {
+                    return Err(self.catchable_type_error());
+                }
+                let id = self.intern_key("stack");
+                let desc = OrdinaryDescriptor {
+                    value: Some(arg0),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(true),
+                    ..OrdinaryDescriptor::default()
+                };
+                if !self.mop_define_own_property(code, inst, id, desc)? {
+                    return Err(self.catchable_type_error());
+                }
+                Slot::undefined()
+            }
             NativeMethod::RegExpToString => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.regexps.contains_key(&r) => r,
