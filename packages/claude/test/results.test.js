@@ -65,9 +65,9 @@ test('facet-threw produces a passable result for arbitrary thrown values', t => 
       fc.string(),
       fc.anything({ key: safeObjectKey }),
       (method, caught) => {
-      const result = facetThrew(method, caught);
-      t.is(passStyleOf(result), 'copyRecord');
-      t.is(passStyleOf(result.error), 'error');
+        const result = facetThrew(method, caught);
+        t.is(passStyleOf(result), 'copyRecord');
+        t.is(passStyleOf(result.error), 'error');
       },
     ),
   );
