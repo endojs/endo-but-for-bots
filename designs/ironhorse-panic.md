@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-17 |
+| **Updated** | 2026-08-29 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 
@@ -43,11 +44,11 @@ The clean answer is a two-part contract:
 
 Ironhorse already terminates uncatchably for two of the three natural cases
 (stack overflow, meter refusal). What is missing is (a) one formal concept that
-unifies them and the net-new cases, (b) an explicit statement of the embargo
-contract against the daemon's *actual* current delivery machinery (which,
-importantly, chose a different mechanism), and (c) the debugger's treatment of a
-panic versus an ordinary uncaught throw. This design supplies all three, then
-adds the reference-error Coda.
+unifies them and the net-new cases, (b) a per-worker write-ahead transcript that
+makes embargo, restart, and replay one durability contract, (c) treatment of
+host calls and their restart-sensitive handles as transcript messages, and (d)
+the debugger's treatment of a panic versus an ordinary uncaught throw. This
+design supplies all four, then adds the reference-error Coda.
 
 ## Scope: What Is Already a Panic (the required first step)
 
@@ -77,8 +78,8 @@ Net-new panic sources (no existing `Halt` variant, added by this design):
 
 **Conclusion of the scope step:** the mechanism exists for two of three natural
 cases and needs *naming and generalizing*, not building. The genuinely new
-engineering is the formal category (small), the embargo reconciliation (a
-survey, possibly a follow-on design, see § Open questions), and the Coda.
+engineering is the formal category (small), the per-worker write-ahead
+transcript and embargo, transcript-aware host calls, and the Coda.
 
 ## The Formal `Panic` Category
 
@@ -207,48 +208,105 @@ consistency nobody cares about. The moment a panic is meant to be **fixed and
 retried**, those escaped messages become exactly the hangover inconsistency the
 embargo exists to prevent, and admission control gives nothing here.
 
-### The embargo is net-new; it is its own follow-on design
+### Per-worker write-ahead transcript
 
-Because outbound release is synchronous mid-crank and there is no commit point,
-the message-embargo half of this design's premise is **net-new machinery**, not a
-reclassification like the panic half. It should be specified in **its own
-follow-on design** (working title `message-embargo-and-crank-commit`, to be
-filed), because it touches the bridge layer, needs a crank-commit delimiter, and
-must reason about partial effects. This design fixes only the **contract** that
-follow-on must satisfy; it does not assert an implementation this codebase does
-not have. The nearest existing primitives the follow-on builds on, all found by
-the survey:
+The absence of a transcript makes panic recovery unsound, so the transcript is
+part of this design rather than a follow-on. Each endor worker owns
+`<endo-dir>/workers/<handle>/transcript.sqlite`, opened in WAL mode. A database
+per worker avoids a global writer lock between vats and confines corruption and
+recovery to one vat. The database contains four logical records (the physical
+schema may normalize payloads into side tables):
 
-- the **`send_frame` chokepoint** in `worker_io.rs` (the single point every
-  outbound message passes through, so the buffer lives here);
-- the **crank-start/crank-end markers** in the XS main loop (the delimiter that
-  scopes a buffer to one crank);
-- the commit-capable **`HeapStore::commit` / `CheckpointBatch`** store in
-  `rust/engine/ironhorse-snapshot/src/store.rs` (epoch/seal discipline), today
-  **unwired** to the crank path, if durability at the commit boundary is wanted
-  (see [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md), whose
-  "dirty-page incremental checkpoints at crank boundaries" is the natural place a
-  crank-commit boundary would attach).
+| Record | Durable content |
+|---|---|
+| `snapshot` | Snapshot identity, engine/callback-table signature, and the last committed transcript sequence represented by the snapshot. |
+| `crank` | Monotonic crank id, inbound-delivery sequence, starting snapshot epoch, and `started` / `committed` / `aborted` state. |
+| `event` | Ordered inbound messages, outbound messages, host-call requests, and host-call replies. Every event has a crank id and sequence number; outbound and host-effect events also have a stable idempotency key. |
+| `host_handle` | Logical handle id, the host-call event that created it, a durable reconstruction descriptor, and open/closed state. The guest heap stores the logical id, never an OS file descriptor or native pointer. |
 
-The normative contract the follow-on must satisfy:
+The worker supervisor is the only writer. Its crank protocol is:
 
-- A **committed** crank (`CrankOutcome::Committed`) releases its outbound messages
-  (flushes the buffer). Admission control already guarantees a normally-completing
-  crank reaches here.
-- A **panicked** crank (`CrankOutcome::Panicked`) releases **none** of its
-  outbound messages (discards the buffer), so no side effect escapes.
-- An **uncaught throw** (`CrankOutcome::Uncaught`) is *not* a panic. It is a
-  guest-visible error that escaped to the host boundary. A crank that ends this
-  way also ends abnormally, so it discards under the same rule, but it remains
-  reported to the debugger and host as an exception, not a panic. See § Debugger
-  interaction.
+1. In one short transaction, append the inbound delivery and a `started` crank
+   row, then sync the WAL before entering the guest. The inbound message is
+   therefore recoverable even if the worker process dies immediately.
+2. Route `sendFrame`, `issueCommand`, and `sendRawFrame` into pending `event`
+   rows instead of the transport. Route transcript-aware host functions through
+   the same event writer, durably recording a request before invoking its host
+   adapter and its reply afterward. Nothing outside the vat observes pending
+   outbound rows.
+3. On `CrankOutcome::Committed`, mark every pending event and the crank committed
+   in one transaction. Only after that transaction is durable may the supervisor
+   release outbound messages, in sequence order. Each released frame carries its
+   stable event sequence so the receiver can discard a duplicate if the
+   supervisor crashes after send but before recording the acknowledgement.
+4. On `CrankOutcome::Panicked` or `CrankOutcome::Uncaught`, discard the staged
+   outbound payloads, close tentative native handles, and mark every event and
+   the crank aborted. The original inbound row remains available for diagnosis
+   and an explicit retry, but none of the crank's outbound effects become
+   releasable.
+
+The synchronous `send_frame` methods in `worker_io.rs` are the existing
+chokepoint to replace with step 2. The literal crank-start/crank-end markers in
+the XS main loop supply the scope. For Ironhorse's store-backed machines,
+`HeapStore::commit` and the transcript crank commit share the worker's SQLite
+transaction; a committed heap epoch can never name an uncommitted transcript
+suffix or vice versa. A CAS snapshot uses the same rule indirectly: commit its
+CAS identity and transcript watermark together, then compact events at or below
+that watermark. WAL checkpointing is lifecycle maintenance, not the logical
+crank commit.
+
+This contract supersedes admission control only where admission control is
+insufficient. Pre-payment remains the quota gate. The transcript and embargo
+cover stack overflow, host failure, Rust panic, reference-error panic, and
+restart, none of which pre-payment makes atomic.
+
+### Host functions are messages too
+
+An XS snapshot preserves callback-table positions but not the native resources
+behind callbacks: file descriptors, directory streams, sockets, timers, and
+database cursors die with the worker incarnation. Consequently every host
+function that reads nondeterministic state, performs an effect, or returns an
+open handle participates in the transcript exactly like a vat message:
+
+- Before invocation, append its canonical request, crank id, call sequence, and
+  idempotency key. A read-only or tentative-local adapter may run during the
+  crank; append its canonical reply or failure before returning to the guest.
+  Replay checks the request byte-for-byte and returns the recorded reply instead
+  of invoking the adapter again.
+- A handle-producing reply returns a logical `host_handle` id. Its durable
+  descriptor records enough authority and position to reconstruct the native
+  resource (for example, a file capability plus offset and open flags). On
+  restart the host re-seats that logical id before replay reaches its first use.
+  Every subsequent operation on the handle is another request/reply event, so
+  reads, writes, seeks, close, and errors replay in the original order.
+- A transactional local effect joins the worker SQLite crank commit. A
+  non-transactional external effect cannot run synchronously inside the crank:
+  the host records it as an outbound message and invokes it only after commit,
+  using the event id as the provider's idempotency key. Any reply returns as a
+  later inbound message and therefore starts another crank. Idempotency closes
+  the crash-after-commit/send-before-ack window; it does not make an effect from
+  an aborted crank acceptable.
+- A non-transactional provider without idempotency is not admissible to a
+  retryable vat. Its adapter must first gain an idempotency protocol or declare
+  a snapshot barrier and make panic recovery stop for operator intervention.
+- A resource with no reconstruction descriptor (an unresumable live socket is
+  the canonical example) cannot masquerade as restored. Its handle is re-seated
+  as broken, and replay/retry remains stopped until the adapter supplies a
+  replacement under the same logical id or the application handles a new
+  delivery that reports the loss.
+
+Pure host functions need no events. The callback registry marks each function
+`pure`, `transcripted-read`, `transactional`, `outbound`, or `barrier`; startup
+rejects an unclassified callback for a retryable worker. This makes the restart
+rule auditable instead of relying on each callback author to remember that
+native handles do not survive a vat restart.
 
 ## Termination and Retry
 
-The retry mechanism is **not new**: it composes the existing suspend-to-snapshot
-/ resume-from-snapshot machinery of
-[daemon-debug-worker-restart](daemon-debug-worker-restart.md), which itself
-composes suspend and debug-aware resume without a new primitive.
+Retry composes the existing suspend-to-snapshot / resume-from-snapshot machinery
+of [daemon-debug-worker-restart](daemon-debug-worker-restart.md) with the new
+per-worker transcript. Snapshot restore supplies the checkpoint; transcript
+replay supplies every committed crank after it.
 
 Sequence from panic to recovery:
 
@@ -263,27 +321,27 @@ sequenceDiagram
     Sup->>Sup: mark worker dead, do NOT commit crank N
     Note over Sup: fix lands as code, config, or external condition change
     Sup->>W: resume fresh machine from last snapshot, pre-N
-    W->>W: replay transcript up to but NOT including delivery N
+    W->>W: replay committed transcript through delivery N-1
+    W->>W: re-seat logical host handles from durable descriptors
     Sup->>W: re-deliver message N, now succeeds
 ```
 
-The one piece this sequence assumes and the codebase **does not have** is the
-**transcript**: an ordered log of the deliveries since the last snapshot, so the
-restored machine can be replayed to the exact pre-N state. The survey confirmed
-there is no delivery-transcript replay anywhere in the daemon. What exists is
-coarse snapshot suspend/resume: an explicit `suspend` verb writes a full XS heap
-snapshot to the CAS (`handle_suspend` -> `Machine::suspend_to_cas`, recorded by
-`Supervisor::mark_suspended`); the next message to a suspended handle triggers
-`handle_resume` -> `resume_shared`/`resume_process`, which respawns from the
-snapshot (`Machine::from_snapshot_file`), restores meter state
-(`Supervisor::restore_meter`), and **delivers the single pending message that
-triggered the resume**. Snapshots are taken only on explicit suspend, never
-per-crank. So "replay the transcript up to but not including N" is itself a
-net-new capability (the same follow-on scope as the embargo, since both need a
-per-crank durability boundary), and the **minimal** panic contract degrades
-gracefully to what suspend/resume already gives: *discard N's escaped effects,
-restore from the last snapshot, and let the supervisor re-drive from there.* That
-is exactly `debugWorker`'s suspend/resume, minus fine-grained replay.
+During replay, the supervisor delivers only committed inbound events after the
+snapshot watermark. Outbound sends and host calls must match the next recorded
+event; the supervisor suppresses recorded outbound sends and returns recorded
+host replies. A kind, payload, order, or handle-id mismatch is a deterministic
+replay fault and stops recovery. When replay reaches the end of the committed
+suffix, the machine is at the state immediately before the aborted delivery.
+The supervisor then exits replay mode and may retry that pending delivery after
+the named fix is present.
+
+The current daemon has only coarse snapshot suspend/resume: `handle_suspend` ->
+`Machine::suspend_to_cas` and `handle_resume` -> `resume_shared` /
+`resume_process`. Implementing the transcript adds the required suffix-replay
+loop and periodic snapshot policy to that path. A successful snapshot records
+its committed-event watermark before older events are compacted. Events for open
+logical handles remain reachable through `host_handle` reconstruction records
+even when the crank events that created them fall below the snapshot watermark.
 
 A second gap the survey surfaced: today the XS `XS_TOO_MUCH_COMPUTATION_EXIT`
 path and `ironhorse-vm`'s `Halt::MeterAbort` are **two separate, unjoined
@@ -434,11 +492,16 @@ peek over a `flag == 2` compiler change).
   Rejected: destroys the per-source diagnostics (overshoot count, meter refusal,
   decode message) the supervisor and debugger need. Classification over retained
   variants is strictly more informative at negligible cost.
-- **A fresh per-crank embargo-and-discard buffer in the bridge layer.** Rejected
-  as the *default*: it re-introduces exactly the complexity the metering design
-  removed with admission control (buffering, crank delimiters, partial-effect
-  reasoning). Considered only conditionally, if the outbound-timing survey finds
-  incremental release for the non-meter panic paths (§ Open questions).
+- **Admission control without a transcript or embargo.** Rejected: pre-paying
+  the meter prevents quota exhaustion in an admitted crank but does not make a
+  stack overflow, Rust panic, reference-error panic, or host effect atomic.
+- **One global transcript database.** Rejected: unrelated vats would contend on
+  SQLite's writer lock and share one recovery/corruption domain. One database per
+  worker keeps the commit order local to the vat.
+- **A plain append-only log per worker.** Viable, but rejected for the first
+  implementation. SQLite WAL supplies transactions across crank state, event
+  rows, snapshot watermarks, and handle descriptors, plus indexed replay and
+  compaction without a second recovery protocol.
 - **A mode *attribute* on the exception breakpoint for panics.** Rejected for the
   same reason the debugger design rejected a mode attribute: the xsbug parser
   discards unknown attributes byte by byte, so it degrades to silent no-op. A
@@ -449,23 +512,6 @@ peek over a `flag == 2` compiler change).
 
 ## Open Questions
 
-- Resolved (surveyed): the daemon releases a crank's outbound messages
-  **synchronously, mid-crank** (`send_frame` in `worker_io.rs`), with **no commit
-  point**. So the embargo is net-new machinery, and the buffer plus its
-  crank-commit delimiter are deferred to the `message-embargo-and-crank-commit`
-  follow-on design (§ The embargo is net-new). This design fixes only the contract
-  that follow-on must satisfy; it asserts no commit point this codebase lacks.
-- Resolved (surveyed): there is **no delivery transcript** today, only coarse
-  snapshot suspend/resume (restore-plus-deliver-one-pending-message). Fine-grained
-  "replay up to but not including N" is a separate capability on the same
-  follow-on's durability boundary; the minimal panic contract degrades to
-  discard-plus-restore-from-last-snapshot (§ Termination and retry).
-- Should the `message-embargo-and-crank-commit` follow-on attach its commit
-  boundary to [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md)'s
-  "dirty-page incremental checkpoints at crank boundaries", so commit and
-  durable-checkpoint are one act, or keep the embargo flush separate from
-  heap-checkpoint durability? Leaning toward one act, but it depends on that
-  seam's supervisor wiring, which is still in progress.
 - Should `Decode` and the harness-only `StepLimit` be inside `is_panic()`, or
   kept out because their provenance is supervisor/harness rather than guest
   behavior? Leaning: inside for the commit decision (both must terminate without
@@ -492,7 +538,8 @@ peek over a `flag == 2` compiler change).
 | [daemon-debug-worker-restart](daemon-debug-worker-restart.md) | The suspend-to-snapshot / resume-from-snapshot machinery the retry path composes; the per-worker `debug-flag`-before-resume shape the Coda's construction option mirrors. |
 | [ironhorse-debugger-recovery-and-uncaught](ironhorse-debugger-recovery-and-uncaught.md) | Supplies the throw/uncaught classifier (`jumps.is_empty()`), the `raise` engine-unwind prerequisite the Coda toggles against, and the break/report model a panic must be distinguished within. The Coda's switch lives at that design's `raise` seam. |
 | [daemon-xs-worker-debugger](daemon-xs-worker-debugger.md) | The consumer contract (`<break>`/`<panic>` wire messages, `DebugSession`, `setExceptionBreakMode`) the panic break reason extends. |
-| [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md) | Its `HeapStore::commit` / `CheckpointBatch` store and "dirty-page incremental checkpoints at crank boundaries" are the nearest existing durability primitive for the (net-new, deferred) crank-commit boundary the embargo needs. Unwired to the crank path today. |
+| [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md) | Supplies the per-worker SQLite `HeapStore::commit` / `CheckpointBatch` durability primitive. A store-backed worker commits its heap epoch and transcript crank in the same SQLite transaction. |
+| [ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) | Supplies the landed snapshot-plus-journal-suffix, stable frame sequence, duplicate-suppression, and replay-window precedent. This design applies that recovery envelope to endor vats and extends it to host-call messages and logical handles. |
 
 ## Prompt
 
