@@ -16,15 +16,15 @@ issues synchronization ("give me more") credits whose payload is the JS value
 `undefined` (a bare flow-control signal, confirmed by `iterate-reader.js`'s own
 "Synchronization values are `undefined`" comment). The producer answers each
 credit with a data acknowledgement, and the window bounds how many items are in
-flight or sitting prefetched at once. `ReadableBlob.lines(buffer = 0)` —
-*proposed* in [PR #832](https://github.com/endojs/endo-but-for-bots/pull/832),
-which is **open and unmerged** as of this writing, so the method does not yet
-exist in `packages/platform/src/fs/interfaces.js` — would inherit exactly this
-knob once it lands.
+flight or sitting prefetched at once. `ReadableBlob.lines(buffer = 0)` (proposed
+in [PR #832](https://github.com/endojs/endo-but-for-bots/pull/832), which is
+**open and unmerged** as of this writing, so the method does not yet exist in
+`packages/platform/src/fs/interfaces.js`) would inherit exactly this knob once it
+lands.
 
 A fixed window cannot be right for every link. Too small and throughput
 collapses toward one item per CapTP round trip (the window cannot cover the
-bandwidth-delay product). Too large and a slow consumer accumulates an
+bandwidth-delay product, or BDP). Too large and a slow consumer accumulates an
 unbounded prefetch pile of aging items: memory the initiator holds, plus
 producer work that an early `return()` throws away. The maintainer's note on
 [PR #832](https://github.com/endojs/endo-but-for-bots/pull/832#discussion_r3885564599)
@@ -34,8 +34,9 @@ controlling the pace and buffer size. Even in that case, we need an alpha
 parameter for relative aggressiveness."
 
 This design adds an **opt-in, consumer-side adaptive credit controller**,
-CoDel-inspired, that sizes the window to the smallest value sustaining
-throughput. It changes no wire format and no existing signature. A numeric
+CoDel-inspired (CoDel is a delay-based queue-control algorithm; see
+[Control loop](#control-loop) for the one-paragraph primer), that sizes the
+window to the smallest value sustaining throughput. It changes no wire format and no existing signature. A numeric
 `buffer` behaves exactly as today. It does **not** disturb the pending
 `ReadableBlob.lines(buffer = 0)` proposal on PR #832 (see
 [Compatibility](#compatibility)).
@@ -63,7 +64,7 @@ local `buffer` will eagerly pre-pull ahead of the consumer's credit ledger, and
 that pre-pull burst is real initiator-held memory the consumer's `outstanding`
 accounting does not count. That case is called out as an explicitly unbounded
 pairing in [Compatibility](#compatibility) and exercised by the verification plan,
-rather than asserted away. The garden's own motivating call site — `lines()` — pins
+rather than asserted away. This design's own motivating call site (`lines()`) pins
 the producer buffer at `0`, so it satisfies the precondition by construction; an
 arbitrary externally-supplied producer does not, and only documentation (not the
 consumer) can hold it to `0`.
@@ -101,9 +102,10 @@ monotonic clock `now()`:
 `sojourn` is the CoDel *sojourn time*: the queue is the local prefetch buffer
 and sojourn is time-in-that-queue. It contains **no** round-trip term, so it
 measures standing backlog, not link latency. That property lets one delay
-`target` — the standing-delay budget the controller holds `sojourn` under,
-defined as `target = alpha * target0` and detailed in
-[The alpha knob](#the-alpha-knob) — work across a variable-RTT CapTP link.
+`target` (the standing-delay budget the controller holds `sojourn` under, defined
+as `target = alpha * target0`, where `target0` is the base standing-delay budget
+that `alpha` scales (analogous to classic CoDel's fixed 5 ms), detailed in
+[The alpha knob](#the-alpha-knob)) work across a variable-RTT CapTP link.
 `sojourn` (the shrink half) and `starved` (the growth half) are the two signals
 the control loop actually consults; between them they drive the whole loop.
 
@@ -117,13 +119,13 @@ because the queue is reliable.
 
 **CoDel in one paragraph** (for readers new to it). CoDel (Controlled Delay, from
 network queue management) judges congestion not by how *full* a queue is but by
-how *long* items sit in it — the *sojourn time*. A queue that is briefly deep but
+how *long* items sit in it: the *sojourn time*. A queue that is briefly deep but
 drains fast is healthy; one where items consistently age past a small `target`
 delay has a *standing* backlog that pure occupancy cannot distinguish from a
 harmless burst. So CoDel watches whether sojourn stays above `target` for a full
 `interval`: it *arms* a timer at `now + interval` the moment sojourn first crosses
-`target`, and only if sojourn is still high when the timer fires does it act —
-this hysteresis is what lets it ignore transient bursts and react only to
+`target`, and only if sojourn is still high when the timer fires does it act.
+This hysteresis is what lets it ignore transient bursts and react only to
 persistent bloat. Once acting, it does not act once and stop; it acts repeatedly
 on an **accelerating cadence**, `interval / sqrt(count)`, so the longer the
 backlog persists the harder it pushes. This design keeps that detector wholesale
@@ -141,20 +143,40 @@ means "currently in the reducing phase," and is renamed to say so rather than
 carry the misleading `dropping` name into a design that never drops.
 
 Defining `outstanding` on **consumption**, not arrival, is deliberate and is
-what makes the "Hard memory bound" claim true. `iterate-reader.js`'s existing
-mechanics resolve an ack node as soon as data lands over CapTP, independent of
-when the application calls `next()`, so arrival and consumption are distinct
-events. If `outstanding` decremented on arrival, a stalled application would let
-issued credits arrive and pile up unconsumed while `outstanding` fell toward 0,
-and the pump would then top the ledger back to `W` **on top of** that unconsumed
-backlog, growing the real buffer past `W`. Counting consumption instead means
-`outstanding` is exactly the number of unconsumed items (in flight plus
-prefetched), so bounding it by `floor(W) <= max` bounds real memory.
+what makes the "Hard memory bound" claim true. Over CapTP an ack node's promise
+resolves as soon as its data lands locally, independent of when the application
+calls `next()`, so arrival and consumption are distinct events. If `outstanding`
+decremented on arrival, a stalled application would let issued credits arrive and
+pile up unconsumed while `outstanding` fell toward 0, and the pump would then top
+the ledger back to `W` **on top of** that unconsumed backlog, growing the real
+buffer past `W`. Counting consumption instead means `outstanding` is exactly the
+number of unconsumed items (in flight plus prefetched), so bounding it by
+`floor(W) <= max` bounds real memory.
+
+**How `tArrive` is captured (not assumed).** Today's numeric `iterate-reader.js`
+holds only a single `nodePromise` and reads it inside the same `next()` call that
+consumes the item (`iterate-reader.js:110-156`): it never observes an ack node's
+*resolution* independent of consumption, so a controller layered naively on it
+would measure `sojourn` at consumption and see `sojourn` near `0` for every item,
+silently disabling the shrink half, ratcheting `W` to `max`, and staying there.
+The adaptive path therefore does **not** rely on the numeric path's timing. As
+each credit is issued, the adaptive loop retains the corresponding node-promise
+reference and **eagerly attaches an arrival callback** (`nodePromise.then(() => {
+tArrive[i] = now(); })`), so `tArrive[i]` is stamped the moment item `i`'s data
+lands over CapTP, whether or not the application has reached it. `tConsume[i]` is
+stamped when `next()` returns item `i`, and `sojourn[i] = tConsume[i] -
+tArrive[i]` is then a true in-buffer aging time, not a consumption-instant zero.
+Retaining these references for the credited-but-unconsumed items is bounded by the
+same `outstanding <= floor(W) <= max` ceiling, so it adds no unbounded state. This
+eager-arrival observation is the specific mechanism the shrink half depends on,
+and the verification plan exercises it against real (not synthetic) buffering
+delay so a regression that collapsed it back to consumption-instant sampling is
+caught.
 
 ```mermaid
 stateDiagram-v2
   [*] --> Filling
-  Filling --> Filling: starved or sojourn under target\nadditive increase W by alpha
+  Filling --> Filling: starved or sojourn under target\nadditive increase W by alpha once per window epoch
   Filling --> Arming: sojourn at or over target\narm firstAbove at now plus interval
   Arming --> Filling: sojourn under target or buffer drained\nreset detector
   Arming --> Reducing: now reaches firstAbove\nreduce W by factor beta; count is 1
@@ -186,13 +208,35 @@ Credit issuance is thereby **decoupled** from the one-credit-per-consumed-item
 lockstep of today (a separate pump chases `W(t)` rather than emitting exactly
 one credit per item), while remaining bounded by consumption.
 
+**Growth is paced per window epoch, not per consumed item.** The additive
+increase `W += alpha` fires at most **once per window epoch** (one epoch being
+`floor(W)` consumed items, the number in flight across one pipeline depth, i.e. a
+round-trip-equivalent), not once per item. This matters because the pipeline is
+`W`-deep: at a steady state near the bandwidth-delay product roughly `W` items are
+consumed per RTT, so a naive per-item `W += alpha` would grow the window by
+roughly `alpha * W` per RTT: growth proportional to the current window, a
+materially more overshoot-prone curve than classical AIMD's fixed additive step
+per RTT. The
+convergence and burst-tolerance vocabulary this design borrows from AIMD and CoDel
+(the "standard CoDel burst-tolerance property" in
+[Composition with CapTP and cancellation](#composition-with-captp-and-cancellation),
+the multi-flow AIMD framing there, and the "steady-state window is strictly
+increasing in `alpha`" argument in [The alpha knob](#the-alpha-knob)) assumes a
+per-RTT-paced increase; epoch-pacing is what makes that assumption hold, bounding
+aggregate growth to `alpha` per RTT-equivalent so the window probes gently rather
+than in window-proportional jumps. Concretely, the loop carries an epoch counter
+of consumed items and applies one `+= alpha` step each time it reaches the current
+`floor(W)`, then resets. When no clock is present the occupancy fallback paces the
+same way (per `floor(W)` items), since it too lacks an RTT estimate.
+
 Concretely, suppose `min = 1`, `max = 16`, `alpha = 1`, decrease factor
 `beta = 1/2`, effective `target = 5` ms, `interval = 100` ms, and the clock starts
 at `t = 0` ms. The controller seeds `W = 1` and the pump issues one credit
 (`outstanding = 1`). Item 0 arrives at `t = 30` ms and the application consumes it
 at once, so `sojourn[0] = 0` ms (at or under `target`). The detector stays in
-Filling and `W` grows to `2` by additive increase. `outstanding` drops to `0` on
-consume, then the pump refills it to `floor(2) = 2`. Now suppose the application
+Filling and `W` grows to `2` by additive increase (one window epoch elapsed, since
+`floor(W)` was `1`). `outstanding` drops to `0` on consume; then the pump refills
+it to `floor(2) = 2`. Now suppose the application
 stalls: item 1 sits from its arrival at `t = 45` ms until it is consumed at
 `t = 53` ms, so `sojourn[1] = 8` ms (over `target`), which arms `firstAbove` at
 `t = 153` ms. If `sojourn` stays over `target` until `now` reaches 153 ms, the
@@ -220,13 +264,13 @@ standing-delay budget together.
 **Why monotonicity holds by construction.** `alpha` drives only the *increase*
 side of the loop; the multiplicative *decrease* is a **separate fixed factor
 `beta`** (default `1/2`, the classic AIMD halving), deliberately **not** coupled to
-`alpha`. This is the reason the decrease is `W *= beta` throughout — the worked
+`alpha`. This is the reason the decrease is `W *= beta` throughout: the worked
 example, the state diagram, and the reduction cadence all reduce by `beta`, never
 by a function of `alpha`. Were the decrease tied to `alpha` (an earlier draft
 reduced by `1 / (1 + alpha)`), a larger `alpha` would both grow the window faster
 *and* cut it harder per reduction, and the net steady-state average would be a
-nontrivial dynamical-systems question rather than a guarantee — at large `alpha`
-the sharper cut could even dominate the faster growth. Decoupling the two removes
+nontrivial dynamical-systems question rather than a guarantee (at large `alpha`
+the sharper cut could even dominate the faster growth). Decoupling the two removes
 that ambiguity: with `beta` fixed, each unit of `alpha` raises the additive step
 and the delay budget while leaving the decrease untouched, so the steady-state
 window is strictly increasing in `alpha` by construction. A caller who wants a
@@ -257,6 +301,14 @@ object is treated as a plain descriptor and is normalized by wrapping it in
 object branch a caller must reason about (descriptor versus already-built
 controller), and the brand, not the raw shape, is what tells them apart.
 
+`makeCodelCreditController` **rejects unknown descriptor keys** rather than
+silently dropping them: a mistyped knob (`apha` for `alpha`) is a `TypeError` at
+construction, not quietly-wrong aggressiveness a caller has no signal for. The
+recognized key set is exactly the documented knobs (`alpha`, `beta`, `min`,
+`max`, `target0`, `target`, `interval`); every other own-enumerable key is an
+error. Least-surprise for a tunable surface wants a typo to fail loudly, and a
+descriptor is a small fixed vocabulary, so an allowlist check is cheap.
+
 ```ts
 // Unchanged: fixed credit window, today's behavior, default 0.
 iterateReader(reader, { buffer: 8 });
@@ -278,20 +330,36 @@ policy is a drop-in. `IterateReaderOptions.buffer` widens from `number` to
 
 An extension point the design advertises as user-implementable must have its
 contract stated where it is introduced. `makeCodelCreditController` and
-`makeOccupancyCreditController` are both exported from the `@endo/exo-stream`
-package entry point (`packages/exo-stream/index.js`), the same module a caller
-imports `iterateReader` from, so the constructor is discoverable without grepping
-the package. Each returns a `CreditController`. `iterateReader`'s loop reads
-exactly one method and one field on the controller per consumed item, in order:
+`makeOccupancyCreditController` are both exported from their own subpath module
+(`packages/exo-stream/credit-controller.js`, reached as
+`@endo/exo-stream/credit-controller.js`), matching the package's established
+convention: the `@endo/exo-stream` barrel `index.js` is type-only (`export {}`),
+and every runtime value (`iterateReader`, `readerFromIterator`,
+`iterateBytesReader`, and the rest) is reached through its own deep subpath in the
+package's `exports` map, which is also how the README teaches every example. The
+new constructors follow that same sibling convention rather than becoming the lone
+runtime exports on the barrel. The package README's import examples are the entry
+point a user starts at, and gain a `credit-controller.js` line alongside the
+existing ones. Each constructor returns a `CreditController`. `iterateReader`'s
+loop reads exactly one method and one field on the controller per consumed item,
+in order:
 
 ```ts
 interface CreditController {
   // Brand: distinguishes a built controller from a plain descriptor.
   readonly isCreditController: true;
 
+  // The policy actually running behind this controller. makeCodelCreditController
+  // delegates to the occupancy fallback when no clock is present (see Clock
+  // capability), so the value a caller holds is not always the one the factory
+  // name asserts. This field makes the swap observable: a caller (and the
+  // verification plan's Clock-absent test) can assert which contract they hold
+  // rather than only that memory stays bounded.
+  readonly policy: 'codel' | 'occupancy';
+
   // Hard credit ceiling. iterateReader clamps fillTarget() to this before
   // pumping, so the memory bound is enforced loop-side against ANY
-  // implementation — not on the honor system of a trusted fillTarget().
+  // implementation, not on the honor system of a trusted fillTarget().
   readonly maxCredit: number;
 
   // Called once per consumed item, with that item's fresh sample.
@@ -304,7 +372,7 @@ interface CreditController {
 
   // The current integer credit target the pump fills toward, i.e. floor(W).
   // Named for its contract (the target the pump fills toward), deliberately
-  // NOT "floor()" — "floor" names the lower bound `min` elsewhere in this
+  // NOT "floor()": "floor" names the lower bound `min` elsewhere in this
   // document, and a method returning the fill *target* must not borrow it.
   fillTarget(): number;
 }
@@ -313,8 +381,8 @@ interface CreditController {
 `record` advances the controller's internal state machine (detector plus window);
 `fillTarget()` reports the integer credit target the pump then fills `outstanding`
 up to, which `iterateReader` clamps to `maxCredit`. Exposing `maxCredit` on the
-interface — rather than folding the ceiling into one implementation's private
-clamp — is what lets the loop enforce the memory bound uniformly: a conforming
+interface (rather than folding the ceiling into one implementation's private
+clamp) is what lets the loop enforce the memory bound uniformly: a conforming
 controller with a runaway `fillTarget()` still cannot pump the real buffer past
 `maxCredit`, because the loop, not the controller, applies the ceiling. A
 controller holds only counters and its injected `now`, so it composes with
@@ -335,8 +403,8 @@ controller holds only counters and its injected `now`, so it composes with
   end of the CapTP wire and unenforceable by the consumer) eagerly pulls up to
   that many items *ahead of* the consumer's credit ledger. Those pre-pulled items
   are real initiator-held memory that `outstanding` does not count, so the
-  [hard memory bound](#limits-and-failure-behavior) — which bounds only
-  consumer-credited items — does **not** cover them. Adaptive-consumer +
+  [hard memory bound](#limits-and-failure-behavior) (which bounds only
+  consumer-credited items) does **not** cover them. Adaptive-consumer +
   nonzero-buffer-producer is therefore an **explicitly unbounded pairing**: it
   functions correctly (the streams interoperate) but its peak memory is
   `producer.buffer + max`, not `max`. The verification plan pairs the adaptive
@@ -358,14 +426,14 @@ controller holds only counters and its injected `now`, so it composes with
   **to be filed**).
 - **`iterateBytesReader` is the untouched-but-symmetric sibling.**
   `iterateBytesReader` (`packages/exo-stream/iterate-bytes-reader.js`) is the same
-  shape of operation as `iterateReader` — same consumer-side static pre-buffer
+  shape of operation as `iterateReader`: same consumer-side static pre-buffer
   priming loop, same `IterateBytesReaderOptions.buffer?: number` knob over the
   same `makeReaderPump` producer. It therefore takes the **identical**
   discriminated-union widening: `IterateBytesReaderOptions.buffer` widens from
   `number` to `number | CreditController`, wired to the same controller and the
   same loop-side `maxCredit` clamp, so the two siblings do not silently diverge. It
-  is called out here — rather than left unmentioned like the two siblings the
-  original draft addressed — because a reader who reaches for adaptivity on
+  is called out here (rather than left unmentioned like the two siblings the
+  original draft addressed) because a reader who reaches for adaptivity on
   `iterateBytesReader` must find the same answer, not silence. (`lines` and
   `makeBufferedReader`, the two *asymmetric* siblings, keep the separate
   treatments below.)
@@ -429,7 +497,16 @@ controller holds only counters and its injected `now`, so it composes with
   satisfies the same `record`/`fillTarget` interface. `makeCodelCreditController`
   detects the absence of `now()` at construction and **delegates** to
   `makeOccupancyCreditController`, so the policy boundary the design relies on
-  for testability also covers its own degrade path. Non-monotonic clocks are
+  for testability also covers its own degrade path. That delegation is not
+  silent: the returned controller carries `policy: 'occupancy'` (versus
+  `policy: 'codel'`), so a caller who asked for CoDel and got the fallback can
+  observe the swap on the returned value rather than only by noticing degraded
+  throughput-chasing in production (see
+  [the interface](#the-creditcontroller-interface)). The occupancy fallback reads
+  `alpha`, `beta`, `min`, and `max` (they govern its additive-increase step,
+  multiplicative-decrease factor, and clamp exactly as in the CoDel policy);
+  the delay-only knobs `target0`, `target`, and `interval` have no meaning
+  without a clock and are ignored by the fallback. Non-monotonic clocks are
   guarded by clamping negative deltas to `0`.
 - **Hard memory bound (loop-enforced, producer-scoped).** `max` firmly bounds the
   **consumer-credited** buffer: no measurement, however adversarial, grows
@@ -439,12 +516,12 @@ controller holds only counters and its injected `now`, so it composes with
   ceiling is applied **loop-side**: `iterateReader` clamps any controller's
   `fillTarget()` to its declared `maxCredit` (see
   [the interface](#the-creditcontroller-interface)), so the bound holds against a
-  buggy or hostile third-party `CreditController`, not just the reference CoDel one
-  — it is a property of the loop, not of one implementation's private clamp.
+  buggy or hostile third-party `CreditController`, not just the reference CoDel one:
+  it is a property of the loop, not of one implementation's private clamp.
   Second, it is **scoped to the producer precondition**: it bounds the initiator's
   credited buffer, which equals total real memory **only when the producer's own
   pre-pull `buffer` is `0` or small**. Against a nonzero-buffer producer, peak
-  memory is `producer.buffer + max` — an explicitly unbounded pairing documented
+  memory is `producer.buffer + max`, an explicitly unbounded pairing documented
   under [Compatibility](#compatibility), because the consumer cannot enforce the
   far end's setting. `min >= 1` guarantees liveness (credit always reaches the
   producer, so the stream cannot stall).
@@ -454,8 +531,13 @@ controller holds only counters and its injected `now`, so it composes with
   and `max` caps it regardless.
 - **Degenerate links.** Producer-bound (source is the bottleneck): the window
   grows to `max` without benefit but does no harm; the pump simply stays
-  credited. Consumer-bound (slow application): the window collapses to `min`,
-  standing delay stays near `target`, memory stays bounded via occupancy AIMD.
+  credited. Consumer-bound (slow application): the window collapses to `min`;
+  standing delay stays near `target`; memory stays bounded by the CoDel window
+  collapsing to `min` (or, on the no-clock path, by the occupancy fallback's own
+  multiplicative decrease). "Occupancy AIMD" names only the
+  `makeOccupancyCreditController` fallback, not the primary delay-based
+  controller, so the bounding mechanism here is the CoDel window itself unless the
+  fallback is in force.
 
 ## Verification plan
 
@@ -463,12 +545,17 @@ Controller unit tests with a synthetic clock and synthetic `sojourn`/`starved`
 traces (no CapTP needed), asserting:
 
 - Fast consumer, slow producer -> `W` climbs to a stable value near the BDP with
-  no oscillation.
+  no oscillation, **and does not overshoot the BDP within a single `interval`**,
+  asserting the epoch-paced increase (see
+  [Control loop](#control-loop), *Growth is paced per window epoch*) bounds
+  aggregate growth to `alpha` per round-trip-equivalent rather than the
+  window-proportional `alpha * W` a per-item increase would produce. This checks
+  transient overshoot, not just eventual convergence.
 - Slow consumer, fast producer -> `W` collapses to `min`; `outstanding <= max`
   and standing `sojourn <= target * (1 + margin)` throughout (the bufferbloat
   regression, which this test exists to catch precisely because `outstanding`
   counts consumption, not arrival).
-- Step change in consumer speed -> `W` re-converges within a bounded number of
+- Step change in consumer speed -> `W` reconverges within a bounded number of
   intervals.
 - Bursty consumer -> min-tracking prevents needless shrinkage (CoDel burst
   tolerance).
@@ -487,38 +574,56 @@ traces (no CapTP needed), asserting:
   arbitrarily large value never grows `outstanding` past its declared `maxCredit`,
   proving the ceiling is enforced by `iterateReader`'s loop-side clamp and not by
   trust in the controller.
-- Clock-absent -> the `makeOccupancyCreditController` fallback still bounds
-  `outstanding <= max`.
+- Clock-absent -> `makeCodelCreditController` built without a `now()` returns a
+  controller carrying `policy: 'occupancy'` (the swap is observable on the
+  returned value, not only inferable from behavior), and that fallback still
+  bounds `outstanding <= max`.
 - Determinism -> the controller runs under `lockdown` with only an injected
   `now`; no ambient authority.
 
 Integration tests over the existing CapTP loopback (`test/captp-stream.test.js`)
-with injected artificial RTT and per-item produce/consume delays: throughput
-within a stated fraction of the best fixed-buffer baseline while max outstanding
-stays bounded; adaptive consumer against a `buffer:0` producer (the bounded case);
-and early `return()`/`throw()` mid-stream with credit outstanding tears down
-cleanly with no leaked credit and prefetched items discarded. A push-based
-`makeBufferedReader` consumer passed the descriptor must behave as an
-unthrottled no-op.
+with injected artificial RTT and per-item produce/consume delays, each item a
+parallel fragment naming a test condition:
+
+- throughput within a stated fraction of the best fixed-buffer baseline while max
+  outstanding stays bounded;
+- an adaptive consumer against a `buffer:0` producer, the bounded case;
+- **a real-timing shrink test**: a slow consumer against a fast `buffer:0`
+  producer over the live loopback (real arrival-vs-consumption timing, *not*
+  synthetic `sojourn` traces) asserting `W` actually falls strictly below `max`
+  and settles near the BDP. This is the test that would fail if `tArrive` were
+  measured at consumption instead of at true arrival (see *How `tArrive` is
+  captured* under [Control loop](#control-loop)); the loop-side `maxCredit` clamp
+  alone cannot make it pass, since the clamp bounds outstanding regardless of
+  whether the window ever shrinks, so this assertion is what independently
+  confirms the shrink half runs;
+- `iterateBytesReader` accepting a `CreditController` and clamping to `maxCredit`
+  identically to `iterateReader`, exercising the symmetric sibling
+  (`iterate-bytes-reader.js`) so its promised discriminated-union widening cannot
+  silently regress;
+- early `return()`/`throw()` mid-stream with credit outstanding tearing down
+  cleanly with no leaked credit and prefetched items discarded;
+- a push-based `makeBufferedReader` consumer passed the descriptor behaving as an
+  unthrottled no-op.
 
 - **Producer pre-buffer degradation.** Pair the adaptive consumer with a
   **nonzero-`buffer` producer** and assert that peak initiator memory is
-  `producer.buffer + max`, *not* `max` — demonstrating the memory bound degrading
+  `producer.buffer + max`, *not* `max`, demonstrating the memory bound degrading
   exactly as [Compatibility](#compatibility) and [Limits](#limits-and-failure-behavior)
   state, so the unenforceable joint precondition is verified as a real limit rather
   than silently assumed away.
 
-The design's own headline motivating path — `ReadableBlob.lines()` wired through
-the adaptive controller over the loopback (a real `lines()` reader, not a synthetic
-`iterateReader` stand-in), asserting that `lines`'s producer-side `0` composes with
-an adaptive consumer window and that line delivery, throughput, and the memory
-bound all hold on that concrete call site the Compatibility argument leans on — is
-**blocked on [PR #832](https://github.com/endojs/endo-but-for-bots/pull/832)
-merging**, since `ReadableBlob.lines()` does not exist until it lands. Until then
-this end-to-end item is a *pending* verification target: the synthetic
-`iterateReader`-over-loopback tests above stand in for it, and the `lines()`
-integration is added as a follow-up gated on #832. This dependency is tracked in
-[Dependencies](#dependencies).
+The design's own headline motivating path is `ReadableBlob.lines()` wired through
+the adaptive controller over the loopback: a real `lines()` reader, not a synthetic
+`iterateReader` stand-in. It would assert that `lines`'s producer-side `0` composes
+with an adaptive consumer window, and that line delivery, throughput, and the
+memory bound all hold on that concrete call site the Compatibility argument leans
+on. That path is **blocked on
+[PR #832](https://github.com/endojs/endo-but-for-bots/pull/832) merging**, since
+`ReadableBlob.lines()` does not exist until it lands. Until then this end-to-end
+item is a *pending* verification target: the synthetic `iterateReader`-over-loopback
+tests above stand in for it, and the `lines()` integration is added as a follow-up
+gated on #832. This dependency is tracked in [Dependencies](#dependencies).
 
 ## Dependencies
 
@@ -530,24 +635,24 @@ integration is added as a follow-up gated on #832. This dependency is tracked in
 
 ## Open questions
 
-1. **Alpha/target coupling — resolved in this revision:** `alpha` co-scales the
+1. **Alpha/target coupling** (resolved in this revision): `alpha` co-scales the
    additive-increase step and the delay `target` by default, and `target` is a
    separate optional override so aggressiveness (growth rate) and delay tolerance
    can be tuned independently when needed (see
    [The alpha knob](#the-alpha-knob)). Left here as a record of the decision
    rather than an open fork.
-2. **Parameter defaults — open:** what are the right defaults for `target0`,
+2. **Parameter defaults** (open): what are the right defaults for `target0`,
    `interval`, `min`, `max`, and the decrease factor `beta`? CoDel's 5 ms and
    100 ms come from network queues; a CapTP credit window over a loopback or a
    same-process bridge has a very different latency floor, so the defaults should
    be calibrated against the loopback integration test rather than inherited.
-3. **Writer-stream dual — open:** should a symmetric adaptive controller for
+3. **Writer-stream dual** (open): should a symmetric adaptive controller for
    **writer** streams (`iterate-writer.js`, where the initiator is the producer
    and the responder consumes) be part of this work or a separate follow-up? The
    dual is natural (roles swap and the responder becomes the controller) but the
    ask and its `lines()` origin are reader-only. Proposed: **to be filed** as a
    sibling design.
-4. **Consumer-side default flip — open:** once proven, should the consumer-side
+4. **Consumer-side default flip** (open): once proven, should the consumer-side
    default flip from `buffer = 0` to an adaptive controller for the shared reader
    API? Out of scope here; gated on adoption evidence that adaptive is strictly
    better.
