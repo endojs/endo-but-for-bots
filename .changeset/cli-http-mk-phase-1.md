@@ -12,32 +12,38 @@ endo http mk <name> --origin <origin> [--origin <origin>...]
   [--policy-mode strict|tofu-auto [--acknowledge-unbounded]] [--as <agent>]
 ```
 
-Phase-1 scope: `mk` mints, registers, and makes the client inspectable, but the
-client cannot yet complete a live outbound request on the `llm` code path (see
-the known limitation below).
+Phase-1 scope: `mk` mints and registers the client, then echoes its
+locally-normalized policy on stderr.
+The client cannot yet complete a live outbound request on the `llm` code path
+(see the known limitation below).
 
 `--origin` is required and repeatable; each value is an origin
 (`scheme://host[:port]`, http: or https:) and is normalized to its canonical
 serialization, so a browser-copied form with a trailing slash or an explicit
-default port is accepted. A value carrying a path, query, fragment, or userinfo
-(for example `https://api.example.com/v1`) is refused by flag name rather than
-silently widened to the whole host.
+default port is accepted.
+A value carrying a path, query, fragment, or userinfo (for example
+`https://api.example.com/v1`) is refused by flag name rather than silently
+widened to the whole host.
+Default-ignorable Unicode code points are likewise refused before WHATWG host
+normalization can silently remove them.
 The guard knobs are optional and default to 60 requests/minute and a 1 MiB
 response cap when unset; `--policy-mode` defaults to `strict`.
 
 Under `--policy-mode strict` the client can reach only the listed origins.
 Under `--policy-mode tofu-auto` it auto-allows any first-seen origin, so
 `--origin` becomes a pre-seed rather than a bound — the allowlist no longer
-confines outbound reach. Because Phase 1 ships no verb to inspect or revoke that
-grant, `tofu-auto` additionally requires `--acknowledge-unbounded`; prefer
-`strict` until the policy-inspection and revocation verbs land.
+confines outbound reach.
+Because Phase 1 ships no verb to inspect or revoke that grant, `tofu-auto`
+additionally requires `--acknowledge-unbounded`; prefer `strict` until the
+policy-inspection and revocation verbs land.
 
 `--as` names a host; the underlying capability is host-only, so a guest cannot
 mint one.
 
-On a successful mint the verb echoes the canonical origin allowlist and the
-policy mode on stderr (the CLI's own locally-normalized form, which can differ
-from what was typed), so the confinement is legible without an inspect verb.
+On a successful mint the verb echoes the canonical origin allowlist, policy
+mode, request-rate cap, and response-byte cap on stderr (the CLI's own
+locally-normalized form, which can differ from what was typed), so the policy is
+legible without an inspect verb.
 
 Re-running `mk` on a name that already denotes a client rebinds the name to the
 newly minted client under the new policy; the previous client's name reference
@@ -47,10 +53,8 @@ Revocation of a still-referenced client lands with a later verb.
 
 Policy mutation and revocation are not yet exposed on the CLI.
 
-Known Phase-1 limitation: the minted client registers and is inspectable, but
-cannot yet complete a real outbound request on the `llm` code path. Under the
-daemon's SES lockdown, `@endo/http-confine` hardens the live platform `Response`
-before `@endo/exo-http-client` reads its headers, and undici's `Headers`
-iterator throws on a frozen instance. Completing a live request depends on the
-`http-confine` inert-response-snapshot fix (PR #286), which is not carried here;
-see `designs/cli-http-client.md` for the durable analysis.
+Known Phase-1 limitation: the minted client registers, but cannot yet complete
+a real outbound request on the `llm` code path.
+The required `http-confine` inert-response-snapshot fix is tracked by
+[PR #286](https://github.com/endojs/endo-but-for-bots/pull/286) and is not
+carried here; see `designs/cli-http-client.md` for the durable analysis.

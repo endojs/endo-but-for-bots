@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-09 |
-| **Updated** | 2026-08-17 |
+| **Updated** | 2026-08-29 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Phase 1 (`endo http mk`) landed on the policy client |
 | **Source** | PR #144 review id 4256844646 (`CHANGES_REQUESTED`) |
@@ -24,24 +24,10 @@
 
 ## Landed CLI surface (Phase 1)
 
-**Reconciling the two supersession claims in `designs/README.md`.** The index
-carries two rows that a reader can mistake for a contradiction: the
-`cli-http-client` row (this design) reports Phase 1 as *landed on the
-policy-based `provideHttpClient` client*, while the `daemon-agent-tools` row
-says *the `provideHttpClient` daemon wiring is superseded by
-[endo-fetch](endo-fetch.md)*. Both are true and non-contradictory once the tense
-is made explicit: the endo-fetch migration is **planned, not yet landed** — no
-`@endo/fetch` / `@endo/confined-fetch` replacement for `provideHttpClient` exists
-on `llm` today. Phase 1 is therefore a **deliberate stop-gap**: it lands the
-`endo http mk` user surface on the daemon wiring that is live *now*, accepting
-that the migration will later re-home that surface onto the unconfined-base +
-confined-plugin shape without changing the verb tree (which endo-fetch keeps as
-the eventual user surface). It does **not** mean the endo-fetch plan needs
-updating; the CLI verb is intentionally decoupled from the packaging beneath it,
-so the mechanism can be swapped under a stable `endo http mk` spelling. The
-`daemon-agent-tools` row's wording is tightened to "planned to be superseded (not
-yet landed)" so the index no longer reads as if the wiring Phase 1 rides were
-already dead.
+**Reconciling the two supersession claims in `designs/README.md`.** Phase 1 is a
+deliberate stop-gap on the policy-based `provideHttpClient` wiring that is live
+today. The [endo-fetch](endo-fetch.md) migration is planned but has not landed;
+it can later replace the packaging beneath the stable `endo http mk` verb tree.
 
 The first `endo http` verb, `mk`, has landed on top of the HTTP client that
 now lives on the daemon, **not** on the controller/client formula pair this
@@ -78,15 +64,21 @@ the single pet name it registered. It validates each flag's lexical shape
 locally and reports by flag name — origins are normalized to their canonical
 serialization (so a browser-copied trailing slash, explicit default port, or
 mixed-case host is accepted, while a path, query, fragment, or userinfo is
-refused rather than silently widened to the whole host), the numeric guards must
-be positive integers, and `--policy-mode` must be one of the admissible modes —
-while the daemon's
+refused rather than silently widened to the whole host). Default-ignorable
+Unicode code points are refused before WHATWG host normalization can silently
+remove them. The numeric guards must be positive integers, and `--policy-mode`
+must be one of the admissible modes, while the daemon's
 `normalizeHttpClientPolicy` stays the authority on policy *semantics*. The origin
 allowlist the design carries over from PR #144 is expressed directly by
 `--origin`; the SSRF and flooding defenses (`redirect: 'manual'`, the
 per-response byte cap, the sliding-window rate limit) are enforced by the
 confinement layer the client is built on, so they need no separate CLI plumbing
 at this phase.
+
+On success, `mk` echoes the locally-normalized origin allowlist, policy mode,
+request-rate cap, and response-byte cap on stderr. The resource bounds are the
+explicit flag values or the daemon's documented defaults (60 requests/minute
+and 1 MiB per response), not a daemon read-back.
 
 **`--policy-mode strict` vs `tofu-auto`.** Under `strict` (the default) the
 allowlist is the confinement bound: only the listed origins are reachable. Under
@@ -147,9 +139,9 @@ response snapshot instead of the live platform `Response`, dodging an undici
 `Cannot assign to read only property 'Symbol(headers map sorted)'` that fires
 when `harden()` freezes the live `Headers`. That change is **not** on `llm`, and
 this PR does not carry it — so on `llm`, a real dial-out through the minted
-client still crashes. Contrary to an earlier draft of this note, the crash is
-**not** avoided by `@endo/exo-http-client` snapshotting headers: under the
-daemon's SES lockdown, `http-confine`'s `request()` returns
+client still crashes. `@endo/exo-http-client` does not avoid the crash by
+snapshotting headers: under the daemon's SES lockdown, `http-confine`'s
+`request()` returns
 `freeze({ response, ... })` where `freeze` is `harden` (`http-confine.js` binds
 `freeze = typeof harden === 'function' ? harden : Object.freeze`), so it
 **deep-hardens the live undici `Response`** before anything reads it —
@@ -611,15 +603,10 @@ facet owns each knob:
 The host trusts the controller it minted; the guest trusts the client
 the host hands it; nothing else is trusted by default.
 
-The unresolved question of how to handle "this client may need to
-talk to a peer whose certificate / origin we have not seen before,
-and we want to learn it on first contact" is addressed in a separate
-sibling design.
-A `trust-on-first-bind` addendum is being authored in parallel; this
-design forward-links to it from this section once the addendum's PR
-opens.
-
-> Forward link to addendum: pending PR for `designs/http-client-trust-on-first-bind.md` (slug placeholder pending the parallel designer dispatch).
+The question of how to handle "this client may need to talk to a peer whose
+certificate / origin we have not seen before, and we want to learn it on first
+contact" is addressed by the sibling
+[trust-on-first-bind](trust-on-first-bind.md) design.
 
 The addendum will own the policy-mode question; this design's
 allowlist remains the strict-by-default mode.
@@ -778,8 +765,8 @@ tables and called out where they appear.
 
 ## Out of scope, future work
 
-- Trust-on-first-bind policy mode: separate design (sibling, in
-  flight).
+- Trust-on-first-bind policy mode: separate sibling design, now landed as
+  [trust-on-first-bind](trust-on-first-bind.md).
 - Shared origin-allowlist parser between this design and PR #106
   (browser exo): noted in PR #144's body as future consolidation
   work; remains future work.
@@ -797,7 +784,7 @@ tables and called out where they appear.
 |---|---|
 | [endoclaw-network-fetch](endoclaw-network-fetch.md) | Parent; this design replaces its CLI surface and cap-split section. |
 | [daemon-agent-tools](daemon-agent-tools.md) | Sibling agent-capability design; the http client is one such tool. |
-| `designs/http-client-trust-on-first-bind.md` (forthcoming) | Sibling; owns the trust-mode question deferred from this design. |
+| [trust-on-first-bind](trust-on-first-bind.md) | Sibling; owns the trust-mode question deferred from this design. |
 
 ## Prompt
 
