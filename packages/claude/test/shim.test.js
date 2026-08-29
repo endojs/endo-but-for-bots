@@ -78,6 +78,42 @@ test('an unknown method is method-not-found; a notification yields no response',
   t.is(notif, undefined);
 });
 
+test('a non-2.0 or non-object message is Invalid Request, echoing its id when present', async t => {
+  const shim = mkShim(async () => ({}));
+  const bad = await shim.handleMessage({ id: 7, method: 'initialize' });
+  t.is(bad.error.code, -32_600);
+  t.is(bad.id, 7);
+  // A message with no usable id null-fills, and never touches the broker.
+  const noId = await shim.handleMessage(/** @type {any} */ ('not an object'));
+  t.is(noId.error.code, -32_600);
+  t.is(noId.id, null);
+});
+
+test('ping is answered with an empty result without touching the broker', async t => {
+  let forwarded = 0;
+  const shim = mkShim(async () => {
+    forwarded += 1;
+  });
+  const res = await shim.handleMessage({ jsonrpc: '2.0', id: 6, method: 'ping' });
+  t.deepEqual(res, { jsonrpc: '2.0', id: 6, result: {} });
+  t.is(forwarded, 0);
+});
+
+test('an unknown-method notification and a broker error on a notification both yield no response', async t => {
+  const okShim = mkShim(async () => ({}));
+  // Unknown method with no id: notification, so the default case stays silent.
+  const silent = await okShim.handleMessage({ jsonrpc: '2.0', method: 'nope' });
+  t.is(silent, undefined);
+  // A broker throw on a notification is swallowed (no id to answer).
+  const throwing = mkShim(async () => {
+    throw new Error('broker down');
+  });
+  t.is(
+    await throwing.handleMessage({ jsonrpc: '2.0', method: 'tools/call' }),
+    undefined,
+  );
+});
+
 test('handleLine parses newline-delimited JSON-RPC and serializes a response line', async t => {
   const shim = mkShim(async () => ({ tools: [] }));
   const out = await shim.handleLine(
