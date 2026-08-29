@@ -24,6 +24,25 @@
 
 ## Landed CLI surface (Phase 1)
 
+**Reconciling the two supersession claims in `designs/README.md`.** The index
+carries two rows that a reader can mistake for a contradiction: the
+`cli-http-client` row (this design) reports Phase 1 as *landed on the
+policy-based `provideHttpClient` client*, while the `daemon-agent-tools` row
+says *the `provideHttpClient` daemon wiring is superseded by
+[endo-fetch](endo-fetch.md)*. Both are true and non-contradictory once the tense
+is made explicit: the endo-fetch migration is **planned, not yet landed** — no
+`@endo/fetch` / `@endo/confined-fetch` replacement for `provideHttpClient` exists
+on `llm` today. Phase 1 is therefore a **deliberate stop-gap**: it lands the
+`endo http mk` user surface on the daemon wiring that is live *now*, accepting
+that the migration will later re-home that surface onto the unconfined-base +
+confined-plugin shape without changing the verb tree (which endo-fetch keeps as
+the eventual user surface). It does **not** mean the endo-fetch plan needs
+updating; the CLI verb is intentionally decoupled from the packaging beneath it,
+so the mechanism can be swapped under a stable `endo http mk` spelling. The
+`daemon-agent-tools` row's wording is tightened to "planned to be superseded (not
+yet landed)" so the index no longer reads as if the wiring Phase 1 rides were
+already dead.
+
 The first `endo http` verb, `mk`, has landed on top of the HTTP client that
 now lives on the daemon, **not** on the controller/client formula pair this
 document originally proposed. That pair — `http-controller` +
@@ -83,6 +102,21 @@ what got auto-pinned or undo it. Because that grant is unbounded and unrevocable
 in Phase 1, `mk` refuses `--policy-mode tofu-auto` unless the operator also
 passes `--acknowledge-unbounded`; the widening is named on the `--policy-mode`
 help line itself, not only here.
+
+**The `--acknowledge-unbounded` gate is CLI-only UX friction, not an
+authorization boundary.** It is enforced entirely in `mk`'s local action and is
+**not** threaded into the policy record `provideHttpClient` persists:
+`makeHttpClientPolicy` never emits an `acknowledgedUnbounded` bit, and the
+daemon's `normalizeHttpClientPolicy` (unmodified by Phase 1) accepts
+`policyMode: 'tofu-auto'` with no acknowledgment field. Any caller that reaches
+`provideHttpClient` directly — a script, a future GUI, a REPL against the host
+agent — mints the unbounded `tofu-auto` grant with no record that the widening
+was ever acknowledged. The gate advises the operator at the CLI; it does not
+gate the capability at its minting boundary, and the persisted formula carries no
+evidence of acknowledgment. Making acknowledgment a real, recorded precondition
+of the mint (a host-method `acknowledgedUnbounded` bit the daemon requires and
+stores) is deferred to the phase that lands the `inspect`/`revoke` verbs, where
+the persisted-policy surface is being reworked anyway.
 
 **Re-`mk` on an existing name rebinds it.** `provideHttpClient` always
 formulates and stores under the name, so `mk` on a name that already denotes a

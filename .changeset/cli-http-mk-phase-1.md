@@ -9,8 +9,12 @@ a host-curated policy and registers it under a single pet name:
 ```
 endo http mk <name> --origin <origin> [--origin <origin>...]
   [--max-requests-per-minute <n>] [--max-response-bytes <n>]
-  [--policy-mode strict|tofu-auto [--acknowledge-unbounded]] [--as <host>]
+  [--policy-mode strict|tofu-auto [--acknowledge-unbounded]] [--as <agent>]
 ```
+
+Phase-1 scope: `mk` mints, registers, and makes the client inspectable, but the
+client cannot yet complete a live outbound request on the `llm` code path (see
+the known limitation below).
 
 `--origin` is required and repeatable; each value is an origin
 (`scheme://host[:port]`, http: or https:) and is normalized to its canonical

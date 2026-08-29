@@ -1,5 +1,10 @@
 // @ts-nocheck
 
+// `http-mk-policy.js` imports `q` from `@endo/errors`, which requires the
+// SES assert globals to be installed before it loads; lock down first, matching
+// `list-grouping.test.js`. This must precede every other import.
+import '@endo/init/debug.js';
+
 import os from 'os';
 import path from 'path';
 import test from 'ava';
@@ -118,6 +123,33 @@ test('normalizeHttpClientOrigin canonicalizes an IPv6 literal host', t => {
     normalizeHttpClientOrigin('https://[2001:db8::1]/'),
     'https://[2001:db8::1]',
   );
+  // Mixed-case hextets fold to lowercase — the arbAcceptedOrigin property only
+  // generates fc.domain() hosts, so no IPv6 literal (let alone a mixed-case one)
+  // ever exercises this case-fold; pin it directly the way the IDN case is.
+  t.is(
+    normalizeHttpClientOrigin('https://[2001:DB8::1]'),
+    'https://[2001:db8::1]',
+  );
+  t.is(
+    normalizeHttpClientOrigin('https://[2001:DB8::AB]:443'),
+    'https://[2001:db8::ab]',
+  );
+});
+
+test('normalizeHttpClientOrigin canonicalizes a trailing-dot (fully qualified) host', t => {
+  // A trailing-dot FQDN (`example.com.`) is a distinct DNS name that the WHATWG
+  // URL parser preserves verbatim in the origin; it does not fold to the
+  // dotless form, so an allowlist entry typed one way does not confine the
+  // other. Pin that the canonical serialization keeps the trailing dot rather
+  // than silently equating the two names.
+  t.is(
+    normalizeHttpClientOrigin('https://example.com./'),
+    'https://example.com.',
+  );
+  t.not(
+    normalizeHttpClientOrigin('https://example.com.'),
+    normalizeHttpClientOrigin('https://example.com'),
+  );
 });
 
 test('normalizeHttpClientOrigin handles the port boundaries', t => {
@@ -148,6 +180,31 @@ test('makeHttpClientPolicy normalizes each origin through the assembler', t => {
   });
   t.deepEqual(policy, {
     allowedOrigins: ['https://example.com', 'https://api.example.com'],
+  });
+});
+
+test('makeHttpClientPolicy preserves case-collided origins verbatim (no local dedup)', t => {
+  // Two `--origin` values that differ only in host case (and a stripped default
+  // port) canonicalize to the same origin. The assembler does NOT dedup them —
+  // it hands the daemon exactly as many entries as the operator typed. Pin this:
+  // the duplication is harmless (the daemon's allowlist membership check is
+  // idempotent, so a repeated origin neither widens nor narrows confinement),
+  // and folding duplicates silently here would hide a typo the operator may want
+  // surfaced. If a later phase adds dedup, it should be a deliberate, tested
+  // change rather than an accident, so this locks in the current contract.
+  const policy = makeHttpClientPolicy({
+    allowedOrigins: [
+      'https://Example.com',
+      'https://example.com',
+      'https://EXAMPLE.com:443',
+    ],
+  });
+  t.deepEqual(policy, {
+    allowedOrigins: [
+      'https://example.com',
+      'https://example.com',
+      'https://example.com',
+    ],
   });
 });
 
@@ -282,6 +339,13 @@ test('parsePositiveIntegerFlag pins the safe-integer boundary and the trim path'
   // so without these the Number.isSafeInteger guard is dead coverage — a
   // syntactically valid numeral that Number() silently rounds must still reject.
   t.is(parse('9007199254740991'), Number.MAX_SAFE_INTEGER);
+  // Exactly MAX_SAFE_INTEGER + 1 (2^53) is representable as a double yet is not
+  // a *safe* integer, so it must reject at the isSafeInteger guard — the tight
+  // boundary one past the last admissible value, distinct from the +2 case
+  // below (which Number() silently rounds).
+  t.throws(() => parse('9007199254740992'), {
+    message: /must be a safe integer/,
+  });
   t.throws(() => parse('9007199254740993'), {
     message: /must be a safe integer/,
   });
@@ -304,6 +368,38 @@ test('collectHttpOrigin accumulates repeated --origin values in flag order', t =
     'https://b.example',
     'https://c.example',
   ]);
+});
+
+test('parsePositiveIntegerFlag round-trips every positive safe integer', async t => {
+  const parse = parsePositiveIntegerFlag('--max-response-bytes');
+  await fc.assert(
+    fc.property(fc.integer({ min: 1, max: Number.MAX_SAFE_INTEGER }), n => {
+      // The decimal spelling of any positive safe integer parses back to it,
+      // and re-spelling the result is a fixed point — the hand-picked examples
+      // above check three points; this pins the whole admissible range.
+      t.is(parse(String(n)), n);
+      t.is(parse(String(parse(String(n)))), n);
+    }),
+  );
+});
+
+test('collectHttpOrigin folds an arbitrary sequence into flag order', async t => {
+  await fc.assert(
+    fc.property(fc.array(fc.string()), values => {
+      // Commander calls the coercer once per repeated flag, threading the prior
+      // accumulator; folding it over any sequence must reproduce that sequence
+      // exactly (a last-wins regression would collapse it to the final value).
+      const collected = values.reduce(
+        (previous, value) => collectHttpOrigin(value, previous),
+        undefined,
+      );
+      if (values.length === 0) {
+        t.is(collected, undefined);
+      } else {
+        t.deepEqual(collected, values);
+      }
+    }),
+  );
 });
 
 test('parsePolicyModeFlag accepts admissible modes and names the flag on reject', t => {

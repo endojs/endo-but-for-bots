@@ -1,5 +1,6 @@
 // @ts-check
 
+import { q } from '@endo/errors';
 import harden from '@endo/harden';
 
 /**
@@ -37,14 +38,10 @@ export const normalizeHttpClientOrigin = raw => {
   try {
     parsed = new URL(raw);
   } catch {
-    throw new Error(
-      `--origin ${JSON.stringify(raw)} is not a valid http(s) origin`,
-    );
+    throw new Error(`--origin ${q(raw)} is not a valid http(s) origin`);
   }
   if (!HTTP_ORIGIN_SCHEMES.includes(parsed.protocol)) {
-    throw new Error(
-      `--origin ${JSON.stringify(raw)} must use the http: or https: scheme`,
-    );
+    throw new Error(`--origin ${q(raw)} must use the http: or https: scheme`);
   }
   // An origin is scheme://host[:port] only. A path (beyond the bare `/` the
   // WHATWG serializer always yields for the http:/https: special schemes),
@@ -59,7 +56,7 @@ export const normalizeHttpClientOrigin = raw => {
     parsed.password !== ''
   ) {
     throw new Error(
-      `--origin ${JSON.stringify(raw)} must be a bare origin ` +
+      `--origin ${q(raw)} must be a bare origin ` +
         `(scheme://host[:port], no path, query, fragment, or userinfo)`,
     );
   }
@@ -80,15 +77,11 @@ export const normalizeHttpClientOrigin = raw => {
 export const parsePositiveIntegerFlag = flag => value => {
   const trimmed = value.trim();
   if (!/^[1-9][0-9]*$/.test(trimmed)) {
-    throw new Error(
-      `${flag} must be a positive integer, got ${JSON.stringify(value)}`,
-    );
+    throw new Error(`${flag} must be a positive integer, got ${q(value)}`);
   }
   const parsedInteger = Number(trimmed);
   if (!Number.isSafeInteger(parsedInteger)) {
-    throw new Error(
-      `${flag} must be a safe integer, got ${JSON.stringify(value)}`,
-    );
+    throw new Error(`${flag} must be a safe integer, got ${q(value)}`);
   }
   return parsedInteger;
 };
@@ -118,7 +111,7 @@ const HTTP_POLICY_MODES = harden(['strict', 'tofu-auto']);
 export const parsePolicyModeFlag = value => {
   if (!HTTP_POLICY_MODES.includes(value)) {
     throw new Error(
-      `--policy-mode must be strict or tofu-auto, got ${JSON.stringify(value)}`,
+      `--policy-mode must be strict or tofu-auto, got ${q(value)}`,
     );
   }
   return /** @type {'strict' | 'tofu-auto'} */ (value);
