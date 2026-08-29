@@ -247,6 +247,7 @@ impl MachineSnapshot for Interp {
         .with_function_state(tables.function_state)
         .with_proxy_state(tables.proxy_state)
         .with_accessors(tables.accessors)
+        .with_intl_bound_functions(tables.intl_bound_functions)
         .with_name_floor(self.installed_names_floor())
     }
 }
@@ -270,6 +271,7 @@ struct SideTableImages {
     function_state: ironhorse_vm::FunctionStateSnapshot,
     proxy_state: ironhorse_vm::ProxyStateSnapshot,
     accessors: Vec<ironhorse_vm::AccessorRow>,
+    intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow>,
     arguments_brands: Vec<u32>,
     temporal: crate::image::TemporalImage,
     intl: ironhorse_vm::IntlTables,
@@ -377,6 +379,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
     let function_state = interp.function_state_snapshot();
     let proxy_state = interp.proxy_state_snapshot();
     let accessors = interp.accessors_snapshot();
+    let intl_bound_functions = interp.intl_bound_functions_snapshot();
     SideTableImages {
         arrays,
         collections,
@@ -395,6 +398,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
         function_state,
         proxy_state,
         accessors,
+        intl_bound_functions,
     }
 }
 
@@ -423,6 +427,7 @@ fn restore_side_tables(
     function_state: ironhorse_vm::FunctionStateSnapshot,
     proxy_state: ironhorse_vm::ProxyStateSnapshot,
     accessors: Vec<ironhorse_vm::AccessorRow>,
+    intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow>,
     arguments_brands: Vec<u32>,
     temporal: crate::image::TemporalImage,
     intl: ironhorse_vm::IntlTables,
@@ -512,11 +517,6 @@ fn restore_side_tables(
             "side-table restore: malformed retained function state",
         ));
     }
-    if !interp.restore_accessors(accessors) {
-        return Err(SnapshotError::Corrupt(
-            "side-table restore: malformed accessor state",
-        ));
-    }
     interp.restore_arguments_brands(arguments_brands);
     let ok = interp.restore_temporal_records(
         temporal.instants,
@@ -535,6 +535,16 @@ fn restore_side_tables(
     let ok = interp.restore_intl(intl);
     if !ok {
         return Err(SnapshotError::Corrupt("side-table restore: malformed intl record"));
+    }
+    if !interp.restore_intl_bound_functions(intl_bound_functions) {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed Intl bound-function state",
+        ));
+    }
+    if !interp.restore_accessors(accessors) {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed accessor state",
+        ));
     }
     // The iterator cursors (schema 13): validated at decode/bounds
     // (kinds, cursor ranges, the covering-collection cross-check);
@@ -606,6 +616,7 @@ pub fn image_to_interp(
         image.function_state,
         image.proxy_state,
         image.accessors,
+        image.intl_bound_functions,
         image.arguments_brands,
         image.temporal,
         image.intl,
@@ -851,6 +862,7 @@ fn small_state_of(interp: &Interp) -> SmallState {
         function_state: tables.function_state,
         proxy_state: tables.proxy_state,
         accessors: tables.accessors,
+        intl_bound_functions: tables.intl_bound_functions,
         arguments_brands: tables.arguments_brands,
         temporal: tables.temporal,
         intl: tables.intl,
@@ -1553,6 +1565,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.function_state,
         small.proxy_state,
         small.accessors,
+        small.intl_bound_functions,
         small.arguments_brands,
         small.temporal,
         small.intl,

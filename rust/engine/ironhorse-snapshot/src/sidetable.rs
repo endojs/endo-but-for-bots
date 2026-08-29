@@ -556,11 +556,10 @@ impl SideTable {
             // restore. Locks: the `intl_carry.rs` twins (memory, file,
             // lazy, blob — a resumed segment iterator CONTINUES its walk).
             SideTable::IntlRecords => ("locales/collators/…/date_time_formats", Serialized),
-            // The bound-fn links are `functions`-gated (a minted bound
-            // function is a FuncInfo row) and boundary-DROPPED, not
-            // refused: the getters re-mint on a cache miss.
+            // Runtime compare/format functions and their owner links
+            // travel in `IBFN`; restore rebuilds their native FuncInfo.
             SideTable::IntlBoundFunctions => {
-                ("collator_compare_functions/number_format_bound_functions", Pending)
+                ("collator_compare_functions/number_format_bound_functions", Serialized)
             }
             // Defining-crank and eval segments travel in the same atomic
             // cluster as their function metadata.
@@ -763,7 +762,7 @@ mod tests {
     #[test]
     fn pending_is_derived_from_ledger() {
         let pending = SideTable::pending();
-        assert_eq!(pending.len(), 11, "the design's Remaining ledger count");
+        assert_eq!(pending.len(), 10, "the design's Remaining ledger count");
         // The rich per-instance tables are still pending.
         assert!(!pending.contains(&SideTable::Functions));
         assert!(!pending.contains(&SideTable::BoundFunctions));
@@ -805,7 +804,7 @@ mod tests {
         // into their own functions-gated row.
         assert!(!pending.contains(&SideTable::IntlRecords));
         assert!(!pending.contains(&SideTable::NameFloor));
-        assert!(pending.contains(&SideTable::IntlBoundFunctions));
+        assert!(!pending.contains(&SideTable::IntlBoundFunctions));
         // The schema-13 iterator-cursor carry: a resumed built-in
         // iterator continues its walk (ordinal-normalized collection
         // cursors included).

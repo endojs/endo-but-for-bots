@@ -1,16 +1,15 @@
-//! Wave-6 W6-9: the SILENT-WRONG Pending rows refuse to persist.
+//! Wave-6 W6-9 gate graduation locks.
 //!
 //! The blast-radius probe showed a resumed heap holding a Proxy or an
-//! accessor property answers WRONG VALUES. Function and proxy state now
-//! travel; accessors remain the last refuse-on-hold row until their own
-//! getter/setter mapping lands. Error data and
+//! accessor property answered wrong values. Function, proxy, accessor,
+//! and Intl bound-function state now travel. Error data and
 //! the typed-array family started here and GRADUATED: they travel in
 //! the `ERRD` (store schema 9) and `ABUF`/`TARR`/`DVIW` (schema 10)
 //! atoms (`error_data_carry.rs` / `typed_array_carry.rs` hold their
 //! twins).
 
 use ironhorse_snapshot::machine::begin_store_session;
-use ironhorse_snapshot::store::{MemoryStore, StoreError};
+use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::Signature;
 use ironhorse_vm::Interp;
 
@@ -26,17 +25,6 @@ fn machine_running(src: &str) -> Interp {
     let o = m.run(&b);
     assert!(o.completed, "fixture crank: {:?}", o.halt);
     m
-}
-
-fn refuses(src: &str, row: &'static str) {
-    let mut store = MemoryStore::new();
-    match begin_store_session(machine_running(src), &sig(), &mut store) {
-        Err((_, StoreError::PendingStateUnsupported { row: r })) => {
-            assert_eq!(r, row, "the refusal names the row held");
-        }
-        Err((_, e)) => panic!("expected PendingStateUnsupported({row}), got {e:?}"),
-        Ok(_) => panic!("a heap holding live {row} must refuse to persist"),
-    }
 }
 
 #[test]
@@ -90,13 +78,19 @@ fn a_redefined_seed_accessor_persists() {
 }
 
 #[test]
-fn an_accessor_holding_a_pending_runtime_native_still_refuses() {
-    refuses(
-        "var nf = 0; var o = 0; var format = 0; \
-         nf = new Intl.NumberFormat('en'); format = nf.format; o = {}; \
-         Object.defineProperty(o, 'x', { get: format }); 0;",
-        "accessors with non-persisted native functions",
-    );
+fn an_accessor_holding_an_intl_bound_function_persists() {
+    let mut store = MemoryStore::new();
+    begin_store_session(
+        machine_running(
+            "var nf = 0; var o = 0; var format = 0; \
+             nf = new Intl.NumberFormat('en'); format = nf.format; o = {}; \
+             Object.defineProperty(o, 'x', { get: format }); 0;",
+        ),
+        &sig(),
+        &mut store,
+    )
+    .map_err(|(_, error)| error)
+    .expect("Intl bound functions travel before accessors restore");
 }
 
 /// And the exemption's positive half: a heap whose only accessor row IS

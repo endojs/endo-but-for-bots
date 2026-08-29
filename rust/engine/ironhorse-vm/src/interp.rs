@@ -4728,6 +4728,17 @@ pub struct AccessorRow {
     pub set: Option<Slot>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IntlBoundFunctionRow {
+    /// 0 = Collator compare, 1 = NumberFormat format.
+    pub kind: u8,
+    pub function: u32,
+    pub owner: u32,
+    pub name: String,
+    pub name_chunk: u32,
+    pub arity: u32,
+}
+
 /// A suspended activation: the caller's scope and resume point, saved by
 /// `run` and restored by `end` (XS's `mxFrame->value.frame.{code,scope}`
 /// plus the environment the frame aliases). The value stack is shared and
@@ -8893,13 +8904,6 @@ impl Interp {
             .ctor_prototypes
             .iter()
             .any(|(owner, _)| !function_owners.contains(owner))
-            || state
-                .deleted_meta
-                .iter()
-                .any(|(owner, _)| {
-                    !function_owners.contains(owner)
-                        && !self.functions.contains_key(&crate::value::SlotIndex(*owner))
-                })
         {
             return false;
         }
@@ -9034,6 +9038,11 @@ impl Interp {
         if function.0 < self.boot_slot_count || self.proxy_revokers.contains_key(&function) {
             return true;
         }
+        if self.collator_compare_functions.contains_key(&function)
+            || self.number_format_bound_functions.contains_key(&function)
+        {
+            return true;
+        }
         self.functions
             .get(&function)
             .is_some_and(|info| info.native.is_none() && info.method.is_none())
@@ -9074,6 +9083,68 @@ impl Interp {
                     set: row.set,
                 },
             );
+        }
+        true
+    }
+
+    pub fn intl_bound_functions_snapshot(&self) -> Vec<IntlBoundFunctionRow> {
+        let mut rows = Vec::new();
+        for (function, owner) in &self.collator_compare_functions {
+            let info = &self.functions[function];
+            rows.push(IntlBoundFunctionRow {
+                kind: 0,
+                function: function.0,
+                owner: owner.0,
+                name: info.name.clone(),
+                name_chunk: info.name_chunk.0,
+                arity: info.arity,
+            });
+        }
+        for (function, owner) in &self.number_format_bound_functions {
+            let info = &self.functions[function];
+            rows.push(IntlBoundFunctionRow {
+                kind: 1,
+                function: function.0,
+                owner: owner.0,
+                name: info.name.clone(),
+                name_chunk: info.name_chunk.0,
+                arity: info.arity,
+            });
+        }
+        rows.sort_unstable_by_key(|row| row.function);
+        rows
+    }
+
+    pub fn restore_intl_bound_functions(&mut self, rows: Vec<IntlBoundFunctionRow>) -> bool {
+        for row in rows {
+            let function = crate::value::SlotIndex(row.function);
+            let owner = crate::value::SlotIndex(row.owner);
+            if self.functions.contains_key(&function) {
+                return false;
+            }
+            let method = match row.kind {
+                0 if self.collators.contains_key(&owner) => NativeMethod::CollatorCompare,
+                1 if self.number_formats.contains_key(&owner) => {
+                    NativeMethod::NumberFormatBoundFormat
+                }
+                _ => return false,
+            };
+            self.functions.insert(
+                function,
+                FuncInfo {
+                    method: Some(method),
+                    name: row.name,
+                    name_chunk: crate::value::ChunkOffset(row.name_chunk),
+                    arity: row.arity,
+                    ..FuncInfo::default()
+                },
+            );
+            if row.kind == 0 {
+                self.collator_compare_functions.insert(function, owner);
+            } else {
+                self.number_format_bound_functions.insert(function, owner);
+                self.number_formats.get_mut(&owner).unwrap().bound_format = Some(function);
+            }
         }
         true
     }
