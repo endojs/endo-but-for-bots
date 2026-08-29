@@ -1,4 +1,5 @@
 // @ts-nocheck
+// spell-out-exempt -- XDG_RUNTIME_DIR and ENDO_ADDR are external variable names.
 
 // `http-mk-policy.js` imports `q` from `@endo/errors`, which requires the
 // SES assert globals to be installed before it loads; lock down first, matching
@@ -112,6 +113,21 @@ test('normalizeHttpClientOrigin punycodes a non-ASCII (IDN) host', t => {
     normalizeHttpClientOrigin('https://xn--exmple-cua.com'),
     'https://xn--exmple-cua.com',
   );
+});
+
+test('normalizeHttpClientOrigin refuses default-ignorable Unicode', t => {
+  // WHATWG IDNA mapping silently removes these hostname code points. Refusing
+  // them prevents a pasted value from normalizing to a different visible host.
+  for (const raw of [
+    'https://exam\u200bple.com',
+    'https://exam\u00adple.com',
+    'https://exam\u200cple.com',
+    'https://exam\u200dple.com',
+  ]) {
+    t.throws(() => normalizeHttpClientOrigin(raw), {
+      message: /must not contain default-ignorable Unicode code points/,
+    });
+  }
 });
 
 test('normalizeHttpClientOrigin canonicalizes an IPv6 literal host', t => {
@@ -554,6 +570,10 @@ test.serial(
         'http://127.0.0.1:8080',
         '--origin',
         'https://API.example.com:443/',
+        '--max-requests-per-minute',
+        '30',
+        '--max-response-bytes',
+        '2048',
       );
       const lines = result.stdout.split('\n').filter(Boolean);
       t.deepEqual(
@@ -569,6 +589,8 @@ test.serial(
       // slash dropped), not the non-canonical form typed above.
       t.regex(result.stderr, /minted strict HTTP client "my-http" over/);
       t.regex(result.stderr, /https:\/\/api\.example\.com(?![:/])/);
+      t.regex(result.stderr, /max 30 requests\/minute/);
+      t.regex(result.stderr, /max 2048 response bytes/);
       t.notRegex(result.stderr, /API\.example\.com/);
 
       // The name is reachable via endo list.
@@ -684,6 +706,8 @@ test.serial(
         'the acknowledged tofu-auto mint should register the name',
       );
       t.regex(result.stderr, /minted tofu-auto HTTP client "wild" over/);
+      t.regex(result.stderr, /max 60 requests\/minute/);
+      t.regex(result.stderr, /max 1048576 response bytes/);
       t.regex(result.stderr, /warning:.*tofu-auto/);
       t.regex(result.stderr, /does not bound outbound reach/);
     } finally {

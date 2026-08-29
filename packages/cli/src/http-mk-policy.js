@@ -13,6 +13,12 @@ import harden from '@endo/harden';
 
 const HTTP_ORIGIN_SCHEMES = harden(['http:', 'https:']);
 
+// WHATWG host parsing removes these code points before IDNA conversion. Refuse
+// them before parsing so a visually reviewed hostname cannot silently name a
+// different origin after normalization.
+const DEFAULT_IGNORABLE_CODE_POINT_PATTERN =
+  /\p{Default_Ignorable_Code_Point}/u;
+
 /**
  * Normalize one `--origin` flag value to its exact WHATWG origin serialization
  * — `URL.prototype.origin` (https://url.spec.whatwg.org/#dom-url-origin), which
@@ -34,6 +40,11 @@ const HTTP_ORIGIN_SCHEMES = harden(['http:', 'https:']);
  * @returns {string} The canonical origin.
  */
 export const normalizeHttpClientOrigin = raw => {
+  if (DEFAULT_IGNORABLE_CODE_POINT_PATTERN.test(raw)) {
+    throw new Error(
+      `--origin ${q(raw)} must not contain default-ignorable Unicode code points`,
+    );
+  }
   let parsed;
   try {
     parsed = new URL(raw);

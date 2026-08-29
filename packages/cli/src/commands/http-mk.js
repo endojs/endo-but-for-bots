@@ -6,6 +6,9 @@ import { withEndoAgent } from '../context.js';
 import { parsePetNamePath } from '../pet-name.js';
 import { makeHttpClientPolicy } from '../http-mk-policy.js';
 
+const DEFAULT_MAX_REQUESTS_PER_MINUTE = 60;
+const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
+
 /**
  * `endo http mk <name> --origin <origin> ...` — mint a confined outbound-HTTP
  * client capability under a host-curated policy and register it under `<name>`
@@ -68,16 +71,23 @@ export const httpMk = async ({
     console.log(name);
     // Echo the effective bound the operator actually minted: the CLI's own
     // locally-normalized origin allowlist (canonicalized here — IDN punycode,
-    // case-fold, default-port strip — so it can differ from what was typed) and
-    // the policy mode, since Phase 1 has no inspect verb to reveal it after the
-    // fact. This is the shape `mk` sent, not a daemon read-back: `provideHttpClient`
-    // returns the minted client capability (discarded here), not the stored policy,
-    // so there is no daemon-verbatim policy to echo. The daemon re-normalizes the
-    // same origins through `normalizeHttpClientPolicy`, which agrees with this
-    // serialization for every accepted origin.
+    // case-fold, default-port strip — so it can differ from what was typed),
+    // policy mode, and explicit-or-default resource bounds. Phase 1 has no
+    // inspect verb to reveal them after the fact. This is the shape `mk` sent
+    // plus the daemon's documented defaults, not a daemon read-back:
+    // `provideHttpClient` returns the minted client capability (discarded here),
+    // not the stored policy. The daemon re-normalizes the same origins through
+    // `normalizeHttpClientPolicy`, which agrees with this serialization for
+    // every accepted origin.
+    const maxRequestsPerMinute =
+      policy.maxRequestsPerMinute ?? DEFAULT_MAX_REQUESTS_PER_MINUTE;
+    const maxResponseBytes =
+      policy.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
     process.stderr.write(
       `minted ${policy.policyMode ?? 'strict'} HTTP client "${name}" over ` +
-        `${policy.allowedOrigins.join(', ')}\n`,
+        `${policy.allowedOrigins.join(', ')}; ` +
+        `max ${maxRequestsPerMinute} requests/minute; ` +
+        `max ${maxResponseBytes} response bytes\n`,
     );
     if (policy.policyMode === 'tofu-auto') {
       process.stderr.write(
