@@ -6,9 +6,13 @@ filesystem view, optional network) as one or more `Exo` handles, so a
 caller-granted process tree runs under additional kernel-level
 confinement on top of Endo's capability boundary.
 
-The architecture is documented in this README. The original design
-rationale is preserved in this repository's history at
-[`PLAN/endo_posix_sandbox.md`](https://github.com/endojs/endo-but-for-bots/blob/a54c3adb/PLAN/endo_posix_sandbox.md).
+The confinement is *additional* defense around inner native processes,
+never a replacement for Endo's own model: the daemon, workers, and
+CapTP graph remain the authoritative capability boundary. Each slice is
+constructed from caller-granted `Mount` capabilities and is GC-pinned by
+its handle — releasing the handle kills the inner processes, unmounts
+scratch, and the slice goes away. The architecture is documented in the
+rest of this README.
 
 ## Status
 

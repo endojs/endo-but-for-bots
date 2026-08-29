@@ -216,7 +216,7 @@ treatment for the `URL` constructor and `URLSearchParams`).*
 *Earlier additions: [daemon-make-archive](daemon-make-archive.md) (added
 2026-04-23), [filesystem-watchers](filesystem-watchers.md) (added
 2026-05-07), [endo-posix-sandbox](endo-posix-sandbox.md) (added
-2026-05-07; mirrors `PLAN/endo_posix_sandbox.md` for roadmap calibration),
+2026-05-07; roadmap-calibration record for the `packages/sandbox` branch),
 [exo-zip-package](exo-zip-package.md) (added 2026-05-08; PR #128 reshape
 blocker), [pass-style-promise](pass-style-promise.md) (added 2026-05-10;
 synthesizes endojs/endo#1312 and endojs/endo#1652 for issue #168),
