@@ -480,7 +480,11 @@ export const makeCodexClient = ({
       'exec',
       '--json',
       '--sandbox',
-      'workspace-write',
+      // This process already runs inside an Endo-owned rootless Podman slice.
+      // Its mounts and network are the security boundary; asking Codex to
+      // create another Linux sandbox inside it makes bubblewrap's uid mapping
+      // fail on hosted machines.
+      'danger-full-access',
       '--skip-git-repo-check',
     ];
     if (mcpConfigPath) {

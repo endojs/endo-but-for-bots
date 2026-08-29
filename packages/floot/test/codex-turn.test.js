@@ -48,3 +48,46 @@ test('translates Codex JSONL events to Floot output', t => {
   ]);
   t.true(events.some(([kind, value]) => kind === 'delta' && value === 'Done.'));
 });
+
+test('translates Codex programmatic tool calls with separate results', t => {
+  const events = [];
+  const writer = harden({
+    setPhase: phase => events.push(['phase', phase]),
+    delta: text => events.push(['delta', text]),
+    toolCall: call => events.push(['call', call]),
+    toolResult: result => events.push(['result', result]),
+  });
+  const translator = makeCodexEventTranslator(writer);
+  translator.handle({
+    type: 'response_item',
+    payload: {
+      type: 'custom_tool_call',
+      id: 'custom-1',
+      call_id: 'call-1',
+      name: 'exec',
+      input: 'const result = await tools.exec_command({ cmd: "uptime" });',
+    },
+  });
+  translator.handle({
+    type: 'response_item',
+    payload: {
+      type: 'custom_tool_call_output',
+      call_id: 'call-1',
+      output: 'bwrap: setting up uid map: Operation not permitted',
+    },
+  });
+
+  t.deepEqual(translator.finish().toolCalls, [
+    {
+      id: 'call-1',
+      name: 'exec',
+      args: JSON.stringify({
+        input:
+          'const result = await tools.exec_command({ cmd: "uptime" });',
+      }),
+      result: 'bwrap: setting up uid map: Operation not permitted',
+    },
+  ]);
+  t.true(events.some(([kind]) => kind === 'call'));
+  t.true(events.some(([kind]) => kind === 'result'));
+});

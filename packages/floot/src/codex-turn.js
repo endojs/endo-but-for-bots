@@ -22,6 +22,18 @@ const itemTool = item => {
   if (item.type === 'web_search') {
     return harden({ name: 'web_search', args: { query: item.query || '' } });
   }
+  if (
+    item.type === 'custom_tool_call' ||
+    item.type === 'dynamic_tool_call' ||
+    item.type === 'function_call' ||
+    item.type === 'tool_call'
+  ) {
+    const input = item.input ?? item.arguments ?? item.args ?? {};
+    return harden({
+      name: `${item.name || item.tool || 'tool'}`,
+      args: typeof input === 'string' ? { input } : input,
+    });
+  }
   return undefined;
 };
 
@@ -48,8 +60,65 @@ export const makeCodexEventTranslator = writer => {
   /** @type {{ inputTokens: number, outputTokens: number } | undefined} */
   let usage;
 
+  const recordToolCall = (id, tool) => {
+    const args = JSON.stringify(tool.args);
+    let call = callsById.get(id);
+    if (!call) {
+      call = { id, name: tool.name, args, result: null };
+      callsById.set(id, call);
+      toolCalls.push(call);
+      w.toolCall({ id, name: tool.name, args });
+    }
+    w.setPhase('using tools');
+    return call;
+  };
+
+  const recordToolResult = (id, result) => {
+    let call = callsById.get(id);
+    if (!call) {
+      call = { id, name: 'tool', args: '{}', result: null };
+      callsById.set(id, call);
+      toolCalls.push(call);
+      w.toolCall({ id, name: call.name, args: call.args });
+    }
+    call.result = result;
+    w.toolResult({ id, name: call.name, result });
+    w.setPhase('thinking');
+  };
+
   const handle = event => {
     if (!event || typeof event !== 'object') return;
+
+    // Newer Codex runtimes can expose programmatic/custom calls as raw
+    // response items. Their outputs arrive separately and pair by call_id,
+    // unlike the self-contained item.completed records used by shell and MCP.
+    const responseItem =
+      event.type === 'response_item' && event.payload
+        ? event.payload
+        : event;
+    if (
+      responseItem.type === 'custom_tool_call_output' ||
+      responseItem.type === 'dynamic_tool_call_output' ||
+      responseItem.type === 'function_call_output' ||
+      responseItem.type === 'tool_call_output'
+    ) {
+      const id = `${responseItem.call_id || responseItem.id || ''}`;
+      recordToolResult(id, itemResult(responseItem));
+      return;
+    }
+    const responseTool = itemTool(responseItem);
+    if (
+      responseTool &&
+      (responseItem !== event ||
+        responseItem.type === 'custom_tool_call' ||
+        responseItem.type === 'dynamic_tool_call' ||
+        responseItem.type === 'function_call' ||
+        responseItem.type === 'tool_call')
+    ) {
+      const id = `${responseItem.call_id || responseItem.id || `${responseItem.type}-${toolCalls.length + 1}`}`;
+      recordToolCall(id, responseTool);
+      return;
+    }
     if (event.type === 'thread.started') {
       w.setPhase('codex session starting');
       return;
@@ -78,15 +147,7 @@ export const makeCodexEventTranslator = writer => {
       const tool = itemTool(item);
       if (!tool) return;
       const id = `${item.id || `${item.type}-${toolCalls.length + 1}`}`;
-      const args = JSON.stringify(tool.args);
-      let call = callsById.get(id);
-      if (!call) {
-        call = { id, name: tool.name, args, result: null };
-        callsById.set(id, call);
-        toolCalls.push(call);
-        w.toolCall({ id, name: tool.name, args });
-      }
-      w.setPhase('using tools');
+      const call = recordToolCall(id, tool);
       if (event.type === 'item.completed') {
         const result = itemResult(item);
         call.result = result;

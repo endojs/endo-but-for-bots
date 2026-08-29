@@ -91,7 +91,7 @@ test('starts and then resumes the persisted Codex thread', async t => {
     'exec',
     '--json',
     '--sandbox',
-    'workspace-write',
+    'danger-full-access',
     '--skip-git-repo-check',
   ]);
   t.false(execSpawns[0].argv.includes('resume'));

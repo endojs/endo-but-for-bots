@@ -158,6 +158,88 @@ test('a claude-cli turn persists history and folds usage', async t => {
   });
 });
 
+test('a codex-cli turn surfaces and persists tool activity', async t => {
+  t.timeout(20_000);
+  const powers = makeFakePowers();
+  const { client, turns } = makeFakeClient();
+  const agent = await makeStreamingAgent(
+    powers,
+    undefined,
+    { codexClient: client },
+    'test prompt',
+  );
+
+  const { writer, reader } = makeReplyChannel();
+  const replyP = collectReply(reader);
+  const turnP = agent.converse('check health', writer);
+  for (let i = 0; i < 50 && turns.length === 0; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  t.is(turns.length, 1);
+  turns[0].push({ type: 'thread.started', thread_id: 'thread-1' });
+  turns[0].push({ type: 'turn.started' });
+  turns[0].push({
+    type: 'item.started',
+    item: {
+      id: 'cmd-1',
+      type: 'command_execution',
+      command: 'uptime',
+      status: 'in_progress',
+    },
+  });
+  turns[0].push({
+    type: 'item.completed',
+    item: {
+      id: 'cmd-1',
+      type: 'command_execution',
+      command: 'uptime',
+      aggregated_output: 'up 13 days',
+      exit_code: 0,
+      status: 'completed',
+    },
+  });
+  turns[0].push({
+    type: 'item.completed',
+    item: { id: 'msg-1', type: 'agent_message', text: 'Healthy.' },
+  });
+  turns[0].push({
+    type: 'turn.completed',
+    usage: { input_tokens: 30, output_tokens: 6 },
+  });
+  turns[0].push({ type: 'end' });
+
+  await turnP;
+  const events = await replyP;
+  t.deepEqual(
+    events.map(event => event.type),
+    [
+      'phase',
+      'phase',
+      'phase',
+      'tool_call',
+      'phase',
+      'phase',
+      'tool_result',
+      'phase',
+      'delta',
+      'usage',
+      'final',
+      'end',
+    ],
+  );
+  t.deepEqual(await agent.getHistory(), [
+    { role: 'user', content: 'check health' },
+    {
+      role: 'tool',
+      name: 'shell',
+      args: '{"command":"uptime"}',
+      result: 'up 13 days',
+    },
+    { role: 'assistant', content: 'Healthy.' },
+  ]);
+});
+
 test('a failed claude-cli turn aborts the reply but keeps the delivered prompt', async t => {
   t.timeout(20_000);
   const powers = makeFakePowers();
