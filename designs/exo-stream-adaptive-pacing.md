@@ -60,7 +60,7 @@ the synchronization (syn)/credit chain* (`for (let i = 0; ; i += 1) { if (i >= b
 synPromise ... } ... }`, `reader-pump.js:73-76`): a **producer-local** knob set on
 the far end of the CapTP wire, which the consumer's `iterateReader` call has no
 authority over and cannot observe. The two `buffer` options therefore live on
-opposite ends of the wire and neither side can force the other's. The adaptive
+opposite ends of the wire and neither side can force the other's setting. The adaptive
 memory bound (see [Limits](#limits-and-failure-behavior)) holds **only when the
 producer's own pre-pull buffer is `0` or small**; a producer that keeps a nonzero
 local `buffer` will eagerly pre-pull ahead of the consumer's credit ledger, and
@@ -156,33 +156,59 @@ buffer past `W`. Counting consumption instead means `outstanding` is exactly the
 number of unconsumed items (in flight plus prefetched), so bounding it by
 `floor(W) <= max` bounds real memory.
 
-**How `tArrive` is captured (not assumed).** Today's numeric `iterate-reader.js`
-holds only a single `nodePromise` and reads it inside the same `next()` call that
-consumes the item (`iterate-reader.js:110-156`): it never observes an ack node's
-*resolution* independent of consumption, so a controller layered naively on it
-would measure `sojourn` at consumption and see `sojourn` near `0` for every item,
-silently disabling the shrink half, ratcheting `W` to `max`, and staying there.
-The adaptive path therefore does **not** rely on the numeric path's timing. As
-each credit is issued, the adaptive loop retains the corresponding node-promise
-reference and **eagerly attaches an arrival callback**:
+**How `tArrive` is captured (the arrival walker and prefetch queue).** Today's
+numeric `iterate-reader.js` holds only a single `nodePromise` and reads it inside
+the same `next()` call that consumes the item (`iterate-reader.js:110-156`): it
+never observes an ack node's *resolution* independent of consumption, so a
+controller layered naively on it would measure `sojourn` at consumption and see
+`sojourn` near `0` for every item, silently disabling the shrink half, ratcheting
+`W` to `max`, and staying there. The adaptive path therefore does **not** rely on
+the numeric path's timing, and — critically — the timing it needs does **not**
+fall out of credit issuance alone. Issuing a synchronization credit only unblocks
+the producer's next pull (`reader-pump.js:74-76`); it hands the consumer no
+advance reference to that pull's eventual ack node. An ack node's `.promise` field
+(the reference to the *next* node) is a plain property read that becomes available
+only *after* the current node has resolved locally (`iterate-reader.js:110-117`),
+so an arrival callback for node `i` cannot be attached until node `i-1` has
+already arrived. Observing arrival ahead of consumption therefore requires a small
+explicit structure, specified here at the data-structure level rather than assumed
+to fall out of `nodePromise.then(...)`:
 
-```js
-nodePromise.then(() => {
-  const time = controller.sampleTime();
-  if (time !== undefined) tArrive[i] = time;
-});
-```
+- **An arrival walker.** A single background loop owns the sole live cursor down
+  the ack chain (the `nodePromise` the numeric path walks inside `next()`). While
+  the credit ledger permits (`outstanding` below the fill target), the walker
+  awaits its current `nodePromise`; on resolution it (1) stamps
+  `tArrive[i] = controller.sampleTime()`, (2) enqueues the resolved node on the
+  arrival FIFO below, and (3) advances its cursor to `node.promise` (or stops on a
+  `null` terminal). The walker runs strictly *ahead of* the application's `next()`
+  cursor and is the **only** reader of `node.promise` on the forward path.
+- **An arrival FIFO** (`arrived`) — the concrete "local prefetch buffer" the rest
+  of the design refers to. It holds resolved-but-unconsumed nodes in arrival
+  order. Its depth is exactly `outstanding` and so is bounded by
+  `outstanding <= floor(W) <= max`; it adds no unbounded state.
+- **Consumption dequeues, never walks.** `next()` no longer awaits `nodePromise`
+  itself; it dequeues the head of `arrived` (awaiting a not-yet-arrived head only
+  when the FIFO is empty, which is exactly the `starved[i]` condition). On dequeue
+  it stamps `tConsume[i]`, so `sojourn[i] = tConsume[i] - tArrive[i]` is a true
+  in-buffer aging time, not a consumption-instant zero. Consumption touches only
+  the FIFO, never `node.promise`.
 
-This stamps `tArrive[i]` the moment item `i`'s data lands over CapTP,
-whether or not the application has reached it. `tConsume[i]` is stamped when
-`next()` returns item `i`, and `sojourn[i] = tConsume[i] - tArrive[i]` is then a
-true in-buffer aging time, not a consumption-instant zero. The number of
-references retained for credited-but-unconsumed items is bounded by the same
-`outstanding <= floor(W) <= max` ceiling, so it adds no unbounded state. This
-eager-arrival observation is the specific mechanism the shrink half depends on,
-and the verification plan exercises it against real (not synthetic) buffering
-delay so a regression that collapsed it back to consumption-instant sampling is
-caught.
+Because the walker is the single owner of chain advancement and consumption reads
+only the FIFO, there is exactly **one** live cursor on the ack chain at any moment,
+which is what keeps teardown correct. `return()`/`throw()` today drain the chain by
+walking that single `nodePromise` to the terminal node
+(`iterate-reader.js:193-195`, `let node = await nodePromise; while (node.promise
+!== null) { node = await node.promise; }`). In the adaptive path teardown (1) stops
+the walker so no further credit is issued and no further advance occurs, then (2)
+resumes that same drain from the walker's current cursor — the authoritative live
+position on the chain — while the already-resolved nodes still sitting in `arrived`
+are discarded exactly as today's outstanding pre-pulled items are. The walker and
+the teardown drain never run concurrently on the same `node.promise` reference
+(teardown takes over the one cursor the walker just released), so the two
+chain-walks cannot race down the same references. This arrival-walker-plus-FIFO is
+the specific mechanism the shrink half depends on, and the verification plan
+exercises it against real (not synthetic) buffering delay so a regression that
+collapsed it back to consumption-instant sampling is caught.
 
 ```mermaid
 stateDiagram-v2
@@ -205,11 +231,11 @@ drive additive increase up from that floor.
 **Per consumed item.** The initiator, when `next()` returns item `i`: (1) samples
 `sojourn[i]` and `starved[i]`; (2) decrements `outstanding` (the item was
 consumed); (3) steps the detector above; (4) runs the **credit pump**: while
-`outstanding < min(controller.fillTarget(), controller.maxCredit)` and the stream
+`outstanding < min(controller.fillTarget(), controller.max)` and the stream
 is live, issue one synchronization credit and increment `outstanding`. The pump's
 trigger is thus **gated on consumption**, not arrival: the same event that
 releases buffer memory is the one that lets new credit flow, so the ledger and
-the real buffer move together. The `min(..., maxCredit)` clamp is applied by
+the real buffer move together. The `min(..., max)` clamp is applied by
 `iterateReader`'s loop, not trusted to the controller: the memory ceiling is
 enforced loop-side against *any* `CreditController`, so a buggy or hostile
 `fillTarget()` cannot pump past the declared bound (see
@@ -341,7 +367,7 @@ distinct instead of pushing both through one option name.
 
 `pacing` accepts either a `CreditController` produced by
 `makeCodelCreditController(opts)` (carrying an `isCreditController` brand plus the
-`record`/`fillTarget`/`maxCredit` members below), or a plain descriptor object,
+`record`/`fillTarget`/`max` members below), or a plain descriptor object,
 which `iterateReader` normalizes by wrapping in
 `makeCodelCreditController(descriptor)` before use. The brand, not the raw shape,
 tells the two apart, so there is exactly one object distinction a caller reasons
@@ -373,10 +399,12 @@ An out-of-range value is a `TypeError` at construction, exactly like an unknown
 key, so a caller cannot pass `{ min: 0 }`,
 `{ max: 4, min: 8 }`, `{ alpha: 0 }`, or `{ beta: 1.5 }` and silently defeat the
 liveness and monotonicity guarantees the rest of this document leans on. The
-enforced ceiling the controller then exposes, `maxCredit`, is exactly the
-configured `max` as an integer credit count (`floor(max)` when a non-integer `max`
-is supplied), so the value a caller sets and the value they read back name one
-ceiling, not two.
+ceiling the controller then exposes, `max`, is exactly the configured descriptor
+`max` read back unchanged under the same name, so the key a caller sets and the
+field they read back are one value spelled one way, not a set-here-read-there
+rename. Credits are issued in integer counts, so the realized credit ceiling the
+pump enforces is `floor(max)`; the exposed `max` field still reports the caller's
+configured value verbatim, an exact round trip.
 
 The initial defaults are `alpha = 1`, `beta = 1/2`, `min = 1`, `max = 1024`,
 `baseTarget = 5` ms, and `interval = 100` ms. These make an options bag with
@@ -428,26 +456,31 @@ interface CreditController {
   // Brand: distinguishes a built controller from a plain descriptor.
   readonly isCreditController: true;
 
-  // The policy actually running behind this controller. makeCodelCreditController
+  // The policy actually running behind this controller. Open, not closed: the
+  // two built-in policies report 'codel' and 'occupancy', and a third-party
+  // CreditController reports its own policy name — the field's type is `string`
+  // so a conforming custom implementation has a truthful value to report rather
+  // than being forced to borrow a shipped policy's name. makeCodelCreditController
   // delegates to the occupancy fallback when no clock is present (see Clock
   // capability), so the value a caller holds is not always the one the factory
   // name asserts. This field makes the swap observable: a caller (and the
   // verification plan's Clock-absent test) can assert which contract they hold
   // rather than only that memory stays bounded.
-  readonly policy: 'codel' | 'occupancy';
+  readonly policy: string; // 'codel' | 'occupancy' for the two built-ins
 
-  // Hard credit ceiling. iterateReader clamps fillTarget() to this before
+  // Hard window ceiling. iterateReader clamps fillTarget() to this before
   // pumping, so the memory bound is enforced loop-side against ANY
   // implementation, not on the honor system of a trusted fillTarget().
-  // This IS the configured `max` (as an integer credit count, floor(max) for a
-  // non-integer max): the descriptor key the caller sets and the field they
-  // read back name one ceiling, so `makeCodelCreditController({ max: 16 })`
-  // yields `maxCredit === 16`.
-  readonly maxCredit: number;
+  // This IS the configured descriptor `max`, read back unchanged under the same
+  // name: `makeCodelCreditController({ max: 16 }).max === 16`, an exact round
+  // trip. (Credits are issued in integer counts, so the realized credit ceiling
+  // the pump enforces is floor(max); this field still reports the caller's
+  // configured value verbatim.)
+  readonly max: number;
 
   // Returns a monotonic timestamp from the injected `now` capability, or
   // undefined for a clock-free controller. The loop calls this both from the
-  // eager arrival callback and at consumption so both stamps share one clock.
+  // arrival walker and at consumption so both stamps share one clock.
   sampleTime(): number | undefined;
 
   // Called once per consumed item, with that item's fresh sample.
@@ -468,11 +501,11 @@ interface CreditController {
 
 `record` advances the controller's internal state machine (detector plus window);
 `fillTarget()` reports the integer credit target the pump then fills `outstanding`
-up to, which `iterateReader` clamps to `maxCredit`. Exposing `maxCredit` on the
+up to, which `iterateReader` clamps to `max`. Exposing `max` on the
 interface (rather than folding the ceiling into one implementation's private
 clamp) is what lets the loop enforce the memory bound uniformly: a conforming
 controller with a runaway `fillTarget()` still cannot pump the real buffer past
-`maxCredit`, because the loop, not the controller, applies the ceiling. A
+`max`, because the loop, not the controller, applies the ceiling. A
 controller holds only counters and its injected `now`, so it composes with
 `lockdown` and with the existing teardown unchanged.
 
@@ -525,7 +558,7 @@ direct-use contract is the same occupancy policy selected automatically when
   same `makeReaderPump` producer. It therefore takes the **identical** additive
   widening: `IterateBytesReaderOptions` gains the same `pacing?: CreditController`
   field alongside its unchanged `buffer?: number`, wired to the same controller and
-  the same loop-side `maxCredit` clamp, so the two siblings do not silently diverge.
+  the same loop-side `max` clamp, so the two siblings do not silently diverge.
   It is called out here (rather than left unmentioned like the two siblings the
   original draft addressed) because a reader who reaches for adaptivity on
   `iterateBytesReader` must find the same answer, not silence. (`lines` and
@@ -562,7 +595,7 @@ direct-use contract is the same occupancy policy selected automatically when
 - **Concurrent streams over one transport are assumed independent.** CoDel's
   single-queue model assumes `sojourn` reflects only this stream's own backlog.
   Two or more adaptive streams sharing one CapTP connection to the same peer,
-  each growing and shrinking `W` independently, is the classic multi-flow AIMD
+  each growing and shrinking `W` independently, are instances of the classic multi-flow AIMD
   (additive-increase, multiplicative-decrease) contention case, and this design
   does **not** coordinate fairness between such
   co-resident streams: each controller sizes its own window from its own
@@ -570,11 +603,15 @@ direct-use contract is the same occupancy policy selected automatically when
   fairness policy (a coordinated controller across co-resident streams) is a
   separate follow-up, **to be filed** if adoption surfaces the contention in
   practice.
-- **Cancellation.** The controller holds only counters, so it composes with the
-  existing `return()`/`throw()` teardown in `iterate-reader.js` unchanged: on
-  terminal it stops and issues no further credit (it must honor `terminalPromise`
-  before every credit-pump emission), and outstanding pre-pulled items are
-  discarded exactly as today. Keeping the window minimal is a *cancellation*
+- **Cancellation.** The controller holds only counters, so it adds no teardown
+  logic of its own and composes with the existing `return()`/`throw()` teardown in
+  `iterate-reader.js`: on termination the arrival walker halts (yielding its single
+  live chain cursor to the teardown drain, see *How `tArrive` is captured* under
+  [Control loop](#control-loop)) and the loop issues no further credit (the pump
+  must honor `terminalPromise` before every emission), and the resolved
+  but-unconsumed nodes still held in the arrival FIFO are discarded exactly as
+  today's outstanding pre-pulled items are. Keeping the window minimal is a
+  *cancellation*
   virtue too: fewer speculative items were pulled, so an early close wastes less
   producer work and fewer irreversible source reads.
 
@@ -585,7 +622,7 @@ direct-use contract is the same occupancy policy selected automatically when
   returning monotonic milliseconds) in the same descriptor passed to
   `makeCodelCreditController({ ..., now })`; it is a recognized capability key,
   and a supplied non-function is a `TypeError`. The controller exposes that one
-  clock to `iterateReader` through `sampleTime()`, so the eager arrival callback
+  clock to `iterateReader` through `sampleTime()`, so the arrival walker
   and the consumption sample use the same time domain. The controller uses only
   `now()` plus arithmetic, so it runs under `lockdown`. With no `now` key, a
   **degraded count-based fallback** governs
@@ -611,10 +648,10 @@ direct-use contract is the same occupancy policy selected automatically when
 - **Hard memory bound (loop-enforced, producer-scoped).** `max` firmly bounds the
   **consumer-credited** buffer: no measurement, however adversarial, grows
   `outstanding` past it, because `outstanding` counts unconsumed credited items and
-  the pump never issues beyond `min(fillTarget(), maxCredit) <= max`. Two
+  the pump never issues beyond `min(fillTarget(), max) <= max`. Two
   properties make this a real bound rather than an honor-system claim. First, the
   ceiling is applied **loop-side**: `iterateReader` clamps any controller's
-  `fillTarget()` to its declared `maxCredit` (see
+  `fillTarget()` to its declared `max` (see
   [the interface](#the-creditcontroller-interface)), so the bound holds against a
   buggy or hostile third-party `CreditController`, not just the reference CoDel one:
   it is a property of the loop, not of one implementation's private clamp.
@@ -656,7 +693,7 @@ traces (no CapTP needed), asserting:
   **bandwidth-bound** slow producer is asserted *separately* to grow `W` to `max`
   (no convergence to BDP), matching the degenerate case in
   [Limits](#limits-and-failure-behavior). The two "slow producer" regimes have
-  opposite expected outcomes and neither test asserts the other's.
+  opposite expected outcomes and neither test asserts the other's outcome.
 - Slow consumer, fast producer -> `W` collapses to `min`; `outstanding <= max`
   and standing `sojourn <= target * (1 + margin)` throughout (the bufferbloat
   regression, which this test exists to catch precisely because `outstanding`
@@ -681,8 +718,8 @@ traces (no CapTP needed), asserting:
   values each throw at `makeCodelCreditController` time: `{ min: 0 }` (below the
   liveness floor), `{ max: 4, min: 8 }` (`max < min`), `{ alpha: 0 }`,
   `{ beta: 1.5 }` and `{ beta: 0 }` (outside `(0, 1)`), non-positive `baseTarget`,
-  `target`, or `interval`, and a non-function `now`. Also that `buffer` and
-  `pacing` supplied together on the same `iterateReader` call is a `TypeError`.
+  `target`, or `interval`, and a non-function `now`. Also, supplying both `buffer`
+  and `pacing` on the same `iterateReader` call throws a `TypeError`.
   This is the boundary-value coverage the alpha/beta *sweeps* (which assume valid
   values) do not provide.
 - Clock-absent -> `makeCodelCreditController` built without a `now` key returns a
@@ -707,10 +744,10 @@ parallel fragment naming a test condition:
   and enters a bounded sawtooth near the BDP. This is the test that would fail if
   `tArrive` were measured at consumption instead of at true arrival (see *How
   `tArrive` is captured* under [Control loop](#control-loop)); the loop-side
-  `maxCredit` clamp alone cannot make it pass, since the clamp bounds outstanding regardless of
+  `max` clamp alone cannot make it pass, since the clamp bounds outstanding regardless of
   whether the window ever shrinks, so this assertion is what independently
   confirms the shrink half runs.
-- `iterateBytesReader` accepting a `pacing` controller and clamping to `maxCredit`
+- `iterateBytesReader` accepting a `pacing` controller and clamping to `max`
   identically to `iterateReader`, exercising the symmetric sibling
   (`iterate-bytes-reader.js`) so its promised `pacing` widening cannot silently
   regress.
