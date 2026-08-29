@@ -1376,8 +1376,13 @@ export interface EndoMount extends PathEntryIssuer {
    * Streaming glob: a `PassableReader` yielding matching mount-relative paths
    * one element at a time, in the same UTF-16-sorted order as `glob`. Returned
    * synchronously so `iterateReader(E(mount).streamGlob(p))` pipelines. No
-   * result cap; `buffer` is the clamped pre-ack window. Closing the iterator
-   * early stops the remote walk.
+   * result cap; `buffer` is the clamped pre-ack window. Because glob's order is
+   * a global sort, the directory walk is eager — the whole confined tree is
+   * enumerated before the first element — so `streamGlob` bounds marshalled
+   * message size, not time-to-first-result, and closing the iterator early does
+   * not stop the walk (unlike `streamGrep`, whose content reads early close
+   * genuinely elides). Its streaming win is the absent result cap and the
+   * one-element-at-a-time message size.
    */
   streamGlob(
     pattern: string,

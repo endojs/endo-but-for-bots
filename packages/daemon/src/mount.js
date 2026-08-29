@@ -978,7 +978,8 @@ const makeMountExo = ctx => {
   // Streaming counterpart of `grep`: a `PassableReader` over the same platform
   // walk, yielding one `{ file, line, text }` record per element. There is
   // deliberately no `maxResults`; the consumer bounds the stream by closing it
-  // (an early `for await` break stops the remote walk). `options.glob` selects
+  // (an early `for await` break stops the remote content reads — though not the
+  // eager directory walk; see the incrementality note below). `options.glob` selects
   // the file set exactly like `grep`'s `paths`, but the glob enumeration is
   // piped straight into grep as an async iterable of path batches, so — unlike
   // the eager `grep(pattern, glob(g))` composition, which awaits the whole glob

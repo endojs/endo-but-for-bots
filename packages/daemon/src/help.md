@@ -885,10 +885,10 @@ UTF-16-sorted order as glob(), with the same dialect, deny filtering, and confin
 pattern: string — A glob pattern (same dialect as glob()).
 options.buffer: number — Elements the producer may pre-acknowledge ahead of demand, for
 high-latency links (default 0, fully synchronized; clamped to 1024).
-Iterate with iterateReader from @endo/exo-stream. Unlike glob(), there is no 10,000-result cap;
-closing the iterator early (break out of for await) stops the remote walk. Because glob order is a
-global sort, the whole match set is walked before the first element, so streamGlob bounds message
-size rather than time-to-first-result.
+Iterate with iterateReader from @endo/exo-stream. Unlike glob(), there is no 10,000-result cap.
+Because glob order is a global sort, the directory walk is eager: the whole match set is walked
+before the first element, so streamGlob bounds message size rather than time-to-first-result, and
+closing the iterator early does not stop the walk (unlike streamGrep's incremental content reads).
 Example: for await (const p of iterateReader(E(mount).streamGlob("**/*.js"))) { ... }
 
 ## streamGrep(pattern, options?) -> PassableReader<{ file, line, text }>
