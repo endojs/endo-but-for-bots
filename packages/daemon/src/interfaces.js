@@ -693,6 +693,23 @@ export const MountInterface = M.interface('EndoMount', {
   glorp: M.call(M.string(), M.string())
     .optional(M.splitRecord({}, { maxResults: M.number() }))
     .returns(M.promise()),
+  // Streaming search (glob). Returns a `PassableReader` synchronously (guard
+  // `M.remotable('PassableReader')`, not `M.promise()`), so
+  // `iterateReader(E(mount).streamGlob(p))` pipelines without an extra round
+  // trip — the same synchronous-remotable shape `followNameChanges`, `entry`,
+  // and `readOnly` use. There is no `maxResults`: the consumer's pull-based
+  // flow control is the bound, and `buffer` (the pre-ack window) is clamped by
+  // the producer. See designs/mount-stream-glob-grep.md.
+  streamGlob: M.call(M.string())
+    .optional(M.splitRecord({}, { buffer: M.number() }))
+    .returns(M.remotable('PassableReader')),
+  // Streaming search (grep). Like `streamGlob`, returns a `PassableReader`
+  // synchronously. `options.glob` selects the file set (piped straight into
+  // grep, no intermediate materialization); `buffer` is the clamped pre-ack
+  // window. No `maxResults` — early close stops the walk.
+  streamGrep: M.call(M.string())
+    .optional(M.splitRecord({}, { glob: M.string(), buffer: M.number() }))
+    .returns(M.remotable('PassableReader')),
   lookup: M.call(PathArgShape).returns(M.promise()),
   // `maybeLookup` is async in every mount implementation, so retain the
   // promise boundary here even though the shared name-hub record is broader.

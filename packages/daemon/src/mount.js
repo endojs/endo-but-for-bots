@@ -6,6 +6,7 @@
 
 import { E } from '@endo/eventual-send';
 import { q } from '@endo/errors';
+import { M } from '@endo/patterns';
 import { makeExo } from '@endo/exo';
 import { makePromiseKit } from '@endo/promise-kit';
 import { encodeBase64 } from '@endo/base64';
@@ -36,6 +37,52 @@ import {
 // post-sort cap). Kept as a `mount.js` export so consumers and the
 // cross-language contract test bind to the one canonical constant.
 export { GLOB_MAX_RESULTS };
+
+// Ceiling on a streaming search's pre-ack buffer window. Where the eager
+// variants bound their daemon-side memory with a result cap (`GLOB_MAX_RESULTS`
+// / `GREP_MAX_RESULTS`), the streaming variants have no result cap — the
+// consumer's pull-based flow control is the bound — so the only daemon-side
+// memory commitment is the buffer the producer pre-acknowledges ahead of
+// demand. Clamping the caller-requested buffer to this ceiling keeps a remote
+// caller from demanding unbounded pre-materialization. An implementation may
+// lower this only with measurement and a corresponding design update
+// (designs/mount-stream-glob-grep.md § Resolved Questions).
+export const STREAM_BUFFER_MAX = 1024;
+
+/**
+ * Clamp a caller-requested stream buffer to `[0, STREAM_BUFFER_MAX]`. A
+ * non-number, a negative, or a non-finite request collapses to the fully
+ * synchronized `0`; a fractional request floors so the pre-ack window is a
+ * whole number of elements. The `MountInterface` guard already rejects a
+ * non-number `buffer`, so the type coercion here is defense in depth for a
+ * direct (non-exo) caller.
+ *
+ * @param {number} [requested]
+ * @returns {number}
+ */
+export const clampStreamBuffer = requested => {
+  if (typeof requested !== 'number' || !Number.isFinite(requested)) {
+    return 0;
+  }
+  if (requested <= 0) {
+    return 0;
+  }
+  if (requested > STREAM_BUFFER_MAX) {
+    return STREAM_BUFFER_MAX;
+  }
+  return Math.floor(requested);
+};
+harden(clampStreamBuffer);
+
+// Element shape a `streamGrep` reader self-describes through the exo-stream
+// `readPattern()` facility: the same `{ file, line, text }` record the eager
+// `grep` yields. `streamGlob`'s element pattern is simply `M.string()` (a
+// mount-relative path), inlined at the call site.
+const grepMatchPattern = harden({
+  file: M.string(),
+  line: M.number(),
+  text: M.string(),
+});
 
 const mountEntryRecords = new WeakMap();
 const mountRecords = new WeakMap();
@@ -867,6 +914,110 @@ const makeMountExo = ctx => {
     return harden(matches.slice(0, maxResults));
   };
 
+  // Streaming counterpart of `glob`: a `PassableReader` over the same platform
+  // walk, yielding one mount-relative path per element instead of a single
+  // capped array. Built on the shared engine generator, so confinement, deny
+  // filtering, the two-metacharacter dialect, symlink-cycle termination, and
+  // the UTF-16 sorted order are identical to `glob` by construction (no second
+  // walker to drift). Because glob's order is a *global* sort, the engine
+  // collects and sorts the whole match set before the first batch — so unlike
+  // `streamGrep`, `streamGlob` is not incremental in the directory walk; its
+  // streaming win is bounded marshalled-message size and the absence of the
+  // 10,000-path cap, not time-to-first-result. `assertLive()` runs at
+  // invocation (synchronously, so a revoked mount throws here) and the
+  // generator re-checks it before each yield, so a mid-stream revoke cuts the
+  // next pull.
+  /**
+   * @param {string} pattern
+   * @param {{ buffer?: number }} [options]
+   */
+  const streamGlob = (pattern, options = {}) => {
+    assertLive();
+    const { buffer = 0 } = options;
+    const search = provideSearch(filePowers);
+    const generate = async function* generate() {
+      assertLive();
+      // `batchSize: 1` drives the engine one element at a time so read-ahead is
+      // bounded to the consumer's demand (the `buffer: 0` "one step ahead"
+      // property); the reader pump re-frames each element into one ack anyway,
+      // so the internal batch size is purely the producer's walk granularity.
+      // (The global sort still forces the whole glob walk before the first
+      // element — see the method comment.)
+      for await (const batch of search.globPaths(currentDir, pattern, {
+        deniedSegments:
+          deniedSegments === undefined ? undefined : [...deniedSegments],
+        confinementRoot,
+        batchSize: 1,
+      })) {
+        for (const relPath of batch) {
+          assertLive();
+          yield relPath;
+        }
+      }
+    };
+    return readerFromIterator(generate(), {
+      buffer: clampStreamBuffer(buffer),
+      readPattern: M.string(),
+    });
+  };
+
+  // Streaming counterpart of `grep`: a `PassableReader` over the same platform
+  // walk, yielding one `{ file, line, text }` record per element. There is
+  // deliberately no `maxResults`; the consumer bounds the stream by closing it
+  // (an early `for await` break stops the remote walk). `options.glob` selects
+  // the file set exactly like `grep`'s `paths`, but the glob enumeration is
+  // piped straight into grep as an async iterable of path batches, so — unlike
+  // the eager `grep(pattern, glob(g))` composition, which awaits the whole glob
+  // array first — no intermediate file list is materialized. With `paths`
+  // omitted, every file under the face's root is searched. grep needs no global
+  // sort (its order is path-then-line as files are read), so `streamGrep` is
+  // genuinely incremental: a consumer that stops early leaves the unread files
+  // unread. `assertLive()` runs at invocation and is re-checked before each
+  // yield.
+  /**
+   * @param {string} pattern
+   * @param {{ glob?: string, buffer?: number }} [options]
+   */
+  const streamGrep = (pattern, options = {}) => {
+    assertLive();
+    const { glob: globPattern = undefined, buffer = 0 } = options;
+    const search = provideSearch(filePowers);
+    const denied =
+      deniedSegments === undefined ? undefined : [...deniedSegments];
+    const generate = async function* generate() {
+      assertLive();
+      // A `glob` option pipes the path enumeration straight into grep as an
+      // async iterable of batches (no intermediate array); omitted, grep walks
+      // the whole tree itself.
+      const paths =
+        globPattern === undefined
+          ? undefined
+          : search.globPaths(currentDir, globPattern, {
+              deniedSegments: denied,
+              confinementRoot,
+              includeDirectories: false,
+              batchSize: 1,
+            });
+      // `batchSize: 1` keeps grep's file reads bounded to demand: the engine
+      // reads only as far as the next match before yielding, so a consumer that
+      // closes early leaves the remaining files unread.
+      for await (const batch of search.grepFiles(currentDir, pattern, paths, {
+        deniedSegments: denied,
+        confinementRoot,
+        batchSize: 1,
+      })) {
+        for (const match of batch) {
+          assertLive();
+          yield match;
+        }
+      }
+    };
+    return readerFromIterator(generate(), {
+      buffer: clampStreamBuffer(buffer),
+      readPattern: grepMatchPattern,
+    });
+  };
+
   // Fused glob+grep: enumerate the files matching the `glob` pattern and
   // search them for the `grep` pattern, returning grep's `{ file, line, text }`
   // records. Both patterns are required positionals (unlike grep's optional
@@ -1343,6 +1494,8 @@ const makeMountExo = ctx => {
     glob,
     grep,
     glorp,
+    streamGlob,
+    streamGrep,
     lookup,
     maybeLookup,
     subView,

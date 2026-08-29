@@ -1372,6 +1372,30 @@ export interface EndoMount extends PathEntryIssuer {
     grepPattern: string,
     options?: { maxResults?: number },
   ): Promise<Array<import('@endo/platform/fs/search.types').GrepMatch>>;
+  /**
+   * Streaming glob: a `PassableReader` yielding matching mount-relative paths
+   * one element at a time, in the same UTF-16-sorted order as `glob`. Returned
+   * synchronously so `iterateReader(E(mount).streamGlob(p))` pipelines. No
+   * result cap; `buffer` is the clamped pre-ack window. Closing the iterator
+   * early stops the remote walk.
+   */
+  streamGlob(
+    pattern: string,
+    options?: { buffer?: number },
+  ): import('@endo/exo-stream').PassableReader<string, undefined>;
+  /**
+   * Streaming grep: a `PassableReader` yielding `{ file, line, text }` records
+   * one element at a time, in path-then-line order. `options.glob` selects the
+   * file set (piped into grep with no intermediate materialization). No
+   * `maxResults`; early close stops the walk.
+   */
+  streamGrep(
+    pattern: string,
+    options?: { glob?: string; buffer?: number },
+  ): import('@endo/exo-stream').PassableReader<
+    import('@endo/platform/fs/search.types').GrepMatch,
+    undefined
+  >;
   lookup(
     path: string | readonly string[] | EndoMountEntry,
   ): Promise<EndoMount | EndoMountFile>;
