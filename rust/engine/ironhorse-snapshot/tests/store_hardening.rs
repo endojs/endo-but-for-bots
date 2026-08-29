@@ -212,6 +212,7 @@ fn incremental_batch(
         accessors: Vec::new(),
         intl_bound_functions: Vec::new(),
         private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
+        disposable_stacks: Vec::new(),
         arguments_brands: Vec::new(),
         temporal: ironhorse_snapshot::image::TemporalImage::default(),
         intl: ironhorse_vm::IntlTables::default(),

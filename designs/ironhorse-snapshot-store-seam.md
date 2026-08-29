@@ -1466,7 +1466,7 @@ rather than work items.
   intact, both refusal edges are pinned, and the worker lifecycle
   test now runs a divergent crank through relink live and after
   reopen.
-  STILL OPEN in this workstream: the 9 `Pending` ledger rows
+  STILL OPEN in this workstream: the 8 `Pending` ledger rows
   (generators, promises, function-dependent per-instance tables, and
   modules — several unreachable cross-crank in the vm today regardless
   of restore).
@@ -1895,6 +1895,10 @@ rather than work items.
     value and accessor rows travel in `PRIV`, keyed by receiver and
     lexical brand. Private accessor functions ride `FUNC`; cross-table
     validation rejects duplicate representations of one private key.
+  - [x] Explicit resource-management stacks LANDED (2026-08-29,
+    schema v20 / format v9): `DISP` carries disposed/async flags and
+    ordered resource/method records. Deferred functions ride `FUNC`;
+    resumed disposal preserves LIFO order across every path.
 - [x] ~~The `combinators` / `from_async` / `promise_guards` tables
   are append-only for the machine's lifetime (wave-6 W6-19)~~ Done
   (2026-08-27): both collectors' sweeps now COMPACT the three arenas
@@ -2833,6 +2837,10 @@ bite-checked by reverting the fix under the lock). Statuses:
   receiver and lexical-brand slots. Private accessor functions ride
   `FUNC`; eager, lazy, file, blob, and malformed-row tests live in
   `private_elements_carry.rs`. Nine Pending rows remain.
+- **Disposable-stack carry (2026-08-29, schema v20 / format v9):**
+  `DISP` carries pending disposal records and stack state. Resource and
+  disposal-method slots join the bounds walk; malformed disposed stacks
+  retaining records are refused. Eight Pending rows remain.
 
 ### External review — the fail-closed persistence boundary (2026-08-28)
 
@@ -2850,9 +2858,9 @@ bite-checked lock:
   skipping unknown atoms and silently dropping arrays, collections,
   RegExps, Intl records and cursors.
   The Date carry later advanced the write stamp to 3 for the same
-  reason. Function, proxy, accessor, Intl-bound, and private-element
-  carries later advanced it through 8. The reader accepts a read RANGE
-  (`1..=8`) — older atoms
+  reason. Function, proxy, accessor, Intl-bound, private-element, and
+  disposable-stack carries later advanced it through 9. The reader
+  accepts a read RANGE (`1..=9`) — older atoms
   are a subset with the same
   encodings — and refuses anything newer; the store's
   open gate checks readability rather than equality so older stores
