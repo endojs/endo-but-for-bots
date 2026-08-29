@@ -114,6 +114,8 @@ pub const DATE: FourCc = FourCc(*b"DATE");
 pub const FUNC: FourCc = FourCc(*b"FUNC");
 /// `PROX` — proxy target/handler/revocation records and revoker links.
 pub const PROX: FourCc = FourCc(*b"PROX");
+/// `ACCS` — guest accessor getter/setter mappings.
+pub const ACCS: FourCc = FourCc(*b"ACCS");
 /// `NFLR` — the installed-names floor (wave-6 W6-7): the id ceiling at
 /// or below which partial install passes leave bindings alone. Four
 /// big-endian bytes. Emitted only when it differs from the name-table
@@ -147,11 +149,11 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 /// outright instead of resuming a degraded machine. Version 3 adds
 /// the `DATE` state-bearing atom, which a version-2 reader would
 /// likewise skip. Version 4 adds the atomic `FUNC` callability cluster;
-/// version 5 adds proxy internal slots.
+/// version 5 adds proxy internal slots; version 6 adds accessors.
 /// The reader accepts
 /// [`IRONHORSE_FORMAT_VERSION_MIN_READ`]`..=`this and refuses anything
 /// newer.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 5;
+pub const IRONHORSE_FORMAT_VERSION: u32 = 6;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in
@@ -395,10 +397,11 @@ mod tests {
     /// write stamp so an older exact-match reader refuses instead of
     /// skipping unknown state. Version 2 introduced the initial ledger
     /// atoms; version 3 introduces Date records; version 4 introduces
-    /// retained function state; version 5 introduces proxy state.
+    /// retained function state; versions 5 and 6 introduce proxy and
+    /// accessor state.
     #[test]
     fn the_write_stamp_is_past_the_side_table_addition() {
-        assert!(IRONHORSE_FORMAT_VERSION >= 5, "the proxy atom is a format bump");
+        assert!(IRONHORSE_FORMAT_VERSION >= 6, "the accessor atom is a format bump");
         assert_eq!(Version::current().format_version, IRONHORSE_FORMAT_VERSION);
     }
 

@@ -246,6 +246,7 @@ impl MachineSnapshot for Interp {
         .with_dates(tables.dates)
         .with_function_state(tables.function_state)
         .with_proxy_state(tables.proxy_state)
+        .with_accessors(tables.accessors)
         .with_name_floor(self.installed_names_floor())
     }
 }
@@ -268,6 +269,7 @@ struct SideTableImages {
     dates: Vec<crate::image::DateImage>,
     function_state: ironhorse_vm::FunctionStateSnapshot,
     proxy_state: ironhorse_vm::ProxyStateSnapshot,
+    accessors: Vec<ironhorse_vm::AccessorRow>,
     arguments_brands: Vec<u32>,
     temporal: crate::image::TemporalImage,
     intl: ironhorse_vm::IntlTables,
@@ -374,6 +376,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
         .collect();
     let function_state = interp.function_state_snapshot();
     let proxy_state = interp.proxy_state_snapshot();
+    let accessors = interp.accessors_snapshot();
     SideTableImages {
         arrays,
         collections,
@@ -391,6 +394,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
         dates,
         function_state,
         proxy_state,
+        accessors,
     }
 }
 
@@ -418,6 +422,7 @@ fn restore_side_tables(
     dates: Vec<crate::image::DateImage>,
     function_state: ironhorse_vm::FunctionStateSnapshot,
     proxy_state: ironhorse_vm::ProxyStateSnapshot,
+    accessors: Vec<ironhorse_vm::AccessorRow>,
     arguments_brands: Vec<u32>,
     temporal: crate::image::TemporalImage,
     intl: ironhorse_vm::IntlTables,
@@ -505,6 +510,11 @@ fn restore_side_tables(
     if !interp.restore_function_state(function_state) {
         return Err(SnapshotError::Corrupt(
             "side-table restore: malformed retained function state",
+        ));
+    }
+    if !interp.restore_accessors(accessors) {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed accessor state",
         ));
     }
     interp.restore_arguments_brands(arguments_brands);
@@ -595,6 +605,7 @@ pub fn image_to_interp(
         image.dates,
         image.function_state,
         image.proxy_state,
+        image.accessors,
         image.arguments_brands,
         image.temporal,
         image.intl,
@@ -839,6 +850,7 @@ fn small_state_of(interp: &Interp) -> SmallState {
         dates: tables.dates,
         function_state: tables.function_state,
         proxy_state: tables.proxy_state,
+        accessors: tables.accessors,
         arguments_brands: tables.arguments_brands,
         temporal: tables.temporal,
         intl: tables.intl,
@@ -1540,6 +1552,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.dates,
         small.function_state,
         small.proxy_state,
+        small.accessors,
         small.arguments_brands,
         small.temporal,
         small.intl,

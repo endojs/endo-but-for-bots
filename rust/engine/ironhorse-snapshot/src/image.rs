@@ -27,7 +27,7 @@ use crate::format::{
 use crate::slot_codec::{decode_slots, encode_slots, SLOT_RECORD_BYTES};
 use ironhorse_vm::{
     dtf_component_key_static, ChunkArena, CollatorData, DateTimeFormatData, IntlTables,
-    IteratorRow, ListFormatData, LocaleData, MeterState, NumberFormatData, PluralRulesData,
+    IteratorRow, Kind, ListFormatData, LocaleData, MeterState, NumberFormatData, PluralRulesData,
     SegmentIteratorData, SegmenterData, SegmentsData, Slot, SlotArena, COST_TABLE_VERSION,
 };
 
@@ -371,6 +371,8 @@ pub struct MachineImage {
     pub function_state: ironhorse_vm::FunctionStateSnapshot,
     /// `PROX`: Proxy internal slots and revoker links.
     pub proxy_state: ironhorse_vm::ProxyStateSnapshot,
+    /// `ACCS`: guest accessor getter/setter mappings.
+    pub accessors: Vec<ironhorse_vm::AccessorRow>,
     /// `ARGB`: the arguments-exotic brand owners, ascending.
     pub arguments_brands: Vec<u32>,
     /// `TMPR`: the four Temporal record tables (ledger).
@@ -454,6 +456,7 @@ impl MachineImage {
             dates: Vec::new(),
             function_state: ironhorse_vm::FunctionStateSnapshot::default(),
             proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
+            accessors: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -586,6 +589,11 @@ impl MachineImage {
         proxy_state: ironhorse_vm::ProxyStateSnapshot,
     ) -> MachineImage {
         self.proxy_state = proxy_state;
+        self
+    }
+
+    pub fn with_accessors(mut self, accessors: Vec<ironhorse_vm::AccessorRow>) -> MachineImage {
+        self.accessors = accessors;
         self
     }
 
@@ -1725,6 +1733,62 @@ pub(crate) fn decode_proxy_state(
     Ok(ironhorse_vm::ProxyStateSnapshot { proxies, revokers })
 }
 
+pub(crate) fn encode_accessors(rows: &[ironhorse_vm::AccessorRow]) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    for row in rows {
+        v.extend_from_slice(&row.owner.to_be_bytes());
+        v.extend_from_slice(&row.id.to_be_bytes());
+        for value in [row.get, row.set] {
+            match value {
+                None => v.push(0),
+                Some(slot) => {
+                    v.push(1);
+                    crate::slot_codec::encode_slot(&slot, &mut v);
+                }
+            }
+        }
+    }
+    v
+}
+
+pub(crate) fn decode_accessors(
+    p: &[u8],
+) -> Result<Vec<ironhorse_vm::AccessorRow>, SnapshotError> {
+    let mut c = Cursor::new(p, "accessor state");
+    let count = c.u32()? as usize;
+    let mut rows = Vec::with_capacity(count.min(p.len() / 8));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        let id = c.u16()?;
+        if rows
+            .last()
+            .is_some_and(|row: &ironhorse_vm::AccessorRow| (owner, id) <= (row.owner, row.id))
+        {
+            return Err(SnapshotError::Corrupt(
+                "accessor state: rows not strictly ascending",
+            ));
+        }
+        let mut value = || -> Result<Option<Slot>, SnapshotError> {
+            match c.u8()? {
+                0 => Ok(None),
+                1 => Ok(Some(c.slot()?)),
+                _ => Err(SnapshotError::Corrupt("accessor state: bad option tag")),
+            }
+        };
+        let get = value()?;
+        let set = value()?;
+        rows.push(ironhorse_vm::AccessorRow {
+            owner,
+            id,
+            get,
+            set,
+        });
+    }
+    c.done()?;
+    Ok(rows)
+}
+
 /// Encode the arguments-exotic brand owners (the `ARGB` payload /
 /// small-state arguments section): a `u32` count then ascending owners.
 pub(crate) fn encode_arguments_brands(owners: &[u32]) -> Vec<u8> {
@@ -2411,6 +2475,7 @@ pub(crate) struct LangRows<'a> {
     pub dates: &'a [DateImage],
     pub function_state: &'a ironhorse_vm::FunctionStateSnapshot,
     pub proxy_state: &'a ironhorse_vm::ProxyStateSnapshot,
+    pub accessors: &'a [ironhorse_vm::AccessorRow],
     pub arguments_brands: &'a [u32],
     pub temporal: &'a TemporalImage,
     pub intl: &'a IntlTables,
@@ -2424,6 +2489,7 @@ impl LangRows<'_> {
         dates: &[],
         function_state: &EMPTY_FUNCTION_STATE,
         proxy_state: &EMPTY_PROXY_STATE,
+        accessors: &[],
         arguments_brands: &[],
         temporal: &EMPTY_TEMPORAL,
         intl: &EMPTY_INTL,
@@ -2845,6 +2911,25 @@ pub(crate) fn check_image_slot_bounds(
             }
         }
     }
+    let symbol_ids = symbols.id_set();
+    for row in lang.accessors {
+        owned(row.owner)?;
+        if row.id == 0
+            || (row.id as usize > names_len && !symbol_ids.contains(&row.id))
+        {
+            return Err(SnapshotError::Corrupt(
+                "accessor state: id outside the property-key tables",
+            ));
+        }
+        for value in [row.get, row.set].into_iter().flatten() {
+            if value.kind != Kind::Reference {
+                return Err(SnapshotError::Corrupt(
+                    "accessor state: getter or setter is not callable",
+                ));
+            }
+            check(&value)?;
+        }
+    }
     for &o in lang.arguments_brands {
         owned(o)?;
     }
@@ -3039,6 +3124,9 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
             &encode_proxy_state(&image.proxy_state),
         );
     }
+    if !image.accessors.is_empty() {
+        w.atom(crate::format::ACCS, &encode_accessors(&image.accessors));
+    }
     // The installed-names floor: `Some` only when it differs from the
     // name-table length (`with_name_floor` canonicalizes), so machines
     // whose floor sits at the table stay byte-stable with every
@@ -3202,6 +3290,10 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => decode_proxy_state(a.payload)?,
         None => ironhorse_vm::ProxyStateSnapshot::default(),
     };
+    let accessors = match r.find(crate::format::ACCS) {
+        Some(a) => decode_accessors(a.payload)?,
+        None => Vec::new(),
+    };
     let name_floor = match r.find(crate::format::NFLR) {
         Some(a) => {
             if a.payload.len() != 4 {
@@ -3251,6 +3343,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
             dates: &dates,
             function_state: &function_state,
             proxy_state: &proxy_state,
+            accessors: &accessors,
             arguments_brands: &arguments_brands,
             temporal: &temporal,
             intl: &intl,
@@ -3288,6 +3381,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         dates,
         function_state,
         proxy_state,
+        accessors,
         arguments_brands,
         temporal,
         intl,
@@ -3666,6 +3760,7 @@ mod tests {
                 dates: &[],
                 function_state: &EMPTY_FUNCTION_STATE,
                 proxy_state: &EMPTY_PROXY_STATE,
+                accessors: &[],
                 arguments_brands: &[],
                 temporal: &EMPTY_TEMPORAL,
                 intl,
@@ -4024,6 +4119,7 @@ mod tests {
             dates: Vec::new(),
             function_state: ironhorse_vm::FunctionStateSnapshot::default(),
             proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
+            accessors: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -4064,6 +4160,7 @@ mod tests {
             dates: Vec::new(),
             function_state: ironhorse_vm::FunctionStateSnapshot::default(),
             proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
+            accessors: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -4185,6 +4282,7 @@ mod tests {
             dates: Vec::new(),
             function_state: ironhorse_vm::FunctionStateSnapshot::default(),
             proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
+            accessors: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
