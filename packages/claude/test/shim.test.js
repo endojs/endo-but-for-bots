@@ -11,11 +11,13 @@ test('initialize returns protocol + tools capability without touching the broker
   const shim = mkShim(async () => {
     forwarded += 1;
   });
-  const res = await shim.handleMessage({
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'initialize',
-  });
+  const res = /** @type {any} */ (
+    await shim.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+    })
+  );
   t.is(res.result.serverInfo.name, 'endo-claude-shim');
   t.deepEqual(res.result.capabilities, { tools: {} });
   t.is(forwarded, 0);
@@ -29,19 +31,23 @@ test('tools/list and tools/call forward to the broker', async t => {
     return { content: [{ type: 'text', text: 'ok' }] };
   });
 
-  const list = await shim.handleMessage({
-    jsonrpc: '2.0',
-    id: 2,
-    method: 'tools/list',
-  });
+  const list = /** @type {any} */ (
+    await shim.handleMessage({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/list',
+    })
+  );
   t.deepEqual(list.result.tools, [{ name: 'writeText' }]);
 
-  const call = await shim.handleMessage({
-    jsonrpc: '2.0',
-    id: 3,
-    method: 'tools/call',
-    params: { name: 'writeText', arguments: { path: 'a', text: 'b' } },
-  });
+  const call = /** @type {any} */ (
+    await shim.handleMessage({
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'tools/call',
+      params: { name: 'writeText', arguments: { path: 'a', text: 'b' } },
+    })
+  );
   t.deepEqual(call.result.content, [{ type: 'text', text: 'ok' }]);
   t.deepEqual(
     calls.map(c => c.method),
@@ -53,23 +59,27 @@ test('a broker error becomes a JSON-RPC error, not a thrown shim', async t => {
   const shim = mkShim(async () => {
     throw new Error('broker down');
   });
-  const res = await shim.handleMessage({
-    jsonrpc: '2.0',
-    id: 4,
-    method: 'tools/call',
-    params: {},
-  });
+  const res = /** @type {any} */ (
+    await shim.handleMessage({
+      jsonrpc: '2.0',
+      id: 4,
+      method: 'tools/call',
+      params: {},
+    })
+  );
   t.is(res.error.code, -32_000);
   t.is(res.error.message, 'broker down');
 });
 
 test('an unknown method is method-not-found; a notification yields no response', async t => {
   const shim = mkShim(async () => ({}));
-  const res = await shim.handleMessage({
-    jsonrpc: '2.0',
-    id: 5,
-    method: 'nope',
-  });
+  const res = /** @type {any} */ (
+    await shim.handleMessage({
+      jsonrpc: '2.0',
+      id: 5,
+      method: 'nope',
+    })
+  );
   t.is(res.error.code, -32_601);
   const notif = await shim.handleMessage({
     jsonrpc: '2.0',
@@ -80,13 +90,18 @@ test('an unknown method is method-not-found; a notification yields no response',
 
 test('a non-2.0 or non-object message is Invalid Request, echoing its id when present', async t => {
   const shim = mkShim(async () => ({}));
-  const bad = await shim.handleMessage({ id: 7, method: 'initialize' });
+  const bad = /** @type {any} */ (
+    await shim.handleMessage({ id: 7, method: 'initialize' })
+  );
   t.is(bad.error.code, -32_600);
   t.is(bad.id, 7);
   // A message with no usable id null-fills, and never touches the broker.
   const noId = await shim.handleMessage(/** @type {any} */ ('not an object'));
-  t.is(noId.error.code, -32_600);
-  t.is(noId.id, null);
+  t.deepEqual(noId, {
+    jsonrpc: '2.0',
+    id: null,
+    error: { code: -32_600, message: 'Invalid Request' },
+  });
 });
 
 test('ping is answered with an empty result without touching the broker', async t => {
