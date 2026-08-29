@@ -416,10 +416,9 @@ pub fn dual_run_with(source: &str, compiler: Compiler) -> Option<DualRun> {
 /// constructor's own `message` read by a LATER crank was its live
 /// specimen).
 ///
-/// Scope: the self-contained-crank contract — data/state reads across
-/// cranks, never calls of a prior crank's functions (ironhorse's crank
-/// bytecode is the caller's; XS retains it, so such a fixture diverges
-/// by design). Per-crank ironhorse computrons are the RAW meter delta
+/// Retained defining-crank bytecode extends the scope to function and
+/// closure calls created by earlier cranks. Per-crank ironhorse
+/// computrons are the RAW meter delta
 /// across the crank (`meter_index`), matching the shim's per-crank
 /// `meterIndex` reset. The run stops at the first crank where either
 /// engine fails to complete (that crank's comparison is returned;
