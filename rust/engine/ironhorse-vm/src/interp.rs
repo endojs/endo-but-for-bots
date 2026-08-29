@@ -4689,6 +4689,33 @@ impl FunctionStateSnapshot {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProxyRow {
+    pub owner: u32,
+    pub target: u32,
+    pub handler: u32,
+    pub revoked: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProxyRevokerRow {
+    pub owner: u32,
+    pub proxy: u32,
+    pub name_chunk: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProxyStateSnapshot {
+    pub proxies: Vec<ProxyRow>,
+    pub revokers: Vec<ProxyRevokerRow>,
+}
+
+impl ProxyStateSnapshot {
+    pub fn is_empty(&self) -> bool {
+        self.proxies.is_empty() && self.revokers.is_empty()
+    }
+}
+
 /// A suspended activation: the caller's scope and resume point, saved by
 /// `run` and restored by `end` (XS's `mxFrame->value.frame.{code,scope}`
 /// plus the environment the frame aliases). The value stack is shared and
@@ -8360,9 +8387,6 @@ impl Interp {
     /// `RebuiltAtRestore` pattern, not a carry. A guest REDEFINITION
     /// at the seed key stores a different getter and still refuses.
     pub fn stored_unpersistable_row(&self) -> Option<&'static str> {
-        if self.proxies.keys().any(|o| !self.slots.is_free_index(*o)) {
-            return Some("proxies");
-        }
         if self.accessors.iter().any(|((o, id), data)| {
             !self.slots.is_free_index(*o) && !self.is_boot_seed_accessor(*o, *id, data)
         }) {
@@ -8910,6 +8934,74 @@ impl Interp {
         for (owner, id) in state.deleted_meta {
             self.deleted_fn_meta
                 .insert((crate::value::SlotIndex(owner), id));
+        }
+        true
+    }
+
+    pub fn proxy_state_snapshot(&self) -> ProxyStateSnapshot {
+        let mut proxies: Vec<ProxyRow> = self
+            .proxies
+            .iter()
+            .map(|(owner, data)| ProxyRow {
+                owner: owner.0,
+                target: data.target.0,
+                handler: data.handler.0,
+                revoked: data.revoked,
+            })
+            .collect();
+        proxies.sort_unstable_by_key(|row| row.owner);
+
+        let mut revokers: Vec<ProxyRevokerRow> = self
+            .proxy_revokers
+            .iter()
+            .map(|(owner, proxy)| {
+                let info = &self.functions[owner];
+                ProxyRevokerRow {
+                    owner: owner.0,
+                    proxy: proxy.0,
+                    name_chunk: info.name_chunk.0,
+                }
+            })
+            .collect();
+        revokers.sort_unstable_by_key(|row| row.owner);
+        ProxyStateSnapshot { proxies, revokers }
+    }
+
+    pub fn restore_proxy_state(&mut self, state: ProxyStateSnapshot) -> bool {
+        let proxy_owners: std::collections::BTreeSet<u32> =
+            state.proxies.iter().map(|row| row.owner).collect();
+        if state
+            .revokers
+            .iter()
+            .any(|row| !proxy_owners.contains(&row.proxy))
+        {
+            return false;
+        }
+        for row in state.proxies {
+            self.proxies.insert(
+                crate::value::SlotIndex(row.owner),
+                ProxyData {
+                    target: crate::value::SlotIndex(row.target),
+                    handler: crate::value::SlotIndex(row.handler),
+                    revoked: row.revoked,
+                },
+            );
+        }
+        for row in state.revokers {
+            let owner = crate::value::SlotIndex(row.owner);
+            if self.functions.contains_key(&owner) {
+                return false;
+            }
+            self.functions.insert(
+                owner,
+                FuncInfo {
+                    method: Some(NativeMethod::ProxyRevoke),
+                    name_chunk: crate::value::ChunkOffset(row.name_chunk),
+                    ..FuncInfo::default()
+                },
+            );
+            self.proxy_revokers
+                .insert(owner, crate::value::SlotIndex(row.proxy));
         }
         true
     }

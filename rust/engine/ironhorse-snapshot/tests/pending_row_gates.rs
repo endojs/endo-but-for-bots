@@ -1,15 +1,9 @@
 //! Wave-6 W6-9: the SILENT-WRONG Pending rows refuse to persist.
 //!
 //! The blast-radius probe showed a resumed heap holding a Proxy or an
-//! accessor property answers WRONG VALUES (a plain-object degradation
-//! the consuming natives never notice), where the other Pending rows
-//! fail visibly via per-native `this` guards. Both remaining rows hold
-//! FUNCTION slots (traps, getters/setters), so their honest carry is
-//! dependency-gated on the `functions` row — a resumed guest function
-//! is uncallable today, and carrying a proxy whose traps cannot run
-//! would trade silent-wrong for visible-broken, not for correct. Until
-//! then the persist verbs refuse such heaps by name — the `Segments`
-//! precedent: honest refusal over silent corruption. Error data and
+//! accessor property answers WRONG VALUES. Function and proxy state now
+//! travel; accessors remain the last refuse-on-hold row until their own
+//! getter/setter mapping lands. Error data and
 //! the typed-array family started here and GRADUATED: they travel in
 //! the `ERRD` (store schema 9) and `ABUF`/`TARR`/`DVIW` (schema 10)
 //! atoms (`error_data_carry.rs` / `typed_array_carry.rs` hold their
@@ -46,8 +40,15 @@ fn refuses(src: &str, row: &'static str) {
 }
 
 #[test]
-fn a_heap_holding_a_live_proxy_refuses_to_persist() {
-    refuses("var p = 0; p = new Proxy({ v: 1 }, {}); 0;", "proxies");
+fn a_heap_holding_a_live_proxy_persists() {
+    let mut store = MemoryStore::new();
+    begin_store_session(
+        machine_running("var p = 0; p = new Proxy({ v: 1 }, {}); 0;"),
+        &sig(),
+        &mut store,
+    )
+    .map_err(|(_, error)| error)
+    .expect("proxy state travels");
 }
 
 #[test]

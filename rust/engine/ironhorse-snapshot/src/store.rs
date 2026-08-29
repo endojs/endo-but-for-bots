@@ -86,7 +86,7 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// sections EMPTY (a pure 12-byte suffix; a v6-era machine had
 /// nothing persisted in them by definition) and restamps the root for
 /// the changed small leaf.
-pub const STORE_SCHEMA_VERSION: u32 = 15;
+pub const STORE_SCHEMA_VERSION: u32 = 16;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -1329,6 +1329,8 @@ pub struct SmallState {
     pub dates: Vec<crate::image::DateImage>,
     /// Atomic retained guest-callability state (schema 15; `FUNC`).
     pub function_state: ironhorse_vm::FunctionStateSnapshot,
+    /// Proxy internal slots and revoker links (schema 16; `PROX`).
+    pub proxy_state: ironhorse_vm::ProxyStateSnapshot,
     /// The arguments-exotic brand owners (schema 11; the `ARGB` encoding).
     pub arguments_brands: Vec<u32>,
     /// The Temporal record tables (schema 11; the `TMPR` encoding).
@@ -1344,11 +1346,11 @@ pub struct SmallState {
 }
 
 impl SmallState {
-    /// Serialize: twenty-two sections, each `u32` length-prefixed, in
+    /// Serialize: twenty-three sections, each `u32` length-prefixed, in
     /// the fixed order stack, free list, keys, names, symbols, meter,
     /// arrays, collections, registry, errors, buffers, typed arrays,
     /// data views, wrappers, regexps, arguments brands, temporal,
-    /// intl, name floor, iterators, dates, function state
+    /// intl, name floor, iterators, dates, function state, proxy state
     /// (arrays/collections/registry since store schema 7 — the
     /// side-table ledger; the 6→7 migration appends them empty, a
     /// pure 12-byte suffix — errors since schema 9, the typed-array
@@ -1356,14 +1358,15 @@ impl SmallState {
     /// schema 11, the Intl record tables plus the installed-names
     /// floor since schema 12, and the iterator cursors since schema
     /// 13, Date records since schema 14, and retained function state
-    /// since schema 15, whose migrations append their empty sections the same
+    /// since schema 15, and proxy state since schema 16, whose
+    /// migrations append their empty sections the same
     /// way). Since store schema v4 the free-list section is
     /// always EMPTY in stored small state — the list lives in
     /// dirty-diffed segment rows (phase 9) — but the section slot
     /// stays so the layout is stable; the atom container path still
     /// carries the list via the image, not this encoding.
     pub fn encode(&self) -> Vec<u8> {
-        let sections: [Vec<u8>; 22] = [
+        let sections: [Vec<u8>; 23] = [
             encode_stack(&self.stack),
             encode_u32s(&[]),
             encode_strings(&self.keys),
@@ -1389,6 +1392,7 @@ impl SmallState {
             crate::image::encode_iterators(&self.iterators),
             crate::image::encode_dates(&self.dates),
             crate::image::encode_function_state(&self.function_state),
+            crate::image::encode_proxy_state(&self.proxy_state),
         ];
         let mut v = Vec::new();
         for s in sections {
@@ -1398,7 +1402,7 @@ impl SmallState {
         v
     }
 
-    /// Decode the twenty-two sections. Every section length is
+    /// Decode the twenty-three sections. Every section length is
     /// bounds-checked against the remaining payload before it is
     /// sliced.
     pub fn decode(p: &[u8]) -> Result<SmallState, StoreError> {
@@ -1557,7 +1561,14 @@ impl SmallState {
         } else {
             crate::image::decode_function_state(function_bytes).map_err(StoreError::Snapshot)?
         };
-        // Same exact-consumption rule as the manifest: twenty-two
+        // Schema-16 proxy state.
+        let proxy_bytes = section("small state proxy section")?;
+        let proxy_state = if proxy_bytes.is_empty() {
+            ironhorse_vm::ProxyStateSnapshot::default()
+        } else {
+            crate::image::decode_proxy_state(proxy_bytes).map_err(StoreError::Snapshot)?
+        };
+        // Same exact-consumption rule as the manifest: twenty-three
         // sections and nothing after them, or the small state fails
         // closed.
         if i != p.len() {
@@ -1583,6 +1594,7 @@ impl SmallState {
             regexps,
             dates,
             function_state,
+            proxy_state,
             arguments_brands,
             temporal,
             intl,
@@ -1947,6 +1959,7 @@ pub fn migrate_store(
             12 => migrate_v12_to_v13(store)?,
             13 => migrate_v13_to_v14(store)?,
             14 => migrate_v14_to_v15(store)?,
+            15 => migrate_v15_to_v16(store)?,
             _ => {
                 return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                     "unsupported store schema version",
@@ -2282,6 +2295,35 @@ fn migrate_v14_to_v15(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     store.replace_manifest_and_small_for_migration(&manifest, &new_small)
 }
 
+/// 15 → 16: proxy internal slots and revoker links join the small
+/// state. Schema 15 refused live proxies, so appending an empty section
+/// is content-preserving.
+fn migrate_v15_to_v16(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    let small = store.read_small_state()?;
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    if old != manifest.root {
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root.clone(),
+        });
+    }
+    let mut new_small = small;
+    new_small.extend_from_slice(&[0u8; 4]);
+    manifest.store_schema = 16;
+    manifest.root = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &new_small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
+}
+
 /// The epoch discipline every [`HeapStore::commit`] enforces: the first
 /// commit into an empty store is epoch 1; every later commit advances
 /// the stored epoch by exactly one. Anything else is a replayed or
@@ -2424,6 +2466,7 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         regexps: image.regexps.clone(),
         dates: image.dates.clone(),
         function_state: image.function_state.clone(),
+        proxy_state: image.proxy_state.clone(),
         arguments_brands: image.arguments_brands.clone(),
         temporal: image.temporal.clone(),
         intl: image.intl.clone(),
@@ -2639,6 +2682,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
             regexps: &small.regexps,
             dates: &small.dates,
             function_state: &small.function_state,
+            proxy_state: &small.proxy_state,
             arguments_brands: &small.arguments_brands,
             temporal: &small.temporal,
             intl: &small.intl,
@@ -2676,6 +2720,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         regexps: small.regexps,
         dates: small.dates,
         function_state: small.function_state,
+        proxy_state: small.proxy_state,
         arguments_brands: small.arguments_brands,
         temporal: small.temporal,
         intl: small.intl,
@@ -2967,6 +3012,7 @@ pub fn validate_store(
             regexps: &small.regexps,
             dates: &small.dates,
             function_state: &small.function_state,
+            proxy_state: &small.proxy_state,
             arguments_brands: &small.arguments_brands,
             temporal: &small.temporal,
             intl: &small.intl,
@@ -3350,6 +3396,7 @@ mod tests {
             regexps: Vec::new(),
             dates: Vec::new(),
             function_state: ironhorse_vm::FunctionStateSnapshot::default(),
+            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: crate::image::TemporalImage::default(),
             intl: ironhorse_vm::IntlTables::default(),
@@ -3383,6 +3430,7 @@ mod tests {
             regexps: Vec::new(),
             dates: Vec::new(),
             function_state: ironhorse_vm::FunctionStateSnapshot::default(),
+            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: crate::image::TemporalImage::default(),
             intl: ironhorse_vm::IntlTables::default(),

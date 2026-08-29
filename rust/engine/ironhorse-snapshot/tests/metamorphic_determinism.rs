@@ -126,7 +126,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned for format version 4, marking the atomic `FUNC`
         // callability cluster. This fixture defines no function, so
         // again only the VERS payload changes.
-        "ba0fdc6f41ebf504f468466aeff350edc598fd9b437f28a3535652044154285b",
+        // Re-pinned for format version 5, marking proxy state. This
+        // fixture holds no proxy, so only VERS changes.
+        "1159f4fd7f5bdb3e2b66b7cf346b4514a7b09c8da0ba55d90d0ff5f9293b9f37",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -196,7 +198,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // state gain the Date carry, while VERS marks its atom.
         // Re-pinned for schema 15 and format 4: the small state gains
         // the atomic function section and VERS marks `FUNC`.
-        "bfa5b7f367b2038b33f2997b75298dfd92354f668929863492fd5850a95fcb97",
+        // Re-pinned for schema 16 and format 5: the small state gains
+        // proxy records and VERS marks `PROX`.
+        "8025002824ee1e06bacb2e9b69b6c3b35172dca61cdd901d6c28d8284cc900a7",
         "epoch-3 seal chain"
     );
 }

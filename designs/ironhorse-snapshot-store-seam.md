@@ -1466,7 +1466,7 @@ rather than work items.
   intact, both refusal edges are pinned, and the worker lifecycle
   test now runs a divergent crank through relink live and after
   reopen.
-  STILL OPEN in this workstream: the 13 `Pending` ledger rows
+  STILL OPEN in this workstream: the 12 `Pending` ledger rows
   (generators, promises, function-dependent per-instance tables, and
   modules — several unreachable cross-crank in the vm today regardless
   of restore).
@@ -1878,10 +1878,13 @@ rather than work items.
     Memory, file, lazy and blob twins live in `date_carry.rs`; the
     codec lock covers arbitrary NaN payload bits. `Dates` graduates
     Serialized and the ledger returns to 17 Pending rows.
-  - [ ] `proxies`, `accessors`: their `functions` prerequisite landed
-    with schema v15. Their own target/handler and getter/setter rows
-    remain gated until the next carry; the former dependency blocker
-    is now cleared.
+  - [x] Proxy state LANDED (2026-08-29, schema v16 / format v5):
+    target, handler, revoked state, and revoker links travel in `PROX`.
+    Revoker function metadata is rebuilt from the row at restore.
+    Guest trap functions ride `FUNC`; memory, file, lazy, blob,
+    revocation, and malformed-row locks live in `proxy_carry.rs`.
+  - [ ] `accessors`: the `functions` prerequisite landed with schema
+    v15. Getter/setter rows remain gated until their own carry.
 - [x] ~~The `combinators` / `from_async` / `promise_guards` tables
   are append-only for the machine's lifetime (wave-6 W6-19)~~ Done
   (2026-08-27): both collectors' sweeps now COMPACT the three arenas
@@ -2798,6 +2801,11 @@ bite-checked by reverting the fix under the lock). Statuses:
   calls, closures, bound calls, constructors, and eval-defined
   functions now survive eager, lazy, file, and blob resumes. The four
   ledger rows graduate together; 13 Pending rows remain.
+- **Proxy carry (2026-08-29, schema v16 / format v5):** `PROX`
+  carries proxy target/handler/revocation records and revoker links.
+  Runtime revoker functions rebuild their native metadata at restore;
+  guest traps ride the preceding `FUNC` carry. The proxy
+  `PendingStateUnsupported` gate retires; 12 Pending rows remain.
 
 ### External review — the fail-closed persistence boundary (2026-08-28)
 
@@ -2815,8 +2823,8 @@ bite-checked lock:
   skipping unknown atoms and silently dropping arrays, collections,
   RegExps, Intl records and cursors.
   The Date carry later advanced the write stamp to 3 for the same
-  reason. The function carry later advanced it to 4. The reader accepts
-  a read RANGE (`1..=4`) — older atoms are a subset with the same
+  reason. The function and proxy carries later advanced it to 4 and 5.
+  The reader accepts a read RANGE (`1..=5`) — older atoms are a subset with the same
   encodings — and refuses anything newer; the store's
   open gate checks readability rather than equality so older stores
   still open and migrate.
