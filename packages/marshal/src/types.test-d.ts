@@ -25,10 +25,26 @@ import type {
 } from '../index.js';
 import { makeMarshal } from './marshal.js';
 
-// Each public type is pinned against an independently-written expected shape,
-// so a future edit that drops or malforms a member reddens this suite (a bare
-// `expectType<T>(x as unknown as T)` self-assertion cannot — it only checks that
-// the name still exports).
+// Bidirectional type equality. `expectType<T>(x)` from tsd — and the bare `tsc`
+// check this package's CI runs (`yarn lint:types`, no `tsd` CLI) — only asserts
+// that the *argument* is assignable to `T`; it is one-directional. A pin like
+// `expectType<Expected>(actual)` therefore stays green when `actual` silently
+// *drops* a member (the narrower shape is still assignable to `Expected`) and,
+// symmetrically, when it *widens* one. `Equal<A, B>` resolves to `true` only when
+// `A` and `B` are mutually assignable, so `expectType<true>(null as unknown as
+// Equal<Actual, Expected>)` reddens under plain `tsc` whenever the two diverge in
+// either direction. Verified by mutation before landing: dropping a member from
+// any pinned type below turns its `Equal<...>` to `false`, and `false` is not
+// assignable to `true`.
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
+    ? true
+    : false;
+
+// Each public type is pinned by bidirectional equality against an
+// independently-written expected shape, so a future edit that drops, widens, or
+// malforms a member reddens this suite (a bare `expectType<T>(x as unknown as T)`
+// self-assertion cannot — it only checks that the name still exports).
 
 // EncodingClass carries a literal `@qclass` discriminant.
 expectType<{ '@qclass': 'NaN' }>(null as unknown as EncodingClass<'NaN'>);
@@ -47,6 +63,16 @@ expectAssignable<EncodingUnion>({
   name: 'Error',
   message: 'boom',
 });
+// The 'error' arm's optional fields (errorId/cause/errors) are part of the pinned
+// surface; exercise them positively so dropping one from the declaration reddens.
+expectAssignable<EncodingUnion>({
+  '@qclass': 'error',
+  name: 'Error',
+  message: 'boom',
+  errorId: 'e1',
+  cause: { '@qclass': 'error', name: 'Error', message: 'inner' },
+  errors: [{ '@qclass': 'error', name: 'Error', message: 'aggregated' }],
+});
 expectAssignable<EncodingUnion>({ '@qclass': 'slot', index: 0, iface: 'x' });
 // 'hilbert' is the '@qclass'-collision escape hatch: an `original` Encoding plus
 // an optional `rest` record of the value's other properties.
@@ -62,9 +88,26 @@ expectAssignable<EncodingUnion>({
   payload: null,
 });
 
+// Negative pins: a value whose '@qclass' matches no arm, or that omits an arm's
+// required extra field, must NOT be assignable. These redden if the union is
+// accidentally widened — e.g. a required member field turned optional, or a
+// catch-all arm introduced — which the positive `expectAssignable` pins above
+// cannot catch on their own.
+// @ts-expect-error - 'bogus' is not one of the union's '@qclass' discriminants
+expectAssignable<EncodingUnion>({ '@qclass': 'bogus' });
+// @ts-expect-error - the 'slot' arm requires a numeric `index`
+expectAssignable<EncodingUnion>({ '@qclass': 'slot' });
+// @ts-expect-error - the 'bigint' arm requires `digits`
+expectAssignable<EncodingUnion>({ '@qclass': 'bigint' });
+// @ts-expect-error - the 'symbol' arm requires `name`
+expectAssignable<EncodingUnion>({ '@qclass': 'symbol' });
+
 // EncodingElement is a primitive leaf or an EncodingUnion.
-expectType<boolean | number | null | string | EncodingUnion>(
-  null as unknown as EncodingElement,
+expectType<true>(
+  null as unknown as Equal<
+    EncodingElement,
+    boolean | number | null | string | EncodingUnion
+  >,
 );
 
 // TreeOf<string> is a leaf or a record of subtrees.
@@ -76,65 +119,112 @@ expectAssignable<Encoding>('leaf');
 expectAssignable<Encoding>({ '@qclass': 'NaN' });
 
 // CapData pins its body/slots shape.
-expectType<{ body: string; slots: string[] }>(
-  null as unknown as CapData<string>,
+expectType<true>(
+  null as unknown as Equal<CapData<string>, { body: string; slots: string[] }>,
 );
 
 // Marshal exposes the (de)serialize pair plus the toCapData/fromCapData names.
-expectType<{
-  serialize: ToCapData<string>;
-  unserialize: FromCapData<string>;
-  toCapData: ToCapData<string>;
-  fromCapData: FromCapData<string>;
-}>(null as unknown as Marshal<string>);
+expectType<true>(
+  null as unknown as Equal<
+    Marshal<string>,
+    {
+      serialize: ToCapData<string>;
+      unserialize: FromCapData<string>;
+      toCapData: ToCapData<string>;
+      fromCapData: FromCapData<string>;
+    }
+  >,
+);
 
-// MakeMarshalOptions pins every option's name, optionality, and value set.
-expectType<{
-  errorTagging?: 'on' | 'off' | undefined;
-  marshalName?: string | undefined;
-  errorIdNum?: number | undefined;
-  marshalSaveError?: ((err: Error) => void) | undefined;
-  serializeBodyFormat?: 'capdata' | 'smallcaps' | undefined;
-}>(null as unknown as MakeMarshalOptions);
+// MakeMarshalOptions pins every option's name, optionality, and value set. The
+// bidirectional check catches both a dropped option and a sneakily-added one.
+expectType<true>(
+  null as unknown as Equal<
+    MakeMarshalOptions,
+    {
+      errorTagging?: 'on' | 'off' | undefined;
+      marshalName?: string | undefined;
+      errorIdNum?: number | undefined;
+      marshalSaveError?: ((err: Error) => void) | undefined;
+      serializeBodyFormat?: 'capdata' | 'smallcaps' | undefined;
+    }
+  >,
+);
 
 // RankComparison is exactly the three-way result.
-expectType<-1 | 0 | 1>(null as unknown as RankComparison);
+expectType<true>(null as unknown as Equal<RankComparison, -1 | 0 | 1>);
 
 // RankCover is an inclusive [lower, upper] string pair.
-expectType<[string, string]>(null as unknown as RankCover);
+expectType<true>(null as unknown as Equal<RankCover, [string, string]>);
 
 // PartialComparison widens to `number` (TS has no NaN literal type) rather than
 // narrowing to the three ordered results.
-expectType<number>(null as unknown as PartialComparison);
+expectType<true>(null as unknown as Equal<PartialComparison, number>);
 
-expectType<(value: RemotableObject) => string>(
-  null as unknown as ConvertValToSlot<string, RemotableObject>,
+// The (de)slot converter signatures are pinned by full-function equality, which
+// (unlike a one-directional `expectType` on a callback) is strict on the return
+// type and every parameter's arity and optionality: dropping ConvertSlotToVal's
+// optional `iface` turns the `Equal` below to `false`.
+expectType<true>(
+  null as unknown as Equal<
+    ConvertValToSlot<string, RemotableObject>,
+    (val: RemotableObject) => string
+  >,
 );
-expectType<(slot: string, iface?: string) => RemotableObject>(
-  null as unknown as ConvertSlotToVal<string, RemotableObject>,
+expectType<true>(
+  null as unknown as Equal<
+    ConvertSlotToVal<string, RemotableObject>,
+    (slot: string, iface?: string | undefined) => RemotableObject
+  >,
 );
-// Pin the parameter lists as tuples: unlike a callback expectType (which stays
-// green when a trailing param is dropped, since TS treats a shorter callback as
-// structurally assignable), tuple equality is strict on arity and optionality,
-// so dropping ConvertSlotToVal's optional `iface` reddens this suite.
-expectType<[val: RemotableObject]>(
-  null as unknown as Parameters<ConvertValToSlot<string, RemotableObject>>,
+// Pin the parameter lists as tuples too, so the arity/optionality guarantee is
+// legible on its own: tuple equality reddens if the optional `iface` is dropped.
+expectType<true>(
+  null as unknown as Equal<
+    Parameters<ConvertValToSlot<string, RemotableObject>>,
+    [val: RemotableObject]
+  >,
 );
-expectType<[slot: string, iface?: string | undefined]>(
-  null as unknown as Parameters<ConvertSlotToVal<string, RemotableObject>>,
+expectType<true>(
+  null as unknown as Equal<
+    Parameters<ConvertSlotToVal<string, RemotableObject>>,
+    [slot: string, iface?: string | undefined]
+  >,
 );
-expectType<(value: import('@endo/pass-style').Passable) => CapData<string>>(
-  null as unknown as ToCapData<string>,
+// The defaulted generic parameters (`Value ... = any`, `T = any`) resolve to
+// `any` when omitted; pin the one-argument instantiations so a regression that
+// drops a `= any` default (making the second argument required) reddens here.
+expectType<true>(
+  null as unknown as Equal<ConvertValToSlot<string>, (val: any) => string>,
 );
-expectType<(data: CapData<string>) => any>(
-  null as unknown as FromCapData<string>,
+expectType<true>(
+  null as unknown as Equal<
+    PartialCompare,
+    (left: any, right: any) => PartialComparison
+  >,
 );
-expectType<(left: any, right: any) => RankComparison>(
-  null as unknown as RankCompare,
+
+expectType<true>(
+  null as unknown as Equal<
+    ToCapData<string>,
+    (value: import('@endo/pass-style').Passable) => CapData<string>
+  >,
 );
-expectType<RankCompare>(null as unknown as FullCompare);
-expectType<(left: string, right: string) => PartialComparison>(
-  null as unknown as PartialCompare<string>,
+expectType<true>(
+  null as unknown as Equal<FromCapData<string>, (data: CapData<string>) => any>,
+);
+expectType<true>(
+  null as unknown as Equal<
+    RankCompare,
+    (left: any, right: any) => RankComparison
+  >,
+);
+expectType<true>(null as unknown as Equal<FullCompare, RankCompare>);
+expectType<true>(
+  null as unknown as Equal<
+    PartialCompare<string>,
+    (left: string, right: string) => PartialComparison
+  >,
 );
 
 expectType<AtomStyle>('string');

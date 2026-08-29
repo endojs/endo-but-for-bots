@@ -163,7 +163,9 @@ export type FullCompare = RankCompare;
 /**
  * The result of a `PartialCompare` function that defines a meaningful and
  * meaningfully precise partial order in which incomparable values are
- * represented by `NaN`. See `PartialCompare`.
+ * represented by `NaN`. See `PartialCompare`. TypeScript has no `NaN` literal
+ * type, so this necessarily widens to `number` rather than narrowing to the
+ * three ordered results.
  */
 export type PartialComparison = -1 | 0 | 1 | number;
 /**
