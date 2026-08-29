@@ -313,6 +313,7 @@ LLM-agent stack).*
 | [platform-fs](platform-fs.md) | 2026-03-18 | 2026-05-19 | **Complete** |
 | [fs-interface-reconciliation](fs-interface-reconciliation.md) | 2026-06-18 | 2026-06-19 | In Progress |
 | [fs-interface-consolidation](fs-interface-consolidation.md) | 2026-06-18 | 2026-07-15 | In Progress |
+| [readableblob-lines](readableblob-lines.md) | 2026-07-22 | 2026-08-29 | Proposed |
 | [daemon-capability-persona](daemon-capability-persona.md) | 2026-02-16 | 2026-02-24 | Not Started |
 | [daemon-cross-peer-gc](daemon-cross-peer-gc.md) | 2026-03-07 | 2026-04-29 | **Complete** |
 | [daemon-retention-paths](daemon-retention-paths.md) | 2026-04-30 | 2026-05-19 | In Progress (PR #284) |
@@ -464,6 +465,8 @@ The 2026-08-25 update adds [hardener-indexed-cardinality](hardener-indexed-cardi
 **2026-08-27 (PR #89 refresh):** re-adds [genie-integration](genie-integration.md) as a *retrospective* (+1 design → 192). `@endo/genie` was retired (`42bc7d516`, 2026-08-13), so the survey is trimmed to what its three headline facets became — the pi engine as `@endo/agentry`, memory as `EndoDirectory`/`Mount` over `@endo/platform/fs/extended`, and scheduling as the `@endo/reminder` plugin ([endo-reminder](endo-reminder.md), superseding [endoclaw-timer](endoclaw-timer.md)) — plus the residual `lal`/`fae` consolidation backlog.
 
 The 2026-08-27 rebase adds [exo-git-follow-root-advancement](exo-git-follow-root-advancement.md) (Proposed), increasing Proposed from 37 to 38 and the design count from 192 to 193.
+
+The 2026-08-29 update adds [readableblob-lines](readableblob-lines.md) (Proposed), increasing Proposed from 38 to 39 and the design count from 193 to 194. It is a flow-controlled `ReadableBlob.lines({ start, end, buffer })` reader with optional zero-based, end-exclusive line bounds and exact CR, LF, CRLF, and final unterminated-line behavior. It adds no critical-path dependency.
 
 ## Roadmap
 
@@ -652,6 +655,7 @@ flowchart TD
     subgraph Capability System
         dsand[endo-posix-sandbox<br/><i>IN PROGRESS</i>]
         pfs[platform-fs<br/><i>COMPLETE</i>]
+        rblines[readableblob-lines]
         dfs[daemon-capability-filesystem<br/><i>REFERENCE</i>]
         dmount[daemon-mount<br/><i>IN PROGRESS</i>]
         dmcap[daemon-mount-capabilities]
@@ -677,6 +681,7 @@ flowchart TD
         egitcas[endor-git-bindings<br/><i>PROPOSED</i>]
         errun[endor-run-expanded<br/><i>IN PROGRESS</i>]
         pfs --> dfs
+        pfs --> rblines
         pfs --> dmount
         dmount --> dmcap
         dmcap --> dgit
@@ -846,6 +851,7 @@ capabilities available to agents.
 | agentry-git-verb-gaps | Proposed | Narrow local-git history-editing verb set for the agentry `stack-surgery` eval lane: `cherryPick`, `commit({ amend })`, `reword`, `rebase({ autosquash })`, and `checkoutConflict`. Depends on `daemon-git-capability`; the downstream `agentry-git-eval-scenarios` `stack-surgery` edge lands with that design's README node. |
 | agentry-git-eval-scenarios | Not Started | Small canonical git code-mode eval set for `@endo/agentry`: trim to `stage-and-commit`, `conflict-rebase`, and `stack-surgery`; rework PR #526 in place as the buildable conflict leg; rework PR #626 in place so its fixture and scorer land behind a pending live row, with live activation depending on agentry-git-verb-gaps for cherry-pick, amend, reword, autosquash, and conflict-side selection; name ReadableBlob `fetch`, `rangeRead`, and `rangeReadText` as the sed-like filesystem/blob path; retain rendered Git output bounds and remote exo propagation as follow-ups; and score outcomes by final state and authority boundary, never command sequence. |
 | ~~platform-fs~~ | **Complete** | `@endo/platform/fs` — shared types, content store, tree adapters; landed on `llm` (initial commit `e0dda06fb` + PR #122 review cycle fixups) |
+| readableblob-lines | Proposed | CapTP `ReadableBlob.lines({ start, end, buffer })` reader with optional zero-based, end-exclusive line bounds (matching `rangeReadText`/`textRange`), retaining CR, LF, CRLF, and a final unterminated line; shared-guard update across platform (including `BlobRef` and snapshots), daemon, mount, Git, unzip, and the browser bridge. |
 | daemon-capability-filesystem | Reference | `Dir`/`File` capabilities sketch retained as reference; narrower mount slice ships via daemon-mount |
 | ~~daemon-content-store-gc~~ | **Complete** | Content-store pruning and scratch-mount directory cleanup at GC time; landed in PR #99 |
 | daemon-mount | In Progress | Phases 1-3, 5 on `llm` (commit `e22f71327`); symlink confinement, 20 integration tests; Phase 4 (sub-mounts, snapshot) in PR #135 open, mount extensions in PR #127 open, `followNameChanges` in PR #277 open |
@@ -1485,6 +1491,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | agentry-git-eval-scenarios | S-M | 2-3 days for `conflict-rebase`; stack-surgery fixture/scorer now, live row waits on verb-gaps | 3 | Canonical git code-mode eval set for `@endo/agentry`: `stage-and-commit`, `conflict-rebase` with current `Git` and workspace caps, and `stack-surgery` as the dense scenario whose live activation waits on cherry-pick, amend, reword, autosquash, and conflict-side selection. |
 | exo-git-follow-root-advancement | M-L | 1-1.5 weeks | 3 | `@endo/platform/fs` tree identity, snapshots, atomic mutators, change/latest followers, high-level patching, and conformance across in-memory/native/composed adapters; `GitStage` tentative metadata, mutable roots, explicit commit, stale-base checks, matching Git followers, declarations, attenuation, and recovery |
 | ~~platform-fs~~ | S-M | — | 3 | ✅ Complete; `@endo/platform` package landed on `llm` (commit `e0dda06fb`); PR #122 carried review-cycle fixups |
+| readableblob-lines | M | 2-3 days | 3 | Shared interface addition plus streaming line scanner, all blob producers, generated declarations, and cross-surface conformance tests. |
 | daemon-capability-filesystem | L | — | 3 | Reference sketch; narrower mount slice ships via daemon-mount |
 | ~~daemon-content-store-gc~~ | S | — | 3 | ✅ Complete (PR #99, ~2 days actual vs 1 day estimate) |
 | daemon-mount | M-L | 1.5 weeks | 3 | Mount exo, symlink confinement; Phase 4 in PR #135 forwarded under bot |
@@ -1595,7 +1602,7 @@ date of this pass.
 |-----------|-----------------|-----------------|----------------------------------|
 | M1: AI Agent Experience (was M0) | 0 | **Complete** | — |
 | M2: Project Hygiene (was M½) | 0 | **Complete** | — |
-| M3: Remote Access & Tools (was M1) | 19 (`gateway-package`, `daemon-docker-selfhost`, `daemon-agent-tools`, `endo-agent-tools`, `agentry-agent-builder`, `agentry-git-verb-gaps`, `agentry-git-eval-scenarios`, `exo-git-follow-root-advancement`, `daemon-mount`, `daemon-worker-import-from-mount`, `registry-capability`, `mvs-resolver`, `snapshot-mapper`, `filesystem-watchers`, `daemon-locator-terminology`, `daemon-rename-to-manager`, `daemon-xs-worker-snapshot`, `endoclaw-timer`, `endoclaw-network-fetch`) | 9-13 weeks | 11-15 weeks |
+| M3: Remote Access & Tools (was M1) | 20 (`gateway-package`, `daemon-docker-selfhost`, `daemon-agent-tools`, `endo-agent-tools`, `agentry-agent-builder`, `agentry-git-verb-gaps`, `agentry-git-eval-scenarios`, `readableblob-lines`, `exo-git-follow-root-advancement`, `daemon-mount`, `daemon-worker-import-from-mount`, `registry-capability`, `mvs-resolver`, `snapshot-mapper`, `filesystem-watchers`, `daemon-locator-terminology`, `daemon-rename-to-manager`, `daemon-xs-worker-snapshot`, `endoclaw-timer`, `endoclaw-network-fetch`) | 9-13 weeks | 11-15 weeks |
 | M4: Networking (was M2) | 9 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrup-framing`, `cbor-frame`, `cbor-codec`, `cbor-encode-decode`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`, `ocapn-orthogonal-persistence`) | 5-6 weeks | 6-8 weeks |
 | M5: Public Hosting & Billing (was M7) | 4 in-flight on PR #356 stack (`gateway-package` counted under M3; `gateway-packaging-ci`, `gateway-aws-deployment`, `gateway-aws-attuned` counted here) + 3 design gaps (`gateway-oauth-bonding`, `gateway-key-recovery`, `gateway-stripe-adapter`) | 4-6 weeks design + impl | merge cadence of PRs #343 and #356 |
 | M6: MCP Bridge Hosting (was Milestone B) | 2 net-new (`endo-gateway-mcp` impl, `endo-claude`); cross-milestone slices in M3 (P0) and M5 (P2/P3/P4 gaps) | ~3-3.5 weeks own work (endo-gateway-mcp ~2 weeks + endo-claude ~1-1.5 weeks) + ~6-9 weeks across P0-P4 | gated by M3 gateway-package phases 2/7/8 merge cadence |
