@@ -18,6 +18,8 @@
 
 import { makeError, X, q } from '@endo/errors';
 
+/** @import { McpToolDescriptor, PinnedCatalog } from './types.js' */
+
 /**
  * The one syntactic charset a tool name (and a server name) may use before it is
  * rendered into a comma/space-joined `--allowedTools` value or an
@@ -96,20 +98,6 @@ export const isAdmissibleServerName = serverName => {
   return true;
 };
 harden(isAdmissibleServerName);
-
-/**
- * @typedef {object} McpToolDescriptor
- * @property {string} name
- * @property {string} [description]
- * @property {unknown} [inputSchema]
- */
-
-/**
- * @typedef {Readonly<Record<string, McpToolDescriptor>>} PinnedCatalog
- *   A `harden`ed null-prototype record mapping each SURVIVING tool name to its
- *   (hardened) descriptor. This is the authoritative pinned snapshot: both the
- *   allow-list and the bridge's dispatch check derive from it.
- */
 
 /**
  * Take a raw `tools/list` result (an array of tool descriptors) and produce the

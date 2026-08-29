@@ -17,21 +17,7 @@ import { makeError, X, q } from '@endo/errors';
 import { isAdmissibleServerName } from './tool-permissions.js';
 import { assertGuestFormulaId } from './formula-id.js';
 
-/**
- * @typedef {object} StdioTransport
- * @property {'stdio'} kind
- * @property {string} command          Absolute path to the shim executable.
- * @property {readonly string[]} [args]  Harness-fixed args (never prompt-derived).
- */
-
-/**
- * @typedef {object} HttpTransport
- * @property {'http'} kind
- * @property {string} url              A `http://127.0.0.1...` URL (never `0.0.0.0`).
- * @property {string} bearer           The guest's 64-hex formula id.
- */
-
-/** @typedef {StdioTransport | HttpTransport} McpTransport */
+/** @import { McpTransport } from './types.js' */
 
 /**
  * Assert a loopback URL is actually loopback (not `0.0.0.0` or a routable host),

@@ -11,21 +11,7 @@
 import { makeError, X, q } from '@endo/errors';
 import { toPassableError } from '@endo/pass-style';
 
-/**
- * @typedef {{ type: 'ok', text: string, usage: Readonly<Record<string, number | string>> }} OkResult
- * @typedef {{ type: 'rate-limited', retryAfterMs?: number }} RateLimitedResult
- * @typedef {{ type: 'pool-exhausted', retryAfterMs?: number }} PoolExhaustedResult
- * @typedef {{ type: 'bridge-down', detail: string }} BridgeDownResult
- * @typedef {{ type: 'facet-threw', method: string, error: Error }} FacetThrewResult
- * @typedef {{ type: 'nonzero-exit', code: number }} NonzeroExitResult
- * @typedef {{ type: 'parse-error', detail: string }} ParseErrorResult
- * @typedef {{ type: 'limit-exceeded', which: 'wall-clock' | 'output-bytes' | 'max-turns' }} LimitExceededResult
- * @typedef {{ type: 'cancelled', at: 'before-spawn' | 'mid-stream' | 'after-exit' }} CancelledResult
- *
- * @typedef {OkResult | RateLimitedResult | PoolExhaustedResult | BridgeDownResult
- *   | FacetThrewResult | NonzeroExitResult | ParseErrorResult | LimitExceededResult
- *   | CancelledResult} InferResult
- */
+/** @import { BridgeDownResult, CancelledResult, FacetThrewResult, LimitExceededResult, NonzeroExitResult, OkResult, ParseErrorResult, PoolExhaustedResult, RateLimitedResult } from './types.js' */
 
 /** The exhaustive set of `type` discriminants, for validation and tests. */
 export const INFER_RESULT_TYPES = harden([
