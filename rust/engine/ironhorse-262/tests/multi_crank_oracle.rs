@@ -92,5 +92,6 @@ fn an_aborting_crank_compares_and_stops() {
     // run-only computron count at the throw.
     assert_eq!(runs[1].agreement, Agreement::BothAbort, "{:?}", runs[1]);
     assert!(runs[1].error_agrees, "{:?}", runs[1]);
+    assert!(runs[1].is_bit_exact(), "{:?}", runs[1]);
     assert_eq!(runs[1].oracle_error, "RangeError: later");
 }
