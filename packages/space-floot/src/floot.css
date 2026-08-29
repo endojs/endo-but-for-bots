@@ -1022,3 +1022,53 @@
     padding: 0.75rem;
   }
 }
+
+/* ── Narrow screens, continued ─────────────────────────────────────────────
+   The drawer sidebar above handles navigation; these are about the transcript
+   itself, which grew action groups and pending controls since that block was
+   written. A bubble capped at 80% of a 390px screen wastes a third of the
+   width it needs most. */
+@media (max-width: 640px) {
+  .floot-msg,
+  .floot-actions,
+  .floot-tool {
+    max-width: 92%;
+  }
+
+  /* An action header is name + preview + state on one line; on a phone the
+     preview has nowhere to go, so let the row wrap instead of clipping the
+     part that says what the action did. */
+  .floot-actions-head,
+  .floot-action-head {
+    flex-wrap: wrap;
+  }
+
+  .floot-actions-detail,
+  .floot-action-preview {
+    flex-basis: 100%;
+    white-space: normal;
+  }
+
+  /* Code and results: wrap rather than scroll sideways, and give them more of
+     the screen than a desktop pane would need. */
+  .floot-tool-pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 40vh;
+  }
+
+  .floot-action-body {
+    padding-left: 0.7rem;
+  }
+
+  /* Touch targets: these were sized for a pointer. */
+  .floot-pending-action,
+  .floot-actions-head,
+  .floot-action-head {
+    min-height: 36px;
+  }
+
+  .floot-pending-input {
+    width: 100%;
+  }
+}
