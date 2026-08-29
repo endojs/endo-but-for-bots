@@ -6,6 +6,14 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[exo-stream-adaptive-pacing](exo-stream-adaptive-pacing.md) (added
+2026-08-29; an opt-in, consumer-side CoDel-inspired credit controller for
+`@endo/exo-stream` readers that sizes the flow-control window to the smallest
+value sustaining throughput — CoDel governs the ceiling via credit withholding,
+additive-increase governs the floor, and a single monotone `alpha` dials
+relative aggressiveness; wire-format-unchanged and numeric-`buffer`-compatible,
+leaving the `ReadableBlob.lines(buffer = 0)` decision untouched; follow-up to
+[readableblob-lines](readableblob-lines.md) per PR #832),
 [endor-registry-proxy-worker](endor-registry-proxy-worker.md) (added
 2026-08-06; an XS-hosted JavaScript mapping phase over a virtual read-only CAS
 package graph, using compartment-mapper's shared package resolver to emit a
@@ -261,6 +269,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
+| [exo-stream-adaptive-pacing](exo-stream-adaptive-pacing.md) | 2026-08-29 | 2026-08-29 | Proposed |
 | [cap-std-watch](cap-std-watch.md) | 2026-07-18 | 2026-07-18 | Proposed |
 | [store-write-file](store-write-file.md) | 2026-07-15 | 2026-07-15 | Not Started |
 | [buffered-channel-exo-stream-consolidation](buffered-channel-exo-stream-consolidation.md) | 2026-07-06 | 2026-07-24 | **Complete** |
