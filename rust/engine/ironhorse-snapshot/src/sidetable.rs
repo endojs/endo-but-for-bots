@@ -508,9 +508,11 @@ impl SideTable {
             // getter) — its getter is a boot-minted native, so
             // `Interp::rebuild_boot_accessors` reinstates the pair from
             // boot structure (the `RebuiltAtRestore` pattern inside a
-            // Pending row). Guest accessors — and a guest REDEFINITION at
-            // the seed key — still refuse (`pending_row_gates.rs`).
-            SideTable::Accessors => ("accessors", Pending),
+            // serialized row). Guest accessors and redefinitions travel
+            // in `ACCS`; the exact boot seed stays omitted. An accessor
+            // referencing a runtime native function from a still-Pending
+            // owner row remains dependency-gated.
+            SideTable::Accessors => ("accessors", Serialized),
             SideTable::WrapperData => ("wrapper_data", Serialized),
             // Ledger G1 (2026-08-24): the two BULK tables travel in the
             // `ARRY`/`COLL` atoms and the schema-7 small-state sections
@@ -715,6 +717,7 @@ mod tests {
         const BOOT_DERIVED: &[&str] = &[
             "intrinsics", "global_obj", "intl_object", "temporal_object",
             "temporal_now_object", "math_object", "static_str", "default_keys",
+            "boot_slot_count",
             "well_known_symbols", "proto_methods", "proto_data", "proto_accessors",
             "proto_value_data", "string_iterator_method", "async_iterator_identity",
             "object_proto", "function_proto", "array_proto",
@@ -760,7 +763,7 @@ mod tests {
     #[test]
     fn pending_is_derived_from_ledger() {
         let pending = SideTable::pending();
-        assert_eq!(pending.len(), 12, "the design's Remaining ledger count");
+        assert_eq!(pending.len(), 11, "the design's Remaining ledger count");
         // The rich per-instance tables are still pending.
         assert!(!pending.contains(&SideTable::Functions));
         assert!(!pending.contains(&SideTable::BoundFunctions));
@@ -790,7 +793,7 @@ mod tests {
         assert!(!pending.contains(&SideTable::TypedArrays));
         assert!(!pending.contains(&SideTable::DataViews));
         assert!(!pending.contains(&SideTable::Proxies));
-        assert!(pending.contains(&SideTable::Accessors));
+        assert!(!pending.contains(&SideTable::Accessors));
         // The schema-11 data-only language rows graduated: wrappers,
         // regexps (recompiled from source at restore), and the four
         // Temporal record tables.

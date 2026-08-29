@@ -1466,7 +1466,7 @@ rather than work items.
   intact, both refusal edges are pinned, and the worker lifecycle
   test now runs a divergent crank through relink live and after
   reopen.
-  STILL OPEN in this workstream: the 12 `Pending` ledger rows
+  STILL OPEN in this workstream: the 11 `Pending` ledger rows
   (generators, promises, function-dependent per-instance tables, and
   modules — several unreachable cross-crank in the vm today regardless
   of restore).
@@ -1803,9 +1803,9 @@ rather than work items.
     `proto_accessors` seed — same key, the seed's own getter, no
     setter — and `restore_snapshot_state` re-derives the pair from
     boot structure (`rebuild_boot_accessors`; the RebuiltAtRestore
-    pattern inside a Pending row). A guest accessor, and a guest
-    REDEFINITION at the seed key, still refuse
-    (`pending_row_gates.rs`). Second, the installed-names floor —
+    pattern inside a Pending row). At schema 12 a guest accessor or
+    redefinition still refused; the later schema-17 `ACCS` carry lifts
+    that restriction. Second, the installed-names floor —
     wave-6 W6-7's register — did not travel: restore floored at the
     FULL restored table, so a name interned DURING the live machine's
     install pass (`format`, the Intl member keys) could never be
@@ -1883,8 +1883,13 @@ rather than work items.
     Revoker function metadata is rebuilt from the row at restore.
     Guest trap functions ride `FUNC`; memory, file, lazy, blob,
     revocation, and malformed-row locks live in `proxy_carry.rs`.
-  - [ ] `accessors`: the `functions` prerequisite landed with schema
-    v15. Getter/setter rows remain gated until their own carry.
+  - [x] Guest accessors LANDED (2026-08-29, schema v17 / format v6):
+    owner/key→getter/setter mappings travel in `ACCS`; exact boot seeds
+    remain restore-derived, while guest redefinitions at those keys
+    travel. Guest getter/setter functions ride `FUNC`. Accessors that
+    reference runtime native functions owned by a still-Pending row
+    remain dependency-gated by name. Locks: `accessor_carry.rs` and
+    the narrowed `pending_row_gates.rs`.
 - [x] ~~The `combinators` / `from_async` / `promise_guards` tables
   are append-only for the machine's lifetime (wave-6 W6-19)~~ Done
   (2026-08-27): both collectors' sweeps now COMPACT the three arenas
@@ -2806,6 +2811,12 @@ bite-checked by reverting the fix under the lock). Statuses:
   Runtime revoker functions rebuild their native metadata at restore;
   guest traps ride the preceding `FUNC` carry. The proxy
   `PendingStateUnsupported` gate retires; 12 Pending rows remain.
+- **Accessor carry (2026-08-29, schema v17 / format v6):** `ACCS`
+  carries guest getter/setter mappings, including guest replacement of
+  a boot-seeded accessor. Exact boot seeds remain derived. Accessors
+  holding runtime native functions from a Pending owner row retain a
+  narrowed dependency gate; ordinary guest accessors now resume across
+  every path. Eleven Pending rows remain.
 
 ### External review — the fail-closed persistence boundary (2026-08-28)
 
@@ -2823,8 +2834,9 @@ bite-checked lock:
   skipping unknown atoms and silently dropping arrays, collections,
   RegExps, Intl records and cursors.
   The Date carry later advanced the write stamp to 3 for the same
-  reason. The function and proxy carries later advanced it to 4 and 5.
-  The reader accepts a read RANGE (`1..=5`) — older atoms are a subset with the same
+  reason. Function, proxy, and accessor carries later advanced it
+  through 6. The reader accepts a read RANGE (`1..=6`) — older atoms
+  are a subset with the same
   encodings — and refuses anything newer; the store's
   open gate checks readability rather than equality so older stores
   still open and migrate.

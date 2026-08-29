@@ -52,29 +52,50 @@ fn a_heap_holding_a_live_proxy_persists() {
 }
 
 #[test]
-fn a_heap_holding_a_guest_accessor_refuses_to_persist() {
-    refuses(
-        "var o = 0; o = {}; \
-         Object.defineProperty(o, 'x', { get: function () { return 1; } }); 0;",
-        "accessors",
-    );
+fn a_heap_holding_a_guest_accessor_persists() {
+    let mut store = MemoryStore::new();
+    begin_store_session(
+        machine_running(
+            "var o = 0; o = {}; \
+             Object.defineProperty(o, 'x', { get: function () { return 1; } }); 0;",
+        ),
+        &sig(),
+        &mut store,
+    )
+    .map_err(|(_, error)| error)
+    .expect("guest accessors travel");
 }
 
 /// The boot-seed exemption (the Intl carry, store schema 12) admits
 /// EXACTLY the seeded `proto_accessors` entry — the `Intl.NumberFormat`
 /// `format` getter, whose side-table pair `restore_snapshot_state`
 /// re-derives from boot structure. A guest REDEFINITION at the very
-/// same key stores a different getter, which restore could not tell
-/// from the seed once the live table is gone — so it must keep
-/// refusing.
+/// same key stores a different getter. The ACCS carry now preserves
+/// that redefinition instead of confusing it with the boot seed.
 #[test]
-fn a_redefined_seed_accessor_still_refuses_to_persist() {
+fn a_redefined_seed_accessor_persists() {
+    let mut store = MemoryStore::new();
+    begin_store_session(
+        machine_running(
+            "var t = 0; \
+             Object.defineProperty(Intl.NumberFormat.prototype, 'format', \
+               { get: function () { return 1; }, configurable: true }); \
+             t = 7; 0;",
+        ),
+        &sig(),
+        &mut store,
+    )
+    .map_err(|(_, error)| error)
+    .expect("guest seed redefinitions travel");
+}
+
+#[test]
+fn an_accessor_holding_a_pending_runtime_native_still_refuses() {
     refuses(
-        "var t = 0; \
-         Object.defineProperty(Intl.NumberFormat.prototype, 'format', \
-           { get: function () { return 1; }, configurable: true }); \
-         t = 7; 0;",
-        "accessors",
+        "var nf = 0; var o = 0; var format = 0; \
+         nf = new Intl.NumberFormat('en'); format = nf.format; o = {}; \
+         Object.defineProperty(o, 'x', { get: format }); 0;",
+        "accessors with non-persisted native functions",
     );
 }
 

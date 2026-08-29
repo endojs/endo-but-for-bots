@@ -3732,6 +3732,10 @@ pub struct Interp {
     /// computron count, which now also folds in the program overhead and
     /// the allocation metering.
     n_dispatched: u64,
+    /// Slot count immediately after deterministic boot construction.
+    /// Runtime native functions sit above this boundary; boot functions
+    /// below it are re-derived at the same indices on restore.
+    boot_slot_count: u32,
     /// Current **native `dispatch_at` re-entry depth** (callbacks, async
     /// bodies, async-generator and generator resumes each recurse into
     /// `dispatch_at`). Bounded by [`DISPATCH_REENTRY_LIMIT`] so a degenerate
@@ -4716,6 +4720,14 @@ impl ProxyStateSnapshot {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct AccessorRow {
+    pub owner: u32,
+    pub id: u16,
+    pub get: Option<Slot>,
+    pub set: Option<Slot>,
+}
+
 /// A suspended activation: the caller's scope and resume point, saved by
 /// `run` and restored by `end` (XS's `mxFrame->value.frame.{code,scope}`
 /// plus the environment the frame aliases). The value stack is shared and
@@ -5005,6 +5017,7 @@ impl Interp {
             chunks,
             static_str,
             n_dispatched: 0,
+            boot_slot_count: 0,
             dispatch_depth: 0,
             source_compiler: None,
             eval_direct: false,
@@ -5151,6 +5164,7 @@ impl Interp {
             jumps: Vec::new(),
         };
         interp.create_intrinsics();
+        interp.boot_slot_count = interp.slots.capacity();
         interp
     }
 
@@ -8388,9 +8402,12 @@ impl Interp {
     /// at the seed key stores a different getter and still refuses.
     pub fn stored_unpersistable_row(&self) -> Option<&'static str> {
         if self.accessors.iter().any(|((o, id), data)| {
-            !self.slots.is_free_index(*o) && !self.is_boot_seed_accessor(*o, *id, data)
+            !self.slots.is_free_index(*o)
+                && !self.is_boot_seed_accessor(*o, *id, data)
+                && (!self.accessor_function_persists(data.get)
+                    || !self.accessor_function_persists(data.set))
         }) {
-            return Some("accessors");
+            return Some("accessors with non-persisted native functions");
         }
         None
     }
@@ -9002,6 +9019,61 @@ impl Interp {
             );
             self.proxy_revokers
                 .insert(owner, crate::value::SlotIndex(row.proxy));
+        }
+        true
+    }
+
+    fn accessor_function_persists(&self, value: Option<Slot>) -> bool {
+        let Some(Slot {
+            value: Payload::Reference(function),
+            ..
+        }) = value
+        else {
+            return value.is_none();
+        };
+        if function.0 < self.boot_slot_count || self.proxy_revokers.contains_key(&function) {
+            return true;
+        }
+        self.functions
+            .get(&function)
+            .is_some_and(|info| info.native.is_none() && info.method.is_none())
+    }
+
+    /// Snapshot guest accessor getter/setter mappings. Exact boot seeds are
+    /// re-derived and omitted.
+    pub fn accessors_snapshot(&self) -> Vec<AccessorRow> {
+        let mut rows: Vec<AccessorRow> = self
+            .accessors
+            .iter()
+            .filter(|((owner, id), data)| !self.is_boot_seed_accessor(*owner, *id, data))
+            .map(|((owner, id), data)| AccessorRow {
+                owner: owner.0,
+                id: *id,
+                get: data.get,
+                set: data.set,
+            })
+            .collect();
+        rows.sort_unstable_by_key(|row| (row.owner, row.id));
+        rows
+    }
+
+    pub fn restore_accessors(&mut self, rows: Vec<AccessorRow>) -> bool {
+        for row in rows {
+            for value in [row.get, row.set].into_iter().flatten() {
+                let Payload::Reference(function) = value.value else {
+                    return false;
+                };
+                if !self.functions.contains_key(&function) {
+                    return false;
+                }
+            }
+            self.accessors.insert(
+                (crate::value::SlotIndex(row.owner), row.id),
+                AccessorData {
+                    get: row.get,
+                    set: row.set,
+                },
+            );
         }
         true
     }
