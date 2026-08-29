@@ -9013,7 +9013,24 @@ impl Interp {
                         let iterator = match self.call_primitive_method(code, method, iterable, &[])
                         {
                             Ok(iterator) if iterator.kind == Kind::Reference => iterator,
-                            Ok(_) => return self.catchable_type_error(),
+                            Ok(_) => {
+                                // GetIterator step 3 (`fxGetIterator`'s
+                                // "iterator: not an object"), raised in-frame
+                                // so a `try` in the SAME activation — a
+                                // generator body around `yield*` — observes it
+                                // (a returned halt would skip that handler).
+                                let error = self.internal_error(
+                                    "TypeError",
+                                    "iterator: not an object".into(),
+                                );
+                                pc = dispatch_result!(
+                                    self.raise_js(error),
+                                    pc,
+                                    self,
+                                    return_depth
+                                );
+                                continue;
+                            }
                             Err(halt) => return halt,
                         };
                         self.push(iterator);
@@ -9074,7 +9091,19 @@ impl Interp {
                             self.meter.tick_raw(FOR_OF_GET_ITERATOR_METERING);
                             self.push(iterable);
                         }
-                        _ => return self.catchable_type_error(),
+                        _ => {
+                            // No iterator protocol at all: XS reaches the
+                            // call of the absent `Symbol.iterator` method
+                            // (`fxCallInstance`'s "call: not a function"),
+                            // raised in-frame so an enclosing `try` in the
+                            // same activation observes it.
+                            let error = self.internal_error(
+                                "TypeError",
+                                "call: not a function".into(),
+                            );
+                            pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                            continue;
+                        }
                     }
                     pc += size as usize;
                 }
