@@ -9,6 +9,10 @@ import {
   limitExceeded,
   cancelled,
   poolExhausted,
+  rateLimited,
+  bridgeDown,
+  nonzeroExit,
+  parseError,
   INFER_RESULT_TYPES,
 } from '../src/results.js';
 
@@ -18,6 +22,12 @@ test('ok result is a hardened, passable copyRecord', t => {
   t.is(r.text, 'hello');
   t.true(Object.isFrozen(r));
   t.is(passStyleOf(r), 'copyRecord');
+});
+
+test('ok rejects a non-string text', t => {
+  t.throws(() => ok(/** @type {any} */ (123)), {
+    message: /text must be a string/,
+  });
 });
 
 test('ok rejects non-primitive usage values (would not marshal)', t => {
@@ -60,6 +70,37 @@ test('poolExhausted omits retryAfterMs when unset', t => {
     { ...poolExhausted(500) },
     { type: 'pool-exhausted', retryAfterMs: 500 },
   );
+});
+
+test('rate-limited omits retryAfterMs when unset', t => {
+  t.deepEqual({ ...rateLimited() }, { type: 'rate-limited' });
+  t.deepEqual(
+    { ...rateLimited(250) },
+    { type: 'rate-limited', retryAfterMs: 250 },
+  );
+  t.true(Object.isFrozen(rateLimited()));
+});
+
+test('bridge-down coerces detail to a passable string', t => {
+  const r = bridgeDown('socket closed');
+  t.deepEqual({ ...r }, { type: 'bridge-down', detail: 'socket closed' });
+  // A non-string detail is coerced, never dropped, so the record still marshals.
+  t.is(bridgeDown(/** @type {any} */ (42)).detail, '42');
+  t.is(passStyleOf(r), 'copyRecord');
+});
+
+test('nonzero-exit coerces the code to a number', t => {
+  t.deepEqual({ ...nonzeroExit(137) }, { type: 'nonzero-exit', code: 137 });
+  t.is(nonzeroExit(/** @type {any} */ ('2')).code, 2);
+  t.is(passStyleOf(nonzeroExit(1)), 'copyRecord');
+});
+
+test('parse-error coerces detail to a passable string', t => {
+  t.deepEqual(
+    { ...parseError('unexpected token') },
+    { type: 'parse-error', detail: 'unexpected token' },
+  );
+  t.is(parseError(/** @type {any} */ (undefined)).detail, 'undefined');
 });
 
 test('the taxonomy enumerates all nine cases', t => {
