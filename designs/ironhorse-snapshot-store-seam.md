@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
-| **Updated** | 2026-08-28 |
+| **Updated** | 2026-08-29 |
 | **Author** | Aaron Kumavis (prompted) |
 | **Status** | In Progress |
 | **Builds on** | designs/ironhorse-engine.md (§ Snapshots, requirement 1c) |
@@ -1466,9 +1466,9 @@ rather than work items.
   intact, both refusal edges are pinned, and the worker lifecycle
   test now runs a divergent crank through relink live and after
   reopen.
-  STILL OPEN in this workstream: the 30 `Pending` ledger rows
-  (functions/closures, generators, promises, the language-completion
-  sweep's per-instance tables, dynamic code segments, …, several
+  STILL OPEN in this workstream: the 17 `Pending` ledger rows
+  (functions/closures, generators, promises, function-dependent
+  per-instance tables, dynamic code segments, and modules — several
   unreachable cross-crank in the vm today regardless of restore).
   The old intern gap is NOT among them: runtime string keys live in
   the NAME table and symbol keys travel in `SYMB` (id-space
@@ -1863,7 +1863,20 @@ rather than work items.
     migration appends the one empty section (a pure 4-byte suffix,
     verify-root-then-restamp); the golden seal re-pinned, the blob
     pin held — container stability restored after v12's deliberate
-    `NFLR` exception. The ledger stands at 17 Pending rows.
+    `NFLR` exception. The ledger stood at 17 Pending rows before the
+    second llm rebase introduced the Date table.
+  - [x] Date `[[DateValue]]` records LANDED (2026-08-29, store schema
+    v14 and container format v3): owner-ascending `(owner, raw f64
+    bits)` rows travel in the `DATE` atom and the twenty-first
+    small-state section. Raw bits preserve invalid dates and signed
+    zero exactly. The untouched `%Date.prototype%` NaN seed is
+    re-derived by boot and omitted; a guest-mutated prototype is
+    emitted like any other Date. Decode refuses duplicate or
+    descending owners, both adoption paths reject free owners, and
+    the 13→14 migration appends one empty section before restamping.
+    Memory, file, lazy and blob twins live in `date_carry.rs`; the
+    codec lock covers arbitrary NaN payload bits. `Dates` graduates
+    Serialized and the ledger returns to 17 Pending rows.
   - [ ] `proxies`, `accessors`: dependency-gated on the `functions`
     row, with the probe evidence recorded (2026-08-27): a resumed
     guest function is UNCALLABLE today (`f(2)` throws TypeError,
@@ -2772,6 +2785,14 @@ bite-checked by reverting the fix under the lock). Statuses:
   free-list-reuse fixture; `date_proto` also joined the explicit
   roots beside its siblings). Both golden pins re-pinned for the
   mainline's boot-heap growth — content, not format.
+- **Date carry (2026-08-29, schema v14 / format v3):** the pure-data
+  `dates` row introduced by the second llm rebase now travels as raw
+  IEEE-754 bits in `DATE` and the twenty-first small-state section.
+  The carry preserves guest Date instances and guest mutation of
+  `%Date.prototype%` across eager, lazy, file and blob resumes;
+  `Dates` is no longer Pending. Format v3 makes older readers refuse
+  the new state-bearing atom instead of skipping it, and both golden
+  pins moved consciously.
 
 ### External review — the fail-closed persistence boundary (2026-08-28)
 
@@ -2788,7 +2809,8 @@ bite-checked lock:
   version-1 exact-match reader refuses these containers instead of
   skipping unknown atoms and silently dropping arrays, collections,
   RegExps, Intl records and cursors.
-  The reader accepts a read RANGE (`1..=2`) — older atoms are a subset
+  The Date carry later advanced the write stamp to 3 for the same
+  reason. The reader accepts a read RANGE (`1..=3`) — older atoms are a subset
   with the same encodings — and refuses anything newer; the store's
   open gate checks readability rather than equality so older stores
   still open and migrate.
@@ -2864,11 +2886,23 @@ bite-checked lock:
   reconciliation net, `validate_store` as the one open-time gate both
   resume paths share, decoders that produce only refused-or-valid
   rows, and (this round) a restore with no debug-only trust checks.
-  What remains of the recommendation — a single typed
-  `ValidatedSnapshot` boundary object consumed by an infallible
-  restore — is recorded as follow-up rather than done piecemeal here;
-  the eager/lazy split shares its header and page-validation rules
-  already.
+  The proof boundary landed incrementally rather than as a rewrite:
+  container adoption now crosses a private-field `ValidatedSnapshot`
+  wrapper, and store adoption returns a private-field
+  `ValidatedStoreState` that keeps the validated manifest, small
+  state, free set and row leaves in one epoch-bound value.
+  Publicly mutable `MachineImage` remains available for codec tooling
+  and crafted-input tests, but cannot be passed directly to restore.
+  Restore deliberately retains a `Result` as a release-visible
+  invariant tripwire while the VM's redundant restore checks remain;
+  the proof type removes the mutation bypass without converting a
+  future validator/restore drift into a process panic.
+  The wrapper constructor also runs the stored-property-id audit, and
+  the shared bounds gate rejects the null chunk sentinel for buffer
+  backing even under a maximal store chunk domain.
+  A literally infallible restore remains inappropriate until
+  boot-derived index rebuilding and lazy page faults carry equivalent
+  prepared proofs.
 
 ## What Is the Problem Being Solved?
 

@@ -366,6 +366,13 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         });
         next_owner += 1;
     }
+    let n_dates = ((c.byte() % 4) as usize).min(cap as usize);
+    let dates: Vec<ironhorse_snapshot::image::DateImage> = (0..n_dates)
+        .map(|owner| ironhorse_snapshot::image::DateImage {
+            owner: owner as u32,
+            value_bits: ((c.u32() as u64) << 32) | c.u32() as u64,
+        })
+        .collect();
 
     MachineImage::from_arenas(fuzz_snapshot_sig(), &slots, &chunks, &stack, names, keys, symbols)
         .with_meter(meter)
@@ -374,22 +381,20 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         // model. Crafted family bytes are exercised by the byte-level
         // container decoder target instead.
         .with_side_tables(arrays, collections, registry, errors, Vec::new(), Vec::new(), Vec::new())
+        .with_dates(dates)
 }
 
 /// The core round-trip invariant over a built image: a freshly written
 /// snapshot must **read back** (a decode failure on our own output is a
 /// defect), and **write → read → write must be byte-identical**.
 ///
-/// Byte-equality — not `MachineImage` value equality — is the invariant on
-/// purpose. A slot may hold a `Payload::Number(f64::NAN)` (or any non-
-/// reflexive float), and `NaN != NaN`, so the *derived* `PartialEq` on
-/// `MachineImage` reports a spurious inequality even though the codec
-/// preserves the NaN bit pattern exactly (fuzz trophy
-/// `nan_payload_round_trips_byte_exact_but_not_parteq`; the slot codec's own
-/// `nan_bits_preserved` proves the bits survive). Byte-equality of
-/// write→read→write is the faithful, NaN-safe statement of "the container
-/// round-trips" the daemon restore path depends on, and it subsumes value
-/// fidelity: it proves `encode(decode(encode(img))) == encode(img)`.
+/// Byte-equality is the always-applicable invariant. When `img` is reflexive
+/// under `MachineImage`'s derived `PartialEq` (it contains no NaN), value
+/// equality is checked too. The second check catches a writer that silently
+/// omits a model field: byte idempotence alone would accept both writes
+/// dropping the same field. A NaN-bearing image cannot use derived value
+/// equality (`NaN != NaN`), so it keeps the bit-exact byte check; the slot
+/// codec's `nan_bits_preserved` lock covers that payload directly.
 pub fn roundtrip_image_is_invariant(img: &MachineImage) -> Result<(), RoundtripDivergence> {
     let sig = fuzz_snapshot_sig();
     let bytes = write_machine(img);
@@ -411,6 +416,12 @@ pub fn roundtrip_image_is_invariant(img: &MachineImage) -> Result<(), RoundtripD
             ),
         });
     }
+    let reflexive_twin = img.clone();
+    if img == &reflexive_twin && &back != img {
+        return Err(RoundtripDivergence {
+            detail: "write→read changed the decoded machine model".to_string(),
+        });
+    }
     Ok(())
 }
 
@@ -422,12 +433,13 @@ pub fn roundtrip_generated_is_invariant(data: &[u8]) -> Result<(), RoundtripDive
 /// Round-trip invariance over a **live machine**: compile a generated program
 /// with the oracle, drive the engine to populate its heap, snapshot it, and
 /// assert the container round-trips byte-identically and the resumed machine's
-/// meter equals the live one. Skips (returns `Ok`) any source the oracle
-/// declines to compile.
-pub fn roundtrip_program_is_invariant(source: &str) -> Result<(), RoundtripDivergence> {
+/// meter equals the live one. Returns `Ok(false)` when the oracle declines the
+/// source or the generated state is outside the current persistence coverage;
+/// `Ok(true)` means the round trip actually ran.
+pub fn roundtrip_program_is_invariant(source: &str) -> Result<bool, RoundtripDivergence> {
     let oracle = match xs_oracle::run(source) {
         Some(o) => o,
-        None => return Ok(()),
+        None => return Ok(false),
     };
     let names = parse_symbols(&oracle.symbols);
     let mut interp = Interp::new();
@@ -439,7 +451,7 @@ pub fn roundtrip_program_is_invariant(source: &str) -> Result<(), RoundtripDiver
     // program that HALTED) — a named refusal, not a divergence.
     let bytes = match interp.write_snapshot(&sig) {
         Ok(b) => b,
-        Err(_) => return Ok(()),
+        Err(_) => return Ok(false),
     };
     let restored = match from_snapshot_bytes(&bytes, &sig) {
         Ok(m) => m,
@@ -471,7 +483,7 @@ pub fn roundtrip_program_is_invariant(source: &str) -> Result<(), RoundtripDiver
             detail: format!("meter state not preserved across snapshot (source {source:?})"),
         });
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Behavioral continuation: a machine that runs crank A, suspends, resumes,
@@ -483,14 +495,14 @@ pub fn roundtrip_program_is_invariant(source: &str) -> Result<(), RoundtripDiver
 pub fn suspend_resume_is_transparent(
     source_a: &str,
     source_b: &str,
-) -> Result<(), RoundtripDivergence> {
+) -> Result<bool, RoundtripDivergence> {
     let a = match xs_oracle::run(source_a) {
         Some(o) => o,
-        None => return Ok(()),
+        None => return Ok(false),
     };
     let b = match xs_oracle::run(source_b) {
         Some(o) => o,
-        None => return Ok(()),
+        None => return Ok(false),
     };
 
     // Uninterrupted: one machine runs crank A then crank B.
@@ -504,7 +516,7 @@ pub fn suspend_resume_is_transparent(
     m1.run(&a.bytecode);
     let bytes = match m1.write_snapshot(&sig) {
         Ok(b) => b,
-        Err(_) => return Ok(()),
+        Err(_) => return Ok(false),
     };
     let mut m2 = match from_snapshot_bytes(&bytes, &sig) {
         Ok(m) => m,
@@ -526,7 +538,7 @@ pub fn suspend_resume_is_transparent(
             ),
         });
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Mutate a (valid) snapshot buffer deterministically from the cursor bytes —
@@ -637,6 +649,7 @@ mod tests {
         let mut saw_arrays = false;
         let mut saw_collections = false;
         let mut saw_registry = false;
+        let mut saw_dates = false;
         for seed in 0u32..3000 {
             let buf = seed_bytes(seed, 7);
             let img = gen_machine_image(&buf);
@@ -647,6 +660,7 @@ mod tests {
             saw_arrays |= !img.arrays.is_empty();
             saw_collections |= !img.collections.is_empty();
             saw_registry |= !img.registry.is_empty();
+            saw_dates |= !img.dates.is_empty();
             if let Err(d) = roundtrip_image_is_invariant(&img) {
                 panic!("arena snapshot round-trip divergence at seed {seed}: {d:?}");
             }
@@ -661,6 +675,7 @@ mod tests {
         assert!(saw_arrays, "side-table ARRY arm never exercised");
         assert!(saw_collections, "side-table COLL arm never exercised");
         assert!(saw_registry, "side-table REGY arm never exercised");
+        assert!(saw_dates, "side-table DATE arm never exercised");
     }
 
     #[test]
@@ -679,7 +694,8 @@ mod tests {
                 gen_stage3_reentrant_program(&buf),
             ] {
                 match roundtrip_program_is_invariant(&prog) {
-                    Ok(()) => checked += 1,
+                    Ok(true) => checked += 1,
+                    Ok(false) => {}
                     Err(d) => panic!("engine snapshot round-trip divergence on {prog:?}: {d:?}"),
                 }
             }
@@ -697,7 +713,8 @@ mod tests {
             let a = gen_program(&seed_bytes(seed, 13));
             let b = gen_program(&seed_bytes(seed.wrapping_mul(2654435761), 17));
             match suspend_resume_is_transparent(&a, &b) {
-                Ok(()) => checked += 1,
+                Ok(true) => checked += 1,
+                Ok(false) => {}
                 Err(d) => panic!("suspend/resume transparency divergence: {d:?}"),
             }
         }

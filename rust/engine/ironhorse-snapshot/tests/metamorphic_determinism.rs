@@ -117,7 +117,13 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // side-table atom family, so a version-1 exact-match reader
         // refuses these containers instead of silently dropping that
         // state. Only the `VERS` payload bytes moved.
-        "22843b227177b4af77b9ac5d1a95df9c191188a34ebeb41c7116557a3e8d9c77",
+        // Re-pinned after rebasing onto the 2026-08-29 llm head: the
+        // mainline boot heap changed again, so this is a content move,
+        // not another format change.
+        // Re-pinned for format version 3, which marks the new `DATE`
+        // state-bearing atom. This fixture has no guest Date record,
+        // so only the VERS payload changes.
+        "82d1698a56a20c44caa55dfaa996cf8a48ab9287052f7b974997b12da9dd182c",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -182,7 +188,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // the manifest embeds the `VERS` stamp, so the seal moves with
         // the blob — the one other deliberate exception to the two-pin
         // independence, exercised by a version field doing its job.
-        "9e75a21a588d5f02538a81d116bd4522d6f796b3d6833dbf8e753d8a863ff549",
+        // Re-pinned with the blob after the 2026-08-29 llm rebase.
+        // Re-pinned for schema 14 and format 3: the manifest and small
+        // state gain the Date carry, while VERS marks its atom.
+        "ed0b4b000bb23ee3a5f26c59439f04bf4ffac6a8e7ba3b24e9eb0b57344c3d8a",
         "epoch-3 seal chain"
     );
 }

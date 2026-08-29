@@ -29,11 +29,11 @@ fn quiescent_machine(src: &str) -> Interp {
     m
 }
 
-/// Finding 4: a persisted regexp whose source passes decode (valid
-/// UTF-8, ascending owner) but does not RECOMPILE cannot come from an
-/// honest writer. The restore must refuse it by name — debug builds
-/// used to panic on an assert while release builds continued with the
-/// row silently dropped.
+/// Finding 4: a persisted regexp whose source is structurally valid
+/// (UTF-8, ascending owner) but does not RECOMPILE cannot come from an
+/// honest writer. The adoption validator must refuse it before restore —
+/// debug builds used to panic during restore while release builds
+/// continued with the row silently dropped.
 #[test]
 fn a_regexp_row_that_cannot_recompile_is_refused_with_a_structured_error() {
     let m = quiescent_machine("var re = 0; var t = 0; re = /a(b+)c/g; t = 7; t");
@@ -43,9 +43,20 @@ fn a_regexp_row_that_cannot_recompile_is_refused_with_a_structured_error() {
     image.regexps[0].source = "(".to_string();
     let crafted = write_machine(&image);
     match from_snapshot_bytes(&crafted, &sig()) {
-        Err(SnapshotError::Corrupt("side-table restore: persisted regexp does not recompile")) => {}
-        Err(other) => panic!("refused, but not by the restore's named error: {other:?}"),
+        Err(SnapshotError::Corrupt("regexp side table: persisted source does not compile")) => {}
+        Err(other) => panic!("refused, but not by the adoption validator: {other:?}"),
         Ok(_) => panic!("a non-recompilable regexp row must not restore"),
+    }
+    let mut store = MemoryStore::new();
+    store
+        .commit(&image_to_batch(&image, 1, ""))
+        .expect("the raw commit models a crafted writer");
+    match validate_store(&store, &sig()) {
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "regexp side table: persisted source does not compile",
+        ))) => {}
+        Err(other) => panic!("store refused, but not by the adoption validator: {other:?}"),
+        Ok(_) => panic!("a non-recompilable store row must not validate"),
     }
 }
 
