@@ -102,6 +102,36 @@ expectAssignable<EncodingUnion>({ '@qclass': 'bigint' });
 // @ts-expect-error - the 'symbol' arm requires `name`
 expectAssignable<EncodingUnion>({ '@qclass': 'symbol' });
 
+// Bidirectional pin: `EncodingUnion` must equal exactly this fully-spelled union.
+// The positive `expectAssignable` pins above catch a member being *dropped*, and
+// the negative `@ts-expect-error` pins catch narrow widenings, but neither reddens
+// when a wholly new disjoint arm is *added* to the declaration (a superset stays
+// assignable in both the directions those pins probe). `Equal<...>` closes that
+// gap: adding, dropping, or reshaping any arm here or in `types.d.ts` diverges the
+// two and reddens under plain `tsc`.
+expectType<true>(
+  null as unknown as Equal<
+    EncodingUnion,
+    | EncodingClass<'NaN'>
+    | EncodingClass<'undefined'>
+    | EncodingClass<'Infinity'>
+    | EncodingClass<'-Infinity'>
+    | (EncodingClass<'bigint'> & { digits: string })
+    | EncodingClass<'@@asyncIterator'>
+    | (EncodingClass<'symbol'> & { name: string })
+    | (EncodingClass<'error'> & {
+        name: string;
+        message: string;
+        errorId?: string;
+        cause?: Encoding;
+        errors?: Encoding[];
+      })
+    | (EncodingClass<'slot'> & { index: number; iface?: string })
+    | (EncodingClass<'hilbert'> & { original: Encoding; rest?: Encoding })
+    | (EncodingClass<'tagged'> & { tag: string; payload: Encoding })
+  >,
+);
+
 // EncodingElement is a primitive leaf or an EncodingUnion.
 expectType<true>(
   null as unknown as Equal<
