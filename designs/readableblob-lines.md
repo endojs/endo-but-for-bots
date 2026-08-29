@@ -10,17 +10,20 @@
 ## Problem
 
 `ReadableBlob.text()` materializes a whole file. Callers that process a log,
-source file, or other text record-by-record instead need a CapTP-safe,
-flow-controlled reader. Splitting a materialized string is both needlessly
-large and ambiguous at CR, LF, CRLF, and a final unterminated line.
+source file, or other text record-by-record instead need a reader that is
+CapTP-safe (a remotable that marshals across a capability boundary, not a raw
+async iterator) and flow-controlled (the consumer paces the producer through the
+exo-stream `buffer`, so the source is not read ahead of demand). Splitting a
+materialized string is both needlessly large and ambiguous at CR, LF, CRLF, and
+a final unterminated line.
 
 ## Design
 
-Add this method directly to `readableBlobMethodGuards` — the single shared
+Add this method directly to `readableBlobMethodGuards`, the single shared
 interface-guard object (owned by
-[fs-interface-consolidation](fs-interface-consolidation.md)) that every
-`ReadableBlob`-derived exo spreads — so defining it once propagates it to every
-implementation:
+[fs-interface-consolidation.md](fs-interface-consolidation.md)) that every
+`ReadableBlob`-derived exo spreads, so defining it once propagates it to every
+exo that spreads that record:
 
 ```ts
 lines(options?: {
@@ -32,23 +35,35 @@ lines(options?: {
 
 `lines` returns an exo stream made with `readerFromIterator`. The caller
 consumes it with `iterateReader(E(blob).lines(options))`. All options are
-optional. `start` and `end` select the half-open line range `[start, end)`,
-reusing the addressing convention the established `rangeReadText` (and its
-`textRange` successor in
-[readableblob-range-attenuation.md](readableblob-range-attenuation.md)) already
-define on this same interface: line indices are non-negative, zero-based,
-end-exclusive JavaScript `number`s. An omitted `start` defaults to `0` (the
-first line); an omitted `end` selects through the last line. Reusing one
-line-range convention across `ReadableBlob`, rather than introducing a second,
-means a caller who has learned `rangeReadText`/`textRange` reads `lines` the same
-way and a bound ported between them keeps its meaning.
+optional. `start` and `end` select the half-open line range `[start, end)`. Line
+indices are non-negative, zero-based, end-exclusive JavaScript `number`s. An
+omitted `start` defaults to `0` (the first line); an omitted `end` selects
+through the last line.
+
+This is the first line-addressing method on the shared base guard
+`readableBlobMethodGuards`, so it establishes that convention on the base guard
+rather than reusing one already adopted there. The existing
+`rangeReadText(startLine, endLine)` lives on the narrower
+`rangeReadConvenienceMethodGuards`, which today only `LocalBlob` implements, and
+its `textRange(startLine, endLine)` successor in
+[readableblob-range-attenuation.md](readableblob-range-attenuation.md) is still
+`Status: Proposed`. `lines` deliberately adopts the same value semantics those
+narrower methods define (non-negative, zero-based, end-exclusive line indices),
+so a caller who later learns `rangeReadText` or `textRange` reads a `lines` bound
+the same way. The call shape differs, though: `rangeReadText` and `textRange`
+take the range positionally, while `lines` carries it in an options bag, so the
+shared meaning ports between them but the argument spelling does not. The bag
+properties are named `start` and `end` rather than `startLine`/`endLine` because
+the method name `lines` already supplies the line context.
 
 A negative, fractional, or non-safe bound rejects with `EINVAL` before opening
-the source, exactly as `rangeReadText` does (via the shared `toSafeNumber`) — the
-same input class throws on both methods rather than being silently reinterpreted
-on one. An `end` past the last line clamps to the end; an empty or inverted range
-(`start >= end`) yields nothing, so out-of-range bounds are defined without an
-error. For five lines, for example, `{ start: 1, end: 3 }` selects lines 1 and 2;
+the source (via the shared `toSafeNumber`), so the same input class throws
+rather than being silently reinterpreted. An inverted range (`start > end`) also
+rejects with `EINVAL`, matching `textRange`, which rejects an inverted interval
+the same way; the shared convention therefore agrees on the error as well as on
+the valid-range meaning. An `end` past the last line clamps to the end, and an
+empty range (`start === end`) yields nothing, so an in-bounds empty window is
+defined without an error. For five lines, for example, `{ start: 1, end: 3 }` selects lines 1 and 2;
 `{ start: 2 }` selects lines 2, 3, and 4; `{ end: 2 }` selects lines 0 and 1; and
 `{ start: 4, end: 9 }` selects only line 4 (the `end` clamps).
 
@@ -101,15 +116,17 @@ normal reader cancellation behavior: an early consumer `return()` closes the
 underlying byte reader or file handle. `lines()` does not change blob identity,
 range authority, or the behavior of `text`, `json`, and `streamBase64`.
 
-Three line-range methods now share one addressing convention on this interface,
-differing only in return shape: `rangeReadText(startLine, endLine)` returns the
-window as a single joined string, `textRange(startLine, endLine)` returns a new
-`ReadableBlob` bounded to that window (a re-addressable capability), and
-`lines()` streams the window as individual line values with their original
-terminators. Because the addressing is identical, a caller composes them freely —
-for example `E(blob).textRange(a, b)` then `.lines()` on the result — and reaches
-for `lines` when it wants flow control and per-line values rather than a
-materialized string or a sub-blob.
+Once `textRange` lands, three line-range methods will share one addressing
+convention on this interface, differing only in return shape:
+`rangeReadText(startLine, endLine)` returns the window as a single joined string,
+`textRange(startLine, endLine)` returns a new `ReadableBlob` bounded to that
+window (a re-addressable capability), and `lines()` streams the window as
+individual line values with their original terminators. Today only
+`rangeReadText` exists, and only on `LocalBlob`, so the composition below is
+forward-looking. Because the value semantics are identical, a caller will be able
+to compose them freely, for example `E(blob).textRange(a, b)` then `.lines()` on
+the result, reaching for `lines` when it wants flow control and per-line values
+rather than a materialized string or a sub-blob.
 
 ## Implementations and migration
 
@@ -122,17 +139,20 @@ spreads the shared readable-blob methods:
 |---|---|
 | Platform base and snapshots | `blobFromBytes` in `packages/platform/src/blob.js` and `snapshotBlobMethods` in `packages/platform/src/fs/snapshot-blob.js`; the former also supplies unzip leaves. |
 | Platform local | `makeLocalBlob` in `packages/platform/src/fs-node/local-blob.js`; read incrementally rather than `readFile`ing the full text. |
-| Platform extended | Make `BlobRefInterface` in `packages/platform/src/fs/extended/type-guards.js` spread the shared readable-blob methods and implement both `streamBase64` and `lines` in `makeBlobRefExo` in `shared/blob-ref.js`, alongside its existing `getInfo` and `fetch` range-I/O methods. |
+| Platform extended | Add `lines` to `BlobRefInterface` in `packages/platform/src/fs/extended/type-guards.js` and implement it in `makeBlobRefExo` in `packages/platform/src/fs/extended/shared/blob-ref.js`, alongside its existing `getInfo`, `fetch`, `text`, and `json` methods. `BlobRef` keeps hand-declaring its guard rather than spreading the shared record, so it gains `lines` without gaining `streamBase64` (fs-interface-consolidation.md § C4 keeps `streamBase64` daemon-only because the extended layer streams via `fetch` / `PassableBytesReader`). |
 | Daemon CAS and transient | `makeReadableBlob` and `makeBytesBlob` in `packages/daemon/src/manager.js`. |
 | Daemon mount | `makeMountFileExo` and `makeReadableBlobView` in `packages/daemon/src/mount.js`; preserve confinement and re-check revocation while reading. |
 | Git | `makeGitBlob` in `packages/git/src/native-git-backend.js`, using its existing byte iterator. |
 | Browser bridge | `makeBrowserBlob` in `packages/spaces-util/src/browser-tree.js`, reading incrementally from the browser file stream. |
 | Public surfaces | `packages/platform/src/fs/interfaces.js`, `types.ts`, and extended declarations; daemon interfaces/types/help; `packages/exo-git/src/types.ts`; and generated agent-tool declarations. |
 
-This makes `BlobRef` coherent with the shared model: it is a
-`ReadableBlob` with the additional `getInfo` and `fetch` range-I/O methods,
-not a parallel whole-value interface that happens to omit `streamBase64`.
-The extended TypeScript declaration must express the same relationship.
+This keeps `BlobRef` coherent with the shared read model on the whole-value and
+line surfaces (`text`, `json`, `lines`) while preserving its one deliberate
+difference: `streamBase64` stays daemon-only per
+[fs-interface-consolidation.md](fs-interface-consolidation.md) § C4, because the
+extended layer streams via `fetch` and `PassableBytesReader` rather than the
+CapTP base64 pump. The extended TypeScript declaration must express the same
+relationship.
 
 Implement the byte-to-line adapter once in `@endo/platform` and reuse it from
 each producer where the byte iterator is available. Each implementation still
@@ -152,7 +172,7 @@ negative, fractional, and non-safe bounds rejecting with `EINVAL`. Include
 values, early iterator return, early source closure at `end`, and propagated
 source errors. The mount cases must also verify revocation mid-stream.
 
-The daemon mount conformance test should assert `lines` in the exact
+The daemon mount conformance test should assert that `lines` is in the exact
 `ReadableBlob` method set. Test the platform base/local/snapshot, extended
 `BlobRef`, daemon stored and transient, mount read-only view, Git, unzip, and
 browser-bridge paths so a later implementation cannot satisfy the guard while
@@ -168,7 +188,7 @@ omitting a producer.
 
 ## Follow-up
 
-A separate design will consider a CoDel-inspired control algorithm that can
+A separate design will consider a CoDel-inspired (Controlled Delay) control algorithm that can
 implicitly adjust reader pace and buffer size. Such an API still needs an
 explicit alpha parameter so callers can select relative aggressiveness. This
 proposal keeps the fixed `buffer = 0` default until that broader reader-level
