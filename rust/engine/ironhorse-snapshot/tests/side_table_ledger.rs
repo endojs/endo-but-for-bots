@@ -18,7 +18,8 @@ mod common;
 use common::TempDir;
 
 use ironhorse_snapshot::machine::{
-    begin_store_session, checkpoint_to_store, resume_from_store, MachineSnapshot,
+    begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
+    MachineSnapshot,
 };
 use ironhorse_snapshot::store::{validate_store, HeapStore, MemoryStore, StoreError};
 use ironhorse_snapshot::store_file::FileStore;
@@ -504,13 +505,20 @@ fn the_persistence_audit_reads_the_image_not_the_mint_counter() {
     freed.slot_live -= 1;
     assert_eq!(freed.stored_unregistered_key_id(), None, "a free slot names nothing");
 
-    // The blob→store adoption path refuses it. `write_snapshot` is
-    // infallible by signature and cannot refuse, so this is where the
-    // container half of the gate has to live.
+    let poisoned_bytes = write_machine(&poisoned);
+    assert_eq!(
+        from_snapshot_bytes(&poisoned_bytes, &sig()).err(),
+        Some(ironhorse_snapshot::format::SnapshotError::Corrupt(
+            "stored property id outside the name and symbol-key tables",
+        )),
+        "a poisoned container cannot restore directly",
+    );
+
+    // The blob→store adoption path refuses it too.
     let mut store = MemoryStore::new();
     assert_eq!(
         ironhorse_snapshot::store::import_from_container(
-            &write_machine(&poisoned),
+            &poisoned_bytes,
             &sig(),
             &mut store,
         ),

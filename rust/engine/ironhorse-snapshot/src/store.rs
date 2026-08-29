@@ -86,7 +86,7 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// sections EMPTY (a pure 12-byte suffix; a v6-era machine had
 /// nothing persisted in them by definition) and restamps the root for
 /// the changed small leaf.
-pub const STORE_SCHEMA_VERSION: u32 = 13;
+pub const STORE_SCHEMA_VERSION: u32 = 14;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -1334,6 +1334,8 @@ pub struct SmallState {
     pub wrappers: Vec<crate::image::WrapperImage>,
     /// The regexp side table (schema 11; the `REGX` encoding).
     pub regexps: Vec<crate::image::RegExpImage>,
+    /// Date `[[DateValue]]` records (schema 14; the `DATE` encoding).
+    pub dates: Vec<crate::image::DateImage>,
     /// The arguments-exotic brand owners (schema 11; the `ARGB` encoding).
     pub arguments_brands: Vec<u32>,
     /// The Temporal record tables (schema 11; the `TMPR` encoding).
@@ -1349,25 +1351,26 @@ pub struct SmallState {
 }
 
 impl SmallState {
-    /// Serialize: twenty sections, each `u32` length-prefixed, in
+    /// Serialize: twenty-one sections, each `u32` length-prefixed, in
     /// the fixed order stack, free list, keys, names, symbols, meter,
     /// arrays, collections, registry, errors, buffers, typed arrays,
     /// data views, wrappers, regexps, arguments brands, temporal,
-    /// intl, name floor, iterators
+    /// intl, name floor, iterators, dates
     /// (arrays/collections/registry since store schema 7 — the
     /// side-table ledger; the 6→7 migration appends them empty, a
     /// pure 12-byte suffix — errors since schema 9, the typed-array
     /// family since schema 10, the data-only language rows since
     /// schema 11, the Intl record tables plus the installed-names
     /// floor since schema 12, and the iterator cursors since schema
-    /// 13, whose migrations append their empty sections the same
+    /// 13, and Date records since schema 14, whose migrations append
+    /// their empty sections the same
     /// way). Since store schema v4 the free-list section is
     /// always EMPTY in stored small state — the list lives in
     /// dirty-diffed segment rows (phase 9) — but the section slot
     /// stays so the layout is stable; the atom container path still
     /// carries the list via the image, not this encoding.
     pub fn encode(&self) -> Vec<u8> {
-        let sections: [Vec<u8>; 20] = [
+        let sections: [Vec<u8>; 21] = [
             encode_stack(&self.stack),
             encode_u32s(&[]),
             encode_strings(&self.keys),
@@ -1391,6 +1394,7 @@ impl SmallState {
                 None => Vec::new(),
             },
             crate::image::encode_iterators(&self.iterators),
+            crate::image::encode_dates(&self.dates),
         ];
         let mut v = Vec::new();
         for s in sections {
@@ -1400,7 +1404,7 @@ impl SmallState {
         v
     }
 
-    /// Decode the twenty sections. Every section length is
+    /// Decode the twenty-one sections. Every section length is
     /// bounds-checked against the remaining payload before it is
     /// sliced.
     pub fn decode(p: &[u8]) -> Result<SmallState, StoreError> {
@@ -1545,7 +1549,14 @@ impl SmallState {
         } else {
             crate::image::decode_iterators(iterators_bytes).map_err(StoreError::Snapshot)?
         };
-        // Same exact-consumption rule as the manifest: twenty
+        // Schema-14 Date records, same empty-section migration rule.
+        let dates_bytes = section("small state dates section")?;
+        let dates = if dates_bytes.is_empty() {
+            Vec::new()
+        } else {
+            crate::image::decode_dates(dates_bytes).map_err(StoreError::Snapshot)?
+        };
+        // Same exact-consumption rule as the manifest: twenty-one
         // sections and nothing after them, or the small state fails
         // closed.
         if i != p.len() {
@@ -1569,6 +1580,7 @@ impl SmallState {
             data_views,
             wrappers,
             regexps,
+            dates,
             arguments_brands,
             temporal,
             intl,
@@ -1931,6 +1943,7 @@ pub fn migrate_store(
             10 => migrate_v10_to_v11(store)?,
             11 => migrate_v11_to_v12(store)?,
             12 => migrate_v12_to_v13(store)?,
+            13 => migrate_v13_to_v14(store)?,
             _ => {
                 return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                     "unsupported store schema version",
@@ -2208,6 +2221,35 @@ fn migrate_v12_to_v13(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     store.replace_manifest_and_small_for_migration(&manifest, &new_small)
 }
 
+/// 13 → 14: Date `[[DateValue]]` records join the small state. The
+/// new section appends empty: v13 did not serialize guest Date records,
+/// while the untouched `%Date.prototype%` seed is rebuilt by boot.
+fn migrate_v13_to_v14(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    let small = store.read_small_state()?;
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    if old != manifest.root {
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root.clone(),
+        });
+    }
+    let mut new_small = small;
+    new_small.extend_from_slice(&[0u8; 4]);
+    manifest.store_schema = 14;
+    manifest.root = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &new_small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
+}
+
 /// The epoch discipline every [`HeapStore::commit`] enforces: the first
 /// commit into an empty store is epoch 1; every later commit advances
 /// the stored epoch by exactly one. Anything else is a replayed or
@@ -2348,6 +2390,7 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         data_views: image.data_views.clone(),
         wrappers: image.wrappers.clone(),
         regexps: image.regexps.clone(),
+        dates: image.dates.clone(),
         arguments_brands: image.arguments_brands.clone(),
         temporal: image.temporal.clone(),
         intl: image.intl.clone(),
@@ -2561,6 +2604,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         &crate::image::LangRows {
             wrappers: &small.wrappers,
             regexps: &small.regexps,
+            dates: &small.dates,
             arguments_brands: &small.arguments_brands,
             temporal: &small.temporal,
             intl: &small.intl,
@@ -2596,6 +2640,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         data_views: small.data_views,
         wrappers: small.wrappers,
         regexps: small.regexps,
+        dates: small.dates,
         arguments_brands: small.arguments_brands,
         temporal: small.temporal,
         intl: small.intl,
@@ -2620,13 +2665,42 @@ pub struct StoreLeaves {
     pub frees: Vec<[u8; 32]>,
 }
 
+/// Proof that a store's manifest, small state, geometry, free set, row
+/// inventory, and integrity metadata passed the complete open-time gate.
+///
+/// Fields are private so resume code cannot accidentally mix validated pieces
+/// with values read from another epoch. Lazy page contents remain validated at
+/// fault against the leaves carried here.
+#[derive(Clone, Debug)]
+pub struct ValidatedStoreState {
+    manifest: StoreManifest,
+    small: SmallState,
+    leaves: StoreLeaves,
+}
+
+impl ValidatedStoreState {
+    /// The validated manifest pinned by this state.
+    pub fn manifest(&self) -> &StoreManifest {
+        &self.manifest
+    }
+
+    /// The validated decoded small state.
+    pub fn small(&self) -> &SmallState {
+        &self.small
+    }
+
+    pub(crate) fn into_parts(self) -> (StoreManifest, SmallState, StoreLeaves) {
+        (self.manifest, self.small, self.leaves)
+    }
+}
+
 /// Validate a store exhaustively: manifest gates, signature, meter
 /// cost-table version, live/free/count accounting, the full row
 /// inventory (existence and exact length of every page and extent the
 /// geometry promises), leaf/summary recombination against the sealed
-/// root, and the reassembled free list's semantic gates. Returns the
-/// manifest and decoded small state so a resume does not re-read
-/// them.
+/// root, and the reassembled free list's semantic gates. Returns one
+/// [`ValidatedStoreState`] so resume cannot mix those proven pieces
+/// with values read from another epoch.
 ///
 /// This is the open-time gate that makes later read faults pure I/O
 /// errors (design decision 7): after `validate_store` succeeds, every
@@ -2635,7 +2709,7 @@ pub struct StoreLeaves {
 pub fn validate_store(
     store: &dyn HeapStore,
     expected_sig: &Signature,
-) -> Result<(StoreManifest, SmallState, StoreLeaves), StoreError> {
+) -> Result<ValidatedStoreState, StoreError> {
     let manifest = store.manifest()?;
     // Readability, not equality with the write stamp (review finding
     // 1's flip side): an older READABLE format version opens — its
@@ -2856,6 +2930,7 @@ pub fn validate_store(
         &crate::image::LangRows {
             wrappers: &small.wrappers,
             regexps: &small.regexps,
+            dates: &small.dates,
             arguments_brands: &small.arguments_brands,
             temporal: &small.temporal,
             intl: &small.intl,
@@ -2869,15 +2944,15 @@ pub fn validate_store(
     )
     .map_err(StoreError::Snapshot)?;
 
-    Ok((
+    Ok(ValidatedStoreState {
         manifest,
         small,
-        StoreLeaves {
+        leaves: StoreLeaves {
             pages: leaf_pages,
             exts: leaf_exts,
             frees: leaf_frees,
         },
-    ))
+    })
 }
 
 // --- container ↔ store (the identity locks) ---
@@ -2900,7 +2975,7 @@ pub fn import_from_container(
     expected_sig: &Signature,
     store: &mut dyn HeapStore,
 ) -> Result<(), StoreError> {
-    let image = crate::image::read_machine(bytes, expected_sig)?;
+    let image = crate::image::read_validated_machine(bytes, expected_sig)?.into_image();
     // The blob half of the id-space audit: nothing may ADOPT a
     // container whose heap stores a property id outside both key
     // tables — crafted or torn bytes, or a pre-unification blob that
@@ -3237,6 +3312,7 @@ mod tests {
             data_views: Vec::new(),
             wrappers: Vec::new(),
             regexps: Vec::new(),
+            dates: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: crate::image::TemporalImage::default(),
             intl: ironhorse_vm::IntlTables::default(),
@@ -3268,6 +3344,7 @@ mod tests {
             data_views: Vec::new(),
             wrappers: Vec::new(),
             regexps: Vec::new(),
+            dates: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: crate::image::TemporalImage::default(),
             intl: ironhorse_vm::IntlTables::default(),
@@ -3344,7 +3421,9 @@ mod tests {
         let image = ran_image();
         let mut store = MemoryStore::new();
         store.commit(&image_to_batch(&image, 1, "")).unwrap();
-        let (manifest, small, _leaves) = validate_store(&store, &sig()).expect("validates");
+        let validated = validate_store(&store, &sig()).expect("validates");
+        let manifest = validated.manifest();
+        let small = validated.small();
         assert_eq!(manifest.epoch, 1);
         assert_eq!(manifest.slot_count as usize, image.slots.len());
         assert_eq!(small.slot_free, image.slot_free);

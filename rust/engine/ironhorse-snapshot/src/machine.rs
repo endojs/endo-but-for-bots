@@ -60,7 +60,9 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use crate::format::{Signature, SnapshotError};
-use crate::image::{read_machine, write_machine, MachineImage, MeterImage};
+use crate::image::{
+    read_validated_machine, write_machine, MachineImage, MeterImage, ValidatedSnapshot,
+};
 use crate::sha256::{hex, Sha256};
 use crate::store::{
     chunk_extent_count, compute_root, derive_page_edges, image_to_batch, leaf_hash, seal_commit,
@@ -251,13 +253,14 @@ impl MachineSnapshot for Interp {
             tables.intl,
         )
         .with_iterators(tables.iterators)
+        .with_dates(tables.dates)
         .with_name_floor(self.installed_names_floor())
     }
 }
 
 /// The machine's serialized side-table views (ledger rows `Arrays`/
 /// `Collections`/`SymbolRegistry`/`ErrorData`/`ArrayBuffers`/
-/// `TypedArrays`/`DataViews`), converted from the vm's tuple
+/// `TypedArrays`/`DataViews`/`Dates`), converted from the vm's tuple
 /// snapshots into the image structs, in the vm's canonical
 /// (ascending) order.
 struct SideTableImages {
@@ -270,6 +273,7 @@ struct SideTableImages {
     data_views: Vec<crate::image::DataViewImage>,
     wrappers: Vec<crate::image::WrapperImage>,
     regexps: Vec<crate::image::RegExpImage>,
+    dates: Vec<crate::image::DateImage>,
     arguments_brands: Vec<u32>,
     temporal: crate::image::TemporalImage,
     intl: ironhorse_vm::IntlTables,
@@ -369,6 +373,11 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
     };
     let intl = interp.intl_snapshot();
     let iterators = interp.iterators_snapshot();
+    let dates = interp
+        .dates_snapshot()
+        .into_iter()
+        .map(|(owner, value_bits)| crate::image::DateImage { owner, value_bits })
+        .collect();
     SideTableImages {
         arrays,
         collections,
@@ -383,6 +392,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
         temporal,
         intl,
         iterators,
+        dates,
     }
 }
 
@@ -407,6 +417,7 @@ fn restore_side_tables(
     data_views: Vec<crate::image::DataViewImage>,
     wrappers: Vec<crate::image::WrapperImage>,
     regexps: Vec<crate::image::RegExpImage>,
+    dates: Vec<crate::image::DateImage>,
     arguments_brands: Vec<u32>,
     temporal: crate::image::TemporalImage,
     intl: ironhorse_vm::IntlTables,
@@ -480,6 +491,12 @@ fn restore_side_tables(
             "side-table restore: persisted regexp does not recompile",
         ));
     }
+    interp.restore_dates(
+        dates
+            .into_iter()
+            .map(|d| (d.owner, d.value_bits))
+            .collect(),
+    );
     interp.restore_arguments_brands(arguments_brands);
     let ok = interp.restore_temporal_records(
         temporal.instants,
@@ -512,18 +529,21 @@ fn restore_side_tables(
     Ok(())
 }
 
-/// Rebuild a live [`Interp`] from a decoded [`MachineImage`]: a fresh
+/// Rebuild a live [`Interp`] from a [`ValidatedSnapshot`]: a fresh
 /// boot machine with the image's serializable state reinstated (the
 /// arenas, stack, program symbol names, and metering state). The
 /// boot-derived intrinsics/prototypes come from the fresh boot at their
 /// deterministic slot indices, matching the image's boot region. See
 /// [`Interp::restore_snapshot_state`].
 ///
-/// Fallible (review finding 4): decode validated shape, but every
-/// restore verb that RE-DERIVES state (a regexp recompile, the vm's
-/// own cross-checks) can still refuse, and a release build must
-/// surface that as a structured error, not continue with missing rows.
-pub fn image_to_interp(image: MachineImage) -> Result<Interp, crate::format::SnapshotError> {
+/// The proof wrapper prevents mutation between validation and restore.
+/// Restoration remains fallible while the VM keeps belt-and-braces
+/// revalidation for derived state; every such refusal is structured on all
+/// build profiles.
+pub fn image_to_interp(
+    snapshot: ValidatedSnapshot,
+) -> Result<Interp, crate::format::SnapshotError> {
+    let image = snapshot.into_image();
     let meter = image.meter.to_state();
     let (slots, chunks) = image.to_arenas();
     let mut interp = Interp::new();
@@ -562,6 +582,7 @@ pub fn image_to_interp(image: MachineImage) -> Result<Interp, crate::format::Sna
         image.data_views,
         image.wrappers,
         image.regexps,
+        image.dates,
         image.arguments_brands,
         image.temporal,
         image.intl,
@@ -575,8 +596,8 @@ pub fn image_to_interp(image: MachineImage) -> Result<Interp, crate::format::Sna
 /// cost-table version (all fail closed). The metering analogue of
 /// `fxReadSnapshot`'s signature gate is the `METR` cost-table check.
 pub fn from_snapshot_bytes(buf: &[u8], expected_sig: &Signature) -> Result<Interp, SnapshotError> {
-    let image = read_machine(buf, expected_sig)?;
-    image_to_interp(image)
+    let snapshot = read_validated_machine(buf, expected_sig)?;
+    image_to_interp(snapshot)
 }
 
 /// Rebuild a machine from a snapshot file. Streams the file into memory,
@@ -803,6 +824,7 @@ fn small_state_of(interp: &Interp) -> SmallState {
         data_views: tables.data_views,
         wrappers: tables.wrappers,
         regexps: tables.regexps,
+        dates: tables.dates,
         arguments_brands: tables.arguments_brands,
         temporal: tables.temporal,
         intl: tables.intl,
@@ -1270,7 +1292,7 @@ pub fn resume_from_store(
     store: &dyn HeapStore,
     expected_sig: &Signature,
 ) -> Result<StoreSession, StoreError> {
-    let (manifest, _small, leaves) = validate_store(store, expected_sig)?;
+    let (manifest, _small, leaves) = validate_store(store, expected_sig)?.into_parts();
     // Ledger seed material (V6-c): validation just proved these
     // leaves recombine to the stored root; the raw summaries and
     // small bytes complete the picture. Read before the torn-read
@@ -1318,7 +1340,8 @@ pub fn resume_from_store(
     debug_assert_eq!(root_ledger.root(), manifest.root, "seed from validated state");
     Ok(StoreSession {
         gen_dirty: std::collections::BTreeSet::new(),
-        interp: image_to_interp(image).map_err(StoreError::Snapshot)?,
+        interp: image_to_interp(ValidatedSnapshot::from_validated_image(image))
+            .map_err(StoreError::Snapshot)?,
         epoch: manifest.epoch,
         seal: manifest.seal,
         pin: None,
@@ -1427,7 +1450,8 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     store: std::rc::Rc<std::cell::RefCell<S>>,
     expected_sig: &Signature,
 ) -> Result<StoreSession, StoreError> {
-    let (manifest, small, leaves) = validate_store(&*store.borrow(), expected_sig)?;
+    let (manifest, small, leaves) =
+        validate_store(&*store.borrow(), expected_sig)?.into_parts();
     // Ledger seed material (V6-c), read before the torn-read re-check
     // below so the guard covers it too.
     let edges = store.borrow().page_edges()?;
@@ -1515,6 +1539,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.data_views,
         small.wrappers,
         small.regexps,
+        small.dates,
         small.arguments_brands,
         small.temporal,
         small.intl,
@@ -1666,7 +1691,13 @@ mod tests {
         assert!(a.completed);
 
         let bytes = m.write_snapshot(&sig()).expect("quiescent machine snapshots");
-        let m2 = from_snapshot_bytes(&bytes, &sig()).expect("restores");
+        let snapshot = read_validated_machine(&bytes, &sig()).expect("validates");
+        assert_eq!(
+            snapshot.image().meter.to_state(),
+            m.meter_state(),
+            "the proof wrapper exposes only an immutable validated image",
+        );
+        let m2 = image_to_interp(snapshot).expect("restores validated state");
         // The restored machine carries the same metering state.
         assert_eq!(m2.meter_state(), m.meter_state());
         // Re-serializing the restored machine is byte-identical.

@@ -8650,6 +8650,31 @@ impl Interp {
         }
     }
 
+    /// Quiescent snapshot of Date `[[DateValue]]` records, ascending by
+    /// owning slot and carrying each IEEE-754 value as raw bits.
+    ///
+    /// The untouched `%Date.prototype%` seed is re-derived by boot and is
+    /// omitted. A guest-mutated prototype is emitted like any other Date.
+    pub fn dates_snapshot(&self) -> Vec<(u32, u64)> {
+        let boot_bits = f64::NAN.to_bits();
+        let mut out: Vec<(u32, u64)> = self
+            .dates
+            .iter()
+            .filter(|(owner, value)| **owner != self.date_proto || value.to_bits() != boot_bits)
+            .map(|(owner, value)| (owner.0, value.to_bits()))
+            .collect();
+        out.sort_unstable_by_key(|(owner, _)| *owner);
+        out
+    }
+
+    /// Reinstate validated Date `[[DateValue]]` records.
+    pub fn restore_dates(&mut self, rows: Vec<(u32, u64)>) {
+        for (owner, value_bits) in rows {
+            self.dates
+                .insert(crate::value::SlotIndex(owner), f64::from_bits(value_bits));
+        }
+    }
+
     /// Quiescent snapshot of the four Temporal record tables (ledger
     /// `TemporalRecords` row, the `TMPR` atom), each ascending by
     /// owner: instants `(owner, epochNanoseconds)`, durations
@@ -40476,7 +40501,7 @@ mod tests {
     }
 
     #[test]
-    fn leave_call_underflow_fails_closed_on_main_thread_stack() {
+    fn former_leave_call_underflow_trophy_completes_without_panicking() {
         // The `fuzz-ironhorse` bytecode_decoder trophy (CI run
         // 33123238794, 2026-08-27): this 20-byte crafted program drove
         // nested async re-entry until a `start_async` return-family
@@ -40485,13 +40510,12 @@ mod tests {
         // cascaded to an empty stack, and hit the explicit
         // `panic!("leave_call with empty call stack")` — a host process
         // abort where a named refusal is owed (endojs/endo-but-for-bots#1046).
-        // The frame-underflow guards on the four return-family boundaries
-        // (`end:`/`start_generator:`/`start_async_generator:`/`start_async:`)
-        // now degrade it to a host-facing `Halt::Unsupported`, exactly as
-        // the sibling `*:stack-underflow` refusals do. Run on a
-        // main-thread-sized (8 MiB, libFuzzer's default) stack via a
-        // spawned thread so the assertion faithfully mirrors the fuzz
-        // harness rather than the test runner's smaller worker stack.
+        // The current mainline's bounded native re-entry changes this
+        // trophy's terminal outcome to a safe `Return` before the old
+        // underflow site. Keep the exact bytes as the process-crash lock:
+        // run on a main-thread-sized (8 MiB, libFuzzer's default) stack
+        // so the assertion faithfully mirrors the fuzz harness rather
+        // than the test runner's smaller worker stack.
         let bytes: &[u8] = &[
             41, 12, 193, 193, 193, 193, 12, 12, 56, 102, 102, 102, 102, 102, 102, 102, 6, 66,
             193, 82,
@@ -40501,8 +40525,8 @@ mod tests {
             .spawn(|| crate::run_program_bounded(bytes, 500_000).halt)
             .expect("spawn fuzz-repro thread")
             .join()
-            .expect("run must not panic — a frame underflow is a named refusal, not an abort");
-        assert_eq!(halt, Halt::Unsupported("start_async:frame-underflow"));
+            .expect("run must not panic on the former frame-underflow trophy");
+        assert_eq!(halt, Halt::Return);
     }
 
     #[test]

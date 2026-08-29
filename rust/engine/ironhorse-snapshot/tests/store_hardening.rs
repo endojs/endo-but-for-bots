@@ -206,6 +206,7 @@ fn incremental_batch(
         data_views: Vec::new(),
         wrappers: Vec::new(),
         regexps: Vec::new(),
+        dates: Vec::new(),
         arguments_brands: Vec::new(),
         temporal: ironhorse_snapshot::image::TemporalImage::default(),
         intl: ironhorse_vm::IntlTables::default(),

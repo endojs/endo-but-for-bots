@@ -104,6 +104,10 @@ pub const TMPR: FourCc = FourCc(*b"TMPR");
 /// folded into `done` (see the vm's `IteratorRow`). Ironhorse-specific;
 /// emitted only when non-empty (see [`ARRY`]).
 pub const ITER: FourCc = FourCc(*b"ITER");
+/// `DATE` — Date `[[DateValue]]` records (ledger `Dates` row): owner
+/// plus raw IEEE-754 bits, owner-ascending. Ironhorse-specific;
+/// emitted only when non-empty (see [`ARRY`]).
+pub const DATE: FourCc = FourCc(*b"DATE");
 /// `NFLR` — the installed-names floor (wave-6 W6-7): the id ceiling at
 /// or below which partial install passes leave bindings alone. Four
 /// big-endian bytes. Emitted only when it differs from the name-table
@@ -130,14 +134,16 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 /// The Ironhorse snapshot format version — the stamp every writer
 /// emits. Bumped on any change to the atom layout or the slot-record
 /// encoding, INCLUDING the addition of state-bearing atoms (review
-/// finding 1): version 2 marks the side-table atom family
+/// finding 1): version 2 marks the initial side-table atom family
 /// (`ARRY`…`INTL`/`ITER`/`NFLR`), so a version-1 reader — which skips
 /// unknown atoms and would silently drop arrays, collections, RegExps,
 /// Intl records and iterator cursors — refuses a version-2 container
-/// outright instead of resuming a degraded machine. The reader accepts
+/// outright instead of resuming a degraded machine. Version 3 adds
+/// the `DATE` state-bearing atom, which a version-2 reader would
+/// likewise skip. The reader accepts
 /// [`IRONHORSE_FORMAT_VERSION_MIN_READ`]`..=`this and refuses anything
 /// newer.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 2;
+pub const IRONHORSE_FORMAT_VERSION: u32 = 3;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in
@@ -377,14 +383,13 @@ mod tests {
         payload
     }
 
-    /// Review finding 1: the write stamp moved to 2 when the
-    /// state-bearing side-table atoms joined the format, so a
-    /// version-1 reader (exact-match, as this reader was) REFUSES a
-    /// version-2 container instead of skipping the unknown atoms and
-    /// silently dropping that state.
+    /// Review finding 1: each state-bearing atom family advances the
+    /// write stamp so an older exact-match reader refuses instead of
+    /// skipping unknown state. Version 2 introduced the initial ledger
+    /// atoms; version 3 introduces Date records.
     #[test]
     fn the_write_stamp_is_past_the_side_table_addition() {
-        assert!(IRONHORSE_FORMAT_VERSION >= 2, "the side-table atoms are a format bump");
+        assert!(IRONHORSE_FORMAT_VERSION >= 3, "the Date atom is a format bump");
         assert_eq!(Version::current().format_version, IRONHORSE_FORMAT_VERSION);
     }
 

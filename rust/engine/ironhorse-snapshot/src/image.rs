@@ -251,6 +251,15 @@ pub struct RegExpImage {
     pub last_index_bits: u64,
 }
 
+/// One Date instance's serialized `[[DateValue]]`: owning slot and raw
+/// IEEE-754 bits. Raw bits preserve invalid dates and negative zero exactly.
+/// Ascending by owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DateImage {
+    pub owner: u32,
+    pub value_bits: u64,
+}
+
 /// The four Temporal record tables (the `TMPR` atom / small-state
 /// temporal section), each ascending by owner. Pure numeric/string
 /// data — no slot references beyond the weak owners.
@@ -356,6 +365,8 @@ pub struct MachineImage {
     pub wrappers: Vec<WrapperImage>,
     /// `REGX`: the regexp side table (ledger), owner-ascending.
     pub regexps: Vec<RegExpImage>,
+    /// `DATE`: Date `[[DateValue]]` records, owner-ascending.
+    pub dates: Vec<DateImage>,
     /// `ARGB`: the arguments-exotic brand owners, ascending.
     pub arguments_brands: Vec<u32>,
     /// `TMPR`: the four Temporal record tables (ledger).
@@ -368,6 +379,34 @@ pub struct MachineImage {
     /// traveled. `None` — a pre-floor snapshot — restores to the
     /// conservative full-table default.
     pub name_floor: Option<u32>,
+}
+
+/// A decoded machine image that has crossed the complete container
+/// validation boundary.
+///
+/// The inner image is private so callers cannot mutate validated state and
+/// then pass it directly to restore. Low-level tooling may inspect it through
+/// [`Self::image`] or consume it through [`Self::into_image`], but restoring a
+/// modified [`MachineImage`] requires encoding and validating it again.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ValidatedSnapshot {
+    image: MachineImage,
+}
+
+impl ValidatedSnapshot {
+    pub(crate) fn from_validated_image(image: MachineImage) -> ValidatedSnapshot {
+        ValidatedSnapshot { image }
+    }
+
+    /// Borrow the validated plain-data image for inspection.
+    pub fn image(&self) -> &MachineImage {
+        &self.image
+    }
+
+    /// Consume the proof wrapper and return its plain-data image.
+    pub fn into_image(self) -> MachineImage {
+        self.image
+    }
 }
 
 impl MachineImage {
@@ -408,6 +447,7 @@ impl MachineImage {
             data_views: Vec::new(),
             wrappers: Vec::new(),
             regexps: Vec::new(),
+            dates: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -517,6 +557,12 @@ impl MachineImage {
     /// boundary-normalized (collection ordinals; staleness in `done`).
     pub fn with_iterators(mut self, iterators: Vec<IteratorRow>) -> MachineImage {
         self.iterators = iterators;
+        self
+    }
+
+    /// Attach Date `[[DateValue]]` records, already owner-ascending.
+    pub fn with_dates(mut self, dates: Vec<DateImage>) -> MachineImage {
+        self.dates = dates;
         self
     }
 
@@ -1366,6 +1412,35 @@ pub(crate) fn decode_regexps(p: &[u8]) -> Result<Vec<RegExpImage>, SnapshotError
     Ok(out)
 }
 
+/// Encode Date `[[DateValue]]` rows: count, then `(owner, raw f64 bits)`.
+pub(crate) fn encode_dates(dates: &[DateImage]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(4 + dates.len() * 12);
+    v.extend_from_slice(&(dates.len() as u32).to_be_bytes());
+    for d in dates {
+        v.extend_from_slice(&d.owner.to_be_bytes());
+        v.extend_from_slice(&d.value_bits.to_be_bytes());
+    }
+    v
+}
+
+pub(crate) fn decode_dates(p: &[u8]) -> Result<Vec<DateImage>, SnapshotError> {
+    let mut c = Cursor::new(p, "date side table");
+    let count = c.u32()? as usize;
+    let mut out = Vec::with_capacity(count.min(p.len() / 12));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        let value_bits = ((c.u32()? as u64) << 32) | c.u32()? as u64;
+        if out.last().is_some_and(|prev: &DateImage| owner <= prev.owner) {
+            return Err(SnapshotError::Corrupt(
+                "date side table: owners not strictly ascending",
+            ));
+        }
+        out.push(DateImage { owner, value_bits });
+    }
+    c.done()?;
+    Ok(out)
+}
+
 /// Encode the arguments-exotic brand owners (the `ARGB` payload /
 /// small-state arguments section): a `u32` count then ascending owners.
 pub(crate) fn encode_arguments_brands(owners: &[u32]) -> Vec<u8> {
@@ -2049,6 +2124,7 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
 pub(crate) struct LangRows<'a> {
     pub wrappers: &'a [WrapperImage],
     pub regexps: &'a [RegExpImage],
+    pub dates: &'a [DateImage],
     pub arguments_brands: &'a [u32],
     pub temporal: &'a TemporalImage,
     pub intl: &'a IntlTables,
@@ -2059,6 +2135,7 @@ impl LangRows<'_> {
     pub(crate) const EMPTY: LangRows<'static> = LangRows {
         wrappers: &[],
         regexps: &[],
+        dates: &[],
         arguments_brands: &[],
         temporal: &EMPTY_TEMPORAL,
         intl: &EMPTY_INTL,
@@ -2273,7 +2350,10 @@ pub(crate) fn check_image_slot_bounds(
     };
     for b in buffers {
         owned(b.owner)?;
-        if (b.data as usize) < CHUNK_HEADER || b.data as u64 + b.length as u64 > chunk_len as u64 {
+        if b.data == u32::MAX
+            || (b.data as usize) < CHUNK_HEADER
+            || b.data as u64 + b.length as u64 > chunk_len as u64
+        {
             return Err(OOC);
         }
     }
@@ -2314,6 +2394,14 @@ pub(crate) fn check_image_slot_bounds(
     }
     for r in lang.regexps {
         owned(r.owner)?;
+        if !ironhorse_vm::regexp_source_compiles(&r.source, &r.flags) {
+            return Err(SnapshotError::Corrupt(
+                "regexp side table: persisted source does not compile",
+            ));
+        }
+    }
+    for d in lang.dates {
+        owned(d.owner)?;
     }
     for &o in lang.arguments_brands {
         owned(o)?;
@@ -2494,6 +2582,9 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
     if !image.iterators.is_empty() {
         w.atom(crate::format::ITER, &encode_iterators(&image.iterators));
     }
+    if !image.dates.is_empty() {
+        w.atom(crate::format::DATE, &encode_dates(&image.dates));
+    }
     // The installed-names floor: `Some` only when it differs from the
     // name-table length (`with_name_floor` canonicalizes), so machines
     // whose floor sits at the table stay byte-stable with every
@@ -2509,6 +2600,10 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
 /// `SIGN` against `expected_sig` — a mismatch fails closed exactly as
 /// `fxReadSnapshot` does (a callback index would bind the wrong host
 /// function). Pass the machine's current signature.
+///
+/// This low-level API returns a mutable plain-data model for tooling and
+/// crafted-input tests. Machine adoption uses [`read_validated_machine`], whose
+/// private wrapper prevents mutation between this validation and restore.
 pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage, SnapshotError> {
     let r = AtomReader::parse(buf)?;
 
@@ -2641,6 +2736,10 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => decode_iterators(a.payload)?,
         None => Vec::new(),
     };
+    let dates = match r.find(crate::format::DATE) {
+        Some(a) => decode_dates(a.payload)?,
+        None => Vec::new(),
+    };
     let name_floor = match r.find(crate::format::NFLR) {
         Some(a) => {
             if a.payload.len() != 4 {
@@ -2687,6 +2786,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         &LangRows {
             wrappers: &wrappers,
             regexps: &regexps,
+            dates: &dates,
             arguments_brands: &arguments_brands,
             temporal: &temporal,
             intl: &intl,
@@ -2721,12 +2821,32 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         data_views,
         wrappers,
         regexps,
+        dates,
         arguments_brands,
         temporal,
         intl,
         iterators,
         name_floor,
     })
+}
+
+/// Decode and validate container bytes into the proof-carrying image accepted
+/// by the restore boundary.
+///
+/// [`read_machine`] remains the low-level inspection API. Adoption paths use
+/// this function so no publicly mutable [`MachineImage`] exists between
+/// validation and restore.
+pub fn read_validated_machine(
+    buf: &[u8],
+    expected_sig: &Signature,
+) -> Result<ValidatedSnapshot, SnapshotError> {
+    let image = read_machine(buf, expected_sig)?;
+    if image.stored_unregistered_key_id().is_some() {
+        return Err(SnapshotError::Corrupt(
+            "stored property id outside the name and symbol-key tables",
+        ));
+    }
+    Ok(ValidatedSnapshot::from_validated_image(image))
 }
 
 #[cfg(test)]
@@ -2838,6 +2958,24 @@ mod tests {
     }
 
     #[test]
+    fn date_decode_preserves_raw_bits_and_refuses_duplicate_owners() {
+        let rows = vec![
+            DateImage { owner: 2, value_bits: (-0.0f64).to_bits() },
+            DateImage { owner: 7, value_bits: 0x7ff8_0000_0000_0042 },
+        ];
+        assert_eq!(decode_dates(&encode_dates(&rows)).unwrap(), rows);
+
+        let duplicate = vec![
+            DateImage { owner: 3, value_bits: 1.0f64.to_bits() },
+            DateImage { owner: 3, value_bits: 2.0f64.to_bits() },
+        ];
+        assert!(matches!(
+            decode_dates(&encode_dates(&duplicate)),
+            Err(SnapshotError::Corrupt(_))
+        ));
+    }
+
+    #[test]
     fn typed_array_family_decode_refuses_crafted_rows() {
         // Unknown flag bits on a buffer row.
         let bad_flags = vec![BufferImage { owner: 1, data: 4, length: 8, flags: 4 }];
@@ -2890,6 +3028,10 @@ mod tests {
         // A buffer whose offset sits inside the chunk header.
         let low = vec![BufferImage { owner: 1, data: 2, length: 8, flags: 0 }];
         assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &low, &[], &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64, &[]).is_err());
+        // The NULL chunk sentinel is never valid backing, even when a
+        // store advertises a chunk domain large enough to cover u32::MAX.
+        let null = vec![BufferImage { owner: 1, data: u32::MAX, length: 0, flags: 0 }];
+        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &null, &[], &[], &LangRows::EMPTY, &[], 0, &sym, 4, usize::MAX, &[]).is_err());
         // A view naming a buffer with NO row (an in-bounds slot is not
         // enough — restoring it would read through unbacked geometry).
         let orphan = vec![TypedArrayImage { owner: 2, kind: 0, buffer: 3, offset: 0, length: 1 }];
@@ -3055,6 +3197,7 @@ mod tests {
             let lang = LangRows {
                 wrappers: &[],
                 regexps: &[],
+                dates: &[],
                 arguments_brands: &[],
                 temporal: &EMPTY_TEMPORAL,
                 intl,
@@ -3410,6 +3553,7 @@ mod tests {
             data_views: Vec::new(),
             wrappers: Vec::new(),
             regexps: Vec::new(),
+            dates: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -3447,6 +3591,7 @@ mod tests {
             data_views: Vec::new(),
             wrappers: Vec::new(),
             regexps: Vec::new(),
+            dates: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -3565,6 +3710,7 @@ mod tests {
             data_views: Vec::new(),
             wrappers: Vec::new(),
             regexps: Vec::new(),
+            dates: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),

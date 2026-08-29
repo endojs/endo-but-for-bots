@@ -88,6 +88,15 @@ pub fn run_program_with_symbols(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
     interp.run(bytecode)
 }
 
+/// Whether a persisted RegExp `(source, flags)` pair recompiles under this
+/// engine build.
+///
+/// Snapshot validation calls this before admitting an image, so restoration
+/// never discovers malformed RegExp state after the trust boundary.
+pub fn regexp_source_compiles(source: &str, flags: &str) -> bool {
+    ironhorse_regexp::compile(source, flags).is_ok()
+}
+
 /// Disassemble a bytecode buffer to `(offset, mnemonic)` pairs, walking
 /// instruction lengths with [`opcode::instruction_len`] so ID-operand
 /// and length-prefixed variable opcodes (functions, strings, embedded

@@ -554,10 +554,10 @@ impl SideTable {
             SideTable::TemporalRecords => {
                 ("temporal_instants/temporal_durations/temporal_plains/temporal_zoneds", Serialized)
             }
-            // The mainline's Date-core table (2026-08-28 rebase): pure
-            // per-instance data, the Temporal-records class; Pending
-            // until an atom carries it (a recorded follow-up).
-            SideTable::Dates => ("dates", Pending),
+            // Date `[[DateValue]]` records travel as raw IEEE-754 bits
+            // in `DATE` (schema 14). The untouched Date.prototype seed
+            // is re-derived by boot; a guest-mutated seed is emitted.
+            SideTable::Dates => ("dates", Serialized),
             SideTable::AsyncGenerators => ("async_generators/async_gen_run_stack", Pending),
             SideTable::PrivateElements => ("private_values/private_accessors", Pending),
             SideTable::DisposableStacks => ("disposable_stacks", Pending),
@@ -714,6 +714,10 @@ mod tests {
             "pending_new_target", "exception", "frame_slots", "locals", "id_map",
             "resume_status", "callback_return_depth", "env", "direct_eval_hoist",
             "eval_direct", "active_segment", "top_level_code", "result", "strict",
+            // Native dispatch recursion is bracketed by `dispatch_at`;
+            // every return decrements it before control can reach a
+            // persistence boundary.
+            "dispatch_depth",
             // Poison latch for the property-key id-space meet: provably
             // never set at a persistable boundary — the dispatch loop
             // halts on it before the next instruction and `is_quiescent`
@@ -772,6 +776,7 @@ mod tests {
     #[test]
     fn pending_is_derived_from_ledger() {
         let pending = SideTable::pending();
+        assert_eq!(pending.len(), 17, "the design's Remaining ledger count");
         // The rich per-instance tables are still pending.
         assert!(pending.contains(&SideTable::Functions));
         assert!(pending.contains(&SideTable::Generators));
@@ -817,9 +822,8 @@ mod tests {
         // iterator continues its walk (ordinal-normalized collection
         // cursors included).
         assert!(!pending.contains(&SideTable::Iterators));
-        // The 2026-08-28 rebase surfaced the mainline's Date table —
-        // honestly Pending until its (pure-data) atom lands.
-        assert!(pending.contains(&SideTable::Dates));
+        // Schema 14 carries the mainline's pure-data Date table.
+        assert!(!pending.contains(&SideTable::Dates));
         // The quiescence-gated run stacks, call chain, catch chain, and
         // microtask queue are EmptyAtBoundary, not pending: no atom is
         // ever needed for state the gates prove empty.
