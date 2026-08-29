@@ -4766,6 +4766,21 @@ impl PrivateElementSnapshot {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct DisposalRecordRow {
+    pub resource: Slot,
+    pub method: Slot,
+    pub pass_resource: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DisposableStackRow {
+    pub owner: u32,
+    pub disposed: bool,
+    pub asynchronous: bool,
+    pub records: Vec<DisposalRecordRow>,
+}
+
 /// A suspended activation: the caller's scope and resume point, saved by
 /// `run` and restored by `end` (XS's `mxFrame->value.frame.{code,scope}`
 /// plus the environment the frame aliases). The value stack is shared and
@@ -9232,6 +9247,50 @@ impl Interp {
             );
         }
         true
+    }
+
+    pub fn disposable_stacks_snapshot(&self) -> Vec<DisposableStackRow> {
+        let mut rows: Vec<DisposableStackRow> = self
+            .disposable_stacks
+            .iter()
+            .map(|(owner, data)| DisposableStackRow {
+                owner: owner.0,
+                disposed: data.disposed,
+                asynchronous: data.asynchronous,
+                records: data
+                    .records
+                    .iter()
+                    .map(|record| DisposalRecordRow {
+                        resource: record.resource,
+                        method: record.method,
+                        pass_resource: record.pass_resource,
+                    })
+                    .collect(),
+            })
+            .collect();
+        rows.sort_unstable_by_key(|row| row.owner);
+        rows
+    }
+
+    pub fn restore_disposable_stacks(&mut self, rows: Vec<DisposableStackRow>) {
+        for row in rows {
+            self.disposable_stacks.insert(
+                crate::value::SlotIndex(row.owner),
+                DisposableStackData {
+                    disposed: row.disposed,
+                    asynchronous: row.asynchronous,
+                    records: row
+                        .records
+                        .into_iter()
+                        .map(|record| DisposalRecord {
+                            resource: record.resource,
+                            method: record.method,
+                            pass_resource: record.pass_resource,
+                        })
+                        .collect(),
+                },
+            );
+        }
     }
 
     /// Quiescent snapshot of the four Temporal record tables (ledger

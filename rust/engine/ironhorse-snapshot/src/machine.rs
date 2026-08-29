@@ -249,6 +249,7 @@ impl MachineSnapshot for Interp {
         .with_accessors(tables.accessors)
         .with_intl_bound_functions(tables.intl_bound_functions)
         .with_private_elements(tables.private_elements)
+        .with_disposable_stacks(tables.disposable_stacks)
         .with_name_floor(self.installed_names_floor())
     }
 }
@@ -274,6 +275,7 @@ struct SideTableImages {
     accessors: Vec<ironhorse_vm::AccessorRow>,
     intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow>,
     private_elements: ironhorse_vm::PrivateElementSnapshot,
+    disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
     arguments_brands: Vec<u32>,
     temporal: crate::image::TemporalImage,
     intl: ironhorse_vm::IntlTables,
@@ -383,6 +385,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
     let accessors = interp.accessors_snapshot();
     let intl_bound_functions = interp.intl_bound_functions_snapshot();
     let private_elements = interp.private_elements_snapshot();
+    let disposable_stacks = interp.disposable_stacks_snapshot();
     SideTableImages {
         arrays,
         collections,
@@ -403,6 +406,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
         accessors,
         intl_bound_functions,
         private_elements,
+        disposable_stacks,
     }
 }
 
@@ -433,6 +437,7 @@ fn restore_side_tables(
     accessors: Vec<ironhorse_vm::AccessorRow>,
     intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow>,
     private_elements: ironhorse_vm::PrivateElementSnapshot,
+    disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
     arguments_brands: Vec<u32>,
     temporal: crate::image::TemporalImage,
     intl: ironhorse_vm::IntlTables,
@@ -556,6 +561,7 @@ fn restore_side_tables(
             "side-table restore: malformed private elements",
         ));
     }
+    interp.restore_disposable_stacks(disposable_stacks);
     // The iterator cursors (schema 13): validated at decode/bounds
     // (kinds, cursor ranges, the covering-collection cross-check);
     // restored AFTER the collections so the covering rows are in hand
@@ -628,6 +634,7 @@ pub fn image_to_interp(
         image.accessors,
         image.intl_bound_functions,
         image.private_elements,
+        image.disposable_stacks,
         image.arguments_brands,
         image.temporal,
         image.intl,
@@ -875,6 +882,7 @@ fn small_state_of(interp: &Interp) -> SmallState {
         accessors: tables.accessors,
         intl_bound_functions: tables.intl_bound_functions,
         private_elements: tables.private_elements,
+        disposable_stacks: tables.disposable_stacks,
         arguments_brands: tables.arguments_brands,
         temporal: tables.temporal,
         intl: tables.intl,
@@ -1579,6 +1587,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.accessors,
         small.intl_bound_functions,
         small.private_elements,
+        small.disposable_stacks,
         small.arguments_brands,
         small.temporal,
         small.intl,

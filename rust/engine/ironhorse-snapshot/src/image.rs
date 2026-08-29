@@ -377,6 +377,8 @@ pub struct MachineImage {
     pub intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow>,
     /// `PRIV`: private values and accessors.
     pub private_elements: ironhorse_vm::PrivateElementSnapshot,
+    /// `DISP`: explicit resource-management stacks.
+    pub disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
     /// `ARGB`: the arguments-exotic brand owners, ascending.
     pub arguments_brands: Vec<u32>,
     /// `TMPR`: the four Temporal record tables (ledger).
@@ -463,6 +465,7 @@ impl MachineImage {
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
             private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
+            disposable_stacks: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -616,6 +619,14 @@ impl MachineImage {
         private_elements: ironhorse_vm::PrivateElementSnapshot,
     ) -> MachineImage {
         self.private_elements = private_elements;
+        self
+    }
+
+    pub fn with_disposable_stacks(
+        mut self,
+        disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
+    ) -> MachineImage {
+        self.disposable_stacks = disposable_stacks;
         self
     }
 
@@ -1951,6 +1962,76 @@ pub(crate) fn decode_private_elements(
     Ok(ironhorse_vm::PrivateElementSnapshot { values, accessors })
 }
 
+pub(crate) fn encode_disposable_stacks(rows: &[ironhorse_vm::DisposableStackRow]) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    for row in rows {
+        v.extend_from_slice(&row.owner.to_be_bytes());
+        v.push(row.disposed as u8);
+        v.push(row.asynchronous as u8);
+        v.extend_from_slice(&(row.records.len() as u32).to_be_bytes());
+        for record in &row.records {
+            crate::slot_codec::encode_slot(&record.resource, &mut v);
+            crate::slot_codec::encode_slot(&record.method, &mut v);
+            v.push(record.pass_resource as u8);
+        }
+    }
+    v
+}
+
+pub(crate) fn decode_disposable_stacks(
+    p: &[u8],
+) -> Result<Vec<ironhorse_vm::DisposableStackRow>, SnapshotError> {
+    let mut c = Cursor::new(p, "disposable stacks");
+    let count = c.u32()? as usize;
+    let mut rows = Vec::with_capacity(count.min(p.len() / 10));
+    let boolean = |c: &mut Cursor<'_>| -> Result<bool, SnapshotError> {
+        match c.u8()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(SnapshotError::Corrupt(
+                "disposable stacks: bad boolean byte",
+            )),
+        }
+    };
+    for _ in 0..count {
+        let owner = c.u32()?;
+        if rows
+            .last()
+            .is_some_and(|row: &ironhorse_vm::DisposableStackRow| owner <= row.owner)
+        {
+            return Err(SnapshotError::Corrupt(
+                "disposable stacks: owners not strictly ascending",
+            ));
+        }
+        let disposed = boolean(&mut c)?;
+        let asynchronous = boolean(&mut c)?;
+        let record_count = c.u32()? as usize;
+        let mut records =
+            Vec::with_capacity(record_count.min(p.len() / (2 * SLOT_RECORD_BYTES + 1)));
+        for _ in 0..record_count {
+            records.push(ironhorse_vm::DisposalRecordRow {
+                resource: c.slot()?,
+                method: c.slot()?,
+                pass_resource: boolean(&mut c)?,
+            });
+        }
+        if disposed && !records.is_empty() {
+            return Err(SnapshotError::Corrupt(
+                "disposable stacks: disposed stack retains records",
+            ));
+        }
+        rows.push(ironhorse_vm::DisposableStackRow {
+            owner,
+            disposed,
+            asynchronous,
+            records,
+        });
+    }
+    c.done()?;
+    Ok(rows)
+}
+
 /// Encode the arguments-exotic brand owners (the `ARGB` payload /
 /// small-state arguments section): a `u32` count then ascending owners.
 pub(crate) fn encode_arguments_brands(owners: &[u32]) -> Vec<u8> {
@@ -2640,6 +2721,7 @@ pub(crate) struct LangRows<'a> {
     pub accessors: &'a [ironhorse_vm::AccessorRow],
     pub intl_bound_functions: &'a [ironhorse_vm::IntlBoundFunctionRow],
     pub private_elements: &'a ironhorse_vm::PrivateElementSnapshot,
+    pub disposable_stacks: &'a [ironhorse_vm::DisposableStackRow],
     pub arguments_brands: &'a [u32],
     pub temporal: &'a TemporalImage,
     pub intl: &'a IntlTables,
@@ -2656,6 +2738,7 @@ impl LangRows<'_> {
         accessors: &[],
         intl_bound_functions: &[],
         private_elements: &EMPTY_PRIVATE_ELEMENTS,
+        disposable_stacks: &[],
         arguments_brands: &[],
         temporal: &EMPTY_TEMPORAL,
         intl: &EMPTY_INTL,
@@ -3157,6 +3240,18 @@ pub(crate) fn check_image_slot_bounds(
             check(&value)?;
         }
     }
+    for row in lang.disposable_stacks {
+        owned(row.owner)?;
+        for record in &row.records {
+            check(&record.resource)?;
+            check(&record.method)?;
+            if record.method.kind != Kind::Reference {
+                return Err(SnapshotError::Corrupt(
+                    "disposable stacks: disposal method is not callable",
+                ));
+            }
+        }
+    }
     for &o in lang.arguments_brands {
         owned(o)?;
     }
@@ -3366,6 +3461,12 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
             &encode_private_elements(&image.private_elements),
         );
     }
+    if !image.disposable_stacks.is_empty() {
+        w.atom(
+            crate::format::DISP,
+            &encode_disposable_stacks(&image.disposable_stacks),
+        );
+    }
     // The installed-names floor: `Some` only when it differs from the
     // name-table length (`with_name_floor` canonicalizes), so machines
     // whose floor sits at the table stay byte-stable with every
@@ -3541,6 +3642,10 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => decode_private_elements(a.payload)?,
         None => ironhorse_vm::PrivateElementSnapshot::default(),
     };
+    let disposable_stacks = match r.find(crate::format::DISP) {
+        Some(a) => decode_disposable_stacks(a.payload)?,
+        None => Vec::new(),
+    };
     let name_floor = match r.find(crate::format::NFLR) {
         Some(a) => {
             if a.payload.len() != 4 {
@@ -3593,6 +3698,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
             accessors: &accessors,
             intl_bound_functions: &intl_bound_functions,
             private_elements: &private_elements,
+            disposable_stacks: &disposable_stacks,
             arguments_brands: &arguments_brands,
             temporal: &temporal,
             intl: &intl,
@@ -3633,6 +3739,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         accessors,
         intl_bound_functions,
         private_elements,
+        disposable_stacks,
         arguments_brands,
         temporal,
         intl,
@@ -4014,6 +4121,7 @@ mod tests {
                 accessors: &[],
                 intl_bound_functions: &[],
                 private_elements: &EMPTY_PRIVATE_ELEMENTS,
+                disposable_stacks: &[],
                 arguments_brands: &[],
                 temporal: &EMPTY_TEMPORAL,
                 intl,
@@ -4375,6 +4483,7 @@ mod tests {
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
             private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
+            disposable_stacks: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -4418,6 +4527,7 @@ mod tests {
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
             private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
+            disposable_stacks: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -4542,6 +4652,7 @@ mod tests {
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
             private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
+            disposable_stacks: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
