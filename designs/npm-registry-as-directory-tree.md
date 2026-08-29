@@ -76,7 +76,7 @@ working machinery, not a rewrite of the registry proxy.
 | Path | Capability surface | Enumeration and lookup |
 |---|---|---|
 | `/` | `EnumerableTree` | `list()` returns configured registry names, initially `['npm']`; `lookup('npm')` returns the npm hub. |
-| `/npm` | Non-enumerable `LookupTree` | No `list` method. `lookup('ses')` returns its version directory; `lookup('@endo')` returns a non-enumerable scope hub. |
+| `/npm` | Non-enumerable `LookupTree` | No `list` method. `lookup('ses')` returns its version directory; `lookup('@endo')` returns a non-enumerable scope hub; `lookup('@endo/patterns')` is a convenience spelling for the two-segment scoped-package path. |
 | `/npm/@<scope>` | Non-enumerable `LookupTree` | No `list` method. `lookup('package')` returns that scoped package's version directory. |
 | `/npm/<package>` or `/npm/@<scope>/<package>` | `EnumerableTree` | `list()` returns exact published versions in ascending semver order; `lookup('1.2.3')` selects one version. |
 | `.../<version>` | Immutable `SnapshotTree` / `EndoReadableTree` | The package root itself: `lookup('package.json')`, `lookup('src')`, and content identity through `getInfo()` / `sha256()`. |
@@ -107,41 +107,36 @@ The leading `@` makes the intermediate scope hub unambiguous.
 for these methods, so one calling convention serves the whole interface
 and there is no string-versus-array shape for a caller to disambiguate at
 runtime.
-Each segment is matched literally against the current node's children; no
-segment is split on `/`.
+Each segment is normally matched literally against the current node's
+children.
 This follows the standing convention in `packages/daemon/src/mount.js`,
 whose `segmentsFromEntryPathArg` reserves slash-splitting for `entry()`
 and keeps every other path-bearing method on single-name segment
 matching.
 So a scoped package is reached by `lookup('@endo', 'patterns')` (two
-segments) or by a stepwise `lookup('@endo')` then `lookup('patterns')`; a
-single-segment `lookup('@endo/patterns')` against `/npm` looks for one
-literal child named `@endo/patterns`, finds none (the only matching key
-is the scope hub `@endo`), and rejects.
+segments), by a stepwise `lookup('@endo')` then `lookup('patterns')`, or
+by the npm hub's scoped-package convenience spelling
+`lookup('@endo/patterns')`.
 Reaching for the npm-shaped single string (`lookup('@endo/patterns')`),
 spelled the way `package.json` and every import specifier already spell
-it, is a predictable slip.
-A segment that itself contains `/` therefore rejects with a structured
+it, is predictable enough to support directly.
+The npm hub recognizes exactly one slash-bearing form: one leading-`@`
+scope segment, one `/`, and one non-empty package segment. It normalizes
+that form to the same two-segment traversal as
+`lookup('@endo', 'patterns')`; `has` applies the same normalization.
+Any other segment that contains `/` rejects with a structured
 `@endo/errors` `SyntaxError` that names the offending slash-bearing
-segment and points at the two-segment (or stepwise) form, a distinct
-concrete shape rather than the identical not-found `RangeError` a
-genuinely absent package raises.
+segment and the accepted scoped-package or multi-segment forms, a
+distinct concrete shape rather than the identical not-found `RangeError`
+a genuinely absent package raises.
 The cross-backend conformance suite asserts this slash-bearing-segment
 `SyntaxError` shape separately from the plain not-found shape.
-The primary tree surface rejects the slash-bearing spelling on purpose:
-keeping one unambiguous per-segment grammar is what lets `lookup`, `has`,
-and `list` share a single rest-parameter calling convention with no
-string-versus-array shape to disambiguate at runtime, and adopting the
-`@scope/pkg`-splitting behavior the deprecated adapter needs (§ Migration
-and compatibility step 4) would reintroduce exactly that ambiguity for
-every new caller.
-The friendlier split is confined to the retiring compatibility shim
-because that shim exists only to keep the legacy opaque-string call shape
-resolving; the primary surface trades a one-time predictable rejection
-(with a diagnostic that names the fix) for a grammar that never has to
-guess whether a segment is one name or two.
+This convenience does not make slash-splitting a general path grammar:
+the leading `@` and exactly one slash identify npm's already-atomic scoped
+package spelling without ambiguity, while unscoped `foo/bar`, incomplete
+`@scope/`, and deeper `@scope/package/path` strings still reject.
 Adapters must return the same intermediate scope-hub capability for the
-stepwise and multi-segment forms.
+stepwise, multi-segment, and scoped-package convenience forms.
 
 Only exact published versions appear below a package.
 `list()` on a package directory returns those versions in ascending
@@ -575,14 +570,12 @@ registry fake is required for resolver and mapper tests.
    with an embedded slash (`@scope/pkg`, per the `encodeURIComponent(name)`
    packument-URL construction in `packages/daemon/src/registry-user.js` and
    `backend.fetchVersions('@scope/pkg')` in
-   `packages/daemon/test/registry-node-backend.test.js`), which the new
-   tree's per-segment grammar would otherwise reject as a single
-   slash-bearing segment.
-   The adapter therefore splits a leading-`@` slash-bearing `name` into its
-   `@scope` and package segments (and passes an unscoped `name` as one
-   segment) before entering the tree, so an old caller resolving any
+   `packages/daemon/test/registry-node-backend.test.js`).
+   The primary npm hub's scoped-package convenience spelling accepts that
+   opaque name and normalizes it to the same two-segment traversal, so the
+   adapter can delegate it unchanged and an old caller resolving any
    `@endo/*`-style scoped package keeps resolving to the same tree it got
-   yesterday instead of hitting the slash-bearing-segment diagnostic.
+   yesterday.
 
 The mechanics-layer review work for peer and optional dependencies,
 workspaces, `.npmrc` authentication, package `imports`, and execution
@@ -611,9 +604,12 @@ requiring one path-safe root segment.
   absent-method rejection.
 - Shared path tests cover unscoped and scoped packages, unknown scopes,
   packages, and versions (asserting the structured not-found `RangeError`),
-  a single-segment slash-bearing name such as `lookup('@endo/patterns')`
-  (asserting its distinct `SyntaxError` diagnostic, separate from
-  not-found), the `temporal` descriptor `getInfo()` reports on each of the
+  the scoped-package convenience spelling `lookup('@endo/patterns')`
+  returning the same capability as `lookup('@endo', 'patterns')`, and
+  malformed slash-bearing names such as `lookup('endo/patterns')` and
+  `lookup('@endo/patterns/extra')` rejecting with the distinct
+  `SyntaxError` diagnostic, separate from not-found. They also cover the
+  `temporal` descriptor `getInfo()` reports on each of the
   four node kinds (`'stable'` root, `'live'` npm and scope hubs, `'live'`
   package directory, `'immutable'` version leaf), the version leaf's
   `getInfo().integrity` matching the packument `dist.integrity` that feeds
