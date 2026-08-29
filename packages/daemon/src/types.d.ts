@@ -738,15 +738,6 @@ export type FormField = {
   default?: unknown;
   pattern?: unknown;
   secret?: boolean;
-  /**
-   * When set with `secret`, submit mints a credential capability instead of
-   * storing the string. Implied by `audience` or `secretKind`.
-   */
-  asCredential?: boolean;
-  /** When minting a credential, scope it to this audience. */
-  audience?: string;
-  /** When minting a credential, mint basic-auth instead of a bearer token. */
-  secretKind?: 'bearer' | 'basic';
 };
 
 export type Form = MessageBase & {

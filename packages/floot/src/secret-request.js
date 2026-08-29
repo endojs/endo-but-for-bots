@@ -11,7 +11,7 @@ import { E } from '@endo/eventual-send';
  *   id: string,
  *   label: string,
  *   petName: string,
- *   kind: 'bearer' | 'basic',
+ *   kind: string,
  *   audience: string,
  *   username?: string,
  * }} SecretRequestInfo
@@ -20,10 +20,14 @@ import { E } from '@endo/eventual-send';
 /**
  * @typedef {{
  *   petName: string,
- *   kind: 'bearer' | 'basic',
+ *   kind: string,
  *   audience: string,
  *   byteLength: number,
  * }} SecretReceipt
+ */
+
+/**
+ * @typedef {(value: unknown, info: SecretRequestInfo) => Promise<SecretReceipt>} SecretAcceptor
  */
 
 /**
@@ -56,6 +60,80 @@ const requirePetName = value => {
 harden(requirePetName);
 
 /**
+ * A single-use bridge between a trusted secret-entry UI and a policy-specific
+ * acceptor. The broker never interprets or retains submitted bytes itself.
+ * Credential minting is one acceptor; a seed-once managed file (such as a
+ * Codex auth store) can use the same UI without pretending to be a credential.
+ *
+ * @param {object} [options]
+ * @param {() => string} [options.randomId]
+ */
+export const makeSecretRequestBroker = ({
+  randomId = () =>
+    `sec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+} = {}) => {
+  /** @type {{ info: SecretRequestInfo, accept: SecretAcceptor, settle: (receipt: SecretReceipt) => void, fail: (err: Error) => void } | undefined} */
+  let pending;
+
+  const getPending = () => (pending ? harden({ ...pending.info }) : null);
+
+  /**
+   * @param {Omit<SecretRequestInfo, 'id'>} details
+   * @param {SecretAcceptor} accept
+   * @returns {Promise<SecretReceipt>}
+   */
+  const request = (details, accept) => {
+    if (pending) {
+      throw new Error(
+        `A secret request is already waiting (${pending.info.petName}). Wait for it or cancel it.`,
+      );
+    }
+    const info = harden({ ...details, id: randomId() });
+    return new Promise((resolve, reject) => {
+      pending = { info, accept, settle: resolve, fail: reject };
+    });
+  };
+  harden(request);
+
+  /**
+   * @param {string} requestId
+   * @param {unknown} value
+   */
+  const submit = async (requestId, value) => {
+    await null;
+    if (!pending || pending.info.id !== requestId) {
+      throw new Error('No matching secret request is waiting');
+    }
+    const requestState = pending;
+    // Consume the request before invoking application code, making submission
+    // single-use even if the acceptor is slow or rejects.
+    pending = undefined;
+    try {
+      const receipt = await requestState.accept(value, requestState.info);
+      requestState.settle(receipt);
+      return receipt;
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      requestState.fail(err);
+      throw err;
+    }
+  };
+  harden(submit);
+
+  /** @param {string} requestId */
+  const cancel = requestId => {
+    if (!pending || pending.info.id !== requestId) return;
+    const { fail } = pending;
+    pending = undefined;
+    fail(new Error('The operator cancelled the secret request'));
+  };
+  harden(cancel);
+
+  return harden({ getPending, request, submit, cancel });
+};
+harden(makeSecretRequestBroker);
+
+/**
  * Per-session kit: one pending request at a time, minted through the host.
  *
  * @param {object} options
@@ -66,6 +144,7 @@ harden(requirePetName);
  * @returns {{
  *   tools: Record<string, any>,
  *   getPending: () => SecretRequestInfo | null,
+ *   request: (details: Omit<SecretRequestInfo, 'id'>, accept: SecretAcceptor) => Promise<SecretReceipt>,
  *   submit: (requestId: string, value: unknown) => Promise<SecretReceipt>,
  *   cancel: (requestId: string) => void,
  * }}
@@ -77,84 +156,57 @@ export const makeSecretRequestKit = ({
   randomId = () =>
     `sec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
 }) => {
-  /** @type {{ info: SecretRequestInfo, settle: (receipt: SecretReceipt) => void, fail: (err: Error) => void } | undefined} */
-  let pending;
-
-  const getPending = () => (pending ? harden({ ...pending.info }) : null);
+  const broker = makeSecretRequestBroker({ randomId });
 
   /**
-   * @param {string} requestId
+   * @param {SecretRequestInfo} info
    * @param {unknown} value
    * @returns {Promise<SecretReceipt>}
    */
-  const submit = async (requestId, value) => {
+  const acceptCredential = async (info, value) => {
     await null;
-    if (!pending || pending.info.id !== requestId) {
-      throw new Error('No matching secret request is waiting');
-    }
-    const { info, settle, fail } = pending;
-    try {
-      const hostName = `floot-secret-${sessionId}-${info.petName}-${info.id}`;
-      /** @type {unknown} */
-      let cap;
-      let byteLength = 0;
-      if (info.kind === 'basic') {
-        const record =
-          value && typeof value === 'object'
-            ? /** @type {Record<string, unknown>} */ (value)
-            : { password: value };
-        const password = requireSecretString(record.password, 'password');
-        const username = requireSecretString(
-          record.username || info.username || 'user',
-          'username',
-        );
-        byteLength = password.length;
-        cap = await E(host).provideBasicCredential(hostName, {
-          audience: info.audience,
-          username,
-          password,
-        });
-      } else {
-        const token = requireSecretString(value, 'secret');
-        byteLength = token.length;
-        cap = await E(host).provideBearerCredential(hostName, {
-          audience: info.audience,
-          token,
-        });
-      }
-      if (await E(sessionGuest).has(info.petName)) {
-        await E(sessionGuest).remove(info.petName);
-      }
-      await E(sessionGuest).storeValue(cap, info.petName);
-      /** @type {SecretReceipt} */
-      const receipt = harden({
-        petName: info.petName,
-        kind: info.kind,
+    const hostName = `floot-secret-${sessionId}-${info.petName}-${info.id}`;
+    /** @type {unknown} */
+    let cap;
+    let byteLength = 0;
+    if (info.kind === 'basic') {
+      const record =
+        value && typeof value === 'object'
+          ? /** @type {Record<string, unknown>} */ (value)
+          : { password: value };
+      const password = requireSecretString(record.password, 'password');
+      const username = requireSecretString(
+        record.username || info.username || 'user',
+        'username',
+      );
+      byteLength = new TextEncoder().encode(password).byteLength;
+      cap = await E(host).provideBasicCredential(hostName, {
         audience: info.audience,
-        byteLength,
+        username,
+        password,
       });
-      pending = undefined;
-      settle(receipt);
-      return receipt;
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      fail(err);
-      pending = undefined;
-      throw err;
+    } else {
+      const token = requireSecretString(value, 'secret');
+      byteLength = new TextEncoder().encode(token).byteLength;
+      cap = await E(host).provideBearerCredential(hostName, {
+        audience: info.audience,
+        token,
+      });
     }
+    if (await E(sessionGuest).has(info.petName)) {
+      await E(sessionGuest).remove(info.petName);
+    }
+    await E(sessionGuest).storeValue(cap, info.petName);
+    /** @type {SecretReceipt} */
+    const receipt = harden({
+      petName: info.petName,
+      kind: info.kind,
+      audience: info.audience,
+      byteLength,
+    });
+    return receipt;
   };
-  harden(submit);
-
-  /**
-   * @param {string} requestId
-   */
-  const cancel = requestId => {
-    if (!pending || pending.info.id !== requestId) return;
-    const { fail } = pending;
-    pending = undefined;
-    fail(new Error('The operator cancelled the secret request'));
-  };
-  harden(cancel);
+  harden(acceptCredential);
 
   const requestSecretTool = harden({
     schema: () =>
@@ -205,11 +257,6 @@ export const makeSecretRequestKit = ({
      * @param {Record<string, unknown>} args
      */
     execute: async args => {
-      if (pending) {
-        throw new Error(
-          `A secret request is already waiting (${pending.info.petName}). Wait for it or cancel it.`,
-        );
-      }
       const label = requireSecretString(args.label, 'label');
       const petName = requirePetName(args.petName);
       const kind = args.kind === 'basic' ? 'basic' : 'bearer';
@@ -222,21 +269,16 @@ export const makeSecretRequestKit = ({
           ? requireSecretString(args.username, 'username')
           : undefined;
       /** @type {SecretRequestInfo} */
-      const info = harden({
-        id: randomId(),
+      const details = harden({
         label,
         petName,
         kind,
         audience,
         ...(username === undefined ? {} : { username }),
       });
-      const receipt = await new Promise((resolve, reject) => {
-        pending = {
-          info,
-          settle: resolve,
-          fail: reject,
-        };
-      });
+      const receipt = await broker.request(details, (value, info) =>
+        acceptCredential(info, value),
+      );
       return JSON.stringify(receipt);
     },
     help: () =>
@@ -258,7 +300,8 @@ export const makeSecretRequestKit = ({
             properties: {
               petName: {
                 type: 'string',
-                description: 'Petname of the secret capability in this session.',
+                description:
+                  'Petname of the secret capability in this session.',
               },
               destPetName: {
                 type: 'string',
@@ -286,6 +329,7 @@ export const makeSecretRequestKit = ({
       }
       const cap = await E(sessionGuest).lookup(petName);
       let dest = await E(sessionGuest).lookup(destPetName);
+      // eslint-disable-next-line no-underscore-dangle
       const methods = await E(dest).__getMethodNames__();
       if (Array.isArray(methods) && methods.includes('worktree')) {
         dest = await E(dest).worktree();
@@ -302,9 +346,10 @@ export const makeSecretRequestKit = ({
       requestSecret: requestSecretTool,
       writeSecret: writeSecretTool,
     },
-    getPending,
-    submit,
-    cancel,
+    getPending: broker.getPending,
+    request: broker.request,
+    submit: broker.submit,
+    cancel: broker.cancel,
   });
 };
 harden(makeSecretRequestKit);

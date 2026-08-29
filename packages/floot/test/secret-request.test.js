@@ -3,7 +3,10 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 
-import { makeSecretRequestKit } from '../src/secret-request.js';
+import {
+  makeSecretRequestBroker,
+  makeSecretRequestKit,
+} from '../src/secret-request.js';
 
 const makeGuest = () => {
   /** @type {Map<string, unknown>} */
@@ -22,6 +25,7 @@ const makeGuest = () => {
     async storeValue(value, name) {
       store.set(name, value);
     },
+    // eslint-disable-next-line no-underscore-dangle
     async __getMethodNames__() {
       return ['has', 'lookup', 'remove', 'storeValue'];
     },
@@ -69,6 +73,7 @@ test('requestSecret waits for submit and returns a receipt without the bytes', a
     audience: 'google-calendar',
   });
   for (let i = 0; i < 20 && !kit.getPending(); i += 1) {
+    // eslint-disable-next-line no-await-in-loop
     await null;
   }
   t.deepEqual(kit.getPending(), {
@@ -93,10 +98,60 @@ test('requestSecret waits for submit and returns a receipt without the bytes', a
   t.regex(toolResult, /google-sa/);
 
   t.is(minted.length, 1);
-  t.is(/** @type {any} */ (minted[0].opts).token, '-----BEGIN PRIVATE KEY-----');
+  t.is(
+    /** @type {any} */ (minted[0].opts).token,
+    '-----BEGIN PRIVATE KEY-----',
+  );
   const cap = await E(guest).lookup('google-sa');
   t.is(await E(cap).audience(), 'google-calendar');
   t.is(kit.getPending(), null);
+});
+
+test('requestSecret preserves opaque bytes exactly', async t => {
+  const { host, minted } = makeHost();
+  const kit = makeSecretRequestKit({
+    host,
+    sessionGuest: makeGuest(),
+    sessionId: 's1',
+    randomId: () => 'req-exact',
+  });
+  const pendingP = E(kit.tools.requestSecret).execute({
+    label: 'opaque file',
+    petName: 'opaque-file',
+  });
+  const value = '  leading\nbody\ntrailing  \n';
+  await kit.submit('req-exact', value);
+  await pendingP;
+  t.is(/** @type {any} */ (minted[0].opts).token, value);
+});
+
+test('secret broker supports a policy-specific managed-file acceptor', async t => {
+  const broker = makeSecretRequestBroker({ randomId: () => 'req-file' });
+  /** @type {unknown} */
+  let accepted;
+  const pendingP = broker.request(
+    {
+      label: 'Codex auth.json',
+      petName: 'codex-auth',
+      kind: 'managed-file',
+      audience: 'codex-host',
+    },
+    async value => {
+      accepted = value;
+      return {
+        petName: 'codex-auth',
+        kind: 'managed-file',
+        audience: 'codex-host',
+        byteLength: new TextEncoder().encode(/** @type {string} */ (value))
+          .byteLength,
+      };
+    },
+  );
+  const value = '{"tokens":{"refresh_token":"opaque"}}\n';
+  const receipt = await broker.submit('req-file', value);
+  t.is(accepted, value);
+  t.is(await pendingP, receipt);
+  t.is(JSON.stringify(receipt).includes('refresh_token'), false);
 });
 
 test('cancel rejects the waiting requestSecret tool', async t => {
@@ -112,6 +167,7 @@ test('cancel rejects the waiting requestSecret tool', async t => {
     petName: 'api-token',
   });
   for (let i = 0; i < 20 && !kit.getPending(); i += 1) {
+    // eslint-disable-next-line no-await-in-loop
     await null;
   }
   t.truthy(kit.getPending());

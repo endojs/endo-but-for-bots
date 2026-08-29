@@ -4348,41 +4348,24 @@ test('form value message @value is addressable via @mail/N/@value', async t => {
   t.deepEqual(resultValue, { displayName: 'Bob' });
 });
 
-test('form secret asCredential field becomes a credential cap, not the string', async t => {
+test('writeSecret rejects a caller-controlled remotable destination', async t => {
   const { host } = await prepareHost(t);
-  const guest = await E(host).provideGuest('guest');
-  const hostIterator = iterateReader(E(host).followMessages());
-  const guestIterator = iterateReader(E(guest).followMessages());
+  const credential = await E(host).provideBearerCredential('credential', {
+    audience: 'https://git.example',
+    token: 'super-secret-token',
+  });
+  let captured;
+  const fakeMount = Far('FakeMount', {
+    writeText(_path, value) {
+      captured = value;
+    },
+  });
 
-  await E(guest).form(
-    '@host',
-    'Git token',
-    harden([
-      {
-        name: 'token',
-        label: 'Token',
-        secret: true,
-        asCredential: true,
-        audience: 'https://git.example',
-      },
-    ]),
+  await t.throwsAsync(
+    () => E(host).writeSecret(fakeMount, 'secret.txt', credential),
+    { message: /daemon-minted mount/ },
   );
-
-  const { value: formMsg } = await hostIterator.next();
-  t.is(formMsg.type, 'form');
-  await E(host).submit(formMsg.number, harden({ token: 'super-secret-token' }));
-
-  await guestIterator.next();
-  const { value: valueMsg } = await guestIterator.next();
-  t.is(valueMsg.type, 'value');
-  const resultValue = await E(guest).lookup([
-    '@mail',
-    String(valueMsg.number),
-    '@value',
-  ]);
-  t.is(typeof resultValue.token, 'object');
-  t.not(resultValue.token, 'super-secret-token');
-  t.is(await E(resultValue.token).audience(), 'https://git.example');
+  t.is(captured, undefined);
 });
 
 // Formula write failure test removed: SQLite provides transactional

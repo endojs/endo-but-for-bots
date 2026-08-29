@@ -88,7 +88,7 @@ export const ComposeBar = ({ state, controller }) => {
   const secret = state.secretRequest;
   const secretBox =
     secret && controller.submitSecret
-      ? h(SecretRequestBar, { request: secret, controller })
+      ? h(SecretRequestBar, { key: secret.id, request: secret, controller })
       : null;
 
   return h(
@@ -139,10 +139,9 @@ const SecretRequestBar = ({ request, controller }) => {
   const [username, setUsername] = useState(request.username || '');
 
   const submit = () => {
-    const secret = value.trim();
-    if (!secret || !controller.submitSecret) return;
+    if (!value || !controller.submitSecret) return;
     controller.submitSecret(
-      secret,
+      value,
       request.kind === 'basic' ? username.trim() || 'user' : undefined,
     );
     setValue('');
@@ -150,7 +149,11 @@ const SecretRequestBar = ({ request, controller }) => {
 
   return h(
     'div',
-    { class: 'floot-secret-request', role: 'dialog', 'aria-label': 'Submit a secret' },
+    {
+      class: 'floot-secret-request',
+      role: 'dialog',
+      'aria-label': 'Submit a secret',
+    },
     h('div', { class: 'floot-secret-title' }, 'Secret requested'),
     h('div', { class: 'floot-secret-label' }, request.label),
     h(
@@ -189,7 +192,7 @@ const SecretRequestBar = ({ request, controller }) => {
         {
           type: 'button',
           class: 'floot-secret-submit',
-          disabled: !value.trim(),
+          disabled: !value,
           onClick: submit,
         },
         'Submit secret',
@@ -199,7 +202,8 @@ const SecretRequestBar = ({ request, controller }) => {
         {
           type: 'button',
           class: 'floot-secret-cancel',
-          onClick: () => controller.cancelSecretRequest && controller.cancelSecretRequest(),
+          onClick: () =>
+            controller.cancelSecretRequest && controller.cancelSecretRequest(),
         },
         'Cancel',
       ),

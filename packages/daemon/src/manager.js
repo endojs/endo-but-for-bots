@@ -6874,45 +6874,6 @@ const makeDaemonCore = async (
     unpinTransient,
   });
 
-  /**
-   * Mint a credential cap from a secret form field so the value message
-   * carries a handle, not the submitted string.
-   *
-   * @param {{ name: string, audience?: string, secretKind?: string }} field
-   * @param {string} raw
-   * @param {Record<string, unknown>} values
-   */
-  const sealSecretField = async (field, raw, values) => {
-    const kind = field.secretKind === 'basic' ? 'basic' : 'bearer';
-    const audience =
-      typeof field.audience === 'string' && field.audience
-        ? field.audience
-        : `form:${field.name}`;
-    /** @type {DeferredTasks<GitCredentialDeferredTaskParams>} */
-    const tasks = makeDeferredTasks();
-    tasks.push(identifiers => {
-      pinTransient(identifiers.gitCredentialId);
-    });
-    /** @type {Record<string, string>} */
-    let material;
-    if (kind === 'basic') {
-      const username =
-        typeof values.username === 'string' && values.username
-          ? values.username
-          : 'user';
-      material = { username, password: raw };
-    } else {
-      material = { token: raw };
-    }
-    const { value } = await formulateGitCredential(
-      kind,
-      audience,
-      harden(material),
-      tasks,
-    );
-    return value;
-  };
-
   const makeMailbox = makeMailboxMaker({
     provide,
     formulateMarshalValue,
@@ -6924,7 +6885,6 @@ const makeDaemonCore = async (
     randomHex256,
     pinTransient,
     unpinTransient,
-    sealSecretField,
   });
 
   /** @param {import('@endo/pass-style').Passable} value */

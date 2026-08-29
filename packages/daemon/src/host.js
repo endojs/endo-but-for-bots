@@ -316,6 +316,7 @@ harden(normalizeHttpClientPolicy);
  *   Host-private resolver from a daemon-minted `HttpClient` cap to its
  *   retained `HttpClientControl`, populated by the `http-client` maker.
  * @param {DaemonCore['formulateGitCredential']} args.formulateGitCredential
+ * @param {(cap: unknown) => ({ token?: string, password?: string, unavailable?: boolean } | undefined)} [args.getGitCredentialMaterialForCap]
  * @param {DaemonCore['formulateGitRemote']} args.formulateGitRemote
  * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
  * @param {DaemonCore['formulateDirectoryForStore']} args.formulateDirectoryForStore
@@ -1041,6 +1042,24 @@ export const makeHostMaker = ({
       await null;
       if (mountCap === undefined || mountCap === null) {
         throw makeError(X`writeSecret: first argument must be a mount`);
+      }
+      const mountId = getIdForRef(mountCap);
+      if (mountId === undefined) {
+        throw makeError(
+          X`writeSecret: first argument must be a daemon-minted mount`,
+        );
+      }
+      const mountFormula = await getFormulaForId(mountId);
+      if (
+        mountFormula.type !== 'mount' &&
+        mountFormula.type !== 'scratch-mount'
+      ) {
+        throw makeError(
+          X`writeSecret: first argument must be a daemon-minted mount`,
+        );
+      }
+      if (mountFormula.readOnly) {
+        throw makeError(X`writeSecret: destination mount is read-only`);
       }
       const material = getGitCredentialMaterialForCap(credentialCap);
       if (material === undefined) {
