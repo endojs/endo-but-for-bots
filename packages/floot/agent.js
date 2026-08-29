@@ -34,6 +34,7 @@ import { discoverTools, executeTool } from '@endo/fae/src/tools.js';
 
 import { createStreamingProvider } from './providers/index.js';
 import { runClaudeTurn } from './src/claude-turn.js';
+import { runCodexTurn } from './src/codex-turn.js';
 import { makeReplyChannel } from './src/stream.js';
 import { makeSessionTurn } from './src/session-turn.js';
 import { makeFlootLocalTools } from './src/tool-registry.js';
@@ -215,19 +216,30 @@ harden(makeSpeechWriter);
  * @param {any} powers
  * @param {Record<string, string>} [env]
  */
-export const makeClaudeClientResolver = (powers, env = {}) => {
+const makeCliClientResolver = (
+  powers,
+  env,
+  {
+    baseEnv,
+    defaultBase,
+    provisionerEnv,
+    defaultProvisioner,
+    claimName,
+    label,
+    packageName,
+  },
+) => {
   /** @type {Map<string, Promise<any>>} */
   const clients = new Map();
-  const base = env.FLOOT_CLAUDE_CLIENT || 'claude-client';
-  const provisionerName =
-    env.FLOOT_CLAUDE_PROVISIONER || 'claude-session-provisioner';
+  const base = env[baseEnv] || defaultBase;
+  const provisionerName = env[provisionerEnv] || defaultProvisioner;
 
   // Which session claimed the shared client. A shared ClaudeClient carries ONE
   // CLI conversation and workspace, so the claim must survive a daemon restart:
   // held only in memory, a different session could claim it after a restart and
   // silently `--continue` the first session's conversation. Persisted to the
   // factory petstore; loaded lazily, written on first claim.
-  const SHARED_CLAIM_NAME = 'floot-claude-shared-claim';
+  const SHARED_CLAIM_NAME = claimName;
   /** @type {string | undefined} */
   let sharedClaimedBy;
   const loadSharedClaim = async () => {
@@ -248,7 +260,7 @@ export const makeClaudeClientResolver = (powers, env = {}) => {
       // The in-memory claim still guards this incarnation; only cross-restart
       // protection is lost, and that must not fail the turn.
       console.error(
-        '[floot] could not persist shared ClaudeClient claim:',
+        `[floot] could not persist shared ${label} claim:`,
         error instanceof Error ? error.message : String(error),
       );
     }
@@ -286,23 +298,23 @@ export const makeClaudeClientResolver = (powers, env = {}) => {
             return E(powers).lookup(perSession);
           }
           throw new Error(
-            `floot: Claude provisioner "${provisionerName}" did not store "${perSession}".`,
+            `floot: ${label} provisioner "${provisionerName}" did not store "${perSession}".`,
           );
         }
         const claimedBy = await loadSharedClaim();
         if (claimedBy !== undefined && claimedBy !== id) {
           throw new Error(
-            `floot: session ${id} cannot use the shared ClaudeClient "${base}" —` +
+            `floot: session ${id} cannot use the shared ${label} "${base}" —` +
               ` session ${claimedBy} already holds it, and a client` +
               ` carries one CLI conversation and workspace. Provision` +
-              ` "${perSession}" with @endo/claude-sandbox for this session.`,
+              ` "${perSession}" with ${packageName} for this session.`,
           );
         }
         if (!(await E(powers).has(base))) {
           throw new Error(
-            `floot: no ClaudeClient capability for session ${id} — provision` +
+            `floot: no ${label} capability for session ${id} — provision` +
               ` "${perSession}" (or "${base}" for a single-session setup) with` +
-              ` @endo/claude-sandbox, or set FLOOT_CLAUDE_CLIENT.`,
+              ` ${packageName}, or set ${baseEnv}.`,
           );
         }
         const shared = await E(powers).lookup(base);
@@ -348,7 +360,33 @@ export const makeClaudeClientResolver = (powers, env = {}) => {
 
   return harden({ get, remove, identifyClient });
 };
+harden(makeCliClientResolver);
+
+/** @param {any} powers @param {Record<string, string>} [env] */
+export const makeClaudeClientResolver = (powers, env = {}) =>
+  makeCliClientResolver(powers, env, {
+    baseEnv: 'FLOOT_CLAUDE_CLIENT',
+    defaultBase: 'claude-client',
+    provisionerEnv: 'FLOOT_CLAUDE_PROVISIONER',
+    defaultProvisioner: 'claude-session-provisioner',
+    claimName: 'floot-claude-shared-claim',
+    label: 'ClaudeClient',
+    packageName: '@endo/claude-sandbox',
+  });
 harden(makeClaudeClientResolver);
+
+/** @param {any} powers @param {Record<string, string>} [env] */
+export const makeCodexClientResolver = (powers, env = {}) =>
+  makeCliClientResolver(powers, env, {
+    baseEnv: 'FLOOT_CODEX_CLIENT',
+    defaultBase: 'codex-client',
+    provisionerEnv: 'FLOOT_CODEX_PROVISIONER',
+    defaultProvisioner: 'codex-session-provisioner',
+    claimName: 'floot-codex-shared-claim',
+    label: 'CodexClient',
+    packageName: '@endo/codex-sandbox',
+  });
+harden(makeCodexClientResolver);
 
 const FlootFactoryInterface = M.interface('FlootFactory', {
   createSession: M.callWhen()
@@ -856,9 +894,17 @@ const RUNTIMES = [
     title: 'Claude API',
     description: 'Streams from the Anthropic API with Floot’s tool loop.',
   },
+  {
+    id: 'codex-cli',
+    title: 'Codex CLI (sandbox)',
+    description:
+      'Runs Codex in an isolated sandbox over a projected workspace; Endo ' +
+      'tools are bridged in over MCP.',
+  },
 ];
 const CLAUDE_CLI_RUNTIME_ID = 'claude-cli';
 const CLAUDE_API_RUNTIME_ID = 'claude-api';
+const CODEX_CLI_RUNTIME_ID = 'codex-cli';
 const DEFAULT_RUNTIME_ID = CLAUDE_CLI_RUNTIME_ID;
 // New sessions default to Claude CLI + the latest Haiku (fast/light).
 const DEFAULT_MODEL_ID = 'claude-haiku-4-5-20251001';
@@ -1084,9 +1130,13 @@ export const makeStreamingAgent = async (
       ? options.maxToolRounds
       : DEFAULT_MAX_TOOL_ROUNDS;
   const claudeClient = /** @type {any} */ (providerConfig).claudeClient;
-  const claudeModel = /** @type {any} */ (providerConfig).claudeModel;
+  const codexClient = /** @type {any} */ (providerConfig).codexClient;
+  const cliClient = codexClient || claudeClient;
+  const cliModel = codexClient
+    ? /** @type {any} */ (providerConfig).codexModel
+    : /** @type {any} */ (providerConfig).claudeModel;
   /** @type {any} */
-  const provider = claudeClient
+  const provider = cliClient
     ? null
     : /** @type {any} */ (providerConfig).provider ||
       createStreamingProvider({
@@ -1229,7 +1279,7 @@ export const makeStreamingAgent = async (
       { role: 'user', content: `${text}`, ...(meta ? { meta } : {}) },
     ]);
 
-    if (claudeClient) {
+    if (cliClient) {
       // Claude-CLI turn: one send to the ClaudeClient capability. The CLI runs
       // its own agentic loop in the sandbox (tools, continuity via the
       // workspace), so the provider tool loop below is bypassed. Preserve its
@@ -1278,14 +1328,15 @@ export const makeStreamingAgent = async (
 
       let turnResult;
       try {
-        turnResult = await runClaudeTurn({
-          client: claudeClient,
+        const runCliTurn = codexClient ? runCodexTurn : runClaudeTurn;
+        turnResult = await runCliTurn({
+          client: cliClient,
           text,
           writer,
           signal,
           // Pin the session's selected model per turn; the client's own
           // default is frozen into its formula env at provision time.
-          model: claudeModel,
+          model: cliModel,
           // Give the CLI runtime the same session persona/instructions the API
           // runtime gets (the CLI never sees the tree's system message).
           systemPrompt: effectivePrompt,
@@ -1759,6 +1810,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
   const claudeClientResolver = makeClaudeClientResolver(powers, env);
   const getClaudeClient = claudeClientResolver.get;
+  const codexClientResolver = makeCodexClientResolver(powers, env);
+  const getCodexClient = codexClientResolver.get;
 
   // Runtime container-mount attach registrar
   // (designs/runtime-container-fs-mount.md): validates guest-chosen /mnt/
@@ -1768,25 +1821,33 @@ export const make = (hostPowers, _context, { env } = {}) => {
   // the hosted Claude session provisioner (root-host powers + fs-mounter);
   // older provisioner caplets without the bridge methods — and deployments
   // with no provisioner at all — simply leave attach unavailable.
-  const containerMountRegistrar = makeContainerMountRegistrar({
-    powers,
-    getBridgeProvider: async () => {
-      const provisionerName =
-        env?.FLOOT_CLAUDE_PROVISIONER || 'claude-session-provisioner';
-      if (!(await E(powers).has(provisionerName))) return undefined;
-      const provider = await E(powers).lookup(provisionerName);
-      try {
-        // eslint-disable-next-line no-underscore-dangle
-        const methods = await E(provider).__getMethodNames__();
-        if (methods.includes('provideContainerMountBridge')) {
-          return provider;
+  const makeCliMountRegistrar = (registryName, provisionerName) =>
+    makeContainerMountRegistrar({
+      powers,
+      registryName,
+      getBridgeProvider: async () => {
+        if (!(await E(powers).has(provisionerName))) return undefined;
+        const provider = await E(powers).lookup(provisionerName);
+        try {
+          // eslint-disable-next-line no-underscore-dangle
+          const methods = await E(provider).__getMethodNames__();
+          if (methods.includes('provideContainerMountBridge')) {
+            return provider;
+          }
+        } catch {
+          // An older provisioner without introspection cannot bridge either.
         }
-      } catch {
-        // An older provisioner without introspection cannot bridge either.
-      }
-      return undefined;
-    },
-  });
+        return undefined;
+      },
+    });
+  const claudeContainerMountRegistrar = makeCliMountRegistrar(
+    'floot-container-mounts',
+    env?.FLOOT_CLAUDE_PROVISIONER || 'claude-session-provisioner',
+  );
+  const codexContainerMountRegistrar = makeCliMountRegistrar(
+    'floot-codex-container-mounts',
+    env?.FLOOT_CODEX_PROVISIONER || 'codex-session-provisioner',
+  );
 
   // Hand a session only the authority its turns need. A session runs prompts;
   // it has no business interrupting or terminating the sandbox session out
@@ -2140,6 +2201,23 @@ export const make = (hostPowers, _context, { env } = {}) => {
           host,
           sessionGuest,
           sessionId: id,
+          managedAcceptors: {
+            codexAuth: async (value, info) => {
+              if (typeof value !== 'string' || value.length === 0) {
+                throw new Error('Codex auth must be non-empty JSON text');
+              }
+              const seederName =
+                env.FLOOT_CODEX_AUTH_SEEDER || 'codex-auth-seeder';
+              if (!(await E(powers).has(seederName))) {
+                throw new Error(
+                  `Codex auth seeder "${seederName}" is not installed on this host`,
+                );
+              }
+              const seeder = await E(powers).lookup(seederName);
+              const receipt = await E(seeder).seed(value);
+              return harden({ ...receipt, petName: info.petName });
+            },
+          },
         });
         secretKits.set(id, secretKit);
         extraTools = { ...extraTools, ...secretKit.tools };
@@ -2150,9 +2228,21 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // Endo authority; the API runtime uses the streaming provider with
         // Floot's own tool loop. Either runtime honors the selected model.
         const runtime = runtimeOf(entry);
-        const model = modelOf(entry);
+        const model =
+          runtime === CODEX_CLI_RUNTIME_ID ? undefined : modelOf(entry);
         let agentConfig;
-        if (runtime === CLAUDE_CLI_RUNTIME_ID) {
+        if (
+          runtime === CLAUDE_CLI_RUNTIME_ID ||
+          runtime === CODEX_CLI_RUNTIME_ID
+        ) {
+          const isCodex = runtime === CODEX_CLI_RUNTIME_ID;
+          const clientResolver = isCodex
+            ? codexClientResolver
+            : claudeClientResolver;
+          const getCliClient = isCodex ? getCodexClient : getClaudeClient;
+          const containerMountRegistrar = isCodex
+            ? codexContainerMountRegistrar
+            : claudeContainerMountRegistrar;
           // Runtime container-mount attach tools
           // (designs/runtime-container-fs-mount.md): let the session bind
           // caps it holds into the sandbox under /mnt/. Built BEFORE the MCP
@@ -2190,7 +2280,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
             ...(workspaceDir ? { workspaceDir } : {}),
             ...(model ? { model } : {}),
           };
-          const claudeClient = await getClaudeClient(
+          const cliClient = await getCliClient(
             id,
             Object.keys(provisionOptions).length ? provisionOptions : undefined,
           );
@@ -2200,9 +2290,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
           // without a resolvable client identity (or bridge provider) still
           // opens; the tools report the situation when called.
           try {
-            const clientKey = await claudeClientResolver.identifyClient(id);
+            const clientKey = await clientResolver.identifyClient(id);
             if (clientKey !== undefined) {
-              await mountKit.arm({ clientKey, client: claudeClient });
+              await mountKit.arm({ clientKey, client: cliClient });
             }
           } catch (err) {
             console.warn(
@@ -2212,7 +2302,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
             );
           }
           agentConfig = {
-            claudeClient: makeSendOnlyClient(claudeClient),
+            [isCodex ? 'codexClient' : 'claudeClient']:
+              makeSendOnlyClient(cliClient),
             // Per-turn --model: the client's env default was frozen at
             // provision time, so a later model change would otherwise be
             // silently ignored for this session.
@@ -2535,12 +2626,24 @@ export const make = (hostPowers, _context, { env } = {}) => {
           }`,
         );
       }
+      try {
+        await codexClientResolver.remove(id);
+      } catch (error) {
+        console.warn(
+          `[floot-factory] could not remove Codex client for ${id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
       // Drop this session's container-mount attach references; last-reference
       // attaches release their 9P bridges and host mount names. Runs after
       // the client removal so the container no longer binds the mountpoints
       // being released.
       try {
-        await containerMountRegistrar.releaseSession(id);
+        await Promise.allSettled([
+          claudeContainerMountRegistrar.releaseSession(id),
+          codexContainerMountRegistrar.releaseSession(id),
+        ]);
       } catch (error) {
         console.warn(
           `[floot-factory] could not release container mounts for ${id}: ${

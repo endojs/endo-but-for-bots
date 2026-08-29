@@ -140,6 +140,7 @@ harden(makeSecretRequestBroker);
  * @param {any} options.host - factory host powers (`provideBearerCredential`)
  * @param {any} options.sessionGuest - session guest that will hold the cap
  * @param {string} options.sessionId
+ * @param {Record<string, SecretAcceptor>} [options.managedAcceptors]
  * @param {() => string} [options.randomId]
  * @returns {{
  *   tools: Record<string, any>,
@@ -153,6 +154,7 @@ export const makeSecretRequestKit = ({
   host,
   sessionGuest,
   sessionId,
+  managedAcceptors = {},
   randomId = () =>
     `sec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
 }) => {
@@ -237,7 +239,7 @@ export const makeSecretRequestKit = ({
               kind: {
                 type: 'string',
                 description:
-                  '"bearer" (default) for a token or opaque blob; "basic" for username+password.',
+                  '"bearer" (default) for a token or opaque blob; "basic" for username+password; "codexAuth" to seed the host Codex login once.',
               },
               audience: {
                 type: 'string',
@@ -259,7 +261,16 @@ export const makeSecretRequestKit = ({
     execute: async args => {
       const label = requireSecretString(args.label, 'label');
       const petName = requirePetName(args.petName);
-      const kind = args.kind === 'basic' ? 'basic' : 'bearer';
+      const requestedKind =
+        typeof args.kind === 'string' && args.kind ? args.kind : 'bearer';
+      const kind =
+        requestedKind === 'basic' || requestedKind === 'bearer'
+          ? requestedKind
+          : requestedKind in managedAcceptors
+            ? requestedKind
+            : (() => {
+                throw new Error(`Unsupported secret kind: ${requestedKind}`);
+              })();
       const audience =
         typeof args.audience === 'string' && args.audience
           ? requireSecretString(args.audience, 'audience')
@@ -268,7 +279,7 @@ export const makeSecretRequestKit = ({
         typeof args.username === 'string' && args.username
           ? requireSecretString(args.username, 'username')
           : undefined;
-      /** @type {SecretRequestInfo} */
+      /** @type {Omit<SecretRequestInfo, 'id'>} */
       const details = harden({
         label,
         petName,
@@ -276,9 +287,10 @@ export const makeSecretRequestKit = ({
         audience,
         ...(username === undefined ? {} : { username }),
       });
-      const receipt = await broker.request(details, (value, info) =>
-        acceptCredential(info, value),
-      );
+      const receipt = await broker.request(details, (value, info) => {
+        const managed = managedAcceptors[info.kind];
+        return managed ? managed(value, info) : acceptCredential(info, value);
+      });
       return JSON.stringify(receipt);
     },
     help: () =>
