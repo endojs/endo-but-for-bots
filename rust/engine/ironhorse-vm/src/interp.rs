@@ -16785,6 +16785,61 @@ impl Interp {
         Ok(self.regexp_exec_inner(inst, arg0)?.0)
     }
 
+    /// Spell the subject for the matcher's NUL-terminated walk the way an XS
+    /// string is stored: an embedded U+0000 becomes the overlong pair `C0 80`
+    /// (modified UTF-8), so the walk never sees a bare NUL byte and treats it
+    /// as end-of-subject. Well-formed UTF-8 never contains `C0`, so every
+    /// `C0 80` pair in the result is one this spelling introduced.
+    fn regexp_subject_bytes(text: &str) -> Vec<u8> {
+        let bytes = text.as_bytes();
+        if !bytes.contains(&0) {
+            return bytes.to_vec();
+        }
+        let mut out = Vec::with_capacity(bytes.len() + 8);
+        for &b in bytes {
+            if b == 0 {
+                out.extend_from_slice(&[0xC0, 0x80]);
+            } else {
+                out.push(b);
+            }
+        }
+        out
+    }
+
+    /// Invert [`Self::regexp_subject_bytes`] on a matched slice before the
+    /// standard UTF-8 decode (a bare `C0 80` would otherwise decode lossily).
+    fn regexp_piece_bytes(piece: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(piece.len());
+        let mut i = 0;
+        while i < piece.len() {
+            if piece[i] == 0xC0 && piece.get(i + 1) == Some(&0x80) {
+                out.push(0);
+                i += 2;
+            } else {
+                out.push(piece[i]);
+                i += 1;
+            }
+        }
+        out
+    }
+
+    /// Count the `C0 80` pairs introduced by [`Self::regexp_subject_bytes`]
+    /// strictly before byte offset `end`, the correction from a byte offset in
+    /// the spelled subject back to the code-unit offset XS reports.
+    fn regexp_nul_pairs_before(subject: &[u8], end: usize) -> i32 {
+        let mut pairs = 0;
+        let mut i = 0;
+        while i + 1 < end.min(subject.len()) {
+            if subject[i] == 0xC0 && subject[i + 1] == 0x80 {
+                pairs += 1;
+                i += 2;
+            } else {
+                i += 1;
+            }
+        }
+        pairs
+    }
+
     /// The `exec` body, returning `(result, Some(match_start))` on a match so
     /// the String-side `search`/`match` methods (which drive the full `exec`,
     /// as XS's `fxExecuteRegExp` does) can read the match position without
@@ -16798,8 +16853,9 @@ impl Interp {
         self.meter.tick_raw(REGEXP_EXEC_FRAME_METERING);
         let subject_slot = self.to_string_slot_metered(arg0);
         let subject = match subject_slot.value {
-            // Transcode UTF-16 → UTF-8 for the matcher's byte-offset space.
-            Payload::String(off) => self.str_text(off).into_bytes(),
+            // Transcode UTF-16 → UTF-8 for the matcher's byte-offset space,
+            // with U+0000 spelled `C0 80` the way an XS string stores it.
+            Payload::String(off) => Self::regexp_subject_bytes(&self.str_text(off)),
             _ => Vec::new(),
         };
         // The declared named groups, one entry per UNIQUE name in name-slot
@@ -16824,7 +16880,10 @@ impl Interp {
         self.meter.tick_raw(
             REGEXP_EXEC_MATCH_METERING + REGEXP_EXEC_PER_CAPTURE * capture_count.saturating_sub(1),
         );
-        let match_start = captures[0].0;
+        // Correct the reported match position for any `C0 80` NUL pairs the
+        // subject spelling introduced before it (one code unit each to XS).
+        let match_start =
+            captures[0].0 - Self::regexp_nul_pairs_before(&subject, captures[0].0.max(0) as usize);
         // The result array: one element per capture (whole match at 0).
         let result = self.new_array_unmetered();
         let mut items: Vec<(u32, Slot)> = Vec::with_capacity(captures.len());
@@ -16835,8 +16894,9 @@ impl Interp {
             // `resultItem = fxNewSlot` per capture.
             self.meter.tick_slot_alloc();
             let slot = if from >= 0 {
-                let piece = &subject[from as usize..to as usize];
-                self.new_string_metered(piece)
+                let piece =
+                    Self::regexp_piece_bytes(&subject[from as usize..to as usize]);
+                self.new_string_metered(&piece)
             } else {
                 Slot::undefined()
             };
@@ -25384,6 +25444,9 @@ impl Interp {
                 if !self.instance_extensible(inst) {
                     return Ok(Slot::boolean(false));
                 }
+                if self.prototype_chain_would_cycle(inst, new_proto) {
+                    return Ok(Slot::boolean(false));
+                }
                 // Store the new prototype in the instance slot's payload
                 // (`Reference(proto)`, or a `None` payload for a null prototype
                 // — the `instance_prototype` NULL sentinel).
@@ -32929,6 +32992,29 @@ impl Interp {
     }
 
     /// `O.[[SetPrototypeOf]](V)` — `proto` is `Reference`/`Null`.
+    /// OrdinarySetPrototypeOf's cycle refusal (ECMA-262 10.1.2 step 8):
+    /// walk the ordinary prototype chain from the proposed prototype;
+    /// reaching `inst` would close a cycle. A proxy in the chain ends the
+    /// walk without failure — its `[[GetPrototypeOf]]` is not the ordinary
+    /// one, so the spec's loop stops there.
+    fn prototype_chain_would_cycle(
+        &self,
+        inst: crate::value::SlotIndex,
+        new_proto: crate::value::SlotIndex,
+    ) -> bool {
+        let mut p = new_proto;
+        while !p.is_null() {
+            if p == inst {
+                return true;
+            }
+            if self.proxies.contains_key(&p) {
+                return false;
+            }
+            p = self.instance_prototype(p);
+        }
+        false
+    }
+
     fn mop_set_prototype(
         &mut self,
         code: &[u8],
@@ -32951,6 +33037,9 @@ impl Interp {
             return Ok(true);
         }
         if !self.instance_extensible(inst) {
+            return Ok(false);
+        }
+        if self.prototype_chain_would_cycle(inst, new_proto) {
             return Ok(false);
         }
         let slot = self.slots.get_mut(inst);
