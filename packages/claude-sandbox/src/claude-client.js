@@ -475,7 +475,7 @@ export const makeClaudeClient = ({
    * `ProcessHandle`.
    *
    * @param {string} prompt
-   * @param {{ model?: string, systemPrompt?: string }} [opts]
+   * @param {{ model?: string, thinking?: string, systemPrompt?: string }} [opts]
    * @returns {Promise<ProcessHandle>}
    */
   const spawnClaude = async (prompt, opts = {}) => {
@@ -505,6 +505,9 @@ export const makeClaudeClient = ({
     const useModel = opts.model || model;
     if (useModel) {
       argv.push('--model', useModel);
+    }
+    if (opts.thinking && opts.thinking !== 'auto') {
+      argv.push('--effort', opts.thinking);
     }
     // Append the caller's persona/instructions to Claude Code's built-in
     // system prompt so the CLI's own agent loop honors them (the CLI never
@@ -579,7 +582,7 @@ export const makeClaudeClient = ({
    * queued when closed bails before it spawns.
    *
    * @param {string} prompt
-   * @param {{ model?: string, systemPrompt?: string }} [opts]
+   * @param {{ model?: string, thinking?: string, systemPrompt?: string }} [opts]
    * @returns {object} reply reader
    */
   const runTurn = (prompt, opts = {}) => {
@@ -908,7 +911,7 @@ export const makeClaudeClient = ({
      * `{ type: 'abort', reason }`). Closing the reader aborts the turn.
      *
      * @param {string} prompt
-     * @param {{ model?: string, systemPrompt?: string }} [opts] - Per-turn
+     * @param {{ model?: string, thinking?: string, systemPrompt?: string }} [opts] - Per-turn
      *   overrides: `model` for `--model`, `systemPrompt` for
      *   `--append-system-prompt` (each falls back to the constructor
      *   default when omitted).

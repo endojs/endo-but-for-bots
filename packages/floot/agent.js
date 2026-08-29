@@ -390,12 +390,13 @@ harden(makeCodexClientResolver);
 
 const FlootFactoryInterface = M.interface('FlootFactory', {
   createSession: M.callWhen()
-    .optional(M.string(), M.string(), M.string(), M.string())
+    .optional(M.string(), M.string(), M.string(), M.string(), M.string())
     .returns(M.remotable()),
   listSessions: M.callWhen().returns(M.arrayOf(M.record())),
   listPresets: M.callWhen().returns(M.arrayOf(M.record())),
   listModels: M.callWhen().returns(M.arrayOf(M.record())),
   listRuntimes: M.callWhen().returns(M.arrayOf(M.record())),
+  listThinkingOptions: M.callWhen().returns(M.arrayOf(M.record())),
   getSession: M.callWhen(M.string()).returns(M.remotable()),
   renameSession: M.callWhen(M.string(), M.string()).returns(M.undefined()),
   deleteSession: M.callWhen(M.string()).returns(M.undefined()),
@@ -843,36 +844,65 @@ export const refreshPresetEntry = entry => {
 };
 harden(refreshPresetEntry);
 
-// Catalog of Anthropic models selectable for a session, ordered faster/lighter
-// to stronger. Ids are passed verbatim to the API provider AND to `claude
-// --model` in the CLI sandbox, so they must be valid Anthropic model ids. The
-// runtime (CLI vs API) is an INDEPENDENT choice (see RUNTIMES) — either runtime
-// can run any of these models.
+// Models selectable for a session. Each entry names the runtimes that accept
+// its id and the runtime(s) for which it is the default. This keeps provider
+// model ids out of incompatible CLIs while letting the UI render one catalog.
 const MODELS = [
   {
     id: 'claude-haiku-4-5-20251001',
     title: 'Claude Haiku 4.5',
     description: 'Fastest and lightest — best for quick, simple turns.',
+    runtimes: ['claude-cli', 'claude-api'],
+    defaultFor: ['claude-cli', 'claude-api'],
   },
   {
     id: 'claude-sonnet-4-6',
     title: 'Claude Sonnet 4.6',
     description: 'Balanced speed and capability.',
+    runtimes: ['claude-cli', 'claude-api'],
+    defaultFor: [],
   },
   {
     id: 'claude-sonnet-5',
     title: 'Claude Sonnet 5',
     description: 'Stronger reasoning at Sonnet-class latency.',
+    runtimes: ['claude-cli', 'claude-api'],
+    defaultFor: [],
   },
   {
     id: 'claude-opus-4-8',
     title: 'Claude Opus 4.8',
     description: 'High capability for hard reasoning and agentic work.',
+    runtimes: ['claude-cli', 'claude-api'],
+    defaultFor: [],
   },
   {
     id: 'claude-opus-5',
     title: 'Claude Opus 5',
     description: 'Most capable — deepest reasoning and longest-horizon work.',
+    runtimes: ['claude-cli', 'claude-api'],
+    defaultFor: [],
+  },
+  {
+    id: 'gpt-5.6-sol',
+    title: 'GPT-5.6 Sol',
+    description: 'Flagship model for complex reasoning and coding.',
+    runtimes: ['codex-cli'],
+    defaultFor: ['codex-cli'],
+  },
+  {
+    id: 'gpt-5.6-terra',
+    title: 'GPT-5.6 Terra',
+    description: 'Balances intelligence, speed, and cost.',
+    runtimes: ['codex-cli'],
+    defaultFor: [],
+  },
+  {
+    id: 'gpt-5.6-luna',
+    title: 'GPT-5.6 Luna',
+    description: 'Fast, cost-sensitive model for high-volume work.',
+    runtimes: ['codex-cli'],
+    defaultFor: [],
   },
 ];
 // Runtime for a session: how the model runs, independent of which model.
@@ -907,12 +937,78 @@ const CLAUDE_API_RUNTIME_ID = 'claude-api';
 const CODEX_CLI_RUNTIME_ID = 'codex-cli';
 const DEFAULT_RUNTIME_ID = CLAUDE_CLI_RUNTIME_ID;
 // New sessions default to Claude CLI + the latest Haiku (fast/light).
-const DEFAULT_MODEL_ID = 'claude-haiku-4-5-20251001';
 // Legacy: sessions created before runtime/model were separated pinned this
 // pseudo-model to select the CLI runtime.
 const LEGACY_CLI_MODEL_ID = 'claude-cli';
-const isKnownModel = id => MODELS.some(m => m.id === id);
 const isKnownRuntime = id => RUNTIMES.some(r => r.id === id);
+const modelsForRuntime = runtime =>
+  MODELS.filter(model => model.runtimes.includes(runtime));
+const defaultModelForRuntime = runtime => {
+  const compatible = modelsForRuntime(runtime);
+  return (
+    compatible.find(model => model.defaultFor.includes(runtime)) ||
+    compatible[0]
+  )?.id;
+};
+const isKnownModelForRuntime = (id, runtime) =>
+  MODELS.some(model => model.id === id && model.runtimes.includes(runtime));
+
+const THINKING_OPTIONS = [
+  {
+    id: 'auto',
+    title: 'Auto',
+    description: 'Use the model and CLI default.',
+    runtimes: ['claude-cli', 'codex-cli'],
+  },
+  {
+    id: 'none',
+    title: 'None',
+    description: 'Lowest latency; do not request reasoning tokens.',
+    runtimes: ['codex-cli'],
+  },
+  {
+    id: 'low',
+    title: 'Low',
+    description: 'Fast, lightweight reasoning.',
+    runtimes: ['claude-cli', 'codex-cli'],
+  },
+  {
+    id: 'medium',
+    title: 'Medium',
+    description: 'Balanced reasoning depth and latency.',
+    runtimes: ['claude-cli', 'codex-cli'],
+  },
+  {
+    id: 'high',
+    title: 'High',
+    description: 'Thorough reasoning for complex work.',
+    runtimes: ['claude-cli', 'codex-cli'],
+  },
+  {
+    id: 'xhigh',
+    title: 'Extra high',
+    description: 'Extended reasoning for difficult agentic work.',
+    runtimes: ['claude-cli', 'codex-cli'],
+  },
+  {
+    id: 'max',
+    title: 'Maximum',
+    description: 'Deepest reasoning; highest latency and token use.',
+    runtimes: ['claude-cli', 'codex-cli'],
+  },
+];
+const isKnownThinkingForRuntime = (id, runtime) =>
+  THINKING_OPTIONS.some(
+    option => option.id === id && option.runtimes.includes(runtime),
+  );
+const thinkingOf = entry => {
+  const runtime = runtimeOf(entry);
+  return entry?.thinking && isKnownThinkingForRuntime(entry.thinking, runtime)
+    ? entry.thinking
+    : runtime === CLAUDE_API_RUNTIME_ID
+      ? ''
+      : 'auto';
+};
 
 /**
  * Resolve a registry entry's runtime, migrating older entries. An explicit
@@ -936,8 +1032,12 @@ const runtimeOf = entry => {
  * @param {{ model?: string } | undefined} entry
  * @returns {string | undefined}
  */
-const modelOf = entry =>
-  entry?.model && isKnownModel(entry.model) ? entry.model : undefined;
+const modelOf = entry => {
+  const runtime = runtimeOf(entry);
+  return entry?.model && isKnownModelForRuntime(entry.model, runtime)
+    ? entry.model
+    : defaultModelForRuntime(runtime);
+};
 
 /**
  * Provision a preset's objects into a session guest's petstore, referenced ONLY
@@ -1075,6 +1175,10 @@ const provisionPresetObjects = async (
  *   events. Turns bypass the provider tool loop — the CLI runs its own tools
  *   in the sandbox and keeps its own conversation continuity.
  * @property {string} [claudeModel] - Model id passed per turn (`--model`).
+ * @property {string} [claudeThinking] - Claude Code `--effort` value.
+ * @property {any} [codexClient] - A CodexClient capability.
+ * @property {string} [codexModel] - Model id passed per Codex turn.
+ * @property {string} [codexThinking] - Codex reasoning effort.
  *   Threaded explicitly because the client's own default is frozen into its
  *   formula env at provision time — without a per-turn override, changing a
  *   session's model after provisioning would silently have no effect.
@@ -1135,6 +1239,9 @@ export const makeStreamingAgent = async (
   const cliModel = codexClient
     ? /** @type {any} */ (providerConfig).codexModel
     : /** @type {any} */ (providerConfig).claudeModel;
+  const cliThinking = codexClient
+    ? /** @type {any} */ (providerConfig).codexThinking
+    : /** @type {any} */ (providerConfig).claudeThinking;
   /** @type {any} */
   const provider = cliClient
     ? null
@@ -1337,6 +1444,7 @@ export const makeStreamingAgent = async (
           // Pin the session's selected model per turn; the client's own
           // default is frozen into its formula env at provision time.
           model: cliModel,
+          thinking: cliThinking,
           // Give the CLI runtime the same session persona/instructions the API
           // runtime gets (the CLI never sees the tree's system message).
           systemPrompt: effectivePrompt,
@@ -2228,8 +2336,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // Endo authority; the API runtime uses the streaming provider with
         // Floot's own tool loop. Either runtime honors the selected model.
         const runtime = runtimeOf(entry);
-        const model =
-          runtime === CODEX_CLI_RUNTIME_ID ? undefined : modelOf(entry);
+        const model = modelOf(entry);
+        const thinking = thinkingOf(entry);
         let agentConfig;
         if (
           runtime === CLAUDE_CLI_RUNTIME_ID ||
@@ -2307,7 +2415,14 @@ export const make = (hostPowers, _context, { env } = {}) => {
             // Per-turn --model: the client's env default was frozen at
             // provision time, so a later model change would otherwise be
             // silently ignored for this session.
-            ...(model ? { claudeModel: model } : {}),
+            ...(model
+              ? { [isCodex ? 'codexModel' : 'claudeModel']: model }
+              : {}),
+            ...(thinking && thinking !== 'auto'
+              ? {
+                  [isCodex ? 'codexThinking' : 'claudeThinking']: thinking,
+                }
+              : {}),
           };
         } else {
           agentConfig = { provider: await getProvider(model) };
@@ -2349,6 +2464,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
             presetId: entry?.presetId || DEFAULT_PRESET_ID,
             runtime: runtimeOf(entry),
             model: modelOf(entry) || '',
+            thinking: thinkingOf(entry),
           });
         },
         /**
@@ -2476,23 +2592,31 @@ export const make = (hostPowers, _context, { env } = {}) => {
     /**
      * @param {string} [title]
      * @param {string} [presetId]
-     * @param {string} [model] - one of listModels() ids; defaults to the
-     *   catalog default (latest Haiku).
-     * @param {string} [runtime] - "claude-cli" or "claude-api"; defaults to CLI.
+     * @param {string} [model] - one of listModels() ids compatible with the
+     *   selected runtime; defaults to that runtime's catalog default.
+     * @param {string} [runtime] - a listRuntimes() id; defaults to Claude CLI.
+     * @param {string} [thinking] - reasoning effort for CLI runtimes.
      * @returns {Promise<object>} an opaque session facet
      */
-    async createSession(title, presetId, model, runtime) {
+    async createSession(title, presetId, model, runtime, thinking) {
       await loadRegistry();
       const preset = getPreset(presetId || DEFAULT_PRESET_ID);
       const id = newSessionId();
       // Runtime and model are independent and always pinned at creation: the
-      // runtime defaults to CLI, the model to the catalog default (latest
-      // Haiku). Snapshot the preset's id and prompt so later catalog edits
+      // runtime defaults to CLI, the model to that runtime's catalog default.
+      // Snapshot the preset's id and prompt so later catalog edits
       // don't change a live session.
       const chosenRuntime = isKnownRuntime(runtime)
         ? runtime
         : DEFAULT_RUNTIME_ID;
-      const chosenModel = isKnownModel(model) ? model : DEFAULT_MODEL_ID;
+      const chosenModel = isKnownModelForRuntime(model, chosenRuntime)
+        ? model
+        : defaultModelForRuntime(chosenRuntime);
+      const chosenThinking = isKnownThinkingForRuntime(thinking, chosenRuntime)
+        ? thinking
+        : chosenRuntime === CLAUDE_API_RUNTIME_ID
+          ? ''
+          : 'auto';
       const entry = harden({
         id,
         title: title || 'New chat',
@@ -2504,6 +2628,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           : {}),
         runtime: chosenRuntime,
         model: chosenModel,
+        thinking: chosenThinking,
       });
       /** @type {any[]} */ (registry).push(entry);
       await saveRegistry();
@@ -2513,13 +2638,13 @@ export const make = (hostPowers, _context, { env } = {}) => {
       getAgent(id).catch(() => {});
       console.error(
         `[floot-factory] Created session "${id}" (preset "${preset.id}", ` +
-          `runtime "${chosenRuntime}", model "${chosenModel}")`,
+          `runtime "${chosenRuntime}", model "${chosenModel}", thinking "${chosenThinking}")`,
       );
       return getFacet(id);
     },
 
     /**
-     * @returns {Promise<Array<{ id: string, title: string, createdAt: number, presetId: string, runtime: string, model: string }>>}
+     * @returns {Promise<Array<{ id: string, title: string, createdAt: number, presetId: string, runtime: string, model: string, thinking: string }>>}
      */
     async listSessions() {
       await loadRegistry();
@@ -2531,6 +2656,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           presetId: entry.presetId || DEFAULT_PRESET_ID,
           runtime: runtimeOf(entry),
           model: modelOf(entry) || '',
+          thinking: thinkingOf(entry),
         })),
       );
     },
@@ -2550,17 +2676,19 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
     /**
      * The selectable models for a new session (faster/lighter → stronger).
-     * `default` marks the pre-selected model (latest Haiku).
+     * `defaultFor` identifies the pre-selected model for each runtime.
      *
-     * @returns {Promise<Array<{ id: string, title: string, description: string, default: boolean }>>}
+     * @returns {Promise<Array<{ id: string, title: string, description: string, runtimes: string[], defaultFor: string[], default: boolean }>>}
      */
     async listModels() {
       return harden(
-        MODELS.map(({ id, title, description }) => ({
+        MODELS.map(({ id, title, description, runtimes, defaultFor }) => ({
           id,
           title,
           description,
-          default: id === DEFAULT_MODEL_ID,
+          runtimes,
+          defaultFor,
+          default: defaultFor.includes(DEFAULT_RUNTIME_ID),
         })),
       );
     },
@@ -2578,6 +2706,23 @@ export const make = (hostPowers, _context, { env } = {}) => {
           title,
           description,
           default: id === DEFAULT_RUNTIME_ID,
+        })),
+      );
+    },
+
+    /**
+     * Reasoning-effort choices, annotated with compatible CLI runtimes.
+     *
+     * @returns {Promise<Array<{ id: string, title: string, description: string, runtimes: string[], default: boolean }>>}
+     */
+    async listThinkingOptions() {
+      return harden(
+        THINKING_OPTIONS.map(({ id, title, description, runtimes }) => ({
+          id,
+          title,
+          description,
+          runtimes,
+          default: id === 'auto',
         })),
       );
     },

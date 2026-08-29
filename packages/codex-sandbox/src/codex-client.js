@@ -425,7 +425,7 @@ export const makeCodexClient = ({
    * `ProcessHandle`.
    *
    * @param {string} prompt
-   * @param {{ model?: string, systemPrompt?: string }} [opts]
+   * @param {{ model?: string, thinking?: string, systemPrompt?: string }} [opts]
    * @returns {Promise<ProcessHandle>}
    */
   const spawnCodex = async (prompt, opts = {}) => {
@@ -455,6 +455,12 @@ export const makeCodexClient = ({
     const useModel = opts.model || model;
     if (useModel) {
       argv.push('--model', useModel);
+    }
+    if (opts.thinking && opts.thinking !== 'auto') {
+      argv.push(
+        '-c',
+        `model_reasoning_effort=${JSON.stringify(opts.thinking)}`,
+      );
     }
     const useSystemPrompt = opts.systemPrompt || systemPrompt;
     const effectivePrompt = useSystemPrompt
@@ -494,7 +500,7 @@ export const makeCodexClient = ({
    * queued when closed bails before it spawns.
    *
    * @param {string} prompt
-   * @param {{ model?: string, systemPrompt?: string }} [opts]
+   * @param {{ model?: string, thinking?: string, systemPrompt?: string }} [opts]
    * @returns {object} reply reader
    */
   const runTurn = (prompt, opts = {}) => {
@@ -800,7 +806,7 @@ export const makeCodexClient = ({
      * `{ type: 'abort', reason }`). Closing the reader aborts the turn.
      *
      * @param {string} prompt
-     * @param {{ model?: string, systemPrompt?: string }} [opts] - Per-turn
+     * @param {{ model?: string, thinking?: string, systemPrompt?: string }} [opts] - Per-turn
      *   overrides: `model` for `--model`, `systemPrompt` for
      *   `--append-system-prompt` (each falls back to the constructor
      *   default when omitted).

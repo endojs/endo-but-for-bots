@@ -52,16 +52,25 @@ test('starts and then resumes the persisted Codex thread', async t => {
       }),
     makeStderrIterable: () =>
       harden({
-        async *[Symbol.asyncIterator]() {},
+        async *[Symbol.asyncIterator]() {
+          yield* [];
+        },
       }),
   });
 
-  for (const prompt of ['first', 'second']) {
-    const reader = await client.send(prompt);
-    for await (const _event of iterateReader(reader)) {
+  const drain = async reader => {
+    for await (const event of iterateReader(reader)) {
       // Drain the result so the next turn can start.
+      void event;
     }
-  }
+  };
+  await drain(await client.send('first'));
+  await drain(
+    await client.send('second', {
+      model: 'gpt-5.6-terra',
+      thinking: 'xhigh',
+    }),
+  );
 
   t.is(persisted, threadId);
   t.deepEqual(spawns[0].argv.slice(0, 6), [
@@ -74,9 +83,15 @@ test('starts and then resumes the persisted Codex thread', async t => {
   ]);
   t.false(spawns[0].argv.includes('resume'));
   const resumeIndex = spawns[1].argv.indexOf('resume');
-  t.true(resumeIndex > 0);
+  t.not(resumeIndex, -1);
   t.is(spawns[1].argv[resumeIndex + 1], threadId);
   t.is(spawns[1].argv.at(-1), 'second');
+  const modelIndex = spawns[1].argv.indexOf('--model');
+  t.is(spawns[1].argv[modelIndex + 1], 'gpt-5.6-terra');
+  t.true(
+    spawns[1].argv.includes('model_reasoning_effort="xhigh"'),
+    'Codex reasoning effort is configured for the turn',
+  );
   t.true(
     spawns[1].argv.includes('mcp_servers.endo.command="node"'),
     'Endo MCP bridge is configured for Codex',

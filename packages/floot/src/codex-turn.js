@@ -120,7 +120,7 @@ export const makeCodexEventTranslator = writer => {
 harden(makeCodexEventTranslator);
 
 /**
- * @param {{ client: any, text: string, writer: object, signal?: AbortSignal, model?: string, systemPrompt?: string }} options
+ * @param {{ client: any, text: string, writer: object, signal?: AbortSignal, model?: string, thinking?: string, systemPrompt?: string }} options
  */
 export const runCodexTurn = async ({
   client,
@@ -128,6 +128,7 @@ export const runCodexTurn = async ({
   writer,
   signal,
   model,
+  thinking,
   systemPrompt,
 }) => {
   const translator = makeCodexEventTranslator(writer);
@@ -135,6 +136,7 @@ export const runCodexTurn = async ({
     text,
     harden({
       ...(model ? { model } : {}),
+      ...(thinking ? { thinking } : {}),
       ...(systemPrompt ? { systemPrompt } : {}),
     }),
   );

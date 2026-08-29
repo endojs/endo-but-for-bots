@@ -33,6 +33,7 @@ export {};
  *   presetId: string,
  *   runtime?: string,
  *   model?: string,
+ *   thinking?: string,
  *   status?: 'idle' | 'streaming' | 'error',
  *   messageCount?: number,
  *   loaded?: boolean,
@@ -44,14 +45,27 @@ export {};
  */
 
 /**
- * A model selectable for a new session. `default` marks the model an unpinned
- * session runs (the factory's configured default).
+ * A model selectable for a new session. `runtimes` limits the model to the
+ * listed backends and `defaultFor` marks its per-runtime defaults. `default`
+ * remains for compatibility with older factories.
  * @typedef {{
  *   id: string,
  *   title: string,
  *   description?: string,
  *   default?: boolean,
+ *   runtimes?: string[],
+ *   defaultFor?: string[],
  * }} FlootModel
+ */
+
+/**
+ * @typedef {{
+ *   id: string,
+ *   title: string,
+ *   description?: string,
+ *   default?: boolean,
+ *   runtimes?: string[],
+ * }} FlootThinkingOption
  */
 
 /**
@@ -112,6 +126,7 @@ export {};
  *   presets: FlootPreset[],
  *   models: FlootModel[],
  *   runtimes: FlootRuntime[],
+ *   thinkingOptions: FlootThinkingOption[],
  *   messages: FlootMessage[],
  *   streamingText: string,
  *   phase: string,
@@ -144,7 +159,8 @@ export {};
  * @property {(pendingId: number, text: string) => void} [editPending]
  * @property {(pendingId: number) => void} [cancelPending]
  * @property {(id: string) => void} selectSession
- * @property {(presetId?: string, model?: string, runtime?: string) => void} newSession
+ * @property {(presetId?: string, model?: string, runtime?: string,
+ *   thinking?: string) => void} newSession
  * @property {(id: string, title: string) => void} renameSession
  * @property {(id: string) => void} deleteSession
  * @property {() => void} toggleMic
