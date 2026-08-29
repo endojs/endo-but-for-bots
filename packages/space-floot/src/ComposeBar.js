@@ -2,6 +2,7 @@
 
 import harden from '@endo/harden';
 import { h, Fragment } from 'preact';
+import { useState } from 'preact/hooks';
 
 /** @import { VNode } from 'preact' */
 /** @import { FlootState, FlootController, FlootVoiceState, FlootSafeEvent } from './types.js' */
@@ -84,11 +85,18 @@ export const ComposeBar = ({ state, controller }) => {
         )
       : null;
 
+  const secret = state.secretRequest;
+  const secretBox =
+    secret && controller.submitSecret
+      ? h(SecretRequestBar, { request: secret, controller })
+      : null;
+
   return h(
     Fragment,
     null,
     voice && voice.hasMic ? VadMeter(voice) : null,
     micHint,
+    secretBox,
     h(
       'div',
       { class: 'floot-compose' },
@@ -116,4 +124,88 @@ export const ComposeBar = ({ state, controller }) => {
     ),
   );
 };
+/**
+ * Operator paste box for requestSecret. The typed value stays in this
+ * component until Submit; it is never written into FlootState.
+ *
+ * @param {{
+ *   request: NonNullable<FlootState['secretRequest']>,
+ *   controller: FlootController,
+ * }} props
+ * @returns {VNode}
+ */
+const SecretRequestBar = ({ request, controller }) => {
+  const [value, setValue] = useState('');
+  const [username, setUsername] = useState(request.username || '');
+
+  const submit = () => {
+    const secret = value.trim();
+    if (!secret || !controller.submitSecret) return;
+    controller.submitSecret(
+      secret,
+      request.kind === 'basic' ? username.trim() || 'user' : undefined,
+    );
+    setValue('');
+  };
+
+  return h(
+    'div',
+    { class: 'floot-secret-request', role: 'dialog', 'aria-label': 'Submit a secret' },
+    h('div', { class: 'floot-secret-title' }, 'Secret requested'),
+    h('div', { class: 'floot-secret-label' }, request.label),
+    h(
+      'div',
+      { class: 'floot-secret-meta' },
+      `Stored as “${request.petName}” · ${request.kind}${
+        request.audience ? ` · ${request.audience}` : ''
+      }. The assistant never sees these bytes.`,
+    ),
+    request.kind === 'basic'
+      ? h('input', {
+          class: 'floot-secret-input',
+          type: 'text',
+          autocomplete: 'off',
+          placeholder: 'Username',
+          value: username,
+          onInput: (/** @type {FlootSafeEvent} */ e) =>
+            setUsername(e.target.value),
+        })
+      : null,
+    h('textarea', {
+      class: 'floot-secret-input',
+      rows: 4,
+      autocomplete: 'off',
+      'data-form-type': 'other',
+      'data-lpignore': 'true',
+      placeholder: 'Paste the secret here — it is not sent to the model',
+      value,
+      onInput: (/** @type {FlootSafeEvent} */ e) => setValue(e.target.value),
+    }),
+    h(
+      'div',
+      { class: 'floot-secret-actions' },
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'floot-secret-submit',
+          disabled: !value.trim(),
+          onClick: submit,
+        },
+        'Submit secret',
+      ),
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'floot-secret-cancel',
+          onClick: () => controller.cancelSecretRequest && controller.cancelSecretRequest(),
+        },
+        'Cancel',
+      ),
+    ),
+  );
+};
+harden(SecretRequestBar);
+
 harden(ComposeBar);

@@ -120,6 +120,14 @@ export {};
  *   status: string,
  *   input: string,
  *   settingsOpen: boolean,
+ *   secretRequest?: {
+ *     id: string,
+ *     label: string,
+ *     petName: string,
+ *     kind: string,
+ *     audience: string,
+ *     username?: string,
+ *   } | null,
  *   usage: { inputTokens: number, outputTokens: number } | null,
  *   voice: FlootVoiceState,
  *   objects?: { controller?: string, stt?: string, tts?: string },
@@ -146,4 +154,6 @@ export {};
  * @property {(text: string) => void} replayMessage
  * @property {() => void} toggleSettings
  * @property {(text: string) => void} setInput
+ * @property {(value: string, username?: string) => void} [submitSecret]
+ * @property {() => void} [cancelSecretRequest]
  */

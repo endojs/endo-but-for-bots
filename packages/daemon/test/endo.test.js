@@ -4348,6 +4348,43 @@ test('form value message @value is addressable via @mail/N/@value', async t => {
   t.deepEqual(resultValue, { displayName: 'Bob' });
 });
 
+test('form secret asCredential field becomes a credential cap, not the string', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  const hostIterator = iterateReader(E(host).followMessages());
+  const guestIterator = iterateReader(E(guest).followMessages());
+
+  await E(guest).form(
+    '@host',
+    'Git token',
+    harden([
+      {
+        name: 'token',
+        label: 'Token',
+        secret: true,
+        asCredential: true,
+        audience: 'https://git.example',
+      },
+    ]),
+  );
+
+  const { value: formMsg } = await hostIterator.next();
+  t.is(formMsg.type, 'form');
+  await E(host).submit(formMsg.number, harden({ token: 'super-secret-token' }));
+
+  await guestIterator.next();
+  const { value: valueMsg } = await guestIterator.next();
+  t.is(valueMsg.type, 'value');
+  const resultValue = await E(guest).lookup([
+    '@mail',
+    String(valueMsg.number),
+    '@value',
+  ]);
+  t.is(typeof resultValue.token, 'object');
+  t.not(resultValue.token, 'super-secret-token');
+  t.is(await E(resultValue.token).audience(), 'https://git.example');
+});
+
 // Formula write failure test removed: SQLite provides transactional
 // atomicity, making partial writes structurally impossible.
 

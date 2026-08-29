@@ -736,8 +736,7 @@ const FormFieldRow = ({ field, value, onChange }) => {
     );
   }
 
-  const $input = h('input', {
-    type: field.secret && !shown ? 'password' : 'text',
+  const inputProps = {
     class: 'form-request-field-input',
     placeholder: field.example || field.name,
     autocomplete: 'off',
@@ -746,7 +745,19 @@ const FormFieldRow = ({ field, value, onChange }) => {
     value: typeof value === 'string' ? value : '',
     /** @param {{ target: { value: string } }} e */
     onInput: e => onChange(e.target.value),
-  });
+  };
+  const $input = field.secret
+    ? h('textarea', {
+        ...inputProps,
+        class: 'form-request-field-input form-request-field-secret',
+        rows: 3,
+        spellcheck: false,
+        style: shown ? undefined : { WebkitTextSecurity: 'disc' },
+      })
+    : h('input', {
+        ...inputProps,
+        type: 'text',
+      });
 
   return h(
     'div',

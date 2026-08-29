@@ -511,6 +511,8 @@ export const flootComponent = (
   let status = 'Loading sessions…';
   let inputText = '';
   let settingsOpen = false;
+  /** @type {{ id: string, label: string, petName: string, kind: string, audience: string, username?: string } | null} */
+  let secretRequest = null;
   // Whether the transcript should follow new content to the bottom. Tracked
   // host-side (see the scroll observer at mount) because the confined view
   // cannot touch DOM scroll positions.
@@ -750,6 +752,7 @@ export const flootComponent = (
       status,
       input: inputText,
       settingsOpen,
+      secretRequest,
       usage: usage
         ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
         : null,
@@ -1848,7 +1851,77 @@ export const flootComponent = (
       inputText = text;
       notify();
     },
+    submitSecret(
+      /** @type {string} */ value,
+      /** @type {string | undefined} */ username,
+    ) {
+      const session = getActiveSession();
+      const request = secretRequest;
+      if (!session || !request) return;
+      const requestId = request.id;
+      secretRequest = null;
+      notify();
+      const payload =
+        request.kind === 'basic'
+          ? harden({ password: value, username: username || request.username || 'user' })
+          : value;
+      E(facetFor(session))
+        .submitSecret(requestId, payload)
+        .then(() => {
+          setStatus('Secret received as a capability.');
+        })
+        .catch((/** @type {Error} */ err) => {
+          setStatus(`error: ${err.message}`);
+          notify();
+        });
+    },
+    cancelSecretRequest() {
+      const session = getActiveSession();
+      const request = secretRequest;
+      if (!session || !request) return;
+      secretRequest = null;
+      notify();
+      E(facetFor(session))
+        .cancelSecretRequest(request.id)
+        .catch(() => {});
+    },
   });
+
+  const pollSecretRequest = () => {
+    if (cancelled) return;
+    const session = getActiveSession();
+    if (!session) {
+      if (secretRequest) {
+        secretRequest = null;
+        notify();
+      }
+      return;
+    }
+    E(facetFor(session))
+      .getSecretRequest()
+      .then((/** @type {any} */ next) => {
+        if (cancelled) return;
+        const prevId = secretRequest && secretRequest.id;
+        const nextId = next && next.id;
+        if (prevId === nextId) return;
+        secretRequest = next
+          ? {
+              id: String(next.id),
+              label: String(next.label || ''),
+              petName: String(next.petName || ''),
+              kind: String(next.kind || 'bearer'),
+              audience: String(next.audience || ''),
+              ...(next.username ? { username: String(next.username) } : {}),
+            }
+          : null;
+        if (next) setStatus('Waiting for a secret in the paste box…');
+        notify();
+      })
+      .catch(() => {
+        // Session facet may not be incarnated yet.
+      });
+  };
+  const secretPoll = setInterval(pollSecretRequest, 400);
 
   // ── Mount the confined Preact view ───────────────────────────────────────────
   $parent.replaceChildren();
@@ -2025,6 +2098,7 @@ export const flootComponent = (
       ttsCtx.close().catch(() => {});
       ttsCtx = null;
     }
+    clearInterval(secretPoll);
     scrollObserver.disconnect();
     $mount.removeEventListener('scroll', onScrollCapture, true);
     unmount($mount);

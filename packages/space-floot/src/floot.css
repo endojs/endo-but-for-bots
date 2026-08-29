@@ -487,6 +487,69 @@
   border-top: 1px solid var(--fl-border);
   flex-shrink: 0;
 }
+
+.floot-secret-request {
+  margin: 0 0.75rem 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--fl-accent);
+  border-radius: 12px;
+  background: var(--fl-surface2);
+}
+.floot-secret-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fl-accent);
+  margin-bottom: 0.25rem;
+}
+.floot-secret-label {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+.floot-secret-meta {
+  font-size: 0.75rem;
+  color: var(--fl-text-muted);
+  margin-bottom: 0.55rem;
+  line-height: 1.35;
+}
+.floot-secret-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 0.45rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 8px;
+  background: var(--fl-bg);
+  color: var(--fl-text);
+  font: inherit;
+  resize: vertical;
+}
+.floot-secret-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+.floot-secret-submit,
+.floot-secret-cancel {
+  border: none;
+  border-radius: 8px;
+  padding: 0.4rem 0.75rem;
+  font: inherit;
+  cursor: pointer;
+}
+.floot-secret-submit {
+  background: var(--fl-accent);
+  color: #fff;
+}
+.floot-secret-submit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.floot-secret-cancel {
+  background: var(--fl-surface3);
+  color: var(--fl-text);
+}
 .floot-input {
   flex: 1;
   resize: none;

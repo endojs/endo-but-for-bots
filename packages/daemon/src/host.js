@@ -366,6 +366,8 @@ export const makeHostMaker = ({
   formulateHttpClient,
   getHttpClientControlForClient,
   formulateGitCredential,
+  getGitCredentialMaterialForCap = /** @param {unknown} _cap */ _cap =>
+    undefined,
   formulateGitRemote,
   formulateInvitation,
   formulateDirectoryForStore,
@@ -1022,6 +1024,51 @@ export const makeHostMaker = ({
         tasks,
       );
       return value;
+    };
+
+    /**
+     * Write credential material to a mount path without returning the bytes.
+     * Guests hold only the credential cap (`audience()`); this privileged
+     * host method is how a secret becomes a file the guest can point a
+     * program at without reading.
+     *
+     * @param {any} mountCap
+     * @param {string | string[]} path
+     * @param {unknown} credentialCap
+     * @returns {Promise<void>}
+     */
+    const writeSecret = async (mountCap, path, credentialCap) => {
+      await null;
+      if (mountCap === undefined || mountCap === null) {
+        throw makeError(X`writeSecret: first argument must be a mount`);
+      }
+      const material = getGitCredentialMaterialForCap(credentialCap);
+      if (material === undefined) {
+        throw makeError(
+          X`writeSecret: argument must be a daemon-minted credential cap`,
+        );
+      }
+      if (
+        typeof material === 'object' &&
+        material !== null &&
+        /** @type {{ unavailable?: boolean }} */ (material).unavailable
+      ) {
+        throw makeError(
+          X`writeSecret: credential material is unavailable after a daemon restart`,
+        );
+      }
+      let bytes;
+      if ('token' in material && typeof material.token === 'string') {
+        bytes = material.token;
+      } else if (
+        'password' in material &&
+        typeof material.password === 'string'
+      ) {
+        bytes = material.password;
+      } else {
+        throw makeError(X`writeSecret: credential material is unavailable`);
+      }
+      await E(mountCap).writeText(path, bytes);
     };
 
     /** @type {EndoHost['getGitCredentialController']} */
@@ -2568,6 +2615,7 @@ export const makeHostMaker = ({
       provideGitClone,
       provideBearerCredential,
       provideBasicCredential,
+      writeSecret,
       getGitCredentialController,
       getGitRemoteController,
       provideHostPath,

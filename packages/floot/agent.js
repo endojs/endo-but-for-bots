@@ -41,6 +41,7 @@ import { makeMcpBridge } from './src/mcp-bridge.js';
 import { startMcpSocketServer } from './src/mcp-socket-server.js';
 import { makePublishTool } from './src/publish-tool.js';
 import { makeContainerMountRegistrar } from './src/container-mounts.js';
+import { makeSecretRequestKit } from './src/secret-request.js';
 
 // Cap the tool-call loop so a misbehaving model can't spin forever before it
 // produces a spoken reply. This is a *safety* ceiling, not a work budget: real
@@ -377,6 +378,9 @@ const FlootSessionInterface = M.interface('FlootSession', {
     .returns(M.any()),
   getHistory: M.callWhen().returns(M.any()),
   getUsage: M.callWhen().returns(M.any()),
+  getSecretRequest: M.callWhen().returns(M.any()),
+  submitSecret: M.callWhen(M.string(), M.any()).returns(M.any()),
+  cancelSecretRequest: M.callWhen(M.string()).returns(M.undefined()),
   help: M.call().returns(M.string()),
 });
 
@@ -427,6 +431,15 @@ objects attached:
 Caplet tools dropped into your \`tools/\` directory are discovered automatically,
 so your abilities can grow over time. When asked what you can do, you can list
 your tools and petnames to find out.
+
+Secrets — never paste them into chat and never put them in exec source. Those
+paths write the bytes into the model transcript. When you need a token, API
+key, private key, or service-account JSON, call requestSecret({ label, petName,
+kind?, audience? }). The operator gets a paste box; you receive only
+{ petName, kind, audience, byteLength }. Look that petname up and pass the
+handle to provideGitRemote / provideGitClone as \`credential\`, or call
+writeSecret({ petName, destPetName, path }) to place the bytes on a mount you
+hold. The handle exposes only audience(); you cannot read the secret back.
 `;
 
 // Flagship "vibe code a new project" persona: the base voice persona plus the
@@ -1865,6 +1878,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
   // so the served mount can be revoked when the session is rebuilt or deleted.
   /** @type {Map<string, { revoke: () => Promise<void> }>} */
   const publishers = new Map();
+  // Per-session secret-ingestion kits. The model calls requestSecret; the UI
+  // calls submitSecret on the session facet. Bytes never enter the transcript.
+  /** @type {Map<string, ReturnType<typeof makeSecretRequestKit>>} */
+  const secretKits = new Map();
   // Build the session-scoped extra tools for a session: a bounded workspace
   // publisher for new-project sessions when an asset server is available. The
   // same map backs both the API tool loop and the CLI MCP bridge.
@@ -2119,6 +2136,13 @@ export const make = (hostPowers, _context, { env } = {}) => {
             err instanceof Error ? err.message : String(err),
           );
         }
+        const secretKit = makeSecretRequestKit({
+          host,
+          sessionGuest,
+          sessionId: id,
+        });
+        secretKits.set(id, secretKit);
+        extraTools = { ...extraTools, ...secretKit.tools };
         // Runtime (CLI vs API) and model are independent, resolved with
         // backward-compatible migration of older entries (see runtimeOf/modelOf).
         // The CLI runtime routes through a ClaudeClient capability and gets a
@@ -2244,7 +2268,18 @@ export const make = (hostPowers, _context, { env } = {}) => {
           return makeSessionTurn({
             run: async (writer, signal) => {
               const agent = await getAgent(id);
-              await agent.converse(input, writer, undefined, signal);
+              const onAbort = () => {
+                const kit = secretKits.get(id);
+                const waiting = kit && kit.getPending();
+                if (waiting) kit.cancel(waiting.id);
+              };
+              if (signal.aborted) onAbort();
+              else signal.addEventListener('abort', onAbort, { once: true });
+              try {
+                await agent.converse(input, writer, undefined, signal);
+              } finally {
+                signal.removeEventListener('abort', onAbort);
+              }
             },
           });
         },
@@ -2263,13 +2298,19 @@ export const make = (hostPowers, _context, { env } = {}) => {
           const turn = makeSessionTurn({
             channel,
             run: async (_writer, signal) => {
-              signal.addEventListener(
-                'abort',
-                () => speech.abort('reply stopped'),
-                { once: true },
-              );
-              const agent = await getAgent(id);
-              await agent.converse(input, speech.writer, undefined, signal);
+              const onAbort = () => {
+                speech.abort('reply stopped');
+                const kit = secretKits.get(id);
+                const waiting = kit && kit.getPending();
+                if (waiting) kit.cancel(waiting.id);
+              };
+              signal.addEventListener('abort', onAbort, { once: true });
+              try {
+                const agent = await getAgent(id);
+                await agent.converse(input, speech.writer, undefined, signal);
+              } finally {
+                signal.removeEventListener('abort', onAbort);
+              }
             },
           });
           return harden({
@@ -2286,8 +2327,30 @@ export const make = (hostPowers, _context, { env } = {}) => {
           const agent = await getAgent(id);
           return agent.getUsage();
         },
+        async getSecretRequest() {
+          const kit = secretKits.get(id);
+          return kit ? kit.getPending() : null;
+        },
+        /**
+         * @param {string} requestId
+         * @param {unknown} value
+         */
+        submitSecret(requestId, value) {
+          const kit = secretKits.get(id);
+          if (!kit) {
+            throw new Error('No secret request is waiting on this session');
+          }
+          return kit.submit(requestId, value);
+        },
+        /**
+         * @param {string} requestId
+         */
+        cancelSecretRequest(requestId) {
+          const kit = secretKits.get(id);
+          if (kit) kit.cancel(requestId);
+        },
         help() {
-          return 'Floot session: startTurn(input) returns a FlootTurn (getStatus, watch, cancel, whenFinished); startTurnWithSpeech(input, tts, options?) adds daemon-side speech; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getInfo() returns { id, title, createdAt }.';
+          return 'Floot session: startTurn(input) returns a FlootTurn (getStatus, watch, cancel, whenFinished); startTurnWithSpeech(input, tts, options?) adds daemon-side speech; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getInfo() returns { id, title, createdAt }; getSecretRequest / submitSecret / cancelSecretRequest ingest operator secrets without putting bytes in the transcript.';
         },
       });
       facets.set(id, facet);
@@ -2504,6 +2567,12 @@ export const make = (hostPowers, _context, { env } = {}) => {
             error instanceof Error ? error.message : String(error)
           }`,
         );
+      }
+      const secretKit = secretKits.get(id);
+      if (secretKit) {
+        const waiting = secretKit.getPending();
+        if (waiting) secretKit.cancel(waiting.id);
+        secretKits.delete(id);
       }
       // Best-effort removal of the backing session guest's persistence (both
       // the handle and the controlling agent petnames).

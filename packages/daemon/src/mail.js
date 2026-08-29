@@ -138,6 +138,10 @@ export const makeMailboxMaker = ({
   randomHex256,
   pinTransient = () => {},
   unpinTransient = () => {},
+  // When a form field is marked `secret: true`, replace the submitted string
+  // with a credential capability before the value message is marshalled so the
+  // requesting agent never receives the bytes.
+  sealSecretField = undefined,
 }) => {
   /**
     @type {MakeMailbox} */
@@ -1288,6 +1292,24 @@ export const makeMailboxMaker = ({
           /** @type {import('@endo/patterns').Pattern} */ (effectivePattern),
           `field ${q(name)}`,
         );
+      }
+
+      if (typeof sealSecretField === 'function') {
+        for (const field of fields) {
+          // `secret: true` only hides the input. Mint a credential cap when
+          // the field opts in (`asCredential`, `audience`, or `secretKind`)
+          // so existing setup forms that consume the string still work.
+          const asCredential =
+            field.asCredential === true ||
+            typeof field.audience === 'string' ||
+            field.secretKind === 'bearer' ||
+            field.secretKind === 'basic';
+          if (!field.secret || !asCredential) continue;
+          const raw = values[field.name];
+          if (typeof raw === 'string' && raw.length > 0) {
+            values[field.name] = await sealSecretField(field, raw, values);
+          }
+        }
       }
 
       // Marshal the values record.
