@@ -1,4 +1,5 @@
-// spell-out-exempt: Preserve the public ConvertValToSlot name and parameter.
+// `ConvertValToSlot` and its `val` parameter are the established public names in
+// the @endo/marshal type surface; they are kept verbatim here.
 import type { Passable, PassableCap } from '@endo/pass-style';
 
 export type ConvertValToSlot<Slot, Value extends PassableCap = any> = (

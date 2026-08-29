@@ -1,4 +1,5 @@
-// spell-out-exempt: Preserve the public ConvertValToSlot name.
+// `ConvertValToSlot` and its `val` parameter are the established public names in
+// the @endo/marshal type surface; the assertions below preserve them verbatim.
 import { expectAssignable, expectType } from 'tsd';
 
 import { Far, type AtomStyle, type RemotableObject } from '@endo/pass-style';
@@ -32,9 +33,14 @@ import { makeMarshal } from './marshal.js';
 // EncodingClass carries a literal `@qclass` discriminant.
 expectType<{ '@qclass': 'NaN' }>(null as unknown as EncodingClass<'NaN'>);
 
-// EncodingUnion's representative members keep their per-tag payload shapes.
+// EncodingUnion carries one entry per '@qclass' tag; pin every member so that
+// dropping any one from the union reddens this suite.
+expectAssignable<EncodingUnion>({ '@qclass': 'NaN' });
 expectAssignable<EncodingUnion>({ '@qclass': 'undefined' });
+expectAssignable<EncodingUnion>({ '@qclass': 'Infinity' });
+expectAssignable<EncodingUnion>({ '@qclass': '-Infinity' });
 expectAssignable<EncodingUnion>({ '@qclass': 'bigint', digits: '123' });
+expectAssignable<EncodingUnion>({ '@qclass': '@@asyncIterator' });
 expectAssignable<EncodingUnion>({ '@qclass': 'symbol', name: 'foo' });
 expectAssignable<EncodingUnion>({
   '@qclass': 'error',
@@ -42,6 +48,14 @@ expectAssignable<EncodingUnion>({
   message: 'boom',
 });
 expectAssignable<EncodingUnion>({ '@qclass': 'slot', index: 0, iface: 'x' });
+// 'hilbert' is the '@qclass'-collision escape hatch: an `original` Encoding plus
+// an optional `rest` record of the value's other properties.
+expectAssignable<EncodingUnion>({ '@qclass': 'hilbert', original: 'x' });
+expectAssignable<EncodingUnion>({
+  '@qclass': 'hilbert',
+  original: 'x',
+  rest: { a: 'leaf' },
+});
 expectAssignable<EncodingUnion>({
   '@qclass': 'tagged',
   tag: 't',
@@ -98,6 +112,16 @@ expectType<(value: RemotableObject) => string>(
 );
 expectType<(slot: string, iface?: string) => RemotableObject>(
   null as unknown as ConvertSlotToVal<string, RemotableObject>,
+);
+// Pin the parameter lists as tuples: unlike a callback expectType (which stays
+// green when a trailing param is dropped, since TS treats a shorter callback as
+// structurally assignable), tuple equality is strict on arity and optionality,
+// so dropping ConvertSlotToVal's optional `iface` reddens this suite.
+expectType<[val: RemotableObject]>(
+  null as unknown as Parameters<ConvertValToSlot<string, RemotableObject>>,
+);
+expectType<[slot: string, iface?: string | undefined]>(
+  null as unknown as Parameters<ConvertSlotToVal<string, RemotableObject>>,
 );
 expectType<(value: import('@endo/pass-style').Passable) => CapData<string>>(
   null as unknown as ToCapData<string>,
