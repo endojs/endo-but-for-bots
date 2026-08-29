@@ -1759,17 +1759,22 @@ export const makeStreamingAgent = async (
   const getHistory = async () => {
     const leafId = await getOrCreateLeaf();
     const path = await tree.getPath(leafId);
-    // Index tool outputs by call id so each assistant tool_call can carry its
-    // result. The raw 'tool' messages are model-wire records; the UI wants the
-    // call and its result joined.
-    const resultById = new Map();
-    for (const m of path) {
-      if (m.role === 'tool' && m.tool_call_id != null) {
-        resultById.set(m.tool_call_id, m.content);
-      }
-    }
+    // Pair results in transcript order rather than indexing the entire path by
+    // call id. CLI runtimes can reuse an item id in a later process/turn; a
+    // path-wide map made that later result overwrite every earlier card with
+    // the same id.
+    const pendingById = new Map();
     const out = [];
     for (const m of path) {
+      if (m.role === 'tool') {
+        const pending = pendingById.get(m.tool_call_id);
+        if (pending) {
+          pending.result = m.content;
+          pendingById.delete(m.tool_call_id);
+        }
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       if (m.role !== 'user' && m.role !== 'assistant') {
         // eslint-disable-next-line no-continue
         continue;
@@ -1784,12 +1789,14 @@ export const makeStreamingAgent = async (
       if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
         for (const tc of m.tool_calls) {
           const args = tc.function?.arguments;
-          out.push({
+          const tool = {
             role: 'tool',
             name: tc.function?.name || 'tool',
             args: typeof args === 'string' ? args : JSON.stringify(args ?? {}),
-            result: resultById.has(tc.id) ? resultById.get(tc.id) : null,
-          });
+            result: null,
+          };
+          out.push(tool);
+          pendingById.set(tc.id, tool);
         }
       }
     }

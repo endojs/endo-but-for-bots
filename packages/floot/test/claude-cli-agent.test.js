@@ -240,7 +240,7 @@ test('a codex-cli turn surfaces and persists tool activity', async t => {
   ]);
 });
 
-test('a codex-cli turn persists a programmatic tool failure', async t => {
+test('codex-cli history keeps reused tool ids paired to their own turn', async t => {
   t.timeout(20_000);
   const powers = makeFakePowers();
   const { client, turns } = makeFakeClient();
@@ -289,6 +289,40 @@ test('a codex-cli turn persists a programmatic tool failure', async t => {
 
   await turnP;
   await replyP;
+
+  const secondChannel = makeReplyChannel();
+  const secondReplyP = collectReply(secondChannel.reader);
+  const secondTurnP = agent.converse('retry health', secondChannel.writer);
+  for (let i = 0; i < 50 && turns.length < 2; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  turns[1].push({
+    type: 'response_item',
+    payload: {
+      type: 'custom_tool_call',
+      call_id: 'call-health',
+      name: 'exec',
+      input: 'const r = await tools.mcp__endo__exec({ code: "health" });',
+    },
+  });
+  turns[1].push({
+    type: 'response_item',
+    payload: {
+      type: 'custom_tool_call_output',
+      call_id: 'call-health',
+      output: [{ type: 'input_text', text: 'healthy' }],
+    },
+  });
+  turns[1].push({
+    type: 'item.completed',
+    item: { id: 'msg-2', type: 'agent_message', text: 'Healthy.' },
+  });
+  turns[1].push({ type: 'turn.completed', usage: {} });
+  turns[1].push({ type: 'end' });
+  await secondTurnP;
+  await secondReplyP;
+
   t.deepEqual(await agent.getHistory(), [
     { role: 'user', content: 'check health' },
     {
@@ -300,6 +334,16 @@ test('a codex-cli turn persists a programmatic tool failure', async t => {
       result: 'MCP tool call requires approval, but approval policy is never',
     },
     { role: 'assistant', content: 'Blocked.' },
+    { role: 'user', content: 'retry health' },
+    {
+      role: 'tool',
+      name: 'exec',
+      args: JSON.stringify({
+        input: 'const r = await tools.mcp__endo__exec({ code: "health" });',
+      }),
+      result: 'healthy',
+    },
+    { role: 'assistant', content: 'Healthy.' },
   ]);
 });
 
