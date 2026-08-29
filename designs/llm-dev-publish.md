@@ -355,15 +355,19 @@ These questions were resolved in review of this design.
   its own; the publishable set is the same set of non-private `@endo/*`
   workspaces that the production release path publishes, and the grant's package
   allowlist is issued to cover exactly that set.
+- The shared moving development pointer is spelled `dev-latest`, named
+  identically across both designs. The attenuation design (PR
+  endojs/endo-but-for-bots#890), which owns the reserved shared-moving `dev-*`
+  tag-shape and monotonicity policy, aligned its channel tag to `dev-latest` to
+  match this design, so the two documents agree on the exact literal. The
+  planned `llm`-to-`dev` branch rename is tracked separately and does not change
+  this tag spelling.
 
 ## Open questions
 
-- Is `dev-latest` the right spelling for the shared moving development pointer,
-  and does the planned `llm`-to-`dev` branch rename change it? The exact tag
-  spelling is shared surface with the attenuation design's tag policy (PR
-  endojs/endo-but-for-bots#890); the two designs should name the reserved
-  shared-moving `dev-*` tag identically. Recorded here so a maintainer decision
-  lands in both designs at once.
+None. The one open question — the exact spelling of the shared moving pointer,
+shared surface with the attenuation design's tag policy — is resolved above: both
+designs name it `dev-latest`.
 
 ## Prompt
 
