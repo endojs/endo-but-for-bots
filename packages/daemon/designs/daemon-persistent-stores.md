@@ -197,9 +197,12 @@ export const MapStoreInterface = M.interface('MapStore', {
 });
 ```
 
-`SetStore` replaces `init` and `set` with `add(key)`, and has no `get` or
-`values`; it provides `has`, `delete`, `getSize`, `keys`, `entries` where an
-entry is the key, and `snapshot` as a `CopySet`. `WeakMapStore` has
+`SetStore` replaces `init` and `set` with `add(key)`, and has no `get`. It
+provides `has`, `delete`, `getSize`, `keys`, `values`, `entries`, and `snapshot`
+as a `CopySet`. As on JavaScript `Set`, `keys()` and `values()` return the same
+keys and `entries()` returns `[key, key]` pairs. This preserves the signatures
+and result shapes of every verb shared with `MapStore`, without persisting a
+duplicate value. `WeakMapStore` has
 `has`/`get`/`init`/`set`/`delete`; `WeakSetStore` has `has`/`add`/`delete`.
 Weak stores deliberately have no `getSize`, enumeration, or `snapshot`.
 
@@ -327,14 +330,15 @@ types an *arbitrary passable key* on a command line or in a form.
 
 #### Constructors (`mk*`)
 
-The daemon already has an `mk*` constructor family — `mkdir`, `mkhost`,
-`mkguest`, `mktmp` (`packages/cli/src/endo.js`), each taking `--name <petName>`
-and `--as <agent>`. The store constructors join it, one flat verb per kind:
+The daemon already has an `mk*` constructor family: `mkdir`, `mkhost`,
+`mkguest`, and `mktmp` (`packages/cli/src/endo.js`). Store constructors use a
+required positional name, matching `mkdir <name>`, plus the common optional
+`--as <agent>`. The store constructors join it, one flat verb per kind:
 
 | Command | Creates | Guest/host method |
 |---|---|---|
-| `endo mkmap --name <n>`     | strong `MapStore`     | `makeMapStore` |
-| `endo mkset --name <n>`     | strong `SetStore`     | `makeSetStore` |
+| `endo mkmap <n>`     | strong `MapStore`     | `makeMapStore` |
+| `endo mkset <n>`     | strong `SetStore`     | `makeSetStore` |
 | `endo mkweakmap --name <n>` | `WeakMapStore`        | `makeWeakMapStore` |
 | `endo mkweakset --name <n>` | `WeakSetStore`        | `makeWeakSetStore` |
 | `endo mksortedmap --name <n>` | `SortedMapStore`     | `makeSortedMapStore` |
@@ -368,9 +372,41 @@ method count. The constructors stay flat as `mk*` to match `mkdir`.
 | `entries()`        | `endo map <name> entries` |
 | `snapshot()`       | `endo map <name> snapshot --name <copymap-name>` (binds a passable `CopyMap`, symmetric with the write-once `store`) |
 
-`SetStore` (`endo set <name> …`) uses the same verbs with `add` in place of
+`SetStore` (`endo set <name> ...`) uses the same verbs with `add` in place of
 `init`/`set`: `add <key>`, `has <key>`, `delete <key>`, `size`, `keys`,
-`snapshot` (→ `CopySet`).
+`values`, `entries`, and `snapshot` (a `CopySet`). Shared verbs have the same
+argument order and output shape as the map commands. In particular,
+`entries` emits `[key, key]` pairs rather than introducing a set-only shape.
+
+#### Set value columns and coherent bags
+
+The shared SQLite table keeps nullable `value_body` and `value_slots` columns.
+For a set row both are null. They are not populated with a unit sentinel or a
+duplicate key: membership is represented by the key row itself, and the API
+synthesizes `[key, key]` only when `entries()` is requested. This keeps set
+storage honest while allowing maps, sets, and future bags to share one indexed
+key substrate.
+
+A durable `BagStore` should be a map from key to natural-number multiplicity,
+not a set with a vestigial value and not a separate table. Its value columns
+carry the encoded bigint count. The coherent surface is the union of the map
+and set vocabulary:
+
+- `has(key)`, `delete(key)`, `getSize()`, `keys()`, `values()`, `entries()`, and
+  `snapshot()` have exactly the map signatures and result shapes. `getSize()`
+  counts distinct keys, `values()` yields counts, and `entries()` yields
+  `[key, count]` pairs.
+- `get(key)`, `init(key, count)`, and `set(key, count)` use the map signatures;
+  counts must be positive bigints.
+- `add(key)` uses exactly the set signature and increments by one. A separate
+  `remove(key)` decrements by one and deletes the row at zero, avoiding an
+  optional count argument that would make `add` mean something different on
+  bags and sets.
+
+The matching CLI group is `endo bag <name> <verb> ...`; every shared verb keeps
+the name, key, and value/count in the same positions as `endo map` and
+`endo set`. This is a design commitment for a later phase, not an additional
+kind implemented by this change.
 
 The **weak** variants (`endo weakmap …` / `endo weakset …`) share the mutating
 verbs (`init`/`set`/`get`/`has`/`delete` or `add`/`has`/`delete`) but **omit the
@@ -474,7 +510,7 @@ phase, broaden the same map to full `M.key()` keys, including nested remotables,
 and add its restart-persistence coverage. This establishes the common codec,
 formula cleanup, and strong edge accounting.
 
-**Phase 2 — durable strong `SetStore`.** Add `kind: 'set'`, `makeSetStore`, and
+**Phase 2 - durable strong `SetStore`.** Add `kind: 'set'`, `makeSetStore`, and
 the `add` / membership / enumeration / `CopySet` surface using the proven
 strong-entry substrate. Include a restart-persistence test.
 
@@ -507,6 +543,10 @@ query-plan use, and restart persistence for each sorted variant.
 
 **Phase 5 — parity polish.** `addAll`/`clear`, lazy iterators, and optional
 multiplayer replication via the synced-store substrate.
+
+**Phase 5a - durable strong `BagStore`.** Reuse the strong collection rows with
+bigint multiplicities in the value columns. Preserve shared map/set verb
+signatures as specified above, and add only the bag-specific decrement verb.
 
 **Phase 6 — human surfaces (CLI + WUI).** The command vocabulary specified in
 *Design → CLI and WUI command vocabulary*: the `mk*` constructors, the
