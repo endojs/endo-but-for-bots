@@ -625,7 +625,7 @@ test('streamGrep with buffer > 0 bounds post-revoke delivery to the clamped buff
     }
   } catch (error) {
     rejected = true;
-    t.regex(error.message, /Mount has been revoked/);
+    t.regex(/** @type {Error} */ (error).message, /Mount has been revoked/);
   }
 
   t.true(rejected, 'the stream rejects once the pre-acked buffer drains');
