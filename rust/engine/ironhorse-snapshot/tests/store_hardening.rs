@@ -211,6 +211,7 @@ fn incremental_batch(
         proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
         accessors: Vec::new(),
         intl_bound_functions: Vec::new(),
+        private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
         arguments_brands: Vec::new(),
         temporal: ironhorse_snapshot::image::TemporalImage::default(),
         intl: ironhorse_vm::IntlTables::default(),

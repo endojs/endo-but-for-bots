@@ -1466,7 +1466,7 @@ rather than work items.
   intact, both refusal edges are pinned, and the worker lifecycle
   test now runs a divergent crank through relink live and after
   reopen.
-  STILL OPEN in this workstream: the 10 `Pending` ledger rows
+  STILL OPEN in this workstream: the 9 `Pending` ledger rows
   (generators, promises, function-dependent per-instance tables, and
   modules — several unreachable cross-crank in the vm today regardless
   of restore).
@@ -1891,6 +1891,10 @@ rather than work items.
     reference runtime native functions owned by a still-Pending row
     remain dependency-gated by name. Locks: `accessor_carry.rs` and
     the narrowed `pending_row_gates.rs`.
+  - [x] Private elements LANDED (2026-08-29, schema v19 / format v8):
+    value and accessor rows travel in `PRIV`, keyed by receiver and
+    lexical brand. Private accessor functions ride `FUNC`; cross-table
+    validation rejects duplicate representations of one private key.
 - [x] ~~The `combinators` / `from_async` / `promise_guards` tables
   are append-only for the machine's lifetime (wave-6 W6-19)~~ Done
   (2026-08-27): both collectors' sweeps now COMPACT the three arenas
@@ -2824,6 +2828,11 @@ bite-checked by reverting the fix under the lock). Statuses:
   at restore. Held bound functions preserve identity and remain
   callable across resume; accessors may now safely reference them.
   Ten Pending rows remain.
+- **Private-element carry (2026-08-29, schema v19 / format v8):**
+  `PRIV` carries private values and getter/setter mappings keyed by
+  receiver and lexical-brand slots. Private accessor functions ride
+  `FUNC`; eager, lazy, file, blob, and malformed-row tests live in
+  `private_elements_carry.rs`. Nine Pending rows remain.
 
 ### External review — the fail-closed persistence boundary (2026-08-28)
 
@@ -2841,8 +2850,9 @@ bite-checked lock:
   skipping unknown atoms and silently dropping arrays, collections,
   RegExps, Intl records and cursors.
   The Date carry later advanced the write stamp to 3 for the same
-  reason. Function, proxy, accessor, and Intl-bound carries later
-  advanced it through 7. The reader accepts a read RANGE (`1..=7`) — older atoms
+  reason. Function, proxy, accessor, Intl-bound, and private-element
+  carries later advanced it through 8. The reader accepts a read RANGE
+  (`1..=8`) — older atoms
   are a subset with the same
   encodings — and refuses anything newer; the store's
   open gate checks readability rather than equality so older stores

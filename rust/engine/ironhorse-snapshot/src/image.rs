@@ -375,6 +375,8 @@ pub struct MachineImage {
     pub accessors: Vec<ironhorse_vm::AccessorRow>,
     /// `IBFN`: runtime Intl bound-function links.
     pub intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow>,
+    /// `PRIV`: private values and accessors.
+    pub private_elements: ironhorse_vm::PrivateElementSnapshot,
     /// `ARGB`: the arguments-exotic brand owners, ascending.
     pub arguments_brands: Vec<u32>,
     /// `TMPR`: the four Temporal record tables (ledger).
@@ -460,6 +462,7 @@ impl MachineImage {
             proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
+            private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -605,6 +608,14 @@ impl MachineImage {
         rows: Vec<ironhorse_vm::IntlBoundFunctionRow>,
     ) -> MachineImage {
         self.intl_bound_functions = rows;
+        self
+    }
+
+    pub fn with_private_elements(
+        mut self,
+        private_elements: ironhorse_vm::PrivateElementSnapshot,
+    ) -> MachineImage {
+        self.private_elements = private_elements;
         self
     }
 
@@ -1855,6 +1866,91 @@ pub(crate) fn decode_intl_bound_functions(
     Ok(rows)
 }
 
+pub(crate) fn encode_private_elements(state: &ironhorse_vm::PrivateElementSnapshot) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(state.values.len() as u32).to_be_bytes());
+    for row in &state.values {
+        v.extend_from_slice(&row.receiver.to_be_bytes());
+        v.extend_from_slice(&row.brand.to_be_bytes());
+        crate::slot_codec::encode_slot(&row.value, &mut v);
+    }
+    v.extend_from_slice(&(state.accessors.len() as u32).to_be_bytes());
+    for row in &state.accessors {
+        v.extend_from_slice(&row.receiver.to_be_bytes());
+        v.extend_from_slice(&row.brand.to_be_bytes());
+        for value in [row.get, row.set] {
+            match value {
+                None => v.push(0),
+                Some(slot) => {
+                    v.push(1);
+                    crate::slot_codec::encode_slot(&slot, &mut v);
+                }
+            }
+        }
+    }
+    v
+}
+
+pub(crate) fn decode_private_elements(
+    p: &[u8],
+) -> Result<ironhorse_vm::PrivateElementSnapshot, SnapshotError> {
+    let mut c = Cursor::new(p, "private elements");
+    let count = c.u32()? as usize;
+    let mut values = Vec::with_capacity(count.min(p.len() / (8 + SLOT_RECORD_BYTES)));
+    for _ in 0..count {
+        let receiver = c.u32()?;
+        let brand = c.u32()?;
+        if values
+            .last()
+            .is_some_and(|row: &ironhorse_vm::PrivateValueRow| {
+                (receiver, brand) <= (row.receiver, row.brand)
+            })
+        {
+            return Err(SnapshotError::Corrupt(
+                "private values: rows not strictly ascending",
+            ));
+        }
+        values.push(ironhorse_vm::PrivateValueRow {
+            receiver,
+            brand,
+            value: c.slot()?,
+        });
+    }
+    let count = c.u32()? as usize;
+    let mut accessors = Vec::with_capacity(count.min(p.len() / 10));
+    for _ in 0..count {
+        let receiver = c.u32()?;
+        let brand = c.u32()?;
+        if accessors
+            .last()
+            .is_some_and(|row: &ironhorse_vm::PrivateAccessorRow| {
+                (receiver, brand) <= (row.receiver, row.brand)
+            })
+        {
+            return Err(SnapshotError::Corrupt(
+                "private accessors: rows not strictly ascending",
+            ));
+        }
+        let mut value = || -> Result<Option<Slot>, SnapshotError> {
+            match c.u8()? {
+                0 => Ok(None),
+                1 => Ok(Some(c.slot()?)),
+                _ => Err(SnapshotError::Corrupt(
+                    "private accessors: bad option tag",
+                )),
+            }
+        };
+        accessors.push(ironhorse_vm::PrivateAccessorRow {
+            receiver,
+            brand,
+            get: value()?,
+            set: value()?,
+        });
+    }
+    c.done()?;
+    Ok(ironhorse_vm::PrivateElementSnapshot { values, accessors })
+}
+
 /// Encode the arguments-exotic brand owners (the `ARGB` payload /
 /// small-state arguments section): a `u32` count then ascending owners.
 pub(crate) fn encode_arguments_brands(owners: &[u32]) -> Vec<u8> {
@@ -2543,6 +2639,7 @@ pub(crate) struct LangRows<'a> {
     pub proxy_state: &'a ironhorse_vm::ProxyStateSnapshot,
     pub accessors: &'a [ironhorse_vm::AccessorRow],
     pub intl_bound_functions: &'a [ironhorse_vm::IntlBoundFunctionRow],
+    pub private_elements: &'a ironhorse_vm::PrivateElementSnapshot,
     pub arguments_brands: &'a [u32],
     pub temporal: &'a TemporalImage,
     pub intl: &'a IntlTables,
@@ -2558,6 +2655,7 @@ impl LangRows<'_> {
         proxy_state: &EMPTY_PROXY_STATE,
         accessors: &[],
         intl_bound_functions: &[],
+        private_elements: &EMPTY_PRIVATE_ELEMENTS,
         arguments_brands: &[],
         temporal: &EMPTY_TEMPORAL,
         intl: &EMPTY_INTL,
@@ -2594,6 +2692,11 @@ static EMPTY_PROXY_STATE: ironhorse_vm::ProxyStateSnapshot = ironhorse_vm::Proxy
     proxies: Vec::new(),
     revokers: Vec::new(),
 };
+static EMPTY_PRIVATE_ELEMENTS: ironhorse_vm::PrivateElementSnapshot =
+    ironhorse_vm::PrivateElementSnapshot {
+        values: Vec::new(),
+        accessors: Vec::new(),
+    };
 
 /// Every slot index and chunk offset a decoded image can carry, checked
 /// against the geometry the image itself declares.
@@ -3026,6 +3129,34 @@ pub(crate) fn check_image_slot_bounds(
             ));
         }
     }
+    let private_value_keys: std::collections::BTreeSet<(u32, u32)> = lang
+        .private_elements
+        .values
+        .iter()
+        .map(|row| (row.receiver, row.brand))
+        .collect();
+    for row in &lang.private_elements.values {
+        owned(row.receiver)?;
+        owned(row.brand)?;
+        check(&row.value)?;
+    }
+    for row in &lang.private_elements.accessors {
+        owned(row.receiver)?;
+        owned(row.brand)?;
+        if private_value_keys.contains(&(row.receiver, row.brand)) {
+            return Err(SnapshotError::Corrupt(
+                "private elements: key has both value and accessor rows",
+            ));
+        }
+        for value in [row.get, row.set].into_iter().flatten() {
+            if value.kind != Kind::Reference {
+                return Err(SnapshotError::Corrupt(
+                    "private accessors: getter or setter is not callable",
+                ));
+            }
+            check(&value)?;
+        }
+    }
     for &o in lang.arguments_brands {
         owned(o)?;
     }
@@ -3229,6 +3360,12 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
             &encode_intl_bound_functions(&image.intl_bound_functions),
         );
     }
+    if !image.private_elements.is_empty() {
+        w.atom(
+            crate::format::PRIV,
+            &encode_private_elements(&image.private_elements),
+        );
+    }
     // The installed-names floor: `Some` only when it differs from the
     // name-table length (`with_name_floor` canonicalizes), so machines
     // whose floor sits at the table stay byte-stable with every
@@ -3400,6 +3537,10 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => decode_intl_bound_functions(a.payload)?,
         None => Vec::new(),
     };
+    let private_elements = match r.find(crate::format::PRIV) {
+        Some(a) => decode_private_elements(a.payload)?,
+        None => ironhorse_vm::PrivateElementSnapshot::default(),
+    };
     let name_floor = match r.find(crate::format::NFLR) {
         Some(a) => {
             if a.payload.len() != 4 {
@@ -3451,6 +3592,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
             proxy_state: &proxy_state,
             accessors: &accessors,
             intl_bound_functions: &intl_bound_functions,
+            private_elements: &private_elements,
             arguments_brands: &arguments_brands,
             temporal: &temporal,
             intl: &intl,
@@ -3490,6 +3632,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         proxy_state,
         accessors,
         intl_bound_functions,
+        private_elements,
         arguments_brands,
         temporal,
         intl,
@@ -3870,6 +4013,7 @@ mod tests {
                 proxy_state: &EMPTY_PROXY_STATE,
                 accessors: &[],
                 intl_bound_functions: &[],
+                private_elements: &EMPTY_PRIVATE_ELEMENTS,
                 arguments_brands: &[],
                 temporal: &EMPTY_TEMPORAL,
                 intl,
@@ -4230,6 +4374,7 @@ mod tests {
             proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
+            private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -4272,6 +4417,7 @@ mod tests {
             proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
+            private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -4395,6 +4541,7 @@ mod tests {
             proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
+            private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
