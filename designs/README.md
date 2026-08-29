@@ -323,7 +323,7 @@ LLM-agent stack).*
 | [daemon-mount-capabilities](daemon-mount-capabilities.md) | 2026-05-18 | 2026-05-27 | **Complete** |
 | [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-06-02 | Not Started |
 | [registry-capability](registry-capability.md) | 2026-06-02 | 2026-08-29 | Deprecated |
-| [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) | 2026-08-29 | — | Not Started |
+| [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) | 2026-08-29 | 2026-08-29 | Not Started |
 | [mvs-resolver](mvs-resolver.md) | 2026-06-02 | 2026-06-02 | Not Started |
 | [snapshot-mapper](snapshot-mapper.md) | 2026-06-02 | 2026-06-02 | Not Started |
 | [filesystem-watchers](filesystem-watchers.md) | 2026-05-07 | 2026-05-07 | Not Started |
@@ -1521,7 +1521,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | ~~daemon-content-store-gc~~ | S | — | 3 | ✅ Complete (PR #99, ~2 days actual vs 1 day estimate) |
 | daemon-mount | M-L | 1.5 weeks | 3 | Mount exo, symlink confinement; Phase 4 in PR #135 forwarded under bot |
 | daemon-worker-import-from-mount | S-M | 3-4 days | 3 | **Integration layer** of the four-layer stack (decomposed 2026-06-02). `makeFromPackage` host method + `makeFromMount` dispatcher + CLI `endo run <mount>` / `endo make <mount>` + XS bridging deferral. Driven by the three preceding layers (`registry-capability`, `mvs-resolver`, `snapshot-mapper`); first cut limited to MVS; lockfile honoring deferred. Does not depend on the Rust subsystem (separate lane). |
-| ~~registry-capability~~ | S-M | — | 3 | Deprecated method-call capability shape; implementation is the compatibility source for the directory-tree adapters |
+| ~~registry-capability~~ | S-M | n/a | 3 | Deprecated method-call capability shape; implementation is the compatibility source for the directory-tree adapters |
 | npm-registry-as-directory-tree | M-L | 1-1.5 weeks | 3 | Factor `LookupTreeInterface`, add Node and Endor adapters plus shared conformance tests, move MVS and mapper late binding to traversal, and retain a temporary legacy method adapter |
 | mvs-resolver | S-M | 3-4 days | 3 | Layer 2 of 4. JS reference MVS algorithm, eager single-pass resolution producing `RegistryResolution` (content-addressed `resolutionHash`). Multi-major coexistence under distinct `<name>@<version>` keys. Lockfile follow-up tracked as constraint-pass insertion point |
 | snapshot-mapper | M | 4-5 days | 3 | Layer 3 of 4. `packages/daemon/src/map-snapshot.js` + `packages/daemon/src/worker-import.js` (`makeMountReadPowers`) + small extension point in `packages/compartment-mapper` for the archive-precedent peer-directory layout. The one cross-package change in the four-layer stack |

@@ -23,7 +23,7 @@ CAS (content-addressed store) readable tree containing that package.
 
 The Node Endo daemon and the Rust-hosted Endor daemon expose the same
 method shapes and path layout.
-Their existing HTTP, npmrc, integrity, MVS (Minimum Version Selection),
+Their existing HTTP, `.npmrc`, integrity, MVS (Minimum Version Selection),
 SQLite, and CAS machinery remains behind the tree as implementation
 detail.
 
@@ -36,7 +36,10 @@ vocabulary for reaching those trees and couples resolution, fetching,
 cache diagnostics, and package storage into one interface.
 That coupling makes a registry harder to substitute in tests and makes
 Node and Endor parity depend on matching a project-specific method API
-instead of matching the filesystem vocabulary both already consume.
+instead of matching the filesystem vocabulary both already consume (the
+shared `has` / `list` / `lookup` readable-tree interface set out below in
+§ Tree shape, from [fs-interface-consolidation](fs-interface-consolidation.md)
+and [fs-interface-reconciliation](fs-interface-reconciliation.md)).
 
 As of 2026-08-29, the method-call interface has shipped in
 `@endo/exo-npm` and the Node daemon.
@@ -59,7 +62,7 @@ working machinery, not a rewrite of the registry proxy.
 
 ## Non-goals
 
-- Reimplementing `RegistryTable`, MVS, npmrc authentication, tarball
+- Reimplementing `RegistryTable`, MVS, `.npmrc` authentication, tarball
   fetching, CAS check-in, assembly, or execution from
   [endor-npm-registry-proxy](endor-npm-registry-proxy.md).
 - Listing every npm package.
@@ -168,8 +171,8 @@ source compatible because they already implement the superset.
 The npm and scope hubs are Exos guarded only by `LookupTreeInterface`;
 the root and package-version directories use `EnumerableTreeInterface`.
 The npm and scope hubs do not implement `list`, so non-enumerability is
-authority the holder never receives, not a boolean that asks an
-enumerable object to behave.
+authority the holder never receives, not a boolean flag that asks an
+otherwise-enumerable object to behave as if it had no `list`.
 A caller that probes enumerability by invoking `list()` on a
 `LookupTree`-only hub therefore hits the platform interface guard's own
 absent-method rejection (a `TypeError` naming the method the guard does
@@ -251,19 +254,35 @@ shared spelling imply one.
 
 Because both a growing package directory and the fixed-configuration
 root are typed `EnumerableTree`, the temporal contract must be
-discoverable structurally and not only in this prose: the root and every
-enumerable directory expose `getInfo()` reporting a `temporal`
-descriptor (`'stable'` at the root, whose registry-name set is fixed
-configuration, and `'live'` at a package directory, whose version set
-grows as npm publishes), while a version leaf continues to report
-immutable content identity through `getInfo()` / `sha256()`.
-A caller can therefore tell a frozen enumeration from a live one by
-reading the node rather than by knowing this document, and the
-cross-backend conformance suite asserts the descriptor each node
-reports.
+discoverable structurally and not only in this prose.
+`getInfo` is not part of the shared `readableTreeMethodGuards` /
+`EnumerableTreeInterface` surface today (only `SnapshotTreeInterface`
+adds it), and this design does not add it there: doing so would force
+every existing platform tree, mount, directory, git, and zip
+implementation to grow a `getInfo` method and would break the source
+compatibility § Non-enumerability relies on.
+Instead the four registry node kinds are purpose-built Exos that carry
+`getInfo` as a registry-node facet layered above their `LookupTree` /
+`EnumerableTree` guard, so the `temporal` descriptor has a concrete home
+without widening any shared platform guard.
+Every node kind reports one:
+
+| Node | `getInfo().temporal` | Why |
+|---|---|---|
+| `/` root | `'stable'` | the registry-name set is fixed configuration. |
+| `/npm`, `/npm/@<scope>` hubs | `'live'` | a `has` or `lookup` for a given name can begin succeeding as packages or scopes publish, even though the hub is non-enumerable. |
+| `/npm/<package>` directory | `'live'` | the version set grows as npm publishes. |
+| `.../<version>` leaf | `'immutable'` | content-addressed and identical on every read, the same identity `getInfo()` / `sha256()` already report. |
+
+A caller can therefore tell a frozen enumeration from a live one, and a
+mutable lookup hub from an immutable leaf, by reading any node's
+`getInfo().temporal` rather than by knowing this document, and the
+cross-backend conformance suite asserts the descriptor each of the four
+node kinds reports.
 
 `list()` is a live read at the moment it is called.
-A single `resolveRegistryTree` pass walks `list()` once per
+A single `resolveRegistryTree` pass (defined below in § Resolver, mapper,
+and mockability) walks `list()` once per
 transitively-discovered dependency, so those calls land at different
 wall-clock moments, and a version published mid-resolution may be seen by
 a later dependency's `list()` and not an earlier one; a resolution is not
@@ -321,9 +340,15 @@ incidental property, and it fixes where the resolver executes per backend:
   coarse `EndoRegistry.resolve()` call this design replaces into
   O(dependency count) round trips.
   The design deliberately does not move the traversal into the worker.
-- Endor: the adapter's XS-hosted callbacks into narrow Rust host powers
-  are in-process to the XS-hosted adapter, so a dependency walk does not
-  cross the XS/Rust boundary once per node.
+- Endor: `resolveRegistryTree` itself, the `@endo/exo-npm` tree Exos it
+  walks, and the shared resolver logic all run inside the single XS
+  engine the Endor daemon embeds (not in a separate Rust or Endor
+  process), so the traversal is same-vat dispatch within XS. That XS
+  engine's `hasPackage` / `listVersions` / `providePackageTree` callbacks
+  reach the Rust mechanics through in-process host powers rather than a
+  cross-process bus, so a dependency walk crosses the XS/Rust boundary at
+  most when a version leaf must be checked in, never once per `lookup` or
+  `list`.
 
 Either way the per-dependency traversal (`lookup` the package or scope,
 `list` versions, `lookup` the selected version, read its `package.json`)
@@ -340,6 +365,24 @@ worker or vat boundary) for a multi-dependency fixture, so a later
 refactor that moves the traversal into the worker (the design's own
 predicted erosion) fails this dispatch-shape assertion instead of
 silently regressing into O(dependency count) round trips.
+The concrete change this guards against is specifically the one the
+platform's own invariants would *not* already surface loudly.
+A naive relocation that called a tree method directly on a genuine
+remote Presence without `E()` would throw at first use under Endo's
+ocap dispatch model (a Presence rejects synchronous method application),
+so that mistake announces itself and needs no test.
+The silent path is the *correct-looking* refactor: constructing
+`resolveRegistryTree` in the worker and consuming `@registry` as the
+`registryP` remote Presence the worker already holds, wrapping every
+`lookup` / `list` in `E()`.
+That version compiles, returns the right resolution, and satisfies every
+existing dispatch invariant (eventual-send across a worker or vat
+boundary is legal, not an error) while quietly issuing one bus round
+trip per dependency instead of zero.
+Because nothing in the platform flags a legal-but-remote `E()`, the
+invocation-counting harness is what catches it: it asserts the traversal
+issued zero eventual-sends, which the `E()`-wrapped worker-side variant
+cannot satisfy.
 This is the same locality the [mvs-resolver](mvs-resolver.md) design
 secures with caller-supplied `getPackument` / `getTarball` hooks: the
 tree adapter replaces those hooks with tree methods on the same side of
@@ -416,25 +459,58 @@ registry fake is required for resolver and mapper tests.
    The tree shape: the root reads `lookup`'s arguments as path segments
    (its top-level `lookup('npm')` enters the npm hub) and its `list()`
    returns `['npm']`.
-   The re-incarnation therefore audits every existing reader of
-   `@registry` by special name (not only direct importers of
-   `makeNpmReferenceRegistry`) and migrates each to the tree call shape
-   or routes it through the deprecated adapter of step 4.
-4. Retain a deprecated method-call-to-tree adapter for callers that
-   directly import `makeNpmReferenceRegistry` or reach `@registry` by
-   special name; remove it after repository call sites and review
-   branches no longer use it.
+   The `@registry` special name is re-incarnated *unconditionally* as the
+   new root tree: every caller reaching `@registry` receives the tree, and
+   the deprecated adapter of step 4 is a separate, explicitly obtained
+   capability rather than something that keeps sitting at `@registry` for
+   some callers.
+   The re-incarnation audits every in-repo reader of `@registry` by
+   special name (not only direct importers of `makeNpmReferenceRegistry`)
+   and migrates each to the tree call shape or to the separately-named
+   deprecated adapter.
+   An externally held pre-migration reference the repo's audit cannot see
+   (a pet name in a running daemon, a script, or another vat) resolves
+   to the new tree at the same identifier, so its shape changes under it;
+   this is a bounded, loud change rather than a silent misresolve.
+   A stale two-string `E(registry).lookup(name, version)` from such a
+   holder walks `name` as a top-level registry segment, and unless `name`
+   happens to equal a configured registry family (`npm`) it finds no such
+   child and rejects with the structured not-found `RangeError`; even the
+   degenerate `lookup('npm', version)` enters the npm hub and then rejects
+   at the `version` segment (no package named `version`).
+   The arity collision therefore surfaces as a diagnosable rejection at
+   the first stale call, not as a wrong object returned, so an unaudited
+   holder learns of the migration by a clean error rather than by silently
+   receiving the wrong protocol.
+4. Retain a deprecated method-call-to-tree adapter, obtained under its own
+   explicit name rather than at `@registry`, for callers that still need
+   the old `EndoRegistry.lookup` / `list` call shape (whether they
+   directly imported `makeNpmReferenceRegistry` or reached the old
+   `@registry`); remove it after repository call sites and review branches
+   no longer use it.
    The shipped `EndoRegistry.lookup(name, version)` returns `undefined`
    on a miss (`packages/daemon/test/registry-endo.test.js` asserts
-   `t.is(missing, undefined, …)`), whereas the new tree rejects on an
+   `t.is(missing, undefined, ...)`), whereas the new tree rejects on an
    unknown name, so the adapter must reconcile that shape difference to
    preserve the compatibility surface it exists for: it catches the
    tree's structured not-found `RangeError` and returns `undefined` to
    the old caller, translating only that not-found shape and re-throwing
    every other error (offline, integrity, and the rest) unchanged.
+   The shipped `lookup` also accepts a scoped package as one opaque string
+   with an embedded slash (`@scope/pkg`, per the `encodeURIComponent(name)`
+   packument-URL construction in `packages/daemon/src/registry-user.js` and
+   `backend.fetchVersions('@scope/pkg')` in
+   `packages/daemon/test/registry-node-backend.test.js`), which the new
+   tree's per-segment grammar would otherwise reject as a single
+   slash-bearing segment.
+   The adapter therefore splits a leading-`@` slash-bearing `name` into its
+   `@scope` and package segments (and passes an unscoped `name` as one
+   segment) before entering the tree, so an old caller resolving any
+   `@endo/*`-style scoped package keeps resolving to the same tree it got
+   yesterday instead of hitting the slash-bearing-segment diagnostic.
 
 The mechanics-layer review work for peer and optional dependencies,
-workspaces, npmrc authentication, package `imports`, and execution
+workspaces, `.npmrc` authentication, package `imports`, and execution
 refinements remains valid.
 Those changes operate before a package tree is returned or after the
 selected CAS graph is assembled.
@@ -462,8 +538,10 @@ requiring one path-safe root segment.
   packages, and versions (asserting the structured not-found error), a
   single-segment slash-bearing name such as `lookup('@endo/patterns')`
   (asserting its distinct diagnostic, separate from not-found), the
-  `temporal` descriptor `getInfo()` reports on the root and on a package
-  directory, ascending version ordering, and exact version leaves.
+  `temporal` descriptor `getInfo()` reports on each of the four node kinds
+  (`'stable'` root, `'live'` npm and scope hubs, `'live'` package
+  directory, `'immutable'` version leaf), ascending version ordering, and
+  exact version leaves.
 - Node adapter tests cover metadata-only listing, lazy tarball fetch,
   integrity failure, cache hit, eviction/refetch, and offline miss.
 - Endor adapter tests run the same cases over `RegistryTable`, the CAS,
@@ -476,7 +554,10 @@ requiring one path-safe root segment.
   relocation of the traversal into the worker fails mechanically.
 - Deprecated-adapter tests assert that an old-shape
   `E(registry).lookup(name, version)` two-string call still returns the
-  resolved version tree and `undefined` on a miss, and `E(registry).list()`
+  resolved version tree and `undefined` on a miss, that a scoped old-shape
+  call spelled as one slash-bearing string
+  (`E(registry).lookup('@endo/patterns', version)`) still resolves the
+  scoped package tree rather than rejecting, and that `E(registry).list()`
   still returns `[]`, while resolving through the new directory tree
   underneath.
 - Snapshot-mapper tests prove identical `RegistryResolution`, compartment
