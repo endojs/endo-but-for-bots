@@ -54,12 +54,22 @@ test('facet-threw preserves an Error message', t => {
 });
 
 test('facet-threw produces a passable result for arbitrary thrown values', t => {
+  // SES makes Object.prototype properties non-writable. Keep fast-check from
+  // generating an own `valueOf` (or similar) that its shrinker later tries to
+  // assign through the frozen inherited property.
+  const safeObjectKey = fc
+    .string()
+    .filter(key => !Object.hasOwn(Object.prototype, key));
   fc.assert(
-    fc.property(fc.string(), fc.anything(), (method, caught) => {
+    fc.property(
+      fc.string(),
+      fc.anything({ key: safeObjectKey }),
+      (method, caught) => {
       const result = facetThrew(method, caught);
       t.is(passStyleOf(result), 'copyRecord');
       t.is(passStyleOf(result.error), 'error');
-    }),
+      },
+    ),
   );
 });
 
