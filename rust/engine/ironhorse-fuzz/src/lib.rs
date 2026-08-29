@@ -3273,34 +3273,22 @@ mod tests {
     }
 
     /// Wave-6 CI fuzz trophy (`oom-60435549f27e8cbfbc0b52739168223c23481bbc`,
-    /// the 4-byte input `C1 A9 C1 C1` — a self-feeding `START_ASYNC`
-    /// loop): the unmetered bounded runner mints a retained async
-    /// instance (and its saved-frame Vecs) per dispatch, so the
-    /// 2M-dispatch ceiling let it allocate ~2.5 GiB and OOM the fuzz
-    /// harness (2 GiB cap) before halting. The bounded runner now caps
-    /// live slots too — a bounded wedge is memory as much as time — so
-    /// the input halts promptly under the memory ceiling with a small
-    /// live heap instead of ballooning.
+    /// the 4-byte input `C1 A9 C1 C1`): before the mainline's
+    /// non-boundary-return guard, this formed a self-feeding
+    /// `START_ASYNC` loop and allocated ~2.5 GiB before the dispatch
+    /// ceiling. The guard now rejects the malformed async exit before
+    /// it can become an allocation wedge.
     #[test]
-    fn a_side_table_allocation_wedge_is_bounded_not_oom() {
+    fn the_former_side_table_allocation_wedge_is_rejected_before_growth() {
         let out = run_program_bounded(&[0xC1, 0xA9, 0xC1, 0xC1], DECODER_STEP_LIMIT);
-        assert!(
-            matches!(out.halt, ironhorse_vm::Halt::StepLimit(_)),
-            "the allocation wedge must hit a bounded ceiling, got {:?}",
-            out.halt
+        assert_eq!(
+            out.halt,
+            ironhorse_vm::Halt::Unsupported("async:non-boundary-return"),
+            "the malformed async exit must fail before it can self-feed"
         );
-        // It halted on the MEMORY ceiling, well before the 2M dispatch
-        // ceiling — the whole point is that far fewer than 2M steps ran.
-        assert!(
-            matches!(out.halt, ironhorse_vm::Halt::StepLimit(n) if n < DECODER_STEP_LIMIT),
-            "must abort on the memory ceiling before the step ceiling, got {:?}",
-            out.halt
-        );
-        // And the live heap stayed bounded — a few slots over the
-        // ceiling, not the millions the step ceiling alone would reach.
         assert!(
             out.dispatched < 800_000,
-            "the memory ceiling must trip an order of magnitude below the step ceiling: {}",
+            "the guard must trip an order of magnitude below the step ceiling: {}",
             out.dispatched
         );
     }
