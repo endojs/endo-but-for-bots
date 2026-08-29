@@ -1,6 +1,7 @@
 // @ts-check
 
 import test from '@endo/ses-ava/prepare-endo.js';
+import fc from 'fast-check';
 import { passStyleOf } from '@endo/pass-style';
 
 import {
@@ -50,6 +51,16 @@ test('facet-threw carries a PASSABLE error, not the raw caught value', t => {
 test('facet-threw preserves an Error message', t => {
   const r = facetThrew('list', new Error('nope'));
   t.is(r.error.message, 'nope');
+});
+
+test('facet-threw produces a passable result for arbitrary thrown values', t => {
+  fc.assert(
+    fc.property(fc.string(), fc.anything(), (method, caught) => {
+      const result = facetThrew(method, caught);
+      t.is(passStyleOf(result), 'copyRecord');
+      t.is(passStyleOf(result.error), 'error');
+    }),
+  );
 });
 
 test('limit-exceeded validates the axis', t => {
