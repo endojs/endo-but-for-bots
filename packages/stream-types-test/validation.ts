@@ -13,13 +13,13 @@ import {
 } from '@endo/stream';
 
 import type { Stream, Reader, Writer } from '@endo/stream';
-import { makeBuffer } from '@endo/stream/buffer';
+import { makeAutoBuffer } from '@endo/stream/auto-buffer';
 import type {
-  Buffer,
-  BufferSink,
-  BufferSpring,
+  AutoBuffer,
+  AutoBufferSink,
+  AutoBufferSpring,
   MaybePromise,
-} from '@endo/stream/buffer';
+} from '@endo/stream/auto-buffer';
 
 async () => {
   const q = makeQueue<number>();
@@ -31,10 +31,13 @@ async () => {
 };
 
 async () => {
-  const { spring, sink } = makeBuffer<number, string>();
-  const producer: BufferSpring<number, string> = spring;
-  const consumer: BufferSink<number, string> = sink;
-  const buffer: Buffer<number, string> = { spring: producer, sink: consumer };
+  const { spring, sink } = makeAutoBuffer<number, string>();
+  const producer: AutoBufferSpring<number, string> = spring;
+  const consumer: AutoBufferSink<number, string> = sink;
+  const buffer: AutoBuffer<number, string> = {
+    spring: producer,
+    sink: consumer,
+  };
   const value: MaybePromise<number> = Promise.resolve(1);
   buffer.spring.next(value);
   // @ts-expect-error

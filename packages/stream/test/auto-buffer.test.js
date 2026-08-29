@@ -1,13 +1,12 @@
 // @ts-check
-/** @import { Buffer } from '../buffer.js' */
+/** @import { AutoBuffer } from '../auto-buffer.js' */
 
 import test from '@endo/ses-ava/test.js';
 
-import { makeBuffer } from '../buffer.js';
-import { makeUnboundedBuffer } from '../unbounded-buffer.js';
+import { makeAutoBuffer } from '../auto-buffer.js';
 
 test('buffer transports values without acknowledgement', async t => {
-  const { spring, sink } = makeBuffer();
+  const { spring, sink } = makeAutoBuffer();
 
   t.is(spring.next(1), undefined);
   t.is(spring.next(Promise.resolve(2)), undefined);
@@ -18,7 +17,7 @@ test('buffer transports values without acknowledgement', async t => {
 });
 
 test('buffer permits the sink to wait before the spring writes', async t => {
-  const { spring, sink } = makeBuffer();
+  const { spring, sink } = makeAutoBuffer();
 
   const next = sink.next();
   spring.next('value');
@@ -28,7 +27,7 @@ test('buffer permits the sink to wait before the spring writes', async t => {
 });
 
 test('buffer transports return and throw terminal operations', async t => {
-  const { spring, sink } = /** @type {Buffer<string, string>} */ (makeBuffer());
+  const { spring, sink } = /** @type {AutoBuffer<string, string>} */ (makeAutoBuffer());
 
   spring.next('value');
   spring.return('finished');
@@ -37,13 +36,13 @@ test('buffer transports return and throw terminal operations', async t => {
   t.deepEqual(await sink.next(), { value: 'value', done: false });
   t.deepEqual(await sink.next(), { value: 'finished', done: true });
 
-  const { spring: failingSpring, sink: failingSink } = makeBuffer();
+  const { spring: failingSpring, sink: failingSink } = makeAutoBuffer();
   failingSpring.throw(Error('failed'));
   await t.throwsAsync(failingSink.next(), { message: 'failed' });
 });
 
 test('buffer does not leak an unhandled rejection when a throw outruns the sink', async t => {
-  const { spring, sink } = makeBuffer();
+  const { spring, sink } = makeAutoBuffer();
 
   /** @type {Array<string | undefined>} */
   const unhandled = [];
@@ -73,7 +72,7 @@ test('buffer does not leak an unhandled rejection when a throw outruns the sink'
 
   // A next() whose value promise rejects takes the same enqueue path and must
   // likewise not leak before the sink reads.
-  const rejecting = makeBuffer();
+  const rejecting = makeAutoBuffer();
   const seen = /** @type {Array<string>} */ ([]);
   /** @param {unknown} reason */
   const record = reason => {
@@ -91,7 +90,7 @@ test('buffer does not leak an unhandled rejection when a throw outruns the sink'
 });
 
 test('buffer sink supports async iteration', async t => {
-  const { spring, sink } = makeUnboundedBuffer();
+  const { spring, sink } = makeAutoBuffer();
   spring.next('one');
   spring.next('two');
   spring.return(undefined);

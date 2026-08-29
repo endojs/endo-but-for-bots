@@ -1,7 +1,7 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { Buffer } from './buffer.js' */
+/** @import { AutoBuffer } from './auto-buffer.js' */
 /** @import { AsyncQueue } from './types.js' */
 
 import harden from '@endo/harden';
@@ -13,7 +13,9 @@ import { makeQueue } from './index.js';
 const freeze = /** @type {<T>(v: T | Readonly<T>) => T} */ (Object.freeze);
 
 /**
- * Make an unbounded buffer.
+ * Make an auto buffer: a one-way buffer whose storage grows automatically to
+ * retain every produced value until the sink consumes it. It applies no
+ * backpressure and drops nothing, in contrast to a bounded ring buffer.
  *
  * The spring is the producer-facing generator subset. Its calls enqueue
  * iterations without waiting for the sink. The sink is the consumer-facing
@@ -21,9 +23,9 @@ const freeze = /** @type {<T>(v: T | Readonly<T>) => T} */ (Object.freeze);
  *
  * @template T
  * @template [TReturn=undefined]
- * @returns {Buffer<T, TReturn>}
+ * @returns {AutoBuffer<T, TReturn>}
  */
-export const makeUnboundedBuffer = () => {
+export const makeAutoBuffer = () => {
   /** @type {AsyncQueue<IteratorResult<T, TReturn>>} */
   const queue = makeQueue();
 
@@ -73,4 +75,4 @@ export const makeUnboundedBuffer = () => {
 
   return harden({ spring, sink });
 };
-harden(makeUnboundedBuffer);
+harden(makeAutoBuffer);
