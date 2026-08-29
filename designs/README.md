@@ -655,7 +655,7 @@ flowchart TD
     subgraph Capability System
         dsand[endo-posix-sandbox<br/><i>IN PROGRESS</i>]
         pfs[platform-fs<br/><i>COMPLETE</i>]
-        rblines[readableblob-lines]
+        rblines[readableblob-lines<br/><i>PROPOSED</i>]
         dfs[daemon-capability-filesystem<br/><i>REFERENCE</i>]
         dmount[daemon-mount<br/><i>IN PROGRESS</i>]
         dmcap[daemon-mount-capabilities]

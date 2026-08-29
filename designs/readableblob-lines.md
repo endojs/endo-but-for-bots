@@ -27,18 +27,18 @@ exo that spreads that record:
 
 ```ts
 lines(options?: {
-  start?: number;
-  end?: number;
+  startLine?: number;
+  endLine?: number;
   buffer?: number;
 }): PassableReader<string, undefined>
 ```
 
 `lines` returns an exo stream made with `readerFromIterator`. The caller
 consumes it with `iterateReader(E(blob).lines(options))`. All options are
-optional. `start` and `end` select the half-open line range `[start, end)`. Line
-indices are non-negative, zero-based, end-exclusive JavaScript `number`s. An
-omitted `start` defaults to `0` (the first line); an omitted `end` selects
-through the last line.
+optional. `startLine` and `endLine` select the half-open line range
+`[startLine, endLine)`. Line indices are non-negative, zero-based, end-exclusive
+JavaScript `number`s. An omitted `startLine` defaults to `0` (the first line); an
+omitted `endLine` selects through the last line.
 
 This is the first line-addressing method on the shared base guard
 `readableBlobMethodGuards`, so it establishes that convention on the base guard
@@ -47,33 +47,53 @@ rather than reusing one already adopted there. The existing
 `rangeReadConvenienceMethodGuards`, which today only `LocalBlob` implements, and
 its `textRange(startLine, endLine)` successor in
 [readableblob-range-attenuation.md](readableblob-range-attenuation.md) is still
-`Status: Proposed`. `lines` deliberately adopts the same value semantics those
-narrower methods define (non-negative, zero-based, end-exclusive line indices),
-so a caller who later learns `rangeReadText` or `textRange` reads a `lines` bound
-the same way. The call shape differs, though: `rangeReadText` and `textRange`
-take the range positionally, while `lines` carries it in an options bag, so the
-shared meaning ports between them but the argument spelling does not. The bag
-properties are named `start` and `end` rather than `startLine`/`endLine` because
-the method name `lines` already supplies the line context.
+`Status: Proposed`. `lines` shares those methods' *range-index* convention — the
+`startLine`/`endLine` bounds are non-negative, zero-based, end-exclusive
+JavaScript `number`s; `endLine` clamps to the last line; and a negative,
+fractional, non-safe, or inverted bound rejects with `EINVAL` — so a caller
+reasons about which line index a bound names the same way across all three
+methods. The bounds are carried positionally by `rangeReadText`/`textRange` and
+in an options bag by `lines` (which also carries `buffer`); the bag keys are
+spelled `startLine`/`endLine` to match the sibling vocabulary rather than
+diverging on names for an identical index value.
+
+`lines` deliberately does **not** share those methods' *line-boundary* model,
+and the divergence is intrinsic to its purpose, so the two surfaces are not
+interchangeable line-for-line and this design makes no value-semantics-parity
+claim. `rangeReadText` (`packages/platform/src/fs-node/local-blob.js`,
+`split('\n')`) and the `textRange` design both split on LF alone — a lone CR is
+content, not a boundary — and, following `String.prototype.split`, a final LF
+yields a trailing empty line element. `lines` instead recognizes CR, LF, and
+CRLF as three terminators (its commissioning prompt requires the terminator be
+retained on each value) and yields no synthetic trailing empty line after a final
+terminator. For `a\nb\n`, `rangeReadText`/`textRange` address three line slots
+(`'a'`, `'b'`, `''`) while `lines` yields two (`'a\n'`, `'b\n'`); for any text
+containing a lone CR the two also disagree on line count and contents. Because the
+line models differ, line index `N` need not denote the same span across the
+surfaces: `lines` is not a drop-in continuation of a `rangeReadText`/`textRange`
+window's line numbering, and callers must not assume line-index parity between
+them.
 
 A negative, fractional, or non-safe bound rejects with `EINVAL` before opening
 the source (via the shared `toSafeNumber`), so the same input class throws
-rather than being silently reinterpreted. An inverted range (`start > end`) also
-rejects with `EINVAL`, matching `textRange`, which rejects an inverted interval
-the same way; the shared convention therefore agrees on the error as well as on
-the valid-range meaning. An `end` past the last line clamps to the end, and an
-empty range (`start === end`) yields nothing, so an in-bounds empty window is
-defined without an error. For five lines, for example, `{ start: 1, end: 3 }` selects lines 1 and 2;
-`{ start: 2 }` selects lines 2, 3, and 4; `{ end: 2 }` selects lines 0 and 1; and
-`{ start: 4, end: 9 }` selects only line 4 (the `end` clamps).
+rather than being silently reinterpreted. An inverted range (`startLine > endLine`)
+also rejects with `EINVAL`, matching `textRange`, which rejects an inverted
+interval the same way; the shared *index* convention therefore agrees on the
+error as well as on how a bound selects an index (the surfaces still differ on the
+line-boundary model that maps an index to bytes, per above). An `endLine` past the
+last line clamps to the end, and an empty range (`startLine === endLine`) yields
+nothing, so an in-bounds empty window is defined without an error. For five lines,
+for example, `{ startLine: 1, endLine: 3 }` selects lines 1 and 2;
+`{ startLine: 2 }` selects lines 2, 3, and 4; `{ endLine: 2 }` selects lines 0 and
+1; and `{ startLine: 4, endLine: 9 }` selects only line 4 (the `endLine` clamps).
 
 `buffer` has the same meaning as the `@endo/exo-stream` `buffer` option: it is
 the number of selected line values pre-pulled before the producer waits for
 further synchronization. It is not a byte length, source-read chunk size, or
-permission to read past the selected `end`. It defaults to
+permission to read past the selected `endLine`. It defaults to
 `0`, so the default is pull-based. There is no clearly better fixed default.
 
-The guard admits an omitted options bag with optional `start`, `end`, and
+The guard admits an omitted options bag with optional `startLine`, `endLine`, and
 `buffer` properties and returns a `PassableReader` remotable. Supplied bounds
 must be non-negative safe integers, and a supplied `buffer` must be a
 non-negative safe integer. Invalid options reject with `EINVAL` before opening
@@ -82,18 +102,20 @@ the source. The implementation passes `readPattern: M.string()` to
 exo-stream boundary as well as in TypeScript.
 
 Because every range is non-negative and end-exclusive, `lines` preserves
-ordinary forward streaming with no whole-source materialization: the adapter
-skips through `start` and closes the source immediately after yielding the last
-line before `end`. It never reads to EOF before emitting a first item, so both
-the common "process a file line by line from the top" case and any bounded window
-stream incrementally. The amount retained is governed only by the source chunk,
+ordinary forward streaming with no whole-source materialization: the byte-to-line
+adapter (the single shared component implemented in `@endo/platform`, detailed
+under "Implementations and migration" below) skips through `startLine` and closes
+the source immediately after yielding the last line before `endLine`. It never reads to EOF before emitting a first item, so streaming is incremental
+both for the common "process a file line by line from the top" case and for any
+bounded window. The amount retained is governed only by the source chunk,
 an unfinished line straddling chunks, and the exo-stream buffer, not by the
 requested range.
 
-Each yielded item is one decoded line, including its original terminator. The
-scanner recognizes the byte terminators before UTF-8 decoding, while a
-streaming `TextDecoder` preserves multi-byte characters split across source
-chunks. The scanner must hold a trailing CR until it can distinguish CRLF from
+Each yielded item is one decoded line, including its original terminator. Within
+that same adapter, the terminator scanner recognizes the byte terminators before
+UTF-8 decoding, while a streaming `TextDecoder` preserves multi-byte characters
+split across source chunks. The scanner must hold a trailing CR until it can
+distinguish CRLF from
 lone CR. This preserves both line boundaries and the original terminator without
 normalizing the text.
 
@@ -105,7 +127,7 @@ normalizing the text.
 | `a\r\nb\rc` | `['a\\r\\n', 'b\\r', 'c']` |
 | `` (empty) | `[]` |
 
-The final nonempty suffix is yielded once with the empty terminator. A blob
+The final non-empty suffix is yielded once with the empty terminator. A blob
 that ends in CR, LF, or CRLF has no additional empty line. A CRLF split across
 source chunks remains one line terminator. Invalid UTF-8 follows the existing
 non-fatal `text()` decoding behavior; this method does not create a stricter
@@ -116,24 +138,46 @@ normal reader cancellation behavior: an early consumer `return()` closes the
 underlying byte reader or file handle. `lines()` does not change blob identity,
 range authority, or the behavior of `text`, `json`, and `streamBase64`.
 
-Once `textRange` lands, three line-range methods will share one addressing
-convention on this interface, differing only in return shape:
-`rangeReadText(startLine, endLine)` returns the window as a single joined string,
-`textRange(startLine, endLine)` returns a new `ReadableBlob` bounded to that
-window (a re-addressable capability), and `lines()` streams the window as
-individual line values with their original terminators. Today only
-`rangeReadText` exists, and only on `LocalBlob`, so the composition below is
-forward-looking. Because the value semantics are identical, a caller will be able
-to compose them freely, for example `E(blob).textRange(a, b)` then `.lines()` on
-the result, reaching for `lines` when it wants flow control and per-line values
-rather than a materialized string or a sub-blob.
+Once `textRange` lands, three line-range methods will share the same
+range-*index* addressing on this interface while differing in both return shape
+and line-boundary model: `rangeReadText(startLine, endLine)` returns an LF-split
+window as a single joined string, `textRange(startLine, endLine)` returns a new
+`ReadableBlob` bounded to that LF-split window (a re-addressable capability), and
+`lines()` streams a terminator-aware window as individual line values with their
+original CR/LF/CRLF terminators. Today only `rangeReadText` exists, and only on
+`LocalBlob`, so this composition is forward-looking. The two can be composed, but
+the composition is over *bytes*, not line indices: `E(blob).textRange(a, b)`
+yields a sub-blob whose bytes `.lines()` can then re-scan when a caller wants flow
+control and per-line values rather than a materialized string or a sub-blob.
+Because the two use different line-boundary models, the line numbering `lines()`
+reports over that sub-blob is not the same as `textRange`'s own LF-based
+`[a, b)` slots; a caller reaches for `lines` for incremental terminator-retaining
+per-line values, not as a drop-in substitute for the other two methods' slot
+addressing.
 
 ## Implementations and migration
 
-The shared guard is intentionally widened in one change. Compatibility
-migrations and a temporary richer interface are unnecessary at this stage.
-Update the matching TypeScript declarations and every exo that currently
-spreads the shared readable-blob methods:
+The shared guard is intentionally widened in one change, and this design
+deliberately departs from the narrow-guard containment that
+[platform-range-and-tree-reads.md](platform-range-and-tree-reads.md) §
+"Interface layering (blast radius)" adopted for `rangeRead`/`rangeReadText`/
+`listTree`. That containment exists because those methods are *not universally
+implementable*: range attenuation and recursive tree listing are `LocalBlob`/
+`LocalTree` capabilities that the daemon, git, and mount exos cannot all cheaply
+provide, so folding them into the shared record would force implementers to
+supply a method they have no backing for. `lines` is the opposite case: every
+producer already exposes incremental byte iteration (each row in the table below
+names the concrete iterator), so every exo can implement `lines` through the one
+shared byte-to-line adapter, and this design commits to landing all of them in
+the same change. Placing `lines` on a temporary narrow guard would therefore only
+add a parallel interface to fold back into the shared record once the (already
+enumerated) producers land — net churn for a method that is universal by
+construction. The wide blast radius is accepted here precisely because the guard
+and the behavior can stay coherent across all implementers at once; a producer
+that cannot yet read incrementally is a reason to fix that producer, not to
+narrow the guard. Compatibility migrations and a temporary richer interface are
+unnecessary at this stage. Update the matching TypeScript declarations and every
+exo that currently spreads the shared readable-blob methods:
 
 | Area | Implementations and work |
 |---|---|
@@ -159,20 +203,34 @@ each producer where the byte iterator is available. Each implementation still
 owns opening and closing its backing reader, liveness checks, and error
 propagation. Do not implement `lines` by delegating to `text()`.
 
+Because `lines` keeps the original terminator on each value — unlike the
+common cross-ecosystem "lines" idiom (Node's `readline`, Python's `.readlines()`
+iteration, `String.split('\n')`), which strips it — the per-surface `help()` text
+and TypeScript doc-comments must carry the terminator-retention callout as
+prominently as the table above, since `help()` is the discoverability path a
+caller hits at the call site rather than this design doc.
+
 ## Verification plan
 
 Add shared adapter tests and per-surface conformance tests. Cover CR, LF,
 CRLF, an empty blob, a final unterminated line, a final terminated line, and
 every terminator split over source chunks. Include multi-byte UTF-8 split
 across chunks and an overlong line. Exercise omitted options and fields;
-half-open positive ranges; an omitted `start` or `end`; reversed and empty
-ranges; bounds at and beyond the available line indices (clamping `end`); and
+half-open positive ranges; an omitted `startLine` or `endLine`; reversed and
+empty ranges; bounds at and beyond the available line indices (clamping
+`endLine`); and
 negative, fractional, and non-safe bounds rejecting with `EINVAL`. Include
 `buffer` values `0` and greater than the selected line count, invalid buffer
-values, early iterator return, early source closure at `end`, and propagated
-source errors. The mount cases must also verify revocation mid-stream.
+values, early iterator return, early source closure at `endLine`, and propagated
+source errors. The mount cases must also verify revocation mid-stream. Because
+`lines` diverges from `rangeReadText`/`textRange` on the line-boundary model,
+include a case that pins the divergence rather than asserting parity: for a
+terminator-ending input (`a\nb\n`) and a lone-CR input (`a\rb\r`), assert that
+`lines` yields the terminator-retaining, no-trailing-empty-line values documented
+above, distinct from the LF-split, trailing-empty-line slots the sibling methods
+would report.
 
-The daemon mount conformance test should assert that `lines` is in the exact
+Assert in the daemon mount conformance test that `lines` is in the exact
 `ReadableBlob` method set. Test the platform base/local/snapshot, extended
 `BlobRef`, daemon stored and transient, mount read-only view, Git, unzip, and
 browser-bridge paths so a later implementation cannot satisfy the guard while
@@ -184,7 +242,7 @@ omitting a producer.
 |---|---|
 | [fs-interface-consolidation.md](fs-interface-consolidation.md) | Owns the shared readable-blob guard whose deliberate widening makes this method universal. |
 | [platform-range-and-tree-reads.md](platform-range-and-tree-reads.md) | Establishes the layered readable-blob interfaces and the conformance boundary this change extends. |
-| [readableblob-range-attenuation.md](readableblob-range-attenuation.md) | Companion design (Status: Proposed); `lines` shares its zero-based, end-exclusive, non-negative line-addressing convention, so ranges and lines compose by applying `lines` to the receiver's bytes. |
+| [readableblob-range-attenuation.md](readableblob-range-attenuation.md) | Companion design (Status: Proposed); `lines` shares its zero-based, end-exclusive, non-negative range-*index* convention but deliberately uses a different line-boundary model (CR/LF/CRLF terminators retained and no synthetic trailing empty line, vs. `textRange`'s LF-only split with a trailing empty line). Composition is therefore byte-level — `.lines()` re-scans a `textRange` sub-blob's bytes — not line-index parity. |
 
 ## Follow-up
 
