@@ -1,5 +1,4 @@
 // @ts-nocheck
-// spell-out-exempt -- XDG_RUNTIME_DIR and ENDO_ADDR are external variable names.
 
 // `http-mk-policy.js` imports `q` from `@endo/errors`, which requires the
 // SES assert globals to be installed before it loads; lock down first, matching
@@ -31,10 +30,10 @@ const endoBin = path.join(dirname, '..', 'bin', 'endo.cjs');
 const testRoot = path.join(dirname, 'tmp', 'endo-http-mk');
 const endoEnv = {
   XDG_STATE_HOME: path.join(testRoot, 'state'),
-  XDG_RUNTIME_DIR: path.join(testRoot, 'run'),
+  'XDG_RUNTIME_DIR': path.join(testRoot, 'run'),
   XDG_CACHE_HOME: path.join(testRoot, 'cache'),
   ENDO_SOCK: path.join(os.tmpdir(), `endo-http-mk-${process.pid}.sock`),
-  ENDO_ADDR: '127.0.0.1:0',
+  'ENDO_ADDR': '127.0.0.1:0',
 };
 
 for (const [key, value] of Object.entries(endoEnv)) {
