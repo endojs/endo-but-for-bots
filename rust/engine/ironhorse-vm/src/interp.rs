@@ -2492,6 +2492,10 @@ pub enum NativeMethod {
     /// `/source/flags` literal string, read through the `source`/`flags`
     /// getters.
     RegExpToString,
+    /// `RegExp.prototype.compile(...)` (`fx_RegExp_prototype_compile`): XS's
+    /// annexB stub is literally `*mxResult = *mxThis` — no instance check, no
+    /// recompilation, arguments ignored — so the mirror returns `this` as-is.
+    RegExpCompile,
     /// `String.prototype.match(regexp)` (`fx_String_prototype_match`): coerce
     /// the receiver to string, the argument to a RegExp, and dispatch to the
     /// matcher — the non-global path returns `exec`'s result; the global path
@@ -4198,6 +4202,11 @@ pub struct Interp {
     /// keeping non-`constructor` programs (and the exact-metering corpus)
     /// byte-identical.
     constructor_id: Option<u16>,
+    /// The program-symbol id of `prototype`, when the program names it —
+    /// gates installing a constructor function's own `prototype` property
+    /// (unobservable otherwise), exactly like [`Self::constructor_id`] gates
+    /// the `prototype.constructor` back-reference.
+    prototype_key_id: Option<u16>,
     /// Per-instance RegExp state (XS's `XS_REGEXP_KIND` internal slot): the
     /// compiled program plus the source/flags strings. Keyed by the RegExp
     /// instance's slot, like [`Self::promises`]. `lastIndex` is an ordinary
@@ -4811,6 +4820,7 @@ impl Interp {
             from_async: Vec::new(),
             then_id: None,
             constructor_id: None,
+            prototype_key_id: None,
             regexps: std::collections::HashMap::new(),
             regexp_proto: crate::value::SlotIndex::NULL,
             last_index_id: None,
@@ -5542,6 +5552,7 @@ impl Interp {
             ("exec", NativeMethod::RegExpExec),
             ("test", NativeMethod::RegExpTest),
             ("toString", NativeMethod::RegExpToString),
+            ("compile", NativeMethod::RegExpCompile),
         ] {
             let mf = self.alloc_method(m);
             self.proto_methods.push((self.regexp_proto, name, mf));
@@ -6569,9 +6580,25 @@ impl Interp {
         self.functions.get(&f).and_then(|fi| fi.method)
     }
 
-    /// The `.prototype` object of a constructor instance, if it is one.
+    /// The `.prototype` object of a constructor instance, if it is one. A
+    /// guest may reassign a plain constructor function's writable own
+    /// `prototype` property, so the own slot (when the program names
+    /// `prototype` — see [`Self::prototype_key_id`]) outranks the boot-time
+    /// [`Self::ctor_prototype`] record; a reassignment to a non-object means
+    /// instances chain to `%Object.prototype%` (`fxGetPrototypeFromConstructor`).
     #[inline]
     fn prototype_of(&self, ctor: crate::value::SlotIndex) -> Option<crate::value::SlotIndex> {
+        if let Some(pid) = self.prototype_key_id {
+            if let Some(p) = self.find_property(ctor, pid) {
+                let s = self.slots.get(p);
+                if s.kind == Kind::Reference {
+                    if let Payload::Reference(r) = s.value {
+                        return Some(r);
+                    }
+                }
+                return None;
+            }
+        }
         self.ctor_prototype.get(&ctor).copied()
     }
 
@@ -6896,7 +6923,12 @@ impl Interp {
             // atom for the name). It is an XS boot default key, so assigning
             // its program-local id here is unmetered.
             let mid = if mname == "prototype" {
-                Some(self.intern_key(mname))
+                let pid = self.intern_key(mname);
+                // The canonical `prototype` key id (a boot default key,
+                // present whether or not the program names it statically) —
+                // the id `install_own_function_prototype`/`prototype_of` use.
+                self.prototype_key_id = Some(pid);
+                Some(pid)
             } else if let Some(&id) = self.symbol_ids.get(mname) {
                 Some(id)
             } else if proto == self.intl_object && self.symbol_ids.contains_key("Intl") {
@@ -7621,15 +7653,37 @@ impl Interp {
     /// slots) — 536 raw total against the pin. Initialized undefined; a
     /// following `SET_VARIABLE` assigns and meters its own built-in step.
     fn materialize_global_property(&mut self, id: u16) -> crate::value::SlotIndex {
-        self.tick_property_create();
+        self.tick_property_create(id);
         self.create_global_property(id, (Kind::Undefined, Payload::None))
     }
 
     /// Meter one new own-property allocation: the property `fxNewSlot`
     /// ([`crate::meter::SLOT_ALLOCATION_METERING`]) plus the measured
     /// [`PROPERTY_CREATE_REMAINDER`], 536 raw total against the pin.
+    ///
+    /// The remainder is dominated by the interned-key `fxFindKey` →
+    /// `fxNewSlot`/`fxNewChunk` allocation, which XS pays only for an atom
+    /// **missing** its boot name table. A key that is one of XS's boot
+    /// default keys (`gxIDStrings` — `toString`, `valueOf`, …) is
+    /// pre-interned at machine creation, so creating a property under it
+    /// costs only the property slot — measured against the pin as exactly
+    /// 256 (the `Test262Error.prototype.toString = …` harness store).
     #[inline]
-    fn tick_property_create(&mut self) {
+    fn tick_property_create(&mut self, id: u16) {
+        self.meter.tick_slot_alloc();
+        let name = self.id_name(id);
+        if !self.default_keys.contains(name.as_str()) {
+            self.meter.tick_raw(PROPERTY_CREATE_REMAINDER);
+        }
+    }
+
+    /// The pre-discount flat form of [`Self::tick_property_create`], for the
+    /// internal materializations (the legacy `caller`/`arguments` own
+    /// properties a function define installs through `instance_put`) whose
+    /// costs are folded into calibrated cluster constants measured with this
+    /// flat charge — discounting them would unbalance those clusters.
+    #[inline]
+    fn tick_property_create_flat(&mut self) {
         self.meter.tick_slot_alloc();
         self.meter.tick_raw(PROPERTY_CREATE_REMAINDER);
     }
@@ -7966,6 +8020,31 @@ impl Interp {
             }
             _ => slot_to_ecma_string(s),
         }
+    }
+
+    /// Render an uncaught thrown value the way XS's host boundary does
+    /// (`fxToString` on the exception): a thrown user object runs its guest
+    /// `toString` (sta.js's `Test262Error` carries one), so the abort value
+    /// matches the oracle's rendering of the same failure. Engine-built
+    /// native errors (in `error_data`) keep the static render — their
+    /// `Error.prototype.toString` shape is already mirrored — and any
+    /// failure inside the guest coercion falls back to the static render.
+    fn render_uncaught(&mut self, code: &[u8], v: Slot) -> String {
+        if let Payload::Reference(r) = v.value {
+            if v.kind == Kind::Reference && !self.error_data.contains_key(&r) {
+                if let Ok(prim) = self.to_primitive(code, v, true) {
+                    if prim.kind == Kind::String {
+                        if let Payload::String(off) = prim.value {
+                            return self.str_text(off);
+                        }
+                    }
+                    if prim.kind != Kind::Reference {
+                        return self.render(&prim);
+                    }
+                }
+            }
+        }
+        self.render(&v)
     }
 
     /// The string value of an instance's `Symbol.toStringTag` (own or
@@ -10038,6 +10117,12 @@ impl Interp {
                 XS_CODE_CONSTRUCTOR_FUNCTION | XS_CODE_FUNCTION => {
                     let name = id!(1);
                     let f = self.new_function(name);
+                    // Only `constructor_function` carries XS's
+                    // `fxDefaultFunctionPrototype` own `prototype` property;
+                    // plain `function` (a method shape) has none.
+                    if op == XS_CODE_CONSTRUCTOR_FUNCTION {
+                        self.install_own_function_prototype(f);
+                    }
                     self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
                     pc += ilen;
                 }
@@ -10052,6 +10137,10 @@ impl Interp {
                 XS_CODE_GENERATOR_FUNCTION => {
                     let name = id!(1);
                     let f = self.new_generator_function(name);
+                    // A generator function carries the same own `prototype`
+                    // slot (`fxDefaultFunctionPrototype` over the generator
+                    // prototype object it re-chained).
+                    self.install_own_function_prototype(f);
                     self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
                     pc += ilen;
                 }
@@ -10071,6 +10160,7 @@ impl Interp {
                 XS_CODE_ASYNC_GENERATOR_FUNCTION => {
                     let name = id!(1);
                     let f = self.new_async_generator_function(name);
+                    self.install_own_function_prototype(f);
                     self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
                     pc += ilen;
                 }
@@ -11842,7 +11932,8 @@ impl Interp {
                                 }
                                 None => {
                                     self.meter_host_escape();
-                                    return Halt::Throw(self.render(&v));
+                                    let text = self.render_uncaught(code, v);
+                                    return Halt::Throw(text);
                                 }
                             }
                         }
@@ -12477,7 +12568,8 @@ impl Interp {
                         }
                         None => {
                             self.meter_host_escape();
-                            return Halt::Throw(self.render(&v));
+                            let text = self.render_uncaught(code, v);
+                            return Halt::Throw(text);
                         }
                     }
                 }
@@ -12499,7 +12591,8 @@ impl Interp {
                         }
                         None => {
                             self.meter_host_escape();
-                            return Halt::Throw(self.render(&v));
+                            let text = self.render_uncaught(code, v);
+                            return Halt::Throw(text);
                         }
                     }
                 }
@@ -12675,6 +12768,25 @@ impl Interp {
         }
         self.ctor_prototype.insert(f, proto);
         f
+    }
+
+    /// Install a constructor function's own `prototype` data property
+    /// (`fxDefaultFunctionPrototype`'s `{writable, enumerable: false,
+    /// configurable: false}` slot) pointing at its [`Self::ctor_prototype`]
+    /// object, so `T.prototype` reads, `T.prototype.m = …` augmentation, and
+    /// `T.prototype = …` reassignment all resolve the SAME object `new T()`
+    /// chains instances to. Gated on the program naming `prototype` (like the
+    /// `prototype.constructor` back-reference), unmetered on both sides.
+    fn install_own_function_prototype(&mut self, f: crate::value::SlotIndex) {
+
+        if let (Some(pid), Some(&proto)) = (self.prototype_key_id, self.ctor_prototype.get(&f)) {
+            self.set_own_unmetered_with_flag(
+                f,
+                pid,
+                Slot::of(Kind::Reference, Payload::Reference(proto)),
+                XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG,
+            );
+        }
     }
 
     /// Define a generator function (`XS_CODE_GENERATOR_FUNCTION` →
@@ -25303,6 +25415,7 @@ impl Interp {
                 };
                 self.regexp_test(inst, arg0)?
             }
+            NativeMethod::RegExpCompile => this,
             NativeMethod::RegExpToString => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.regexps.contains_key(&r) => r,
@@ -32448,7 +32561,7 @@ impl Interp {
                 // `globalThis.x = value` or its computed equivalent.
                 self.global_props.insert(id, index);
             }
-            self.tick_property_create();
+            self.tick_property_create(id);
             return true;
         }
 
@@ -34425,7 +34538,7 @@ impl Interp {
             s.value = value.value;
             false
         } else {
-            self.tick_property_create(); // fxNewSlot + property-table growth (536)
+            self.tick_property_create_flat(); // fxNewSlot + property-table growth (536)
             if inst == self.global_obj {
                 // A new own property of the global object — a `globalThis.x = 1`
                 // (or computed `globalThis["x"] = 1`) creating a binding — is a
