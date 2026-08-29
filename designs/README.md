@@ -9,8 +9,8 @@ layer new groom notes at the top of this file.*
 [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) (added
 2026-07-30; capability-secure npm development publishing: an agent-facing
 registry proxy whose entire accepted mutation vocabulary is dev-release-shaped
-- explicit package allowlist, prerelease versions, exactly one `dev-*`
-dist-tag - gated by attenuated `PublishGrant` capabilities, plus a deterministic
+(explicit package allowlist, prerelease versions, exactly one `dev-*`
+dist-tag), gated by attenuated `PublishGrant` capabilities, plus a deterministic
 promotion service holding the only upstream npm token, independently
 revalidating and promoting byte-identical artifacts with crash-safe
 at-least-once semantics, quarantine, and hash-chained audit ledgers; reconciled
@@ -474,7 +474,7 @@ LLM-agent stack).*
 
 The 2026-08-25 update adds [hardener-indexed-cardinality](hardener-indexed-cardinality.md) (Proposed), increasing Proposed from 36 to 37 and the design count from 191 to 192.
 
-**2026-08-27 (PR #89 refresh):** re-adds [genie-integration](genie-integration.md) as a *retrospective* (+1 design → 192). `@endo/genie` was retired (`42bc7d516`, 2026-08-13), so the survey is trimmed to what its three headline facets became — the pi engine as `@endo/agentry`, memory as `EndoDirectory`/`Mount` over `@endo/platform/fs/extended`, and scheduling as the `@endo/reminder` plugin ([endo-reminder](endo-reminder.md), superseding [endoclaw-timer](endoclaw-timer.md)) — plus the residual `lal`/`fae` consolidation backlog.
+**2026-08-27 (PR #89 refresh):** re-adds [genie-integration](genie-integration.md) as a *retrospective* (+1 design -> 192). `@endo/genie` was retired (`42bc7d516`, 2026-08-13), so the survey is trimmed to what its three headline facets became — the pi engine as `@endo/agentry`, memory as `EndoDirectory`/`Mount` over `@endo/platform/fs/extended`, and scheduling as the `@endo/reminder` plugin ([endo-reminder](endo-reminder.md), superseding [endoclaw-timer](endoclaw-timer.md)) — plus the residual `lal`/`fae` consolidation backlog.
 
 The 2026-08-27 rebase adds [exo-git-follow-root-advancement](exo-git-follow-root-advancement.md) (Proposed), increasing Proposed from 37 to 38 and the design count from 192 to 193.
 

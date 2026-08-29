@@ -16,9 +16,9 @@ This design defines a two-service system:
 - a **capability-attenuated publishing proxy** (working name
   `npm-dev-proxy`, demo deployment target `https://npm.minion.town`) that
   speaks enough of the npm registry HTTP protocol for the stock npm CLI,
-  and accepts publications only from holders of an attenuated
-  `PublishGrant` capability — attenuated to an explicit package allowlist
-  and to development releases only; and
+  and accepts publications only from holders of a `PublishGrant`
+  capability whose authority is limited to an explicit package
+  allowlist and to development releases only; and
 - a **deterministic promotion service** (`npm-dev-promoter`) that is the
   sole holder of the upstream npm automation token, has **no agent or LLM
   in its trusted path**, and re-publishes eligible artifacts
@@ -30,7 +30,7 @@ version carries a semver **prerelease** component, and the publication
 assigns exactly one **dist-tag whose name begins with the literal prefix
 `dev-`**. The proxy's accepted mutation vocabulary makes `latest`, any
 non-`dev-` tag, unpublish, owner changes, arbitrary metadata mutation,
-and out-of-allowlist packages impossible at the proxy boundary — not
+and out-of-allowlist packages impossible at the proxy boundary, not
 merely discouraged.
 
 This document is a design only. The `npm.minion.town` subdomain is a
@@ -42,14 +42,16 @@ altering DNS, creating npm credentials, or publishing packages.
 The garden's agents (gardeners building Endo packages) increasingly need
 the npm *write* path: publish a development release of a package so that
 another worktree, another agent, or a demo deployment can install it by
-name and version. The existing registry work covers only the read path —
+name and version. The existing registry work covers only the read path.
 [endor-npm-registry-proxy](endor-npm-registry-proxy.md) fetches and
 verifies tarballs into a CAS, and
 [registry-capability](registry-capability.md) shapes the daemon's
-`EndoRegistry` read capability — and
-[registry-capability](registry-capability.md) § *Anti-design steers*
-explicitly defers the credentials lane "until the public-only constraint
-becomes binding."
+`EndoRegistry` read capability.
+The latter design's § *Anti-design steers* explicitly defers the
+credentials lane "until the public-only constraint becomes binding."
+That constraint means `@registry` may resolve and fetch only public
+packages without carrying any registry credential; it cannot access a
+private package or perform a write.
 
 Handing an agent an upstream npm token is unacceptable: a single token
 leak (or a prompt-injected agent) could publish `latest` releases,
@@ -62,10 +64,10 @@ does not provide**, placed where the agent's only credential terminates.
 
 The problem decomposes into two halves with different trust properties:
 
-1. **Attenuation** — give the agent a capability whose maximum authority
+1. **Attenuation:** give the agent a capability whose maximum authority
    is "publish development releases of these specific packages," such
-   that no request the agent can make — however crafted — exceeds it.
-2. **Promotion** — move an accepted development release to the real npm
+   that no request the agent can make, however crafted, exceeds it.
+2. **Promotion:** move an accepted development release to the real npm
    registry with a narrowly scoped upstream token, through a path that
    re-derives every security decision deterministically and leaves a
    tamper-evident trail, so the agent-facing proxy's compromise or
@@ -74,7 +76,7 @@ The problem decomposes into two halves with different trust properties:
 ## Goals
 
 1. The developer/publisher (human or agent) receives **no upstream npm
-   credential** — only a capability authorizing publication to the
+   credential**. It receives only a capability authorizing publication to the
    controlled proxy, attenuated to an explicit package allowlist and to
    development releases.
 2. An exact, enumerable **mutation vocabulary** at the proxy boundary
@@ -169,7 +171,7 @@ Both conditions are load-bearing, for different failure modes:
   to a development release even if it were somehow tagged `latest`.
 - The **`dev-` tag** condition is what makes development releases
   *installable by intent* (`npm install pkg@dev-main`) while keeping
-  `latest` — the tag `npm install pkg` resolves — structurally
+  `latest` (the tag `npm install pkg` resolves) structurally
   unreachable through the system.
 
 Direct tag mutation (`npm dist-tag add`) follows the same two conditions:
@@ -197,12 +199,12 @@ or body field can widen a grant's authority.
 
 | Route | Decision |
 |-------|----------|
-| `PUT /{name}` (publish) | **Conditionally accepted** — all checks in § *Publish validation pipeline* must pass |
+| `PUT /{name}` (publish) | **Conditionally accepted:** all checks in § *Publish validation pipeline* must pass |
 | `GET /{name}` (packument) | Public; serves the locally stored document |
 | `GET /{name}/{version}` (version manifest) | Public |
 | `GET /{name}/-/{file}.tgz` (tarball) | Public; served from the blob store by integrity |
-| `PUT /-/package/{name}/dist-tags/{tag}` (`npm dist-tag add`) | **Conditionally accepted** — tag matches `dev-*`, target version exists locally and is prerelease, monotonic move, grant covers `{name}` |
-| `DELETE /-/package/{name}/dist-tags/{tag}` (`npm dist-tag rm`) | **Conditionally accepted** — tag matches `dev-*`, grant covers `{name}`; audited |
+| `PUT /-/package/{name}/dist-tags/{tag}` (`npm dist-tag add`) | **Conditionally accepted:** tag matches `dev-*`, target version exists locally and is prerelease, monotonic move, grant covers `{name}` |
+| `DELETE /-/package/{name}/dist-tags/{tag}` (`npm dist-tag rm`) | **Conditionally accepted:** tag matches `dev-*`, grant covers `{name}`; audited |
 | `GET /-/package/{name}/dist-tags[/{tag}]` | Public read |
 | `GET /-/whoami` | Returns the authenticated grant's `subject` (UX for `npm whoami`) |
 | `GET /-/ping` | Unauthenticated liveness |
@@ -217,9 +219,9 @@ or body field can widen a grant's authority.
 Two consequences worth stating plainly:
 
 - **`npm unpublish` and `npm deprecate` are impossible**: every wire
-  form — whole-package `DELETE /{name}/-rev/{rev}`, single-version
+  form (whole-package `DELETE /{name}/-rev/{rev}`, single-version
   `PUT /{name}/-rev/{rev}`, tarball `-rev` `DELETE`, and deprecate's
-  full-packument `PUT /{name}` — is either an unlisted route (`405`)
+  full-packument `PUT /{name}`) is either an unlisted route (`405`)
   or a publish `PUT` that fails rules P3/P6, rejected without
   dedicated code.
 - **`latest` can never come into existence**: not via publish (rule P4),
@@ -233,28 +235,28 @@ A `PUT /{name}` body (npm's publish document: `_id`, `name`, `versions`,
 `dist-tags`, `_attachments`) is accepted only if **all** of these hold,
 evaluated in order with a distinct structured error code per rule:
 
-- **P1 — Authenticated.** Bearer token maps to a live grant (not
+- **P1: Authenticated.** Bearer token maps to a live grant (not
   revoked, not expired, `notBefore` reached).
-- **P2 — In scope.** `{name}` matches the grant's package allowlist
+- **P2: In scope.** `{name}` matches the grant's package allowlist
   (exact names or a single trailing-scope pattern such as
   `@minion-town/*`, resolved at issuance into the grant record).
-- **P3 — One new version.** The body's `versions` contains exactly one
+- **P3: One new version.** The body's `versions` contains exactly one
   entry, and `(name, version)` does not already exist (or exists with
-  byte-identical content — see idempotent republish, § *Replay and
+  byte-identical content; see idempotent republish, § *Replay and
   idempotency*).
-- **P4 — Development release.** The version satisfies the prerelease
+- **P4: Development release.** The version satisfies the prerelease
   condition, and the body's `dist-tags` is exactly one tag matching the
   `dev-*` pattern (§ *Semantics of a development release*).
-- **P5 — Tarball integrity.** Exactly one attachment; its decoded bytes
+- **P5: Tarball integrity.** Exactly one attachment; its decoded bytes
   hash (SHA-512, SRI form) to the manifest's `dist.integrity` **as
-  recomputed by the proxy from the received bytes** — the client's
+  recomputed by the proxy from the received bytes**. The client's
   claimed integrity is checked against the computed value, never
   trusted. The legacy `dist.shasum` (SHA-1) is recomputed alongside and
   stored recomputed.
-- **P6 — Manifest/tarball subject agreement.** The `package.json` inside
+- **P6: Manifest/tarball subject agreement.** The `package.json` inside
   the tarball has `name` and `version` identical to the publish
   document's. This closes, for everything the proxy accepts, npm's own
-  long-standing *manifest-confusion* hole — the npm registry does not
+  long-standing *manifest-confusion* hole: the npm registry does not
   verify that the manifest in the publish body matches the tarball's
   `package.json` (documented publicly in 2023 by former npm CLI staff
   engineering manager Darcy Clarke, with live PoC packages). Agreement
@@ -267,11 +269,11 @@ evaluated in order with a distinct structured error code per rule:
   `versions` entries); unknown top-level fields are dropped, not stored.
   The proxy reconstructs what it stores from an allowlist of manifest
   fields rather than persisting the submitted document verbatim.
-- **P7 — Monotonic tag.** The `dev-*` tag's target has greater semver
+- **P7: Monotonic tag.** The `dev-*` tag's target has greater semver
   precedence than its persisted per-package, per-tag high-water mark (if
   any); the move and high-water update are atomic with the packument
   update, and tag removal does not erase the mark.
-- **P8 — Limits.** Tarball <= grant `maxTarballBytes` (and <= the global
+- **P8: Limits.** Tarball <= grant `maxTarballBytes` (and <= the global
   hard cap); grant's per-day publish count and per-package version count
   not exceeded; global body-size cap not exceeded.
 
@@ -317,15 +319,17 @@ flowchart LR
     end
 
     upstream["registry.npmjs.org<br/>(upstream)"]
-    admin["Operator / maintainer<br/>(grant issuance, quarantine review,<br/>emergency stop)"]
+    maintainer["Maintainer<br/>(policy and rollout authority)"]
+    operator["Operator<br/>(grant administration, quarantine review,<br/>emergency stop)"]
 
     agent -- "HTTPS: npm publish / dist-tag<br/>(Bearer grant token)" --> http
     http -- "public reads (no auth)" --> agent
     poller -- "loopback: GET /-/events, /-/blobs<br/>(promoter-only token)" --> elog
     poller -- "fetch blob by integrity" --> packs
     valid -- "HTTPS: PUT publish exact bytes<br/>(granular automation token)" --> upstream
-    admin -- "loopback admin API" --> proxyHost
-    admin -- "loopback admin API / config" --> promoterHost
+    maintainer -- "authorizes policy and rollout" --> operator
+    operator -- "loopback admin API" --> proxyHost
+    operator -- "loopback admin API / config" --> promoterHost
 ```
 
 Trust boundaries, and what each side may assume:
@@ -335,8 +339,8 @@ Trust boundaries, and what each side may assume:
   request except the token's existence as a lookup key; all authority
   decisions come from the server-side grant record. TLS is the only
   channel protection; the token is a 256-bit random bearer.
-- **Proxy -> promoter.** The promoter treats the proxy — including its
-  event log — as an *untrusted hint source*. The event log says "bytes
+- **Proxy -> promoter.** The promoter treats the proxy, including its
+  event log, as an *untrusted hint source*. The event log says "bytes
   with this integrity, name, version, tag, grant chain, and subject were
   accepted at this time"; the promoter independently re-fetches the blob
   by integrity, re-hashes it, and re-evaluates every policy rule from
@@ -359,6 +363,14 @@ Trust boundaries, and what each side may assume:
   and the emergency stop are loopback-only admin surfaces (UNIX socket
   or localhost port), never exposed through Caddy.
 
+The **maintainer** owns policy: package and subject allowlists, rollout
+gates, and authorization to widen upstream publication authority.
+The **operator** carries out routine administration within that policy:
+grant issuance and renewal, token revocation, quarantine review, and
+emergency-stop operation.
+One person may hold both roles, but operator access does not itself
+authorize a policy or rollout change.
+
 ## Threat model
 
 Actors: the **grant-holding developer/agent** (honest-but-fallible or
@@ -370,18 +382,18 @@ the audit trail), and the **upstream registry** (trusted to enforce its
 own version immutability and to not lie about integrity; its compromise
 is out of scope).
 
-| Attack | Construction that defeats it |
-|--------|------------------------------|
-| **Confused deputy** | The proxy never takes authority from request parameters: package, tag, and version decisions derive from the server-side grant record and the recomputed integrity, not from client claims. The promoter never takes authority from the proxy's annotations: it revalidates package allowlist, prerelease rule, `dev-*` tag rule, integrity, grant-chain validity-at-accept-time, and policy from its own config. There is no "admin" field a request can set. |
-| **Tag race** | All mutations of one package serialize on a `BEGIN IMMEDIATE` SQLite transaction scoped to the packument row; tag moves are compare-and-swap against the stored tag target evaluated inside the same transaction (monotonic rule included). Two racing publishes of one version: the unique `(name, version)` primary key admits exactly one; the loser gets a deterministic `409`. |
-| **Substitution** | Tarball bytes are hashed by the proxy at acceptance (P5) and stored content-addressed; the promoter fetches the blob *by integrity* and re-hashes before publishing; upstream, npm forbids overwriting an existing version — so a duplicate-publish response is checked: same integrity means "already done" (idempotent success), different integrity is an alarm-level quarantine (§ *Crash-safe state machine*). |
-| **Rollback** | No unpublish verbs exist at the proxy; versions are immutable; `dev-*` tags move forward only (monotonic rule); `latest` never exists. There is no request that can make an older state visible in place of a newer one. |
-| **Dependency confusion** | The allowlist admits only names/scopes the maintainer controls (fixture scope § *Fixture packages and namespaces*); the proxy serves only locally published packages and has **no upstream read-through**, so an upstream squatter's bytes can never be served for an allowlisted name; prerelease versions are invisible to default ranges; `latest` is never set, upstream or locally. Clients compose registries by scope routing (`@minion-town:registry=...`), so non-allowlisted dependencies still resolve from npmjs.com directly, never through a confusion-prone merge. |
-| **Grant token theft / leak** | A stolen grant token reaches only the proxy and only within its attenuation (dev releases of allowlisted packages): its maximum abuse product is an unwanted `x.y.z-pre.n` under a `dev-*` tag — invisible to default installs, attributable to the recorded subject, revocable in one admin call. Tokens are stored hashed (SHA-256) server-side; logs carry only the token id prefix. |
-| **Prompt-injected agent** | Treated as the standing case, not an anomaly: the vocabulary allowlist bounds the worst publish to the dev-release shape; rate and size limits bound volume; every acceptance is attributed in the ledger. |
-| **Replay** | Publish requests map to content-derived event ids (§ *Replay and idempotency*), so a replayed request is an idempotent re-accept or a deterministic `409`, never a duplicate event. |
-| **Proxy compromise** | Can refuse service, deface local packuments (detected by ledger re-derivation on restore), and forge events. Independent revalidation rejects packages outside the promoter-owned allowlist, malformed release shapes, and integrity inconsistencies, but `subject` is proxy-authored attribution rather than an end-to-end authentication claim. A compromised proxy can therefore impersonate an observed allowlisted subject and induce a shape-valid development publish for that subject's allowed package. End-to-end request signatures are required to close this residual risk (§ *Open questions*). |
-| **Promoter compromise** | The blast radius is the upstream token's scope: a granular access token (the only kind npm issues since the 2025 classic-token retirement) restricted to the fixture organization/scope, with no unpublish, owner, or account rights, optionally pinned to the box's egress IP by the granular-token CIDR restriction, and capped by npm at a 90-day lifetime. Rotation and deactivation procedures bound the window (§ *Token rotation*); the hash-chained ledger attributes every upstream call it made. |
+| Attack | Attack shape | Construction that defeats it |
+|--------|--------------|------------------------------|
+| **Confused deputy** | A caller supplies a package, tag, subject, or apparent admin flag that tricks a service into exercising authority the caller does not hold. | The proxy derives package, tag, and version authority from the server-side grant record and recomputed integrity, not client claims. The promoter independently revalidates the package allowlist, release shape, integrity, grant chain, and policy. There is no request-settable admin field. |
+| **Tag race** | Concurrent publishers attempt to make a tag resolve backward or produce a state no serial ordering permits. | All mutations of one package serialize in a `BEGIN IMMEDIATE` SQLite transaction; tag moves compare-and-swap against the stored target and high-water mark. A unique `(name, version)` key admits exactly one of two racing publishes. |
+| **Substitution** | Bytes are changed between acceptance and upstream publication, or a duplicate coordinate upstream already holds different bytes. | The proxy hashes bytes into content-addressed storage; the promoter fetches by integrity and re-hashes. A duplicate-publish response is checked: matching integrity is idempotent success, while different integrity is an alarm-level quarantine (§ *Crash-safe state machine*). |
+| **Rollback** | An attacker makes a package or tag resolve to an older state after users have observed a newer one. | No unpublish verb exists, versions are immutable, each `dev-*` tag retains a persistent high-water mark across removal, and `latest` never exists. |
+| **Dependency confusion** | A squatter publishes the same name upstream so a consumer installs the attacker's package instead of the intended local one. | The allowlist admits only maintainer-controlled names (§ *Fixture packages and namespaces*), the proxy has no upstream read-through, and clients use scope routing. Non-allowlisted dependencies resolve directly from npmjs.com rather than through a merge of registries. |
+| **Grant token theft / leak** | An attacker steals one working copy's bearer token and publishes as its subject. | The token reaches only the proxy and only within its attenuation. A stolen token can produce at worst an attributable prerelease under a `dev-*` tag. `revokeHttpToken()` disables that token without disrupting siblings; `revoke()` disables the entire grant family. Tokens are stored hashed and logs carry only an id prefix. |
+| **Prompt-injected agent** | Adversarial text induces an authorized agent to attempt a production tag, unpublish, owner change, excessive volume, or an out-of-scope package. | The vocabulary allowlist bounds every request to the dev-release shape; package, rate, and size limits bind server-side; every acceptance is attributed in the ledger. |
+| **Replay** | A captured accepted request is submitted again to create a second event or alter the original tag. | Publish requests map to event ids that include name, version, integrity, tag, and grant chain. An exact replay is idempotent; a field mismatch receives deterministic `409` (§ *Replay and idempotency*). |
+| **Proxy compromise** | The agent-facing service forges an event, subject, packument, or blob for the more-powerful promoter. | Independent revalidation rejects packages outside the promoter-owned allowlist, malformed release shapes, and integrity inconsistencies. A residual remains: the proxy can impersonate an observed allowlisted subject for that subject's package. End-to-end request signatures are required to close it (§ *Open questions*). |
+| **Promoter compromise** | The service holding the upstream credential publishes directly outside the proxy's intended flow. | Its granular token is restricted to the fixture packages/scopes, optionally CIDR-pinned, and capped at 90 days. Rotation and deactivation bound the window; the hash-chained ledger attributes every upstream call (§ *Token rotation*). |
 
 ## Capability model
 
@@ -389,9 +401,9 @@ is out of scope).
 
 The capability exists in two realizations of one shape:
 
-1. **Canonical form — a server-side grant record** (SQLite, proxy).
+1. **Canonical form:** a server-side grant record (SQLite, proxy).
    This is the object of record: every authority decision reads it.
-2. **HTTP realization — a bearer token** for the stock npm CLI
+2. **HTTP realization:** a bearer token for the stock npm CLI
    (`//npm.minion.town/:_authToken=...` in `.npmrc`). A token is a
    256-bit random secret with an id, minted *from* a grant; the server
    stores only its SHA-256 hash. Multiple tokens may realize one grant
@@ -425,6 +437,9 @@ type PublishGrantInfo = PublishGrantSpec & {
 interface PublishGrantIssuer {
   // Mint a root grant. Operator-only (loopback admin surface).
   issue(spec: PublishGrantSpec): Promise<PublishGrant>;
+  // Re-obtain the live capability for an existing grant so an operator
+  // can revoke or attenuate it after the original issuance call.
+  get(grantId: string): Promise<PublishGrant>;
   list(filter?: { subject?: string }): Promise<PublishGrantInfo[]>;
   inspect(grantId: string): Promise<PublishGrantInfo>;
 }
@@ -439,6 +454,8 @@ interface PublishGrant {
   attenuate(spec: Partial<PublishGrantSpec>): Promise<PublishGrant>;
   // Mint an HTTP bearer token realizing (a copy of) this grant.
   issueHttpToken(note?: string): Promise<{ tokenId: string; secret: string }>;
+  // Revoke one working-copy token without disturbing sibling tokens.
+  revokeHttpToken(tokenId: string, reason?: string): Promise<void>;
   // Imperative revocation is correct here: revocation is exercised
   // against *another* party's authority, not the holder's own
   // subscription lifetime. Cascades to derived grants and tokens.
@@ -459,7 +476,7 @@ Properties that make this a capability system rather than an ACL:
   delegation chain that authorized it, and lets the promoter verify the
   chain's validity at accept time.
 - **Unforgeability.** Tokens are random secrets looked up by hash; the
-  grant record — never the request — carries the authority.
+  grant record, never the request, carries the authority.
 - **Non-negotiable policy.** The `dev-*` tag rule, the prerelease rule,
   version immutability, and tag monotonicity are properties of the
   proxy's validation pipeline, not grant fields: no grant, not even a
@@ -477,12 +494,31 @@ Properties that make this a capability system rather than an ACL:
   publish does not retroactively block its promotion, but a grant shown
   expired/revoked *before* acceptance (a forged event) fails validation.
 
+### Availability to unattended jobs
+
+Operator-only issuance is a trust boundary, not a requirement that a
+human be present for every gardener job.
+The maintainer first approves a standing subject policy that fixes the
+package subset, limits, and maximum lifetime for a job class.
+An operator-owned renewal controller on the proxy host may then call
+the loopback `issue()` surface under that policy, mint a fresh token
+before the prior grant expires, and place it in the garden's existing
+job-secret injection path.
+The job launcher selects the pre-authorized subject and injects only its
+proxy token into the isolated worktree; the agent cannot reach the
+loopback issuer, choose a broader subject policy, or obtain the upstream
+token.
+Revoking the standing policy stops future renewal, and revoking the live
+grant or token stops current jobs.
+This supports an unattended fleet across grant expirations while keeping
+new authority rooted in a maintainer-approved policy.
+
 ### Subject binding
 
 Every accepted publish is bound to the grant's `subject` (and the full
 `chainHash`) in the audit ledger and the event log; `GET /-/whoami`
 returns the subject so the CLI reflects it. The subject is asserted by
-the operator at issuance — it is an attribution anchor, not an
+the operator at issuance. It is an attribution anchor, not an
 authentication claim. Stronger cryptographic subject binding (per-agent
 keypairs signing each request) is a possible hardening and is deferred
 (§ *Open questions*).
@@ -492,7 +528,7 @@ keypairs signing each request) is a possible hardening and is deferred
 ### Storage
 
 - **SQLite** (WAL mode) for grants/tokens, packuments, the durable
-  event log, and both audit ledgers — the same embedded-ACID choice the
+  event log, and both audit ledgers. This is the same embedded-ACID choice the
   Rust read path made for its registry table
   ([endor-npm-registry-proxy](endor-npm-registry-proxy.md) § *Design
   decisions*), and the substrate that makes per-package serialization a
@@ -505,7 +541,7 @@ keypairs signing each request) is a possible hardening and is deferred
 - The stored **packument** is reconstructed from an allowlist of fields
   (`name`, per-version manifest fields as accepted at P6, `dist-tags`,
   `time` created/modified, `dist.integrity`, `dist.tarball` URL pointing
-  at the proxy) — never the raw submitted document.
+  at the proxy), never the raw submitted document.
 
 ### Replay and idempotency
 
@@ -513,15 +549,17 @@ keypairs signing each request) is a possible hardening and is deferred
   `sha256("npm-dev-proxy/v1" | name | version | integrity | tag |
   chainHash)`. Retried client requests (network flake, CLI retry) map to
   the same event id and the same `(name, version)` row.
-- **Idempotent republish**: a `PUT` whose name, version, *and* tarball
-  integrity exactly match an existing accepted row returns the original
-  success result with no state change and no new event (a `200`
-  idempotent-accept, logged at debug level). This path is a pure
+- **Idempotent republish**: a `PUT` whose name, version, tarball
+  integrity, *and tag* exactly match an existing accepted row returns
+  the original success result with no state change and no new event
+  (a `200` idempotent-accept, logged at debug level). This path is a pure
   read-and-return: it does not reconstruct or rewrite the stored
   manifest, even if the retry's allowed manifest fields differ. Same
-  version, *different* bytes: `409` with npm's own "cannot publish over
-  previously published versions" message — deterministic, never a
-  silent overwrite.
+  name, version, and bytes but a *different tag* receives `409` with a
+  structured `tag-conflict` code; the caller must use the separately
+  audited dist-tag route, where P7 applies. Same version, *different*
+  bytes receives `409` with npm's own "cannot publish over previously
+  published versions" message: deterministic, never a silent overwrite.
 - Dist-tag add of an already-current `(tag, version)` pair is a no-op
   success. All idempotency decisions are made inside the per-package
   transaction, so they hold under concurrency.
@@ -553,7 +591,7 @@ lookup so online guessing is both slow and log-quiet.
 Reads are public and unauthenticated, and the proxy serves **only**
 locally published packages: packument, version manifest, tarball, and
 dist-tag queries for allowlisted names that exist; `404` for everything
-else. There is **no upstream read-through** — the proxy never talks to
+else. There is **no upstream read-through**: the proxy never talks to
 npmjs.com, which removes the entire read-side dependency-confusion
 class at this boundary. Clients that need both the demo packages and
 the public npm universe use npm's scope routing:
@@ -569,7 +607,7 @@ This is also the seam where the existing read stack composes:
 `endor npm-resolve --registry https://npm.minion.town` and a host whose
 `@registry` is configured with that URL resolve dev releases through
 [endor-npm-registry-proxy](endor-npm-registry-proxy.md)'s unchanged
-fetch/integrity/CAS path — public reads, no credentials, exactly the
+fetch/integrity/CAS path: public reads, no credentials, exactly the
 public-only constraint [registry-capability](registry-capability.md)
 runs on.
 
@@ -577,11 +615,11 @@ runs on.
 
 | Command | Path exercised | Result |
 |---------|----------------|--------|
-| `npm publish --tag dev-x` (prerelease version, allowlisted) | P1–P8 | Accepted |
+| `npm publish --tag dev-x` (prerelease version, allowlisted) | P1-P8 | Accepted |
 | `npm publish` (no tag / `--tag latest` / non-prerelease) | P4 | `403` with structured code |
 | `npm dist-tag add pkg@1.2.3-dev.0 dev-x` / `rm dev-x` / `ls` | dist-tag routes | Accepted / accepted-audited / public |
 | `npm install pkg@dev-x` / `pkg@1.2.3-dev.0` | read routes + scope routing | Works |
-| `npm install pkg` (bare, no `latest` exists) | read routes | `ETARGET` from the CLI — expected: no `latest` tag ever exists |
+| `npm install pkg` (bare, no `latest` exists) | read routes | `ETARGET` from the CLI; expected because no `latest` tag ever exists |
 | `npm whoami` | `GET /-/whoami` | `{username: <subject>}` |
 | `npm unpublish` (whole or single-version), `npm deprecate`, `npm owner *`, `npm token *`, `npm adduser`/`login` | rejected routes | `405`/`404` with a pointer to the grant model |
 | `npm view` / `npm audit signatures` | packument read | Works for local packages; `dist.signatures` absent (§ *Immutability, integrity, signatures, and subject binding*) |
@@ -593,8 +631,8 @@ Two CLI behaviors shape the surface rather than the rules:
   `404` answer is how the CLI learns "new package." The read routes
   serve this naturally. The CLI's client-side guards (refusing to
   implicitly re-tag `latest` backwards, the semver-range tag check) are
-  conveniences only — the proxy never relies on them (`--force` bypasses
-  them), which is why every rule lives server-side in P1–P8.
+  conveniences only. The proxy never relies on them (`--force` bypasses
+  them), which is why every rule lives server-side in P1-P8.
 - `npm unpublish`/`npm deprecate` first `GET /{name}?write=true`; the
   proxy serves that as an ordinary read so the CLI's failure message
   comes from the refused mutation (`405`), not a confusing early `404`.
@@ -603,7 +641,7 @@ Yarn (`yarn npm publish`) and pnpm (`pnpm publish`) use the same
 publish-document `PUT` shape and the same dist-tag endpoints; the
 compat matrix above is re-run for both in acceptance tests, and any
 divergence (e.g. a client that GETs the packument before PUT for `_rev`
-handling) is served by the read routes — the proxy ignores `_rev` and
+handling) is served by the read routes. The proxy ignores `_rev` and
 gets its concurrency from the transaction layer instead.
 
 ## Immutability, integrity, signatures, and subject binding
@@ -614,22 +652,23 @@ gets its concurrency from the transaction layer instead.
   Upstream, npm's own no-overwrite rule provides the second wall.
 - **Tarball and manifest.** The tarball is stored byte-identical to
   what the proxy received and published to; the version manifest stored
-  and later promoted is the field-allowlisted reconstruction from P6 —
+  and later promoted is the field-allowlisted reconstruction from P6,
   so what is promoted is exactly what was validated, and its
   `dist.integrity` is proxy-computed, never client-asserted.
 - **Signatures / provenance.** npm's registry-side ECDSA P-256 packument
   signatures (`dist.signatures`, over the template
   `{name}@{version}:{integrity}`) are generated by npmjs.com with its
-  own keys, served at `/-/npm/v1/keys` — a documented convention any
-  registry could implement for itself. The proxy does not mint
+  own keys, served at `/-/npm/v1/keys`. This is a documented convention
+  any registry could implement for itself. The proxy does not mint
   lookalikes in the first cut (own-key signing is an open question,
   § *Open questions*), and `npm audit signatures` is documented as
   not-applicable to the demo registry. Promoted artifacts receive npm's
   own registry signatures at publish time, indistinguishable from
   hand-published ones. `npm publish --provenance` requires Sigstore
   keyless signing from a supported CI OIDC context (GitHub Actions or
-  GitLab CI — it attaches a `<name>-<version>.sigstore` bundle to the
-  publish and logs to Rekor), which a token-publishing promoter is not;
+  GitLab CI). It attaches a `<name>-<version>.sigstore` bundle to the
+  publish and logs to Rekor, which a token-publishing promoter cannot
+  do;
   provenance for promoted artifacts is an explicit open question
   (§ *Open questions*). The audit ledger's hash chain
   (§ *Tamper-evident audit mapping*) is the demo's integrity evidence.
@@ -648,21 +687,26 @@ token.
 
 ### Upstream token
 
-- **Kind:** npm *granular access token* — the only kind npm issues
-  since classic tokens were retired in November 2025 — with read+write
+- **Kind:** npm *granular access token*, the only supported long-lived
+  token kind since npm permanently revoked classic tokens in December
+  2025 ([GitHub changelog](https://github.blog/changelog/2025-12-09-npm-classic-tokens-revoked-session-based-auth-and-cli-token-management-now-available/)),
+  with read+write
   permission scoped to the fixture organization/scope (granular tokens
   support up to 50 orgs and 50 packages/scopes: one fixture scope fits
-  trivially). **Bypass-2FA** enabled, which is the supported automation
-  shape. Where the box's egress IP is stable, the token's optional IP
+  trivially). **Bypass-2FA** enabled, which npm documents for
+  noninteractive publishing when trusted publishing is unavailable
+  ([npm CI/CD guidance](https://docs.npmjs.com/using-private-packages-in-a-ci-cd-workflow/)).
+  Where the box's egress IP is stable, the token's optional IP
   CIDR restriction pins it to that egress.
-- **Lifetime:** npm caps new write-enabled granular tokens at 90 days,
+- **Lifetime:** npm caps write-enabled granular tokens at 90 days
+  ([GitHub changelog](https://github.blog/changelog/2025-11-05-npm-security-update-classic-token-creation-disabled-and-granular-token-changes/)),
   so rotation is not policy-optional but registry-enforced; the
   rotation runbook (§ *Token rotation*) is part of the design, not an
   afterthought.
 - **Storage:** only ever in the promoter's environment: AWS Secrets
   Manager -> 0600 `EnvironmentFile` readable only by the promoter
   service user, rendered via the same presigned-S3/SSM pattern
-  minion.town already uses — never through SSM text, never on the
+  minion.town already uses: never through SSM text, never on the
   proxy's filesystem, never in logs.
 - **Account:** a dedicated, maintainer-controlled npm account (or the
   maintainer's own account at their discretion) owning the fixture org,
@@ -679,7 +723,7 @@ durable cursor, not from push reliability; there is no webhook endpoint
 to attack, no retry choreography, and recovery from any outage is
 "resume from cursor." An optional loopback nudge (proxy -> promoter
 `POST /-/nudge` after each accepted publish) may shave latency but is
-never authoritative — missing or forged nudges change nothing, because
+never authoritative. Missing or forged nudges change nothing, because
 the cursor is the truth.
 
 The event stream carries two event families:
@@ -721,14 +765,14 @@ decision from sources it owns:
 5. **Upstream state check.** GET the upstream version manifest. If the
    `(name, version)` already exists upstream: identical integrity -> the
    publish is already done (record DONE; this is also the
-   crash-recovery path); different integrity -> quarantine and alert —
+   crash-recovery path); different integrity -> quarantine and alert.
    an immutable coordinate holding different bytes upstream is a
    substitution or upstream-integrity incident, never something to
    push past.
 
 Only then does the promoter publish: the exact blob bytes fetched and
 re-hashed in step 1, the field-allowlisted manifest from the event
-(payload recorded at accept time), and the same `dev-*` tag —
+(payload recorded at accept time), and the same `dev-*` tag:
 `npm publish --tag <dev-tag>` semantics against the upstream registry
 API directly (no CLI subprocess required, though the CLI is an
 acceptable implementation shim). **The tarball is never rebuilt,
@@ -752,6 +796,7 @@ stateDiagram-v2
     publishing --> retryWait : upstream 5xx / network
     confirming --> done : upstream holds our integrity
     confirming --> quarantined : upstream holds different bytes
+    confirming --> retryWait : upstream manifest absent (ambiguous 403)
     retryWait --> fetching : backoff elapsed (1m->5m->15m->1h cap)
     retryWait --> quarantined : attempts exhaust review threshold
     quarantined --> fetching : operator: retry (refetch + revalidate)
@@ -765,7 +810,7 @@ stateDiagram-v2
   transaction; the cursor advances only when an event reaches a
   terminal state (`done`, `rejected`), giving **at-least-once**
   semantics: anything non-terminal is re-driven after restart.
-- The single non-transactional edge — the upstream HTTP call — is
+- The single non-transactional edge, the upstream HTTP call, is
   bracketed: transition to `publishing` (recording the attempt) *before*
   the call; record the outcome *after*. A crash inside the bracket
   recovers into the `confirming` flow: ask the upstream what it holds
@@ -778,7 +823,12 @@ stateDiagram-v2
   over previously published versions"; the legacy `EPUBLISHCONFLICT`
   code is retired). The `confirming` state treats `403` as "go look":
   upstream manifest integrity equal to ours -> `done`; different ->
-  `quarantined` + alert.
+  `quarantined` + alert; absent -> `retryWait` with reason
+  `ambiguous-403`. The absent case covers a permission, CIDR, 2FA, or
+  policy rejection in which no version was created. It has its own
+  attempt counter and enters quarantine after the bounded review
+  threshold instead of retrying forever or pretending the publish was a
+  duplicate.
 - **Partial failure recovery.** Upstream 5xx/network -> bounded
   exponential backoff (1m, 5m, 15m, then 1h cap), retrying indefinitely
   with an operator alert at 24h backlog age; upstream 4xx other than
@@ -787,8 +837,8 @@ stateDiagram-v2
   is idempotent or confirmable.
 - **Quarantine and manual review.** Quarantine is a pager condition
   (alert on entry). The loopback admin surface lists quarantined events
-  with full evidence; the operator's actions — `retry`, `reject`
-  (terminal, recorded), or edit-policy-then-retry — are themselves
+  with full evidence. The operator's actions (`retry`, terminal
+  `reject`, or edit-policy-then-retry) are themselves
   ledgered.
 - **Emergency stop.** A persistent `enabled=false` flag in the
   promoter's state store (set via admin surface or config) is checked
@@ -796,7 +846,7 @@ stateDiagram-v2
   poller keeps draining and validating (so the backlog stays observable)
   but performs zero upstream calls. Layers beyond it, in order of
   finality: revoke grants at the proxy (stops inflow), `systemctl stop`,
-  and — the ultimate stop — deactivate the npm token at the registry
+  and, as the ultimate stop, deactivate the npm token at the registry
   (documented, manual, outside this system).
 
 ### Token rotation
@@ -834,13 +884,13 @@ line, fsync-before-ack):
   `tag-mutated`, rate-limit trips.
 - **Ledger B (promoter):** every state transition, every validation
   verdict with its evidence, every upstream request/response (status,
-  body hash, npm username fingerprint — never the token), quarantine
+  body hash, npm username fingerprint, never the token), quarantine
   entries and resolutions, emergency-stop engagements, rotations.
 - The **mapping** proxy event -> upstream result is the join on
   `eventId` (content-derived, § *Replay and idempotency*) plus
   `chainHash` for authority; every accepted publish has exactly one
   terminal ledger-B record (`done` or `rejected`) or is visibly
-  in-flight — "visibly" because both ledgers are hash-chained, so
+  in-flight. "Visibly" means both ledgers are hash-chained, so
   deletion or reordering is detectable by re-derivation.
 - A future hardening anchors each day's ledger-B head hash into the
   garden journal as a transparency anchor (a one-line `message` entry),
@@ -858,7 +908,7 @@ line, fsync-before-ack):
 | Secrets | AWS Secrets Manager -> 0600 `EnvironmentFile` via presigned S3 | minion.town `DEPLOYMENT.md` pattern; upstream token never crosses SSM text |
 | Deploys | SSM-driven idempotent scripts | Same lane as minion.town's `deploy/aws/scripts/*` |
 
-**DNS/TLS (design target — nothing here is provisioned by this job):**
+**DNS/TLS (design target; nothing here is provisioned by this job):**
 one `A`/`AAAA` record for `npm.minion.town` pointing at the minion.town
 EC2 box; Caddy obtains and renews a single-name Let's Encrypt
 certificate (HTTP-01/TLS-ALPN-01) and reverse-proxies
@@ -867,7 +917,7 @@ promoter has no DNS presence at all.
 
 ## Fixture packages and namespaces
 
-- **Scope:** `@minion-town` — an npm organization the maintainer
+- **Scope:** `@minion-town`, an npm organization the maintainer
   registers as an explicit stage-2 precondition (scoped *public*
   packages are free). Until that org exists and is owned by the
   maintainer-controlled account, upstream promotion stays disabled and
@@ -886,7 +936,7 @@ promoter has no DNS presence at all.
 
 - **Logs:** JSON lines, one event per line, at both services. Carried
   fields: `eventId`, `seq`, `subject`, `grantId`, token *id prefix*
-  (first 8 chars — enough to correlate, useless to wield), package,
+  (first 8 chars, enough to correlate but useless to wield), package,
   version, tag, integrity, decision, rule code, latency. **Never
   logged:** grant token secrets, `Authorization` header values, the
   upstream npm token (the promoter logs only the npm username
@@ -897,7 +947,7 @@ promoter has no DNS presence at all.
   backlog age, ledger head seq.
 - **Health:** `/healthz` on both services (Caddy-exposed for the proxy,
   loopback for the promoter) plus a promoter `/status` showing cursor,
-  backlog, stop flag — loopback only.
+  backlog, stop flag. This surface is loopback only.
 - **Alerts:** quarantine entry, backlog age > 24h, auth-failure burst,
   any ledger write failure (also fail-closed: a publish that cannot be
   ledgered is not accepted), upstream 4xx storm.
@@ -914,7 +964,7 @@ promoter has no DNS presence at all.
 - **Restore:** fresh volume -> restore latest tarball -> verify: ledger
   hash chains re-derive to their heads; every blob hashes to its
   address; promoter reconciles `publishing`-state rows through the
-  confirm flow. Worst case for never-promoted dev releases is RPO 24h —
+  confirm flow. Worst case for never-promoted dev releases is RPO 24h,
   acceptable: the publisher can re-publish identically (idempotent).
 - A restore **drill** is a stage-2 exit item.
 
@@ -922,20 +972,20 @@ promoter has no DNS presence at all.
 
 | Item | Marginal cost |
 |------|---------------|
-| Compute | ~$0 — same EC2 box as minion.town, ~224 MiB added footprint |
-| TLS | $0 — Let's Encrypt |
-| Backups | cents/month — a few MB/day into the existing bucket |
-| npm organization | $0 — public scoped packages |
+| Compute | ~$0: same EC2 box as minion.town, ~224 MiB added footprint |
+| TLS | $0: Let's Encrypt |
+| Backups | cents/month: a few MB/day into the existing bucket |
+| npm organization | $0: public scoped packages |
 | Operator time | the real cost: quarterly token rotation (~15 min), weekly ledger glance |
 
 ## Staged rollout
 
 | Stage | Content | Exit criteria |
 |-------|---------|---------------|
-| **S0 — local** | Proxy + promoter on loopback; fixture grants; promoter in `dryRun` (validates, records "would publish", zero upstream capability — no token present) | Full acceptance suite green, including adversarial and failure-injection cases (§ *Acceptance tests*) |
-| **S1 — deployed demo** | `npm.minion.town` live behind Caddy; grants issued to a gardener job; promoter still `dryRun` | End-to-end dev release published through the proxy and consumed via scope routing; ledgers inspected; dry-run promoter validates every event |
-| **S2 — live-fire upstream** | Token installed; promoter enabled for the fixture scope | **All stage-2 conditions met** (below); one fixture release promoted; byte-identity check upstream vs proxy; emergency-stop drill, rotation drill, restore drill executed |
-| **S3 — operate** | Allowlist widened only by maintainer decision; weekly audit review; quarterly rotation | Sustained clean ledgers |
+| **S0: local** | Proxy + promoter on loopback; fixture grants; promoter in `dryRun` (validates, records "would publish", zero upstream capability because no token is present) | Full acceptance suite green, including adversarial and failure-injection cases (§ *Acceptance tests*) |
+| **S1: deployed demo** | `npm.minion.town` live behind Caddy; grants issued to a gardener job; promoter still `dryRun` | End-to-end dev release published through the proxy and consumed via scope routing; ledgers inspected; dry-run promoter validates every event |
+| **S2: live-fire upstream** | Token installed; promoter enabled for the fixture scope | **All stage-2 conditions met** (below); one fixture release promoted; byte-identity check upstream vs proxy; emergency-stop drill, rotation drill, restore drill executed |
+| **S3: operate** | Allowlist widened only by maintainer decision and a fresh upstream ownership/unclaimed-name check for every added package; weekly audit review; quarterly rotation | Sustained clean ledgers; each widening records the ownership check and maintainer decision before policy deployment |
 
 **Explicit conditions before any real upstream publication (the
 stage-2 gate), all required:**
@@ -955,7 +1005,15 @@ stage-2 gate), all required:**
 7. Quarantine runbook written (who gets paged, what `retry`/`reject`
    mean, what evidence to capture).
 8. The promoter's policy config reviewed line-by-line by the
-   maintainer — it, not the proxy, is the last authority.
+   maintainer. It, not the proxy, is the last authority.
+
+The name-control check is a continuing gate, not a one-time fixture
+check.
+Every S3 allowlist addition must repeat condition 4 for each new package
+or scope, record the evidence with the maintainer's decision, and land
+the proxy and promoter policy updates together.
+Until that record exists, the package remains absent from both
+allowlists.
 
 ## Build vs adapt: the Verdaccio comparison
 
@@ -966,38 +1024,38 @@ Verdaccio v5.33/master, 2026-07-30):
 
 | Security property | Verdaccio native | Via plugin | Custom minimum proxy |
 |-------------------|------------------|------------|----------------------|
-| npm-CLI-compatible registry surface | Yes | — | ~small, must build |
-| Per-package-name publish ACL (user/group) | Yes (`packages:` patterns) | — | Yes (grant records) |
-| `dev-*`-tag-only / prerelease-only vocabulary | **No** — ACLs are name-pattern x group only; no semver/tag predicates | Middleware plugin *can* intercept `PUT /:package` before the API router (source-confirmed; the docs page claiming otherwise is stale) and reject by body inspection | Native — the vocabulary *is* the server |
-| `allow_publish` hook sees version/tag | **No** — auth hooks receive `{name}` from URL params only; version is `undefined` on publish, tag name never passed | Middleware body inspection instead | Native |
-| Per-token capability attenuation (package subset, expiry, delegation, revocation) | **No** — tokens carry identity only; npm's granular-token fields (`packages`, `scopes`, `expires`) are *accepted but ignored* | `apiJWTmiddleware` takeover possible (disables login/adduser) | Native (grant records) |
-| Immutable versions / no unpublish | Mostly — write-once tarballs, 409 on re-publish; unpublish disableable per pattern (`unpublish:` empty) | — | Native (no unpublish route exists) |
-| No upstream read-through | Yes — omit `proxy` from the pattern | — | Native (no uplink code exists) |
-| Rate/size limits | Yes (`max_body_size`, `userRateLimit`, global rate limit) | — | Native |
-| Structured logs with auth redaction | Yes (pino, redact paths) | — | Native |
+| npm-CLI-compatible registry surface | Yes | No plugin needed | ~small, must build |
+| Per-package-name publish ACL (user/group) | Yes (`packages:` patterns) | No plugin needed | Yes (grant records) |
+| `dev-*`-tag-only / prerelease-only vocabulary | **No:** ACLs are name-pattern x group only; no semver/tag predicates | Middleware plugin *can* intercept `PUT /:package` before the API router (source-confirmed; the docs page claiming otherwise is stale) and reject by body inspection | Native: the vocabulary *is* the server |
+| `allow_publish` hook sees version/tag | **No:** auth hooks receive `{name}` from URL params only; version is `undefined` on publish, tag name never passed | Middleware body inspection instead | Native |
+| Per-token capability attenuation (package subset, expiry, delegation, revocation) | **No:** tokens carry identity only; npm's granular-token fields (`packages`, `scopes`, `expires`) are *accepted but ignored* | `apiJWTmiddleware` takeover possible (disables login/adduser) | Native (grant records) |
+| Immutable versions / no unpublish | Mostly: write-once tarballs, 409 on re-publish; unpublish disableable per pattern (`unpublish:` empty) | No plugin needed | Native (no unpublish route exists) |
+| No upstream read-through | Yes: omit `proxy` from the pattern | No plugin needed | Native (no uplink code exists) |
+| Rate/size limits | Yes (`max_body_size`, `userRateLimit`, global rate limit) | No plugin needed | Native |
+| Structured logs with auth redaction | Yes (pino, redact paths) | No plugin needed | Native |
 | Tamper-evident hash-chained audit ledger | **No** (note: its built-in `audit` middleware is npm-*advisory* proxying, not an audit trail) | Custom regardless | Custom, small |
-| Deterministic promoter (state machine, revalidation, upstream token isolation) | N/A — out of Verdaccio's scope entirely | Custom regardless | Custom, small |
+| Deterministic promoter (state machine, revalidation, upstream token isolation) | N/A: out of Verdaccio's scope entirely | Custom regardless | Custom, small |
 | Trusted computing base | Verdaccio + its dependency tree (hundreds of packages), plus an ACL/framework model whose defaults you must keep fighting | Same, plus plugin | Node stdlib HTTP + SQLite + a handful of pinned deps |
 
 The decisive rows are the middle three. The properties this design
-exists for — the `dev-*`/prerelease vocabulary, per-token attenuation,
-the ledger, the promoter — are custom code under either option. What
+exists for (the `dev-*`/prerelease vocabulary, per-token attenuation,
+the ledger, and the promoter) are custom code under either option. What
 Verdaccio adds on top is a large dependency tree and an **inverted
 failure posture**: the enforcement point would be a middleware wrapping
 a framework whose own behavior is *more* permissive (Verdaccio would
 happily tag `latest` for an authenticated user with publish rights), so
 a plugin bug fails *open* toward broader authority. The minimum proxy
 has no broader behavior underneath it: a validation bug fails *closed*
-against a route allowlist. Verdaccio's genuine strengths — uplink
+against a route allowlist. Verdaccio's genuine strengths (uplink
 read-through caching, a web UI, multi-user human workflows, storage
-plugins — are exactly the features this demo does not want. (Its
-security-advisory record is clean — no auth or publish-path CVEs in the
-last two years — so this is a fit argument, not a fear argument.)
+plugins) are exactly the features this demo does not want. (Its
+security-advisory record is clean, with no auth or publish-path CVEs in
+the last two years, so this is a fit argument, not a fear argument.)
 
-**Decision: build the minimum proxy** (estimated 1.5–2.5k LOC core plus
+**Decision: build the minimum proxy** (estimated 1.5-2.5k LOC core plus
 the promoter at ~1k), keeping Verdaccio as the documented fallback if
 the demo ever grows into a general-purpose registry (many human users,
-read-through mirroring) — at which point this design's promoter and
+read-through mirroring). At that point this design's promoter and
 ledger would carry over unchanged, and only the front door would be
 re-evaluated.
 
@@ -1006,33 +1064,33 @@ re-evaluated.
 Phased so each phase lands a testable increment; the demo gate
 (§ *Staged rollout*) sits between phases 3 and 4.
 
-- **Phase 1 — proxy core.** HTTP route allowlist; publish validation
-  pipeline P1–P8; grant store + token issuance/verification; SQLite
+- **Phase 1: proxy core.** HTTP route allowlist; publish validation
+  pipeline P1-P8; grant store + token issuance/verification; SQLite
   packuments + content-addressed blob store; dist-tag routes with
   monotonic rule; ledger A; event log; read routes; `whoami`/`ping`;
   rate/size limits; per-IP auth penalty. *Tests:* vocabulary,
   immutability, capability, adversarial groups (§ *Acceptance tests*).
-- **Phase 2 — promoter.** Event-feed poller with durable cursor;
+- **Phase 2: promoter.** Event-feed poller with durable cursor;
   independent revalidation (own policy config, per-subject allowlist);
   state machine with crash recovery and confirm flow; upstream publisher
   (registry API client); quarantine + admin surface; ledger B; `dryRun`
   mode. *Tests:* state-machine, duplicate-handling, failure-injection
   groups.
-- **Phase 3 — demo operations.** systemd units + users; Caddy
+- **Phase 3: demo operations.** systemd units + users; Caddy
   `conf.d/npm.minion.town.caddy`; backup/restore scripts; metrics +
   alert wiring; runbooks (quarantine, rotation, stop, restore). *Tests:*
   deployed acceptance re-run (S1), drill scripts.
-- **Phase 4 — live-fire gate.** Execution of the stage-2 checklist
+- **Phase 4: live-fire gate.** Execution of the stage-2 checklist
   (operator work, not code), then one promoted fixture release with
   byte-identity verification.
 
-Home for phases 1–2 code: see § *Open questions* (repo placement);
+Home for phases 1-2 code: see § *Open questions* (repo placement);
 phase 3 config belongs with the minion.town deployment layer per that
 project's conventions.
 
 ## Acceptance tests
 
-Named, so future builders and reviewers can point at them. Groups A–D
+Named, so future builders and reviewers can point at them. Groups A-D
 run at S0 and re-run against the deployed instance at S1/S2.
 
 **A. Vocabulary and validation.**
@@ -1072,8 +1130,9 @@ both new and existing packages.
 
 **C. Immutability and idempotency.**
 
-- C1 republish same `(name, version)` with identical bytes -> idempotent
-  success, no new event.
+- C1 republish same `(name, version, integrity, tag)` -> idempotent
+  success, no new event; same name/version/integrity with a different
+  tag -> structured `409 tag-conflict` and no tag mutation.
 - C2 republish same version, different bytes -> deterministic `409`.
 - C3 two parallel publishes of the same version -> exactly one accepted.
 - C4 N parallel dist-tag moves + publishes against one package ->
@@ -1093,8 +1152,15 @@ both new and existing packages.
 - D4 token theft simulation: a valid token used from a foreign context
   still cannot exceed its attenuation (the theft's product is a
   ledgered dev-release at worst).
-- D5 `chainHash` on the accepted event matches the grant chain that
+- D5 revoke one HTTP token -> that token immediately fails while a
+  sibling token for the same grant continues to work; revoke the grant
+  -> both fail.
+- D6 `chainHash` on the accepted event matches the grant chain that
   authorized it.
+- D7 unattended renewal: an operator controller constrained by a
+  maintainer-approved subject policy replaces an expiring grant and
+  token through the job-secret path; the job continues without a human
+  present and cannot request a broader package set or lifetime.
 
 **E. Adversarial.**
 
@@ -1118,8 +1184,10 @@ both new and existing packages.
 - F1 SIGKILL the promoter between upstream-call and outcome-record ->
   restart -> confirm flow -> exactly one upstream publish, `done`,
   evidence recorded.
-- F2 upstream 403-duplicate with matching integrity -> `done`; with
-  different integrity -> quarantine + alert.
+- F2 upstream 403 followed by a manifest with matching integrity ->
+  `done`; with different integrity -> quarantine + alert; with no
+  manifest -> `retryWait` as `ambiguous-403`, then quarantine when its
+  bounded review threshold is exhausted.
 - F3 upstream 5xx / network partition -> backoff retries -> eventual
   success; no duplicate upstream publish observable.
 - F4 upstream definitive 4xx -> quarantine; operator `retry` and
@@ -1147,13 +1215,14 @@ both new and existing packages.
   upstream tarball == SHA-512 of the proxy blob == the accept-time
   computed integrity.
 - G4 drills: emergency stop, token rotation, backup-restore with
-  ledger-head re-derivation — each leaves ledger evidence.
+  ledger-head re-derivation. Each leaves ledger evidence.
 
 ## Design Decisions
 
 1. **Two co-required conditions for a development release** (prerelease
-   version ∧ exactly one `dev-*` dist-tag). Each defends a different
-   failure mode — range-invisibility vs `latest`-unreachability — and
+   version and exactly one `dev-*` dist-tag). Each defends a different
+   failure mode (range-invisibility compared with
+   `latest`-unreachability), and
    neither alone is sufficient (§ *Semantics of a development
    release*).
 2. **Route allowlist, not behavior denylist.** The proxy implements
@@ -1167,7 +1236,7 @@ both new and existing packages.
    requirement (§ *Open questions*).
 4. **Non-negotiable system policy.** The dev-release shape,
    immutability, and tag monotonicity live in the validation pipeline,
-   not in grant fields — no grant, however broad, can exceed them.
+   not in grant fields. No grant, however broad, can exceed them.
 5. **Separate promoter process with operator-owned policy.** The
    promoter's per-subject allowlist (its own config, not the proxy's
    data) bounds a compromised proxy to configured package permissions;
@@ -1194,7 +1263,7 @@ both new and existing packages.
     content-derived `eventId` and `chainHash`: tamper-evidence without a
     transparency-log dependency, with a garden-journal anchor as a
     documented future hardening.
-11. **Build the minimum proxy over adapting Verdaccio** — the security
+11. **Build the minimum proxy over adapting Verdaccio:** the security
     properties are custom either way, and the minimum proxy fails
     closed where a Verdaccio plugin would fail open (§ *Build vs adapt:
     the Verdaccio comparison*).
@@ -1203,7 +1272,10 @@ both new and existing packages.
 
 - **Considered and rejected: issuing the agent a narrowly scoped npm
   granular token directly.** npm tokens can be package-scoped but
-  cannot express "development releases only" — any publish-capable npm
+  expose only package/scope, organization, permission, expiry, and CIDR
+  restrictions
+  ([npm access-token documentation](https://docs.npmjs.com/about-access-tokens/));
+  they cannot express "development releases only". Any publish-capable npm
   token can tag `latest`. The attenuation this design exists for is not
   expressible in npm's token model at all.
 - **Considered and rejected: promoter logic inside the proxy process.**
@@ -1217,7 +1289,7 @@ both new and existing packages.
   time and expensive to retrofit; a single accidental `latest` on a
   real scope is the incident this system prevents.
 - **Considered and rejected: unpublish for "cleanup."** No undo
-  exists — upstream's own reuse ban (a name+version can never be
+  exists. Upstream's own reuse ban (a name+version can never be
   reused, even after unpublish) makes deletion semantics treacherous.
   Dev releases age out by obscurity; removal, if ever truly needed, is
   a manual upstream-admin action outside this system, inside npm's
@@ -1226,11 +1298,11 @@ both new and existing packages.
 ## Open questions
 
 - **Where does the code live?** Options: (a) a standalone repo
-  (`kriscendobot/npm-dev-registry`) — keeps the Endo fork clean and the
+  (`kriscendobot/npm-dev-registry`) keeps the Endo fork clean and the
   deploy coupling loose; (b) the minion.town repo as transplant-shaped
   service code per that project's "deployment + configuration layer,
   code shaped for transplant" convention; (c) a package in
-  endo-but-for-bots — only natural once the Endo-native realization
+  endo-but-for-bots, which is only natural once the Endo-native realization
   exists. Recommendation: (a), with (b) acceptable.
 - **Trusted publishing instead of a stored token?** npm's OIDC trusted
   publishing (GA 2025, GitHub Actions/GitLab CI) is npm's recommended
@@ -1271,17 +1343,23 @@ both new and existing packages.
 
 The first cut realizes `PublishGrant` as an HTTP bearer token because
 the publisher is the stock npm CLI running in arbitrary agent
-worktrees. The Endo-native form — out of scope here, named so the
-shapes above do not preclude it — is an exo package
+worktrees. The Endo-native form (out of scope here, named so the
+shapes above do not preclude it) is an exo package
 `@endo/exo-npm-publisher` (the `exo-` prefix per convention for
 `@endo/*` packages whose primary surface is passable interfaces over
-CapTP): a `PublishGrantIssuer` exo holding the token inside the daemon,
-vending `PublishGrant` facets whose `publish()` performs the
+CapTP).
+Here an **exo** is a hardened remote object whose guarded methods can be
+called across CapTP, and a **facet** is one separately attenuated
+interface of that object.
+The package provides a `PublishGrantIssuer` exo holding the token inside
+the daemon and vending `PublishGrant` facets whose `publish()` performs the
 npm-protocol calls, so an agent never holds the token at all. That
 realization composes with [daemon-capability-bank](daemon-capability-bank.md)
-as the catalog of record, and any long-lived feed-follower in it takes
-a `cancelled` `Promise<never>` argument rather than exposing an
-imperative `cancel()` (the daemon's standard cancellation shape).
+as the catalog of record.
+Any long-lived feed follower takes a `cancelled` `Promise<never>` that
+settles when its caller wants the operation to stop; this is the daemon's
+standard cancellation convention instead of an imperative `cancel()`
+method.
 [registry-capability](registry-capability.md)'s `@registry` stays
 strictly read-only; this family is the write lane it deliberately never
 grew.
