@@ -278,25 +278,25 @@ export const makeDaemonDatabase = (config, options) => {
     'DELETE FROM synced_store_meta WHERE store_number = ?',
   );
 
-  const stmtWriteCollectionEntry = db.prepare(
+  const stmtWriteCollectionEntry = prepare(
     'INSERT OR REPLACE INTO collection_store_entry (store_number, key_rank, key_body, key_slots, value_body, value_slots) VALUES (?, ?, ?, ?, ?, ?)',
   );
-  const stmtGetCollectionEntry = db.prepare(
+  const stmtGetCollectionEntry = prepare(
     'SELECT key_body AS keyBody, key_slots AS keySlots, value_body AS valueBody, value_slots AS valueSlots FROM collection_store_entry WHERE store_number = ? AND key_rank = ?',
   );
-  const stmtHasCollectionEntry = db.prepare(
+  const stmtHasCollectionEntry = prepare(
     'SELECT 1 FROM collection_store_entry WHERE store_number = ? AND key_rank = ?',
   );
-  const stmtDeleteCollectionEntry = db.prepare(
+  const stmtDeleteCollectionEntry = prepare(
     'DELETE FROM collection_store_entry WHERE store_number = ? AND key_rank = ?',
   );
-  const stmtListCollectionEntries = db.prepare(
+  const stmtListCollectionEntries = prepare(
     'SELECT key_rank AS keyRank, key_body AS keyBody, key_slots AS keySlots, value_body AS valueBody, value_slots AS valueSlots FROM collection_store_entry WHERE store_number = ? ORDER BY key_rank',
   );
-  const stmtCountCollectionEntries = db.prepare(
+  const stmtCountCollectionEntries = prepare(
     'SELECT COUNT(*) AS count FROM collection_store_entry WHERE store_number = ?',
   );
-  const stmtDeleteAllCollectionEntries = db.prepare(
+  const stmtDeleteAllCollectionEntries = prepare(
     'DELETE FROM collection_store_entry WHERE store_number = ?',
   );
 
