@@ -122,6 +122,8 @@ jobs:
         run: |
           case "$FUZZ_BUDGET" in
             *[!0-9]*|'') echo "::error::seconds_per_target must be a positive integer"; exit 1 ;;
+            *[1-9]*) ;;
+            *) echo "::error::seconds_per_target must be greater than zero"; exit 1 ;;
           esac
           rc=0
           for t in snapshot_decoder snapshot_roundtrip bytecode_decoder parser; do

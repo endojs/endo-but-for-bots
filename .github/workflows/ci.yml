@@ -729,8 +729,11 @@ jobs:
           # ever doesn't hold.
           if ! git rev-parse -q --verify HEAD^2 >/dev/null; then
             echo "hit=true" >> "$GITHUB_OUTPUT"
+          # Consume the whole diff. `grep -q` can close the pipe early,
+          # making `git diff` exit on SIGPIPE and the runner's `pipefail`
+          # misclassify a relevant large PR as a miss.
           elif git diff --name-only HEAD^1 HEAD \
-            | grep -qE '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^\.github/workflows/ci\.yml$'; then
+            | grep -E '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^\.github/workflows/ci\.yml$' >/dev/null; then
             echo "hit=true" >> "$GITHUB_OUTPUT"
           else
             echo "hit=false" >> "$GITHUB_OUTPUT"
@@ -796,8 +799,10 @@ jobs:
           # doesn't hold.
           if ! git rev-parse -q --verify HEAD^2 >/dev/null; then
             echo "hit=true" >> "$GITHUB_OUTPUT"
+          # No `grep -q`: under `pipefail`, its early close can turn a
+          # matching large diff into a false miss through SIGPIPE.
           elif git diff --name-only HEAD^1 HEAD \
-            | grep -qE '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^\.github/workflows/ci\.yml$|^c/moddable|^\.gitmodules$|^rust/endo/xsnap/xsnap-platform\.'; then
+            | grep -E '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^\.github/workflows/ci\.yml$|^c/moddable|^\.gitmodules$|^rust/endo/xsnap/xsnap-platform\.' >/dev/null; then
             echo "hit=true" >> "$GITHUB_OUTPUT"
           else
             echo "hit=false" >> "$GITHUB_OUTPUT"
