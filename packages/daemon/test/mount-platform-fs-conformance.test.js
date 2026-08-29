@@ -211,6 +211,10 @@ const ENDOMOUNT_EXTENSIONS = [
   // Fused glob+grep composition. Reference impl composes the delegated
   // glob/grep surface; a native powers layer may push it down as one call.
   'glorp',
+  // Streaming search variants over the same platform engine, returning a
+  // `PassableReader` (no result cap; the consumer's flow control is the bound).
+  'streamGlob',
+  'streamGrep',
   // Declared as part of the name-hub contract but throws ENOSYS until a
   // filesystem watcher is wired (filesystem-watchers.md) — see § C1.
   'followNameChanges',
