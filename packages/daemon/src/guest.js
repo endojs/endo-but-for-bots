@@ -338,8 +338,11 @@ export const makeGuestMaker = ({
       await unpinTransient(id);
     };
 
-    /** @type {EndoGuest['makeMapStore']} */
-    const makeMapStore = async petName => {
+    /**
+     * @param {string | string[]} petName
+     * @param {import('./types.js').CollectionStoreFormula['kind']} kind
+     */
+    const makeCollectionStore = async (petName, kind) => {
       const { namePath } = petNamePathFrom(petName);
       /** @type {DeferredTasks<CollectionStoreDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
@@ -347,7 +350,7 @@ export const makeGuestMaker = ({
         E(directory).storeIdentifier(namePath, identifiers.collectionStoreId),
       );
       const { id, value } = await formulateCollectionStore(
-        'map',
+        kind,
         tasks,
         pinTransient,
       );
@@ -356,6 +359,12 @@ export const makeGuestMaker = ({
       await unpinTransient(id);
       return /** @type {any} */ (value);
     };
+
+    /** @type {EndoGuest['makeMapStore']} */
+    const makeMapStore = petName => makeCollectionStore(petName, 'map');
+
+    /** @type {EndoGuest['makeSetStore']} */
+    const makeSetStore = petName => makeCollectionStore(petName, 'set');
 
     /** @type {EndoGuest} */
     const guest = {
@@ -412,6 +421,7 @@ export const makeGuestMaker = ({
       storeBlob,
       storeValue,
       makeMapStore,
+      makeSetStore,
       submit,
       sendValue,
     };

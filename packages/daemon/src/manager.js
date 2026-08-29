@@ -3200,7 +3200,9 @@ const makeDaemonCore = async (
       await Promise.all(
         slots.map(id => provide(/** @type {FormulaIdentifier} */ (id))),
       );
-      return marshaller.fromCapData(/** @type {any} */ ({ body, slots }));
+      return /** @type {import('@endo/pass-style').Passable} */ (
+        marshaller.fromCapData(/** @type {any} */ ({ body, slots }))
+      );
     },
     encodeKeyRank,
     filterLocalIds,
@@ -4203,6 +4205,7 @@ const makeDaemonCore = async (
             storeBlob: disallowedFn,
             storeValue: disallowedFn,
             makeMapStore: disallowedFn,
+            makeSetStore: disallowedFn,
             submit: disallowedFn,
             sendValue: disallowedFn,
             deliver: disallowedSyncFn,
@@ -4228,11 +4231,21 @@ const makeDaemonCore = async (
         assertMailboxStoreName,
       );
     },
-    'collection-store': (_formula, _context, id, formulaNumber) =>
-      collectionStoreMaker.makeIdentifiedMapStore(
-        /** @type {FormulaIdentifier} */ (id),
-        formulaNumber,
-      ),
+    'collection-store': (formula, _context, id, formulaNumber) => {
+      if (formula.kind === 'map') {
+        return collectionStoreMaker.makeIdentifiedMapStore(
+          /** @type {FormulaIdentifier} */ (id),
+          formulaNumber,
+        );
+      }
+      if (formula.kind === 'set') {
+        return collectionStoreMaker.makeIdentifiedSetStore(
+          /** @type {FormulaIdentifier} */ (id),
+          formulaNumber,
+        );
+      }
+      throw new Error(`Unknown collection store kind ${formula.kind}`);
+    },
     'mail-hub': ({ store: storeId }, context) => makeMailHub(storeId, context),
     message: (formula, context) => makeMessageHub(formula, context),
     promise: ({ store: storeId }, context) => makePromise(storeId, context),
@@ -5782,7 +5795,7 @@ const makeDaemonCore = async (
 
   /** @type {DaemonCore['formulateCollectionStore']} */
   async function formulateCollectionStore(kind, deferredTasks, pin) {
-    return /** @type {FormulateResult<import('./types.js').MapStore>} */ (
+    return /** @type {FormulateResult<import('./types.js').CollectionStore>} */ (
       withFormulaGraphLock(async () => {
         const ownFormulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()

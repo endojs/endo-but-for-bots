@@ -277,6 +277,23 @@ export interface MapStore<K = unknown, V = unknown> {
   snapshot(): Promise<unknown>;
 }
 
+/**
+ * A durable, incrementally-mutable set of passable keys. Set entries use the
+ * collection table's key columns and leave both value columns null.
+ */
+export interface SetStore<K = unknown> {
+  has(key: K): Promise<boolean>;
+  add(key: K): Promise<void>;
+  delete(key: K): Promise<void>;
+  getSize(): Promise<number>;
+  keys(): Promise<K[]>;
+  values(): Promise<K[]>;
+  entries(): Promise<Array<[K, K]>>;
+  snapshot(): Promise<unknown>;
+}
+
+export type CollectionStore = MapStore | SetStore;
+
 export type ReadableBlobFormula = {
   type: 'readable-blob';
   content: string;
@@ -587,12 +604,12 @@ export type MailboxStoreFormula = {
  * A durable, incrementally-mutable passable collection (the daemon-native
  * analogue of `@agoric/store`). The formula carries only the collection
  * `kind`; its entries live in the `collection_store_entry` SQLite table keyed
- * by this formula's number. Phase 1 implements `kind: 'map'` (a strong
- * `MapStore`); the remaining kinds land in later phases.
+ * by this formula's number. Strong maps and sets share the table; set rows
+ * deliberately leave both value columns null.
  */
 export type CollectionStoreFormula = {
   type: 'collection-store';
-  kind: 'map';
+  kind: 'map' | 'set';
 };
 
 export type MailHubFormula = {
@@ -1584,6 +1601,8 @@ export interface EndoGuest extends EndoAgent {
    * after a daemon restart yields a store backed by the same entries.
    */
   makeMapStore(petName: string | string[]): Promise<FarRef<MapStore>>;
+  /** Create and bind a durable strong `SetStore`. */
+  makeSetStore(petName: string | string[]): Promise<FarRef<SetStore>>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue: Mail['sendValue'];
 }
@@ -1610,6 +1629,8 @@ export interface EndoHost extends EndoAgent {
    * after a daemon restart yields a store backed by the same entries.
    */
   makeMapStore(petName: string | string[]): Promise<FarRef<MapStore>>;
+  /** Create and bind a durable strong `SetStore`. */
+  makeSetStore(petName: string | string[]): Promise<FarRef<SetStore>>;
   storeTree(remoteTree: unknown, petName: string | string[]): Promise<unknown>;
   provideMount(
     path: string,
@@ -2652,7 +2673,7 @@ export interface DaemonCore {
     kind: CollectionStoreFormula['kind'],
     deferredTasks: DeferredTasks<CollectionStoreDeferredTaskParams>,
     pin?: (id: FormulaIdentifier) => void,
-  ) => FormulateResult<MapStore>;
+  ) => FormulateResult<CollectionStore>;
 
   formulatePromise: (
     pinTransient?: (id: FormulaIdentifier) => void,

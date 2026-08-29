@@ -15,7 +15,13 @@ import { promisify as nodePromisify } from 'util';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 import { makeExo } from '@endo/exo';
-import { M, makeCopyMap, getCopyMapEntries } from '@endo/patterns';
+import {
+  M,
+  makeCopyMap,
+  getCopyMapEntries,
+  makeCopySet,
+  getCopySetKeys,
+} from '@endo/patterns';
 import { makeCancelKit } from '@endo/cancel';
 import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
@@ -7680,4 +7686,64 @@ test('MapStore retains a remotable value across a restart', async t => {
   const back = await E(mapAfter).get('agent');
   await E(back).listMessages();
   t.pass();
+});
+
+// -- Persistent strong SetStore (collection-store, kind: 'set') --
+
+test('SetStore supports add/has/delete/getSize/keys/entries/snapshot', async t => {
+  const { host } = await prepareHost(t);
+  const set = await E(host).makeSetStore('s');
+
+  t.is(await E(set).getSize(), 0);
+  t.false(await E(set).has('a'));
+  await E(set).add('b');
+  await E(set).add('a');
+  await E(set).add('c');
+
+  t.is(await E(set).getSize(), 3);
+  t.true(await E(set).has('a'));
+  t.deepEqual(await E(set).keys(), ['a', 'b', 'c']);
+  t.deepEqual(await E(set).values(), ['a', 'b', 'c']);
+  t.deepEqual(await E(set).entries(), [
+    ['a', 'a'],
+    ['b', 'b'],
+    ['c', 'c'],
+  ]);
+  t.deepEqual(
+    [...getCopySetKeys(await E(set).snapshot())],
+    [...getCopySetKeys(makeCopySet(['a', 'b', 'c']))],
+  );
+
+  await t.throwsAsync(() => E(set).add('a'));
+  await t.throwsAsync(() => E(set).delete('missing'));
+  await E(set).delete('b');
+  t.false(await E(set).has('b'));
+  t.deepEqual(await E(set).keys(), ['a', 'c']);
+});
+
+test('SetStore persists null value columns and survives restart', async t => {
+  const { cancelled, config, host } = await prepareHost(t);
+  const set = await E(host).makeSetStore('s');
+  await E(set).add('alpha');
+  await E(set).add(7n);
+
+  const setId = await E(host).identify('s');
+  const { number: setFormulaNumber } = parseId(setId);
+  const database = openTestDb(config.statePath);
+  const rows = database.listCollectionEntries(setFormulaNumber);
+  database.close();
+  t.is(rows.length, 2);
+  for (const row of rows) {
+    t.is(row.valueBody, null);
+    t.is(row.valueSlots, null);
+  }
+
+  await restart(config);
+  const { host: hostAfter } = await makeHost(config, cancelled);
+  const setAfter = await E(hostAfter).lookup(['s']);
+  t.is(await E(setAfter).getSize(), 2);
+  t.true(await E(setAfter).has('alpha'));
+  t.true(await E(setAfter).has(7n));
+  await E(setAfter).add(harden({ nested: ['key'] }));
+  t.true(await E(setAfter).has(harden({ nested: ['key'] })));
 });

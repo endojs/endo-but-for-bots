@@ -532,7 +532,7 @@ export const makeHostMaker = ({
 
     /**
      * @param {ERef<PassableBytesReader>} readerRef
-     * @param {NameOrPath} petName
+     * @param {string | string[]} petName
      */
     const storeBlob = async (readerRef, petName) => {
       const { namePath } = petNamePathFrom(petName);
@@ -550,7 +550,7 @@ export const makeHostMaker = ({
     /**
      * Check in a remote readable-tree Exo, storing it content-addressed.
      * @param {unknown} remoteTree - Remote Exo providing the readable-tree interface.
-     * @param {NameOrPath} petName
+     * @param {string | string[]} petName
      */
     const storeTree = async (remoteTree, petName) => {
       const { namePath } = petNamePathFrom(petName);
@@ -1257,8 +1257,11 @@ export const makeHostMaker = ({
       await unpinTransient(id);
     };
 
-    /** @type {EndoHost['makeMapStore']} */
-    const makeMapStore = async petName => {
+    /**
+     * @param {string | string[]} petName
+     * @param {import('./types.js').CollectionStoreFormula['kind']} kind
+     */
+    const makeCollectionStore = async (petName, kind) => {
       const { namePath } = petNamePathFrom(petName);
       /** @type {DeferredTasks<CollectionStoreDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
@@ -1266,13 +1269,19 @@ export const makeHostMaker = ({
         E(directory).storeIdentifier(namePath, identifiers.collectionStoreId),
       );
       const { id, value } = await formulateCollectionStore(
-        'map',
+        kind,
         tasks,
         pinTransient,
       );
       await unpinTransient(id);
       return /** @type {any} */ (value);
     };
+
+    /** @type {EndoHost['makeMapStore']} */
+    const makeMapStore = petName => makeCollectionStore(petName, 'map');
+
+    /** @type {EndoHost['makeSetStore']} */
+    const makeSetStore = petName => makeCollectionStore(petName, 'set');
 
     /**
      * @param {NameOrPath} workerNamePath
@@ -2576,6 +2585,7 @@ export const makeHostMaker = ({
       storeBlob,
       storeValue,
       makeMapStore,
+      makeSetStore,
       storeTree,
       provideMount,
       provideScratchMount,

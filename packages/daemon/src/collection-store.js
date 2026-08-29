@@ -2,10 +2,10 @@
 
 import harden from '@endo/harden';
 import { makeExo } from '@endo/exo';
-import { M, makeCopyMap } from '@endo/patterns';
+import { M, makeCopyMap, makeCopySet } from '@endo/patterns';
 import { Fail, q } from '@endo/errors';
 
-/** @import { FormulaIdentifier, FormulaNumber, MapStore } from './types.js' */
+/** @import { FormulaIdentifier, FormulaNumber, MapStore, SetStore } from './types.js' */
 /** @import { Passable } from '@endo/pass-style' */
 
 /**
@@ -22,6 +22,24 @@ export const makeMapStoreInterface = keyShape =>
     get: M.callWhen(keyShape).returns(M.any()),
     init: M.callWhen(keyShape, M.any()).returns(M.undefined()),
     set: M.callWhen(keyShape, M.any()).returns(M.undefined()),
+    delete: M.callWhen(keyShape).returns(M.undefined()),
+    getSize: M.callWhen().returns(M.number()),
+    keys: M.callWhen().returns(M.arrayOf(M.any())),
+    values: M.callWhen().returns(M.arrayOf(M.any())),
+    entries: M.callWhen().returns(M.arrayOf(M.array())),
+    snapshot: M.callWhen().returns(M.any()),
+  });
+
+/**
+ * The interface guard for a strong `SetStore`. The key-taking methods share
+ * the same signatures and semantics as their `MapStore` counterparts.
+ *
+ * @param {import('@endo/patterns').Pattern} keyShape
+ */
+export const makeSetStoreInterface = keyShape =>
+  M.interface('SetStore', {
+    has: M.callWhen(keyShape).returns(M.boolean()),
+    add: M.callWhen(keyShape).returns(M.undefined()),
     delete: M.callWhen(keyShape).returns(M.undefined()),
     getSize: M.callWhen().returns(M.number()),
     keys: M.callWhen().returns(M.arrayOf(M.any())),
@@ -107,7 +125,7 @@ export const makeCollectionStoreMaker = ({
      * @typedef {object} Entry
      * @property {string} keyBody
      * @property {string[]} keySlots
-     * @property {string} valueBody
+     * @property {string | null} valueBody
      * @property {string[]} valueSlots
      * @property {FormulaIdentifier[]} slotIds - local ids this entry retains
      */
@@ -169,7 +187,7 @@ export const makeCollectionStoreMaker = ({
       entriesByRank.set(row.keyRank, {
         keyBody: row.keyBody,
         keySlots,
-        valueBody: /** @type {string} */ (row.valueBody),
+        valueBody: row.valueBody,
         valueSlots,
         slotIds,
       });
@@ -194,8 +212,13 @@ export const makeCollectionStoreMaker = ({
       unmarshalFromCapData({ body: entry.keyBody, slots: entry.keySlots });
 
     /** @param {Entry} entry */
-    const readValue = entry =>
-      unmarshalFromCapData({ body: entry.valueBody, slots: entry.valueSlots });
+    const readValue = entry => {
+      entry.valueBody !== null || Fail`collection entry has no value`;
+      return unmarshalFromCapData({
+        body: /** @type {string} */ (entry.valueBody),
+        slots: entry.valueSlots,
+      });
+    };
 
     /**
      * Persist a new or replacement entry, updating the durable row, the
@@ -233,6 +256,16 @@ export const makeCollectionStoreMaker = ({
       await applyRetentionDelta(newSlotIds, oldSlotIds);
     };
 
+    /** @param {Passable} key */
+    const deleteEntry = async key => {
+      const rank = rankOf(key);
+      const entry = entriesByRank.get(rank);
+      entry !== undefined || Fail`key ${q(key)} not found`;
+      deleteCollectionEntry(formulaNumber, rank);
+      entriesByRank.delete(rank);
+      await applyRetentionDelta([], /** @type {Entry} */ (entry).slotIds);
+    };
+
     const mapStore = {
       /** @param {Passable} key */
       has: async key => entriesByRank.has(rankOf(key)),
@@ -265,14 +298,7 @@ export const makeCollectionStoreMaker = ({
       },
 
       /** @param {Passable} key */
-      delete: async key => {
-        const rank = rankOf(key);
-        const entry = entriesByRank.get(rank);
-        entry !== undefined || Fail`key ${q(key)} not found`;
-        deleteCollectionEntry(formulaNumber, rank);
-        entriesByRank.delete(rank);
-        await applyRetentionDelta([], /** @type {Entry} */ (entry).slotIds);
-      },
+      delete: deleteEntry,
 
       getSize: async () => entriesByRank.size,
 
@@ -339,6 +365,164 @@ export const makeCollectionStoreMaker = ({
     );
   };
 
-  return harden({ makeIdentifiedMapStore, collectionRetentionSlots });
+  /**
+   * Construct (or reconstruct) a durable strong `SetStore` using the same
+   * key index and retention machinery as `MapStore`, with null value columns.
+   *
+   * @param {FormulaIdentifier} storeId
+   * @param {FormulaNumber} formulaNumber
+   * @returns {SetStore}
+   */
+  const makeIdentifiedSetStore = (storeId, formulaNumber) => {
+    /** @typedef {{ keyBody: string, keySlots: string[], slotIds: FormulaIdentifier[] }} SetEntry */
+    /** @type {Map<string, SetEntry>} */
+    const entriesByRank = new Map();
+    /** @type {Map<FormulaIdentifier, number>} */
+    const slotCounts = new Map();
+
+    for (const row of listCollectionEntries(formulaNumber)) {
+      row.valueBody === null ||
+        Fail`set entry unexpectedly has a value for rank ${row.keyRank}`;
+      const keySlots = JSON.parse(row.keySlots);
+      const slotIds = filterLocalIds(keySlots);
+      entriesByRank.set(row.keyRank, {
+        keyBody: row.keyBody,
+        keySlots,
+        slotIds,
+      });
+      for (const id of slotIds) {
+        slotCounts.set(id, (slotCounts.get(id) ?? 0) + 1);
+      }
+    }
+
+    /**
+     * @param {FormulaIdentifier[]} add
+     * @param {FormulaIdentifier[]} remove
+     */
+    const applyRetentionDelta = async (add, remove) => {
+      await null;
+      /** @type {FormulaIdentifier[]} */
+      const edgesToAdd = [];
+      /** @type {FormulaIdentifier[]} */
+      const edgesToRemove = [];
+      for (const id of add) {
+        const count = slotCounts.get(id) ?? 0;
+        slotCounts.set(id, count + 1);
+        if (count === 0) edgesToAdd.push(id);
+      }
+      for (const id of remove) {
+        const count = slotCounts.get(id) ?? 0;
+        if (count <= 1) {
+          slotCounts.delete(id);
+          if (count === 1) edgesToRemove.push(id);
+        } else {
+          slotCounts.set(id, count - 1);
+        }
+      }
+      if (edgesToAdd.length > 0) await addStoreEdges(storeId, edgesToAdd);
+      if (edgesToRemove.length > 0)
+        await removeStoreEdges(storeId, edgesToRemove);
+    };
+
+    /** @param {Passable} key */
+    const rankOf = key => encodeKeyRank(harden(key));
+    /** @param {SetEntry} entry */
+    const readKey = entry =>
+      unmarshalFromCapData({ body: entry.keyBody, slots: entry.keySlots });
+    const sortedRanks = () => [...entriesByRank.keys()].sort();
+
+    const setStore = {
+      /** @param {Passable} key */
+      has: async key => entriesByRank.has(rankOf(key)),
+      /** @param {Passable} key */
+      add: async key => {
+        const rank = rankOf(key);
+        !entriesByRank.has(rank) || Fail`key ${q(key)} already registered`;
+        const keyCapData = marshalToCapData(key);
+        const slotIds = filterLocalIds(keyCapData.slots);
+        writeCollectionEntry(
+          formulaNumber,
+          rank,
+          keyCapData.body,
+          JSON.stringify(keyCapData.slots),
+          null,
+          null,
+        );
+        entriesByRank.set(rank, {
+          keyBody: keyCapData.body,
+          keySlots: keyCapData.slots,
+          slotIds,
+        });
+        await applyRetentionDelta(slotIds, []);
+      },
+      /** @param {Passable} key */
+      delete: async key => {
+        const rank = rankOf(key);
+        const entry = entriesByRank.get(rank);
+        entry !== undefined || Fail`key ${q(key)} not found`;
+        deleteCollectionEntry(formulaNumber, rank);
+        entriesByRank.delete(rank);
+        await applyRetentionDelta([], /** @type {SetEntry} */ (entry).slotIds);
+      },
+      getSize: async () => entriesByRank.size,
+      keys: async () => {
+        await null;
+        return harden(
+          await Promise.all(
+            sortedRanks().map(rank =>
+              readKey(/** @type {SetEntry} */ (entriesByRank.get(rank))),
+            ),
+          ),
+        );
+      },
+      values: async () => {
+        await null;
+        return harden(
+          await Promise.all(
+            sortedRanks().map(rank =>
+              readKey(/** @type {SetEntry} */ (entriesByRank.get(rank))),
+            ),
+          ),
+        );
+      },
+      entries: async () => {
+        await null;
+        return harden(
+          await Promise.all(
+            sortedRanks().map(async rank => {
+              const key = await readKey(
+                /** @type {SetEntry} */ (entriesByRank.get(rank)),
+              );
+              return harden([key, key]);
+            }),
+          ),
+        );
+      },
+      snapshot: async () => {
+        await null;
+        return makeCopySet(
+          /** @type {any} */ (
+            await Promise.all(
+              sortedRanks().map(rank =>
+                readKey(/** @type {SetEntry} */ (entriesByRank.get(rank))),
+              ),
+            )
+          ),
+        );
+      },
+    };
+
+    return /** @type {SetStore} */ (
+      /** @type {unknown} */ (
+        makeExo('SetStore', makeSetStoreInterface(M.key()), setStore)
+      )
+    );
+  };
+
+  return harden({
+    makeIdentifiedMapStore,
+    makeIdentifiedSetStore,
+    collectionRetentionSlots,
+  });
 };
 harden(makeCollectionStoreMaker);
