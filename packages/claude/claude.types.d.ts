@@ -23,4 +23,4 @@ export type {
   SpawnFiles,
   StdioTransport,
   Subscription,
-} from './src/types.js';
+} from './src/claude.types.js';
