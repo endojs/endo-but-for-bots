@@ -315,6 +315,10 @@ export const makeCodexClient = ({
   // workspace conversation: each `send()` queues behind the previous turn.
   /** @type {Promise<void>} */
   let turnChain = Promise.resolve();
+  // Cache only a successful check. A signed-out client keeps checking on later
+  // turns so credentials mounted into CODEX_HOME become usable without
+  // restarting the Floot session.
+  let authenticationChecked = false;
 
   // Runtime-attached extra container binds
   // (designs/runtime-container-fs-mount.md). Replacing the set while a slice
@@ -421,6 +425,46 @@ export const makeCodexClient = ({
   };
 
   /**
+   * Deliver EOF to a spawned command. Codex exec reads additional prompt text
+   * from non-TTY stdin, so leaving the sandbox writer open makes it wait
+   * forever even when a complete prompt was supplied on argv.
+   *
+   * @param {ProcessHandle} proc
+   */
+  const closeProcessStdin = async proc => {
+    const stdin = await E(proc).stdin();
+    await E(/** @type {any} */ (stdin)).return();
+  };
+
+  /**
+   * Check the authentication cache once per client before starting Codex.
+   * `codex login status` exits non-zero when no supported authentication
+   * method is active. Successful checks are cached; failures are not.
+   *
+   * @param {SandboxHandle} activeSlice
+   */
+  const ensureAuthenticated = async activeSlice => {
+    if (authenticationChecked) return;
+    const proc = await E(activeSlice).spawn(
+      harden(['codex', 'login', 'status']),
+      harden({
+        cwd: workspacePath,
+        env: { ...env },
+        captureStdout: false,
+        captureStderr: false,
+      }),
+    );
+    await closeProcessStdin(proc);
+    const status = await E(proc).wait();
+    if (status.code === null ? status.signal : status.code) {
+      throw makeError(
+        X`Codex is not authenticated. Authenticate the hosted Codex runtime before starting a Codex session.`,
+      );
+    }
+    authenticationChecked = true;
+  };
+
+  /**
    * Spawn one `codex exec --json` process inside the slice and return its
    * `ProcessHandle`.
    *
@@ -430,6 +474,7 @@ export const makeCodexClient = ({
    */
   const spawnCodex = async (prompt, opts = {}) => {
     const { slice: activeSlice } = await ensureProvisioned();
+    await ensureAuthenticated(activeSlice);
     const argv = [
       'codex',
       'exec',
@@ -483,6 +528,7 @@ export const makeCodexClient = ({
         captureStderr: true,
       }),
     );
+    await closeProcessStdin(proc);
     conversationStarted = true;
     return proc;
   };
