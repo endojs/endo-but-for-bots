@@ -3,9 +3,13 @@
 | | |
 |---|---|
 | **Created** | 2026-06-02 |
-| **Updated** | 2026-07-10 |
+| **Updated** | 2026-08-29 |
 | **Author** | endolinbot (prompted) |
-| **Status** | Not Started |
+| **Status** | Deprecated |
+| **Superseded by** | [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) |
+
+> Superseded by [Package Registries as an Endo Directory Tree](npm-registry-as-directory-tree.md).
+> This document remains as the design and migration record for the bespoke `EndoRegistry.resolve` / `fetch` / `lookup` / `list` interface that shipped before the directory-tree presentation replaced it.
 
 ## Summary
 
