@@ -768,6 +768,47 @@ export const main = async rawArgs => {
       return mkdir({ agentNames, directoryPath });
     });
 
+  for (const kind of ['map', 'set']) {
+    program
+      .command(`mk${kind} <name>`)
+      .option(...commonOptions.as)
+      .description(`makes a durable strong ${kind} store`)
+      .action(async (name, options) => {
+        const { as: agentNames } = options;
+        const { makeCollectionStore } =
+          await import('./commands/make-collection-store.js');
+        return makeCollectionStore({ kind, name, agentNames });
+      });
+
+    program
+      .command(`${kind} <name> <verb> [arguments...]`)
+      .option(...commonOptions.as)
+      .option(
+        '--json',
+        'parse every key and value argument as JSON instead of text',
+      )
+      .option(...commonOptions.name)
+      .description(`operates on a named durable strong ${kind} store`)
+      .action(async (name, verb, argumentsList, options) => {
+        const {
+          as: agentNames,
+          json: asJson = false,
+          name: resultName,
+        } = options;
+        const { collectionStore } =
+          await import('./commands/collection-store.js');
+        return collectionStore({
+          kind,
+          name,
+          verb,
+          argumentsList,
+          asJson,
+          resultName,
+          agentNames,
+        });
+      });
+  }
+
   program
     .command('invite <guest-name>')
     .option(...commonOptions.as)
