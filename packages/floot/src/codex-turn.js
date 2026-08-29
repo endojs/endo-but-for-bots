@@ -37,12 +37,32 @@ const itemTool = item => {
   return undefined;
 };
 
+const renderResultValue = value => {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    const text = value
+      .map(block => {
+        if (typeof block === 'string') return block;
+        if (block && typeof block === 'object') {
+          if (typeof block.text === 'string') return block.text;
+          if (typeof block.output_text === 'string') return block.output_text;
+        }
+        return JSON.stringify(block);
+      })
+      .filter(Boolean)
+      .join('\n');
+    if (text) return text;
+  }
+  if (value && typeof value === 'object' && typeof value.message === 'string') {
+    return value.message;
+  }
+  return JSON.stringify(value);
+};
+
 const itemResult = item => {
   for (const key of ['aggregated_output', 'output', 'result', 'error']) {
     if (item[key] !== undefined) {
-      return typeof item[key] === 'string'
-        ? item[key]
-        : JSON.stringify(item[key]);
+      return renderResultValue(item[key]);
     }
   }
   return item.status ? `${item.status}` : '';
@@ -93,9 +113,7 @@ export const makeCodexEventTranslator = writer => {
     // response items. Their outputs arrive separately and pair by call_id,
     // unlike the self-contained item.completed records used by shell and MCP.
     const responseItem =
-      event.type === 'response_item' && event.payload
-        ? event.payload
-        : event;
+      event.type === 'response_item' && event.payload ? event.payload : event;
     if (
       responseItem.type === 'custom_tool_call_output' ||
       responseItem.type === 'dynamic_tool_call_output' ||
@@ -169,13 +187,26 @@ export const makeCodexEventTranslator = writer => {
     }
   };
 
-  const finish = () =>
-    harden({
+  const finish = () => {
+    // A clean Codex turn must not leave a tool call looking permanently in
+    // progress. Some failure paths have historically omitted item.completed;
+    // preserve that reporting failure explicitly instead of serializing null
+    // into Floot history and making the UI appear stuck.
+    for (const call of toolCalls) {
+      if (call.result === null) {
+        const result =
+          'Codex completed the turn without reporting a tool result.';
+        call.result = result;
+        w.toolResult({ id: call.id, name: call.name, result });
+      }
+    }
+    return harden({
       finalText,
       usage,
       errorReason,
       toolCalls: toolCalls.map(call => harden({ ...call })),
     });
+  };
   return harden({ handle, finish });
 };
 harden(makeCodexEventTranslator);

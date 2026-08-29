@@ -86,12 +86,11 @@ test('starts and then resumes the persisted Codex thread', async t => {
   t.deepEqual(spawns[0].argv, ['codex', 'login', 'status']);
   const execSpawns = spawns.filter(({ argv }) => argv[1] === 'exec');
   t.is(execSpawns.length, 2);
-  t.deepEqual(execSpawns[0].argv.slice(0, 6), [
+  t.deepEqual(execSpawns[0].argv.slice(0, 5), [
     'codex',
     'exec',
     '--json',
-    '--sandbox',
-    'danger-full-access',
+    '--dangerously-bypass-approvals-and-sandbox',
     '--skip-git-repo-check',
   ]);
   t.false(execSpawns[0].argv.includes('resume'));

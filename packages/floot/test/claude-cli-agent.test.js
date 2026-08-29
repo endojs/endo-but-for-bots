@@ -240,6 +240,69 @@ test('a codex-cli turn surfaces and persists tool activity', async t => {
   ]);
 });
 
+test('a codex-cli turn persists a programmatic tool failure', async t => {
+  t.timeout(20_000);
+  const powers = makeFakePowers();
+  const { client, turns } = makeFakeClient();
+  const agent = await makeStreamingAgent(
+    powers,
+    undefined,
+    { codexClient: client },
+    'test prompt',
+  );
+
+  const { writer, reader } = makeReplyChannel();
+  const replyP = collectReply(reader);
+  const turnP = agent.converse('check health', writer);
+  for (let i = 0; i < 50 && turns.length === 0; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  turns[0].push({
+    type: 'response_item',
+    payload: {
+      type: 'custom_tool_call',
+      call_id: 'call-health',
+      name: 'exec',
+      input: 'const r = await tools.mcp__endo__exec({ code: "health" });',
+    },
+  });
+  turns[0].push({
+    type: 'response_item',
+    payload: {
+      type: 'custom_tool_call_output',
+      call_id: 'call-health',
+      output: [
+        {
+          type: 'input_text',
+          text: 'MCP tool call requires approval, but approval policy is never',
+        },
+      ],
+    },
+  });
+  turns[0].push({
+    type: 'item.completed',
+    item: { id: 'msg-1', type: 'agent_message', text: 'Blocked.' },
+  });
+  turns[0].push({ type: 'turn.completed', usage: {} });
+  turns[0].push({ type: 'end' });
+
+  await turnP;
+  await replyP;
+  t.deepEqual(await agent.getHistory(), [
+    { role: 'user', content: 'check health' },
+    {
+      role: 'tool',
+      name: 'exec',
+      args: JSON.stringify({
+        input: 'const r = await tools.mcp__endo__exec({ code: "health" });',
+      }),
+      result: 'MCP tool call requires approval, but approval policy is never',
+    },
+    { role: 'assistant', content: 'Blocked.' },
+  ]);
+});
+
 test('a failed claude-cli turn aborts the reply but keeps the delivered prompt', async t => {
   t.timeout(20_000);
   const powers = makeFakePowers();

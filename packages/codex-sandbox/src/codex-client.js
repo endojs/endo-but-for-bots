@@ -479,12 +479,13 @@ export const makeCodexClient = ({
       'codex',
       'exec',
       '--json',
-      '--sandbox',
-      // This process already runs inside an Endo-owned rootless Podman slice.
-      // Its mounts and network are the security boundary; asking Codex to
-      // create another Linux sandbox inside it makes bubblewrap's uid mapping
-      // fail on hosted machines.
-      'danger-full-access',
+      // This process already runs inside an Endo-owned rootless Podman slice:
+      // its mounts and network are the security and approval boundary. Codex's
+      // explicit externally-sandboxed automation mode both avoids the nested
+      // bubblewrap uid-map failure and pre-authorizes MCP calls. Merely using
+      // `--sandbox danger-full-access` leaves non-interactive approval policy
+      // at `never`, which rejects every MCP tool marked as requiring approval.
+      '--dangerously-bypass-approvals-and-sandbox',
       '--skip-git-repo-check',
     ];
     if (mcpConfigPath) {
